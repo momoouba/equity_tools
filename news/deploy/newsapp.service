@@ -1,0 +1,39 @@
+# systemd服务配置文件
+# 文件位置: /etc/systemd/system/newsapp.service
+# 用于将新闻管理系统注册为系统服务
+
+[Unit]
+Description=News Management System - Node.js Application
+Documentation=https://github.com/your-username/newsapp
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=forking
+User=newsapp
+Group=newsapp
+WorkingDirectory=/opt/newsapp
+Environment=NODE_ENV=production
+Environment=PATH=/usr/bin:/usr/local/bin
+ExecStart=/usr/local/bin/pm2 start /opt/newsapp/deploy/ecosystem.config.js --no-daemon
+ExecReload=/usr/local/bin/pm2 reload /opt/newsapp/deploy/ecosystem.config.js
+ExecStop=/usr/local/bin/pm2 kill
+Restart=always
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=newsapp
+
+# 安全设置
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/newsapp /var/log/newsapp /tmp
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,77 @@
+.batch-import-modal {
+  max-width: 640px;
+}
+
+.batch-modal-body {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.template-section,
+.upload-section {
+  background: #f9fbff;
+  border: 1px solid #e3eaf5;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.template-section h4,
+.upload-section h4 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: #1a1a1a;
+}
+
+.template-section p,
+.upload-section p {
+  margin: 0 0 12px;
+  color: #666;
+  font-size: 14px;
+}
+
+.template-tip {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #999;
+}
+
+.upload-section input[type="file"] {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+.selected-file {
+  font-size: 13px;
+  color: #357abd;
+  margin-bottom: 12px;
+}
+
+.batch-message {
+  padding: 12px;
+  background: #f0f9eb;
+  border: 1px solid #bde5a1;
+  color: #2c662d;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.batch-errors {
+  background: #fff5f5;
+  border: 1px solid #f5c2c7;
+  color: #a94442;
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.batch-errors ul {
+  padding-left: 20px;
+  margin: 8px 0 0;
+}
+
+.batch-errors li {
+  margin-bottom: 4px;
+}
+
