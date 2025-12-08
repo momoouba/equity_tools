@@ -1243,6 +1243,11 @@
   color: #1a1a1a;
 }
 
+/* 正文弹窗中的关键词标签使用白色字体 */
+.content-body .keyword-tag {
+  color: white !important;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .modal-content {
