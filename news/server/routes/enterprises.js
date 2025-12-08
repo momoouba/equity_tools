@@ -1092,13 +1092,14 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     }
 
     if (existing) {
-      // 统一信用代码一致，更新项目简称、被投企业全称、企业公众号ID和企业官网
+      // 统一信用代码一致，更新项目简称、被投企业全称、企业公众号ID、企业官网和退出状态
       await db.execute(
         `UPDATE invested_enterprises 
          SET project_abbreviation = ?,
              enterprise_full_name = ?,
              wechat_official_account_id = ?,
              official_website = ?,
+             exit_status = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         [
@@ -1106,11 +1107,12 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
           enterpriseData.enterprise_full_name,
           enterpriseData.wechat_official_account_id || null,
           enterpriseData.official_website || null,
+          enterpriseData.exit_status,
           existing.id
         ]
       );
       updated++;
-      console.log(`更新企业：统一信用代码 ${enterpriseData.unified_credit_code}，更新项目简称、企业全称、企业公众号ID和企业官网`);
+      console.log(`更新企业：统一信用代码 ${enterpriseData.unified_credit_code}，更新项目简称、企业全称、企业公众号ID、企业官网和退出状态`);
       
       // 同步更新到 company 表
       if (enterpriseData.unified_credit_code && enterpriseData.unified_credit_code.trim() !== '') {

@@ -434,7 +434,8 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           // 批量插入数据
           for (const article of articles) {
             // 检查是否已存在（根据原文链接去重）
-            const sourceUrl = article.sourceUrl || article.url || '';
+            // 优先使用url字段作为去重依据，存入数据库的source_url字段；如果不存在则使用sourceUrl字段
+            const sourceUrl = article.url || article.sourceUrl || '';
             if (!sourceUrl) continue; // 跳过没有链接的文章
 
             const existing = await db.query(
@@ -1225,7 +1226,8 @@ router.get('/user-news', async (req, res) => {
       // 上周：上周一00:00:00到上周日23:59:59
       // 对于企查查新闻，如果public_time为NULL，使用created_at作为替代
       const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-      const daysToLastMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1 + 7; // 上周一
+      // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
+      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
       const lastMonday = new Date(now);
       lastMonday.setDate(now.getDate() - daysToLastMonday);
       lastMonday.setHours(0, 0, 0, 0);
@@ -1528,7 +1530,8 @@ router.get('/', async (req, res) => {
       // 上周：上周一00:00:00到上周日23:59:59
       // 对于企查查新闻，如果public_time为NULL，使用created_at作为替代
       const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-      const daysToLastMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1 + 7; // 上周一
+      // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
+      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
       const lastMonday = new Date(now);
       lastMonday.setDate(now.getDate() - daysToLastMonday);
       lastMonday.setHours(0, 0, 0, 0);
@@ -1685,7 +1688,8 @@ router.post('/export', async (req, res) => {
       } else if (timeRange === 'lastWeek') {
         // 上周：上周一00:00:00到上周日23:59:59
         const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-        const daysToLastMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1 + 7; // 上周一
+        // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
+        const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
         const lastMonday = new Date(now);
         lastMonday.setDate(now.getDate() - daysToLastMonday);
         lastMonday.setHours(0, 0, 0, 0);
@@ -2622,7 +2626,8 @@ async function syncQichachaNewsData(configId = null) {
         endDate = thisMonday.toISOString().slice(0, 10);
       } else {
         // 其他星期几：默认使用上周一至上周日
-        const daysToLastMonday = currentDay === 0 ? 6 : currentDay - 1 + 7;
+        // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(currentDay - 1 + 7)天
+        const daysToLastMonday = currentDay === 0 ? 14 : currentDay - 1 + 7;
         const lastMonday = new Date(now);
         lastMonday.setDate(now.getDate() - daysToLastMonday);
         lastMonday.setHours(0, 0, 0, 0);
@@ -2637,7 +2642,8 @@ async function syncQichachaNewsData(configId = null) {
     } else if (frequencyType === 'week') {
       // 按周执行（无weekday配置）：计算上周周一和周日日期
       const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-      const daysToLastMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1 + 7; // 上周一
+      // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
+      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
       const lastMonday = new Date(now);
       lastMonday.setDate(now.getDate() - daysToLastMonday);
       lastMonday.setHours(0, 0, 0, 0);

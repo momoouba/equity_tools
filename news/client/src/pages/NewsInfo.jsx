@@ -8,6 +8,7 @@ import './NewsInfo.css'
 
 function NewsInfo() {
   const [newsList, setNewsList] = useState([])
+  const [allFilteredNews, setAllFilteredNews] = useState([]) // 存储所有过滤后的数据，用于客户端分页
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -32,6 +33,7 @@ function NewsInfo() {
   const [analysisProgress, setAnalysisProgress] = useState(null)
   const [currentTaskId, setCurrentTaskId] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise') // 'enterprise' 企业相关, 'all' 全部
 
   // 获取用户信息
   useEffect(() => {
@@ -78,9 +80,12 @@ function NewsInfo() {
     
     setLoading(true)
     try {
+      // 获取所有数据用于客户端过滤和排序
+      // 使用较大的pageSize以支持客户端过滤和排序，但设置合理上限避免内存问题
+      const MAX_FETCH_SIZE = 100000 // 最大获取100000条数据
       const params = {
-        page: currentPage,
-        pageSize,
+        page: 1,
+        pageSize: MAX_FETCH_SIZE,
         timeRange: activeTab
       }
       if (search) {
@@ -92,10 +97,62 @@ function NewsInfo() {
       const response = await axios.get(endpoint, { params })
       
       if (response.data.success) {
-        setNewsList(response.data.data || [])
-        setTotal(response.data.total || 0)
+        let allNewsData = response.data.data || []
+        const fetchedCount = allNewsData.length
+        const totalCount = response.data.total || 0
+        
+        // 如果返回的数据量达到上限，且总数超过上限，提示用户
+        if (fetchedCount >= MAX_FETCH_SIZE && totalCount > MAX_FETCH_SIZE) {
+          console.warn(`数据量较大（${totalCount}条），当前显示前${MAX_FETCH_SIZE}条。建议使用搜索功能缩小范围。`)
+        }
+        
+        // 客户端过滤
+        if (enterpriseFilter === 'enterprise') {
+          // 企业相关：只显示被投企业全称不为空的数据
+          allNewsData = allNewsData.filter(news => news.enterprise_full_name && news.enterprise_full_name.trim() !== '')
+        }
+        // 全部：显示所有数据，不需要过滤
+        
+        // 排序：有被投企业全称的排在前面，然后按发布时间降序
+        allNewsData.sort((a, b) => {
+          const aHasEnterprise = a.enterprise_full_name && a.enterprise_full_name.trim() !== ''
+          const bHasEnterprise = b.enterprise_full_name && b.enterprise_full_name.trim() !== ''
+          
+          // 先按是否有企业全称排序（有的在前）
+          if (aHasEnterprise && !bHasEnterprise) return -1
+          if (!aHasEnterprise && bHasEnterprise) return 1
+          
+          // 都有或都没有，按发布时间降序
+          const timeA = a.public_time ? new Date(a.public_time).getTime() : 0
+          const timeB = b.public_time ? new Date(b.public_time).getTime() : 0
+          return timeB - timeA
+        })
+        
+        // 存储所有过滤后的数据，用于客户端分页
+        const totalFiltered = allNewsData.length
+        
+        // 计算正确的总数
+        // 如果数据被截断（后端总数超过获取限制），总数应该是实际获取的数据量
+        // 如果应用了企业相关过滤，总数应该是过滤后的数据量，但不能超过实际获取的数据量
+        let finalTotal
+        if (totalCount > MAX_FETCH_SIZE) {
+          // 数据被截断：使用实际获取的数据量（过滤后的）
+          // 注意：由于数据被截断，我们无法知道后端有多少数据符合过滤条件
+          // 所以显示过滤后的实际数据量，并在控制台提示用户
+          finalTotal = totalFiltered
+          if (enterpriseFilter === 'enterprise') {
+            console.warn(`数据量较大，当前显示企业相关新闻 ${totalFiltered} 条（实际获取 ${fetchedCount} 条，后端总数 ${totalCount} 条）。建议使用搜索功能缩小范围。`)
+          }
+        } else {
+          // 数据未被截断：使用过滤后的数据量
+          finalTotal = totalFiltered
+        }
+        
+        setAllFilteredNews(allNewsData)
+        setTotal(finalTotal)
       } else {
         console.error('获取舆情信息失败:', response.data.message)
+        setAllFilteredNews([])
         setNewsList([])
         setTotal(0)
         throw new Error(response.data.message || '获取舆情信息失败')
@@ -110,6 +167,7 @@ function NewsInfo() {
       }
       console.error('获取舆情信息失败:', error)
       console.error('错误详情:', error.response?.data)
+      setAllFilteredNews([])
       setNewsList([])
       setTotal(0)
       // 只在第一次加载失败时显示错误提示
@@ -154,12 +212,35 @@ function NewsInfo() {
     return () => {
       isMounted = false
     }
-  }, [currentPage, search, isAdmin, user, activeTab, pageSize, adminActiveTab])
+    // 注意：currentPage不在依赖数组中，因为使用客户端分页，数据只获取一次
+    // 当currentPage变化时，只更新显示的列表，不重新获取数据
+  }, [search, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter])
 
-  // 切换tab时重置页码
+  // 客户端分页：当currentPage、pageSize或allFilteredNews变化时，更新显示的列表
+  useEffect(() => {
+    if (allFilteredNews.length === 0) {
+      setNewsList([])
+      return
+    }
+    
+    const startIndex = (currentPage - 1) * pageSize
+    const endIndex = startIndex + pageSize
+    const paginatedData = allFilteredNews.slice(startIndex, endIndex)
+    
+    setNewsList(paginatedData)
+  }, [currentPage, pageSize, allFilteredNews])
+
+  // 判断是否显示复选框功能（所有tab都支持）
+  const shouldShowCheckbox = () => {
+    return ['yesterday', 'thisWeek', 'lastWeek', 'thisMonth', 'all'].includes(activeTab)
+  }
+
+  // 切换tab时重置页码和选择状态
   const handleTabChange = (tab) => {
     setActiveTab(tab)
     setCurrentPage(1)
+    setSelectedNewsIds([])
+    setSelectAll(false)
   }
 
   // 处理每页显示数量变更
@@ -300,7 +381,11 @@ function NewsInfo() {
   }
 
   const handleSearchChange = (e) => {
-    setSearch(e.target.value)
+    const newSearchValue = e.target.value
+    setSearch(newSearchValue)
+    // 当搜索内容变化时，重置到第1页，避免显示空列表
+    // 因为新搜索结果可能比当前页码少
+    setCurrentPage(1)
   }
 
   const totalPages = Math.ceil(total / pageSize)
@@ -436,6 +521,7 @@ function NewsInfo() {
         return [...prev, newsId]
       }
     })
+    // 注意：selectAll状态由useEffect同步更新，避免双重同步
   }
 
   // 处理全选
@@ -447,6 +533,20 @@ function NewsInfo() {
     }
     setSelectAll(!selectAll)
   }
+
+  // 同步selectAll状态：当新闻列表或选中项变化时，检查当前页是否全选
+  useEffect(() => {
+    if (newsList.length === 0) {
+      setSelectAll(false)
+      return
+    }
+    
+    const currentPageNewsIds = newsList.map(news => news.id)
+    const allCurrentPageSelected = currentPageNewsIds.length > 0 && 
+      currentPageNewsIds.every(id => selectedNewsIds.includes(id))
+    
+    setSelectAll(allCurrentPageSelected)
+  }, [newsList, selectedNewsIds])
 
   // 批量AI分析
   const handleBatchAnalysis = async () => {
@@ -722,8 +822,8 @@ function NewsInfo() {
             </button>
           )}
           
-          {/* AI重新分析按钮 - 只在昨日和本周tab显示 */}
-          {(activeTab === 'yesterday' || activeTab === 'thisWeek') && selectedNewsIds.length > 0 && (
+          {/* AI重新分析按钮 - 所有tab都支持 */}
+          {shouldShowCheckbox() && selectedNewsIds.length > 0 && (
             <button 
               className="batch-analysis-btn"
               onClick={handleBatchAnalysis}
@@ -835,15 +935,41 @@ function NewsInfo() {
         </div>
       </div>
 
+      {/* 企业相关/全部过滤按钮 */}
+      <div className="enterprise-filter-buttons">
+        <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'enterprise' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('enterprise')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          企业相关
+        </button>
+        <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'all' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('all')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          全部
+        </button>
+      </div>
+
       <div className="table-container">
         {loading ? (
           <div className="loading">加载中...</div>
         ) : (
-          <table className={`news-table ${(activeTab === 'yesterday' || activeTab === 'thisWeek') ? 'has-checkbox' : ''}`}>
+          <table className={`news-table ${shouldShowCheckbox() ? 'has-checkbox' : ''}`}>
             <thead>
               <tr>
-                {/* 在昨日和本周tab中显示复选框列 */}
-                {(activeTab === 'yesterday' || activeTab === 'thisWeek') && (
+                {/* 在所有tab中显示复选框列 */}
+                {shouldShowCheckbox() && (
                   <th className="checkbox-cell">
                     <input
                       type="checkbox"
@@ -870,7 +996,7 @@ function NewsInfo() {
               {newsList.length === 0 ? (
                 <tr>
                   <td colSpan={
-                    (activeTab === 'yesterday' || activeTab === 'thisWeek') 
+                    shouldShowCheckbox() 
                       ? (isAdmin ? "12" : "10") 
                       : (isAdmin ? "11" : "9")
                   } className="empty-data">
@@ -880,8 +1006,8 @@ function NewsInfo() {
               ) : (
                 newsList.map((news, index) => (
                   <tr key={news.id || index}>
-                    {/* 在昨日和本周tab中显示复选框 */}
-                    {(activeTab === 'yesterday' || activeTab === 'thisWeek') && (
+                    {/* 在所有tab中显示复选框 */}
+                    {shouldShowCheckbox() && (
                       <td className="checkbox-cell">
                         <input
                           type="checkbox"
@@ -899,14 +1025,18 @@ function NewsInfo() {
                     {/* 关键词 */}
                     <td className="keywords-cell">
                       {news.keywords && Array.isArray(news.keywords) && news.keywords.length > 0 ? (
-                        <div className="keywords-list" title={news.keywords.join(', ')}>
+                        <div className="keywords-list">
                           {news.keywords.slice(0, 3).map((keyword, idx) => (
                             <span key={idx} className="keyword-tag" title={keyword}>
                               {keyword.length > 4 ? `${keyword.substring(0, 4)}...` : keyword}
                             </span>
                           ))}
                           {news.keywords.length > 3 && (
-                            <span className="keyword-more" title={news.keywords.slice(3).join(', ')}>
+                            <span 
+                              className="keyword-more" 
+                              data-tooltip={news.keywords.slice(3).join(', ')}
+                              title={news.keywords.slice(3).join(', ')}
+                            >
                               +{news.keywords.length - 3}
                             </span>
                           )}
