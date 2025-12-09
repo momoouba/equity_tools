@@ -88,11 +88,20 @@ async function getEmailTimeRange() {
   const now = new Date();
   
   // 使用Asia/Shanghai时区计算本地日期
-  const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-  
-  // 创建本地时区的今天00:00:00
-  const today = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+  // 创建Asia/Shanghai时区的今天00:00:00（使用ISO字符串方式，确保时区正确）
+  const localDateTimeStr = now.toLocaleString('zh-CN', { 
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  const [datePart] = localDateTimeStr.split(' ');
+  const [localYear, localMonth, localDay] = datePart.split('/').map(Number);
+  const todayStr = `${localYear}-${String(localMonth).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T00:00:00+08:00`;
+  const today = new Date(todayStr);
   
   // 查找节假日前的一个工作日
   const previousWorkday = await findPreviousWorkday(today);
@@ -121,11 +130,20 @@ function getYesterdayTimeRange() {
   const now = new Date();
   
   // 使用Asia/Shanghai时区计算本地日期
-  const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-  
-  // 创建本地时区的今天00:00:00
-  const today = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+  // 创建Asia/Shanghai时区的今天00:00:00（使用ISO字符串方式，确保时区正确）
+  const localDateTimeStr = now.toLocaleString('zh-CN', { 
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  const [datePart] = localDateTimeStr.split(' ');
+  const [localYear, localMonth, localDay] = datePart.split('/').map(Number);
+  const todayStr = `${localYear}-${String(localMonth).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T00:00:00+08:00`;
+  const today = new Date(todayStr);
   
   // 创建本地时区的昨天00:00:00
   const yesterday = new Date(today);
@@ -592,33 +610,69 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
     
+    // 查询所有额外公众号的ID列表（用于判断新闻是否来自额外公众号）
+    const db = require('../db');
+    let additionalAccountIds = [];
+    try {
+      const additionalAccounts = await db.query(
+        `SELECT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE status = 'active' 
+         AND delete_mark = 0
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''`
+      );
+      additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
+      console.log(`[邮件发送] 查询到 ${additionalAccountIds.length} 个额外公众号ID`);
+    } catch (e) {
+      console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
+    }
+    
     // 按企业分组新闻（使用过滤后的列表）
     const newsByEnterprise = {};
     for (const news of filteredNewsList) {
-      // 如果企业名称为空且包含"榜单"或"获奖"标签，使用null作为分组键
       let enterpriseName = news.enterprise_full_name;
+      let groupKey = enterpriseName;
+      
+      // 只有来自额外公众号的新闻，且企业名称为空，且包含"榜单"或"获奖"标签的，才使用null作为分组键
       if ((!enterpriseName || enterpriseName === '' || enterpriseName === 'null')) {
-        // 检查是否包含"榜单"或"获奖"标签
-        let keywords = [];
-        if (news.keywords) {
-          try {
-            if (typeof news.keywords === 'string') {
-              keywords = JSON.parse(news.keywords);
-            } else if (Array.isArray(news.keywords)) {
-              keywords = news.keywords;
-            }
-          } catch (e) {
-            // 解析失败，忽略
-          }
-        }
+        // 检查是否来自额外公众号
+        const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
         
-        const hasAwardTag = keywords.some(k => k === '榜单' || k === '获奖');
-        if (hasAwardTag) {
-          enterpriseName = null; // 使用null作为分组键，邮件生成时会显示为"——榜单或获奖信息"
+        if (isFromAdditionalAccount) {
+          // 检查是否包含"榜单"或"获奖"标签
+          let keywords = [];
+          if (news.keywords) {
+            try {
+              if (typeof news.keywords === 'string') {
+                keywords = JSON.parse(news.keywords);
+              } else if (Array.isArray(news.keywords)) {
+                keywords = news.keywords;
+              }
+            } catch (e) {
+              // 解析失败，忽略
+            }
+          }
+          
+          const hasAwardTag = keywords.some(k => k === '榜单' || k === '获奖');
+          if (hasAwardTag) {
+            // 只有来自额外公众号且包含"榜单"或"获奖"标签的，才使用null作为分组键
+            groupKey = null;
+          } else {
+            // 来自额外公众号但没有标签的，保持原值（使用空字符串作为分组键）
+            groupKey = enterpriseName || '';
+          }
+        } else {
+          // 不是来自额外公众号的，保持原值（使用空字符串作为分组键）
+          groupKey = enterpriseName || '';
         }
       }
       
-      const groupKey = enterpriseName || null; // 使用null作为空企业名称的分组键
+      // 确保groupKey不为undefined
+      if (groupKey === undefined) {
+        groupKey = '';
+      }
+      
       if (!newsByEnterprise[groupKey]) {
         newsByEnterprise[groupKey] = [];
       }
@@ -948,4 +1002,5 @@ module.exports = {
   findPreviousWorkday,
   isWorkdayDate
 };
+
 

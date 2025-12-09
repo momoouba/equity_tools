@@ -148,6 +148,33 @@ function formatDate(date) {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+/**
+ * 创建Asia/Shanghai时区的Date对象（当天00:00:00）
+ * 正确的方式：使用ISO字符串格式，明确指定时区偏移量
+ * @param {Date} date - 参考日期（可选，默认使用当前时间）
+ * @returns {Date} Asia/Shanghai时区当天的00:00:00
+ */
+function createShanghaiDate(date = null) {
+  const now = date || new Date();
+  // 使用toLocaleString获取Asia/Shanghai时区的日期时间字符串
+  const localDateTimeStr = now.toLocaleString('zh-CN', { 
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  // 解析格式：2024/12/8 14:30:00
+  const [datePart] = localDateTimeStr.split(' ');
+  const [localYear, localMonth, localDay] = datePart.split('/').map(Number);
+  
+  // 创建上海时区当天的00:00:00（使用ISO字符串方式，明确指定+08:00时区偏移）
+  const dateStr = `${localYear}-${String(localMonth).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T00:00:00+08:00`;
+  return new Date(dateStr);
+}
+
 function formatDateOnly(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -306,24 +333,20 @@ function testTimeRangeCalculation() {
  * @returns {object} { from, to } 时间范围
  */
 function calculateScheduledSyncTimeRange(targetDate = null) {
-  const now = targetDate || new Date();
-  
-  // 使用Asia/Shanghai时区计算本地日期
-  const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-  
-  // 创建本地时区的今天00:00:00
-  const today = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+  // 使用Asia/Shanghai时区计算日期
+  const today = createShanghaiDate(targetDate);
   
   // 创建本地时区的昨天00:00:00
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   
   // 开始时间：前一天00:00:00
-  const from = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0);
+  const from = new Date(yesterday);
+  from.setHours(0, 0, 0, 0);
   
   // 结束时间：前一天23:59:59
-  const to = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59);
+  const to = new Date(yesterday);
+  to.setHours(23, 59, 59, 999);
   
   return {
     from: formatDate(from),
@@ -396,10 +419,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
   if (isManual) {
     try {
       // 获取当天开始时间（Asia/Shanghai时区）
-      const now = new Date();
-      const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-      const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-      const todayStart = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+      const todayStart = createShanghaiDate();
       const todayEnd = new Date(todayStart);
       todayEnd.setDate(todayEnd.getDate() + 1);
       todayEnd.setMilliseconds(todayEnd.getMilliseconds() - 1);
@@ -816,9 +836,7 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
   const now = runDate || new Date();
   
   // 使用Asia/Shanghai时区计算本地日期
-  const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-  const baseRunDate = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+  const baseRunDate = createShanghaiDate(now);
   
   let fromDate;
   let toDate;
@@ -1109,11 +1127,8 @@ router.post('/sync', async (req, res) => {
       
       // 使用本地时区计算日期，确保基于Asia/Shanghai时区
       // 获取本地时间的年月日（基于Asia/Shanghai时区）
-      const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-      const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-      
-      // 创建本地时区的今天00:00:00
-      const todayStart = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+      // 创建Asia/Shanghai时区的今天00:00:00
+      const todayStart = createShanghaiDate(now);
       
       // 创建本地时区的昨天00:00:00
       const yesterdayStart = new Date(todayStart);
@@ -2825,10 +2840,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
     if (logId) {
       try {
         // 获取当天开始时间（Asia/Shanghai时区）
-        const now = new Date();
-        const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-        const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-        const todayStart = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+        const todayStart = createShanghaiDate();
         const todayEnd = new Date(todayStart);
         todayEnd.setDate(todayEnd.getDate() + 1);
         todayEnd.setMilliseconds(todayEnd.getMilliseconds() - 1);

@@ -31,11 +31,20 @@ function getYesterdayTimeRange() {
   const now = new Date();
   
   // 使用Asia/Shanghai时区计算本地日期
-  const localDateStr = now.toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  const [localYear, localMonth, localDay] = localDateStr.split('/').map(Number);
-  
-  // 创建本地时区的今天00:00:00
-  const today = new Date(localYear, localMonth - 1, localDay, 0, 0, 0);
+  // 创建Asia/Shanghai时区的今天00:00:00（使用ISO字符串方式，确保时区正确）
+  const localDateTimeStr = now.toLocaleString('zh-CN', { 
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  const [datePart] = localDateTimeStr.split(' ');
+  const [localYear, localMonth, localDay] = datePart.split('/').map(Number);
+  const todayStr = `${localYear}-${String(localMonth).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T00:00:00+08:00`;
+  const today = new Date(todayStr);
   
   // 创建本地时区的昨天00:00:00
   const yesterday = new Date(today);
@@ -190,10 +199,11 @@ function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
   
   // 按企业分组显示
   for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
-    // 如果企业名称为空或null，显示"——榜单或获奖信息"
-    const displayEnterpriseName = (enterpriseName === null || enterpriseName === '' || enterpriseName === 'null') 
+    // 只有分组键为null的才显示"——榜单或获奖信息"（这些是包含榜单/获奖标签的额外公众号新闻）
+    // 其他空企业名称的新闻保持原样显示（可能是空字符串或其他值）
+    const displayEnterpriseName = (enterpriseName === null) 
       ? '——榜单或获奖信息' 
-      : enterpriseName;
+      : (enterpriseName || '未关联企业');
     
     html += `
       <div style="margin-bottom: 40px; border-left: 4px solid #4CAF50; padding-left: 20px;">
