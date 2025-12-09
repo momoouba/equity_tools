@@ -465,8 +465,8 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
               // 先判断是否是企业公众号发的，如果是，直接设置企业全称
               let enterpriseFullName = null;
               try {
-                // 获取文章中的公众号ID（可能是article.account或account）
-                const wechatAccountId = article.account || account;
+                // 使用传入的公众号ID（account），而不是接口返回的article.account
+                const wechatAccountId = account;
                 console.log(`[入库] 检查公众号是否为企业公众号 - wechat_account_id: "${wechatAccountId}", account_name: "${article.name || ''}"`);
                 
                 // 只从invested_enterprises表中查找被投企业，且状态不为"完全退出"
@@ -510,7 +510,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 [
                   newsId,
                   article.name || '',
-                  article.account || account,
+                  account, // 直接使用传入的公众号ID，不使用接口返回的article.account
                   enterpriseFullName,
                   sourceUrl,
                   article.title || '',
