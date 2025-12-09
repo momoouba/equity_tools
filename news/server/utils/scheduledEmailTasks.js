@@ -262,7 +262,7 @@ async function getUserVisibleYesterdayNews(userId) {
     
     newsList = await db.query(
       `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
-              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.source_url, nd.created_at,
+              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
               nd.APItype, nd.news_category
        FROM news_detail nd
        WHERE (
@@ -277,6 +277,21 @@ async function getUserVisibleYesterdayNews(userId) {
             FROM invested_enterprises 
             WHERE exit_status NOT IN ('完全退出', '已上市')
             AND delete_mark = 0
+          ))
+         OR
+         -- 额外公众号新闻：包含"榜单"或"获奖"标签且企业名称为空
+         (nd.enterprise_full_name IS NULL 
+          AND nd.wechat_account IN (
+            SELECT wechat_account_id 
+            FROM additional_wechat_accounts 
+            WHERE status = 'active' 
+            AND delete_mark = 0
+          )
+          AND (
+            nd.keywords LIKE '%"榜单"%'
+            OR nd.keywords LIKE '%"获奖"%'
+            OR nd.keywords LIKE '%榜单%'
+            OR nd.keywords LIKE '%获奖%'
           ))
        )
        AND nd.public_time >= ? 
@@ -580,11 +595,34 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     // 按企业分组新闻（使用过滤后的列表）
     const newsByEnterprise = {};
     for (const news of filteredNewsList) {
-      const enterpriseName = news.enterprise_full_name;
-      if (!newsByEnterprise[enterpriseName]) {
-        newsByEnterprise[enterpriseName] = [];
+      // 如果企业名称为空且包含"榜单"或"获奖"标签，使用null作为分组键
+      let enterpriseName = news.enterprise_full_name;
+      if ((!enterpriseName || enterpriseName === '' || enterpriseName === 'null')) {
+        // 检查是否包含"榜单"或"获奖"标签
+        let keywords = [];
+        if (news.keywords) {
+          try {
+            if (typeof news.keywords === 'string') {
+              keywords = JSON.parse(news.keywords);
+            } else if (Array.isArray(news.keywords)) {
+              keywords = news.keywords;
+            }
+          } catch (e) {
+            // 解析失败，忽略
+          }
+        }
+        
+        const hasAwardTag = keywords.some(k => k === '榜单' || k === '获奖');
+        if (hasAwardTag) {
+          enterpriseName = null; // 使用null作为分组键，邮件生成时会显示为"——榜单或获奖信息"
+        }
       }
-      newsByEnterprise[enterpriseName].push(news);
+      
+      const groupKey = enterpriseName || null; // 使用null作为空企业名称的分组键
+      if (!newsByEnterprise[groupKey]) {
+        newsByEnterprise[groupKey] = [];
+      }
+      newsByEnterprise[groupKey].push(news);
     }
     
     const htmlContent = generateEmailContent(newsByEnterprise);

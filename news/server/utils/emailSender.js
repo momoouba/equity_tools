@@ -190,10 +190,15 @@ function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
   
   // 按企业分组显示
   for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
+    // 如果企业名称为空或null，显示"——榜单或获奖信息"
+    const displayEnterpriseName = (enterpriseName === null || enterpriseName === '' || enterpriseName === 'null') 
+      ? '——榜单或获奖信息' 
+      : enterpriseName;
+    
     html += `
       <div style="margin-bottom: 40px; border-left: 4px solid #4CAF50; padding-left: 20px;">
         <h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">
-          ${enterpriseName}
+          ${displayEnterpriseName}
         </h3>
     `;
     

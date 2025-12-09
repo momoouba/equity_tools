@@ -116,13 +116,14 @@ class NewsAnalysis {
   /**
    * 分析新闻情绪和类型
    */
-  async analyzeNewsSentimentAndType(title, content, sourceUrl) {
+  async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false) {
     const prompt = `
 请分析以下新闻文章的情绪倾向和类型分类：
 
 标题：${title}
 内容：${content.substring(0, 2000)}...
 链接：${sourceUrl}
+${isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。**' : ''}
 
 请按照以下JSON格式返回分析结果：
 {
@@ -172,12 +173,21 @@ class NewsAnalysis {
 - 行业分析
 - 安全防护（新增：企业提供安全防护、漏洞修复等）
 - 产品能力（新增：展示产品功能、技术实力等）
+- 榜单（新增：各类榜单、排名等）
+- 获奖（新增：获奖、荣誉、认证等）
 - 广告推广
 - 商业广告
 - 营销推广
 - 其他
 
 **重要要求：每个类型标签必须控制在4个字符以内，超过4个字符的标签将被截断。**
+
+${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
+- 如果新闻内容涉及榜单、排名、获奖、荣誉、认证等信息，请务必添加"榜单"或"获奖"标签
+- 榜单相关：各类榜单、排名、TOP榜单、排行榜等
+- 获奖相关：获奖、荣誉、认证、资质、称号等
+- 请仔细分析内容，确保不遗漏榜单或获奖相关信息
+` : ''}
 
 **广告识别重要提示：**
 - 如果文章主要目的是推销产品、服务或品牌，请标记为"广告推广"、"商业广告"或"营销推广"
@@ -572,11 +582,21 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] 跳过AI验证，直接保持企业关联`);
       }
 
+      // 检查是否是额外公众号的新闻
+      const isAdditionalAccount = await db.query(
+        `SELECT id FROM additional_wechat_accounts 
+         WHERE wechat_account_id = ? 
+         AND status = 'active' 
+         AND delete_mark = 0`,
+        [newsItem.wechat_account]
+      );
+
       console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
       const analysis = await this.analyzeNewsSentimentAndType(
         newsItem.title,
         newsItem.content,
-        newsItem.source_url
+        newsItem.source_url,
+        isAdditionalAccount.length > 0 // 传递是否是额外公众号的标志
       );
       console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
 
@@ -648,11 +668,21 @@ ${enterpriseList}
         enterprises
       );
 
+      // 检查是否是额外公众号的新闻
+      const isAdditionalAccount = await db.query(
+        `SELECT id FROM additional_wechat_accounts 
+         WHERE wechat_account_id = ? 
+         AND status = 'active' 
+         AND delete_mark = 0`,
+        [newsItem.wechat_account]
+      );
+
       // 分析新闻情绪和类型
       const analysis = await this.analyzeNewsSentimentAndType(
         newsItem.title,
         newsItem.content,
-        newsItem.source_url
+        newsItem.source_url,
+        isAdditionalAccount.length > 0 // 传递是否是额外公众号的标志
       );
 
       // 检查是否为广告类型
