@@ -907,42 +907,117 @@ function ScheduledTaskManagement() {
                         <th>处理数量</th>
                         <th>错误数量</th>
                         <th>错误信息</th>
+                        <th>操作</th>
                       </tr>
                     </thead>
                     <tbody>
                       {logs.map((log) => (
-                        <tr key={log.id}>
-                          <td>{log.execution_type === 'manual' ? '手动触发' : '定时任务'}</td>
-                          <td>{formatDate(log.start_time)}</td>
-                          <td>{log.end_time ? formatDate(log.end_time) : '-'}</td>
-                          <td>{log.duration_seconds !== null ? log.duration_seconds : '-'}</td>
-                          <td>
-                            {log.status === 'success' ? (
-                              <span className="status-badge active">成功</span>
-                            ) : log.status === 'failed' ? (
-                              <span className="status-badge inactive">失败</span>
-                            ) : (
-                              <span className="status-badge" style={{ background: '#ffc107', color: '#000' }}>执行中</span>
-                            )}
-                          </td>
-                          <td>{log.synced_count || 0}</td>
-                          <td>{log.total_enterprises || 0}</td>
-                          <td>{log.processed_enterprises || 0}</td>
-                          <td>{log.error_count || 0}</td>
-                          <td style={{ maxWidth: '200px', wordBreak: 'break-word', fontSize: '12px' }}>
-                            {log.error_message || '-'}
-                            {log.execution_details && (
-                              <div style={{ marginTop: '4px', fontSize: '11px', color: '#666' }}>
-                                {log.execution_details.interfaceType && (
-                                  <div>接口类型: {log.execution_details.interfaceType}</div>
-                                )}
-                                {log.execution_details.timeRange && (
-                                  <div>时间范围: {log.execution_details.timeRange.from || log.execution_details.timeRange.startDate} 至 {log.execution_details.timeRange.to || log.execution_details.timeRange.endDate}</div>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
+                        <React.Fragment key={log.id}>
+                          <tr>
+                            <td>{log.execution_type === 'manual' ? '手动触发' : '定时任务'}</td>
+                            <td>{formatDate(log.start_time)}</td>
+                            <td>{log.end_time ? formatDate(log.end_time) : '-'}</td>
+                            <td>{log.duration_seconds !== null ? log.duration_seconds : '-'}</td>
+                            <td>
+                              {log.status === 'success' ? (
+                                <span className="status-badge active">成功</span>
+                              ) : log.status === 'failed' ? (
+                                <span className="status-badge inactive">失败</span>
+                              ) : (
+                                <span className="status-badge" style={{ background: '#ffc107', color: '#000' }}>执行中</span>
+                              )}
+                            </td>
+                            <td>{log.synced_count || 0}</td>
+                            <td>{log.total_enterprises || 0}</td>
+                            <td>{log.processed_enterprises || 0}</td>
+                            <td>{log.error_count || 0}</td>
+                            <td style={{ maxWidth: '200px', wordBreak: 'break-word', fontSize: '12px' }}>
+                              {log.error_message || '-'}
+                              {log.execution_details && (
+                                <div style={{ marginTop: '4px', fontSize: '11px', color: '#666' }}>
+                                  {log.execution_details.interfaceType && (
+                                    <div>接口类型: {log.execution_details.interfaceType}</div>
+                                  )}
+                                  {log.execution_details.timeRange && (
+                                    <div>时间范围: {log.execution_details.timeRange.from || log.execution_details.timeRange.startDate} 至 {log.execution_details.timeRange.to || log.execution_details.timeRange.endDate}</div>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+                            <td>
+                              {log.detail_logs && log.detail_logs.length > 0 && (
+                                <button
+                                  onClick={() => {
+                                    const detailRow = document.getElementById(`detail-${log.id}`);
+                                    if (detailRow) {
+                                      detailRow.style.display = detailRow.style.display === 'none' ? 'table-row' : 'none';
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '12px',
+                                    cursor: 'pointer',
+                                    background: '#007bff',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: '4px'
+                                  }}
+                                >
+                                  查看详情 ({log.detail_logs.length})
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {log.detail_logs && log.detail_logs.length > 0 && (
+                            <tr id={`detail-${log.id}`} style={{ display: 'none' }}>
+                              <td colSpan="10" style={{ padding: '10px', background: '#f5f5f5' }}>
+                                <div style={{ marginBottom: '10px', fontWeight: 'bold' }}>详细同步记录：</div>
+                                <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                  <thead>
+                                    <tr style={{ background: '#e9ecef' }}>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'left' }}>接口类型</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'left' }}>公众号ID/企业代码</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'center' }}>有数据</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'center' }}>返回条数</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'center' }}>入库成功</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'center' }}>入库条数</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'left' }}>错误信息</th>
+                                      <th style={{ padding: '8px', border: '1px solid #dee2e6', textAlign: 'left' }}>操作时间</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {log.detail_logs.map((detail) => (
+                                      <tr key={detail.id}>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6' }}>{detail.interface_type}</td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', wordBreak: 'break-word', maxWidth: '150px' }}>{detail.account_id}</td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                                          {detail.has_data ? (
+                                            <span style={{ color: '#28a745' }}>是</span>
+                                          ) : (
+                                            <span style={{ color: '#dc3545' }}>否</span>
+                                          )}
+                                        </td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', textAlign: 'center' }}>{detail.data_count || 0}</td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', textAlign: 'center' }}>
+                                          {detail.insert_success ? (
+                                            <span style={{ color: '#28a745' }}>是</span>
+                                          ) : (
+                                            <span style={{ color: '#dc3545' }}>否</span>
+                                          )}
+                                        </td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', textAlign: 'center' }}>{detail.insert_count || 0}</td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6', wordBreak: 'break-word', maxWidth: '200px', color: detail.error_message ? '#dc3545' : '#666' }}>
+                                          {detail.error_message || '-'}
+                                        </td>
+                                        <td style={{ padding: '6px', border: '1px solid #dee2e6' }}>{formatDate(detail.created_at)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                     </tbody>
                   </table>
