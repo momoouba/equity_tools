@@ -1268,6 +1268,27 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // news_sync_detail_log 表：新闻同步详细记录（每个公众号/企业的同步详情）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS news_sync_detail_log (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      sync_log_id VARCHAR(19) NOT NULL COMMENT '关联的同步执行日志ID',
+      interface_type ENUM('新榜', '企查查') NOT NULL COMMENT '接口类型',
+      account_id VARCHAR(255) NOT NULL COMMENT '公众号ID（新榜）或统一信用代码（企查查）',
+      has_data TINYINT(1) DEFAULT 0 COMMENT '是否有数据返回：0-否，1-是',
+      data_count INT DEFAULT 0 COMMENT '返回内容的条数',
+      insert_success TINYINT(1) DEFAULT 0 COMMENT '是否成功入库：0-否，1-是',
+      insert_count INT DEFAULT 0 COMMENT '成功入库的条数',
+      error_message TEXT COMMENT '错误信息',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+      INDEX idx_sync_log_id (sync_log_id),
+      INDEX idx_interface_type (interface_type),
+      INDEX idx_account_id (account_id),
+      INDEX idx_created_at (created_at),
+      FOREIGN KEY (sync_log_id) REFERENCES news_sync_execution_log(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
   // news_detail 表：公众号文章详情
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_detail (

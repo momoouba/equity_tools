@@ -470,6 +470,12 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
 
   // 遍历每个公众号，调用接口获取数据
   for (const account of uniqueAccounts) {
+    // 记录每个公众号的同步详情
+    let accountDataCount = 0; // 该公众号返回的数据条数
+    let accountInsertCount = 0; // 该公众号成功入库的条数
+    let accountHasData = false; // 是否有数据返回
+    let accountErrorMsg = null; // 错误信息
+    
     try {
       let page = 1;
       let hasMore = true;
@@ -503,6 +509,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
             hasMore = false;
             break;
           }
+
+          // 记录有数据返回
+          accountHasData = true;
+          accountDataCount += articles.length;
 
           // 批量插入数据
           for (const article of articles) {
@@ -542,6 +552,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 const wechatAccountId = account;
                 console.log(`[入库] 检查公众号是否为企业公众号 - wechat_account_id: "${wechatAccountId}", account_name: "${article.name || ''}"`);
                 
+                // 先检查是否是额外公众号
+                const isAdditionalAccount = additionalAccountIds.includes(wechatAccountId);
+                
                 // 只从invested_enterprises表中查找被投企业，且状态不为"完全退出"
                 // 支持逗号分隔的多个公众号ID
                 const enterpriseResult = await db.query(
@@ -566,7 +579,11 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   enterpriseFullName = enterpriseResult[0].enterprise_full_name;
                   console.log(`[入库] ✓ 匹配到企业公众号，设置企业全称: ${enterpriseFullName}`);
                 } else {
-                  console.log(`[入库] ✗ 公众号 "${wechatAccountId}" 不是invested_enterprises表中的企业公众号`);
+                  if (isAdditionalAccount) {
+                    console.log(`[入库] ℹ 公众号 "${wechatAccountId}" 是额外公众号（非企业公众号），企业全称将在AI分析时根据内容相关性决定`);
+                  } else {
+                    console.log(`[入库] ✗ 公众号 "${wechatAccountId}" 不是invested_enterprises表中的企业公众号，也不是额外公众号`);
+                  }
                 }
                 // 注意：来自additional_wechat_accounts的新闻不在此处设置enterprise_full_name
                 // 它们将在AI分析时根据内容相关性来决定是否关联到被投企业
@@ -597,6 +614,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 ]
               );
               totalSynced++;
+              accountInsertCount++;
             }
           }
 
@@ -610,18 +628,34 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           hasMore = false;
           if (response.data.code !== 0) {
             const errorMsg = response.data.msg || response.data.message || '接口返回错误';
+            
+            // 根据错误信息判断错误类型
+            let errorType = '其他错误';
+            if (errorMsg.includes('数据不存在') || errorMsg.includes('不存在') || errorMsg.includes('无数据') || errorMsg.includes('没有数据')) {
+              errorType = '数据不存在';
+            } else if (errorMsg.includes('使用量') || errorMsg.includes('配额') || errorMsg.includes('不足') || errorMsg.includes('quota') || errorMsg.includes('limit') || errorMsg.includes('次数')) {
+              errorType = '接口使用量不足';
+            } else if (errorMsg.includes('认证') || errorMsg.includes('auth') || errorMsg.includes('key') || errorMsg.includes('token')) {
+              errorType = '401-认证失败';
+            } else if (errorMsg.includes('权限') || errorMsg.includes('permission') || errorMsg.includes('forbidden')) {
+              errorType = '403-权限不足';
+            } else if (errorMsg.includes('超时') || errorMsg.includes('timeout')) {
+              errorType = '请求超时';
+            } else if (errorMsg.includes('网络') || errorMsg.includes('network') || errorMsg.includes('连接')) {
+              errorType = '网络错误';
+            }
+            
             errors.push({
               account,
-              message: errorMsg
+              message: errorMsg,
+              type: errorType
             });
             
+            // 记录错误信息
+            accountErrorMsg = errorMsg;
+            
             // 检查是否是使用量不足的错误
-            const isQuotaExceeded = errorMsg.includes('使用量') || 
-                                   errorMsg.includes('配额') || 
-                                   errorMsg.includes('不足') ||
-                                   errorMsg.includes('quota') ||
-                                   errorMsg.includes('limit') ||
-                                   errorMsg.includes('次数');
+            const isQuotaExceeded = errorType === '接口使用量不足';
             
             if (isQuotaExceeded) {
               console.warn(`[新榜同步] 接口使用量不足，停止后续调用。已处理 ${totalSynced} 条数据`);
@@ -686,6 +720,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
         type: errorType
       });
       
+      // 记录错误信息
+      accountErrorMsg = errorMessage;
+      
       // 检查是否是使用量不足的错误
       const isQuotaExceeded = errorMessage.includes('使用量') || 
                              errorMessage.includes('配额') || 
@@ -712,6 +749,31 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           };
         }
       }
+      
+      // 记录该公众号的同步详情
+      if (logId) {
+        try {
+          const detailLogId = await generateId('news_sync_detail_log');
+          await db.execute(
+            `INSERT INTO news_sync_detail_log 
+             (id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              detailLogId,
+              logId,
+              '新榜',
+              account,
+              accountHasData ? 1 : 0,
+              accountDataCount,
+              accountInsertCount > 0 ? 1 : 0,
+              accountInsertCount,
+              accountErrorMsg
+            ]
+          );
+        } catch (detailLogError) {
+          console.error(`[新榜同步] 记录详细日志失败（公众号：${account}）：`, detailLogError.message);
+        }
+      }
     }
   }
 
@@ -720,6 +782,8 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     '404-公众号不存在或已失效': 0,
     '401-认证失败': 0,
     '403-权限不足': 0,
+    '数据不存在': 0,
+    '接口使用量不足': 0,
     '网络错误': 0,
     '请求超时': 0,
     '服务器错误': 0,
@@ -2934,6 +2998,12 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
     // 遍历每个统一信用代码，每个企业只查询一次
     for (const creditCode of enterprisesToSync) {
+      // 记录每个企业的同步详情
+      let enterpriseDataCount = 0; // 该企业返回的数据条数
+      let enterpriseInsertCount = 0; // 该企业成功入库的条数
+      let enterpriseHasData = false; // 是否有数据返回
+      let enterpriseErrorMsg = null; // 错误信息
+      
       try {
         // 生成Token和Timespan
         const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -2976,6 +3046,10 @@ async function syncQichachaNewsData(configId = null, logId = null) {
           if (Array.isArray(result) && result.length > 0) {
             // 不进行任何过滤，保留所有返回的数据（包括所有情感类型和所有类别）
             console.log(`企业 ${creditCode} 返回 ${result.length} 条数据，全部保存`);
+            
+            // 记录有数据返回
+            enterpriseHasData = true;
+            enterpriseDataCount = result.length;
             
             // 批量插入数据（所有数据）
             for (const newsItem of result) {
@@ -3093,6 +3167,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     );
 
                     totalSynced++;
+                    enterpriseInsertCount++;
                   }
                 } catch (insertError) {
                   const newsTitle = newsItem.Title || newsItem.Url || '未知标题';
@@ -3106,6 +3181,9 @@ async function syncQichachaNewsData(configId = null, logId = null) {
             const message = response.data.Message || response.data.message || '未知错误';
             console.warn(`企查查接口返回错误状态: ${status}, ${message}`);
             errors.push(`接口错误 (${creditCode}): ${status} - ${message}`);
+            
+            // 记录错误信息
+            enterpriseErrorMsg = `${status} - ${message}`;
             
             // 检查是否是使用量不足的错误
             const isQuotaExceeded = message.includes('使用量') || 
@@ -3154,6 +3232,9 @@ async function syncQichachaNewsData(configId = null, logId = null) {
         
         errors.push(`同步失败 (${creditCode}): ${error.message}`);
         
+        // 记录错误信息
+        enterpriseErrorMsg = error.message;
+        
         if (isQuotaExceeded) {
           console.warn(`[企查查同步] 接口使用量不足，停止后续调用。已处理 ${totalSynced} 条数据`);
           // 如果已获取到数据，先返回已处理的数据
@@ -3168,6 +3249,31 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                 quotaExceeded: true
               }
             };
+          }
+        }
+        
+        // 记录该企业的同步详情
+        if (logId) {
+          try {
+            const detailLogId = await generateId('news_sync_detail_log');
+            await db.execute(
+              `INSERT INTO news_sync_detail_log 
+               (id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                detailLogId,
+                logId,
+                '企查查',
+                creditCode,
+                enterpriseHasData ? 1 : 0,
+                enterpriseDataCount,
+                enterpriseInsertCount > 0 ? 1 : 0,
+                enterpriseInsertCount,
+                enterpriseErrorMsg
+              ]
+            );
+          } catch (detailLogError) {
+            console.error(`[企查查同步] 记录详细日志失败（企业：${creditCode}）：`, detailLogError.message);
           }
         }
       }

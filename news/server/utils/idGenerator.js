@@ -28,7 +28,7 @@ async function generateId(tableName) {
       'company', 'system_config', 'data_change_log', 'news_interface_config', 'news_detail',
       'email_config', 'additional_wechat_accounts', 'ai_model_config', 'qichacha_config',
       'recipient_management', 'email_logs', 'system_file_storage', 'holiday_calendar',
-      'external_db_config', 'news_sync_execution_log'
+      'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log'
     ];
     
     if (!validTableNames.includes(tableName)) {

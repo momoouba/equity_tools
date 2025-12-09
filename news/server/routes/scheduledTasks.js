@@ -353,6 +353,19 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
         [id, parseInt(pageSize), offset]
       );
 
+      // 为每个日志获取详细记录
+      for (const log of logs) {
+        const detailLogs = await db.query(
+          `SELECT id, interface_type, account_id, has_data, data_count, 
+                  insert_success, insert_count, error_message, created_at
+           FROM news_sync_detail_log 
+           WHERE sync_log_id = ?
+           ORDER BY created_at ASC`,
+          [log.id]
+        );
+        log.detail_logs = detailLogs || [];
+      }
+
       // 解析execution_details JSON字段
       const formattedLogs = logs.map(log => {
         let executionDetails = null;
