@@ -446,18 +446,19 @@ async function getUserVisibleYesterdayNews(userId) {
 }
 
 /**
- * 过滤新闻：只保留企查查数据源且类别为 80000 或 40000 系列的新闻
+ * 过滤新闻：只保留企查查数据源且类别为 80000、40000 系列或荣誉奖项（14004）的新闻
  * @param {Array} newsList - 新闻列表
  * @returns {Array} - 过滤后的新闻列表
  */
 function filterNewsByCategory(newsList) {
-  // 需要包含的类别编码（80000和40000系列）
+  // 需要包含的类别编码（80000和40000系列，以及荣誉奖项14004）
   const allowedCategoryCodes = [
     '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
     '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008', 
     '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017', 
     '40018', '40019', '40020', '40021', '40022', '40023', '40024', '40025', '40026', 
-    '40027', '40028', '40029', '40030'
+    '40027', '40028', '40029', '40030',
+    '14004'  // 荣誉奖项
   ];
   
   // 从映射表获取对应的中文类别名称
@@ -465,6 +466,8 @@ function filterNewsByCategory(newsList) {
   const allowedCategoryNames = allowedCategoryCodes
     .map(code => categoryMap[code])
     .filter(name => name !== undefined);
+  
+  console.log(`[邮件发送] 允许的企查查类别：${allowedCategoryNames.join(', ')}`);
   
   return newsList.filter(news => {
     // 只处理企查查数据源的新闻
@@ -482,7 +485,11 @@ function filterNewsByCategory(newsList) {
     }
     
     // 检查类别是否在允许的列表中
-    return allowedCategoryNames.includes(category);
+    const isAllowed = allowedCategoryNames.includes(category);
+    if (!isAllowed) {
+      console.log(`[邮件发送] 企查查新闻被过滤：类别"${category}"不在允许列表中 (标题: ${news.title?.substring(0, 30)})`);
+    }
+    return isAllowed;
   });
 }
 
@@ -874,7 +881,75 @@ async function executeEmailTask(recipientId) {
     }
     
     // 获取用户可见的昨日舆情信息
-    const newsList = await getUserVisibleYesterdayNews(recipient.user_id);
+    let newsList = await getUserVisibleYesterdayNews(recipient.user_id);
+    
+    // 如果收件人ID是14004，额外添加涉及荣誉奖项关键词的企查查新闻
+    if (recipientId === '14004') {
+      console.log(`[邮件发送] 收件人ID为14004，额外添加荣誉奖项关键词的企查查新闻`);
+      const { from, to } = await getEmailTimeRange();
+      
+      // 查询包含荣誉奖项关键词的企查查新闻
+      // 条件：类别为"荣誉奖项"或关键词/标题/摘要中包含荣誉奖项相关关键词
+      const honorAwardNews = await db.query(
+        `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+                nd.APItype, nd.news_category
+         FROM news_detail nd
+         WHERE nd.APItype = '企查查'
+         AND (
+           -- 类别为荣誉奖项（14004对应的中文类别）
+           nd.news_category = '荣誉奖项'
+           OR
+           -- 或者关键词中包含荣誉奖项相关关键词（JSON格式或普通文本）
+           (
+             nd.keywords LIKE '%"荣誉"%'
+             OR nd.keywords LIKE '%"奖项"%'
+             OR nd.keywords LIKE '%"获奖"%'
+             OR nd.keywords LIKE '%"榜单"%'
+             OR nd.keywords LIKE '%荣誉%'
+             OR nd.keywords LIKE '%奖项%'
+             OR nd.keywords LIKE '%获奖%'
+             OR nd.keywords LIKE '%榜单%'
+             OR nd.title LIKE '%荣誉%'
+             OR nd.title LIKE '%奖项%'
+             OR nd.title LIKE '%获奖%'
+             OR nd.title LIKE '%榜单%'
+             OR nd.summary LIKE '%荣誉%'
+             OR nd.summary LIKE '%奖项%'
+             OR nd.summary LIKE '%获奖%'
+             OR nd.summary LIKE '%榜单%'
+             OR nd.news_abstract LIKE '%荣誉%'
+             OR nd.news_abstract LIKE '%奖项%'
+             OR nd.news_abstract LIKE '%获奖%'
+             OR nd.news_abstract LIKE '%榜单%'
+           )
+         )
+         AND nd.public_time >= ? 
+         AND nd.public_time < ?
+         AND nd.delete_mark = 0
+         -- 过滤掉摘要和正文都为空的数据
+         AND (
+           (nd.news_abstract IS NOT NULL AND nd.news_abstract != '')
+           OR (nd.summary IS NOT NULL AND nd.summary != '')
+           OR (nd.content IS NOT NULL AND nd.content != '')
+         )
+         ORDER BY nd.public_time DESC`,
+        [from, to]
+      );
+      
+      console.log(`[邮件发送] 查询到 ${honorAwardNews.length} 条荣誉奖项相关的企查查新闻`);
+      
+      // 合并新闻列表，去重（根据id）
+      const existingIds = new Set(newsList.map(n => n.id));
+      const additionalNews = honorAwardNews.filter(n => !existingIds.has(n.id));
+      
+      if (additionalNews.length > 0) {
+        console.log(`[邮件发送] 添加 ${additionalNews.length} 条荣誉奖项新闻到推送列表`);
+        newsList = [...newsList, ...additionalNews];
+      } else {
+        console.log(`[邮件发送] 荣誉奖项新闻已包含在现有列表中，无需额外添加`);
+      }
+    }
     
     // 即使没有数据，也发送邮件通知用户
     if (newsList.length === 0) {
