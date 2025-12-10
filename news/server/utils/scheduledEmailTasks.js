@@ -386,8 +386,8 @@ async function getUserVisibleYesterdayNews(userId) {
     })));
   }
   
-  // 过滤新闻：只保留企查查数据源且类别为 80000 或 40000 系列的新闻
-  const filteredNewsList = filterNewsByCategory(newsList);
+  // 过滤新闻：只保留企查查数据源且类别为 80000 或 40000 系列的新闻（使用默认类别）
+  const filteredNewsList = filterNewsByCategory(newsList, null);
   console.log(`[邮件发送] 企查查类别过滤后：${filteredNewsList.length} 条新闻`);
   if (newsList.length > 0 && filteredNewsList.length === 0) {
     console.log(`[邮件发送] ⚠️ 警告：所有新闻都被类别过滤过滤掉了！`);
@@ -446,13 +446,14 @@ async function getUserVisibleYesterdayNews(userId) {
 }
 
 /**
- * 过滤新闻：只保留企查查数据源且类别为 80000、40000 系列或荣誉奖项（14004）的新闻
+ * 过滤新闻：只保留企查查数据源且类别在允许列表中的新闻
  * @param {Array} newsList - 新闻列表
+ * @param {Array|null} customCategoryCodes - 自定义类别编码列表（null表示使用默认类别）
  * @returns {Array} - 过滤后的新闻列表
  */
-function filterNewsByCategory(newsList) {
-  // 需要包含的类别编码（80000和40000系列，以及荣誉奖项14004）
-  const allowedCategoryCodes = [
+function filterNewsByCategory(newsList, customCategoryCodes = null) {
+  // 默认类别编码（80000和40000系列，以及荣誉奖项14004）
+  const defaultCategoryCodes = [
     '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
     '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008', 
     '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017', 
@@ -461,12 +462,18 @@ function filterNewsByCategory(newsList) {
     '14004'  // 荣誉奖项
   ];
   
+  // 使用自定义类别编码或默认类别编码
+  const allowedCategoryCodes = customCategoryCodes && Array.isArray(customCategoryCodes) && customCategoryCodes.length > 0
+    ? customCategoryCodes
+    : defaultCategoryCodes;
+  
   // 从映射表获取对应的中文类别名称
   const { categoryMap } = require('./qichachaCategoryMapper');
   const allowedCategoryNames = allowedCategoryCodes
     .map(code => categoryMap[code])
     .filter(name => name !== undefined);
   
+  console.log(`[邮件发送] 使用的企查查类别：${customCategoryCodes ? '自定义' : '默认'}，共 ${allowedCategoryNames.length} 个类别`);
   console.log(`[邮件发送] 允许的企查查类别：${allowedCategoryNames.join(', ')}`);
   
   return newsList.filter(news => {
@@ -850,7 +857,7 @@ async function executeEmailTask(recipientId) {
   try {
     console.log(`执行邮件发送任务: 收件管理配置 ${recipientId}`);
     
-    // 获取收件管理配置
+    // 获取收件管理配置，包括企查查类别编码
     const recipients = await db.query(
       `SELECT rm.*, u.account as user_account
        FROM recipient_management rm
@@ -867,6 +874,23 @@ async function executeEmailTask(recipientId) {
     }
     
     const recipient = recipients[0];
+    
+    // 解析企查查类别编码（JSON格式）
+    let categoryCodes = null;
+    if (recipient.qichacha_category_codes) {
+      try {
+        const parsed = typeof recipient.qichacha_category_codes === 'string'
+          ? JSON.parse(recipient.qichacha_category_codes)
+          : recipient.qichacha_category_codes;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          categoryCodes = parsed;
+        }
+      } catch (e) {
+        console.warn(`[邮件发送] 解析企查查类别编码失败: ${e.message}`);
+      }
+    }
+    
+    console.log(`[邮件发送] 收件配置 ${recipientId} 使用${categoryCodes ? '自定义' : '默认'}企查查类别`);
     
     // 如果是每日发送，需要检查今天是否为工作日（排除节假日）
     if (recipient.send_frequency === 'daily') {
@@ -973,8 +997,11 @@ async function executeEmailTask(recipientId) {
     
     const emailConfig = emailConfigs[0];
     
+    // 过滤新闻：根据收件配置的企查查类别编码进行过滤
+    const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
+    
     // 发送邮件（包含Excel附件）
-    await sendNewsEmailWithExcel(recipient, emailConfig, newsList);
+    await sendNewsEmailWithExcel(recipient, emailConfig, filteredNewsList);
     
     console.log(`✓ 邮件发送任务完成: 收件管理配置 ${recipientId}`);
   } catch (error) {

@@ -926,11 +926,54 @@ async function initializeTables(dbPool) {
       send_frequency VARCHAR(20) NOT NULL COMMENT '发送频率：daily-每天，weekly-每周，monthly-每月',
       send_time TIME COMMENT '发送时间（格式：HH:mm:ss）',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
+      qichacha_category_codes JSON COMMENT '企查查新闻类别编码列表（JSON数组），为空时使用默认类别',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+  
+  // 检查并添加 qichacha_category_codes 字段（如果不存在）
+  try {
+    const [columns] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'recipient_management' 
+      AND COLUMN_NAME = 'qichacha_category_codes'
+    `);
+    
+    if (columns.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE recipient_management 
+        ADD COLUMN qichacha_category_codes JSON COMMENT '企查查新闻类别编码列表（JSON数组），为空时使用默认类别'
+      `);
+      console.log('✓ 已添加 recipient_management 表的 qichacha_category_codes 字段');
+      
+      // 初始化现有数据：将默认类别同步到数据库（可选，如果需要的话）
+      // 注意：这里不初始化，让现有记录使用默认类别（null值）
+      // 如果需要初始化，可以取消下面的注释
+      /*
+      const defaultCategoryCodes = [
+        '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
+        '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008',
+        '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017',
+        '40018', '40019', '40020', '40021', '40022', '40023', '40024', '40025', '40026',
+        '40027', '40028', '40029', '40030',
+        '14004'
+      ];
+      const defaultCategoryCodesJson = JSON.stringify(defaultCategoryCodes);
+      await dbPool.query(`
+        UPDATE recipient_management 
+        SET qichacha_category_codes = ?
+        WHERE qichacha_category_codes IS NULL
+      `, [defaultCategoryCodesJson]);
+      console.log('✓ 已初始化现有收件管理记录的企查查类别编码为默认值');
+      */
+    }
+  } catch (err) {
+    console.warn('添加 qichacha_category_codes 字段时出现警告:', err.message);
+  }
 
   // email_config 表：邮件发送配置（必须在 email_logs 之前创建，因为 email_logs 有外键引用它）
   await dbPool.query(`

@@ -2271,7 +2271,7 @@ router.get('/recipients', async (req, res) => {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -2286,14 +2286,14 @@ router.get('/recipients', async (req, res) => {
       // 用户只查看自己的（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.user_id = ? AND rm.is_deleted = 0
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND is_deleted = 0';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND rm.is_deleted = 0';
       queryParams = [userId, pageSize, offset];
     }
 
@@ -2334,7 +2334,7 @@ router.get('/recipients/:id', async (req, res) => {
     if (userRole === 'admin') {
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -2344,7 +2344,7 @@ router.get('/recipients/:id', async (req, res) => {
     } else {
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0
@@ -2356,13 +2356,33 @@ router.get('/recipients/:id', async (req, res) => {
       : await db.query(query, [id, userId]);
 
     if (recipients.length > 0) {
-      res.json({ success: true, data: recipients[0] });
+      const recipient = recipients[0];
+      // 解析JSON字段
+      if (recipient.qichacha_category_codes) {
+        try {
+          recipient.qichacha_category_codes = JSON.parse(recipient.qichacha_category_codes);
+        } catch (e) {
+          recipient.qichacha_category_codes = null;
+        }
+      }
+      res.json({ success: true, data: recipient });
     } else {
       res.status(404).json({ success: false, message: '记录不存在' });
     }
   } catch (error) {
     console.error('获取收件管理信息失败：', error);
     res.status(500).json({ success: false, message: '获取信息失败' });
+  }
+});
+
+// 获取企查查类别映射
+router.get('/qichacha-categories', async (req, res) => {
+  try {
+    const { categoryMap } = require('../utils/qichachaCategoryMapper');
+    res.json({ success: true, data: categoryMap });
+  } catch (error) {
+    console.error('获取企查查类别映射失败：', error);
+    res.status(500).json({ success: false, message: '获取类别映射失败' });
   }
 });
 
@@ -2411,12 +2431,29 @@ router.post('/recipients', [
       return res.status(401).json({ success: false, message: '未登录' });
     }
 
-    const { recipient_email, email_subject, send_frequency, send_time, is_active } = req.body;
+    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes } = req.body;
     
     // 验证多个邮箱格式
     const emailValidation = validateMultipleEmails(recipient_email);
     if (!emailValidation.valid) {
       return res.status(400).json({ success: false, message: emailValidation.message });
+    }
+
+    // 处理企查查类别编码（JSON格式）
+    let categoryCodesJson = null;
+    if (qichacha_category_codes !== null && qichacha_category_codes !== undefined) {
+      if (Array.isArray(qichacha_category_codes) && qichacha_category_codes.length > 0) {
+        categoryCodesJson = JSON.stringify(qichacha_category_codes);
+      } else if (typeof qichacha_category_codes === 'string' && qichacha_category_codes.trim() !== '') {
+        try {
+          const parsed = JSON.parse(qichacha_category_codes);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            categoryCodesJson = qichacha_category_codes;
+          }
+        } catch (e) {
+          // 如果不是有效的JSON，忽略
+        }
+      }
     }
 
     const recipientId = await generateId('recipient_management');
@@ -2426,13 +2463,14 @@ router.post('/recipients', [
       email_subject: email_subject || '',
       send_frequency: send_frequency,
       send_time: send_time || '09:00:00',
-      is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1
+      is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1,
+      qichacha_category_codes: categoryCodesJson
     };
     
     await db.execute(
       `INSERT INTO recipient_management 
-       (id, user_id, recipient_email, email_subject, send_frequency, send_time, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recipientId,
         newData.user_id,
@@ -2440,7 +2478,8 @@ router.post('/recipients', [
         newData.email_subject,
         newData.send_frequency,
         newData.send_time,
-        newData.is_active
+        newData.is_active,
+        newData.qichacha_category_codes
       ]
     );
 
@@ -2474,7 +2513,7 @@ router.put('/recipients/:id', [
     const { id } = req.params;
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
-    const { recipient_email, email_subject, send_frequency, send_time, is_active } = req.body;
+    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes } = req.body;
 
     // 检查记录是否存在（排除已删除的记录）
     const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND is_deleted = 0', [id]);
@@ -2494,7 +2533,8 @@ router.put('/recipients/:id', [
       email_subject: existing[0].email_subject || '',
       send_frequency: existing[0].send_frequency,
       send_time: existing[0].send_time || '',
-      is_active: existing[0].is_active
+      is_active: existing[0].is_active,
+      qichacha_category_codes: existing[0].qichacha_category_codes
     };
 
     // 如果更新邮箱，验证多个邮箱格式
@@ -2505,6 +2545,31 @@ router.put('/recipients/:id', [
         return res.status(400).json({ success: false, message: emailValidation.message });
       }
       validatedEmail = emailValidation.emails;
+    }
+
+    // 处理企查查类别编码（JSON格式）
+    let categoryCodesJson = null;
+    if (qichacha_category_codes !== undefined) {
+      if (qichacha_category_codes === null) {
+        categoryCodesJson = null;
+      } else if (Array.isArray(qichacha_category_codes)) {
+        if (qichacha_category_codes.length > 0) {
+          categoryCodesJson = JSON.stringify(qichacha_category_codes);
+        } else {
+          categoryCodesJson = null;
+        }
+      } else if (typeof qichacha_category_codes === 'string' && qichacha_category_codes.trim() !== '') {
+        try {
+          const parsed = JSON.parse(qichacha_category_codes);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            categoryCodesJson = qichacha_category_codes;
+          } else {
+            categoryCodesJson = null;
+          }
+        } catch (e) {
+          categoryCodesJson = null;
+        }
+      }
     }
 
     // 构建更新字段
@@ -2531,8 +2596,13 @@ router.put('/recipients/:id', [
       updateFields.push('is_active = ?');
       updateValues.push(is_active ? 1 : 0);
     }
+    if (qichacha_category_codes !== undefined) {
+      updateFields.push('qichacha_category_codes = ?');
+      updateValues.push(categoryCodesJson);
+    }
 
     if (updateFields.length > 0) {
+      updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(id);
       await db.execute(
         `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ?`,

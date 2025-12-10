@@ -18,10 +18,14 @@ function RecipientManagement() {
     email_subject: '',
     send_frequency: 'daily',
     send_time: '09:00:00',
-    is_active: true
+    is_active: true,
+    qichacha_category_codes: null // null表示使用默认类别，数组表示自定义类别
   })
   const [showLogModal, setShowLogModal] = useState(false)
   const [logRecipientId, setLogRecipientId] = useState(null)
+  const [showCategoryModal, setShowCategoryModal] = useState(false)
+  const [selectedCategories, setSelectedCategories] = useState([])
+  const [categoryMap, setCategoryMap] = useState({})
 
   useEffect(() => {
     let isMounted = true
@@ -140,8 +144,10 @@ function RecipientManagement() {
       email_subject: '',
       send_frequency: 'daily',
       send_time: '09:00:00',
-      is_active: true
+      is_active: true,
+      qichacha_category_codes: null
     })
+    setSelectedCategories([])
     setShowForm(true)
   }
 
@@ -151,13 +157,16 @@ function RecipientManagement() {
       if (response.data.success) {
         const recipient = response.data.data
         setEditingRecipient(recipient)
+        const categoryCodes = recipient.qichacha_category_codes || null
         setFormData({
           recipient_email: recipient.recipient_email || '',
           email_subject: recipient.email_subject || '',
           send_frequency: recipient.send_frequency || 'daily',
           send_time: recipient.send_time || '09:00:00',
-          is_active: recipient.is_active === 1
+          is_active: recipient.is_active === 1,
+          qichacha_category_codes: categoryCodes
         })
+        setSelectedCategories(Array.isArray(categoryCodes) ? categoryCodes : [])
         setShowForm(true)
       }
     } catch (error) {
@@ -221,11 +230,17 @@ function RecipientManagement() {
     }
 
     try {
+      // 准备提交数据，包含企查查类别编码
+      const submitData = {
+        ...formData,
+        qichacha_category_codes: selectedCategories.length > 0 ? selectedCategories : null
+      }
+      
       let response
       if (editingRecipient) {
-        response = await axios.put(`/api/news/recipients/${editingRecipient.id}`, formData)
+        response = await axios.put(`/api/news/recipients/${editingRecipient.id}`, submitData)
       } else {
-        response = await axios.post('/api/news/recipients', formData)
+        response = await axios.post('/api/news/recipients', submitData)
       }
 
       // 检查响应格式
@@ -240,8 +255,10 @@ function RecipientManagement() {
           email_subject: '',
           send_frequency: 'daily',
           send_time: '09:00:00',
-          is_active: true
+          is_active: true,
+          qichacha_category_codes: null
         })
+        setSelectedCategories([])
         // 延迟刷新列表，确保数据已保存，并捕获可能的错误
         setTimeout(() => {
           fetchRecipients().catch(err => {
@@ -501,6 +518,35 @@ function RecipientManagement() {
                     />
                     启用
                   </label>
+                </div>
+
+                <div className="form-group">
+                  <label>企查查接口消息类型</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowCategoryModal(true)}
+                    style={{
+                      padding: '8px 16px',
+                      backgroundColor: '#007bff',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    选择消息类型
+                  </button>
+                  {selectedCategories.length > 0 && (
+                    <p style={{ marginTop: '8px', fontSize: '12px', color: '#666' }}>
+                      已选择 {selectedCategories.length} 个类别
+                    </p>
+                  )}
+                  {selectedCategories.length === 0 && (
+                    <p style={{ marginTop: '8px', fontSize: '12px', color: '#999' }}>
+                      未选择时，将使用默认类别（80000系列、40000系列、14004）
+                    </p>
+                  )}
                 </div>
 
                 <div className="form-actions">
