@@ -86,15 +86,35 @@ function RecipientManagement() {
       }
     }
     
-    // 加载企查查类别映射
+    // 加载企查查类别映射（从数据库获取）
     const loadCategoryMap = async () => {
       try {
-        const response = await axios.get('/api/news/qichacha-categories')
+        const response = await axios.get('/api/system/qichacha-news-categories', {
+          params: {
+            page: 1,
+            pageSize: 1000 // 获取所有类别
+          }
+        })
         if (response.data.success && isMounted) {
-          setCategoryMap(response.data.data || {})
+          // 将数组转换为对象，key为category_code，value为category_name
+          const categories = response.data.data || []
+          const map = {}
+          categories.forEach(cat => {
+            map[cat.category_code] = cat.category_name
+          })
+          setCategoryMap(map)
         }
       } catch (error) {
         console.error('获取企查查类别映射失败:', error)
+        // 如果新API失败，尝试使用旧API作为后备
+        try {
+          const fallbackResponse = await axios.get('/api/news/qichacha-categories')
+          if (fallbackResponse.data.success && isMounted) {
+            setCategoryMap(fallbackResponse.data.data || {})
+          }
+        } catch (fallbackError) {
+          console.error('获取企查查类别映射（后备方案）失败:', fallbackError)
+        }
       }
     }
     

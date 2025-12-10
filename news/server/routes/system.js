@@ -3,7 +3,28 @@ const { body, validationResult } = require('express-validator');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
 const { logEmailConfigChange, logQichachaConfigChange, logNewsConfigChange } = require('../utils/logger');
+const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
 const xlsx = require('xlsx');
+const multer = require('multer');
+
+// 配置multer用于Excel文件上传
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  },
+  fileFilter: function (req, file, cb) {
+    const allowed = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel'
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只支持Excel文件'));
+    }
+  }
+});
 
 const router = express.Router();
 const HOLIDAY_TYPES = ['周末', '调休', '法定节假日', '工作日'];
@@ -732,6 +753,337 @@ router.delete('/qichacha-config/:id', async (req, res) => {
   }
 });
 
+// ========== 企查查新闻类别管理 API ==========
+
+// 获取企查查新闻类别列表
+router.get('/qichacha-news-categories', async (req, res) => {
+  try {
+    const { page = 1, pageSize = 1000, search } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(pageSize);
+    
+    let query = 'SELECT * FROM qichacha_news_categories WHERE 1=1';
+    let countQuery = 'SELECT COUNT(*) as total FROM qichacha_news_categories WHERE 1=1';
+    const params = [];
+    
+    if (search) {
+      query += ' AND (category_code LIKE ? OR category_name LIKE ?)';
+      countQuery += ' AND (category_code LIKE ? OR category_name LIKE ?)';
+      const searchPattern = `%${search}%`;
+      params.push(searchPattern, searchPattern);
+    }
+    
+    query += ' ORDER BY category_code ASC LIMIT ? OFFSET ?';
+    params.push(parseInt(pageSize), offset);
+    
+    const categories = await db.query(query, params);
+    const [totalResult] = await db.query(countQuery, search ? [params[0], params[1]] : []);
+    const total = totalResult.total;
+    
+    res.json({ 
+      success: true, 
+      data: categories, 
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (error) {
+    console.error('获取企查查新闻类别列表失败：', error);
+    res.status(500).json({ success: false, message: '获取类别列表失败' });
+  }
+});
+
+// 获取单个企查查新闻类别
+router.get('/qichacha-news-category/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const categories = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ?', [id]);
+    if (categories.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+    res.json({ success: true, data: categories[0] });
+  } catch (error) {
+    console.error('获取企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '获取类别失败' });
+  }
+});
+
+// 创建企查查新闻类别
+router.post('/qichacha-news-category', [
+  body('category_code').notEmpty().withMessage('类别编码不能为空'),
+  body('category_name').notEmpty().withMessage('类别描述不能为空'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { category_code, category_name } = req.body;
+
+    // 检查类别编码是否已存在
+    const existing = await db.query(
+      'SELECT id FROM qichacha_news_categories WHERE category_code = ?',
+      [category_code]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `类别编码"${category_code}"已存在` 
+      });
+    }
+
+    const categoryId = await generateId('qichacha_news_categories');
+    await db.execute(
+      'INSERT INTO qichacha_news_categories (id, category_code, category_name) VALUES (?, ?, ?)',
+      [categoryId, category_code, category_name]
+    );
+
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+
+    res.json({ success: true, message: '企查查新闻类别创建成功', data: { id: categoryId } });
+  } catch (error) {
+    console.error('创建企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '创建类别失败：' + error.message });
+  }
+});
+
+// 更新企查查新闻类别
+router.put('/qichacha-news-category/:id', [
+  body('category_code').optional().notEmpty().withMessage('类别编码不能为空'),
+  body('category_name').optional().notEmpty().withMessage('类别描述不能为空'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { category_code, category_name } = req.body;
+
+    // 检查类别是否存在
+    const existing = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+
+    // 如果更新类别编码，检查是否与其他记录重复
+    if (category_code && category_code !== existing[0].category_code) {
+      const duplicate = await db.query(
+        'SELECT id FROM qichacha_news_categories WHERE category_code = ? AND id != ?',
+        [category_code, id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({ 
+          success: false, 
+          message: `类别编码"${category_code}"已存在` 
+        });
+      }
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+    
+    if (category_code !== undefined) {
+      updateFields.push('category_code = ?');
+      updateValues.push(category_code);
+    }
+    if (category_name !== undefined) {
+      updateFields.push('category_name = ?');
+      updateValues.push(category_name);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ success: false, message: '没有要更新的字段' });
+    }
+    
+    updateValues.push(id);
+    await db.execute(
+      `UPDATE qichacha_news_categories SET ${updateFields.join(', ')} WHERE id = ?`,
+      updateValues
+    );
+
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+
+    res.json({ success: true, message: '企查查新闻类别更新成功' });
+  } catch (error) {
+    console.error('更新企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '更新类别失败：' + error.message });
+  }
+});
+
+// 删除企查查新闻类别
+router.delete('/qichacha-news-category/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await db.query('SELECT id FROM qichacha_news_categories WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+
+    await db.execute('DELETE FROM qichacha_news_categories WHERE id = ?', [id]);
+    
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+    
+    res.json({ success: true, message: '企查查新闻类别删除成功' });
+  } catch (error) {
+    console.error('删除企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '删除类别失败' });
+  }
+});
+
+// 下载企查查新闻类别导入模板
+router.get('/qichacha-news-categories/template', async (req, res) => {
+  try {
+    const workbook = xlsx.utils.book_new();
+    const worksheet = xlsx.utils.aoa_to_sheet([
+      ['类别编号', '类别描述'],
+      ['10000', '信用预警'],
+      ['10001', '承诺失信']
+    ]);
+    
+    // 设置列宽
+    worksheet['!cols'] = [
+      { wch: 15 }, // 类别编号
+      { wch: 30 }  // 类别描述
+    ];
+    
+    xlsx.utils.book_append_sheet(workbook, worksheet, '企查查新闻类别');
+    const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent('企查查新闻类别导入模板.xlsx')}"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('生成企查查新闻类别模板失败：', error);
+    res.status(500).json({ success: false, message: '模板生成失败' });
+  }
+});
+
+// 批量导入企查查新闻类别（Excel文件）
+router.post('/qichacha-news-categories/import', excelUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: '请上传Excel文件' });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      return res.status(400).json({ success: false, message: '未检测到数据工作表' });
+    }
+
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'Excel内容为空' });
+    }
+
+    // 验证表头
+    const headers = rows[0].map((cell) => String(cell || '').trim());
+    if (headers[0] !== '类别编号' || headers[1] !== '类别描述') {
+      return res.status(400).json({ success: false, message: '模板表头不匹配，请下载最新模板' });
+    }
+
+    // 获取数据行（跳过表头）
+    const dataRows = rows.slice(1).filter((row) => {
+      const code = String(row[0] || '').trim();
+      const name = String(row[1] || '').trim();
+      return code !== '' || name !== '';
+    });
+
+    if (!dataRows.length) {
+      return res.status(400).json({ success: false, message: '未检测到可导入的数据' });
+    }
+
+    const results = {
+      success: 0,
+      duplicate: [],
+      failed: 0,
+      errors: []
+    };
+
+    // 批量查询所有已存在的类别编码（提高性能）
+    const allExistingCategories = await db.query('SELECT category_code FROM qichacha_news_categories');
+    const existingCodesSet = new Set(allExistingCategories.map(cat => cat.category_code));
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNumber = i + 2; // Excel行号（从第2行开始，因为第1行是表头）
+      const [codeCell, nameCell] = dataRows[i];
+      
+      const category_code = String(codeCell || '').trim();
+      const category_name = String(nameCell || '').trim();
+
+      // 验证必填字段
+      if (!category_code) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code || '(空)',
+          message: '类别编号不能为空'
+        });
+        continue;
+      }
+
+      if (!category_name) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code,
+          message: '类别描述不能为空'
+        });
+        continue;
+      }
+
+      // 检查类别编码是否已存在
+      if (existingCodesSet.has(category_code)) {
+        results.duplicate.push({
+          row: rowNumber,
+          category_code: category_code,
+          category_name: category_name
+        });
+        continue;
+      }
+
+      // 导入新类别
+      try {
+        const categoryId = await generateId('qichacha_news_categories');
+        await db.execute(
+          'INSERT INTO qichacha_news_categories (id, category_code, category_name) VALUES (?, ?, ?)',
+          [categoryId, category_code, category_name]
+        );
+        results.success++;
+        // 添加到已存在集合，避免同一批导入中重复
+        existingCodesSet.add(category_code);
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code,
+          message: error.message || '导入失败'
+        });
+      }
+    }
+
+    // 清除类别映射缓存
+    if (results.success > 0) {
+      clearCategoryMapCache();
+    }
+
+    res.json({ 
+      success: true, 
+      message: `导入完成：成功 ${results.success} 条，重复 ${results.duplicate.length} 条，失败 ${results.failed} 条`,
+      data: results
+    });
+  } catch (error) {
+    console.error('批量导入企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '导入失败：' + error.message });
+  }
+});
+
 // 更新系统配置（兼容旧接口）
 router.put('/config', [
   body('qichacha_app_key').optional(),
@@ -1338,7 +1690,6 @@ router.post('/email-config/:id/test', async (req, res) => {
 });
 
 // 系统基础配置相关路由
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
@@ -1371,24 +1722,6 @@ const upload = multer({
       cb(null, true);
     } else {
       cb(new Error('只允许上传图片文件'));
-    }
-  }
-});
-
-const excelUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 5 * 1024 * 1024 // 5MB
-  },
-  fileFilter: function (req, file, cb) {
-    const allowed = [
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel'
-    ];
-    if (allowed.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('只支持Excel文件'));
     }
   }
 });

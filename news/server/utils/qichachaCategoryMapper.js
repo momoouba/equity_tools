@@ -1,9 +1,12 @@
 /**
  * 企查查新闻类别编码到中文的映射
- * 根据截图中的编码对照表生成
+ * 优先从数据库加载，如果数据库中没有数据则使用默认映射
  */
 
-const categoryMap = {
+const db = require('../db');
+
+// 默认类别映射（作为后备）
+const defaultCategoryMap = {
   '00000': '其他',
   '1000': '高管信息',
   '10000': '信用预警',
@@ -174,8 +177,126 @@ const categoryMap = {
   '80008': '其他'
 };
 
+// 缓存数据库中的类别映射（避免每次都查询数据库）
+let dbCategoryMapCache = null;
+let dbCategoryMapCacheTime = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 缓存5分钟
+
 /**
- * 将企查查新闻类别编码转换为中文
+ * 从数据库加载类别映射
+ * @returns {Promise<Object>} 类别映射对象
+ */
+async function loadCategoryMapFromDB() {
+  try {
+    const categories = await db.query(
+      'SELECT category_code, category_name FROM qichacha_news_categories ORDER BY category_code'
+    );
+    const map = {};
+    categories.forEach(cat => {
+      map[cat.category_code] = cat.category_name;
+    });
+    return map;
+  } catch (error) {
+    console.error('从数据库加载企查查类别映射失败:', error);
+    return null;
+  }
+}
+
+/**
+ * 获取类别映射（优先使用数据库，如果失败则使用默认映射）
+ * @returns {Promise<Object>} 类别映射对象
+ */
+async function getCategoryMap() {
+  // 检查缓存是否有效
+  const now = Date.now();
+  if (dbCategoryMapCache && dbCategoryMapCacheTime && (now - dbCategoryMapCacheTime) < CACHE_DURATION) {
+    return dbCategoryMapCache;
+  }
+
+  // 尝试从数据库加载
+  const dbMap = await loadCategoryMapFromDB();
+  if (dbMap && Object.keys(dbMap).length > 0) {
+    dbCategoryMapCache = dbMap;
+    dbCategoryMapCacheTime = now;
+    return dbMap;
+  }
+
+  // 如果数据库中没有数据，使用默认映射
+  return defaultCategoryMap;
+}
+
+/**
+ * 同步获取类别映射（使用缓存或默认映射）
+ * 注意：首次调用时可能返回默认映射，直到数据库数据被加载
+ * @returns {Object} 类别映射对象
+ */
+function getCategoryMapSync() {
+  if (dbCategoryMapCache) {
+    return dbCategoryMapCache;
+  }
+  return defaultCategoryMap;
+}
+
+/**
+ * 清除类别映射缓存（当类别数据更新时调用）
+ */
+function clearCategoryMapCache() {
+  dbCategoryMapCache = null;
+  dbCategoryMapCacheTime = null;
+}
+
+/**
+ * 将企查查新闻类别编码转换为中文（异步版本）
+ * @param {string|number|array} categoryCode - 类别编码，可能是字符串、数字或数组
+ * @returns {Promise<string>} - 中文类别名称，如果找不到则返回原值
+ */
+async function convertCategoryCodeToChineseAsync(categoryCode) {
+  if (!categoryCode) {
+    return null;
+  }
+
+  // 如果是数组，取第一个元素
+  if (Array.isArray(categoryCode)) {
+    if (categoryCode.length === 0) {
+      return null;
+    }
+    categoryCode = categoryCode[0];
+  }
+
+  // 转换为字符串并去除空格
+  let codeStr = String(categoryCode).trim();
+
+  // 如果是空字符串，返回null
+  if (!codeStr) {
+    return null;
+  }
+
+  // 如果包含逗号，取第一个编码（多个类别的情况）
+  if (codeStr.includes(',')) {
+    codeStr = codeStr.split(',')[0].trim();
+  }
+
+  // 获取类别映射
+  const categoryMap = await getCategoryMap();
+
+  // 查找映射
+  if (categoryMap[codeStr]) {
+    return categoryMap[codeStr];
+  }
+
+  // 如果找不到映射，检查是否是数字格式（可能需要补零）
+  const numCode = String(parseInt(codeStr, 10));
+  if (numCode !== 'NaN' && categoryMap[numCode]) {
+    return categoryMap[numCode];
+  }
+
+  // 如果找不到映射，返回原值（可能是中文或其他格式）
+  console.warn(`未找到类别编码映射: ${codeStr}`);
+  return codeStr;
+}
+
+/**
+ * 将企查查新闻类别编码转换为中文（同步版本）
  * @param {string|number|array} categoryCode - 类别编码，可能是字符串、数字或数组
  * @returns {string} - 中文类别名称，如果找不到则返回原值或"其他"
  */
@@ -205,13 +326,15 @@ function convertCategoryCodeToChinese(categoryCode) {
     codeStr = codeStr.split(',')[0].trim();
   }
 
+  // 获取类别映射（同步版本，使用缓存或默认映射）
+  const categoryMap = getCategoryMapSync();
+
   // 查找映射
   if (categoryMap[codeStr]) {
     return categoryMap[codeStr];
   }
 
   // 如果找不到映射，检查是否是数字格式（可能需要补零）
-  // 尝试作为数字查找（例如 "1000" 和 "1000" 应该匹配）
   const numCode = String(parseInt(codeStr, 10));
   if (numCode !== 'NaN' && categoryMap[numCode]) {
     return categoryMap[numCode];
@@ -223,7 +346,7 @@ function convertCategoryCodeToChinese(categoryCode) {
 }
 
 /**
- * 将多个类别编码转换为中文数组
+ * 将多个类别编码转换为中文数组（同步版本）
  * @param {string|number|array} categoryCodes - 类别编码，可能是字符串、数字或数组
  * @returns {array} - 中文类别名称数组
  */
@@ -243,9 +366,35 @@ function convertCategoryCodesToChinese(categoryCodes) {
   return chineseCategories;
 }
 
+/**
+ * 将多个类别编码转换为中文数组（异步版本）
+ * @param {string|number|array} categoryCodes - 类别编码，可能是字符串、数字或数组
+ * @returns {Promise<array>} - 中文类别名称数组
+ */
+async function convertCategoryCodesToChineseAsync(categoryCodes) {
+  if (!categoryCodes) {
+    return [];
+  }
+
+  // 如果不是数组，转换为数组
+  const codes = Array.isArray(categoryCodes) ? categoryCodes : [categoryCodes];
+
+  // 转换每个编码并过滤掉null值
+  const chineseCategories = await Promise.all(
+    codes.map(code => convertCategoryCodeToChineseAsync(code))
+  );
+  
+  return chineseCategories.filter(category => category !== null && category !== undefined);
+}
+
 module.exports = {
   convertCategoryCodeToChinese,
   convertCategoryCodesToChinese,
-  categoryMap
+  convertCategoryCodeToChineseAsync,
+  convertCategoryCodesToChineseAsync,
+  getCategoryMap,
+  getCategoryMapSync,
+  clearCategoryMapCache,
+  categoryMap: defaultCategoryMap // 保持向后兼容
 };
 

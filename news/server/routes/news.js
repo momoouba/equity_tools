@@ -8,7 +8,7 @@ const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../utils/emailSender');
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews } = require('../utils/scheduledEmailTasks');
-const { convertCategoryCodeToChinese, convertCategoryCodesToChinese } = require('../utils/qichachaCategoryMapper');
+const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = require('../utils/qichachaCategoryMapper');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -2375,14 +2375,21 @@ router.get('/recipients/:id', async (req, res) => {
   }
 });
 
-// 获取企查查类别映射
+// 获取企查查类别映射（从数据库获取）
 router.get('/qichacha-categories', async (req, res) => {
   try {
-    const { categoryMap } = require('../utils/qichachaCategoryMapper');
+    // 优先从数据库获取类别映射
+    const categoryMap = await getCategoryMap();
     res.json({ success: true, data: categoryMap });
   } catch (error) {
     console.error('获取企查查类别映射失败：', error);
-    res.status(500).json({ success: false, message: '获取类别映射失败' });
+    // 如果数据库获取失败，使用默认映射作为后备
+    try {
+      const { categoryMap: defaultMap } = require('../utils/qichachaCategoryMapper');
+      res.json({ success: true, data: defaultMap });
+    } catch (fallbackError) {
+      res.status(500).json({ success: false, message: '获取类别映射失败' });
+    }
   }
 });
 

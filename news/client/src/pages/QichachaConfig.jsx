@@ -2,9 +2,12 @@ import React, { useState, useEffect } from 'react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
 import Pagination from '../components/Pagination'
+import QichachaNewsCategoryList from './QichachaNewsCategoryList'
 import './EmailConfig.css'
+import './SystemConfig.css'
 
 function QichachaConfig() {
+  const [activeSubTab, setActiveSubTab] = useState('config')
   const [configs, setConfigs] = useState([])
   const [applications, setApplications] = useState([])
   const [loading, setLoading] = useState(false)
@@ -179,17 +182,37 @@ function QichachaConfig() {
 
   return (
     <div className="email-config">
-      <div className="config-header">
-        <h3>企查查接口配置</h3>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button className="btn-primary" onClick={fetchConfigs} title="刷新列表">
-            刷新
-          </button>
-          <button className="btn-primary" onClick={handleAdd}>
-            新增配置
-          </button>
-        </div>
+      {/* 二级Tab */}
+      <div className="config-tabs" style={{ marginBottom: '16px' }}>
+        <button
+          className={`tab-button ${activeSubTab === 'config' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('config')}
+        >
+          企查查接口配置
+        </button>
+        <button
+          className={`tab-button ${activeSubTab === 'categories' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('categories')}
+        >
+          企查查新闻类别列表
+        </button>
       </div>
+
+      {activeSubTab === 'categories' ? (
+        <QichachaNewsCategoryList />
+      ) : (
+        <>
+          <div className="config-header">
+            <h3>企查查接口配置</h3>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className="btn-primary" onClick={fetchConfigs} title="刷新列表">
+                刷新
+              </button>
+              <button className="btn-primary" onClick={handleAdd}>
+                新增配置
+              </button>
+            </div>
+          </div>
 
       {loading ? (
         <div className="loading">加载中...</div>
@@ -393,6 +416,8 @@ function QichachaConfig() {
             setLogConfigId(null)
           }}
         />
+      )}
+    </>
       )}
     </div>
   )
