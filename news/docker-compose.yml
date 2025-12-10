@@ -62,7 +62,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 120s  # 增加到120秒，确保应用完全初始化（数据库初始化、定时任务等）
 
   # Nginx 反向代理
   nginx:

@@ -50,23 +50,46 @@ diagnose() {
         sudo docker compose ps
         echo ""
         
-        # 检查容器是否运行
-        APP_STATUS=$(sudo docker compose ps app 2>/dev/null | grep -v "NAME" | awk '{print $4}' || echo "not_running")
-        if [ "$APP_STATUS" != "Up" ]; then
+        # 检查容器是否运行（使用更可靠的方法）
+        # docker compose ps的输出格式可能不同，使用docker ps检查更可靠
+        APP_CONTAINER=$(sudo docker ps --filter "name=newsapp" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
+        if [ -z "$APP_CONTAINER" ]; then
             echo -e "${RED}✗ 应用容器未运行${NC}"
+            # 检查容器是否存在但未运行
+            APP_EXISTS=$(sudo docker ps -a --filter "name=newsapp" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
+            if [ -n "$APP_EXISTS" ]; then
+                APP_STATUS=$(sudo docker ps -a --filter "name=newsapp" --format "{{.Status}}" 2>/dev/null | head -1 || echo "")
+                echo -e "${YELLOW}  容器状态: $APP_STATUS${NC}"
+            fi
             return 1
         else
             echo -e "${GREEN}✓ 应用容器正在运行${NC}"
+            # 显示容器状态详情
+            APP_STATUS=$(sudo docker ps --filter "name=newsapp" --format "{{.Status}}" 2>/dev/null | head -1 || echo "")
+            if [ -n "$APP_STATUS" ]; then
+                echo -e "${CYAN}  状态详情: $APP_STATUS${NC}"
+            fi
         fi
         echo ""
         
         # 检查Nginx容器
-        NGINX_STATUS=$(sudo docker compose ps nginx 2>/dev/null | grep -v "NAME" | awk '{print $4}' || echo "not_running")
-        if [ "$NGINX_STATUS" != "Up" ]; then
+        NGINX_CONTAINER=$(sudo docker ps --filter "name=newsapp-nginx" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp-nginx$" || echo "")
+        if [ -z "$NGINX_CONTAINER" ]; then
             echo -e "${RED}✗ Nginx容器未运行${NC}"
+            # 检查容器是否存在但未运行
+            NGINX_EXISTS=$(sudo docker ps -a --filter "name=newsapp-nginx" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp-nginx$" || echo "")
+            if [ -n "$NGINX_EXISTS" ]; then
+                NGINX_STATUS=$(sudo docker ps -a --filter "name=newsapp-nginx" --format "{{.Status}}" 2>/dev/null | head -1 || echo "")
+                echo -e "${YELLOW}  容器状态: $NGINX_STATUS${NC}"
+            fi
             return 1
         else
             echo -e "${GREEN}✓ Nginx容器正在运行${NC}"
+            # 显示容器状态详情
+            NGINX_STATUS=$(sudo docker ps --filter "name=newsapp-nginx" --format "{{.Status}}" 2>/dev/null | head -1 || echo "")
+            if [ -n "$NGINX_STATUS" ]; then
+                echo -e "${CYAN}  状态详情: $NGINX_STATUS${NC}"
+            fi
         fi
         echo ""
         
@@ -181,18 +204,34 @@ fix() {
         echo ""
         
         # 4. 如果容器未启动，尝试重新创建
-        APP_STATUS=$(sudo docker compose ps app 2>/dev/null | grep -v "NAME" | awk '{print $4}' || echo "not_running")
-        if [ "$APP_STATUS" != "Up" ]; then
+        APP_CONTAINER=$(sudo docker ps --filter "name=newsapp" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
+        if [ -z "$APP_CONTAINER" ]; then
             echo -e "${YELLOW}应用容器未启动，尝试重新创建...${NC}"
             sudo docker compose up -d app
             sleep 5
+            # 再次检查
+            APP_CONTAINER=$(sudo docker ps --filter "name=newsapp" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
+            if [ -z "$APP_CONTAINER" ]; then
+                echo -e "${RED}✗ 应用容器启动失败，请查看日志${NC}"
+                sudo docker compose logs app --tail 20
+            else
+                echo -e "${GREEN}✓ 应用容器已启动${NC}"
+            fi
         fi
         
-        NGINX_STATUS=$(sudo docker compose ps nginx 2>/dev/null | grep -v "NAME" | awk '{print $4}' || echo "not_running")
-        if [ "$NGINX_STATUS" != "Up" ]; then
+        NGINX_CONTAINER=$(sudo docker ps --filter "name=newsapp-nginx" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp-nginx$" || echo "")
+        if [ -z "$NGINX_CONTAINER" ]; then
             echo -e "${YELLOW}Nginx容器未启动，尝试重新创建...${NC}"
             sudo docker compose up -d nginx
             sleep 5
+            # 再次检查
+            NGINX_CONTAINER=$(sudo docker ps --filter "name=newsapp-nginx" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp-nginx$" || echo "")
+            if [ -z "$NGINX_CONTAINER" ]; then
+                echo -e "${RED}✗ Nginx容器启动失败，请查看日志${NC}"
+                sudo docker compose logs nginx --tail 20
+            else
+                echo -e "${GREEN}✓ Nginx容器已启动${NC}"
+            fi
         fi
         
     elif [ "$DEPLOY_TYPE" == "pm2" ]; then

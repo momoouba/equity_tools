@@ -3187,11 +3187,43 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       newsCategory = chineseCategories.length > 0 ? chineseCategories[0] : null;
                     }
 
+                    // 检查content是否为空，如果为空则通过AI抓取网页内容
+                    let finalContent = newsItem.Content || '';
+                    let newsAbstract = null;
+                    
+                    if (!finalContent && newsItem.Url) {
+                      try {
+                        console.log(`[企查查同步] 检测到content为空，开始通过AI抓取网页内容: ${newsItem.Url}`);
+                        const WebContentExtractor = require('../utils/webContentExtractor');
+                        const extractor = new WebContentExtractor();
+                        
+                        const extractedResult = await extractor.extractFromUrl(
+                          newsItem.Url,
+                          newsItem.Title || ''
+                        );
+                        
+                        if (extractedResult.content) {
+                          finalContent = extractedResult.content;
+                          console.log(`[企查查同步] 成功提取正文，长度: ${finalContent.length} 字符`);
+                        } else {
+                          console.warn(`[企查查同步] AI提取正文为空: ${newsItem.Url}`);
+                        }
+                        
+                        if (extractedResult.abstract) {
+                          newsAbstract = extractedResult.abstract;
+                          console.log(`[企查查同步] 成功生成摘要，长度: ${newsAbstract.length} 字符`);
+                        }
+                      } catch (extractError) {
+                        console.error(`[企查查同步] AI提取网页内容失败 (${newsItem.Url}):`, extractError.message);
+                        // 提取失败不影响数据插入，继续使用空的content
+                      }
+                    }
+
                     // 插入新闻数据
                     await db.execute(
                       `INSERT INTO news_detail 
-                       (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                       (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                       [
                         newsId,
                         newsItem.Source || '企查查',
@@ -3201,11 +3233,12 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                         newsItem.Title || '',
                         newsItem.NewsTags || '',
                         publicTime,
-                        newsItem.Content || '',
+                        finalContent,
                         keywordsValue,
                         newsSentiment,
                         '企查查', // APItype - 企查查接口
-                        newsCategory // 新闻类别（中文）
+                        newsCategory, // 新闻类别（中文）
+                        newsAbstract // 摘要（如果通过AI提取）
                       ]
                     );
 
