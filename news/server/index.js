@@ -24,10 +24,32 @@ const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks')
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// 服务器就绪标志（在服务器完全初始化前为false）
+let serverReady = false;
+
 // 中间件
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// 服务器就绪检查中间件（健康检查接口除外）
+app.use((req, res, next) => {
+  // 健康检查接口始终允许访问
+  if (req.path === '/api/health') {
+    return next();
+  }
+  
+  // 如果服务器未完全就绪，返回503
+  if (!serverReady) {
+    return res.status(503).json({
+      success: false,
+      message: '服务器正在启动中，请稍后重试',
+      status: 'starting'
+    });
+  }
+  
+  next();
+});
 
 // 静态文件服务 - 提供uploads目录的访问
 // 注意：必须在所有路由之前配置，以确保静态文件请求不会被其他路由拦截
@@ -121,7 +143,6 @@ app.use((err, req, res, next) => {
 });
 
 // 健康检查 - 确保在服务器启动前就可用
-let serverReady = false;
 app.get('/api/health', async (req, res) => {
   try {
     // 测试数据库连接
@@ -181,61 +202,61 @@ async function startServer() {
       console.log(`✓ 服务器运行在 http://localhost:${PORT}`);
       console.log(`✓ 服务器正在初始化，健康检查端点已可用`);
       
-      try {
-        // 启动定时任务：每天00:00:00执行新闻同步
-        console.log('正在启动定时任务...');
-        cron.schedule('0 0 * * *', async () => {
-          console.log('定时任务触发：开始同步前一天新闻数据...');
-          try {
-            const result = await syncNewsData({ isManual: false });
-            console.log('定时任务完成：', result.message);
-          } catch (error) {
-            console.error('定时任务执行失败：', error.message);
-          }
-        }, {
-          scheduled: true,
-          timezone: 'Asia/Shanghai'
-        });
-        console.log('✓ 定时任务已启动：每天00:00:00自动同步前一天新闻数据');
-        
-        // 初始化邮件发送定时任务（异步，不阻塞）
-        console.log('正在初始化邮件发送定时任务...');
-        initializeScheduledTasks().catch(error => {
-          console.error('初始化邮件发送定时任务失败:', error);
-        });
-
-        // 初始化外部数据库连接（异步，不阻塞）
-        console.log('正在初始化外部数据库连接...');
-        db.query('SELECT * FROM external_db_config WHERE is_deleted = 0 AND is_active = 1')
-          .then(configs => {
-            if (configs && configs.length > 0) {
-              return initializeExternalDatabases(configs);
-            } else {
-              console.log('✓ 没有启用的外部数据库配置');
+      // 先标记为就绪，让API可以正常响应（核心功能已可用）
+      // 异步初始化任务在后台执行，不阻塞API响应
+      serverReady = true;
+      console.log(`✓ 服务器核心功能已就绪，可以接收请求`);
+      
+      // 异步执行非关键初始化任务（不阻塞API响应）
+      setImmediate(async () => {
+        try {
+          // 启动定时任务：每天00:00:00执行新闻同步
+          console.log('正在启动定时任务...');
+          cron.schedule('0 0 * * *', async () => {
+            console.log('定时任务触发：开始同步前一天新闻数据...');
+            try {
+              const result = await syncNewsData({ isManual: false });
+              console.log('定时任务完成：', result.message);
+            } catch (error) {
+              console.error('定时任务执行失败：', error.message);
             }
-          })
-          .then(() => {
-            // 初始化企业同步定时任务
-            console.log('正在初始化企业同步定时任务...');
-            return initializeEnterpriseSyncTasks();
-          })
-          .then(() => {
-            // 所有关键初始化完成，标记服务器为就绪
-            serverReady = true;
-            console.log(`✓ 服务器已完全就绪，可以接收请求`);
-          })
-          .catch(error => {
-            console.error('初始化外部数据库连接或企业同步任务失败:', error);
-            // 即使初始化失败，也标记为就绪（核心功能已可用）
-            serverReady = true;
-            console.log(`✓ 服务器核心功能已就绪，可以接收请求`);
+          }, {
+            scheduled: true,
+            timezone: 'Asia/Shanghai'
           });
-      } catch (error) {
-        console.error('初始化过程中出错:', error);
-        // 即使初始化出错，也标记为就绪（核心功能已可用）
-        serverReady = true;
-        console.log(`✓ 服务器核心功能已就绪，可以接收请求`);
-      }
+          console.log('✓ 定时任务已启动：每天00:00:00自动同步前一天新闻数据');
+          
+          // 初始化邮件发送定时任务（异步，不阻塞）
+          console.log('正在初始化邮件发送定时任务...');
+          initializeScheduledTasks().catch(error => {
+            console.error('初始化邮件发送定时任务失败:', error);
+          });
+
+          // 初始化外部数据库连接（异步，不阻塞）
+          console.log('正在初始化外部数据库连接...');
+          db.query('SELECT * FROM external_db_config WHERE is_deleted = 0 AND is_active = 1')
+            .then(configs => {
+              if (configs && configs.length > 0) {
+                return initializeExternalDatabases(configs);
+              } else {
+                console.log('✓ 没有启用的外部数据库配置');
+              }
+            })
+            .then(() => {
+              // 初始化企业同步定时任务
+              console.log('正在初始化企业同步定时任务...');
+              return initializeEnterpriseSyncTasks();
+            })
+            .then(() => {
+              console.log(`✓ 所有后台初始化任务已完成`);
+            })
+            .catch(error => {
+              console.error('初始化外部数据库连接或企业同步任务失败:', error);
+            });
+        } catch (error) {
+          console.error('后台初始化过程中出错:', error);
+        }
+      });
     });
     
     // 处理服务器启动错误
