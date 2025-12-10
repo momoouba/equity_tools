@@ -8,7 +8,7 @@ const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../utils/emailSender');
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews } = require('../utils/scheduledEmailTasks');
-const { convertCategoryCodeToChinese } = require('../utils/qichachaCategoryMapper');
+const { convertCategoryCodeToChinese, convertCategoryCodesToChinese } = require('../utils/qichachaCategoryMapper');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -77,13 +77,23 @@ async function updateSyncLog(logId, params) {
   } = params;
   
   // 获取开始时间
-  const [logs] = await db.query(
+  if (!logId) {
+    console.warn(`updateSyncLog: logId为空，跳过更新`);
+    return;
+  }
+  
+  const logs = await db.query(
     'SELECT start_time FROM news_sync_execution_log WHERE id = ?',
     [logId]
   );
   
-  if (logs.length === 0) {
+  if (!logs || logs.length === 0) {
     console.warn(`日志记录不存在: ${logId}`);
+    return;
+  }
+  
+  if (!logs[0] || !logs[0].start_time) {
+    console.warn(`日志记录缺少start_time字段: ${logId}`, logs);
     return;
   }
   
@@ -996,14 +1006,27 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
   };
 
   console.log(`[新闻同步] 配置 ${config.id}(${config.app_name || ''}) 区间 ${range.from} -> ${range.to}`);
-
-  const result = await executeNewsSyncForConfig(config, range, { isManual, logId });
+  
+  // 根据接口类型选择同步函数
+  const interfaceType = config.interface_type || '新榜';
+  let result;
+  
+  if (interfaceType === '企查查') {
+    // 企查查接口使用syncQichachaNewsData，它有自己的时间范围计算逻辑
+    console.log(`[新闻同步] 企查查接口，调用syncQichachaNewsData`);
+    result = await syncQichachaNewsData(config.id, logId);
+  } else {
+    // 新榜接口使用executeNewsSyncForConfig
+    console.log(`[新闻同步] 新榜接口，调用executeNewsSyncForConfig`);
+    result = await executeNewsSyncForConfig(config, range, { isManual, logId });
+  }
 
   // 检查是否获取到数据
   const syncedCount = result.data?.synced || 0;
   
   // 拖底逻辑：如果有上一次同步时间但没有获取到数据，使用前一天00:00:00到当天00:00:00
-  if (config.last_sync_time && syncedCount === 0 && !customRangeEnabled) {
+  // 注意：企查查接口不需要拖底逻辑，因为它有自己的时间范围计算逻辑
+  if (interfaceType !== '企查查' && config.last_sync_time && syncedCount === 0 && !customRangeEnabled) {
     console.log(`[新闻同步] 配置 ${config.id} 使用上一次同步时间未获取到数据，启用拖底逻辑：获取前一天00:00:00到当天00:00:00的新闻`);
     
     // 使用拖底逻辑：前一天00:00:00到当天00:00:00
@@ -1017,8 +1040,8 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     
     console.log(`[新闻同步] 配置 ${config.id}(${config.app_name || ''}) 拖底区间 ${fallbackRange.from} -> ${fallbackRange.to}`);
     
-    // 使用拖底范围重新执行同步
-    const fallbackResult = await executeNewsSyncForConfig(config, fallbackRange, { isManual });
+    // 使用拖底范围重新执行同步（仅新榜接口）
+    const fallbackResult = await executeNewsSyncForConfig(config, fallbackRange, { isManual, logId });
     
     // 更新同步时间
     await db.execute(
@@ -1033,11 +1056,13 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     };
   }
 
-  // 正常情况：更新同步时间
-  await db.execute(
-    'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
-    [range.to, formatDateOnly(toDate), config.id]
-  );
+  // 正常情况：更新同步时间（仅新榜接口，企查查接口在syncQichachaNewsData中已更新）
+  if (interfaceType !== '企查查') {
+    await db.execute(
+      'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+      [range.to, formatDateOnly(toDate), config.id]
+    );
+  }
 
   return {
     ...result,
@@ -1090,7 +1115,9 @@ async function syncNewsData(options = {}) {
               executionType: isManual ? 'manual' : 'scheduled',
               userId: null,
               executionDetails: {
-                interfaceType: config.interface_type || '新榜'
+                interfaceType: config.interface_type || '新榜',
+                requestUrl: config.request_url, // 请求地址
+                configId: config.id // 配置ID
               }
             });
           } catch (logError) {
@@ -3138,28 +3165,26 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       enterpriseFullName = enterpriseResult[0].enterprise_full_name;
                     }
 
-                    // 将Category转换为JSON格式（如果是字符串则直接存储）
-                    let keywordsValue = newsItem.Category || '';
-                    if (typeof keywordsValue === 'string' && keywordsValue.trim() !== '') {
-                      // 如果Category是字符串，尝试转换为JSON
-                      try {
-                        keywordsValue = JSON.stringify([keywordsValue]);
-                      } catch (e) {
-                        keywordsValue = newsItem.Category || '';
-                      }
-                    }
-
                     // 将Category编码转换为中文类别
                     // Category可能是字符串、数字或数组
                     let categoryCode = newsItem.Category || '';
                     let newsCategory = null;
+                    let keywordsValue = null;
                     
                     if (categoryCode) {
-                      // 如果是数组，取第一个元素；如果是字符串/数字，直接转换
-                      if (Array.isArray(categoryCode)) {
-                        categoryCode = categoryCode.length > 0 ? categoryCode[0] : '';
+                      // 如果是数组，转换所有编码；如果是字符串/数字，转换为数组
+                      let categoryCodes = Array.isArray(categoryCode) ? categoryCode : [categoryCode];
+                      
+                      // 使用convertCategoryCodesToChinese转换所有编码为中文数组
+                      const chineseCategories = convertCategoryCodesToChinese(categoryCodes);
+                      
+                      // 将中文类别数组存储到keywords字段（JSON格式）
+                      if (chineseCategories.length > 0) {
+                        keywordsValue = JSON.stringify(chineseCategories);
                       }
-                      newsCategory = convertCategoryCodeToChinese(categoryCode);
+                      
+                      // news_category字段存储第一个类别（用于分类显示）
+                      newsCategory = chineseCategories.length > 0 ? chineseCategories[0] : null;
                     }
 
                     // 插入新闻数据
