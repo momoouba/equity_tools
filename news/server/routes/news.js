@@ -490,6 +490,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           size: '20'
         });
 
+        // 记录API调用详情，便于排查404问题
+        console.log(`[新榜同步] 调用API - 公众号ID: "${account}", 时间范围: ${from} 到 ${to}, 页码: ${page}`);
+        console.log(`[新榜同步] API地址: ${request_url}`);
+        
         const response = await axios.post(request_url, 
           params.toString(),
           {
@@ -500,6 +504,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
             timeout: 30000
           }
         );
+        
+        // 记录API响应状态
+        console.log(`[新榜同步] API响应 - 公众号ID: "${account}", 状态码: ${response.status}, 返回码: ${response.data?.code || 'N/A'}`);
 
         // 检查返回状态
         if (response.data.code === 0 && response.data.data && Array.isArray(response.data.data)) {
@@ -687,9 +694,13 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       if (error.response) {
         // HTTP响应错误
         const status = error.response.status;
+        const responseData = error.response.data || {};
+        console.log(`[新榜同步] API错误响应 - 公众号ID: "${account}", HTTP状态: ${status}, 响应数据:`, JSON.stringify(responseData));
+        
         if (status === 404) {
           errorType = '404-公众号不存在或已失效';
           errorMessage = `公众号ID "${account}" 在新榜API中不存在、已失效或已被删除`;
+          console.log(`[新榜同步] ⚠️ 404错误 - 公众号ID: "${account}", 提示: 如果在新榜网站可以查到该公众号，可能是API调用方式或参数格式问题`);
         } else if (status === 401) {
           errorType = '401-认证失败';
           errorMessage = `API认证失败，请检查API Key是否正确`;
@@ -800,9 +811,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
   });
 
   // 输出同步统计信息
+  // 注意：executeNewsSyncForConfig函数专门用于新榜同步，接口类型固定为"新榜"
   console.log(`[新榜同步] ========== 同步统计 ==========`);
   console.log(`[新榜同步] 配置ID: ${config.id}`);
-  console.log(`[新榜同步] 接口类型: ${config.interface_type || '新榜'}`);
+  console.log(`[新榜同步] 接口类型: 新榜`); // 固定为新榜，因为此函数专门用于新榜同步
   console.log(`[新榜同步] 时间范围: ${from} 到 ${to}`);
   console.log(`[新榜同步] 公众号总数: ${uniqueAccounts.length}`);
   console.log(`[新榜同步] 成功同步: ${totalSynced} 条新闻`);
@@ -827,7 +839,11 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     if (errorStats['404-公众号不存在或已失效'] > 0) {
       console.log(`[新榜同步] ⚠️  提示: 有 ${errorStats['404-公众号不存在或已失效']} 个公众号返回404错误`);
       console.log(`[新榜同步]   这通常意味着这些公众号ID在新榜API中不存在、已失效或已被删除`);
-      console.log(`[新榜同步]   建议检查数据库中这些公众号ID是否正确，或联系新榜API服务商确认`);
+      console.log(`[新榜同步]   如果在新榜网站可以查到这些公众号，可能是以下原因：`);
+      console.log(`[新榜同步]   1. API调用方式或参数格式不正确`);
+      console.log(`[新榜同步]   2. API权限不足，无法访问这些公众号的数据`);
+      console.log(`[新榜同步]   3. 新榜API和新榜网站使用不同的数据源`);
+      console.log(`[新榜同步]   建议检查API调用日志中的详细错误信息，或联系新榜API服务商确认`);
     }
   }
   console.log(`[新榜同步] =============================`);
@@ -844,7 +860,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
         errorMessage: errors.length > 0 ? errors.slice(0, 3).join('; ') : null,
         executionDetails: {
           timeRange: { from, to },
-          interfaceType: config.interface_type || '新榜',
+          interfaceType: '新榜', // 固定为新榜，因为此函数专门用于新榜同步
+          requestUrl: request_url, // 请求地址
+          configId: config.id, // 配置ID
           totalAccounts: uniqueAccounts.length,
           syncedCount: totalSynced,
           errorCount: errors.length
@@ -3302,6 +3320,32 @@ async function syncQichachaNewsData(configId = null, logId = null) {
       console.log(`[企查查同步] 剩余待处理: ${uniqueCreditCodes.length - enterprisesToSync.length} 个企业`);
     }
     console.log(`[企查查同步] =============================`);
+
+    // 更新日志记录
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: enterprisesToSync.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? errors.slice(0, 3).map(e => e.message || e).join('; ') : null,
+          executionDetails: {
+            timeRange: { startDate, endDate },
+            interfaceType: '企查查',
+            requestUrl: request_url || 'https://api.qichacha.com/CompanyNews/SearchNews',
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: enterprisesToSync.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length
+          }
+        });
+      } catch (logError) {
+        console.error('更新同步日志失败:', logError.message);
+      }
+    }
 
     // 如果同步了新数据，触发AI分析
     if (totalSynced > 0) {

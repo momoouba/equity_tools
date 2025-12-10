@@ -945,32 +945,153 @@ function ScheduledTaskManagement() {
                               )}
                             </td>
                             <td>
-                              {log.detail_logs && log.detail_logs.length > 0 && (
-                                <button
-                                  onClick={() => {
-                                    const detailRow = document.getElementById(`detail-${log.id}`);
-                                    if (detailRow) {
-                                      detailRow.style.display = detailRow.style.display === 'none' ? 'table-row' : 'none';
-                                    }
-                                  }}
-                                  style={{
-                                    padding: '4px 8px',
-                                    fontSize: '12px',
-                                    cursor: 'pointer',
-                                    background: '#007bff',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: '4px'
-                                  }}
-                                >
-                                  查看详情 ({log.detail_logs.length})
-                                </button>
-                              )}
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                {log.execution_details && (
+                                  <button
+                                    onClick={() => {
+                                      const detailRow = document.getElementById(`execution-detail-${log.id}`);
+                                      if (detailRow) {
+                                        detailRow.style.display = detailRow.style.display === 'none' ? 'table-row' : 'none';
+                                      }
+                                    }}
+                                    style={{
+                                      padding: '4px 8px',
+                                      fontSize: '12px',
+                                      cursor: 'pointer',
+                                      background: '#28a745',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '4px'
+                                    }}
+                                    title="查看接口触发详细信息"
+                                  >
+                                    接口详情
+                                  </button>
+                                )}
+                                {log.detail_logs && log.detail_logs.length > 0 && (
+                                  <button
+                                    onClick={() => {
+                                      const detailRow = document.getElementById(`detail-${log.id}`);
+                                      if (detailRow) {
+                                        detailRow.style.display = detailRow.style.display === 'none' ? 'table-row' : 'none';
+                                      }
+                                    }}
+                                    style={{
+                                      padding: '4px 8px',
+                                      fontSize: '12px',
+                                      cursor: 'pointer',
+                                      background: '#007bff',
+                                      color: 'white',
+                                      border: 'none',
+                                      borderRadius: '4px'
+                                    }}
+                                    title="查看详细同步记录"
+                                  >
+                                    同步记录 ({log.detail_logs.length})
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
+                          {log.execution_details && (
+                            <tr id={`execution-detail-${log.id}`} style={{ display: 'none' }}>
+                              <td colSpan="11" style={{ padding: '15px', background: '#e8f5e9' }}>
+                                <div style={{ marginBottom: '10px', fontWeight: 'bold', color: '#2e7d32' }}>接口触发详细信息：</div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '8px 16px', fontSize: '13px' }}>
+                                  {/* 接口类型 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>接口类型：</div>
+                                  <div>{log.execution_details.interfaceType || '-'}</div>
+                                  
+                                  {/* 请求地址 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>请求地址：</div>
+                                  <div style={{ wordBreak: 'break-all' }}>
+                                    {log.execution_details.requestUrl || '-'}
+                                  </div>
+                                  
+                                  {/* 配置ID */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>配置ID：</div>
+                                  <div>{log.execution_details.configId || log.config_id || '-'}</div>
+                                  
+                                  {/* 时间范围 */}
+                                  {log.execution_details.timeRange && (
+                                    <>
+                                      <div style={{ fontWeight: 'bold', color: '#555' }}>时间范围：</div>
+                                      <div>
+                                        {log.execution_details.timeRange.from || log.execution_details.timeRange.startDate || '-'} 
+                                        {' → '}
+                                        {log.execution_details.timeRange.to || log.execution_details.timeRange.endDate || '-'}
+                                      </div>
+                                    </>
+                                  )}
+                                  
+                                  {/* 公众号总数（新榜接口） */}
+                                  {log.execution_details.totalAccounts !== undefined && (
+                                    <>
+                                      <div style={{ fontWeight: 'bold', color: '#555' }}>公众号总数：</div>
+                                      <div>{log.execution_details.totalAccounts}</div>
+                                    </>
+                                  )}
+                                  
+                                  {/* 企业总数（企查查接口） */}
+                                  {log.execution_details.totalEnterprises !== undefined && (
+                                    <>
+                                      <div style={{ fontWeight: 'bold', color: '#555' }}>企业总数：</div>
+                                      <div>{log.execution_details.totalEnterprises}</div>
+                                    </>
+                                  )}
+                                  
+                                  {/* 处理数量 */}
+                                  {log.execution_details.processedEnterprises !== undefined && (
+                                    <>
+                                      <div style={{ fontWeight: 'bold', color: '#555' }}>处理数量：</div>
+                                      <div>{log.execution_details.processedEnterprises}</div>
+                                    </>
+                                  )}
+                                  
+                                  {/* 同步数量 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>同步数量：</div>
+                                  <div style={{ color: (log.execution_details.syncedCount || log.synced_count || 0) > 0 ? '#28a745' : '#666' }}>
+                                    {log.execution_details.syncedCount !== undefined ? log.execution_details.syncedCount : (log.synced_count || 0)}
+                                  </div>
+                                  
+                                  {/* 错误数量 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>错误数量：</div>
+                                  <div style={{ color: (log.execution_details.errorCount || log.error_count || 0) > 0 ? '#dc3545' : '#28a745' }}>
+                                    {log.execution_details.errorCount !== undefined ? log.execution_details.errorCount : (log.error_count || 0)}
+                                  </div>
+                                  
+                                  {/* 执行类型 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>执行类型：</div>
+                                  <div>{log.execution_type === 'manual' ? '手动触发' : '定时任务'}</div>
+                                  
+                                  {/* 执行状态 */}
+                                  <div style={{ fontWeight: 'bold', color: '#555' }}>执行状态：</div>
+                                  <div>
+                                    {log.status === 'success' ? (
+                                      <span style={{ color: '#28a745' }}>成功</span>
+                                    ) : log.status === 'failed' ? (
+                                      <span style={{ color: '#dc3545' }}>失败</span>
+                                    ) : (
+                                      <span style={{ color: '#ffc107' }}>执行中</span>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                {/* 调试信息：显示完整的execution_details（仅在开发环境或需要时） */}
+                                {process.env.NODE_ENV === 'development' && (
+                                  <div style={{ marginTop: '15px', padding: '10px', background: '#f5f5f5', borderRadius: '4px', fontSize: '11px' }}>
+                                    <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>调试信息（execution_details原始数据）：</div>
+                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                      {JSON.stringify(log.execution_details, null, 2)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
                           {log.detail_logs && log.detail_logs.length > 0 && (
                             <tr id={`detail-${log.id}`} style={{ display: 'none' }}>
-                              <td colSpan="10" style={{ padding: '10px', background: '#f5f5f5' }}>
+                              <td colSpan="11" style={{ padding: '10px', background: '#f5f5f5' }}>
                                 <div style={{ marginBottom: '10px', fontWeight: 'bold' }}>详细同步记录：</div>
                                 <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
                                   <thead>

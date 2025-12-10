@@ -387,6 +387,22 @@ router.put('/news-config/:id', [
     if (frequency_type !== undefined) {
       updateFields.push('frequency_type = ?');
       updateValues.push(frequency_type);
+      
+      // 如果是企查查接口，根据frequency_type自动更新send_frequency，同步到定时任务
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      if (currentInterfaceType === '企查查') {
+        let sendFrequency = 'daily';
+        if (frequency_type === 'week') {
+          sendFrequency = 'weekly';
+        } else if (frequency_type === 'month') {
+          sendFrequency = 'monthly';
+        }
+        
+        updateFields.push('send_frequency = ?');
+        updateValues.push(sendFrequency);
+        
+        console.log(`[新闻接口配置更新] 企查查接口frequency_type更新为${frequency_type}，同步更新send_frequency为${sendFrequency}`);
+      }
     }
     if (frequency_value !== undefined) {
       updateFields.push('frequency_value = ?');
@@ -403,6 +419,19 @@ router.put('/news-config/:id', [
         `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE id = ?`,
         updateValues
       );
+      
+      // 如果是企查查接口且更新了frequency_type，需要更新定时任务调度
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      if (currentInterfaceType === '企查查' && frequency_type !== undefined) {
+        try {
+          const { updateScheduledTasks } = require('../utils/scheduledEmailTasks');
+          await updateScheduledTasks();
+          console.log(`[新闻接口配置更新] 企查查接口frequency_type已更新，定时任务调度已同步更新`);
+        } catch (taskError) {
+          console.warn(`[新闻接口配置更新] 更新定时任务调度失败:`, taskError.message);
+          // 不阻断主流程，只记录警告
+        }
+      }
 
       // 记录更新日志
       const userId = req.headers['x-user-id'] || null;

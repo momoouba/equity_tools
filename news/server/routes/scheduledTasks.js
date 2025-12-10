@@ -628,6 +628,30 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (send_frequency !== undefined) {
         updateFields.push('send_frequency = ?');
         updateValues.push(send_frequency);
+        
+        // 根据send_frequency自动更新frequency_type和frequency_value
+        // 确保与创建时的逻辑一致
+        let frequencyType = 'day';
+        let frequencyValue = 1;
+        
+        if (send_frequency === 'weekly') {
+          frequencyType = 'week';
+          frequencyValue = 1;
+        } else if (send_frequency === 'monthly') {
+          frequencyType = 'month';
+          frequencyValue = 1;
+        } else {
+          // daily 或其他情况
+          frequencyType = 'day';
+          frequencyValue = 1;
+        }
+        
+        updateFields.push('frequency_type = ?');
+        updateValues.push(frequencyType);
+        updateFields.push('frequency_value = ?');
+        updateValues.push(frequencyValue);
+        
+        console.log(`[定时任务更新] 同步更新frequency_type: ${frequencyType}, frequency_value: ${frequencyValue} (基于send_frequency: ${send_frequency})`);
       }
       if (send_time !== undefined) {
         updateFields.push('send_time = ?');

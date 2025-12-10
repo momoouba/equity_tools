@@ -33,17 +33,17 @@ function NewsConfig() {
     fetchApplications()
   }, [currentPage])
 
-  // 当接口类型切换为企查查时，自动设置默认值
+  // 当接口类型切换为企查查时，自动设置默认值（仅在新增时，编辑时保持原有值）
   useEffect(() => {
-    if (formData.interface_type === '企查查') {
+    if (formData.interface_type === '企查查' && !editingConfig) {
       setFormData(prev => ({
         ...prev,
         request_url: prev.request_url || 'https://api.qichacha.com/CompanyNews/SearchNews',
-        frequency_type: 'week', // 企查查接口固定按周执行
-        frequency_value: 1 // 企查查接口固定为1周
+        frequency_type: prev.frequency_type || 'week', // 企查查接口默认按周执行，但可编辑
+        frequency_value: prev.frequency_value || 1 // 企查查接口默认1周，但可编辑
       }))
     }
-  }, [formData.interface_type])
+  }, [formData.interface_type, editingConfig])
 
   const fetchConfigs = async () => {
     setLoading(true)
@@ -455,7 +455,6 @@ function NewsConfig() {
                     value={formData.frequency_type}
                     onChange={handleChange}
                     required
-                    disabled={formData.interface_type === '企查查'} // 企查查接口固定为周
                   >
                     <option value="day">天</option>
                     <option value="week">周</option>
@@ -463,7 +462,7 @@ function NewsConfig() {
                   </select>
                   {formData.interface_type === '企查查' && (
                     <p className="form-hint" style={{ color: '#666', fontSize: '12px', marginTop: '4px' }}>
-                      企查查接口固定按周执行
+                      企查查接口频次类型可编辑，编辑后将同步更新到定时任务配置
                     </p>
                   )}
                 </div>
@@ -477,14 +476,13 @@ function NewsConfig() {
                     onChange={handleChange}
                     min="1"
                     required
-                    disabled={formData.interface_type === '企查查'} // 企查查接口固定为1周
                   />
                   <p className="form-hint">
                     {formData.frequency_type === 'day' 
                       ? `X天：从设置保存开始的当天0点到${formData.frequency_value}天后的23:59:59`
                       : formData.frequency_type === 'week'
                       ? formData.interface_type === '企查查'
-                        ? `按周执行：每次同步获取上周周一00:00:00到上周周日23:59:59的数据（企查查接口固定按周执行）`
+                        ? `按周执行：每次同步获取上周周一00:00:00到上周周日23:59:59的数据（企查查接口频次值可编辑）`
                         : `X周：从设置保存开始的当周周一到${formData.frequency_value}周后的周日23:59:59`
                       : `X月：从设置保存开始的当月1日0点到当月最后一天23:59:59（月份取整）`}
                   </p>
