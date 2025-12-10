@@ -86,7 +86,20 @@ function RecipientManagement() {
       }
     }
     
+    // 加载企查查类别映射
+    const loadCategoryMap = async () => {
+      try {
+        const response = await axios.get('/api/news/qichacha-categories')
+        if (response.data.success && isMounted) {
+          setCategoryMap(response.data.data || {})
+        }
+      } catch (error) {
+        console.error('获取企查查类别映射失败:', error)
+      }
+    }
+    
     loadData()
+    loadCategoryMap()
     
     return () => {
       isMounted = false
@@ -576,6 +589,145 @@ function RecipientManagement() {
             setLogRecipientId(null)
           }}
         />
+      )}
+
+      {/* 企查查类别选择弹窗 */}
+      {showCategoryModal && (
+        <div className="modal-overlay" style={{ zIndex: 1001 }}>
+          <div className="modal-content" style={{ maxWidth: '800px', maxHeight: '80vh', overflow: 'auto' }}>
+            <div className="modal-header">
+              <h3>选择企查查消息类型</h3>
+              <button className="close-btn" onClick={() => setShowCategoryModal(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allCodes = Object.keys(categoryMap)
+                    setSelectedCategories(allCodes)
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    backgroundColor: '#28a745',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  全选
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategories([])}
+                  style={{
+                    padding: '6px 12px',
+                    backgroundColor: '#6c757d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  清空
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // 默认类别：80000系列、40000系列、14004
+                    const defaultCodes = [
+                      '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
+                      '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008',
+                      '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017',
+                      '40018', '40019', '40020', '40021', '40022', '40023', '40024', '40025', '40026',
+                      '40027', '40028', '40029', '40030',
+                      '14004'
+                    ]
+                    setSelectedCategories(defaultCodes.filter(code => categoryMap[code]))
+                  }}
+                  style={{
+                    padding: '6px 12px',
+                    backgroundColor: '#17a2b8',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '12px'
+                  }}
+                >
+                  使用默认类别
+                </button>
+              </div>
+              <div style={{
+                maxHeight: '400px',
+                overflowY: 'auto',
+                border: '1px solid #ddd',
+                borderRadius: '4px',
+                padding: '8px'
+              }}>
+                {Object.keys(categoryMap).length === 0 ? (
+                  <div style={{ padding: '20px', textAlign: 'center', color: '#999' }}>
+                    正在加载类别数据...
+                  </div>
+                ) : (
+                  Object.entries(categoryMap).map(([code, name]) => (
+                    <label
+                      key={code}
+                      style={{
+                        display: 'block',
+                        padding: '8px',
+                        marginBottom: '4px',
+                        cursor: 'pointer',
+                        backgroundColor: selectedCategories.includes(code) ? '#e7f3ff' : 'transparent',
+                        borderRadius: '4px'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes(code)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCategories([...selectedCategories, code])
+                          } else {
+                            setSelectedCategories(selectedCategories.filter(c => c !== code))
+                          }
+                        }}
+                        style={{ marginRight: '8px' }}
+                      />
+                      <span style={{ fontWeight: 'bold', marginRight: '8px' }}>{code}</span>
+                      <span>{name}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <div style={{ marginTop: '16px', fontSize: '14px', color: '#666' }}>
+                已选择 {selectedCategories.length} 个类别
+              </div>
+            </div>
+            <div className="form-actions" style={{ marginTop: '16px' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoryModal(false)
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoryModal(false)
+                }}
+                style={{ backgroundColor: '#007bff' }}
+              >
+                确定
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
