@@ -932,16 +932,10 @@ function ScheduledTaskManagement() {
                             <td>{log.processed_enterprises || 0}</td>
                             <td>{log.error_count || 0}</td>
                             <td style={{ maxWidth: '200px', wordBreak: 'break-word', fontSize: '12px' }}>
-                              {log.error_message || '-'}
-                              {log.execution_details && (
-                                <div style={{ marginTop: '4px', fontSize: '11px', color: '#666' }}>
-                                  {log.execution_details.interfaceType && (
-                                    <div>接口类型: {log.execution_details.interfaceType}</div>
-                                  )}
-                                  {log.execution_details.timeRange && (
-                                    <div>时间范围: {log.execution_details.timeRange.from || log.execution_details.timeRange.startDate} 至 {log.execution_details.timeRange.to || log.execution_details.timeRange.endDate}</div>
-                                  )}
-                                </div>
+                              {log.error_count > 0 ? (
+                                <span style={{ color: '#dc3545' }}>有 {log.error_count} 个错误，点击"接口详情"查看</span>
+                              ) : (
+                                '-'
                               )}
                             </td>
                             <td>
@@ -1077,13 +1071,55 @@ function ScheduledTaskManagement() {
                                   </div>
                                 </div>
                                 
-                                {/* 调试信息：显示完整的execution_details（仅在开发环境或需要时） */}
-                                {process.env.NODE_ENV === 'development' && (
+                                {/* 错误信息详情 - 显示在grid布局外面，在错误数量下面 */}
+                                {(() => {
+                                  const errorCount = log.execution_details?.errorCount || log.error_count || 0;
+                                  const errors = log.execution_details?.errors;
+                                  
+                                  // 如果有错误数量，显示错误详情
+                                  if (errorCount > 0) {
+                                    return (
+                                      <div style={{ marginTop: '15px', padding: '15px', background: '#fff3cd', borderRadius: '4px', border: '1px solid #ffc107' }}>
+                                        <div style={{ fontWeight: 'bold', color: '#dc3545', marginBottom: '10px', fontSize: '14px' }}>错误详情：</div>
+                                        {errors && Array.isArray(errors) && errors.length > 0 ? (
+                                          <div style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                                            {errors.map((error, index) => (
+                                              <div key={index} style={{ marginBottom: '10px', padding: '10px', background: '#fff', borderRadius: '4px', border: '1px solid #ffc107', fontSize: '12px' }}>
+                                                <div style={{ fontWeight: 'bold', color: '#dc3545', marginBottom: '6px' }}>
+                                                  {index + 1}. {error.account || error.enterprise || '未知'}
+                                                </div>
+                                                <div style={{ color: '#666', marginBottom: '4px' }}>
+                                                  <strong>错误类型：</strong>{error.type || '未知错误'}
+                                                </div>
+                                                <div style={{ color: '#333', wordBreak: 'break-word' }}>
+                                                  <strong>错误原因：</strong>{error.message || JSON.stringify(error)}
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <div style={{ padding: '10px', background: '#fff', borderRadius: '4px', fontSize: '12px', color: '#666' }}>
+                                            共 {errorCount} 个错误，但详细错误信息未记录。请查看同步记录详情或联系管理员。
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                
+                                {/* 调试信息：显示完整的execution_details（临时启用，用于诊断） */}
+                                {log.execution_details && (
                                   <div style={{ marginTop: '15px', padding: '10px', background: '#f5f5f5', borderRadius: '4px', fontSize: '11px' }}>
                                     <div style={{ fontWeight: 'bold', marginBottom: '5px' }}>调试信息（execution_details原始数据）：</div>
-                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '200px', overflowY: 'auto' }}>
                                       {JSON.stringify(log.execution_details, null, 2)}
                                     </pre>
+                                    <div style={{ marginTop: '8px', fontSize: '11px', color: '#666' }}>
+                                      <div>错误数量: {log.execution_details.errorCount || log.error_count || 0}</div>
+                                      <div>是否有errors数组: {log.execution_details.errors ? '是' : '否'}</div>
+                                      <div>errors数组长度: {log.execution_details.errors?.length || 0}</div>
+                                    </div>
                                   </div>
                                 )}
                               </td>

@@ -452,9 +452,9 @@ async function getUserVisibleYesterdayNews(userId) {
  * @returns {Array} - 过滤后的新闻列表
  */
 function filterNewsByCategory(newsList, customCategoryCodes = null) {
-  // 默认类别编码（80000和40000系列，以及荣誉奖项14004）
+  // 默认类别编码（80000和40000系列，以及荣誉奖项14004，排除80008）
   const defaultCategoryCodes = [
-    '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
+    '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007',
     '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008', 
     '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017', 
     '40018', '40019', '40020', '40021', '40022', '40023', '40024', '40025', '40026', 
@@ -464,17 +464,24 @@ function filterNewsByCategory(newsList, customCategoryCodes = null) {
   
   // 使用自定义类别编码或默认类别编码
   const allowedCategoryCodes = customCategoryCodes && Array.isArray(customCategoryCodes) && customCategoryCodes.length > 0
-    ? customCategoryCodes
+    ? customCategoryCodes.map(code => String(code).trim()) // 确保都是字符串格式
     : defaultCategoryCodes;
   
-  // 从映射表获取对应的中文类别名称
-  const { categoryMap } = require('./qichachaCategoryMapper');
+  // 将允许的类别编码转换为Set，提高查找效率
+  const allowedCategorySet = new Set(allowedCategoryCodes);
+  
+  // 从映射表获取对应的中文类别名称（用于日志显示）
+  const qichachaCategoryMapper = require('./qichachaCategoryMapper');
+  const categoryMap = qichachaCategoryMapper.getCategoryMapSync ? qichachaCategoryMapper.getCategoryMapSync() : qichachaCategoryMapper.categoryMap || {};
   const allowedCategoryNames = allowedCategoryCodes
     .map(code => categoryMap[code])
     .filter(name => name !== undefined);
   
-  console.log(`[邮件发送] 使用的企查查类别：${customCategoryCodes ? '自定义' : '默认'}，共 ${allowedCategoryNames.length} 个类别`);
-  console.log(`[邮件发送] 允许的企查查类别：${allowedCategoryNames.join(', ')}`);
+  console.log(`[邮件发送] 使用的企查查类别：${customCategoryCodes ? '自定义' : '默认'}，共 ${allowedCategoryCodes.length} 个类别编码`);
+  console.log(`[邮件发送] 允许的企查查类别编码：${allowedCategoryCodes.join(', ')}`);
+  if (allowedCategoryNames.length > 0) {
+    console.log(`[邮件发送] 允许的企查查类别名称：${allowedCategoryNames.join(', ')}`);
+  }
   
   return newsList.filter(news => {
     // 只处理企查查数据源的新闻
@@ -483,18 +490,19 @@ function filterNewsByCategory(newsList, customCategoryCodes = null) {
       return true;
     }
     
-    // 对于企查查数据源，检查类别
-    const category = news.news_category || '';
+    // 对于企查查数据源，检查类别编码
+    const categoryCode = news.news_category ? String(news.news_category).trim() : '';
     
-    // 如果类别为空，不包含
-    if (!category || category.trim() === '') {
+    // 如果类别编码为空，不包含
+    if (!categoryCode) {
       return false;
     }
     
-    // 检查类别是否在允许的列表中
-    const isAllowed = allowedCategoryNames.includes(category);
+    // 直接检查类别编码是否在允许的编码列表中
+    const isAllowed = allowedCategorySet.has(categoryCode);
     if (!isAllowed) {
-      console.log(`[邮件发送] 企查查新闻被过滤：类别"${category}"不在允许列表中 (标题: ${news.title?.substring(0, 30)})`);
+      const categoryName = categoryMap[categoryCode] || categoryCode;
+      console.log(`[邮件发送] 企查查新闻被过滤：类别编码"${categoryCode}"(${categoryName})不在允许列表中 (标题: ${news.title?.substring(0, 30)})`);
     }
     return isAllowed;
   });

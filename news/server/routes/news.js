@@ -8,7 +8,8 @@ const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../utils/emailSender');
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews } = require('../utils/scheduledEmailTasks');
-const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = require('../utils/qichachaCategoryMapper');
+const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
+const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -425,54 +426,56 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
   // 去重公众号ID
   let uniqueAccounts = [...new Set(allAccountIds)];
 
-  // 如果是手动触发，过滤掉当天已查询过的公众号ID
-  if (isManual) {
-    try {
-      // 获取当天开始时间（Asia/Shanghai时区）
-      const todayStart = createShanghaiDate();
-      const todayEnd = new Date(todayStart);
-      todayEnd.setDate(todayEnd.getDate() + 1);
-      todayEnd.setMilliseconds(todayEnd.getMilliseconds() - 1);
+  // 过滤掉当天已查询过的公众号ID（手动触发和定时任务都使用相同逻辑）
+  // 这样可以避免重复查询，减少失败率，提高效率
+  try {
+    // 获取当天开始时间（Asia/Shanghai时区）
+    const todayStart = createShanghaiDate();
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+    todayEnd.setMilliseconds(todayEnd.getMilliseconds() - 1);
 
-      // 查询当天已同步的公众号ID（新榜接口）
-      const syncedAccounts = await db.query(
-        `SELECT DISTINCT wechat_account 
-         FROM news_detail 
-         WHERE APItype = '新榜' 
-         AND created_at >= ? 
-         AND created_at <= ?
-         AND wechat_account IS NOT NULL 
-         AND wechat_account != ''
-         AND delete_mark = 0`,
-        [todayStart, todayEnd]
-      );
+    // 查询当天已同步的公众号ID（新榜接口）
+    const syncedAccounts = await db.query(
+      `SELECT DISTINCT wechat_account 
+       FROM news_detail 
+       WHERE APItype = '新榜' 
+       AND created_at >= ? 
+       AND created_at <= ?
+       AND wechat_account IS NOT NULL 
+       AND wechat_account != ''
+       AND delete_mark = 0`,
+      [todayStart, todayEnd]
+    );
 
-      const syncedAccountIds = syncedAccounts.map(a => a.wechat_account);
-      const syncedAccountSet = new Set(syncedAccountIds);
+    const syncedAccountIds = syncedAccounts.map(a => a.wechat_account);
+    const syncedAccountSet = new Set(syncedAccountIds);
 
-      // 过滤掉已查询的公众号ID
-      const beforeFilterCount = uniqueAccounts.length;
-      uniqueAccounts = uniqueAccounts.filter(account => !syncedAccountSet.has(account));
-      const afterFilterCount = uniqueAccounts.length;
-      const filteredCount = beforeFilterCount - afterFilterCount;
+    // 过滤掉已查询的公众号ID
+    const beforeFilterCount = uniqueAccounts.length;
+    uniqueAccounts = uniqueAccounts.filter(account => !syncedAccountSet.has(account));
+    const afterFilterCount = uniqueAccounts.length;
+    const filteredCount = beforeFilterCount - afterFilterCount;
 
-      if (filteredCount > 0) {
-        console.log(`[手动同步] 过滤掉当天已查询的公众号ID: ${filteredCount} 个`);
-        console.log(`[手动同步] 剩余待查询公众号ID: ${afterFilterCount} 个`);
-      }
-
-      if (uniqueAccounts.length === 0) {
-        console.log(`[手动同步] 所有公众号ID今天都已查询过，无需再次同步`);
-        return {
-          success: true,
-          message: '所有公众号今天都已同步过，无需再次同步',
-          data: { synced: 0, total: 0 }
-        };
-      }
-    } catch (filterError) {
-      console.error('[手动同步] 过滤已查询公众号ID时出错:', filterError.message);
-      // 如果过滤出错，继续使用所有公众号ID，不中断同步流程
+    if (filteredCount > 0) {
+      const triggerType = isManual ? '手动同步' : '定时任务';
+      console.log(`[${triggerType}] 过滤掉当天已查询的公众号ID: ${filteredCount} 个`);
+      console.log(`[${triggerType}] 剩余待查询公众号ID: ${afterFilterCount} 个`);
     }
+
+    if (uniqueAccounts.length === 0) {
+      const triggerType = isManual ? '手动同步' : '定时任务';
+      console.log(`[${triggerType}] 所有公众号ID今天都已查询过，无需再次同步`);
+      return {
+        success: true,
+        message: '所有公众号今天都已同步过，无需再次同步',
+        data: { synced: 0, total: 0 }
+      };
+    }
+  } catch (filterError) {
+    const triggerType = isManual ? '手动同步' : '定时任务';
+    console.error(`[${triggerType}] 过滤已查询公众号ID时出错:`, filterError.message);
+    // 如果过滤出错，继续使用所有公众号ID，不中断同步流程
   }
   
   let totalSynced = 0;
@@ -861,13 +864,19 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
   // 更新日志记录
   if (logId) {
     try {
+      // 将详细错误信息存储到execution_details中，而不是error_message
+      // error_message字段只存储简要信息（如"有X个错误，详见详情"），详细错误在详情中查看
+      const errorSummary = errors.length > 0 
+        ? `共 ${errors.length} 个错误，详见接口详情` 
+        : null;
+      
       await updateSyncLog(logId, {
         status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
         syncedCount: totalSynced,
         totalEnterprises: uniqueAccounts.length,
         processedEnterprises: uniqueAccounts.length,
         errorCount: errors.length,
-        errorMessage: errors.length > 0 ? errors.slice(0, 3).join('; ') : null,
+        errorMessage: errorSummary, // 只存储简要信息
         executionDetails: {
           timeRange: { from, to },
           interfaceType: '新榜', // 固定为新榜，因为此函数专门用于新榜同步
@@ -875,7 +884,8 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           configId: config.id, // 配置ID
           totalAccounts: uniqueAccounts.length,
           syncedCount: totalSynced,
-          errorCount: errors.length
+          errorCount: errors.length,
+          errors: errors.length > 0 ? errors : undefined // 详细错误信息存储在execution_details中
         }
       });
     } catch (logError) {
@@ -1106,9 +1116,10 @@ async function syncNewsData(options = {}) {
     
     for (const config of configs) {
       try {
-        // 如果是单个配置且提供了logId，使用它；否则为每个配置创建日志
+        // 为每个配置创建日志（手动触发和定时任务都需要）
+        // 如果提供了logId（单个配置手动触发时），使用它；否则为每个配置创建新日志
         let configLogId = logId;
-        if (!configLogId && configId) {
+        if (!configLogId) {
           try {
             configLogId = await createSyncLog({
               configId: config.id,
@@ -2357,14 +2368,78 @@ router.get('/recipients/:id', async (req, res) => {
 
     if (recipients.length > 0) {
       const recipient = recipients[0];
+      // 记录从数据库读取的原始值
+      console.log(`[获取收件管理] ID: ${id}, 数据库中的qichacha_category_codes:`, recipient.qichacha_category_codes, '类型:', typeof recipient.qichacha_category_codes);
+      
       // 解析JSON字段
       if (recipient.qichacha_category_codes) {
-        try {
-          recipient.qichacha_category_codes = JSON.parse(recipient.qichacha_category_codes);
-        } catch (e) {
+        // 如果已经是数组，直接使用
+        if (Array.isArray(recipient.qichacha_category_codes)) {
+          console.log(`[获取收件管理] qichacha_category_codes已经是数组，直接使用:`, recipient.qichacha_category_codes.length, '个元素');
+          // 已经是数组，不需要解析
+        } else if (typeof recipient.qichacha_category_codes === 'string') {
+          // 如果是字符串，尝试解析JSON
+          try {
+            const parsed = JSON.parse(recipient.qichacha_category_codes);
+            console.log(`[获取收件管理] JSON解析成功:`, parsed, '类型:', typeof parsed, '是否为数组:', Array.isArray(parsed));
+            if (Array.isArray(parsed)) {
+              recipient.qichacha_category_codes = parsed;
+            } else {
+              console.warn(`[获取收件管理] 解析后的值不是数组:`, parsed);
+              recipient.qichacha_category_codes = null;
+            }
+          } catch (e) {
+            // JSON解析失败，可能是MySQL返回的数组格式字符串（单引号）
+            // 尝试使用eval或手动解析（安全起见，只处理数组格式）
+            console.warn(`[获取收件管理] JSON解析失败:`, e.message, '尝试其他解析方式...');
+            const str = recipient.qichacha_category_codes.trim();
+            // 检查是否是数组格式字符串 ['xxx', 'yyy', ...]
+            if (str.startsWith('[') && str.endsWith(']')) {
+              try {
+                // 使用eval解析（仅用于解析数组字符串，确保安全）
+                // 或者手动解析：移除方括号，分割，去除引号
+                const cleaned = str.slice(1, -1); // 移除 [ 和 ]
+                if (cleaned.trim() === '') {
+                  recipient.qichacha_category_codes = [];
+                } else {
+                  // 分割并清理每个元素
+                  const items = cleaned.split(',').map(item => {
+                    const trimmed = item.trim();
+                    // 移除单引号或双引号
+                    if ((trimmed.startsWith("'") && trimmed.endsWith("'")) || 
+                        (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+                      return trimmed.slice(1, -1);
+                    }
+                    return trimmed;
+                  });
+                  recipient.qichacha_category_codes = items;
+                  console.log(`[获取收件管理] 手动解析成功:`, items.length, '个元素');
+                }
+              } catch (parseError) {
+                console.error(`[获取收件管理] 手动解析也失败:`, parseError.message);
+                recipient.qichacha_category_codes = null;
+              }
+            } else {
+              console.error(`[获取收件管理] 无法识别的格式:`, str);
+              recipient.qichacha_category_codes = null;
+            }
+          }
+        } else {
+          console.warn(`[获取收件管理] qichacha_category_codes类型未知:`, typeof recipient.qichacha_category_codes);
           recipient.qichacha_category_codes = null;
         }
+      } else {
+        console.log(`[获取收件管理] qichacha_category_codes为空或null`);
+        recipient.qichacha_category_codes = null;
       }
+      
+      console.log(`[获取收件管理] 返回给前端的数据:`, {
+        id: recipient.id,
+        qichacha_category_codes: recipient.qichacha_category_codes,
+        isArray: Array.isArray(recipient.qichacha_category_codes),
+        length: Array.isArray(recipient.qichacha_category_codes) ? recipient.qichacha_category_codes.length : 'N/A'
+      });
+      
       res.json({ success: true, data: recipient });
     } else {
       res.status(404).json({ success: false, message: '记录不存在' });
@@ -2379,15 +2454,29 @@ router.get('/recipients/:id', async (req, res) => {
 router.get('/qichacha-categories', async (req, res) => {
   try {
     // 优先从数据库获取类别映射
-    const categoryMap = await getCategoryMap();
+    // 检查 getCategoryMap 是否存在且为函数，如果不存在则从模块重新获取
+    let getCategoryMapFunc = getCategoryMap;
+    if (typeof getCategoryMapFunc !== 'function') {
+      // 如果导入的函数不存在，尝试从模块重新获取
+      getCategoryMapFunc = qichachaCategoryMapperModule.getCategoryMap;
+      if (typeof getCategoryMapFunc !== 'function') {
+        throw new Error('getCategoryMap 函数未正确导入');
+      }
+    }
+    const categoryMap = await getCategoryMapFunc();
     res.json({ success: true, data: categoryMap });
   } catch (error) {
     console.error('获取企查查类别映射失败：', error);
     // 如果数据库获取失败，使用默认映射作为后备
     try {
-      const { categoryMap: defaultMap } = require('../utils/qichachaCategoryMapper');
-      res.json({ success: true, data: defaultMap });
+      const defaultMap = qichachaCategoryMapperModule.categoryMap || qichachaCategoryMapperModule.defaultCategoryMap;
+      if (defaultMap) {
+        res.json({ success: true, data: defaultMap });
+      } else {
+        throw new Error('无法获取默认类别映射');
+      }
     } catch (fallbackError) {
+      console.error('获取默认类别映射失败：', fallbackError);
       res.status(500).json({ success: false, message: '获取类别映射失败' });
     }
   }
@@ -2603,9 +2692,18 @@ router.put('/recipients/:id', [
       updateFields.push('is_active = ?');
       updateValues.push(is_active ? 1 : 0);
     }
+    // 处理企查查类别编码：即使为null也要更新（允许清空类别）
     if (qichacha_category_codes !== undefined) {
       updateFields.push('qichacha_category_codes = ?');
       updateValues.push(categoryCodesJson);
+      console.log(`[更新收件管理] 更新qichacha_category_codes:`, {
+        original: qichacha_category_codes,
+        json: categoryCodesJson,
+        isNull: categoryCodesJson === null,
+        isArray: Array.isArray(qichacha_category_codes)
+      });
+    } else {
+      console.log(`[更新收件管理] qichacha_category_codes未提供，保持原值`);
     }
 
     if (updateFields.length > 0) {
@@ -2623,9 +2721,19 @@ router.put('/recipients/:id', [
       if (send_frequency !== undefined) newData.send_frequency = send_frequency;
       if (send_time !== undefined) newData.send_time = send_time;
       if (is_active !== undefined) newData.is_active = is_active ? 1 : 0;
+      if (qichacha_category_codes !== undefined) {
+        newData.qichacha_category_codes = categoryCodesJson;
+        console.log(`[更新收件管理] 新数据中的qichacha_category_codes:`, categoryCodesJson);
+      }
 
       // 记录更新日志
       await logRecipientChange(id, oldData, newData, userId);
+      
+      // 验证更新后的数据
+      const verifyQuery = await db.query('SELECT qichacha_category_codes FROM recipient_management WHERE id = ?', [id]);
+      if (verifyQuery.length > 0) {
+        console.log(`[更新收件管理] 验证：数据库中保存的值:`, verifyQuery[0].qichacha_category_codes);
+      }
     }
 
     // 更新定时任务
@@ -3252,16 +3360,19 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       // 如果是数组，转换所有编码；如果是字符串/数字，转换为数组
                       let categoryCodes = Array.isArray(categoryCode) ? categoryCode : [categoryCode];
                       
-                      // 使用convertCategoryCodesToChinese转换所有编码为中文数组
-                      const chineseCategories = convertCategoryCodesToChinese(categoryCodes);
+                      // 确保所有编码都是字符串格式
+                      categoryCodes = categoryCodes.map(code => String(code).trim()).filter(code => code);
                       
-                      // 将中文类别数组存储到keywords字段（JSON格式）
-                      if (chineseCategories.length > 0) {
-                        keywordsValue = JSON.stringify(chineseCategories);
+                      if (categoryCodes.length > 0) {
+                        // news_category字段存储第一个类别编码（用于过滤判断）
+                        newsCategory = categoryCodes[0];
+                        
+                        // 使用convertCategoryCodesToChinese转换所有编码为中文数组，存储到keywords字段（JSON格式）
+                        const chineseCategories = convertCategoryCodesToChinese(categoryCodes);
+                        if (chineseCategories.length > 0) {
+                          keywordsValue = JSON.stringify(chineseCategories);
+                        }
                       }
-                      
-                      // news_category字段存储第一个类别（用于分类显示）
-                      newsCategory = chineseCategories.length > 0 ? chineseCategories[0] : null;
                     }
 
                     // 检查content是否为空，如果为空则通过AI抓取网页内容
@@ -3459,13 +3570,19 @@ async function syncQichachaNewsData(configId = null, logId = null) {
     // 更新日志记录
     if (logId) {
       try {
+        // 将详细错误信息存储到execution_details中，而不是error_message
+        // error_message字段只存储简要信息（如"有X个错误，详见详情"），详细错误在详情中查看
+        const errorSummary = errors.length > 0 
+          ? `共 ${errors.length} 个错误，详见接口详情` 
+          : null;
+        
         await updateSyncLog(logId, {
           status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
           syncedCount: totalSynced,
           totalEnterprises: uniqueCreditCodes.length,
           processedEnterprises: enterprisesToSync.length,
           errorCount: errors.length,
-          errorMessage: errors.length > 0 ? errors.slice(0, 3).map(e => e.message || e).join('; ') : null,
+          errorMessage: errorSummary, // 只存储简要信息
           executionDetails: {
             timeRange: { startDate, endDate },
             interfaceType: '企查查',
@@ -3474,7 +3591,8 @@ async function syncQichachaNewsData(configId = null, logId = null) {
             totalEnterprises: uniqueCreditCodes.length,
             processedEnterprises: enterprisesToSync.length,
             syncedCount: totalSynced,
-            errorCount: errors.length
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors : undefined // 详细错误信息存储在execution_details中
           }
         });
       } catch (logError) {

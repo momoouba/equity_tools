@@ -27,6 +27,43 @@ function RecipientManagement() {
   const [selectedCategories, setSelectedCategories] = useState([])
   const [categoryMap, setCategoryMap] = useState({})
 
+  // 当弹窗打开时，确保selectedCategories与formData同步
+  useEffect(() => {
+    if (showCategoryModal) {
+      if (editingRecipient) {
+        // 编辑时，从formData中读取已保存的类别
+        let categoryCodes = formData.qichacha_category_codes
+        console.log('弹窗打开时，formData.qichacha_category_codes:', categoryCodes, '类型:', typeof categoryCodes)
+        
+        if (categoryCodes === null || categoryCodes === undefined) {
+          categoryCodes = []
+        } else if (typeof categoryCodes === 'string') {
+          try {
+            categoryCodes = JSON.parse(categoryCodes)
+          } catch (e) {
+            console.warn('解析qichacha_category_codes失败:', e)
+            categoryCodes = []
+          }
+        }
+        // 确保是数组格式
+        if (!Array.isArray(categoryCodes)) {
+          console.warn('categoryCodes不是数组，转换为空数组:', categoryCodes)
+          categoryCodes = []
+        }
+        console.log('弹窗打开时同步类别（编辑模式）:', categoryCodes, '数量:', categoryCodes.length)
+        setSelectedCategories(categoryCodes)
+      } else {
+        // 新增时，如果formData中有值（可能是之前选择但未保存的），保留；否则清空
+        if (formData.qichacha_category_codes && Array.isArray(formData.qichacha_category_codes)) {
+          console.log('弹窗打开时同步类别（新增模式）:', formData.qichacha_category_codes)
+          setSelectedCategories(formData.qichacha_category_codes)
+        } else {
+          setSelectedCategories([])
+        }
+      }
+    }
+  }, [showCategoryModal, editingRecipient, formData])
+
   useEffect(() => {
     let isMounted = true
     
@@ -189,17 +226,47 @@ function RecipientManagement() {
       const response = await axios.get(`/api/news/recipients/${id}`)
       if (response.data.success) {
         const recipient = response.data.data
+        console.log('获取到的收件管理数据:', recipient)
         setEditingRecipient(recipient)
-        const categoryCodes = recipient.qichacha_category_codes || null
-        setFormData({
+        
+        // 处理企查查类别编码：后端已经解析为数组或null
+        let categoryCodes = recipient.qichacha_category_codes
+        
+        // 如果后端返回的是null或undefined，设置为null
+        if (categoryCodes === null || categoryCodes === undefined) {
+          categoryCodes = null
+        } else if (typeof categoryCodes === 'string') {
+          // 如果是字符串，尝试解析（以防后端没有解析）
+          try {
+            categoryCodes = JSON.parse(categoryCodes)
+          } catch (e) {
+            console.warn('解析qichacha_category_codes失败:', e, '原始值:', categoryCodes)
+            categoryCodes = null
+          }
+        }
+        
+        // 确保是数组或null
+        if (categoryCodes !== null && !Array.isArray(categoryCodes)) {
+          console.warn('qichacha_category_codes不是数组:', categoryCodes)
+          categoryCodes = null
+        }
+        
+        console.log('处理后的类别编码:', categoryCodes)
+        
+        const newFormData = {
           recipient_email: recipient.recipient_email || '',
           email_subject: recipient.email_subject || '',
           send_frequency: recipient.send_frequency || 'daily',
           send_time: recipient.send_time || '09:00:00',
           is_active: recipient.is_active === 1,
           qichacha_category_codes: categoryCodes
-        })
-        setSelectedCategories(Array.isArray(categoryCodes) ? categoryCodes : [])
+        }
+        setFormData(newFormData)
+        // 设置已选择的类别，确保是数组格式（即使是空数组也要设置）
+        const finalCategories = Array.isArray(categoryCodes) ? categoryCodes : []
+        console.log('设置selectedCategories:', finalCategories, '数量:', finalCategories.length)
+        console.log('设置formData.qichacha_category_codes:', categoryCodes, '数量:', finalCategories.length)
+        setSelectedCategories(finalCategories)
         setShowForm(true)
       }
     } catch (error) {
@@ -264,17 +331,33 @@ function RecipientManagement() {
 
     try {
       // 准备提交数据，包含企查查类别编码
+      // 优先使用formData中的值（如果点击了确定按钮，会同步到formData）
+      // 如果formData中没有值，使用selectedCategories（可能用户没有点击确定，但选择了类别）
+      const categoryCodes = formData.qichacha_category_codes !== undefined 
+        ? (formData.qichacha_category_codes && formData.qichacha_category_codes.length > 0 ? formData.qichacha_category_codes : null)
+        : (selectedCategories.length > 0 ? selectedCategories : null)
+      
       const submitData = {
         ...formData,
-        qichacha_category_codes: selectedCategories.length > 0 ? selectedCategories : null
+        qichacha_category_codes: categoryCodes
       }
+      
+      console.log('提交数据:', {
+        ...submitData,
+        qichacha_category_codes: categoryCodes,
+        categoryCodesLength: categoryCodes ? categoryCodes.length : 0
+      })
       
       let response
       if (editingRecipient) {
+        console.log('更新收件管理，ID:', editingRecipient.id)
         response = await axios.put(`/api/news/recipients/${editingRecipient.id}`, submitData)
       } else {
+        console.log('创建收件管理')
         response = await axios.post('/api/news/recipients', submitData)
       }
+      
+      console.log('保存响应:', response.data)
 
       // 检查响应格式
       if (response && response.data && response.data.success === true) {
@@ -657,16 +740,25 @@ function RecipientManagement() {
                 <button
                   type="button"
                   onClick={() => {
-                    // 默认类别：80000系列、40000系列、14004
-                    const defaultCodes = [
-                      '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007', '80008',
-                      '40000', '40001', '40002', '40003', '40004', '40005', '40006', '40007', '40008',
-                      '40009', '40010', '40011', '40012', '40013', '40014', '40015', '40016', '40017',
-                      '40018', '40019', '40020', '40021', '40022', '40023', '40024', '40025', '40026',
-                      '40027', '40028', '40029', '40030',
-                      '14004'
-                    ]
-                    setSelectedCategories(defaultCodes.filter(code => categoryMap[code]))
+                    // 默认类别：14004、40000系列（5位数且以4开头）、80000系列（5位数且以8开头，但排除80008）
+                    // 从categoryMap中动态筛选，确保类别列表更新后默认类别也会同步更新
+                    const allCodes = Object.keys(categoryMap)
+                    const defaultCodes = allCodes.filter(code => {
+                      // 14004：荣誉奖项（固定）
+                      if (code === '14004') {
+                        return true
+                      }
+                      // 40000系列：5位数且以4开头（40000-49999）
+                      if (code.length === 5 && code.startsWith('4')) {
+                        return true
+                      }
+                      // 80000系列：5位数且以8开头，但排除80008（其他）
+                      if (code.length === 5 && code.startsWith('8') && code !== '80008') {
+                        return true
+                      }
+                      return false
+                    })
+                    setSelectedCategories(defaultCodes)
                   }}
                   style={{
                     padding: '6px 12px',
@@ -739,6 +831,12 @@ function RecipientManagement() {
               <button
                 type="button"
                 onClick={() => {
+                  // 将选择的类别同步到formData
+                  setFormData({
+                    ...formData,
+                    qichacha_category_codes: selectedCategories.length > 0 ? selectedCategories : null
+                  })
+                  console.log('确定按钮：同步类别到formData:', selectedCategories)
                   setShowCategoryModal(false)
                 }}
                 style={{ backgroundColor: '#007bff' }}
