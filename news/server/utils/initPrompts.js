@@ -312,38 +312,38 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         );
 
         if (existing.length > 0) {
-        // 如果已存在，检查是否需要更新AI模型配置或提示词内容
-        const existingPrompt = existing[0];
-        let needsUpdate = false;
-        let updateFields = [];
-        let updateValues = [];
+          // 如果已存在，检查是否需要更新AI模型配置或提示词内容
+          const existingPrompt = existing[0];
+          let needsUpdate = false;
+          let updateFields = [];
+          let updateValues = [];
 
-        // 如果缺少AI模型配置，添加它
-        if (!existingPrompt.ai_model_config_id && defaultAiModelConfigId) {
-          updateFields.push('ai_model_config_id = ?');
-          updateValues.push(defaultAiModelConfigId);
-          needsUpdate = true;
-        }
+          // 如果缺少AI模型配置，添加它
+          if (!existingPrompt.ai_model_config_id && defaultAiModelConfigId) {
+            updateFields.push('ai_model_config_id = ?');
+            updateValues.push(defaultAiModelConfigId);
+            needsUpdate = true;
+          }
 
-        // 更新提示词内容（确保使用最新的提示词）
-        if (existingPrompt.prompt_content !== prompt.prompt_content) {
-          updateFields.push('prompt_content = ?');
-          updateValues.push(prompt.prompt_content);
-          needsUpdate = true;
-        }
+          // 更新提示词内容（确保使用最新的提示词）
+          if (existingPrompt.prompt_content !== prompt.prompt_content) {
+            updateFields.push('prompt_content = ?');
+            updateValues.push(prompt.prompt_content);
+            needsUpdate = true;
+          }
 
-        if (needsUpdate) {
-          updateValues.push(existingPrompt.id);
-          await db.execute(
-            `UPDATE ai_prompt_config 
-             SET ${updateFields.join(', ')}, updated_at = NOW()
-             WHERE id = ?`,
-            updateValues
-          );
-          updatedCount++;
-          console.log(`  ✓ 已更新提示词: ${prompt.prompt_name}`);
-        }
-      } else {
+          if (needsUpdate) {
+            updateValues.push(existingPrompt.id);
+            await db.execute(
+              `UPDATE ai_prompt_config 
+               SET ${updateFields.join(', ')}, updated_at = NOW()
+               WHERE id = ?`,
+              updateValues
+            );
+            updatedCount++;
+            console.log(`  ✓ 已更新提示词: ${prompt.prompt_name}`);
+          }
+        } else {
         // 如果不存在，创建新的提示词配置
         const promptId = await generateId('ai_prompt_config');
         await db.execute(

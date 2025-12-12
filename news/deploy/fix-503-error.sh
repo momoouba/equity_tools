@@ -94,14 +94,51 @@ diagnose() {
         echo ""
         
         # 查看应用日志
-        echo -e "${CYAN}2. 查看应用容器日志（最后20行）...${NC}"
-        sudo docker compose logs app --tail 20
+        echo -e "${CYAN}2. 查看应用容器日志（最后50行）...${NC}"
+        sudo docker compose logs app --tail 50
+        echo ""
+        
+        # 检查服务器是否就绪
+        echo -e "${CYAN}2.1 检查服务器初始化状态...${NC}"
+        SERVER_READY_LOG=$(sudo docker compose logs app 2>&1 | grep -i "服务器核心功能已就绪\|server.*ready\|服务器运行正常" | tail -1 || echo "")
+        if [ -n "$SERVER_READY_LOG" ]; then
+            echo -e "${GREEN}✓ 服务器已就绪${NC}"
+            echo "  $SERVER_READY_LOG"
+        else
+            echo -e "${YELLOW}⚠️  服务器可能还在初始化中${NC}"
+            INIT_ERRORS=$(sudo docker compose logs app 2>&1 | grep -i "error\|fail\|exception" | tail -5 || echo "")
+            if [ -n "$INIT_ERRORS" ]; then
+                echo -e "${RED}检测到初始化错误:${NC}"
+                echo "$INIT_ERRORS" | sed 's/^/   /'
+            fi
+        fi
         echo ""
         
         # 查看Nginx日志
         echo -e "${CYAN}3. 查看Nginx容器日志（最后20行）...${NC}"
         sudo docker compose logs nginx --tail 20
         echo ""
+        
+        # 检查Nginx配置中的upstream问题
+        echo -e "${CYAN}4. 检查Nginx配置...${NC}"
+        NGINX_CONFIG_ERROR=$(sudo docker compose logs nginx 2>&1 | grep -i "host not found in upstream\|upstream.*not found" | head -1 || echo "")
+        if [ -n "$NGINX_CONFIG_ERROR" ]; then
+            echo -e "${YELLOW}⚠️  检测到Nginx upstream配置问题:${NC}"
+            echo "   $NGINX_CONFIG_ERROR"
+            echo ""
+            echo -e "${CYAN}检查容器网络连接...${NC}"
+            # 检查容器是否在同一网络
+            APP_NETWORK=$(sudo docker inspect newsapp --format '{{range $net, $v := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || echo "")
+            NGINX_NETWORK=$(sudo docker inspect newsapp-nginx --format '{{range $net, $v := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || echo "")
+            if [ "$APP_NETWORK" == "$NGINX_NETWORK" ] && [ -n "$APP_NETWORK" ]; then
+                echo -e "${GREEN}✓ 容器在同一网络: $APP_NETWORK${NC}"
+            else
+                echo -e "${RED}✗ 容器不在同一网络${NC}"
+                echo "  App网络: $APP_NETWORK"
+                echo "  Nginx网络: $NGINX_NETWORK"
+            fi
+            echo ""
+        fi
         
     # 2. 检查PM2进程状态
     elif [ "$DEPLOY_TYPE" == "pm2" ]; then
@@ -164,16 +201,52 @@ diagnose() {
     fi
     echo ""
     
-    # 4. 测试应用健康检查
-    echo -e "${CYAN}测试应用健康检查...${NC}"
+    # 4. 测试应用健康检查（从宿主机）
+    echo -e "${CYAN}测试应用健康检查（从宿主机）...${NC}"
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/health 2>/dev/null || echo "000")
     if [ "$HTTP_CODE" == "200" ]; then
         echo -e "${GREEN}✓ 应用健康检查通过 (HTTP $HTTP_CODE)${NC}"
     else
         echo -e "${RED}✗ 应用健康检查失败 (HTTP $HTTP_CODE)${NC}"
+        echo ""
+        echo -e "${CYAN}尝试从容器内部测试...${NC}"
+        CONTAINER_HEALTH=$(sudo docker exec newsapp wget -q -O - http://localhost:3001/api/health 2>/dev/null | head -1 || echo "")
+        if echo "$CONTAINER_HEALTH" | grep -q "ok"; then
+            echo -e "${GREEN}✓ 容器内部健康检查正常${NC}"
+            echo -e "${YELLOW}⚠️  问题可能是端口映射或Nginx代理配置${NC}"
+        else
+            echo -e "${RED}✗ 容器内部健康检查也失败${NC}"
+            echo "  响应: $CONTAINER_HEALTH"
+        fi
         return 1
     fi
     echo ""
+    
+    # 5. 测试Nginx代理（如果使用Docker）
+    if [ "$DEPLOY_TYPE" == "docker" ]; then
+        echo -e "${CYAN}测试Nginx代理到应用...${NC}"
+        NGINX_PROXY_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost/api/health 2>/dev/null || echo "000")
+        if [ "$NGINX_PROXY_CODE" == "200" ]; then
+            echo -e "${GREEN}✓ Nginx代理正常 (HTTP $NGINX_PROXY_CODE)${NC}"
+        else
+            echo -e "${RED}✗ Nginx代理失败 (HTTP $NGINX_PROXY_CODE)${NC}"
+            echo ""
+            echo -e "${CYAN}检查Nginx容器内能否访问应用容器...${NC}"
+            NGINX_TO_APP=$(sudo docker exec newsapp-nginx wget -q -O - http://app:3001/api/health 2>/dev/null | head -1 || echo "")
+            if echo "$NGINX_TO_APP" | grep -q "ok"; then
+                echo -e "${GREEN}✓ Nginx容器可以访问应用容器${NC}"
+                echo -e "${YELLOW}⚠️  问题可能是Nginx配置或路由问题${NC}"
+            else
+                echo -e "${RED}✗ Nginx容器无法访问应用容器${NC}"
+                echo "  响应: $NGINX_TO_APP"
+                echo ""
+                echo -e "${CYAN}检查容器网络连接...${NC}"
+                sudo docker exec newsapp-nginx ping -c 2 app 2>&1 | head -5
+            fi
+            return 1
+        fi
+        echo ""
+    fi
     
     return 0
 }
@@ -203,7 +276,116 @@ fix() {
         sudo docker compose ps
         echo ""
         
-        # 4. 如果容器未启动，尝试重新创建
+        # 4. 检查应用容器日志中的语法错误
+        echo "4. 检查应用容器日志中的错误..."
+        APP_ERRORS=$(sudo docker compose logs app 2>&1 | grep -i "Unexpected token\|SyntaxError\|语法错误" | head -3 || echo "")
+        if [ -n "$APP_ERRORS" ]; then
+            echo -e "${RED}✗ 检测到应用代码语法错误:${NC}"
+            echo "$APP_ERRORS" | sed 's/^/   /'
+            echo ""
+            echo -e "${YELLOW}请检查并修复以下文件:${NC}"
+            echo "  - server/utils/initPrompts.js"
+            echo "  - 其他相关文件"
+            echo ""
+            echo -e "${CYAN}建议: 检查文件中的 try-catch 块是否正确闭合${NC}"
+            echo ""
+        fi
+        
+        # 5. 检查Nginx配置问题
+        echo "5. 检查Nginx配置..."
+        NGINX_CONFIG_ERROR=$(sudo docker compose logs nginx 2>&1 | grep -i "host not found in upstream\|upstream.*not found" | head -1 || echo "")
+        if [ -n "$NGINX_CONFIG_ERROR" ]; then
+            echo -e "${YELLOW}⚠️  检测到Nginx upstream配置问题${NC}"
+            echo "   错误信息: $NGINX_CONFIG_ERROR"
+            echo ""
+            
+            # 检查Nginx配置文件
+            echo -e "${CYAN}检查Nginx配置文件...${NC}"
+            if [ -f "deploy/nginx-site.conf" ]; then
+                UPSTREAM_LINE=$(grep -n "server app" deploy/nginx-site.conf | head -1 || echo "")
+                if [ -n "$UPSTREAM_LINE" ]; then
+                    echo "找到upstream配置: $UPSTREAM_LINE"
+                    # 检查是否有空格问题
+                    if echo "$UPSTREAM_LINE" | grep -q "app: 3001"; then
+                        echo -e "${RED}✗ 发现配置问题：upstream中有空格（app: 3001）${NC}"
+                        echo -e "${CYAN}修复配置文件...${NC}"
+                        sed -i 's/app: 3001/app:3001/g' deploy/nginx-site.conf
+                        echo -e "${GREEN}✓ 已修复配置文件${NC}"
+                        echo ""
+                        echo -e "${CYAN}重启Nginx容器以应用修复...${NC}"
+                        sudo docker compose restart nginx
+                        sleep 5
+                    else
+                        echo -e "${GREEN}✓ 配置文件格式正确${NC}"
+                    fi
+                fi
+            fi
+            echo ""
+            
+            echo -e "${CYAN}检查容器网络...${NC}"
+            # 检查容器是否在同一网络
+            APP_NETWORK=$(sudo docker inspect newsapp --format '{{range $net, $v := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || echo "")
+            NGINX_NETWORK=$(sudo docker inspect newsapp-nginx --format '{{range $net, $v := .NetworkSettings.Networks}}{{$net}}{{end}}' 2>/dev/null || echo "")
+            if [ "$APP_NETWORK" == "$NGINX_NETWORK" ] && [ -n "$APP_NETWORK" ]; then
+                echo -e "${GREEN}✓ 容器在同一网络: $APP_NETWORK${NC}"
+                echo ""
+                echo -e "${CYAN}测试容器间网络连接...${NC}"
+                # 测试从nginx容器能否访问app容器
+                if sudo docker exec newsapp-nginx wget -q -O - http://app:3001/api/health 2>/dev/null | grep -q "ok"; then
+                    echo -e "${GREEN}✓ Nginx可以访问App容器${NC}"
+                    echo ""
+                    echo -e "${CYAN}网络正常，但Nginx启动时可能应用容器还未就绪${NC}"
+                    echo -e "${CYAN}尝试重新加载Nginx配置...${NC}"
+                    # 先检查Nginx配置语法
+                    if sudo docker exec newsapp-nginx nginx -t 2>&1 | grep -q "successful"; then
+                        echo -e "${GREEN}✓ Nginx配置语法正确${NC}"
+                        echo -e "${CYAN}重新加载Nginx配置...${NC}"
+                        sudo docker exec newsapp-nginx nginx -s reload 2>&1 || sudo docker compose restart nginx
+                        sleep 3
+                    else
+                        echo -e "${YELLOW}⚠️  Nginx配置语法有误，重启容器...${NC}"
+                        sudo docker compose restart nginx
+                        sleep 5
+                    fi
+                else
+                    echo -e "${YELLOW}⚠️  Nginx无法访问App容器${NC}"
+                    echo ""
+                    echo -e "${CYAN}检查App容器是否正常运行...${NC}"
+                    APP_HEALTH=$(sudo docker inspect newsapp --format '{{.State.Health.Status}}' 2>/dev/null || echo "unknown")
+                    if [ "$APP_HEALTH" == "healthy" ]; then
+                        echo -e "${GREEN}✓ App容器健康状态: $APP_HEALTH${NC}"
+                        echo ""
+                        echo -e "${CYAN}等待App容器完全启动后重启Nginx...${NC}"
+                        sleep 5
+                        sudo docker compose restart nginx
+                        sleep 5
+                    else
+                        echo -e "${RED}✗ App容器健康状态: $APP_HEALTH${NC}"
+                        echo ""
+                        echo -e "${CYAN}等待App容器完全启动...${NC}"
+                        sleep 10
+                        sudo docker compose restart nginx
+                        sleep 5
+                    fi
+                fi
+            else
+                echo -e "${RED}✗ 容器不在同一网络${NC}"
+                echo "  App网络: $APP_NETWORK"
+                echo "  Nginx网络: $NGINX_NETWORK"
+                echo ""
+                echo -e "${CYAN}尝试重新创建容器以修复网络问题...${NC}"
+                sudo docker compose down
+                sleep 2
+                sudo docker compose up -d
+                sleep 15
+                echo ""
+                echo -e "${CYAN}等待服务完全启动...${NC}"
+                sleep 10
+            fi
+            echo ""
+        fi
+        
+        # 6. 如果容器未启动，尝试重新创建
         APP_CONTAINER=$(sudo docker ps --filter "name=newsapp" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
         if [ -z "$APP_CONTAINER" ]; then
             echo -e "${YELLOW}应用容器未启动，尝试重新创建...${NC}"
@@ -213,7 +395,12 @@ fix() {
             APP_CONTAINER=$(sudo docker ps --filter "name=newsapp" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp$" || echo "")
             if [ -z "$APP_CONTAINER" ]; then
                 echo -e "${RED}✗ 应用容器启动失败，请查看日志${NC}"
-                sudo docker compose logs app --tail 20
+                sudo docker compose logs app --tail 50
+                echo ""
+                echo -e "${YELLOW}常见问题:${NC}"
+                echo "  1. 代码语法错误（检查 initPrompts.js）"
+                echo "  2. 数据库连接失败"
+                echo "  3. 端口被占用"
             else
                 echo -e "${GREEN}✓ 应用容器已启动${NC}"
             fi
@@ -228,11 +415,62 @@ fix() {
             NGINX_CONTAINER=$(sudo docker ps --filter "name=newsapp-nginx" --filter "status=running" --format "{{.Names}}" 2>/dev/null | grep -E "^newsapp-nginx$" || echo "")
             if [ -z "$NGINX_CONTAINER" ]; then
                 echo -e "${RED}✗ Nginx容器启动失败，请查看日志${NC}"
-                sudo docker compose logs nginx --tail 20
+                sudo docker compose logs nginx --tail 50
+                echo ""
+                echo -e "${YELLOW}常见问题:${NC}"
+                echo "  1. Nginx配置文件语法错误"
+                echo "  2. upstream配置问题（app:3001无法解析）"
+                echo "  3. 端口被占用"
             else
                 echo -e "${GREEN}✓ Nginx容器已启动${NC}"
             fi
+        else
+            # Nginx容器在运行，验证代理是否正常
+            echo -e "${CYAN}7. 验证Nginx代理是否正常...${NC}"
+            sleep 2
+            NGINX_PROXY_TEST=$(curl -s http://localhost/api/health 2>/dev/null || echo "")
+            if echo "$NGINX_PROXY_TEST" | grep -q "ok"; then
+                echo -e "${GREEN}✓ Nginx代理正常${NC}"
+            else
+                echo -e "${YELLOW}⚠️  Nginx代理异常${NC}"
+                echo "  响应: $NGINX_PROXY_TEST"
+                echo ""
+                echo -e "${CYAN}检查Nginx配置和日志...${NC}"
+                # 检查Nginx配置
+                sudo docker exec newsapp-nginx nginx -t 2>&1 | head -5
+                echo ""
+                # 检查Nginx错误日志
+                sudo docker compose logs nginx --tail 20 | grep -i "error\|fail" | head -5 || echo "  未发现明显错误"
+                echo ""
+                echo -e "${CYAN}尝试重启Nginx容器...${NC}"
+                sudo docker compose restart nginx
+                sleep 5
+            fi
         fi
+        
+        # 8. 最终验证
+        echo ""
+        echo -e "${CYAN}8. 最终验证...${NC}"
+        FINAL_APP_TEST=$(curl -s http://localhost:3001/api/health 2>/dev/null || echo "")
+        FINAL_NGINX_TEST=$(curl -s http://localhost/api/health 2>/dev/null || echo "")
+        
+        if echo "$FINAL_APP_TEST" | grep -q "ok"; then
+            echo -e "${GREEN}✓ 应用直接访问正常${NC}"
+        else
+            echo -e "${RED}✗ 应用直接访问失败${NC}"
+        fi
+        
+        if echo "$FINAL_NGINX_TEST" | grep -q "ok"; then
+            echo -e "${GREEN}✓ Nginx代理访问正常${NC}"
+        else
+            echo -e "${RED}✗ Nginx代理访问失败${NC}"
+            echo ""
+            echo -e "${YELLOW}如果应用直接访问正常但Nginx代理失败，请检查:${NC}"
+            echo "  1. Nginx配置文件: deploy/nginx-site.conf"
+            echo "  2. upstream配置是否正确"
+            echo "  3. 容器网络连接"
+        fi
+        echo ""
         
     elif [ "$DEPLOY_TYPE" == "pm2" ]; then
         echo -e "${CYAN}使用PM2方式修复...${NC}"
