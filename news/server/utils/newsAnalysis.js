@@ -114,16 +114,91 @@ class NewsAnalysis {
   }
 
   /**
+   * 获取提示词配置（包含关联的AI模型配置）
+   */
+  async getPrompt(interfaceType, promptType) {
+    try {
+      // 首先尝试从数据库获取
+      const prompts = await db.query(
+        `SELECT 
+          p.*, 
+          m.id as ai_model_config_id_full,
+          m.config_name, m.provider, m.model_name, m.api_type, 
+          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p
+         FROM ai_prompt_config p
+         LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.is_active = 1 AND m.delete_mark = 0
+         WHERE p.interface_type = ? 
+         AND p.prompt_type = ? 
+         AND p.is_active = 1 
+         AND p.delete_mark = 0 
+         ORDER BY p.created_at DESC 
+         LIMIT 1`,
+        [interfaceType, promptType]
+      );
+
+      if (prompts.length > 0) {
+        const promptConfig = prompts[0];
+        return {
+          prompt_content: promptConfig.prompt_content,
+          ai_model_config: promptConfig.ai_model_config_id_full ? {
+            id: promptConfig.ai_model_config_id_full,
+            config_name: promptConfig.config_name,
+            provider: promptConfig.provider,
+            model_name: promptConfig.model_name,
+            api_type: promptConfig.api_type,
+            api_key: promptConfig.api_key,
+            api_endpoint: promptConfig.api_endpoint,
+            temperature: promptConfig.temperature,
+            max_tokens: promptConfig.max_tokens,
+            top_p: promptConfig.top_p
+          } : null
+        };
+      }
+
+      // 如果数据库中没有，返回null，使用默认提示词
+      console.warn(`未找到启用的提示词配置：${interfaceType} - ${promptType}，使用默认提示词`);
+      return null;
+    } catch (error) {
+      console.error('获取提示词配置失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 替换提示词中的变量
+   */
+  replacePromptVariables(prompt, variables) {
+    let result = prompt;
+    for (const [key, value] of Object.entries(variables)) {
+      const regex = new RegExp(`\\$\\{${key}\\}`, 'g');
+      result = result.replace(regex, value || '');
+    }
+    return result;
+  }
+
+  /**
    * 分析新闻情绪和类型
    */
-  async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false) {
-    const prompt = `
+  async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false, interfaceType = '新榜') {
+    // 获取提示词配置（包含关联的AI模型配置）
+    let promptConfig = await this.getPrompt(interfaceType, 'sentiment_analysis');
+    let promptTemplate = null;
+    let aiModelConfig = null;
+    
+    if (promptConfig) {
+      promptTemplate = promptConfig.prompt_content;
+      aiModelConfig = promptConfig.ai_model_config;
+    }
+    
+    // 如果数据库中没有，使用默认提示词
+    if (!promptTemplate) {
+      promptTemplate = `
 请分析以下新闻文章的情绪倾向和类型分类：
 
-标题：${title}
-内容：${content.substring(0, 2000)}...
-链接：${sourceUrl}
-${isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。**' : ''}
+标题：\${title}
+内容：\${content}
+链接：\${sourceUrl}
+\${isAdditionalAccount}
 
 请按照以下JSON格式返回分析结果：
 {
@@ -196,9 +271,19 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 
 请确保返回的是有效的JSON格式。
 `;
+    }
+
+    // 替换变量
+    const prompt = this.replacePromptVariables(promptTemplate, {
+      title: title || '',
+      content: (content || '').substring(0, 2000) + ((content || '').length > 2000 ? '...' : ''),
+      sourceUrl: sourceUrl || '',
+      isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。**' : ''
+    });
 
     try {
-      const response = await this.callAIModel(prompt);
+      // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
+      const response = await this.callAIModel(prompt, aiModelConfig);
       
       // 尝试解析JSON响应
       let result;
@@ -248,10 +333,22 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
   /**
    * 分析新闻与被投企业的关联性
    */
-  async analyzeEnterpriseRelevance(title, content, enterprises) {
+  async analyzeEnterpriseRelevance(title, content, enterprises, interfaceType = '新榜') {
     const enterpriseList = enterprises.map(e => `${e.enterprise_full_name}(${e.project_abbreviation})`).join('、');
     
-    const prompt = `
+    // 获取提示词配置（包含关联的AI模型配置）
+    let promptConfig = await this.getPrompt(interfaceType, 'enterprise_relevance');
+    let promptTemplate = null;
+    let aiModelConfig = null;
+    
+    if (promptConfig) {
+      promptTemplate = promptConfig.prompt_content;
+      aiModelConfig = promptConfig.ai_model_config;
+    }
+    
+    // 如果数据库中没有，使用默认提示词
+    if (!promptTemplate) {
+      promptTemplate = `
 请严格分析以下新闻文章与被投企业的关联性。请注意：只有当新闻内容与企业有直接、明确的关联时才认为相关。
 
 **重要：您只能从以下被投企业列表中选择企业，不得返回列表之外的任何企业名称！**
@@ -301,9 +398,18 @@ ${enterpriseList}
 
 **特别提醒**：如果新闻中提到"武汉启云方科技有限公司"等不在被投企业列表中的企业，绝对不要返回这些企业名称！
 `;
+    }
+
+    // 替换变量
+    const prompt = this.replacePromptVariables(promptTemplate, {
+      title: title || '',
+      content: (content || '').substring(0, 3000) + ((content || '').length > 3000 ? '...' : ''),
+      enterpriseList: enterpriseList || ''
+    });
 
     try {
-      const response = await this.callAIModel(prompt);
+      // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
+      const response = await this.callAIModel(prompt, aiModelConfig);
       
       // 尝试解析JSON响应
       let result;
@@ -383,7 +489,7 @@ ${enterpriseList}
   /**
    * 验证现有企业关联的合理性
    */
-  async validateExistingAssociation(title, content, enterpriseName) {
+  async validateExistingAssociation(title, content, enterpriseName, interfaceType = '新榜') {
     if (!enterpriseName) {
       return false;
     }
@@ -417,13 +523,25 @@ ${enterpriseList}
       return false;
     }
 
-    const prompt = `
+    // 获取提示词配置（包含关联的AI模型配置）
+    let promptConfig = await this.getPrompt(interfaceType, 'validation');
+    let promptTemplate = null;
+    let aiModelConfig = null;
+    
+    if (promptConfig) {
+      promptTemplate = promptConfig.prompt_content;
+      aiModelConfig = promptConfig.ai_model_config;
+    }
+    
+    // 如果数据库中没有，使用默认提示词
+    if (!promptTemplate) {
+      promptTemplate = `
 请极其严格地评估以下新闻与指定企业的关联性。
 
-新闻标题：${title}
-新闻内容：${content.substring(0, 3000)}...
+新闻标题：\${title}
+新闻内容：\${content}
 
-指定企业：${enterpriseName}
+指定企业：\${enterpriseName}
 
 **严格评估标准**：
 
@@ -462,9 +580,18 @@ ${enterpriseList}
 
 只返回JSON，不要其他内容。
 `;
+    }
+
+    // 替换变量
+    const prompt = this.replacePromptVariables(promptTemplate, {
+      title: title || '',
+      content: (content || '').substring(0, 3000),
+      enterpriseName: enterpriseName || ''
+    });
 
     try {
-      const response = await this.callAIModel(prompt);
+      // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
+      const response = await this.callAIModel(prompt, aiModelConfig);
       
       // 尝试解析JSON响应
       let result;
@@ -566,10 +693,12 @@ ${enterpriseList}
       if (shouldValidate) {
         console.log(`[processNewsWithEnterprise] 需要AI验证企业关联性`);
         // 重新验证企业关联的合理性
+        const interfaceType = newsItem.APItype || '新榜';
         shouldKeepAssociation = await this.validateExistingAssociation(
           newsItem.title,
           newsItem.content,
-          newsItem.enterprise_full_name
+          newsItem.enterprise_full_name,
+          interfaceType
         );
 
         if (!shouldKeepAssociation) {
@@ -592,11 +721,13 @@ ${enterpriseList}
       );
 
       console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
+      const interfaceType = newsItem.APItype || '新榜';
       const analysis = await this.analyzeNewsSentimentAndType(
         newsItem.title,
         newsItem.content,
         newsItem.source_url,
-        isAdditionalAccount.length > 0 // 传递是否是额外公众号的标志
+        isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
+        interfaceType
       );
       console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
 
@@ -662,10 +793,12 @@ ${enterpriseList}
       }
 
       // 分析企业关联性
+      const interfaceType = newsItem.APItype || '新榜';
       const relevantEnterprises = await this.analyzeEnterpriseRelevance(
         newsItem.title,
         newsItem.content,
-        enterprises
+        enterprises,
+        interfaceType
       );
 
       // 检查是否是额外公众号的新闻
@@ -682,7 +815,8 @@ ${enterpriseList}
         newsItem.title,
         newsItem.content,
         newsItem.source_url,
-        isAdditionalAccount.length > 0 // 传递是否是额外公众号的标志
+        isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
+        interfaceType
       );
 
       // 检查是否为广告类型

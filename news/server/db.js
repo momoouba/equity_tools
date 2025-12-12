@@ -1634,6 +1634,179 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // ai_prompt_config 表：AI提示词配置
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS ai_prompt_config (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      prompt_name VARCHAR(255) NOT NULL COMMENT '提示词名称',
+      interface_type VARCHAR(50) NOT NULL COMMENT '新闻接口类型：新榜/企查查',
+      prompt_type VARCHAR(50) NOT NULL COMMENT '提示词类型：sentiment_analysis-情绪分析, enterprise_relevance-企业关联分析, validation-关联验证',
+      prompt_content LONGTEXT NOT NULL COMMENT '提示词内容',
+      ai_model_config_id VARCHAR(19) NULL COMMENT '关联的AI模型配置ID',
+      is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
+      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      updater_user_id VARCHAR(19) COMMENT '更新用户ID',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      INDEX idx_interface_type (interface_type),
+      INDEX idx_prompt_type (prompt_type),
+      INDEX idx_is_active (is_active),
+      INDEX idx_delete_mark (delete_mark),
+      INDEX idx_ai_model_config_id (ai_model_config_id),
+      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  
+  // 如果表已存在但没有 ai_model_config_id 字段，则添加外键约束（如果 ai_model_config 表存在）
+  try {
+    const [aiModelTables] = await dbPool.query(`
+      SELECT TABLE_NAME 
+      FROM INFORMATION_SCHEMA.TABLES 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'ai_model_config'
+    `);
+    
+    if (aiModelTables.length > 0) {
+      // 检查外键约束是否已存在
+      const [fkCheck] = await dbPool.query(`
+        SELECT CONSTRAINT_NAME 
+        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE 
+        WHERE TABLE_SCHEMA = DATABASE() 
+        AND TABLE_NAME = 'ai_prompt_config' 
+        AND REFERENCED_TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'ai_model_config_id'
+      `);
+      
+      if (fkCheck.length === 0) {
+        // 检查字段是否存在
+        const [columns] = await dbPool.query(`
+          SELECT COLUMN_NAME 
+          FROM INFORMATION_SCHEMA.COLUMNS 
+          WHERE TABLE_SCHEMA = DATABASE() 
+          AND TABLE_NAME = 'ai_prompt_config' 
+          AND COLUMN_NAME = 'ai_model_config_id'
+        `);
+        
+        if (columns.length > 0) {
+          // 字段存在但外键不存在，添加外键
+          try {
+            await dbPool.query(`
+              ALTER TABLE ai_prompt_config 
+              ADD CONSTRAINT fk_ai_prompt_config_model 
+              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(id) ON DELETE SET NULL
+            `);
+            console.log('✓ 已为 ai_prompt_config 表添加 ai_model_config_id 外键约束');
+          } catch (fkErr) {
+            if (!fkErr.message.includes('Duplicate foreign key')) {
+              console.warn('  添加外键约束时出现警告:', fkErr.message);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('检查 ai_prompt_config 外键约束时出现警告:', err.message);
+  }
+
+  // 迁移ai_prompt_config表，添加ai_model_config_id字段
+  try {
+    // 检查表是否存在
+    const [tables] = await dbPool.query(`
+      SELECT TABLE_NAME 
+      FROM INFORMATION_SCHEMA.TABLES 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'ai_prompt_config'
+    `);
+    
+    if (tables.length === 0) {
+      console.log('  ai_prompt_config 表不存在，将在创建表时包含 ai_model_config_id 字段');
+    } else {
+      // 表存在，检查字段是否存在
+      const [columns] = await dbPool.query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = DATABASE() 
+        AND TABLE_NAME = 'ai_prompt_config' 
+        AND COLUMN_NAME = 'ai_model_config_id'
+      `);
+      
+      if (columns.length === 0) {
+        // 先添加字段和索引
+        await dbPool.query(`
+          ALTER TABLE ai_prompt_config 
+          ADD COLUMN ai_model_config_id VARCHAR(19) NULL COMMENT '关联的AI模型配置ID'
+        `);
+        
+        // 添加索引
+        try {
+          await dbPool.query(`
+            ALTER TABLE ai_prompt_config 
+            ADD INDEX idx_ai_model_config_id (ai_model_config_id)
+          `);
+        } catch (idxErr) {
+          if (!idxErr.message.includes('Duplicate key name')) {
+            console.warn('  添加索引时出现警告:', idxErr.message);
+          }
+        }
+        
+        // 检查 ai_model_config 表是否存在，如果存在则添加外键
+        const [aiModelTables] = await dbPool.query(`
+          SELECT TABLE_NAME 
+          FROM INFORMATION_SCHEMA.TABLES 
+          WHERE TABLE_SCHEMA = DATABASE() 
+          AND TABLE_NAME = 'ai_model_config'
+        `);
+        
+        if (aiModelTables.length > 0) {
+          try {
+            await dbPool.query(`
+              ALTER TABLE ai_prompt_config 
+              ADD CONSTRAINT fk_ai_prompt_config_model 
+              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(id) ON DELETE SET NULL
+            `);
+          } catch (fkErr) {
+            if (!fkErr.message.includes('Duplicate foreign key')) {
+              console.warn('  添加外键约束时出现警告:', fkErr.message);
+            }
+          }
+        } else {
+          console.warn('  ai_model_config 表不存在，跳过外键约束添加');
+        }
+        
+        console.log('✓ 已为 ai_prompt_config 表添加 ai_model_config_id 字段');
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 ai_prompt_config 表时出现警告:', err.message);
+    if (err.stack) {
+      console.warn('错误堆栈:', err.stack);
+    }
+  }
+
+  // ai_prompt_change_log 表：AI提示词修改历史日志
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS ai_prompt_change_log (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      prompt_config_id VARCHAR(19) NOT NULL COMMENT '提示词配置ID',
+      change_type ENUM('create', 'update', 'delete', 'activate', 'deactivate') NOT NULL COMMENT '变更类型',
+      old_value LONGTEXT COMMENT '旧值（JSON格式，包含所有字段）',
+      new_value LONGTEXT COMMENT '新值（JSON格式，包含所有字段）',
+      change_user_id VARCHAR(19) COMMENT '变更用户ID',
+      change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '变更时间',
+      change_reason VARCHAR(500) COMMENT '变更原因',
+      INDEX idx_prompt_config_id (prompt_config_id),
+      INDEX idx_change_type (change_type),
+      INDEX idx_change_time (change_time),
+      FOREIGN KEY (prompt_config_id) REFERENCES ai_prompt_config(id) ON DELETE CASCADE,
+      FOREIGN KEY (change_user_id) REFERENCES users(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
   // external_db_config 表：外部数据库配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS external_db_config (
@@ -2155,6 +2328,14 @@ async function initializeTables(dbPool) {
   */
   
   console.log('✓ 所有数据库表结构初始化完成');
+  
+  // 初始化提示词配置
+  try {
+    const { initPrompts } = require('./utils/initPrompts');
+    await initPrompts();
+  } catch (error) {
+    console.warn('初始化提示词配置时出现警告:', error.message);
+  }
   } catch (error) {
     console.error('✗ 初始化数据库表结构时出错:', error.message);
     console.error('错误堆栈:', error.stack);

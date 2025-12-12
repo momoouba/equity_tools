@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import axios from '../utils/axios';
+import PromptConfig from './PromptConfig';
 import './AIConfig.css';
 
 function AIConfig() {
+  const [activeSubTab, setActiveSubTab] = useState('model');
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -255,6 +257,26 @@ function AIConfig() {
     <div className="ai-config-container">
       <div className="ai-config-header">
         <h2>AI模型配置管理</h2>
+      </div>
+
+      <div className="config-tabs">
+        <button
+          className={`tab-button ${activeSubTab === 'model' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('model')}
+        >
+          AI模型配置管理
+        </button>
+        <button
+          className={`tab-button ${activeSubTab === 'prompt' ? 'active' : ''}`}
+          onClick={() => setActiveSubTab('prompt')}
+        >
+          模型提示词设置
+        </button>
+      </div>
+
+      {activeSubTab === 'model' && (
+        <div>
+          <div className="ai-config-header">
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="btn-primary" onClick={fetchConfigs} title="刷新列表">
             刷新
@@ -564,6 +586,12 @@ function AIConfig() {
             </form>
           </div>
         </div>
+      )}
+        </div>
+      )}
+
+      {activeSubTab === 'prompt' && (
+        <PromptConfig />
       )}
     </div>
   );

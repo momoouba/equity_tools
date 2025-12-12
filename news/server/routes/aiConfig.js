@@ -74,6 +74,33 @@ router.get('/', checkAdminPermission, async (req, res) => {
   }
 });
 
+// 获取启用的AI模型配置列表（用于下拉选择）
+router.get('/active', checkAdminPermission, async (req, res) => {
+  try {
+    const data = await db.query(
+      `SELECT 
+        id, config_name, provider, model_name, api_type, 
+        application_type
+       FROM ai_model_config 
+       WHERE delete_mark = 0 AND is_active = 1
+       ORDER BY created_at DESC`
+    );
+
+    res.json({
+      success: true,
+      data: data || []
+    });
+  } catch (error) {
+    console.error('查询启用的AI模型配置失败：', error);
+    console.error('错误堆栈：', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || '查询失败',
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
 // 获取单个AI模型配置（用于编辑）
 router.get('/:id', checkAdminPermission, async (req, res) => {
   try {
