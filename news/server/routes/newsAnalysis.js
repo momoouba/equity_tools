@@ -64,9 +64,9 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     console.log(`新闻ID: ${id}`);
     console.log(`强制重新分析: ${forceReanalyze}`);
     
-    // 获取新闻详情，包括公众号信息
+    // 获取新闻详情，包括公众号信息和现有分析结果
     const newsItems = await db.query(
-      'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name FROM news_detail WHERE id = ?',
+      'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords FROM news_detail WHERE id = ?',
       [id]
     );
     
@@ -80,14 +80,39 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     console.log(`当前企业全称: "${newsItem.enterprise_full_name || '(空)'}"`);
     console.log(`公众号ID (wechat_account): "${newsItem.wechat_account || '(空)'}"`);
     console.log(`公众号名称 (account_name): "${newsItem.account_name || '(空)'}"`);
+    console.log(`当前摘要: "${newsItem.news_abstract ? newsItem.news_abstract.substring(0, 80) + '...' : '(空)'}"`);
+    
+    // 检查摘要是否不完整（以数字结尾、以省略号结尾等）
+    const isAbstractIncomplete = newsItem.news_abstract && (
+      /[\d\.]+[。！？.!?]?$/.test(newsItem.news_abstract.trim()) || // 以数字结尾
+      /\.{2,}$/.test(newsItem.news_abstract.trim()) || // 以省略号结尾
+      /…+$/.test(newsItem.news_abstract.trim()) || // 以中文省略号结尾
+      newsItem.news_abstract.length < 30 // 摘要太短
+    );
+    
+    if (isAbstractIncomplete) {
+      console.log(`⚠️ 检测到摘要不完整，将强制重新分析`);
+      console.log(`摘要问题: ${newsItem.news_abstract.substring(Math.max(0, newsItem.news_abstract.length - 20))}`);
+    }
     
     // 如果是强制重新分析，先清空相关字段（但不清空企业全称，因为需要根据公众号重新匹配）
-    if (forceReanalyze) {
+    // 注意：即使forceReanalyze为false，如果摘要、情绪或关键词为空或不完整，也应该重新分析
+    const shouldClearResults = forceReanalyze || !newsItem.news_abstract || !newsItem.news_sentiment || !newsItem.keywords || isAbstractIncomplete;
+    if (shouldClearResults) {
       await db.execute(
         'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE id = ?',
         [id]
       );
       console.log(`✓ 已清空分析结果字段（保留企业全称）`);
+      if (forceReanalyze) {
+        console.log(`清空原因: 强制重新分析`);
+      } else if (isAbstractIncomplete) {
+        console.log(`清空原因: 摘要不完整（以数字结尾或太短）`);
+      } else {
+        console.log(`清空原因: 分析结果不完整（缺少摘要、情绪或关键词）`);
+      }
+    } else {
+      console.log(`⚠️ 分析结果已存在且完整，如需重新分析请设置forceReanalyze=true`);
     }
     
     // 在重新分析前，先根据公众号匹配企业（如果新闻来自invested_enterprises表的公众号）
@@ -1089,5 +1114,10 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
   }
 });
 
+// 确保导出的是路由对象
+if (!router || typeof router.use !== 'function') {
+  console.error('错误：router对象无效');
+  throw new Error('router对象无效，无法导出');
+}
 
 module.exports = router;

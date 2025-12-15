@@ -10,6 +10,548 @@ class NewsAnalysis {
   }
 
   /**
+   * 从URL抓取网页内容
+   */
+  async fetchContentFromUrl(url) {
+    try {
+      if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+        console.warn(`[fetchContentFromUrl] 无效的URL: ${url}`);
+        return null;
+      }
+
+      console.log(`[fetchContentFromUrl] 开始抓取网页内容: ${url}`);
+      
+      // 设置请求头，模拟浏览器访问
+      const response = await axios.get(url, {
+        timeout: 15000, // 15秒超时
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1'
+        },
+        maxRedirects: 5,
+        validateStatus: (status) => status < 500 // 允许3xx和4xx状态码，但不允许5xx
+      });
+
+      if (response.status !== 200) {
+        console.warn(`[fetchContentFromUrl] HTTP状态码: ${response.status}, URL: ${url}`);
+        return null;
+      }
+
+      const html = response.data;
+      if (!html || typeof html !== 'string') {
+        console.warn(`[fetchContentFromUrl] 返回内容不是HTML字符串, URL: ${url}`);
+        return null;
+      }
+
+      // 智能提取正文内容
+      let text = this.extractArticleContent(html);
+
+      // 如果提取的文本太短（少于50个字符），可能提取失败
+      if (text.length < 50) {
+        console.warn(`[fetchContentFromUrl] 提取的文本内容太短（${text.length}字符），可能提取失败, URL: ${url}`);
+        // 尝试提取前5000个字符作为备用
+        const fallbackText = html.substring(0, 5000)
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (fallbackText.length > text.length) {
+          text = fallbackText;
+        }
+      }
+
+      if (text.length === 0) {
+        console.warn(`[fetchContentFromUrl] 未能提取到文本内容, URL: ${url}`);
+        return null;
+      }
+
+      // 限制最大长度为50000字符（避免内容过长）
+      if (text.length > 50000) {
+        text = text.substring(0, 50000) + '...[内容已截断]';
+      }
+
+      console.log(`[fetchContentFromUrl] ✓ 成功抓取网页内容，长度: ${text.length}字符`);
+      return text;
+
+    } catch (error) {
+      console.error(`[fetchContentFromUrl] 抓取网页内容失败: ${error.message}, URL: ${url}`);
+      if (error.response) {
+        console.error(`[fetchContentFromUrl] HTTP状态码: ${error.response.status}`);
+      }
+      return null;
+    }
+  }
+
+  /**
+   * 从HTML中智能提取正文内容
+   */
+  extractArticleContent(html) {
+    // 第一步：移除script、style、noscript等标签及其内容
+    let cleanedHtml = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+
+    // 第二步：优先查找正文内容容器（按优先级排序）
+    const articleSelectors = [
+      // 优先查找：article-txt-content、article-content、txt-content 等常见的正文容器class
+      /<div[^>]*class="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*article-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*id="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*id="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*id="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      // 其次查找：通用的article、main标签
+      /<article[^>]*>([\s\S]*?)<\/article>/i,
+      /<main[^>]*>([\s\S]*?)<\/main>/i,
+      // 最后查找：其他可能的正文容器
+      /<div[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*id="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*id="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*post[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+      /<div[^>]*class="[^"]*entry[^"]*"[^>]*>([\s\S]*?)<\/div>/i
+    ];
+
+    let articleContent = null;
+    for (const selector of articleSelectors) {
+      const match = cleanedHtml.match(selector);
+      if (match && match[1]) {
+        const content = match[1];
+        // 检查提取的内容是否足够长（至少200字符）
+        const textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 200) {
+          articleContent = content;
+          console.log(`[extractArticleContent] 找到正文容器，长度: ${textOnly.length}字符`);
+          break;
+        }
+      }
+    }
+
+    // 如果找到正文容器，使用它；否则使用整个HTML
+    let contentHtml = articleContent || cleanedHtml;
+
+    // 第三步：移除常见的导航、侧边栏、页脚等元素
+    contentHtml = contentHtml
+      // 移除导航栏
+      .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+      .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
+      .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+      // 移除侧边栏
+      .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '')
+      .replace(/<div[^>]*class="[^"]*sidebar[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+      .replace(/<div[^>]*id="[^"]*sidebar[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+      // 移除常见的导航相关class
+      .replace(/<div[^>]*class="[^"]*(?:nav|menu|header|footer|topbar|bottombar)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '')
+      // 移除表单元素（搜索框、登录框等）
+      .replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '')
+      .replace(/<input[^>]*>/gi, '')
+      .replace(/<button[^>]*>[\s\S]*?<\/button>/gi, '')
+      // 移除链接但保留文本（导航链接通常不是正文）
+      .replace(/<a[^>]*>([\s\S]*?)<\/a>/gi, (match, text) => {
+        // 如果链接文本很短（可能是导航），移除它
+        const linkText = text.replace(/<[^>]+>/g, '').trim();
+        if (linkText.length < 5) {
+          return '';
+        }
+        return text;
+      })
+      // 移除常见的UI元素
+      .replace(/<ul[^>]*class="[^"]*(?:nav|menu)[^"]*"[^>]*>[\s\S]*?<\/ul>/gi, '')
+      .replace(/<div[^>]*class="[^"]*(?:search|login|register|user-info)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+
+    // 第四步：提取纯文本
+    let text = contentHtml
+      .replace(/<[^>]+>/g, ' ')
+      // 解码HTML实体
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/&mdash;/g, '—')
+      .replace(/&ndash;/g, '–')
+      .replace(/&hellip;/g, '…')
+      .replace(/&ldquo;/g, '"')
+      .replace(/&rdquo;/g, '"')
+      .replace(/&lsquo;/g, '\'')
+      .replace(/&rsquo;/g, '\'')
+      // 移除多余的空白字符
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // 第五步：移除常见的导航文本模式
+    const navigationPatterns = [
+      // 常见的导航词汇（前后可能有空格或标点）
+      /\b(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|关注|订阅|设置|帮助|关于|联系我们)\b/gi,
+      // 重复的导航文本（如"搜索 搜索"）
+      /(搜索\s*){2,}/gi,
+      // 数字+操作（如"+1 收藏 0 评论 +1 点赞"）
+      /[+\-]?\d+\s*(收藏|评论|点赞|分享|转发)/gi,
+      // 常见的页面元素文本
+      /(上一页|下一页|返回|顶部|底部|更多|展开|收起|收起全文|展开全文)/gi,
+      // 移除"风闻"相关的导航文本（针对观察者网）
+      /风闻\s*(搜索|热门搜索|搜索历史)/gi,
+      // 移除常见的导航分隔符模式（如"搜索 热门搜索 搜索历史"）
+      /(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册)\s+(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册)/gi
+    ];
+
+    for (const pattern of navigationPatterns) {
+      text = text.replace(pattern, '');
+    }
+
+    // 第六步：移除文本开头的导航模式（通常在正文前出现）
+    // 匹配模式：标题 + 下划线 + 导航词汇序列
+    const leadingNavPatterns = [
+      // 匹配：标题_风闻 搜索 热门搜索...（观察者网模式）
+      /^[^。！？\n]+_风闻\s+(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间)[\s\S]{0,500}?(?=\d{1,2}\s*[天小时分钟]|昨天|今天|在|而|由于|当前|随着|值得|制造|键合|量检测)/i,
+      // 匹配：导航词汇序列（至少3个导航词连续出现）
+      /^(\s*(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|风闻)\s*[_\s\-|/]*\s*){3,}/i,
+      // 匹配：标题重复出现（如"国产半导体设备，大举进军HBM"出现两次）
+      /^([^。！？\n]+?)(\s+[\s\S]{0,200}?)\1\s+/i
+    ];
+
+    for (const pattern of leadingNavPatterns) {
+      const beforeReplace = text;
+      text = text.replace(pattern, '').trim();
+      if (text !== beforeReplace) {
+        console.log(`[extractArticleContent] 移除了开头的导航模式`);
+      }
+    }
+
+    // 第七步：移除文本中重复出现的导航序列
+    // 匹配：导航词汇 + 数字操作（如"+1 收藏 0 评论 +1 点赞"）
+    text = text.replace(/[+\-]?\d+\s*(收藏|评论|点赞|分享|转发)\s*\d+\s*(收藏|评论|点赞|分享|转发)/gi, '');
+    
+    // 移除：标题 + 导航词汇 + 重复标题的模式
+    const titleNavPattern = /([^。！？\n]{10,50}?)\s+(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|风闻|半导体产业纵横|探索IC产业无限可能)[\s\S]{0,300}?\1/gi;
+    text = text.replace(titleNavPattern, '$1');
+
+    // 第八步：清理多余的空白和标点
+    text = text
+      .replace(/\s+/g, ' ')
+      .replace(/\s*[。！？]\s*[。！？]+/g, '。') // 移除重复的标点
+      .replace(/^\s*[，。！？、]\s*/g, '') // 移除开头的标点
+      .trim();
+
+    // 第七步：如果文本太短，尝试从整个HTML提取（作为备用）
+    if (text.length < 100) {
+      console.warn(`[extractArticleContent] 提取的文本太短（${text.length}字符），尝试备用方法`);
+      // 备用方法：从body标签中提取，但移除更多无关元素
+      const bodyMatch = cleanedHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      if (bodyMatch && bodyMatch[1]) {
+        let fallbackText = bodyMatch[1]
+          .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '')
+          .replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '')
+          .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
+          .replace(/<aside[^>]*>[\s\S]*?<\/aside>/gi, '')
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        if (fallbackText.length > text.length) {
+          text = fallbackText;
+        }
+      }
+    }
+
+    return text;
+  }
+
+  /**
+   * 循环清理脏信息，直到内容干净为止
+   */
+  cleanDirtyContent(text, maxIterations = 10) {
+    if (!text || text.trim() === '') {
+      return text;
+    }
+
+    let cleanedText = text;
+    let previousLength = cleanedText.length;
+    let iteration = 0;
+
+    // 定义脏信息模式
+    const dirtyPatterns = [
+      // JavaScript代码和网页模板代码（优先清理）
+      /<script[^>]*>[\s\S]*?<\/script>/gi,
+      /document\.title\s*=\s*['"][^'"]*['"]/gi,
+      /var\s+PAGE_MID\s*=\s*['"][^'"]*['"]/gi,
+      /setTimeout\s*\([^)]*\)/gi,
+      /function\s*\(\)\s*\{[^}]*\}/gi,
+      /title\s*===\s*['"][^'"]*['"]/gi,
+      /document\.title\s*=/gi,
+      /PAGE_MID\s*=/gi,
+      /mmbizwap[^;]*/gi,
+      /secitptpage[^;]*/gi,
+      /verify\.html[^;]*/gi,
+      /微信公众号平台[^;]*/gi,
+      /body\s*,/gi,
+      // 导航词汇
+      /\b(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|关注|订阅|设置|帮助|关于|联系我们)\b/gi,
+      // 重复的导航文本
+      /(搜索\s*){2,}/gi,
+      // 数字+操作
+      /[+\-]?\d+\s*(收藏|评论|点赞|分享|转发)/gi,
+      // 页面元素文本
+      /(上一页|下一页|返回|顶部|底部|更多|展开|收起|收起全文|展开全文|点击展开全文|打开.*APP|阅读体验更佳)/gi,
+      // 风闻相关
+      /风闻\s*(搜索|热门搜索|搜索历史)/gi,
+      // 标题_风闻模式
+      /^[^。！？\n]+_风闻\s+(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间)[\s\S]{0,500}?(?=\d{1,2}\s*[天小时分钟]|昨天|今天|在|而|由于|当前|随着|值得|制造|键合|量检测)/i,
+      // 导航词汇序列（至少3个连续）
+      /^(\s*(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|风闻)\s*[_\s\-|/]*\s*){3,}/i,
+      // 标题重复出现
+      /^([^。！？\n]+?)(\s+[\s\S]{0,200}?)\1\s+/i,
+      // 数字+操作序列
+      /[+\-]?\d+\s*(收藏|评论|点赞|分享|转发)\s*\d+\s*(收藏|评论|点赞|分享|转发)/gi,
+      // 标题+导航+重复标题
+      /([^。！？\n]{10,50}?)\s+(搜索|热门搜索|搜索历史|首页|私信|消息|个人主页|我的文章|账号设置|退出|登录|注册|收藏|评论|点赞|分享|微信|微博|空间|风闻|半导体产业纵横|探索IC产业无限可能)[\s\S]{0,300}?\1/gi,
+      // 常见的页脚信息
+      /(科技\s*举报|点击展开全文|打开.*APP.*阅读体验更佳|分享到：|收藏\s*\d+|点赞\s*\d+|更多好问|最新提问|邀您参与问答|等\d+人\s*已参与问答|热点\s*\d+|站务|观察者网评论|请你来预测|风闻社区小助手|最近更新的专栏|查看全部|联系我们|关于我们|版权声明|服务条款|刊登广告|联系微博|加入我们|网站地图|举报制度规范|网站自律管理承诺书|Copyright[\s\S]{0,100}?All rights reserved|沪ICP备[\s\S]{0,50}?互联网新闻信息服务许可证[\s\S]{0,50}?违法及不良信息举报电话)/gi,
+      // 作者信息模式
+      /(半导体产业纵横|探索IC产业无限可能)[\s\S]{0,50}?\|\s*\d+篇文章[\s\S]{0,50}?\d+人关注[\s\S]{0,50}?\+关注/gi,
+      // 相关文章推荐
+      /(查看全部>>|作者文章|相关文章|推荐阅读|热门文章|最新文章)/gi
+    ];
+
+    // 循环清理，直到没有变化或达到最大迭代次数
+    while (iteration < maxIterations) {
+      iteration++;
+      const beforeClean = cleanedText;
+
+      // 应用所有清理模式
+      for (const pattern of dirtyPatterns) {
+        cleanedText = cleanedText.replace(pattern, '');
+      }
+
+      // 清理多余的空白和标点
+      cleanedText = cleanedText
+        .replace(/\s+/g, ' ')
+        .replace(/\s*[。！？]\s*[。！？]+/g, '。')
+        .replace(/^\s*[，。！？、]\s*/g, '')
+        .trim();
+
+      // 如果内容没有变化，说明已经清理干净
+      if (cleanedText.length === beforeClean.length && cleanedText === beforeClean) {
+        console.log(`[cleanDirtyContent] 经过${iteration}次迭代，内容已清理干净`);
+        break;
+      }
+
+      // 如果内容变得太短，停止清理
+      if (cleanedText.length < 100 && previousLength > 200) {
+        console.warn(`[cleanDirtyContent] 内容清理后变得太短，停止清理`);
+        break;
+      }
+
+      previousLength = cleanedText.length;
+    }
+
+    if (iteration >= maxIterations) {
+      console.warn(`[cleanDirtyContent] 达到最大迭代次数(${maxIterations})，停止清理`);
+    }
+
+    return cleanedText;
+  }
+
+  /**
+   * 检查内容是否包含导航信息（需要重新抓取）
+   */
+  isContentContaminated(content) {
+    if (!content || content.trim() === '') {
+      return false;
+    }
+
+    // 检查是否包含JavaScript代码或网页模板代码（这些通常是错误的内容提取）
+    const jsPatterns = [
+      /document\.title\s*=/i,
+      /var\s+PAGE_MID/i,
+      /mmbizwap/i,
+      /secitptpage/i,
+      /verify\.html/i,
+      /微信公众号平台/i,
+      /setTimeout\s*\(/i,
+      /function\s*\(\)\s*\{/i,
+      /<script[^>]*>/i,
+      /<\/script>/i,
+      /body\s*,/i,
+      /title\s*===/i,
+      /document\.title\s*=\s*['"]/i,
+      /PAGE_MID\s*=/i,
+      /noMobile\s*&&/i,
+      /=>\s*\{/i
+    ];
+    
+    // 检查是否包含CSS样式代码（这些通常是错误的内容提取）
+    const cssPatterns = [
+      /\.wx-root/i,
+      /--weui-/i,
+      /@media\s*\(prefers-color-scheme/i,
+      /data-weui-theme/i,
+      /rgba\s*\(/i,
+      /#[0-9a-f]{3,6}/i, // CSS颜色代码
+      /:\s*#[0-9a-f]{3,6}/i, // CSS属性值中的颜色
+      /:\s*rgba\s*\(/i, // CSS属性值中的rgba
+      /:\s*#[a-f0-9]{3,6}\s*;/i // CSS属性值
+    ];
+    
+    // 如果内容主要是JavaScript代码或网页模板代码，认为内容被污染
+    const jsPatternCount = jsPatterns.filter(pattern => pattern.test(content)).length;
+    const cssPatternCount = cssPatterns.filter(pattern => pattern.test(content)).length;
+    
+    // 如果包含2个或以上JavaScript模式，或1个JavaScript模式+1个CSS模式，认为内容被污染
+    if (jsPatternCount >= 2 || (jsPatternCount >= 1 && cssPatternCount >= 1)) {
+      console.log(`[isContentContaminated] 检测到JavaScript代码或CSS样式代码（JS: ${jsPatternCount}, CSS: ${cssPatternCount}），需要重新抓取`);
+      return true;
+    }
+    
+    // 如果包含大量CSS样式代码（3个或以上），认为内容被污染
+    if (cssPatternCount >= 3) {
+      console.log(`[isContentContaminated] 检测到大量CSS样式代码（${cssPatternCount}个模式），需要重新抓取`);
+      return true;
+    }
+    
+    // 如果包含JavaScript代码且长度较短（少于200字符），可能是错误提取
+    if (jsPatternCount >= 1 && content.trim().length < 200) {
+      console.log(`[isContentContaminated] 检测到JavaScript代码且内容较短，需要重新抓取`);
+      return true;
+    }
+
+    // 检查是否包含大量导航词汇
+    const navKeywords = ['搜索', '热门搜索', '搜索历史', '首页', '私信', '消息', '个人主页', '我的文章', '账号设置', '退出', '登录/注册', '收藏', '评论', '点赞', '分享', '微信', '微博', '空间', '风闻'];
+    let navCount = 0;
+    for (const keyword of navKeywords) {
+      if (content.includes(keyword)) {
+        navCount++;
+      }
+    }
+
+    // 如果包含5个或以上导航关键词，认为内容被污染
+    if (navCount >= 5) {
+      console.log(`[isContentContaminated] 检测到内容包含${navCount}个导航关键词，需要重新抓取`);
+      return true;
+    }
+
+    // 检查是否包含"数字+操作"模式（如"+1 收藏 0 评论"）
+    if (/[+\-]?\d+\s*(收藏|评论|点赞|分享)/i.test(content)) {
+      console.log(`[isContentContaminated] 检测到内容包含"数字+操作"模式，需要重新抓取`);
+      return true;
+    }
+
+    // 检查文本开头是否包含导航模式
+    const leadingNavCheck = /^[^。！？\n]+_[风闻]\s+(搜索|热门搜索)/i.test(content);
+    if (leadingNavCheck) {
+      console.log(`[isContentContaminated] 检测到内容开头包含导航模式，需要重新抓取`);
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
+   * 如果content包含导航信息，会清理或重新抓取
+   */
+  async ensureNewsContent(newsItem) {
+    // 检查现有content是否被污染（包含导航信息）
+    if (newsItem.content && newsItem.content.trim() !== '') {
+      if (this.isContentContaminated(newsItem.content)) {
+        console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} 的content包含脏信息，开始清理`);
+        
+        // 先尝试清理现有内容
+        const cleanedContent = this.cleanDirtyContent(newsItem.content);
+        console.log(`[ensureNewsContent] 清理完成，原始长度: ${newsItem.content.length}字符，清理后长度: ${cleanedContent.length}字符`);
+        
+        // 检查清理后是否仍然被污染
+        if (this.isContentContaminated(cleanedContent)) {
+          console.log(`[ensureNewsContent] 清理后仍然包含脏信息，尝试重新抓取`);
+          // 如果有source_url，重新抓取
+          if (newsItem.source_url && newsItem.source_url.trim() !== '') {
+            newsItem.content = '';
+          } else {
+            // 没有source_url，使用清理后的版本
+            console.log(`[ensureNewsContent] 没有source_url，使用清理后的版本`);
+            newsItem.content = cleanedContent;
+            // 更新数据库
+            try {
+              await db.execute('UPDATE news_detail SET content = ? WHERE id = ?', [cleanedContent, newsItem.id]);
+            } catch (error) {
+              console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
+            }
+            return cleanedContent;
+          }
+        } else {
+          // 清理成功，使用清理后的内容
+          console.log(`[ensureNewsContent] ✓ 内容已清理干净`);
+          newsItem.content = cleanedContent;
+          // 更新数据库
+          try {
+            await db.execute('UPDATE news_detail SET content = ? WHERE id = ?', [cleanedContent, newsItem.id]);
+            console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库`);
+          } catch (error) {
+            console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
+          }
+          return cleanedContent;
+        }
+      } else {
+        // content正常，直接返回
+        return newsItem.content;
+      }
+    }
+
+    // 如果content为空但有source_url，尝试从URL抓取
+    if (newsItem.source_url && newsItem.source_url.trim() !== '') {
+      console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} 的content为空或被污染，尝试从source_url抓取内容`);
+      const fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+      
+      if (fetchedContent) {
+        // 循环清理脏信息，直到内容干净
+        console.log(`[ensureNewsContent] 开始清理抓取到的内容，原始长度: ${fetchedContent.length}字符`);
+        const cleanedContent = this.cleanDirtyContent(fetchedContent);
+        console.log(`[ensureNewsContent] 清理完成，清理后长度: ${cleanedContent.length}字符`);
+        
+        // 检查清理后的内容是否仍然被污染
+        if (this.isContentContaminated(cleanedContent)) {
+          console.warn(`[ensureNewsContent] 清理后的内容仍然包含脏信息，但继续使用清理后的版本`);
+        }
+        
+        // 将清理后的内容更新到数据库
+        try {
+          await db.execute(
+            'UPDATE news_detail SET content = ? WHERE id = ?',
+            [cleanedContent, newsItem.id]
+          );
+          console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库，新闻ID: ${newsItem.id}`);
+          // 更新newsItem对象，以便后续使用
+          newsItem.content = cleanedContent;
+          return cleanedContent;
+        } catch (error) {
+          console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
+          // 即使更新失败，也返回清理后的内容供本次分析使用
+          return cleanedContent;
+        }
+      } else {
+        console.warn(`[ensureNewsContent] 无法从source_url抓取内容，新闻ID: ${newsItem.id}, URL: ${newsItem.source_url}`);
+        return null;
+      }
+    }
+
+    // content为空且没有source_url，或抓取失败
+    console.warn(`[ensureNewsContent] 新闻ID ${newsItem.id} 的content为空且无法抓取，标题: ${newsItem.title}`);
+    return null;
+  }
+
+  /**
    * 获取活跃的AI配置
    */
   async getActiveAIConfig() {
@@ -115,10 +657,11 @@ class NewsAnalysis {
 
   /**
    * 获取提示词配置（包含关联的AI模型配置）
+   * 支持多条配置，返回所有匹配的配置（按创建时间倒序），调用方可以选择使用哪一个
    */
   async getPrompt(interfaceType, promptType) {
     try {
-      // 首先尝试从数据库获取
+      // 从数据库获取所有匹配的提示词配置（不限制数量）
       const prompts = await db.query(
         `SELECT 
           p.*, 
@@ -131,13 +674,26 @@ class NewsAnalysis {
          AND p.prompt_type = ? 
          AND p.is_active = 1 
          AND p.delete_mark = 0 
-         ORDER BY p.created_at DESC 
-         LIMIT 1`,
+         ORDER BY p.created_at DESC`,
         [interfaceType, promptType]
       );
 
       if (prompts.length > 0) {
+        // 记录找到的配置数量
+        if (prompts.length === 1) {
+          console.log(`✓ 找到 1 条匹配的提示词配置：${interfaceType} - ${promptType} (ID: ${prompts[0].id}, 名称: ${prompts[0].prompt_name || '未命名'})`);
+        } else {
+          console.log(`✓ 找到 ${prompts.length} 条匹配的提示词配置：${interfaceType} - ${promptType}`);
+          prompts.forEach((p, index) => {
+            console.log(`  ${index === 0 ? '→' : ' '} [${index + 1}] ID: ${p.id}, 名称: ${p.prompt_name || '未命名'}, 创建时间: ${p.created_at}`);
+          });
+          console.log(`  使用最新配置: ${prompts[0].id}(${prompts[0].prompt_name || '未命名'})`);
+        }
+        
+        // 如果有多个配置，使用最新的（第一个）
+        // 如果需要使用其他配置，可以后续扩展选择逻辑
         const promptConfig = prompts[0];
+        
         return {
           prompt_content: promptConfig.prompt_content,
           ai_model_config: promptConfig.ai_model_config_id_full ? {
@@ -151,7 +707,15 @@ class NewsAnalysis {
             temperature: promptConfig.temperature,
             max_tokens: promptConfig.max_tokens,
             top_p: promptConfig.top_p
-          } : null
+          } : null,
+          // 返回所有匹配的配置，供调用方选择使用
+          all_prompts: prompts.map(p => ({
+            id: p.id,
+            prompt_name: p.prompt_name,
+            prompt_content: p.prompt_content,
+            ai_model_config_id: p.ai_model_config_id_full,
+            created_at: p.created_at
+          }))
         };
       }
 
@@ -180,14 +744,96 @@ class NewsAnalysis {
    * 分析新闻情绪和类型
    */
   async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false, interfaceType = '新榜') {
+    // 特殊处理：新榜接口的微信公众号里面是图片且无正文内容的情况
+    // 注意：只有当content真正是图片内容（通过isImageOnlyContent检测）或者是空的时候，才跳过AI分析
+    // 如果content很短但不是图片内容，应该继续走正常的AI分析流程
+    // 同时检查内容是否被污染（包含JavaScript代码等脏信息）
+    const isContentDirty = content && this.isContentContaminated(content);
+    const isImageOnly = this.isImageOnlyContent(content) || 
+                       (!content || content.trim().length === 0) ||
+                       isContentDirty;
+    
+    if ((interfaceType === '新榜' || interfaceType === '新榜接口') && isImageOnly) {
+      console.log(`[analyzeNewsSentimentAndType] 检测到新榜接口的图片内容或脏内容，跳过AI分析`);
+      if (isContentDirty) {
+        console.log(`[analyzeNewsSentimentAndType] 内容被污染（包含JavaScript代码等），视为图片内容处理`);
+      }
+      
+      // 先尝试从标题推断关键词和摘要
+      const inferredKeywords = this.inferKeywordsFromContent(title, '');
+      let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+      let finalAbstract = '正文内容为图片，无法识别';
+        
+        // 如果标题包含会议相关关键词，设置会议相关的摘要和关键词
+        const titleLower = (title || '').toLowerCase();
+        const meetingKeywords = [
+          '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+          '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+          '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+          '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+          '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+          '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+          '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+        ];
+        
+        // 招聘相关关键词
+        const recruitmentKeywords = [
+          '招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', 
+          '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求',
+          '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事',
+          '实习生招聘', '应届生招聘', '2027届', '2026届', '2025届'
+        ];
+        
+        const hasMeetingKeyword = meetingKeywords.some(kw => titleLower.includes(kw));
+        const hasRecruitmentKeyword = recruitmentKeywords.some(kw => titleLower.includes(kw));
+        
+        if (hasMeetingKeyword) {
+          // 如果标题包含会议关键词，优先使用会议事项标签
+          if (!finalKeywords.includes('会议事项')) {
+            finalKeywords = ['会议事项'];
+          }
+          // 基于标题生成摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[analyzeNewsSentimentAndType] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
+        } else if (hasRecruitmentKeyword) {
+          // 如果标题包含招聘关键词，使用人员招聘标签
+          if (!finalKeywords.includes('人员招聘')) {
+            finalKeywords = ['人员招聘'];
+          }
+          // 基于标题生成摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[analyzeNewsSentimentAndType] 标题包含招聘关键词，设置人员招聘标签和基于标题的摘要`);
+        } else if (inferredKeywords.length > 0) {
+          // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[analyzeNewsSentimentAndType] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
+        }
+        
+        console.log(`[analyzeNewsSentimentAndType] 设置特殊摘要和关键词`);
+        console.log(`[analyzeNewsSentimentAndType] 关键词: ${JSON.stringify(finalKeywords)}`);
+        console.log(`[analyzeNewsSentimentAndType] 摘要: ${finalAbstract}`);
+        
+        return {
+          sentiment: 'neutral',
+          sentiment_reason: '正文内容为图片，无法识别',
+          keywords: finalKeywords,
+          news_abstract: finalAbstract
+        };
+    }
+    
     // 获取提示词配置（包含关联的AI模型配置）
     let promptConfig = await this.getPrompt(interfaceType, 'sentiment_analysis');
     let promptTemplate = null;
     let aiModelConfig = null;
     
-    if (promptConfig) {
+    if (promptConfig && promptConfig.prompt_content) {
+      // 优先使用数据库中的提示词
       promptTemplate = promptConfig.prompt_content;
       aiModelConfig = promptConfig.ai_model_config;
+      console.log(`✓ 使用数据库中的提示词配置：${interfaceType} - sentiment_analysis`);
+    } else {
+      // 如果数据库中没有，使用默认提示词
+      console.log(`⚠️ 未找到数据库提示词配置，使用默认提示词：${interfaceType} - sentiment_analysis`);
     }
     
     // 如果数据库中没有，使用默认提示词
@@ -205,8 +851,55 @@ class NewsAnalysis {
   "sentiment": "positive|neutral|negative",
   "sentiment_reason": "情绪判断的原因",
   "news_type": ["类型标签1", "类型标签2"],
-  "news_abstract": "100字左右的关键信息摘要"
+  "news_abstract": "150字以内的关键信息摘要"
 }
+
+**重要要求（必须严格遵守）：**
+
+1. **摘要要求（极其重要，必须严格遵守）**：
+   - news_abstract字段必须是完整的、完整的句子，绝对不能以省略号（...）结尾，也不能以数字或未完成的短语结尾（如"还背着27."、"营收达到1."等）
+   - 摘要必须是一个完整的、有意义的句子，能够独立表达新闻的核心内容
+   - 摘要应该包含：时间、主体、事件、结果或意义等关键信息
+   - **极其重要**：摘要必须是文章正文内容的核心关键内容的**总结和提炼**，而不是简单提取正文的第一句话、第一段话或每一段的首句
+   - **绝对禁止**：直接摘取第一段话、摘取每一段的首句、或简单复制原文的某句话作为摘要
+   - **必须跳过**：正文开头的引导语、关注提示、广告语等无关内容（如"点击关注"、"点击左上方关注"、"欢迎关注"、"扫描二维码"等），直接总结文章的核心主题和关键信息
+   - **摘要应该是总结性的**：需要阅读**完整文章**后，提炼出核心要点，形成总结性的表述。如果正文开头只是引入，应该总结后续的核心内容。摘要应该是对全文信息的提炼和概括，而不是原文的片段拼接
+   - **摘要生成方法**：通读全文，理解文章的核心主题、关键信息、主要观点，然后用简洁的语言总结成150字以内的完整句子。不要逐段摘取，而要提炼整合
+   - **特别重要**：如果文章是负面新闻（看衰、质疑、担忧企业），摘要必须准确反映文章的核心观点和担忧点，不能只是复制开头段落。例如，如果文章质疑企业能否成功上市、指出现金流紧张、债务压力大等风险，摘要应该总结这些核心担忧点，而不是只提取开头引入性文字。
+   - 摘要长度必须在150字以内，即使需要压缩也要确保句子完整，不能中途截断，不能以数字、未完成的短语结尾
+   - **绝对禁止**：在不完整的句子后直接加句号。必须生成完整的句子。禁止以数字、未完成的短语、未完成的句子结尾。
+   - 示例：
+     ✅ 正确："12月13日是国家公祭日，全国各地举行纪念活动，缅怀遇难同胞，提醒人们铭记历史、珍爱和平，吾辈应当自强不息，建设更强大的祖国。"
+     ✅ 正确："企业发布国家公祭日文章，缅怀南京大屠杀遇难同胞、铭记民族苦难的庄严时刻。"
+     ✅ 正确："鼎泰药研赴港IPO，2025年上半年通过生物资产公允价值变动实现扭亏，但账上现金4.19亿面临27亿赎回债务压力。"
+     ✅ 正确（负面新闻摘要）："鼎泰药研赴港IPO面临多重挑战，现金流紧张，4.19亿现金需应对27.27亿赎回债务，利润波动依赖实验猴公允价值，行业遇冷背景下能否成功上市存疑。"
+     ❌ 错误："点击左上方关注"博睿康"！"（这是引导语，不是核心内容）
+     ❌ 错误："国内心血管代谢疾病非临床研究的头部CRO——鼎泰药研，最近敲了港交所的大门。营收看着稳当当，利润却跟坐过山车似的，2025年上半年靠生物资产公允价值赚了1.36亿才扭亏，可账上现金只剩4.19亿，还背着27."（这是原文第一句的复制，且不完整）
+     ❌ 错误："12月13日是国家公祭日，全国各地举行纪念活动，缅怀遇难同胞。"（只是开头，不是总结）
+     ❌ 错误："点击左上方关注"博睿康"！《CAAE脑电读图会》第三十九期，本期读图会由来自空军军医大学第一附属医院的刘永红教授担任主持人。"（这是第一段话的摘取，不是总结）
+     ❌ 错误：逐段摘取首句拼接而成的摘要（如"首先...接着...然后..."这种结构，明显是逐段摘取）
+   - 如果新闻正文只是一个链接地址（URL），请根据标题推断新闻主题，生成完整的摘要句子
+   - 如果新闻正文包含图片链接，请根据标题和上下文推断图片内容，生成完整的摘要句子
+   - **关键**：摘要必须能够独立阅读，不需要依赖原文就能理解新闻的核心内容，必须反映文章的核心主题和关键信息，是总结性的表述，而不是原文的片段
+
+2. **标签要求（极其重要，必须严格遵守）**：
+   - news_type字段必须包含具体的、有意义的标签，**绝对不能只返回["其他"]**
+   - 必须仔细分析新闻内容，根据实际内容选择合适的标签
+   - 标签应该准确反映新闻的核心主题和内容类型
+   - 如果新闻涉及多个方面，可以包含多个标签（最多3-4个）
+   - **标签选择规则（按优先级判断）**：
+     * **优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等（如国家公祭日、春节、国庆节、清明节、中秋节、劳动节等），应选择"节假日"标签。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签，即使内容中包含企业介绍、产品信息等附加内容。
+     * 如果新闻涉及企业活动、业务发展 → 选择"企业发展"、"市场拓展"等
+     * 如果新闻涉及获奖、荣誉、认证 → **严格判断**：只有明确在标题或正文中描述对应的企业获得**具体的**奖项、荣誉、认证时（如"获得XX奖"、"荣获XX奖"），才选择"获奖"、"企业荣誉"标签。**必须排除**：①论坛、座谈会、会诊、会议、分享会、研讨会、读图会、病例分享等活动；②泛泛而谈的表述（如"获得了众多荣誉"、"获得了荣誉"等，没有具体奖项名称）；③参与性表述（如"成为XX供应商"、"成为XX协办方"等，不是获奖）。如果不符合上述条件，应该根据活动性质选择其他标签（如"行业分析"、"产品能力"等）
+     * 如果新闻涉及产品发布、技术突破 → 选择"产品发布"、"技术创新"等
+     * 如果新闻涉及融资、投资 → 选择"融资消息"
+     * 如果新闻涉及合作、伙伴关系 → 选择"合作伙伴"
+     * 如果新闻涉及榜单 → **严格判断**：只有明确由某家企业发布的榜单信息，或标题中包含"榜单"字样时，才选择"榜单"标签。行业分享会、企业单独获奖信息不应标记为"榜单"
+     * 如果新闻涉及广告、推广 → 选择"广告推广"、"营销推广"等
+     * 如果新闻涉及纪念活动、社会事件、行业分享会（但不是节假日） → 根据内容选择合适标签，如"行业分析"等
+   - **只有当新闻内容确实无法归类到任何具体类别时，才使用"其他"标签，且必须作为最后一个补充标签，前面要有至少1-2个具体标签**
+   - **绝对禁止**：只返回["其他"]，必须至少包含1个具体标签
+   - 标签应该基于新闻的实际内容判断，不能因为内容是链接或图片就简单地使用"其他"
 
 情绪分类标准（重要：请仔细区分以下情况）：
 - positive: 正面新闻
@@ -228,6 +921,8 @@ class NewsAnalysis {
   * 企业产品/服务出现严重问题且未及时解决
   * 企业应对风险不力，导致负面影响
   * 企业自身的安全漏洞、数据泄露等（非外部风险应对）
+  * **重要**：如果文章整体基调是看衰、质疑、担忧企业的发展前景，或指出企业面临重大风险、挑战、困境，应判断为负面新闻
+  * **示例**：文章提到企业"现金流紧张"、"面临XX亿债务压力"、"能否成功上市存疑"、"风险较大"、"能否避开这个坑不好说"等表述，整体呈现担忧、质疑的基调，应判断为负面
 
 **关键判断原则：**
 1. 如果文章提到"漏洞"、"风险"等词汇，但内容是展示企业及时响应、提供防护方案、帮助客户解决问题，这属于正面新闻（展示企业能力和产品优势）
@@ -246,22 +941,33 @@ class NewsAnalysis {
 - 人事变动
 - 财务报告
 - 行业分析
-- 安全防护（新增：企业提供安全防护、漏洞修复等）
-- 产品能力（新增：展示产品功能、技术实力等）
-- 榜单（新增：各类榜单、排名等）
-- 获奖（新增：获奖、荣誉、认证等）
+- 安全防护（企业提供安全防护、漏洞修复等）
+- 产品能力（展示产品功能、技术实力等）
+- 节假日（**优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等，如国家公祭日、春节、国庆节、清明节等，应标记为"节假日"。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签）
+- 榜单（**严格使用**：仅用于明确由某家企业发布的榜单信息，或标题中包含"榜单"字样的新闻。行业分享会、企业单独获奖信息不应使用此标签）
+- 获奖（**严格使用**：仅用于明确在标题或正文中描述对应的企业获得**具体的**奖项、荣誉、认证时（如"获得XX奖"、"荣获XX奖"）。**必须排除**：①论坛、座谈会、会诊、会议、分享会、研讨会、读图会、病例分享等活动；②泛泛而谈的表述（如"获得了众多荣誉"，没有具体奖项名称）；③参与性表述（如"成为XX供应商"、"成为XX协办方"等）。注意：企业单独的获奖信息应使用"获奖"标签，不是"榜单"标签）
 - 广告推广
 - 商业广告
 - 营销推广
-- 其他
+- 其他（仅在确实无法归类时使用，且应作为补充标签）
 
-**重要要求：每个类型标签必须控制在4个字符以内，超过4个字符的标签将被截断。**
+**标签选择要求（非常重要）**：
+- 每个类型标签必须控制在4个字符以内，超过4个字符的标签将被截断
+- 必须根据新闻的实际内容选择最贴切的标签，不能简单地使用"其他"
+- 仔细阅读新闻内容，识别新闻的核心主题和类型
+- 如果新闻涉及节假日、纪念日、节日等（如国家公祭日、春节、国庆节等），应优先标记为"节假日"标签
+- 如果新闻涉及纪念活动、历史事件、社会关注等，应该选择合适的标签，不能随意归类为"其他"
+- 标签应该具体、准确，反映新闻的核心信息
 
 ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
-- 如果新闻内容涉及榜单、排名、获奖、荣誉、认证等信息，请务必添加"榜单"或"获奖"标签
-- 榜单相关：各类榜单、排名、TOP榜单、排行榜等
-- 获奖相关：获奖、荣誉、认证、资质、称号等
-- 请仔细分析内容，确保不遗漏榜单或获奖相关信息
+- 如果新闻内容涉及获奖、荣誉、认证等信息，请添加"获奖"标签
+- 如果新闻内容涉及榜单信息，请**严格判断**：
+  * 只有明确由某家企业发布的榜单信息，或标题中包含"榜单"字样时，才添加"榜单"标签
+  * 行业分享会不应标记为"榜单"
+  * 企业单独的获奖信息应使用"获奖"标签，不是"榜单"标签
+- 获奖相关：**严格判断**，只有明确在标题或正文中描述企业获得某类奖项、荣誉、认证时，才添加"获奖"标签。**必须排除**：论坛、座谈会、会诊、会议、分享会、研讨会等活动
+- 榜单相关：明确由企业发布的榜单、标题包含"榜单"字样的新闻
+- 请仔细分析内容，区分"榜单"和"获奖"，确保标签准确。特别注意：论坛、座谈会、会诊等活动不应标记为"获奖"
 ` : ''}
 
 **广告识别重要提示：**
@@ -273,12 +979,37 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 `;
     }
 
+    // 处理内容：如果内容为空或只是一个URL，需要在提示词中特别说明
+    let processedContent = content || '';
+    let contentNote = '';
+    
+    // 记录传递给AI的内容信息
+    console.log(`[analyzeNewsSentimentAndType] 接收到的content长度: ${(content || '').length}字符`);
+    if (content && content.length > 0) {
+      console.log(`[analyzeNewsSentimentAndType] content预览: ${content.substring(0, 100)}...`);
+    } else {
+      console.warn(`[analyzeNewsSentimentAndType] ⚠️ content为空，可能无法生成有效摘要`);
+    }
+    
+    if (!processedContent || processedContent.trim() === '') {
+      contentNote = '\n**注意：新闻正文内容为空，可能只是链接地址，请根据标题和链接地址进行判断。**';
+      console.warn(`[analyzeNewsSentimentAndType] ⚠️ 内容为空，将在提示词中添加说明`);
+    } else if (processedContent.trim().startsWith('http://') || processedContent.trim().startsWith('https://')) {
+      contentNote = '\n**注意：新闻正文似乎只是一个链接地址，请根据标题和链接地址进行判断，如果可能，请说明链接指向的内容类型。**';
+    }
+    
+    // 发送完整内容给AI，不截取（确保AI能看到全文进行准确分析）
+    // 注意：如果内容过长，AI模型配置中的max_tokens会限制响应长度，但输入内容应该完整发送
+    const contentForAnalysis = processedContent;
+    
+    console.log(`[analyzeNewsSentimentAndType] 发送给AI的内容长度: ${contentForAnalysis.length}字符`);
+
     // 替换变量
     const prompt = this.replacePromptVariables(promptTemplate, {
       title: title || '',
-      content: (content || '').substring(0, 2000) + ((content || '').length > 2000 ? '...' : ''),
+      content: contentForAnalysis + contentNote,
       sourceUrl: sourceUrl || '',
-      isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。**' : ''
+      isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。注意区分"榜单"和"获奖"：只有明确由企业发布的榜单或标题包含"榜单"字样时才使用"榜单"标签，企业单独获奖应使用"获奖"标签。**' : ''
     });
 
     try {
@@ -297,35 +1028,360 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         }
       } catch (parseError) {
         console.warn('AI响应解析失败，使用默认值:', parseError.message);
+        // 生成默认摘要，确保是完整句子，并跳过引导语
+        const processedContent = this.skipIrrelevantContent(content || '');
+        const contentPreview = processedContent.substring(0, 100);
+        const lastSentenceMatch = contentPreview.match(/(.+[。！？.!?])/);
+        const defaultAbstract = lastSentenceMatch ? lastSentenceMatch[1] : (contentPreview || '新闻内容摘要') + '。';
+        
         result = {
           sentiment: 'neutral',
           sentiment_reason: '解析失败，使用默认值',
           news_type: ['其他'],
-          news_abstract: content.substring(0, 100) + '...'
+          news_abstract: defaultAbstract
         };
       }
 
-      // 限制关键词长度为4个字符以内
-      const limitedKeywords = (result.news_type || ['其他']).map(keyword => {
-        if (typeof keyword === 'string' && keyword.length > 4) {
-          return keyword.substring(0, 4);
+      // 限制关键词长度为4个字符以内，并处理"其他"标签
+      let keywords = result.news_type || [];
+      if (!Array.isArray(keywords) || keywords.length === 0) {
+        // 如果AI没有返回标签，尝试从内容中提取
+        console.warn('⚠️ AI未返回news_type，尝试从标题和内容推断标签');
+        keywords = this.inferKeywordsFromContent(title, content);
+      } else {
+        // 过滤掉无效标签
+        keywords = keywords.filter(k => k && typeof k === 'string' && k.trim() !== '');
+        
+        // 如果所有标签都是"其他"，尝试从标题和内容推断可能的标签
+        const allOthers = keywords.every(k => k.trim() === '其他' || k.trim() === '其它');
+        if (allOthers && keywords.length === 1) {
+          console.warn('⚠️ AI只返回了"其他"标签，尝试根据内容推断');
+          const inferredKeywords = this.inferKeywordsFromContent(title, content);
+          if (inferredKeywords.length > 0 && inferredKeywords[0] !== '其他') {
+            keywords = inferredKeywords;
+            console.log(`✓ 推断出标签: ${JSON.stringify(keywords)}`);
+          }
+        } else if (allOthers && keywords.length > 1) {
+          // 如果只有"其他"标签，移除多余的"其他"
+          keywords = keywords.filter(k => k.trim() !== '其他' && k.trim() !== '其它');
+          if (keywords.length === 0) {
+            const inferredKeywords = this.inferKeywordsFromContent(title, content);
+            keywords = inferredKeywords;
+          }
         }
-        return keyword;
-      });
+        
+        // 限制每个标签长度为4个字符以内
+        keywords = keywords.map(keyword => {
+          const trimmed = typeof keyword === 'string' ? keyword.trim() : String(keyword).trim();
+          if (trimmed.length > 4) {
+            return trimmed.substring(0, 4);
+          }
+          return trimmed;
+        });
+        
+        // 去重
+        keywords = [...new Set(keywords)];
+      }
+
+      // 处理摘要：确保完整句子，去除末尾的省略号
+      let abstract = result.news_abstract || '';
+      
+      // 检查摘要是否是错误消息（AI返回的错误提示）
+      const errorMessages = [
+        '由于未提供具体新闻内容',
+        '无法生成有效摘要',
+        '未提供具体新闻正文内容',
+        '由于未提供具体的新闻正文内容',
+        '无法生成有效摘要',
+        '未提供具体新闻内容',
+        '无法生成摘要',
+        '内容为空',
+        '没有提供内容',
+        '无法生成',
+        '未提供'
+      ];
+      
+      // 检查摘要是否包含错误消息关键词（更严格的检测）
+      const isErrorMessage = abstract && (
+        abstract.includes('未提供具体新闻内容') || 
+        abstract.includes('无法生成有效摘要') ||
+        abstract.includes('无法生成摘要') ||
+        abstract.includes('未提供具体新闻正文内容') ||
+        (abstract.includes('未提供') && abstract.includes('无法生成'))
+      );
+      
+      if (isErrorMessage) {
+        console.warn(`[analyzeNewsSentimentAndType] AI返回了错误消息，将尝试从原文提取摘要`);
+        console.warn(`AI返回的摘要: ${abstract}`);
+        console.warn(`当前content长度: ${(content || '').length}字符`);
+        if (content && content.length > 0) {
+          console.warn(`当前content预览: ${content.substring(0, 200)}...`);
+        }
+        // 清空摘要，后续会从原文提取
+        abstract = '';
+      }
+      
+      if (abstract) {
+        // 去除末尾的省略号（可能是多个...或…）
+        abstract = abstract.trim()
+          .replace(/\.{2,}$/, '')  // 去除末尾的多个点
+          .replace(/…+$/, '')      // 去除末尾的中文省略号
+          .replace(/\.{3,}$/, '')  // 再次去除多个点
+          // 去除末尾的分号或分号+句号（如";。"）
+          .replace(/[;；]+[。.!?]?$/, '')
+          .trim();
+        
+        // 检查摘要是否完整（至少包含主语和谓语，且长度合理）
+        const isComplete = this.isAbstractComplete(abstract, title, content);
+        
+        // 检查摘要是否以数字结尾（可能是被截断）
+        const endsWithNumber = /[\d\.]+[。！？.!?]?$/.test(abstract.trim());
+        if (endsWithNumber) {
+          const abstractTrimmed = abstract.trim();
+          const beforeNum = abstractTrimmed.replace(/[\d\.]+[。！？.!?]?$/, '').trim();
+          // 如果数字前的内容太短，或者以不完整的短语结尾，标记为不完整
+          if (beforeNum.length < 10) {
+            console.warn('⚠️ AI返回的摘要以数字结尾，数字前内容太少，可能被截断');
+            isComplete = false;
+          } else {
+            // 检查数字前的最后一个短语是否完整
+            const lastPhrase = beforeNum.split(/[，。！？.!?]/).pop().trim();
+            if (lastPhrase.length < 5 && /[着了的]$/.test(lastPhrase)) {
+              console.warn('⚠️ AI返回的摘要以数字结尾，且数字前短语不完整');
+              isComplete = false;
+            } else {
+              // 检查最后几个字符是否包含"还/只/仅"且短语较短
+              const lastFewChars = beforeNum.substring(Math.max(0, beforeNum.length - 5));
+              if (/[还只仅]/.test(lastFewChars) && lastPhrase.length < 8) {
+                // 特别检查"还背着"、"还剩下"、"只剩下"等模式
+                if (/还.*[着下]|只.*[剩下]|仅.*[剩下]/.test(lastPhrase)) {
+                  console.warn('⚠️ AI返回的摘要以数字结尾，且数字前以"还背着/还剩下"等不完整短语结尾');
+                  isComplete = false;
+                }
+              }
+            }
+          }
+        }
+        
+        if (!isComplete) {
+          console.warn('⚠️ AI返回的摘要不完整或只是第一段话，尝试生成总结性摘要');
+          console.warn(`当前摘要: ${abstract.substring(0, 80)}...`);
+          console.warn(`摘要长度: ${abstract.length}字符，内容长度: ${(content || '').length}字符`);
+          
+          // 检查摘要是否与原文开头高度相似（可能是简单复制第一段话）
+          const contentStart = (content || '').trim().substring(0, Math.min(abstract.length + 50, (content || '').length));
+          const abstractStart = abstract.substring(0, Math.min(abstract.length, 100));
+          let sameCount = 0;
+          const checkLen = Math.min(abstractStart.length, contentStart.length);
+          for (let i = 0; i < checkLen; i++) {
+            if (abstractStart[i] === contentStart[i]) {
+              sameCount++;
+            }
+          }
+          const copySimilarity = checkLen > 0 ? sameCount / checkLen : 0;
+          
+          // 如果相似度超过60%，认为是简单复制第一段话，直接使用extractCompleteAbstract重新提取
+          if (copySimilarity > 0.6) {
+            console.warn(`⚠️ 检测到摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%，可能是简单复制第一段话，将重新提取`);
+            const extractedAbstract = this.extractCompleteAbstract(title, content, abstract);
+            if (extractedAbstract && extractedAbstract.length >= 30) {
+              abstract = extractedAbstract;
+              console.log(`✓ 已从原文重新提取摘要（跳过第一段话），长度: ${abstract.length}字符`);
+              console.log(`新摘要预览: ${abstract.substring(0, 80)}...`);
+              // 重新检查是否完整
+              isComplete = this.isAbstractComplete(abstract, title, content);
+            }
+          }
+          
+          // 如果摘要以数字结尾，先尝试补充完整
+          if (!isComplete && endsWithNumber) {
+            const supplemented = this.supplementAbstract(abstract, title, content);
+            if (supplemented && supplemented.length > abstract.length && 
+                !/[\d\.]+[。！？.!?]?$/.test(supplemented.trim())) {
+              abstract = supplemented;
+              console.log(`✓ 已补充完整摘要: ${abstract.substring(0, 80)}...`);
+              // 重新检查是否完整
+              isComplete = this.isAbstractComplete(abstract, title, content);
+            }
+          }
+          
+          // 如果还是不完整，尝试从原文中提取完整的摘要（会跳过引导语，提取核心内容）
+          if (!isComplete) {
+            const extractedAbstract = this.extractCompleteAbstract(title, content, abstract);
+            // 如果提取的摘要比AI返回的更长，且更完整，使用提取的摘要
+            if (extractedAbstract && 
+                extractedAbstract.length >= Math.max(abstract.length, 50) &&
+                !/[\d\.]+[。！？.!?]?$/.test(extractedAbstract.trim()) &&
+                this.isAbstractComplete(extractedAbstract, title, content)) {
+              abstract = extractedAbstract;
+              console.log(`✓ 已从原文提取完整摘要: ${abstract.substring(0, 80)}...`);
+            } else {
+              // 如果提取的摘要也不合适，尝试修复当前摘要
+              // 如果摘要以数字结尾，尝试在原文中找到完整的表述
+              if (endsWithNumber) {
+                const supplemented = this.supplementAbstract(abstract, title, content);
+                if (supplemented && supplemented.length > abstract.length) {
+                  abstract = supplemented;
+                  console.log(`✓ 已补充完整摘要: ${abstract.substring(0, 50)}...`);
+                } else {
+                  // 如果找不到，至少确保以句号结尾，并尝试修复
+                  abstract = abstract.replace(/[\d\.]+[。！？.!?]?$/, '').trim();
+                  if (!/[。！？.!?]$/.test(abstract)) {
+                    abstract += '。';
+                  }
+                }
+              } else {
+                // 确保以句号结尾
+                if (abstract && !/[。！？.!?]$/.test(abstract)) {
+                  // 尝试找到最后一个完整句子
+                  const lastSentenceMatch = abstract.match(/(.+[。！？.!?])/);
+                  if (lastSentenceMatch) {
+                    abstract = lastSentenceMatch[1];
+                  } else {
+                    abstract += '。';
+                  }
+                }
+              }
+            }
+          }
+        } else {
+          // 确保摘要以句号、问号或感叹号结尾
+          if (abstract && !/[。！？.!?]$/.test(abstract)) {
+            abstract += '。';
+          }
+        }
+      } else {
+        // 如果没有摘要或摘要被识别为错误消息，从原文提取
+        console.log(`[analyzeNewsSentimentAndType] AI未返回摘要或摘要为空/错误，从原文提取`);
+        console.log(`内容长度: ${(content || '').length}字符`);
+        if (content && content.length > 0) {
+          console.log(`内容预览: ${content.substring(0, 200)}...`);
+        }
+        
+        if (content && content.trim().length > 20) {
+          // 确保content不是错误消息本身
+          const contentTrimmed = content.trim();
+          const isContentErrorMessage = contentTrimmed.includes('未提供具体新闻内容') || 
+                                       contentTrimmed.includes('无法生成有效摘要') ||
+                                       contentTrimmed.includes('无法生成摘要');
+          
+          if (isContentErrorMessage) {
+            console.warn(`[analyzeNewsSentimentAndType] ⚠️ 警告：content本身包含错误消息，可能content字段存储的是错误消息而不是正文内容`);
+            console.warn(`content值: ${contentTrimmed.substring(0, 100)}...`);
+            // 基于标题生成摘要
+            if (title && title.length > 5) {
+              abstract = `${title}相关新闻报道。`;
+            } else {
+              abstract = '新闻内容摘要。';
+            }
+          } else {
+            // 从原文提取摘要
+            console.log(`[analyzeNewsSentimentAndType] 开始从原文提取摘要...`);
+            abstract = this.extractCompleteAbstract(title, content, '');
+            
+            // 如果提取的摘要仍然为空或太短，尝试基于标题生成
+            if (!abstract || abstract.length < 20) {
+              console.warn(`[analyzeNewsSentimentAndType] 无法从原文提取有效摘要，基于标题生成`);
+              console.warn(`提取的摘要: ${abstract || '(空)'}`);
+              if (title && title.length > 5) {
+                abstract = `${title}相关新闻报道。`;
+              } else {
+                abstract = '新闻内容摘要。';
+              }
+            } else {
+              console.log(`[analyzeNewsSentimentAndType] ✓ 已从原文提取摘要，长度: ${abstract.length}字符`);
+              console.log(`摘要预览: ${abstract.substring(0, 100)}...`);
+            }
+          }
+        } else {
+          console.warn(`[analyzeNewsSentimentAndType] 内容为空或太短，无法提取摘要`);
+          console.warn(`content值: ${content || '(空)'}`);
+          
+          // 特殊处理：新榜接口且内容为空的情况（可能是图片内容）
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && 
+              (!content || content.trim().length === 0)) {
+            console.log(`[analyzeNewsSentimentAndType] 检测到新榜接口且内容为空或很短，可能是图片内容，从标题推断关键词和摘要`);
+            
+            // 从标题推断关键词
+            const inferredKeywords = this.inferKeywordsFromContent(title, '');
+            let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+            
+            // 检查标题是否包含会议关键词
+            const titleLower = (title || '').toLowerCase();
+            const meetingKeywords = [
+              '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+              '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+              '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+              '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+              '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+              '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+              '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+            ];
+            
+            const hasMeetingKeyword = meetingKeywords.some(kw => titleLower.includes(kw));
+            if (hasMeetingKeyword) {
+              // 如果标题包含会议关键词，优先使用会议事项标签
+              if (!finalKeywords.includes('会议事项')) {
+                finalKeywords = ['会议事项'];
+              }
+              // 基于标题生成摘要
+              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              console.log(`[analyzeNewsSentimentAndType] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
+            } else if (inferredKeywords.length > 0) {
+              // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
+              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              console.log(`[analyzeNewsSentimentAndType] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
+            } else {
+              // 基于标题生成摘要
+              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+            }
+            
+            // 确保关键词不为空
+            if (finalKeywords.length === 0) {
+              finalKeywords = ['图片内容'];
+            }
+            
+            // 确保摘要不为空
+            if (!abstract || abstract.trim().length === 0) {
+              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+            }
+            
+            console.log(`[analyzeNewsSentimentAndType] 设置后的关键词: ${JSON.stringify(finalKeywords)}`);
+            console.log(`[analyzeNewsSentimentAndType] 设置后的摘要: ${abstract}`);
+            
+            // 更新keywords和abstract变量，确保返回时包含正确的关键词和摘要
+            keywords = finalKeywords;
+            // abstract已经在上面设置好了
+          } else {
+            // 基于标题生成摘要
+            if (title && title.length > 5) {
+              abstract = `${title}相关新闻报道。`;
+            } else {
+              abstract = '新闻内容摘要。';
+            }
+          }
+        }
+      }
 
       return {
         sentiment: result.sentiment || 'neutral',
         sentiment_reason: result.sentiment_reason || '',
-        keywords: limitedKeywords,
-        news_abstract: result.news_abstract || content.substring(0, 100) + '...'
+        keywords: keywords.length > 0 ? keywords : ['其他'],
+        news_abstract: abstract
       };
     } catch (error) {
       console.error('新闻分析失败:', error);
+      // 生成默认摘要，确保是完整句子，并跳过引导语
+      const processedContent = this.skipIrrelevantContent(content || '');
+      const contentPreview = processedContent.substring(0, 100);
+      const lastSentenceMatch = contentPreview.match(/(.+[。！？.!?])/);
+      const defaultAbstract = lastSentenceMatch ? lastSentenceMatch[1] : (contentPreview || '新闻内容摘要') + '。';
+      
       return {
         sentiment: 'neutral',
         sentiment_reason: '分析失败',
         keywords: ['其他'],
-        news_abstract: content.substring(0, 100) + '...'
+        news_abstract: defaultAbstract
       };
     }
   }
@@ -640,6 +1696,263 @@ ${enterpriseList}
 
 
   /**
+   * 校验分析结果（摘要和关键词）
+   * 确保摘要不包含错误消息，关键词不包含"其他"
+   */
+  validateAnalysisResult(analysis, title, content, interfaceType = '新榜') {
+    let validatedAbstract = analysis.news_abstract || '';
+    let validatedKeywords = [...(analysis.keywords || [])];
+    let needsFix = false;
+    
+    // 1. 检查摘要是否包含错误消息
+    const errorMessages = [
+      '未提供具体新闻内容',
+      '无法生成有效摘要',
+      '无法生成摘要',
+      '未提供具体新闻正文内容',
+      '由于未提供具体的新闻正文内容'
+    ];
+    
+    const hasErrorMessage = errorMessages.some(msg => validatedAbstract.includes(msg));
+    if (hasErrorMessage) {
+      console.warn(`[validateAnalysisResult] ⚠️ 检测到摘要包含错误消息: ${validatedAbstract}`);
+      
+      // 特殊处理：新榜接口的图片内容（只有当content真正是图片内容或者是空的时候）
+      // 同时检查内容是否被污染（包含JavaScript代码、CSS样式等脏信息）
+      const isContentDirty = content && this.isContentContaminated(content);
+      const isImageContent = this.isImageOnlyContent(content) || 
+                            (!content || content.trim().length === 0) ||
+                            isContentDirty;
+      
+      if ((interfaceType === '新榜' || interfaceType === '新榜接口') && isImageContent) {
+        console.log(`[validateAnalysisResult] 检测到新榜接口的图片内容或脏内容，设置特殊摘要`);
+        if (isContentDirty) {
+          console.log(`[validateAnalysisResult] 内容被污染（包含JavaScript代码、CSS样式等），视为图片内容处理`);
+        }
+        
+        // 先尝试从标题推断关键词
+        const inferredKeywords = this.inferKeywordsFromContent(title, '');
+        let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+        let finalAbstract = '正文内容为图片，无法识别';
+        
+        // 如果标题包含会议相关关键词，设置会议相关的摘要和关键词
+        const titleLower = (title || '').toLowerCase();
+        const meetingKeywords = [
+          '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+          '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+          '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+          '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+          '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+          '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+          '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+        ];
+        
+        // 招聘相关关键词
+        const recruitmentKeywords = [
+          '招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', 
+          '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求',
+          '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事',
+          '实习生招聘', '应届生招聘', '2027届', '2026届', '2025届'
+        ];
+        
+        const hasMeetingKeyword = meetingKeywords.some(kw => titleLower.includes(kw));
+        const hasRecruitmentKeyword = recruitmentKeywords.some(kw => titleLower.includes(kw));
+        
+        if (hasMeetingKeyword) {
+          // 如果标题包含会议关键词，优先使用会议事项标签
+          if (!finalKeywords.includes('会议事项')) {
+            finalKeywords = ['会议事项'];
+          }
+          // 基于标题生成摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[validateAnalysisResult] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
+        } else if (hasRecruitmentKeyword) {
+          // 如果标题包含招聘关键词，使用人员招聘标签
+          if (!finalKeywords.includes('人员招聘')) {
+            finalKeywords = ['人员招聘'];
+          }
+          // 基于标题生成摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[validateAnalysisResult] 标题包含招聘关键词，设置人员招聘标签和基于标题的摘要`);
+        } else if (inferredKeywords.length > 0) {
+          // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
+          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          console.log(`[validateAnalysisResult] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
+        }
+        
+        validatedAbstract = finalAbstract;
+        validatedKeywords = finalKeywords;
+        console.log(`[validateAnalysisResult] 设置后的关键词: ${JSON.stringify(validatedKeywords)}`);
+        console.log(`[validateAnalysisResult] 设置后的摘要: ${validatedAbstract}`);
+        needsFix = true;
+      } else {
+        console.warn(`[validateAnalysisResult] 将尝试从原文重新提取摘要`);
+        
+        // 尝试从原文提取摘要
+        if (content && content.trim().length > 20) {
+          const extractedAbstract = this.extractCompleteAbstract(title, content, '');
+          if (extractedAbstract && extractedAbstract.length >= 20) {
+            validatedAbstract = extractedAbstract;
+            console.log(`[validateAnalysisResult] ✓ 已从原文重新提取摘要，长度: ${validatedAbstract.length}字符`);
+          } else {
+            // 如果提取失败，基于标题生成
+            validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
+            console.warn(`[validateAnalysisResult] 无法从原文提取，使用标题生成摘要`);
+          }
+        } else {
+          // 如果content为空，基于标题生成
+          // 特殊处理：新榜接口且内容为空的情况（可能是图片内容）
+          const isImageContent = this.isImageOnlyContent(content) || 
+                                (!content || content.trim().length === 0);
+          
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && isImageContent) {
+            console.log(`[validateAnalysisResult] 检测到新榜接口且内容为空或很短，可能是图片内容，从标题生成摘要`);
+            
+            // 检查标题是否包含会议关键词或招聘关键词
+            const titleLower = (title || '').toLowerCase();
+            const meetingKeywords = [
+              '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+              '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+              '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+              '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+              '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+              '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+              '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+            ];
+            
+            const recruitmentKeywords = [
+              '招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', 
+              '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求',
+              '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事',
+              '实习生招聘', '应届生招聘', '2027届', '2026届', '2025届'
+            ];
+            
+            const hasMeetingKeyword = meetingKeywords.some(kw => titleLower.includes(kw));
+            const hasRecruitmentKeyword = recruitmentKeywords.some(kw => titleLower.includes(kw));
+            
+            if (hasMeetingKeyword || hasRecruitmentKeyword) {
+              // 如果标题包含会议关键词或招聘关键词，基于标题生成摘要
+              validatedAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              console.log(`[validateAnalysisResult] 标题包含${hasMeetingKeyword ? '会议' : '招聘'}关键词，设置基于标题的摘要`);
+            } else {
+              // 基于标题生成摘要
+              validatedAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+            }
+          } else {
+            validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
+            console.warn(`[validateAnalysisResult] content为空，使用标题生成摘要`);
+          }
+        }
+        needsFix = true;
+      }
+    }
+    
+    // 2. 检查关键词是否为空或包含"其他"
+    const isEmptyKeywords = !validatedKeywords || validatedKeywords.length === 0;
+    const hasOtherKeyword = validatedKeywords && validatedKeywords.some(kw => 
+      kw === '其他' || kw === '其它' || kw.trim() === '其他' || kw.trim() === '其它'
+    );
+    
+    if (isEmptyKeywords || hasOtherKeyword) {
+      if (isEmptyKeywords) {
+        console.warn(`[validateAnalysisResult] ⚠️ 检测到关键词为空`);
+      } else {
+        console.warn(`[validateAnalysisResult] ⚠️ 检测到关键词包含"其他": ${JSON.stringify(validatedKeywords)}`);
+      }
+      
+      // 移除"其他"关键词
+      validatedKeywords = (validatedKeywords || []).filter(kw => 
+        kw !== '其他' && kw !== '其它' && kw.trim() !== '其他' && kw.trim() !== '其它'
+      );
+      
+      // 如果移除后没有关键词，尝试从标题和内容推断
+      if (validatedKeywords.length === 0) {
+        console.warn(`[validateAnalysisResult] 关键词为空或移除"其他"后没有关键词，尝试从标题推断`);
+        
+        // 特殊处理：新榜接口且内容为空的情况（可能是图片内容）
+        const isImageContent = this.isImageOnlyContent(content) || 
+                              (!content || content.trim().length === 0);
+        
+        if ((interfaceType === '新榜' || interfaceType === '新榜接口') && isImageContent) {
+          console.log(`[validateAnalysisResult] 检测到新榜接口且内容为空或很短，可能是图片内容，从标题推断关键词`);
+          
+          // 从标题推断关键词
+          const inferredKeywords = this.inferKeywordsFromContent(title, '');
+          let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+          
+          // 检查标题是否包含会议关键词或招聘关键词
+          const titleLower = (title || '').toLowerCase();
+          const meetingKeywords = [
+            '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+            '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+            '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+            '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+            '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+            '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+            '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+          ];
+          
+          const recruitmentKeywords = [
+            '招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', 
+            '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求',
+            '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事',
+            '实习生招聘', '应届生招聘', '2027届', '2026届', '2025届'
+          ];
+          
+          const hasMeetingKeyword = meetingKeywords.some(kw => titleLower.includes(kw));
+          const hasRecruitmentKeyword = recruitmentKeywords.some(kw => titleLower.includes(kw));
+          
+          if (hasMeetingKeyword) {
+            // 如果标题包含会议关键词，优先使用会议事项标签
+            if (!finalKeywords.includes('会议事项')) {
+              finalKeywords = ['会议事项'];
+            }
+            console.log(`[validateAnalysisResult] 标题包含会议关键词，设置会议事项标签`);
+          } else if (hasRecruitmentKeyword) {
+            // 如果标题包含招聘关键词，使用人员招聘标签
+            if (!finalKeywords.includes('人员招聘')) {
+              finalKeywords = ['人员招聘'];
+            }
+            console.log(`[validateAnalysisResult] 标题包含招聘关键词，设置人员招聘标签`);
+          }
+          
+          validatedKeywords = finalKeywords;
+          console.log(`[validateAnalysisResult] ✓ 已推断关键词: ${JSON.stringify(validatedKeywords)}`);
+        } else {
+          // 从标题和内容推断关键词
+          const inferredKeywords = this.inferKeywordsFromContent(title, content);
+          if (inferredKeywords.length > 0) {
+            validatedKeywords = inferredKeywords;
+            console.log(`[validateAnalysisResult] ✓ 已推断关键词: ${JSON.stringify(validatedKeywords)}`);
+          } else {
+            // 如果推断失败，至少保留一个基于标题的关键词
+            validatedKeywords = ['新闻资讯'];
+            console.warn(`[validateAnalysisResult] 无法推断关键词，使用默认关键词`);
+          }
+        }
+      } else {
+        console.log(`[validateAnalysisResult] ✓ 已移除"其他"关键词，剩余: ${JSON.stringify(validatedKeywords)}`);
+      }
+      needsFix = true;
+    }
+    
+    if (needsFix) {
+      console.log(`[validateAnalysisResult] ✓ 校验完成，已修复分析结果`);
+      console.log(`[validateAnalysisResult] 修复后的摘要: ${validatedAbstract.substring(0, 100)}...`);
+      console.log(`[validateAnalysisResult] 修复后的关键词: ${JSON.stringify(validatedKeywords)}`);
+    } else {
+      console.log(`[validateAnalysisResult] ✓ 校验通过，分析结果正常`);
+    }
+    
+    return {
+      sentiment: analysis.sentiment,
+      sentiment_reason: analysis.sentiment_reason,
+      keywords: validatedKeywords,
+      news_abstract: validatedAbstract
+    };
+  }
+
+  /**
    * 处理有被投企业的新闻
    */
   async processNewsWithEnterprise(newsItem) {
@@ -649,54 +1962,67 @@ ${enterpriseList}
       console.log(`[processNewsWithEnterprise] 当前企业全称: "${newsItem.enterprise_full_name}"`);
       
       // 检查该企业是否来自invested_enterprises表且状态不为"完全退出"
-      // 如果是，则不应该解除关联，直接使用该企业全称
+      // 对于企查查接口的数据，无论企业是否在invested_enterprises表中，都需要进行二次校验
+      // 对于新榜接口的数据，如果企业来自invested_enterprises表且状态不为"完全退出"，则不需要验证
       let finalEnterpriseName = newsItem.enterprise_full_name;
       let shouldValidate = true;
+      const interfaceType = newsItem.APItype || '新榜';
       
       console.log(`[processNewsWithEnterprise] 检查企业是否来自invested_enterprises表...`);
+      console.log(`[processNewsWithEnterprise] 接口类型: ${interfaceType}`);
+      
       try {
-        const enterpriseCheck = await db.query(
-          `SELECT enterprise_full_name, exit_status, delete_mark
-           FROM invested_enterprises 
-           WHERE enterprise_full_name = ? 
-           AND exit_status NOT IN ('完全退出', '已上市')
-           AND delete_mark = 0 
-           LIMIT 1`,
-          [newsItem.enterprise_full_name]
-        );
-        
-        console.log(`[processNewsWithEnterprise] 查询结果数量: ${enterpriseCheck.length}`);
-        if (enterpriseCheck.length > 0) {
-          console.log(`[processNewsWithEnterprise] 查询结果详情:`, enterpriseCheck[0]);
-          // 该企业来自invested_enterprises表且状态不为"完全退出"
-          // 不需要验证关联性，直接保持企业全称
-          console.log(`[processNewsWithEnterprise] ✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${newsItem.enterprise_full_name}`);
-          shouldValidate = false;
+        // 对于企查查接口的数据，始终需要进行二次校验
+        if (interfaceType === '企查查' || interfaceType === 'qichacha') {
+          console.log(`[processNewsWithEnterprise] 企查查接口数据，需要进行二次校验关联性`);
+          shouldValidate = true;
         } else {
-          console.log(`[processNewsWithEnterprise] ⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性`);
-          // 查询所有相关记录以便调试
-          const allResults = await db.query(
+          // 对于新榜接口的数据，检查企业是否在invested_enterprises表中
+          const enterpriseCheck = await db.query(
             `SELECT enterprise_full_name, exit_status, delete_mark
              FROM invested_enterprises 
-             WHERE enterprise_full_name = ?`,
+             WHERE enterprise_full_name = ? 
+             AND exit_status NOT IN ('完全退出', '已上市')
+             AND delete_mark = 0 
+             LIMIT 1`,
             [newsItem.enterprise_full_name]
           );
-          console.log(`[processNewsWithEnterprise] 所有相关记录（不限制状态）:`, allResults);
+          
+          console.log(`[processNewsWithEnterprise] 查询结果数量: ${enterpriseCheck.length}`);
+          if (enterpriseCheck.length > 0) {
+            console.log(`[processNewsWithEnterprise] 查询结果详情:`, enterpriseCheck[0]);
+            // 该企业来自invested_enterprises表且状态不为"完全退出"
+            // 对于新榜接口的数据，不需要验证关联性，直接保持企业全称
+            console.log(`[processNewsWithEnterprise] ✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${newsItem.enterprise_full_name}`);
+            shouldValidate = false;
+          } else {
+            console.log(`[processNewsWithEnterprise] ⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性`);
+            // 查询所有相关记录以便调试
+            const allResults = await db.query(
+              `SELECT enterprise_full_name, exit_status, delete_mark
+               FROM invested_enterprises 
+               WHERE enterprise_full_name = ?`,
+              [newsItem.enterprise_full_name]
+            );
+            console.log(`[processNewsWithEnterprise] 所有相关记录（不限制状态）:`, allResults);
+          }
         }
       } catch (e) {
         console.error(`[processNewsWithEnterprise] ❌ 检查企业状态时出错:`, e.message);
         console.error(`[processNewsWithEnterprise] 错误堆栈:`, e.stack);
       }
       
-      // 只有需要验证的才进行AI验证（例如来自additional_wechat_accounts的新闻）
+      // 只有需要验证的才进行AI验证
       let shouldKeepAssociation = true; // 默认保持关联
       if (shouldValidate) {
-        console.log(`[processNewsWithEnterprise] 需要AI验证企业关联性`);
+        console.log(`[processNewsWithEnterprise] 需要AI验证企业关联性（接口类型: ${interfaceType}）`);
+        // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
+        const validationContent = await this.ensureNewsContent(newsItem);
+        
         // 重新验证企业关联的合理性
-        const interfaceType = newsItem.APItype || '新榜';
         shouldKeepAssociation = await this.validateExistingAssociation(
           newsItem.title,
-          newsItem.content,
+          validationContent || newsItem.content || '', // 使用抓取到的内容，如果为空则使用原始content
           newsItem.enterprise_full_name,
           interfaceType
         );
@@ -721,20 +2047,39 @@ ${enterpriseList}
       );
 
       console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
-      const interfaceType = newsItem.APItype || '新榜';
+      
+      // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
+      const actualContent = await this.ensureNewsContent(newsItem);
+      
+      // 确保使用清理后的内容
+      const contentForAnalysis = actualContent || newsItem.content || '';
+      console.log(`[processNewsWithEnterprise] 准备分析，内容长度: ${contentForAnalysis.length}字符`);
+      if (contentForAnalysis.length === 0) {
+        console.warn(`[processNewsWithEnterprise] ⚠️ 警告：内容为空，可能无法生成有效摘要`);
+      } else {
+        console.log(`[processNewsWithEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
+      }
+      
+      // interfaceType已在前面声明，直接使用
       const analysis = await this.analyzeNewsSentimentAndType(
         newsItem.title,
-        newsItem.content,
+        contentForAnalysis, // 使用确保后的内容
         newsItem.source_url,
         isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
         interfaceType
       );
       console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
 
+      // 在更新数据库之前，校验分析结果（摘要和关键词）
+      console.log(`[processNewsWithEnterprise] 开始校验分析结果...`);
+      const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+      
       // 更新数据库，包括可能的企业关联变更
       console.log(`[processNewsWithEnterprise] 准备更新数据库`);
       console.log(`[processNewsWithEnterprise] 企业全称: "${finalEnterpriseName || '(空)'}"`);
-      console.log(`[processNewsWithEnterprise] 情绪: ${analysis.sentiment}`);
+      console.log(`[processNewsWithEnterprise] 情绪: ${validatedAnalysis.sentiment}`);
+      console.log(`[processNewsWithEnterprise] 关键词: ${JSON.stringify(validatedAnalysis.keywords)}`);
+      console.log(`[processNewsWithEnterprise] 摘要: ${validatedAnalysis.news_abstract.substring(0, 100)}...`);
       console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ? WHERE id = ?`);
       
       await db.execute(
@@ -743,9 +2088,9 @@ ${enterpriseList}
          WHERE id = ?`,
         [
           finalEnterpriseName,
-          analysis.sentiment,
-          JSON.stringify(analysis.keywords),
-          analysis.news_abstract,
+          validatedAnalysis.sentiment,
+          JSON.stringify(validatedAnalysis.keywords),
+          validatedAnalysis.news_abstract,
           newsItem.id
         ]
       );
@@ -792,11 +2137,14 @@ ${enterpriseList}
         return await this.processNewsWithEnterprise(newsItem);
       }
 
+      // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
+      const actualContent = await this.ensureNewsContent(newsItem);
+      
       // 分析企业关联性
       const interfaceType = newsItem.APItype || '新榜';
       const relevantEnterprises = await this.analyzeEnterpriseRelevance(
         newsItem.title,
-        newsItem.content,
+        actualContent || newsItem.content || '', // 使用抓取到的内容，如果为空则使用原始content
         enterprises,
         interfaceType
       );
@@ -810,10 +2158,22 @@ ${enterpriseList}
         [newsItem.wechat_account]
       );
 
-      // 分析新闻情绪和类型
+      // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
+      const analysisContent = await this.ensureNewsContent(newsItem);
+      
+      // 确保使用清理后的内容
+      const contentForAnalysis = analysisContent || newsItem.content || '';
+      console.log(`[processNewsWithoutEnterprise] 准备分析，内容长度: ${contentForAnalysis.length}字符`);
+      if (contentForAnalysis.length === 0) {
+        console.warn(`[processNewsWithoutEnterprise] ⚠️ 警告：内容为空，可能无法生成有效摘要`);
+      } else {
+        console.log(`[processNewsWithoutEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
+      }
+      
+      // 分析新闻情绪和类型（使用已确保的content）
       const analysis = await this.analyzeNewsSentimentAndType(
         newsItem.title,
-        newsItem.content,
+        contentForAnalysis, // 使用确保后的内容
         newsItem.source_url,
         isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
         interfaceType
@@ -832,14 +2192,18 @@ ${enterpriseList}
 
       if (relevantEnterprises.length === 0 || isAdvertisement) {
         // 没有相关企业，或者是广告类型，保持enterprise_full_name为空
+        // 在更新数据库之前，校验分析结果（摘要和关键词）
+        console.log(`[processNewsWithoutEnterprise] 开始校验分析结果...`);
+        const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+        
         await db.execute(
           `UPDATE news_detail 
            SET news_sentiment = ?, keywords = ?, news_abstract = ?
            WHERE id = ?`,
           [
-            analysis.sentiment,
-            JSON.stringify(analysis.keywords),
-            analysis.news_abstract,
+            validatedAnalysis.sentiment,
+            JSON.stringify(validatedAnalysis.keywords),
+            validatedAnalysis.news_abstract,
             newsItem.id
           ]
         );
@@ -865,20 +2229,28 @@ ${enterpriseList}
         
         if (validEnterprises.length === 0) {
           // 没有有效的企业关联，保持enterprise_full_name为空
+          // 在更新数据库之前，校验分析结果（摘要和关键词）
+          console.log(`[processNewsWithoutEnterprise] 开始校验分析结果（无有效企业关联）...`);
+          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
+          
           await db.execute(
             `UPDATE news_detail 
              SET news_sentiment = ?, keywords = ?, news_abstract = ?
              WHERE id = ?`,
             [
-              analysis.sentiment,
-              JSON.stringify(analysis.keywords),
-              analysis.news_abstract,
+              validatedAnalysis.sentiment,
+              JSON.stringify(validatedAnalysis.keywords),
+              validatedAnalysis.news_abstract,
               newsItem.id
             ]
           );
           console.log(`✓ 已完成新闻分析（无有效企业关联): ${newsItem.id}`);
         } else {
           // 处理有效的企业关联
+          // 在更新数据库之前，先校验分析结果（摘要和关键词），所有记录使用相同的校验结果
+          console.log(`[processNewsWithoutEnterprise] 开始校验分析结果（有企业关联）...`);
+          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
+          
           for (let i = 0; i < validEnterprises.length; i++) {
             const enterprise = validEnterprises[i];
             
@@ -890,9 +2262,9 @@ ${enterpriseList}
                  WHERE id = ?`,
                 [
                   enterprise.enterprise_name,
-                  analysis.sentiment,
-                  JSON.stringify(analysis.keywords),
-                  analysis.news_abstract,
+                  validatedAnalysis.sentiment,
+                  JSON.stringify(validatedAnalysis.keywords),
+                  validatedAnalysis.news_abstract,
                   newsItem.id
                 ]
               );
@@ -911,9 +2283,9 @@ ${enterpriseList}
                 [
                   newId,
                   enterprise.enterprise_name,
-                  JSON.stringify(analysis.keywords),
-                  analysis.news_abstract,
-                  analysis.sentiment,
+                  JSON.stringify(validatedAnalysis.keywords),
+                  validatedAnalysis.news_abstract,
+                  validatedAnalysis.sentiment,
                   newsItem.id
                 ]
               );
@@ -1101,6 +2473,823 @@ ${enterpriseList}
       console.error('执行去重检查失败:', error);
       return 0;
     }
+  }
+
+  /**
+   * 从标题和内容推断关键词标签
+   */
+  inferKeywordsFromContent(title, content) {
+    const fullText = ((title || '') + ' ' + (content || '')).toLowerCase();
+    const keywords = [];
+    
+    // 关键词匹配规则（按优先级排序，节假日最优先）
+    const keywordRules = [
+      // 节假日标签优先判断（如果是节假日内容，只返回节假日标签）
+      { 
+        keywords: ['公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日'],
+        tag: '节假日',
+        // 验证是否为节假日内容：标题或内容主要是节假日相关
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          const fullText = titleLower + ' ' + contentLower;
+          
+          // 节假日关键词
+          const holidayKeywords = ['公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日'];
+          
+          // 检查标题是否包含节假日关键词
+          const titleHasHoliday = holidayKeywords.some(kw => titleLower.includes(kw));
+          if (titleHasHoliday) return true;
+          
+          // 检查内容开头部分是否主要是节假日相关（前300字）
+          const contentStart = contentLower.substring(0, 300);
+          const holidayCount = holidayKeywords.filter(kw => contentStart.includes(kw)).length;
+          // 如果前300字中包含2个或以上节假日关键词，认为是节假日内容
+          if (holidayCount >= 2) return true;
+          
+          // 检查是否明确提到节假日相关的活动（国家公祭日、缅怀、悼念等）
+          if (/国家.*公祭|公祭.*日|缅怀.*遇难|悼念.*同胞|纪念.*日|节日.*活动|节假日/.test(fullText)) {
+            return true;
+          }
+          
+          return false;
+        },
+        // 如果是节假日，只返回这一个标签（独占标签）
+        exclusive: true
+      },
+      // 政策信息标签：检测政策法规、征求意见稿、管理办法、通知等政策类新闻（优先级高于技术创新）
+      { 
+        keywords: ['政策', '法规', '办法', '条例', '规定', '通知', '意见', '征求意见', '征求意见稿', '管理办法', '实施细则', '指导意见', '暂行办法', '试行办法', '管理办法', '评估办法', '安全法', '数据安全', '网络安全', '网信办', '国家互联网信息办公室', '工信部', '发改委', '市场监管', '监管', '合规', '规范', '标准', '国家标准', '行业标准'],
+        tag: '政策信息',
+        // 验证条件：标题或内容明确提到政策、法规、办法、条例、通知等
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          const fullText = titleLower + ' ' + contentLower;
+          
+          // 政策相关关键词
+          const policyKeywords = [
+            '政策', '法规', '办法', '条例', '规定', '通知', '意见', 
+            '征求意见', '征求意见稿', '管理办法', '实施细则', '指导意见', 
+            '暂行办法', '试行办法', '管理办法', '评估办法', 
+            '安全法', '数据安全法', '网络安全法', '个人信息保护法',
+            '网信办', '国家互联网信息办公室', '工信部', '发改委', 
+            '市场监管', '监管', '合规', '规范', '标准', '国家标准', '行业标准',
+            '公开征求意见', '向社会公开征求意见', '征求意见稿', 
+            '第.*条', '第一条', '第二条', '第三条', '第四条', '第五条',
+            '根据.*法', '根据.*条例', '根据.*规定', '根据.*办法',
+            '应当遵守', '应当符合', '应当执行', '应当遵循'
+          ];
+          
+          // 检查标题是否包含政策关键词
+          const titleHasPolicy = policyKeywords.some(kw => titleLower.includes(kw));
+          if (titleHasPolicy) {
+            return true;
+          }
+          
+          // 检查内容开头部分是否包含政策关键词（前500字）
+          const contentStart = contentLower.substring(0, 500);
+          const policyCount = policyKeywords.filter(kw => contentStart.includes(kw)).length;
+          // 如果前500字中包含3个或以上政策关键词，认为是政策内容
+          if (policyCount >= 3) {
+            return true;
+          }
+          
+          // 检查是否明确提到政策相关的活动（征求意见、管理办法、评估办法等）
+          if (/征求意见|管理办法|评估办法|实施细则|指导意见|暂行办法|试行办法|公开征求意见|向社会公开征求意见|征求意见稿|第.*条|根据.*法|根据.*条例|根据.*规定|根据.*办法|应当遵守|应当符合|应当执行|应当遵循/.test(fullText)) {
+            return true;
+          }
+          
+          // 检查是否包含政策发布机构（网信办、工信部、发改委等）
+          if (/网信办|国家互联网信息办公室|工信部|发改委|市场监管|监管机构|政府部门|国家机关/.test(fullText)) {
+            return true;
+          }
+          
+          return false;
+        },
+        // 政策信息标签优先级较高，但不是独占标签（可以与其他标签共存，但会优先于技术创新）
+        priority: 1
+      },
+      // 会议事项标签：检测会议预告、会议召开等类型的新闻
+      { 
+        keywords: ['会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', '签约会', '路演', '说明会', '推介会', '培训会', '分享会', '学术会议', '行业会议', '战略会议', '董事会', '股东大会', '临时股东大会', '年度股东大会'],
+        tag: '会议事项',
+        // 验证条件：标题或内容明确提到会议相关活动
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          const fullText = titleLower + ' ' + contentLower;
+          
+          // 会议相关关键词
+          const meetingKeywords = [
+            '会议预告', '会议召开', '会议', '论坛', '座谈会', '研讨会', '交流会', 
+            '讨论会', '圆桌会', '峰会', '大会', '年会', '发布会', '启动会', 
+            '签约会', '路演', '说明会', '推介会', '培训会', '分享会', 
+            '学术会议', '行业会议', '战略会议', '董事会', '股东大会', 
+            '临时股东大会', '年度股东大会', '会议通知', '会议公告', 
+            '会议邀请', '会议报名', '会议议程', '会议日程', '会议安排',
+            '即将召开', '即将举办', '即将举行', '召开会议', '举办会议', '举行会议'
+          ];
+          
+          // 检查标题是否包含会议关键词
+          const titleHasMeeting = meetingKeywords.some(kw => titleLower.includes(kw));
+          if (titleHasMeeting) {
+            return true;
+          }
+          
+          // 检查内容开头部分是否包含会议关键词（前500字）
+          const contentStart = contentLower.substring(0, 500);
+          const meetingCount = meetingKeywords.filter(kw => contentStart.includes(kw)).length;
+          // 如果前500字中包含2个或以上会议关键词，认为是会议内容
+          if (meetingCount >= 2) {
+            return true;
+          }
+          
+          // 检查是否明确提到会议相关的活动（会议预告、会议召开、会议通知等）
+          if (/会议预告|会议召开|会议通知|会议公告|会议邀请|会议报名|会议议程|会议日程|会议安排|召开会议|举办会议|举行会议|即将召开|即将举办|即将举行/.test(fullText)) {
+            return true;
+          }
+          
+          return false;
+        }
+      },
+      // 获奖标签需要严格判断：必须明确描述企业获得奖项，排除论坛、座谈会、会诊等活动
+      { 
+        keywords: ['获奖', '荣誉', '认证', '称号', '资质'], 
+        tag: '获奖',
+        // 验证条件：必须明确在标题或正文中描述企业获得某类奖项
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          const fullText = titleLower + ' ' + contentLower;
+          
+          // 排除条件：如果是论坛、座谈会、会诊、会议、分享会、研讨会、读图会等活动，不应标记为"获奖"
+          const activityKeywords = ['论坛', '座谈会', '会诊', '会议', '分享会', '研讨会', '交流会', '讨论会', '圆桌会', '峰会', '读图会', '病例分享', '学术专场'];
+          const hasActivityKeyword = activityKeywords.some(kw => titleLower.includes(kw) || contentLower.substring(0, 300).includes(kw));
+          if (hasActivityKeyword) {
+            // 如果标题或内容开头明确提到这些活动，即使有"获奖"、"荣誉"等词，也不应标记为"获奖"
+            return false;
+          }
+          
+          // 排除泛泛而谈的表述，如"获得了众多荣誉"、"获得了荣誉"等，必须明确具体奖项
+          const vaguePatterns = [
+            /获得了.*众多.*荣誉/,
+            /获得了.*荣誉$/,
+            /获得了.*荣誉[，。！？]/,
+            /获得.*众多.*荣誉/,
+            /获得.*荣誉$/,
+            /获得.*荣誉[，。！？]/
+          ];
+          const hasVaguePattern = vaguePatterns.some(pattern => pattern.test(fullText));
+          if (hasVaguePattern) {
+            return false; // 泛泛而谈，不标记为"获奖"
+          }
+          
+          // 排除"成为...供应商"、"成为...协办方"等参与性表述
+          const participationPatterns = [
+            /成为.*供应商/,
+            /成为.*协办/,
+            /成为.*合作/,
+            /成为.*指定/,
+            /担任.*供应商/,
+            /担任.*协办/
+          ];
+          const hasParticipationPattern = participationPatterns.some(pattern => pattern.test(fullText));
+          if (hasParticipationPattern && !/获得.*奖|荣获.*奖/.test(fullText)) {
+            return false; // 只是参与或合作，不是获奖
+          }
+          
+          // 必须明确提到企业获得具体的奖项、荣誉、认证等
+          // 检查是否包含"获得XX奖"、"荣获XX奖"、"被授予XX"等明确表述
+          // 要求"获得"或"荣获"后面必须跟具体的奖项名称，不能只是"荣誉"、"认证"等泛泛词汇
+          const awardPatterns = [
+            /获得.*[一二三四五六七八九十\d]+.*奖/,  // 获得XX奖（必须有具体奖项名称）
+            /荣获.*[一二三四五六七八九十\d]+.*奖/,  // 荣获XX奖
+            /获得.*年度.*奖/,  // 获得年度XX奖
+            /荣获.*年度.*奖/,  // 荣获年度XX奖
+            /获得.*[最佳|优秀|杰出|创新|领先|先进].*奖/,  // 获得最佳/优秀/杰出/创新/领先/先进XX奖
+            /荣获.*[最佳|优秀|杰出|创新|领先|先进].*奖/,  // 荣获最佳/优秀/杰出/创新/领先/先进XX奖
+            /被授予.*[一二三四五六七八九十\d]+.*奖/,  // 被授予XX奖
+            /被授予.*[最佳|优秀|杰出|创新|领先|先进].*奖/,  // 被授予最佳/优秀/杰出/创新/领先/先进XX奖
+            /获得.*[一二三四五六七八九十\d]+.*荣誉/,  // 获得XX荣誉（必须有具体荣誉名称）
+            /荣获.*[一二三四五六七八九十\d]+.*荣誉/,  // 荣获XX荣誉
+            /获得.*[一二三四五六七八九十\d]+.*认证/,  // 获得XX认证（必须有具体认证名称）
+            /获得.*[一二三四五六七八九十\d]+.*称号/,  // 获得XX称号（必须有具体称号名称）
+            /获得.*[一二三四五六七八九十\d]+.*资质/,  // 获得XX资质（必须有具体资质名称）
+            /[企业公司].*获得.*[一二三四五六七八九十\d]+.*奖/,  // 企业获得XX奖
+            /[企业公司].*荣获.*[一二三四五六七八九十\d]+.*奖/   // 企业荣获XX奖
+          ];
+          
+          const hasAwardPattern = awardPatterns.some(pattern => pattern.test(fullText));
+          if (!hasAwardPattern) {
+            return false;
+          }
+          
+          return true;
+        }
+      },
+      // 榜单标签需要更严格的判断：标题必须包含"榜单"字样，或内容明确提到"发布榜单"、"榜单发布"等
+      { 
+        keywords: ['榜单'], 
+        tag: '榜单',
+        // 额外的验证条件：标题必须包含"榜单"，或内容明确提到企业发布榜单
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          
+          // 排除条件：如果是行业分享会、交流会、论坛等，即使有"榜单"也不应该标记
+          if (/分享会|交流会|论坛|会议|研讨会/.test(titleLower) && !titleLower.includes('榜单')) {
+            return false;
+          }
+          
+          // 排除条件：如果是单独的获奖信息（标题包含"获奖"、"荣誉"等，但不包含"榜单"），不应该标记为榜单
+          if ((/获奖|荣誉|认证|称号/.test(titleLower)) && !titleLower.includes('榜单')) {
+            return false;
+          }
+          
+          // 条件1：标题明确包含"榜单"字样（最优先）
+          if (titleLower.includes('榜单')) {
+            return true;
+          }
+          
+          // 条件2：内容明确提到企业"发布榜单"、"榜单发布"、"推出榜单"等
+          if (/发布.*榜单|榜单.*发布|推出.*榜单|榜单.*推出|公布.*榜单|榜单.*公布|企业.*榜单|榜单.*企业/.test(contentLower)) {
+            return true;
+          }
+          
+          // 其他情况不标记为榜单
+          return false;
+        }
+      },
+      { keywords: ['融资', '投资', '轮', '资金', '募资'], tag: '融资消息' },
+      { keywords: ['合作', '伙伴', '战略', '联盟', '协议'], tag: '合作伙伴' },
+      { keywords: ['产品', '发布', '推出', '上市', '新品'], tag: '产品发布' },
+      // 人员招聘标签：检测招聘、招聘信息、实习生招聘、校园招聘等（优先级高于人事变动）
+      { 
+        keywords: ['招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求', '招聘项目', '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事', '实习生招聘', '应届生招聘'],
+        tag: '人员招聘',
+        // 验证条件：标题或内容明确提到招聘相关信息
+        validate: (title, content) => {
+          const titleLower = (title || '').toLowerCase();
+          const contentLower = (content || '').toLowerCase();
+          const fullText = titleLower + ' ' + contentLower;
+          
+          // 招聘相关关键词
+          const recruitmentKeywords = [
+            '招聘', '招聘信息', '实习生', '校园招聘', '社会招聘', '校招', '社招', 
+            '岗位', '职位', '应聘', '求职', '加入我们', '加入团队', '人才招聘', '人才需求',
+            '招聘启动', '招聘开启', '招聘开始', '招聘公告', '招聘通知', '招聘启事',
+            '实习生招聘', '应届生招聘', '2027届', '2026届', '2025届'
+          ];
+          
+          // 检查标题是否包含招聘关键词
+          const titleHasRecruitment = recruitmentKeywords.some(kw => titleLower.includes(kw));
+          if (titleHasRecruitment) {
+            return true;
+          }
+          
+          // 检查内容开头部分是否包含招聘关键词（前300字）
+          const contentStart = contentLower.substring(0, 300);
+          const recruitmentCount = recruitmentKeywords.filter(kw => contentStart.includes(kw)).length;
+          // 如果前300字中包含2个或以上招聘关键词，认为是招聘内容
+          if (recruitmentCount >= 2) {
+            return true;
+          }
+          
+          return false;
+        }
+      },
+      { keywords: ['技术', '创新', '突破', '研发', '专利'], tag: '技术创新' },
+      { keywords: ['市场', '拓展', '扩张', '布局', '进入'], tag: '市场拓展' },
+      { keywords: ['人事', '任命', '离职', '加入', '高管'], tag: '人事变动' },
+      { keywords: ['财务', '财报', '营收', '利润', '业绩'], tag: '财务报告' },
+      { keywords: ['广告', '推广', '营销', '宣传', '促销'], tag: '广告推广' },
+      { keywords: ['安全', '防护', '漏洞', '修复', '安全'], tag: '安全防护' },
+      { keywords: ['发展', '成长', '壮大', '进步'], tag: '企业发展' },
+    ];
+    
+    for (const rule of keywordRules) {
+      if (rule.keywords.some(kw => fullText.includes(kw))) {
+        // 如果规则有验证函数，需要先验证
+        if (rule.validate) {
+          if (rule.validate(title, content)) {
+            keywords.push(rule.tag);
+            // 如果是独占标签（如节假日），只返回这一个标签
+            if (rule.exclusive) {
+              return keywords;
+            }
+            if (keywords.length >= 2) break; // 最多返回2个标签
+          }
+        } else {
+          keywords.push(rule.tag);
+          if (keywords.length >= 2) break; // 最多返回2个标签
+        }
+      }
+    }
+    
+    // 如果没找到，返回行业分析
+    if (keywords.length === 0) {
+      keywords.push('行业分析');
+    }
+    
+    return keywords;
+  }
+
+  /**
+   * 检查摘要是否完整且包含核心内容
+   */
+  isAbstractComplete(abstract, title, content) {
+    if (!abstract || abstract.length < 10) return false;
+    
+    // 检查是否包含引导语等无关内容
+    if (/点击.*关注|欢迎关注|扫描.*二维码|关注.*公众号|点击左上方|点击上方.*关注/.test(abstract)) {
+      return false; // 包含引导语，不是核心内容
+    }
+    
+    // 检查是否以数字或未完成的短语结尾（如"还背着27."、"营收达到1."等）
+    if (/[\d\.]+[。！？.!?]?$/.test(abstract.trim())) {
+      const abstractTrimmed = abstract.trim();
+      const lastChar = abstractTrimmed.slice(-1);
+      // 如果以数字结尾，且不是以句号结尾，说明不完整
+      if (!/[。！？.!?]$/.test(lastChar)) {
+        return false;
+      }
+      // 即使以数字+句号结尾，检查数字前的表述是否完整
+      const beforeLastNum = abstractTrimmed.replace(/[\d\.]+[。！？.!?]?$/, '').trim();
+      // 如果数字前的内容太短（少于10字），可能不完整
+      if (beforeLastNum.length < 10) {
+        return false;
+      }
+      // 检查数字前的短语是否看起来完整（如"还背着27."中的"还背着"明显不完整）
+      const lastPhrase = beforeLastNum.split(/[，。！？.!?]/).pop().trim();
+      // 如果最后一个短语很短（少于5字）且以"着"、"了"、"的"等助词结尾，可能不完整
+      if (lastPhrase.length < 5 && /[着了的]$/.test(lastPhrase)) {
+        return false;
+      }
+      // 如果数字前的内容以"还"、"只"、"仅"等词结尾，且后面直接是数字，可能不完整
+      // 检查最后几个字符是否包含这些词
+      const lastFewChars = beforeLastNum.substring(Math.max(0, beforeLastNum.length - 5));
+      if (/[还只仅]/.test(lastFewChars) && lastPhrase.length < 8) {
+        // 如果最后几个字符包含"还/只/仅"且短语较短，可能不完整
+        // 特别检查"还背着"、"还剩下"、"只剩下"等模式
+        if (/还.*[着下]|只.*[剩下]|仅.*[剩下]/.test(lastPhrase)) {
+          return false;
+        }
+      }
+    }
+    
+    // 检查是否以句号结尾
+    if (!/[。！？.!?]$/.test(abstract)) return false;
+    
+    // 检查是否只是原文的第一句话（如果摘要长度与原文前100字相似度很高，可能是简单复制）
+    const contentStart = (content || '').trim().substring(0, 150);
+    if (contentStart && abstract.length > 30) {
+      // 检查摘要是否与原文开头高度相似（简单判断）
+      const abstractWords = abstract.substring(0, 50);
+      const contentWords = contentStart.substring(0, 50);
+      // 如果前50字相似度超过80%，可能是直接复制，需要检查是否是总结性的
+      let sameCount = 0;
+      const minLen = Math.min(abstractWords.length, contentWords.length);
+      for (let i = 0; i < minLen; i++) {
+        if (abstractWords[i] === contentWords[i]) {
+          sameCount++;
+        }
+      }
+      const similarity = minLen > 0 ? sameCount / minLen : 0;
+      
+      // 更严格地检测：如果摘要与原文开头高度相似，可能是简单复制第一段话
+      // 检查摘要是否与原文前200字高度相似（不仅仅是前50字）
+      const abstractLong = abstract.substring(0, Math.min(abstract.length, 100));
+      const contentLong = contentStart.substring(0, Math.min(contentStart.length, 200));
+      let longSameCount = 0;
+      const longMinLen = Math.min(abstractLong.length, contentLong.length);
+      for (let i = 0; i < longMinLen; i++) {
+        if (abstractLong[i] === contentLong[i]) {
+          longSameCount++;
+        }
+      }
+      const longSimilarity = longMinLen > 0 ? longSameCount / longMinLen : 0;
+      
+      // 如果相似度太高（超过60%）且摘要长度较短（可能只是第一段话），可能不是总结性的
+      // 或者如果前100字的相似度超过70%，也认为是简单复制
+      const isLikelyCopy = (similarity > 0.7 && abstract.length < 150) || 
+                          (longSimilarity > 0.6 && abstract.length < 150);
+      
+      if (isLikelyCopy && contentStart.length > abstract.length * 1.2) {
+        // 可能是简单复制第一段话，检查是否包含总结性的表述
+        if (!/[总结|概括|要点|核心|主要|关键|总之|综上所述|总的来说|整体|总体|综合]/i.test(abstract)) {
+          // 进一步检查：如果摘要末尾被截断（以数字结尾或明显不完整），则不合格
+          if (/[\d\.]+[。！？.!?]$/.test(abstract)) {
+            // 检查数字前的短语是否完整
+            const beforeNum = abstract.replace(/[\d\.]+[。！？.!?]?$/, '').trim();
+            const lastPhrase = beforeNum.split(/[，。！？.!?]/).pop().trim();
+            // 如果最后短语包含"还背着"、"还剩下"等不完整模式，不合格
+            if (/还.*[着下]|只.*[剩下]|仅.*[剩下]/.test(lastPhrase) && lastPhrase.length < 8) {
+              return false;
+            }
+            // 如果数字前的内容以"还/只/仅"结尾，也不合格
+            const lastFewChars = beforeNum.substring(Math.max(0, beforeNum.length - 5));
+            if (/[还只仅]/.test(lastFewChars) && lastPhrase.length < 8) {
+              return false;
+            }
+          }
+          // 如果摘要长度太短，也可能不是总结性的
+          if (abstract.length < 60) {
+            return false;
+          }
+        }
+      }
+    }
+    
+    // 检查是否包含关键信息（至少包含标题中的关键词或内容的核心信息）
+    const titleKeywords = (title || '').split(/[，。！？\s]+/).filter(w => w.length > 1);
+    const hasTitleInfo = titleKeywords.length === 0 || titleKeywords.some(kw => abstract.includes(kw));
+    
+    // 检查摘要长度是否合理（至少30字，最多150字）
+    if (abstract.length < 30 || abstract.length > 150) return false;
+    
+    // 检查是否包含完整的句子结构（至少包含一个动词或形容词）
+    const hasVerb = /[进行|开展|发布|获得|实现|完成|达成|启动|推出|宣布|表示|认为|指出|强调|要求|希望|期待|计划|预计|将|已|正在|是|有|为|在|缅怀|悼念|纪念|面临|达到|实现|完成]/i.test(abstract);
+    
+    return hasTitleInfo && hasVerb;
+  }
+
+  /**
+   * 从原文提取完整的摘要（跳过引导语等无关内容）
+   * 改进：提取文章的核心内容，而不是简单提取第一段话
+   */
+  extractCompleteAbstract(title, content, existingAbstract) {
+    const fullText = (content || '').trim();
+    if (!fullText || fullText.length < 20) {
+      // 如果内容太短，基于标题生成摘要
+      if (title && title.length > 5) {
+        return `${title}相关新闻报道。`;
+      }
+      return '新闻内容摘要。';
+    }
+    
+    // 跳过开头的引导语、关注提示等无关内容
+    let processedText = this.skipIrrelevantContent(fullText);
+    
+    // 策略：不要简单提取前150字，而是提取文章的核心内容
+    // 1. 将文章按句子分割
+    const sentences = processedText.match(/(.+?[。！？.!?])/g) || [];
+    
+    if (sentences.length === 0) {
+      // 如果没有找到句子，返回基于标题的摘要
+      if (title && title.length > 5) {
+        return `${title}相关新闻报道。`;
+      }
+      return '新闻内容摘要。';
+    }
+    
+    // 2. 跳过前1-2句（通常是引入性内容），寻找核心内容
+    const titleKeywords = (title || '').split(/[，。！？\s]+/).filter(w => w.length > 1);
+    let startIndex = 0;
+    
+    // 跳过前1-2句引入性内容
+    if (sentences.length > 2) {
+      startIndex = Math.min(1, sentences.length - 1); // 从第2句开始
+    }
+    
+    // 查找包含标题关键词或重要信息的句子（核心内容通常在文章前1/3处）
+    const searchRange = Math.min(Math.floor(sentences.length / 3), 5); // 在前1/3的句子中查找
+    for (let i = startIndex; i < Math.min(startIndex + searchRange, sentences.length); i++) {
+      const sentence = sentences[i];
+      const hasTitleKeyword = titleKeywords.length === 0 || titleKeywords.some(kw => sentence.includes(kw));
+      const hasImportantVerb = /[发布|宣布|表示|获得|实现|完成|达成|启动|推出|面临|达到|成为|是|有|为|在|涉及|关于|针对]/i.test(sentence);
+      
+      if (hasTitleKeyword || hasImportantVerb) {
+        startIndex = i;
+        break;
+      }
+    }
+    
+    // 3. 从核心句子开始，提取2-4句形成总结（不超过150字）
+    let extracted = '';
+    let extractedLength = 0;
+    const maxLength = 150;
+    
+    // 从startIndex开始，提取2-4句核心内容
+    for (let i = startIndex; i < Math.min(startIndex + 4, sentences.length); i++) {
+      const sentence = sentences[i];
+      if (extractedLength + sentence.length <= maxLength) {
+        extracted += sentence;
+        extractedLength += sentence.length;
+      } else {
+        // 如果加上这句会超过150字，检查是否可以截断这句
+        const remaining = maxLength - extractedLength;
+        if (remaining > 30) {
+          // 如果剩余空间足够，尝试截取这句的一部分
+          const truncated = sentence.substring(0, remaining);
+          const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
+          if (lastSentenceMatch) {
+            extracted += lastSentenceMatch[1];
+          }
+        }
+        break;
+      }
+    }
+    
+    // 如果提取的内容太短（少于30字），尝试提取更多
+    if (extracted.length < 30 && sentences.length > startIndex + 4) {
+      // 继续提取更多句子
+      for (let i = startIndex + 4; i < Math.min(startIndex + 6, sentences.length); i++) {
+        const sentence = sentences[i];
+        if (extractedLength + sentence.length <= maxLength) {
+          extracted += sentence;
+          extractedLength += sentence.length;
+        } else {
+          break;
+        }
+      }
+    }
+    
+    // 如果提取的内容仍然太短，使用前150字作为备用（但至少跳过第一句）
+    if (extracted.length < 30) {
+      // 跳过第一句，从第二句开始提取
+      if (sentences.length > 1) {
+        extracted = sentences.slice(1, Math.min(4, sentences.length)).join('');
+        if (extracted.length > maxLength) {
+          // 如果超过150字，截断到最后一个完整句子
+          const truncated = extracted.substring(0, maxLength);
+          const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
+          if (lastSentenceMatch) {
+            extracted = lastSentenceMatch[1];
+          } else {
+            extracted = truncated.trim() + '。';
+          }
+        }
+      } else {
+        // 如果只有一句，使用它
+        extracted = sentences[0];
+      }
+    }
+    
+    // 确保摘要不超过150字
+    if (extracted.length > 150) {
+      const sentences = extracted.match(/(.+?[。！？.!?])/g);
+      if (sentences) {
+        let result = '';
+        for (const sentence of sentences) {
+          if ((result + sentence).length <= 150) {
+            result += sentence;
+          } else {
+            break;
+          }
+        }
+        if (result) extracted = result;
+      } else {
+        extracted = extracted.substring(0, 150);
+        const lastSentence = extracted.match(/(.+[。！？.!?])/);
+        if (lastSentence) {
+          extracted = lastSentence[1];
+        } else {
+          extracted = extracted.trim() + '。';
+        }
+      }
+    }
+    
+    return extracted.trim();
+  }
+
+  /**
+   * 跳过正文开头的引导语、关注提示等无关内容
+   */
+  skipIrrelevantContent(content) {
+    if (!content || content.length < 10) return content;
+    
+    // 定义需要跳过的引导语模式
+    const irrelevantPatterns = [
+      /^点击.*关注.*[！!。.\n]/i,
+      /^欢迎关注.*[！!。.\n]/i,
+      /^扫描.*二维码.*[！!。.\n]/i,
+      /^关注.*公众号.*[！!。.\n]/i,
+      /^点击左上方关注.*[！!。.\n]/i,
+      /^点击上方.*关注.*[！!。.\n]/i,
+      /^长按.*关注.*[！!。.\n]/i,
+      /^识别.*二维码.*[！!。.\n]/i,
+      /^·[^·]*·\s*[\n\r]/m, // 类似 "·国家公祭日·" 这样的装饰性分隔符
+    ];
+    
+    let processed = content;
+    
+    // 尝试匹配并跳过引导语
+    for (const pattern of irrelevantPatterns) {
+      const match = processed.match(pattern);
+      if (match) {
+        // 跳过匹配到的内容
+        processed = processed.substring(match[0].length).trim();
+        // 如果后面还有换行，也跳过
+        processed = processed.replace(/^[\n\r]+/, '').trim();
+      }
+    }
+    
+    // 如果处理后的内容太短（少于20字），说明可能跳过了太多，尝试另一种方式
+    if (processed.length < 20 && content.length > 50) {
+      // 尝试另一种方式：查找第一个包含实质性内容的句子
+      const sentences = content.split(/[。！？.!?]/);
+      for (const sentence of sentences) {
+        const trimmed = sentence.trim();
+        // 跳过明显的引导语
+        if (trimmed.length > 10 && 
+            !/点击|关注|扫描|二维码|欢迎/.test(trimmed) &&
+            !/^[·•●\-\*]\s*$/.test(trimmed)) {
+          // 如果这个句子包含实质性内容，返回它
+          if (trimmed.length > 15) {
+            return trimmed + '。';
+          }
+        }
+      }
+      return content; // 如果都找不到，返回原内容
+    }
+    
+    return processed;
+  }
+
+  /**
+   * 检测内容是否是图片内容（图片标签或图片URL）
+   */
+  isImageOnlyContent(content) {
+    if (!content || content.trim().length === 0) {
+      return true;
+    }
+    
+    const contentTrimmed = content.trim();
+    
+    // 如果内容非常短（少于10个字符），可能是图片
+    if (contentTrimmed.length < 10) {
+      return true;
+    }
+    
+    // 检测是否包含JavaScript代码或网页模板代码（这些通常是错误的内容提取）
+    const jsPatterns = [
+      /document\.title\s*=/i,
+      /var\s+PAGE_MID/i,
+      /mmbizwap/i,
+      /secitptpage/i,
+      /verify\.html/i,
+      /微信公众号平台/i,
+      /setTimeout\s*\(/i,
+      /function\s*\(\)\s*\{/i,
+      /<script[^>]*>/i,
+      /<\/script>/i,
+      /body\s*,/i,
+      /title\s*===/i,
+      /noMobile\s*&&/i,
+      /document\.title\s*=\s*['"]/i,
+      /PAGE_MID\s*=/i
+    ];
+    
+    // 检测是否包含CSS样式代码（这些通常是错误的内容提取）
+    const cssPatterns = [
+      /\.wx-root/i,
+      /--weui-/i,
+      /@media\s*\(prefers-color-scheme/i,
+      /data-weui-theme/i,
+      /rgba\s*\(/i,
+      /#[0-9a-f]{3,6}/i, // CSS颜色代码
+      /:\s*#[0-9a-f]{3,6}/i, // CSS属性值中的颜色
+      /:\s*rgba\s*\(/i, // CSS属性值中的rgba
+      /:\s*#[a-f0-9]{3,6}\s*;/i // CSS属性值
+    ];
+    
+    // 如果内容主要是JavaScript代码或网页模板代码，认为是图片内容（错误提取）
+    const jsPatternCount = jsPatterns.filter(pattern => pattern.test(contentTrimmed)).length;
+    const cssPatternCount = cssPatterns.filter(pattern => pattern.test(contentTrimmed)).length;
+    
+    // 如果包含2个或以上JavaScript模式，或1个JavaScript模式+1个CSS模式，认为是图片内容
+    if (jsPatternCount >= 2 || (jsPatternCount >= 1 && cssPatternCount >= 1)) {
+      console.log(`[isImageOnlyContent] 检测到JavaScript代码或CSS样式代码（JS: ${jsPatternCount}, CSS: ${cssPatternCount}），认为是图片内容（错误提取）`);
+      return true;
+    }
+    
+    // 如果内容包含CSS样式代码且长度较长（超过500字符），可能是错误提取
+    if (cssPatternCount >= 3 && contentTrimmed.length > 500) {
+      console.log(`[isImageOnlyContent] 检测到大量CSS样式代码（${cssPatternCount}个模式），认为是图片内容（错误提取）`);
+      return true;
+    }
+    
+    // 如果内容包含JavaScript代码且长度较短（少于200字符），可能是错误提取
+    if (jsPatternCount >= 1 && contentTrimmed.length < 200) {
+      console.log(`[isImageOnlyContent] 检测到JavaScript代码且内容较短，认为是图片内容（错误提取）`);
+      return true;
+    }
+    
+    // 检测是否包含图片标签
+    const imageTagPatterns = [
+      /<img[^>]*>/i,
+      /<image[^>]*>/i,
+      /\[图片\]/i,
+      /\[image\]/i,
+      /图片内容/i,
+      /image content/i
+    ];
+    
+    for (const pattern of imageTagPatterns) {
+      if (pattern.test(contentTrimmed)) {
+        return true;
+      }
+    }
+    
+    // 检测是否主要是图片URL（http/https链接，且以图片扩展名结尾）
+    const imageUrlPattern = /^https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?[^\s]*)?$/i;
+    if (imageUrlPattern.test(contentTrimmed)) {
+      return true;
+    }
+    
+    // 检测内容是否只包含图片URL（没有其他文本）
+    const urlOnlyPattern = /^https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?[^\s]*)?(\s+https?:\/\/[^\s]+\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?[^\s]*)?)*$/i;
+    if (urlOnlyPattern.test(contentTrimmed)) {
+      return true;
+    }
+    
+    // 如果内容中图片URL的比例很高（超过80%），可能是图片内容
+    const allUrls = contentTrimmed.match(/https?:\/\/[^\s]+/gi) || [];
+    const imageUrls = allUrls.filter(url => /\.(jpg|jpeg|png|gif|bmp|webp|svg)(\?|$)/i.test(url));
+    if (allUrls.length > 0 && imageUrls.length / allUrls.length > 0.8) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 补充不完整的摘要
+   */
+  supplementAbstract(incompleteAbstract, title, content) {
+    const fullText = (content || '').trim();
+    if (!fullText || fullText.length < 20) return null;
+    
+    // 如果摘要以数字结尾（如"还背着27."），尝试在原文中找到完整的表述
+    if (/[\d\.]+[。！？.!?]?$/.test(incompleteAbstract)) {
+      // 提取摘要中最后一个数字之前的文本（取最后30字作为关键词，提高匹配成功率）
+      const beforeNum = incompleteAbstract.replace(/[\d\.]+[。！？.!?]?$/, '').trim();
+      const searchKeyword = beforeNum.length > 30 ? beforeNum.substring(beforeNum.length - 30) : beforeNum;
+      
+      // 跳过引导语后查找
+      const processedText = this.skipIrrelevantContent(fullText);
+      
+      // 在原文中查找包含这个文本的完整句子
+      const keywordIndex = processedText.indexOf(searchKeyword);
+      if (keywordIndex >= 0) {
+        // 从关键词位置开始，查找完整的句子
+        const start = keywordIndex;
+        const end = Math.min(processedText.length, start + 300);
+        const context = processedText.substring(start, end);
+        
+        // 查找包含关键词和数字的完整句子（到句号为止）
+        // 先尝试找到包含数字的完整句子
+        const sentenceWithNum = context.match(/([^。！？.!?]*[\d\.]+[^。！？.!?]*[。！？.!?])/);
+        if (sentenceWithNum) {
+          const extracted = sentenceWithNum[1].trim();
+          // 确保提取的句子包含数字且完整（至少30字）
+          if (extracted.length >= 30 && extracted.length <= 150) {
+            return extracted;
+          }
+        }
+        
+        // 如果找不到包含数字的完整句子，尝试找到关键词后的第一个完整句子
+        const afterKeyword = context.substring(searchKeyword.length);
+        const firstSentence = afterKeyword.match(/(.+?[。！？.!?])/);
+        if (firstSentence) {
+          const extracted = (searchKeyword + firstSentence[1]).trim();
+          if (extracted.length >= 30 && extracted.length <= 150) {
+            return extracted;
+          }
+        }
+      }
+    }
+    
+    // 如果摘要太短或不完整，尝试从原文补充
+    if (incompleteAbstract && incompleteAbstract.length < 30) {
+      if (fullText && fullText.length > incompleteAbstract.length) {
+        // 跳过引导语
+        const processedText = this.skipIrrelevantContent(fullText);
+        // 尝试找到包含摘要关键词的完整句子
+        const keywords = incompleteAbstract.split(/[，。！？\s]+/).filter(w => w.length > 1);
+        for (const keyword of keywords) {
+          const keywordIndex = processedText.indexOf(keyword);
+          if (keywordIndex >= 0) {
+            // 找到包含关键词的句子
+            const start = Math.max(0, keywordIndex - 50);
+            const end = Math.min(processedText.length, keywordIndex + 150);
+            const context = processedText.substring(start, end);
+            // 查找完整的句子
+            const sentenceMatch = context.match(/(.+[。！？.!?])/);
+            if (sentenceMatch) {
+              const extracted = sentenceMatch[1].trim();
+              // 确保提取的句子长度合理且完整
+              if (extracted.length >= 30 && extracted.length <= 150) {
+                return extracted;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return null;
   }
 }
 
