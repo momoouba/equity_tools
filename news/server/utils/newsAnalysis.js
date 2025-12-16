@@ -762,7 +762,7 @@ class NewsAnalysis {
       // 先尝试从标题推断关键词和摘要
       const inferredKeywords = this.inferKeywordsFromContent(title, '');
       let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
-      let finalAbstract = '正文内容为图片，无法识别';
+      let finalAbstract = '正文无文字，无法生成摘要';
         
         // 如果标题包含会议相关关键词，设置会议相关的摘要和关键词
         const titleLower = (title || '').toLowerCase();
@@ -793,7 +793,7 @@ class NewsAnalysis {
             finalKeywords = ['会议事项'];
           }
           // 基于标题生成摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[analyzeNewsSentimentAndType] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
         } else if (hasRecruitmentKeyword) {
           // 如果标题包含招聘关键词，使用人员招聘标签
@@ -801,11 +801,11 @@ class NewsAnalysis {
             finalKeywords = ['人员招聘'];
           }
           // 基于标题生成摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[analyzeNewsSentimentAndType] 标题包含招聘关键词，设置人员招聘标签和基于标题的摘要`);
         } else if (inferredKeywords.length > 0) {
           // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[analyzeNewsSentimentAndType] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
         }
         
@@ -815,7 +815,7 @@ class NewsAnalysis {
         
         return {
           sentiment: 'neutral',
-          sentiment_reason: '正文内容为图片，无法识别',
+          sentiment_reason: '正文无文字，无法生成摘要',
           keywords: finalKeywords,
           news_abstract: finalAbstract
         };
@@ -851,7 +851,7 @@ class NewsAnalysis {
   "sentiment": "positive|neutral|negative",
   "sentiment_reason": "情绪判断的原因",
   "news_type": ["类型标签1", "类型标签2"],
-  "news_abstract": "150字以内的关键信息摘要"
+  "news_abstract": "150字左右的关键信息摘要（最多不超过170字）"
 }
 
 **重要要求（必须严格遵守）：**
@@ -864,9 +864,9 @@ class NewsAnalysis {
    - **绝对禁止**：直接摘取第一段话、摘取每一段的首句、或简单复制原文的某句话作为摘要
    - **必须跳过**：正文开头的引导语、关注提示、广告语等无关内容（如"点击关注"、"点击左上方关注"、"欢迎关注"、"扫描二维码"等），直接总结文章的核心主题和关键信息
    - **摘要应该是总结性的**：需要阅读**完整文章**后，提炼出核心要点，形成总结性的表述。如果正文开头只是引入，应该总结后续的核心内容。摘要应该是对全文信息的提炼和概括，而不是原文的片段拼接
-   - **摘要生成方法**：通读全文，理解文章的核心主题、关键信息、主要观点，然后用简洁的语言总结成150字以内的完整句子。不要逐段摘取，而要提炼整合
+   - **摘要生成方法**：通读全文，理解文章的核心主题、关键信息、主要观点，然后用简洁的语言总结成150字左右的完整句子（最多不超过170字）。不要逐段摘取，而要提炼整合
    - **特别重要**：如果文章是负面新闻（看衰、质疑、担忧企业），摘要必须准确反映文章的核心观点和担忧点，不能只是复制开头段落。例如，如果文章质疑企业能否成功上市、指出现金流紧张、债务压力大等风险，摘要应该总结这些核心担忧点，而不是只提取开头引入性文字。
-   - 摘要长度必须在150字以内，即使需要压缩也要确保句子完整，不能中途截断，不能以数字、未完成的短语结尾
+   - 摘要长度应该在150字左右，最多不超过170字，即使需要压缩也要确保句子完整，不能中途截断，不能以数字、未完成的短语结尾
    - **绝对禁止**：在不完整的句子后直接加句号。必须生成完整的句子。禁止以数字、未完成的短语、未完成的句子结尾。
    - 示例：
      ✅ 正确："12月13日是国家公祭日，全国各地举行纪念活动，缅怀遇难同胞，提醒人们铭记历史、珍爱和平，吾辈应当自强不息，建设更强大的祖国。"
@@ -1325,15 +1325,15 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
                 finalKeywords = ['会议事项'];
               }
               // 基于标题生成摘要
-              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              abstract = '正文无文字，无法生成摘要';
               console.log(`[analyzeNewsSentimentAndType] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
             } else if (inferredKeywords.length > 0) {
               // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
-              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              abstract = '正文无文字，无法生成摘要';
               console.log(`[analyzeNewsSentimentAndType] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
             } else {
               // 基于标题生成摘要
-              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              abstract = '正文无文字，无法生成摘要';
             }
             
             // 确保关键词不为空
@@ -1343,7 +1343,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
             
             // 确保摘要不为空
             if (!abstract || abstract.trim().length === 0) {
-              abstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              abstract = '正文无文字，无法生成摘要';
             }
             
             console.log(`[analyzeNewsSentimentAndType] 设置后的关键词: ${JSON.stringify(finalKeywords)}`);
@@ -1733,7 +1733,7 @@ ${enterpriseList}
         // 先尝试从标题推断关键词
         const inferredKeywords = this.inferKeywordsFromContent(title, '');
         let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
-        let finalAbstract = '正文内容为图片，无法识别';
+        let finalAbstract = '正文无文字，无法生成摘要';
         
         // 如果标题包含会议相关关键词，设置会议相关的摘要和关键词
         const titleLower = (title || '').toLowerCase();
@@ -1764,7 +1764,7 @@ ${enterpriseList}
             finalKeywords = ['会议事项'];
           }
           // 基于标题生成摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[validateAnalysisResult] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
         } else if (hasRecruitmentKeyword) {
           // 如果标题包含招聘关键词，使用人员招聘标签
@@ -1772,11 +1772,11 @@ ${enterpriseList}
             finalKeywords = ['人员招聘'];
           }
           // 基于标题生成摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[validateAnalysisResult] 标题包含招聘关键词，设置人员招聘标签和基于标题的摘要`);
         } else if (inferredKeywords.length > 0) {
           // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
-          finalAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+          finalAbstract = '正文无文字，无法生成摘要';
           console.log(`[validateAnalysisResult] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
         }
         
@@ -1832,11 +1832,11 @@ ${enterpriseList}
             
             if (hasMeetingKeyword || hasRecruitmentKeyword) {
               // 如果标题包含会议关键词或招聘关键词，基于标题生成摘要
-              validatedAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              validatedAbstract = '正文无文字，无法生成摘要';
               console.log(`[validateAnalysisResult] 标题包含${hasMeetingKeyword ? '会议' : '招聘'}关键词，设置基于标题的摘要`);
             } else {
               // 基于标题生成摘要
-              validatedAbstract = title && title.length > 5 ? `${title}，正文内容为图片，无法识别。` : '正文内容为图片，无法识别。';
+              validatedAbstract = '正文无文字，无法生成摘要';
             }
           } else {
             validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
@@ -2905,8 +2905,8 @@ ${enterpriseList}
     const titleKeywords = (title || '').split(/[，。！？\s]+/).filter(w => w.length > 1);
     const hasTitleInfo = titleKeywords.length === 0 || titleKeywords.some(kw => abstract.includes(kw));
     
-    // 检查摘要长度是否合理（至少30字，最多150字）
-    if (abstract.length < 30 || abstract.length > 150) return false;
+    // 检查摘要长度是否合理（至少30字，最多170字）
+    if (abstract.length < 30 || abstract.length > 170) return false;
     
     // 检查是否包含完整的句子结构（至少包含一个动词或形容词）
     const hasVerb = /[进行|开展|发布|获得|实现|完成|达成|启动|推出|宣布|表示|认为|指出|强调|要求|希望|期待|计划|预计|将|已|正在|是|有|为|在|缅怀|悼念|纪念|面临|达到|实现|完成]/i.test(abstract);
@@ -2931,7 +2931,7 @@ ${enterpriseList}
     // 跳过开头的引导语、关注提示等无关内容
     let processedText = this.skipIrrelevantContent(fullText);
     
-    // 策略：不要简单提取前150字，而是提取文章的核心内容
+    // 策略：不要简单提取前170字，而是提取文章的核心内容
     // 1. 将文章按句子分割
     const sentences = processedText.match(/(.+?[。！？.!?])/g) || [];
     
@@ -2965,10 +2965,10 @@ ${enterpriseList}
       }
     }
     
-    // 3. 从核心句子开始，提取2-4句形成总结（不超过150字）
+    // 3. 从核心句子开始，提取2-4句形成总结（不超过170字）
     let extracted = '';
     let extractedLength = 0;
-    const maxLength = 150;
+    const maxLength = 170;
     
     // 从startIndex开始，提取2-4句核心内容
     for (let i = startIndex; i < Math.min(startIndex + 4, sentences.length); i++) {
@@ -3005,13 +3005,13 @@ ${enterpriseList}
       }
     }
     
-    // 如果提取的内容仍然太短，使用前150字作为备用（但至少跳过第一句）
+    // 如果提取的内容仍然太短，使用前170字作为备用（但至少跳过第一句）
     if (extracted.length < 30) {
       // 跳过第一句，从第二句开始提取
       if (sentences.length > 1) {
         extracted = sentences.slice(1, Math.min(4, sentences.length)).join('');
         if (extracted.length > maxLength) {
-          // 如果超过150字，截断到最后一个完整句子
+          // 如果超过170字，截断到最后一个完整句子
           const truncated = extracted.substring(0, maxLength);
           const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
           if (lastSentenceMatch) {
@@ -3026,13 +3026,13 @@ ${enterpriseList}
       }
     }
     
-    // 确保摘要不超过150字
-    if (extracted.length > 150) {
+    // 确保摘要不超过170字
+    if (extracted.length > 170) {
       const sentences = extracted.match(/(.+?[。！？.!?])/g);
       if (sentences) {
         let result = '';
         for (const sentence of sentences) {
-          if ((result + sentence).length <= 150) {
+          if ((result + sentence).length <= 170) {
             result += sentence;
           } else {
             break;
@@ -3040,7 +3040,7 @@ ${enterpriseList}
         }
         if (result) extracted = result;
       } else {
-        extracted = extracted.substring(0, 150);
+        extracted = extracted.substring(0, 170);
         const lastSentence = extracted.match(/(.+[。！？.!?])/);
         if (lastSentence) {
           extracted = lastSentence[1];
