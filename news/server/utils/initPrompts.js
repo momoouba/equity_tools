@@ -130,12 +130,12 @@ async function initPrompts() {
 
 **重要要求：每个类型标签必须控制在4个字符以内，超过4个字符的标签将被截断。**
 
-${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
+\${isAdditionalAccount ? \`**额外公众号新闻特殊处理（重要）：**
 - 如果新闻内容涉及榜单、排名、获奖、荣誉、认证等信息，请务必添加"榜单"或"获奖"标签
 - 榜单相关：各类榜单、排名、TOP榜单、排行榜等
 - 获奖相关：获奖、荣誉、认证、资质、称号等
 - 请仔细分析内容，确保不遗漏榜单或获奖相关信息
-` : ''}
+\` : ''}
 
 **广告识别重要提示：**
 - 如果文章主要目的是推销产品、服务或品牌，请标记为"广告推广"、"商业广告"或"营销推广"
@@ -344,47 +344,48 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
             console.log(`  ✓ 已更新提示词: ${prompt.prompt_name}`);
           }
         } else {
-        // 如果不存在，创建新的提示词配置
-        const promptId = await generateId('ai_prompt_config');
-        await db.execute(
-          `INSERT INTO ai_prompt_config 
-           (id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, creator_user_id) 
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            promptId,
-            prompt.prompt_name,
-            prompt.interface_type,
-            prompt.prompt_type,
-            prompt.prompt_content,
-            defaultAiModelConfigId, // 关联默认的AI模型配置
-            1, // 默认启用
-            adminUserId
-          ]
-        );
-        createdCount++;
-        console.log(`  ✓ 已创建提示词: ${prompt.prompt_name}`);
-
-        // 记录创建日志
-        if (adminUserId) {
-          const logId = await generateId('ai_prompt_change_log');
-          const logData = {
-            ...prompt,
-            ai_model_config_id: defaultAiModelConfigId
-          };
+          // 如果不存在，创建新的提示词配置
+          const promptId = await generateId('ai_prompt_config');
           await db.execute(
-            `INSERT INTO ai_prompt_change_log 
-             (id, prompt_config_id, change_type, old_value, new_value, change_user_id, change_reason) 
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ai_prompt_config 
+             (id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, creator_user_id) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-              logId,
               promptId,
-              'create',
-              null,
-              JSON.stringify(logData),
-              adminUserId,
-              '系统初始化'
+              prompt.prompt_name,
+              prompt.interface_type,
+              prompt.prompt_type,
+              prompt.prompt_content,
+              defaultAiModelConfigId, // 关联默认的AI模型配置
+              1, // 默认启用
+              adminUserId
             ]
           );
+          createdCount++;
+          console.log(`  ✓ 已创建提示词: ${prompt.prompt_name}`);
+
+          // 记录创建日志
+          if (adminUserId) {
+            const logId = await generateId('ai_prompt_change_log');
+            const logData = {
+              ...prompt,
+              ai_model_config_id: defaultAiModelConfigId
+            };
+            await db.execute(
+              `INSERT INTO ai_prompt_change_log 
+               (id, prompt_config_id, change_type, old_value, new_value, change_user_id, change_reason) 
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                logId,
+                promptId,
+                'create',
+                null,
+                JSON.stringify(logData),
+                adminUserId,
+                '系统初始化'
+              ]
+            );
+          }
         }
       } catch (promptError) {
         console.error(`  ✗ 处理提示词 "${prompt.prompt_name}" 时出错:`, promptError.message);

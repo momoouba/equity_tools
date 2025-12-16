@@ -2362,13 +2362,18 @@ async function initializeTables(dbPool) {
   
   console.log('✓ 所有数据库表结构初始化完成');
   
-  // 初始化提示词配置
-  try {
-    const { initPrompts } = require('./utils/initPrompts');
-    await initPrompts();
-  } catch (error) {
-    console.warn('初始化提示词配置时出现警告:', error.message);
-  }
+  // 初始化提示词配置（异步执行，不阻塞服务器启动）
+  setImmediate(async () => {
+    try {
+      const { initPrompts } = require('./utils/initPrompts');
+      await initPrompts();
+    } catch (error) {
+      console.warn('初始化提示词配置时出现警告:', error.message);
+      if (error.stack) {
+        console.warn('错误堆栈:', error.stack);
+      }
+    }
+  });
   } catch (error) {
     console.error('✗ 初始化数据库表结构时出错:', error.message);
     console.error('错误堆栈:', error.stack);
