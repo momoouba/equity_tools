@@ -25,7 +25,9 @@ function ScheduledTaskManagement() {
     send_time: '09:00:00',
     is_active: true,
     weekday: 'monday', // 星期字段：monday到sunday
-    month_day: 'first' // 日期字段：first(第一天), last(最后一天), 15(15日)
+    month_day: 'first', // 日期字段：first(第一天), last(最后一天), 15(15日)
+    retry_count: 0, // 重新抓取次数
+    retry_interval: 0 // 重新抓取间隔（分钟）
   })
   const [applications, setApplications] = useState([]) // 应用列表
 
@@ -136,7 +138,9 @@ function ScheduledTaskManagement() {
       send_time: time,
       is_active: active,
       weekday: task.weekday || task.week_day || 'monday',
-      month_day: task.monthDay || task.month_day || 'first'
+      month_day: task.monthDay || task.month_day || 'first',
+      retry_count: task.retryCount || task.retry_count || 0,
+      retry_interval: task.retryInterval || task.retry_interval || 0
     })
     setShowEditModal(true)
   }
@@ -166,7 +170,9 @@ function ScheduledTaskManagement() {
             weekday: formData.send_frequency === 'weekly' ? (formData.weekday || null) : null,
             month_day: formData.send_frequency === 'monthly' ? (formData.month_day || null) : null,
             frequency_type: formData.send_frequency === 'weekly' ? 'week' : (formData.send_frequency === 'monthly' ? 'month' : 'day'),
-            frequency_value: 1
+            frequency_value: 1,
+            retry_count: formData.retry_count !== undefined ? parseInt(formData.retry_count) : 0,
+            retry_interval: formData.retry_interval !== undefined ? parseInt(formData.retry_interval) : 0
           }
           
           // 如果是复制任务，需要包含原始数据中的 api_key 和 content_type
@@ -214,6 +220,8 @@ function ScheduledTaskManagement() {
             is_active: formData.is_active,
             weekday: formData.send_frequency === 'weekly' ? (formData.weekday || null) : null,
             month_day: formData.send_frequency === 'monthly' ? (formData.month_day || null) : null,
+            retry_count: formData.retry_count !== undefined ? parseInt(formData.retry_count) : 0,
+            retry_interval: formData.retry_interval !== undefined ? parseInt(formData.retry_interval) : 0,
             task_type: 'news_sync'
           }
           const response = await axios.put(`/api/scheduled-tasks/${editingTask.id}`, updateData)
@@ -316,7 +324,9 @@ function ScheduledTaskManagement() {
       send_time: '00:00:00',
       is_active: true,
       weekday: 'monday',
-      month_day: 'first'
+      month_day: 'first',
+      retry_count: 0,
+      retry_interval: 0
     })
     setShowEditModal(true)
   }
@@ -357,7 +367,9 @@ function ScheduledTaskManagement() {
         send_time: sendTime,
         is_active: originalData.is_active !== undefined ? (originalData.is_active === 1 || originalData.is_active === true) : true,
         weekday: originalData.weekday || 'monday',
-        month_day: originalData.month_day || 'first'
+        month_day: originalData.month_day || 'first',
+        retry_count: originalData.retry_count || 0,
+        retry_interval: originalData.retry_interval || 0
       })
       
       // 打开弹窗
@@ -801,6 +813,35 @@ function ScheduledTaskManagement() {
                   启用
                 </label>
               </div>
+
+              {activeTab === 'news_sync' && (
+                <>
+                  <div className="form-group">
+                    <label>重新抓取次数</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.retry_count || 0}
+                      onChange={(e) => setFormData({ ...formData, retry_count: parseInt(e.target.value) || 0 })}
+                      style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+                      placeholder="未获取数据时的重新抓取次数，0表示不重试"
+                    />
+                    <small style={{ color: '#666', fontSize: '12px' }}>当接口调用后未返回任何数据时，将根据此配置进行重试。设置为0表示不重试。</small>
+                  </div>
+                  <div className="form-group">
+                    <label>重新抓取间隔（分钟）</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={formData.retry_interval || 0}
+                      onChange={(e) => setFormData({ ...formData, retry_interval: parseInt(e.target.value) || 0 })}
+                      style={{ width: '100%', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+                      placeholder="重新抓取的时间间隔（单位：分钟）"
+                    />
+                    <small style={{ color: '#666', fontSize: '12px' }}>每次重试之间的等待时间（单位：分钟）。例如设置为5，表示在第一次调用后5分钟再次调用。</small>
+                  </div>
+                </>
+              )}
 
               <div className="form-actions" style={{ marginTop: '20px' }}>
                 <button

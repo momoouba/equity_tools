@@ -930,7 +930,91 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
   }
 }
 
-async function syncConfigWithSchedule(config, { isManual, runDate, customRange, logId = null }) {
+/**
+ * 如果需要，安排重试
+ * @param {Object} config - 新闻接口配置
+ * @param {Object} range - 时间范围 { from, to }
+ * @param {Object} options - 选项
+ */
+async function scheduleRetryIfNeeded(config, range, options = {}) {
+  const { isManual = false, logId = null, retryAttempt = 0 } = options;
+  
+  // 获取重试配置
+  const retryCount = config.retry_count || 0;
+  const retryInterval = config.retry_interval || 0;
+  
+  // 如果未配置重试或已达到最大重试次数，不进行重试
+  if (retryCount <= 0 || retryInterval <= 0 || retryAttempt >= retryCount) {
+    if (retryAttempt >= retryCount && retryCount > 0) {
+      console.log(`[新闻同步] 配置 ${config.id} 已达到最大重试次数 ${retryCount}，不再重试`);
+    }
+    return;
+  }
+  
+  // 计算下次重试时间（毫秒）
+  const retryDelayMs = retryInterval * 60 * 1000;
+  const retryTime = new Date(Date.now() + retryDelayMs);
+  
+  console.log(`[新闻同步] 配置 ${config.id} 未获取到数据，将在 ${retryInterval} 分钟后（${retryTime.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}）进行第 ${retryAttempt + 1} 次重试（共 ${retryCount} 次）`);
+  
+  // 使用 setTimeout 安排重试
+  setTimeout(async () => {
+    try {
+      console.log(`[新闻同步] 配置 ${config.id} 开始第 ${retryAttempt + 1} 次重试`);
+      
+      // 重新获取配置（可能已被更新）
+      const updatedConfigs = await db.query(
+        'SELECT nic.*, a.app_name FROM news_interface_config nic LEFT JOIN applications a ON nic.app_id = a.id WHERE nic.id = ? AND nic.is_active = 1 AND nic.is_deleted = 0',
+        [config.id]
+      );
+      
+      if (updatedConfigs.length === 0) {
+        console.log(`[新闻同步] 配置 ${config.id} 在重试时已不存在或已禁用，取消重试`);
+        return;
+      }
+      
+      const updatedConfig = updatedConfigs[0];
+      
+      // 检查重试配置是否仍然有效
+      const currentRetryCount = updatedConfig.retry_count || 0;
+      const currentRetryInterval = updatedConfig.retry_interval || 0;
+      
+      if (currentRetryCount <= 0 || currentRetryInterval <= 0) {
+        console.log(`[新闻同步] 配置 ${config.id} 的重试配置已更改，取消重试`);
+        return;
+      }
+      
+      // 执行重试，使用相同的时间范围
+      const retryResult = await syncConfigWithSchedule(updatedConfig, {
+        isManual: false, // 重试视为定时任务
+        runDate: new Date(),
+        customRange: range, // 使用相同的时间范围
+        logId: null, // 重试时创建新日志
+        retryAttempt: retryAttempt + 1
+      });
+      
+      const retrySyncedCount = retryResult.data?.synced || 0;
+      
+      if (retrySyncedCount > 0) {
+        console.log(`[新闻同步] 配置 ${config.id} 第 ${retryAttempt + 1} 次重试成功，获取到 ${retrySyncedCount} 条数据`);
+      } else {
+        console.log(`[新闻同步] 配置 ${config.id} 第 ${retryAttempt + 1} 次重试仍未获取到数据`);
+        // 如果还有剩余重试次数，继续安排下一次重试
+        if (retryAttempt + 1 < currentRetryCount) {
+          await scheduleRetryIfNeeded(updatedConfig, range, {
+            isManual: false,
+            logId: null,
+            retryAttempt: retryAttempt + 1
+          });
+        }
+      }
+    } catch (error) {
+      console.error(`[新闻同步] 配置 ${config.id} 第 ${retryAttempt + 1} 次重试失败:`, error.message);
+    }
+  }, retryDelayMs);
+}
+
+async function syncConfigWithSchedule(config, { isManual, runDate, customRange, logId = null, retryAttempt = 0 } = {}) {
   const frequency = getConfigFrequency(config) || 'daily';
   const customRangeEnabled = !!(customRange && customRange.from && customRange.to);
   
@@ -1053,17 +1137,30 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     // 使用拖底范围重新执行同步（仅新榜接口）
     const fallbackResult = await executeNewsSyncForConfig(config, fallbackRange, { isManual, logId });
     
+    // 检查拖底逻辑后是否获取到数据
+    const fallbackSyncedCount = fallbackResult.data?.synced || 0;
+    
     // 更新同步时间
     await db.execute(
       'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
       [fallbackRange.to, formatDateOnly(fallbackToDate), config.id]
     );
     
+    // 如果拖底逻辑后仍未获取到数据，检查是否需要重试（仅在非手动触发且非重试时）
+    if (fallbackSyncedCount === 0 && !isManual && retryAttempt === 0) {
+      await scheduleRetryIfNeeded(config, fallbackRange, { isManual, logId, retryAttempt: 0 });
+    }
+    
     return {
       ...fallbackResult,
       runDate: formatDateOnly(fallbackToDate),
       usedFallback: true // 标记使用了拖底逻辑
     };
+  }
+  
+  // 如果未获取到数据且未使用拖底逻辑，检查是否需要重试（仅在非手动触发且非重试时）
+  if (syncedCount === 0 && !customRangeEnabled && !isManual && retryAttempt === 0) {
+    await scheduleRetryIfNeeded(config, range, { isManual, logId, retryAttempt: 0 });
   }
 
   // 正常情况：更新同步时间（仅新榜接口，企查查接口在syncQichachaNewsData中已更新）

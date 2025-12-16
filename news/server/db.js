@@ -1046,6 +1046,39 @@ async function initializeTables(dbPool) {
     console.warn('迁移news_interface_config表month_day字段时出现警告:', err.message);
   }
 
+  // 迁移news_interface_config表，添加retry_count和retry_interval字段
+  try {
+    const [retryCountCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'retry_count'
+    `);
+    if (retryCountCheck.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN retry_count INT DEFAULT 0 COMMENT \'未获取数据时的重新抓取次数，0表示不重试\'');
+      // 已为 news_interface_config 表添加 retry_count 字段
+    }
+  } catch (err) {
+    console.warn('迁移news_interface_config表retry_count字段时出现警告:', err.message);
+  }
+
+  try {
+    const [retryIntervalCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'retry_interval'
+    `);
+    if (retryIntervalCheck.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN retry_interval INT DEFAULT 0 COMMENT \'重新抓取间隔（单位：分钟）\'');
+      // 已为 news_interface_config 表添加 retry_interval 字段
+    }
+  } catch (err) {
+    console.warn('迁移news_interface_config表retry_interval字段时出现警告:', err.message);
+  }
+
   // 移除news_interface_config表的唯一约束，允许同一应用和接口类型有多个不同配置
   // 注意：需要先删除使用该索引的外键约束，然后才能删除唯一索引
   // 已禁用：此迁移逻辑每次启动都会执行，导致外键约束警告。外键约束已手动修复，不再需要每次启动都执行。

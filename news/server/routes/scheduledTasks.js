@@ -672,6 +672,14 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
         updateFields.push('month_day = ?');
         updateValues.push(month_day);
       }
+      if (req.body.retry_count !== undefined) {
+        updateFields.push('retry_count = ?');
+        updateValues.push(parseInt(req.body.retry_count) || 0);
+      }
+      if (req.body.retry_interval !== undefined) {
+        updateFields.push('retry_interval = ?');
+        updateValues.push(parseInt(req.body.retry_interval) || 0);
+      }
 
       if (updateFields.length > 0) {
         updateValues.push(id);

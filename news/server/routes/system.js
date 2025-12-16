@@ -278,10 +278,13 @@ router.post('/news-config', [
       }
     }
     
+    const retry_count = req.body.retry_count !== undefined ? parseInt(req.body.retry_count) : 0;
+    const retry_interval = req.body.retry_interval !== undefined ? parseInt(req.body.retry_interval) : 0;
+
     await db.execute(
       `INSERT INTO news_interface_config 
-       (id, app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         app_id,
@@ -295,6 +298,8 @@ router.post('/news-config', [
         finalSendTime,
         weekday || null,
         month_day || null,
+        retry_count,
+        retry_interval,
         finalIsActive
       ]
     );
@@ -350,7 +355,7 @@ router.put('/news-config/:id', [
     }
 
     const { id } = req.params;
-    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, is_active } = req.body;
+    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, is_active, retry_count, retry_interval } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
     const existingConfigs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [id]);
