@@ -143,7 +143,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?)
-             AND exit_status NOT IN ('完全退出', '已上市')
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0 
              LIMIT 1`,
             [
@@ -211,7 +211,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             `SELECT enterprise_full_name, exit_status, delete_mark
              FROM invested_enterprises 
              WHERE wechat_official_account_id = ? 
-             AND exit_status NOT IN ('完全退出', '已上市')
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0 
              LIMIT 1`,
             [newsItem.account_name]

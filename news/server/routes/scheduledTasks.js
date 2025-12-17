@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { updateScheduledTasks, executeEmailTask } = require('../utils/scheduledEmailTasks');
+const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
 
 const router = express.Router();
 
@@ -688,7 +689,10 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
           updateValues
         );
 
-        // TODO: 更新新闻同步定时任务（如果需要）
+        // 更新新闻同步定时任务
+        updateNewsSyncScheduledTasks().catch(error => {
+          console.error('更新新闻同步定时任务失败:', error);
+        });
       }
     } else {
       return res.status(400).json({ success: false, message: '无效的任务类型' });

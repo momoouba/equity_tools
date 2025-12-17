@@ -322,6 +322,18 @@ router.post('/news-config', [
       );
     }
 
+    // 如果新配置是启用的，更新新闻同步定时任务
+    if (finalIsActive === 1) {
+      try {
+        const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
+        await updateNewsSyncScheduledTasks();
+        console.log(`[新闻接口配置创建] 新配置已启用，新闻同步定时任务调度已更新`);
+      } catch (taskError) {
+        console.warn(`[新闻接口配置创建] 更新新闻同步定时任务调度失败:`, taskError.message);
+        // 不阻断主流程，只记录警告
+      }
+    }
+
     res.json({ success: true, message: '新闻接口配置创建成功', data: { id: configId } });
   } catch (error) {
     console.error('创建新闻接口配置失败：', error);
@@ -446,15 +458,22 @@ router.put('/news-config/:id', [
         updateValues
       );
       
-      // 如果是企查查接口且更新了frequency_type，需要更新定时任务调度
-      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
-      if (currentInterfaceType === '企查查' && frequency_type !== undefined) {
+      // 如果更新了定时任务相关字段（send_frequency, send_time, weekday, month_day, is_active），需要更新定时任务调度
+      const shouldUpdateScheduledTasks = 
+        send_frequency !== undefined || 
+        send_time !== undefined || 
+        weekday !== undefined || 
+        month_day !== undefined || 
+        is_active !== undefined ||
+        frequency_type !== undefined; // frequency_type变更可能影响send_frequency的默认值
+      
+      if (shouldUpdateScheduledTasks) {
         try {
-          const { updateScheduledTasks } = require('../utils/scheduledEmailTasks');
-          await updateScheduledTasks();
-          console.log(`[新闻接口配置更新] 企查查接口frequency_type已更新，定时任务调度已同步更新`);
+          const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
+          await updateNewsSyncScheduledTasks();
+          console.log(`[新闻接口配置更新] 定时任务相关字段已更新，新闻同步定时任务调度已同步更新`);
         } catch (taskError) {
-          console.warn(`[新闻接口配置更新] 更新定时任务调度失败:`, taskError.message);
+          console.warn(`[新闻接口配置更新] 更新新闻同步定时任务调度失败:`, taskError.message);
           // 不阻断主流程，只记录警告
         }
       }

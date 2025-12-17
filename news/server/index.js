@@ -17,10 +17,10 @@ const newsAnalysisRoutes = require('./routes/newsAnalysis');
 const emailRoutes = require('./routes/email');
 const scheduledTasksRoutes = require('./routes/scheduledTasks');
 const externalDbRoutes = require('./routes/externalDb');
-const syncNewsData = newsRoutes.syncNewsData;
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
+const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -212,21 +212,11 @@ async function startServer() {
       // 异步执行非关键初始化任务（不阻塞API响应）
       setImmediate(async () => {
         try {
-          // 启动定时任务：每天00:00:00执行新闻同步
-          console.log('正在启动定时任务...');
-          cron.schedule('0 0 * * *', async () => {
-            console.log('定时任务触发：开始同步前一天新闻数据...');
-            try {
-              const result = await syncNewsData({ isManual: false });
-              console.log('定时任务完成：', result.message);
-            } catch (error) {
-              console.error('定时任务执行失败：', error.message);
-            }
-          }, {
-            scheduled: true,
-            timezone: 'Asia/Shanghai'
+          // 初始化新闻同步定时任务（根据news_interface_config表中的配置）
+          console.log('正在初始化新闻同步定时任务...');
+          initializeNewsSyncScheduledTasks().catch(error => {
+            console.error('初始化新闻同步定时任务失败:', error);
           });
-          console.log('✓ 定时任务已启动：每天00:00:00自动同步前一天新闻数据');
           
           // 初始化邮件发送定时任务（异步，不阻塞）
           console.log('正在初始化邮件发送定时任务...');

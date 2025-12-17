@@ -210,7 +210,7 @@ async function getUserVisibleYesterdayNews(userId) {
     const enterprises = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
        FROM invested_enterprises 
-       WHERE exit_status NOT IN ('完全退出', '已上市')
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
        AND delete_mark = 0`

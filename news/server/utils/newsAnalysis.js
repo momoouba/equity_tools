@@ -1982,7 +1982,7 @@ ${enterpriseList}
             `SELECT enterprise_full_name, exit_status, delete_mark
              FROM invested_enterprises 
              WHERE enterprise_full_name = ? 
-             AND exit_status NOT IN ('完全退出', '已上市')
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0 
              LIMIT 1`,
             [newsItem.enterprise_full_name]
@@ -2216,7 +2216,7 @@ ${enterpriseList}
         for (const enterprise of relevantEnterprises) {
           const existsInDB = await db.query(
             `SELECT enterprise_full_name FROM invested_enterprises 
-             WHERE enterprise_full_name = ? AND delete_mark = 0 AND exit_status != '完全退出'`,
+             WHERE enterprise_full_name = ? AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`,
             [enterprise.enterprise_name]
           );
           

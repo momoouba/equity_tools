@@ -1078,9 +1078,9 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     // 根据统一社会信用代码判断是否已存在
     let existing = null;
     if (enterpriseData.unified_credit_code && enterpriseData.unified_credit_code.trim() !== '') {
-      // 如果有统一信用代码，根据统一信用代码查找
+      // 如果有统一信用代码，根据统一信用代码查找（同时查询退出状态）
       const existingRecords = await db.query(
-        `SELECT id, project_number FROM invested_enterprises 
+        `SELECT id, project_number, exit_status FROM invested_enterprises 
          WHERE unified_credit_code = ? 
          AND delete_mark = 0
          LIMIT 1`,
@@ -1092,6 +1092,12 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     }
 
     if (existing) {
+      // 如果现有记录的退出状态为"不再观察"，则跳过更新，保护用户手动设置的状态
+      if (existing.exit_status === '不再观察') {
+        console.log(`跳过更新企业（退出状态为"不再观察"）：统一信用代码 ${enterpriseData.unified_credit_code}，企业全称 ${enterpriseData.enterprise_full_name}`);
+        continue; // 跳过这条数据，不进行更新
+      }
+      
       // 统一信用代码一致，更新项目简称、被投企业全称、企业公众号ID、企业官网和退出状态
       await db.execute(
         `UPDATE invested_enterprises 

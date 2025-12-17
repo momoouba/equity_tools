@@ -386,11 +386,11 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     console.log(`- 说明: 获取前一天0点到今天0点之间发布的新闻`);
   }
 
-  // 查询invested_enterprises表中退出状态不为"完全退出"和"已上市"的数据
+  // 查询invested_enterprises表中退出状态不为"完全退出"、"已上市"和"不再观察"的数据
   const enterprises = await db.query(
     `SELECT DISTINCT wechat_official_account_id 
      FROM invested_enterprises 
-     WHERE exit_status NOT IN ('完全退出', '已上市')
+     WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
      AND wechat_official_account_id IS NOT NULL 
      AND wechat_official_account_id != ''
      AND delete_mark = 0`
@@ -541,16 +541,26 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
             const sourceUrl = article.url || article.sourceUrl || '';
             if (!sourceUrl) continue; // 跳过没有链接的文章
 
+            // 检查是否已存在（包括已删除的记录）
+            // 如果用户手动删除了某条新闻（delete_mark = 1），不应该重新插入
             const existing = await db.query(
-              'SELECT id FROM news_detail WHERE source_url = ? AND delete_mark = 0',
+              'SELECT id, delete_mark FROM news_detail WHERE source_url = ?',
               [sourceUrl]
             );
 
-            if (existing.length === 0) {
-              // 将关键词数组转换为JSON字符串
-              const keywordsJson = article.keywords && Array.isArray(article.keywords) 
-                ? JSON.stringify(article.keywords) 
-                : null;
+            // 如果已存在且未被删除，跳过（避免重复）
+            // 如果已存在但已删除（delete_mark = 1），也跳过（保护用户手动删除的记录）
+            if (existing.length > 0) {
+              if (existing[0].delete_mark === 1) {
+                console.log(`[入库] 跳过已删除的新闻（用户手动删除）: ${sourceUrl}`);
+              }
+              continue; // 跳过已存在的记录（无论是否已删除）
+            }
+
+            // 只有不存在时才插入新数据
+            // 注意：新榜接口的关键词不直接使用，而是通过AI分析生成
+              // 这里将keywords设为null，等待后续AI分析填充
+              // 与企查查接口保持一致的处理方式
 
               // 格式化发布时间
               let publicTime = null;
@@ -584,7 +594,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?)
-                   AND exit_status NOT IN ('完全退出', '已上市')
+                   AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                    AND delete_mark = 0 
                    LIMIT 1`,
                   [
@@ -627,7 +637,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   article.summary || '',
                   publicTime,
                   article.content || '',
-                  keywordsJson,
+                  null, // keywords - 设为null，等待后续AI分析生成（不使用接口返回的原始关键词）
                   null, // news_abstract - 暂时为空，后续可通过AI分析填充
                   'neutral', // news_sentiment - 默认为中性，后续可通过情感分析填充
                   '新榜' // APItype - 新榜接口
@@ -635,7 +645,6 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
               );
               totalSynced++;
               accountInsertCount++;
-            }
           }
 
           // 如果返回的数据少于20条，说明没有更多数据了
@@ -3200,7 +3209,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name
        FROM invested_enterprises 
-       WHERE exit_status NOT IN ('完全退出', '已上市')
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL 
        AND unified_credit_code != ''
@@ -3401,24 +3410,33 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                   }
                   
                   // 检查是否已存在（根据source_url、title、public_time组合去重）
+                  // 如果用户手动删除了某条新闻（delete_mark = 1），不应该重新插入
                   let existing = [];
                   if (sourceUrl) {
-                    // 优先使用source_url去重
+                    // 优先使用source_url去重（包括已删除的记录）
                     existing = await db.query(
-                      'SELECT id FROM news_detail WHERE source_url = ? AND delete_mark = 0 LIMIT 1',
+                      'SELECT id, delete_mark FROM news_detail WHERE source_url = ? LIMIT 1',
                       [sourceUrl]
                     );
                   } else if (title && publicTime) {
-                    // 如果没有source_url，使用title和public_time组合去重
+                    // 如果没有source_url，使用title和public_time组合去重（包括已删除的记录）
                     existing = await db.query(
-                      'SELECT id FROM news_detail WHERE title = ? AND public_time = ? AND delete_mark = 0 LIMIT 1',
+                      'SELECT id, delete_mark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
                       [title, publicTime]
                     );
                   }
 
-                  if (existing.length === 0) {
-                    // 使用系统自动生成的ID，不再使用企查查返回的NewsId（可能过长）
-                    const newsId = await generateId('news_detail');
+                  // 如果已存在，无论是否已删除，都跳过（保护用户手动删除的记录）
+                  if (existing.length > 0) {
+                    if (existing[0].delete_mark === 1) {
+                      console.log(`[入库] 跳过已删除的企查查新闻（用户手动删除）: ${sourceUrl || title}`);
+                    }
+                    continue; // 跳过已存在的记录（无论是否已删除）
+                  }
+
+                  // 只有不存在时才插入新数据
+                  // 使用系统自动生成的ID，不再使用企查查返回的NewsId（可能过长）
+                  const newsId = await generateId('news_detail');
                     // 转换情感类型
                     let newsSentiment = 'neutral'; // 默认中性
                     const emotionTypeValue = newsItem.EmotionType || '';
@@ -3438,7 +3456,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       `SELECT enterprise_full_name 
                        FROM invested_enterprises 
                        WHERE unified_credit_code = ? 
-                       AND exit_status NOT IN ('完全退出', '已上市')
+                       AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                        AND delete_mark = 0 
                        LIMIT 1`,
                       [creditCode]
@@ -3530,7 +3548,6 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
                     totalSynced++;
                     enterpriseInsertCount++;
-                  }
                 } catch (insertError) {
                   const newsTitle = newsItem.Title || newsItem.Url || '未知标题';
                   console.error(`插入新闻数据失败 (${newsTitle}):`, insertError.message);

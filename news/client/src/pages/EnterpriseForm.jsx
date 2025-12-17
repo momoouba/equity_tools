@@ -314,6 +314,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
               <option value="部分退出">部分退出</option>
               <option value="完全退出">完全退出</option>
               <option value="继续观察">继续观察</option>
+              <option value="不再观察">不再观察</option>
               <option value="已上市">已上市</option>
             </select>
           </div>
