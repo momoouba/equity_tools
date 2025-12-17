@@ -140,3 +140,4 @@ echo "  2. 查看应用日志（实时）: sudo docker compose logs app -f"
 echo "  3. 测试功能是否正常"
 echo ""
 
+
