@@ -3490,14 +3490,28 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       }
                     }
 
-                    // 检查content是否为空，如果为空则通过AI抓取网页内容
+                    // 检查content是否为空，如果为空则从链接提取正文内容
                     // 注意：企查查接口数据，需要在正文内容入库后，再基于正文内容做摘要、关键词、情感的分析
                     // 所以在同步时，只提取正文，不提取摘要，摘要将在后续的AI分析中生成
                     let finalContent = newsItem.Content || '';
                     
                     if (!finalContent && newsItem.Url) {
                       try {
-                        console.log(`[企查查同步] 检测到content为空，开始通过AI抓取网页内容: ${newsItem.Url}`);
+                        console.log(`[企查查同步] 检测到content为空，开始从链接提取正文内容: ${newsItem.Url}`);
+                        
+                        // 优先使用 extractArticleContent 方法（查找 news-detail 或 article-content 标记）
+                        const newsAnalysis = require('../utils/newsAnalysis');
+                        
+                        // 先尝试使用 fetchContentFromUrl 方法（会使用 extractArticleContent 查找标记）
+                        let extractedContent = await newsAnalysis.fetchContentFromUrl(newsItem.Url);
+                        
+                        if (extractedContent && extractedContent.trim().length > 50) {
+                          finalContent = extractedContent;
+                          console.log(`[企查查同步] ✓ 使用extractArticleContent方法成功提取正文，长度: ${finalContent.length} 字符`);
+                          console.log(`[企查查同步] 注意：摘要、关键词、情感分析将在后续的AI分析中基于正文内容生成`);
+                        } else {
+                          // 如果 extractArticleContent 提取失败，使用 AI 提取作为备用方案
+                          console.log(`[企查查同步] extractArticleContent提取失败或内容太短，尝试使用AI提取作为备用方案`);
                         const WebContentExtractor = require('../utils/webContentExtractor');
                         const extractor = new WebContentExtractor();
                         
@@ -3506,17 +3520,18 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                           newsItem.Title || ''
                         );
                         
-                        if (extractedResult.content) {
+                          if (extractedResult.content && extractedResult.content.trim().length > 50) {
                           finalContent = extractedResult.content;
-                          console.log(`[企查查同步] 成功提取正文，长度: ${finalContent.length} 字符`);
+                            console.log(`[企查查同步] ✓ 使用AI提取成功提取正文，长度: ${finalContent.length} 字符`);
                           console.log(`[企查查同步] 注意：摘要、关键词、情感分析将在后续的AI分析中基于正文内容生成`);
                         } else {
-                          console.warn(`[企查查同步] AI提取正文为空: ${newsItem.Url}`);
+                            console.warn(`[企查查同步] AI提取正文为空或太短: ${newsItem.Url}`);
+                          }
                         }
                         
                         // 不提取摘要，摘要将在后续的AI分析中基于正文内容生成
                       } catch (extractError) {
-                        console.error(`[企查查同步] AI提取网页内容失败 (${newsItem.Url}):`, extractError.message);
+                        console.error(`[企查查同步] 提取网页内容失败 (${newsItem.Url}):`, extractError.message);
                         // 提取失败不影响数据插入，继续使用空的content
                       }
                     }

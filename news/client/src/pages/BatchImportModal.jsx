@@ -110,7 +110,7 @@ function BatchImportModal({ onClose, onSuccess }) {
             <button className="btn-primary" onClick={handleDownloadTemplate}>
               下载模板
             </button>
-            <p className="template-tip">模板包含以下字段：项目简称、被投企业全称、统一信用代码、企业公众号id、企业官网、退出状态（未退出/部分退出/完全退出/继续观察）。</p>
+            <p className="template-tip">模板包含以下字段：项目简称、被投企业全称、统一信用代码、企业公众号id、企业官网、退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）。</p>
           </section>
 
           <section className="upload-section">

@@ -30,7 +30,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
         unified_credit_code: enterprise.unified_credit_code || '',
         wechat_official_account_id: enterprise.wechat_official_account_id || '',
         official_website: enterprise.official_website || '',
-        exit_status: enterprise.exit_status || '未退出'
+        exit_status: enterprise.exit_status !== undefined && enterprise.exit_status !== null ? enterprise.exit_status : '未退出'
       })
       setProjectNumber(enterprise.project_number)
     } else {

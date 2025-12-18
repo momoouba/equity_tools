@@ -1113,6 +1113,444 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
     });
   }
 });
+// 检查并重新分析新榜接口新闻中摘要或关键词为空的情况
+router.post('/reanalyze-xinbang-missing', checkAdminPermission, async (req, res) => {
+  try {
+    const { startDate, endDate, limit = 100 } = req.body;
+
+    console.log(`\n========== 开始检查并重新分析新榜接口新闻（摘要或关键词为空） ==========`);
+    console.log(`时间范围: ${startDate || '全部'} 至 ${endDate || '全部'}`);
+    console.log(`限制数量: ${limit}`);
+
+    // 构建查询条件：新榜接口，有正文但缺少摘要或关键词，且内容不是乱码
+    let condition = `WHERE APItype = '新榜'
+                     AND (news_abstract IS NULL OR news_abstract = '' OR keywords IS NULL OR keywords = '' OR keywords = '[]')
+                     AND content IS NOT NULL
+                     AND content != ''
+                     AND LENGTH(content) > 20
+                     AND delete_mark = 0`;
+    const params = [];
+
+    if (startDate) {
+      condition += ' AND created_at >= ?';
+      params.push(startDate);
+    }
+
+    if (endDate) {
+      condition += ' AND created_at <= ?';
+      params.push(endDate);
+    }
+
+    // 查询需要分析的新闻
+    const newsToAnalyze = await db.query(
+      `SELECT id, title, content, source_url, enterprise_full_name,
+              wechat_account, account_name, APItype, news_abstract, keywords
+       FROM news_detail
+       ${condition}
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [...params, limit]
+    );
+
+    console.log(`找到 ${newsToAnalyze.length} 条需要重新分析的新榜新闻`);
+
+    if (newsToAnalyze.length === 0) {
+      return res.json({
+        success: true,
+        message: '没有需要重新分析的新榜新闻',
+        data: {
+          total: 0,
+          processed: 0,
+          successCount: 0,
+          errorCount: 0
+        }
+      });
+    }
+
+    // 过滤掉乱码内容
+    const validNews = [];
+    for (const news of newsToAnalyze) {
+      // 检查内容是否是乱码（使用 newsAnalysis 实例的方法）
+      try {
+        // newsAnalysis 是一个实例，直接调用方法
+        if (news.content && typeof newsAnalysis.isContentContaminated === 'function' && newsAnalysis.isContentContaminated(news.content)) {
+          console.log(`跳过乱码内容: ${news.id} - ${news.title.substring(0, 50)}`);
+          continue;
+        }
+      } catch (error) {
+        console.warn(`检查乱码内容时出错: ${error.message}，继续处理该新闻`);
+      }
+      validNews.push(news);
+    }
+
+    console.log(`过滤后有效新闻数量: ${validNews.length} 条`);
+
+    if (validNews.length === 0) {
+      return res.json({
+        success: true,
+        message: '所有新闻都是乱码内容，无需分析',
+        data: {
+          total: newsToAnalyze.length,
+          processed: 0,
+          successCount: 0,
+          errorCount: 0
+        }
+      });
+    }
+
+    // 生成任务ID
+    const taskId = `xinbang-missing-${Date.now()}`;
+
+    // 立即返回响应
+    res.json({
+      success: true,
+      message: '开始重新分析',
+      taskId: taskId,
+      data: {
+        total: validNews.length,
+        processed: 0,
+        successCount: 0,
+        errorCount: 0
+      }
+    });
+
+    // 初始化进度状态
+    global.analysisProgress = global.analysisProgress || {};
+    global.analysisProgress[taskId] = {
+      total: validNews.length,
+      processed: 0,
+      successCount: 0,
+      errorCount: 0,
+      status: 'processing',
+      startTime: new Date(),
+      currentItem: null,
+      results: []
+    };
+
+    // 异步处理分析任务
+    setImmediate(async () => {
+      let successCount = 0;
+      let errorCount = 0;
+      const results = [];
+
+      console.log(`开始异步处理 ${validNews.length} 条新榜新闻的AI分析...`);
+
+      for (let i = 0; i < validNews.length; i++) {
+        const news = validNews[i];
+
+        try {
+          console.log(`\n========== 开始重新分析新榜新闻 (${i + 1}/${validNews.length}) ==========`);
+          console.log(`新闻ID: ${news.id}`);
+          console.log(`新闻标题: ${news.title}`);
+          console.log(`当前摘要: "${news.news_abstract || '(空)'}"`);
+          console.log(`当前关键词: "${news.keywords || '(空)'}"`);
+          console.log(`内容长度: ${(news.content || '').length}字符`);
+
+          // 更新进度状态
+          global.analysisProgress[taskId] = {
+            ...global.analysisProgress[taskId],
+            processed: i,
+            currentItem: {
+              id: news.id,
+              title: news.title
+            }
+          };
+
+          // 确保内容不为空
+          if (!news.content || news.content.trim().length === 0) {
+            console.log(`⚠️ 新闻内容为空，跳过`);
+            errorCount++;
+            results.push({
+              id: news.id,
+              title: news.title,
+              status: 'skipped',
+              message: '内容为空'
+            });
+            continue;
+          }
+
+          // 根据是否有企业关联选择处理方法
+          let result;
+          if (news.enterprise_full_name) {
+            console.log(`使用processNewsWithEnterprise处理（有企业关联）`);
+            result = await newsAnalysis.processNewsWithEnterprise(news);
+          } else {
+            console.log(`使用processNewsWithoutEnterprise处理（无企业关联）`);
+            result = await newsAnalysis.processNewsWithoutEnterprise(news);
+          }
+
+          if (result) {
+            // 验证最终结果
+            const finalNews = await db.query(
+              'SELECT id, title, news_abstract, keywords FROM news_detail WHERE id = ?',
+              [news.id]
+            );
+            
+            if (finalNews.length > 0) {
+              const hasAbstract = finalNews[0].news_abstract && finalNews[0].news_abstract.trim().length > 0;
+              const hasKeywords = finalNews[0].keywords && finalNews[0].keywords !== '[]' && finalNews[0].keywords.trim().length > 0;
+              
+              if (hasAbstract && hasKeywords) {
+                successCount++;
+                results.push({
+                  id: news.id,
+                  title: news.title,
+                  status: 'success',
+                  message: '摘要和关键词已生成'
+                });
+                console.log(`✓ 分析成功: ${news.id}，摘要和关键词已生成`);
+              } else {
+                errorCount++;
+                results.push({
+                  id: news.id,
+                  title: news.title,
+                  status: 'partial',
+                  message: `摘要: ${hasAbstract ? '有' : '无'}, 关键词: ${hasKeywords ? '有' : '无'}`
+                });
+                console.log(`⚠️ 分析部分成功: ${news.id}，摘要: ${hasAbstract ? '有' : '无'}, 关键词: ${hasKeywords ? '有' : '无'}`);
+              }
+            } else {
+              errorCount++;
+              results.push({
+                id: news.id,
+                title: news.title,
+                status: 'error',
+                message: '无法验证结果'
+              });
+              console.log(`✗ 分析失败: ${news.id}，无法验证结果`);
+            }
+          } else {
+            errorCount++;
+            results.push({
+              id: news.id,
+              title: news.title,
+              status: 'error',
+              message: '分析失败'
+            });
+            console.log(`✗ 分析失败: ${news.id}`);
+          }
+        } catch (error) {
+          errorCount++;
+          console.error(`分析新闻 ${news.id} 时出错:`, error);
+          results.push({
+            id: news.id,
+            title: news.title,
+            status: 'error',
+            message: error.message
+          });
+        }
+
+        // 更新进度
+        global.analysisProgress[taskId] = {
+          ...global.analysisProgress[taskId],
+          processed: i + 1,
+          successCount,
+          errorCount,
+          results: results.slice(-20) // 只保留最后20条结果
+        };
+
+        // 添加延迟避免API频率限制
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // 完成
+      global.analysisProgress[taskId] = {
+        ...global.analysisProgress[taskId],
+        status: 'completed',
+        processed: validNews.length,
+        successCount,
+        errorCount
+      };
+
+      console.log(`\n========== 批量重新分析完成 ==========`);
+      console.log(`总计: ${validNews.length} 条`);
+      console.log(`成功: ${successCount} 条`);
+      console.log(`失败: ${errorCount} 条`);
+    });
+
+  } catch (error) {
+    console.error('批量重新分析失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '分析失败: ' + error.message
+    });
+  }
+});
+
+// 诊断工具：测试特定URL的正文提取
+router.post('/diagnose-extraction', checkAdminPermission, async (req, res) => {
+  try {
+    const { url } = req.body;
+    
+    if (!url) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供URL参数'
+      });
+    }
+    
+    console.log(`[诊断工具] 开始测试URL: ${url}`);
+    
+    const newsAnalysis = require('../utils/newsAnalysis');
+    const axios = require('axios');
+    
+    // 1. 获取原始HTML
+    let html = null;
+    try {
+      const response = await axios.get(url, {
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+      
+      if (response.status === 200 && response.data) {
+        html = typeof response.data === 'string' ? response.data : JSON.stringify(response.data);
+        console.log(`[诊断工具] ✓ 成功获取HTML，长度: ${html.length}字符`);
+      } else {
+        return res.status(500).json({
+          success: false,
+          message: `HTTP状态码: ${response.status}`,
+          data: { step: 'fetch_html', status: response.status }
+        });
+      }
+    } catch (error) {
+      console.error(`[诊断工具] 获取HTML失败:`, error.message);
+      return res.status(500).json({
+        success: false,
+        message: `获取HTML失败: ${error.message}`,
+        data: { step: 'fetch_html', error: error.message }
+      });
+    }
+    
+    // 2. 检查HTML结构
+    const hasArticleTag = /<article[^>]*>/i.test(html);
+    const hasMainNews = /main-news/i.test(html);
+    const hasArticleWithHtml = /article-with-html/i.test(html);
+    
+    // 查找所有article标签
+    const articleTags = [];
+    const articleTagRegex = /<article[^>]*>/gi;
+    let articleMatch;
+    while ((articleMatch = articleTagRegex.exec(html)) !== null) {
+      const tag = articleMatch[0];
+      const classMatch = tag.match(/class\s*=\s*["']([^"']*)["']/i);
+      articleTags.push({
+        tag: tag.substring(0, 200),
+        class: classMatch ? classMatch[1] : null
+      });
+    }
+    
+    // 3. 提取正文内容
+    let extractedContent = null;
+    let extractionLogs = [];
+    
+    // 捕获console.log输出
+    const originalLog = console.log;
+    const logs = [];
+    console.log = (...args) => {
+      const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+      if (message.includes('extractArticleContent') || message.includes('fetchContentFromUrl') || message.includes('findArticleContent')) {
+        logs.push(message);
+      }
+      originalLog.apply(console, args);
+    };
+    
+    try {
+      extractedContent = await newsAnalysis.fetchContentFromUrl(url);
+      extractionLogs = logs;
+    } catch (error) {
+      console.error(`[诊断工具] 提取正文失败:`, error.message);
+      extractionLogs = logs;
+      extractionLogs.push(`错误: ${error.message}`);
+    } finally {
+      console.log = originalLog;
+    }
+    
+    // 4. 如果提取失败，尝试直接调用extractArticleContent
+    let directExtraction = null;
+    if (!extractedContent || extractedContent.length < 50) {
+      try {
+        directExtraction = newsAnalysis.extractArticleContent(html);
+        if (directExtraction) {
+          const textOnly = directExtraction.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          directExtraction = {
+            html: directExtraction.substring(0, 5000), // 增加到5000字符以便查看完整内容
+            text: textOnly.substring(0, 5000),
+            textLength: textOnly.length
+          };
+        }
+      } catch (error) {
+        console.error(`[诊断工具] 直接提取失败:`, error.message);
+      }
+    }
+    
+    // 5. 查找包含main-news的article标签的完整内容（用于调试）
+    let mainNewsArticleSample = null;
+    if (hasMainNews) {
+      const mainNewsMatch = html.match(/<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]{0,2000})/i);
+      if (mainNewsMatch) {
+        mainNewsArticleSample = {
+          tag: mainNewsMatch[0].substring(0, 500),
+          contentPreview: mainNewsMatch[1] ? mainNewsMatch[1].substring(0, 500) : null
+        };
+      }
+    }
+    
+    // 6. 生成建议
+    const recommendations = [];
+    if (!hasArticleTag) {
+      recommendations.push('HTML中未找到article标签，可能需要使用其他选择器');
+    }
+    if (hasMainNews && (!extractedContent || extractedContent.length < 50)) {
+      recommendations.push('HTML中包含main-news但未提取成功，可能需要调整正则表达式');
+    }
+    if (extractedContent && extractedContent.length < 50) {
+      recommendations.push('提取的内容太短，可能匹配到了错误的标签或内容被截断');
+    }
+    if (articleTags.length > 1) {
+      recommendations.push(`找到${articleTags.length}个article标签，需要确保匹配到正确的标签`);
+    }
+    if (!hasMainNews && !hasArticleWithHtml) {
+      recommendations.push('HTML中未找到main-news或article-with-html类，可能需要检查HTML结构是否变化');
+    }
+    
+    // 7. 返回诊断结果
+    res.json({
+      success: true,
+      message: '诊断完成',
+      data: {
+        url,
+        htmlInfo: {
+          length: html.length,
+          hasArticleTag,
+          hasMainNews,
+          hasArticleWithHtml,
+          articleTagsCount: articleTags.length,
+          articleTags: articleTags.slice(0, 10) // 只返回前10个
+        },
+        extraction: {
+          success: !!(extractedContent && extractedContent.length >= 50),
+          contentLength: extractedContent ? extractedContent.length : 0,
+          contentPreview: extractedContent ? extractedContent.substring(0, 2000) : null, // 增加到2000字符
+          contentFull: extractedContent ? extractedContent : null, // 添加完整内容
+          logs: extractionLogs
+        },
+        directExtraction: directExtraction,
+        mainNewsArticleSample: mainNewsArticleSample,
+        recommendations: recommendations
+      }
+    });
+    
+  } catch (error) {
+    console.error('[诊断工具] 诊断失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '诊断失败: ' + error.message,
+      error: error.stack
+    });
+  }
+});
 
 // 确保导出的是路由对象
 if (!router || typeof router.use !== 'function') {
@@ -1121,3 +1559,4 @@ if (!router || typeof router.use !== 'function') {
 }
 
 module.exports = router;
+

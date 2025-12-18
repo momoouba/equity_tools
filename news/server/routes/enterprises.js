@@ -10,7 +10,7 @@ const { queryExternal, getExternalPool, createExternalPool } = require('../utils
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
-const TEMPLATE_HEADERS = ['项目简称', '被投企业全称', '统一信用代码', '企业公众号id', '企业官网', '退出状态（未退出/部分退出/完全退出/继续观察/已上市）'];
+const TEMPLATE_HEADERS = ['项目简称', '被投企业全称', '统一信用代码', '企业公众号id', '企业官网', '退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）'];
 
 /**
  * 合并微信公众号ID

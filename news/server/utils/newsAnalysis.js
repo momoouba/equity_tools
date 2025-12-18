@@ -48,11 +48,20 @@ class NewsAnalysis {
       }
 
       // 智能提取正文内容
+      console.log(`[fetchContentFromUrl] 开始提取正文内容，HTML长度: ${html.length}字符`);
+      // 检查HTML中是否包含article标签（用于调试）
+      const hasArticleTag = /<article[^>]*>/i.test(html);
+      const hasMainNews = /main-news/i.test(html);
+      const hasArticleWithHtml = /article-with-html/i.test(html);
+      console.log(`[fetchContentFromUrl] HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}`);
+      
       let text = this.extractArticleContent(html);
+      console.log(`[fetchContentFromUrl] 提取完成，文本长度: ${text.length}字符`);
 
       // 如果提取的文本太短（少于50个字符），可能提取失败
       if (text.length < 50) {
         console.warn(`[fetchContentFromUrl] 提取的文本内容太短（${text.length}字符），可能提取失败, URL: ${url}`);
+        console.warn(`[fetchContentFromUrl] 如果HTML中包含article标签但提取失败，可能是匹配规则需要调整`);
         // 尝试提取前5000个字符作为备用
         const fallbackText = html.substring(0, 5000)
           .replace(/<[^>]+>/g, ' ')
@@ -89,48 +98,528 @@ class NewsAnalysis {
    * 从HTML中智能提取正文内容
    */
   extractArticleContent(html) {
-    // 第一步：移除script、style、noscript等标签及其内容
+    // 第一步：先提取article标签，避免在清理过程中被截断
+    // 使用智能匹配函数查找完整的article标签（处理嵌套和script标签中的</article>）
+    const findCompleteArticle = (html) => {
+      // 查找所有包含main-news的article开始标签
+      const articleStartRegex = /<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>/gi;
+      const matches = [];
+      let match;
+      
+      while ((match = articleStartRegex.exec(html)) !== null) {
+        const startPos = match.index;
+        const tagEnd = match.index + match[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套和script标签）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          // 查找下一个<article或</article>
+          const nextOpen = html.indexOf('<article', pos);
+          const nextClose = html.indexOf('</article>', pos);
+          
+          if (nextClose === -1) {
+            // 没有找到结束标签，使用HTML末尾
+            endPos = html.length;
+            break;
+          }
+          
+          // 检查在</article>之前是否有<script>标签，如果有，跳过script标签内的</article>
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<article是否在script标签内
+            const scriptBeforeArticle = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterArticle = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeArticle !== -1 && scriptAfterArticle !== -1 && scriptAfterArticle > nextOpen) {
+              // 这个<article在script标签内，跳过
+              pos = scriptAfterArticle + 9;
+              continue;
+            }
+            
+            // 找到嵌套的article标签
+            depth++;
+            pos = nextOpen + 8;
+          } else {
+            // 检查这个</article>是否在script标签内
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              // 这个</article>在script标签内，跳过
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            
+            // 找到结束标签
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 11;
+          }
+        }
+        
+        if (endPos !== -1) {
+          const content = html.substring(tagEnd, endPos);
+          const textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          console.log(`[findCompleteArticle] 找到article内容，位置: ${tagEnd}-${endPos}, 文本长度: ${textOnly.length}字符`);
+          
+          // 检查内容是否包含不应该出现的标签（如footer、body、html等）
+          const hasInvalidTags = /<\/?(?:footer|body|html|head)[\s>]/i.test(content);
+          if (hasInvalidTags) {
+            console.log(`[findCompleteArticle] ⚠️ 内容包含无效标签（footer/body/html/head），可能匹配到了错误的结束标签`);
+            console.log(`[findCompleteArticle] 内容预览（后200字符）: ...${content.substring(Math.max(0, content.length - 200))}`);
+            
+            // 尝试查找更早的</article>标签
+            let searchPos = tagEnd;
+            let foundValidEnd = false;
+            while (searchPos < endPos) {
+              const earlierClose = html.indexOf('</article>', searchPos);
+              if (earlierClose === -1 || earlierClose >= endPos) break;
+              
+              const earlierContent = html.substring(tagEnd, earlierClose);
+              const earlierText = earlierContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              const earlierHasInvalidTags = /<\/?(?:footer|body|html|head)[\s>]/i.test(earlierContent);
+              
+              console.log(`[findCompleteArticle] 检查更早的结束标签，位置: ${tagEnd}-${earlierClose}, 文本长度: ${earlierText.length}字符, 包含无效标签: ${earlierHasInvalidTags}`);
+              
+              if (!earlierHasInvalidTags && earlierText.length >= textOnly.length * 0.5) {
+                // 找到不包含无效标签的结束位置
+                console.log(`[findCompleteArticle] ✓ 找到有效的结束标签，位置: ${tagEnd}-${earlierClose}, 文本长度: ${earlierText.length}字符`);
+                matches.push({
+                  content: earlierContent,
+                  textLength: earlierText.length,
+                  startPos: startPos,
+                  endPos: earlierClose
+                });
+                foundValidEnd = true;
+                break;
+              }
+              
+              searchPos = earlierClose + 11;
+            }
+            
+            if (!foundValidEnd) {
+              console.log(`[findCompleteArticle] ⚠️ 未找到有效的结束标签，使用原始匹配`);
+              matches.push({
+                content: content,
+                textLength: textOnly.length,
+                startPos: startPos,
+                endPos: endPos
+              });
+            }
+          } else {
+            // 内容不包含无效标签，直接使用
+            matches.push({
+              content: content,
+              textLength: textOnly.length,
+              startPos: startPos,
+              endPos: endPos
+            });
+          }
+        }
+      }
+      
+      // 返回内容最长的匹配
+      if (matches.length > 0) {
+        matches.sort((a, b) => b.textLength - a.textLength);
+        return matches[0].content;
+      }
+      return null;
+    };
+    
+    // 先尝试从原始HTML中提取完整的article标签
+    const extractedArticleContent = findCompleteArticle(html);
+    if (extractedArticleContent) {
+      const articleText = extractedArticleContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      console.log(`[extractArticleContent] ✓ 从原始HTML中提取到article标签内容，长度: ${articleText.length}字符`);
+      
+      // 如果内容足够长（>500字符），直接使用并返回
+      if (articleText.length > 500) {
+        console.log(`[extractArticleContent] ✓ 使用原始HTML中的article标签内容，长度: ${articleText.length}字符`);
+        // 清理article内容中的script、style等标签
+        let cleanedContent = extractedArticleContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        // 清理后的内容就是最终结果，直接返回
+        const finalText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        console.log(`[extractArticleContent] ✓ 清理后最终内容长度: ${finalText.length}字符`);
+        console.log(`[extractArticleContent] ✓ 清理后HTML内容长度: ${cleanedContent.length}字符`);
+        // 记录清理后内容的预览（前500字符和后500字符）
+        const previewStart = cleanedContent.substring(0, 500);
+        const previewEnd = cleanedContent.substring(Math.max(0, cleanedContent.length - 500));
+        console.log(`[extractArticleContent] ✓ 清理后内容预览（前500字符）: ${previewStart}...`);
+        console.log(`[extractArticleContent] ✓ 清理后内容预览（后500字符）: ...${previewEnd}`);
+        return cleanedContent;
+      }
+    }
+    
+    // 第二步：移除script、style、noscript等标签及其内容（如果还没有提取article标签）
+    const originalHtmlLength = html.length;
     let cleanedHtml = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
       .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
       .replace(/<!--[\s\S]*?-->/g, '');
+    
+    console.log(`[extractArticleContent] HTML清理: 原始长度=${originalHtmlLength}字符，清理后长度=${cleanedHtml.length}字符`);
+    
+    // 检查清理后的HTML中是否包含完整的article标签
+    // 注意：使用非贪婪匹配可能匹配到错误的结束标签，需要检查
+    const articleTagMatch = cleanedHtml.match(/<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i);
+    if (articleTagMatch) {
+      const articleContent = articleTagMatch[1];
+      const articleText = articleContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      console.log(`[extractArticleContent] 清理后HTML中article标签内容长度: ${articleText.length}字符`);
+      console.log(`[extractArticleContent] 清理后HTML中article标签HTML长度: ${articleContent.length}字符`);
+      // 检查是否有多个</article>标签
+      const allArticleEnds = cleanedHtml.match(/<\/article>/gi);
+      if (allArticleEnds) {
+        console.log(`[extractArticleContent] 清理后HTML中找到 ${allArticleEnds.length} 个</article>标签`);
+      }
+      
+      // 如果内容太短（少于800字符），可能是匹配到了错误的结束标签
+      if (articleText.length < 800) {
+        console.log(`[extractArticleContent] ⚠️ 清理后HTML中article标签内容较短（${articleText.length}字符），可能匹配到了错误的结束标签`);
+        // 尝试查找所有匹配main-news的article标签
+        const allMainNewsArticles = cleanedHtml.match(/<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/gi);
+        if (allMainNewsArticles && allMainNewsArticles.length > 1) {
+          console.log(`[extractArticleContent] 找到 ${allMainNewsArticles.length} 个main-news article标签，可能需要使用更长的匹配`);
+        }
+      }
+    } else {
+      console.log(`[extractArticleContent] ⚠️ 清理后HTML中未找到完整的article标签`);
+    }
+
+    // 辅助函数：智能匹配article标签（处理嵌套和重复）
+    const findArticleContent = (html, classPattern) => {
+      console.log(`[findArticleContent] 开始智能匹配，pattern: ${classPattern}`);
+      console.log(`[findArticleContent] HTML长度: ${html.length}字符`);
+      
+      // 查找所有匹配class的article开始标签
+      // 注意：classPattern可能包含转义字符，需要正确处理
+      // 例如：\\bmain-news\\b[^"\']*\\barticle-with-html\\b 应该匹配 "main-news article-with-html"
+      const escapedPattern = classPattern.replace(/\\b/g, '\\b'); // 确保单词边界正确
+      const startTagRegex = new RegExp(`<article[^>]*class\\s*=\\s*["'][^"']*${escapedPattern}[^"']*["'][^>]*>`, 'gi');
+      console.log(`[findArticleContent] 使用的正则表达式: ${startTagRegex.source}`);
+      let match;
+      const candidates = [];
+      let matchCount = 0;
+      
+      while ((match = startTagRegex.exec(html)) !== null) {
+        matchCount++;
+        console.log(`[findArticleContent] 找到第 ${matchCount} 个匹配的article开始标签，位置: ${match.index}`);
+        const startPos = match.index;
+        const tagEnd = match.index + match[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        // 查找所有article开始和结束标签的位置
+        // 注意：要从tagEnd开始查找，因为当前article标签的开始位置是startPos
+        const articleStarts = [];
+        const articleEnds = [];
+        let searchPos = tagEnd; // 从当前article标签的结束位置开始查找
+        
+        // 先查找当前article标签之后的所有标签
+        while (searchPos < html.length) {
+          const nextOpen = html.indexOf('<article', searchPos);
+          const nextClose = html.indexOf('</article>', searchPos);
+          
+          if (nextOpen === -1 && nextClose === -1) break;
+          
+          if (nextOpen !== -1 && (nextClose === -1 || nextOpen < nextClose)) {
+            articleStarts.push(nextOpen);
+            searchPos = nextOpen + 8;
+          } else if (nextClose !== -1) {
+            articleEnds.push(nextClose);
+            searchPos = nextClose + 11;
+          }
+        }
+        
+        console.log(`[findArticleContent] 找到 ${articleStarts.length} 个后续article开始标签，${articleEnds.length} 个结束标签`);
+        console.log(`[findArticleContent] 当前article开始位置: ${startPos}, 标签结束位置: ${tagEnd}, HTML总长度: ${html.length}`);
+        
+        // 如果没有找到结束标签，说明article标签可能没有正确关闭，尝试查找到HTML末尾
+        if (articleEnds.length === 0) {
+          console.log(`[findArticleContent] ⚠️ 未找到任何结束标签，尝试查找HTML中所有的</article>标签`);
+          // 在整个HTML中查找所有</article>标签
+          let allEnds = [];
+          let searchAllPos = 0;
+          while ((searchAllPos = html.indexOf('</article>', searchAllPos)) !== -1) {
+            allEnds.push(searchAllPos);
+            searchAllPos += 11;
+          }
+          console.log(`[findArticleContent] HTML中总共找到 ${allEnds.length} 个</article>标签`);
+          if (allEnds.length > 0) {
+            // 找到第一个在当前article标签之后的结束标签
+            const firstEndAfterTag = allEnds.find(pos => pos > tagEnd);
+            if (firstEndAfterTag) {
+              articleEnds.push(firstEndAfterTag);
+              console.log(`[findArticleContent] 找到当前article标签后的第一个结束标签，位置: ${firstEndAfterTag}`);
+            } else {
+              // 如果没有找到，使用最后一个结束标签
+              articleEnds.push(allEnds[allEnds.length - 1]);
+              console.log(`[findArticleContent] 使用最后一个结束标签，位置: ${allEnds[allEnds.length - 1]}`);
+            }
+          }
+        }
+        
+        // 找到匹配当前开始标签的结束标签（处理嵌套）
+        let currentDepth = 1;
+        let startIdx = 0; // 当前开始标签在articleStarts中的索引（0表示当前标签）
+        let endIdx = -1;
+        
+        for (let i = 0; i < articleEnds.length; i++) {
+          // 检查在这个结束标签之前是否有新的开始标签
+          while (startIdx < articleStarts.length && articleStarts[startIdx] < articleEnds[i]) {
+            if (articleStarts[startIdx] > tagEnd) { // 排除当前开始标签
+              currentDepth++;
+              console.log(`[findArticleContent] 发现嵌套的article标签，depth=${currentDepth}`);
+            }
+            startIdx++;
+          }
+          
+          // 如果depth为1，说明找到了匹配的结束标签
+          if (currentDepth === 1) {
+            endIdx = i;
+            break;
+          }
+          
+          // 遇到结束标签，depth减1
+          currentDepth--;
+        }
+        
+        if (endIdx !== -1) {
+          endPos = articleEnds[endIdx];
+          console.log(`[findArticleContent] 找到匹配的结束标签，位置: ${endPos}`);
+        } else if (articleEnds.length > 0) {
+          // 如果没有找到匹配的结束标签，使用最后一个结束标签
+          endPos = articleEnds[articleEnds.length - 1];
+          console.log(`[findArticleContent] ⚠️ 未找到匹配的结束标签，使用最后一个结束标签位置: ${endPos}`);
+        } else {
+          // 没有找到任何结束标签，使用HTML末尾
+          endPos = html.length;
+          console.log(`[findArticleContent] ⚠️ 未找到任何结束标签，使用HTML末尾: ${endPos}`);
+        }
+        
+        // 验证提取的内容是否完整
+        if (endPos !== -1) {
+          const extractedContent = html.substring(tagEnd, endPos);
+          const extractedText = extractedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          // 检查内容是否以完整的句子结尾（应该以句号、问号或感叹号结尾）
+          const lastChar = extractedText.charAt(extractedText.length - 1);
+          if (!['。', '！', '？', '.', '!', '?'].includes(lastChar) && endPos < html.length - 100) {
+            console.log(`[findArticleContent] ⚠️ 提取的内容可能不完整，最后字符: "${lastChar}", 结束位置: ${endPos}, HTML总长度: ${html.length}`);
+            // 尝试查找下一个</article>标签
+            const nextArticleEnd = html.indexOf('</article>', endPos + 11);
+            if (nextArticleEnd !== -1) {
+              const extendedContent = html.substring(tagEnd, nextArticleEnd);
+              const extendedText = extendedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+              if (extendedText.length > extractedText.length) {
+                console.log(`[findArticleContent] ✓ 找到更完整的内容，使用下一个结束标签，位置: ${nextArticleEnd}, 长度: ${extendedText.length}字符`);
+                endPos = nextArticleEnd;
+              }
+            }
+          }
+        }
+        
+        if (endPos !== -1) {
+          const content = html.substring(tagEnd, endPos);
+          const textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          console.log(`[findArticleContent] 候选 ${matchCount}: 内容长度=${textOnly.length}字符, HTML内容长度=${content.length}字符, 位置=${startPos}-${endPos}`);
+          console.log(`[findArticleContent] 候选 ${matchCount}: 内容预览（前200字符）: ${textOnly.substring(0, 200)}...`);
+          console.log(`[findArticleContent] 候选 ${matchCount}: 内容预览（后200字符）: ...${textOnly.substring(Math.max(0, textOnly.length - 200))}`);
+          candidates.push({
+            content: content,
+            textLength: textOnly.length,
+            startPos: startPos,
+            endPos: endPos + 11 // 包含结束标签
+          });
+        } else {
+          console.log(`[findArticleContent] 候选 ${matchCount}: 未找到匹配的结束标签`);
+        }
+      }
+      
+      // 返回内容最长的匹配（如果有多个相同的article标签，选择最长的）
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => b.textLength - a.textLength);
+        const bestMatch = candidates[0];
+        
+        console.log(`[findArticleContent] 找到 ${candidates.length} 个匹配的article标签`);
+        candidates.forEach((candidate, idx) => {
+          console.log(`[findArticleContent] 候选 ${idx + 1}: 内容长度=${candidate.textLength}字符, 位置=${candidate.startPos}-${candidate.endPos}`);
+        });
+        
+        // 如果最佳匹配的内容长度明显短于其他候选（可能是截断），尝试使用更长的
+        if (candidates.length > 1 && bestMatch.textLength < candidates[1].textLength * 0.8) {
+          console.log(`[findArticleContent] ⚠️ 发现多个article标签，最佳匹配可能不完整（${bestMatch.textLength}字符），使用最长的匹配（${candidates[0].textLength}字符）`);
+          return candidates[0].content; // 已经排序，第一个就是最长的
+        }
+        
+        // 如果最佳匹配的内容太短（少于500字符），但还有其他候选，尝试使用更长的
+        // 注意：对于格隆汇等网站，完整文章通常超过500字符
+        if (bestMatch.textLength < 500 && candidates.length > 1) {
+          console.log(`[findArticleContent] ⚠️ 最佳匹配内容太短（${bestMatch.textLength}字符），使用更长的匹配（${candidates[0].textLength}字符）`);
+          return candidates[0].content; // 已经排序，第一个就是最长的
+        }
+        
+        // 如果只有一个候选但内容太短（少于500字符），可能是提取不完整
+        if (candidates.length === 1 && bestMatch.textLength < 500) {
+          console.log(`[findArticleContent] ⚠️ 单个article标签内容较短（${bestMatch.textLength}字符），可能提取不完整`);
+          // 尝试重新提取：从开始位置到HTML结束，查找所有内容
+          const fullContent = html.substring(bestMatch.startPos);
+          const nextArticleClose = fullContent.indexOf('</article>', bestMatch.endPos - bestMatch.startPos);
+          if (nextArticleClose !== -1) {
+            const extendedContent = html.substring(bestMatch.startPos + bestMatch.endPos - bestMatch.startPos, bestMatch.startPos + nextArticleClose);
+            const extendedText = extendedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+            if (extendedText.length > bestMatch.textLength) {
+              console.log(`[findArticleContent] ✓ 找到更完整的内容，长度: ${extendedText.length}字符`);
+              return extendedContent;
+            }
+          }
+        }
+        
+        console.log(`[findArticleContent] ✓ 使用最佳匹配，内容长度: ${bestMatch.textLength}字符`);
+        return bestMatch.content;
+      }
+      return null;
+    };
 
     // 第二步：优先查找正文内容容器（按优先级排序）
     const articleSelectors = [
+      // 最高优先级：企查查、格隆汇等网站的 article 标签，包含 main-news、article-with-html 等 class
+      // 使用智能匹配函数处理嵌套
+      { type: 'smart', pattern: '\\bmain-news\\b[^"\']*\\barticle-with-html\\b', priority: 1 },
+      { type: 'smart', pattern: '\\barticle-with-html\\b[^"\']*\\bmain-news\\b', priority: 2 },
+      { type: 'smart', pattern: '\\bmain-news\\b', priority: 3 },
+      { type: 'smart', pattern: '\\barticle-with-html\\b', priority: 4 },
+      // 正则表达式匹配（作为备用）
+      { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*\barticle-with-html\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 5 },
+      { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\barticle-with-html\b[^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 6 },
+      { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 7 },
+      { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\barticle-with-html\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 8 },
       // 优先查找：article-txt-content、article-content、txt-content 等常见的正文容器class
-      /<div[^>]*class="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*article-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*id="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*id="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*id="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      // 其次查找：通用的article、main标签
-      /<article[^>]*>([\s\S]*?)<\/article>/i,
-      /<main[^>]*>([\s\S]*?)<\/main>/i,
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 9 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 10 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 11 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*article-text[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 12 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*post-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 13 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*entry-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 14 },
+      { type: 'regex', pattern: /<div[^>]*id="[^"]*article-txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 15 },
+      { type: 'regex', pattern: /<div[^>]*id="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 16 },
+      { type: 'regex', pattern: /<div[^>]*id="[^"]*txt-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 17 },
+      // 其次查找：通用的article、main标签（放在后面，避免匹配到非正文的article）
+      { type: 'regex', pattern: /<article[^>]*>([\s\S]*?)<\/article>/i, priority: 18 },
+      { type: 'regex', pattern: /<main[^>]*>([\s\S]*?)<\/main>/i, priority: 19 },
       // 最后查找：其他可能的正文容器
-      /<div[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*id="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*id="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*post[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
-      /<div[^>]*class="[^"]*entry[^"]*"[^>]*>([\s\S]*?)<\/div>/i
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 20 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 21 },
+      { type: 'regex', pattern: /<div[^>]*id="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 22 },
+      { type: 'regex', pattern: /<div[^>]*id="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 23 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*post[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 24 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*entry[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 25 }
     ];
 
     let articleContent = null;
-    for (const selector of articleSelectors) {
-      const match = cleanedHtml.match(selector);
-      if (match && match[1]) {
-        const content = match[1];
-        // 检查提取的内容是否足够长（至少200字符）
-        const textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (textOnly.length > 200) {
+    let matchedSelector = null;
+    
+    // 先检查HTML中是否包含main-news或article-with-html（用于调试）
+    const hasMainNewsInHtml = /main-news/i.test(cleanedHtml);
+    const hasArticleWithHtmlInHtml = /article-with-html/i.test(cleanedHtml);
+    console.log(`[extractArticleContent] HTML检查: hasMainNews=${hasMainNewsInHtml}, hasArticleWithHtml=${hasArticleWithHtmlInHtml}`);
+    
+    // 如果包含这些标记，尝试查找所有article标签（用于调试）
+    if (hasMainNewsInHtml || hasArticleWithHtmlInHtml) {
+      const allArticles = cleanedHtml.match(/<article[^>]*>/gi);
+      if (allArticles) {
+        console.log(`[extractArticleContent] 找到 ${allArticles.length} 个article标签`);
+        allArticles.forEach((tag, idx) => {
+          const classMatch = tag.match(/class\s*=\s*["']([^"']*)["']/i);
+          if (classMatch) {
+            console.log(`[extractArticleContent] Article ${idx + 1} class: "${classMatch[1]}"`);
+          }
+        });
+      }
+    }
+    
+    for (let i = 0; i < articleSelectors.length; i++) {
+      const selector = articleSelectors[i];
+      let content = null;
+      let textOnly = '';
+      
+      if (selector.type === 'smart') {
+        // 使用智能匹配函数
+        console.log(`[extractArticleContent] 使用智能匹配（规则 ${i + 1}），pattern: ${selector.pattern}`);
+        content = findArticleContent(cleanedHtml, selector.pattern);
+        if (content) {
+          textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          console.log(`[extractArticleContent] 智能匹配返回内容，长度: ${textOnly.length}字符`);
+        } else {
+          console.log(`[extractArticleContent] 智能匹配返回null，未找到匹配`);
+        }
+      } else if (selector.type === 'regex') {
+        // 使用正则表达式匹配
+        const match = cleanedHtml.match(selector.pattern);
+        if (match && match[1]) {
+          content = match[1];
+          textOnly = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        }
+      }
+      
+      if (content && textOnly) {
+        // 检查提取的内容是否足够长
+        const minLength = (selector.priority <= 4) ? 100 : 200; // 前4个规则使用更低的阈值
+        const actualMinLength = (selector.priority <= 4 && textOnly.length >= 50) ? 50 : minLength;
+        
+        console.log(`[extractArticleContent] 尝试匹配规则 ${i + 1}（优先级${selector.priority}），提取内容长度: ${textOnly.length}字符，最小要求: ${actualMinLength}字符`);
+        
+        if (textOnly.length >= actualMinLength) {
           articleContent = content;
-          console.log(`[extractArticleContent] 找到正文容器，长度: ${textOnly.length}字符`);
+          matchedSelector = i + 1;
+          console.log(`[extractArticleContent] ✓ 找到正文容器（规则${matchedSelector}），长度: ${textOnly.length}字符`);
+          // 如果是前4个规则（main-news匹配），记录更多信息
+          if (selector.priority <= 4) {
+            console.log(`[extractArticleContent] 匹配到企查查/格隆汇等网站的article标签（main-news/article-with-html）`);
+            // 查找匹配到的article标签
+            const articleStartMatch = cleanedHtml.match(new RegExp(`<article[^>]*class\\s*=\\s*["'][^"']*${selector.pattern.replace(/\\b/g, '')}[^"']*["'][^>]*>`, 'i'));
+            if (articleStartMatch) {
+              const articleTag = articleStartMatch[0];
+              const classMatch = articleTag.match(/class\s*=\s*["']([^"']*)["']/i);
+              if (classMatch) {
+                console.log(`[extractArticleContent] 匹配到的article标签class: "${classMatch[1]}"`);
+                console.log(`[extractArticleContent] 完整的article标签: ${articleTag.substring(0, 300)}${articleTag.length > 300 ? '...' : ''}`);
+              }
+            }
+          }
           break;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 规则 ${i + 1} 匹配成功但内容太短（${textOnly.length}字符 < ${actualMinLength}字符），继续尝试下一个规则`);
+        }
+      } else {
+        // 只在调试时输出前4个规则，避免日志过多
+        if (selector.priority <= 4) {
+          console.log(`[extractArticleContent] 规则 ${i + 1}（main-news匹配）未匹配到内容`);
+        }
+      }
+    }
+    
+    if (!articleContent) {
+      console.log(`[extractArticleContent] ⚠️ 所有匹配规则都未找到足够长的正文内容，将使用整个HTML`);
+      // 如果HTML中包含main-news但未匹配，记录警告
+      if (hasMainNewsInHtml || hasArticleWithHtmlInHtml) {
+        console.warn(`[extractArticleContent] ⚠️ HTML中包含main-news或article-with-html，但未成功提取，可能需要检查匹配规则`);
+        // 尝试直接查找包含main-news的article标签位置
+        const mainNewsArticleMatch = cleanedHtml.match(/<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*["'][^>]*>/i);
+        if (mainNewsArticleMatch) {
+          console.warn(`[extractArticleContent] 找到包含main-news的article标签，但正则表达式未匹配到内容，可能需要调整匹配规则`);
+          console.warn(`[extractArticleContent] article标签示例: ${mainNewsArticleMatch[0].substring(0, 200)}...`);
         }
       }
     }
@@ -1936,6 +2425,56 @@ ${enterpriseList}
       needsFix = true;
     }
     
+    // 3. 对于新榜接口的新闻，强制确保摘要和关键词不为空（除非内容为空或乱码）
+    if ((interfaceType === '新榜' || interfaceType === '新榜接口')) {
+      const isContentEmpty = !content || content.trim().length === 0;
+      const isContentDirty = content && this.isContentContaminated(content);
+      const isImageContent = this.isImageOnlyContent(content);
+      
+      // 如果内容为空、乱码或只是图片，允许摘要和关键词为空或使用默认值
+      const allowEmpty = isContentEmpty || isContentDirty || isImageContent;
+      
+      if (!allowEmpty) {
+        // 内容有效，强制确保摘要和关键词不为空
+        if (!validatedAbstract || validatedAbstract.trim().length === 0) {
+          console.warn(`[validateAnalysisResult] ⚠️ 新榜接口：摘要为空，强制生成摘要`);
+          // 尝试从原文提取摘要
+          if (content && content.trim().length > 20) {
+            const extractedAbstract = this.extractCompleteAbstract(title, content, '');
+            if (extractedAbstract && extractedAbstract.length >= 20) {
+              validatedAbstract = extractedAbstract;
+              console.log(`[validateAnalysisResult] ✓ 已从原文强制提取摘要，长度: ${validatedAbstract.length}字符`);
+            } else {
+              // 如果提取失败，基于标题和内容生成
+              validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
+              console.warn(`[validateAnalysisResult] 无法从原文提取，使用标题生成摘要`);
+            }
+          } else {
+            validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
+            console.warn(`[validateAnalysisResult] content为空或太短，使用标题生成摘要`);
+          }
+          needsFix = true;
+        }
+        
+        if (!validatedKeywords || validatedKeywords.length === 0) {
+          console.warn(`[validateAnalysisResult] ⚠️ 新榜接口：关键词为空，强制生成关键词`);
+          // 从标题和内容推断关键词
+          const inferredKeywords = this.inferKeywordsFromContent(title, content);
+          if (inferredKeywords.length > 0) {
+            validatedKeywords = inferredKeywords;
+            console.log(`[validateAnalysisResult] ✓ 已强制推断关键词: ${JSON.stringify(validatedKeywords)}`);
+          } else {
+            // 如果推断失败，至少保留一个基于标题的关键词
+            validatedKeywords = ['新闻资讯'];
+            console.warn(`[validateAnalysisResult] 无法推断关键词，使用默认关键词`);
+          }
+          needsFix = true;
+        }
+      } else {
+        console.log(`[validateAnalysisResult] 新榜接口：内容为空/乱码/图片，允许摘要和关键词为空或使用默认值`);
+      }
+    }
+    
     if (needsFix) {
       console.log(`[validateAnalysisResult] ✓ 校验完成，已修复分析结果`);
       console.log(`[validateAnalysisResult] 修复后的摘要: ${validatedAbstract.substring(0, 100)}...`);
@@ -2072,7 +2611,48 @@ ${enterpriseList}
 
       // 在更新数据库之前，校验分析结果（摘要和关键词）
       console.log(`[processNewsWithEnterprise] 开始校验分析结果...`);
-      const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+      let validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+      
+      // 对于新榜接口的新闻，强制检查摘要和关键词是否为空（除非内容为空或乱码）
+      if ((interfaceType === '新榜' || interfaceType === '新榜接口')) {
+        const isContentEmpty = !contentForAnalysis || contentForAnalysis.trim().length === 0;
+        const isContentDirty = contentForAnalysis && this.isContentContaminated(contentForAnalysis);
+        const isImageContent = this.isImageOnlyContent(contentForAnalysis);
+        const allowEmpty = isContentEmpty || isContentDirty || isImageContent;
+        
+        if (!allowEmpty) {
+          // 内容有效，强制确保摘要和关键词不为空
+          if (!validatedAnalysis.news_abstract || validatedAnalysis.news_abstract.trim().length === 0) {
+            console.warn(`[processNewsWithEnterprise] ⚠️ 新榜接口：摘要为空，强制重新生成`);
+            // 重新分析以生成摘要
+            const reAnalysis = await this.analyzeNewsSentimentAndType(
+              newsItem.title,
+              contentForAnalysis,
+              newsItem.source_url,
+              isAdditionalAccount.length > 0,
+              interfaceType
+            );
+            const reValidatedAnalysis = this.validateAnalysisResult(reAnalysis, newsItem.title, contentForAnalysis, interfaceType);
+            validatedAnalysis.news_abstract = reValidatedAnalysis.news_abstract;
+            validatedAnalysis.keywords = reValidatedAnalysis.keywords;
+          }
+          
+          if (!validatedAnalysis.keywords || validatedAnalysis.keywords.length === 0) {
+            console.warn(`[processNewsWithEnterprise] ⚠️ 新榜接口：关键词为空，强制重新生成`);
+            // 重新分析以生成关键词
+            const reAnalysis = await this.analyzeNewsSentimentAndType(
+              newsItem.title,
+              contentForAnalysis,
+              newsItem.source_url,
+              isAdditionalAccount.length > 0,
+              interfaceType
+            );
+            const reValidatedAnalysis = this.validateAnalysisResult(reAnalysis, newsItem.title, contentForAnalysis, interfaceType);
+            validatedAnalysis.news_abstract = reValidatedAnalysis.news_abstract || validatedAnalysis.news_abstract;
+            validatedAnalysis.keywords = reValidatedAnalysis.keywords;
+          }
+        }
+      }
       
       // 更新数据库，包括可能的企业关联变更
       console.log(`[processNewsWithEnterprise] 准备更新数据库`);
@@ -2194,7 +2774,48 @@ ${enterpriseList}
         // 没有相关企业，或者是广告类型，保持enterprise_full_name为空
         // 在更新数据库之前，校验分析结果（摘要和关键词）
         console.log(`[processNewsWithoutEnterprise] 开始校验分析结果...`);
-        const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+        let validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+        
+        // 对于新榜接口的新闻，强制检查摘要和关键词是否为空（除非内容为空或乱码）
+        if ((interfaceType === '新榜' || interfaceType === '新榜接口')) {
+          const isContentEmpty = !contentForAnalysis || contentForAnalysis.trim().length === 0;
+          const isContentDirty = contentForAnalysis && this.isContentContaminated(contentForAnalysis);
+          const isImageContent = this.isImageOnlyContent(contentForAnalysis);
+          const allowEmpty = isContentEmpty || isContentDirty || isImageContent;
+          
+          if (!allowEmpty) {
+            // 内容有效，强制确保摘要和关键词不为空
+            if (!validatedAnalysis.news_abstract || validatedAnalysis.news_abstract.trim().length === 0) {
+              console.warn(`[processNewsWithoutEnterprise] ⚠️ 新榜接口：摘要为空，强制重新生成`);
+              // 重新分析以生成摘要
+              const reAnalysis = await this.analyzeNewsSentimentAndType(
+                newsItem.title,
+                contentForAnalysis,
+                newsItem.source_url,
+                isAdditionalAccount.length > 0,
+                interfaceType
+              );
+              const reValidatedAnalysis = this.validateAnalysisResult(reAnalysis, newsItem.title, contentForAnalysis, interfaceType);
+              validatedAnalysis.news_abstract = reValidatedAnalysis.news_abstract;
+              validatedAnalysis.keywords = reValidatedAnalysis.keywords;
+            }
+            
+            if (!validatedAnalysis.keywords || validatedAnalysis.keywords.length === 0) {
+              console.warn(`[processNewsWithoutEnterprise] ⚠️ 新榜接口：关键词为空，强制重新生成`);
+              // 重新分析以生成关键词
+              const reAnalysis = await this.analyzeNewsSentimentAndType(
+                newsItem.title,
+                contentForAnalysis,
+                newsItem.source_url,
+                isAdditionalAccount.length > 0,
+                interfaceType
+              );
+              const reValidatedAnalysis = this.validateAnalysisResult(reAnalysis, newsItem.title, contentForAnalysis, interfaceType);
+              validatedAnalysis.news_abstract = reValidatedAnalysis.news_abstract || validatedAnalysis.news_abstract;
+              validatedAnalysis.keywords = reValidatedAnalysis.keywords;
+            }
+          }
+        }
         
         await db.execute(
           `UPDATE news_detail 
@@ -2309,9 +2930,9 @@ ${enterpriseList}
     try {
       console.log('开始批量分析新闻...');
       
-      // 获取需要分析的新闻（news_abstract为空的记录），包括公众号信息
+      // 获取需要分析的新闻（news_abstract为空的记录），包括公众号信息和接口类型
       const newsItems = await db.query(
-        `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, created_at
+        `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, created_at, APItype
          FROM news_detail 
          WHERE news_abstract IS NULL 
          AND content IS NOT NULL 
@@ -2333,6 +2954,24 @@ ${enterpriseList}
 
       for (const newsItem of newsItems) {
         try {
+          // 检查内容是否是乱码（针对新榜接口的新闻）
+          const interfaceType = newsItem.APItype || '新榜';
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content) {
+            // 检查内容是否被污染（包含JavaScript代码、CSS样式等脏信息）
+            if (this.isContentContaminated(newsItem.content)) {
+              console.log(`[批量分析] ⚠️ 跳过乱码内容（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+              errorCount++;
+              continue;
+            }
+            
+            // 检查内容长度（至少20字符才认为是有效正文）
+            if (newsItem.content.trim().length < 20) {
+              console.log(`[批量分析] ⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+              errorCount++;
+              continue;
+            }
+          }
+          
           let result;
           // 在AI分析前，先检查是否是企业公众号发的
           // 如果是invested_enterprises表中状态不为"完全退出"的企业公众号，直接设置企业全称
