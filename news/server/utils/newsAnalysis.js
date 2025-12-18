@@ -53,22 +53,53 @@ class NewsAnalysis {
       const hasArticleTag = /<article[^>]*>/i.test(html);
       const hasMainNews = /main-news/i.test(html);
       const hasArticleWithHtml = /article-with-html/i.test(html);
-      console.log(`[fetchContentFromUrl] HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}`);
+      const isGelonghui = /gelonghui\.com/i.test(url);
+      console.log(`[fetchContentFromUrl] HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}, isGelonghui=${isGelonghui}`);
       
-      let text = this.extractArticleContent(html);
+      let text = this.extractArticleContent(html, url);
       console.log(`[fetchContentFromUrl] 提取完成，文本长度: ${text.length}字符`);
 
       // 如果提取的文本太短（少于50个字符），可能提取失败
       if (text.length < 50) {
         console.warn(`[fetchContentFromUrl] 提取的文本内容太短（${text.length}字符），可能提取失败, URL: ${url}`);
         console.warn(`[fetchContentFromUrl] 如果HTML中包含article标签但提取失败，可能是匹配规则需要调整`);
-        // 尝试提取前5000个字符作为备用
-        const fallbackText = html.substring(0, 5000)
-          .replace(/<[^>]+>/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (fallbackText.length > text.length) {
-          text = fallbackText;
+        
+        // 对于格隆汇网站，尝试更宽松的提取策略
+        if (isGelonghui) {
+          console.log(`[fetchContentFromUrl] 格隆汇网站提取失败，尝试使用更宽松的提取策略`);
+          // 尝试查找包含正文内容的div或其他容器
+          const gelonghuiPatterns = [
+            /<div[^>]*class="[^"]*news-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+            /<div[^>]*class="[^"]*article-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+            /<div[^>]*class="[^"]*content-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+            /<section[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/section>/i
+          ];
+          
+          for (const pattern of gelonghuiPatterns) {
+            const match = html.match(pattern);
+            if (match && match[1]) {
+              const extracted = match[1]
+                .replace(/<[^>]+>/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+              if (extracted.length > text.length) {
+                text = extracted;
+                console.log(`[fetchContentFromUrl] 使用格隆汇特殊模式提取，长度: ${text.length}字符`);
+                break;
+              }
+            }
+          }
+        }
+        
+        // 如果仍然太短，尝试提取前5000个字符作为备用
+        if (text.length < 50) {
+          const fallbackText = html.substring(0, 5000)
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (fallbackText.length > text.length) {
+            text = fallbackText;
+          }
         }
       }
 
@@ -96,8 +127,10 @@ class NewsAnalysis {
 
   /**
    * 从HTML中智能提取正文内容
+   * @param {string} html - HTML内容
+   * @param {string} url - 网页URL（可选，用于特殊处理）
    */
-  extractArticleContent(html) {
+  extractArticleContent(html, url = '') {
     // 第一步：先提取article标签，避免在清理过程中被截断
     // 使用智能匹配函数查找完整的article标签（处理嵌套和script标签中的</article>）
     const findCompleteArticle = (html) => {
@@ -500,6 +533,11 @@ class NewsAnalysis {
       { type: 'smart', pattern: '\\barticle-with-html\\b[^"\']*\\bmain-news\\b', priority: 2 },
       { type: 'smart', pattern: '\\bmain-news\\b', priority: 3 },
       { type: 'smart', pattern: '\\barticle-with-html\\b', priority: 4 },
+      // 格隆汇网站的特殊匹配（添加更多可能的类名）
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*news-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 4.5 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*article-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 4.6 },
+      { type: 'regex', pattern: /<div[^>]*class="[^"]*content-body[^"]*"[^>]*>([\s\S]*?)<\/div>/i, priority: 4.7 },
+      { type: 'regex', pattern: /<section[^>]*class="[^"]*article[^"]*"[^>]*>([\s\S]*?)<\/section>/i, priority: 4.8 },
       // 正则表达式匹配（作为备用）
       { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\bmain-news\b[^"']*\barticle-with-html\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 5 },
       { type: 'regex', pattern: /<article[^>]*class\s*=\s*["'][^"']*\barticle-with-html\b[^"']*\bmain-news\b[^"']*["'][^>]*>([\s\S]*?)<\/article>/i, priority: 6 },
@@ -533,7 +571,8 @@ class NewsAnalysis {
     // 先检查HTML中是否包含main-news或article-with-html（用于调试）
     const hasMainNewsInHtml = /main-news/i.test(cleanedHtml);
     const hasArticleWithHtmlInHtml = /article-with-html/i.test(cleanedHtml);
-    console.log(`[extractArticleContent] HTML检查: hasMainNews=${hasMainNewsInHtml}, hasArticleWithHtml=${hasArticleWithHtmlInHtml}`);
+    const isGelonghui = /gelonghui\.com/i.test(url);
+    console.log(`[extractArticleContent] HTML检查: hasMainNews=${hasMainNewsInHtml}, hasArticleWithHtml=${hasArticleWithHtmlInHtml}, isGelonghui=${isGelonghui}`);
     
     // 如果包含这些标记，尝试查找所有article标签（用于调试）
     if (hasMainNewsInHtml || hasArticleWithHtmlInHtml) {
@@ -575,7 +614,10 @@ class NewsAnalysis {
       
       if (content && textOnly) {
         // 检查提取的内容是否足够长
-        const minLength = (selector.priority <= 4) ? 100 : 200; // 前4个规则使用更低的阈值
+        // 对于格隆汇网站，使用更低的阈值
+        const baseMinLength = (selector.priority <= 4) ? 100 : 200; // 前4个规则使用更低的阈值
+        const gelonghuiMinLength = (selector.priority <= 4) ? 50 : 100; // 格隆汇网站使用更低的阈值
+        const minLength = isGelonghui ? gelonghuiMinLength : baseMinLength;
         const actualMinLength = (selector.priority <= 4 && textOnly.length >= 50) ? 50 : minLength;
         
         console.log(`[extractArticleContent] 尝试匹配规则 ${i + 1}（优先级${selector.priority}），提取内容长度: ${textOnly.length}字符，最小要求: ${actualMinLength}字符`);
@@ -655,6 +697,29 @@ class NewsAnalysis {
       // 移除常见的UI元素
       .replace(/<ul[^>]*class="[^"]*(?:nav|menu)[^"]*"[^>]*>[\s\S]*?<\/ul>/gi, '')
       .replace(/<div[^>]*class="[^"]*(?:search|login|register|user-info)[^"]*"[^>]*>[\s\S]*?<\/div>/gi, '');
+    
+    // 对于格隆汇网站，在HTML阶段就移除页脚内容
+    if (isGelonghui) {
+      console.log(`[extractArticleContent] 格隆汇网站：在HTML阶段移除页脚内容`);
+      // 移除"实时快讯"相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*实时快讯[^>]*>[\s\S]*?/gi, '');
+      // 移除"格隆汇APP下载"相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*格隆汇APP下载[^>]*>[\s\S]*?/gi, '');
+      // 移除"关于格隆汇"相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*关于格隆汇[^>]*>[\s\S]*?/gi, '');
+      // 移除"合作伙伴"相关的HTML块（仅在HTML末尾）
+      const partnersMatch = contentHtml.match(/([\s\S]*)(<[^>]*合作伙伴[^>]*>[\s\S]*)/i);
+      if (partnersMatch && partnersMatch[1].length < contentHtml.length * 0.7) {
+        contentHtml = partnersMatch[1];
+        console.log(`[extractArticleContent] 移除了格隆汇网站的"合作伙伴"HTML块`);
+      }
+      // 移除"声明未经授权"相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*声明未经授权[^>]*>[\s\S]*/gi, '');
+      // 移除"违法与不良信息举报"相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*违法与不良信息举报[^>]*>[\s\S]*/gi, '');
+      // 移除版权信息相关的HTML块
+      contentHtml = contentHtml.replace(/<[^>]*©深圳格隆汇信息科技有限公司[^>]*>[\s\S]*/gi, '');
+    }
 
     // 第四步：提取纯文本
     let text = contentHtml
@@ -678,6 +743,109 @@ class NewsAnalysis {
       .replace(/\s+/g, ' ')
       .trim();
 
+    // 第五步：移除格隆汇网站特有的页脚和无关内容（文本阶段再次清理，确保彻底移除）
+    if (isGelonghui) {
+      console.log(`[extractArticleContent] 格隆汇网站：在文本阶段再次清理页脚内容，原始长度: ${text.length}字符`);
+      
+      // 移除"实时快讯"及其后续内容（使用更宽松的匹配）
+      const realtimeNewsPatterns = [
+        /实时快讯[\s\S]*/i,
+        /实时.*快讯[\s\S]*/i
+      ];
+      for (const pattern of realtimeNewsPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的"实时快讯"部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"格隆汇APP下载"及其后续内容
+      const appDownloadPatterns = [
+        /格隆汇APP下载[\s\S]*/i,
+        /格隆汇.*APP.*下载[\s\S]*/i
+      ];
+      for (const pattern of appDownloadPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的"格隆汇APP下载"部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"关于格隆汇"及其后续内容
+      const aboutPatterns = [
+        /关于格隆汇[\s\S]*/i,
+        /关于.*格隆汇[\s\S]*/i
+      ];
+      for (const pattern of aboutPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的"关于格隆汇"部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"合作伙伴"及其后续内容（仅在文本的后30%部分出现时移除）
+      const partnersIndex = text.indexOf('合作伙伴');
+      if (partnersIndex !== -1 && partnersIndex > text.length * 0.7) {
+        text = text.substring(0, partnersIndex).trim();
+        console.log(`[extractArticleContent] 移除了格隆汇网站的"合作伙伴"部分，清理后长度: ${text.length}字符`);
+      }
+      
+      // 移除"声明未经授权"及其后续内容
+      const statementPatterns = [
+        /声明未经授权[\s\S]*/i,
+        /声明.*未经授权[\s\S]*/i
+      ];
+      for (const pattern of statementPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的"声明未经授权"部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"违法与不良信息举报"及其后续内容
+      const reportPatterns = [
+        /违法与不良信息举报[\s\S]*/i,
+        /违法.*不良信息.*举报[\s\S]*/i
+      ];
+      for (const pattern of reportPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的"违法与不良信息举报"部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"©深圳格隆汇信息科技有限公司"及其后续内容
+      const copyrightPatterns = [
+        /©深圳格隆汇信息科技有限公司[\s\S]*/i,
+        /©.*深圳.*格隆汇[\s\S]*/i,
+        /深圳格隆汇信息科技有限公司[\s\S]*/i
+      ];
+      for (const pattern of copyrightPatterns) {
+        const beforeReplace = text;
+        text = text.replace(pattern, '').trim();
+        if (text !== beforeReplace) {
+          console.log(`[extractArticleContent] 移除了格隆汇网站的版权信息部分，清理后长度: ${text.length}字符`);
+          break;
+        }
+      }
+      
+      // 移除"查看全部"、"查看更多"等链接文本
+      text = text.replace(/查看全部[\s\S]*/i, '').trim();
+      text = text.replace(/查看更多[\s\S]*/i, '').trim();
+      
+      console.log(`[extractArticleContent] 格隆汇网站清理完成，最终长度: ${text.length}字符`);
+    }
+    
     // 第五步：移除常见的导航文本模式
     const navigationPatterns = [
       // 常见的导航词汇（前后可能有空格或标点）
@@ -732,7 +900,39 @@ class NewsAnalysis {
       .replace(/^\s*[，。！？、]\s*/g, '') // 移除开头的标点
       .trim();
 
-    // 第七步：如果文本太短，尝试从整个HTML提取（作为备用）
+    // 第七步：对于格隆汇网站，如果文本太短，尝试更精确的提取
+    if (isGelonghui && text.length < 200) {
+      console.warn(`[extractArticleContent] 格隆汇网站提取的文本太短（${text.length}字符），尝试更精确的提取`);
+      // 尝试直接从article标签中提取，但移除页脚内容
+      if (articleContent) {
+        let refinedText = articleContent
+          .replace(/<[^>]*实时快讯[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*格隆汇APP[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*关于格隆汇[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*合作伙伴[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*声明未经授权[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*违法与不良信息[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]*©深圳格隆汇[^>]*>[\s\S]*?/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        
+        // 再次清理文本中的页脚内容
+        refinedText = refinedText.replace(/实时快讯[\s\S]*/i, '').trim();
+        refinedText = refinedText.replace(/格隆汇APP下载[\s\S]*/i, '').trim();
+        refinedText = refinedText.replace(/关于格隆汇[\s\S]*/i, '').trim();
+        refinedText = refinedText.replace(/声明未经授权[\s\S]*/i, '').trim();
+        refinedText = refinedText.replace(/违法与不良信息举报[\s\S]*/i, '').trim();
+        refinedText = refinedText.replace(/©深圳格隆汇信息科技有限公司[\s\S]*/i, '').trim();
+        
+        if (refinedText.length > text.length) {
+          text = refinedText;
+          console.log(`[extractArticleContent] 使用精炼后的文本，长度: ${text.length}字符`);
+        }
+      }
+    }
+    
+    // 第八步：如果文本太短，尝试从整个HTML提取（作为备用）
     if (text.length < 100) {
       console.warn(`[extractArticleContent] 提取的文本太短（${text.length}字符），尝试备用方法`);
       // 备用方法：从body标签中提取，但移除更多无关元素
@@ -752,6 +952,20 @@ class NewsAnalysis {
         if (fallbackText.length > text.length) {
           text = fallbackText;
         }
+      }
+    }
+    
+    // 最终检查：确保文本长度足够
+    if (text.length < 50) {
+      console.warn(`[extractArticleContent] ⚠️ 最终提取的文本太短（${text.length}字符），可能提取失败`);
+    } else {
+      console.log(`[extractArticleContent] ✓ 最终提取的文本长度: ${text.length}字符`);
+      // 输出文本预览（前200字符和后100字符）
+      if (text.length > 300) {
+        console.log(`[extractArticleContent] 文本预览（前200字符）: ${text.substring(0, 200)}...`);
+        console.log(`[extractArticleContent] 文本预览（后100字符）: ...${text.substring(text.length - 100)}`);
+      } else {
+        console.log(`[extractArticleContent] 文本预览: ${text}`);
       }
     }
 
@@ -811,7 +1025,18 @@ class NewsAnalysis {
       // 作者信息模式
       /(半导体产业纵横|探索IC产业无限可能)[\s\S]{0,50}?\|\s*\d+篇文章[\s\S]{0,50}?\d+人关注[\s\S]{0,50}?\+关注/gi,
       // 相关文章推荐
-      /(查看全部>>|作者文章|相关文章|推荐阅读|热门文章|最新文章)/gi
+      /(查看全部>>|作者文章|相关文章|推荐阅读|热门文章|最新文章)/gi,
+      // 格隆汇网站特有的页脚内容
+      /实时快讯[\s\S]*/gi,
+      /格隆汇APP下载[\s\S]*/gi,
+      /关于格隆汇[\s\S]*/gi,
+      /声明未经授权[\s\S]*/gi,
+      /违法与不良信息举报[\s\S]*/gi,
+      /©深圳格隆汇信息科技有限公司[\s\S]*/gi,
+      /深圳格隆汇信息科技有限公司[\s\S]*/gi,
+      /合作伙伴[\s\S]*/gi,
+      /查看全部[\s\S]*/gi,
+      /查看更多[\s\S]*/gi
     ];
 
     // 循环清理，直到没有变化或达到最大迭代次数
@@ -950,8 +1175,99 @@ class NewsAnalysis {
   /**
    * 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
    * 如果content包含导航信息，会清理或重新抓取
+   * @param {Object} newsItem - 新闻对象
+   * @param {boolean} forceRefetch - 是否强制重新抓取（即使content不为空）
    */
-  async ensureNewsContent(newsItem) {
+  async ensureNewsContent(newsItem, forceRefetch = false) {
+    // 检查现有content是否有效
+    const hasValidContent = newsItem.content && 
+                            newsItem.content.trim() !== '' && 
+                            newsItem.content.length > 50 &&
+                            !newsItem.content.includes('无法提取正文内容') &&
+                            !newsItem.content.includes('正文无文字');
+    
+    // 如果强制重新抓取，或者content无效，则重新抓取
+    if (forceRefetch || !hasValidContent) {
+      if (newsItem.source_url && newsItem.source_url.trim() !== '') {
+        console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} ${forceRefetch ? '强制重新抓取' : 'content无效，尝试从source_url抓取内容'}`);
+        
+        // 先尝试常规提取
+        let fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+        
+        // 如果常规提取失败或内容太短，尝试使用AI提取（仅对格隆汇等网站）
+        const isGelonghui = /gelonghui\.com/i.test(newsItem.source_url);
+        // 检查提取的内容是否包含太多无关信息（如"实时快讯"、"格隆汇APP下载"等）
+        const hasUnwantedContent = fetchedContent && (
+          fetchedContent.includes('实时快讯') ||
+          fetchedContent.includes('格隆汇APP下载') ||
+          fetchedContent.includes('关于格隆汇') ||
+          fetchedContent.includes('声明未经授权') ||
+          fetchedContent.includes('违法与不良信息举报') ||
+          fetchedContent.includes('©深圳格隆汇信息科技有限公司')
+        );
+        
+        if ((!fetchedContent || fetchedContent.length < 200 || hasUnwantedContent) && isGelonghui) {
+          console.log(`[ensureNewsContent] 常规提取失败或包含无关内容（长度: ${fetchedContent ? fetchedContent.length : 0}字符，包含无关内容: ${hasUnwantedContent}），尝试使用AI提取（格隆汇网站）`);
+          try {
+            const WebContentExtractor = require('./webContentExtractor');
+            const extractor = new WebContentExtractor();
+            const aiResult = await extractor.extractFromUrl(newsItem.source_url, newsItem.title);
+            if (aiResult && aiResult.content && aiResult.content.length > 100) {
+              // 清理AI提取的内容中的页脚信息
+              let cleanedAiContent = aiResult.content;
+              cleanedAiContent = cleanedAiContent.replace(/实时快讯[\s\S]*/i, '').trim();
+              cleanedAiContent = cleanedAiContent.replace(/格隆汇APP下载[\s\S]*/i, '').trim();
+              cleanedAiContent = cleanedAiContent.replace(/关于格隆汇[\s\S]*/i, '').trim();
+              cleanedAiContent = cleanedAiContent.replace(/声明未经授权[\s\S]*/i, '').trim();
+              cleanedAiContent = cleanedAiContent.replace(/违法与不良信息举报[\s\S]*/i, '').trim();
+              cleanedAiContent = cleanedAiContent.replace(/©深圳格隆汇信息科技有限公司[\s\S]*/i, '').trim();
+              
+              if (cleanedAiContent.length > 100) {
+                fetchedContent = cleanedAiContent;
+                console.log(`[ensureNewsContent] ✓ AI提取成功并清理，长度: ${fetchedContent.length}字符`);
+              } else {
+                console.warn(`[ensureNewsContent] AI提取的内容清理后太短（${cleanedAiContent.length}字符），使用原始AI提取结果`);
+                fetchedContent = aiResult.content;
+              }
+            }
+          } catch (aiError) {
+            console.warn(`[ensureNewsContent] AI提取失败: ${aiError.message}，继续使用常规提取结果`);
+          }
+        }
+        
+        if (fetchedContent && fetchedContent.length > 50) {
+          // 清理脏信息
+          console.log(`[ensureNewsContent] 开始清理抓取到的内容，原始长度: ${fetchedContent.length}字符`);
+          const cleanedContent = this.cleanDirtyContent(fetchedContent);
+          console.log(`[ensureNewsContent] 清理完成，清理后长度: ${cleanedContent.length}字符`);
+          
+          // 检查清理后的内容是否仍然被污染
+          if (this.isContentContaminated(cleanedContent)) {
+            console.warn(`[ensureNewsContent] 清理后的内容仍然包含脏信息，但继续使用清理后的版本`);
+          }
+          
+          // 将清理后的内容更新到数据库
+          try {
+            await db.execute(
+              'UPDATE news_detail SET content = ? WHERE id = ?',
+              [cleanedContent, newsItem.id]
+            );
+            console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库，新闻ID: ${newsItem.id}`);
+            // 更新newsItem对象，以便后续使用
+            newsItem.content = cleanedContent;
+            return cleanedContent;
+          } catch (error) {
+            console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
+            // 即使更新失败，也返回清理后的内容供本次分析使用
+            return cleanedContent;
+          }
+        } else {
+          console.warn(`[ensureNewsContent] 无法从source_url抓取有效内容，新闻ID: ${newsItem.id}, URL: ${newsItem.source_url}`);
+          return null;
+        }
+      }
+    }
+    
     // 检查现有content是否被污染（包含导航信息）
     if (newsItem.content && newsItem.content.trim() !== '') {
       if (this.isContentContaminated(newsItem.content)) {
@@ -966,7 +1282,7 @@ class NewsAnalysis {
           console.log(`[ensureNewsContent] 清理后仍然包含脏信息，尝试重新抓取`);
           // 如果有source_url，重新抓取
           if (newsItem.source_url && newsItem.source_url.trim() !== '') {
-            newsItem.content = '';
+            return await this.ensureNewsContent(newsItem, true); // 递归调用，强制重新抓取
           } else {
             // 没有source_url，使用清理后的版本
             console.log(`[ensureNewsContent] 没有source_url，使用清理后的版本`);
@@ -995,43 +1311,6 @@ class NewsAnalysis {
       } else {
         // content正常，直接返回
         return newsItem.content;
-      }
-    }
-
-    // 如果content为空但有source_url，尝试从URL抓取
-    if (newsItem.source_url && newsItem.source_url.trim() !== '') {
-      console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} 的content为空或被污染，尝试从source_url抓取内容`);
-      const fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
-      
-      if (fetchedContent) {
-        // 循环清理脏信息，直到内容干净
-        console.log(`[ensureNewsContent] 开始清理抓取到的内容，原始长度: ${fetchedContent.length}字符`);
-        const cleanedContent = this.cleanDirtyContent(fetchedContent);
-        console.log(`[ensureNewsContent] 清理完成，清理后长度: ${cleanedContent.length}字符`);
-        
-        // 检查清理后的内容是否仍然被污染
-        if (this.isContentContaminated(cleanedContent)) {
-          console.warn(`[ensureNewsContent] 清理后的内容仍然包含脏信息，但继续使用清理后的版本`);
-        }
-        
-        // 将清理后的内容更新到数据库
-        try {
-          await db.execute(
-            'UPDATE news_detail SET content = ? WHERE id = ?',
-            [cleanedContent, newsItem.id]
-          );
-          console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库，新闻ID: ${newsItem.id}`);
-          // 更新newsItem对象，以便后续使用
-          newsItem.content = cleanedContent;
-          return cleanedContent;
-        } catch (error) {
-          console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
-          // 即使更新失败，也返回清理后的内容供本次分析使用
-          return cleanedContent;
-        }
-      } else {
-        console.warn(`[ensureNewsContent] 无法从source_url抓取内容，新闻ID: ${newsItem.id}, URL: ${newsItem.source_url}`);
-        return null;
       }
     }
 
@@ -2588,7 +2867,8 @@ ${enterpriseList}
       console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
       
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
-      const actualContent = await this.ensureNewsContent(newsItem);
+      // 强制重新抓取，确保获取最新内容
+      const actualContent = await this.ensureNewsContent(newsItem, true);
       
       // 确保使用清理后的内容
       const contentForAnalysis = actualContent || newsItem.content || '';
@@ -2660,17 +2940,22 @@ ${enterpriseList}
       console.log(`[processNewsWithEnterprise] 情绪: ${validatedAnalysis.sentiment}`);
       console.log(`[processNewsWithEnterprise] 关键词: ${JSON.stringify(validatedAnalysis.keywords)}`);
       console.log(`[processNewsWithEnterprise] 摘要: ${validatedAnalysis.news_abstract.substring(0, 100)}...`);
-      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ? WHERE id = ?`);
+      console.log(`[processNewsWithEnterprise] 内容长度: ${contentForAnalysis ? contentForAnalysis.length : 0}字符`);
+      
+      // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
+      const contentToSave = contentForAnalysis || newsItem.content || null;
+      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ? WHERE id = ?`);
       
       await db.execute(
         `UPDATE news_detail 
-         SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?
+         SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
          WHERE id = ?`,
         [
           finalEnterpriseName,
           validatedAnalysis.sentiment,
           JSON.stringify(validatedAnalysis.keywords),
           validatedAnalysis.news_abstract,
+          contentToSave,
           newsItem.id
         ]
       );
@@ -2718,7 +3003,8 @@ ${enterpriseList}
       }
 
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
-      const actualContent = await this.ensureNewsContent(newsItem);
+      // 强制重新抓取，确保获取最新内容
+      const actualContent = await this.ensureNewsContent(newsItem, true);
       
       // 分析企业关联性
       const interfaceType = newsItem.APItype || '新榜';
@@ -2817,14 +3103,19 @@ ${enterpriseList}
           }
         }
         
+        // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
+        const contentToSave = contentForAnalysis || newsItem.content || null;
+        console.log(`[processNewsWithoutEnterprise] 内容长度: ${contentToSave ? contentToSave.length : 0}字符`);
+        
         await db.execute(
           `UPDATE news_detail 
-           SET news_sentiment = ?, keywords = ?, news_abstract = ?
+           SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
            WHERE id = ?`,
           [
             validatedAnalysis.sentiment,
             JSON.stringify(validatedAnalysis.keywords),
             validatedAnalysis.news_abstract,
+            contentToSave,
             newsItem.id
           ]
         );
@@ -2854,14 +3145,19 @@ ${enterpriseList}
           console.log(`[processNewsWithoutEnterprise] 开始校验分析结果（无有效企业关联）...`);
           const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
           
+          // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
+          const contentToSave = contentForAnalysis || newsItem.content || null;
+          console.log(`[processNewsWithoutEnterprise] 内容长度: ${contentToSave ? contentToSave.length : 0}字符`);
+          
           await db.execute(
             `UPDATE news_detail 
-             SET news_sentiment = ?, keywords = ?, news_abstract = ?
+             SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
              WHERE id = ?`,
             [
               validatedAnalysis.sentiment,
               JSON.stringify(validatedAnalysis.keywords),
               validatedAnalysis.news_abstract,
+              contentToSave,
               newsItem.id
             ]
           );
@@ -2877,15 +3173,19 @@ ${enterpriseList}
             
             if (i === 0) {
               // 更新原记录
+              // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
+              const contentToSave = contentForAnalysis || newsItem.content || null;
+              
               await db.execute(
                 `UPDATE news_detail 
-                 SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?
+                 SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
                  WHERE id = ?`,
                 [
                   enterprise.enterprise_name,
                   validatedAnalysis.sentiment,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
+                  contentToSave,
                   newsItem.id
                 ]
               );

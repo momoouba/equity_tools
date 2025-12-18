@@ -98,16 +98,40 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     // 如果是强制重新分析，先清空相关字段（但不清空企业全称，因为需要根据公众号重新匹配）
     // 注意：即使forceReanalyze为false，如果摘要、情绪或关键词为空或不完整，也应该重新分析
     const shouldClearResults = forceReanalyze || !newsItem.news_abstract || !newsItem.news_sentiment || !newsItem.keywords || isAbstractIncomplete;
-    if (shouldClearResults) {
-      await db.execute(
-        'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE id = ?',
-        [id]
-      );
+    
+    // 检查content是否有效（为空、太短或包含错误消息）
+    const hasValidContent = newsItem.content && 
+                            newsItem.content.trim() !== '' && 
+                            newsItem.content.length > 50 &&
+                            !newsItem.content.includes('无法提取正文内容') &&
+                            !newsItem.content.includes('正文无文字');
+    
+    // 如果content无效，也清空content字段，强制重新抓取
+    // 如果是强制重新分析，即使content有效，也要清空分析结果字段，强制重新生成摘要和关键词
+    if (shouldClearResults || !hasValidContent) {
+      if (!hasValidContent && newsItem.source_url) {
+        console.log(`⚠️ 检测到content无效（${newsItem.content ? `长度: ${newsItem.content.length}字符` : '为空'}），将清空content字段并重新抓取`);
+        await db.execute(
+          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL, content = NULL WHERE id = ?',
+          [id]
+        );
+        // 更新newsItem对象
+        newsItem.content = null;
+      } else {
+        // 即使content有效，如果是强制重新分析，也要清空分析结果字段
+        await db.execute(
+          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE id = ?',
+          [id]
+        );
+        console.log(`✓ 已清空分析结果字段（保留企业全称和content），将重新生成摘要和关键词`);
+      }
       console.log(`✓ 已清空分析结果字段（保留企业全称）`);
       if (forceReanalyze) {
         console.log(`清空原因: 强制重新分析`);
       } else if (isAbstractIncomplete) {
         console.log(`清空原因: 摘要不完整（以数字结尾或太短）`);
+      } else if (!hasValidContent) {
+        console.log(`清空原因: content无效，需要重新抓取`);
       } else {
         console.log(`清空原因: 分析结果不完整（缺少摘要、情绪或关键词）`);
       }
