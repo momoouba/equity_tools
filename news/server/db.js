@@ -1627,6 +1627,7 @@ async function initializeTables(dbPool) {
       top_p DECIMAL(3,2) DEFAULT 1.0 COMMENT 'Top P参数：0.0-1.0',
       is_active TINYINT DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       application_type ENUM('news_analysis', 'general') DEFAULT 'news_analysis' COMMENT '应用类型',
+      usage_type ENUM('content_analysis', 'image_recognition') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updater_user_id VARCHAR(19) COMMENT '更新用户ID',
@@ -2359,6 +2360,28 @@ async function initializeTables(dbPool) {
     console.warn('迁移news_interface_config唯一键约束时出现警告:', err.message);
   }
   */
+  
+  // 迁移ai_model_config表，添加usage_type字段
+  try {
+    const [usageTypeCols] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'ai_model_config' 
+      AND COLUMN_NAME = 'usage_type'
+    `);
+    
+    if (usageTypeCols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config 
+        ADD COLUMN usage_type ENUM('content_analysis', 'image_recognition') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别'
+        AFTER application_type
+      `);
+      console.log('✓ 已为 ai_model_config 表添加 usage_type 字段');
+    }
+  } catch (err) {
+    console.warn('迁移ai_model_config表usage_type字段时出现警告:', err.message);
+  }
   
   console.log('✓ 所有数据库表结构初始化完成');
   

@@ -47,7 +47,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
         id, config_name, provider, model_name, api_type, 
         CONCAT(LEFT(api_key, 8), '****') as api_key_masked,
         api_endpoint, temperature, max_tokens, top_p, 
-        is_active, application_type, creator_user_id, created_at, updated_at
+        is_active, application_type, usage_type, creator_user_id, created_at, updated_at
        FROM ai_model_config 
        ${condition} 
        ORDER BY created_at DESC 
@@ -138,7 +138,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
       temperature = 0.7,
       max_tokens = 2000,
       top_p = 1.0,
-      application_type = 'news_analysis'
+      application_type = 'news_analysis',
+      usage_type = 'content_analysis'
     } = req.body;
 
     // 验证必填字段
@@ -166,11 +167,11 @@ router.post('/', checkAdminPermission, async (req, res) => {
     await db.execute(
       `INSERT INTO ai_model_config 
        (id, config_name, provider, model_name, api_type, api_key, api_endpoint, 
-        temperature, max_tokens, top_p, application_type, creator_user_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        temperature, max_tokens, top_p, application_type, usage_type, creator_user_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId, config_name, provider, model_name, api_type, api_key, 
-        api_endpoint, temperature, max_tokens, top_p, application_type, req.currentUserId
+        api_endpoint, temperature, max_tokens, top_p, application_type, usage_type, req.currentUserId
       ]
     );
 
@@ -200,6 +201,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       max_tokens,
       top_p,
       application_type,
+      usage_type,
       is_active
     } = req.body;
 
@@ -230,11 +232,11 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       `UPDATE ai_model_config 
        SET config_name = ?, provider = ?, model_name = ?, api_type = ?, 
            api_key = ?, api_endpoint = ?, temperature = ?, max_tokens = ?, 
-           top_p = ?, application_type = ?, is_active = ?, updater_user_id = ?
+           top_p = ?, application_type = ?, usage_type = ?, is_active = ?, updater_user_id = ?
        WHERE id = ?`,
       [
         config_name, provider, model_name, api_type, api_key, api_endpoint,
-        temperature, max_tokens, top_p, application_type, is_active, req.currentUserId, id
+        temperature, max_tokens, top_p, application_type, usage_type !== undefined ? usage_type : 'content_analysis', is_active, req.currentUserId, id
       ]
     );
 
@@ -403,7 +405,9 @@ router.get('/models/available', checkAdminPermission, (req, res) => {
       'qwen-turbo',
       'qwen-plus',
       'qwen-max',
-      'qwen-max-longcontext'
+      'qwen-max-longcontext',
+      'qwen3-vl-plus',
+      'qwen-max3'
     ],
     openai: [
       'gpt-3.5-turbo',

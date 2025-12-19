@@ -1186,10 +1186,26 @@ class NewsAnalysis {
                             !newsItem.content.includes('无法提取正文内容') &&
                             !newsItem.content.includes('正文无文字');
     
+    // 检查content是否包含JavaScript/CSS代码（这是乱码的标志）
+    const isContentContaminated = this.isContentContaminated(newsItem.content || '');
+    
+    // 对于新榜接口的新闻，如果content已经存在且有效，不应该强制重新抓取
+    // 只有在content为空、无效或包含乱码时，才应该从URL抓取
+    const interfaceType = newsItem.APItype || '新榜';
+    const isXinbang = (interfaceType === '新榜' || interfaceType === '新榜接口');
+    
     // 如果强制重新抓取，或者content无效，则重新抓取
-    if (forceRefetch || !hasValidContent) {
+    // 但对于新榜接口，如果content有效且不包含乱码，不应该强制重新抓取
+    const shouldRefetch = forceRefetch && !(isXinbang && hasValidContent && !isContentContaminated) || 
+                          !hasValidContent || 
+                          isContentContaminated;
+    
+    if (shouldRefetch) {
       if (newsItem.source_url && newsItem.source_url.trim() !== '') {
-        console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} ${forceRefetch ? '强制重新抓取' : 'content无效，尝试从source_url抓取内容'}`);
+        const refetchReason = isContentContaminated ? 'content包含乱码' : 
+                             (forceRefetch ? '强制重新抓取' : 'content无效');
+        console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} ${refetchReason}，尝试从source_url抓取内容`);
+        console.log(`[ensureNewsContent] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbang}`);
         
         // 先尝试常规提取
         let fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
@@ -1530,7 +1546,7 @@ class NewsAnalysis {
       // 先尝试从标题推断关键词和摘要
       const inferredKeywords = this.inferKeywordsFromContent(title, '');
       let finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
-      let finalAbstract = '正文无文字，无法生成摘要';
+      let finalAbstract = '无正文内容，该新闻为图片，请查看详情';
         
         // 如果标题包含会议相关关键词，设置会议相关的摘要和关键词
         const titleLower = (title || '').toLowerCase();
@@ -1561,7 +1577,7 @@ class NewsAnalysis {
             finalKeywords = ['会议事项'];
           }
           // 基于标题生成摘要
-          finalAbstract = '正文无文字，无法生成摘要';
+          finalAbstract = '无正文内容，该新闻为图片，请查看详情';
           console.log(`[analyzeNewsSentimentAndType] 标题包含会议关键词，设置会议事项标签和基于标题的摘要`);
         } else if (hasRecruitmentKeyword) {
           // 如果标题包含招聘关键词，使用人员招聘标签
@@ -1569,11 +1585,11 @@ class NewsAnalysis {
             finalKeywords = ['人员招聘'];
           }
           // 基于标题生成摘要
-          finalAbstract = '正文无文字，无法生成摘要';
+          finalAbstract = '无正文内容，该新闻为图片，请查看详情';
           console.log(`[analyzeNewsSentimentAndType] 标题包含招聘关键词，设置人员招聘标签和基于标题的摘要`);
         } else if (inferredKeywords.length > 0) {
           // 如果从标题推断出了关键词，使用推断的关键词和基于标题的摘要
-          finalAbstract = '正文无文字，无法生成摘要';
+          finalAbstract = '无正文内容，该新闻为图片，请查看详情';
           console.log(`[analyzeNewsSentimentAndType] 从标题推断出关键词: ${JSON.stringify(inferredKeywords)}`);
         }
         
@@ -1583,7 +1599,7 @@ class NewsAnalysis {
         
         return {
           sentiment: 'neutral',
-          sentiment_reason: '正文无文字，无法生成摘要',
+          sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
           keywords: finalKeywords,
           news_abstract: finalAbstract
         };
@@ -2785,6 +2801,7 @@ ${enterpriseList}
       let finalEnterpriseName = newsItem.enterprise_full_name;
       let shouldValidate = true;
       const interfaceType = newsItem.APItype || '新榜';
+      const isXinbang = (interfaceType === '新榜' || interfaceType === '新榜接口');
       
       console.log(`[processNewsWithEnterprise] 检查企业是否来自invested_enterprises表...`);
       console.log(`[processNewsWithEnterprise] 接口类型: ${interfaceType}`);
@@ -2867,8 +2884,22 @@ ${enterpriseList}
       console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
       
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
-      // 强制重新抓取，确保获取最新内容
-      const actualContent = await this.ensureNewsContent(newsItem, true);
+      // 对于新榜接口，如果content已经存在且有效（不包含乱码），不应该强制重新抓取
+      const hasValidContentForAnalysis = newsItem.content && 
+                                         newsItem.content.trim() !== '' && 
+                                         newsItem.content.length > 50 &&
+                                         !newsItem.content.includes('无法提取正文内容') &&
+                                         !newsItem.content.includes('正文无文字');
+      const isContentContaminatedForAnalysis = newsItem.content && this.isContentContaminated(newsItem.content);
+      
+      // 对于新榜接口，如果content有效且不包含乱码，不强制重新抓取
+      const shouldForceRefetch = !(isXinbang && hasValidContentForAnalysis && !isContentContaminatedForAnalysis);
+      
+      console.log(`[processNewsWithEnterprise] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbang}`);
+      console.log(`[processNewsWithEnterprise] content有效性: ${hasValidContentForAnalysis}, 是否包含乱码: ${isContentContaminatedForAnalysis}`);
+      console.log(`[processNewsWithEnterprise] 是否强制重新抓取: ${shouldForceRefetch}`);
+      
+      const actualContent = await this.ensureNewsContent(newsItem, shouldForceRefetch);
       
       // 确保使用清理后的内容
       const contentForAnalysis = actualContent || newsItem.content || '';
@@ -2943,7 +2974,16 @@ ${enterpriseList}
       console.log(`[processNewsWithEnterprise] 内容长度: ${contentForAnalysis ? contentForAnalysis.length : 0}字符`);
       
       // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
-      const contentToSave = contentForAnalysis || newsItem.content || null;
+      // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
+      let contentToSave = null;
+      if (isXinbang && hasValidContentForAnalysis && !isContentContaminatedForAnalysis) {
+        // 新榜接口且content有效，使用原始content，不覆盖
+        contentToSave = newsItem.content;
+        console.log(`[processNewsWithEnterprise] 新榜接口且content有效，保留原始content，不覆盖`);
+      } else {
+        // 其他情况，使用抓取到的内容或原始content
+        contentToSave = contentForAnalysis || newsItem.content || null;
+      }
       console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ? WHERE id = ?`);
       
       await db.execute(
@@ -3003,11 +3043,26 @@ ${enterpriseList}
       }
 
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
-      // 强制重新抓取，确保获取最新内容
-      const actualContent = await this.ensureNewsContent(newsItem, true);
+      // 对于新榜接口，如果content已经存在且有效（不包含乱码），不应该强制重新抓取
+      const interfaceType = newsItem.APItype || '新榜';
+      const isXinbangForContent = (interfaceType === '新榜' || interfaceType === '新榜接口');
+      const hasValidContentForAnalysis = newsItem.content && 
+                                         newsItem.content.trim() !== '' && 
+                                         newsItem.content.length > 50 &&
+                                         !newsItem.content.includes('无法提取正文内容') &&
+                                         !newsItem.content.includes('正文无文字');
+      const isContentContaminatedForAnalysis = newsItem.content && this.isContentContaminated(newsItem.content);
+      
+      // 对于新榜接口，如果content有效且不包含乱码，不强制重新抓取
+      const shouldForceRefetch = !(isXinbangForContent && hasValidContentForAnalysis && !isContentContaminatedForAnalysis);
+      
+      console.log(`[processNewsWithoutEnterprise] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbangForContent}`);
+      console.log(`[processNewsWithoutEnterprise] content有效性: ${hasValidContentForAnalysis}, 是否包含乱码: ${isContentContaminatedForAnalysis}`);
+      console.log(`[processNewsWithoutEnterprise] 是否强制重新抓取: ${shouldForceRefetch}`);
+      
+      const actualContent = await this.ensureNewsContent(newsItem, shouldForceRefetch);
       
       // 分析企业关联性
-      const interfaceType = newsItem.APItype || '新榜';
       const relevantEnterprises = await this.analyzeEnterpriseRelevance(
         newsItem.title,
         actualContent || newsItem.content || '', // 使用抓取到的内容，如果为空则使用原始content
@@ -3025,7 +3080,22 @@ ${enterpriseList}
       );
 
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
-      const analysisContent = await this.ensureNewsContent(newsItem);
+      // 对于新榜接口，如果content已经存在且有效（不包含乱码），不应该强制重新抓取
+      const hasValidContentForAnalysis2 = newsItem.content && 
+                                         newsItem.content.trim() !== '' && 
+                                         newsItem.content.length > 50 &&
+                                         !newsItem.content.includes('无法提取正文内容') &&
+                                         !newsItem.content.includes('正文无文字');
+      const isContentContaminatedForAnalysis2 = newsItem.content && this.isContentContaminated(newsItem.content);
+      
+      // 对于新榜接口，如果content有效且不包含乱码，不强制重新抓取
+      const shouldForceRefetch2 = !(isXinbangForContent && hasValidContentForAnalysis2 && !isContentContaminatedForAnalysis2);
+      
+      console.log(`[processNewsWithoutEnterprise] 第二次调用ensureNewsContent，接口类型: ${interfaceType}, 是否新榜接口: ${isXinbangForContent}`);
+      console.log(`[processNewsWithoutEnterprise] content有效性: ${hasValidContentForAnalysis2}, 是否包含乱码: ${isContentContaminatedForAnalysis2}`);
+      console.log(`[processNewsWithoutEnterprise] 是否强制重新抓取: ${shouldForceRefetch2}`);
+      
+      const analysisContent = await this.ensureNewsContent(newsItem, shouldForceRefetch2);
       
       // 确保使用清理后的内容
       const contentForAnalysis = analysisContent || newsItem.content || '';
@@ -3104,7 +3174,16 @@ ${enterpriseList}
         }
         
         // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
-        const contentToSave = contentForAnalysis || newsItem.content || null;
+        // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
+        let contentToSave = null;
+        if (isXinbangForContent && hasValidContentForAnalysis2 && !isContentContaminatedForAnalysis2) {
+          // 新榜接口且content有效，使用原始content，不覆盖
+          contentToSave = newsItem.content;
+          console.log(`[processNewsWithoutEnterprise] 新榜接口且content有效，保留原始content，不覆盖`);
+        } else {
+          // 其他情况，使用抓取到的内容或原始content
+          contentToSave = contentForAnalysis || newsItem.content || null;
+        }
         console.log(`[processNewsWithoutEnterprise] 内容长度: ${contentToSave ? contentToSave.length : 0}字符`);
         
         await db.execute(
@@ -3146,8 +3225,17 @@ ${enterpriseList}
           const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
           
           // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
-          const contentToSave = contentForAnalysis || newsItem.content || null;
-          console.log(`[processNewsWithoutEnterprise] 内容长度: ${contentToSave ? contentToSave.length : 0}字符`);
+          // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
+          let contentToSave2 = null;
+          if (isXinbangForContent && hasValidContentForAnalysis2 && !isContentContaminatedForAnalysis2) {
+            // 新榜接口且content有效，使用原始content，不覆盖
+            contentToSave2 = newsItem.content;
+            console.log(`[processNewsWithoutEnterprise] 新榜接口且content有效，保留原始content，不覆盖`);
+          } else {
+            // 其他情况，使用抓取到的内容或原始content
+            contentToSave2 = contentForAnalysis || newsItem.content || null;
+          }
+          console.log(`[processNewsWithoutEnterprise] 内容长度: ${contentToSave2 ? contentToSave2.length : 0}字符`);
           
           await db.execute(
             `UPDATE news_detail 
@@ -3157,7 +3245,7 @@ ${enterpriseList}
               validatedAnalysis.sentiment,
               JSON.stringify(validatedAnalysis.keywords),
               validatedAnalysis.news_abstract,
-              contentToSave,
+              contentToSave2,
               newsItem.id
             ]
           );
@@ -3174,7 +3262,16 @@ ${enterpriseList}
             if (i === 0) {
               // 更新原记录
               // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
-              const contentToSave = contentForAnalysis || newsItem.content || null;
+              // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
+              let contentToSave3 = null;
+              if (isXinbangForContent && hasValidContentForAnalysis2 && !isContentContaminatedForAnalysis2) {
+                // 新榜接口且content有效，使用原始content，不覆盖
+                contentToSave3 = newsItem.content;
+                console.log(`[processNewsWithoutEnterprise] 新榜接口且content有效，保留原始content，不覆盖`);
+              } else {
+                // 其他情况，使用抓取到的内容或原始content
+                contentToSave3 = contentForAnalysis || newsItem.content || null;
+              }
               
               await db.execute(
                 `UPDATE news_detail 
@@ -3185,7 +3282,7 @@ ${enterpriseList}
                   validatedAnalysis.sentiment,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
-                  contentToSave,
+                  contentToSave3,
                   newsItem.id
                 ]
               );
@@ -3226,6 +3323,444 @@ ${enterpriseList}
   /**
    * 批量分析新闻
    */
+  /**
+   * 补充新榜接口数据的摘要和关键词（在批量分析完成后调用）
+   * 检查新榜接口中content不为空但摘要或关键词为空的记录，重新调用AI分析
+   * @returns {Promise<number>} - 补充的记录数
+   */
+  async supplementXinbangNewsAnalysis() {
+    try {
+      console.log('[补充新榜分析] 开始查询需要补充的新榜接口数据...');
+      
+      // 查询新榜接口中content不为空但摘要或关键词为空的记录
+      const newsToSupplement = await db.query(
+        `SELECT id, title, content, source_url, wechat_account, enterprise_full_name, account_name
+         FROM news_detail 
+         WHERE APItype = '新榜'
+         AND content IS NOT NULL 
+         AND content != ''
+         AND (news_abstract IS NULL OR news_abstract = '' OR keywords IS NULL OR keywords = '[]' OR keywords = '')
+         AND delete_mark = 0
+         ORDER BY created_at DESC
+         LIMIT 100`,
+        []
+      );
+
+      if (newsToSupplement.length === 0) {
+        console.log('[补充新榜分析] 没有需要补充的新榜接口数据');
+        return 0;
+      }
+
+      console.log(`[补充新榜分析] 找到 ${newsToSupplement.length} 条需要补充的新榜接口数据`);
+
+      let supplementCount = 0;
+      const interfaceType = '新榜';
+
+      for (const newsItem of newsToSupplement) {
+        try {
+          // 检查是否是额外公众号
+          const isAdditionalAccountResult = await db.query(
+            `SELECT id FROM additional_wechat_accounts 
+             WHERE wechat_account_id = ? 
+             AND status = 'active' 
+             AND delete_mark = 0`,
+            [newsItem.wechat_account]
+          );
+          const isAdditionalAccount = isAdditionalAccountResult.length > 0;
+
+          // 检查内容是否被污染
+          const isContentDirty = newsItem.content && this.isContentContaminated(newsItem.content);
+          
+          let analysisResult = null;
+          let finalContent = newsItem.content || '';
+          
+          if (isContentDirty) {
+            // 内容被污染，尝试从source_url提取内容
+            if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
+              try {
+                console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 内容被污染，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
+                const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
+                
+                if (extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
+                  finalContent = extractResult.content;
+                  console.log(`[补充新榜分析] ✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
+                  
+                  // 更新数据库中的content
+                  await db.execute(
+                    'UPDATE news_detail SET content = ? WHERE id = ?',
+                    [finalContent, newsItem.id]
+                  );
+                  
+                  // 使用提取的内容进行AI分析
+                  analysisResult = await this.analyzeNewsSentimentAndType(
+                    newsItem.title,
+                    finalContent,
+                    newsItem.source_url || '',
+                    isAdditionalAccount,
+                    interfaceType
+                  );
+                } else {
+                  // 提取失败，使用默认处理
+                  console.log(`[补充新榜分析] 从微信公众号提取内容失败，使用默认处理`);
+                  const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+                  const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+                  const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+                  
+                  analysisResult = {
+                    sentiment: 'neutral',
+                    sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+                    keywords: finalKeywords,
+                    news_abstract: finalAbstract
+                  };
+                }
+              } catch (extractError) {
+                console.error(`[补充新榜分析] 从微信公众号提取内容时出错: ${extractError.message}`);
+                // 提取失败，使用默认处理
+                const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+                const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+                const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+                
+                analysisResult = {
+                  sentiment: 'neutral',
+                  sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+                  keywords: finalKeywords,
+                  news_abstract: finalAbstract
+                };
+              }
+            } else {
+              // 不是微信公众号URL或没有source_url，使用默认处理
+              console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 内容被污染，且不是微信公众号URL，使用默认处理`);
+              const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+              const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+              const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+              
+              analysisResult = {
+                sentiment: 'neutral',
+                sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+                keywords: finalKeywords,
+                news_abstract: finalAbstract
+              };
+            }
+          } else {
+            // 内容有效，调用AI分析
+            console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 调用AI分析，内容长度: ${newsItem.content.length}字符`);
+            analysisResult = await this.analyzeNewsSentimentAndType(
+              newsItem.title,
+              newsItem.content,
+              newsItem.source_url || '',
+              isAdditionalAccount,
+              interfaceType
+            );
+          }
+
+          // 更新数据库
+          if (analysisResult) {
+            await db.execute(
+              `UPDATE news_detail 
+               SET news_sentiment = ?, keywords = ?, news_abstract = ?
+               WHERE id = ?`,
+              [
+                analysisResult.sentiment || 'neutral',
+                JSON.stringify(analysisResult.keywords || []),
+                analysisResult.news_abstract || '',
+                newsItem.id
+              ]
+            );
+            supplementCount++;
+            console.log(`[补充新榜分析] ✓ 已补充新闻ID: ${newsItem.id}`);
+          }
+
+          // 如果是额外公众号，执行企业关联分析和关联验证
+          if (isAdditionalAccount && finalContent && finalContent.trim().length > 0) {
+            try {
+              console.log(`[补充新榜分析] 额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+              
+              // 获取所有被投企业信息
+              const enterprises = await db.query(
+                `SELECT enterprise_full_name, project_abbreviation 
+                 FROM invested_enterprises 
+                 WHERE delete_mark = 0 
+                 AND exit_status NOT IN ('完全退出', '已上市')`
+              );
+
+              if (enterprises.length > 0) {
+                // 分析企业关联性
+                const relevantEnterprises = await this.analyzeEnterpriseRelevance(
+                  newsItem.title,
+                  finalContent,
+                  enterprises,
+                  interfaceType
+                );
+
+                if (relevantEnterprises.length > 0) {
+                  // 有相关企业，更新企业全称
+                  const firstEnterprise = relevantEnterprises[0];
+                  await db.execute(
+                    'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
+                    [firstEnterprise.enterprise_name, newsItem.id]
+                  );
+                  console.log(`[补充新榜分析] ✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+                }
+              }
+            } catch (enterpriseError) {
+              console.error(`[补充新榜分析] 额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+            }
+          }
+
+          // 添加延迟避免API频率限制
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error(`[补充新榜分析] 处理新闻 ${newsItem.id} 时出错:`, error);
+        }
+      }
+
+      return supplementCount;
+    } catch (error) {
+      console.error('[补充新榜分析] 补充新榜接口数据失败:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * 调用Python脚本提取微信公众号文章内容
+   * @param {string} url - 文章URL
+   * @returns {Promise<Object>} - 提取结果
+   */
+  async extractWeChatArticleContent(url) {
+    try {
+      const { spawn } = require('child_process');
+      const path = require('path');
+      
+      // 获取图片识别模型配置
+      const imageModelConfig = await db.query(
+        `SELECT * FROM ai_model_config 
+         WHERE usage_type = 'image_recognition' 
+         AND is_active = 1 
+         AND delete_mark = 0 
+         ORDER BY created_at DESC 
+         LIMIT 1`
+      );
+      
+      const pythonScriptPath = path.join(__dirname, 'wechatArticleExtractor.py');
+      const args = [pythonScriptPath, url];
+      
+      // 如果有图片识别模型配置，传递配置JSON
+      if (imageModelConfig.length > 0) {
+        const config = imageModelConfig[0];
+        const configJson = JSON.stringify({
+          api_endpoint: config.api_endpoint,
+          api_key: config.api_key,
+          model_name: config.model_name,
+          api_type: config.api_type,
+          temperature: config.temperature,
+          max_tokens: config.max_tokens
+        });
+        args.push(configJson);
+      }
+      
+      return new Promise((resolve, reject) => {
+        const pythonProcess = spawn('python3', args, {
+          cwd: __dirname,
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+        
+        let stdout = '';
+        let stderr = '';
+        
+        pythonProcess.stdout.on('data', (data) => {
+          stdout += data.toString();
+        });
+        
+        pythonProcess.stderr.on('data', (data) => {
+          stderr += data.toString();
+        });
+        
+        pythonProcess.on('close', (code) => {
+          if (code !== 0) {
+            console.error(`[提取微信公众号文章] Python脚本执行失败，退出码: ${code}, 错误: ${stderr}`);
+            reject(new Error(`Python脚本执行失败: ${stderr}`));
+            return;
+          }
+          
+          try {
+            const result = JSON.parse(stdout);
+            resolve(result);
+          } catch (parseError) {
+            console.error(`[提取微信公众号文章] 解析Python脚本输出失败: ${parseError.message}`);
+            console.error(`[提取微信公众号文章] 输出内容: ${stdout}`);
+            reject(new Error(`解析输出失败: ${parseError.message}`));
+          }
+        });
+        
+        pythonProcess.on('error', (error) => {
+          console.error(`[提取微信公众号文章] 启动Python脚本失败: ${error.message}`);
+          reject(error);
+        });
+      });
+    } catch (error) {
+      console.error(`[提取微信公众号文章] 调用Python脚本失败: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * 立即分析新榜接口的新闻（在入库后立即调用）
+   * @param {Object} newsItem - 新闻对象（包含id, title, content, source_url, wechat_account, enterprise_full_name等）
+   * @param {boolean} isAdditionalAccount - 是否是额外公众号
+   * @returns {Promise<boolean>} - 是否分析成功
+   */
+  async analyzeXinbangNewsImmediately(newsItem, isAdditionalAccount = false) {
+    try {
+      console.log(`[立即分析新榜新闻] 开始分析新闻ID: ${newsItem.id}, 标题: ${newsItem.title.substring(0, 50)}...`);
+      
+      const interfaceType = '新榜';
+      const hasContent = newsItem.content && newsItem.content.trim().length > 0;
+      const isContentDirty = newsItem.content && this.isContentContaminated(newsItem.content);
+      
+      let analysisResult = null;
+      let finalContent = newsItem.content || '';
+      
+      if (!hasContent || isContentDirty) {
+        // content为空或包含乱码，尝试从source_url提取内容
+        if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
+          try {
+            console.log(`[立即分析新榜新闻] content为空或包含乱码，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
+            const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
+            
+            if (extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
+              finalContent = extractResult.content;
+              console.log(`[立即分析新榜新闻] ✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
+              
+              // 更新数据库中的content
+              await db.execute(
+                'UPDATE news_detail SET content = ? WHERE id = ?',
+                [finalContent, newsItem.id]
+              );
+              
+              // 使用提取的内容进行AI分析
+              analysisResult = await this.analyzeNewsSentimentAndType(
+                newsItem.title,
+                finalContent,
+                newsItem.source_url || '',
+                isAdditionalAccount,
+                interfaceType
+              );
+            } else {
+              // 提取失败，使用默认处理
+              console.log(`[立即分析新榜新闻] 从微信公众号提取内容失败，使用默认处理`);
+              const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+              const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+              const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+              
+              analysisResult = {
+                sentiment: 'neutral',
+                sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+                keywords: finalKeywords,
+                news_abstract: finalAbstract
+              };
+            }
+          } catch (extractError) {
+            console.error(`[立即分析新榜新闻] 从微信公众号提取内容时出错: ${extractError.message}`);
+            // 提取失败，使用默认处理
+            const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+            const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+            const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+            
+            analysisResult = {
+              sentiment: 'neutral',
+              sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+              keywords: finalKeywords,
+              news_abstract: finalAbstract
+            };
+          }
+        } else {
+          // 不是微信公众号URL或没有source_url，使用默认处理
+          console.log(`[立即分析新榜新闻] content为空或包含乱码，且不是微信公众号URL，使用默认处理`);
+          const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
+          const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+          const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
+          
+          analysisResult = {
+            sentiment: 'neutral',
+            sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
+            keywords: finalKeywords,
+            news_abstract: finalAbstract
+          };
+        }
+      } else {
+        // content有内容，调用AI分析
+        console.log(`[立即分析新榜新闻] content有内容，调用AI分析，内容长度: ${newsItem.content.length}字符`);
+        analysisResult = await this.analyzeNewsSentimentAndType(
+          newsItem.title,
+          newsItem.content,
+          newsItem.source_url || '',
+          isAdditionalAccount,
+          interfaceType
+        );
+      }
+      
+      // 更新数据库
+      if (analysisResult) {
+        await db.execute(
+          `UPDATE news_detail 
+           SET news_sentiment = ?, keywords = ?, news_abstract = ?
+           WHERE id = ?`,
+          [
+            analysisResult.sentiment || 'neutral',
+            JSON.stringify(analysisResult.keywords || []),
+            analysisResult.news_abstract || '',
+            newsItem.id
+          ]
+        );
+        console.log(`[立即分析新榜新闻] ✓ 已更新数据库，新闻ID: ${newsItem.id}`);
+        
+        // 如果是额外公众号，执行企业关联分析和关联验证
+        if (isAdditionalAccount && hasContent && !isContentDirty) {
+          try {
+            console.log(`[立即分析新榜新闻] 额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+            
+            // 获取所有被投企业信息
+            const enterprises = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation 
+               FROM invested_enterprises 
+               WHERE delete_mark = 0 
+               AND exit_status NOT IN ('完全退出', '已上市')`
+            );
+
+            if (enterprises.length > 0) {
+              // 分析企业关联性
+              const relevantEnterprises = await this.analyzeEnterpriseRelevance(
+                newsItem.title,
+                finalContent,
+                enterprises,
+                interfaceType
+              );
+
+              if (relevantEnterprises.length > 0) {
+                // 有相关企业，更新企业全称
+                const firstEnterprise = relevantEnterprises[0];
+                await db.execute(
+                  'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
+                  [firstEnterprise.enterprise_name, newsItem.id]
+                );
+                console.log(`[立即分析新榜新闻] ✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+              }
+            }
+          } catch (enterpriseError) {
+            console.error(`[立即分析新榜新闻] 额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+          }
+        }
+        
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error(`[立即分析新榜新闻] ✗ 分析失败，新闻ID: ${newsItem.id}, 错误: ${error.message}`);
+      return false;
+    }
+  }
+
   async batchAnalyzeNews(limit = 50) {
     try {
       console.log('开始批量分析新闻...');
@@ -3333,6 +3868,16 @@ ${enterpriseList}
       }
 
       console.log(`批量分析完成: 成功 ${successCount} 条, 失败 ${errorCount} 条`);
+
+      // AI分析完成后，检查新榜接口数据，补充缺失的摘要和关键词
+      let xinbangSupplementCount = 0;
+      try {
+        console.log('[批量分析] 开始检查新榜接口数据，补充缺失的摘要和关键词...');
+        xinbangSupplementCount = await this.supplementXinbangNewsAnalysis();
+        console.log(`[批量分析] 新榜接口数据补充完成: 补充了 ${xinbangSupplementCount} 条新闻的摘要和关键词`);
+      } catch (supplementError) {
+        console.error('[批量分析] 补充新榜接口数据失败:', supplementError);
+      }
 
       // AI分析完成后，执行去重检查
       let duplicateCount = 0;

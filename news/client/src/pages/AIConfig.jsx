@@ -25,6 +25,7 @@ function AIConfig() {
     max_tokens: 2000,
     top_p: 1.0,
     application_type: 'news_analysis',
+    usage_type: 'content_analysis',
     is_active: 1
   });
 
@@ -49,6 +50,11 @@ function AIConfig() {
   const applicationTypes = [
     { value: 'news_analysis', label: '新闻分析' },
     { value: 'general', label: '通用' }
+  ];
+
+  const usageTypes = [
+    { value: 'content_analysis', label: '情绪分析' },
+    { value: 'image_recognition', label: '图片识别' }
   ];
 
   useEffect(() => {
@@ -104,6 +110,7 @@ function AIConfig() {
       max_tokens: 2000,
       top_p: 1.0,
       application_type: 'news_analysis',
+      usage_type: 'content_analysis',
       is_active: 1
     });
     setTestResult(null);
@@ -302,6 +309,7 @@ function AIConfig() {
               <th>提供商</th>
               <th>模型名称</th>
               <th>应用类型</th>
+              <th>用途类型</th>
               <th>状态</th>
               <th>创建时间</th>
               <th>操作</th>
@@ -310,11 +318,11 @@ function AIConfig() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan="7" className="loading">加载中...</td>
+                <td colSpan="8" className="loading">加载中...</td>
               </tr>
             ) : configs.length === 0 ? (
               <tr>
-                <td colSpan="7" className="no-data">暂无配置</td>
+                <td colSpan="8" className="no-data">暂无配置</td>
               </tr>
             ) : (
               configs.map(config => (
@@ -323,6 +331,7 @@ function AIConfig() {
                   <td>{providers.find(p => p.value === config.provider)?.label || config.provider}</td>
                   <td>{config.model_name}</td>
                   <td>{applicationTypes.find(t => t.value === config.application_type)?.label || config.application_type}</td>
+                  <td>{usageTypes.find(t => t.value === config.usage_type)?.label || config.usage_type || '内容分析'}</td>
                   <td>
                     <span className={`status-badge ${config.is_active ? 'active' : 'inactive'}`}>
                       {config.is_active ? '启用' : '禁用'}
@@ -536,19 +545,38 @@ function AIConfig() {
                 </div>
               </div>
 
-              <div className="form-group">
-                <label>
-                  <input
-                    type="checkbox"
-                    name="is_active"
-                    checked={formData.is_active === 1}
-                    onChange={(e) => setFormData(prev => ({
-                      ...prev,
-                      is_active: e.target.checked ? 1 : 0
-                    }))}
-                  />
-                  启用配置
-                </label>
+              <div className="form-row">
+                <div className="form-group">
+                  <label>用途类型 *</label>
+                  <select
+                    name="usage_type"
+                    value={formData.usage_type}
+                    onChange={handleInputChange}
+                    required
+                  >
+                    <option value="">请选择用途类型</option>
+                    {usageTypes.map(type => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', marginTop: '25px' }}>
+                    <input
+                      type="checkbox"
+                      name="is_active"
+                      checked={formData.is_active === 1}
+                      onChange={(e) => setFormData(prev => ({
+                        ...prev,
+                        is_active: e.target.checked ? 1 : 0
+                      }))}
+                      style={{ marginRight: '8px' }}
+                    />
+                    启用配置
+                  </label>
+                </div>
               </div>
 
               {testResult && (

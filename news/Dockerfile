@@ -7,8 +7,11 @@ WORKDIR /app/client
 # 复制前端依赖文件
 COPY client/package*.json ./
 
-# 安装前端依赖
-RUN npm ci
+# 配置npm使用国内镜像源并安装前端依赖
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-timeout 300000 \
+    && npm config set fetch-retries 5 \
+    && npm ci
 
 # 复制前端源代码
 COPY client/ ./
@@ -21,18 +24,37 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-# 安装系统依赖（MySQL客户端等）
-RUN apk add --no-cache \
+# 安装系统依赖（MySQL客户端、Python3、pip等）
+# 使用国内镜像源加速并添加DNS配置
+RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf || true \
+    && sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories || true \
+    && apk update --no-cache --timeout=300 \
+    && apk add --no-cache --timeout=300 \
     mysql-client \
+    python3 \
+    py3-pip \
+    py3-setuptools \
     tzdata \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
-    && echo "Asia/Shanghai" > /etc/timezone
+    && echo "Asia/Shanghai" > /etc/timezone \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && ln -sf /usr/bin/pip3 /usr/bin/pip
 
 # 复制后端依赖文件
 COPY package*.json ./
 
-# 安装后端依赖
-RUN npm ci --only=production
+# 配置npm使用国内镜像源并安装后端依赖
+RUN npm config set registry https://registry.npmmirror.com \
+    && npm config set fetch-timeout 300000 \
+    && npm config set fetch-retries 5 \
+    && npm ci --only=production
+
+# 复制Python依赖文件并安装
+COPY server/utils/requirements.txt ./server/utils/
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && pip config set global.timeout 300 \
+    && pip config set global.retries 5 \
+    && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt
 
 # 复制后端源代码
 COPY server/ ./server/

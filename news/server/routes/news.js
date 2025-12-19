@@ -643,6 +643,33 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   '新榜' // APItype - 新榜接口
                 ]
               );
+              
+              // 新榜接口：入库后立即进行AI分析
+              try {
+                const newsAnalysis = require('../utils/newsAnalysis');
+                const newsItem = {
+                  id: newsId,
+                  title: article.title || '',
+                  content: article.content || '',
+                  source_url: sourceUrl,
+                  wechat_account: account,
+                  enterprise_full_name: enterpriseFullName
+                };
+                const isAdditionalAccount = additionalAccountIds.includes(account);
+                
+                // 异步执行AI分析，不阻塞同步流程
+                setImmediate(async () => {
+                  try {
+                    await newsAnalysis.analyzeXinbangNewsImmediately(newsItem, isAdditionalAccount);
+                    console.log(`[新榜同步] ✓ 已立即分析新闻ID: ${newsId}`);
+                  } catch (analysisError) {
+                    console.error(`[新榜同步] ✗ 立即分析失败，新闻ID: ${newsId}, 错误: ${analysisError.message}`);
+                  }
+                });
+              } catch (analysisInitError) {
+                console.warn(`[新榜同步] ✗ 启动立即分析失败，新闻ID: ${newsId}, 错误: ${analysisInitError.message}`);
+              }
+              
               totalSynced++;
               accountInsertCount++;
           }
