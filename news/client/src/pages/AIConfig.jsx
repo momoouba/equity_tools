@@ -44,7 +44,8 @@ function AIConfig() {
 
   const apiTypes = [
     { value: 'chat', label: 'Chat API' },
-    { value: 'completion', label: 'Completion API' }
+    { value: 'completion', label: 'Completion API' },
+    { value: 'chat_completion', label: 'Chat Completion API' }
   ];
 
   const applicationTypes = [
@@ -242,13 +243,39 @@ function AIConfig() {
       ...prev,
       provider,
       model_name: '', // 重置模型名称
-      api_endpoint: getDefaultEndpoint(provider)
+      api_endpoint: getDefaultEndpoint(provider, prev.usage_type)
     }));
   };
 
-  const getDefaultEndpoint = (provider) => {
+  const handleModelNameChange = (e) => {
+    const modelName = e.target.value;
+    setFormData(prev => ({
+      ...prev,
+      model_name: modelName,
+      // 如果是视觉模型，自动设置正确的端点
+      api_endpoint: getDefaultEndpoint(prev.provider, prev.usage_type, modelName)
+    }));
+  };
+
+  const handleUsageTypeChange = (e) => {
+    const usageType = e.target.value;
+    setFormData(prev => ({
+      ...prev,
+      usage_type: usageType,
+      // 如果是图片识别，自动设置正确的端点
+      api_endpoint: getDefaultEndpoint(prev.provider, usageType, prev.model_name)
+    }));
+  };
+
+  const getDefaultEndpoint = (provider, usageType = 'content_analysis', modelName = '') => {
+    // 检查是否是视觉模型
+    const isVisionModel = usageType === 'image_recognition' || 
+                         (modelName && (modelName.toLowerCase().includes('vl') || modelName.toLowerCase().includes('vision')));
+    
     const endpoints = {
-      alibaba: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
+      alibaba: isVisionModel 
+        ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
+        : 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
       openai: 'https://api.openai.com/v1/chat/completions',
       baidu: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions',
       tencent: 'https://hunyuan.tencentcloudapi.com/'
@@ -440,7 +467,7 @@ function AIConfig() {
                   <select
                     name="model_name"
                     value={formData.model_name}
-                    onChange={handleInputChange}
+                    onChange={handleModelNameChange}
                     required
                   >
                     <option value="">请选择模型</option>
@@ -551,7 +578,7 @@ function AIConfig() {
                   <select
                     name="usage_type"
                     value={formData.usage_type}
-                    onChange={handleInputChange}
+                    onChange={handleUsageTypeChange}
                     required
                   >
                     <option value="">请选择用途类型</option>
@@ -562,20 +589,20 @@ function AIConfig() {
                     ))}
                   </select>
                 </div>
-                <div className="form-group">
+              <div className="form-group">
                   <label style={{ display: 'flex', alignItems: 'center', marginTop: '25px' }}>
-                    <input
-                      type="checkbox"
-                      name="is_active"
-                      checked={formData.is_active === 1}
-                      onChange={(e) => setFormData(prev => ({
-                        ...prev,
-                        is_active: e.target.checked ? 1 : 0
-                      }))}
+                  <input
+                    type="checkbox"
+                    name="is_active"
+                    checked={formData.is_active === 1}
+                    onChange={(e) => setFormData(prev => ({
+                      ...prev,
+                      is_active: e.target.checked ? 1 : 0
+                    }))}
                       style={{ marginRight: '8px' }}
-                    />
-                    启用配置
-                  </label>
+                  />
+                  启用配置
+                </label>
                 </div>
               </div>
 

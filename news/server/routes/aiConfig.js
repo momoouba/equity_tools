@@ -321,9 +321,32 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
 
   } catch (error) {
     console.error('测试AI模型失败：', error);
+    
+    // 获取更详细的错误信息
+    let errorMessage = error.message;
+    if (error.response) {
+      // 如果有响应，获取详细的错误信息
+      const statusCode = error.response.status;
+      const errorData = error.response.data;
+      
+      if (errorData) {
+        if (errorData.message) {
+          errorMessage = `HTTP ${statusCode}: ${errorData.message}`;
+        } else if (errorData.error) {
+          errorMessage = `HTTP ${statusCode}: ${errorData.error.message || errorData.error}`;
+        } else if (errorData.code) {
+          errorMessage = `HTTP ${statusCode}: ${errorData.code} - ${errorData.message || '未知错误'}`;
+        } else {
+          errorMessage = `HTTP ${statusCode}: ${JSON.stringify(errorData)}`;
+        }
+      } else {
+        errorMessage = `HTTP ${statusCode}: ${error.message}`;
+      }
+    }
+    
     res.status(500).json({ 
       success: false, 
-      message: '测试失败：' + error.message 
+      message: '测试失败：' + errorMessage 
     });
   }
 });
@@ -332,35 +355,137 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
 async function testAlibabaModel(config) {
   const testMessage = "你好，请回复'测试成功'";
   
-  const requestData = {
-    model: config.model_name,
-    input: {
+  // 检查是否是视觉模型（VL模型）
+  const isVisionModel = config.model_name && (
+    config.model_name.toLowerCase().includes('vl') || 
+    config.model_name.toLowerCase().includes('vision') ||
+    config.usage_type === 'image_recognition'
+  );
+  
+  // 对于视觉模型，验证API端点是否正确
+  if (isVisionModel) {
+    const endpoint = config.api_endpoint || '';
+    // 视觉模型应该使用兼容模式端点或multimodal端点
+    const isValidVisionEndpoint = 
+      endpoint.includes('/compatible-mode/v1/chat/completions') ||
+      endpoint.includes('/multimodal-generation/generation') ||
+      endpoint.includes('/chat/completions');
+    
+    if (!isValidVisionEndpoint) {
+      throw new Error(
+        '视觉模型需要使用正确的API端点。\n' +
+        '推荐使用：https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions\n' +
+        '或：https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+      );
+    }
+  }
+  
+  let requestData;
+  
+  // 确保参数类型正确（转换为数字类型）
+  const temperature = typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature;
+  const maxTokens = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const topP = typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p;
+  
+  // 根据API类型选择不同的请求格式
+  if (config.api_type === 'chat_completion') {
+    // Chat Completion API（兼容OpenAI格式）
+    requestData = {
+      model: config.model_name,
       messages: [
         {
           role: "user",
           content: testMessage
         }
-      ]
-    },
-    parameters: {
-      temperature: config.temperature,
-      max_tokens: Math.min(config.max_tokens, 100), // 测试时限制token数
-      top_p: config.top_p
-    }
-  };
+      ],
+      temperature: temperature,
+      max_tokens: Math.min(maxTokens, 100), // 测试时限制token数
+      top_p: topP
+    };
+  } else {
+    // Chat API（阿里云原生格式）
+    requestData = {
+      model: config.model_name,
+      input: {
+        messages: [
+          {
+            role: "user",
+            content: testMessage
+          }
+        ]
+      },
+      parameters: {
+        temperature: temperature,
+        max_tokens: Math.min(maxTokens, 100), // 测试时限制token数
+        top_p: topP
+      }
+    };
+  }
 
-  const response = await axios.post(config.api_endpoint, requestData, {
-    headers: {
-      'Authorization': `Bearer ${config.api_key}`,
-      'Content-Type': 'application/json'
-    },
-    timeout: 30000
-  });
+  // 添加调试日志
+  console.log(`[测试AI模型] 模型: ${config.model_name}, API类型: ${config.api_type}, 端点: ${config.api_endpoint}`);
+  console.log(`[测试AI模型] 请求数据:`, JSON.stringify(requestData, null, 2));
+  
+  let response;
+  try {
+    response = await axios.post(config.api_endpoint, requestData, {
+      headers: {
+        'Authorization': `Bearer ${config.api_key}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
+    });
+    console.log(`[测试AI模型] 响应成功:`, JSON.stringify(response.data, null, 2));
+  } catch (error) {
+    // 捕获并抛出更详细的错误信息
+    console.error(`[测试AI模型] 请求失败:`, error.response?.data || error.message);
+    
+    if (error.response) {
+      const statusCode = error.response.status;
+      const errorData = error.response.data;
+      let detailedError = `API请求失败 (HTTP ${statusCode})`;
+      
+      if (errorData) {
+        if (errorData.message) {
+          detailedError += `: ${errorData.message}`;
+        } else if (errorData.error) {
+          detailedError += `: ${errorData.error.message || errorData.error}`;
+        } else if (errorData.code) {
+          detailedError += `: ${errorData.code} - ${errorData.message || '未知错误'}`;
+        }
+        
+        // 如果是模型不存在错误，提供更详细的提示
+        if (errorData.code === 'InvalidParameter' && errorData.message && errorData.message.includes('Model not exist')) {
+          detailedError += '\n\n可能的原因：\n';
+          detailedError += '1. 模型名称不正确，请确认模型名称完全匹配（qwen3-vl-plus）\n';
+          detailedError += '2. API端点不正确，视觉模型应使用兼容模式端点\n';
+          detailedError += '3. 账户可能没有权限使用该模型\n';
+          detailedError += '\n推荐配置：\n';
+          detailedError += '- API端点：https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions\n';
+          detailedError += '- API类型：Chat Completion API\n';
+          detailedError += '- 模型名称：qwen3-vl-plus（注意大小写）';
+        }
+      }
+      
+      throw new Error(detailedError);
+    }
+    throw error;
+  }
+
+  // 根据API类型解析响应
+  let modelResponse;
+  if (config.api_type === 'chat_completion') {
+    // Chat Completion API响应格式（兼容OpenAI）
+    modelResponse = response.data.choices?.[0]?.message?.content || '模型响应格式未知';
+  } else {
+    // Chat API响应格式（阿里云原生）
+    modelResponse = response.data.output?.text || response.data.output?.choices?.[0]?.message?.content || '模型响应格式未知';
+  }
 
   return {
     status: 'success',
     response_time: new Date().toISOString(),
-    model_response: response.data.output?.text || response.data.output?.choices?.[0]?.message?.content || '模型响应格式未知',
+    model_response: modelResponse,
     token_usage: response.data.usage || null
   };
 }
@@ -404,10 +529,9 @@ router.get('/models/available', checkAdminPermission, (req, res) => {
     alibaba: [
       'qwen-turbo',
       'qwen-plus',
-      'qwen-max',
-      'qwen-max-longcontext',
-      'qwen3-vl-plus',
-      'qwen-max3'
+      'qwen3-max',
+      'qwen-long',
+      'qwen3-vl-plus'
     ],
     openai: [
       'gpt-3.5-turbo',

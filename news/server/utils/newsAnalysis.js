@@ -1394,9 +1394,9 @@ class NewsAnalysis {
         ]
       },
       parameters: {
-        temperature: config.temperature,
-        max_tokens: config.max_tokens,
-        top_p: config.top_p
+        temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
+        max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+        top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
       }
     };
 
@@ -1423,9 +1423,9 @@ class NewsAnalysis {
           content: prompt
         }
       ],
-      temperature: config.temperature,
-      max_tokens: config.max_tokens,
-      top_p: config.top_p
+      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
+      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
     };
 
     const response = await axios.post(config.api_endpoint, requestData, {

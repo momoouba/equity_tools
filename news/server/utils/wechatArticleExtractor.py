@@ -241,7 +241,9 @@ class WeChatArticleExtractor:
             prompt = "请识别这张图片中的所有文字内容，包括图片中的标题、正文、图表文字等。如果图片中没有文字，请返回'无文字内容'。"
             
             # 根据不同的API类型构建请求体
-            if self.image_model_config.get('api_type') == 'chat':
+            api_type = self.image_model_config.get('api_type', 'chat')
+            if api_type == 'chat' or api_type == 'chat_completion':
+                # Chat API 或 Chat Completion API（兼容OpenAI格式）
                 payload = {
                     'model': model_name,
                     'messages': [
@@ -286,10 +288,13 @@ class WeChatArticleExtractor:
             result = response.json()
             
             # 解析响应
-            if self.image_model_config.get('api_type') == 'chat':
+            api_type = self.image_model_config.get('api_type', 'chat')
+            if api_type == 'chat' or api_type == 'chat_completion':
+                # Chat API 或 Chat Completion API响应格式（兼容OpenAI）
                 if 'choices' in result and len(result['choices']) > 0:
                     return result['choices'][0]['message']['content']
             else:
+                # 其他API类型的响应格式
                 if 'text' in result:
                     return result['text']
                 elif 'content' in result:
