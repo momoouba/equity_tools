@@ -1207,8 +1207,35 @@ class NewsAnalysis {
         console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} ${refetchReason}，尝试从source_url抓取内容`);
         console.log(`[ensureNewsContent] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbang}`);
         
-        // 先尝试常规提取
-        let fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+        // 对于微信公众号文章，优先使用Python脚本提取（支持验证页面URL，但图片提取功能已禁用）
+        let fetchedContent = null;
+        if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
+          try {
+            console.log(`[ensureNewsContent] 检测到微信公众号URL，使用Python脚本提取内容: ${newsItem.source_url}`);
+            const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
+            
+            if (extractResult && extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
+              fetchedContent = extractResult.content;
+              console.log(`[ensureNewsContent] ✓ Python脚本提取成功，内容长度: ${fetchedContent.length}字符`);
+              // ========== 图片统计已禁用 ==========
+              // console.log(`[ensureNewsContent] 图片统计: 找到 ${extractResult.image_count || 0} 张图片，识别 ${extractResult.recognized_image_count || 0} 张`);
+              console.log(`[ensureNewsContent] 图片统计: 图片提取功能已禁用`);
+            } else {
+              console.warn(`[ensureNewsContent] Python脚本提取失败或内容为空，错误: ${extractResult?.error || '未知错误'}`);
+              // Python脚本提取失败，尝试使用常规方法作为备用
+              console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
+              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+            }
+          } catch (wechatError) {
+            console.error(`[ensureNewsContent] Python脚本提取时出错: ${wechatError.message}`);
+            // Python脚本提取失败，尝试使用常规方法作为备用
+            console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
+            fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+          }
+        } else {
+          // 非微信公众号文章，使用常规提取
+          fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+        }
         
         // 如果常规提取失败或内容太短，尝试使用AI提取（仅对格隆汇等网站）
         const isGelonghui = /gelonghui\.com/i.test(newsItem.source_url);
@@ -1296,7 +1323,7 @@ class NewsAnalysis {
         // 检查清理后是否仍然被污染
         if (this.isContentContaminated(cleanedContent)) {
           console.log(`[ensureNewsContent] 清理后仍然包含脏信息，尝试重新抓取`);
-          // 如果有source_url，重新抓取
+          // 如果有source_url，重新抓取（递归调用会使用Python脚本处理微信公众号文章）
           if (newsItem.source_url && newsItem.source_url.trim() !== '') {
             return await this.ensureNewsContent(newsItem, true); // 递归调用，强制重新抓取
           } else {
@@ -3530,33 +3557,58 @@ ${enterpriseList}
     try {
       const { spawn } = require('child_process');
       const path = require('path');
+      const { URL } = require('url');
       
+      // 处理验证页面URL：如果是wappoc_appmsgcaptcha验证页面，提取target_url参数
+      let actualUrl = url;
+      try {
+        const urlObj = new URL(url);
+        if (urlObj.pathname.includes('wappoc_appmsgcaptcha') && urlObj.searchParams.has('target_url')) {
+          const targetUrl = urlObj.searchParams.get('target_url');
+          if (targetUrl) {
+            actualUrl = decodeURIComponent(targetUrl);
+            console.log(`[提取微信公众号文章] 检测到验证页面URL，提取真实文章URL: ${actualUrl}`);
+          }
+        }
+      } catch (urlError) {
+        console.warn(`[提取微信公众号文章] 解析URL失败，使用原始URL: ${urlError.message}`);
+      }
+      
+      // ========== 图片识别模型配置获取已禁用 ==========
+      // 暂时不实现从微信公众号内容中提取图片的功能
       // 获取图片识别模型配置
-      const imageModelConfig = await db.query(
-        `SELECT * FROM ai_model_config 
-         WHERE usage_type = 'image_recognition' 
-         AND is_active = 1 
-         AND delete_mark = 0 
-         ORDER BY created_at DESC 
-         LIMIT 1`
-      );
+      // const imageModelConfig = await db.query(
+      //   `SELECT * FROM ai_model_config 
+      //    WHERE usage_type = 'image_recognition' 
+      //    AND is_active = 1 
+      //    AND delete_mark = 0 
+      //    ORDER BY created_at DESC 
+      //    LIMIT 1`
+      // );
+      const imageModelConfig = []; // 图片识别功能已禁用
       
       const pythonScriptPath = path.join(__dirname, 'wechatArticleExtractor.py');
-      const args = [pythonScriptPath, url];
+      const args = [pythonScriptPath, actualUrl];
       
+      // ========== 图片识别模型配置传递已禁用 ==========
       // 如果有图片识别模型配置，传递配置JSON
-      if (imageModelConfig.length > 0) {
-        const config = imageModelConfig[0];
-        const configJson = JSON.stringify({
-          api_endpoint: config.api_endpoint,
-          api_key: config.api_key,
-          model_name: config.model_name,
-          api_type: config.api_type,
-          temperature: config.temperature,
-          max_tokens: config.max_tokens
-        });
-        args.push(configJson);
-      }
+      // if (imageModelConfig.length > 0) {
+      //   const config = imageModelConfig[0];
+      //   const configJson = JSON.stringify({
+      //     api_endpoint: config.api_endpoint,
+      //     api_key: config.api_key,
+      //     model_name: config.model_name,
+      //     api_type: config.api_type,
+      //     temperature: config.temperature,
+      //     max_tokens: config.max_tokens
+      //   });
+      //   args.push(configJson);
+      // }
+      
+      console.log(`[提取微信公众号文章] 准备执行Python脚本: python3 ${args.join(' ')}`);
+      console.log(`[提取微信公众号文章] 脚本路径: ${pythonScriptPath}`);
+      console.log(`[提取微信公众号文章] 工作目录: ${__dirname}`);
+      console.log(`[提取微信公众号文章] 图片识别模型配置: 已禁用（图片提取功能已禁用）`);
       
       return new Promise((resolve, reject) => {
         const pythonProcess = spawn('python3', args, {
@@ -3568,32 +3620,59 @@ ${enterpriseList}
         let stderr = '';
         
         pythonProcess.stdout.on('data', (data) => {
-          stdout += data.toString();
+          const output = data.toString();
+          stdout += output;
+          // 实时输出stdout（用于调试）
+          console.log(`[提取微信公众号文章] Python stdout: ${output.trim()}`);
         });
         
         pythonProcess.stderr.on('data', (data) => {
-          stderr += data.toString();
+          const output = data.toString();
+          stderr += output;
+          // 实时输出stderr（用于调试）
+          console.error(`[提取微信公众号文章] Python stderr: ${output.trim()}`);
         });
         
         pythonProcess.on('close', (code) => {
+          console.log(`[提取微信公众号文章] Python脚本执行完成，退出码: ${code}`);
+          console.log(`[提取微信公众号文章] stdout长度: ${stdout.length}字符, stderr长度: ${stderr.length}字符`);
+          
           if (code !== 0) {
-            console.error(`[提取微信公众号文章] Python脚本执行失败，退出码: ${code}, 错误: ${stderr}`);
-            reject(new Error(`Python脚本执行失败: ${stderr}`));
+            console.error(`[提取微信公众号文章] Python脚本执行失败，退出码: ${code}`);
+            console.error(`[提取微信公众号文章] stderr完整内容:\n${stderr}`);
+            console.error(`[提取微信公众号文章] stdout完整内容:\n${stdout}`);
+            reject(new Error(`Python脚本执行失败（退出码: ${code}）: ${stderr || stdout || '未知错误'}`));
             return;
           }
           
+          // 即使退出码为0，也检查stderr是否有错误信息
+          if (stderr && stderr.trim().length > 0) {
+            console.warn(`[提取微信公众号文章] Python脚本有stderr输出（可能是警告）: ${stderr}`);
+          }
+          
           try {
+            if (!stdout || stdout.trim().length === 0) {
+              console.error(`[提取微信公众号文章] Python脚本stdout为空`);
+              reject(new Error('Python脚本未返回任何输出'));
+              return;
+            }
+            
             const result = JSON.parse(stdout);
+            console.log(`[提取微信公众号文章] Python脚本返回结果: success=${result.success}, content长度=${result.content?.length || 0}, error=${result.error || '无'}`);
             resolve(result);
           } catch (parseError) {
             console.error(`[提取微信公众号文章] 解析Python脚本输出失败: ${parseError.message}`);
-            console.error(`[提取微信公众号文章] 输出内容: ${stdout}`);
-            reject(new Error(`解析输出失败: ${parseError.message}`));
+            console.error(`[提取微信公众号文章] stdout完整内容（前500字符）: ${stdout.substring(0, 500)}`);
+            console.error(`[提取微信公众号文章] stdout完整内容（后500字符）: ${stdout.substring(Math.max(0, stdout.length - 500))}`);
+            console.error(`[提取微信公众号文章] stderr完整内容: ${stderr}`);
+            reject(new Error(`解析输出失败: ${parseError.message}。stdout: ${stdout.substring(0, 200)}...`));
           }
         });
         
         pythonProcess.on('error', (error) => {
           console.error(`[提取微信公众号文章] 启动Python脚本失败: ${error.message}`);
+          console.error(`[提取微信公众号文章] 错误堆栈: ${error.stack}`);
+          console.error(`[提取微信公众号文章] 可能的原因: Python3未安装或路径不正确`);
           reject(error);
         });
       });

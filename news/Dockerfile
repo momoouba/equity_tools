@@ -1,6 +1,6 @@
 # 多阶段构建 Dockerfile
 # 阶段1: 构建前端
-FROM node:18-alpine AS frontend-builder
+FROM node:18-slim AS frontend-builder
 
 WORKDIR /app/client
 
@@ -20,25 +20,37 @@ COPY client/ ./
 RUN npm run build
 
 # 阶段2: 构建后端并运行
-FROM node:18-alpine
+FROM node:18-slim
 
 WORKDIR /app
 
 # 安装系统依赖（MySQL客户端、Python3、pip等）
-# 使用国内镜像源加速并添加DNS配置
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf || true \
-    && sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories || true \
-    && apk update --no-cache --timeout=300 \
-    && apk add --no-cache --timeout=300 \
-    mysql-client \
+# 使用Debian包管理器
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    default-mysql-client \
     python3 \
-    py3-pip \
-    py3-setuptools \
+    python3-pip \
+    python3-setuptools \
     tzdata \
+    # Playwright所需的系统依赖
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libgtk-3-0 \
+    libxshmfence1 \
+    && rm -rf /var/lib/apt/lists/* \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
-    && ln -sf /usr/bin/python3 /usr/bin/python \
-    && ln -sf /usr/bin/pip3 /usr/bin/pip
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 # 复制后端依赖文件
 COPY package*.json ./
@@ -54,7 +66,9 @@ COPY server/utils/requirements.txt ./server/utils/
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip config set global.timeout 300 \
     && pip config set global.retries 5 \
-    && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt
+    && pip install --upgrade pip \
+    && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt \
+    && playwright install chromium || echo "Playwright安装失败，将在运行时提示安装"
 
 # 复制后端源代码
 COPY server/ ./server/
@@ -70,8 +84,8 @@ COPY --from=frontend-builder /app/client/dist ./client/dist
 RUN mkdir -p uploads logs
 
 # 创建非root用户
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 && \
+RUN groupadd -r nodejs && \
+    useradd -r -g nodejs nodejs && \
     chown -R nodejs:nodejs /app
 
 USER nodejs
