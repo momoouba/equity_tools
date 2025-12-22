@@ -404,10 +404,16 @@ async function getUserVisibleYesterdayNews(userId) {
     })));
   }
   
-  // 过滤掉摘要和正文都为空的数据
+  // 过滤掉摘要和正文都为空的数据，以及企业名称为null或空的数据
   // 注意：news_abstract 可能为 null，但 summary 字段可能有值
   const beforeFilterCount = filteredNewsList.length;
   const finalNewsList = filteredNewsList.filter(news => {
+    // 首先过滤掉企业名称为null或空字符串的新闻
+    if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
+      console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
+      return false;
+    }
+    
     // 检查 news_abstract 字段（AI提取的摘要）
     const hasAbstract = news.news_abstract && news.news_abstract.trim() !== '';
     // 检查 summary 字段（原始摘要，新榜数据使用此字段）
@@ -599,9 +605,15 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     // 生成邮件内容
     const { generateEmailContent, generateEmailTextContent } = require('./emailSender');
     
-    // 过滤掉广告类型的新闻（广告推广、商业广告、营销推广）
+    // 过滤掉广告类型的新闻（广告推广、商业广告、营销推广），以及企业名称为null或空的新闻
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
+      // 首先过滤掉企业名称为null或空字符串的新闻
+      if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
+        console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
+        return false;
+      }
+      
       // 解析keywords字段（可能是JSON字符串或数组）
       let keywords = [];
       if (news.keywords) {
@@ -650,9 +662,15 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
     }
     
-    // 按企业分组新闻（使用过滤后的列表）
+    // 按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
     const newsByEnterprise = {};
     for (const news of filteredNewsList) {
+      // 过滤掉企业名称为null或空字符串的新闻
+      if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
+        console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
+        continue;
+      }
+      
       let enterpriseName = news.enterprise_full_name;
       let groupKey = enterpriseName;
       

@@ -78,14 +78,20 @@ async function getYesterdayNewsByEnterprise() {
     [from, to]
   );
   
-  // 按企业分组
+  // 按企业分组（过滤掉企业名称为null或空字符串的新闻）
   const newsByEnterprise = {};
   for (const news of newsList) {
     const enterpriseName = news.enterprise_full_name;
-    if (!newsByEnterprise[enterpriseName]) {
-      newsByEnterprise[enterpriseName] = [];
+    // 确保企业名称不为null、不为空字符串
+    if (enterpriseName && enterpriseName.trim() !== '') {
+      if (!newsByEnterprise[enterpriseName]) {
+        newsByEnterprise[enterpriseName] = [];
+      }
+      newsByEnterprise[enterpriseName].push(news);
+    } else {
+      // 记录被过滤掉的新闻（用于调试）
+      console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
     }
-    newsByEnterprise[enterpriseName].push(news);
   }
   
   return newsByEnterprise;
