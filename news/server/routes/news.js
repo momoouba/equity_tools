@@ -929,23 +929,37 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     }
   }
 
-  // 如果同步了新数据，触发AI分析
+  // 如果同步了新数据，先进行数据去重和清理，再触发AI分析
   if (totalSynced > 0) {
     try {
-      console.log(`[新榜同步] 开始AI分析 ${totalSynced} 条新数据...`);
-      const newsAnalysis = require('../utils/newsAnalysis');
+      console.log(`[新榜同步] 开始数据去重和清理...`);
+      const newsDeduplication = require('../utils/newsDeduplication');
       
-      // 异步执行AI分析，不阻塞同步响应
+      // 异步执行数据去重，不阻塞同步响应
       setImmediate(async () => {
         try {
+          await newsDeduplication.executeDeduplication();
+          console.log(`[新榜同步] ✓ 数据去重完成`);
+          
+          // 数据去重完成后，触发AI分析
+          console.log(`[新榜同步] 开始AI分析 ${totalSynced} 条新数据...`);
+          const newsAnalysis = require('../utils/newsAnalysis');
           await newsAnalysis.batchAnalyzeNews(totalSynced);
           console.log(`[新榜同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
-        } catch (analysisError) {
-          console.error(`[新榜同步] ✗ AI分析失败:`, analysisError.message);
+        } catch (deduplicationError) {
+          console.error(`[新榜同步] ✗ 数据去重失败:`, deduplicationError.message);
+          // 即使去重失败，也继续执行AI分析
+          try {
+            const newsAnalysis = require('../utils/newsAnalysis');
+            await newsAnalysis.batchAnalyzeNews(totalSynced);
+            console.log(`[新榜同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
+          } catch (analysisError) {
+            console.error(`[新榜同步] ✗ AI分析失败:`, analysisError.message);
+          }
         }
       });
     } catch (error) {
-      console.warn(`[新榜同步] ✗ 启动AI分析失败:`, error.message);
+      console.warn(`[新榜同步] ✗ 启动数据去重失败:`, error.message);
     }
   } else {
     console.log(`[新榜同步] 本次同步未获取到新数据`);
@@ -3757,23 +3771,37 @@ async function syncQichachaNewsData(configId = null, logId = null) {
       }
     }
 
-    // 如果同步了新数据，触发AI分析
+    // 如果同步了新数据，先进行数据去重和清理，再触发AI分析
     if (totalSynced > 0) {
       try {
-        console.log(`[企查查同步] 开始AI分析 ${totalSynced} 条新数据...`);
-        const newsAnalysis = require('../utils/newsAnalysis');
+        console.log(`[企查查同步] 开始数据去重和清理...`);
+        const newsDeduplication = require('../utils/newsDeduplication');
         
-        // 异步执行AI分析，不阻塞同步响应
+        // 异步执行数据去重，不阻塞同步响应
         setImmediate(async () => {
           try {
+            await newsDeduplication.executeDeduplication();
+            console.log(`[企查查同步] ✓ 数据去重完成`);
+            
+            // 数据去重完成后，触发AI分析
+            console.log(`[企查查同步] 开始AI分析 ${totalSynced} 条新数据...`);
+            const newsAnalysis = require('../utils/newsAnalysis');
             await newsAnalysis.batchAnalyzeNews(totalSynced);
             console.log(`[企查查同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
-          } catch (analysisError) {
-            console.error(`[企查查同步] ✗ AI分析失败:`, analysisError.message);
+          } catch (deduplicationError) {
+            console.error(`[企查查同步] ✗ 数据去重失败:`, deduplicationError.message);
+            // 即使去重失败，也继续执行AI分析
+            try {
+              const newsAnalysis = require('../utils/newsAnalysis');
+              await newsAnalysis.batchAnalyzeNews(totalSynced);
+              console.log(`[企查查同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
+            } catch (analysisError) {
+              console.error(`[企查查同步] ✗ AI分析失败:`, analysisError.message);
+            }
           }
         });
       } catch (error) {
-        console.warn(`[企查查同步] ✗ 启动AI分析失败:`, error.message);
+        console.warn(`[企查查同步] ✗ 启动数据去重失败:`, error.message);
       }
     } else {
       console.log(`[企查查同步] 本次同步未获取到新数据`);

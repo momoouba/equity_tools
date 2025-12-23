@@ -2198,7 +2198,35 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
   }
 
   /**
+   * 大小写不敏感的字符串匹配（特别处理英文）
+   * @param {string} str1 - 字符串1
+   * @param {string} str2 - 字符串2
+   * @returns {boolean} - 是否匹配
+   */
+  _caseInsensitiveMatch(str1, str2) {
+    if (!str1 || !str2) return false;
+    const s1 = str1.trim();
+    const s2 = str2.trim();
+    if (!s1 || !s2) return false;
+    
+    // 如果包含英文字符，进行大小写不敏感匹配
+    if (/[a-zA-Z]/.test(s1) || /[a-zA-Z]/.test(s2)) {
+      return s1.toLowerCase() === s2.toLowerCase() ||
+        s1.toLowerCase().includes(s2.toLowerCase()) ||
+        s2.toLowerCase().includes(s1.toLowerCase());
+    }
+    
+    // 纯中文，直接匹配
+    return s1 === s2 || s1.includes(s2) || s2.includes(s1);
+  }
+
+  /**
    * 分析新闻与被投企业的关联性
+   * @param {string} title - 新闻标题
+   * @param {string} content - 新闻内容
+   * @param {Array} enterprises - 被投企业列表（包含 enterprise_full_name 和 project_abbreviation）
+   * @param {string} interfaceType - 接口类型（默认：'新榜'）
+   * @returns {Promise<Array>} - 相关企业列表
    */
   async analyzeEnterpriseRelevance(title, content, enterprises, interfaceType = '新榜') {
     const enterpriseList = enterprises.map(e => `${e.enterprise_full_name}(${e.project_abbreviation})`).join('、');
@@ -2243,6 +2271,7 @@ ${enterpriseList}
 5. **特别注意**：医保政策、行业监管、通用技术趋势等新闻通常与具体企业无直接关联
 6. **企业名称检查**：如果新闻中没有明确提及企业名称或其产品/服务，相关度应该非常低
 7. **业务匹配**：必须确认新闻内容与企业的具体业务领域有直接关系，而非泛泛的行业关系
+8. **匹配规则**：企业列表格式为"企业全称(项目简称)"，如果新闻中提到企业全称或项目简称中的任何一个，都可以认为相关
 
 请按照以下JSON格式返回分析结果：
 {
@@ -2301,12 +2330,20 @@ ${enterpriseList}
           relevance_reason: item.relevance_reason
         }))
         .filter(item => {
-          // 验证企业名称是否在被投企业列表中
-          const isValidEnterprise = enterprises.some(e => 
-            e.enterprise_full_name === item.enterprise_name ||
-            e.enterprise_full_name.includes(item.enterprise_name) ||
-            item.enterprise_name.includes(e.enterprise_full_name)
-          );
+          // 验证企业名称是否在被投企业列表中（匹配企业全称或项目简称，大小写不敏感）
+          const isValidEnterprise = enterprises.some(e => {
+            const enterpriseFullName = e.enterprise_full_name || '';
+            const projectAbbreviation = e.project_abbreviation || '';
+            const itemName = item.enterprise_name || '';
+            
+            // 匹配企业全称（大小写不敏感）
+            const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
+            
+            // 匹配项目简称（大小写不敏感）
+            const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+            
+            return matchesFullName || matchesAbbreviation;
+          });
           
           if (!isValidEnterprise) {
             console.log(`⚠️ AI返回了不在被投企业列表中的企业: "${item.enterprise_name}"，已过滤`);
@@ -2316,11 +2353,41 @@ ${enterpriseList}
         });
 
       // 二次验证：检查企业名称和关键业务词汇是否在新闻内容中出现
-      relevantEnterprises = relevantEnterprises.filter(enterprise => {
+      // 同时检查 enterprise_full_name 和 project_abbreviation，两者有其一即可
+      relevantEnterprises = relevantEnterprises.map(enterprise => {
+        // 找到对应的企业信息（包含 project_abbreviation，大小写不敏感）
+        const matchedEnterprise = enterprises.find(e => {
+          const enterpriseFullName = e.enterprise_full_name || '';
+          const projectAbbreviation = e.project_abbreviation || '';
+          const itemName = enterprise.enterprise_name || '';
+          
+          // 匹配企业全称（大小写不敏感）
+          const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
+          
+          // 匹配项目简称（大小写不敏感）
+          const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+          
+          return matchesFullName || matchesAbbreviation;
+        });
+        
+        if (!matchedEnterprise) {
+          console.log(`二次验证：未找到企业"${enterprise.enterprise_name}"的完整信息，相关度设为0%`);
+          enterprise.relevance_score = 0;
+          return enterprise;
+        }
+        
         const fullContent = (title + ' ' + content).toLowerCase();
+        const enterpriseFullName = (matchedEnterprise.enterprise_full_name || '').toLowerCase().trim();
+        const projectAbbreviation = (matchedEnterprise.project_abbreviation || '').toLowerCase().trim();
         const enterpriseName = enterprise.enterprise_name.toLowerCase();
         
         // 检查企业全称是否在内容中出现
+        const fullNameInContent = enterpriseFullName && fullContent.includes(enterpriseFullName);
+        
+        // 检查项目简称是否在内容中出现
+        const abbreviationInContent = projectAbbreviation && fullContent.includes(projectAbbreviation);
+        
+        // 检查企业名称（AI返回的名称）是否在内容中出现
         const nameInContent = fullContent.includes(enterpriseName);
         
         // 检查企业简称或关键词是否出现
@@ -2332,16 +2399,22 @@ ${enterpriseList}
         
         const hasKeywordInContent = enterpriseKeywords.some(keyword => fullContent.includes(keyword));
         
-        // 如果企业名称和关键词都不在内容中，大幅降低相关度
-        if (!nameInContent && !hasKeywordInContent) {
-          console.log(`二次验证：企业"${enterprise.enterprise_name}"及其关键词未在新闻内容中出现，相关度从${enterprise.relevance_score}%降低到0%`);
+        // 如果企业全称、项目简称、企业名称和关键词都不在内容中，大幅降低相关度
+        if (!fullNameInContent && !abbreviationInContent && !nameInContent && !hasKeywordInContent) {
+          console.log(`二次验证：企业"${enterprise.enterprise_name}"（全称: ${matchedEnterprise.enterprise_full_name}, 简称: ${matchedEnterprise.project_abbreviation || '无'}）及其关键词未在新闻内容中出现，相关度从${enterprise.relevance_score}%降低到0%`);
           enterprise.relevance_score = 0;
-        } else if (!nameInContent && enterprise.relevance_score > 40) {
-          // 如果只有关键词匹配但没有企业全名，降低相关度
+        } else if ((fullNameInContent || abbreviationInContent) && enterprise.relevance_score < 50) {
+          // 如果企业全称或项目简称在内容中出现，但相关度较低，适当提升相关度
+          console.log(`二次验证：企业"${enterprise.enterprise_name}"的${fullNameInContent ? '全称' : '简称'}在内容中出现，相关度从${enterprise.relevance_score}%提升到${Math.min(enterprise.relevance_score + 20, 100)}%`);
+          enterprise.relevance_score = Math.min(enterprise.relevance_score + 20, 100);
+        } else if (!fullNameInContent && !abbreviationInContent && !nameInContent && enterprise.relevance_score > 40) {
+          // 如果只有关键词匹配但没有企业全名、项目简称或企业名称，降低相关度
           console.log(`二次验证：企业"${enterprise.enterprise_name}"未直接出现，但有关键词匹配，相关度从${enterprise.relevance_score}%降低到${Math.max(enterprise.relevance_score - 40, 0)}%`);
           enterprise.relevance_score = Math.max(enterprise.relevance_score - 40, 0);
         }
         
+        return enterprise;
+      }).filter(enterprise => {
         // 如果相关度仍然大于等于30%，则保留
         return enterprise.relevance_score >= 30;
       });
@@ -3229,14 +3302,35 @@ ${enterpriseList}
         console.log(`✓ 已完成新闻分析（${reason}): ${newsItem.id}`);
       } else {
         // 有相关企业且非广告类型，需要复制数据
-        // 最终验证：确保所有企业名称都在被投企业表中存在
+        // 最终验证：确保所有企业名称都在被投企业表中存在（检查企业全称或项目简称，大小写不敏感）
         const validEnterprises = [];
         for (const enterprise of relevantEnterprises) {
-          const existsInDB = await db.query(
-            `SELECT enterprise_full_name FROM invested_enterprises 
+          // 先尝试精确匹配企业全称
+          let existsInDB = await db.query(
+            `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
              WHERE enterprise_full_name = ? AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`,
             [enterprise.enterprise_name]
           );
+          
+          // 如果精确匹配失败，尝试大小写不敏感匹配（检查企业全称和项目简称）
+          if (existsInDB.length === 0) {
+            const allEnterprises = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+               WHERE delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
+            );
+            
+            // 使用大小写不敏感匹配
+            existsInDB = allEnterprises.filter(e => {
+              const enterpriseFullName = e.enterprise_full_name || '';
+              const projectAbbreviation = e.project_abbreviation || '';
+              const itemName = enterprise.enterprise_name || '';
+              
+              const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
+              const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+              
+              return matchesFullName || matchesAbbreviation;
+            });
+          }
           
           if (existsInDB.length > 0) {
             validEnterprises.push(enterprise);
