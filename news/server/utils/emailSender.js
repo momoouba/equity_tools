@@ -84,10 +84,10 @@ async function getYesterdayNewsByEnterprise() {
     const enterpriseName = news.enterprise_full_name;
     // 确保企业名称不为null、不为空字符串
     if (enterpriseName && enterpriseName.trim() !== '') {
-      if (!newsByEnterprise[enterpriseName]) {
-        newsByEnterprise[enterpriseName] = [];
-      }
-      newsByEnterprise[enterpriseName].push(news);
+    if (!newsByEnterprise[enterpriseName]) {
+      newsByEnterprise[enterpriseName] = [];
+    }
+    newsByEnterprise[enterpriseName].push(news);
     } else {
       // 记录被过滤掉的新闻（用于调试）
       console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);

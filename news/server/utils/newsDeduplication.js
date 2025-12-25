@@ -90,7 +90,10 @@ class NewsDeduplication {
         } else {
           // 如果都没有乱码，优先删除企查查接口的数据
           const qichachaRecords = cleanRecords.filter(r => r.APItype === '企查查');
-          if (qichachaRecords.length > 0) {
+          const xinbangRecords = cleanRecords.filter(r => r.APItype === '新榜');
+          
+          if (qichachaRecords.length > 0 && xinbangRecords.length > 0) {
+            // 如果同时有企查查和新榜的记录，优先删除企查查的记录
             for (const record of qichachaRecords) {
               await db.execute(
                 'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
@@ -99,8 +102,19 @@ class NewsDeduplication {
               cleanedCount++;
               console.log(`[数据去重] ✓ 删除企查查接口记录（无乱码，优先删除）: ID=${record.id}, source_url=${sourceUrl}`);
             }
+          } else if (qichachaRecords.length > 0) {
+            // 如果只有企查查的记录，删除最早的一条（保留最新的）
+            const recordsToDelete = qichachaRecords.slice(0, qichachaRecords.length - 1);
+            for (const record of recordsToDelete) {
+              await db.execute(
+                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                [record.id]
+              );
+              cleanedCount++;
+              console.log(`[数据去重] ✓ 删除企查查接口重复记录（保留最新）: ID=${record.id}, source_url=${sourceUrl}`);
+            }
           } else {
-            // 如果没有企查查的记录，删除最早的一条（保留最新的）
+            // 如果没有企查查的记录（都是新榜或其他），删除最早的一条（保留最新的）
             const recordsToDelete = cleanRecords.slice(0, cleanRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(
@@ -146,9 +160,11 @@ class NewsDeduplication {
             row.ids.split(',').forEach(id => processedIds.add(id));
           }
         });
+        console.log(`[数据去重] 已通过source_url处理的记录数: ${processedIds.size}`);
       }
       
       // 查找所有有重复title的记录（排除已删除的，且不在source_url重复记录中的）
+      // 注意：这里只排除source_url重复的记录，对于source_url不同但title相同的记录，应该被处理
       let duplicates;
       if (processedIds.size > 0) {
         const processedIdsArray = Array.from(processedIds);
@@ -187,7 +203,7 @@ class NewsDeduplication {
 
         // 获取所有重复记录的详细信息
         const records = await db.query(
-          `SELECT id, content, APItype, created_at, delete_mark
+          `SELECT id, content, APItype, created_at, delete_mark, source_url, wechat_account
            FROM news_detail
            WHERE id IN (${ids.map(() => '?').join(',')}) AND delete_mark = 0
            ORDER BY created_at ASC`,
@@ -199,6 +215,14 @@ class NewsDeduplication {
         }
 
         console.log(`[数据去重] 处理title重复: ${title.substring(0, 50)}..., 共 ${records.length} 条记录`);
+        console.log(`[数据去重] 重复记录详情:`, records.map(r => ({
+          id: r.id,
+          APItype: r.APItype,
+          wechat_account: r.wechat_account,
+          source_url: r.source_url ? r.source_url.substring(0, 50) + '...' : 'NULL',
+          created_at: r.created_at,
+          content_length: r.content ? r.content.length : 0
+        })));
 
         // 检查每条记录的内容是否包含乱码
         const recordsWithContamination = records.map(record => ({
@@ -224,7 +248,10 @@ class NewsDeduplication {
         } else {
           // 如果都没有乱码，优先删除企查查接口的数据
           const qichachaRecords = cleanRecords.filter(r => r.APItype === '企查查');
-          if (qichachaRecords.length > 0) {
+          const xinbangRecords = cleanRecords.filter(r => r.APItype === '新榜');
+          
+          if (qichachaRecords.length > 0 && xinbangRecords.length > 0) {
+            // 如果同时有企查查和新榜的记录，优先删除企查查的记录
             for (const record of qichachaRecords) {
               await db.execute(
                 'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
@@ -233,8 +260,19 @@ class NewsDeduplication {
               cleanedCount++;
               console.log(`[数据去重] ✓ 删除企查查接口记录（无乱码，优先删除）: ID=${record.id}, title=${title.substring(0, 50)}...`);
             }
+          } else if (qichachaRecords.length > 0) {
+            // 如果只有企查查的记录，删除最早的一条（保留最新的）
+            const recordsToDelete = qichachaRecords.slice(0, qichachaRecords.length - 1);
+            for (const record of recordsToDelete) {
+              await db.execute(
+                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                [record.id]
+              );
+              cleanedCount++;
+              console.log(`[数据去重] ✓ 删除企查查接口重复记录（保留最新）: ID=${record.id}, title=${title.substring(0, 50)}...`);
+            }
           } else {
-            // 如果没有企查查的记录，删除最早的一条（保留最新的）
+            // 如果没有企查查的记录（都是新榜或其他），删除最早的一条（保留最新的）
             const recordsToDelete = cleanRecords.slice(0, cleanRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(

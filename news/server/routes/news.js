@@ -951,10 +951,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           // 即使去重失败，也继续执行AI分析
           try {
             const newsAnalysis = require('../utils/newsAnalysis');
-            await newsAnalysis.batchAnalyzeNews(totalSynced);
-            console.log(`[新榜同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
-          } catch (analysisError) {
-            console.error(`[新榜同步] ✗ AI分析失败:`, analysisError.message);
+          await newsAnalysis.batchAnalyzeNews(totalSynced);
+          console.log(`[新榜同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
+        } catch (analysisError) {
+          console.error(`[新榜同步] ✗ AI分析失败:`, analysisError.message);
           }
         }
       });
@@ -3793,10 +3793,10 @@ async function syncQichachaNewsData(configId = null, logId = null) {
             // 即使去重失败，也继续执行AI分析
             try {
               const newsAnalysis = require('../utils/newsAnalysis');
-              await newsAnalysis.batchAnalyzeNews(totalSynced);
-              console.log(`[企查查同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
-            } catch (analysisError) {
-              console.error(`[企查查同步] ✗ AI分析失败:`, analysisError.message);
+            await newsAnalysis.batchAnalyzeNews(totalSynced);
+            console.log(`[企查查同步] ✓ AI分析完成，已分析 ${totalSynced} 条新闻`);
+          } catch (analysisError) {
+            console.error(`[企查查同步] ✗ AI分析失败:`, analysisError.message);
             }
           }
         });
