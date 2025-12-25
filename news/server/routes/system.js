@@ -367,7 +367,7 @@ router.put('/news-config/:id', [
     }
 
     const { id } = req.params;
-    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, is_active, retry_count, retry_interval } = req.body;
+    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
     const existingConfigs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [id]);
@@ -445,6 +445,30 @@ router.put('/news-config/:id', [
     if (frequency_value !== undefined) {
       updateFields.push('frequency_value = ?');
       updateValues.push(frequency_value);
+    }
+    if (send_frequency !== undefined) {
+      updateFields.push('send_frequency = ?');
+      updateValues.push(send_frequency);
+    }
+    if (send_time !== undefined) {
+      updateFields.push('send_time = ?');
+      updateValues.push(send_time);
+    }
+    if (weekday !== undefined) {
+      updateFields.push('weekday = ?');
+      updateValues.push(weekday);
+    }
+    if (month_day !== undefined) {
+      updateFields.push('month_day = ?');
+      updateValues.push(month_day);
+    }
+    if (retry_count !== undefined) {
+      updateFields.push('retry_count = ?');
+      updateValues.push(retry_count);
+    }
+    if (retry_interval !== undefined) {
+      updateFields.push('retry_interval = ?');
+      updateValues.push(retry_interval);
     }
     if (is_active !== undefined) {
       updateFields.push('is_active = ?');

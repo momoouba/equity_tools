@@ -191,18 +191,47 @@ function NewsConfig() {
     
     // 企查查接口不需要api_key，从qichacha_config获取
     const isQichacha = formData.interface_type === '企查查'
-    if (!formData.app_id || !formData.request_url || (!isQichacha && !formData.api_key) || !formData.frequency_type || !formData.frequency_value) {
-      alert('请填写所有必填字段')
-      return
+    
+    // 验证逻辑：创建时要求api_key，更新时api_key可以为空（保留原有密钥）
+    if (editingConfig) {
+      // 更新时，api_key可以为空（后端会保留原有密钥）
+      // 对于新榜接口，content_type也是必填的
+      if (!formData.app_id || !formData.request_url || 
+          (!isQichacha && !formData.content_type) || 
+          !formData.frequency_type || 
+          !formData.frequency_value || 
+          formData.frequency_value <= 0) {
+        alert('请填写所有必填字段')
+        return
+      }
+    } else {
+      // 创建时，新榜接口需要api_key和content_type
+      if (!formData.app_id || !formData.request_url || 
+          (!isQichacha && !formData.api_key) || 
+          (!isQichacha && !formData.content_type) || 
+          !formData.frequency_type || 
+          !formData.frequency_value || 
+          formData.frequency_value <= 0) {
+        alert('请填写所有必填字段')
+        return
+      }
     }
 
     try {
       let response
       if (editingConfig) {
         const updateData = { ...formData }
+        // 如果api_key为空、只有空格、或者是占位符，则删除该字段（后端会保留原有密钥）
         if (!updateData.api_key || updateData.api_key.trim() === '' || updateData.api_key === '****') {
           delete updateData.api_key
         }
+        // 确保frequency_value是数字类型
+        if (updateData.frequency_value) {
+          updateData.frequency_value = parseInt(updateData.frequency_value, 10)
+        }
+        // 确保is_active是布尔值
+        updateData.is_active = updateData.is_active === true || updateData.is_active === 1
+        console.log('[前端] 更新数据:', updateData)
         response = await axios.put(`/api/system/news-config/${editingConfig.id}`, updateData)
       } else {
         response = await axios.post('/api/system/news-config', formData)
