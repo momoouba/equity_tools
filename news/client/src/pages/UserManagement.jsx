@@ -125,6 +125,21 @@ function UserManagement() {
     }
   }
 
+  const handleResetPassword = async (user) => {
+    if (!window.confirm(`确定要将用户 "${user.account}" 的密码重置为 "123456" 吗？`)) {
+      return
+    }
+
+    try {
+      await axios.put(`/api/auth/users/${user.id}/reset-password`)
+      alert(`用户 "${user.account}" 的密码已重置为 "123456"`)
+      fetchUsers()
+    } catch (error) {
+      console.error('重置密码失败:', error)
+      alert('重置密码失败：' + (error.response?.data?.message || '未知错误'))
+    }
+  }
+
   const formatDate = (dateString) => {
     if (!dateString) return '-'
     try {
@@ -221,6 +236,12 @@ function UserManagement() {
                       onClick={() => handleEdit(user)}
                     >
                       编辑
+                    </button>
+                    <button
+                      className="btn-reset-password"
+                      onClick={() => handleResetPassword(user)}
+                    >
+                      重置密码
                     </button>
                   </div>
                 </td>

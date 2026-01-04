@@ -8,6 +8,7 @@ import NewsInfo from './NewsInfo'
 import EmailManagement from './EmailManagement'
 import UserManagement from './UserManagement'
 import ScheduledTaskManagement from './ScheduledTaskManagement'
+import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
 function Dashboard() {
@@ -19,6 +20,7 @@ function Dashboard() {
     system_name: '',
     logo: ''
   })
+  const [showUserProfileModal, setShowUserProfileModal] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
 
@@ -90,6 +92,10 @@ function Dashboard() {
     navigate('/login')
   }
 
+  const handleUpdateUser = (updatedUser) => {
+    setUser(updatedUser)
+  }
+
   if (!user) {
     return <div>加载中...</div>
   }
@@ -109,7 +115,20 @@ function Dashboard() {
             <h1>{systemConfig.system_name || '股权投资小工具锦集'}</h1>
           </div>
           <div className="user-info">
-            <span>欢迎，{user.account}</span>
+            <span>
+              欢迎，<span 
+                className="user-account-link" 
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setShowUserProfileModal(true)
+                }}
+                title="点击查看个人信息"
+                style={{ cursor: 'pointer', userSelect: 'none' }}
+              >
+                {user.account}
+              </span>
+            </span>
             <button onClick={handleLogout} className="logout-button">
               退出登录
             </button>
@@ -209,6 +228,12 @@ function Dashboard() {
           </Routes>
         </main>
       </div>
+
+      <UserProfileModal
+        isOpen={showUserProfileModal}
+        onClose={() => setShowUserProfileModal(false)}
+        onUpdateUser={handleUpdateUser}
+      />
     </div>
   )
 }

@@ -44,6 +44,18 @@
   font-size: 14px;
 }
 
+.dashboard-container .user-info .user-account-link {
+  color: #357abd;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: all 0.3s ease;
+}
+
+.dashboard-container .user-info .user-account-link:hover {
+  color: #2c5f8f;
+  text-decoration: none;
+}
+
 .dashboard-container .logout-button {
   padding: 8px 16px;
   background: #e74c3c;

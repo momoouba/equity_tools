@@ -88,9 +88,9 @@
 /* 操作列宽度优化 */
 .config-table th:last-child,
 .config-table td:last-child {
-  width: 280px;
-  min-width: 280px;
-  max-width: 280px;
+  width: 300px;
+  min-width: 300px;
+  max-width: 300px;
   padding: 8px 4px;
   text-align: center;
 }
@@ -132,8 +132,9 @@
 .email-config .btn-test,
 .email-config .btn-delete,
 .email-config .btn-log,
-.email-config .btn-send-email {
-  padding: 6px 8px;
+.email-config .btn-send-email,
+.email-config .btn-reset-password {
+  padding: 6px 12px;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -142,10 +143,11 @@
   white-space: nowrap;
   flex-shrink: 0;
   width: auto;
-  min-width: 50px;
+  min-width: 70px;
   max-width: none;
   text-align: center;
   box-sizing: border-box;
+  display: inline-block;
 }
 
 .email-config .btn-edit {
@@ -178,6 +180,15 @@
 
 .email-config .btn-delete:hover {
   background: #c82333;
+}
+
+.email-config .btn-reset-password {
+  background: #ff9800;
+  color: white;
+}
+
+.email-config .btn-reset-password:hover {
+  background: #e68900;
 }
 
 .email-config .btn-log {

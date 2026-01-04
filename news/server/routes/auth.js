@@ -391,5 +391,188 @@ router.put('/users/:id/main-membership', [
   }
 });
 
+// 获取当前用户信息
+router.get('/profile', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+
+    const users = await db.query(
+      'SELECT id, account, phone, email, company_name FROM users WHERE id = ?',
+      [userId]
+    );
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    res.json({
+      success: true,
+      data: users[0]
+    });
+  } catch (error) {
+    console.error('获取用户信息失败：', error);
+    res.status(500).json({ success: false, message: '获取用户信息失败' });
+  }
+});
+
+// 更新当前用户信息
+router.put('/profile', [
+  body('phone').matches(/^1[3-9]\d{9}$/).withMessage('手机号格式不正确'),
+  body('email').optional({ nullable: true, checkFalsy: true }).isEmail().withMessage('邮箱格式不正确'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+
+    const { phone, email } = req.body;
+
+    // 检查手机号是否已被其他用户使用
+    const existingUsers = await db.query(
+      'SELECT id FROM users WHERE phone = ? AND id != ?',
+      [phone, userId]
+    );
+
+    if (existingUsers.length > 0) {
+      return res.status(400).json({ success: false, message: '手机号已被使用' });
+    }
+
+    // 如果提供了邮箱，检查邮箱是否已被其他用户使用
+    if (email) {
+      const existingEmailUsers = await db.query(
+        'SELECT id FROM users WHERE email = ? AND id != ?',
+        [email, userId]
+      );
+
+      if (existingEmailUsers.length > 0) {
+        return res.status(400).json({ success: false, message: '邮箱已被使用' });
+      }
+    }
+
+    // 更新用户信息
+    if (email) {
+      await db.execute(
+        'UPDATE users SET phone = ?, email = ? WHERE id = ?',
+        [phone, email, userId]
+      );
+    } else {
+      await db.execute(
+        'UPDATE users SET phone = ? WHERE id = ?',
+        [phone, userId]
+      );
+    }
+
+    res.json({
+      success: true,
+      message: '个人信息更新成功'
+    });
+  } catch (error) {
+    console.error('更新用户信息失败：', error);
+    res.status(500).json({ success: false, message: '更新用户信息失败：' + error.message });
+  }
+});
+
+// 修改密码
+router.put('/change-password', [
+  body('oldPassword').notEmpty().withMessage('旧密码不能为空'),
+  body('newPassword').isLength({ min: 6 }).withMessage('新密码至少6位'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+
+    const { oldPassword, newPassword } = req.body;
+
+    // 获取用户信息
+    const users = await db.query('SELECT id, password FROM users WHERE id = ?', [userId]);
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    const user = users[0];
+
+    // 验证旧密码
+    const isValidPassword = await bcrypt.compare(oldPassword, user.password);
+    if (!isValidPassword) {
+      return res.status(400).json({ success: false, message: '旧密码错误' });
+    }
+
+    // 检查新旧密码是否相同
+    const isSamePassword = await bcrypt.compare(newPassword, user.password);
+    if (isSamePassword) {
+      return res.status(400).json({ success: false, message: '新密码不能与旧密码相同' });
+    }
+
+    // 加密新密码
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // 更新密码
+    await db.execute(
+      'UPDATE users SET password = ? WHERE id = ?',
+      [hashedPassword, userId]
+    );
+
+    res.json({
+      success: true,
+      message: '密码修改成功'
+    });
+  } catch (error) {
+    console.error('修改密码失败：', error);
+    res.status(500).json({ success: false, message: '修改密码失败：' + error.message });
+  }
+});
+
+// 管理员重置用户密码（仅admin可用）
+router.put('/users/:id/reset-password', async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || 'user';
+    if (userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: '无权访问' });
+    }
+
+    const { id } = req.params;
+
+    // 检查用户是否存在
+    const users = await db.query('SELECT id, account FROM users WHERE id = ?', [id]);
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    // 重置密码为 123456
+    const defaultPassword = '123456';
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+
+    // 更新密码
+    await db.execute(
+      'UPDATE users SET password = ? WHERE id = ?',
+      [hashedPassword, id]
+    );
+
+    res.json({
+      success: true,
+      message: '密码重置成功'
+    });
+  } catch (error) {
+    console.error('重置密码失败：', error);
+    res.status(500).json({ success: false, message: '重置密码失败：' + error.message });
+  }
+});
+
 module.exports = router;
 
