@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import axios from '../utils/axios'
 import Pagination from '../components/Pagination'
+import TaskProgressModal from '../components/TaskProgressModal'
 import './EmailConfig.css'
 
 function ScheduledTaskManagement() {
@@ -63,6 +64,8 @@ function ScheduledTaskManagement() {
   const [logLoading, setLogLoading] = useState(false)
   const [logCurrentPage, setLogCurrentPage] = useState(1)
   const [logTotal, setLogTotal] = useState(0)
+  const [showProgressModal, setShowProgressModal] = useState(false)
+  const [progressTaskId, setProgressTaskId] = useState(null)
 
   useEffect(() => {
     fetchTasks()
@@ -270,14 +273,26 @@ function ScheduledTaskManagement() {
     }
 
     try {
+      // 显示进度弹窗
+      setProgressTaskId(taskId)
+      setShowProgressModal(true)
+      
+      // 触发任务执行（异步，不等待完成）
       const response = await axios.post(`/api/scheduled-tasks/${taskId}/execute`, {
         task_type: activeTab === 'email' ? 'email' : 'news_sync'
       })
-      if (response.data.success) {
-        alert('任务执行完成')
+      
+      // 如果立即返回错误，关闭进度弹窗并显示错误
+      if (!response.data.success) {
+        setShowProgressModal(false)
+        setProgressTaskId(null)
+        alert('执行任务失败：' + (response.data.message || '未知错误'))
       }
+      // 如果成功，进度弹窗会通过轮询自动更新状态
     } catch (error) {
       console.error('执行任务失败:', error)
+      setShowProgressModal(false)
+      setProgressTaskId(null)
       alert('执行任务失败：' + (error.response?.data?.message || '未知错误'))
     }
   }
@@ -1231,6 +1246,20 @@ function ScheduledTaskManagement() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* 执行进度弹窗 */}
+      {showProgressModal && progressTaskId && (
+        <TaskProgressModal
+          taskId={progressTaskId}
+          taskType={activeTab === 'email' ? 'email' : 'news_sync'}
+          onClose={() => {
+            setShowProgressModal(false)
+            setProgressTaskId(null)
+            // 刷新任务列表以更新状态
+            fetchTasks()
+          }}
+        />
       )}
     </div>
   )

@@ -2741,7 +2741,7 @@ router.post('/recipients', [
 
 // 更新收件管理
 router.put('/recipients/:id', [
-  body('recipient_email').optional().isEmail().withMessage('收件人邮箱格式不正确'),
+  body('recipient_email').optional(),
   body('email_subject').optional(),
   body('send_frequency').optional().isIn(['daily', 'weekly', 'monthly']).withMessage('发送频率必须是daily、weekly或monthly'),
   body('send_time').optional().matches(/^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).withMessage('发送时间格式不正确，应为HH:mm:ss'),
@@ -3041,8 +3041,8 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     
     const recipient = existing[0];
     
-    // 获取用户可见的昨日舆情信息
-    const newsList = await getUserVisibleYesterdayNews(recipient.user_id);
+    // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企查查类别过滤）
+    const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
     
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
     const emailConfigs = await db.query(

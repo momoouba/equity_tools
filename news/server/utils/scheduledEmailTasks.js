@@ -169,9 +169,12 @@ function getYesterdayTimeRange() {
  * 获取用户可见的舆情信息（根据用户权限过滤）
  * 时间范围：从节假日前的一个工作日到当前工作日（与新闻同步一致）
  */
-async function getUserVisibleYesterdayNews(userId) {
+async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
   console.log(`[邮件发送] ========== 开始获取用户可见的舆情信息 ==========`);
   console.log(`[邮件发送] 用户ID: ${userId}`);
+  if (recipientConfig) {
+    console.log(`[邮件发送] 收件管理配置ID: ${recipientConfig.id || '(NULL)'}`);
+  }
   
   const { from, to } = await getEmailTimeRange();
   console.log(`[邮件发送] 时间范围: ${from} 到 ${to}`);
@@ -278,6 +281,16 @@ async function getUserVisibleYesterdayNews(userId) {
       console.log(`[邮件发送] 管理员：公众号ID匹配 + 时间范围的新闻数：${testAccountTimeQuery[0]?.count || 0}`);
     }
     
+    // 特别检查量子位公众号ID是否在查询列表中
+    const quantumBitAccountId = 'gh_114e76fd6e5d';
+    const hasQuantumBit = uniqueAccountIds.includes(quantumBitAccountId);
+    if (hasQuantumBit) {
+      console.log(`[邮件发送] ✓ 量子位公众号ID (${quantumBitAccountId}) 在查询列表中`);
+    } else {
+      console.log(`[邮件发送] ⚠️ 量子位公众号ID (${quantumBitAccountId}) 不在查询列表中`);
+      console.log(`[邮件发送]   当前查询的公众号ID列表（前20个）: ${uniqueAccountIds.slice(0, 20).join(', ')}`);
+    }
+    
     newsList = await db.query(
       `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
               nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
@@ -288,13 +301,44 @@ async function getUserVisibleYesterdayNews(userId) {
          nd.wechat_account IN (${placeholders})
          OR
          -- 或者通过企业全称匹配（如果企业全称不为空）
+         -- 支持精确匹配和模糊匹配（去掉括号内容后匹配，处理"企业全称(简称)"格式）
          (nd.enterprise_full_name IS NOT NULL 
           AND nd.enterprise_full_name != ''
-          AND nd.enterprise_full_name IN (
-            SELECT enterprise_full_name 
-            FROM invested_enterprises 
-            WHERE exit_status NOT IN ('完全退出', '已上市')
-            AND delete_mark = 0
+          AND (
+            -- 精确匹配
+            nd.enterprise_full_name IN (
+              SELECT enterprise_full_name 
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+            )
+            OR
+            -- 模糊匹配：新闻中的企业全称去掉括号内容后，与数据库中的企业全称匹配
+            -- 例如："上海燧原科技股份有限公司(燧原科技)" 匹配 "上海燧原科技股份有限公司"
+            (CASE 
+              WHEN nd.enterprise_full_name LIKE '%(%' THEN 
+                TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '(', 1))
+              ELSE 
+                nd.enterprise_full_name
+            END) IN (
+              SELECT enterprise_full_name 
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+            )
+            OR
+            -- 反向匹配：数据库中的企业全称去掉括号内容后，与新闻中的企业全称匹配
+            nd.enterprise_full_name IN (
+              SELECT CASE 
+                WHEN enterprise_full_name LIKE '%(%' THEN 
+                  TRIM(SUBSTRING_INDEX(enterprise_full_name, '(', 1))
+                ELSE 
+                  enterprise_full_name
+              END
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+            )
           ))
          OR
          -- 额外公众号新闻：包含"榜单"或"获奖"标签且企业名称为空
@@ -319,15 +363,128 @@ async function getUserVisibleYesterdayNews(userId) {
       [...uniqueAccountIds, from, to]
     );
     
+    // 特别查询量子位公众号的新闻（用于调试）
+    if (quantumBitAccountId) {
+      const quantumBitTestQuery = await db.query(
+        `SELECT COUNT(*) as count 
+         FROM news_detail 
+         WHERE wechat_account = ?
+         AND public_time >= ? 
+         AND public_time < ?
+         AND delete_mark = 0`,
+        [quantumBitAccountId, from, to]
+      );
+      const quantumBitCount = quantumBitTestQuery[0]?.count || 0;
+      console.log(`[邮件发送] 时间范围内量子位公众号(${quantumBitAccountId})的新闻总数: ${quantumBitCount}`);
+      
+      if (quantumBitCount > 0) {
+        const quantumBitNewsSample = await db.query(
+          `SELECT id, title, enterprise_full_name, account_name, wechat_account, 
+                  news_abstract, summary, content, public_time, APItype
+           FROM news_detail 
+           WHERE wechat_account = ?
+           AND public_time >= ? 
+           AND public_time < ?
+           AND delete_mark = 0
+           ORDER BY public_time DESC
+           LIMIT 5`,
+          [quantumBitAccountId, from, to]
+        );
+        console.log(`[邮件发送] 量子位公众号新闻示例（前5条）:`, quantumBitNewsSample.map(n => ({
+          id: n.id,
+          title: n.title?.substring(0, 50),
+          enterprise_full_name: n.enterprise_full_name || '(NULL)',
+          public_time: n.public_time,
+          APItype: n.APItype || '(NULL)',
+          hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
+          hasSummary: !!(n.summary && n.summary.trim()),
+          hasContent: !!(n.content && n.content.trim())
+        })));
+        
+        // 特别检查目标新闻ID
+        const targetNewsId = '2026010409510500005';
+        const targetNewsInDB = quantumBitNewsSample.find(n => n.id === targetNewsId);
+        if (targetNewsInDB) {
+          console.log(`[邮件发送] ⚠️⚠️⚠️ 发现目标新闻 ${targetNewsId} 在数据库中：`);
+          console.log(`[邮件发送]   企业全称: "${targetNewsInDB.enterprise_full_name || '(NULL)'}"`);
+          
+          // 检查企业全称是否在被投企业列表中
+          if (targetNewsInDB.enterprise_full_name) {
+            const enterpriseMatch = await db.query(
+              `SELECT enterprise_full_name, exit_status 
+               FROM invested_enterprises 
+               WHERE enterprise_full_name = ?
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               AND delete_mark = 0
+               LIMIT 1`,
+              [targetNewsInDB.enterprise_full_name]
+            );
+            if (enterpriseMatch.length > 0) {
+              console.log(`[邮件发送]   ✓ 企业全称在被投企业列表中: ${enterpriseMatch[0].enterprise_full_name}, 退出状态: ${enterpriseMatch[0].exit_status}`);
+            } else {
+              console.log(`[邮件发送]   ⚠️ 企业全称不在被投企业列表中，或退出状态不符合条件`);
+              // 尝试模糊匹配（去掉括号内容）
+              const enterpriseNameWithoutBrackets = targetNewsInDB.enterprise_full_name.replace(/\([^)]*\)/g, '').trim();
+              if (enterpriseNameWithoutBrackets !== targetNewsInDB.enterprise_full_name) {
+                const enterpriseMatch2 = await db.query(
+                  `SELECT enterprise_full_name, exit_status 
+                   FROM invested_enterprises 
+                   WHERE enterprise_full_name = ?
+                   AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+                   AND delete_mark = 0
+                   LIMIT 1`,
+                  [enterpriseNameWithoutBrackets]
+                );
+                if (enterpriseMatch2.length > 0) {
+                  console.log(`[邮件发送]   ⚠️ 去掉括号后匹配到: ${enterpriseMatch2[0].enterprise_full_name}, 退出状态: ${enterpriseMatch2[0].exit_status}`);
+                  console.log(`[邮件发送]   ⚠️ 问题：新闻中的企业全称 "${targetNewsInDB.enterprise_full_name}" 与数据库中的 "${enterpriseMatch2[0].enterprise_full_name}" 不完全匹配`);
+                }
+              }
+            }
+          }
+        } else {
+          console.log(`[邮件发送] ⚠️ 目标新闻 ${targetNewsId} 不在量子位公众号的新闻示例中`);
+        }
+      }
+    }
+    
     console.log(`[邮件发送] 管理员：查询到 ${newsList.length} 条新闻（时间范围：${from} 到 ${to}，公众号数量：${uniqueAccountIds.length}）`);
     if (newsList.length > 0) {
       console.log(`[邮件发送] 管理员：查询到的新闻示例（前3条）：`, newsList.slice(0, 3).map(n => ({
+        id: n.id,
         title: n.title,
         enterprise_full_name: n.enterprise_full_name,
         public_time: n.public_time,
-        wechat_account: n.account_name,
-        APItype: n.APItype
+        wechat_account: n.wechat_account,
+        account_name: n.account_name,
+        APItype: n.APItype,
+        hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
+        hasSummary: !!(n.summary && n.summary.trim()),
+        hasContent: !!(n.content && n.content.trim())
       })));
+      
+      // 特别检查量子位公众号的新闻
+      const quantumBitNews = newsList.filter(n => 
+        (n.account_name && n.account_name.includes('量子位')) || 
+        (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+      );
+      if (quantumBitNews.length > 0) {
+        console.log(`[邮件发送] ⚠️ 发现 ${quantumBitNews.length} 条量子位公众号的新闻，详细检查：`);
+        quantumBitNews.forEach(n => {
+          console.log(`[邮件发送]   新闻ID: ${n.id}`);
+          console.log(`[邮件发送]   标题: ${n.title?.substring(0, 50)}`);
+          console.log(`[邮件发送]   企业全称: ${n.enterprise_full_name || '(NULL)'}`);
+          console.log(`[邮件发送]   公众号ID: ${n.wechat_account || '(NULL)'}`);
+          console.log(`[邮件发送]   公众号名称: ${n.account_name || '(NULL)'}`);
+          console.log(`[邮件发送]   APItype: ${n.APItype || '(NULL)'}`);
+          console.log(`[邮件发送]   发布时间: ${n.public_time || '(NULL)'}`);
+          console.log(`[邮件发送]   有摘要(news_abstract): ${!!(n.news_abstract && n.news_abstract.trim())}`);
+          console.log(`[邮件发送]   有摘要(summary): ${!!(n.summary && n.summary.trim())}`);
+          console.log(`[邮件发送]   有正文(content): ${!!(n.content && n.content.trim())}`);
+          console.log(`[邮件发送]   摘要预览(news_abstract): ${n.news_abstract ? n.news_abstract.substring(0, 100) : '(NULL)'}`);
+          console.log(`[邮件发送]   摘要预览(summary): ${n.summary ? n.summary.substring(0, 100) : '(NULL)'}`);
+        });
+      }
     }
   } else {
     // 普通用户只能看到自己创建的被投企业相关的新闻
@@ -380,15 +537,76 @@ async function getUserVisibleYesterdayNews(userId) {
       title: n.title?.substring(0, 30),
       APItype: n.APItype || '(NULL)',
       news_category: n.news_category || '(NULL)',
+      enterprise_full_name: n.enterprise_full_name || '(NULL)',
+      account_name: n.account_name || '(NULL)',
+      wechat_account: n.wechat_account || '(NULL)',
       hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
-      hasContent: !!(n.content && n.content.trim()),
-      enterprise_full_name: n.enterprise_full_name
+      hasSummary: !!(n.summary && n.summary.trim()),
+      hasContent: !!(n.content && n.content.trim())
     })));
+    
+    // 特别检查量子位公众号的新闻
+    const quantumBitNews = newsList.filter(n => 
+      (n.account_name && n.account_name.includes('量子位')) || 
+      (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+    );
+    if (quantumBitNews.length > 0) {
+      console.log(`[邮件发送] ⚠️ 初始查询中包含 ${quantumBitNews.length} 条量子位公众号的新闻`);
+    }
   }
   
-  // 过滤新闻：只保留企查查数据源且类别为 80000 或 40000 系列的新闻（使用默认类别）
-  const filteredNewsList = filterNewsByCategory(newsList, null);
+  // 过滤新闻：只保留企查查数据源且类别在配置的允许列表中的新闻
+  // 注意：此函数会过滤掉类别不在允许列表中的企查查新闻，但会保留所有新榜新闻
+  // 如果收件管理配置了自定义类别（qichacha_category_codes），则使用自定义类别；否则使用默认类别
+  let categoryCodes = null;
+  if (recipientConfig && recipientConfig.qichacha_category_codes) {
+    try {
+      const parsed = typeof recipientConfig.qichacha_category_codes === 'string'
+        ? JSON.parse(recipientConfig.qichacha_category_codes)
+        : recipientConfig.qichacha_category_codes;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        categoryCodes = parsed;
+        console.log(`[邮件发送] 使用收件管理配置的自定义企查查类别，共 ${categoryCodes.length} 个类别`);
+      }
+    } catch (e) {
+      console.warn(`[邮件发送] 解析收件管理配置的企查查类别编码失败: ${e.message}`);
+    }
+  }
+  const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
   console.log(`[邮件发送] 企查查类别过滤后：${filteredNewsList.length} 条新闻`);
+  if (filteredNewsList.length > 0) {
+    console.log(`[邮件发送] 企查查类别过滤后的新闻详情：`, filteredNewsList.slice(0, 5).map(n => ({
+      id: n.id,
+      title: n.title?.substring(0, 30),
+      APItype: n.APItype || '(NULL)',
+      news_category: n.news_category || '(NULL)',
+      enterprise_full_name: n.enterprise_full_name || '(NULL)',
+      account_name: n.account_name || '(NULL)',
+      hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
+      hasSummary: !!(n.summary && n.summary.trim()),
+      hasContent: !!(n.content && n.content.trim())
+    })));
+    
+    // 检查量子位公众号的新闻是否还在
+    const quantumBitAfterCategory = filteredNewsList.filter(n => 
+      (n.account_name && n.account_name.includes('量子位')) || 
+      (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+    );
+    if (quantumBitAfterCategory.length > 0) {
+      console.log(`[邮件发送] ✓ 企查查类别过滤后，仍有 ${quantumBitAfterCategory.length} 条量子位公众号的新闻`);
+    } else {
+      const quantumBitBefore = newsList.filter(n => 
+        (n.account_name && n.account_name.includes('量子位')) || 
+        (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+      );
+      if (quantumBitBefore.length > 0) {
+        console.log(`[邮件发送] ⚠️ 警告：量子位公众号的 ${quantumBitBefore.length} 条新闻在企查查类别过滤中被过滤掉了！`);
+        quantumBitBefore.forEach(n => {
+          console.log(`[邮件发送]   被过滤的新闻: ID=${n.id}, 标题=${n.title?.substring(0, 50)}, APItype=${n.APItype || '(NULL)'}`);
+        });
+      }
+    }
+  }
   if (newsList.length > 0 && filteredNewsList.length === 0) {
     console.log(`[邮件发送] ⚠️ 警告：所有新闻都被类别过滤过滤掉了！`);
     console.log(`[邮件发送] 被过滤掉的新闻详情：`, newsList.slice(0, 5).map(n => ({
@@ -396,6 +614,7 @@ async function getUserVisibleYesterdayNews(userId) {
       title: n.title?.substring(0, 30),
       APItype: n.APItype || '(NULL)',
       news_category: n.news_category || '(NULL)',
+      enterprise_full_name: n.enterprise_full_name || '(NULL)',
       filterReason: !n.APItype || (n.APItype !== '企查查' && n.APItype !== 'qichacha') 
         ? '非企查查数据源，应保留' 
         : (!n.news_category || n.news_category.trim() === '' 
@@ -404,13 +623,60 @@ async function getUserVisibleYesterdayNews(userId) {
     })));
   }
   
-  // 过滤掉摘要和正文都为空的数据，以及企业名称为null或空的数据
-  // 注意：news_abstract 可能为 null，但 summary 字段可能有值
+  // 过滤新闻：根据数据源类型应用不同的过滤规则
+  // 注意：企查查新闻的类别检查已经在 filterNewsByCategory 函数中完成
+  // 进入此过滤的企查查新闻都是已经通过类别检查的（类别在配置的允许列表中）
+  // 
+  // 新榜新闻推送条件：有企业全称、有标题、有摘要（news_abstract 或 summary）
+  // 企查查新闻推送条件：有企业全称、有标题、有摘要（news_abstract）或正文，且类别在配置的允许列表中（已在前面完成）
   const beforeFilterCount = filteredNewsList.length;
+  console.log(`[邮件发送] 开始最终过滤，当前新闻数：${beforeFilterCount}`);
+  
+  // 特别检查目标新闻ID是否在过滤列表中
+  const targetNewsId = '2026010409510500005';
+  const targetNews = filteredNewsList.find(n => n.id === targetNewsId);
+  if (targetNews) {
+    console.log(`[邮件发送] ⚠️⚠️⚠️ 发现目标新闻 ${targetNewsId} 在过滤列表中，详细检查：`);
+    console.log(`[邮件发送]   标题: ${targetNews.title || '(NULL)'}`);
+    console.log(`[邮件发送]   企业全称: ${targetNews.enterprise_full_name || '(NULL)'}`);
+    console.log(`[邮件发送]   企业全称类型: ${typeof targetNews.enterprise_full_name}`);
+    console.log(`[邮件发送]   企业全称trim后: ${targetNews.enterprise_full_name ? targetNews.enterprise_full_name.trim() : '(NULL)'}`);
+    console.log(`[邮件发送]   APItype: ${targetNews.APItype || '(NULL)'}`);
+    console.log(`[邮件发送]   account_name: ${targetNews.account_name || '(NULL)'}`);
+    console.log(`[邮件发送]   wechat_account: ${targetNews.wechat_account || '(NULL)'}`);
+    console.log(`[邮件发送]   news_abstract存在: ${!!targetNews.news_abstract}`);
+    console.log(`[邮件发送]   news_abstract值: ${targetNews.news_abstract ? `"${targetNews.news_abstract.substring(0, 100)}..."` : '(NULL)'}`);
+    console.log(`[邮件发送]   summary存在: ${!!targetNews.summary}`);
+    console.log(`[邮件发送]   summary值: ${targetNews.summary ? `"${targetNews.summary.substring(0, 100)}..."` : '(NULL)'}`);
+    console.log(`[邮件发送]   content存在: ${!!targetNews.content}`);
+    console.log(`[邮件发送]   content长度: ${targetNews.content ? targetNews.content.length : 0}`);
+  } else {
+    console.log(`[邮件发送] ⚠️ 目标新闻 ${targetNewsId} 不在过滤列表中，可能在企查查类别过滤时已被过滤`);
+  }
+  
   const finalNewsList = filteredNewsList.filter(news => {
-    // 首先过滤掉企业名称为null或空字符串的新闻
-    if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
-      console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
+    // 特别记录目标新闻的过滤过程
+    const isTargetNews = news.id === targetNewsId;
+    
+    // 首先检查标题（标题是必需的）
+    if (!news.title || news.title.trim() === '') {
+      if (isTargetNews) {
+        console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤：标题为空`);
+      }
+      console.log(`[邮件发送] 过滤掉标题为空的新闻: ${news.id} (APItype: ${news.APItype || '(NULL)'})`);
+      return false;
+    }
+    
+    // 检查企业全称（企业全称是必需的）
+    const enterpriseName = news.enterprise_full_name;
+    const hasEnterpriseName = enterpriseName && enterpriseName.trim() !== '';
+    if (!hasEnterpriseName) {
+      if (isTargetNews) {
+        console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤：企业名称为空`);
+        console.log(`[邮件发送]   企业全称原始值: ${enterpriseName === null ? '(null)' : enterpriseName === undefined ? '(undefined)' : `"${enterpriseName}"`}`);
+        console.log(`[邮件发送]   企业全称trim后: ${enterpriseName ? enterpriseName.trim() : '(NULL)'}`);
+      }
+      console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title?.substring(0, 50)} (APItype: ${news.APItype || '(NULL)'})`);
       return false;
     }
     
@@ -421,12 +687,68 @@ async function getUserVisibleYesterdayNews(userId) {
     // 检查 content 字段（正文）
     const hasContent = news.content && news.content.trim() !== '';
     
-    // 如果摘要（news_abstract 或 summary）和正文都为空，则过滤掉
-    if (!hasAbstract && !hasSummary && !hasContent) {
-      return false;
+    // 判断数据源类型
+    const isQichacha = news.APItype === '企查查' || news.APItype === 'qichacha';
+    const isXinbang = news.APItype === '新榜' || !news.APItype || (!isQichacha);
+    
+    if (isTargetNews) {
+      console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 过滤检查：`);
+      console.log(`[邮件发送]   isQichacha: ${isQichacha}, isXinbang: ${isXinbang}`);
+      console.log(`[邮件发送]   hasAbstract: ${hasAbstract}, hasSummary: ${hasSummary}, hasContent: ${hasContent}`);
     }
     
-    return true;
+    if (isXinbang) {
+      // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
+      if (hasAbstract || hasSummary) {
+        // 特别记录量子位公众号的新闻
+        const isQuantumBit = (news.account_name && news.account_name.includes('量子位')) || 
+                            (news.wechat_account && news.wechat_account.includes('gh_114e76fd6e5d'));
+        if (isQuantumBit) {
+          console.log(`[邮件发送] ✓✓✓ 量子位新榜新闻通过过滤: ${news.id} - ${news.title?.substring(0, 50)}`);
+          console.log(`[邮件发送]   企业: ${news.enterprise_full_name}, 有摘要(news_abstract): ${hasAbstract}, 有摘要(summary): ${hasSummary}`);
+        } else {
+          if (isTargetNews) {
+            console.log(`[邮件发送] ✓✓✓ 目标新闻 ${targetNewsId} 通过过滤（新榜新闻，有摘要）`);
+          }
+          console.log(`[邮件发送] ✓ 新榜新闻通过过滤: ${news.id} - ${news.title?.substring(0, 50)} (企业: ${news.enterprise_full_name}, 有摘要: ${hasAbstract || hasSummary})`);
+        }
+        return true;
+      } else {
+        // 特别记录量子位公众号的新闻被过滤的原因
+        const isQuantumBit = (news.account_name && news.account_name.includes('量子位')) || 
+                            (news.wechat_account && news.wechat_account.includes('gh_114e76fd6e5d'));
+        if (isQuantumBit || isTargetNews) {
+          if (isTargetNews) {
+            console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤（新榜新闻，无摘要）`);
+          }
+          console.log(`[邮件发送] ⚠️⚠️⚠️ ${isQuantumBit ? '量子位' : '目标'}新榜新闻被过滤（无摘要）: ${news.id} - ${news.title?.substring(0, 50)}`);
+          console.log(`[邮件发送]   企业: ${news.enterprise_full_name || '(NULL)'}`);
+          console.log(`[邮件发送]   hasAbstract: ${hasAbstract}, news_abstract值: ${news.news_abstract ? `"${news.news_abstract.substring(0, 50)}..."` : '(NULL)'}`);
+          console.log(`[邮件发送]   hasSummary: ${hasSummary}, summary值: ${news.summary ? `"${news.summary.substring(0, 50)}..."` : '(NULL)'}`);
+          console.log(`[邮件发送]   hasContent: ${hasContent}, content长度: ${news.content ? news.content.length : 0}`);
+        } else {
+          console.log(`[邮件发送] 过滤掉新榜新闻（无摘要）: ${news.id} - ${news.title?.substring(0, 50)} (企业: ${news.enterprise_full_name}, hasAbstract: ${hasAbstract}, hasSummary: ${hasSummary})`);
+        }
+        return false;
+      }
+    } else {
+      // 企查查新闻：有摘要（news_abstract）或正文即可推送
+      // 注意：企查查新闻的类别检查已经在 filterNewsByCategory 函数中完成
+      // 进入此过滤的企查查新闻都是类别在配置的允许列表中的
+      if (hasAbstract || hasContent) {
+        if (isTargetNews) {
+          console.log(`[邮件发送] ✓✓✓ 目标新闻 ${targetNewsId} 通过过滤（企查查新闻，有摘要或正文）`);
+        }
+        console.log(`[邮件发送] ✓ 企查查新闻通过过滤: ${news.id} - ${news.title?.substring(0, 50)} (企业: ${news.enterprise_full_name}, 类别: ${news.news_category || '(NULL)'}, 有摘要或正文: ${hasAbstract || hasContent})`);
+        return true;
+      } else {
+        if (isTargetNews) {
+          console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤（企查查新闻，无摘要和正文）`);
+        }
+        console.log(`[邮件发送] 过滤掉企查查新闻（无摘要和正文）: ${news.id} - ${news.title?.substring(0, 50)} (企业: ${news.enterprise_full_name}, 类别: ${news.news_category || '(NULL)'}, hasAbstract: ${hasAbstract}, hasContent: ${hasContent})`);
+        return false;
+      }
+    }
   });
   
   const filteredCount = beforeFilterCount - finalNewsList.length;
@@ -438,14 +760,52 @@ async function getUserVisibleYesterdayNews(userId) {
   console.log(`[邮件发送] 最终返回：${finalNewsList.length} 条新闻`);
   if (finalNewsList.length > 0) {
     console.log(`[邮件发送] 最终新闻示例（前3条）：`, finalNewsList.slice(0, 3).map(n => ({
+      id: n.id,
       title: n.title,
       enterprise_full_name: n.enterprise_full_name,
+      account_name: n.account_name,
       public_time: n.public_time,
       hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
+      hasSummary: !!(n.summary && n.summary.trim()),
       hasContent: !!(n.content && n.content.trim())
     })));
+    
+    // 检查最终结果中是否包含量子位公众号的新闻
+    const quantumBitFinal = finalNewsList.filter(n => 
+      (n.account_name && n.account_name.includes('量子位')) || 
+      (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+    );
+    if (quantumBitFinal.length > 0) {
+      console.log(`[邮件发送] ✓✓✓ 最终结果中包含 ${quantumBitFinal.length} 条量子位公众号的新闻，将被发送`);
+    } else {
+      const quantumBitInitial = newsList.filter(n => 
+        (n.account_name && n.account_name.includes('量子位')) || 
+        (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+      );
+      if (quantumBitInitial.length > 0) {
+        console.log(`[邮件发送] ⚠️⚠️⚠️ 警告：初始查询到 ${quantumBitInitial.length} 条量子位公众号的新闻，但最终结果中为 0 条！`);
+        console.log(`[邮件发送]   请检查上述日志，查看量子位新闻在哪个过滤步骤被过滤掉了`);
+      }
+    }
   } else if (newsList.length > 0) {
     console.log(`[邮件发送] ⚠️ 警告：初始查询到 ${newsList.length} 条新闻，但经过过滤后为 0 条！`);
+    
+    // 检查是否有量子位公众号的新闻被过滤
+    const quantumBitInitial = newsList.filter(n => 
+      (n.account_name && n.account_name.includes('量子位')) || 
+      (n.wechat_account && n.wechat_account.includes('gh_114e76fd6e5d'))
+    );
+    if (quantumBitInitial.length > 0) {
+      console.log(`[邮件发送] ⚠️⚠️⚠️ 特别警告：初始查询中包含 ${quantumBitInitial.length} 条量子位公众号的新闻，但全部被过滤掉了！`);
+      quantumBitInitial.forEach(n => {
+        console.log(`[邮件发送]   被过滤的量子位新闻: ID=${n.id}, 标题=${n.title?.substring(0, 50)}`);
+        console.log(`[邮件发送]     企业全称: ${n.enterprise_full_name || '(NULL)'}`);
+        console.log(`[邮件发送]     APItype: ${n.APItype || '(NULL)'}`);
+        console.log(`[邮件发送]     有摘要(news_abstract): ${!!(n.news_abstract && n.news_abstract.trim())}`);
+        console.log(`[邮件发送]     有摘要(summary): ${!!(n.summary && n.summary.trim())}`);
+        console.log(`[邮件发送]     有正文(content): ${!!(n.content && n.content.trim())}`);
+      });
+    }
   }
   
   return finalNewsList;
@@ -930,8 +1290,8 @@ async function executeEmailTask(recipientId) {
       }
     }
     
-    // 获取用户可见的昨日舆情信息
-    let newsList = await getUserVisibleYesterdayNews(recipient.user_id);
+    // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企查查类别过滤）
+    let newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
     
     // 如果收件人ID是14004，额外添加涉及荣誉奖项关键词的企查查新闻
     if (recipientId === '14004') {
