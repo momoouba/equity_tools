@@ -396,7 +396,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
      AND delete_mark = 0`
   );
 
-  // 查询additional_wechat_accounts表中状态为"active"的数据
+  // 查询additional_wechat_accounts表中状态为"active"的数据，并进行去重
   const additionalAccounts = await db.query(
     `SELECT DISTINCT wechat_account_id 
      FROM additional_wechat_accounts 
@@ -413,7 +413,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     enterpriseAccountIds.push(...ids);
   });
   const additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
-  const allAccountIds = [...enterpriseAccountIds, ...additionalAccountIds];
+  
+  // 合并并去重：使用Set确保wechat_account_id唯一
+  const allAccountIdsSet = new Set([...enterpriseAccountIds, ...additionalAccountIds]);
+  const allAccountIds = Array.from(allAccountIdsSet);
 
   if (allAccountIds.length === 0) {
     return { 
@@ -2451,7 +2454,7 @@ router.get('/recipients', async (req, res) => {
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND rm.is_deleted = 0';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND is_deleted = 0';
       queryParams = [userId, pageSize, offset];
     }
 

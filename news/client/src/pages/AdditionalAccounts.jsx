@@ -24,7 +24,35 @@ function AdditionalAccounts() {
   })
   const [importFile, setImportFile] = useState(null)
   const [importLoading, setImportLoading] = useState(false)
+  const [userRole, setUserRole] = useState('user')
+  const [selectedUserId, setSelectedUserId] = useState('')
+  const [usersList, setUsersList] = useState([])
   const pageSize = 10
+
+  // 获取当前用户角色
+  useEffect(() => {
+    const role = localStorage.getItem('userRole') || 'user'
+    setUserRole(role)
+    
+    // 如果是管理员，获取用户列表
+    if (role === 'admin') {
+      fetchUsers()
+    }
+  }, [])
+
+  // 获取用户列表（仅管理员）
+  const fetchUsers = async () => {
+    try {
+      const response = await axios.get('/api/auth/users', {
+        params: { page: 1, pageSize: 1000 }
+      })
+      if (response.data.success) {
+        setUsersList(response.data.data || [])
+      }
+    } catch (error) {
+      console.error('获取用户列表失败:', error)
+    }
+  }
 
   // 获取公众号列表
   const fetchAccounts = async (abortSignal) => {
@@ -39,6 +67,10 @@ function AdditionalAccounts() {
       }
       if (statusFilter) {
         params.status = statusFilter
+      }
+      // 如果是管理员且选择了用户，传递userId参数
+      if (userRole === 'admin' && selectedUserId) {
+        params.userId = selectedUserId
       }
       
       const response = await axios.get('/api/additional-accounts', { 
@@ -74,7 +106,7 @@ function AdditionalAccounts() {
     return () => {
       abortController.abort()
     }
-  }, [currentPage, search, statusFilter])
+  }, [currentPage, search, statusFilter, selectedUserId])
 
   const handleSearch = (e) => {
     e.preventDefault()
@@ -244,6 +276,26 @@ function AdditionalAccounts() {
       <div className="accounts-header">
         <h2>额外公众号管理</h2>
         <div className="header-actions">
+          {userRole === 'admin' && (
+            <div className="user-filter" style={{ marginBottom: '10px' }}>
+              <label>切换用户查看：</label>
+              <select 
+                value={selectedUserId} 
+                onChange={(e) => {
+                  setSelectedUserId(e.target.value)
+                  setCurrentPage(1)
+                }}
+                style={{ marginRight: '10px', padding: '5px' }}
+              >
+                <option value="">全部用户</option>
+                {usersList.map(user => (
+                  <option key={user.id} value={user.id}>
+                    {user.account || user.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <form onSubmit={handleSearch} className="search-form">
             <input
               type="text"
@@ -290,6 +342,7 @@ function AdditionalAccounts() {
                 <th>公众号名称</th>
                 <th>账号ID</th>
                 <th>状态</th>
+                <th>创建人</th>
                 <th>创建时间</th>
                 <th>操作</th>
               </tr>
@@ -297,7 +350,7 @@ function AdditionalAccounts() {
             <tbody>
               {accountsList.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="empty-data">
+                  <td colSpan="7" className="empty-data">
                     {search || statusFilter ? '未找到相关数据' : '暂无数据'}
                   </td>
                 </tr>
@@ -312,6 +365,7 @@ function AdditionalAccounts() {
                         {account.status === 'active' ? '生效' : '失效'}
                       </span>
                     </td>
+                    <td>{account.creator_account || '-'}</td>
                     <td>{formatDate(account.created_at)}</td>
                     <td>
                       <div className="action-buttons">

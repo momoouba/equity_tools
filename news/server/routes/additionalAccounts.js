@@ -15,8 +15,8 @@ const upload = multer({
   }
 });
 
-// 权限检查中间件
-const checkAdminPermission = (req, res, next) => {
+// 用户认证中间件（所有用户都可以访问）
+const checkAuth = (req, res, next) => {
   const userRole = req.headers['x-user-role'] || 'user';
   const userId = req.headers['x-user-id'] || null;
 
@@ -24,49 +24,62 @@ const checkAdminPermission = (req, res, next) => {
     return res.status(401).json({ success: false, message: '未登录' });
   }
 
-  if (userRole !== 'admin') {
-    return res.status(403).json({ success: false, message: '权限不足' });
-  }
-
   req.currentUserId = userId;
+  req.currentUserRole = userRole;
   next();
 };
 
 // 获取额外公众号列表
-router.get('/', checkAdminPermission, async (req, res) => {
+router.get('/', checkAuth, async (req, res) => {
   try {
-    const { page = 1, pageSize = 10, search, status } = req.query;
+    const { page = 1, pageSize = 10, search, status, userId } = req.query;
     const offset = (page - 1) * pageSize;
+    const isAdmin = req.currentUserRole === 'admin';
 
-    let condition = 'WHERE delete_mark = 0';
+    let condition = 'WHERE a.delete_mark = 0';
     const params = [];
 
+    // 权限控制：普通用户只能看到自己创建的，管理员可以看到所有，并能切换用户查看
+    if (isAdmin && userId) {
+      // 管理员指定查看某个用户创建的
+      condition += ' AND a.creator_user_id = ?';
+      params.push(userId);
+    } else if (!isAdmin) {
+      // 普通用户只能看到自己创建的
+      condition += ' AND a.creator_user_id = ?';
+      params.push(req.currentUserId);
+    }
+
     if (search) {
-      condition += ' AND (account_name LIKE ? OR wechat_account_id LIKE ?)';
+      condition += ' AND (a.account_name LIKE ? OR a.wechat_account_id LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm);
     }
 
     if (status) {
-      condition += ' AND status = ?';
+      condition += ' AND a.status = ?';
       params.push(status);
     }
 
-    // 查询数据
+    // 查询数据，包含创建人信息
     const data = await db.query(
       `SELECT 
-        id, account_name, wechat_account_id, status, 
-        creator_user_id, created_at, updater_user_id, updated_at
-       FROM additional_wechat_accounts 
+        a.id, a.account_name, a.wechat_account_id, a.status, 
+        a.creator_user_id, a.created_at, a.updater_user_id, a.updated_at,
+        u.account as creator_account
+       FROM additional_wechat_accounts a
+       LEFT JOIN users u ON a.creator_user_id = u.id
        ${condition} 
-       ORDER BY created_at DESC 
+       ORDER BY a.created_at DESC 
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
 
     // 查询总数
     const totalRows = await db.query(
-      `SELECT COUNT(*) as total FROM additional_wechat_accounts ${condition}`,
+      `SELECT COUNT(*) as total 
+       FROM additional_wechat_accounts a
+       ${condition}`,
       params
     );
 
@@ -88,8 +101,8 @@ router.get('/', checkAdminPermission, async (req, res) => {
   }
 });
 
-// 新增额外公众号
-router.post('/', checkAdminPermission, async (req, res) => {
+// 新增额外公众号（所有用户都可以创建）
+router.post('/', checkAuth, async (req, res) => {
   try {
     const { account_name, wechat_account_id, status = 'active' } = req.body;
 
@@ -100,16 +113,17 @@ router.post('/', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 检查是否已存在
+    // 检查是否已存在（允许不同用户创建相同的公众号ID，但在同步时会去重）
+    // 这里只检查当前用户是否已经创建过相同的公众号ID
     const existing = await db.query(
-      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND delete_mark = 0',
-      [wechat_account_id]
+      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND creator_user_id = ? AND delete_mark = 0',
+      [wechat_account_id, req.currentUserId]
     );
 
     if (existing.length > 0) {
       return res.status(400).json({ 
         success: false, 
-        message: '该微信账号ID已存在' 
+        message: '您已经创建过该微信账号ID' 
       });
     }
 
@@ -140,8 +154,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
   }
 });
 
-// 更新额外公众号
-router.put('/:id', checkAdminPermission, async (req, res) => {
+// 更新额外公众号（用户只能更新自己创建的，管理员可以更新所有）
+router.put('/:id', checkAuth, async (req, res) => {
   try {
     const { id } = req.params;
     const { account_name, wechat_account_id, status } = req.body;
@@ -167,17 +181,25 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const oldData = existing[0];
+    
+    // 权限检查：普通用户只能更新自己创建的
+    if (req.currentUserRole !== 'admin' && oldData.creator_user_id !== req.currentUserId) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '无权更新此记录' 
+      });
+    }
 
-    // 检查微信账号ID是否重复（排除当前记录）
+    // 检查微信账号ID是否重复（排除当前记录，只检查当前用户创建的）
     const duplicate = await db.query(
-      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND id != ? AND delete_mark = 0',
-      [wechat_account_id, id]
+      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND id != ? AND creator_user_id = ? AND delete_mark = 0',
+      [wechat_account_id, id, req.currentUserId]
     );
 
     if (duplicate.length > 0) {
       return res.status(400).json({ 
         success: false, 
-        message: '该微信账号ID已存在' 
+        message: '您已经创建过该微信账号ID' 
       });
     }
 
@@ -206,14 +228,14 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
   }
 });
 
-// 删除额外公众号（软删除）
-router.delete('/:id', checkAdminPermission, async (req, res) => {
+// 删除额外公众号（软删除，用户只能删除自己创建的，管理员可以删除所有）
+router.delete('/:id', checkAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT id FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
+      'SELECT id, creator_user_id FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
       [id]
     );
 
@@ -221,6 +243,14 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
       return res.status(404).json({ 
         success: false, 
         message: '记录不存在' 
+      });
+    }
+    
+    // 权限检查：普通用户只能删除自己创建的
+    if (req.currentUserRole !== 'admin' && existing[0].creator_user_id !== req.currentUserId) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '无权删除此记录' 
       });
     }
 
@@ -241,8 +271,8 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
   }
 });
 
-// 批量导入额外公众号
-router.post('/batch-import', checkAdminPermission, upload.single('file'), async (req, res) => {
+// 批量导入额外公众号（所有用户都可以导入）
+router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ 
@@ -281,10 +311,10 @@ router.post('/batch-import', checkAdminPermission, upload.single('file'), async 
           continue;
         }
 
-        // 检查是否已存在
+        // 检查当前用户是否已创建过该公众号ID
         const existing = await db.query(
-          'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND delete_mark = 0',
-          [wechat_account_id]
+          'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND creator_user_id = ? AND delete_mark = 0',
+          [wechat_account_id, req.currentUserId]
         );
 
         if (existing.length > 0) {
@@ -323,8 +353,8 @@ router.post('/batch-import', checkAdminPermission, upload.single('file'), async 
   }
 });
 
-// 下载导入模板
-router.get('/download-template', checkAdminPermission, (req, res) => {
+// 下载导入模板（所有用户都可以下载）
+router.get('/download-template', checkAuth, (req, res) => {
   try {
     // 创建模板数据
     const templateData = [
@@ -377,10 +407,26 @@ router.get('/download-template', checkAdminPermission, (req, res) => {
   }
 });
 
-// 获取额外公众号变更日志
-router.get('/:id/logs', checkAdminPermission, async (req, res) => {
+// 获取额外公众号变更日志（用户只能查看自己创建的，管理员可以查看所有）
+router.get('/:id/logs', checkAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    
+    // 检查记录是否存在并验证权限
+    const existing = await db.query(
+      'SELECT creator_user_id FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
+      [id]
+    );
+    
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '记录不存在' });
+    }
+    
+    // 权限检查：普通用户只能查看自己创建的
+    if (req.currentUserRole !== 'admin' && existing[0].creator_user_id !== req.currentUserId) {
+      return res.status(403).json({ success: false, message: '无权查看此记录的日志' });
+    }
+    
     const logs = await db.query(
       `SELECT l.*, u.account as change_user_account
        FROM data_change_log l

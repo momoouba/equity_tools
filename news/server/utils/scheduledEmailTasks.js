@@ -487,22 +487,35 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       }
     }
   } else {
-    // 普通用户只能看到自己创建的被投企业相关的新闻
-    // 查询用户创建的被投企业的微信公众号ID
+    // 普通用户只能看到自己创建的被投企业相关的新闻，以及自己创建的额外公众号数据
+    console.log(`[邮件发送] ========== 普通用户查询逻辑 ==========`);
+    
+    // 1. 查询用户创建的被投企业的微信公众号ID
     const wechatAccounts = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
        FROM invested_enterprises 
        WHERE creator_user_id = ? 
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
-       AND exit_status NOT IN ('完全退出', '已上市')
+       AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND delete_mark = 0`,
       [userId]
     );
     
-    if (wechatAccounts.length === 0) {
-      return [];
-    }
+    // 2. 查询用户创建的额外公众号ID
+    const userAdditionalAccounts = await db.query(
+      `SELECT DISTINCT wechat_account_id 
+       FROM additional_wechat_accounts 
+       WHERE creator_user_id = ? 
+       AND status = 'active' 
+       AND wechat_account_id IS NOT NULL 
+       AND wechat_account_id != ''
+       AND delete_mark = 0`,
+      [userId]
+    );
+    
+    console.log(`[邮件发送] 用户创建的被投企业公众号数: ${wechatAccounts.length}`);
+    console.log(`[邮件发送] 用户创建的额外公众号数: ${userAdditionalAccounts.length}`);
     
     // 拆分逗号分隔的公众号ID
     const accountIds = [];
@@ -510,27 +523,67 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       const ids = splitAccountIds(item.wechat_official_account_id);
       accountIds.push(...ids);
     });
-    const placeholders = accountIds.map(() => '?').join(',');
+    userAdditionalAccounts.forEach(item => {
+      accountIds.push(item.wechat_account_id);
+    });
     
-    // 查询这些公众号的昨日新闻
+    // 去重公众号ID
+    const uniqueAccountIds = [...new Set(accountIds)];
+    
+    if (uniqueAccountIds.length === 0) {
+      console.log(`[邮件发送] 用户没有创建任何被投企业或额外公众号`);
+      return [];
+    }
+    
+    const placeholders = uniqueAccountIds.map(() => '?').join(',');
+    console.log(`[邮件发送] 用户查询的公众号总数: ${uniqueAccountIds.length}`);
+    
+    // 查询这些公众号的新闻，包括：
+    // 1. 通过公众号ID匹配且有企业全称的新闻（来自被投企业）
+    // 2. 通过公众号ID匹配的额外公众号新闻（可能有企业全称，也可能没有）
     newsList = await db.query(
-      `SELECT id, title, enterprise_full_name, news_sentiment, keywords, 
-              news_abstract, summary, content, public_time, account_name, source_url, created_at,
-              APItype, news_category
-       FROM news_detail 
-       WHERE wechat_account IN (${placeholders})
-       AND enterprise_full_name IS NOT NULL 
-       AND enterprise_full_name != ''
-       AND public_time >= ? 
-       AND public_time < ?
-       AND delete_mark = 0
-       ORDER BY enterprise_full_name, public_time DESC`,
-      [...accountIds, from, to]
+      `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+              nd.APItype, nd.news_category
+       FROM news_detail nd
+       WHERE nd.wechat_account IN (${placeholders})
+       AND nd.public_time >= ? 
+       AND nd.public_time < ?
+       AND nd.delete_mark = 0
+       ORDER BY 
+         CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
+         COALESCE(nd.enterprise_full_name, nd.account_name, ''),
+         nd.public_time DESC`,
+      [...uniqueAccountIds, from, to]
     );
+    
+    console.log(`[邮件发送] 普通用户：查询到 ${newsList.length} 条新闻`);
   }
   
   console.log(`[邮件发送] ========== 开始过滤新闻 ==========`);
   console.log(`[邮件发送] 初始查询结果：${newsList.length} 条新闻`);
+  
+  // 预先获取所有额外公众号的ID列表（用于后续过滤判断）
+  let additionalAccountIdsSet = new Set();
+  try {
+    const additionalAccounts = await db.query(
+      `SELECT DISTINCT wechat_account_id 
+       FROM additional_wechat_accounts 
+       WHERE status = 'active' 
+       AND wechat_account_id IS NOT NULL 
+       AND wechat_account_id != ''
+       AND delete_mark = 0`
+    );
+    additionalAccounts.forEach(acc => {
+      if (acc.wechat_account_id) {
+        additionalAccountIdsSet.add(acc.wechat_account_id);
+      }
+    });
+    console.log(`[邮件发送] 预先获取额外公众号ID列表，共 ${additionalAccountIdsSet.size} 个`);
+  } catch (err) {
+    console.warn(`[邮件发送] 获取额外公众号列表失败: ${err.message}`);
+  }
+  
   if (newsList.length > 0) {
     console.log(`[邮件发送] 初始新闻详情（前5条）：`, newsList.slice(0, 5).map(n => ({
       id: n.id,
@@ -667,17 +720,31 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       return false;
     }
     
-    // 检查企业全称（企业全称是必需的）
+    // 检查企业全称
+    // 注意：额外公众号的新闻可能没有企业名称，这种情况下应该保留，并在邮件中显示公众号名称
     const enterpriseName = news.enterprise_full_name;
     const hasEnterpriseName = enterpriseName && enterpriseName.trim() !== '';
+    
+    // 对于没有企业名称的新闻，检查是否是额外公众号的新闻
+    // 如果是额外公众号的新闻，即使没有企业名称也允许通过
     if (!hasEnterpriseName) {
-      if (isTargetNews) {
-        console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤：企业名称为空`);
-        console.log(`[邮件发送]   企业全称原始值: ${enterpriseName === null ? '(null)' : enterpriseName === undefined ? '(undefined)' : `"${enterpriseName}"`}`);
-        console.log(`[邮件发送]   企业全称trim后: ${enterpriseName ? enterpriseName.trim() : '(NULL)'}`);
+      // 使用预先获取的额外公众号ID列表来判断（避免在filter回调中查询数据库）
+      const isAdditionalAccountNews = news.wechat_account && additionalAccountIdsSet.has(news.wechat_account);
+      
+      if (!isAdditionalAccountNews) {
+        // 非额外公众号的新闻，企业全称是必需的
+        if (isTargetNews) {
+          console.log(`[邮件发送] ⚠️⚠️⚠️ 目标新闻 ${targetNewsId} 被过滤：企业名称为空（非额外公众号新闻）`);
+          console.log(`[邮件发送]   企业全称原始值: ${enterpriseName === null ? '(null)' : enterpriseName === undefined ? '(undefined)' : `"${enterpriseName}"`}`);
+          console.log(`[邮件发送]   企业全称trim后: ${enterpriseName ? enterpriseName.trim() : '(NULL)'}`);
+        }
+        console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title?.substring(0, 50)} (APItype: ${news.APItype || '(NULL)'})`);
+        return false;
+      } else {
+        // 额外公众号的新闻，没有企业名称也允许通过，在邮件中显示公众号名称
+        news._display_enterprise_name = news.account_name || news.wechat_account || '未知公众号';
+        console.log(`[邮件发送] ✓ 额外公众号新闻（无企业名称）: ${news.id} - ${news.title?.substring(0, 50)} (将显示为: ${news._display_enterprise_name})`);
       }
-      console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title?.substring(0, 50)} (APItype: ${news.APItype || '(NULL)'})`);
-      return false;
     }
     
     // 检查 news_abstract 字段（AI提取的摘要）
@@ -879,6 +946,7 @@ function filterNewsByCategory(newsList, customCategoryCodes = null) {
  */
 function exportNewsToExcel(newsList) {
   // 准备Excel数据
+  // 注意：对于没有企业名称的额外公众号新闻，显示公众号名称
   const excelData = newsList.map((news, index) => {
     const keywords = news.keywords ? (typeof news.keywords === 'string' ? JSON.parse(news.keywords) : news.keywords) : [];
     const sentimentMap = {
@@ -887,13 +955,20 @@ function exportNewsToExcel(newsList) {
       'neutral': '中性'
     };
     
+    // 如果没有企业名称，使用公众号名称（或_display_enterprise_name标记）
+    const displayEnterpriseName = news.enterprise_full_name || 
+                                  news._display_enterprise_name || 
+                                  news.account_name || 
+                                  news.wechat_account || 
+                                  '';
+    
     return {
       '序号': index + 1,
-      '被投企业全称': news.enterprise_full_name || '',
+      '被投企业全称': displayEnterpriseName,
       '新闻标题': news.title || '',
       '新闻标签': Array.isArray(keywords) ? keywords.join('、') : '',
       '新闻情绪': sentimentMap[news.news_sentiment] || news.news_sentiment || '未知',
-      '新闻摘要': news.news_abstract || '',
+      '新闻摘要': news.news_abstract || news.summary || '',
       '发布时间': news.public_time ? new Date(news.public_time).toLocaleString('zh-CN') : '',
       '公众号名称': news.account_name || '',
       '原文链接': news.source_url || ''

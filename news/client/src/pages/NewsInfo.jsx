@@ -659,56 +659,34 @@ function NewsInfo() {
 
   return (
     <div className="news-info">
-      {/* 管理员Tab页签 */}
-      {isAdmin && (
-        <div className="admin-tabs">
-          <button 
-            className={`admin-tab-button ${adminActiveTab === 'news' ? 'active' : ''}`}
-            onClick={() => setAdminActiveTab('news')}
-          >
-            舆情信息
-          </button>
-          <button 
-            className={`admin-tab-button ${adminActiveTab === 'accounts' ? 'active' : ''}`}
-            onClick={() => setAdminActiveTab('accounts')}
-          >
-            公众号管理
-          </button>
-          <button 
-            className={`admin-tab-button ${adminActiveTab === 'recipients' ? 'active' : ''}`}
-            onClick={() => {
-              console.log('点击收件管理按钮, 当前 adminActiveTab:', adminActiveTab)
-              setAdminActiveTab('recipients')
-              console.log('设置 adminActiveTab 为 recipients')
-            }}
-          >
-            收件管理
-          </button>
-        </div>
-      )}
-
-      {/* 用户Tab页签 */}
-      {!isAdmin && (
-        <div className="admin-tabs">
-          <button 
-            className={`admin-tab-button ${adminActiveTab === 'news' ? 'active' : ''}`}
-            onClick={() => setAdminActiveTab('news')}
-          >
-            舆情信息
-          </button>
-          <button 
-            className={`admin-tab-button ${adminActiveTab === 'recipients' ? 'active' : ''}`}
-            onClick={() => {
-              console.log('点击收件管理按钮, 当前 adminActiveTab:', adminActiveTab)
-              setAdminActiveTab('recipients')
+      {/* Tab页签（所有用户都可以看到） */}
+      <div className="admin-tabs">
+        <button 
+          className={`admin-tab-button ${adminActiveTab === 'news' ? 'active' : ''}`}
+          onClick={() => setAdminActiveTab('news')}
+        >
+          舆情信息
+        </button>
+        <button 
+          className={`admin-tab-button ${adminActiveTab === 'accounts' ? 'active' : ''}`}
+          onClick={() => setAdminActiveTab('accounts')}
+        >
+          公众号管理
+        </button>
+        <button 
+          className={`admin-tab-button ${adminActiveTab === 'recipients' ? 'active' : ''}`}
+          onClick={() => {
+            console.log('点击收件管理按钮, 当前 adminActiveTab:', adminActiveTab)
+            setAdminActiveTab('recipients')
+            if (!isAdmin) {
               setRecipientTab('recipients')
-              console.log('设置 adminActiveTab 为 recipients')
-            }}
-          >
-            收件管理
-          </button>
-        </div>
-      )}
+            }
+            console.log('设置 adminActiveTab 为 recipients')
+          }}
+        >
+          收件管理
+        </button>
+      </div>
 
       {/* 根据选中的tab显示不同内容 */}
       {adminActiveTab === 'news' && (
@@ -1302,8 +1280,8 @@ function NewsInfo() {
 
 
 
-      {/* 公众号管理页面 */}
-      {isAdmin && adminActiveTab === 'accounts' && (
+      {/* 公众号管理页面（所有用户都可以访问） */}
+      {adminActiveTab === 'accounts' && (
         <AdditionalAccounts />
       )}
 
