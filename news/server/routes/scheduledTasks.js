@@ -2,6 +2,9 @@ const express = require('express');
 const db = require('../db');
 const { updateScheduledTasks, executeEmailTask } = require('../utils/scheduledEmailTasks');
 const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
+const { generateId } = require('../utils/idGenerator');
+const { initializeScheduledTask: initializeNewsReanalysisTask } = require('../utils/scheduledNewsReanalysisTasks');
+const cron = require('node-cron');
 
 const router = express.Router();
 
@@ -138,6 +141,150 @@ function calculateNextExecutionTime(sendFrequency, sendTime, weekday = null, mon
   
   return nextExecution;
 }
+
+// ========== AI分析定时任务配置路由（必须在动态路由之前） ==========
+
+// 获取AI分析定时任务配置
+router.get('/ai-analysis-config', checkAdminPermission, async (req, res) => {
+  try {
+    // 从system_config表读取配置
+    const configs = await db.query(
+      'SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?)',
+      ['ai_reanalysis_cron', 'ai_reanalysis_active']
+    );
+
+    let cronExpression = '0 2 * * *'; // 默认每天凌晨2点
+    let isActive = true; // 默认启用
+
+    for (const config of configs) {
+      if (config.config_key === 'ai_reanalysis_cron') {
+        cronExpression = config.config_value || '0 2 * * *';
+      } else if (config.config_key === 'ai_reanalysis_active') {
+        isActive = config.config_value === '1' || config.config_value === 'true';
+      }
+    }
+
+    // 解析cron表达式为时间（只处理每天执行的cron：分钟 小时 * * *）
+    let executionTime = '02:00';
+    if (cronExpression && cron.validate(cronExpression)) {
+      const parts = cronExpression.trim().split(/\s+/);
+      if (parts.length >= 2 && parts[2] === '*' && parts[3] === '*' && parts[4] === '*') {
+        const minutes = parts[0].padStart(2, '0');
+        const hours = parts[1].padStart(2, '0');
+        executionTime = `${hours}:${minutes}`;
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        cronExpression,
+        executionTime,
+        isActive
+      }
+    });
+  } catch (error) {
+    console.error('获取AI分析定时任务配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败：' + error.message });
+  }
+});
+
+// 更新AI分析定时任务配置
+router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
+  try {
+    const { executionTime, isActive } = req.body;
+
+    // 验证时间格式
+    if (executionTime && !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(executionTime)) {
+      return res.status(400).json({ success: false, message: '时间格式不正确，应为HH:mm格式' });
+    }
+
+    // 将时间转换为cron表达式（每天执行）
+    let cronExpression = '0 2 * * *'; // 默认
+    if (executionTime) {
+      const [hours, minutes] = executionTime.split(':');
+      cronExpression = `${minutes} ${hours} * * *`;
+    }
+
+    // 验证cron表达式
+    if (!cron.validate(cronExpression)) {
+      return res.status(400).json({ success: false, message: '无效的时间配置' });
+    }
+
+    // 更新或插入配置
+    for (const config of [
+      { key: 'ai_reanalysis_cron', value: cronExpression, desc: 'AI分析定时任务Cron表达式' },
+      { key: 'ai_reanalysis_active', value: isActive ? '1' : '0', desc: 'AI分析定时任务是否启用' }
+    ]) {
+      const existing = await db.query('SELECT id FROM system_config WHERE config_key = ?', [config.key]);
+      
+      if (existing.length > 0) {
+        await db.execute(
+          'UPDATE system_config SET config_value = ? WHERE config_key = ?',
+          [config.value, config.key]
+        );
+      } else {
+        const configId = await generateId('system_config');
+        await db.execute(
+          'INSERT INTO system_config (id, config_key, config_value, config_desc) VALUES (?, ?, ?, ?)',
+          [configId, config.key, config.value, config.desc]
+        );
+      }
+    }
+
+    // 重新初始化定时任务
+    try {
+      const { initializeScheduledTask, stopScheduledTask } = require('../utils/scheduledNewsReanalysisTasks');
+      if (isActive) {
+        initializeScheduledTask(cronExpression);
+      } else {
+        stopScheduledTask();
+      }
+    } catch (initError) {
+      console.error('重新初始化AI分析定时任务失败:', initError);
+      // 即使初始化失败，也返回成功，因为配置已保存
+    }
+
+    res.json({
+      success: true,
+      message: 'AI分析定时任务配置更新成功'
+    });
+  } catch (error) {
+    console.error('更新AI分析定时任务配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 即时执行AI分析定时任务
+router.post('/ai-analysis-config/execute', checkAdminPermission, async (req, res) => {
+  try {
+    const { executeEmptyAbstractReanalysis } = require('../utils/scheduledNewsReanalysisTasks');
+    
+    console.log('[AI分析定时任务] 管理员手动触发执行...');
+    
+    // 立即返回响应，告知前端开始处理
+    res.json({
+      success: true,
+      message: '开始执行AI分析任务，请稍候...',
+      status: 'processing'
+    });
+
+    // 异步执行任务
+    setImmediate(async () => {
+      try {
+        const result = await executeEmptyAbstractReanalysis(50); // 每次处理50条
+        console.log('[AI分析定时任务] 手动执行完成:', result);
+      } catch (error) {
+        console.error('[AI分析定时任务] 手动执行失败:', error);
+      }
+    });
+  } catch (error) {
+    console.error('执行AI分析定时任务失败：', error);
+    res.status(500).json({ success: false, message: '执行失败：' + error.message });
+  }
+});
+
+// ========== 其他定时任务路由 ==========
 
 // 获取所有定时任务列表
 router.get('/', checkAdminPermission, async (req, res) => {

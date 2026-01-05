@@ -21,6 +21,7 @@ const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
+const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -216,6 +217,12 @@ async function startServer() {
           console.log('正在初始化新闻同步定时任务...');
           initializeNewsSyncScheduledTasks().catch(error => {
             console.error('初始化新闻同步定时任务失败:', error);
+          });
+          
+          // 初始化空摘要新闻重新分析定时任务
+          console.log('正在初始化空摘要新闻重新分析定时任务...');
+          initializeNewsReanalysisTask().catch(error => {
+            console.error('初始化空摘要新闻重新分析定时任务失败:', error);
           });
           
           // 初始化邮件发送定时任务（异步，不阻塞）

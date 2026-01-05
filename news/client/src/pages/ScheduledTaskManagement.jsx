@@ -5,12 +5,19 @@ import TaskProgressModal from '../components/TaskProgressModal'
 import './EmailConfig.css'
 
 function ScheduledTaskManagement() {
-  const [activeTab, setActiveTab] = useState('email') // 'email' 或 'news_sync'
+  const [activeTab, setActiveTab] = useState('email') // 'email' 或 'news_sync' 或 'ai_analysis'
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const pageSize = 10
+
+  // AI分析定时任务配置
+  const [aiAnalysisConfig, setAiAnalysisConfig] = useState({
+    executionTime: '02:00',
+    isActive: true
+  })
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false)
 
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
@@ -68,8 +75,68 @@ function ScheduledTaskManagement() {
   const [progressTaskId, setProgressTaskId] = useState(null)
 
   useEffect(() => {
-    fetchTasks()
+    if (activeTab === 'ai_analysis') {
+      fetchAiAnalysisConfig()
+    } else {
+      fetchTasks()
+    }
   }, [currentPage, activeTab])
+
+  const fetchAiAnalysisConfig = async () => {
+    setAiAnalysisLoading(true)
+    try {
+      const response = await axios.get('/api/scheduled-tasks/ai-analysis-config')
+      if (response.data.success) {
+        setAiAnalysisConfig({
+          executionTime: response.data.data.executionTime || '02:00',
+          isActive: response.data.data.isActive !== undefined ? response.data.data.isActive : true
+        })
+      }
+    } catch (error) {
+      console.error('获取AI分析定时任务配置失败:', error)
+      alert('获取配置失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setAiAnalysisLoading(false)
+    }
+  }
+
+  const handleSaveAiAnalysisConfig = async () => {
+    setAiAnalysisLoading(true)
+    try {
+      const response = await axios.put('/api/scheduled-tasks/ai-analysis-config', {
+        executionTime: aiAnalysisConfig.executionTime,
+        isActive: aiAnalysisConfig.isActive
+      })
+      if (response.data.success) {
+        alert('保存成功')
+        fetchAiAnalysisConfig()
+      }
+    } catch (error) {
+      console.error('保存AI分析定时任务配置失败:', error)
+      alert('保存失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setAiAnalysisLoading(false)
+    }
+  }
+
+  const handleExecuteAiAnalysis = async () => {
+    if (!confirm('确定要立即执行一次AI分析任务吗？这将会分析摘要为空的新闻数据。')) {
+      return
+    }
+
+    setAiAnalysisLoading(true)
+    try {
+      const response = await axios.post('/api/scheduled-tasks/ai-analysis-config/execute')
+      if (response.data.success) {
+        alert('任务已开始执行，请查看日志了解执行结果')
+      }
+    } catch (error) {
+      console.error('执行AI分析定时任务失败:', error)
+      alert('执行失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setAiAnalysisLoading(false)
+    }
+  }
 
   useEffect(() => {
     if (showLogModal && logTaskId) {
@@ -523,9 +590,95 @@ function ScheduledTaskManagement() {
         >
           新闻接口同步
         </button>
+        <button
+          className={`tab-button ${activeTab === 'ai_analysis' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('ai_analysis')
+            setCurrentPage(1)
+          }}
+          style={{
+            padding: '10px 20px',
+            border: 'none',
+            borderBottom: activeTab === 'ai_analysis' ? '2px solid #357abd' : '2px solid transparent',
+            background: 'none',
+            cursor: 'pointer',
+            color: activeTab === 'ai_analysis' ? '#357abd' : '#666',
+            fontWeight: activeTab === 'ai_analysis' ? 'bold' : 'normal'
+          }}
+        >
+          AI分析定时任务
+        </button>
       </div>
 
-      {loading ? (
+      {activeTab === 'ai_analysis' ? (
+        <div style={{ padding: '20px', background: '#fff', borderRadius: '4px' }}>
+          {aiAnalysisLoading ? (
+            <div className="loading">加载中...</div>
+          ) : (
+            <div>
+              <div style={{ marginBottom: '20px' }}>
+                <h4 style={{ marginBottom: '20px' }}>AI分析定时任务配置</h4>
+                <div style={{ marginBottom: '16px', padding: '16px', background: '#f5f5f5', borderRadius: '4px' }}>
+                  <p style={{ margin: '0 0 8px 0', color: '#666' }}>
+                    此定时任务用于自动检查并重新分析新闻摘要为空的新闻数据，确保所有有效新闻都有摘要内容。
+                  </p>
+                  <p style={{ margin: '0', color: '#666', fontSize: '14px' }}>
+                    执行频率：每天执行一次
+                  </p>
+                </div>
+                <div className="form-group" style={{ marginBottom: '16px' }}>
+                  <label>执行时间 *</label>
+                  <input
+                    type="time"
+                    value={aiAnalysisConfig.executionTime}
+                    onChange={(e) => setAiAnalysisConfig({ ...aiAnalysisConfig, executionTime: e.target.value })}
+                    style={{ width: '200px', padding: '8px', borderRadius: '4px', border: '1px solid #ccc' }}
+                  />
+                  <p style={{ margin: '4px 0 0 0', color: '#999', fontSize: '12px' }}>
+                    每天的执行时间（24小时制）
+                  </p>
+                </div>
+                <div className="form-group" style={{ marginBottom: '20px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <input
+                      type="checkbox"
+                      checked={aiAnalysisConfig.isActive}
+                      onChange={(e) => setAiAnalysisConfig({ ...aiAnalysisConfig, isActive: e.target.checked })}
+                      style={{ width: '16px', height: '16px' }}
+                    />
+                    <span>启用定时任务</span>
+                  </label>
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="btn-primary"
+                    onClick={handleSaveAiAnalysisConfig}
+                    disabled={aiAnalysisLoading}
+                  >
+                    保存
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={fetchAiAnalysisConfig}
+                    disabled={aiAnalysisLoading}
+                    style={{ background: '#6c757d', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    刷新
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={handleExecuteAiAnalysis}
+                    disabled={aiAnalysisLoading}
+                    style={{ background: '#28a745', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    立即执行
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : loading ? (
         <div className="loading">加载中...</div>
       ) : tasks.length === 0 ? (
         <div className="empty-data">暂无定时任务</div>
