@@ -144,6 +144,24 @@ async function updateSyncLog(logId, params) {
      WHERE id = ?`,
     updateValues
   );
+  
+  // 更新对应配置的last_sync_time为执行日志的end_time
+  try {
+    const configRecords = await db.query(
+      'SELECT config_id FROM news_sync_execution_log WHERE id = ?',
+      [logId]
+    );
+    if (configRecords.length > 0 && configRecords[0].config_id) {
+      await db.execute(
+        'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+        [endTime, formatDateOnly(endTime), configRecords[0].config_id]
+      );
+      console.log(`[新闻同步] 已使用执行日志的end_time更新配置 ${configRecords[0].config_id} 的last_sync_time: ${endTime}`);
+    }
+  } catch (updateConfigError) {
+    console.warn(`[新闻同步] 更新配置的last_sync_time失败: ${updateConfigError.message}`);
+    // 不抛出错误，因为日志更新已经成功
+  }
 }
 
 /**
@@ -1193,11 +1211,8 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     // 检查拖底逻辑后是否获取到数据
     const fallbackSyncedCount = fallbackResult.data?.synced || 0;
     
-    // 更新同步时间
-    await db.execute(
-      'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
-      [fallbackRange.to, formatDateOnly(fallbackToDate), config.id]
-    );
+    // 注意：last_sync_time 的更新现在在 updateSyncLog 函数中处理
+    // 这里不再需要更新，因为 updateSyncLog 会使用执行日志的 end_time 来更新 last_sync_time
     
     // 如果拖底逻辑后仍未获取到数据，检查是否需要重试（仅在非手动触发且非重试时）
     if (fallbackSyncedCount === 0 && !isManual && retryAttempt === 0) {
@@ -1216,13 +1231,8 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     await scheduleRetryIfNeeded(config, range, { isManual, logId, retryAttempt: 0 });
   }
 
-  // 正常情况：更新同步时间（仅新榜接口，企查查接口在syncQichachaNewsData中已更新）
-  if (interfaceType !== '企查查') {
-    await db.execute(
-      'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
-      [range.to, formatDateOnly(toDate), config.id]
-    );
-  }
+  // 注意：last_sync_time 的更新现在在 updateSyncLog 函数中处理
+  // 这里不再需要更新，因为 updateSyncLog 会使用执行日志的 end_time 来更新 last_sync_time
 
   return {
     ...result,
@@ -3717,13 +3727,8 @@ async function syncQichachaNewsData(configId = null, logId = null) {
       }
     }
 
-    // 更新最后同步时间
-    if (configId || config.id) {
-      await db.execute(
-        'UPDATE news_interface_config SET last_sync_time = NOW(), last_sync_date = CURDATE() WHERE id = ?',
-        [configId || config.id]
-      );
-    }
+    // 注意：last_sync_time 的更新现在在 updateSyncLog 函数中处理
+    // 这里不再需要更新，因为 updateSyncLog 会使用执行日志的 end_time 来更新 last_sync_time
 
     // 输出同步统计信息
     console.log(`[企查查同步] ========== 同步统计 ==========`);

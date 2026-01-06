@@ -228,6 +228,266 @@ class NewsAnalysis {
       }
     }
     
+    // 特殊处理：每经网（nbd.com.cn）
+    // 每经网的正文在 <div class="g-article"> 中
+    if (url && url.includes('nbd.com.cn')) {
+      console.log(`[extractArticleContent] 检测到每经网URL，使用特殊提取逻辑`);
+      
+      // 智能匹配div标签（处理嵌套）
+      const findNbdArticleDiv = (html) => {
+        // 查找class="g-article"的div开始标签
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bg-article\b[^"']*["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            // 没有找到结束标签，使用HTML末尾
+            endPos = html.length;
+            break;
+          }
+          
+          // 检查是否有嵌套的div
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<div是否在script标签内
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              // 这个<div在script标签内，跳过
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            // 检查这个</div>是否在script标签内
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              // 这个</div>在script标签内，跳过
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        
+        return null;
+      };
+      
+      const nbdContent = findNbdArticleDiv(html);
+      
+      if (nbdContent) {
+        // 清理script、style等标签
+        let cleanedContent = nbdContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        // 检查内容长度
+        const nbdText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        if (nbdText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取每经网正文，长度: ${nbdText.length}字符`);
+          console.log(`[extractArticleContent] ✓ 每经网内容预览（前300字符）: ${nbdText.substring(0, 300)}...`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 每经网提取的内容太短（${nbdText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到每经网的g-article div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：东方财富网（eastmoney.com）
+    // 东方财富网的正文在 <div class="txtinfos" id="ContentBody"> 中
+    if (url && url.includes('eastmoney.com')) {
+      console.log(`[extractArticleContent] 检测到东方财富网URL，使用特殊提取逻辑`);
+      
+      // 智能匹配div标签（处理嵌套）
+      const findEastmoneyArticleDiv = (html) => {
+        // 查找id="ContentBody"且class包含"txtinfos"的div开始标签
+        // 优先匹配id="ContentBody"，因为id更唯一
+        const divStartRegex = /<div[^>]*id\s*=\s*["']ContentBody["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          // 如果没找到id="ContentBody"，尝试查找class="txtinfos"
+          const divStartRegex2 = /<div[^>]*class\s*=\s*["'][^"']*\btxtinfos\b[^"']*["'][^>]*>/i;
+          const startMatch2 = html.match(divStartRegex2);
+          if (!startMatch2) {
+            return null;
+          }
+          const startPos = startMatch2.index;
+          const tagEnd = startPos + startMatch2[0].length;
+          
+          // 从开始标签后查找对应的结束标签（处理嵌套div）
+          let depth = 1;
+          let pos = tagEnd;
+          let endPos = -1;
+          
+          while (pos < html.length && depth > 0) {
+            const nextOpen = html.indexOf('<div', pos);
+            const nextClose = html.indexOf('</div>', pos);
+            
+            if (nextClose === -1) {
+              endPos = html.length;
+              break;
+            }
+            
+            if (nextOpen !== -1 && nextOpen < nextClose) {
+              const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+              const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+              if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+                pos = scriptAfterDiv + 9;
+                continue;
+              }
+              depth++;
+              pos = nextOpen + 4;
+            } else {
+              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+              const scriptAfterClose = html.indexOf('</script>', nextClose);
+              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+                pos = scriptAfterClose + 9;
+                continue;
+              }
+              depth--;
+              if (depth === 0) {
+                endPos = nextClose;
+                break;
+              }
+              pos = nextClose + 6;
+            }
+          }
+          
+          if (endPos !== -1) {
+            return html.substring(tagEnd, endPos);
+          }
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            // 没有找到结束标签，使用HTML末尾
+            endPos = html.length;
+            break;
+          }
+          
+          // 检查是否有嵌套的div
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<div是否在script标签内
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              // 这个<div在script标签内，跳过
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            // 检查这个</div>是否在script标签内
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              // 这个</div>在script标签内，跳过
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        
+        return null;
+      };
+      
+      const eastmoneyContent = findEastmoneyArticleDiv(html);
+      
+      if (eastmoneyContent) {
+        // 清理script、style等标签
+        let cleanedContent = eastmoneyContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        // 移除一些不需要的内容（如广告链接、隐藏元素等）
+        cleanedContent = cleanedContent
+          .replace(/<p[^>]*style\s*=\s*["'][^"']*display\s*:\s*none[^"']*["'][^>]*>[\s\S]*?<\/p>/gi, '') // 移除display:none的p标签
+          .replace(/<div[^>]*class\s*=\s*["'][^"']*\bem_module_extend\b[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '') // 移除em_module_extend div
+          .replace(/<center[^>]*>[\s\S]*?<\/center>/gi, '') // 移除center标签
+          .replace(/<a[^>]*target\s*=\s*["']_blank["'][^>]*>[\s\S]*?<\/a>/gi, (match) => {
+            // 保留链接文本，但移除链接标签（如果是广告链接）
+            const textMatch = match.match(/>(.*?)<\/a>/);
+            if (textMatch && (textMatch[1].includes('妙想') || textMatch[1].includes('体验'))) {
+              return ''; // 移除广告链接
+            }
+            return textMatch ? textMatch[1] : '';
+          });
+        
+        // 检查内容长度
+        const eastmoneyText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        if (eastmoneyText.length > 50) {
+          console.log(`[extractArticleContent] ✓ 成功提取东方财富网正文，长度: ${eastmoneyText.length}字符`);
+          console.log(`[extractArticleContent] ✓ 东方财富网内容预览（前300字符）: ${eastmoneyText.substring(0, 300)}...`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 东方财富网提取的内容太短（${eastmoneyText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到东方财富网的ContentBody div，继续使用通用提取逻辑`);
+      }
+    }
+    
     // 第一步：先提取article标签，避免在清理过程中被截断
     // 使用智能匹配函数查找完整的article标签（处理嵌套和script标签中的</article>）
     const findCompleteArticle = (html) => {

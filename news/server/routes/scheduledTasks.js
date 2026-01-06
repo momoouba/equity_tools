@@ -354,7 +354,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
       const total = totalResult.total || 0;
 
       // 为每个配置添加定时任务信息
-      const tasks = configs.map(config => {
+      const tasks = await Promise.all(configs.map(async (config) => {
         const isActive = config.is_active === 1;
         
         // 如果send_frequency或send_time为空，根据frequency_type设置默认值
@@ -380,6 +380,40 @@ router.get('/', checkAdminPermission, async (req, res) => {
           ? calculateNextExecutionTime(sendFrequency, sendTime, config.weekday || config.week_day || null, config.monthDay || config.month_day || null) 
           : null;
         
+        // 优先从最新的执行日志中获取end_time作为lastSyncTime
+        let lastSyncTime = config.last_sync_time;
+        try {
+          const latestLogs = await db.query(
+            `SELECT end_time FROM news_sync_execution_log 
+             WHERE config_id = ? AND end_time IS NOT NULL 
+             ORDER BY end_time DESC LIMIT 1`,
+            [config.id]
+          );
+          if (latestLogs.length > 0 && latestLogs[0].end_time) {
+            lastSyncTime = latestLogs[0].end_time;
+            // 如果配置表中的last_sync_time是旧的（时间部分为00:00:00），更新它
+            if (config.last_sync_time && 
+                (new Date(config.last_sync_time).getHours() === 0 && 
+                 new Date(config.last_sync_time).getMinutes() === 0 && 
+                 new Date(config.last_sync_time).getSeconds() === 0)) {
+              // 异步更新配置表的last_sync_time（不阻塞响应）
+              setImmediate(async () => {
+                try {
+                  await db.execute(
+                    'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = DATE(?) WHERE id = ?',
+                    [lastSyncTime, lastSyncTime, config.id]
+                  );
+                } catch (updateError) {
+                  console.warn(`[定时任务API] 更新配置 ${config.id} 的last_sync_time失败:`, updateError.message);
+                }
+              });
+            }
+          }
+        } catch (logError) {
+          console.warn(`[定时任务API] 查询配置 ${config.id} 的执行日志失败:`, logError.message);
+          // 如果查询失败，继续使用config.last_sync_time
+        }
+        
         return {
           id: config.id,
           appId: config.app_id,
@@ -396,11 +430,11 @@ router.get('/', checkAdminPermission, async (req, res) => {
           retryInterval: config.retry_interval || 0,
           retry_interval: config.retry_interval || 0,
           nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
-          lastSyncTime: config.last_sync_time,
+          lastSyncTime: lastSyncTime,
           createdAt: config.created_at,
           updatedAt: config.updated_at
         };
-      });
+      }));
 
       res.json({
         success: true,

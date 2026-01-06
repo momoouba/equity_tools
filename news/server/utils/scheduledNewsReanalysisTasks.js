@@ -58,9 +58,12 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
 
     console.log(`[空摘要重新分析定时任务] 找到 ${newsList.length} 条摘要为空的新闻，开始重新分析...`);
 
-    // 确保新闻分析模块已初始化
-    if (!newsAnalysis.aiConfig) {
-      await newsAnalysis.initialize();
+    // 确保新闻分析模块已初始化（加载AI配置）
+    try {
+      await newsAnalysis.getActiveAIConfig();
+    } catch (configError) {
+      console.error(`[空摘要重新分析定时任务] 获取AI配置失败: ${configError.message}`);
+      throw new Error(`无法获取AI配置: ${configError.message}`);
     }
 
     let successCount = 0;
