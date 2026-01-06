@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI工具 - 个人精选平台</title>
+    <style>
+        /* --- 基础样式 --- */
+        :root {
+            --card-bg: rgba(255, 255, 255, 0.85); /* 卡片半透明，透出背景 */
+            --text-main: #1F2937;
+            --text-sub: #6B7280;    /* 辅助文字颜色 */
+            --accent: #2563EB; /* 科技蓝 */
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #F8FAFC; /* 浅灰底色 */
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* 防止出现滚动条 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+        }
+
+        /* --- 背景 Canvas --- */
+        #particle-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1; /* 放在最底层 */
+            background: linear-gradient(to bottom, #ffffff, #f1f5f9);
+        }
+
+        /* --- 内容容器 --- */
+        .container {
+            width: 100%;
+            max-width: 1000px;
+            padding: 0 20px;
+            margin-top: 10vh; /* 距离顶部稍微远一点 */
+            position: relative;
+            z-index: 10; /* 保证内容在粒子之上 */
+            flex: 1; /* 让容器占据主体空间，把footer挤下去 */
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 头部样式 */
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            animation: fadeInDown 1s ease-out;
+        }
+
+        h1 {
+            font-size: 3rem;
+            font-weight: 800;
+            margin: 0 0 10px 0;
+            letter-spacing: -1px;
+            color: #111827;
+        }
+
+        p.subtitle {
+            font-size: 1.1rem;
+            color: #64748B;
+            margin: 0;
+            font-weight: 400;
+        }
+
+        /* 卡片网格 */
+        .grid {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        /* 卡片样式 */
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px); /* 毛玻璃 */
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 16px;
+            padding: 24px;
+            width: 280px; /* 稍微宽一点容纳描述 */
+            height: 160px; /* 稍微高一点 */
+            text-decoration: none;
+            color: var(--text-main);
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            animation: fadeInUp 0.8s ease-out forwards;
+            opacity: 0; /* 初始隐藏，由动画显示 */
+        }
+
+        /* 卡片依次入场 */
+        .card:nth-child(1) { animation-delay: 0.1s; }
+        .card:nth-child(2) { animation-delay: 0.2s; }
+        .card:nth-child(3) { animation-delay: 0.3s; }
+        .card:nth-child(4) { animation-delay: 0.4s; }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 30px -5px rgba(37, 99, 235, 0.15); /* 悬停时带一点蓝色阴影 */
+            border-color: rgba(37, 99, 235, 0.3);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .card-icon {
+            font-size: 28px;
+            margin-right: 12px;
+        }
+
+        .card-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .card-desc {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            line-height: 1.5;
+            margin: 0;
+            flex-grow: 1; /* 让描述占据中间空间 */
+        }
+
+        .card-footer {
+            margin-top: 16px;
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .card-arrow {
+            color: var(--accent);
+            opacity: 0;
+            transform: translateX(-10px);
+            transition: all 0.2s ease;
+            font-weight: bold;
+            font-size: 1.1rem;
+        }
+
+        .card:hover .card-arrow {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        /* 页脚样式 */
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #94A3B8;
+            font-size: 0.85rem;
+            width: 100%;
+            position: relative;
+            z-index: 10;
+        }
+
+        /* 简单的入场动画 */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- 背景 Canvas -->
+    <canvas id="particle-canvas"></canvas>
+
+    <div class="container">
+        <header>
+            <h1>AI 工具</h1>
+            <!-- 副标题已移除 -->
+        </header>
+
+        <div class="grid" id="card-container">
+            <!-- 卡片由 JS 生成 -->
+        </div>
+    </div>
+
+    <!-- footer 已移除 -->
+
+    <script>
+        // ==========================================
+        // ★★★ 1. 数据配置区 ★★★
+        // ==========================================
+        const toolsData = [
+            {
+                name: "NotebookLM",
+                icon: "📓", 
+                desc: "谷歌出品的 AI 笔记助手，擅长分析长文档和生成播客。",
+                link: "https://notebooklm.google.com/"
+            },
+            {
+                name: "Gamma",
+                icon: "🎨",
+                desc: "新一代演示文稿工具，AI 一键生成精美的 PPT 和网页。",
+                link: "https://gamma.app/"
+            },
+            {
+                name: "Gemini (Canvas)",
+                icon: "✨",
+                desc: "谷歌最强多模态模型，支持超长上下文和创意协作。",
+                link: "https://gemini.google.com/"
+            },
+            {
+                name: "商汤小浣熊",
+                icon: "🦝",
+                desc: "国产 AI 编程助手，提供代码补全、重构和测试功能。",
+                link: "https://raccoon.sensetime.com/"
+            }
+        ];
+
+        // 生成卡片 HTML
+        const container = document.getElementById('card-container');
+        toolsData.forEach(tool => {
+            const card = document.createElement('a');
+            card.className = 'card';
+            card.href = tool.link;
+            card.target = '_blank';
+            
+            card.innerHTML = `
+                <div>
+                    <div class="card-header">
+                        <div class="card-icon">${tool.icon}</div>
+                        <h3 class="card-title">${tool.name}</h3>
+                    </div>
+                    <p class="card-desc">${tool.desc}</p>
+                </div>
+                <div class="card-footer">
+                    <div class="card-arrow">前往使用 →</div>
+                </div>
+            `;
+            container.appendChild(card);
+        });
+
+
+        // ==========================================
+        // ★★★ 2. 粒子特效系统 (Particle Network) ★★★
+        // ==========================================
+        const canvas = document.getElementById('particle-canvas');
+        const ctx = canvas.getContext('2d');
+
+        let particlesArray;
+        let mouse = {
+            x: null,
+            y: null,
+            radius: 150 // 鼠标吸引半径，形成“随鼠标飘动”的感觉
+        }
+
+        // 调整 Canvas 尺寸充满屏幕
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', () => {
+            resizeCanvas();
+            initParticles();
+        });
+        resizeCanvas();
+
+        // 监听鼠标移动
+        window.addEventListener('mousemove', (event) => {
+            mouse.x = event.x;
+            mouse.y = event.y;
+        });
+        // 鼠标移出屏幕，取消吸引
+        window.addEventListener('mouseout', () => {
+            mouse.x = undefined;
+            mouse.y = undefined;
+        });
+
+        // 粒子类
+        class Particle {
+            constructor() {
+                // 随机位置
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                // 随机速度 (漂浮感)
+                this.directionX = (Math.random() * 2) - 1; // -1 ~ 1
+                this.directionY = (Math.random() * 2) - 1;
+                // 大小和颜色
+                this.size = (Math.random() * 3) + 1; // 1 ~ 4px
+                this.color = '#3B82F6'; // 科技蓝
+            }
+
+            // 绘制单个粒子
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2, false);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+
+            // 更新粒子位置 (核心逻辑)
+            update() {
+                // 1. 边界检测 (碰到屏幕边缘反弹)
+                if (this.x > canvas.width || this.x < 0) {
+                    this.directionX = -this.directionX;
+                }
+                if (this.y > canvas.height || this.y < 0) {
+                    this.directionY = -this.directionY;
+                }
+
+                // 2. 鼠标互动 (核心：随鼠标飘动)
+                // 检测粒子是否在鼠标半径内
+                let dx = mouse.x - this.x;
+                let dy = mouse.y - this.y;
+                let distance = Math.sqrt(dx*dx + dy*dy);
+
+                if (distance < mouse.radius) {
+                    // 缓冲互动
+                    if (mouse.x < this.x && this.x < canvas.width - this.size * 10) {
+                        this.x += 2;
+                    }
+                    if (mouse.x > this.x && this.x > this.size * 10) {
+                        this.x -= 2;
+                    }
+                    if (mouse.y < this.y && this.y < canvas.height - this.size * 10) {
+                        this.y += 2;
+                    }
+                    if (mouse.y > this.y && this.y > this.size * 10) {
+                        this.y -= 2;
+                    }
+                }
+
+                // 3. 常规移动
+                this.x += this.directionX * 0.4; // 速度系数
+                this.y += this.directionY * 0.4;
+
+                this.draw();
+            }
+        }
+
+        // 初始化粒子群
+        function initParticles() {
+            particlesArray = [];
+            // 根据屏幕大小决定粒子数量
+            let numberOfParticles = (canvas.width * canvas.height) / 9000;
+            for (let i = 0; i < numberOfParticles; i++) {
+                particlesArray.push(new Particle());
+            }
+        }
+
+        // 连线逻辑
+        function connect() {
+            let opacityValue = 1;
+            for (let a = 0; a < particlesArray.length; a++) {
+                for (let b = a; b < particlesArray.length; b++) {
+                    let distance = ((particlesArray[a].x - particlesArray[b].x) * (particlesArray[a].x - particlesArray[b].x)) + 
+                                   ((particlesArray[a].y - particlesArray[b].y) * (particlesArray[a].y - particlesArray[b].y));
+                    
+                    if (distance < (canvas.width/7) * (canvas.height/7)) {
+                        opacityValue = 1 - (distance/20000);
+                        ctx.strokeStyle = 'rgba(59, 130, 246,' + opacityValue + ')'; 
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(particlesArray[a].x, particlesArray[a].y);
+                        ctx.lineTo(particlesArray[b].x, particlesArray[b].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+        }
+
+        // 动画循环
+        function animate() {
+            requestAnimationFrame(animate);
+            ctx.clearRect(0, 0, canvas.width, canvas.height); 
+            
+            for (let i = 0; i < particlesArray.length; i++) {
+                particlesArray[i].update();
+            }
+            connect(); 
+        }
+
+        // 启动
+        initParticles();
+        animate();
+
+    </script>
+</body>
+</html>

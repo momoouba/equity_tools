@@ -79,7 +79,10 @@ services:
       - ./deploy/nginx-site.conf:/etc/nginx/conf.d/default.conf:ro
       - ./logs/nginx:/var/log/nginx
       - ./deploy/ssl:/etc/nginx/ssl:ro
+      - ./deploy/ssl/aileading-fullchain.pem:/etc/nginx/ssl/aileading-fullchain.pem:ro
+      - ./deploy/ssl/aileading-privkey.pem:/etc/nginx/ssl/aileading-privkey.pem:ro
       - app_frontend:/usr/share/nginx/html:ro
+      - /opt/leadingpage:/opt/leadingpage:ro
     networks:
       - newsapp-network
     healthcheck:
