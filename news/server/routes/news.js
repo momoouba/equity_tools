@@ -557,25 +557,30 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
 
           // 批量插入数据
           for (const article of articles) {
-            // 检查是否已存在（根据原文链接去重）
-            // 优先使用url字段作为去重依据，存入数据库的source_url字段；如果不存在则使用sourceUrl字段
+            // 新榜接口：根据标题去重（不使用source_url去重）
             const sourceUrl = article.url || article.sourceUrl || '';
-            if (!sourceUrl) continue; // 跳过没有链接的文章
+            const title = article.title || '';
+            
+            // 如果标题为空，跳过该条记录
+            if (!title) {
+              console.log(`[入库] 跳过标题为空的新闻: source_url: ${sourceUrl}`);
+              continue;
+            }
 
-            // 检查是否已存在（包括已删除的记录）
-            // 如果用户手动删除了某条新闻（delete_mark = 1），不应该重新插入
-            const existing = await db.query(
-              'SELECT id, delete_mark FROM news_detail WHERE source_url = ?',
-              [sourceUrl]
+            // 检查标题是否重复（仅针对新榜接口）
+            const existingByTitle = await db.query(
+              'SELECT id, delete_mark, source_url FROM news_detail WHERE title = ? AND APItype = ? LIMIT 1',
+              [title, '新榜']
             );
 
-            // 如果已存在且未被删除，跳过（避免重复）
-            // 如果已存在但已删除（delete_mark = 1），也跳过（保护用户手动删除的记录）
-            if (existing.length > 0) {
-              if (existing[0].delete_mark === 1) {
-                console.log(`[入库] 跳过已删除的新闻（用户手动删除）: ${sourceUrl}`);
+            // 如果标题已存在（无论是否已删除），跳过（避免重复）
+            if (existingByTitle.length > 0) {
+              if (existingByTitle[0].delete_mark === 1) {
+                console.log(`[入库] 跳过已删除的新闻（标题重复，用户手动删除）: ${title} (source_url: ${existingByTitle[0].source_url})`);
+              } else {
+                console.log(`[入库] 跳过重复标题的新闻: ${title} (已存在ID: ${existingByTitle[0].id}, source_url: ${existingByTitle[0].source_url})`);
               }
-              continue; // 跳过已存在的记录（无论是否已删除）
+              continue; // 跳过标题重复的记录（无论是否已删除）
             }
 
             // 只有不存在时才插入新数据
