@@ -1,0 +1,57 @@
+/* Register 页面样式 - Arco Design 规范 */
+
+.register-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
+  padding: 20px;
+}
+
+.register-container .register-card {
+  background: white;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(74, 144, 226, 0.2);
+  width: 100%;
+  max-width: 480px;
+  animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.register-container .register-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.register-container .login-link {
+  text-align: center;
+  font-size: 14px;
+  color: #86909c;
+  margin-top: 16px;
+}
+
+.register-container .login-link a {
+  color: #165dff;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.register-container .login-link a:hover {
+  text-decoration: underline;
+}
+

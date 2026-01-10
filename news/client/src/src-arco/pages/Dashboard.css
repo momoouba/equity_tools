@@ -1,0 +1,77 @@
+/* Dashboard 页面样式 - Arco Design 规范 */
+
+.dashboard-layout {
+  min-height: 100vh;
+  background: #f7f8fa;
+}
+
+.dashboard-header {
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  padding: 0 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 64px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-logo {
+  height: 40px;
+  width: auto;
+  object-fit: contain;
+}
+
+.header-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.welcome-text {
+  color: #4e5969;
+  font-size: 14px;
+}
+
+.user-account-link {
+  color: #165dff;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.user-account-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-sider {
+  background: #ffffff;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.04);
+}
+
+.dashboard-menu {
+  border-right: none;
+  background: transparent;
+}
+
+.dashboard-content {
+  padding: 24px;
+  background: #f7f8fa;
+  min-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+

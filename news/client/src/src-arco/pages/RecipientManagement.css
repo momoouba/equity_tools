@@ -1,0 +1,81 @@
+/* RecipientManagement 页面样式 - Arco Design 规范 */
+
+.recipient-management {
+  width: 100%;
+}
+
+.management-card {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.management-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.management-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+}
+
+.table-container {
+  margin-bottom: 16px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
+.category-selection {
+  padding: 8px 0;
+}
+
+/* 操作按钮样式优化 */
+.recipient-management .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.recipient-management .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.recipient-management .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.recipient-management .arco-btn-outline {
+  border-width: 1px;
+}
+
+.recipient-management .arco-btn-outline:hover {
+  border-color: currentColor;
+}
+

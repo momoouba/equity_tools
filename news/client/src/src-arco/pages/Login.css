@@ -1,0 +1,105 @@
+/* Login 页面样式 - Arco Design 规范 */
+
+.login-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf1 100%);
+  overflow: hidden;
+}
+
+.login-container .login-background {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  z-index: 0;
+}
+
+.login-container .chart-panel {
+  position: absolute;
+  background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+  border-radius: 8px;
+  opacity: 0.1;
+  z-index: 0;
+}
+
+.login-container .chart-panel-1 {
+  width: 300px;
+  height: 200px;
+  top: 10%;
+  left: 5%;
+  transform: rotate(-15deg);
+  background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+}
+
+.login-container .chart-panel-2 {
+  width: 150px;
+  height: 150px;
+  bottom: 15%;
+  left: 10%;
+  transform: rotate(20deg);
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f5a623 0%, #d68910 100%);
+}
+
+.login-container .chart-panel-3 {
+  width: 250px;
+  height: 100px;
+  bottom: 20%;
+  left: 20%;
+  transform: rotate(-10deg);
+  background: linear-gradient(135deg, #357abd 0%, #2c5f8f 100%);
+}
+
+.login-container .login-card {
+  position: relative;
+  z-index: 1;
+  background: white;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(74, 144, 226, 0.3);
+  width: 100%;
+  max-width: 420px;
+  animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-container .login-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.login-container .register-link {
+  text-align: center;
+  font-size: 14px;
+  color: #86909c;
+  margin-top: 16px;
+}
+
+.login-container .register-link a {
+  color: #165dff;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.login-container .register-link a:hover {
+  text-decoration: underline;
+}
+

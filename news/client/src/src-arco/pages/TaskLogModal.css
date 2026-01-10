@@ -1,0 +1,21 @@
+/* TaskLogModal 组件样式 - Arco Design 规范 */
+
+.task-log-content {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.empty-logs {
+  text-align: center;
+  padding: 40px;
+  color: #86909c;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+

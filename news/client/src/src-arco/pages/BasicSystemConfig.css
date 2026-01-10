@@ -1,0 +1,66 @@
+/* BasicSystemConfig 页面样式 - Arco Design 规范 */
+
+.basic-system-config {
+  width: 100%;
+}
+
+.config-section {
+  margin-bottom: 24px;
+}
+
+.config-section h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0 0 16px 0;
+}
+
+.form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #86909c;
+}
+
+.upload-preview-container {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.preview-image {
+  width: 120px;
+  height: 120px;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f7f8fa;
+  flex-shrink: 0;
+}
+
+.preview-image img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.background-preview {
+  width: 200px;
+  height: 120px;
+}
+
+.background-preview img {
+  object-fit: cover;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
