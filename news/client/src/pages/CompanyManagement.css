@@ -1,293 +1,173 @@
+/* CompanyManagement 页面样式 - Arco Design 规范 */
+
 .company-management {
-  background: white;
-  border-radius: 8px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  width: 100%;
 }
 
-.company-management .management-header {
+.management-card {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.management-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 20px;
-  padding-bottom: 12px !important;
-  border-bottom: 1px solid #e0e0e0;
-  position: relative !important; /* 必须保留，作为绝对定位参考 */
-  height: 74px; /* 对应截图中的73.99px，取整为74px（显式高度） */
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e6eb;
 }
 
-
-/* 彻底简化，先让按钮显示，再实现右对齐+底部对齐 */
-.company-management .action-buttons  {
-  display: flex !important;
-  flex-direction: row !important; /* 强制横向排列 */
-  flex-wrap: nowrap !important; /* 确保按钮一行显示，不换行 */
-  gap: 8px !important; /* 按钮间距 */
-  align-items: center !important; /* 按钮组内垂直居中 */
-  justify-content: flex-end !important; /* 按钮组内右对齐 */
-  
-   /* 核心：宽度仅适配按钮总宽度，不拉伸 */
-   width: fit-content !important; 
-   min-width: fit-content !important;
-   max-width: fit-content !important;
-  
-  /* 定位（保留之前的右对齐+底部对齐） */
-  position: absolute !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  height: auto !important; /* 改为自动高度，让按钮自然排列 */
-  
-}
-
-/* 覆盖之前的冲突样式（如果删不掉就保留） */
-/* 覆盖冲突样式（删不掉则保留） */
-.company-management .header-actions .action-buttons {
-  display: flex !important;
-  flex-direction: row !important; /* 强制横向排列 */
-  position: absolute !important;
-  right: 0 !important;
-  bottom: 0 !important;
-  height: auto !important; /* 改为自动高度 */
-  width: fit-content !important;
-  min-width: fit-content !important;
-  max-width: fit-content !important;
-  left: auto !important;
-  top: auto !important;
-  transform: none !important;
-  flex-wrap: nowrap !important; /* 确保按钮一行显示，不换行 */
-  justify-content: flex-end !important;
-  align-items: center !important; /* 垂直居中 */
-  gap: 8px !important; /* 按钮间距 */
-}
-.company-management .btn-primary {
-  width: 80px !important; 
-  height: auto !important; /* 改为自动高度，根据内容自适应 */
-  min-height: 32px !important; /* 设置最小高度 */
-  padding: 6px 8px !important; /* 增加上下内边距 */
-  font-size: 12px !important;
-  background: #2d6ca2 !important;
-  color: white !important;
-  border: none !important;
-  border-radius: 2px !important;
-  cursor: pointer !important;
-  
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  
-  display: inline-flex !important; /* 改为inline-flex，确保按钮在一行显示 */
-  align-items: center !important;
-  justify-content: center !important;
-  line-height: 1.2 !important;
-  flex-shrink: 0 !important; /* 禁止收缩 */
-}
-
-.company-management .btn-primary:hover {
-  background: #1f5386 !important;
-  box-shadow: 0 2px 6px rgba(53, 122, 189, 0.3) !important;
-  transform: none !important;
-}
-
-.company-management .btn-primary:active {
-  transform: none !important;
-  box-shadow: 0 1px 2px rgba(53, 122, 189, 0.2) !important;
-}
-
-.company-management .company-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-  table-layout: fixed;
-  box-sizing: border-box;
-}
-
-.company-management .company-table thead {
-  background: #f5f7fa;
-  position: relative;
-}
-
-.company-management .company-table th {
-  padding: 12px;
-  text-align: left;
+.management-title {
+  font-size: 20px;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
-  box-sizing: border-box;
+  color: #1d2129;
+  margin: 0;
 }
 
-.company-management .company-table th:nth-child(1),
-.company-management .company-table td:nth-child(1) {
-  width: 8%;
+.filter-collapse {
+  margin-bottom: 16px;
 }
 
-.company-management .company-table th:nth-child(2),
-.company-management .company-table td:nth-child(2) {
-  width: 12%;
+.filter-collapse .arco-collapse-item-content-box {
+  padding: 16px;
+  background: #f7f8fa;
+  border-radius: 4px;
 }
 
-.company-management .company-table th:nth-child(3),
-.company-management .company-table td:nth-child(3) {
-  width: 19.3%;
+.filter-content {
+  padding: 8px 0;
 }
 
-.company-management .company-table th:nth-child(4),
-.company-management .company-table td:nth-child(4) {
-  width: 17.3%;
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
 }
 
-.company-management .company-table th:nth-child(5),
-.company-management .company-table td:nth-child(5) {
-  width: 19.2%;
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.company-management .company-table th:nth-child(6),
-.company-management .company-table td:nth-child(6) {
-  width: 14.7%;
+.filter-item label {
+  font-size: 14px;
+  color: #1d2129;
+  font-weight: 500;
 }
 
-.company-management .company-table th:nth-child(7),
-.company-management .company-table td:nth-child(7) {
-  width: 8.5% !important;
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
-.company-management .company-table th:nth-child(7) {
+.table-container {
+  margin-bottom: 16px;
+}
+
+.company-table {
+  font-size: 14px;
+}
+
+.company-table .arco-table-th {
+  background: #f7f8fa;
+  font-weight: 600;
+  color: #1d2129;
   position: sticky;
-  right: 0;
-  background: #f5f7fa;
+  top: 0;
   z-index: 10;
 }
 
-.company-management .company-table td:nth-child(3) {
-  white-space: normal;
-  word-break: break-word;
-  overflow: visible;
-  text-overflow: clip;
+.company-table .arco-table-tr:hover {
+  background: #f7f8fa;
 }
 
-.company-management .company-table td:nth-child(4) {
-  white-space: normal;
-  word-break: break-all;
-  overflow: visible;
-  text-overflow: clip;
+.company-table .table-row-selected {
+  background: #e8f3ff !important;
 }
 
-.company-management .company-table td:nth-child(5) {
-  white-space: normal;
-  word-break: break-all;
-  overflow: visible;
-  text-overflow: clip;
+.company-table .table-row-selected:hover {
+  background: #d4e9ff !important;
 }
 
-.company-management .company-table td {
-  padding: 12px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #666;
-  box-sizing: border-box;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.company-table .arco-table-td {
+  padding: 12px 16px;
 }
 
-.company-management .company-table tbody tr:hover {
-  background: #f9f9f9;
+.company-table .arco-table-th {
+  padding: 12px 16px;
 }
 
-.company-management .company-table tbody tr:hover td:last-child {
-  background: #f9f9f9 !important;
+/* 操作按钮样式优化 */
+.company-table .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.company-management .company-table a {
-  color: #357abd;
-  text-decoration: none;
+.company-table .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.company-management .company-table a:hover {
-  text-decoration: underline;
+.company-table .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.company-management .empty-data {
-  text-align: center;
-  color: #999;
-  padding: 40px !important;
+.company-table .arco-btn-outline {
+  border-width: 1px;
 }
 
-/* 操作列的td：缩小宽度，固定到右侧 */
-.company-management .company-table td:last-child {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 5px !important; /* 按钮间距改为5px */
-  align-items: center !important;
-  justify-content: flex-start !important; /* 左对齐按钮 */
-  padding: 6px 4px !important; /* 缩小内边距 */
-  box-sizing: border-box !important;
-  overflow: visible !important;
-  width: 8.5% !important;
-  max-width: 8.5% !important;
-  min-width: 0 !important;
-  position: sticky !important;
-  right: 0 !important;
-  z-index: 5 !important;
-  background: white !important;
-  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.05) !important;
-  height: auto !important;
+.company-table .arco-btn-outline:hover {
+  border-color: currentColor;
 }
 
-/* 按钮样式：缩小尺寸 */
-.company-management .btn-edit,
-.company-management .btn-log,
-.company-management .btn-delete {
-  padding: 3px 6px !important; /* 缩小内边距 */
-  margin-right: 0 !important;
-  border: none;
-  border-radius: 3px !important;
-  cursor: pointer;
-  font-size: 11px !important; /* 缩小字体 */
-  transition: all 0.3s ease;
-  min-width: 35px !important; /* 缩小最小宽度 */
-  text-align: center;
-  flex-shrink: 0 !important; /* 禁止收缩 */
-  white-space: nowrap;
-  height: 26px !important; /* 缩小按钮高度 */
+.company-table .arco-btn-outline-success {
+  color: #00b42a;
+  border-color: #00b42a;
 }
 
-/* 按钮颜色样式不变，保留原配置 */
-.company-management .btn-edit {
-  background: #4a90e2;
-  color: white;
-}
-.company-management .btn-edit:hover {
-  background: #357abd;
-}
-.company-management .btn-log {
-  background: #27ae60;
-  color: white;
-}
-.company-management .btn-log:hover {
-  background: #229954;
-}
-.company-management .btn-delete {
-  background: #e74c3c;
-  color: white;
-}
-.company-management .btn-delete:hover {
-  background: #c0392b;
+.company-table .arco-btn-outline-success:hover {
+  background: #00b42a;
+  color: #ffffff;
 }
 
+.company-table .arco-btn-outline-danger {
+  color: #f53f3f;
+  border-color: #f53f3f;
+}
 
-.company-management .loading {
-  text-align: center;
-  padding: 40px;
-  color: #999;
+.company-table .arco-btn-outline-danger:hover {
+  background: #f53f3f;
+  color: #ffffff;
+}
+
+/* 操作列固定右侧时的样式 */
+.company-table .arco-table-td:last-child {
+  background: #ffffff;
+}
+
+.company-table .arco-table-tr:hover .arco-table-td:last-child {
+  background: #f7f8fa;
+}
+
+.company-table .table-row-selected .arco-table-td:last-child {
+  background: #e8f3ff !important;
 }
 
 .pagination-wrapper {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid #e5e6eb;
   flex-wrap: wrap;
   gap: 16px;
 }
@@ -299,68 +179,14 @@
 }
 
 .page-size-label {
-  color: #666;
+  color: #4e5969;
   font-size: 14px;
   white-space: nowrap;
-}
-
-.page-size-select {
-  padding: 6px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  font-size: 14px;
-  color: #333;
-  background: white;
-  cursor: pointer;
-  outline: none;
-  transition: all 0.3s ease;
-}
-
-.page-size-select:hover {
-  border-color: #357abd;
-}
-
-.page-size-select:focus {
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
 }
 
 .page-size-unit {
-  color: #666;
+  color: #4e5969;
   font-size: 14px;
   white-space: nowrap;
-}
-
-.company-management .pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 16px;
-  flex: 1;
-}
-
-.company-management .pagination button {
-  padding: 8px 16px;
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.company-management .pagination button:hover:not(:disabled) {
-  background: #f5f7fa;
-  border-color: #357abd;
-}
-
-.company-management .pagination button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.company-management .pagination span {
-  color: #666;
-  font-size: 14px;
 }
 

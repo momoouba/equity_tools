@@ -1,539 +1,128 @@
+/* EnterpriseManagement 页面样式 - Arco Design 规范 */
+
 .enterprise-management {
-  background: white;
-  border-radius: 8px;
-  padding: 24px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  width: 100%;
 }
 
-.enterprise-management .management-header {
-  margin-bottom: 24px;
+.management-card {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.management-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
   padding-bottom: 16px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.enterprise-management .management-header h2 {
-  font-size: 20px;
-  color: #1a1a1a;
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.enterprise-management .header-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 20px;
-  width: 100%;
-}
-
-.enterprise-management .header-controls {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-shrink: 0;
-  margin-left: auto; /* 相对于 header-actions 右对齐 */
-}
-
-.enterprise-management .search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  flex-shrink: 0;
-}
-
-.enterprise-management .search-input {
-  padding: 8px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  font-size: 14px;
-  color: #333;
-  background: white;
-  min-width: 300px;
-  max-width: 400px;
-  transition: all 0.3s ease;
-}
-
-.enterprise-management .search-input:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
-}
-
-.enterprise-management .search-input::placeholder {
-  color: #999;
-}
-
-.enterprise-management .btn-search {
-  padding: 8px 16px;
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-}
-
-.enterprise-management .btn-search:hover {
-  background: #2c5f8f;
-}
-
-.enterprise-management .btn-clear-search {
-  padding: 4px 8px;
-  background: #e74c3c;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
-  transition: all 0.3s ease;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.enterprise-management .btn-clear-search:hover {
-  background: #c0392b;
-}
-
-.enterprise-management .user-filter {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.enterprise-management .user-filter label {
-  font-size: 14px;
-  color: #666;
-  white-space: nowrap;
-}
-
-.enterprise-management .filter-select {
-  padding: 8px 12px;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  font-size: 14px;
-  color: #333;
-  background: white;
-  cursor: pointer;
-  min-width: 120px;
-  max-width: 200px;
-}
-
-.enterprise-management .filter-select:hover {
-  border-color: #357abd;
-}
-
-.enterprise-management .filter-select:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
-}
-
-
-.enterprise-management .btn-primary {
-  padding: 10px 20px;
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.enterprise-management .btn-primary:hover {
-  background: #2c5f8f;
-}
-
-/* 刷新按钮：绿色，宽度增加一倍 */
-.enterprise-management .btn-refresh {
-  background: #27ae60 !important;
-  min-width: 80px !important;
-  width: auto !important;
-}
-
-.enterprise-management .btn-refresh:hover {
-  background: #229954 !important;
-}
-
-/* 新增按钮：蓝色，宽度增加一倍 */
-.enterprise-management .btn-add {
-  background: #357abd !important;
-  min-width: 80px !important;
-  width: auto !important;
-}
-
-.enterprise-management .btn-add:hover {
-  background: #2c5f8f !important;
-}
-
-.enterprise-management .btn-secondary {
-  padding: 10px 20px;
-  background: white;
-  color: #357abd;
-  border: 1px solid #357abd;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.enterprise-management .btn-secondary:hover {
-  background: #f0f7ff;
-}
-
-.enterprise-management .table-container {
-  overflow-x: hidden;
-  width: 100%;
-}
-
-.enterprise-management .enterprise-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  table-layout: fixed;
-  box-sizing: border-box;
-}
-
-.enterprise-management .enterprise-table thead {
-  background: #f5f7fa;
-  position: relative;
-}
-
-.enterprise-management .enterprise-table th {
-  padding: 10px 8px;
-  text-align: left;
-  font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  box-sizing: border-box;
-}
-
-.enterprise-management .enterprise-table th:nth-child(1),
-.enterprise-management .enterprise-table td:nth-child(1) {
-  width: 7.3%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(2),
-.enterprise-management .enterprise-table td:nth-child(2) {
-  width: 11.1%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(3),
-.enterprise-management .enterprise-table td:nth-child(3) {
-  width: 9.3%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(4),
-.enterprise-management .enterprise-table td:nth-child(4) {
-  width: 17.1%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(5),
-.enterprise-management .enterprise-table td:nth-child(5) {
-  width: 13.2%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(6),
-.enterprise-management .enterprise-table td:nth-child(6) {
-  width: 11.3%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(7),
-.enterprise-management .enterprise-table td:nth-child(7) {
-  width: 15.5%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(8),
-.enterprise-management .enterprise-table td:nth-child(8) {
-  width: 7.3%;
-}
-
-.enterprise-management .enterprise-table th:nth-child(9),
-.enterprise-management .enterprise-table td:nth-child(9) {
-  width: 7.9% !important;
-}
-
-.enterprise-management .enterprise-table th:nth-child(9) {
-  position: sticky;
-  right: 0;
-  background: #f5f7fa;
-  z-index: 10;
-}
-
-.enterprise-management .enterprise-table td {
-  padding: 10px 8px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #666;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  box-sizing: border-box;
-}
-
-.enterprise-management .enterprise-table tbody tr:hover {
-  background: #f9f9f9;
-}
-
-.enterprise-management .enterprise-table tbody tr:hover .action-cell {
-  background: #f9f9f9 !important;
-}
-
-.enterprise-management .enterprise-table td.action-cell {
-  overflow: visible !important;
-  width: 7.9% !important;
-  max-width: 7.9% !important;
-}
-
-.enterprise-management .enterprise-table a {
-  color: #357abd;
-  text-decoration: none;
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.enterprise-management .enterprise-table a:hover {
-  text-decoration: underline;
-}
-
-.enterprise-management .enterprise-table td:nth-child(4) {
-  white-space: normal;
-  word-break: break-word;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-.enterprise-management .enterprise-table td:nth-child(5) {
-  white-space: normal;
-  word-break: break-all;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-.enterprise-management .enterprise-table td:nth-child(7) {
-  white-space: normal;
-  word-break: break-all;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-/* 响应式设计 */
-@media (max-width: 768px) {
-  .enterprise-management .header-actions {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-  }
-  
-  .enterprise-management .management-header h2 {
-    margin-bottom: 16px;
-  }
-  
-  .enterprise-management .header-controls {
-    flex-wrap: wrap;
-    gap: 12px;
-    width: 100%;
-    justify-content: flex-start;
-  }
-  
-  .enterprise-management .search-box {
-    width: 100%;
-  }
-  
-  .enterprise-management .search-input {
-    min-width: 200px;
-    max-width: 100%;
-    flex: 1;
-  }
-  
-  .enterprise-management .user-filter {
-    width: 100%;
-  }
-  
-  .enterprise-management .filter-select {
-    min-width: 120px;
-  }
-  
-  .enterprise-management .pagination-wrapper {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 16px;
-  }
-  
-  .enterprise-management .page-size-selector {
-    justify-content: center;
-  }
-  
-  .enterprise-management .pagination {
-    justify-content: center;
-  }
-}
-
-.enterprise-management .empty-data {
-  text-align: center;
-  color: #999;
-  padding: 40px !important;
-}
-
-.enterprise-management .action-cell {
-  display: flex;
-  gap: 3px;
-  align-items: flex-start;
-  justify-content: flex-start;
-  padding: 6px 2px !important;
-  white-space: nowrap;
-  background: white !important;
-  overflow: visible !important;
-  min-width: 0;
-  width: 7.9% !important;
-  max-width: 7.9% !important;
-  position: sticky;
-  right: 0;
-  z-index: 5;
-  box-shadow: -2px 0 4px rgba(0, 0, 0, 0.05);
-}
-
-.enterprise-management .action-cell .btn-edit,
-.enterprise-management .action-cell .btn-log,
-.enterprise-management .action-cell .btn-delete {
-  flex: 0 0 auto;
-  padding: 3px 6px;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: all 0.3s ease;
-  text-align: center;
-  white-space: nowrap;
-  min-width: 35px;
-  max-width: none;
-  overflow: visible;
-}
-
-.enterprise-management .btn-edit {
-  background: #4a90e2;
-  color: white;
-}
-
-.enterprise-management .btn-edit:hover {
-  background: #357abd;
-}
-
-.enterprise-management .btn-log {
-  background: #27ae60;
-  color: white;
-}
-
-.enterprise-management .btn-log:hover {
-  background: #229954;
-}
-
-.enterprise-management .btn-delete {
-  background: #e74c3c;
-  color: white;
-}
-
-.enterprise-management .btn-delete:hover {
-  background: #c0392b;
-}
-
-.enterprise-management .loading {
-  text-align: center;
-  padding: 40px;
-  color: #999;
-}
-
-.enterprise-management .pagination-wrapper {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #e0e0e0;
-  gap: 20px;
+  border-bottom: 1px solid #e5e6eb;
   flex-wrap: wrap;
+  gap: 16px;
 }
 
-.enterprise-management .page-size-selector {
+.management-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+}
+
+.filter-collapse {
+  margin-bottom: 16px;
+}
+
+.filter-collapse .arco-collapse-item-content-box {
+  padding: 16px;
+  background: #f7f8fa;
+  border-radius: 4px;
+}
+
+.filter-content {
+  padding: 8px 0;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-item label {
+  font-size: 14px;
+  color: #1d2129;
+  font-weight: 500;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.table-container {
+  margin-bottom: 16px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.page-size-selector {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-shrink: 0;
 }
 
-.enterprise-management .page-size-selector label {
+.page-size-label {
+  color: #4e5969;
   font-size: 14px;
-  color: #666;
   white-space: nowrap;
 }
 
-.enterprise-management .page-size-select {
-  padding: 6px 10px;
-  border: 1px solid #e0e0e0;
+.page-size-unit {
+  color: #4e5969;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* 操作按钮样式优化 */
+.enterprise-management .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
   border-radius: 4px;
-  font-size: 14px;
-  color: #333;
-  background: white;
-  cursor: pointer;
-  min-width: 100px;
-  transition: all 0.3s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.enterprise-management .page-size-select:hover {
-  border-color: #357abd;
+.enterprise-management .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.enterprise-management .page-size-select:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
+.enterprise-management .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.enterprise-management .pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 16px;
-  flex: 1;
+.enterprise-management .arco-btn-outline {
+  border-width: 1px;
 }
 
-.enterprise-management .pagination button {
-  padding: 8px 16px;
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.enterprise-management .pagination button:hover:not(:disabled) {
-  background: #f5f7fa;
-  border-color: #357abd;
-}
-
-.enterprise-management .pagination button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.enterprise-management .pagination span {
-  color: #666;
-  font-size: 14px;
+.enterprise-management .arco-btn-outline:hover {
+  border-color: currentColor;
 }
 

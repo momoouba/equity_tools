@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import EnterpriseForm from './EnterpriseForm'
 import BatchImportModal from './BatchImportModal'
 import LogModal from './LogModal'
 import EnterpriseSyncModal from './EnterpriseSyncModal'
-import Pagination from '../components/Pagination'
 import './EnterpriseManagement.css'
+
+const Option = Select.Option
+const InputSearch = Input.Search
+const CollapseItem = Collapse.Item
 
 function EnterpriseManagement() {
   const [enterprises, setEnterprises] = useState([])
@@ -23,9 +27,9 @@ function EnterpriseManagement() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [searchKeyword, setSearchKeyword] = useState('')
   const [pageSize, setPageSize] = useState(20)
+  const [filterCollapsed, setFilterCollapsed] = useState(true)
 
   useEffect(() => {
-    // 检查用户角色
     const userData = localStorage.getItem('user')
     if (userData) {
       try {
@@ -58,7 +62,6 @@ function EnterpriseManagement() {
   const fetchEnterprises = async () => {
     setLoading(true)
     try {
-      // 从localStorage获取用户角色，确保实时性
       const userData = localStorage.getItem('user')
       let currentIsAdmin = isAdmin
       if (userData) {
@@ -74,11 +77,9 @@ function EnterpriseManagement() {
         page: currentPage,
         pageSize
       }
-      // 如果是admin且选择了用户筛选，添加筛选参数
       if (currentIsAdmin && selectedUserId) {
         params.filter_user_id = selectedUserId
       }
-      // 如果有搜索关键词，添加搜索参数
       if (searchKeyword && searchKeyword.trim()) {
         params.search = searchKeyword.trim()
       }
@@ -89,6 +90,7 @@ function EnterpriseManagement() {
       }
     } catch (error) {
       console.error('获取企业列表失败:', error)
+      Message.error('获取企业列表失败')
     } finally {
       setLoading(false)
     }
@@ -105,19 +107,21 @@ function EnterpriseManagement() {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('确定要删除这条记录吗？')) {
-      return
-    }
-
-    try {
-      const response = await axios.delete(`/api/enterprises/${id}`)
-      if (response.data.success) {
-        alert('删除成功')
-        fetchEnterprises()
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这条记录吗？',
+      onOk: async () => {
+        try {
+          const response = await axios.delete(`/api/enterprises/${id}`)
+          if (response.data.success) {
+            Message.success('删除成功')
+            fetchEnterprises()
+          }
+        } catch (error) {
+          Message.error('删除失败：' + (error.response?.data?.message || '未知错误'))
+        }
       }
-    } catch (error) {
-      alert('删除失败：' + (error.response?.data?.message || '未知错误'))
-    }
+    })
   }
 
   const handleFormClose = () => {
@@ -130,64 +134,21 @@ function EnterpriseManagement() {
     handleFormClose()
   }
 
-  const handleBatchImport = () => {
-    setShowBatchModal(true)
-  }
-
-  const handleViewLog = (id) => {
-    setLogEnterpriseId(id)
-    setShowLogModal(true)
-  }
-
-  const totalPages = Math.ceil(total / pageSize)
-
-  const handleUserFilterChange = (e) => {
-    setSelectedUserId(e.target.value)
-    setCurrentPage(1) // 重置到第一页
-  }
-
-  const handleSearch = () => {
-    setCurrentPage(1) // 搜索时重置到第一页
-    fetchEnterprises()
-  }
-
-  const handleSearchKeyPress = (e) => {
-    if (e.key === 'Enter') {
-      handleSearch()
-    }
-  }
-
-  const handleClearSearch = () => {
-    setSearchKeyword('')
-    setCurrentPage(1)
-  }
-
-  const handlePageSizeChange = (e) => {
-    const newPageSize = parseInt(e.target.value, 10)
-    setPageSize(newPageSize)
-    setCurrentPage(1) // 改变每页显示条数时重置到第一页
-  }
-
   const handleExport = async () => {
     try {
-      // 构建导出参数
       const params = {}
-      // 如果是admin且选择了用户筛选，添加筛选参数
       if (isAdmin && selectedUserId) {
         params.filter_user_id = selectedUserId
       }
-      // 如果有搜索关键词，添加搜索参数
       if (searchKeyword && searchKeyword.trim()) {
         params.search = searchKeyword.trim()
       }
 
-      // 使用axios下载文件
       const response = await axios.get('/api/enterprises/export', {
         params,
-        responseType: 'blob' // 重要：指定响应类型为blob
+        responseType: 'blob'
       })
 
-      // 创建Blob对象并下载
       const blob = new Blob([response.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       })
@@ -195,7 +156,6 @@ function EnterpriseManagement() {
       const link = document.createElement('a')
       link.href = url
       
-      // 从响应头获取文件名，如果没有则使用默认名称
       const contentDisposition = response.headers['content-disposition']
       let fileName = '被投企业数据.xlsx'
       if (contentDisposition) {
@@ -211,184 +171,272 @@ function EnterpriseManagement() {
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
 
-      // 显示成功提示
-      alert('导出成功！')
+      Message.success('导出成功！')
     } catch (error) {
       console.error('导出失败：', error)
       if (error.response?.data) {
-        // 如果是blob响应，尝试解析错误消息
         const blob = error.response.data
         if (blob instanceof Blob) {
           blob.text().then(text => {
             try {
               const errorData = JSON.parse(text)
-              alert('导出失败：' + (errorData.message || '未知错误'))
+              Message.error('导出失败：' + (errorData.message || '未知错误'))
             } catch {
-              alert('导出失败：服务器错误')
+              Message.error('导出失败：服务器错误')
             }
           })
         } else {
-          alert('导出失败：' + (error.response.data.message || '未知错误'))
+          Message.error('导出失败：' + (error.response.data.message || '未知错误'))
         }
       } else {
-        alert('导出失败：' + (error.message || '未知错误'))
+        Message.error('导出失败：' + (error.message || '未知错误'))
       }
     }
   }
 
+  const handleSearch = () => {
+    setCurrentPage(1)
+    fetchEnterprises()
+  }
+
+  const handleReset = () => {
+    setSearchKeyword('')
+    setSelectedUserId('')
+    setCurrentPage(1)
+  }
+
+  const columns = [
+    {
+      title: '序号',
+      width: 80,
+      render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
+    },
+    {
+      title: '项目编号',
+      dataIndex: 'project_number',
+      width: 150
+    },
+    {
+      title: '项目简称',
+      dataIndex: 'project_abbreviation',
+      width: 150,
+      render: (text) => text || '-'
+    },
+    {
+      title: '被投企业全称',
+      dataIndex: 'enterprise_full_name',
+      width: 250,
+      ellipsis: true,
+      tooltip: true
+    },
+    {
+      title: '统一信用代码',
+      dataIndex: 'unified_credit_code',
+      width: 180,
+      render: (text) => text || '-'
+    },
+    {
+      title: '企业公众号id',
+      dataIndex: 'wechat_official_account_id',
+      width: 180,
+      render: (text) => text || '-'
+    },
+    {
+      title: '企业官网',
+      dataIndex: 'official_website',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text ? (
+        <a href={text} target="_blank" rel="noopener noreferrer">
+          {text}
+        </a>
+      ) : '-'
+    },
+    {
+      title: '退出状态',
+      dataIndex: 'exit_status',
+      width: 120
+    },
+    {
+      title: '操作',
+      width: 200,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleEdit(record)}
+          >
+            编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="success"
+            onClick={() => {
+              setLogEnterpriseId(record.id)
+              setShowLogModal(true)
+            }}
+          >
+            日志
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="danger"
+            onClick={() => handleDelete(record.id)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
+
   return (
     <div className="enterprise-management">
-      <div className="management-header">
-        <div className="header-actions">
-          <h2>被投企业管理</h2>
-          <div className="header-controls">
-            <div className="search-box">
-              <input
-                type="text"
-                className="search-input"
-                placeholder="搜索项目编号、简称、企业全称、统一信用代码、公众号ID、官网、退出状态..."
-                value={searchKeyword}
-                onChange={(e) => setSearchKeyword(e.target.value)}
-                onKeyPress={handleSearchKeyPress}
-              />
-              <button className="btn-search" onClick={handleSearch}>
-                搜索
-              </button>
-              {searchKeyword && (
-                <button className="btn-clear-search" onClick={handleClearSearch} title="清除搜索">
-                  ×
-                </button>
-              )}
-            </div>
-            <button className="btn-secondary" onClick={handleBatchImport}>
-              批量导入
-            </button>
-            <button className="btn-secondary" onClick={() => setShowSyncModal(true)}>
-              定时更新
-            </button>
-            <button className="btn-secondary" onClick={handleExport} title="导出为Excel">
-              导出
-            </button>
-            <button className="btn-primary btn-refresh" onClick={fetchEnterprises} title="刷新列表">
+      <Card className="management-card" bordered={false}>
+        <div className="management-header">
+          <h2 className="management-title">被投企业管理</h2>
+          <Space>
+            <Button
+              onClick={fetchEnterprises}
+              loading={loading}
+            >
               刷新
-            </button>
-            <button className="btn-primary btn-add" onClick={handleAdd}>
+            </Button>
+            <Button
+              type="outline"
+              onClick={() => setShowBatchModal(true)}
+            >
+              批量导入
+            </Button>
+            <Button
+              type="outline"
+              onClick={() => setShowSyncModal(true)}
+            >
+              定时更新
+            </Button>
+            <Button
+              type="outline"
+              onClick={handleExport}
+            >
+              导出
+            </Button>
+            <Button
+              type="primary"
+              onClick={handleAdd}
+            >
               新增
-            </button>
-            {isAdmin && (
-              <div className="user-filter">
-                <label htmlFor="user-filter">筛选用户：</label>
-                <select
-                  id="user-filter"
-                  value={selectedUserId}
-                  onChange={handleUserFilterChange}
-                  className="filter-select"
-                >
-                  <option value="">全部用户</option>
-                  {users.map(user => (
-                    <option key={user.id} value={user.id}>
-                      {user.account}
-                    </option>
-                  ))}
-                </select>
+            </Button>
+          </Space>
+        </div>
+
+        <Collapse
+          activeKey={filterCollapsed ? [] : ['filters']}
+          onChange={(keys) => setFilterCollapsed(keys.length === 0)}
+          className="filter-collapse"
+        >
+          <CollapseItem header="筛选条件" name="filters">
+            <div className="filter-content">
+              <div className="filter-row">
+                <div className="filter-item">
+                  <label>关键词</label>
+                  <InputSearch
+                    value={searchKeyword}
+                    onChange={(value) => setSearchKeyword(value)}
+                    placeholder="搜索项目编号、简称、企业全称、统一信用代码、公众号ID、官网、退出状态..."
+                    style={{ width: 400 }}
+                    allowClear
+                    onSearch={handleSearch}
+                  />
+                </div>
+                {isAdmin && (
+                  <div className="filter-item">
+                    <label>筛选用户</label>
+                    <Select
+                      value={selectedUserId}
+                      onChange={(value) => {
+                        setSelectedUserId(value)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="全部用户"
+                      style={{ width: 200 }}
+                      allowClear
+                    >
+                      {users.map(user => (
+                        <Option key={user.id} value={user.id}>
+                          {user.account}
+                        </Option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+                <div className="filter-actions">
+                  <Button type="primary" onClick={handleSearch}>
+                    查询
+                  </Button>
+                  <Button type="outline" onClick={handleReset}>
+                    重置
+                  </Button>
+                </div>
               </div>
-            )}
+            </div>
+          </CollapseItem>
+        </Collapse>
+
+        <div className="table-container">
+          {loading && enterprises.length === 0 ? (
+            <Skeleton
+              loading={true}
+              animation={true}
+              text={{ rows: 8, width: ['100%'] }}
+            />
+          ) : (
+            <Table
+              columns={columns}
+              data={enterprises}
+              loading={loading}
+              pagination={false}
+              rowKey="id"
+              border={{
+                wrapper: true,
+                cell: true
+              }}
+              stripe
+            />
+          )}
+        </div>
+
+        <div className="pagination-wrapper">
+          <div className="page-size-selector">
+            <span className="page-size-label">每页显示：</span>
+            <Select
+              value={pageSize}
+              onChange={(value) => {
+                setPageSize(value)
+                setCurrentPage(1)
+              }}
+              style={{ width: 100 }}
+            >
+              <Option value={10}>10</Option>
+              <Option value={20}>20</Option>
+              <Option value={50}>50</Option>
+              <Option value={100}>100</Option>
+            </Select>
+            <span className="page-size-unit">条</span>
           </div>
+          <Pagination
+            current={currentPage}
+            total={total}
+            pageSize={pageSize}
+            onChange={(page) => setCurrentPage(page)}
+            showTotal
+            showJumper
+          />
         </div>
-      </div>
-
-      <div className="table-container">
-        {loading ? (
-          <div className="loading">加载中...</div>
-        ) : (
-          <table className="enterprise-table">
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th>项目编号</th>
-                <th>项目简称</th>
-                <th>被投企业全称</th>
-                <th>统一信用代码</th>
-                <th>企业公众号id</th>
-                <th>企业官网</th>
-                <th>退出状态</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {enterprises.length === 0 ? (
-                <tr>
-                  <td colSpan="9" className="empty-data">暂无数据</td>
-                </tr>
-              ) : (
-                enterprises.map((enterprise, index) => (
-                  <tr key={enterprise.id}>
-                    <td>{(currentPage - 1) * pageSize + index + 1}</td>
-                    <td>{enterprise.project_number}</td>
-                    <td>{enterprise.project_abbreviation || '-'}</td>
-                    <td>{enterprise.enterprise_full_name}</td>
-                    <td>{enterprise.unified_credit_code || '-'}</td>
-                    <td>{enterprise.wechat_official_account_id || '-'}</td>
-                    <td>
-                      {enterprise.official_website ? (
-                        <a href={enterprise.official_website} target="_blank" rel="noopener noreferrer">
-                          {enterprise.official_website}
-                        </a>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    <td>{enterprise.exit_status}</td>
-                    <td className="action-cell">
-                      <button
-                        className="btn-edit"
-                        onClick={() => handleEdit(enterprise)}
-                      >
-                        编辑
-                      </button>
-                      <button
-                        className="btn-log"
-                        onClick={() => handleViewLog(enterprise.id)}
-                      >
-                        日志
-                      </button>
-                      <button
-                        className="btn-delete"
-                        onClick={() => handleDelete(enterprise.id)}
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="pagination-wrapper">
-        <div className="page-size-selector">
-          <label htmlFor="page-size">每页显示：</label>
-          <select
-            id="page-size"
-            className="page-size-select"
-            value={pageSize}
-            onChange={handlePageSizeChange}
-          >
-            <option value="10">10 条</option>
-            <option value="20">20 条</option>
-            <option value="50">50 条</option>
-            <option value="100">100 条</option>
-          </select>
-        </div>
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          totalItems={total}
-          onPageChange={setCurrentPage}
-        />
-      </div>
+      </Card>
 
       {showForm && (
         <EnterpriseForm

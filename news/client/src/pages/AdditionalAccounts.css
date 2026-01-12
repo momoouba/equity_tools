@@ -1,809 +1,143 @@
+/* AdditionalAccounts 页面样式 - Arco Design 规范 */
+
 .additional-accounts {
-  /* 移除框架样式，直接显示内容 */
-  background: transparent;
-  border-radius: 0;
-  padding: 0;
-  box-shadow: none;
-}
-
-.accounts-header {
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: none; /* 移除底部边框 */
-  position: relative; /* 必须添加，让子元素基于它定位 */
-  /* 其他原有样式（如高度、宽度等）保留不变 */
-}
-
-.accounts-header h2 {
-  font-size: 20px;
-  color: #1a1a1a;
-  margin: 0 0 20px 0;
-  font-weight: 600;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  flex-wrap: nowrap; /* 不换行，确保在一行显示 */
   width: 100%;
-  justify-content: flex-start;
-  position: relative; /* 设置为相对定位，作为绝对定位的参考 */
 }
 
-.header-actions .action-buttons {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 10px;
-  align-items: center;
-  flex-shrink: 0;
-  white-space: nowrap;
-  position: absolute; /* 使用绝对定位 */
-  width: 50% !important;   /* 核心修改2：内部按钮右对齐 */
-  justify-content: flex-end !important;   /* 定位按你的需求调整（比如想让按钮组左侧对齐父容器50%位置） */
-  right: auto !important; /* 贴紧父容器（accounts-header）右侧 */
-  left: 50% !important; /* 定位到页面中心 */
-  transform: none !important; /* 不偏移，让左侧对齐到中心 */
-  min-width: fit-content;
-}
-
-.refresh-button {
-  padding: 8px 16px;
-  background-color: #6c757d;
-  color: white;
-  border: none;
+.management-card {
+  background: #ffffff;
   border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.3s;
 }
 
-.refresh-button:hover {
-  background-color: #5a6268;
-}
-
-.refresh-button:active {
-  background-color: #484f54;
-}
-
-.search-form {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex: 0 1 auto; /* 不自动扩展，只占用必要空间 */
-  min-width: 0; /* 允许缩小 */
-  flex-wrap: nowrap;
-  margin-right: 0; /* 移除右边距，action-buttons紧跟在搜索按钮后面 */
-}
-
-.search-input {
-  padding: 10px 14px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 14px;
-  flex: 0 1 auto; /* 不自动扩展 */
-  width: 200px; /* 固定宽度，避免过度扩展 */
-  min-width: 150px;
-  max-width: 250px;
-  transition: all 0.3s ease;
-  background: white;
-}
-
-.search-input:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 3px rgba(53, 122, 189, 0.1);
-}
-
-.search-input::placeholder {
-  color: #999;
-}
-
-.status-filter {
-  padding: 10px 14px;
-  border: 1px solid #e0e0e0;
-  border-radius: 6px;
-  font-size: 14px;
-  background: white;
-  cursor: pointer;
-  white-space: nowrap;
-  flex-shrink: 0;
-  min-width: 120px;
-  transition: all 0.3s ease;
-  color: #333;
-}
-
-.status-filter:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 3px rgba(53, 122, 189, 0.1);
-}
-
-.status-filter:hover {
-  border-color: #357abd;
-}
-
-.search-button {
-  padding: 10px 20px;
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
-  box-shadow: 0 2px 4px rgba(53, 122, 189, 0.2);
-}
-
-.search-button:hover {
-  background: #2c5f8f;
-  box-shadow: 0 2px 8px rgba(53, 122, 189, 0.3);
-  transform: translateY(-1px);
-}
-
-.search-button:active {
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(53, 122, 189, 0.2);
-}
-
-.action-buttons {
-  display: flex;
-  flex-direction: row;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: nowrap;
-}
-
-.header-actions .add-button,
-.header-actions .import-button,
-.header-actions .btn-primary {
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-weight: 500;
-}
-
-.add-button {
-  padding: 10px 10px; /* 左右内边距从20px减半为10px */
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
-  box-shadow: 0 2px 4px rgba(53, 122, 189, 0.2);
-}
-
-.add-button:hover {
-  background: #2c5f8f;
-  box-shadow: 0 2px 8px rgba(53, 122, 189, 0.3);
-  transform: translateY(-1px);
-}
-
-.add-button:active {
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(53, 122, 189, 0.2);
-}
-
-.import-button {
-  padding: 10px 10px; /* 左右内边距从20px减半为10px */
-  background: white;
-  color: #357abd;
-  border: 1.5px solid #357abd;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
-  box-shadow: 0 2px 4px rgba(53, 122, 189, 0.1);
-}
-
-.import-button:hover {
-  background: #f0f7ff;
-  border-color: #2c5f8f;
-  color: #2c5f8f;
-  box-shadow: 0 2px 8px rgba(53, 122, 189, 0.2);
-  transform: translateY(-1px);
-}
-
-.import-button:active {
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(53, 122, 189, 0.1);
-}
-
-.header-actions .btn-primary {
-  padding: 10px 10px; /* 左右内边距从20px减半为10px */
-  background: #6c757d;
-  color: white;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
-  box-shadow: 0 2px 4px rgba(108, 117, 125, 0.2);
-}
-
-.header-actions .btn-primary:hover {
-  background: #5a6268;
-  box-shadow: 0 2px 8px rgba(108, 117, 125, 0.3);
-  transform: translateY(-1px);
-}
-
-.header-actions .btn-primary:active {
-  background: #484f54;
-  transform: translateY(0);
-  box-shadow: 0 1px 2px rgba(108, 117, 125, 0.2);
-}
-
-/* 刷新按钮：绿色 */
-.header-actions .btn-refresh {
-  background: #27ae60 !important;
-  box-shadow: 0 2px 4px rgba(39, 174, 96, 0.2) !important;
-}
-
-.header-actions .btn-refresh:hover {
-  background: #229954 !important;
-  box-shadow: 0 2px 8px rgba(39, 174, 96, 0.3) !important;
-}
-
-.header-actions .btn-refresh:active {
-  background: #1e8449 !important;
-  box-shadow: 0 1px 2px rgba(39, 174, 96, 0.2) !important;
-}
-
-.table-container {
-  overflow-x: auto;
-}
-
-.accounts-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
-}
-
-.accounts-table thead {
-  background: #f5f7fa;
-}
-
-.accounts-table th {
-  padding: 12px;
-  text-align: left;
-  font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
-  white-space: nowrap;
-}
-
-.accounts-table th:last-child {
-  width: 200px;
-  min-width: 200px;
-  max-width: 200px;
-}
-
-.accounts-table td {
-  padding: 12px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #666;
-  vertical-align: middle;
-}
-
-.accounts-table td:last-child {
-  width: 200px;
-  min-width: 200px;
-  max-width: 200px;
-  padding: 8px 4px;
-  text-align: center;
-}
-
-.accounts-table td .action-buttons {
-  display: flex !important;
-  flex-direction: row !important;
-  flex-wrap: nowrap !important;
-  gap: 6px;
-  align-items: center;
-  justify-content: center;
-}
-
-.accounts-table tbody tr:hover {
-  background: #f9f9f9;
-}
-
-.status-badge {
-  display: inline-block;
-  padding: 4px 8px;
-  border-radius: 12px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.status-badge.active {
-  background: #d4edda;
-  color: #155724;
-}
-
-.status-badge.inactive {
-  background: #f8d7da;
-  color: #721c24;
-}
-
-.edit-btn,
-.delete-btn,
-.log-btn {
-  padding: 6px 8px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  transition: all 0.3s ease;
-  white-space: nowrap;
-  flex-shrink: 0;
-  width: auto;
-  min-width: 50px;
-  max-width: none;
-  box-sizing: border-box;
-  text-align: center;
-}
-
-.edit-btn {
-  background: #357abd;
-  color: white;
-}
-
-.edit-btn:hover {
-  background: #2c5f8f;
-}
-
-.delete-btn {
-  background: #dc3545;
-  color: white;
-  width: 50px;
-  min-width: 50px;
-  max-width: 50px;
-}
-
-.delete-btn:hover {
-  background: #c82333;
-}
-
-.log-btn {
-  background: #357abd;
-  color: white;
-  width: 50px;
-  min-width: 50px;
-  max-width: 50px;
-}
-
-.log-btn:hover {
-  background: #2c5f8f;
-}
-
-.empty-data {
-  text-align: center;
-  color: #999;
-  padding: 40px !important;
-}
-
-.loading {
-  text-align: center;
-  padding: 40px;
-  color: #999;
-}
-
-.pagination {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 12px;
-  margin-top: 24px;
-  padding-top: 16px;
-  border-top: 1px solid #e0e0e0;
-  flex-wrap: wrap;
-}
-
-.pagination button {
-  padding: 8px 16px;
-  background: white;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.pagination button:hover:not(:disabled) {
-  background: #f5f7fa;
-  border-color: #357abd;
-}
-
-.pagination button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.pagination-pages {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.pagination-page {
-  min-width: 36px;
-  padding: 6px 12px;
-  text-align: center;
-}
-
-.pagination-page.active {
-  background: #357abd;
-  color: white;
-  border-color: #357abd;
-}
-
-.pagination-page.active:hover {
-  background: #2c5f8f;
-  border-color: #2c5f8f;
-}
-
-.pagination-ellipsis {
-  padding: 6px 8px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: #666;
-  font-size: 16px;
-  min-width: auto;
-}
-
-.pagination-ellipsis:hover {
-  background: #f5f7fa;
-  color: #357abd;
-}
-
-.pagination-info {
-  color: #666;
-  font-size: 14px;
-  margin: 0 8px;
-}
-
-.pagination-goto {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 8px;
-}
-
-.pagination-goto span {
-  color: #666;
-  font-size: 14px;
-  white-space: nowrap;
-}
-
-.pagination-input {
-  width: 50px;
-  padding: 6px 8px;
-  border: 1px solid #e0e0e0;
-  border-radius: 4px;
-  font-size: 14px;
-  text-align: center;
-  outline: none;
-}
-
-.pagination-input:focus {
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
-}
-
-.pagination-goto-btn {
-  padding: 6px 12px;
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.pagination-goto-btn:hover {
-  background: #2c5f8f;
-}
-
-/* 模态框样式 */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: white;
-  border-radius: 8px;
-  width: 90%;
-  max-width: 500px;
-  max-height: 80vh;
-  overflow: hidden;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-}
-
-.modal-header {
+.management-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #f5f7fa;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
-.modal-header h3 {
+.management-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
   margin: 0;
-  font-size: 18px;
-  color: #1a1a1a;
 }
 
-.close-btn {
-  background: none;
-  border: none;
-  font-size: 24px;
-  cursor: pointer;
-  color: #666;
-  padding: 0;
-  width: 30px;
-  height: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  transition: all 0.3s ease;
-}
-
-.close-btn:hover {
-  background: #e0e0e0;
-  color: #333;
-}
-
-.modal-body {
-  padding: 20px;
-  overflow-y: auto;
-  max-height: calc(80vh - 60px);
-}
-
-.form-group {
+.filter-collapse {
   margin-bottom: 16px;
 }
 
-.form-group label {
-  display: block;
-  margin-bottom: 4px;
-  font-weight: 500;
-  color: #333;
-}
-
-.form-group input,
-.form-group select {
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid #e0e0e0;
+.filter-collapse .arco-collapse-item-content-box {
+  padding: 16px;
+  background: #f7f8fa;
   border-radius: 4px;
-  font-size: 14px;
-  box-sizing: border-box;
 }
 
-.form-group input:focus,
-.form-group select:focus {
-  outline: none;
-  border-color: #357abd;
-  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
+.filter-content {
+  padding: 8px 0;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-item label {
+  font-size: 14px;
+  color: #1d2129;
+  font-weight: 500;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.table-container {
+  margin-bottom: 16px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
 }
 
 .form-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 20px;
+  margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #e0e0e0;
+  border-top: 1px solid #e5e6eb;
 }
 
-.form-actions button {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
-}
-
-.form-actions button[type="button"] {
-  background: #6c757d;
-  color: white;
-}
-
-.form-actions button[type="button"]:hover {
-  background: #5a6268;
-}
-
-.form-actions button[type="submit"] {
-  background: #28a745;
-  color: white;
-}
-
-.form-actions button[type="submit"]:hover {
-  background: #218838;
-}
-
-/* 导入相关样式 */
 .import-steps {
-  margin-bottom: 20px;
+  padding: 8px 0;
 }
 
-.step {
-  margin-bottom: 20px;
-  padding: 16px;
-  background: #f8f9fa;
-  border-radius: 4px;
+.import-step-card {
+  background: #f7f8fa;
+  border: 1px solid #e5e6eb;
 }
 
-.step h4 {
-  margin: 0 0 8px 0;
-  color: #495057;
+.info-card {
+  background: #e8f3ff;
+  border: 1px solid #b3d8ff;
+}
+
+.info-card h4 {
+  color: #165dff;
+  margin: 0 0 12px 0;
+}
+
+.info-card ul {
+  color: #4e5969;
+}
+
+.info-card li {
+  margin-bottom: 8px;
+}
+
+/* 操作按钮样式优化 */
+.additional-accounts .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
   font-size: 14px;
-}
-
-.download-template-btn {
-  padding: 8px 16px;
-  background: #007bff;
-  color: white;
-  border: none;
   border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.download-template-btn:hover {
-  background: #0056b3;
+.additional-accounts .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.file-upload {
-  margin-top: 8px;
+.additional-accounts .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
-.file-input {
-  width: 100%;
-  padding: 8px;
-  border: 2px dashed #dee2e6;
-  border-radius: 4px;
-  background: white;
-  cursor: pointer;
+.additional-accounts .arco-btn-outline {
+  border-width: 1px;
 }
 
-.file-name {
-  margin-top: 8px;
-  font-size: 12px;
-  color: #28a745;
+.additional-accounts .arco-btn-outline:hover {
+  border-color: currentColor;
 }
 
-.import-notes {
-  background: #e9ecef;
-  padding: 12px;
-  border-radius: 4px;
-}
-
-.import-notes h4 {
-  margin: 0 0 8px 0;
-  color: #495057;
-  font-size: 14px;
-}
-
-.import-notes ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
-.import-notes li {
-  font-size: 12px;
-  color: #6c757d;
-  margin-bottom: 4px;
-}
-
-/* 响应式设计 */
-@media (max-width: 1200px) {
-  /* 在中等屏幕上，稍微调整间距，但仍保持一行 */
-  .header-actions {
-    gap: 12px;
-  }
-  
-  .search-input {
-    min-width: 120px;
-    max-width: 250px;
-  }
-  
-  .status-filter {
-    min-width: 100px;
-  }
-}
-
-@media (max-width: 900px) {
-  /* 在较小屏幕上，如果空间不足，允许搜索表单缩小 */
-  .search-form {
-    flex: 0 1 auto;
-    min-width: 0;
-  }
-  
-  .search-input {
-    min-width: 100px;
-    max-width: 200px;
-  }
-}
-
-@media (max-width: 768px) {
-  .accounts-header h2 {
-    font-size: 18px;
-    margin-bottom: 16px;
-  }
-  
-  .header-actions {
-    gap: 12px;
-  }
-  
-  .search-form {
-    flex-direction: column;
-    gap: 8px;
-  }
-  
-  .search-input {
-    width: 100%;
-    min-width: 0;
-  }
-  
-  .status-filter {
-    width: 100%;
-  }
-  
-  .search-button {
-    width: 100%;
-  }
-  
-  .header-actions .action-buttons {
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-  
-  .add-button,
-  .import-button,
-  .header-actions .btn-primary {
-    flex: 1;
-    min-width: 100px;
-  }
-  
-  .modal-content {
-    width: 95%;
-    margin: 20px;
-  }
-  
-  .accounts-table {
-    font-size: 12px;
-  }
-  
-  .accounts-table th,
-  .accounts-table td {
-    padding: 8px;
-  }
-}

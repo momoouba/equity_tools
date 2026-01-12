@@ -29,7 +29,7 @@ async function generateId(tableName) {
       'email_config', 'additional_wechat_accounts', 'ai_model_config', 'qichacha_config',
       'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage', 
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log',
-      'ai_prompt_config', 'ai_prompt_change_log'
+      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links'
     ];
     
     if (!validTableNames.includes(tableName)) {

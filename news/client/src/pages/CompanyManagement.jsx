@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import CompanyForm from './CompanyForm'
 import LogModal from './LogModal'
-import Pagination from '../components/Pagination'
 import './CompanyManagement.css'
+
+const Option = Select.Option
+const CollapseItem = Collapse.Item
 
 function CompanyManagement() {
   const [companies, setCompanies] = useState([])
@@ -15,6 +18,10 @@ function CompanyManagement() {
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [pageSize, setPageSize] = useState(10)
+  const [filterCollapsed, setFilterCollapsed] = useState(true)
+  const [filters, setFilters] = useState({
+    keyword: ''
+  })
 
   useEffect(() => {
     fetchCompanies()
@@ -26,7 +33,8 @@ function CompanyManagement() {
       const response = await axios.get('/api/companies', {
         params: {
           page: currentPage,
-          pageSize
+          pageSize,
+          ...filters
         }
       })
       if (response.data.success) {
@@ -35,6 +43,7 @@ function CompanyManagement() {
       }
     } catch (error) {
       console.error('获取企业列表失败:', error)
+      Message.error('获取企业列表失败')
     } finally {
       setLoading(false)
     }
@@ -51,19 +60,21 @@ function CompanyManagement() {
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('确定要删除这条记录吗？')) {
-      return
-    }
-
-    try {
-      const response = await axios.delete(`/api/companies/${id}`)
-      if (response.data.success) {
-        alert('删除成功')
-        fetchCompanies()
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这条记录吗？',
+      onOk: async () => {
+        try {
+          const response = await axios.delete(`/api/companies/${id}`)
+          if (response.data.success) {
+            Message.success('删除成功')
+            fetchCompanies()
+          }
+        } catch (error) {
+          Message.error('删除失败：' + (error.response?.data?.message || '未知错误'))
+        }
       }
-    } catch (error) {
-      alert('删除失败：' + (error.response?.data?.message || '未知错误'))
-    }
+    })
   }
 
   const handleFormClose = () => {
@@ -81,116 +92,197 @@ function CompanyManagement() {
     setShowLogModal(true)
   }
 
-  const handlePageSizeChange = (e) => {
-    const newPageSize = parseInt(e.target.value, 10)
-    setPageSize(newPageSize)
-    setCurrentPage(1) // 改变每页显示条数时重置到第一页
+  const handleSearch = () => {
+    setCurrentPage(1)
+    fetchCompanies()
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  const handleReset = () => {
+    setFilters({ keyword: '' })
+    setCurrentPage(1)
+  }
+
+  const columns = [
+    {
+      title: '序号',
+      width: 80,
+      render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
+    },
+    {
+      title: '企业简称',
+      dataIndex: 'enterprise_abbreviation',
+      width: 150,
+      render: (text) => text || '-'
+    },
+    {
+      title: '企业全称',
+      dataIndex: 'enterprise_full_name',
+      width: 250,
+      ellipsis: true,
+      tooltip: true
+    },
+    {
+      title: '统一信用代码',
+      dataIndex: 'unified_credit_code',
+      width: 180,
+      render: (text) => text || '-'
+    },
+    {
+      title: '公司官网',
+      dataIndex: 'official_website',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text ? (
+        <a href={text} target="_blank" rel="noopener noreferrer">
+          {text}
+        </a>
+      ) : '-'
+    },
+    {
+      title: '微信公众号id',
+      dataIndex: 'wechat_official_account_id',
+      width: 180,
+      render: (text) => text || '-'
+    },
+    {
+      title: '操作',
+      width: 200,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleEdit(record)}
+          >
+            编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="success"
+            onClick={() => handleViewLog(record.id)}
+          >
+            日志
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="danger"
+            onClick={() => handleDelete(record.id)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
 
   return (
     <div className="company-management">
-      <div className="management-header">
-        <h2>企业列表管理</h2>
-        <div className="action-buttons">
-          <button className="btn-primary" onClick={handleAdd}>
-            新增
-          </button>
-          <button className="btn-primary" onClick={fetchCompanies} title="刷新列表">
-            刷新
-          </button>
+      <Card className="management-card" bordered={false}>
+        <div className="management-header">
+          <h2 className="management-title">企业列表管理</h2>
+          <Space>
+            <Button
+              onClick={fetchCompanies}
+              loading={loading}
+            >
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              onClick={handleAdd}
+            >
+              新增
+            </Button>
+          </Space>
         </div>
-      </div>
 
-      <div className="table-container">
-        {loading ? (
-          <div className="loading">加载中...</div>
-        ) : (
-          <table className="company-table">
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th>企业简称</th>
-                <th>企业全称</th>
-                <th>统一信用代码</th>
-                <th>公司官网</th>
-                <th>微信公众号id</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {companies.length === 0 ? (
-                <tr>
-                  <td colSpan="7" className="empty-data">暂无数据</td>
-                </tr>
-              ) : (
-                companies.map((company, index) => (
-                  <tr key={company.id}>
-                    <td>{(currentPage - 1) * pageSize + index + 1}</td>
-                    <td>{company.enterprise_abbreviation || '-'}</td>
-                    <td>{company.enterprise_full_name}</td>
-                    <td>{company.unified_credit_code || '-'}</td>
-                    <td>
-                      {company.official_website ? (
-                        <a href={company.official_website} target="_blank" rel="noopener noreferrer">
-                          {company.official_website}
-                        </a>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    <td>{company.wechat_official_account_id || '-'}</td>
-                    <td>
-                      <button
-                        className="btn-edit"
-                        onClick={() => handleEdit(company)}
-                      >
-                        编辑
-                      </button>
-                      <button
-                        className="btn-log"
-                        onClick={() => handleViewLog(company.id)}
-                      >
-                        日志
-                      </button>
-                      <button
-                        className="btn-delete"
-                        onClick={() => handleDelete(company.id)}
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
+        <Collapse
+          activeKey={filterCollapsed ? [] : ['filters']}
+          onChange={(keys) => setFilterCollapsed(keys.length === 0)}
+          className="filter-collapse"
+        >
+          <CollapseItem header="筛选条件" name="filters">
+            <div className="filter-content">
+              <div className="filter-row">
+                <div className="filter-item">
+                  <label>关键词</label>
+                  <Input.Search
+                    value={filters.keyword}
+                    onChange={(value) => setFilters({ ...filters, keyword: value })}
+                    placeholder="企业简称/全称/统一信用代码"
+                    style={{ width: 300 }}
+                    allowClear
+                    onSearch={handleSearch}
+                  />
+                </div>
+                <div className="filter-actions">
+                  <Button type="primary" onClick={handleSearch}>
+                    查询
+                  </Button>
+                  <Button type="outline" onClick={handleReset}>
+                    重置
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </CollapseItem>
+        </Collapse>
 
-      <div className="pagination-wrapper">
-        <div className="page-size-selector">
-          <span className="page-size-label">每页显示：</span>
-          <select 
-            className="page-size-select" 
-            value={pageSize} 
-            onChange={handlePageSizeChange}
-          >
-            <option value={10}>10</option>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
-          </select>
-          <span className="page-size-unit">条</span>
+        <div className="table-container">
+          {loading && companies.length === 0 ? (
+            <Skeleton
+              loading={true}
+              animation={true}
+              text={{ rows: 8, width: ['100%'] }}
+            />
+          ) : (
+            <Table
+              columns={columns}
+              data={companies}
+              loading={loading}
+              pagination={false}
+              rowKey="id"
+              border={{
+                wrapper: true,
+                cell: true
+              }}
+              stripe
+              className="company-table"
+            />
+          )}
         </div>
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-          totalItems={total}
-        />
-      </div>
+
+        <div className="pagination-wrapper">
+          <div className="page-size-selector">
+            <span className="page-size-label">每页显示：</span>
+            <Select
+              value={pageSize}
+              onChange={(value) => {
+                setPageSize(value)
+                setCurrentPage(1)
+              }}
+              style={{ width: 100 }}
+            >
+              <Option value={10}>10</Option>
+              <Option value={20}>20</Option>
+              <Option value={50}>50</Option>
+              <Option value={100}>100</Option>
+            </Select>
+            <span className="page-size-unit">条</span>
+          </div>
+          <Pagination
+            current={currentPage}
+            total={total}
+            pageSize={pageSize}
+            onChange={(page) => setCurrentPage(page)}
+            showTotal
+            showJumper
+          />
+        </div>
+      </Card>
 
       {showForm && (
         <CompanyForm

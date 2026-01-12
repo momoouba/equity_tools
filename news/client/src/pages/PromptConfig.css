@@ -1,142 +1,83 @@
-.prompt-config-container {
-  padding: 24px;
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
+/* PromptConfig 页面样式 - Arco Design 规范 */
 
-.prompt-config-header {
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-  margin-bottom: 24px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.prompt-preview {
-  max-width: 300px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: #666;
-}
-
-.btn-activate {
-  background: #28a745;
-  color: white;
-}
-
-.btn-activate:hover {
-  background: #218838;
-}
-
-.btn-deactivate {
-  background: #ffc107;
-  color: #333;
-}
-
-.btn-deactivate:hover {
-  background: #e0a800;
-}
-
-.btn-log {
-  background: #17a2b8;
-  color: white;
-}
-
-.btn-log:hover {
-  background: #138496;
-}
-
-.btn-view-detail {
-  padding: 4px 12px;
-  background: #6c757d;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.btn-view-detail:hover {
-  background: #5a6268;
-}
-
-.log-content {
-  padding: 20px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-
-.log-table {
+.prompt-config {
   width: 100%;
-  border-collapse: collapse;
-  font-size: 14px;
 }
 
-.log-table thead {
-  background: #f5f7fa;
-  position: sticky;
-  top: 0;
-  z-index: 1;
+.config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
-.log-table th {
-  padding: 12px;
-  text-align: left;
+.config-header h3 {
+  font-size: 18px;
   font-weight: 600;
-  color: #333;
-  border-bottom: 2px solid #e0e0e0;
+  color: #1d2129;
+  margin: 0;
 }
 
-.log-table td {
-  padding: 12px;
-  border-bottom: 1px solid #e0e0e0;
-  color: #666;
+.table-container {
+  margin-bottom: 16px;
 }
 
-.log-table tbody tr:hover {
-  background: #f9f9f9;
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
 }
 
-.log-type {
-  display: inline-block;
-  padding: 4px 8px;
-  border-radius: 12px;
-  font-size: 12px;
+/* 操作按钮样式优化 */
+.prompt-config .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.prompt-config .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.prompt-config .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.prompt-config .arco-btn-outline {
+  border-width: 1px;
+}
+
+.prompt-config .arco-btn-outline:hover {
+  border-color: currentColor;
+}
+
+/* 表单样式 */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #1d2129;
+  font-size: 14px;
   font-weight: 500;
 }
 
-.log-type-create {
-  background: #d4edda;
-  color: #155724;
-}
-
-.log-type-update {
-  background: #d1ecf1;
-  color: #0c5460;
-}
-
-.log-type-delete {
-  background: #f8d7da;
-  color: #721c24;
-}
-
-.log-type-activate {
-  background: #d4edda;
-  color: #155724;
-}
-
-.log-type-deactivate {
-  background: #fff3cd;
-  color: #856404;
-}
-
-.form-hint {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #999;
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
 }
 

@@ -17,6 +17,7 @@ const newsAnalysisRoutes = require('./routes/newsAnalysis');
 const emailRoutes = require('./routes/email');
 const scheduledTasksRoutes = require('./routes/scheduledTasks');
 const externalDbRoutes = require('./routes/externalDb');
+const newsShareRoutes = require('./routes/newsShare');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
@@ -133,6 +134,38 @@ app.use('/api/news-analysis', newsAnalysisRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/scheduled-tasks', scheduledTasksRoutes);
 app.use('/api/external-db', externalDbRoutes);
+app.use('/api/news-share', newsShareRoutes);
+
+// SPA路由支持：对于所有非API路径，返回前端应用的index.html
+// 这样前端路由（如 /share/:token）才能正常工作
+// 注意：开发环境应该使用Vite开发服务器（localhost:5173），这里只处理生产环境
+const clientDistPath = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDistPath)) {
+  // 提供静态文件服务
+  app.use(express.static(clientDistPath));
+  
+  // 所有非API路径都返回index.html，让前端路由处理
+  app.get('*', (req, res, next) => {
+    // 排除API路径
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    
+    // 静态资源（assets目录下的文件）应该由express.static处理，这里不需要特殊处理
+    // 如果请求的是静态资源文件（有扩展名），让express.static处理
+    if (req.path.includes('.') && !req.path.startsWith('/share')) {
+      return next();
+    }
+    
+    // 对于其他路径（如 /share/:token），返回index.html
+    const indexPath = path.join(clientDistPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      next();
+    }
+  });
+}
 
 // 全局错误日志
 app.use((err, req, res, next) => {

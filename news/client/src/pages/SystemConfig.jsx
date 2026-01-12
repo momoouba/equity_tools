@@ -1,94 +1,71 @@
 import React, { useState } from 'react'
+import { Tabs, Card } from '@arco-design/web-react'
+import BasicSystemConfig from './BasicSystemConfig'
 import AIConfig from './AIConfig'
 import EmailConfig from './EmailConfig'
 import QichachaConfig from './QichachaConfig'
 import NewsConfig from './NewsConfig'
-import BasicSystemConfig from './BasicSystemConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import './SystemConfig.css'
+
+const TabPane = Tabs.TabPane
 
 function SystemConfig() {
   const [activeTab, setActiveTab] = useState('basic')
 
   return (
     <div className="system-config">
-      <div className="config-header">
-        <h2>系统配置</h2>
-      </div>
-
-      <div className="config-tabs">
-        <button
-          className={`tab-button ${activeTab === 'basic' ? 'active' : ''}`}
-          onClick={() => setActiveTab('basic')}
+      <Card className="config-card" bordered={false}>
+        <Tabs
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          className="config-tabs"
+          type="line"
         >
-          系统配置
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'qichacha' ? 'active' : ''}`}
-          onClick={() => setActiveTab('qichacha')}
-        >
-          企查查接口配置
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'news' ? 'active' : ''}`}
-          onClick={() => setActiveTab('news')}
-        >
-          新闻接口配置
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'ai' ? 'active' : ''}`}
-          onClick={() => setActiveTab('ai')}
-        >
-          AI模型配置
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'email' ? 'active' : ''}`}
-          onClick={() => setActiveTab('email')}
-        >
-          邮件配置
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'holiday' ? 'active' : ''}`}
-          onClick={() => setActiveTab('holiday')}
-        >
-          节假日维护
-        </button>
-        <button
-          className={`tab-button ${activeTab === 'database' ? 'active' : ''}`}
-          onClick={() => setActiveTab('database')}
-        >
-          数据库连接
-        </button>
-      </div>
+          <TabPane key="basic" title="系统配置">
+            <div className="config-content">
+              <BasicSystemConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'basic' && (
-        <BasicSystemConfig />
-      )}
+          <TabPane key="qichacha" title="企查查接口配置">
+            <div className="config-content">
+              <QichachaConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'qichacha' && (
-        <QichachaConfig />
-      )}
+          <TabPane key="news" title="新闻接口配置">
+            <div className="config-content">
+              <NewsConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'news' && (
-        <NewsConfig />
-      )}
+          <TabPane key="ai" title="AI模型配置">
+            <div className="config-content">
+              <AIConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'ai' && (
-        <AIConfig />
-      )}
+          <TabPane key="email" title="邮件配置">
+            <div className="config-content">
+              <EmailConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'email' && (
-        <EmailConfig />
-      )}
+          <TabPane key="holiday" title="节假日维护">
+            <div className="config-content">
+              <HolidayConfig />
+            </div>
+          </TabPane>
 
-      {activeTab === 'holiday' && (
-        <HolidayConfig />
-      )}
-
-      {activeTab === 'database' && (
-        <DatabaseConfig />
-      )}
+          <TabPane key="database" title="数据库连接">
+            <div className="config-content">
+              <DatabaseConfig />
+            </div>
+          </TabPane>
+        </Tabs>
+      </Card>
     </div>
   )
 }

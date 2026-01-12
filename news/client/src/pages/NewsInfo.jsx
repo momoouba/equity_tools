@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Tabs, Input, Select, Tag, Progress, Checkbox, Radio, Divider } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdditionalAccounts from './AdditionalAccounts'
 import RecipientManagement from './RecipientManagement'
 import UserEmailRecords from './UserEmailRecords'
-import Pagination from '../components/Pagination'
 import './NewsInfo.css'
+
+const Option = Select.Option
+const TabPane = Tabs.TabPane
+const InputSearch = Input.Search
+const RadioGroup = Radio.Group
 
 function NewsInfo() {
   const [newsList, setNewsList] = useState([])
-  const [allFilteredNews, setAllFilteredNews] = useState([]) // 存储所有过滤后的数据，用于客户端分页
+  const [allFilteredNews, setAllFilteredNews] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -22,9 +27,8 @@ function NewsInfo() {
   const [activeTab, setActiveTab] = useState('yesterday')
   const [showExportModal, setShowExportModal] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
-  const [adminActiveTab, setAdminActiveTab] = useState('news') // 管理员tab切换
-  const [recipientTab, setRecipientTab] = useState('recipients') // 收件管理tab切换：recipients, records, logs
-  // 批量选择相关状态
+  const [adminActiveTab, setAdminActiveTab] = useState('news')
+  const [recipientTab, setRecipientTab] = useState('recipients')
   const [selectedNewsIds, setSelectedNewsIds] = useState([])
   const [selectAll, setSelectAll] = useState(false)
   const [batchAnalysisLoading, setBatchAnalysisLoading] = useState(false)
@@ -33,9 +37,18 @@ function NewsInfo() {
   const [analysisProgress, setAnalysisProgress] = useState(null)
   const [currentTaskId, setCurrentTaskId] = useState(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
-  const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise') // 'enterprise' 企业相关, 'all' 全部
+  const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise')
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [shareConfig, setShareConfig] = useState({
+    enabled: false,
+    hasExpiry: false,
+    expiryTime: '',
+    hasPassword: false,
+    password: ''
+  })
+  const [shareLink, setShareLink] = useState(null)
+  const [shareLoading, setShareLoading] = useState(false)
 
-  // 获取用户信息
   useEffect(() => {
     const userData = localStorage.getItem('user')
     if (userData) {
@@ -45,9 +58,8 @@ function NewsInfo() {
     }
   }, [])
 
-  // 获取用户统计信息
   const fetchUserStats = async () => {
-    if (!isAdmin) { // 只有普通用户需要获取统计信息
+    if (!isAdmin) {
       try {
         const response = await axios.get('/api/news/user-stats')
         if (response.data.success) {
@@ -59,30 +71,24 @@ function NewsInfo() {
     }
   }
 
-  // 当用户信息加载完成后获取统计信息
   useEffect(() => {
     if (user !== null && !isAdmin) {
       fetchUserStats()
     }
   }, [user, isAdmin])
 
-  // 提取数据获取逻辑为独立函数
   const fetchNews = async () => {
-    // 如果不在舆情信息tab，不执行请求
     if (isAdmin && adminActiveTab !== 'news') {
       return
     }
     
-    // 如果用户信息未加载，不执行请求
     if (user === null) {
       return
     }
     
     setLoading(true)
     try {
-      // 获取所有数据用于客户端过滤和排序
-      // 使用较大的pageSize以支持客户端过滤和排序，但设置合理上限避免内存问题
-      const MAX_FETCH_SIZE = 100000 // 最大获取100000条数据
+      const MAX_FETCH_SIZE = 100000
       const params = {
         page: 1,
         pageSize: MAX_FETCH_SIZE,
@@ -92,7 +98,6 @@ function NewsInfo() {
         params.search = search
       }
       
-      // 根据用户角色选择不同的API端点
       const endpoint = isAdmin ? '/api/news/' : '/api/news/user-news'
       const response = await axios.get(endpoint, { params })
       
@@ -101,50 +106,34 @@ function NewsInfo() {
         const fetchedCount = allNewsData.length
         const totalCount = response.data.total || 0
         
-        // 如果返回的数据量达到上限，且总数超过上限，提示用户
         if (fetchedCount >= MAX_FETCH_SIZE && totalCount > MAX_FETCH_SIZE) {
           console.warn(`数据量较大（${totalCount}条），当前显示前${MAX_FETCH_SIZE}条。建议使用搜索功能缩小范围。`)
         }
         
-        // 客户端过滤
         if (enterpriseFilter === 'enterprise') {
-          // 企业相关：只显示被投企业全称不为空的数据
           allNewsData = allNewsData.filter(news => news.enterprise_full_name && news.enterprise_full_name.trim() !== '')
         }
-        // 全部：显示所有数据，不需要过滤
         
-        // 排序：有被投企业全称的排在前面，然后按发布时间降序
         allNewsData.sort((a, b) => {
           const aHasEnterprise = a.enterprise_full_name && a.enterprise_full_name.trim() !== ''
           const bHasEnterprise = b.enterprise_full_name && b.enterprise_full_name.trim() !== ''
           
-          // 先按是否有企业全称排序（有的在前）
           if (aHasEnterprise && !bHasEnterprise) return -1
           if (!aHasEnterprise && bHasEnterprise) return 1
           
-          // 都有或都没有，按发布时间降序
           const timeA = a.public_time ? new Date(a.public_time).getTime() : 0
           const timeB = b.public_time ? new Date(b.public_time).getTime() : 0
           return timeB - timeA
         })
         
-        // 存储所有过滤后的数据，用于客户端分页
         const totalFiltered = allNewsData.length
-        
-        // 计算正确的总数
-        // 如果数据被截断（后端总数超过获取限制），总数应该是实际获取的数据量
-        // 如果应用了企业相关过滤，总数应该是过滤后的数据量，但不能超过实际获取的数据量
         let finalTotal
         if (totalCount > MAX_FETCH_SIZE) {
-          // 数据被截断：使用实际获取的数据量（过滤后的）
-          // 注意：由于数据被截断，我们无法知道后端有多少数据符合过滤条件
-          // 所以显示过滤后的实际数据量，并在控制台提示用户
           finalTotal = totalFiltered
           if (enterpriseFilter === 'enterprise') {
             console.warn(`数据量较大，当前显示企业相关新闻 ${totalFiltered} 条（实际获取 ${fetchedCount} 条，后端总数 ${totalCount} 条）。建议使用搜索功能缩小范围。`)
           }
         } else {
-          // 数据未被截断：使用过滤后的数据量
           finalTotal = totalFiltered
         }
         
@@ -158,7 +147,6 @@ function NewsInfo() {
         throw new Error(response.data.message || '获取舆情信息失败')
       }
     } catch (error) {
-      // 忽略连接被拒绝的错误（通常是服务器未启动或正在重启）
       if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
         console.warn('后端服务器连接被拒绝，可能正在启动中...')
         setNewsList([])
@@ -166,11 +154,9 @@ function NewsInfo() {
         throw error
       }
       console.error('获取舆情信息失败:', error)
-      console.error('错误详情:', error.response?.data)
       setAllFilteredNews([])
       setNewsList([])
       setTotal(0)
-      // 只在第一次加载失败时显示错误提示
       if (currentPage === 1 && !search) {
         throw new Error('获取舆情信息失败：' + (error.response?.data?.message || error.message || '未知错误'))
       }
@@ -187,22 +173,18 @@ function NewsInfo() {
       try {
         await fetchNews()
       } catch (error) {
-        // 错误已在 fetchNews 中处理
         if (isMounted && currentPage === 1 && !search) {
-          // 只在第一次加载失败时显示错误提示
           if (error.message && !error.message.includes('ECONNREFUSED')) {
-            alert(error.message)
+            Message.error(error.message)
           }
         }
       }
     }
     
-    // 如果不在舆情信息tab，不执行请求
     if (isAdmin && adminActiveTab !== 'news') {
       return
     }
     
-    // 如果用户信息未加载，不执行请求
     if (user === null) {
       return
     }
@@ -212,11 +194,8 @@ function NewsInfo() {
     return () => {
       isMounted = false
     }
-    // 注意：currentPage不在依赖数组中，因为使用客户端分页，数据只获取一次
-    // 当currentPage变化时，只更新显示的列表，不重新获取数据
   }, [search, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter])
 
-  // 客户端分页：当currentPage、pageSize或allFilteredNews变化时，更新显示的列表
   useEffect(() => {
     if (allFilteredNews.length === 0) {
       setNewsList([])
@@ -230,12 +209,10 @@ function NewsInfo() {
     setNewsList(paginatedData)
   }, [currentPage, pageSize, allFilteredNews])
 
-  // 判断是否显示复选框功能（所有tab都支持）
   const shouldShowCheckbox = () => {
     return ['yesterday', 'thisWeek', 'lastWeek', 'thisMonth', 'all'].includes(activeTab)
   }
 
-  // 切换tab时重置页码和选择状态
   const handleTabChange = (tab) => {
     setActiveTab(tab)
     setCurrentPage(1)
@@ -243,22 +220,19 @@ function NewsInfo() {
     setSelectAll(false)
   }
 
-  // 处理每页显示数量变更
   const handlePageSizeChange = (newPageSize) => {
     setPageSize(newPageSize)
-    setCurrentPage(1) // 重置到第一页
+    setCurrentPage(1)
     setSelectedNewsIds([])
     setSelectAll(false)
   }
 
-  // 检查AI分析状态
   const checkAnalysisStatus = async () => {
     try {
       const response = await axios.get('/api/news-analysis/analysis-status')
       if (response.data.success) {
         setAnalysisStatus(response.data.data)
         if (response.data.data.isProcessing) {
-          // 如果还在处理中，3秒后再次检查
           setTimeout(checkAnalysisStatus, 3000)
         }
       }
@@ -267,124 +241,97 @@ function NewsInfo() {
     }
   }
 
-  // 检查分析进度
   const checkAnalysisProgress = async (taskId) => {
-    console.log('检查分析进度，任务ID:', taskId)
     try {
       const response = await axios.get(`/api/news-analysis/analysis-progress/${taskId}`)
-      console.log('进度响应:', response.data)
       if (response.data.success) {
         const progressData = response.data.data
-        console.log('设置进度数据:', progressData)
         setAnalysisProgress(progressData)
         
         if (progressData.status === 'processing') {
-          // 如果还在处理中，2秒后再次检查
-          console.log('继续处理中，2秒后再次检查')
           setTimeout(() => checkAnalysisProgress(taskId), 2000)
         } else if (progressData.status === 'completed') {
-          // 分析完成，显示结果并清理状态
-          console.log('分析完成')
           setTimeout(() => {
             setAnalysisProgress(null)
             setCurrentTaskId(null)
-            fetchNews() // 刷新新闻列表
-          }, 3000) // 3秒后清理状态
+            fetchNews()
+          }, 3000)
         } else if (progressData.status === 'not_found') {
-          // 任务不存在，清理状态
-          console.log('任务不存在')
           setAnalysisProgress(null)
           setCurrentTaskId(null)
         }
       }
     } catch (error) {
       console.error('检查分析进度失败:', error)
-      // 出错时也清理状态
       setAnalysisProgress(null)
       setCurrentTaskId(null)
     }
   }
 
-
-  // 清理无效的企业关联
   const cleanInvalidAssociations = async () => {
-    const confirmMessage = `此操作将检查所有新闻的企业关联，并清理不在被投企业数据库中的关联。\n\n这可能会影响大量数据，是否继续？`
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    try {
-      const response = await axios.post('/api/news-analysis/clean-invalid-associations')
-
-      if (response.data.success) {
-        const result = response.data.data
-        let resultMessage = `清理完成！\n\n` +
-          `检查了 ${result.totalChecked} 条新闻\n` +
-          `清理了 ${result.cleanedCount} 个无效企业关联\n\n`
-        
-        if (result.invalidEnterprises.length > 0) {
-          resultMessage += `清理的无效企业示例：\n`
-          result.invalidEnterprises.slice(0, 5).forEach(item => {
-            resultMessage += `• ${item.invalidEnterprise}\n`
-          })
-          if (result.invalidEnterprises.length > 5) {
-            resultMessage += `... 还有 ${result.invalidEnterprises.length - 5} 个\n`
+    Modal.confirm({
+      title: '确认清理',
+      content: '此操作将检查所有新闻的企业关联，并清理不在被投企业数据库中的关联。\n\n这可能会影响大量数据，是否继续？',
+      onOk: async () => {
+        try {
+          const response = await axios.post('/api/news-analysis/clean-invalid-associations')
+          if (response.data.success) {
+            const result = response.data.data
+            let resultMessage = `清理完成！\n\n` +
+              `检查了 ${result.totalChecked} 条新闻\n` +
+              `清理了 ${result.cleanedCount} 个无效企业关联\n\n`
+            
+            if (result.invalidEnterprises.length > 0) {
+              resultMessage += `清理的无效企业示例：\n`
+              result.invalidEnterprises.slice(0, 5).forEach(item => {
+                resultMessage += `• ${item.invalidEnterprise}\n`
+              })
+              if (result.invalidEnterprises.length > 5) {
+                resultMessage += `... 还有 ${result.invalidEnterprises.length - 5} 个\n`
+              }
+            }
+            Message.success(resultMessage.replace(/\n/g, ' '))
+            fetchNews()
+          } else {
+            Message.error('清理失败：' + response.data.message)
           }
+        } catch (error) {
+          console.error('清理无效关联失败:', error)
+          Message.error('清理失败：' + (error.response?.data?.message || error.message))
         }
-
-        alert(resultMessage)
-        
-        // 刷新新闻列表
-        fetchNews()
-      } else {
-        alert('清理失败：' + response.data.message)
       }
-    } catch (error) {
-      console.error('清理无效关联失败:', error)
-      alert('清理失败：' + (error.response?.data?.message || error.message))
-    }
+    })
   }
 
-  // 取消分析
   const cancelAnalysis = () => {
-    if (window.confirm('确定要取消当前的AI分析吗？\n\n已处理的数据不会回滚。')) {
-      setAnalysisProgress(null)
-      setCurrentTaskId(null)
-      alert('已取消AI分析监控\n\n注意：后台分析可能仍在继续，但不再显示进度。')
-    }
+    Modal.confirm({
+      title: '确认取消',
+      content: '确定要取消当前的AI分析吗？\n\n已处理的数据不会回滚。',
+      onOk: () => {
+        setAnalysisProgress(null)
+        setCurrentTaskId(null)
+        Message.info('已取消AI分析监控\n\n注意：后台分析可能仍在继续，但不再显示进度。')
+      }
+    })
   }
 
-  // 刷新列表
   const handleRefreshList = async () => {
     if (isRefreshing || loading) return
     
-    console.log('手动刷新新闻列表')
     setIsRefreshing(true)
-    
     try {
       await fetchNews()
-      console.log('新闻列表刷新完成')
     } catch (error) {
       console.error('刷新新闻列表失败:', error)
-      alert('刷新失败，请稍后重试')
+      Message.error('刷新失败，请稍后重试')
     } finally {
-      // 延迟一点时间让用户看到刷新动画
       setTimeout(() => {
         setIsRefreshing(false)
       }, 800)
     }
   }
 
-  const handleSearch = (e) => {
-    e.preventDefault()
-    setCurrentPage(1)
-  }
-
-  const handleSearchChange = (e) => {
-    const newSearchValue = e.target.value
-    setSearch(newSearchValue)
-    // 当搜索内容变化时，重置到第1页，避免显示空列表
-    // 因为新搜索结果可能比当前页码少
+  const handleSearch = () => {
     setCurrentPage(1)
   }
 
@@ -436,30 +383,30 @@ function NewsInfo() {
   }
 
   const handleDelete = async (newsId) => {
-    if (!window.confirm('确定要删除这条新闻记录吗？此操作不可恢复。')) {
-      return
-    }
-
-    try {
-      const response = await axios.delete(`/api/news/${newsId}`, {
-        headers: {
-          'user-id': user?.id,
-          'user-role': user?.role
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这条新闻记录吗？此操作不可恢复。',
+      onOk: async () => {
+        try {
+          const response = await axios.delete(`/api/news/${newsId}`, {
+            headers: {
+              'user-id': user?.id,
+              'user-role': user?.role
+            }
+          })
+          if (response.data.success) {
+            Message.success('删除成功')
+            fetchNews()
+          } else {
+            Message.error('删除失败：' + (response.data.message || '未知错误'))
+          }
+        } catch (error) {
+          console.error('删除新闻失败:', error)
+          Message.error('删除失败：' + (error.response?.data?.message || '网络错误'))
         }
-      })
-      if (response.data.success) {
-        alert('删除成功')
-        // 重新获取数据
-        fetchNews()
-      } else {
-        alert('删除失败：' + (response.data.message || '未知错误'))
       }
-    } catch (error) {
-      console.error('删除新闻失败:', error)
-      alert('删除失败：' + (error.response?.data?.message || '网络错误'))
-    }
+    })
   }
-
 
   const closeModal = () => {
     setShowDetailModal(false)
@@ -477,7 +424,6 @@ function NewsInfo() {
         responseType: 'blob'
       })
 
-      // 创建下载链接
       const blob = new Blob([response.data], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       })
@@ -486,7 +432,6 @@ function NewsInfo() {
       const link = document.createElement('a')
       link.href = url
       
-      // 从响应头获取文件名，如果没有则使用默认名称
       const contentDisposition = response.headers['content-disposition']
       let filename = '舆情信息.xlsx'
       if (contentDisposition) {
@@ -503,16 +448,15 @@ function NewsInfo() {
       window.URL.revokeObjectURL(url)
       
       setShowExportModal(false)
+      Message.success('导出成功')
     } catch (error) {
       console.error('导出失败:', error)
-      alert('导出失败，请重试')
+      Message.error('导出失败，请重试')
     } finally {
       setExportLoading(false)
     }
   }
 
-
-  // 处理复选框选择
   const handleSelectNews = (newsId) => {
     setSelectedNewsIds(prev => {
       if (prev.includes(newsId)) {
@@ -521,10 +465,8 @@ function NewsInfo() {
         return [...prev, newsId]
       }
     })
-    // 注意：selectAll状态由useEffect同步更新，避免双重同步
   }
 
-  // 处理全选
   const handleSelectAll = () => {
     if (selectAll) {
       setSelectedNewsIds([])
@@ -534,7 +476,6 @@ function NewsInfo() {
     setSelectAll(!selectAll)
   }
 
-  // 同步selectAll状态：当新闻列表或选中项变化时，检查当前页是否全选
   useEffect(() => {
     if (newsList.length === 0) {
       setSelectAll(false)
@@ -548,790 +489,870 @@ function NewsInfo() {
     setSelectAll(allCurrentPageSelected)
   }, [newsList, selectedNewsIds])
 
-  // 批量AI分析
-  const handleBatchAnalysis = async () => {
-    if (selectedNewsIds.length === 0) {
-      alert('请先选择要分析的新闻')
+  // 创建分享链接
+  const handleCreateShareLink = async () => {
+    if (!shareConfig.enabled) {
+      Message.warning('请先开启公共链接分享')
       return
     }
 
-    // 检查用户信息
-    if (!user || !user.id) {
-      alert('用户信息未加载，请刷新页面重试')
+    if (shareConfig.hasExpiry && !shareConfig.expiryTime) {
+      Message.warning('请设置有效期时间')
       return
     }
 
-    // 添加确认对话框
-    const confirmMessage = `确定要对选中的 ${selectedNewsIds.length} 条新闻进行AI重新分析吗？\n\n分析过程可能需要一些时间，请耐心等待。`
-    if (!window.confirm(confirmMessage)) {
+    if (shareConfig.hasPassword && !shareConfig.password) {
+      Message.warning('请设置密码')
       return
     }
 
-    setBatchAnalysisLoading(true)
-
-    console.log('开始AI分析，用户ID:', user.id, '选中新闻数量:', selectedNewsIds.length)
-    console.log('选中的新闻IDs:', selectedNewsIds)
-
-
+    setShareLoading(true)
     try {
-      console.log('发送请求到:', '/api/news-analysis/batch-analyze-selected')
-      const response = await axios.post('/api/news-analysis/batch-analyze-selected', {
-        newsIds: selectedNewsIds
+      const response = await axios.post('/api/news-share/create', {
+        hasExpiry: shareConfig.hasExpiry,
+        expiryTime: shareConfig.hasExpiry ? shareConfig.expiryTime : null,
+        hasPassword: shareConfig.hasPassword,
+        password: shareConfig.hasPassword ? shareConfig.password : null
       })
 
-      console.log('AI分析响应:', response.data)
-
-      console.log('收到响应:', response.data)
-      
       if (response.data.success) {
-        if (response.data.status === 'processing') {
-          // 异步处理模式
-          const taskId = response.data.taskId
-          console.log('收到任务ID:', taskId)
-          setCurrentTaskId(taskId)
-          
-          // 立即设置初始进度状态
-          setAnalysisProgress({
-            status: 'processing',
-            total: response.data.data.total,
-            processed: 0,
-            successCount: 0,
-            errorCount: 0,
-            percentage: 0,
-            currentItem: null,
-            estimatedTimeLeft: null
-          })
-          
-          alert(`AI分析已开始！\n\n正在后台处理 ${response.data.data.total} 条新闻\n您可以在页面上方看到实时进度条`)
-          
-          // 清空选择
-          setSelectedNewsIds([])
-          setSelectAll(false)
-          
-          // 开始检查分析进度
-          console.log('开始检查分析进度，任务ID:', taskId)
-          setTimeout(() => checkAnalysisProgress(taskId), 1000)
-          
-        } else {
-          // 同步处理完成
-          alert(`AI分析完成！\n\n处理了 ${response.data.processed || selectedNewsIds.length} 条新闻\n成功: ${response.data.successCount || 0} 条\n失败: ${response.data.errorCount || 0} 条`)
-          // 刷新新闻列表
-          fetchNews()
-          // 清空选择
-          setSelectedNewsIds([])
-          setSelectAll(false)
-        }
+        setShareLink(response.data.data)
+        const textToCopy = shareConfig.hasPassword
+          ? `链接：${response.data.data.shareUrl}\n密码：${shareConfig.password}`
+          : response.data.data.shareUrl
+        navigator.clipboard.writeText(textToCopy)
+        Message.success('分享链接创建成功！链接和密码已复制到剪贴板')
       } else {
-        console.error('分析失败，响应数据:', response.data)
-        alert('分析失败：' + (response.data.message || '未知错误'))
+        Message.error('创建分享链接失败：' + response.data.message)
       }
     } catch (error) {
-      console.error('批量分析失败:', error)
-      console.error('错误详情:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-        statusText: error.response?.statusText
-      })
-      
-      let errorMessage = '分析失败：'
-      if (error.code === 'ECONNABORTED') {
-        // 请求超时
-        errorMessage += '请求超时\n\n如果您看到此消息，AI分析可能仍在后台进行中\n请等待几分钟后刷新页面查看结果'
-      } else if (error.response) {
-        // 服务器响应了错误状态码
-        errorMessage += `服务器错误 (${error.response.status}): ${error.response.data?.message || error.response.statusText}`
-      } else if (error.request) {
-        // 请求发送了但没有收到响应
-        errorMessage += '网络连接超时或服务器无响应\n\n分析可能仍在后台进行，请稍后刷新页面查看结果'
-      } else {
-        // 其他错误
-        errorMessage += error.message || '未知错误'
-      }
-      
-      alert(errorMessage)
+      console.error('创建分享链接失败:', error)
+      Message.error('创建分享链接失败：' + (error.response?.data?.message || error.message))
     } finally {
-      setBatchAnalysisLoading(false)
+      setShareLoading(false)
     }
   }
 
+  // 复制链接和密码
+  const handleCopyLinkAndPassword = () => {
+    if (shareLink) {
+      const textToCopy = shareConfig.hasPassword
+        ? `链接：${shareLink.shareUrl}\n密码：${shareConfig.password}`
+        : shareLink.shareUrl
+      navigator.clipboard.writeText(textToCopy)
+      Message.success('链接和密码已复制到剪贴板')
+    }
+  }
 
+  const handleBatchAnalysis = async () => {
+    if (selectedNewsIds.length === 0) {
+      Message.warning('请先选择要分析的新闻')
+      return
+    }
+
+    if (!user || !user.id) {
+      Message.warning('用户信息未加载，请刷新页面重试')
+      return
+    }
+
+    Modal.confirm({
+      title: '确认AI分析',
+      content: `确定要对选中的 ${selectedNewsIds.length} 条新闻进行AI重新分析吗？\n\n分析过程可能需要一些时间，请耐心等待。`,
+      onOk: async () => {
+        setBatchAnalysisLoading(true)
+        try {
+          const response = await axios.post('/api/news-analysis/batch-analyze-selected', {
+            newsIds: selectedNewsIds
+          })
+          
+          if (response.data.success) {
+            if (response.data.status === 'processing') {
+              const taskId = response.data.taskId
+              setCurrentTaskId(taskId)
+              
+              setAnalysisProgress({
+                status: 'processing',
+                total: response.data.data.total,
+                processed: 0,
+                successCount: 0,
+                errorCount: 0,
+                percentage: 0,
+                currentItem: null,
+                estimatedTimeLeft: null
+              })
+              
+              Message.success(`AI分析已开始！正在后台处理 ${response.data.data.total} 条新闻`)
+              
+              setSelectedNewsIds([])
+              setSelectAll(false)
+              
+              setTimeout(() => checkAnalysisProgress(taskId), 1000)
+            } else {
+              Message.success(`AI分析完成！处理了 ${response.data.processed || selectedNewsIds.length} 条新闻，成功: ${response.data.successCount || 0} 条，失败: ${response.data.errorCount || 0} 条`)
+              fetchNews()
+              setSelectedNewsIds([])
+              setSelectAll(false)
+            }
+          } else {
+            Message.error('分析失败：' + (response.data.message || '未知错误'))
+          }
+        } catch (error) {
+          console.error('批量分析失败:', error)
+          let errorMessage = '分析失败：'
+          if (error.code === 'ECONNABORTED') {
+            errorMessage += '请求超时。如果您看到此消息，AI分析可能仍在后台进行中，请等待几分钟后刷新页面查看结果'
+          } else if (error.response) {
+            errorMessage += `服务器错误 (${error.response.status}): ${error.response.data?.message || error.response.statusText}`
+          } else if (error.request) {
+            errorMessage += '网络连接超时或服务器无响应。分析可能仍在后台进行，请稍后刷新页面查看结果'
+          } else {
+            errorMessage += error.message || '未知错误'
+          }
+          Message.error(errorMessage)
+        } finally {
+          setBatchAnalysisLoading(false)
+        }
+      }
+    })
+  }
+
+  const columns = [
+    ...(shouldShowCheckbox() ? [{
+      title: (
+        <Checkbox
+          checked={selectAll && newsList.length > 0}
+          onChange={handleSelectAll}
+        />
+      ),
+      width: 60,
+      render: (_, record) => (
+        <Checkbox
+          checked={selectedNewsIds.includes(record.id)}
+          onChange={() => handleSelectNews(record.id)}
+        />
+      )
+    }] : []),
+    {
+      title: '序号',
+      width: 80,
+      render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
+    },
+    {
+      title: '被投企业全称',
+      dataIndex: 'enterprise_full_name',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '关键词',
+      dataIndex: 'keywords',
+      width: 200,
+      render: (keywords) => {
+        if (keywords && Array.isArray(keywords) && keywords.length > 0) {
+          return (
+            <Space wrap>
+              {keywords.slice(0, 3).map((keyword, idx) => (
+                <Tag key={idx} size="small">
+                  {keyword.length > 4 ? `${keyword.substring(0, 4)}...` : keyword}
+                </Tag>
+              ))}
+              {keywords.length > 3 && (
+                <Tag size="small" color="gray">
+                  +{keywords.length - 3}
+                </Tag>
+              )}
+            </Space>
+          )
+        }
+        return '-'
+      }
+    },
+    {
+      title: '发布时间',
+      dataIndex: 'public_time',
+      width: 180,
+      render: (text) => formatDate(text)
+    },
+    {
+      title: '标题',
+      dataIndex: 'title',
+      width: 300,
+      ellipsis: false,
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
+    },
+    {
+      title: '新闻摘要',
+      dataIndex: 'news_abstract',
+      width: 300,
+      ellipsis: false,
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
+    },
+    {
+      title: '文章链接',
+      dataIndex: 'source_url',
+      width: 120,
+      render: (text) => text ? (
+        <Button type="text" size="small" onClick={() => window.open(text, '_blank')}>
+          查看文章
+        </Button>
+      ) : '-'
+    },
+    {
+      title: '公众号名称',
+      dataIndex: 'account_name',
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '微信账号',
+      dataIndex: 'wechat_account',
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    ...(isAdmin ? [{
+      title: '创建时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (text) => formatDate(text)
+    }, {
+      title: '操作',
+      width: 200,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleViewDetail(record)}
+          >
+            详情
+          </Button>
+          {record.content && (
+            <Button
+              type="outline"
+              size="small"
+              status="success"
+              onClick={() => handleViewContent(record)}
+            >
+              正文
+            </Button>
+          )}
+          <Button
+            type="outline"
+            size="small"
+            status="danger"
+            onClick={() => handleDelete(record.id)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }] : [])
+  ]
 
   return (
     <div className="news-info">
-      {/* Tab页签（所有用户都可以看到） */}
-      <div className="admin-tabs">
-        <button 
-          className={`admin-tab-button ${adminActiveTab === 'news' ? 'active' : ''}`}
-          onClick={() => setAdminActiveTab('news')}
-        >
-          舆情信息
-        </button>
-        <button 
-          className={`admin-tab-button ${adminActiveTab === 'accounts' ? 'active' : ''}`}
-          onClick={() => setAdminActiveTab('accounts')}
-        >
-          公众号管理
-        </button>
-        <button 
-          className={`admin-tab-button ${adminActiveTab === 'recipients' ? 'active' : ''}`}
-          onClick={() => {
-            console.log('点击收件管理按钮, 当前 adminActiveTab:', adminActiveTab)
-            setAdminActiveTab('recipients')
-            if (!isAdmin) {
-              setRecipientTab('recipients')
-            }
-            console.log('设置 adminActiveTab 为 recipients')
-          }}
-        >
-          收件管理
-        </button>
-      </div>
+      <Tabs
+        activeTab={adminActiveTab}
+        onChange={setAdminActiveTab}
+        type="line"
+        className="admin-tabs"
+      >
+        <TabPane key="news" title="舆情信息">
+          <Card className="news-card" bordered={false}>
+            <div className="news-header">
+              <h2>
+                舆情信息
+                {isAdmin && <Tag color="orange" style={{ marginLeft: '8px' }}>（管理员 - 全部数据）</Tag>}
+                {!isAdmin && <Tag color="blue" style={{ marginLeft: '8px' }}>（我的企业相关）</Tag>}
+              </h2>
+              <Space>
+                <InputSearch
+                  value={search}
+                  onChange={(value) => setSearch(value)}
+                  placeholder="搜索标题、公众号名称或微信号..."
+                  style={{ width: 400 }}
+                  allowClear
+                  onSearch={handleSearch}
+                />
+                <Button
+                  type="primary"
+                  status="danger"
+                  onClick={() => setShowShareModal(true)}
+                >
+                  发布
+                </Button>
+              </Space>
+            </div>
 
-      {/* 根据选中的tab显示不同内容 */}
-      {adminActiveTab === 'news' && (
-        <>
-          <div className="news-header">
-            <h2>
-              舆情信息
-              {isAdmin && <span className="admin-badge">（管理员 - 全部数据）</span>}
-              {!isAdmin && <span className="user-badge">（我的企业相关）</span>}
-            </h2>
-            <form onSubmit={handleSearch} className="search-form">
-              <input
-                type="text"
-                placeholder="搜索标题、公众号名称或微信号..."
-                value={search}
-                onChange={handleSearchChange}
-                className="search-input"
-              />
-              <button type="submit" className="search-button">
-                搜索
-              </button>
-            </form>
-          </div>
-
-      {/* 管理员统计面板 */}
-      {isAdmin && (
-        <div className="stats-panel">
-          <div className="stats-item">
-            <span className="stats-label">总舆情数量</span>
-            <span className="stats-value">{total.toLocaleString()}</span>
-          </div>
-          <div className="stats-item">
-            <span className="stats-label">当前页显示</span>
-            <span className="stats-value">{newsList.length}</span>
-          </div>
-          <div className="stats-item">
-            <span className="stats-label">总页数</span>
-            <span className="stats-value">{totalPages}</span>
-          </div>
-        </div>
-      )}
-
-      {/* 用户统计面板 */}
-      {!isAdmin && userStats && (
-        <div className="user-stats-panel">
-          <div className="user-stats-item highlight">
-            <span className="stats-label">昨日发布新闻企业个数</span>
-            <span className="stats-value">{userStats.yesterdayAccountsCount || 0}</span>
-          </div>
-          <div className="user-stats-item highlight">
-            <span className="stats-label">昨日累计新闻条数</span>
-            <span className="stats-value">{userStats.yesterdayCount || 0}</span>
-          </div>
-          <div className="user-stats-item highlight-blue">
-            <span className="stats-label">当前总关注被投企业个数</span>
-            <span className="stats-value blue">{userStats.totalEnterprises || 0}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Tab页签 */}
-      <div className="news-tabs">
-        <div className="tabs-left">
-          <button 
-            className={`tab-button ${activeTab === 'yesterday' ? 'active' : ''}`}
-            onClick={() => handleTabChange('yesterday')}
-          >
-            昨日舆情
-          </button>
-          <button 
-            className={`tab-button ${activeTab === 'thisWeek' ? 'active' : ''}`}
-            onClick={() => handleTabChange('thisWeek')}
-          >
-            本周舆情
-          </button>
-          <button 
-            className={`tab-button ${activeTab === 'lastWeek' ? 'active' : ''}`}
-            onClick={() => handleTabChange('lastWeek')}
-          >
-            上周舆情
-          </button>
-          <button 
-            className={`tab-button ${activeTab === 'thisMonth' ? 'active' : ''}`}
-            onClick={() => handleTabChange('thisMonth')}
-          >
-            本月舆情
-          </button>
-          <button 
-            className={`tab-button ${activeTab === 'all' ? 'active' : ''}`}
-            onClick={() => handleTabChange('all')}
-          >
-            全部舆情
-          </button>
-        </div>
-        <div className="tabs-right">
-          {activeTab === 'all' ? (
-            <button 
-              className="export-button"
-              onClick={() => setShowExportModal(true)}
-              disabled={exportLoading}
-            >
-              {exportLoading ? '导出中...' : '导出'}
-            </button>
-          ) : (
-            <button 
-              className="export-button"
-              onClick={() => handleExport()}
-              disabled={exportLoading}
-            >
-              {exportLoading ? '导出中...' : '导出'}
-            </button>
-          )}
-          
-          {/* AI重新分析按钮 - 所有tab都支持 */}
-          {shouldShowCheckbox() && selectedNewsIds.length > 0 && (
-            <button 
-              className="batch-analysis-btn"
-              onClick={handleBatchAnalysis}
-              disabled={batchAnalysisLoading}
-              title="对选中的新闻进行AI重新分析"
-            >
-              {batchAnalysisLoading ? '分析中...' : `AI分析(${selectedNewsIds.length})`}
-            </button>
-          )}
-
-
-          {/* 分析进度条显示 */}
-          {(analysisProgress && analysisProgress.status === 'processing') && (
-            <div className="analysis-progress-container">
-              <div className="progress-header">
-                <span className="progress-title">AI分析进行中</span>
-                <span className="progress-stats">
-                  {analysisProgress?.processed || 0}/{analysisProgress?.total || 0} 
-                  ({analysisProgress?.percentage || 0}%)
-                </span>
-              </div>
-              
-              <div className="progress-bar-container">
-              <div 
-                className="progress-bar-fill" 
-                style={{ width: `${analysisProgress?.percentage || 0}%` }}
-              ></div>
-              </div>
-              
-              <div className="progress-details">
-                {analysisProgress?.currentItem && (
-                  <div className="current-item">
-                    正在处理: {analysisProgress.currentItem.title}
+            {isAdmin && (
+              <Card className="stats-card" style={{ marginBottom: '16px' }}>
+                <Space size="large">
+                  <div>
+                    <div className="stats-label">总舆情数量</div>
+                    <div className="stats-value">{total.toLocaleString()}</div>
                   </div>
-                )}
-                {!analysisProgress?.currentItem && currentTaskId && (
-                  <div className="current-item">
-                    正在初始化分析任务...
+                  <div>
+                    <div className="stats-label">当前页显示</div>
+                    <div className="stats-value">{newsList.length}</div>
                   </div>
-                )}
-                <div className="progress-info">
-                  <span>成功: {analysisProgress?.successCount || 0}</span>
-                  <span>失败: {analysisProgress?.errorCount || 0}</span>
-                  {analysisProgress?.estimatedTimeLeft && (
-                    <span>预计剩余: {Math.floor(analysisProgress.estimatedTimeLeft / 60)}分{analysisProgress.estimatedTimeLeft % 60}秒</span>
-                  )}
-                  <button 
-                    className="cancel-analysis-btn"
-                    onClick={() => cancelAnalysis()}
-                    title="取消分析"
+                  <div>
+                    <div className="stats-label">总页数</div>
+                    <div className="stats-value">{totalPages}</div>
+                  </div>
+                </Space>
+              </Card>
+            )}
+
+            {!isAdmin && userStats && (
+              <Card className="stats-card" style={{ marginBottom: '16px' }}>
+                <Space size="large">
+                  <div>
+                    <div className="stats-label">昨日发布新闻企业个数</div>
+                    <div className="stats-value highlight">{userStats.yesterdayAccountsCount || 0}</div>
+                  </div>
+                  <div>
+                    <div className="stats-label">昨日累计新闻条数</div>
+                    <div className="stats-value highlight">{userStats.yesterdayCount || 0}</div>
+                  </div>
+                  <div>
+                    <div className="stats-label">当前总关注被投企业个数</div>
+                    <div className="stats-value highlight-blue">{userStats.totalEnterprises || 0}</div>
+                  </div>
+                </Space>
+              </Card>
+            )}
+
+            <Tabs
+              activeTab={activeTab}
+              onChange={handleTabChange}
+              type="line"
+              className="time-range-tabs"
+            >
+              <TabPane key="yesterday" title="昨日舆情" />
+              <TabPane key="thisWeek" title="本周舆情" />
+              <TabPane key="lastWeek" title="上周舆情" />
+              <TabPane key="thisMonth" title="本月舆情" />
+              <TabPane key="all" title="全部舆情" />
+            </Tabs>
+
+            <div className="toolbar">
+              <Space>
+                {activeTab === 'all' ? (
+                  <Button
+                    type="outline"
+                    onClick={() => setShowExportModal(true)}
+                    loading={exportLoading}
                   >
-                    取消
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* 分析完成显示 */}
-          {analysisProgress && analysisProgress.status === 'completed' && (
-            <div className="analysis-completed">
-              <span className="completed-icon">✅</span>
-              <span className="completed-text">
-                分析完成！处理了 {analysisProgress.total} 条新闻，
-                成功 {analysisProgress.successCount} 条，
-                失败 {analysisProgress.errorCount} 条
-              </span>
-            </div>
-          )}
-
-          {/* 分析状态显示 */}
-          {analysisStatus && analysisStatus.isProcessing && !analysisProgress && (
-            <div className="analysis-status">
-              <span className="status-text">
-                AI分析进行中: {analysisStatus.analyzed}/{analysisStatus.total}
-              </span>
-              <button 
-                className="status-refresh-btn"
-                onClick={checkAnalysisStatus}
-                title="刷新分析状态"
-              >
-                🔄
-              </button>
-            </div>
-          )}
-
-          {/* 管理员清理功能 */}
-          {isAdmin && (
-            <button 
-              className="clean-associations-btn"
-              onClick={cleanInvalidAssociations}
-              title="清理无效的企业关联"
-            >
-              清理无效关联
-            </button>
-          )}
-
-          {/* 刷新列表按钮 */}
-          <button 
-            className={`btn-primary btn-refresh ${isRefreshing ? 'refreshing' : ''}`}
-            onClick={handleRefreshList}
-            disabled={loading || isRefreshing}
-            title="刷新新闻列表"
-          >
-            {isRefreshing ? '刷新中...' : '刷新'}
-          </button>
-          
-
-        </div>
-      </div>
-
-      {/* 企业相关/全部过滤按钮 */}
-      <div className="enterprise-filter-buttons">
-        <button
-          className={`enterprise-filter-btn ${enterpriseFilter === 'enterprise' ? 'active' : ''}`}
-          onClick={() => {
-            setEnterpriseFilter('enterprise')
-            setCurrentPage(1)
-            setSelectedNewsIds([])
-            setSelectAll(false)
-          }}
-        >
-          企业相关
-        </button>
-        <button
-          className={`enterprise-filter-btn ${enterpriseFilter === 'all' ? 'active' : ''}`}
-          onClick={() => {
-            setEnterpriseFilter('all')
-            setCurrentPage(1)
-            setSelectedNewsIds([])
-            setSelectAll(false)
-          }}
-        >
-          全部
-        </button>
-      </div>
-
-      <div className="table-container">
-        {loading ? (
-          <div className="loading">加载中...</div>
-        ) : (
-          <table className={`news-table ${shouldShowCheckbox() ? 'has-checkbox' : ''}`}>
-            <thead>
-              <tr>
-                {/* 在所有tab中显示复选框列 */}
-                {shouldShowCheckbox() && (
-                  <th className="checkbox-cell">
-                    <input
-                      type="checkbox"
-                      checked={selectAll}
-                      onChange={handleSelectAll}
-                      title="全选/取消全选"
-                    />
-                  </th>
-                )}
-                <th className="sequence-number-cell">序号</th>
-                <th className="enterprise-name-cell">被投企业全称</th>
-                <th className="keywords-cell">关键词</th>
-                <th className="publish-time-cell">发布时间</th>
-                <th className="title-cell">标题</th>
-                <th className="abstract-cell">新闻摘要</th>
-                <th className="article-link-cell">文章链接</th>
-                <th className="account-name-cell">公众号名称</th>
-                <th className="wechat-account-cell">微信账号</th>
-                {isAdmin && <th className="created-time-cell">创建时间</th>}
-                {isAdmin && <th className="action-cell">操作</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {newsList.length === 0 ? (
-                <tr>
-                  <td colSpan={
-                    shouldShowCheckbox() 
-                      ? (isAdmin ? "12" : "10") 
-                      : (isAdmin ? "11" : "9")
-                  } className="empty-data">
-                    {search ? '未找到相关数据' : '暂无数据'}
-                  </td>
-                </tr>
-              ) : (
-                newsList.map((news, index) => (
-                  <tr key={news.id || index}>
-                    {/* 在所有tab中显示复选框 */}
-                    {shouldShowCheckbox() && (
-                      <td className="checkbox-cell">
-                        <input
-                          type="checkbox"
-                          checked={selectedNewsIds.includes(news.id)}
-                          onChange={() => handleSelectNews(news.id)}
-                        />
-                      </td>
-                    )}
-                    {/* 序号 */}
-                    <td className="sequence-number-cell">{(currentPage - 1) * pageSize + index + 1}</td>
-                    {/* 被投企业全称 */}
-                    <td className="enterprise-name-cell" title={news.enterprise_full_name || ''}>
-                      {news.enterprise_full_name || '-'}
-                    </td>
-                    {/* 关键词 */}
-                    <td className="keywords-cell">
-                      {news.keywords && Array.isArray(news.keywords) && news.keywords.length > 0 ? (
-                        <div className="keywords-list">
-                          {news.keywords.slice(0, 3).map((keyword, idx) => (
-                            <span key={idx} className="keyword-tag" title={keyword}>
-                              {keyword.length > 4 ? `${keyword.substring(0, 4)}...` : keyword}
-                            </span>
-                          ))}
-                          {news.keywords.length > 3 && (
-                            <span 
-                              className="keyword-more" 
-                              data-tooltip={news.keywords.slice(3).join(', ')}
-                              title={news.keywords.slice(3).join(', ')}
-                            >
-                              +{news.keywords.length - 3}
-                            </span>
-                          )}
-                        </div>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    {/* 发布时间 */}
-                    <td className="publish-time-cell" title={formatDate(news.public_time)}>
-                      {formatDateWithLineBreak(news.public_time)}
-                    </td>
-                    {/* 标题 */}
-                    <td className="title-cell" title={news.title || ''}>
-                      {news.title || '-'}
-                    </td>
-                    {/* 新闻摘要 */}
-                    <td className="abstract-cell" title={news.news_abstract || ''}>
-                      {news.news_abstract || '-'}
-                    </td>
-                    {/* 文章链接 */}
-                    <td className="article-link-cell">
-                      {news.source_url ? (
-                        <a
-                          href={news.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="article-link"
-                        >
-                          查看文章
-                        </a>
-                      ) : (
-                        '-'
-                      )}
-                    </td>
-                    {/* 公众号名称 */}
-                    <td className="account-name-cell" title={news.account_name || ''}>
-                      {news.account_name || '-'}
-                    </td>
-                    {/* 微信账号 */}
-                    <td className="wechat-account-cell" title={news.wechat_account || ''}>
-                      {news.wechat_account || '-'}
-                    </td>
-                    {/* 创建时间 */}
-                    {isAdmin && (
-                      <td className="created-time-cell" title={formatDate(news.created_at)}>
-                        {formatDateWithLineBreak(news.created_at)}
-                      </td>
-                    )}
-                    {/* 操作 */}
-                    {isAdmin && (
-                      <td className="action-cell">
-                        <div className="action-buttons">
-                          <button 
-                            className="view-detail-btn"
-                            onClick={() => handleViewDetail(news)}
-                            title="查看详情"
-                          >
-                            详情
-                          </button>
-                          {news.content && (
-                            <button 
-                              className="view-content-btn"
-                              onClick={() => handleViewContent(news)}
-                              title="查看正文"
-                            >
-                              正文
-                            </button>
-                          )}
-                          {isAdmin && (
-                            <button 
-                              className="delete-btn"
-                              onClick={() => handleDelete(news.id)}
-                              title="删除"
-                            >
-                              删除
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        )}
-      </div>
-
-      <div className="pagination-container">
-        {/* 每页显示数量选择器 */}
-        <div className="page-size-selector">
-          <label>每页显示：</label>
-          <select 
-            value={pageSize} 
-            onChange={(e) => handlePageSizeChange(parseInt(e.target.value))}
-            className="page-size-select"
-          >
-            <option value={10}>10条</option>
-            <option value={20}>20条</option>
-            <option value={30}>30条</option>
-            <option value={50}>50条</option>
-            <option value={100}>100条</option>
-          </select>
-        </div>
-
-        {/* 分页信息和按钮 */}
-        <Pagination
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setCurrentPage}
-        />
-
-        {/* 总数信息 */}
-        <div className="total-info">
-          共 {total} 条记录
-        </div>
-      </div>
-
-      {/* 详情模态框 */}
-      {showDetailModal && selectedNews && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>舆情详情</h3>
-              <button className="close-btn" onClick={closeModal}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="detail-row">
-                <label>公众号名称：</label>
-                <span>{selectedNews.account_name || '-'}</span>
-              </div>
-              <div className="detail-row">
-                <label>微信账号：</label>
-                <span>{selectedNews.wechat_account || '-'}</span>
-              </div>
-              <div className="detail-row">
-                <label>发布时间：</label>
-                <span>{formatDate(selectedNews.public_time)}</span>
-              </div>
-              <div className="detail-row">
-                <label>创建时间：</label>
-                <span>{formatDate(selectedNews.created_at)}</span>
-              </div>
-              <div className="detail-row">
-                <label>文章标题：</label>
-                <span>{selectedNews.title || '-'}</span>
-              </div>
-              {selectedNews.summary && (
-                <div className="detail-row">
-                  <label>文章摘要：</label>
-                  <span>{selectedNews.summary}</span>
-                </div>
-              )}
-              <div className="detail-row">
-                <label>原文链接：</label>
-                <span>
-                  {selectedNews.source_url ? (
-                    <a href={selectedNews.source_url} target="_blank" rel="noopener noreferrer" className="article-link">
-                      {selectedNews.source_url}
-                    </a>
-                  ) : '-'}
-                </span>
-              </div>
-              {selectedNews.keywords && selectedNews.keywords.length > 0 && (
-                <div className="detail-row">
-                  <label>关键词：</label>
-                  <div className="keywords-list">
-                    {selectedNews.keywords.map((keyword, idx) => (
-                      <span key={idx} className="keyword-tag">
-                        {keyword}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 正文模态框 */}
-      {showContentModal && selectedNews && (
-        <div className="modal-overlay">
-          <div className="modal-content modal-large">
-            <div className="modal-header">
-              <h3>文章正文</h3>
-              <button className="close-btn" onClick={closeModal}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="content-header">
-                <h4>{selectedNews.title}</h4>
-                <p className="content-meta">
-                  {selectedNews.account_name} · {formatDate(selectedNews.public_time)}
-                </p>
-              </div>
-              <div className="content-body">
-                {selectedNews.content ? (
-                  <div dangerouslySetInnerHTML={{ __html: selectedNews.content }} />
+                    导出
+                  </Button>
                 ) : (
-                  <p>暂无正文内容</p>
+                  <Button
+                    type="outline"
+                    onClick={() => handleExport()}
+                    loading={exportLoading}
+                  >
+                    导出
+                  </Button>
                 )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+                
+                {shouldShowCheckbox() && selectedNewsIds.length > 0 && (
+                  <Button
+                    type="outline"
+                    status="warning"
+                    onClick={handleBatchAnalysis}
+                    loading={batchAnalysisLoading}
+                  >
+                    AI分析({selectedNewsIds.length})
+                  </Button>
+                )}
 
-      {/* 导出选择模态框 */}
-      {showExportModal && (
-        <div className="modal-overlay">
-          <div className="modal-content export-modal">
-            <div className="modal-header">
-              <h3>选择导出范围</h3>
-              <button className="close-btn" onClick={() => setShowExportModal(false)}>×</button>
+                {(analysisProgress && analysisProgress.status === 'processing') && (
+                  <Card className="progress-card" style={{ padding: '12px', marginTop: '16px' }}>
+                    <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontWeight: 600 }}>AI分析进行中</span>
+                      <span style={{ fontSize: '14px', color: '#4e5969' }}>
+                        {analysisProgress?.processed || 0}/{analysisProgress?.total || 0} ({analysisProgress?.percentage || 0}%)
+                      </span>
+                    </div>
+                    <Progress
+                      percent={analysisProgress?.percentage || 0}
+                      status="normal"
+                      style={{ marginBottom: '8px' }}
+                    />
+                    <div style={{ fontSize: '12px', color: '#86909c', display: 'flex', justifyContent: 'space-between' }}>
+                      <span>成功: {analysisProgress?.successCount || 0} 失败: {analysisProgress?.errorCount || 0}</span>
+                      <Button type="text" size="mini" onClick={cancelAnalysis}>取消</Button>
+                    </div>
+                  </Card>
+                )}
+
+                {analysisProgress && analysisProgress.status === 'completed' && (
+                  <Card className="completed-card" style={{ padding: '12px', marginTop: '16px', background: '#f0f9ff' }}>
+                    <Space>
+                      <Tag color="green">✅</Tag>
+                      <span>
+                        分析完成！处理了 {analysisProgress.total} 条新闻，成功 {analysisProgress.successCount} 条，失败 {analysisProgress.errorCount} 条
+                      </span>
+                    </Space>
+                  </Card>
+                )}
+
+                {isAdmin && (
+                  <Button
+                    type="outline"
+                    status="warning"
+                    onClick={cleanInvalidAssociations}
+                  >
+                    清理无效关联
+                  </Button>
+                )}
+
+                <Button
+                  onClick={handleRefreshList}
+                  loading={isRefreshing}
+                >
+                  刷新
+                </Button>
+              </Space>
             </div>
-            <div className="modal-body">
-              <div className="export-options">
-                <button 
-                  className="export-option-btn"
-                  onClick={() => handleExport('thisWeek')}
-                  disabled={exportLoading}
-                >
-                  <div className="option-title">本周舆情</div>
-                  <div className="option-desc">导出本周一至今的舆情信息</div>
-                </button>
-                <button 
-                  className="export-option-btn"
-                  onClick={() => handleExport('thisMonth')}
-                  disabled={exportLoading}
-                >
-                  <div className="option-title">本月舆情</div>
-                  <div className="option-desc">导出本月1日至今的舆情信息</div>
-                </button>
-                <button 
-                  className="export-option-btn"
-                  onClick={() => handleExport('lastMonth')}
-                  disabled={exportLoading}
-                >
-                  <div className="option-title">上月舆情</div>
-                  <div className="option-desc">导出上个月的舆情信息</div>
-                </button>
-                <button 
-                  className="export-option-btn"
-                  onClick={() => handleExport('all')}
-                  disabled={exportLoading}
-                >
-                  <div className="option-title">全部舆情</div>
-                  <div className="option-desc">导出所有舆情信息</div>
-                </button>
-              </div>
-              {exportLoading && (
-                <div className="export-loading">
-                  正在生成Excel文件，请稍候...
+
+            <RadioGroup
+              value={enterpriseFilter}
+              onChange={(value) => {
+                setEnterpriseFilter(value)
+                setCurrentPage(1)
+                setSelectedNewsIds([])
+                setSelectAll(false)
+              }}
+              type="button"
+              style={{ marginBottom: '16px' }}
+            >
+              <Radio value="enterprise">企业相关</Radio>
+              <Radio value="all">全部</Radio>
+            </RadioGroup>
+
+            <div className="table-container">
+              {loading && newsList.length === 0 ? (
+                <Skeleton
+                  loading={true}
+                  animation={true}
+                  text={{ rows: 8, width: ['100%'] }}
+                />
+              ) : (
+                <Table
+                  columns={columns}
+                  data={newsList}
+                  loading={loading}
+                  pagination={false}
+                  rowKey="id"
+                  border={{
+                    wrapper: true,
+                    cell: true
+                  }}
+                  stripe
+                />
+              )}
+            </div>
+
+            {total > 0 && (
+              <div className="pagination-wrapper">
+                <div className="page-size-selector">
+                  <span className="page-size-label">每页显示：</span>
+                  <Select
+                    value={pageSize}
+                    onChange={handlePageSizeChange}
+                    style={{ width: 100 }}
+                  >
+                    <Option value={10}>10</Option>
+                    <Option value={20}>20</Option>
+                    <Option value={30}>30</Option>
+                    <Option value={50}>50</Option>
+                    <Option value={100}>100</Option>
+                  </Select>
+                  <span className="page-size-unit">条</span>
                 </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-        </>
-      )}
-
-
-
-      {/* 公众号管理页面（所有用户都可以访问） */}
-      {adminActiveTab === 'accounts' && (
-        <AdditionalAccounts />
-      )}
-
-      {/* 收件管理页面 */}
-      {adminActiveTab === 'recipients' && (
-        <div style={{ marginTop: '24px', minHeight: '400px' }}>
-          {/* 普通用户显示三个tab：收件管理、收发记录、邮件日志 */}
-          {!isAdmin && (
-            <>
-              <div className="email-management-tabs" style={{ marginBottom: '20px' }}>
-                <button
-                  className={`tab-button ${recipientTab === 'recipients' ? 'active' : ''}`}
-                  onClick={() => setRecipientTab('recipients')}
-                >
-                  收件管理
-                </button>
-                <button
-                  className={`tab-button ${recipientTab === 'records' ? 'active' : ''}`}
-                  onClick={() => setRecipientTab('records')}
-                >
-                  收发记录
-                </button>
-                <button
-                  className={`tab-button ${recipientTab === 'logs' ? 'active' : ''}`}
-                  onClick={() => setRecipientTab('logs')}
-                >
-                  邮件日志
-                </button>
+                <Pagination
+                  current={currentPage}
+                  total={total}
+                  pageSize={pageSize}
+                  onChange={(page) => setCurrentPage(page)}
+                  showTotal
+                  showJumper
+                />
               </div>
-              
-              {recipientTab === 'recipients' && (
+            )}
+          </Card>
+        </TabPane>
+
+        <TabPane key="accounts" title="公众号管理">
+          <AdditionalAccounts />
+        </TabPane>
+
+        <TabPane key="recipients" title="收件管理">
+          {!isAdmin ? (
+            <Tabs
+              activeTab={recipientTab}
+              onChange={setRecipientTab}
+              type="line"
+            >
+              <TabPane key="recipients" title="收件管理">
                 <RecipientManagement />
-              )}
-              
-              {recipientTab === 'records' && (
+              </TabPane>
+              <TabPane key="records" title="收发记录">
                 <UserEmailRecords activeTab="records" />
-              )}
-              
-              {recipientTab === 'logs' && (
+              </TabPane>
+              <TabPane key="logs" title="邮件日志">
                 <UserEmailRecords activeTab="logs" />
-              )}
-            </>
-          )}
-          
-          {/* 管理员只显示收件管理 */}
-          {isAdmin && (
+              </TabPane>
+            </Tabs>
+          ) : (
             <RecipientManagement />
           )}
+        </TabPane>
+      </Tabs>
+
+      {/* 分享链接对话框 */}
+      <Modal
+        visible={showShareModal}
+        title="公共链接分享"
+        onCancel={() => {
+          setShowShareModal(false)
+          setShareConfig({
+            enabled: false,
+            hasExpiry: false,
+            expiryTime: '',
+            hasPassword: false,
+            password: ''
+          })
+          setShareLink(null)
+        }}
+        footer={null}
+        style={{ width: 600 }}
+      >
+        <div style={{ padding: '20px 0' }}>
+          {/* 开启/关闭开关 */}
+          <div style={{ marginBottom: '24px', paddingBottom: '20px', borderBottom: '1px solid #e0e0e0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ fontSize: '16px', fontWeight: 500 }}>公共链接分享</span>
+              <Checkbox
+                checked={shareConfig.enabled}
+                onChange={(checked) => {
+                  setShareConfig({
+                    ...shareConfig,
+                    enabled: checked
+                  })
+                  if (!checked) {
+                    setShareLink(null)
+                  }
+                }}
+              />
+            </div>
+            <div style={{ fontSize: '14px', color: '#666', marginTop: '8px' }}>
+              开启后,用户可以通过该链接访问仪表板
+            </div>
+          </div>
+
+          {/* 分享链接显示 */}
+          {shareLink && (
+            <div style={{ marginBottom: '24px', paddingBottom: '20px', borderBottom: '1px solid #e0e0e0' }}>
+              <div style={{ fontSize: '14px', fontWeight: 500, marginBottom: '8px' }}>分享链接：</div>
+              <Space style={{ width: '100%' }}>
+                <Input
+                  value={shareLink.shareUrl}
+                  readOnly
+                  style={{ flex: 1, backgroundColor: '#f5f5f5' }}
+                />
+                <Button onClick={() => {
+                  navigator.clipboard.writeText(shareLink.shareUrl)
+                  Message.success('链接已复制到剪贴板')
+                }}>
+                  复制链接
+                </Button>
+              </Space>
+            </div>
+          )}
+
+          {/* 有效期设置 */}
+          {shareConfig.enabled && (
+            <>
+              <div style={{ marginBottom: '20px' }}>
+                <Checkbox
+                  checked={shareConfig.hasExpiry}
+                  onChange={(checked) => {
+                    setShareConfig({
+                      ...shareConfig,
+                      hasExpiry: checked,
+                      expiryTime: checked ? shareConfig.expiryTime : ''
+                    })
+                  }}
+                >
+                  有效期
+                </Checkbox>
+                {shareConfig.hasExpiry && (
+                  <div style={{ marginTop: '12px' }}>
+                    <Input
+                      type="datetime-local"
+                      value={shareConfig.expiryTime}
+                      onChange={(value) => {
+                        setShareConfig({
+                          ...shareConfig,
+                          expiryTime: value
+                        })
+                      }}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* 密码保护设置 */}
+              <div style={{ marginBottom: '20px' }}>
+                <Checkbox
+                  checked={shareConfig.hasPassword}
+                  onChange={(checked) => {
+                    setShareConfig({
+                      ...shareConfig,
+                      hasPassword: checked,
+                      password: checked ? shareConfig.password : ''
+                    })
+                  }}
+                >
+                  密码保护
+                </Checkbox>
+                {shareConfig.hasPassword && (
+                  <Space style={{ width: '100%', marginTop: '12px' }}>
+                    <Input
+                      value={shareConfig.password}
+                      onChange={(value) => {
+                        setShareConfig({
+                          ...shareConfig,
+                          password: value
+                        })
+                      }}
+                      placeholder="请输入密码"
+                      style={{ flex: 1 }}
+                    />
+                    <Button
+                      onClick={() => {
+                        // 生成随机密码
+                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
+                        let newPassword = ''
+                        for (let i = 0; i < 10; i++) {
+                          newPassword += chars.charAt(Math.floor(Math.random() * chars.length))
+                        }
+                        setShareConfig({
+                          ...shareConfig,
+                          password: newPassword
+                        })
+                      }}
+                    >
+                      重新生成
+                    </Button>
+                  </Space>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* 操作按钮 */}
+          {shareConfig.enabled && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #e0e0e0' }}>
+              <Button
+                onClick={() => {
+                  setShowShareModal(false)
+                  setShareConfig({
+                    enabled: false,
+                    hasExpiry: false,
+                    expiryTime: '',
+                    hasPassword: false,
+                    password: ''
+                  })
+                  setShareLink(null)
+                }}
+              >
+                取消
+              </Button>
+              <Button
+                type="primary"
+                onClick={shareLink ? handleCopyLinkAndPassword : handleCreateShareLink}
+                loading={shareLoading}
+              >
+                {shareLoading ? '创建中...' : shareLink ? '复制链接及密码' : '创建链接'}
+              </Button>
+            </div>
+          )}
         </div>
-      )}
+      </Modal>
+
+      {/* 详情模态框 */}
+      <Modal
+        visible={showDetailModal}
+        title="舆情详情"
+        onCancel={closeModal}
+        footer={null}
+        style={{ width: 600 }}
+      >
+        {selectedNews && (
+          <div className="detail-content">
+            <div className="detail-row">
+              <label>公众号名称：</label>
+              <span>{selectedNews.account_name || '-'}</span>
+            </div>
+            <div className="detail-row">
+              <label>微信账号：</label>
+              <span>{selectedNews.wechat_account || '-'}</span>
+            </div>
+            <div className="detail-row">
+              <label>发布时间：</label>
+              <span>{formatDate(selectedNews.public_time)}</span>
+            </div>
+            <div className="detail-row">
+              <label>创建时间：</label>
+              <span>{formatDate(selectedNews.created_at)}</span>
+            </div>
+            <div className="detail-row">
+              <label>文章标题：</label>
+              <span>{selectedNews.title || '-'}</span>
+            </div>
+            {selectedNews.summary && (
+              <div className="detail-row">
+                <label>文章摘要：</label>
+                <span>{selectedNews.summary}</span>
+              </div>
+            )}
+            <div className="detail-row">
+              <label>原文链接：</label>
+              <span>
+                {selectedNews.source_url ? (
+                  <a href={selectedNews.source_url} target="_blank" rel="noopener noreferrer">
+                    {selectedNews.source_url}
+                  </a>
+                ) : '-'}
+              </span>
+            </div>
+            {selectedNews.keywords && selectedNews.keywords.length > 0 && (
+              <div className="detail-row">
+                <label>关键词：</label>
+                <Space wrap>
+                  {selectedNews.keywords.map((keyword, idx) => (
+                    <Tag key={idx}>{keyword}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* 正文模态框 */}
+      <Modal
+        visible={showContentModal}
+        title="文章正文"
+        onCancel={closeModal}
+        footer={null}
+        style={{ width: 800 }}
+      >
+        {selectedNews && (
+          <div>
+            <div style={{ marginBottom: '16px' }}>
+              <h3>{selectedNews.title}</h3>
+              <p style={{ color: '#86909c', fontSize: '14px' }}>
+                {selectedNews.account_name} · {formatDate(selectedNews.public_time)}
+              </p>
+            </div>
+            <Divider />
+            <div>
+              {selectedNews.content ? (
+                <div dangerouslySetInnerHTML={{ __html: selectedNews.content }} />
+              ) : (
+                <p>暂无正文内容</p>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 导出选择模态框 */}
+      <Modal
+        visible={showExportModal}
+        title="选择导出范围"
+        onCancel={() => setShowExportModal(false)}
+        footer={null}
+        style={{ width: 600 }}
+      >
+        <div className="export-options">
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Button
+              type="outline"
+              long
+              onClick={() => handleExport('thisWeek')}
+              loading={exportLoading}
+            >
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px' }}>本周舆情</div>
+                <div style={{ fontSize: '12px', color: '#86909c' }}>导出本周一至今的舆情信息</div>
+              </div>
+            </Button>
+            <Button
+              type="outline"
+              long
+              onClick={() => handleExport('thisMonth')}
+              loading={exportLoading}
+            >
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px' }}>本月舆情</div>
+                <div style={{ fontSize: '12px', color: '#86909c' }}>导出本月1日至今的舆情信息</div>
+              </div>
+            </Button>
+            <Button
+              type="outline"
+              long
+              onClick={() => handleExport('lastMonth')}
+              loading={exportLoading}
+            >
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px' }}>上月舆情</div>
+                <div style={{ fontSize: '12px', color: '#86909c' }}>导出上个月的舆情信息</div>
+              </div>
+            </Button>
+            <Button
+              type="outline"
+              long
+              onClick={() => handleExport('all')}
+              loading={exportLoading}
+            >
+              <div style={{ textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px' }}>全部舆情</div>
+                <div style={{ fontSize: '12px', color: '#86909c' }}>导出所有舆情信息</div>
+              </div>
+            </Button>
+          </Space>
+        </div>
+      </Modal>
     </div>
   )
 }

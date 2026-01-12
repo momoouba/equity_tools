@@ -1,27 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { Modal, Table, Progress, Spin, Button, Tag } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './TaskProgressModal.css'
 
 function TaskProgressModal({ taskId, taskType, onClose }) {
   const [progress, setProgress] = useState({
-    status: 'processing', // processing, success, failed
+    status: 'processing',
     message: '任务执行中...',
     details: [],
     startTime: new Date(),
     endTime: null,
     duration: null
   })
-  const [logs, setLogs] = useState([])
   const pollingIntervalRef = useRef(null)
-  const maxPollingTime = 10 * 60 * 1000 // 最多轮询10分钟
+  const maxPollingTime = 10 * 60 * 1000
   const startPollingTime = useRef(Date.now())
 
   useEffect(() => {
-    // 开始轮询
     startPolling()
-    
     return () => {
-      // 清理轮询
       if (pollingIntervalRef.current) {
         clearInterval(pollingIntervalRef.current)
       }
@@ -29,12 +26,8 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
   }, [taskId, taskType])
 
   const startPolling = async () => {
-    // 立即获取一次
     await fetchProgress()
-    
-    // 每2秒轮询一次
     pollingIntervalRef.current = setInterval(async () => {
-      // 检查是否超过最大轮询时间
       if (Date.now() - startPollingTime.current > maxPollingTime) {
         stopPolling()
         setProgress(prev => ({
@@ -44,7 +37,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
         }))
         return
       }
-      
       await fetchProgress()
     }, 2000)
   }
@@ -58,11 +50,10 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
 
   const fetchProgress = async () => {
     try {
-      // 获取最新的日志记录
       const response = await axios.get(`/api/scheduled-tasks/${taskId}/logs`, {
         params: {
           page: 1,
-          pageSize: 1, // 只获取最新的一条
+          pageSize: 1,
           task_type: taskType
         }
       })
@@ -70,18 +61,15 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
       if (response.data.success && response.data.data && response.data.data.length > 0) {
         const latestLog = response.data.data[0]
         
-        // 根据任务类型处理不同的日志格式
         if (taskType === 'email') {
-          // 邮件任务日志
           const emailLog = latestLog
           const isSuccess = emailLog.status === 'success'
           const isFailed = emailLog.status === 'failed' || (emailLog.error_message && emailLog.error_message.trim() !== '')
           
-          // 检查日志时间，如果是最近1分钟内的，可能是当前执行的日志
           const logTime = new Date(emailLog.created_at).getTime()
           const now = Date.now()
           const timeDiff = now - logTime
-          const isRecentLog = timeDiff < 60000 // 1分钟内
+          const isRecentLog = timeDiff < 60000
           
           if (isSuccess || (isFailed && isRecentLog)) {
             stopPolling()
@@ -102,7 +90,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
               duration: null
             })
           } else {
-            // 仍在执行中或等待日志
             const elapsed = Math.round((Date.now() - startPollingTime.current) / 1000)
             setProgress(prev => ({
               ...prev,
@@ -115,7 +102,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
             }))
           }
         } else if (taskType === 'news_sync') {
-          // 新闻同步任务日志
           const syncLog = latestLog
           const isSuccess = syncLog.status === 'success'
           const isFailed = syncLog.status === 'failed'
@@ -148,7 +134,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
               duration: duration
             })
           } else if (isProcessing) {
-            // 仍在执行中
             const startTime = new Date(syncLog.start_time)
             const elapsed = Math.round((Date.now() - startTime.getTime()) / 1000)
             
@@ -170,7 +155,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
           }
         }
       } else {
-        // 还没有日志记录，任务可能刚开始
         const elapsed = Math.round((Date.now() - startPollingTime.current) / 1000)
         setProgress(prev => ({
           ...prev,
@@ -186,7 +170,6 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
       }
     } catch (error) {
       console.error('获取执行进度失败:', error)
-      // 不停止轮询，继续尝试
     }
   }
 
@@ -207,82 +190,71 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
     }
   }
 
-  const getStatusColor = () => {
-    switch (progress.status) {
-      case 'success':
-        return '#28a745'
-      case 'failed':
-        return '#dc3545'
-      default:
-        return '#ffc107'
+  const detailColumns = [
+    {
+      title: '项目',
+      dataIndex: 'label',
+      width: 150
+    },
+    {
+      title: '值',
+      dataIndex: 'value',
+      width: 300
     }
-  }
-
-  const getStatusIcon = () => {
-    switch (progress.status) {
-      case 'success':
-        return '✓'
-      case 'failed':
-        return '✗'
-      default:
-        return '⟳'
-    }
-  }
+  ]
 
   return (
-    <div className="task-progress-modal-overlay">
-      <div className="task-progress-modal-content">
-        <div className="task-progress-modal-header">
-          <h3>任务执行进度</h3>
-          {progress.status !== 'processing' && (
-            <button className="close-button" onClick={onClose}>×</button>
-          )}
-        </div>
-        <div className="task-progress-modal-body">
-          <div className="progress-status" style={{ color: getStatusColor() }}>
-            <span className="status-icon" style={{ color: getStatusColor() }}>
-              {progress.status === 'processing' && <span className="spinner">⟳</span>}
-              {progress.status === 'success' && '✓'}
-              {progress.status === 'failed' && '✗'}
-            </span>
-            <span className="status-message">{progress.message}</span>
-          </div>
-          
-          {progress.details && progress.details.length > 0 && (
-            <div className="progress-details">
-              <h4>执行详情</h4>
-              <table className="progress-table">
-                <tbody>
-                  {progress.details.map((detail, index) => (
-                    <tr key={index}>
-                      <td className="detail-label">{detail.label}:</td>
-                      <td className="detail-value">{detail.value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
+    <Modal
+      visible={!!taskId}
+      title="任务执行进度"
+      onCancel={progress.status !== 'processing' ? onClose : undefined}
+      footer={progress.status !== 'processing' ? (
+        <Button type="primary" onClick={onClose}>
+          关闭
+        </Button>
+      ) : null}
+      style={{ width: 600 }}
+      closable={progress.status !== 'processing'}
+    >
+      <div className="task-progress-content">
+        <div className="progress-status">
           {progress.status === 'processing' && (
-            <div className="progress-hint">
-              <p>任务正在执行中，请稍候...</p>
-              <p style={{ fontSize: '12px', color: '#666' }}>
-                此窗口将自动更新进度，任务完成后会自动关闭
-              </p>
-            </div>
+            <Spin style={{ marginRight: 8 }} />
           )}
-
-          {progress.status !== 'processing' && (
-            <div className="progress-actions">
-              <button className="btn-primary" onClick={onClose}>
-                关闭
-              </button>
-            </div>
+          {progress.status === 'success' && (
+            <Tag color="green" style={{ marginRight: 8 }}>成功</Tag>
           )}
+          {progress.status === 'failed' && (
+            <Tag color="red" style={{ marginRight: 8 }}>失败</Tag>
+          )}
+          <span className="status-message">{progress.message}</span>
         </div>
+        
+        {progress.details && progress.details.length > 0 && (
+          <div className="progress-details">
+            <Table
+              columns={detailColumns}
+              data={progress.details}
+              pagination={false}
+              rowKey="label"
+              border={{
+                wrapper: true,
+                cell: true
+              }}
+            />
+          </div>
+        )}
+
+        {progress.status === 'processing' && (
+          <div className="progress-hint">
+            <p>任务正在执行中，请稍候...</p>
+            <p style={{ fontSize: '12px', color: '#86909c', marginTop: '8px' }}>
+              此窗口将自动更新进度，任务完成后可以关闭
+            </p>
+          </div>
+        )}
       </div>
-    </div>
+    </Modal>
   )
 }
 

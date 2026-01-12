@@ -1,44 +1,15 @@
 import React, { useState, useEffect } from 'react'
+import { Form, Input, Button, Message, Upload } from '@arco-design/web-react'
 import axios from '../utils/axios'
-import './SystemConfig.css'
+import './BasicSystemConfig.css'
+
+const FormItem = Form.Item
 
 function BasicSystemConfig() {
-  const [formData, setFormData] = useState({
-    system_name: '',
-    login_background: '',
-    logo: ''
-  })
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState({ type: '', text: '' })
   const [logoPreview, setLogoPreview] = useState('')
   const [backgroundPreview, setBackgroundPreview] = useState('')
-
-  const submitConfig = async (data, { showLoader = false, successText = '', errorText = '保存失败' } = {}) => {
-    if (showLoader) {
-      setLoading(true)
-    }
-    try {
-      const response = await axios.put('/api/system/basic-config', data)
-      if (response.data.success) {
-        if (successText) {
-          setMessage({ type: 'success', text: successText })
-        }
-        window.dispatchEvent(new CustomEvent('systemConfigUpdated'))
-        return true
-      }
-      throw new Error(response.data.message || '保存失败')
-    } catch (error) {
-      console.error('保存系统配置失败:', error)
-      if (errorText) {
-        setMessage({ type: 'error', text: `${errorText}：${error.response?.data?.message || error.message}` })
-      }
-      return false
-    } finally {
-      if (showLoader) {
-        setLoading(false)
-      }
-    }
-  }
 
   useEffect(() => {
     fetchConfig()
@@ -49,7 +20,7 @@ function BasicSystemConfig() {
       const response = await axios.get('/api/system/basic-config')
       if (response.data.success) {
         const config = response.data.data || {}
-        setFormData({
+        form.setFieldsValue({
           system_name: config.system_name || '',
           login_background: config.login_background || '',
           logo: config.logo || ''
@@ -66,29 +37,15 @@ function BasicSystemConfig() {
     }
   }
 
-  const handleInputChange = (e) => {
-    const { name, value } = e.target
-    setFormData({
-      ...formData,
-      [name]: value
-    })
-    setMessage({ type: '', text: '' })
-  }
-
-  const handleLogoUpload = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    // 验证文件类型
+  const handleLogoUpload = async (file) => {
     if (!file.type.startsWith('image/')) {
-      setMessage({ type: 'error', text: '请上传图片文件' })
-      return
+      Message.error('请上传图片文件')
+      return false
     }
 
-    // 验证文件大小（最大5MB）
     if (file.size > 5 * 1024 * 1024) {
-      setMessage({ type: 'error', text: '图片大小不能超过5MB' })
-      return
+      Message.error('图片大小不能超过5MB')
+      return false
     }
 
     const formDataToSend = new FormData()
@@ -104,38 +61,32 @@ function BasicSystemConfig() {
       })
       if (response.data.success) {
         const updatedData = {
-          ...formData,
+          system_name: form.getFieldValue('system_name'),
+          login_background: form.getFieldValue('login_background'),
           logo: response.data.filename
         }
-        setFormData(updatedData)
+        form.setFieldsValue({ logo: response.data.filename })
         setLogoPreview(`/api/uploads/${response.data.filename}`)
-        await submitConfig(updatedData, {
-          successText: 'Logo上传并保存成功',
-          errorText: 'Logo保存失败'
-        })
+        await submitConfig(updatedData, 'Logo上传并保存成功', 'Logo保存失败')
       }
     } catch (error) {
       console.error('上传Logo失败:', error)
-      setMessage({ type: 'error', text: '上传Logo失败：' + (error.response?.data?.message || '未知错误') })
+      Message.error('上传Logo失败：' + (error.response?.data?.message || '未知错误'))
     } finally {
       setLoading(false)
     }
+    return false
   }
 
-  const handleBackgroundUpload = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
-    // 验证文件类型
+  const handleBackgroundUpload = async (file) => {
     if (!file.type.startsWith('image/')) {
-      setMessage({ type: 'error', text: '请上传图片文件' })
-      return
+      Message.error('请上传图片文件')
+      return false
     }
 
-    // 验证文件大小（最大10MB）
     if (file.size > 10 * 1024 * 1024) {
-      setMessage({ type: 'error', text: '图片大小不能超过10MB' })
-      return
+      Message.error('图片大小不能超过10MB')
+      return false
     }
 
     const formDataToSend = new FormData()
@@ -151,132 +102,132 @@ function BasicSystemConfig() {
       })
       if (response.data.success) {
         const updatedData = {
-          ...formData,
-          login_background: response.data.filename
+          system_name: form.getFieldValue('system_name'),
+          login_background: response.data.filename,
+          logo: form.getFieldValue('logo')
         }
-        setFormData(updatedData)
+        form.setFieldsValue({ login_background: response.data.filename })
         setBackgroundPreview(`/api/uploads/${response.data.filename}`)
-        await submitConfig(updatedData, {
-          successText: '登录页底图上传并保存成功',
-          errorText: '登录页底图保存失败'
-        })
+        await submitConfig(updatedData, '登录页底图上传并保存成功', '登录页底图保存失败')
       }
     } catch (error) {
       console.error('上传底图失败:', error)
-      setMessage({ type: 'error', text: '上传底图失败：' + (error.response?.data?.message || '未知错误') })
+      Message.error('上传底图失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setLoading(false)
+    }
+    return false
+  }
+
+  const submitConfig = async (data, successText, errorText) => {
+    try {
+      const response = await axios.put('/api/system/basic-config', data)
+      if (response.data.success) {
+        if (successText) {
+          Message.success(successText)
+        }
+        window.dispatchEvent(new CustomEvent('systemConfigUpdated'))
+        return true
+      }
+      throw new Error(response.data.message || '保存失败')
+    } catch (error) {
+      console.error('保存系统配置失败:', error)
+      if (errorText) {
+        Message.error(`${errorText}：${error.response?.data?.message || error.message}`)
+      }
+      return false
+    }
+  }
+
+  const handleSubmit = async (values) => {
+    setLoading(true)
+    try {
+      await submitConfig(values, '系统配置保存成功', '保存失败')
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setMessage({ type: '', text: '' })
-    await submitConfig(formData, { showLoader: true, successText: '系统配置保存成功' })
-  }
-
   return (
-    <div className="config-form">
-      {message.text && (
-        <div className={`message ${message.type}`}>
-          {message.text}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit}>
+    <div className="basic-system-config">
+      <Form
+        form={form}
+        onSubmit={handleSubmit}
+        layout="vertical"
+        autoComplete="off"
+      >
         <div className="config-section">
           <h3>系统基本信息</h3>
           
-          <div className="form-group">
-            <label>系统名称</label>
-            <input
-              type="text"
-              name="system_name"
-              value={formData.system_name}
-              onChange={handleInputChange}
-              placeholder="请输入系统名称"
-            />
+          <FormItem
+            label="系统名称"
+            field="system_name"
+          >
+            <Input placeholder="请输入系统名称" />
             <div className="form-hint">此名称将显示在页面顶部栏</div>
-          </div>
+          </FormItem>
 
-          <div className="form-group">
-            <label>系统Logo</label>
-            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+          <FormItem
+            label="系统Logo"
+            field="logo"
+          >
+            <div className="upload-preview-container">
               {logoPreview && (
-                <div style={{ 
-                  width: '120px', 
-                  height: '120px', 
-                  border: '1px solid #e0e0e0', 
-                  borderRadius: '8px',
-                  padding: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: '#fafafa'
-                }}>
+                <div className="preview-image">
                   <img 
                     src={logoPreview} 
                     alt="Logo预览" 
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
                   />
                 </div>
               )}
-              <div style={{ flex: 1 }}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleLogoUpload}
-                  disabled={loading}
-                  style={{ marginBottom: '8px' }}
-                />
-                <div className="form-hint">支持JPG、PNG格式，建议尺寸：120x120px，最大5MB</div>
-              </div>
+              <Upload
+                accept="image/*"
+                beforeUpload={handleLogoUpload}
+                showUploadList={false}
+                disabled={loading}
+              >
+                <Button type="outline" loading={loading}>
+                  上传Logo
+                </Button>
+              </Upload>
             </div>
-          </div>
+            <div className="form-hint">支持JPG、PNG格式，建议尺寸：120x120px，最大5MB</div>
+          </FormItem>
 
-          <div className="form-group">
-            <label>登录页底图</label>
-            <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+          <FormItem
+            label="登录页底图"
+            field="login_background"
+          >
+            <div className="upload-preview-container">
               {backgroundPreview && (
-                <div style={{ 
-                  width: '200px', 
-                  height: '120px', 
-                  border: '1px solid #e0e0e0', 
-                  borderRadius: '8px',
-                  padding: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: '#fafafa',
-                  overflow: 'hidden'
-                }}>
+                <div className="preview-image background-preview">
                   <img 
                     src={backgroundPreview} 
                     alt="底图预览" 
-                    style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'cover' }}
                   />
                 </div>
               )}
-              <div style={{ flex: 1 }}>
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleBackgroundUpload}
-                  disabled={loading}
-                  style={{ marginBottom: '8px' }}
-                />
-                <div className="form-hint">支持JPG、PNG格式，建议尺寸：1920x1080px，最大10MB</div>
-              </div>
+              <Upload
+                accept="image/*"
+                beforeUpload={handleBackgroundUpload}
+                showUploadList={false}
+                disabled={loading}
+              >
+                <Button type="outline" loading={loading}>
+                  上传底图
+                </Button>
+              </Upload>
             </div>
-          </div>
+            <div className="form-hint">支持JPG、PNG格式，建议尺寸：1920x1080px，最大10MB</div>
+          </FormItem>
         </div>
 
         <div className="form-actions">
-          <button type="submit" className="btn-save" disabled={loading}>
-            {loading ? '保存中...' : '保存配置'}
-          </button>
+          <Button type="primary" htmlType="submit" loading={loading}>
+            保存配置
+          </Button>
         </div>
-      </form>
+      </Form>
     </div>
   )
 }

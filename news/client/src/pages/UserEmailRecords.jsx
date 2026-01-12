@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Pagination, Message, Skeleton, Card, Tabs, Tag } from '@arco-design/web-react'
 import axios from '../utils/axios'
-import Pagination from '../components/Pagination'
-import './EmailManagement.css'
+import './UserEmailRecords.css'
+
+const TabPane = Tabs.TabPane
 
 function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
   const [emailConfigId, setEmailConfigId] = useState('')
-  const [activeTab, setActiveTab] = useState(propActiveTab) // 'records' 或 'logs'
+  const [activeTab, setActiveTab] = useState(propActiveTab)
   const [records, setRecords] = useState([])
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(false)
@@ -16,7 +18,6 @@ function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
   const pageSize = 10
 
   useEffect(() => {
-    // 获取"新闻舆情"应用的邮件配置
     fetchNewsEmailConfig()
   }, [])
 
@@ -40,7 +41,6 @@ function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
         params: { page: 1, pageSize: 100 }
       })
       if (response.data.success) {
-        // 查找"新闻舆情"应用的邮件配置
         const newsConfig = response.data.data.find(config => config.app_name === '新闻舆情')
         if (newsConfig) {
           setEmailConfigId(newsConfig.id)
@@ -68,6 +68,7 @@ function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
       }
     } catch (error) {
       console.error('获取邮件记录失败:', error)
+      Message.error('获取邮件记录失败')
     } finally {
       setLoading(false)
     }
@@ -90,6 +91,7 @@ function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
       }
     } catch (error) {
       console.error('获取邮件日志失败:', error)
+      Message.error('获取邮件日志失败')
     } finally {
       setLoading(false)
     }
@@ -112,121 +114,216 @@ function UserEmailRecords({ activeTab: propActiveTab = 'records' }) {
     }
   }
 
-  const getStatusBadge = (status) => {
-    return status === 'success' ? (
-      <span className="status-badge active">成功</span>
-    ) : (
-      <span className="status-badge inactive">失败</span>
-    )
-  }
-
   const getOperationTypeName = (type) => {
     return type === 'send' ? '发送' : '接收'
   }
 
+  const recordsColumns = [
+    {
+      title: '操作类型',
+      dataIndex: 'operation_type',
+      width: 120,
+      render: (type) => getOperationTypeName(type)
+    },
+    {
+      title: '发件人',
+      dataIndex: 'from_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '收件人',
+      dataIndex: 'to_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '抄送',
+      dataIndex: 'cc_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '密送',
+      dataIndex: 'bcc_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '主题',
+      dataIndex: 'subject',
+      width: 250,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (status) => (
+        <Tag color={status === 'success' ? 'green' : 'red'}>
+          {status === 'success' ? '成功' : '失败'}
+        </Tag>
+      )
+    },
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (text) => formatDate(text)
+    }
+  ]
+
+  const logsColumns = [
+    {
+      title: '操作类型',
+      dataIndex: 'operation_type',
+      width: 120,
+      render: (type) => getOperationTypeName(type)
+    },
+    {
+      title: '发件人',
+      dataIndex: 'from_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '收件人',
+      dataIndex: 'to_email',
+      width: 200,
+      render: (text) => text || '-'
+    },
+    {
+      title: '主题',
+      dataIndex: 'subject',
+      width: 250,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (status) => (
+        <Tag color={status === 'success' ? 'green' : 'red'}>
+          {status === 'success' ? '成功' : '失败'}
+        </Tag>
+      )
+    },
+    {
+      title: '错误信息',
+      dataIndex: 'error_message',
+      width: 300,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (text) => formatDate(text)
+    }
+  ]
+
   if (!emailConfigId) {
     return (
-      <div style={{ marginTop: '24px', padding: '20px', background: 'white', borderRadius: '8px' }}>
-        <p style={{ color: '#999', textAlign: 'center' }}>未找到"新闻舆情"应用的邮件配置</p>
-      </div>
+      <Card className="empty-card">
+        <p style={{ color: '#86909c', textAlign: 'center', margin: 0 }}>
+          未找到"新闻舆情"应用的邮件配置
+        </p>
+      </Card>
     )
   }
 
   return (
-    <div>
-      <div className="email-management-content">
-        {activeTab === 'records' ? (
-          <div className="records-tab">
-            {loading ? (
-              <div className="loading">加载中...</div>
-            ) : records.length === 0 ? (
-              <div className="empty-data">暂无邮件记录</div>
-            ) : (
-              <>
-                <table className="email-table">
-                  <thead>
-                    <tr>
-                      <th>操作类型</th>
-                      <th>发件人</th>
-                      <th>收件人</th>
-                      <th>抄送</th>
-                      <th>密送</th>
-                      <th>主题</th>
-                      <th>状态</th>
-                      <th>时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {records.map((record) => (
-                      <tr key={record.id}>
-                        <td>{getOperationTypeName(record.operation_type)}</td>
-                        <td>{record.from_email || '-'}</td>
-                        <td>{record.to_email || '-'}</td>
-                        <td>{record.cc_email || '-'}</td>
-                        <td>{record.bcc_email || '-'}</td>
-                        <td>{record.subject || '-'}</td>
-                        <td>{getStatusBadge(record.status)}</td>
-                        <td>{formatDate(record.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {total > 0 && (
-                  <Pagination
-                    currentPage={currentPage}
-                    totalPages={Math.ceil(total / pageSize)}
-                    onPageChange={setCurrentPage}
-                  />
-                )}
-              </>
+    <div className="user-email-records">
+      <Card className="management-card" bordered={false}>
+        <Tabs
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          type="line"
+          className="email-tabs"
+        >
+          <TabPane key="records" title="收发记录">
+            <div className="table-container">
+              {loading && records.length === 0 ? (
+                <Skeleton
+                  loading={true}
+                  animation={true}
+                  text={{ rows: 8, width: ['100%'] }}
+                />
+              ) : (
+                <Table
+                  columns={recordsColumns}
+                  data={records}
+                  loading={loading}
+                  pagination={false}
+                  rowKey="id"
+                  border={{
+                    wrapper: true,
+                    cell: true
+                  }}
+                  stripe
+                />
+              )}
+            </div>
+
+            {total > 0 && (
+              <div className="pagination-wrapper">
+                <Pagination
+                  current={currentPage}
+                  total={total}
+                  pageSize={pageSize}
+                  onChange={(page) => setCurrentPage(page)}
+                  showTotal
+                  showJumper
+                />
+              </div>
             )}
-          </div>
-        ) : (
-          <div className="logs-tab">
-            {loading ? (
-              <div className="loading">加载中...</div>
-            ) : logs.length === 0 ? (
-              <div className="empty-data">暂无邮件日志</div>
-            ) : (
-              <>
-                <table className="email-table">
-                  <thead>
-                    <tr>
-                      <th>操作类型</th>
-                      <th>发件人</th>
-                      <th>收件人</th>
-                      <th>主题</th>
-                      <th>状态</th>
-                      <th>错误信息</th>
-                      <th>时间</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {logs.map((log) => (
-                      <tr key={log.id}>
-                        <td>{getOperationTypeName(log.operation_type)}</td>
-                        <td>{log.from_email || '-'}</td>
-                        <td>{log.to_email || '-'}</td>
-                        <td>{log.subject || '-'}</td>
-                        <td>{getStatusBadge(log.status)}</td>
-                        <td className="error-message">{log.error_message || '-'}</td>
-                        <td>{formatDate(log.created_at)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {logTotal > 0 && (
-                  <Pagination
-                    currentPage={logCurrentPage}
-                    totalPages={Math.ceil(logTotal / pageSize)}
-                    onPageChange={setLogCurrentPage}
-                  />
-                )}
-              </>
+          </TabPane>
+
+          <TabPane key="logs" title="邮件日志">
+            <div className="table-container">
+              {loading && logs.length === 0 ? (
+                <Skeleton
+                  loading={true}
+                  animation={true}
+                  text={{ rows: 8, width: ['100%'] }}
+                />
+              ) : (
+                <Table
+                  columns={logsColumns}
+                  data={logs}
+                  loading={loading}
+                  pagination={false}
+                  rowKey="id"
+                  border={{
+                    wrapper: true,
+                    cell: true
+                  }}
+                  stripe
+                />
+              )}
+            </div>
+
+            {logTotal > 0 && (
+              <div className="pagination-wrapper">
+                <Pagination
+                  current={logCurrentPage}
+                  total={logTotal}
+                  pageSize={pageSize}
+                  onChange={(page) => setLogCurrentPage(page)}
+                  showTotal
+                  showJumper
+                />
+              </div>
             )}
-          </div>
-        )}
-      </div>
+          </TabPane>
+        </Tabs>
+      </Card>
     </div>
   )
 }

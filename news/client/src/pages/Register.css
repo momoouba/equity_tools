@@ -1,3 +1,5 @@
+/* Register 页面样式 - Arco Design 规范 */
+
 .register-container {
   min-height: 100vh;
   display: flex;
@@ -30,92 +32,21 @@
 
 .register-container .register-title {
   font-size: 24px;
-  font-weight: bold;
-  color: #1a1a1a;
+  font-weight: 600;
+  color: #1d2129;
   margin-bottom: 32px;
   text-align: center;
-}
-
-.register-container .register-form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.register-container .form-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.register-container .form-group label {
-  font-size: 14px;
-  color: #333;
-  font-weight: 500;
-}
-
-.register-container .form-group input {
-  padding: 12px 16px;
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  font-size: 14px;
-  transition: all 0.3s ease;
-  background: #fafafa;
-}
-
-.register-container .form-group input:focus {
-  outline: none;
-  border-color: #4a90e2;
-  background: white;
-  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
-}
-
-.register-container .register-button {
-  margin-top: 8px;
-  padding: 14px;
-  background: #357abd;
-  color: white;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.register-container .register-button:hover:not(:disabled) {
-  background: #2c5f8f;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(53, 122, 189, 0.4);
-}
-
-.register-container .register-button:active:not(:disabled) {
-  transform: translateY(0);
-}
-
-.register-container .register-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.register-container .error-message {
-  color: #e74c3c;
-  font-size: 14px;
-  text-align: center;
-  padding: 8px;
-  background: #fee;
-  border-radius: 6px;
 }
 
 .register-container .login-link {
   text-align: center;
   font-size: 14px;
-  color: #666;
-  margin-top: 8px;
+  color: #86909c;
+  margin-top: 16px;
 }
 
 .register-container .login-link a {
-  color: #4a90e2;
+  color: #165dff;
   text-decoration: none;
   font-weight: 500;
 }
@@ -123,3 +54,4 @@
 .register-container .login-link a:hover {
   text-decoration: underline;
 }
+

@@ -16,7 +16,7 @@ function formatDate(date) {
 }
 
 /**
- * 获取邮件发送的时间范围（与新闻同步一致：从节假日前的一个工作日到当前工作日）
+ * 获取邮件发送的时间范围（基于创建时间：今天获取到的新闻）
  */
 async function getEmailTimeRange() {
   const { getEmailTimeRange: getEmailTimeRangeFromScheduled } = require('./scheduledEmailTasks');
@@ -57,22 +57,22 @@ function getYesterdayTimeRange() {
 }
 
 /**
- * 查询新闻，按企业分组（时间范围：从节假日前的一个工作日到当前工作日，与新闻同步一致）
+ * 查询新闻，按企业分组（时间范围：基于创建时间，今天获取到的新闻）
  */
 async function getYesterdayNewsByEnterprise() {
   const { from, to } = await getEmailTimeRange();
   
-  console.log(`查询新闻（与新闻同步一致的时间范围）: ${from} 到 ${to}`);
+  console.log(`查询新闻（基于创建时间，今天获取到的新闻）: ${from} 到 ${to}`);
   
-  // 查询前一天的所有新闻（有企业全称的）
+  // 查询今天获取的所有新闻（有企业全称的）
   const newsList = await db.query(
     `SELECT id, title, enterprise_full_name, news_sentiment, keywords, 
             news_abstract, public_time, account_name, source_url, created_at
      FROM news_detail 
      WHERE enterprise_full_name IS NOT NULL 
      AND enterprise_full_name != ''
-     AND public_time >= ? 
-     AND public_time < ?
+     AND created_at >= ? 
+     AND created_at < ?
      AND delete_mark = 0
      ORDER BY enterprise_full_name, public_time DESC`,
     [from, to]
@@ -455,7 +455,7 @@ async function sendNewsEmailToRecipient(recipientId) {
       throw new Error('收件管理配置未启用');
     }
     
-    // 获取前一天的新闻（按企业分组）
+    // 获取今天获取到的新闻（按企业分组）
     const newsByEnterprise = await getYesterdayNewsByEnterprise();
     
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
@@ -522,11 +522,11 @@ async function sendNewsEmailsToAllRecipients() {
     
     console.log(`找到 ${recipients.length} 个启用的收件管理配置`);
     
-    // 获取前一天的新闻（按企业分组）
+    // 获取今天获取到的新闻（按企业分组）
     const newsByEnterprise = await getYesterdayNewsByEnterprise();
     
     if (Object.keys(newsByEnterprise).length === 0) {
-      console.log('前一天没有相关企业的新闻，将发送空数据通知邮件');
+      console.log('今天没有获取到相关企业的新闻，将发送空数据通知邮件');
     }
     
     // 获取邮件配置（使用第一个可用的配置，或者根据应用ID匹配）

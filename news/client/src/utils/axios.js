@@ -1,7 +1,18 @@
 import axios from 'axios'
 
 // 创建axios实例
+// 如果当前访问的是后端端口（3001），API请求也应该指向同一端口
+const getBaseURL = () => {
+  // 开发环境：如果当前在localhost:3001，API也指向3001
+  if (window.location.hostname === 'localhost' && window.location.port === '3001') {
+    return 'http://localhost:3001'
+  }
+  // 其他情况：使用相对路径，由代理或服务器处理
+  return ''
+}
+
 const axiosInstance = axios.create({
+  baseURL: getBaseURL(),
   timeout: 120000 // 增加到120秒，适应AI分析的时间需求
 })
 

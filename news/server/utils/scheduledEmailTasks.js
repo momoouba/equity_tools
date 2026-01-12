@@ -82,7 +82,8 @@ async function findPreviousWorkday(date) {
 }
 
 /**
- * 获取邮件发送的时间范围（与新闻同步一致：从节假日前的一个工作日到当前工作日）
+ * 获取邮件发送的时间范围（基于创建时间：今天获取到的新闻）
+ * 说明：节假日后第一天获取到的新闻，本身就包含了节假日期间的新闻，所以只需要筛选今天创建（获取）的新闻
  */
 async function getEmailTimeRange() {
   const now = new Date();
@@ -103,8 +104,9 @@ async function getEmailTimeRange() {
   const todayStr = `${localYear}-${String(localMonth).padStart(2, '0')}-${String(localDay).padStart(2, '0')}T00:00:00+08:00`;
   const today = new Date(todayStr);
   
-  // 查找节假日前的一个工作日
-  const previousWorkday = await findPreviousWorkday(today);
+  // 明天的00:00:00（作为结束时间，不包含明天）
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
   
   const formatDate = (date) => {
     const year = date.getFullYear();
@@ -117,8 +119,8 @@ async function getEmailTimeRange() {
   };
   
   return {
-    from: formatDate(previousWorkday),
-    to: formatDate(today)
+    from: formatDate(today),      // 今天00:00:00
+    to: formatDate(tomorrow)       // 明天00:00:00（不包含）
   };
 }
 
@@ -167,7 +169,7 @@ function getYesterdayTimeRange() {
 
 /**
  * 获取用户可见的舆情信息（根据用户权限过滤）
- * 时间范围：从节假日前的一个工作日到当前工作日（与新闻同步一致）
+ * 时间范围：今天创建（获取）的新闻（基于 created_at）
  */
 async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
   console.log(`[邮件发送] ========== 开始获取用户可见的舆情信息 ==========`);
@@ -177,7 +179,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
   }
   
   const { from, to } = await getEmailTimeRange();
-  console.log(`[邮件发送] 时间范围: ${from} 到 ${to}`);
+  console.log(`[邮件发送] 时间范围（基于创建时间）: ${from} 到 ${to}`);
   
   // 先检查用户角色（管理员自动拥有所有权限）
   const users = await db.query('SELECT role FROM users WHERE id = ?', [userId]);
@@ -250,12 +252,12 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     const testTimeQuery = await db.query(
       `SELECT COUNT(*) as count 
        FROM news_detail 
-       WHERE public_time >= ? 
-       AND public_time < ?
+       WHERE created_at >= ? 
+       AND created_at < ?
        AND delete_mark = 0`,
       [from, to]
     );
-    console.log(`[邮件发送] 管理员：时间范围内总新闻数：${testTimeQuery[0]?.count || 0}`);
+    console.log(`[邮件发送] 管理员：时间范围内总新闻数（基于创建时间）：${testTimeQuery[0]?.count || 0}`);
     
     // 测试一下公众号ID匹配查询
     if (uniqueAccountIds.length > 0) {
@@ -273,12 +275,12 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE wechat_account IN (${placeholders})
-         AND public_time >= ? 
-         AND public_time < ?
+         AND created_at >= ? 
+         AND created_at < ?
          AND delete_mark = 0`,
         [...uniqueAccountIds, from, to]
       );
-      console.log(`[邮件发送] 管理员：公众号ID匹配 + 时间范围的新闻数：${testAccountTimeQuery[0]?.count || 0}`);
+      console.log(`[邮件发送] 管理员：公众号ID匹配 + 时间范围的新闻数（基于创建时间）：${testAccountTimeQuery[0]?.count || 0}`);
     }
     
     // 特别检查量子位公众号ID是否在查询列表中
@@ -356,8 +358,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
             OR nd.keywords LIKE '%获奖%'
           ))
        )
-       AND nd.public_time >= ? 
-       AND nd.public_time < ?
+       AND nd.created_at >= ? 
+       AND nd.created_at < ?
        AND nd.delete_mark = 0
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
       [...uniqueAccountIds, from, to]
@@ -369,13 +371,13 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE wechat_account = ?
-         AND public_time >= ? 
-         AND public_time < ?
+         AND created_at >= ? 
+         AND created_at < ?
          AND delete_mark = 0`,
         [quantumBitAccountId, from, to]
       );
       const quantumBitCount = quantumBitTestQuery[0]?.count || 0;
-      console.log(`[邮件发送] 时间范围内量子位公众号(${quantumBitAccountId})的新闻总数: ${quantumBitCount}`);
+      console.log(`[邮件发送] 时间范围内量子位公众号(${quantumBitAccountId})的新闻总数（基于创建时间）: ${quantumBitCount}`);
       
       if (quantumBitCount > 0) {
         const quantumBitNewsSample = await db.query(
@@ -383,8 +385,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
                   news_abstract, summary, content, public_time, APItype
            FROM news_detail 
            WHERE wechat_account = ?
-           AND public_time >= ? 
-           AND public_time < ?
+           AND created_at >= ? 
+           AND created_at < ?
            AND delete_mark = 0
            ORDER BY public_time DESC
            LIMIT 5`,
@@ -547,8 +549,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               nd.APItype, nd.news_category
        FROM news_detail nd
        WHERE nd.wechat_account IN (${placeholders})
-       AND nd.public_time >= ? 
-       AND nd.public_time < ?
+       AND nd.created_at >= ? 
+       AND nd.created_at < ?
        AND nd.delete_mark = 0
        ORDER BY 
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
@@ -1370,10 +1372,10 @@ async function executeEmailTask(recipientId) {
     
     // 如果收件人ID是14004，额外添加涉及荣誉奖项关键词的企查查新闻
     if (recipientId === '14004') {
-      console.log(`[邮件发送] 收件人ID为14004，额外添加荣誉奖项关键词的企查查新闻`);
+      console.log(`[邮件发送] 收件人ID为14004，额外添加荣誉奖项关键词的企查查新闻（基于创建时间）`);
       const { from, to } = await getEmailTimeRange();
       
-      // 查询包含荣誉奖项关键词的企查查新闻
+      // 查询包含荣誉奖项关键词的企查查新闻（基于创建时间筛选）
       // 条件：类别为"荣誉奖项"或关键词/标题/摘要中包含荣誉奖项相关关键词
       const honorAwardNews = await db.query(
         `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
@@ -1409,8 +1411,8 @@ async function executeEmailTask(recipientId) {
              OR nd.news_abstract LIKE '%榜单%'
            )
          )
-         AND nd.public_time >= ? 
-         AND nd.public_time < ?
+         AND nd.created_at >= ? 
+         AND nd.created_at < ?
          AND nd.delete_mark = 0
          -- 过滤掉摘要和正文都为空的数据
          AND (
@@ -1422,7 +1424,7 @@ async function executeEmailTask(recipientId) {
         [from, to]
       );
       
-      console.log(`[邮件发送] 查询到 ${honorAwardNews.length} 条荣誉奖项相关的企查查新闻`);
+      console.log(`[邮件发送] 查询到 ${honorAwardNews.length} 条荣誉奖项相关的企查查新闻（基于创建时间）`);
       
       // 合并新闻列表，去重（根据id）
       const existingIds = new Set(newsList.map(n => n.id));
@@ -1438,7 +1440,7 @@ async function executeEmailTask(recipientId) {
     
     // 即使没有数据，也发送邮件通知用户
     if (newsList.length === 0) {
-      console.log(`用户 ${recipient.user_id} 昨日没有可见的舆情信息，将发送空数据通知邮件`);
+      console.log(`用户 ${recipient.user_id} 今天没有获取到可见的舆情信息，将发送空数据通知邮件`);
     }
     
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）

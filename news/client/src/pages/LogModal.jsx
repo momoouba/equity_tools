@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { Modal, Table, Message, Spin } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './LogModal.css'
 
@@ -37,7 +38,7 @@ function LogModal({ type, id, onClose }) {
       }
     } catch (error) {
       console.error('获取日志失败:', error)
-      alert('获取日志失败')
+      Message.error('获取日志失败')
     } finally {
       setLoading(false)
     }
@@ -45,20 +46,16 @@ function LogModal({ type, id, onClose }) {
 
   const getFieldName = (field) => {
     const fieldMap = {
-      // invested_enterprises 字段
       project_abbreviation: '项目简称',
       enterprise_full_name: '企业全称',
       unified_credit_code: '统一信用代码',
       wechat_official_account_id: '微信公众号id',
       official_website: '官网地址',
       exit_status: '退出状态',
-      // company 字段
       enterprise_abbreviation: '企业简称',
-      // additional_wechat_accounts 字段
       account_name: '公众号名称',
       wechat_account_id: '账号ID',
       status: '状态',
-      // email_config 字段
       app_id: '应用',
       smtp_host: 'SMTP服务器地址',
       smtp_port: 'SMTP端口',
@@ -71,15 +68,12 @@ function LogModal({ type, id, onClose }) {
       pop_secure: 'POP使用SSL/TLS',
       pop_user: 'POP用户名',
       is_active: '状态',
-      // qichacha_config 字段
       qichacha_app_key: '应用凭证',
       qichacha_daily_limit: '每日查询限制',
-      // news_interface_config 字段
       request_url: '请求地址',
       content_type: 'Content-Type',
       frequency_type: '频次类型',
       frequency_value: '频次值',
-      // recipient_management 字段
       user_id: '用户ID',
       recipient_email: '收件人邮箱',
       email_subject: '邮件主题',
@@ -105,56 +99,71 @@ function LogModal({ type, id, onClose }) {
     })
   }
 
+  const columns = [
+    {
+      title: '变更时间',
+      dataIndex: 'change_time',
+      width: 180,
+      render: (text) => formatTime(text)
+    },
+    {
+      title: '操作人',
+      dataIndex: 'change_user_account',
+      width: 150,
+      render: (text) => text || '未知用户'
+    },
+    {
+      title: '变更字段',
+      dataIndex: 'changed_field',
+      width: 150,
+      render: (text) => getFieldName(text)
+    },
+    {
+      title: '旧值',
+      dataIndex: 'old_value',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '(空)'
+    },
+    {
+      title: '新值',
+      dataIndex: 'new_value',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '(空)'
+    }
+  ]
+
   return (
-    <div className="modal-overlay">
-      <div className="modal-content log-modal">
-        <div className="modal-header">
-          <h3>变更日志</h3>
-          <button className="close-button" onClick={onClose}>×</button>
-        </div>
-
-        <div className="log-content">
-          {loading ? (
-            <div className="loading">加载中...</div>
-          ) : logs.length === 0 ? (
-            <div className="empty-logs">暂无变更记录</div>
-          ) : (
-            <div className="log-list">
-              {logs.map((log, index) => (
-                <div key={log.id} className="log-item">
-                  <div className="log-header">
-                    <span className="log-time">{formatTime(log.change_time)}</span>
-                    <span className="log-user">
-                      {log.change_user_account || '未知用户'}
-                    </span>
-                  </div>
-                  <div className="log-body">
-                    <div className="log-field">
-                      <span className="field-name">{getFieldName(log.changed_field)}</span>
-                    </div>
-                    <div className="log-change">
-                      <div className="old-value">
-                        <span className="label">旧值：</span>
-                        <span className="value">{log.old_value || '(空)'}</span>
-                      </div>
-                      <div className="arrow">→</div>
-                      <div className="new-value">
-                        <span className="label">新值：</span>
-                        <span className="value">{log.new_value || '(空)'}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="modal-footer">
-          <button className="btn-close" onClick={onClose}>关闭</button>
-        </div>
+    <Modal
+      visible={true}
+      title="变更日志"
+      onCancel={onClose}
+      footer={null}
+      style={{ width: 900 }}
+    >
+      <div className="log-content">
+        {loading ? (
+          <Spin style={{ width: '100%', padding: '40px' }} />
+        ) : logs.length === 0 ? (
+          <div className="empty-logs">暂无变更记录</div>
+        ) : (
+          <Table
+            columns={columns}
+            data={logs}
+            pagination={false}
+            rowKey="id"
+            border={{
+              wrapper: true,
+              cell: true
+            }}
+            stripe
+          />
+        )}
       </div>
-    </div>
+    </Modal>
   )
 }
 

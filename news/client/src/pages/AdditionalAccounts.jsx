@@ -1,8 +1,13 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input, Form, Upload, Tag } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
-import Pagination from '../components/Pagination'
 import './AdditionalAccounts.css'
+
+const Option = Select.Option
+const InputSearch = Input.Search
+const FormItem = Form.Item
+const CollapseItem = Collapse.Item
 
 function AdditionalAccounts() {
   const [accountsList, setAccountsList] = useState([])
@@ -28,19 +33,23 @@ function AdditionalAccounts() {
   const [selectedUserId, setSelectedUserId] = useState('')
   const [usersList, setUsersList] = useState([])
   const pageSize = 10
+  const [filterCollapsed, setFilterCollapsed] = useState(true)
 
-  // 获取当前用户角色
   useEffect(() => {
-    const role = localStorage.getItem('userRole') || 'user'
-    setUserRole(role)
-    
-    // 如果是管理员，获取用户列表
-    if (role === 'admin') {
-      fetchUsers()
+    const userData = localStorage.getItem('user')
+    if (userData) {
+      try {
+        const user = JSON.parse(userData)
+        setUserRole(user.role || 'user')
+        if (user.role === 'admin') {
+          fetchUsers()
+        }
+      } catch (e) {
+        console.error('解析用户信息失败:', e)
+      }
     }
   }, [])
 
-  // 获取用户列表（仅管理员）
   const fetchUsers = async () => {
     try {
       const response = await axios.get('/api/auth/users', {
@@ -54,7 +63,6 @@ function AdditionalAccounts() {
     }
   }
 
-  // 获取公众号列表
   const fetchAccounts = async (abortSignal) => {
     setLoading(true)
     try {
@@ -68,7 +76,6 @@ function AdditionalAccounts() {
       if (statusFilter) {
         params.status = statusFilter
       }
-      // 如果是管理员且选择了用户，传递userId参数
       if (userRole === 'admin' && selectedUserId) {
         params.userId = selectedUserId
       }
@@ -82,14 +89,12 @@ function AdditionalAccounts() {
         setTotal(response.data.total)
       }
     } catch (error) {
-      // 如果是取消请求，不显示错误
       if (error.name === 'CanceledError' || error.name === 'AbortError') {
         return
       }
       console.error('获取公众号列表失败:', error)
-      // 只在组件仍然挂载时显示错误提示
       if (!abortSignal?.aborted) {
-        alert('获取数据失败，请重试')
+        Message.error('获取数据失败，请重试')
       }
     } finally {
       if (!abortSignal?.aborted) {
@@ -100,29 +105,23 @@ function AdditionalAccounts() {
 
   useEffect(() => {
     const abortController = new AbortController()
-    
     fetchAccounts(abortController.signal)
-    
     return () => {
       abortController.abort()
     }
   }, [currentPage, search, statusFilter, selectedUserId])
 
-  const handleSearch = (e) => {
-    e.preventDefault()
+  const handleSearch = () => {
     setCurrentPage(1)
   }
 
-  const handleSearchChange = (e) => {
-    setSearch(e.target.value)
-  }
-
-  const handleStatusFilterChange = (e) => {
-    setStatusFilter(e.target.value)
+  const handleReset = () => {
+    setSearch('')
+    setStatusFilter('')
+    setSelectedUserId('')
     setCurrentPage(1)
   }
 
-  // 新增公众号
   const handleAdd = () => {
     setFormData({
       account_name: '',
@@ -132,7 +131,6 @@ function AdditionalAccounts() {
     setShowAddModal(true)
   }
 
-  // 编辑公众号
   const handleEdit = (account) => {
     setSelectedAccount(account)
     setFormData({
@@ -143,60 +141,51 @@ function AdditionalAccounts() {
     setShowEditModal(true)
   }
 
-  // 查看日志
   const handleViewLog = (accountId) => {
     setLogAccountId(accountId)
     setShowLogModal(true)
   }
 
-  // 删除公众号
   const handleDelete = async (id) => {
-    if (!confirm('确定要删除这个公众号吗？')) {
-      return
-    }
-
-    try {
-      const response = await axios.delete(`/api/additional-accounts/${id}`)
-      if (response.data.success) {
-        alert('删除成功')
-        fetchAccounts(new AbortController().signal)
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这个公众号吗？',
+      onOk: async () => {
+        try {
+          const response = await axios.delete(`/api/additional-accounts/${id}`)
+          if (response.data.success) {
+            Message.success('删除成功')
+            fetchAccounts(new AbortController().signal)
+          }
+        } catch (error) {
+          console.error('删除失败:', error)
+          Message.error('删除失败，请重试')
+        }
       }
-    } catch (error) {
-      console.error('删除失败:', error)
-      alert('删除失败，请重试')
-    }
+    })
   }
 
-  // 提交表单
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    
-    if (!formData.account_name || !formData.wechat_account_id) {
-      alert('请填写完整信息')
-      return
-    }
-
+  const handleSubmit = async (values) => {
     try {
       let response
       if (showEditModal) {
-        response = await axios.put(`/api/additional-accounts/${selectedAccount.id}`, formData)
+        response = await axios.put(`/api/additional-accounts/${selectedAccount.id}`, values)
       } else {
-        response = await axios.post('/api/additional-accounts', formData)
+        response = await axios.post('/api/additional-accounts', values)
       }
 
       if (response.data.success) {
-        alert(showEditModal ? '更新成功' : '添加成功')
+        Message.success(showEditModal ? '更新成功' : '添加成功')
         setShowAddModal(false)
         setShowEditModal(false)
         fetchAccounts(new AbortController().signal)
       }
     } catch (error) {
       console.error('操作失败:', error)
-      alert(error.response?.data?.message || '操作失败，请重试')
+      Message.error(error.response?.data?.message || '操作失败，请重试')
     }
   }
 
-  // 下载模板
   const handleDownloadTemplate = async () => {
     try {
       const response = await axios.get('/api/additional-accounts/download-template', {
@@ -215,16 +204,16 @@ function AdditionalAccounts() {
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
+      Message.success('模板下载成功')
     } catch (error) {
       console.error('下载模板失败:', error)
-      alert('下载失败，请重试')
+      Message.error('下载失败，请重试')
     }
   }
 
-  // 批量导入
   const handleImport = async () => {
     if (!importFile) {
-      alert('请选择要导入的文件')
+      Message.warning('请选择要导入的文件')
       return
     }
 
@@ -240,14 +229,14 @@ function AdditionalAccounts() {
       })
 
       if (response.data.success) {
-        alert(response.data.message)
+        Message.success(response.data.message)
         setShowImportModal(false)
         setImportFile(null)
         fetchAccounts(new AbortController().signal)
       }
     } catch (error) {
       console.error('导入失败:', error)
-      alert(error.response?.data?.message || '导入失败，请重试')
+      Message.error(error.response?.data?.message || '导入失败，请重试')
     } finally {
       setImportLoading(false)
     }
@@ -269,255 +258,335 @@ function AdditionalAccounts() {
     }
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  const columns = [
+    {
+      title: '序号',
+      width: 80,
+      render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
+    },
+    {
+      title: '公众号名称',
+      dataIndex: 'account_name',
+      width: 200
+    },
+    {
+      title: '账号ID',
+      dataIndex: 'wechat_account_id',
+      width: 200
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (status) => (
+        <Tag color={status === 'active' ? 'green' : 'red'}>
+          {status === 'active' ? '生效' : '失效'}
+        </Tag>
+      )
+    },
+    {
+      title: '创建人',
+      dataIndex: 'creator_account',
+      width: 150,
+      render: (text) => text || '-'
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (text) => formatDate(text)
+    },
+    {
+      title: '操作',
+      width: 250,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleEdit(record)}
+          >
+            编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="success"
+            onClick={() => handleViewLog(record.id)}
+          >
+            日志
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="danger"
+            onClick={() => handleDelete(record.id)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
 
   return (
     <div className="additional-accounts">
-      <div className="accounts-header">
-        <h2>额外公众号管理</h2>
-        <div className="header-actions">
-          {userRole === 'admin' && (
-            <div className="user-filter" style={{ marginBottom: '10px' }}>
-              <label>切换用户查看：</label>
-              <select 
-                value={selectedUserId} 
-                onChange={(e) => {
-                  setSelectedUserId(e.target.value)
-                  setCurrentPage(1)
-                }}
-                style={{ marginRight: '10px', padding: '5px' }}
-              >
-                <option value="">全部用户</option>
-                {usersList.map(user => (
-                  <option key={user.id} value={user.id}>
-                    {user.account || user.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          <form onSubmit={handleSearch} className="search-form">
-            <input
-              type="text"
-              placeholder="搜索公众号名称或账号ID..."
-              value={search}
-              onChange={handleSearchChange}
-              className="search-input"
-            />
-            <select 
-              value={statusFilter} 
-              onChange={handleStatusFilterChange}
-              className="status-filter"
+      <Card className="management-card" bordered={false}>
+        <div className="management-header">
+          <h2 className="management-title">额外公众号管理</h2>
+          <Space>
+            <Button
+              onClick={handleAdd}
+              type="primary"
             >
-              <option value="">全部状态</option>
-              <option value="active">生效</option>
-              <option value="inactive">失效</option>
-            </select>
-            <button type="submit" className="search-button">
-              搜索
-            </button>
-          </form>
-          <div className="action-buttons">
-            <button onClick={handleAdd} className="add-button">
               新增公众号
-            </button>
-            <button onClick={() => setShowImportModal(true)} className="import-button">
+            </Button>
+            <Button
+              onClick={() => setShowImportModal(true)}
+              type="outline"
+            >
               批量导入
-            </button>
-            <button onClick={() => fetchAccounts(new AbortController().signal)} className="btn-primary btn-refresh" title="刷新列表">
+            </Button>
+            <Button
+              onClick={() => fetchAccounts(new AbortController().signal)}
+              loading={loading}
+            >
               刷新
-            </button>
-          </div>
+            </Button>
+          </Space>
         </div>
-      </div>
 
-      <div className="table-container">
-        {loading ? (
-          <div className="loading">加载中...</div>
-        ) : (
-          <table className="accounts-table">
-            <thead>
-              <tr>
-                <th>序号</th>
-                <th>公众号名称</th>
-                <th>账号ID</th>
-                <th>状态</th>
-                <th>创建人</th>
-                <th>创建时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {accountsList.length === 0 ? (
-                <tr>
-                  <td colSpan="7" className="empty-data">
-                    {search || statusFilter ? '未找到相关数据' : '暂无数据'}
-                  </td>
-                </tr>
-              ) : (
-                accountsList.map((account, index) => (
-                  <tr key={account.id}>
-                    <td>{(currentPage - 1) * pageSize + index + 1}</td>
-                    <td>{account.account_name}</td>
-                    <td>{account.wechat_account_id}</td>
-                    <td>
-                      <span className={`status-badge ${account.status}`}>
-                        {account.status === 'active' ? '生效' : '失效'}
-                      </span>
-                    </td>
-                    <td>{account.creator_account || '-'}</td>
-                    <td>{formatDate(account.created_at)}</td>
-                    <td>
-                      <div className="action-buttons">
-                        <button 
-                          onClick={() => handleEdit(account)}
-                          className="edit-btn"
-                        >
-                          编辑
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(account.id)}
-                          className="delete-btn"
-                        >
-                          删除
-                        </button>
-                        <button 
-                          onClick={() => handleViewLog(account.id)}
-                          className="log-btn"
-                        >
-                          日志
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <Collapse
+          activeKey={filterCollapsed ? [] : ['filters']}
+          onChange={(keys) => setFilterCollapsed(keys.length === 0)}
+          className="filter-collapse"
+        >
+          <CollapseItem header="筛选条件" name="filters">
+            <div className="filter-content">
+              <div className="filter-row">
+                {userRole === 'admin' && (
+                  <div className="filter-item">
+                    <label>切换用户查看</label>
+                    <Select
+                      value={selectedUserId}
+                      onChange={(value) => {
+                        setSelectedUserId(value)
+                        setCurrentPage(1)
+                      }}
+                      placeholder="全部用户"
+                      style={{ width: 200 }}
+                      allowClear
+                    >
+                      {usersList.map(user => (
+                        <Option key={user.id} value={user.id}>
+                          {user.account || user.id}
+                        </Option>
+                      ))}
+                    </Select>
+                  </div>
+                )}
+                <div className="filter-item">
+                  <label>关键词</label>
+                  <InputSearch
+                    value={search}
+                    onChange={(value) => setSearch(value)}
+                    placeholder="搜索公众号名称或账号ID..."
+                    style={{ width: 300 }}
+                    allowClear
+                    onSearch={handleSearch}
+                  />
+                </div>
+                <div className="filter-item">
+                  <label>状态</label>
+                  <Select
+                    value={statusFilter}
+                    onChange={(value) => {
+                      setStatusFilter(value)
+                      setCurrentPage(1)
+                    }}
+                    placeholder="全部状态"
+                    style={{ width: 150 }}
+                    allowClear
+                  >
+                    <Option value="active">生效</Option>
+                    <Option value="inactive">失效</Option>
+                  </Select>
+                </div>
+                <div className="filter-actions">
+                  <Button type="primary" onClick={handleSearch}>
+                    查询
+                  </Button>
+                  <Button type="outline" onClick={handleReset}>
+                    重置
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </CollapseItem>
+        </Collapse>
+
+        <div className="table-container">
+          {loading && accountsList.length === 0 ? (
+            <Skeleton
+              loading={true}
+              animation={true}
+              text={{ rows: 8, width: ['100%'] }}
+            />
+          ) : (
+            <Table
+              columns={columns}
+              data={accountsList}
+              loading={loading}
+              pagination={false}
+              rowKey="id"
+              border={{
+                wrapper: true,
+                cell: true
+              }}
+              stripe
+            />
+          )}
+        </div>
+
+        {total > 0 && (
+          <div className="pagination-wrapper">
+            <Pagination
+              current={currentPage}
+              total={total}
+              pageSize={pageSize}
+              onChange={(page) => setCurrentPage(page)}
+              showTotal
+              showJumper
+            />
+          </div>
         )}
-      </div>
-
-      <Pagination
-        currentPage={currentPage}
-        totalPages={totalPages}
-        onPageChange={setCurrentPage}
-      />
+      </Card>
 
       {/* 新增/编辑模态框 */}
-      {(showAddModal || showEditModal) && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>{showEditModal ? '编辑公众号' : '新增公众号'}</h3>
-              <button className="close-btn" onClick={() => {
+      <Modal
+        visible={showAddModal || showEditModal}
+        title={showEditModal ? '编辑公众号' : '新增公众号'}
+        onCancel={() => {
+          setShowAddModal(false)
+          setShowEditModal(false)
+        }}
+        footer={null}
+        style={{ width: 500 }}
+      >
+        <Form
+          initialValues={formData}
+          onSubmit={handleSubmit}
+          layout="vertical"
+        >
+          <FormItem
+            label="公众号名称"
+            field="account_name"
+            rules={[{ required: true, message: '请输入公众号名称' }]}
+          >
+            <Input placeholder="请输入公众号名称" />
+          </FormItem>
+          <FormItem
+            label="账号ID"
+            field="wechat_account_id"
+            rules={[{ required: true, message: '请输入微信账号ID' }]}
+          >
+            <Input placeholder="请输入微信账号ID" />
+          </FormItem>
+          <FormItem
+            label="状态"
+            field="status"
+          >
+            <Select>
+              <Option value="active">生效</Option>
+              <Option value="inactive">失效</Option>
+            </Select>
+          </FormItem>
+          <div className="form-actions">
+            <Button
+              type="secondary"
+              onClick={() => {
                 setShowAddModal(false)
                 setShowEditModal(false)
-              }}>×</button>
-            </div>
-            <div className="modal-body">
-              <form onSubmit={handleSubmit}>
-                <div className="form-group">
-                  <label>公众号名称 *</label>
-                  <input
-                    type="text"
-                    value={formData.account_name}
-                    onChange={(e) => setFormData({...formData, account_name: e.target.value})}
-                    placeholder="请输入公众号名称"
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label>账号ID *</label>
-                  <input
-                    type="text"
-                    value={formData.wechat_account_id}
-                    onChange={(e) => setFormData({...formData, wechat_account_id: e.target.value})}
-                    placeholder="请输入微信账号ID"
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label>状态</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({...formData, status: e.target.value})}
-                  >
-                    <option value="active">生效</option>
-                    <option value="inactive">失效</option>
-                  </select>
-                </div>
-                <div className="form-actions">
-                  <button type="button" onClick={() => {
-                    setShowAddModal(false)
-                    setShowEditModal(false)
-                  }}>
-                    取消
-                  </button>
-                  <button type="submit">
-                    {showEditModal ? '更新' : '添加'}
-                  </button>
-                </div>
-              </form>
-            </div>
+              }}
+            >
+              取消
+            </Button>
+            <Button type="primary" htmlType="submit">
+              {showEditModal ? '更新' : '添加'}
+            </Button>
           </div>
-        </div>
-      )}
+        </Form>
+      </Modal>
 
       {/* 批量导入模态框 */}
-      {showImportModal && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>批量导入公众号</h3>
-              <button className="close-btn" onClick={() => setShowImportModal(false)}>×</button>
-            </div>
-            <div className="modal-body">
-              <div className="import-steps">
-                <div className="step">
-                  <h4>第一步：下载导入模板</h4>
-                  <button onClick={handleDownloadTemplate} className="download-template-btn">
-                    下载Excel模板
-                  </button>
-                </div>
-                <div className="step">
-                  <h4>第二步：填写数据并上传</h4>
-                  <div className="file-upload">
-                    <input
-                      type="file"
-                      accept=".xlsx,.xls"
-                      onChange={(e) => setImportFile(e.target.files[0])}
-                      className="file-input"
-                    />
-                    {importFile && (
-                      <p className="file-name">已选择文件：{importFile.name}</p>
-                    )}
-                  </div>
-                </div>
-                <div className="import-notes">
-                  <h4>导入说明：</h4>
-                  <ul>
-                    <li>支持Excel格式文件（.xlsx, .xls）</li>
-                    <li>必填字段：公众号名称、账号ID</li>
-                    <li>重复的账号ID将被跳过，不会导入</li>
-                    <li>导入后默认状态为"生效"</li>
-                  </ul>
-                </div>
-              </div>
-              <div className="form-actions">
-                <button onClick={() => setShowImportModal(false)}>
-                  取消
-                </button>
-                <button 
-                  onClick={handleImport} 
-                  disabled={!importFile || importLoading}
-                >
-                  {importLoading ? '导入中...' : '开始导入'}
-                </button>
-              </div>
-            </div>
+      <Modal
+        visible={showImportModal}
+        title="批量导入公众号"
+        onCancel={() => {
+          setShowImportModal(false)
+          setImportFile(null)
+        }}
+        footer={null}
+        style={{ width: 600 }}
+      >
+        <div className="import-steps">
+          <Card className="import-step-card" style={{ marginBottom: '16px' }}>
+            <h4 style={{ marginBottom: '12px' }}>第一步：下载导入模板</h4>
+            <Button
+              type="outline"
+              onClick={handleDownloadTemplate}
+            >
+              下载Excel模板
+            </Button>
+          </Card>
+          <Card className="import-step-card" style={{ marginBottom: '16px' }}>
+            <h4 style={{ marginBottom: '12px' }}>第二步：填写数据并上传</h4>
+            <Upload
+              accept=".xlsx,.xls"
+              fileList={importFile ? [importFile] : []}
+              onChange={(fileList) => {
+                setImportFile(fileList[0]?.originFile || null)
+              }}
+              beforeUpload={() => false}
+            >
+              <Button>选择文件</Button>
+            </Upload>
+            {importFile && (
+              <p style={{ marginTop: '8px', color: '#165dff' }}>
+                已选择文件：{importFile.name}
+              </p>
+            )}
+          </Card>
+          <Card className="info-card" style={{ marginBottom: '16px' }}>
+            <h4 style={{ marginBottom: '12px' }}>导入说明：</h4>
+            <ul style={{ margin: 0, paddingLeft: '20px' }}>
+              <li>支持Excel格式文件（.xlsx, .xls）</li>
+              <li>必填字段：公众号名称、账号ID</li>
+              <li>重复的账号ID将被跳过，不会导入</li>
+              <li>导入后默认状态为"生效"</li>
+            </ul>
+          </Card>
+          <div className="form-actions">
+            <Button
+              type="secondary"
+              onClick={() => {
+                setShowImportModal(false)
+                setImportFile(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              type="primary"
+              onClick={handleImport}
+              disabled={!importFile || importLoading}
+              loading={importLoading}
+            >
+              开始导入
+            </Button>
           </div>
         </div>
-      )}
+      </Modal>
 
       {/* 日志模态框 */}
       {showLogModal && (
@@ -535,3 +604,4 @@ function AdditionalAccounts() {
 }
 
 export default AdditionalAccounts
+

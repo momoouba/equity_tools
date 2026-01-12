@@ -1,14 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
+import { Form, Input, Button, Message } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './Login.css'
 
+const FormItem = Form.Item
+
 function Login() {
-  const [formData, setFormData] = useState({
-    account: '',
-    password: ''
-  })
-  const [error, setError] = useState('')
+  const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [backgroundImage, setBackgroundImage] = useState('')
   const navigate = useNavigate()
@@ -28,7 +27,6 @@ function Login() {
     }
   }
 
-  // 监听系统配置更新事件
   useEffect(() => {
     const handleConfigUpdate = () => {
       fetchSystemConfig()
@@ -39,28 +37,17 @@ function Login() {
     }
   }, [])
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    })
-    setError('')
-  }
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setError('')
+  const handleSubmit = async (values) => {
     setLoading(true)
-
     try {
-      const response = await axios.post('/api/auth/login', formData)
+      const response = await axios.post('/api/auth/login', values)
       if (response.data.success) {
-        // 存储用户信息到localStorage
         localStorage.setItem('user', JSON.stringify(response.data.user))
+        Message.success('登录成功')
         navigate('/dashboard')
       }
     } catch (err) {
-      setError(err.response?.data?.message || '登录失败，请重试')
+      Message.error(err.response?.data?.message || '登录失败，请重试')
     } finally {
       setLoading(false)
     }
@@ -74,7 +61,6 @@ function Login() {
       backgroundRepeat: 'no-repeat'
     } : {}}>
       <div className="login-background" style={backgroundImage ? { display: 'none' } : {}}>
-        {/* 装饰性图表元素 */}
         <div className="chart-panel chart-panel-1"></div>
         <div className="chart-panel chart-panel-2"></div>
         <div className="chart-panel chart-panel-3"></div>
@@ -82,43 +68,43 @@ function Login() {
       
       <div className="login-card">
         <h1 className="login-title">股权投资小工具锦集</h1>
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label htmlFor="account">账号</label>
-            <input
-              type="text"
-              id="account"
-              name="account"
-              value={formData.account}
-              onChange={handleChange}
-              required
-              placeholder="请输入账号"
-            />
-          </div>
+        <Form
+          form={form}
+          onSubmit={handleSubmit}
+          layout="vertical"
+          autoComplete="off"
+        >
+          <FormItem
+            label="账号"
+            field="account"
+            rules={[{ required: true, message: '请输入账号' }]}
+          >
+            <Input placeholder="请输入账号" />
+          </FormItem>
           
-          <div className="form-group">
-            <label htmlFor="password">密码</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              value={formData.password}
-              onChange={handleChange}
-              required
-              placeholder="请输入密码"
-            />
-          </div>
+          <FormItem
+            label="密码"
+            field="password"
+            rules={[{ required: true, message: '请输入密码' }]}
+          >
+            <Input.Password placeholder="请输入密码" />
+          </FormItem>
 
-          {error && <div className="error-message">{error}</div>}
-
-          <button type="submit" className="login-button" disabled={loading}>
-            {loading ? '登录中...' : '登录'}
-          </button>
+          <FormItem>
+            <Button
+              type="primary"
+              htmlType="submit"
+              long
+              loading={loading}
+            >
+              {loading ? '登录中...' : '登录'}
+            </Button>
+          </FormItem>
 
           <div className="register-link">
             还没有账号？<Link to="/register">立即注册</Link>
           </div>
-        </form>
+        </Form>
       </div>
     </div>
   )

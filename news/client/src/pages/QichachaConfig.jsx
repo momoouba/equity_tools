@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
-import Pagination from '../components/Pagination'
 import QichachaNewsCategoryList from './QichachaNewsCategoryList'
-import './EmailConfig.css'
-import './SystemConfig.css'
+import './QichachaConfig.css'
+
+const Option = Select.Option
+const TabPane = Tabs.TabPane
 
 function QichachaConfig() {
   const [activeSubTab, setActiveSubTab] = useState('config')
@@ -48,7 +50,7 @@ function QichachaConfig() {
       }
     } catch (error) {
       console.error('获取企查查配置列表失败:', error)
-      alert('获取配置列表失败')
+      Message.error('获取配置列表失败')
     } finally {
       setLoading(false)
     }
@@ -89,7 +91,7 @@ function QichachaConfig() {
         setFormData({
           app_id: config.app_id,
           qichacha_app_key: config.qichacha_app_key || '',
-          qichacha_secret_key: '', // 不显示密钥
+          qichacha_secret_key: '',
           qichacha_daily_limit: config.qichacha_daily_limit || 100,
           interface_type: config.interface_type || '企业信息',
           is_active: config.is_active === 1
@@ -98,35 +100,35 @@ function QichachaConfig() {
       }
     } catch (error) {
       console.error('获取企查查配置失败:', error)
-      alert('获取配置失败')
+      Message.error('获取配置失败')
     }
   }
 
   const handleDelete = async (id) => {
-    if (!window.confirm('确定要删除这个企查查配置吗？')) {
-      return
-    }
-
-    try {
-      const response = await axios.delete(`/api/system/qichacha-config/${id}`)
-      if (response.data.success) {
-        alert('删除成功')
-        fetchConfigs()
+    Modal.confirm({
+      title: '确认删除',
+      content: '确定要删除这个企查查配置吗？',
+      onOk: async () => {
+        try {
+          const response = await axios.delete(`/api/system/qichacha-config/${id}`)
+          if (response.data.success) {
+            Message.success('删除成功')
+            fetchConfigs()
+          }
+        } catch (error) {
+          console.error('删除失败:', error)
+          Message.error('删除失败：' + (error.response?.data?.message || '未知错误'))
+        }
       }
-    } catch (error) {
-      console.error('删除失败:', error)
-      alert('删除失败：' + (error.response?.data?.message || '未知错误'))
-    }
+    })
   }
 
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target
+  const handleChange = (name, value) => {
     setFormData({
       ...formData,
-      [name]: type === 'checkbox' ? checked : (type === 'number' ? parseInt(value, 10) : value)
+      [name]: value
     })
     
-    // 如果用户开始输入密钥，清除"已有密钥"标记
     if (name === 'qichacha_secret_key' && value !== '') {
       setHasSecretKey(false)
     }
@@ -136,7 +138,7 @@ function QichachaConfig() {
     e.preventDefault()
     
     if (!formData.app_id || !formData.qichacha_app_key || (!formData.qichacha_secret_key && !editingConfig)) {
-      alert('请填写所有必填字段')
+      Message.warning('请填写所有必填字段')
       return
     }
 
@@ -153,14 +155,14 @@ function QichachaConfig() {
       }
 
       if (response.data.success) {
-        alert(editingConfig ? '更新成功' : '创建成功')
+        Message.success(editingConfig ? '更新成功' : '创建成功')
         setShowForm(false)
         setEditingConfig(null)
         fetchConfigs()
       }
     } catch (error) {
       console.error('保存失败:', error)
-      alert('保存失败：' + (error.response?.data?.message || '未知错误'))
+      Message.error('保存失败：' + (error.response?.data?.message || '未知错误'))
     }
   }
 
@@ -180,245 +182,264 @@ function QichachaConfig() {
     }
   }
 
-  return (
-    <div className="email-config">
-      {/* 二级Tab */}
-      <div className="config-tabs" style={{ marginBottom: '16px' }}>
-        <button
-          className={`tab-button ${activeSubTab === 'config' ? 'active' : ''}`}
-          onClick={() => setActiveSubTab('config')}
-        >
-          企查查接口配置
-        </button>
-        <button
-          className={`tab-button ${activeSubTab === 'categories' ? 'active' : ''}`}
-          onClick={() => setActiveSubTab('categories')}
-        >
-          企查查新闻类别列表
-        </button>
-      </div>
+  const columns = [
+    {
+      title: '应用',
+      dataIndex: 'app_name',
+      width: 150,
+      render: (text) => text || '-'
+    },
+    {
+      title: '接口类型',
+      dataIndex: 'interface_type',
+      width: 150,
+      render: (text) => text || '企业信息'
+    },
+    {
+      title: '应用凭证',
+      dataIndex: 'qichacha_app_key',
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '每日查询限制',
+      dataIndex: 'qichacha_daily_limit',
+      width: 150,
+      render: (text) => text || 100
+    },
+    {
+      title: '状态',
+      dataIndex: 'is_active',
+      width: 100,
+      render: (isActive) => (
+        <Tag color={isActive ? 'green' : 'red'}>
+          {isActive ? '启用' : '禁用'}
+        </Tag>
+      )
+    },
+    {
+      title: '创建时间',
+      dataIndex: 'created_at',
+      width: 180,
+      render: (text) => formatDate(text)
+    },
+    {
+      title: '操作',
+      width: 200,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleEdit(record.id)}
+          >
+            编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="success"
+            onClick={() => {
+              setLogConfigId(record.id)
+              setShowLogModal(true)
+            }}
+          >
+            日志
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="danger"
+            onClick={() => handleDelete(record.id)}
+          >
+            删除
+          </Button>
+        </Space>
+      )
+    }
+  ]
 
-      {activeSubTab === 'categories' ? (
-        <QichachaNewsCategoryList />
-      ) : (
-        <>
+  return (
+    <div className="qichacha-config">
+      <Tabs activeTab={activeSubTab} onChange={setActiveSubTab} type="line">
+        <TabPane key="config" title="企查查接口配置">
           <div className="config-header">
             <h3>企查查接口配置</h3>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button className="btn-primary" onClick={fetchConfigs} title="刷新列表">
+            <Space>
+              <Button
+                onClick={fetchConfigs}
+                loading={loading}
+              >
                 刷新
-              </button>
-              <button className="btn-primary" onClick={handleAdd}>
+              </Button>
+              <Button
+                type="primary"
+                onClick={handleAdd}
+              >
                 新增配置
-              </button>
-            </div>
+              </Button>
+            </Space>
           </div>
 
-      {loading ? (
-        <div className="loading">加载中...</div>
-      ) : configs.length === 0 ? (
-        <div className="empty-data">暂无企查查配置</div>
-      ) : (
-        <table className="config-table">
-          <thead>
-            <tr>
-              <th>应用</th>
-              <th>应用凭证</th>
-              <th>接口类型</th>
-              <th>每日查询限制</th>
-              <th>状态</th>
-              <th>创建时间</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {configs.map((config) => (
-              <tr key={config.id}>
-                <td>{config.app_name || '-'}</td>
-                <td>{config.qichacha_app_key || '-'}</td>
-                <td>{config.interface_type || '企业信息'}</td>
-                <td>{config.qichacha_daily_limit || 100}</td>
-                <td>
-                  <span className={`status-badge ${config.is_active ? 'active' : 'inactive'}`}>
-                    {config.is_active ? '启用' : '禁用'}
-                  </span>
-                </td>
-                <td>{formatDate(config.created_at)}</td>
-                <td>
-                  <div className="action-buttons">
-                    <button
-                      className="btn-edit"
-                      onClick={() => handleEdit(config.id)}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      className="btn-log"
-                      onClick={() => {
-                        setLogConfigId(config.id)
-                        setShowLogModal(true)
-                      }}
-                    >
-                      日志
-                    </button>
-                    <button
-                      className="btn-delete"
-                      onClick={() => handleDelete(config.id)}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      {/* 分页 */}
-      {total > 0 && (() => {
-        const totalPages = Math.ceil(total / pageSize)
-        return totalPages > 1 && (
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            onPageChange={setCurrentPage}
-          />
-        )
-      })()}
-
-      {/* 新增/编辑表单 */}
-      {showForm && (
-        <div className="modal-overlay">
-          <div className="modal-content">
-            <div className="modal-header">
-              <h3>{editingConfig ? '编辑企查查配置' : '新增企查查配置'}</h3>
-              <button className="close-btn" onClick={() => {
-                setShowForm(false)
-                setEditingConfig(null)
-              }}>×</button>
-            </div>
-            <div className="modal-body">
-              <form onSubmit={handleSubmit}>
-                <div className="form-group">
-                  <label>应用 *</label>
-                  <select
-                    name="app_id"
-                    value={formData.app_id}
-                    onChange={handleChange}
-                    required
-                    disabled={!!editingConfig}
-                  >
-                    <option value="">请选择应用</option>
-                    {applications.map(app => (
-                      <option key={app.id} value={app.id}>
-                        {app.app_name}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置企查查的应用'}</p>
-                </div>
-
-                <div className="form-group">
-                  <label>应用凭证 *</label>
-                  <input
-                    type="text"
-                    name="qichacha_app_key"
-                    value={formData.qichacha_app_key}
-                    onChange={handleChange}
-                    placeholder="请输入企查查应用凭证"
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>凭证秘钥 *</label>
-                  <input
-                    type="password"
-                    name="qichacha_secret_key"
-                    value={hasSecretKey && !formData.qichacha_secret_key ? '****' : formData.qichacha_secret_key}
-                    onChange={handleChange}
-                    onFocus={(e) => {
-                      if (hasSecretKey && e.target.value === '****') {
-                        setHasSecretKey(false)
-                        setFormData({ ...formData, qichacha_secret_key: '' })
-                        e.target.value = ''
-                      }
-                    }}
-                    placeholder={editingConfig ? (hasSecretKey ? '****' : '留空则不更新密钥') : '请输入企查查凭证秘钥'}
-                    required={!editingConfig}
-                  />
-                  <p className="form-hint">{editingConfig ? '留空则不更新密钥' : '请输入企查查凭证秘钥'}</p>
-                </div>
-
-                <div className="form-group">
-                  <label>接口类型 *</label>
-                  <select
-                    name="interface_type"
-                    value={formData.interface_type}
-                    onChange={handleChange}
-                    required
-                  >
-                    <option value="企业信息">企业信息</option>
-                    <option value="新闻舆情">新闻舆情</option>
-                  </select>
-                  <p className="form-hint">选择该配置用于企业信息查询还是新闻舆情查询</p>
-                </div>
-
-                <div className="form-group">
-                  <label>每日查询限制次数 *</label>
-                  <input
-                    type="number"
-                    name="qichacha_daily_limit"
-                    value={formData.qichacha_daily_limit}
-                    onChange={handleChange}
-                    min="0"
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>
-                    <input
-                      type="checkbox"
-                      name="is_active"
-                      checked={formData.is_active}
-                      onChange={handleChange}
-                    />
-                    启用配置
-                  </label>
-                </div>
-
-                <div className="form-actions">
-                  <button type="button" onClick={() => {
-                    setShowForm(false)
-                    setEditingConfig(null)
-                  }}>
-                    取消
-                  </button>
-                  <button type="submit">
-                    {editingConfig ? '更新' : '创建'}
-                  </button>
-                </div>
-              </form>
-            </div>
+          <div className="table-container">
+            {loading && configs.length === 0 ? (
+              <Skeleton
+                loading={true}
+                animation={true}
+                text={{ rows: 8, width: ['100%'] }}
+              />
+            ) : (
+              <Table
+                columns={columns}
+                data={configs}
+                loading={loading}
+                pagination={false}
+                rowKey="id"
+                border={{
+                  wrapper: true,
+                  cell: true
+                }}
+                stripe
+              />
+            )}
           </div>
-        </div>
-      )}
 
-      {/* 日志弹窗 */}
-      {showLogModal && (
-        <LogModal
-          type="qichacha_config"
-          id={logConfigId}
-          onClose={() => {
-            setShowLogModal(false)
-            setLogConfigId(null)
-          }}
-        />
-      )}
-    </>
-      )}
+          {/* 分页 */}
+          {total > 0 && (
+            <div className="pagination-wrapper">
+              <Pagination
+                current={currentPage}
+                total={total}
+                pageSize={pageSize}
+                onChange={(page) => setCurrentPage(page)}
+                showTotal
+                showJumper
+              />
+            </div>
+          )}
+
+          {/* 新增/编辑表单 */}
+          <Modal
+            visible={showForm}
+            title={editingConfig ? '编辑企查查配置' : '新增企查查配置'}
+            onCancel={() => {
+              setShowForm(false)
+              setEditingConfig(null)
+            }}
+            footer={null}
+            style={{ width: 600 }}
+          >
+            <form onSubmit={handleSubmit}>
+              <div className="form-group">
+                <label>应用 *</label>
+                <Select
+                  value={formData.app_id}
+                  onChange={(value) => handleChange('app_id', value)}
+                  placeholder="请选择应用"
+                  disabled={!!editingConfig}
+                >
+                  {applications.map((app) => (
+                    <Option key={app.id} value={app.id}>
+                      {app.app_name}
+                    </Option>
+                  ))}
+                </Select>
+                <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置企查查接口的应用'}</p>
+              </div>
+
+              <div className="form-group">
+                <label>接口类型 *</label>
+                <Select
+                  value={formData.interface_type}
+                  onChange={(value) => handleChange('interface_type', value)}
+                  disabled={!!editingConfig}
+                >
+                  <Option value="企业信息">企业信息</Option>
+                  <Option value="新闻舆情">新闻舆情</Option>
+                </Select>
+                <p className="form-hint">{editingConfig ? '编辑时不能修改接口类型' : '选择企查查接口类型'}</p>
+              </div>
+
+              <div className="form-group">
+                <label>应用凭证 *</label>
+                <Input
+                  value={formData.qichacha_app_key}
+                  onChange={(value) => handleChange('qichacha_app_key', value)}
+                  placeholder="请输入企查查应用凭证"
+                />
+              </div>
+
+              <div className="form-group">
+                <label>密钥 *</label>
+                <Input.Password
+                  value={hasSecretKey && !formData.qichacha_secret_key ? '****' : formData.qichacha_secret_key}
+                  onChange={(value) => handleChange('qichacha_secret_key', value)}
+                  onFocus={(e) => {
+                    if (hasSecretKey && e.target.value === '****') {
+                      setHasSecretKey(false)
+                      setFormData({ ...formData, qichacha_secret_key: '' })
+                    }
+                  }}
+                  placeholder={editingConfig ? (hasSecretKey ? '****' : '留空则不更新密钥') : '请输入企查查密钥'}
+                />
+                <p className="form-hint">{editingConfig ? '留空则不更新密钥' : '请输入企查查密钥'}</p>
+              </div>
+
+              <div className="form-group">
+                <label>每日查询限制</label>
+                <InputNumber
+                  value={formData.qichacha_daily_limit}
+                  onChange={(value) => handleChange('qichacha_daily_limit', value)}
+                  min={1}
+                  style={{ width: '100%' }}
+                />
+                <p className="form-hint">设置每日最大查询次数，默认100次</p>
+              </div>
+
+              <div className="form-group">
+                <label>
+                  <Switch
+                    checked={formData.is_active}
+                    onChange={(checked) => handleChange('is_active', checked)}
+                    style={{ marginRight: 8 }}
+                  />
+                  启用配置
+                </label>
+              </div>
+
+              <div className="form-actions">
+                <Button type="secondary" onClick={() => {
+                  setShowForm(false)
+                  setEditingConfig(null)
+                }}>
+                  取消
+                </Button>
+                <Button type="primary" htmlType="submit">
+                  {editingConfig ? '更新' : '创建'}
+                </Button>
+              </div>
+            </form>
+          </Modal>
+
+          {/* 日志弹窗 */}
+          {showLogModal && (
+            <LogModal
+              type="qichacha_config"
+              id={logConfigId}
+              onClose={() => {
+                setShowLogModal(false)
+                setLogConfigId(null)
+              }}
+            />
+          )}
+        </TabPane>
+
+        <TabPane key="category" title="企查查新闻类别">
+          <QichachaNewsCategoryList />
+        </TabPane>
+      </Tabs>
     </div>
   )
 }

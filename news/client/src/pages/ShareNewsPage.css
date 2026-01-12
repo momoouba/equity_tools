@@ -1,0 +1,381 @@
+.share-news-page {
+  min-height: 100vh;
+  background-color: #f5f5f5;
+  padding: 20px;
+}
+
+.share-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.share-header h2 {
+  margin: 0;
+  color: #333;
+}
+
+.loading-container,
+.error-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+.loading {
+  font-size: 16px;
+  color: #666;
+}
+
+.error-message {
+  font-size: 16px;
+  color: #f53f3f;
+  padding: 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.password-modal {
+  max-width: 400px;
+}
+
+.password-modal .form-group {
+  margin-bottom: 20px;
+}
+
+.password-modal label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #333;
+}
+
+.password-modal input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.password-modal input.error {
+  border-color: #f53f3f;
+}
+
+.password-modal .error-message {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #f53f3f;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.btn-primary {
+  padding: 10px 20px;
+  background-color: #165dff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.btn-primary:hover {
+  background-color: #0e42d2;
+}
+
+/* 复用NewsInfo的样式 */
+.search-form {
+  display: flex;
+  gap: 10px;
+}
+
+.search-input {
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+  width: 300px;
+}
+
+.search-button {
+  padding: 8px 16px;
+  background-color: #165dff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.news-tabs {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  background: white;
+  padding: 10px 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.tabs-left {
+  display: flex;
+  gap: 10px;
+}
+
+.tab-button {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: #666;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.tab-button:hover {
+  background-color: #f0f0f0;
+}
+
+.tab-button.active {
+  background-color: #165dff;
+  color: white;
+}
+
+.enterprise-filter-buttons {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.enterprise-filter-btn {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  background: white;
+  color: #666;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.enterprise-filter-btn:hover {
+  border-color: #165dff;
+  color: #165dff;
+}
+
+.enterprise-filter-btn.active {
+  background-color: #165dff;
+  color: white;
+  border-color: #165dff;
+}
+
+.table-container {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow-x: auto;
+}
+
+.news-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.news-table th {
+  background-color: #f5f5f5;
+  padding: 12px;
+  text-align: left;
+  font-weight: 500;
+  color: #333;
+  border-bottom: 2px solid #ddd;
+}
+
+.news-table td {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.news-table tr:hover {
+  background-color: #f9f9f9;
+}
+
+.empty-data {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+  padding: 20px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.page-size-select {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.total-info {
+  color: #666;
+  font-size: 14px;
+}
+
+/* 模态框样式 */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-width: 90%;
+  max-height: 90%;
+  overflow: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #eee;
+}
+
+.modal-header h3 {
+  margin: 0;
+  color: #333;
+}
+
+.modal-body {
+  padding: 20px;
+}
+
+/* 关键词样式 */
+.keywords-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.keyword-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: #e6f7ff;
+  color: #1890ff;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.keyword-more {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: #f0f0f0;
+  color: #666;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: help;
+}
+
+/* 单元格样式 */
+.sequence-number-cell {
+  width: 60px;
+  text-align: center;
+}
+
+.enterprise-name-cell {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keywords-cell {
+  max-width: 200px;
+}
+
+.publish-time-cell {
+  width: 150px;
+  white-space: pre-line;
+}
+
+.title-cell {
+  max-width: 300px;
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  line-height: 1.5 !important;
+  vertical-align: top !important;
+  padding: 8px !important;
+}
+
+.abstract-cell {
+  max-width: 300px;
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  line-height: 1.5 !important;
+  vertical-align: top !important;
+  padding: 8px !important;
+}
+
+.article-link-cell {
+  width: 100px;
+}
+
+.account-name-cell {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wechat-account-cell {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.article-link {
+  color: #165dff;
+  text-decoration: none;
+}
+
+.article-link:hover {
+  text-decoration: underline;
+}
+

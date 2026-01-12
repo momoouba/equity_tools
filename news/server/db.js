@@ -2383,6 +2383,26 @@ async function initializeTables(dbPool) {
     console.warn('迁移ai_model_config表usage_type字段时出现警告:', err.message);
   }
   
+  // 创建舆情信息分享链接表
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS news_share_links (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      user_id VARCHAR(19) NOT NULL COMMENT '创建用户ID',
+      share_token VARCHAR(64) NOT NULL UNIQUE COMMENT '分享链接token',
+      status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态：active-启用，inactive-禁用',
+      has_expiry TINYINT(1) DEFAULT 0 COMMENT '是否有有效期：1-是，0-否',
+      expiry_time DATETIME NULL COMMENT '有效期至',
+      has_password TINYINT(1) DEFAULT 0 COMMENT '是否有密码：1-是，0-否',
+      password_hash VARCHAR(255) NULL COMMENT '密码哈希值',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      INDEX idx_user_id (user_id),
+      INDEX idx_share_token (share_token),
+      INDEX idx_status (status),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  
   console.log('✓ 所有数据库表结构初始化完成');
   
   // 初始化提示词配置（异步执行，不阻塞服务器启动）

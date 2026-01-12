@@ -1,3 +1,5 @@
+/* Arco Design 全局样式配置 - 8px 间距规范 + 简约商务风配色 */
+
 * {
   margin: 0;
   padding: 0;
@@ -10,11 +12,60 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f5f7fa;
+  background: #f7f8fa;
+  color: #1d2129;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 #root {
   width: 100%;
   min-height: 100vh;
+}
+
+/* 8px 间距规范工具类 */
+.mt-8 { margin-top: 8px; }
+.mt-16 { margin-top: 16px; }
+.mt-24 { margin-top: 24px; }
+.mt-32 { margin-top: 32px; }
+
+.mb-8 { margin-bottom: 8px; }
+.mb-16 { margin-bottom: 16px; }
+.mb-24 { margin-bottom: 24px; }
+.mb-32 { margin-bottom: 32px; }
+
+.ml-8 { margin-left: 8px; }
+.ml-16 { margin-left: 16px; }
+.ml-24 { margin-left: 24px; }
+
+.mr-8 { margin-right: 8px; }
+.mr-16 { margin-right: 16px; }
+.mr-24 { margin-right: 24px; }
+
+.p-8 { padding: 8px; }
+.p-16 { padding: 16px; }
+.p-24 { padding: 24px; }
+.p-32 { padding: 32px; }
+
+.gap-8 { gap: 8px; }
+.gap-16 { gap: 16px; }
+.gap-24 { gap: 24px; }
+
+/* 简约商务风配色 */
+:root {
+  --color-primary: #165dff;
+  --color-primary-hover: #0e42d2;
+  --color-primary-active: #0c36b3;
+  --color-success: #00b42a;
+  --color-warning: #ff7d00;
+  --color-danger: #f53f3f;
+  --color-text-primary: #1d2129;
+  --color-text-secondary: #4e5969;
+  --color-text-tertiary: #86909c;
+  --color-border: #e5e6eb;
+  --color-bg: #f7f8fa;
+  --color-bg-secondary: #f2f3f5;
+  --color-bg-hover: #f7f8fa;
+  --color-bg-active: #e8e9ed;
 }
 
