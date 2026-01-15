@@ -21,20 +21,81 @@ class NewsAnalysis {
 
       console.log(`[fetchContentFromUrl] 开始抓取网页内容: ${url}`);
       
+      // 检测是否是中国经营网（cb.com.cn），需要特殊处理
+      const isCbnet = url.includes('cb.com.cn') || url.includes('cbnet.com');
+      
       // 设置请求头，模拟浏览器访问
-      const response = await axios.get(url, {
-        timeout: 15000, // 15秒超时
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-          'Accept-Encoding': 'gzip, deflate, br',
-          'Connection': 'keep-alive',
-          'Upgrade-Insecure-Requests': '1'
-        },
-        maxRedirects: 5,
-        validateStatus: (status) => status < 500 // 允许3xx和4xx状态码，但不允许5xx
-      });
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Cache-Control': 'max-age=0',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1'
+      };
+      
+      // 对于中国经营网，添加Referer
+      if (isCbnet) {
+        headers['Referer'] = 'https://www.cb.com.cn/';
+        headers['Origin'] = 'https://www.cb.com.cn';
+      }
+      
+      let response;
+      try {
+        response = await axios.get(url, {
+          timeout: 20000, // 20秒超时
+          headers: headers,
+          maxRedirects: 5,
+          validateStatus: (status) => {
+            // 允许2xx、3xx状态码，对于521等特殊状态码也尝试处理
+            return status < 400 || status === 521;
+          }
+        });
+      } catch (error) {
+        // 如果是521错误，尝试使用更完整的浏览器请求头重试
+        if (error.response && error.response.status === 521) {
+          console.log(`[fetchContentFromUrl] 检测到521错误，尝试使用更完整的请求头重试`);
+          try {
+            // 添加更多浏览器特征
+            const retryHeaders = {
+              ...headers,
+              'DNT': '1',
+              'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+              'Sec-Ch-Ua-Mobile': '?0',
+              'Sec-Ch-Ua-Platform': '"Windows"'
+            };
+            
+            response = await axios.get(url, {
+              timeout: 20000,
+              headers: retryHeaders,
+              maxRedirects: 5,
+              validateStatus: (status) => status < 400 || status === 521
+            });
+          } catch (retryError) {
+            console.error(`[fetchContentFromUrl] 重试后仍然失败: ${retryError.message}`);
+            throw retryError;
+          }
+        } else {
+          throw error;
+        }
+      }
+
+      // 处理521状态码（Cloudflare等反爬虫机制）
+      if (response.status === 521) {
+        console.warn(`[fetchContentFromUrl] HTTP 521错误（Cloudflare反爬虫机制），URL: ${url}`);
+        console.warn(`[fetchContentFromUrl] 521错误通常表示网站需要JavaScript渲染才能访问`);
+        console.warn(`[fetchContentFromUrl] 建议：1) 手动访问URL获取内容 2) 使用支持JavaScript渲染的工具（如Playwright）`);
+        // 抛出特殊错误，标识为反爬虫阻塞
+        const error = new Error('ANTI_CRAWLER_BLOCKED');
+        error.status = 521;
+        error.url = url;
+        throw error;
+      }
 
       if (response.status !== 200) {
         console.warn(`[fetchContentFromUrl] HTTP状态码: ${response.status}, URL: ${url}`);
@@ -45,6 +106,16 @@ class NewsAnalysis {
       if (!html || typeof html !== 'string') {
         console.warn(`[fetchContentFromUrl] 返回内容不是HTML字符串, URL: ${url}`);
         return null;
+      }
+
+      // 检测百度移动端页面，如果HTML太短，说明需要JavaScript渲染
+      if (url.includes('mbd.baidu.com') && html.length < 2000) {
+        console.warn(`[fetchContentFromUrl] 检测到百度移动端页面，HTML太短（${html.length}字符），需要JavaScript渲染`);
+        // 抛出特殊错误，标识为需要JavaScript渲染
+        const error = new Error('JAVASCRIPT_REQUIRED');
+        error.status = 200; // HTTP状态是200，但内容需要JS渲染
+        error.url = url;
+        throw error;
       }
 
       // 智能提取正文内容
@@ -117,6 +188,12 @@ class NewsAnalysis {
       return text;
 
     } catch (error) {
+      // 如果是反爬虫阻塞错误或需要JavaScript渲染的错误，直接抛出
+      if (error.message === 'ANTI_CRAWLER_BLOCKED' || error.status === 521 || 
+          error.message === 'JAVASCRIPT_REQUIRED') {
+        throw error;
+      }
+      
       console.error(`[fetchContentFromUrl] 抓取网页内容失败: ${error.message}, URL: ${url}`);
       if (error.response) {
         console.error(`[fetchContentFromUrl] HTTP状态码: ${error.response.status}`);
@@ -131,6 +208,47 @@ class NewsAnalysis {
    * @param {string} url - 网页URL（可选，用于特殊处理）
    */
   extractArticleContent(html, url = '') {
+    // 特殊处理：百度移动端页面（mbd.baidu.com）
+    // 百度移动端页面需要JavaScript渲染，HTML内容很少，无法直接提取
+    if (url && url.includes('mbd.baidu.com')) {
+      console.log(`[extractArticleContent] 检测到百度移动端URL，HTML长度: ${html.length}字符`);
+      
+      // 如果HTML太短（少于2000字符），说明是JavaScript渲染页面
+      if (html.length < 2000) {
+        console.warn(`[extractArticleContent] ⚠️ 百度移动端页面HTML太短（${html.length}字符），需要JavaScript渲染，无法提取正文`);
+        // 返回null，让上层处理（会设置特殊摘要）
+        return null;
+      }
+      
+      // 如果HTML较长，尝试提取内容
+      // 百度移动端页面可能包含一些文本内容，尝试提取
+      const baiduPatterns = [
+        /<div[^>]*class="[^"]*article-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+        /<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
+        /<article[^>]*>([\s\S]*?)<\/article>/i
+      ];
+      
+      for (const pattern of baiduPatterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+          const extracted = match[1]
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (extracted.length > 100) {
+            console.log(`[extractArticleContent] ✓ 从百度移动端页面提取到内容，长度: ${extracted.length}字符`);
+            return match[1]; // 返回HTML内容，让后续清理
+          }
+        }
+      }
+      
+      // 如果提取失败，返回null
+      console.warn(`[extractArticleContent] ⚠️ 百度移动端页面无法提取正文，需要JavaScript渲染`);
+      return null;
+    }
+    
     // 特殊处理：新浪新闻（sina.com.cn）
     // 新浪新闻的正文在 <div class="article" id="artibody"> 中
     if (url && url.includes('sina.com.cn')) {
@@ -322,6 +440,548 @@ class NewsAnalysis {
         }
       } else {
         console.log(`[extractArticleContent] ⚠️ 未找到每经网的g-article div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：中国经营网（cbnet.com）
+    // 中国经营网的正文在 <div class="content_page p_page">、<div class="content_page p_page_1"> 等多页标签中
+    if (url && (url.includes('cbnet.com') || url.includes('cb.com.cn'))) {
+      console.log(`[extractArticleContent] 检测到中国经营网URL，使用特殊提取逻辑`);
+      
+      // 查找所有包含 content_page p_page 的div元素
+      const findCbnetContentPages = (html) => {
+        // 匹配所有同时包含 content_page 和 p_page 类的div标签
+        // 支持：content_page p_page、content_page p_page_1、content_page p_page_2 等
+        // 正则表达式确保同时包含 content_page 和 p_page（可能带数字后缀）
+        const pageDivRegex = /<div[^>]*class\s*=\s*["']([^"']*)["'][^>]*>/gi;
+        const pageMatches = [];
+        let match;
+        
+        // 查找所有匹配的div开始标签
+        while ((match = pageDivRegex.exec(html)) !== null) {
+          const classAttr = match[1] || '';
+          // 检查class属性是否同时包含 content_page 和 p_page
+          if (!classAttr.includes('content_page') || !classAttr.match(/\bp_page(?:_\d+)?\b/)) {
+            continue; // 跳过不匹配的div
+          }
+          
+          const startPos = match.index;
+          const tagEnd = startPos + match[0].length;
+          
+          // 从开始标签后查找对应的结束标签（处理嵌套div）
+          let depth = 1;
+          let pos = tagEnd;
+          let endPos = -1;
+          
+          while (pos < html.length && depth > 0) {
+            const nextOpen = html.indexOf('<div', pos);
+            const nextClose = html.indexOf('</div>', pos);
+            
+            if (nextClose === -1) {
+              endPos = html.length;
+              break;
+            }
+            
+            // 检查是否有嵌套的div
+            if (nextOpen !== -1 && nextOpen < nextClose) {
+              // 检查这个<div是否在script标签内
+              const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+              const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+              if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+                pos = scriptAfterDiv + 9;
+                continue;
+              }
+              
+              depth++;
+              pos = nextOpen + 4;
+            } else {
+              // 检查这个</div>是否在script标签内
+              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+              const scriptAfterClose = html.indexOf('</script>', nextClose);
+              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+                pos = scriptAfterClose + 9;
+                continue;
+              }
+              
+              depth--;
+              if (depth === 0) {
+                endPos = nextClose;
+                break;
+              }
+              pos = nextClose + 6;
+            }
+          }
+          
+          if (endPos !== -1) {
+            const content = html.substring(tagEnd, endPos);
+            pageMatches.push({
+              startPos: startPos,
+              content: content
+            });
+          }
+        }
+        
+        // 按位置排序，确保按顺序合并
+        pageMatches.sort((a, b) => a.startPos - b.startPos);
+        
+        // 合并所有页面的内容
+        if (pageMatches.length > 0) {
+          const combinedContent = pageMatches.map(m => m.content).join('\n');
+          console.log(`[extractArticleContent] 找到 ${pageMatches.length} 个内容页面`);
+          return combinedContent;
+        }
+        
+        return null;
+      };
+      
+      const cbnetContent = findCbnetContentPages(html);
+      
+      if (cbnetContent) {
+        // 清理script、style等标签
+        let cleanedContent = cbnetContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        // 检查内容长度
+        const cbnetText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        if (cbnetText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取中国经营网正文，长度: ${cbnetText.length}字符`);
+          console.log(`[extractArticleContent] ✓ 中国经营网内容预览（前300字符）: ${cbnetText.substring(0, 300)}...`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 中国经营网提取的内容太短（${cbnetText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到中国经营网的content_page p_page div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：中国民用航空网
+    // 正文在 <div class="entry-content"> 中
+    if (url && (url.includes('caacnews.com.cn') || url.includes('caacnews.com'))) {
+      console.log(`[extractArticleContent] 检测到中国民用航空网URL，使用特殊提取逻辑`);
+      
+      const findCaacContent = (html) => {
+        // 查找class包含entry-content的div
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bentry-content\b[^"']*["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        return null;
+      };
+      
+      const caacContent = findCaacContent(html);
+      if (caacContent) {
+        let cleanedContent = caacContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        const caacText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (caacText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取中国民用航空网正文，长度: ${caacText.length}字符`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 中国民用航空网提取的内容太短（${caacText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到中国民用航空网的entry-content div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：长江商报
+    // 正文在 <div class="c_zw"> 中
+    if (url && url.includes('changjiangtimes.com')) {
+      console.log(`[extractArticleContent] 检测到长江商报URL，使用特殊提取逻辑`);
+      
+      const findCjContent = (html) => {
+        // 查找class="c_zw"的div
+        const divStartRegex = /<div[^>]*class\s*=\s*["']c_zw["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        return null;
+      };
+      
+      const cjContent = findCjContent(html);
+      if (cjContent) {
+        let cleanedContent = cjContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        const cjText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (cjText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取长江商报正文，长度: ${cjText.length}字符`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 长江商报提取的内容太短（${cjText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到长江商报的c_zw div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：新浪财经（finance.sina.com.cn）
+    // 正文在 <div class="article" id="artibody"> 中
+    if (url && url.includes('finance.sina.com.cn')) {
+      console.log(`[extractArticleContent] 检测到新浪财经URL，使用特殊提取逻辑`);
+      
+      const findSinaFinanceDiv = (html) => {
+        // 查找class包含article且id="artibody"的div
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\barticle\b[^"']*["'][^>]*id\s*=\s*["']artibody["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          // 如果没找到，尝试只匹配id="artibody"
+          const divStartRegex2 = /<div[^>]*id\s*=\s*["']artibody["'][^>]*>/i;
+          const startMatch2 = html.match(divStartRegex2);
+          if (!startMatch2) {
+            return null;
+          }
+          const startPos = startMatch2.index;
+          const tagEnd = startPos + startMatch2[0].length;
+          
+          let depth = 1;
+          let pos = tagEnd;
+          let endPos = -1;
+          
+          while (pos < html.length && depth > 0) {
+            const nextOpen = html.indexOf('<div', pos);
+            const nextClose = html.indexOf('</div>', pos);
+            
+            if (nextClose === -1) {
+              endPos = html.length;
+              break;
+            }
+            
+            if (nextOpen !== -1 && nextOpen < nextClose) {
+              const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+              const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+              if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+                pos = scriptAfterDiv + 9;
+                continue;
+              }
+              depth++;
+              pos = nextOpen + 4;
+            } else {
+              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+              const scriptAfterClose = html.indexOf('</script>', nextClose);
+              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+                pos = scriptAfterClose + 9;
+                continue;
+              }
+              depth--;
+              if (depth === 0) {
+                endPos = nextClose;
+                break;
+              }
+              pos = nextClose + 6;
+            }
+          }
+          
+          if (endPos !== -1) {
+            return html.substring(tagEnd, endPos);
+          }
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        return null;
+      };
+      
+      const sinaFinanceContent = findSinaFinanceDiv(html);
+      if (sinaFinanceContent) {
+        let cleanedContent = sinaFinanceContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        const sinaFinanceText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (sinaFinanceText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取新浪财经正文，长度: ${sinaFinanceText.length}字符`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 新浪财经提取的内容太短（${sinaFinanceText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到新浪财经的article artibody div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：科创板日报
+    // 正文在 <div class="_18p7x" data-testid="article"> 中
+    if (url && (url.includes('stcn.com') || url.includes('chinastarmarket.cn'))) {
+      console.log(`[extractArticleContent] 检测到科创板日报URL，使用特殊提取逻辑`);
+      
+      const findStcnContent = (html) => {
+        // 查找class="_18p7x"且data-testid="article"的div
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*_18p7x[^"']*["'][^>]*data-testid\s*=\s*["']article["'][^>]*>/i;
+        const startMatch = html.match(divStartRegex);
+        
+        if (!startMatch) {
+          // 如果没找到，尝试只匹配class="_18p7x"
+          const divStartRegex2 = /<div[^>]*class\s*=\s*["'][^"']*_18p7x[^"']*["'][^>]*>/i;
+          const startMatch2 = html.match(divStartRegex2);
+          if (!startMatch2) {
+            return null;
+          }
+          const startPos = startMatch2.index;
+          const tagEnd = startPos + startMatch2[0].length;
+          
+          let depth = 1;
+          let pos = tagEnd;
+          let endPos = -1;
+          
+          while (pos < html.length && depth > 0) {
+            const nextOpen = html.indexOf('<div', pos);
+            const nextClose = html.indexOf('</div>', pos);
+            
+            if (nextClose === -1) {
+              endPos = html.length;
+              break;
+            }
+            
+            if (nextOpen !== -1 && nextOpen < nextClose) {
+              const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+              const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+              if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+                pos = scriptAfterDiv + 9;
+                continue;
+              }
+              depth++;
+              pos = nextOpen + 4;
+            } else {
+              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+              const scriptAfterClose = html.indexOf('</script>', nextClose);
+              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+                pos = scriptAfterClose + 9;
+                continue;
+              }
+              depth--;
+              if (depth === 0) {
+                endPos = nextClose;
+                break;
+              }
+              pos = nextClose + 6;
+            }
+          }
+          
+          if (endPos !== -1) {
+            return html.substring(tagEnd, endPos);
+          }
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        return null;
+      };
+      
+      const stcnContent = findStcnContent(html);
+      if (stcnContent) {
+        let cleanedContent = stcnContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        const stcnText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (stcnText.length > 100) {
+          console.log(`[extractArticleContent] ✓ 成功提取科创板日报正文，长度: ${stcnText.length}字符`);
+          return cleanedContent;
+        } else {
+          console.log(`[extractArticleContent] ⚠️ 科创板日报提取的内容太短（${stcnText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        console.log(`[extractArticleContent] ⚠️ 未找到科创板日报的_18p7x article div，继续使用通用提取逻辑`);
       }
     }
     
@@ -1581,17 +2241,61 @@ class NewsAnalysis {
               console.warn(`[ensureNewsContent] Python脚本提取失败或内容为空，错误: ${extractResult?.error || '未知错误'}`);
               // Python脚本提取失败，尝试使用常规方法作为备用
               console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
-              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+              try {
+                fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+              } catch (fetchError) {
+                // 检查是否是反爬虫阻塞错误或需要JavaScript渲染的错误
+                if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
+                  console.warn(`[ensureNewsContent] 检测到反爬虫阻塞（521错误），URL: ${newsItem.source_url}`);
+                  newsItem._antiCrawlerBlocked = true;
+                  fetchedContent = null;
+                } else if (fetchError.message === 'JAVASCRIPT_REQUIRED') {
+                  console.warn(`[ensureNewsContent] 检测到需要JavaScript渲染的页面，URL: ${newsItem.source_url}`);
+                  newsItem._antiCrawlerBlocked = true;
+                  fetchedContent = null;
+                } else {
+                  throw fetchError;
+                }
+              }
             }
           } catch (wechatError) {
             console.error(`[ensureNewsContent] Python脚本提取时出错: ${wechatError.message}`);
             // Python脚本提取失败，尝试使用常规方法作为备用
             console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
-            fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+            try {
+              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+            } catch (fetchError) {
+              // 检查是否是反爬虫阻塞错误
+              if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
+                console.warn(`[ensureNewsContent] 检测到反爬虫阻塞（521错误），URL: ${newsItem.source_url}`);
+                newsItem._antiCrawlerBlocked = true;
+                fetchedContent = null;
+              } else {
+                throw fetchError;
+              }
+            }
           }
         } else {
           // 非微信公众号文章，使用常规提取
-          fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+          try {
+            fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+          } catch (fetchError) {
+            // 检查是否是反爬虫阻塞错误或需要JavaScript渲染的错误
+            if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
+              console.warn(`[ensureNewsContent] 检测到反爬虫阻塞（521错误），URL: ${newsItem.source_url}`);
+              // 在newsItem上设置标记，表示遇到反爬虫阻塞
+              newsItem._antiCrawlerBlocked = true;
+              fetchedContent = null;
+            } else if (fetchError.message === 'JAVASCRIPT_REQUIRED') {
+              console.warn(`[ensureNewsContent] 检测到需要JavaScript渲染的页面，URL: ${newsItem.source_url}`);
+              // 在newsItem上设置标记，表示需要JavaScript渲染
+              newsItem._antiCrawlerBlocked = true;
+              fetchedContent = null;
+            } else {
+              // 其他错误，继续抛出
+              throw fetchError;
+            }
+          }
         }
         
         // 如果常规提取失败或内容太短，尝试使用AI提取（仅对格隆汇等网站）
@@ -3367,15 +4071,29 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
       }
       
-      // interfaceType已在前面声明，直接使用
-      const analysis = await this.analyzeNewsSentimentAndType(
-        newsItem.title,
-        contentForAnalysis, // 使用确保后的内容
-        newsItem.source_url,
-        isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
-        interfaceType
-      );
-      console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
+      // 检查是否遇到反爬虫阻塞
+      let analysis;
+      if (newsItem._antiCrawlerBlocked) {
+        console.log(`[processNewsWithEnterprise] 检测到反爬虫阻塞，设置特殊摘要`);
+        // 设置特殊摘要和关键词
+        analysis = {
+          sentiment: 'neutral',
+          sentiment_reason: '网页设置了反爬虫机制，无法获取正文',
+          keywords: ['政策信息'],
+          news_abstract: '网页设置了反爬虫机制，无法获取正文'
+        };
+        console.log(`[processNewsWithEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
+      } else {
+        // interfaceType已在前面声明，直接使用
+        analysis = await this.analyzeNewsSentimentAndType(
+          newsItem.title,
+          contentForAnalysis, // 使用确保后的内容
+          newsItem.source_url,
+          isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
+          interfaceType
+        );
+        console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
+      }
 
       // 在更新数据库之前，校验分析结果（摘要和关键词）
       console.log(`[processNewsWithEnterprise] 开始校验分析结果...`);
@@ -3563,14 +4281,28 @@ ${enterpriseList}
         console.log(`[processNewsWithoutEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
       }
       
-      // 分析新闻情绪和类型（使用已确保的content）
-      const analysis = await this.analyzeNewsSentimentAndType(
-        newsItem.title,
-        contentForAnalysis, // 使用确保后的内容
-        newsItem.source_url,
-        isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
-        interfaceType
-      );
+      // 检查是否遇到反爬虫阻塞
+      let analysis;
+      if (newsItem._antiCrawlerBlocked) {
+        console.log(`[processNewsWithoutEnterprise] 检测到反爬虫阻塞，设置特殊摘要`);
+        // 设置特殊摘要和关键词
+        analysis = {
+          sentiment: 'neutral',
+          sentiment_reason: '网页设置了反爬虫机制，无法获取正文',
+          keywords: ['政策信息'],
+          news_abstract: '网页设置了反爬虫机制，无法获取正文'
+        };
+        console.log(`[processNewsWithoutEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
+      } else {
+        // 分析新闻情绪和类型（使用已确保的content）
+        analysis = await this.analyzeNewsSentimentAndType(
+          newsItem.title,
+          contentForAnalysis, // 使用确保后的内容
+          newsItem.source_url,
+          isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
+          interfaceType
+        );
+      }
 
       // 检查是否为广告类型
       const isAdvertisement = analysis.keywords.some(keyword => {
