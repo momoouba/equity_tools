@@ -33,7 +33,7 @@ axiosInstance.interceptors.request.use(
           config.headers['x-user-role'] = user.role
         }
       } catch (e) {
-        console.warn('解析用户信息失败:', e)
+        // 静默处理解析错误
       }
     }
     return config
@@ -52,7 +52,10 @@ axiosInstance.interceptors.response.use(
     // 如果是401未授权，清除用户信息并跳转到登录页
     if (error.response?.status === 401) {
       localStorage.removeItem('user')
-      window.location.href = '/login'
+      // 只在非分享页面时跳转
+      if (!window.location.pathname.startsWith('/share/')) {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }

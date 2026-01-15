@@ -1,21 +1,76 @@
-import React, { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import React, { useState, useEffect, useCallback } from 'react'
+import { useParams } from 'react-router-dom'
 import axios from '../utils/axios'
 import Pagination from '../components/Pagination'
 import './ShareNewsPage.css'
 
+// 版本标识：简化版本，已移除所有循环逻辑 - 2026-01-15
+const VERSION = '2.0.0-simplified'
+
+// 强制清除控制台并显示版本信息（在模块加载时立即执行）
+if (typeof window !== 'undefined') {
+  // 立即清除控制台
+  console.clear()
+  
+  // 显示醒目的版本信息
+  console.log('%c═══════════════════════════════════════════════════════', 'color: green; font-size: 16px; font-weight: bold')
+  console.log('%c[ShareNewsPage] 版本: ' + VERSION, 'color: green; font-size: 18px; font-weight: bold')
+  console.log('%c已移除所有循环逻辑（MutationObserver、setInterval等）', 'color: green; font-size: 14px')
+  console.log('%c═══════════════════════════════════════════════════════', 'color: green; font-size: 16px; font-weight: bold')
+  
+  // 标记新版本已加载
+  window.__SHARE_NEWS_PAGE_VERSION__ = VERSION
+  window.__SHARE_NEWS_PAGE_LOADED_AT__ = Date.now()
+  
+  // 监听控制台输出，如果检测到旧代码的日志，立即警告
+  const originalLog = console.log
+  const originalWarn = console.warn
+  const originalError = console.error
+  
+  let oldCodeDetected = false
+  
+  const checkForOldCode = (args) => {
+    const message = args.join(' ')
+    if (message.includes('MutationObserver 触发') || 
+        message.includes('找到') && message.includes('个表头元素') ||
+        message.includes('已为') && message.includes('个表头单元格设置样式')) {
+      if (!oldCodeDetected) {
+        oldCodeDetected = true
+        console.error('%c⚠️ 检测到旧代码的日志！浏览器可能在使用缓存！', 'color: red; font-size: 16px; font-weight: bold')
+        console.error('%c请立即按 Ctrl+Shift+R 硬刷新，或使用无痕模式', 'color: red; font-size: 14px')
+        console.error('%c如果问题持续，请清除浏览器缓存', 'color: orange; font-size: 14px')
+      }
+    }
+  }
+  
+  console.log = (...args) => {
+    checkForOldCode(args)
+    originalLog.apply(console, args)
+  }
+  
+  console.warn = (...args) => {
+    checkForOldCode(args)
+    originalWarn.apply(console, args)
+  }
+  
+  console.error = (...args) => {
+    checkForOldCode(args)
+    originalError.apply(console, args)
+  }
+}
+
 function ShareNewsPage() {
+  
   const { token } = useParams()
-  const navigate = useNavigate()
   const [newsList, setNewsList] = useState([])
   const [allFilteredNews, setAllFilteredNews] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
-  const [activeTab, setActiveTab] = useState('yesterday') // 默认显示昨日舆情
+  const [activeTab, setActiveTab] = useState('yesterday')
   const [pageSize, setPageSize] = useState(10)
-  const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise') // 默认显示企业相关
+  const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise')
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [password, setPassword] = useState('')
   const [passwordError, setPasswordError] = useState('')
@@ -23,32 +78,39 @@ function ShareNewsPage() {
   const [verified, setVerified] = useState(false)
   const [error, setError] = useState('')
 
-  // 验证token和密码
+  // 验证token
   useEffect(() => {
+    let isMounted = true
+    
     const verifyToken = async () => {
       try {
-        console.log('验证分享链接token:', token)
-        const response = await axios.get(`/api/news-share/verify/${token}`)
-        console.log('验证响应:', response.data)
-        if (response.data.success) {
-          if (response.data.data.hasPassword) {
-            // 需要密码验证
+        const response = await axios.get(`/api/news-share/verify/${token}`, {
+          timeout: 10000
+        })
+        
+        if (!isMounted) return
+        
+        if (response.data?.success) {
+          if (response.data.data?.hasPassword) {
             setShowPasswordModal(true)
             setVerifying(false)
           } else {
-            // 不需要密码，直接验证通过
             setVerified(true)
             setVerifying(false)
-            fetchNews()
           }
         } else {
           setVerifying(false)
-          setError(response.data.message || '分享链接验证失败')
+          setError(response.data?.message || '分享链接验证失败')
         }
       } catch (error) {
-        console.error('验证token失败:', error)
+        if (!isMounted) return
+        
         setVerifying(false)
-        setError(error.response?.data?.message || '分享链接无效或已过期')
+        if (error.response) {
+          setError(error.response.data?.message || `服务器错误 (${error.response.status})`)
+        } else {
+          setError(error.message || '分享链接无效或已过期')
+        }
       }
     }
 
@@ -57,6 +119,10 @@ function ShareNewsPage() {
     } else {
       setVerifying(false)
       setError('缺少分享链接token')
+    }
+    
+    return () => {
+      isMounted = false
     }
   }, [token])
 
@@ -77,7 +143,6 @@ function ShareNewsPage() {
       if (response.data.success) {
         setVerified(true)
         setShowPasswordModal(false)
-        fetchNews()
       }
     } catch (error) {
       setPasswordError(error.response?.data?.message || '密码错误')
@@ -85,12 +150,12 @@ function ShareNewsPage() {
   }
 
   // 获取舆情信息
-  const fetchNews = async () => {
+  const fetchNews = useCallback(async () => {
     setLoading(true)
     try {
       const params = {
         page: 1,
-        pageSize: 100000, // 获取所有数据用于客户端过滤
+        pageSize: 100000,
         timeRange: activeTab
       }
       if (search) {
@@ -102,25 +167,25 @@ function ShareNewsPage() {
       if (response.data.success) {
         let allNewsData = response.data.data || []
 
-        // 处理关键词数据（确保keywords是数组格式）
+        // 处理关键词数据
         allNewsData = allNewsData.map(news => {
-          let keywords = [];
+          let keywords = []
           if (news.keywords) {
             if (Array.isArray(news.keywords)) {
-              keywords = news.keywords;
+              keywords = news.keywords
             } else if (typeof news.keywords === 'string') {
               try {
-                keywords = JSON.parse(news.keywords);
+                keywords = JSON.parse(news.keywords)
               } catch (e) {
-                keywords = [news.keywords];
+                keywords = [news.keywords]
               }
             }
           }
           return {
             ...news,
             keywords: Array.isArray(keywords) ? keywords : []
-          };
-        });
+          }
+        })
 
         // 客户端过滤
         if (enterpriseFilter === 'enterprise') {
@@ -129,7 +194,7 @@ function ShareNewsPage() {
           )
         }
 
-        // 排序：有被投企业全称的排在前面，然后按发布时间降序
+        // 排序
         allNewsData.sort((a, b) => {
           const aHasEnterprise = a.enterprise_full_name && a.enterprise_full_name.trim() !== ''
           const bHasEnterprise = b.enterprise_full_name && b.enterprise_full_name.trim() !== ''
@@ -148,19 +213,18 @@ function ShareNewsPage() {
         setError(response.data.message || '获取舆情信息失败')
       }
     } catch (error) {
-      console.error('获取舆情信息失败:', error)
       setError(error.response?.data?.message || '获取舆情信息失败')
     } finally {
       setLoading(false)
     }
-  }
+  }, [token, activeTab, search, enterpriseFilter])
 
   // 当verified为true时获取数据
   useEffect(() => {
     if (verified && !showPasswordModal) {
       fetchNews()
     }
-  }, [verified, activeTab, search, enterpriseFilter, showPasswordModal])
+  }, [verified, showPasswordModal, fetchNews])
 
   // 客户端分页
   useEffect(() => {
@@ -172,32 +236,30 @@ function ShareNewsPage() {
     const startIndex = (currentPage - 1) * pageSize
     const endIndex = startIndex + pageSize
     const paginatedData = allFilteredNews.slice(startIndex, endIndex)
-
     setNewsList(paginatedData)
   }, [currentPage, pageSize, allFilteredNews])
 
-  const handleTabChange = (tab) => {
-    setActiveTab(tab)
-    setCurrentPage(1)
-  }
-
-  const handlePageSizeChange = (newPageSize) => {
-    setPageSize(newPageSize)
-    setCurrentPage(1)
+  // 搜索处理
+  const handleSearchChange = (e) => {
+    setSearch(e.target.value)
   }
 
   const handleSearch = (e) => {
     e.preventDefault()
     setCurrentPage(1)
+    fetchNews()
   }
 
-  const handleSearchChange = (e) => {
-    setSearch(e.target.value)
+  // Tab切换
+  const handleTabChange = (tab) => {
+    setActiveTab(tab)
     setCurrentPage(1)
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  // 分页计算
+  const totalPages = Math.ceil(total / pageSize) || 1
 
+  // 格式化日期
   const formatDate = (dateString) => {
     if (!dateString) return '-'
     try {
@@ -394,7 +456,7 @@ function ShareNewsPage() {
         {loading ? (
           <div className="loading">加载中...</div>
         ) : (
-          <table className="news-table">
+          <table className="news-table" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 <th className="sequence-number-cell">序号</th>
@@ -426,16 +488,15 @@ function ShareNewsPage() {
                     </td>
                     <td className="keywords-cell">
                       {(() => {
-                        // 确保keywords是数组
-                        let keywords = [];
+                        let keywords = []
                         if (news.keywords) {
                           if (Array.isArray(news.keywords)) {
-                            keywords = news.keywords;
+                            keywords = news.keywords
                           } else if (typeof news.keywords === 'string') {
                             try {
-                              keywords = JSON.parse(news.keywords);
+                              keywords = JSON.parse(news.keywords)
                             } catch (e) {
-                              keywords = news.keywords.trim() ? [news.keywords] : [];
+                              keywords = news.keywords.trim() ? [news.keywords] : []
                             }
                           }
                         }
@@ -448,20 +509,13 @@ function ShareNewsPage() {
                               </span>
                             ))}
                             {keywords.length > 3 && (
-                              <span
-                                className="keyword-more"
-                                title={keywords.slice(3).join(', ')}
-                              >
-                                +{keywords.length - 3}
-                              </span>
+                              <span className="keyword-more">+{keywords.length - 3}</span>
                             )}
                           </div>
-                        ) : (
-                          '-'
-                        );
+                        ) : '-'
                       })()}
                     </td>
-                    <td className="publish-time-cell" title={formatDate(news.public_time)}>
+                    <td className="publish-time-cell" style={{ whiteSpace: 'pre-line' }}>
                       {formatDateWithLineBreak(news.public_time)}
                     </td>
                     <td className="title-cell" title={news.title || ''}>
@@ -472,17 +526,10 @@ function ShareNewsPage() {
                     </td>
                     <td className="article-link-cell">
                       {news.source_url ? (
-                        <a
-                          href={news.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="article-link"
-                        >
-                          查看文章
+                        <a href={news.source_url} target="_blank" rel="noopener noreferrer">
+                          查看
                         </a>
-                      ) : (
-                        '-'
-                      )}
+                      ) : '-'}
                     </td>
                     <td className="account-name-cell" title={news.account_name || ''}>
                       {news.account_name || '-'}
@@ -498,13 +545,16 @@ function ShareNewsPage() {
         )}
       </div>
 
+      {/* 分页控件 */}
       <div className="pagination-container">
         <div className="page-size-selector">
-          <label>每页显示：</label>
+          <span>每页显示：</span>
           <select
             value={pageSize}
-            onChange={(e) => handlePageSizeChange(parseInt(e.target.value))}
-            className="page-size-select"
+            onChange={(e) => {
+              setPageSize(Number(e.target.value))
+              setCurrentPage(1)
+            }}
           >
             <option value={10}>10条</option>
             <option value={20}>20条</option>
@@ -529,4 +579,3 @@ function ShareNewsPage() {
 }
 
 export default ShareNewsPage
-

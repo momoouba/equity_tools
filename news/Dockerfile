@@ -33,6 +33,8 @@ RUN apt-get update && \
     python3-pip \
     python3-setuptools \
     tzdata \
+    # 编译工具（用于编译 bcrypt 等原生模块）
+    build-essential \
     # Playwright所需的系统依赖
     libnss3 \
     libatk1.0-0 \
@@ -59,7 +61,10 @@ COPY package*.json ./
 RUN npm config set registry https://registry.npmmirror.com \
     && npm config set fetch-timeout 300000 \
     && npm config set fetch-retries 5 \
-    && npm ci --only=production
+    && npm ci --only=production \
+    && apt-get purge -y build-essential \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # 复制Python依赖文件并安装
 COPY server/utils/requirements.txt ./server/utils/

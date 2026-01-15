@@ -5,7 +5,7 @@ import '@arco-design/web-react/dist/css/arco.css'
 import App from './App'
 import './index.css'
 
-// Arco Design 主题配置 - 简约商务风
+// Arco Design 主题配置
 const themeConfig = {
   primaryColor: '#165dff',
   successColor: '#00b42a',
@@ -17,11 +17,14 @@ const themeConfig = {
   componentSize: 'default'
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <ConfigProvider theme={themeConfig}>
-      <App />
-    </ConfigProvider>
-  </React.StrictMode>,
-)
+const rootElement = document.getElementById('root')
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <ConfigProvider theme={themeConfig}>
+        <App />
+      </ConfigProvider>
+    </React.StrictMode>,
+  )
+}
 

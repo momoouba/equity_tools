@@ -26,19 +26,26 @@ const checkAuth = (req, res, next) => {
 };
 
 /**
- * 创建分享链接
+ * 创建或更新分享链接
  * POST /api/news-share/create
+ * 如果用户已有活跃的分享链接，则更新它；否则创建新的
  */
 router.post('/create', checkAuth, async (req, res) => {
   try {
     const userId = req.currentUserId;
     const { hasExpiry, expiryTime, hasPassword, password } = req.body;
 
-    // 生成token
-    const shareToken = generateShareToken();
-    const shareId = await generateId('news_share_links');
+    // 检查是否已有活跃的分享链接
+    const existingLinks = await db.query(
+      `SELECT id, share_token, status
+       FROM news_share_links
+       WHERE user_id = ? AND status = 'active'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userId]
+    );
 
-    // 处理密码
+    // 处理密码（每次都需要重新生成）
     let passwordHash = null;
     if (hasPassword && password) {
       passwordHash = await bcrypt.hash(password, 10);
@@ -50,21 +57,48 @@ router.post('/create', checkAuth, async (req, res) => {
       expiryTimeValue = new Date(expiryTime);
     }
 
-    // 插入数据库
-    await db.execute(
-      `INSERT INTO news_share_links 
-       (id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
-       VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
-      [
-        shareId,
-        userId,
-        shareToken,
-        hasExpiry ? 1 : 0,
-        expiryTimeValue,
-        hasPassword ? 1 : 0,
-        passwordHash
-      ]
-    );
+    let shareId, shareToken;
+
+    if (existingLinks.length > 0) {
+      // 更新已有链接
+      shareId = existingLinks[0].id;
+      shareToken = existingLinks[0].share_token;
+
+      // 更新数据库
+      await db.execute(
+        `UPDATE news_share_links 
+         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND user_id = ?`,
+        [
+          hasExpiry ? 1 : 0,
+          expiryTimeValue,
+          hasPassword ? 1 : 0,
+          passwordHash,
+          shareId,
+          userId
+        ]
+      );
+    } else {
+      // 创建新链接
+      shareToken = generateShareToken();
+      shareId = await generateId('news_share_links');
+
+      // 插入数据库
+      await db.execute(
+        `INSERT INTO news_share_links 
+         (id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
+         VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
+        [
+          shareId,
+          userId,
+          shareToken,
+          hasExpiry ? 1 : 0,
+          expiryTimeValue,
+          hasPassword ? 1 : 0,
+          passwordHash
+        ]
+      );
+    }
 
     // 生成分享链接URL（前端路由）
     // 开发环境使用前端端口5173，生产环境使用环境变量或默认前端域名
@@ -91,10 +125,76 @@ router.post('/create', checkAuth, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('创建分享链接失败:', error);
+    console.error('创建/更新分享链接失败:', error);
     res.status(500).json({
       success: false,
-      message: '创建分享链接失败：' + error.message
+      message: '创建/更新分享链接失败：' + error.message
+    });
+  }
+});
+
+/**
+ * 获取当前用户最新的活跃分享链接
+ * GET /api/news-share/current
+ */
+router.get('/current', checkAuth, async (req, res) => {
+  try {
+    const userId = req.currentUserId;
+
+    const links = await db.query(
+      `SELECT id, share_token, status, has_expiry, expiry_time, has_password, created_at, updated_at
+       FROM news_share_links
+       WHERE user_id = ? AND status = 'active'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [userId]
+    );
+
+    if (links.length === 0) {
+      return res.json({
+        success: true,
+        data: null
+      });
+    }
+
+    const link = links[0];
+
+    // 检查有效期
+    let isValid = true;
+    if (link.has_expiry && link.expiry_time) {
+      const now = new Date();
+      const expiryTime = new Date(link.expiry_time);
+      if (now > expiryTime) {
+        isValid = false;
+      }
+    }
+
+    // 生成完整URL（前端路由）
+    let frontendHost;
+    if (process.env.NODE_ENV === 'development') {
+      frontendHost = 'localhost:5173';
+    } else {
+      frontendHost = process.env.FRONTEND_HOST || req.get('host');
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id: link.id,
+        shareToken: link.share_token,
+        shareUrl: `${req.protocol}://${frontendHost}/share/${link.share_token}`,
+        status: link.status,
+        hasExpiry: link.has_expiry === 1,
+        expiryTime: link.expiry_time,
+        hasPassword: link.has_password === 1,
+        isValid: isValid
+      }
+    });
+  } catch (error) {
+    console.error('获取当前分享链接失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '获取当前分享链接失败：' + error.message
     });
   }
 });

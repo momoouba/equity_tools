@@ -48,6 +48,7 @@ function NewsInfo() {
   })
   const [shareLink, setShareLink] = useState(null)
   const [shareLoading, setShareLoading] = useState(false)
+  const [currentShareLinkId, setCurrentShareLinkId] = useState(null)
 
   useEffect(() => {
     const userData = localStorage.getItem('user')
@@ -76,6 +77,14 @@ function NewsInfo() {
       fetchUserStats()
     }
   }, [user, isAdmin])
+
+  // 当模态框打开时，加载已有分享链接
+  useEffect(() => {
+    if (showShareModal) {
+      loadCurrentShareLink()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showShareModal])
 
   const fetchNews = async () => {
     if (isAdmin && adminActiveTab !== 'news') {
@@ -489,7 +498,43 @@ function NewsInfo() {
     setSelectAll(allCurrentPageSelected)
   }, [newsList, selectedNewsIds])
 
-  // 创建分享链接
+  // 加载当前用户的分享链接
+  const loadCurrentShareLink = async () => {
+    try {
+      const response = await axios.get('/api/news-share/current')
+      if (response.data.success && response.data.data) {
+        const link = response.data.data
+        setShareLink(link)
+        setCurrentShareLinkId(link.id)
+        // 恢复配置状态
+        setShareConfig({
+          enabled: true,
+          hasExpiry: link.hasExpiry,
+          expiryTime: link.expiryTime ? new Date(link.expiryTime).toISOString().slice(0, 16) : '',
+          hasPassword: link.hasPassword,
+          password: '' // 密码不显示，每次需要重新生成
+        })
+      } else {
+        // 没有已有链接，重置状态
+        setShareLink(null)
+        setCurrentShareLinkId(null)
+        setShareConfig({
+          enabled: false,
+          hasExpiry: false,
+          expiryTime: '',
+          hasPassword: false,
+          password: ''
+        })
+      }
+    } catch (error) {
+      console.error('加载分享链接失败:', error)
+      // 加载失败时重置状态
+      setShareLink(null)
+      setCurrentShareLinkId(null)
+    }
+  }
+
+  // 创建或更新分享链接
   const handleCreateShareLink = async () => {
     if (!shareConfig.enabled) {
       Message.warning('请先开启公共链接分享')
@@ -501,9 +546,22 @@ function NewsInfo() {
       return
     }
 
-    if (shareConfig.hasPassword && !shareConfig.password) {
-      Message.warning('请设置密码')
-      return
+    // 如果启用密码保护，每次都需要重新生成密码
+    let finalPassword = shareConfig.password
+    if (shareConfig.hasPassword) {
+      // 如果已有链接，或者密码为空，都重新生成密码
+      if (currentShareLinkId || !finalPassword) {
+        // 生成随机密码
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
+        finalPassword = ''
+        for (let i = 0; i < 10; i++) {
+          finalPassword += chars.charAt(Math.floor(Math.random() * chars.length))
+        }
+        setShareConfig({
+          ...shareConfig,
+          password: finalPassword
+        })
+      }
     }
 
     setShareLoading(true)
@@ -512,22 +570,24 @@ function NewsInfo() {
         hasExpiry: shareConfig.hasExpiry,
         expiryTime: shareConfig.hasExpiry ? shareConfig.expiryTime : null,
         hasPassword: shareConfig.hasPassword,
-        password: shareConfig.hasPassword ? shareConfig.password : null
+        password: shareConfig.hasPassword ? finalPassword : null
       })
 
       if (response.data.success) {
         setShareLink(response.data.data)
+        setCurrentShareLinkId(response.data.data.id)
         const textToCopy = shareConfig.hasPassword
-          ? `链接：${response.data.data.shareUrl}\n密码：${shareConfig.password}`
+          ? `链接：${response.data.data.shareUrl}\n密码：${finalPassword}`
           : response.data.data.shareUrl
         navigator.clipboard.writeText(textToCopy)
-        Message.success('分享链接创建成功！链接和密码已复制到剪贴板')
+        const actionText = currentShareLinkId ? '更新' : '创建'
+        Message.success(`分享链接${actionText}成功！链接和密码已复制到剪贴板`)
       } else {
-        Message.error('创建分享链接失败：' + response.data.message)
+        Message.error('创建/更新分享链接失败：' + response.data.message)
       }
     } catch (error) {
-      console.error('创建分享链接失败:', error)
-      Message.error('创建分享链接失败：' + (error.response?.data?.message || error.message))
+      console.error('创建/更新分享链接失败:', error)
+      Message.error('创建/更新分享链接失败：' + (error.response?.data?.message || error.message))
     } finally {
       setShareLoading(false)
     }
@@ -801,7 +861,9 @@ function NewsInfo() {
                 <Button
                   type="primary"
                   status="danger"
-                  onClick={() => setShowShareModal(true)}
+                  onClick={() => {
+                    setShowShareModal(true)
+                  }}
                 >
                   发布
                 </Button>
@@ -1049,6 +1111,7 @@ function NewsInfo() {
             password: ''
           })
           setShareLink(null)
+          setCurrentShareLinkId(null)
         }}
         footer={null}
         style={{ width: 600 }}
@@ -1065,9 +1128,8 @@ function NewsInfo() {
                     ...shareConfig,
                     enabled: checked
                   })
-                  if (!checked) {
-                    setShareLink(null)
-                  }
+                  // 关闭开关时不删除链接信息，只是隐藏，这样再次打开时可以恢复
+                  // 如果用户真的想删除，可以通过其他方式（如删除链接功能）
                 }}
               />
             </div>
@@ -1153,25 +1215,28 @@ function NewsInfo() {
                           password: value
                         })
                       }}
-                      placeholder="请输入密码"
+                      placeholder={currentShareLinkId ? "密码已隐藏，点击更新链接将自动生成新密码" : "留空将自动生成密码，或手动输入"}
                       style={{ flex: 1 }}
+                      readOnly={!!currentShareLinkId}
                     />
-                    <Button
-                      onClick={() => {
-                        // 生成随机密码
-                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
-                        let newPassword = ''
-                        for (let i = 0; i < 10; i++) {
-                          newPassword += chars.charAt(Math.floor(Math.random() * chars.length))
-                        }
-                        setShareConfig({
-                          ...shareConfig,
-                          password: newPassword
-                        })
-                      }}
-                    >
-                      重新生成
-                    </Button>
+                    {!currentShareLinkId && (
+                      <Button
+                        onClick={() => {
+                          // 生成随机密码
+                          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*'
+                          let newPassword = ''
+                          for (let i = 0; i < 10; i++) {
+                            newPassword += chars.charAt(Math.floor(Math.random() * chars.length))
+                          }
+                          setShareConfig({
+                            ...shareConfig,
+                            password: newPassword
+                          })
+                        }}
+                      >
+                        重新生成
+                      </Button>
+                    )}
                   </Space>
                 )}
               </div>
@@ -1192,16 +1257,17 @@ function NewsInfo() {
                     password: ''
                   })
                   setShareLink(null)
+                  setCurrentShareLinkId(null)
                 }}
               >
                 取消
               </Button>
               <Button
                 type="primary"
-                onClick={shareLink ? handleCopyLinkAndPassword : handleCreateShareLink}
+                onClick={handleCreateShareLink}
                 loading={shareLoading}
               >
-                {shareLoading ? '创建中...' : shareLink ? '复制链接及密码' : '创建链接'}
+                {shareLoading ? (currentShareLinkId ? '更新中...' : '创建中...') : (currentShareLinkId ? '更新链接' : '创建链接')}
               </Button>
             </div>
           )}

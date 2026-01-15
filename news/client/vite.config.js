@@ -75,34 +75,28 @@ export default defineConfig({
             
             if (isConnectionRefused) {
               errorCount++
-              // 只在开发环境且距离上次警告超过10秒时显示一次提示
+              // 显示连接错误，不要抑制
               const now = Date.now()
               if (process.env.NODE_ENV === 'development' && (now - lastWarningTime > 10000)) {
-                console.warn('[Vite代理] 后端服务器正在启动中，请稍候...')
+                console.error('[Vite代理] ❌ 无法连接到后端服务器 (localhost:3001)，请确保后端服务正在运行')
+                console.error('[Vite代理] 错误详情:', err.message, err.code)
                 lastWarningTime = now
                 errorCount = 0
               }
-              // 完全抑制错误，不输出到控制台，也不抛出异常
+              // 不再抑制错误，让错误传播
               return
             }
-            // 其他错误才显示
-            console.warn('[Vite代理] 代理错误:', err.message)
+            // 其他错误显示
+            console.error('[Vite代理] ❌ 代理错误:', err.message, err.code)
           })
           
-          // 拦截代理请求，在启动阶段不输出日志
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            // 启动阶段不显示代理请求日志，避免刷屏
-            // 服务器就绪后（10秒后）可以显示（可选，如果需要调试可以取消注释）
-            // if (process.env.NODE_ENV === 'development' && (Date.now() - lastWarningTime > 10000)) {
-            //   console.log('[1]代理请求:', req.method, req.url)
-            // }
-          })
+          // 代理请求和响应（已移除日志以减少控制台输出）
         }
       }
     }
   },
   // 自定义日志级别，减少错误输出
-  logLevel: 'warn', // 只显示警告和错误，不显示info
+  logLevel: 'info', // 显示所有日志，便于调试
   clearScreen: false // 不清屏，保持日志连续性
 })
 

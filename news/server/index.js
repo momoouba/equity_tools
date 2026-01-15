@@ -138,10 +138,11 @@ app.use('/api/news-share', newsShareRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
-// 注意：开发环境应该使用Vite开发服务器（localhost:5173），这里只处理生产环境
 const clientDistPath = path.join(__dirname, '../client/dist');
-if (fs.existsSync(clientDistPath)) {
-  // 提供静态文件服务
+const isProduction = fs.existsSync(clientDistPath);
+
+if (isProduction) {
+  // 生产环境：提供静态文件服务
   app.use(express.static(clientDistPath));
   
   // 所有非API路径都返回index.html，让前端路由处理
@@ -165,6 +166,103 @@ if (fs.existsSync(clientDistPath)) {
       next();
     }
   });
+} else {
+  // 开发环境：将前端请求代理到 Vite 开发服务器（localhost:5173）
+  const http = require('http');
+  const { URL } = require('url');
+  
+  // 处理所有非API请求
+  app.use((req, res, next) => {
+    // 排除API路径
+    if (req.path.startsWith('/api')) {
+      return next();
+    }
+    
+    // 调试日志
+    console.log(`[开发环境代理] ${req.method} ${req.originalUrl} -> Vite (localhost:5173)`);
+    
+    // 代理到 Vite 开发服务器
+    const vitePort = 5173;
+    const targetUrl = new URL(`http://localhost:${vitePort}${req.originalUrl}`);
+    
+    const options = {
+      hostname: targetUrl.hostname,
+      port: targetUrl.port,
+      path: targetUrl.pathname + targetUrl.search,
+      method: req.method,
+      headers: {
+        ...req.headers,
+        host: `localhost:${vitePort}`
+      }
+    };
+    
+    const proxyReq = http.request(options, (proxyRes) => {
+      // 复制响应头
+      res.statusCode = proxyRes.statusCode;
+      Object.keys(proxyRes.headers).forEach(key => {
+        // 跳过一些不应该转发的头
+        if (key.toLowerCase() !== 'content-encoding' && 
+            key.toLowerCase() !== 'transfer-encoding' &&
+            key.toLowerCase() !== 'connection') {
+          res.setHeader(key, proxyRes.headers[key]);
+        }
+      });
+      
+      // 转发响应体
+      proxyRes.pipe(res);
+    });
+    
+    proxyReq.on('error', (err) => {
+      if (!res.headersSent) {
+        console.error(`[开发环境代理] 无法连接到 Vite 开发服务器 (localhost:${vitePort}):`, err.message);
+        res.status(503).send(`
+          <!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="UTF-8">
+              <title>开发服务器未启动</title>
+              <style>
+                body { font-family: Arial, sans-serif; padding: 40px; text-align: center; }
+                h1 { color: #e53e3e; }
+                pre { background: #f5f5f5; padding: 15px; border-radius: 5px; display: inline-block; }
+              </style>
+            </head>
+            <body>
+              <h1>无法连接到 Vite 开发服务器</h1>
+              <p>请确保前端开发服务器正在运行：</p>
+              <pre>cd client && npm run dev</pre>
+              <p>或者直接访问 Vite 开发服务器：</p>
+              <p><a href="http://localhost:${vitePort}${req.originalUrl}">http://localhost:${vitePort}${req.originalUrl}</a></p>
+            </body>
+          </html>
+        `);
+      }
+    });
+    
+    // 处理请求体
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'DELETE') {
+      // GET/HEAD/DELETE 请求没有 body，直接结束
+      proxyReq.end();
+    } else {
+      // POST/PUT/PATCH 等有 body 的请求，转发请求体
+      req.on('data', (chunk) => {
+        proxyReq.write(chunk);
+      });
+      req.on('end', () => {
+        proxyReq.end();
+      });
+      req.on('error', (err) => {
+        proxyReq.destroy();
+        if (!res.headersSent) {
+          res.status(500).send('Request error');
+        }
+      });
+    }
+  });
+  
+  console.log('✓ 开发环境：前端请求将代理到 Vite 开发服务器 (localhost:5173)');
+  console.log('  提示：如果 Vite 未启动，请运行: cd client && npm run dev');
+  console.log('  或者直接访问: http://localhost:5173');
 }
 
 // 全局错误日志
