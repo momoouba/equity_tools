@@ -2462,6 +2462,28 @@ class NewsAnalysis {
         throw new Error(`不支持的AI提供商: ${aiConfig.provider}`);
       }
     } catch (error) {
+      // 特殊处理：429配额超限错误
+      if (error.response && error.response.status === 429) {
+        const errorData = error.response.data || {};
+        const errorCode = errorData.code || '';
+        const errorMessage = errorData.message || error.message;
+        
+        console.error('AI模型调用失败: 配额超限 (429)', {
+          code: errorCode,
+          message: errorMessage,
+          provider: aiConfig.provider,
+          model: aiConfig.model_name,
+          request_id: errorData.request_id
+        });
+        
+        // 如果是配额超限，提供更详细的错误信息
+        if (errorCode === 'Throttling.AllocationQuota') {
+          throw new Error(`AI模型配额超限：${errorMessage}。请增加配额限制或稍后重试。`);
+        } else {
+          throw new Error(`AI模型调用失败 (429): ${errorMessage}`);
+        }
+      }
+      
       console.error('AI模型调用失败:', error);
       throw error;
     }
@@ -2891,15 +2913,38 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       // 尝试解析JSON响应
       let result;
       try {
-        // 提取JSON部分（可能包含在代码块中）
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          result = JSON.parse(jsonMatch[0]);
+        // 改进JSON提取逻辑：先尝试提取markdown代码块中的JSON
+        let jsonStr = null;
+        
+        // 1. 尝试提取 ```json ... ``` 或 ``` ... ``` 代码块中的内容
+        const jsonCodeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonCodeBlockMatch && jsonCodeBlockMatch[1]) {
+          jsonStr = jsonCodeBlockMatch[1].trim();
+        }
+        
+        // 2. 如果没找到代码块，尝试提取第一个完整的JSON对象
+        if (!jsonStr) {
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+          }
+        }
+        
+        if (jsonStr) {
+          // 清理可能存在的特殊字符（如反引号）
+          jsonStr = jsonStr
+            .replace(/`/g, '') // 移除反引号
+            .replace(/\n\s*\n/g, '\n') // 移除多余空行
+            .trim();
+          
+          result = JSON.parse(jsonStr);
         } else {
           throw new Error('未找到JSON格式的响应');
         }
       } catch (parseError) {
         console.warn('AI响应解析失败，使用默认值:', parseError.message);
+        console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
+        console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
         // 生成默认摘要，确保是完整句子，并跳过引导语
         const processedContent = this.skipIrrelevantContent(content || '');
         const contentPreview = processedContent.substring(0, 100);
@@ -3371,14 +3416,38 @@ ${enterpriseList}
       // 尝试解析JSON响应
       let result;
       try {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          result = JSON.parse(jsonMatch[0]);
+        // 改进JSON提取逻辑：先尝试提取markdown代码块中的JSON
+        let jsonStr = null;
+        
+        // 1. 尝试提取 ```json ... ``` 或 ``` ... ``` 代码块中的内容
+        const jsonCodeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonCodeBlockMatch && jsonCodeBlockMatch[1]) {
+          jsonStr = jsonCodeBlockMatch[1].trim();
+        }
+        
+        // 2. 如果没找到代码块，尝试提取第一个完整的JSON对象
+        if (!jsonStr) {
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+          }
+        }
+        
+        if (jsonStr) {
+          // 清理可能存在的特殊字符（如反引号）
+          jsonStr = jsonStr
+            .replace(/`/g, '') // 移除反引号
+            .replace(/\n\s*\n/g, '\n') // 移除多余空行
+            .trim();
+          
+          result = JSON.parse(jsonStr);
         } else {
           throw new Error('未找到JSON格式的响应');
         }
       } catch (parseError) {
         console.warn('企业关联性分析解析失败:', parseError.message);
+        console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
+        console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
         return [];
       }
 
@@ -3597,14 +3666,38 @@ ${enterpriseList}
       // 尝试解析JSON响应
       let result;
       try {
-        const jsonMatch = response.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          result = JSON.parse(jsonMatch[0]);
+        // 改进JSON提取逻辑：先尝试提取markdown代码块中的JSON
+        let jsonStr = null;
+        
+        // 1. 尝试提取 ```json ... ``` 或 ``` ... ``` 代码块中的内容
+        const jsonCodeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+        if (jsonCodeBlockMatch && jsonCodeBlockMatch[1]) {
+          jsonStr = jsonCodeBlockMatch[1].trim();
+        }
+        
+        // 2. 如果没找到代码块，尝试提取第一个完整的JSON对象
+        if (!jsonStr) {
+          const jsonMatch = response.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonStr = jsonMatch[0];
+          }
+        }
+        
+        if (jsonStr) {
+          // 清理可能存在的特殊字符（如反引号）
+          jsonStr = jsonStr
+            .replace(/`/g, '') // 移除反引号
+            .replace(/\n\s*\n/g, '\n') // 移除多余空行
+            .trim();
+          
+          result = JSON.parse(jsonStr);
         } else {
           throw new Error('未找到JSON格式的响应');
         }
       } catch (parseError) {
         console.warn('企业关联验证解析失败:', parseError.message);
+        console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
+        console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
         // 如果解析失败，默认保持关联（保守策略）
         return true;
       }

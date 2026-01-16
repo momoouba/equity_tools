@@ -13,7 +13,6 @@ const RadioGroup = Radio.Group
 
 function NewsInfo() {
   const [newsList, setNewsList] = useState([])
-  const [allFilteredNews, setAllFilteredNews] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -32,7 +31,7 @@ function NewsInfo() {
   const [selectedNewsIds, setSelectedNewsIds] = useState([])
   const [selectAll, setSelectAll] = useState(false)
   const [batchAnalysisLoading, setBatchAnalysisLoading] = useState(false)
-  const [pageSize, setPageSize] = useState(10)
+  const [pageSize, setPageSize] = useState(100) // 默认100条
   const [analysisStatus, setAnalysisStatus] = useState(null)
   const [analysisProgress, setAnalysisProgress] = useState(null)
   const [currentTaskId, setCurrentTaskId] = useState(null)
@@ -97,11 +96,12 @@ function NewsInfo() {
     
     setLoading(true)
     try {
-      const MAX_FETCH_SIZE = 100000
+      // 使用服务端分页，根据currentPage查询对应页的数据
       const params = {
-        page: 1,
-        pageSize: MAX_FETCH_SIZE,
-        timeRange: activeTab
+        page: currentPage,
+        pageSize: pageSize,
+        timeRange: activeTab,
+        enterpriseFilter: enterpriseFilter // 传递企业过滤参数到后端
       }
       if (search) {
         params.search = search
@@ -111,46 +111,34 @@ function NewsInfo() {
       const response = await axios.get(endpoint, { params })
       
       if (response.data.success) {
-        let allNewsData = response.data.data || []
-        const fetchedCount = allNewsData.length
+        let newsData = response.data.data || []
         const totalCount = response.data.total || 0
         
-        if (fetchedCount >= MAX_FETCH_SIZE && totalCount > MAX_FETCH_SIZE) {
-          console.warn(`数据量较大（${totalCount}条），当前显示前${MAX_FETCH_SIZE}条。建议使用搜索功能缩小范围。`)
-        }
-        
-        if (enterpriseFilter === 'enterprise') {
-          allNewsData = allNewsData.filter(news => news.enterprise_full_name && news.enterprise_full_name.trim() !== '')
-        }
-        
-        allNewsData.sort((a, b) => {
-          const aHasEnterprise = a.enterprise_full_name && a.enterprise_full_name.trim() !== ''
-          const bHasEnterprise = b.enterprise_full_name && b.enterprise_full_name.trim() !== ''
-          
-          if (aHasEnterprise && !bHasEnterprise) return -1
-          if (!aHasEnterprise && bHasEnterprise) return 1
-          
-          const timeA = a.public_time ? new Date(a.public_time).getTime() : 0
-          const timeB = b.public_time ? new Date(b.public_time).getTime() : 0
-          return timeB - timeA
+        // 处理关键词数据
+        newsData = newsData.map(news => {
+          let keywords = []
+          if (news.keywords) {
+            if (Array.isArray(news.keywords)) {
+              keywords = news.keywords
+            } else if (typeof news.keywords === 'string') {
+              try {
+                keywords = JSON.parse(news.keywords)
+              } catch (e) {
+                keywords = [news.keywords]
+              }
+            }
+          }
+          return {
+            ...news,
+            keywords: Array.isArray(keywords) ? keywords : []
+          }
         })
         
-        const totalFiltered = allNewsData.length
-        let finalTotal
-        if (totalCount > MAX_FETCH_SIZE) {
-          finalTotal = totalFiltered
-          if (enterpriseFilter === 'enterprise') {
-            console.warn(`数据量较大，当前显示企业相关新闻 ${totalFiltered} 条（实际获取 ${fetchedCount} 条，后端总数 ${totalCount} 条）。建议使用搜索功能缩小范围。`)
-          }
-        } else {
-          finalTotal = totalFiltered
-        }
-        
-        setAllFilteredNews(allNewsData)
-        setTotal(finalTotal)
+        // 后端已经根据enterpriseFilter过滤和排序，直接使用返回的数据
+        setNewsList(newsData)
+        setTotal(totalCount)
       } else {
         console.error('获取舆情信息失败:', response.data.message)
-        setAllFilteredNews([])
         setNewsList([])
         setTotal(0)
         throw new Error(response.data.message || '获取舆情信息失败')
@@ -163,7 +151,6 @@ function NewsInfo() {
         throw error
       }
       console.error('获取舆情信息失败:', error)
-      setAllFilteredNews([])
       setNewsList([])
       setTotal(0)
       if (currentPage === 1 && !search) {
@@ -203,20 +190,7 @@ function NewsInfo() {
     return () => {
       isMounted = false
     }
-  }, [search, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter])
-
-  useEffect(() => {
-    if (allFilteredNews.length === 0) {
-      setNewsList([])
-      return
-    }
-    
-    const startIndex = (currentPage - 1) * pageSize
-    const endIndex = startIndex + pageSize
-    const paginatedData = allFilteredNews.slice(startIndex, endIndex)
-    
-    setNewsList(paginatedData)
-  }, [currentPage, pageSize, allFilteredNews])
+  }, [search, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter, currentPage])
 
   const shouldShowCheckbox = () => {
     return ['yesterday', 'thisWeek', 'lastWeek', 'thisMonth', 'all'].includes(activeTab)

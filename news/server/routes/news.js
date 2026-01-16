@@ -1599,6 +1599,7 @@ router.get('/user-news', async (req, res) => {
     const pageSize = parseInt(req.query.pageSize, 10) || 10;
     const search = req.query.search || '';
     const timeRange = req.query.timeRange || 'all'; // yesterday, thisWeek, thisMonth, all
+    const enterpriseFilter = req.query.enterpriseFilter || 'all'; // enterprise, all
     const offset = (page - 1) * pageSize;
 
     // 计算时间范围
@@ -1732,6 +1733,11 @@ router.get('/user-news', async (req, res) => {
       params.push(...timeParams);
     }
 
+    // 添加企业过滤条件
+    if (enterpriseFilter === 'enterprise') {
+      condition += ' AND enterprise_full_name IS NOT NULL AND enterprise_full_name != \'\'';
+    }
+
     // 添加搜索条件
     if (search) {
       condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)';
@@ -1739,11 +1745,14 @@ router.get('/user-news', async (req, res) => {
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    // 查询数据（按发布时间降序）
+    // 查询数据（有企业的优先，然后按发布时间降序）
     const data = await db.query(
       `SELECT account_name, wechat_account, enterprise_full_name, public_time, title, source_url, keywords 
        ${condition} 
-       ORDER BY public_time DESC, created_at DESC 
+       ORDER BY 
+         CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
+         public_time DESC, 
+         created_at DESC 
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
@@ -1904,7 +1913,7 @@ router.get('/', async (req, res) => {
     }
 
     // 管理员可以查看所有数据
-    const { page = 1, pageSize = 10, search, account, timeRange = 'all' } = req.query;
+    const { page = 1, pageSize = 10, search, account, timeRange = 'all', enterpriseFilter = 'all' } = req.query;
     const offset = (page - 1) * pageSize;
 
     let condition = 'FROM news_detail WHERE delete_mark = 0';
@@ -1957,6 +1966,11 @@ router.get('/', async (req, res) => {
       params.push(monthStart);
     }
 
+    // 添加企业过滤条件
+    if (enterpriseFilter === 'enterprise') {
+      condition += ' AND enterprise_full_name IS NOT NULL AND enterprise_full_name != \'\'';
+    }
+
     if (search) {
       condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)';
       const searchTerm = `%${search}%`;
@@ -1968,8 +1982,14 @@ router.get('/', async (req, res) => {
       params.push(account);
     }
 
+    // 查询数据（有企业的优先，然后按发布时间降序）
     const data = await db.query(
-      `SELECT * ${condition} ORDER BY public_time DESC, created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT * ${condition} 
+       ORDER BY 
+         CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
+         public_time DESC, 
+         created_at DESC 
+       LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
     const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
