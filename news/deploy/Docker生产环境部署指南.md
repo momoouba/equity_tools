@@ -63,24 +63,64 @@ docker compose stop
 
 #### 步骤5：重新构建镜像
 
-```bash
-# 构建新镜像（会重新构建前端）
-docker compose build --no-cache
+有多种方式可以选择：
 
-# 如果构建时间较长，可以使用：
+**方式1：完全重建（清除所有缓存）- 推荐**
+
+```bash
+# 构建新镜像（会重新构建前端，不使用缓存）
+docker compose build --no-cache
+```
+
+**方式2：仅重新构建（使用缓存）- 更快**
+
+```bash
+# 使用缓存构建，速度更快
+docker compose build
+```
+
+**方式3：仅构建应用服务**
+
+```bash
+# 如果只修改了应用代码，可以只构建 app 服务
 docker compose build --no-cache app
 ```
 
-**注意：** `--no-cache` 参数确保使用最新代码，不使用缓存。
+**注意：** `--no-cache` 参数确保使用最新代码，不使用缓存，但构建时间更长。
 
 #### 步骤6：启动新容器
 
+**方式1：分步执行（推荐）**
+
 ```bash
+# 先停止容器
+docker compose down
+
+# 重新构建
+docker compose build --no-cache
+
 # 启动所有服务
 docker compose up -d
+```
 
-# 查看启动日志
+**方式2：一步完成（快捷）**
+
+```bash
+# 一步完成重建和启动
+docker compose up --build -d
+```
+
+**查看启动日志：**
+
+```bash
+# 查看应用日志（实时）
 docker compose logs -f app
+
+# 查看最近100行日志
+docker compose logs app --tail 100
+
+# 查看所有服务状态
+docker compose ps
 ```
 
 #### 步骤7：验证部署

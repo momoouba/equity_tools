@@ -10,6 +10,7 @@ const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews } = require('../utils/scheduledEmailTasks');
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
+const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -1314,7 +1315,7 @@ async function syncNewsData(options = {}) {
           ...res
         });
       } catch (err) {
-        console.error(`配置 ${config.id} 同步失败：`, err);
+        errorWithTag('[新闻同步]', `配置 ${config.id} 同步失败：`, err);
         results.push({
           configId: config.id,
           appId: config.app_id,
@@ -1326,12 +1327,12 @@ async function syncNewsData(options = {}) {
     }
 
     // 输出总体统计
-    console.log(`[新闻同步] ========== 总体统计 ==========`);
-    console.log(`[新闻同步] 配置总数: ${totalConfigs}`);
-    console.log(`[新闻同步] 成功配置: ${successConfigs}`);
-    console.log(`[新闻同步] 失败配置: ${totalConfigs - successConfigs}`);
-    console.log(`[新闻同步] 总同步数量: ${totalSyncedAll} 条新闻`);
-    console.log(`[新闻同步] =============================`);
+    logWithTag('[新闻同步]', '========== 总体统计 ==========');
+    logWithTag('[新闻同步]', `配置总数: ${totalConfigs}`);
+    logWithTag('[新闻同步]', `成功配置: ${successConfigs}`);
+    logWithTag('[新闻同步]', `失败配置: ${totalConfigs - successConfigs}`);
+    logWithTag('[新闻同步]', `总同步数量: ${totalSyncedAll} 条新闻`);
+    logWithTag('[新闻同步]', '=============================');
 
     return {
       success: true,
@@ -1390,25 +1391,25 @@ router.post('/sync', async (req, res) => {
       console.error('创建同步日志失败:', logError.message);
     }
 
-    console.log(`[手动同步] ========== 开始手动同步 ==========`);
-    console.log(`[手动同步] 配置ID: ${config_id}`);
-    console.log(`[手动同步] 接口类型: ${config.interface_type || '新榜'}`);
-    console.log(`[手动同步] 触发时间: ${formatDate(new Date())}`);
+    logWithTag('[手动同步]', '========== 开始手动同步 ==========');
+    logWithTag('[手动同步]', `配置ID: ${config_id}`);
+    logWithTag('[手动同步]', `接口类型: ${config.interface_type || '新榜'}`);
+    logWithTag('[手动同步]', `触发时间: ${formatDate(new Date())}`);
     
     // 根据接口类型选择同步函数
     const interfaceType = config.interface_type || '新榜';
     let result;
     
     if (interfaceType === '企查查') {
-      console.log(`[手动同步] 执行企查查新闻同步...`);
+      logWithTag('[手动同步]', '执行企查查新闻同步...');
       result = await syncQichachaNewsData(config_id, logId);
     } else {
-      console.log(`[手动同步] 执行新榜新闻同步...`);
+      logWithTag('[手动同步]', '执行新榜新闻同步...');
       
       // 获取当前时间（Asia/Shanghai时区）
       const now = new Date();
-      console.log(`[手动同步] 服务器当前时间: ${now.toISOString()}`);
-      console.log(`[手动同步] 服务器本地时间: ${now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      logWithTag('[手动同步]', `服务器当前时间: ${now.toISOString()}`);
+      logWithTag('[手动同步]', `服务器本地时间: ${now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       
       // 使用本地时区计算日期，确保基于Asia/Shanghai时区
       // 获取本地时间的年月日（基于Asia/Shanghai时区）
@@ -1419,9 +1420,9 @@ router.post('/sync', async (req, res) => {
       const yesterdayStart = new Date(todayStart);
       yesterdayStart.setDate(yesterdayStart.getDate() - 1);
       
-      console.log(`[手动同步] 计算的时间范围:`);
-      console.log(`[手动同步] - 昨天开始: ${formatDate(yesterdayStart)} (${yesterdayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
-      console.log(`[手动同步] - 今天开始: ${formatDate(todayStart)} (${todayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
+      logWithTag('[手动同步]', '计算的时间范围:');
+      logWithTag('[手动同步]', `- 昨天开始: ${formatDate(yesterdayStart)} (${yesterdayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
+      logWithTag('[手动同步]', `- 今天开始: ${formatDate(todayStart)} (${todayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
       
       result = await syncNewsData({
         isManual: true,
@@ -1431,8 +1432,8 @@ router.post('/sync', async (req, res) => {
       });
     }
     
-    console.log(`[手动同步] ========== 同步完成 ==========`);
-    console.log(`[手动同步] 结果:`, JSON.stringify({
+    logWithTag('[手动同步]', '========== 同步完成 ==========');
+    logWithTag('[手动同步]', '结果:', JSON.stringify({
       success: result.success,
       message: result.message,
       synced: result.data?.synced || 0,
@@ -1447,7 +1448,7 @@ router.post('/sync', async (req, res) => {
       logId: logId
     });
   } catch (error) {
-    console.error('同步新闻数据失败：', error);
+    errorWithTag('[手动同步]', '同步新闻数据失败：', error);
     res.status(500).json({ success: false, message: '同步失败：' + error.message });
   }
 });
@@ -1572,7 +1573,7 @@ router.get('/user-stats', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('查询用户舆情统计失败：', error);
+    errorWithTag('[用户统计]', '查询用户舆情统计失败：', error);
     res.status(500).json({ success: false, message: '查询失败' });
   }
 });
@@ -3080,7 +3081,183 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     const recipient = existing[0];
     
     // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企查查类别过滤）
-    const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    let newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    
+    // ========== 邮件发送前AI重新分析 ==========
+    if (newsList.length > 0) {
+      logWithTag('[手动发送邮件]', '========== 开始AI重新分析 ==========');
+      logWithTag('[手动发送邮件]', `需要重新分析的新闻数量: ${newsList.length}`);
+      
+      const newsAnalysis = require('../utils/newsAnalysis');
+      const newsAnalysisInstance = new newsAnalysis();
+      
+      let reanalyzeSuccessCount = 0;
+      let reanalyzeErrorCount = 0;
+      
+      // 批量重新分析新闻
+      for (const news of newsList) {
+        try {
+          logWithTag('[手动发送邮件]', `正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
+          
+          // 获取完整的新闻数据（包括content）
+          const fullNewsItems = await db.query(
+            'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
+            [news.id]
+          );
+          
+          if (fullNewsItems.length === 0) {
+            warnWithTag('[手动发送邮件]', `⚠️ 新闻 ${news.id} 不存在，跳过重新分析`);
+            continue;
+          }
+          
+          const newsItem = fullNewsItems[0];
+          
+          // 根据是否有企业关联选择不同的处理方式
+          let reanalyzeResult;
+          if (newsItem.enterprise_full_name) {
+            // 有企业关联，使用processNewsWithEnterprise（会保护来自invested_enterprises的企业关联）
+            logWithTag('[手动发送邮件]', `新闻 ${news.id} 有企业关联，使用processNewsWithEnterprise`);
+            reanalyzeResult = await newsAnalysisInstance.processNewsWithEnterprise(newsItem);
+          } else {
+            // 无企业关联，使用processNewsWithoutEnterprise
+            logWithTag('[手动发送邮件]', `新闻 ${news.id} 无企业关联，使用processNewsWithoutEnterprise`);
+            reanalyzeResult = await newsAnalysisInstance.processNewsWithoutEnterprise(newsItem);
+          }
+          
+          if (reanalyzeResult) {
+            reanalyzeSuccessCount++;
+            logWithTag('[手动发送邮件]', `✓ 新闻 ${news.id} 重新分析成功`);
+          } else {
+            reanalyzeErrorCount++;
+            logWithTag('[手动发送邮件]', `✗ 新闻 ${news.id} 重新分析失败`);
+          }
+          
+          // 添加延迟避免API频率限制
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          reanalyzeErrorCount++;
+          errorWithTag('[手动发送邮件]', `✗ 新闻 ${news.id} 重新分析出错: ${error.message}`);
+        }
+      }
+      
+      logWithTag('[手动发送邮件]', `AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
+      logWithTag('[手动发送邮件]', '========== AI重新分析结束 ==========');
+      
+      // 重新分析完成后，从数据库重新获取最新的新闻数据
+      logWithTag('[手动发送邮件]', '从数据库重新获取最新的新闻数据...');
+      const newsIds = newsList.map(n => n.id);
+      if (newsIds.length > 0) {
+        const placeholders = newsIds.map(() => '?').join(',');
+        const refreshedNewsList = await db.query(
+          `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+                  nd.APItype, nd.news_category
+           FROM news_detail nd
+           WHERE nd.id IN (${placeholders})
+           AND nd.delete_mark = 0`,
+          newsIds
+        );
+        
+        logWithTag('[手动发送邮件]', `重新获取到 ${refreshedNewsList.length} 条新闻数据`);
+        newsList = refreshedNewsList;
+      }
+      
+      // 重新应用最终过滤逻辑（过滤掉不满足发送邮件条件的数据）
+      logWithTag('[手动发送邮件]', '========== 重新应用最终过滤逻辑 ==========');
+      
+      // 预先获取所有额外公众号的ID列表（用于后续过滤判断）
+      let additionalAccountIdsSet = new Set();
+      try {
+        const additionalAccounts = await db.query(
+          `SELECT DISTINCT wechat_account_id 
+           FROM additional_wechat_accounts 
+           WHERE status = 'active' 
+           AND wechat_account_id IS NOT NULL 
+           AND wechat_account_id != ''
+           AND delete_mark = 0`
+        );
+        additionalAccounts.forEach(acc => {
+          if (acc.wechat_account_id) {
+            additionalAccountIdsSet.add(acc.wechat_account_id);
+          }
+        });
+        logWithTag('[手动发送邮件]', `预先获取额外公众号ID列表，共 ${additionalAccountIdsSet.size} 个`);
+      } catch (err) {
+        warnWithTag('[手动发送邮件]', `获取额外公众号列表失败: ${err.message}`);
+      }
+      
+      // 解析企查查类别编码（JSON格式）
+      let categoryCodes = null;
+      if (recipient.qichacha_category_codes) {
+        try {
+          const parsed = typeof recipient.qichacha_category_codes === 'string'
+            ? JSON.parse(recipient.qichacha_category_codes)
+            : recipient.qichacha_category_codes;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            categoryCodes = parsed;
+          }
+        } catch (e) {
+          warnWithTag('[手动发送邮件]', `解析企查查类别编码失败: ${e.message}`);
+        }
+      }
+      
+      // 导入过滤函数
+      const { filterNewsByCategory } = require('../utils/scheduledEmailTasks');
+      
+      // 过滤新闻：根据收件配置的企查查类别编码进行过滤
+      const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
+      
+      // 使用finalNewsList的过滤逻辑再次过滤
+      const beforeFinalFilterCount = filteredNewsList.length;
+      const finalFilteredNewsList = filteredNewsList.filter(news => {
+        // 检查标题（标题是必需的）
+        if (!news.title || news.title.trim() === '') {
+          return false;
+        }
+        
+        // 检查企业全称（额外公众号的新闻可能没有企业名称）
+        const enterpriseName = news.enterprise_full_name;
+        const hasEnterpriseName = enterpriseName && enterpriseName.trim() !== '';
+        
+        // 对于没有企业名称的新闻，检查是否是额外公众号的新闻
+        if (!hasEnterpriseName) {
+          const isAdditionalAccountNews = news.wechat_account && additionalAccountIdsSet.has(news.wechat_account);
+          if (!isAdditionalAccountNews) {
+            // 非额外公众号的新闻，企业全称是必需的
+            return false;
+          }
+        }
+        
+        // 检查 news_abstract 字段（AI提取的摘要）
+        const hasAbstract = news.news_abstract && news.news_abstract.trim() !== '';
+        // 检查 summary 字段（原始摘要，新榜数据使用此字段）
+        const hasSummary = news.summary && news.summary.trim() !== '';
+        // 检查 content 字段（正文）
+        const hasContent = news.content && news.content.trim() !== '';
+        
+        // 判断数据源类型
+        const isQichacha = news.APItype === '企查查' || news.APItype === 'qichacha';
+        const isXinbang = news.APItype === '新榜' || !news.APItype || (!isQichacha);
+        
+        if (isXinbang) {
+          // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
+          return hasAbstract || hasSummary;
+        } else {
+          // 企查查新闻：有摘要（news_abstract）或正文即可推送
+          return hasAbstract || hasContent;
+        }
+      });
+      
+      const afterFinalFilterCount = finalFilteredNewsList.length;
+      const finalFilteredCount = beforeFinalFilterCount - afterFinalFilterCount;
+      if (finalFilteredCount > 0) {
+        logWithTag('[手动发送邮件]', `最终过滤掉 ${finalFilteredCount} 条不满足发送邮件条件的数据，剩余 ${afterFinalFilterCount} 条`);
+      }
+      logWithTag('[手动发送邮件]', '========== 最终过滤完成 ==========');
+      
+      // 使用最终过滤后的新闻列表
+      newsList = finalFilteredNewsList;
+    }
     
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
     const emailConfigs = await db.query(

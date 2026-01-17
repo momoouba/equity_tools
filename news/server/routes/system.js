@@ -6,6 +6,7 @@ const { logEmailConfigChange, logQichachaConfigChange, logNewsConfigChange } = r
 const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
 const xlsx = require('xlsx');
 const multer = require('multer');
+const { logWithTag, errorWithTag, warnWithTag } = require('../utils/logUtils');
 
 // 配置multer用于Excel文件上传
 const excelUpload = multer({
@@ -57,7 +58,7 @@ router.get('/qichacha-configs', async (req, res) => {
       pageSize: pageSize
     });
   } catch (error) {
-    console.error('获取企查查配置列表失败：', error);
+    errorWithTag('[系统配置]', '获取企查查配置列表失败：', error);
     res.status(500).json({ success: false, message: '获取配置列表失败' });
   }
 });
@@ -78,7 +79,7 @@ router.get('/qichacha-config/:id', async (req, res) => {
       res.status(404).json({ success: false, message: '配置不存在' });
     }
   } catch (error) {
-    console.error('获取企查查配置失败：', error);
+    errorWithTag('[系统配置]', '获取企查查配置失败：', error);
     res.status(500).json({ success: false, message: '获取配置失败' });
   }
 });
@@ -105,7 +106,7 @@ router.get('/config', async (req, res) => {
       data: configMap
     });
   } catch (error) {
-    console.error('获取系统配置失败：', error);
+    errorWithTag('[系统配置]', '获取系统配置失败：', error);
     res.status(500).json({ success: false, message: '获取配置失败' });
   }
 });
@@ -138,7 +139,7 @@ router.get('/news-configs', async (req, res) => {
       pageSize: pageSize
     });
   } catch (error) {
-    console.error('获取新闻接口配置列表失败：', error);
+    errorWithTag('[系统配置]', '获取新闻接口配置列表失败：', error);
     res.status(500).json({ success: false, message: '获取配置列表失败' });
   }
 });
@@ -159,7 +160,7 @@ router.get('/news-config/:id', async (req, res) => {
       res.status(404).json({ success: false, message: '配置不存在' });
     }
   } catch (error) {
-    console.error('获取新闻接口配置失败：', error);
+    errorWithTag('[系统配置]', '获取新闻接口配置失败：', error);
     res.status(500).json({ success: false, message: '获取配置失败' });
   }
 });
@@ -327,16 +328,16 @@ router.post('/news-config', [
       try {
         const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
         await updateNewsSyncScheduledTasks();
-        console.log(`[新闻接口配置创建] 新配置已启用，新闻同步定时任务调度已更新`);
+        logWithTag('[新闻接口配置创建]', '新配置已启用，新闻同步定时任务调度已更新');
       } catch (taskError) {
-        console.warn(`[新闻接口配置创建] 更新新闻同步定时任务调度失败:`, taskError.message);
+        warnWithTag('[新闻接口配置创建]', `更新新闻同步定时任务调度失败:`, taskError.message);
         // 不阻断主流程，只记录警告
       }
     }
 
     res.json({ success: true, message: '新闻接口配置创建成功', data: { id: configId } });
   } catch (error) {
-    console.error('创建新闻接口配置失败：', error);
+    errorWithTag('[系统配置]', '创建新闻接口配置失败：', error);
     
     // 如果是唯一约束错误，提供更友好的提示
     if (error.code === 'ER_DUP_ENTRY' && error.message.includes('uk_app_interface')) {
@@ -439,7 +440,7 @@ router.put('/news-config/:id', [
         updateFields.push('send_frequency = ?');
         updateValues.push(sendFrequency);
         
-        console.log(`[新闻接口配置更新] 企查查接口frequency_type更新为${frequency_type}，同步更新send_frequency为${sendFrequency}`);
+        logWithTag('[新闻接口配置更新]', `企查查接口frequency_type更新为${frequency_type}，同步更新send_frequency为${sendFrequency}`);
       }
     }
     if (frequency_value !== undefined) {
@@ -495,9 +496,9 @@ router.put('/news-config/:id', [
         try {
           const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
           await updateNewsSyncScheduledTasks();
-          console.log(`[新闻接口配置更新] 定时任务相关字段已更新，新闻同步定时任务调度已同步更新`);
+          logWithTag('[新闻接口配置更新]', '定时任务相关字段已更新，新闻同步定时任务调度已同步更新');
         } catch (taskError) {
-          console.warn(`[新闻接口配置更新] 更新新闻同步定时任务调度失败:`, taskError.message);
+          warnWithTag('[新闻接口配置更新]', `更新新闻同步定时任务调度失败:`, taskError.message);
           // 不阻断主流程，只记录警告
         }
       }
@@ -534,7 +535,7 @@ router.put('/news-config/:id', [
 
     res.json({ success: true, message: '新闻接口配置更新成功' });
   } catch (error) {
-    console.error('更新新闻接口配置失败：', error);
+    errorWithTag('[系统配置]', '更新新闻接口配置失败：', error);
     res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
   }
 });
@@ -553,7 +554,7 @@ router.get('/news-config/:id/logs', async (req, res) => {
     );
     res.json({ success: true, data: logs });
   } catch (error) {
-    console.error('获取新闻接口配置日志失败：', error);
+    errorWithTag('[系统配置]', '获取新闻接口配置日志失败：', error);
     res.status(500).json({ success: false, message: '获取日志失败' });
   }
 });
@@ -570,7 +571,7 @@ router.delete('/news-config/:id', async (req, res) => {
     await db.execute('DELETE FROM news_interface_config WHERE id = ?', [id]);
     res.json({ success: true, message: '新闻接口配置删除成功' });
   } catch (error) {
-    console.error('删除新闻接口配置失败：', error);
+    errorWithTag('[系统配置]', '删除新闻接口配置失败：', error);
     res.status(500).json({ success: false, message: '删除配置失败' });
   }
 });

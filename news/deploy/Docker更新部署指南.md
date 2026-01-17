@@ -18,6 +18,84 @@
 
 ---
 
+## 🐳 Docker 重新构建和启动指南
+
+### 方式一：完全重建（清除所有缓存）- 推荐
+
+适用于代码或依赖有较大变更时，确保使用最新代码：
+
+```bash
+# 进入项目目录
+cd /opt/newsapp/news  # 或你的实际项目路径
+
+# 停止并删除所有容器（保留数据卷）
+docker compose down
+
+# 重新构建镜像（清除缓存）
+docker compose build --no-cache
+
+# 启动所有服务
+docker compose up -d
+```
+
+### 方式二：仅重新构建（使用缓存）- 更快
+
+适用于代码有少量变更时，构建速度更快：
+
+```bash
+cd /opt/newsapp/news
+docker compose down
+docker compose build
+docker compose up -d
+```
+
+### 方式三：一步完成重建和启动（最快捷）
+
+```bash
+cd /opt/newsapp/news
+docker compose up --build -d
+```
+
+### 方式四：仅重启应用服务（如果只修改了应用代码）
+
+如果只修改了应用代码，且 server 目录是 volume 挂载的，可以只重建 app 服务：
+
+```bash
+cd /opt/newsapp/news
+
+# 只重新构建 app 服务
+docker compose build app
+
+# 重启 app 服务
+docker compose up -d app
+```
+
+### 查看服务状态和日志
+
+```bash
+# 查看服务状态
+docker compose ps
+
+# 查看应用日志
+docker compose logs -f app
+
+# 查看所有服务日志
+docker compose logs -f
+
+# 查看最近50行日志
+docker compose logs app --tail 50
+```
+
+### 注意事项
+
+1. **确保 Docker Desktop 已启动**（Windows/Mac）或 Docker 服务已运行（Linux）
+2. **完全重建（`--no-cache`）**会清除所有缓存，构建时间更长，但更彻底
+3. **使用 `-d` 参数**后台运行服务
+4. **如果数据库服务（mysql）已运行正常**，方式四可以只重建 app，避免重启数据库
+5. **PowerShell 环境**：在 Windows PowerShell 中，需要分步执行命令（不支持 `&&`）
+
+---
+
 ## 🐳 Docker 部署更新步骤
 
 ### 步骤1：确认文件已更新到服务器

@@ -1,12 +1,13 @@
 const express = require('express');
 const newsAnalysis = require('../utils/newsAnalysis');
 const db = require('../db');
+const { logWithTag, errorWithTag } = require('../utils/logUtils');
 
 const router = express.Router();
 
 // 测试端点
 router.get('/test', (req, res) => {
-  console.log('收到测试请求');
+  logWithTag('[AI分析]', '收到测试请求');
   res.json({ success: true, message: 'newsAnalysis路由工作正常' });
 });
 
@@ -32,7 +33,7 @@ router.post('/analyze', checkAdminPermission, async (req, res) => {
   try {
     const { limit = 50 } = req.body;
     
-    console.log(`管理员 ${req.currentUserId} 触发新闻分析，限制条数: ${limit}`);
+    logWithTag('[AI分析]', `管理员 ${req.currentUserId} 触发新闻分析，限制条数: ${limit}`);
     
     const result = await newsAnalysis.batchAnalyzeNews(limit);
     
@@ -46,7 +47,7 @@ router.post('/analyze', checkAdminPermission, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('手动触发新闻分析失败:', error);
+    errorWithTag('[AI分析]', '手动触发新闻分析失败:', error);
     res.status(500).json({ 
       success: false, 
       message: '分析失败: ' + error.message 
@@ -60,9 +61,9 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     const { id } = req.params;
     const { forceReanalyze = false } = req.body;
     
-    console.log(`\n========== 开始重新分析新闻 ==========`);
-    console.log(`新闻ID: ${id}`);
-    console.log(`强制重新分析: ${forceReanalyze}`);
+    logWithTag('[AI分析]', '\n========== 开始重新分析新闻 ==========');
+    logWithTag('[AI分析]', `新闻ID: ${id}`);
+    logWithTag('[AI分析]', `强制重新分析: ${forceReanalyze}`);
     
     // 获取新闻详情，包括公众号信息和现有分析结果
     const newsItems = await db.query(

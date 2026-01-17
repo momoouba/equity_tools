@@ -1,5 +1,6 @@
 const axios = require('axios');
 const db = require('../db');
+const { logWithTag, errorWithTag, warnWithTag } = require('./logUtils');
 
 /**
  * 新闻分析工具类
@@ -15,11 +16,11 @@ class NewsAnalysis {
   async fetchContentFromUrl(url) {
     try {
       if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
-        console.warn(`[fetchContentFromUrl] 无效的URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', `无效的URL: ${url}`);
         return null;
       }
 
-      console.log(`[fetchContentFromUrl] 开始抓取网页内容: ${url}`);
+      logWithTag('[fetchContentFromUrl]', `开始抓取网页内容: ${url}`);
       
       // 检测是否是中国经营网（cb.com.cn），需要特殊处理
       const isCbnet = url.includes('cb.com.cn') || url.includes('cbnet.com');
@@ -59,7 +60,7 @@ class NewsAnalysis {
       } catch (error) {
         // 如果是521错误，尝试使用更完整的浏览器请求头重试
         if (error.response && error.response.status === 521) {
-          console.log(`[fetchContentFromUrl] 检测到521错误，尝试使用更完整的请求头重试`);
+          logWithTag('[fetchContentFromUrl]', '检测到521错误，尝试使用更完整的请求头重试');
           try {
             // 添加更多浏览器特征
             const retryHeaders = {
@@ -77,7 +78,7 @@ class NewsAnalysis {
               validateStatus: (status) => status < 400 || status === 521
             });
           } catch (retryError) {
-            console.error(`[fetchContentFromUrl] 重试后仍然失败: ${retryError.message}`);
+            errorWithTag('[fetchContentFromUrl]', `重试后仍然失败: ${retryError.message}`);
             throw retryError;
           }
         } else {
@@ -87,9 +88,9 @@ class NewsAnalysis {
 
       // 处理521状态码（Cloudflare等反爬虫机制）
       if (response.status === 521) {
-        console.warn(`[fetchContentFromUrl] HTTP 521错误（Cloudflare反爬虫机制），URL: ${url}`);
-        console.warn(`[fetchContentFromUrl] 521错误通常表示网站需要JavaScript渲染才能访问`);
-        console.warn(`[fetchContentFromUrl] 建议：1) 手动访问URL获取内容 2) 使用支持JavaScript渲染的工具（如Playwright）`);
+        warnWithTag('[fetchContentFromUrl]', `HTTP 521错误（Cloudflare反爬虫机制），URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', '521错误通常表示网站需要JavaScript渲染才能访问');
+        warnWithTag('[fetchContentFromUrl]', '建议：1) 手动访问URL获取内容 2) 使用支持JavaScript渲染的工具（如Playwright）');
         // 抛出特殊错误，标识为反爬虫阻塞
         const error = new Error('ANTI_CRAWLER_BLOCKED');
         error.status = 521;
@@ -98,19 +99,19 @@ class NewsAnalysis {
       }
 
       if (response.status !== 200) {
-        console.warn(`[fetchContentFromUrl] HTTP状态码: ${response.status}, URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', `HTTP状态码: ${response.status}, URL: ${url}`);
         return null;
       }
 
       const html = response.data;
       if (!html || typeof html !== 'string') {
-        console.warn(`[fetchContentFromUrl] 返回内容不是HTML字符串, URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', `返回内容不是HTML字符串, URL: ${url}`);
         return null;
       }
 
       // 检测百度移动端页面，如果HTML太短，说明需要JavaScript渲染
       if (url.includes('mbd.baidu.com') && html.length < 2000) {
-        console.warn(`[fetchContentFromUrl] 检测到百度移动端页面，HTML太短（${html.length}字符），需要JavaScript渲染`);
+        warnWithTag('[fetchContentFromUrl]', `检测到百度移动端页面，HTML太短（${html.length}字符），需要JavaScript渲染`);
         // 抛出特殊错误，标识为需要JavaScript渲染
         const error = new Error('JAVASCRIPT_REQUIRED');
         error.status = 200; // HTTP状态是200，但内容需要JS渲染
@@ -119,25 +120,25 @@ class NewsAnalysis {
       }
 
       // 智能提取正文内容
-      console.log(`[fetchContentFromUrl] 开始提取正文内容，HTML长度: ${html.length}字符`);
+      logWithTag('[fetchContentFromUrl]', `开始提取正文内容，HTML长度: ${html.length}字符`);
       // 检查HTML中是否包含article标签（用于调试）
       const hasArticleTag = /<article[^>]*>/i.test(html);
       const hasMainNews = /main-news/i.test(html);
       const hasArticleWithHtml = /article-with-html/i.test(html);
       const isGelonghui = /gelonghui\.com/i.test(url);
-      console.log(`[fetchContentFromUrl] HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}, isGelonghui=${isGelonghui}`);
+      logWithTag('[fetchContentFromUrl]', `HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}, isGelonghui=${isGelonghui}`);
       
       let text = this.extractArticleContent(html, url);
-      console.log(`[fetchContentFromUrl] 提取完成，文本长度: ${text.length}字符`);
+      logWithTag('[fetchContentFromUrl]', `提取完成，文本长度: ${text.length}字符`);
 
       // 如果提取的文本太短（少于50个字符），可能提取失败
       if (text.length < 50) {
-        console.warn(`[fetchContentFromUrl] 提取的文本内容太短（${text.length}字符），可能提取失败, URL: ${url}`);
-        console.warn(`[fetchContentFromUrl] 如果HTML中包含article标签但提取失败，可能是匹配规则需要调整`);
+        warnWithTag('[fetchContentFromUrl]', `提取的文本内容太短（${text.length}字符），可能提取失败, URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', '如果HTML中包含article标签但提取失败，可能是匹配规则需要调整');
         
         // 对于格隆汇网站，尝试更宽松的提取策略
         if (isGelonghui) {
-          console.log(`[fetchContentFromUrl] 格隆汇网站提取失败，尝试使用更宽松的提取策略`);
+          logWithTag('[fetchContentFromUrl]', '格隆汇网站提取失败，尝试使用更宽松的提取策略');
           // 尝试查找包含正文内容的div或其他容器
           const gelonghuiPatterns = [
             /<div[^>]*class="[^"]*news-content[^"]*"[^>]*>([\s\S]*?)<\/div>/i,
@@ -155,7 +156,7 @@ class NewsAnalysis {
                 .trim();
               if (extracted.length > text.length) {
                 text = extracted;
-                console.log(`[fetchContentFromUrl] 使用格隆汇特殊模式提取，长度: ${text.length}字符`);
+                logWithTag('[fetchContentFromUrl]', `使用格隆汇特殊模式提取，长度: ${text.length}字符`);
                 break;
               }
             }
@@ -175,7 +176,7 @@ class NewsAnalysis {
       }
 
       if (text.length === 0) {
-        console.warn(`[fetchContentFromUrl] 未能提取到文本内容, URL: ${url}`);
+        warnWithTag('[fetchContentFromUrl]', `未能提取到文本内容, URL: ${url}`);
         return null;
       }
 
@@ -184,7 +185,7 @@ class NewsAnalysis {
         text = text.substring(0, 50000) + '...[内容已截断]';
       }
 
-      console.log(`[fetchContentFromUrl] ✓ 成功抓取网页内容，长度: ${text.length}字符`);
+      logWithTag('[fetchContentFromUrl]', `✓ 成功抓取网页内容，长度: ${text.length}字符`);
       return text;
 
     } catch (error) {
@@ -194,9 +195,9 @@ class NewsAnalysis {
         throw error;
       }
       
-      console.error(`[fetchContentFromUrl] 抓取网页内容失败: ${error.message}, URL: ${url}`);
+      errorWithTag('[fetchContentFromUrl]', `抓取网页内容失败: ${error.message}, URL: ${url}`);
       if (error.response) {
-        console.error(`[fetchContentFromUrl] HTTP状态码: ${error.response.status}`);
+        errorWithTag('[fetchContentFromUrl]', `HTTP状态码: ${error.response.status}`);
       }
       return null;
     }
@@ -211,11 +212,11 @@ class NewsAnalysis {
     // 特殊处理：百度移动端页面（mbd.baidu.com）
     // 百度移动端页面需要JavaScript渲染，HTML内容很少，无法直接提取
     if (url && url.includes('mbd.baidu.com')) {
-      console.log(`[extractArticleContent] 检测到百度移动端URL，HTML长度: ${html.length}字符`);
+      logWithTag('[extractArticleContent]', `检测到百度移动端URL，HTML长度: ${html.length}字符`);
       
       // 如果HTML太短（少于2000字符），说明是JavaScript渲染页面
       if (html.length < 2000) {
-        console.warn(`[extractArticleContent] ⚠️ 百度移动端页面HTML太短（${html.length}字符），需要JavaScript渲染，无法提取正文`);
+        warnWithTag('[extractArticleContent]', `⚠️ 百度移动端页面HTML太短（${html.length}字符），需要JavaScript渲染，无法提取正文`);
         // 返回null，让上层处理（会设置特殊摘要）
         return null;
       }
@@ -238,14 +239,14 @@ class NewsAnalysis {
             .replace(/\s+/g, ' ')
             .trim();
           if (extracted.length > 100) {
-            console.log(`[extractArticleContent] ✓ 从百度移动端页面提取到内容，长度: ${extracted.length}字符`);
+            logWithTag('[extractArticleContent]', `✓ 从百度移动端页面提取到内容，长度: ${extracted.length}字符`);
             return match[1]; // 返回HTML内容，让后续清理
           }
         }
       }
       
       // 如果提取失败，返回null
-      console.warn(`[extractArticleContent] ⚠️ 百度移动端页面无法提取正文，需要JavaScript渲染`);
+      warnWithTag('[extractArticleContent]', '⚠️ 百度移动端页面无法提取正文，需要JavaScript渲染');
       return null;
     }
     
@@ -335,11 +336,11 @@ class NewsAnalysis {
         const sinaText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (sinaText.length > 100) {
-          console.log(`[extractArticleContent] ✓ 成功提取新浪新闻正文，长度: ${sinaText.length}字符`);
-          console.log(`[extractArticleContent] ✓ 新浪新闻内容预览（前300字符）: ${sinaText.substring(0, 300)}...`);
+          logWithTag('[extractArticleContent]', `✓ 成功提取新浪新闻正文，长度: ${sinaText.length}字符`);
+          logWithTag('[extractArticleContent]', `✓ 新浪新闻内容预览（前300字符）: ${sinaText.substring(0, 300)}...`);
           return cleanedContent;
         } else {
-          console.log(`[extractArticleContent] ⚠️ 新浪新闻提取的内容太短（${sinaText.length}字符），继续使用通用提取逻辑`);
+          warnWithTag('[extractArticleContent]', `⚠️ 新浪新闻提取的内容太短（${sinaText.length}字符），继续使用通用提取逻辑`);
         }
       } else {
         console.log(`[extractArticleContent] ⚠️ 未找到新浪新闻的artibody div，继续使用通用提取逻辑`);
@@ -4020,16 +4021,16 @@ ${enterpriseList}
           needsFix = true;
         }
       } else {
-        console.log(`[validateAnalysisResult] 新榜接口：内容为空/乱码/图片，允许摘要和关键词为空或使用默认值`);
+        logWithTag('[validateAnalysisResult]', '新榜接口：内容为空/乱码/图片，允许摘要和关键词为空或使用默认值');
       }
     }
     
     if (needsFix) {
-      console.log(`[validateAnalysisResult] ✓ 校验完成，已修复分析结果`);
-      console.log(`[validateAnalysisResult] 修复后的摘要: ${validatedAbstract.substring(0, 100)}...`);
-      console.log(`[validateAnalysisResult] 修复后的关键词: ${JSON.stringify(validatedKeywords)}`);
+      logWithTag('[validateAnalysisResult]', '✓ 校验完成，已修复分析结果');
+      logWithTag('[validateAnalysisResult]', `修复后的摘要: ${validatedAbstract.substring(0, 100)}...`);
+      logWithTag('[validateAnalysisResult]', `修复后的关键词: ${JSON.stringify(validatedKeywords)}`);
     } else {
-      console.log(`[validateAnalysisResult] ✓ 校验通过，分析结果正常`);
+      logWithTag('[validateAnalysisResult]', '✓ 校验通过，分析结果正常');
     }
     
     return {
@@ -4045,9 +4046,9 @@ ${enterpriseList}
    */
   async processNewsWithEnterprise(newsItem) {
     try {
-      console.log(`\n[processNewsWithEnterprise] 开始分析有企业关联的新闻`);
-      console.log(`[processNewsWithEnterprise] 新闻标题: ${newsItem.title}`);
-      console.log(`[processNewsWithEnterprise] 当前企业全称: "${newsItem.enterprise_full_name}"`);
+      logWithTag('[processNewsWithEnterprise]', '\n开始分析有企业关联的新闻');
+      logWithTag('[processNewsWithEnterprise]', `新闻标题: ${newsItem.title}`);
+      logWithTag('[processNewsWithEnterprise]', `当前企业全称: "${newsItem.enterprise_full_name}"`);
       
       // 检查该企业是否来自invested_enterprises表且状态不为"完全退出"
       // 对于企查查接口的数据，无论企业是否在invested_enterprises表中，都需要进行二次校验
@@ -4057,13 +4058,13 @@ ${enterpriseList}
       const interfaceType = newsItem.APItype || '新榜';
       const isXinbang = (interfaceType === '新榜' || interfaceType === '新榜接口');
       
-      console.log(`[processNewsWithEnterprise] 检查企业是否来自invested_enterprises表...`);
-      console.log(`[processNewsWithEnterprise] 接口类型: ${interfaceType}`);
+      logWithTag('[processNewsWithEnterprise]', '检查企业是否来自invested_enterprises表...');
+      logWithTag('[processNewsWithEnterprise]', `接口类型: ${interfaceType}`);
       
       try {
         // 对于企查查接口的数据，始终需要进行二次校验
         if (interfaceType === '企查查' || interfaceType === 'qichacha') {
-          console.log(`[processNewsWithEnterprise] 企查查接口数据，需要进行二次校验关联性`);
+          logWithTag('[processNewsWithEnterprise]', '企查查接口数据，需要进行二次校验关联性');
           shouldValidate = true;
         } else {
           // 对于新榜接口的数据，检查企业是否在invested_enterprises表中
@@ -4077,15 +4078,15 @@ ${enterpriseList}
             [newsItem.enterprise_full_name]
           );
           
-          console.log(`[processNewsWithEnterprise] 查询结果数量: ${enterpriseCheck.length}`);
+          logWithTag('[processNewsWithEnterprise]', `查询结果数量: ${enterpriseCheck.length}`);
           if (enterpriseCheck.length > 0) {
-            console.log(`[processNewsWithEnterprise] 查询结果详情:`, enterpriseCheck[0]);
+            logWithTag('[processNewsWithEnterprise]', '查询结果详情:', enterpriseCheck[0]);
             // 该企业来自invested_enterprises表且状态不为"完全退出"
             // 对于新榜接口的数据，不需要验证关联性，直接保持企业全称
-            console.log(`[processNewsWithEnterprise] ✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${newsItem.enterprise_full_name}`);
+            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${newsItem.enterprise_full_name}`);
             shouldValidate = false;
           } else {
-            console.log(`[processNewsWithEnterprise] ⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性`);
+            logWithTag('[processNewsWithEnterprise]', '⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性');
             // 查询所有相关记录以便调试
             const allResults = await db.query(
               `SELECT enterprise_full_name, exit_status, delete_mark
@@ -4093,18 +4094,18 @@ ${enterpriseList}
                WHERE enterprise_full_name = ?`,
               [newsItem.enterprise_full_name]
             );
-            console.log(`[processNewsWithEnterprise] 所有相关记录（不限制状态）:`, allResults);
+            logWithTag('[processNewsWithEnterprise]', '所有相关记录（不限制状态）:', allResults);
           }
         }
       } catch (e) {
-        console.error(`[processNewsWithEnterprise] ❌ 检查企业状态时出错:`, e.message);
-        console.error(`[processNewsWithEnterprise] 错误堆栈:`, e.stack);
+        errorWithTag('[processNewsWithEnterprise]', '❌ 检查企业状态时出错:', e.message);
+        errorWithTag('[processNewsWithEnterprise]', '错误堆栈:', e.stack);
       }
       
       // 只有需要验证的才进行AI验证
       let shouldKeepAssociation = true; // 默认保持关联
       if (shouldValidate) {
-        console.log(`[processNewsWithEnterprise] 需要AI验证企业关联性（接口类型: ${interfaceType}）`);
+        logWithTag('[processNewsWithEnterprise]', `需要AI验证企业关联性（接口类型: ${interfaceType}）`);
         // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
         const validationContent = await this.ensureNewsContent(newsItem);
         
@@ -4117,13 +4118,13 @@ ${enterpriseList}
         );
 
         if (!shouldKeepAssociation) {
-          console.log(`[processNewsWithEnterprise] 🚫 AI判断需要解除企业关联: ${newsItem.enterprise_full_name}`);
+          logWithTag('[processNewsWithEnterprise]', `🚫 AI判断需要解除企业关联: ${newsItem.enterprise_full_name}`);
           finalEnterpriseName = null;
         } else {
-          console.log(`[processNewsWithEnterprise] ✅ AI验证企业关联合理: ${newsItem.enterprise_full_name}`);
+          logWithTag('[processNewsWithEnterprise]', `✅ AI验证企业关联合理: ${newsItem.enterprise_full_name}`);
         }
       } else {
-        console.log(`[processNewsWithEnterprise] 跳过AI验证，直接保持企业关联`);
+        logWithTag('[processNewsWithEnterprise]', '跳过AI验证，直接保持企业关联');
       }
 
       // 检查是否是额外公众号的新闻
@@ -4135,7 +4136,7 @@ ${enterpriseList}
         [newsItem.wechat_account]
       );
 
-      console.log(`[processNewsWithEnterprise] 开始分析新闻情绪和类型...`);
+      logWithTag('[processNewsWithEnterprise]', '开始分析新闻情绪和类型...');
       
       // 确保新闻有内容（如果content为空但有source_url，则从URL抓取）
       // 对于新榜接口，如果content已经存在且有效（不包含乱码），不应该强制重新抓取
@@ -4189,7 +4190,7 @@ ${enterpriseList}
       }
 
       // 在更新数据库之前，校验分析结果（摘要和关键词）
-      console.log(`[processNewsWithEnterprise] 开始校验分析结果...`);
+      logWithTag('[processNewsWithEnterprise]', '开始校验分析结果...');
       let validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
       
       // 对于新榜接口的新闻，强制检查摘要和关键词是否为空（除非内容为空或乱码）
@@ -4282,10 +4283,10 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] ❌ 更新失败！无法验证更新结果`);
       }
 
-      console.log(`[processNewsWithEnterprise] ✓ 已完成新闻分析: ${newsItem.id}${shouldValidate && !shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
+      logWithTag('[processNewsWithEnterprise]', `✓ 已完成新闻分析: ${newsItem.id}${shouldValidate && !shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
       return true;
     } catch (error) {
-      console.error(`新闻分析失败 ${newsItem.id}:`, error);
+      errorWithTag('[processNewsWithEnterprise]', `新闻分析失败 ${newsItem.id}:`, error);
       return false;
     }
   }
@@ -4295,7 +4296,7 @@ ${enterpriseList}
    */
   async processNewsWithoutEnterprise(newsItem) {
     try {
-      console.log(`分析无企业关联的新闻: ${newsItem.title}`);
+      logWithTag('[processNewsWithoutEnterprise]', `分析无企业关联的新闻: ${newsItem.title}`);
       
       // 获取所有被投企业信息
       const enterprises = await db.query(
@@ -4306,7 +4307,7 @@ ${enterpriseList}
       );
 
       if (enterprises.length === 0) {
-        console.log('没有可匹配的被投企业');
+        logWithTag('[processNewsWithoutEnterprise]', '没有可匹配的被投企业');
         return await this.processNewsWithEnterprise(newsItem);
       }
 
@@ -4324,9 +4325,9 @@ ${enterpriseList}
       // 对于新榜接口，如果content有效且不包含乱码，不强制重新抓取
       const shouldForceRefetch = !(isXinbangForContent && hasValidContentForAnalysis && !isContentContaminatedForAnalysis);
       
-      console.log(`[processNewsWithoutEnterprise] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbangForContent}`);
-      console.log(`[processNewsWithoutEnterprise] content有效性: ${hasValidContentForAnalysis}, 是否包含乱码: ${isContentContaminatedForAnalysis}`);
-      console.log(`[processNewsWithoutEnterprise] 是否强制重新抓取: ${shouldForceRefetch}`);
+      logWithTag('[processNewsWithoutEnterprise]', `接口类型: ${interfaceType}, 是否新榜接口: ${isXinbangForContent}`);
+      logWithTag('[processNewsWithoutEnterprise]', `content有效性: ${hasValidContentForAnalysis}, 是否包含乱码: ${isContentContaminatedForAnalysis}`);
+      logWithTag('[processNewsWithoutEnterprise]', `是否强制重新抓取: ${shouldForceRefetch}`);
       
       const actualContent = await this.ensureNewsContent(newsItem, shouldForceRefetch);
       
@@ -4385,7 +4386,7 @@ ${enterpriseList}
           keywords: ['政策信息'],
           news_abstract: '网页设置了反爬虫机制，无法获取正文'
         };
-        console.log(`[processNewsWithoutEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
+        logWithTag('[processNewsWithoutEnterprise]', `反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
       } else {
         // 分析新闻情绪和类型（使用已确保的content）
         analysis = await this.analyzeNewsSentimentAndType(
@@ -4411,7 +4412,7 @@ ${enterpriseList}
       if (relevantEnterprises.length === 0 || isAdvertisement) {
         // 没有相关企业，或者是广告类型，保持enterprise_full_name为空
         // 在更新数据库之前，校验分析结果（摘要和关键词）
-        console.log(`[processNewsWithoutEnterprise] 开始校验分析结果...`);
+        logWithTag('[processNewsWithoutEnterprise]', '开始校验分析结果...');
         let validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
         
         // 对于新榜接口的新闻，强制检查摘要和关键词是否为空（除非内容为空或乱码）
@@ -4481,7 +4482,7 @@ ${enterpriseList}
           ]
         );
         const reason = isAdvertisement ? '广告类型' : '无关联企业';
-        console.log(`✓ 已完成新闻分析（${reason}): ${newsItem.id}`);
+        logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（${reason}): ${newsItem.id}`);
       } else {
         // 有相关企业且非广告类型，需要复制数据
         // 最终验证：确保所有企业名称都在被投企业表中存在（检查企业全称或项目简称，大小写不敏感）
@@ -4524,7 +4525,7 @@ ${enterpriseList}
         if (validEnterprises.length === 0) {
           // 没有有效的企业关联，保持enterprise_full_name为空
           // 在更新数据库之前，校验分析结果（摘要和关键词）
-          console.log(`[processNewsWithoutEnterprise] 开始校验分析结果（无有效企业关联）...`);
+          logWithTag('[processNewsWithoutEnterprise]', '开始校验分析结果（无有效企业关联）...');
           const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
           
           // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
@@ -4552,11 +4553,11 @@ ${enterpriseList}
               newsItem.id
             ]
           );
-          console.log(`✓ 已完成新闻分析（无有效企业关联): ${newsItem.id}`);
+          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（无有效企业关联): ${newsItem.id}`);
         } else {
           // 处理有效的企业关联
           // 在更新数据库之前，先校验分析结果（摘要和关键词），所有记录使用相同的校验结果
-          console.log(`[processNewsWithoutEnterprise] 开始校验分析结果（有企业关联）...`);
+          logWithTag('[processNewsWithoutEnterprise]', '开始校验分析结果（有企业关联）...');
           const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
           
           for (let i = 0; i < validEnterprises.length; i++) {
@@ -4612,13 +4613,13 @@ ${enterpriseList}
               );
             }
           }
-          console.log(`✓ 已完成新闻分析（关联${validEnterprises.length}家有效企业): ${newsItem.id}`);
+          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（关联${validEnterprises.length}家有效企业): ${newsItem.id}`);
         }
       }
 
       return true;
     } catch (error) {
-      console.error(`新闻分析失败 ${newsItem.id}:`, error);
+      errorWithTag('[processNewsWithoutEnterprise]', `新闻分析失败 ${newsItem.id}:`, error);
       return false;
     }
   }
@@ -4633,7 +4634,7 @@ ${enterpriseList}
    */
   async supplementXinbangNewsAnalysis() {
     try {
-      console.log('[补充新榜分析] 开始查询需要补充的新榜接口数据...');
+      logWithTag('[补充新榜分析]', '开始查询需要补充的新榜接口数据...');
       
       // 查询新榜接口中content不为空但摘要或关键词为空的记录
       const newsToSupplement = await db.query(
@@ -4650,11 +4651,11 @@ ${enterpriseList}
       );
 
       if (newsToSupplement.length === 0) {
-        console.log('[补充新榜分析] 没有需要补充的新榜接口数据');
+        logWithTag('[补充新榜分析]', '没有需要补充的新榜接口数据');
         return 0;
       }
 
-      console.log(`[补充新榜分析] 找到 ${newsToSupplement.length} 条需要补充的新榜接口数据`);
+      logWithTag('[补充新榜分析]', `找到 ${newsToSupplement.length} 条需要补充的新榜接口数据`);
 
       let supplementCount = 0;
       const interfaceType = '新榜';
@@ -4681,12 +4682,12 @@ ${enterpriseList}
             // 内容被污染，尝试从source_url提取内容
             if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
               try {
-                console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 内容被污染，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
+                logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 内容被污染，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
                 const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
                 
                 if (extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
                   finalContent = extractResult.content;
-                  console.log(`[补充新榜分析] ✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
+                  logWithTag('[补充新榜分析]', `✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
                   
                   // 更新数据库中的content
                   await db.execute(
@@ -4704,7 +4705,7 @@ ${enterpriseList}
                   );
                 } else {
                   // 提取失败，使用默认处理
-                  console.log(`[补充新榜分析] 从微信公众号提取内容失败，使用默认处理`);
+                  logWithTag('[补充新榜分析]', '从微信公众号提取内容失败，使用默认处理');
                   const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
                   const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
                   const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
@@ -4717,7 +4718,7 @@ ${enterpriseList}
                   };
                 }
               } catch (extractError) {
-                console.error(`[补充新榜分析] 从微信公众号提取内容时出错: ${extractError.message}`);
+                errorWithTag('[补充新榜分析]', `从微信公众号提取内容时出错: ${extractError.message}`);
                 // 提取失败，使用默认处理
                 const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
                 const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
@@ -4732,7 +4733,7 @@ ${enterpriseList}
               }
             } else {
               // 不是微信公众号URL或没有source_url，使用默认处理
-              console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 内容被污染，且不是微信公众号URL，使用默认处理`);
+              logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 内容被污染，且不是微信公众号URL，使用默认处理`);
               const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
               const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
               const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
@@ -4746,7 +4747,7 @@ ${enterpriseList}
             }
           } else {
             // 内容有效，调用AI分析
-            console.log(`[补充新榜分析] 新闻ID ${newsItem.id} 调用AI分析，内容长度: ${newsItem.content.length}字符`);
+            logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 调用AI分析，内容长度: ${newsItem.content.length}字符`);
             analysisResult = await this.analyzeNewsSentimentAndType(
               newsItem.title,
               newsItem.content,
@@ -4770,13 +4771,13 @@ ${enterpriseList}
               ]
             );
             supplementCount++;
-            console.log(`[补充新榜分析] ✓ 已补充新闻ID: ${newsItem.id}`);
+            logWithTag('[补充新榜分析]', `✓ 已补充新闻ID: ${newsItem.id}`);
           }
 
           // 如果是额外公众号，执行企业关联分析和关联验证
           if (isAdditionalAccount && finalContent && finalContent.trim().length > 0) {
             try {
-              console.log(`[补充新榜分析] 额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+              logWithTag('[补充新榜分析]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
               
               // 获取所有被投企业信息
               const enterprises = await db.query(
@@ -4802,24 +4803,24 @@ ${enterpriseList}
                     'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
                     [firstEnterprise.enterprise_name, newsItem.id]
                   );
-                  console.log(`[补充新榜分析] ✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
                 }
               }
             } catch (enterpriseError) {
-              console.error(`[补充新榜分析] 额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+              errorWithTag('[补充新榜分析]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
             }
           }
 
           // 添加延迟避免API频率限制
           await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          console.error(`[补充新榜分析] 处理新闻 ${newsItem.id} 时出错:`, error);
+          errorWithTag('[补充新榜分析]', `处理新闻 ${newsItem.id} 时出错:`, error);
         }
       }
 
       return supplementCount;
     } catch (error) {
-      console.error('[补充新榜分析] 补充新榜接口数据失败:', error);
+      errorWithTag('[补充新榜分析]', '补充新榜接口数据失败:', error);
       return 0;
     }
   }
@@ -4966,7 +4967,7 @@ ${enterpriseList}
    */
   async analyzeXinbangNewsImmediately(newsItem, isAdditionalAccount = false) {
     try {
-      console.log(`[立即分析新榜新闻] 开始分析新闻ID: ${newsItem.id}, 标题: ${newsItem.title.substring(0, 50)}...`);
+      logWithTag('[立即分析新榜新闻]', `开始分析新闻ID: ${newsItem.id}, 标题: ${newsItem.title.substring(0, 50)}...`);
       
       const interfaceType = '新榜';
       const hasContent = newsItem.content && newsItem.content.trim().length > 0;
@@ -4979,12 +4980,12 @@ ${enterpriseList}
         // content为空或包含乱码，尝试从source_url提取内容
         if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
           try {
-            console.log(`[立即分析新榜新闻] content为空或包含乱码，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
+            logWithTag('[立即分析新榜新闻]', `content为空或包含乱码，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
             const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
             
             if (extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
               finalContent = extractResult.content;
-              console.log(`[立即分析新榜新闻] ✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
+              logWithTag('[立即分析新榜新闻]', `✓ 成功从微信公众号提取内容，长度: ${finalContent.length}字符`);
               
               // 更新数据库中的content
               await db.execute(
@@ -5002,7 +5003,7 @@ ${enterpriseList}
               );
             } else {
               // 提取失败，使用默认处理
-              console.log(`[立即分析新榜新闻] 从微信公众号提取内容失败，使用默认处理`);
+              logWithTag('[立即分析新榜新闻]', '从微信公众号提取内容失败，使用默认处理');
               const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
               const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
               const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
@@ -5015,7 +5016,7 @@ ${enterpriseList}
               };
             }
           } catch (extractError) {
-            console.error(`[立即分析新榜新闻] 从微信公众号提取内容时出错: ${extractError.message}`);
+            errorWithTag('[立即分析新榜新闻]', `从微信公众号提取内容时出错: ${extractError.message}`);
             // 提取失败，使用默认处理
             const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
             const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
@@ -5044,7 +5045,7 @@ ${enterpriseList}
         }
       } else {
         // content有内容，调用AI分析
-        console.log(`[立即分析新榜新闻] content有内容，调用AI分析，内容长度: ${newsItem.content.length}字符`);
+        logWithTag('[立即分析新榜新闻]', `content有内容，调用AI分析，内容长度: ${newsItem.content.length}字符`);
         analysisResult = await this.analyzeNewsSentimentAndType(
           newsItem.title,
           newsItem.content,
@@ -5067,12 +5068,12 @@ ${enterpriseList}
             newsItem.id
           ]
         );
-        console.log(`[立即分析新榜新闻] ✓ 已更新数据库，新闻ID: ${newsItem.id}`);
+        logWithTag('[立即分析新榜新闻]', `✓ 已更新数据库，新闻ID: ${newsItem.id}`);
         
         // 如果是额外公众号，执行企业关联分析和关联验证
         if (isAdditionalAccount && hasContent && !isContentDirty) {
           try {
-            console.log(`[立即分析新榜新闻] 额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+            logWithTag('[立即分析新榜新闻]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
             
             // 获取所有被投企业信息
             const enterprises = await db.query(
@@ -5098,11 +5099,11 @@ ${enterpriseList}
                   'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
                   [firstEnterprise.enterprise_name, newsItem.id]
                 );
-                console.log(`[立即分析新榜新闻] ✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+                logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
               }
             }
           } catch (enterpriseError) {
-            console.error(`[立即分析新榜新闻] 额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+            errorWithTag('[立即分析新榜新闻]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
           }
         }
         
@@ -5111,14 +5112,14 @@ ${enterpriseList}
       
       return false;
     } catch (error) {
-      console.error(`[立即分析新榜新闻] ✗ 分析失败，新闻ID: ${newsItem.id}, 错误: ${error.message}`);
+      errorWithTag('[立即分析新榜新闻]', `✗ 分析失败，新闻ID: ${newsItem.id}, 错误: ${error.message}`);
       return false;
     }
   }
 
   async batchAnalyzeNews(limit = 50) {
     try {
-      console.log('开始批量分析新闻...');
+      logWithTag('[批量分析]', '开始批量分析新闻...');
       
       // 获取需要分析的新闻（news_abstract为空的记录），包括公众号信息和接口类型
       const newsItems = await db.query(
@@ -5133,11 +5134,11 @@ ${enterpriseList}
       );
 
       if (newsItems.length === 0) {
-        console.log('没有需要分析的新闻');
+        logWithTag('[批量分析]', '没有需要分析的新闻');
         return { success: true, processed: 0, message: '没有需要分析的新闻' };
       }
 
-      console.log(`找到 ${newsItems.length} 条需要分析的新闻`);
+      logWithTag('[批量分析]', `找到 ${newsItems.length} 条需要分析的新闻`);
 
       let successCount = 0;
       let errorCount = 0;
@@ -5149,14 +5150,14 @@ ${enterpriseList}
           if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content) {
             // 检查内容是否被污染（包含JavaScript代码、CSS样式等脏信息）
             if (this.isContentContaminated(newsItem.content)) {
-              console.log(`[批量分析] ⚠️ 跳过乱码内容（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+              warnWithTag('[批量分析]', `⚠️ 跳过乱码内容（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
               errorCount++;
               continue;
             }
             
             // 检查内容长度（至少20字符才认为是有效正文）
             if (newsItem.content.trim().length < 20) {
-              console.log(`[批量分析] ⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+              warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
               errorCount++;
               continue;
             }
@@ -5188,7 +5189,7 @@ ${enterpriseList}
               
               if (enterpriseResult.length > 0) {
                 newsItem.enterprise_full_name = enterpriseResult[0].enterprise_full_name;
-                console.log(`[批量分析] ✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}`);
+                logWithTag('[批量分析]', `✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}`);
                 // 更新数据库中的企业全称
                 await db.execute(
                   'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
@@ -5196,7 +5197,7 @@ ${enterpriseList}
                 );
               }
             } catch (e) {
-              console.warn(`[批量分析] 检查企业公众号时出错:`, e.message);
+              warnWithTag('[批量分析]', `检查企业公众号时出错:`, e.message);
             }
           }
           
@@ -5227,11 +5228,11 @@ ${enterpriseList}
       // AI分析完成后，检查新榜接口数据，补充缺失的摘要和关键词
       let xinbangSupplementCount = 0;
       try {
-        console.log('[批量分析] 开始检查新榜接口数据，补充缺失的摘要和关键词...');
+        logWithTag('[批量分析]', '开始检查新榜接口数据，补充缺失的摘要和关键词...');
         xinbangSupplementCount = await this.supplementXinbangNewsAnalysis();
-        console.log(`[批量分析] 新榜接口数据补充完成: 补充了 ${xinbangSupplementCount} 条新闻的摘要和关键词`);
+        logWithTag('[批量分析]', `新榜接口数据补充完成: 补充了 ${xinbangSupplementCount} 条新闻的摘要和关键词`);
       } catch (supplementError) {
-        console.error('[批量分析] 补充新榜接口数据失败:', supplementError);
+        errorWithTag('[批量分析]', '补充新榜接口数据失败:', supplementError);
       }
 
       // AI分析完成后，执行去重检查

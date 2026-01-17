@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const db = require('../db');
 const { sendNewsEmailToRecipient, getYesterdayNewsByEnterprise } = require('./emailSender');
 const XLSX = require('xlsx');
+const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -172,8 +173,8 @@ function getYesterdayTimeRange() {
  * 时间范围：今天创建（获取）的新闻（基于 created_at）
  */
 async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
-  console.log(`[邮件发送] ========== 开始获取用户可见的舆情信息 ==========`);
-  console.log(`[邮件发送] 用户ID: ${userId}`);
+  logWithTimestamp(`[邮件发送] ========== 开始获取用户可见的舆情信息 ==========`);
+  logWithTimestamp(`[邮件发送] 用户ID: ${userId}`);
   if (recipientConfig) {
     console.log(`[邮件发送] 收件管理配置ID: ${recipientConfig.id || '(NULL)'}`);
   }
@@ -1443,6 +1444,86 @@ async function executeEmailTask(recipientId) {
       console.log(`用户 ${recipient.user_id} 今天没有获取到可见的舆情信息，将发送空数据通知邮件`);
     }
     
+    // ========== 邮件发送前AI重新分析 ==========
+    if (newsList.length > 0) {
+      logWithTimestamp(`[邮件发送] ========== 开始AI重新分析 ==========`);
+      logWithTimestamp(`[邮件发送] 需要重新分析的新闻数量: ${newsList.length}`);
+      
+      const newsAnalysis = require('./newsAnalysis');
+      const newsAnalysisInstance = new newsAnalysis();
+      
+      let reanalyzeSuccessCount = 0;
+      let reanalyzeErrorCount = 0;
+      
+      // 批量重新分析新闻
+      for (const news of newsList) {
+        try {
+          logWithTimestamp(`[邮件发送] 正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
+          
+          // 获取完整的新闻数据（包括content）
+          const fullNewsItems = await db.query(
+            'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
+            [news.id]
+          );
+          
+          if (fullNewsItems.length === 0) {
+            logWithTimestamp(`[邮件发送] ⚠️ 新闻 ${news.id} 不存在，跳过重新分析`);
+            continue;
+          }
+          
+          const newsItem = fullNewsItems[0];
+          
+          // 根据是否有企业关联选择不同的处理方式
+          let reanalyzeResult;
+          if (newsItem.enterprise_full_name) {
+            // 有企业关联，使用processNewsWithEnterprise（会保护来自invested_enterprises的企业关联）
+            logWithTimestamp(`[邮件发送] 新闻 ${news.id} 有企业关联，使用processNewsWithEnterprise`);
+            reanalyzeResult = await newsAnalysisInstance.processNewsWithEnterprise(newsItem);
+          } else {
+            // 无企业关联，使用processNewsWithoutEnterprise
+            logWithTimestamp(`[邮件发送] 新闻 ${news.id} 无企业关联，使用processNewsWithoutEnterprise`);
+            reanalyzeResult = await newsAnalysisInstance.processNewsWithoutEnterprise(newsItem);
+          }
+          
+          if (reanalyzeResult) {
+            reanalyzeSuccessCount++;
+            logWithTimestamp(`[邮件发送] ✓ 新闻 ${news.id} 重新分析成功`);
+          } else {
+            reanalyzeErrorCount++;
+            logWithTimestamp(`[邮件发送] ✗ 新闻 ${news.id} 重新分析失败`);
+          }
+          
+          // 添加延迟避免API频率限制
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          reanalyzeErrorCount++;
+          errorWithTimestamp(`[邮件发送] ✗ 新闻 ${news.id} 重新分析出错: ${error.message}`);
+        }
+      }
+      
+      logWithTimestamp(`[邮件发送] AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
+      logWithTimestamp(`[邮件发送] ========== AI重新分析结束 ==========`);
+      
+      // 重新分析完成后，从数据库重新获取最新的新闻数据
+      logWithTimestamp(`[邮件发送] 从数据库重新获取最新的新闻数据...`);
+      const newsIds = newsList.map(n => n.id);
+      if (newsIds.length > 0) {
+        const placeholders = newsIds.map(() => '?').join(',');
+        const refreshedNewsList = await db.query(
+          `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+                  nd.APItype, nd.news_category
+           FROM news_detail nd
+           WHERE nd.id IN (${placeholders})
+           AND nd.delete_mark = 0`,
+          newsIds
+        );
+        
+        logWithTimestamp(`[邮件发送] 重新获取到 ${refreshedNewsList.length} 条新闻数据`);
+        newsList = refreshedNewsList;
+      }
+    }
+    
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
     const emailConfigs = await db.query(
       `SELECT ec.*, a.app_name
@@ -1463,8 +1544,81 @@ async function executeEmailTask(recipientId) {
     // 过滤新闻：根据收件配置的企查查类别编码进行过滤
     const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
     
-    // 发送邮件（包含Excel附件）
-    await sendNewsEmailWithExcel(recipient, emailConfig, filteredNewsList);
+    // 预先获取所有额外公众号的ID列表（用于后续过滤判断）
+    let additionalAccountIdsSet = new Set();
+    try {
+      const additionalAccounts = await db.query(
+        `SELECT DISTINCT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE status = 'active' 
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''
+         AND delete_mark = 0`
+      );
+      additionalAccounts.forEach(acc => {
+        if (acc.wechat_account_id) {
+          additionalAccountIdsSet.add(acc.wechat_account_id);
+        }
+      });
+      logWithTimestamp(`[邮件发送] 预先获取额外公众号ID列表，共 ${additionalAccountIdsSet.size} 个`);
+    } catch (err) {
+      warnWithTimestamp(`[邮件发送] 获取额外公众号列表失败: ${err.message}`);
+    }
+    
+    // 重新应用最终过滤逻辑（过滤掉不满足发送邮件条件的数据）
+    logWithTimestamp(`[邮件发送] ========== 重新应用最终过滤逻辑 ==========`);
+    logWithTimestamp(`[邮件发送] AI重新分析后新闻数: ${newsList.length}, 企查查类别过滤后: ${filteredNewsList.length}`);
+    
+    // 使用finalNewsList的过滤逻辑再次过滤
+    const beforeFinalFilterCount = filteredNewsList.length;
+    const finalFilteredNewsList = filteredNewsList.filter(news => {
+      // 检查标题（标题是必需的）
+      if (!news.title || news.title.trim() === '') {
+        return false;
+      }
+      
+      // 检查企业全称（额外公众号的新闻可能没有企业名称）
+      const enterpriseName = news.enterprise_full_name;
+      const hasEnterpriseName = enterpriseName && enterpriseName.trim() !== '';
+      
+      // 对于没有企业名称的新闻，检查是否是额外公众号的新闻
+      if (!hasEnterpriseName) {
+        const isAdditionalAccountNews = news.wechat_account && additionalAccountIdsSet.has(news.wechat_account);
+        if (!isAdditionalAccountNews) {
+          // 非额外公众号的新闻，企业全称是必需的
+          return false;
+        }
+      }
+      
+      // 检查 news_abstract 字段（AI提取的摘要）
+      const hasAbstract = news.news_abstract && news.news_abstract.trim() !== '';
+      // 检查 summary 字段（原始摘要，新榜数据使用此字段）
+      const hasSummary = news.summary && news.summary.trim() !== '';
+      // 检查 content 字段（正文）
+      const hasContent = news.content && news.content.trim() !== '';
+      
+      // 判断数据源类型
+      const isQichacha = news.APItype === '企查查' || news.APItype === 'qichacha';
+      const isXinbang = news.APItype === '新榜' || !news.APItype || (!isQichacha);
+      
+      if (isXinbang) {
+        // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
+        return hasAbstract || hasSummary;
+      } else {
+        // 企查查新闻：有摘要（news_abstract）或正文即可推送
+        return hasAbstract || hasContent;
+      }
+    });
+    
+    const afterFinalFilterCount = finalFilteredNewsList.length;
+    const finalFilteredCount = beforeFinalFilterCount - afterFinalFilterCount;
+    if (finalFilteredCount > 0) {
+      logWithTimestamp(`[邮件发送] 最终过滤掉 ${finalFilteredCount} 条不满足发送邮件条件的数据，剩余 ${afterFinalFilterCount} 条`);
+    }
+    logWithTimestamp(`[邮件发送] ========== 最终过滤完成 ==========`);
+    
+    // 发送邮件（包含Excel附件），使用最终过滤后的新闻列表
+    await sendNewsEmailWithExcel(recipient, emailConfig, finalFilteredNewsList);
     
     console.log(`✓ 邮件发送任务完成: 收件管理配置 ${recipientId}`);
   } catch (error) {
@@ -1565,7 +1719,8 @@ module.exports = {
   getYesterdayTimeRange,
   getEmailTimeRange,
   findPreviousWorkday,
-  isWorkdayDate
+  isWorkdayDate,
+  filterNewsByCategory
 };
 
 

@@ -5,6 +5,7 @@ const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTask
 const { generateId } = require('../utils/idGenerator');
 const { initializeScheduledTask: initializeNewsReanalysisTask } = require('../utils/scheduledNewsReanalysisTasks');
 const cron = require('node-cron');
+const { logWithTag, errorWithTag } = require('../utils/logUtils');
 
 const router = express.Router();
 
@@ -184,7 +185,7 @@ router.get('/ai-analysis-config', checkAdminPermission, async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('获取AI分析定时任务配置失败：', error);
+    errorWithTag('[定时任务]', '获取AI分析定时任务配置失败：', error);
     res.status(500).json({ success: false, message: '获取配置失败：' + error.message });
   }
 });
@@ -241,7 +242,7 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
         stopScheduledTask();
       }
     } catch (initError) {
-      console.error('重新初始化AI分析定时任务失败:', initError);
+      errorWithTag('[定时任务]', '重新初始化AI分析定时任务失败:', initError);
       // 即使初始化失败，也返回成功，因为配置已保存
     }
 
@@ -250,7 +251,7 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
       message: 'AI分析定时任务配置更新成功'
     });
   } catch (error) {
-    console.error('更新AI分析定时任务配置失败：', error);
+    errorWithTag('[定时任务]', '更新AI分析定时任务配置失败：', error);
     res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
   }
 });
@@ -260,7 +261,7 @@ router.post('/ai-analysis-config/execute', checkAdminPermission, async (req, res
   try {
     const { executeEmptyAbstractReanalysis } = require('../utils/scheduledNewsReanalysisTasks');
     
-    console.log('[AI分析定时任务] 管理员手动触发执行...');
+    logWithTag('[AI分析定时任务]', '管理员手动触发执行...');
     
     // 立即返回响应，告知前端开始处理
     res.json({
@@ -273,13 +274,13 @@ router.post('/ai-analysis-config/execute', checkAdminPermission, async (req, res
     setImmediate(async () => {
       try {
         const result = await executeEmptyAbstractReanalysis(50); // 每次处理50条
-        console.log('[AI分析定时任务] 手动执行完成:', result);
+        logWithTag('[AI分析定时任务]', '手动执行完成:', result);
       } catch (error) {
-        console.error('[AI分析定时任务] 手动执行失败:', error);
+        errorWithTag('[AI分析定时任务]', '手动执行失败:', error);
       }
     });
   } catch (error) {
-    console.error('执行AI分析定时任务失败：', error);
+    errorWithTag('[定时任务]', '执行AI分析定时任务失败：', error);
     res.status(500).json({ success: false, message: '执行失败：' + error.message });
   }
 });
@@ -404,13 +405,13 @@ router.get('/', checkAdminPermission, async (req, res) => {
                     [lastSyncTime, lastSyncTime, config.id]
                   );
                 } catch (updateError) {
-                  console.warn(`[定时任务API] 更新配置 ${config.id} 的last_sync_time失败:`, updateError.message);
+                  logWithTag('[定时任务API]', `更新配置 ${config.id} 的last_sync_time失败:`, updateError.message);
                 }
               });
             }
           }
         } catch (logError) {
-          console.warn(`[定时任务API] 查询配置 ${config.id} 的执行日志失败:`, logError.message);
+          logWithTag('[定时任务API]', `查询配置 ${config.id} 的执行日志失败:`, logError.message);
           // 如果查询失败，继续使用config.last_sync_time
         }
         
@@ -447,7 +448,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
       res.status(400).json({ success: false, message: '无效的任务类型' });
     }
   } catch (error) {
-    console.error('获取定时任务列表失败：', error);
+    errorWithTag('[定时任务]', '获取定时任务列表失败：', error);
     res.status(500).json({ success: false, message: '获取定时任务列表失败：' + error.message });
   }
 });
@@ -494,7 +495,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       data: task
     });
   } catch (error) {
-    console.error('获取定时任务详情失败：', error);
+    errorWithTag('[定时任务]', '获取定时任务详情失败：', error);
     res.status(500).json({ success: false, message: '获取定时任务详情失败：' + error.message });
   }
 });
@@ -564,7 +565,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
               executionDetails = log.execution_details;
             }
           } catch (e) {
-            console.error('解析execution_details失败:', e.message, '原始数据:', log.execution_details);
+            errorWithTag('[定时任务]', '解析execution_details失败:', e.message, '原始数据:', log.execution_details);
             executionDetails = null;
           }
         }
@@ -671,7 +672,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
     });
     }
   } catch (error) {
-    console.error('获取定时任务日志失败：', error);
+    errorWithTag('[定时任务]', '获取定时任务日志失败：', error);
     res.status(500).json({ success: false, message: '获取定时任务日志失败：' + error.message });
   }
 });
@@ -717,7 +718,7 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
           });
         }
       } catch (logError) {
-        console.error('创建同步日志失败:', logError.message);
+        errorWithTag('[定时任务]', '创建同步日志失败:', logError.message);
       }
       
       if (interfaceType === '企查查') {
@@ -744,7 +745,7 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
       message: '定时任务执行完成'
     });
   } catch (error) {
-    console.error('执行定时任务失败：', error);
+    errorWithTag('[定时任务]', '执行定时任务失败：', error);
     res.status(500).json({
       success: false,
       message: '执行定时任务失败：' + error.message
@@ -837,7 +838,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
         updateFields.push('frequency_value = ?');
         updateValues.push(frequencyValue);
         
-        console.log(`[定时任务更新] 同步更新frequency_type: ${frequencyType}, frequency_value: ${frequencyValue} (基于send_frequency: ${send_frequency})`);
+        logWithTag('[定时任务更新]', `同步更新frequency_type: ${frequencyType}, frequency_value: ${frequencyValue} (基于send_frequency: ${send_frequency})`);
       }
       if (send_time !== undefined) {
         updateFields.push('send_time = ?');
@@ -876,7 +877,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
         // 更新新闻同步定时任务
         updateNewsSyncScheduledTasks().catch(error => {
-          console.error('更新新闻同步定时任务失败:', error);
+          errorWithTag('[定时任务]', '更新新闻同步定时任务失败:', error);
         });
       }
     } else {
@@ -888,7 +889,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       message: '定时任务更新成功'
     });
   } catch (error) {
-    console.error('更新定时任务失败：', error);
+    errorWithTag('[定时任务]', '更新定时任务失败：', error);
     res.status(500).json({ success: false, message: '更新定时任务失败：' + error.message });
   }
 });
@@ -935,7 +936,7 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     res.json({ success: true, message: '定时任务删除成功' });
   } catch (error) {
-    console.error('删除定时任务失败：', error);
+    errorWithTag('[定时任务]', '删除定时任务失败：', error);
     res.status(500).json({ success: false, message: '删除定时任务失败：' + error.message });
   }
 });
