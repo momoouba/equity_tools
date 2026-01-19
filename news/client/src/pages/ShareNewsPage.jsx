@@ -77,6 +77,12 @@ function ShareNewsPage() {
   const [verifying, setVerifying] = useState(true)
   const [verified, setVerified] = useState(false)
   const [error, setError] = useState('')
+  const [exportLoading, setExportLoading] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [cleanLoading, setCleanLoading] = useState(false)
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false)
+  const [selectedNewsIds, setSelectedNewsIds] = useState([])
+  const [selectAll, setSelectAll] = useState(false)
 
   // 验证token
   useEffect(() => {
@@ -254,7 +260,51 @@ function ShareNewsPage() {
   const handleTabChange = (tab) => {
     setActiveTab(tab)
     setCurrentPage(1)
+    setSelectedNewsIds([])
+    setSelectAll(false)
   }
+
+  // 当分页或筛选变化时，清除选择
+  useEffect(() => {
+    setSelectedNewsIds([])
+    setSelectAll(false)
+  }, [currentPage, activeTab, enterpriseFilter, search])
+
+  // 处理单个新闻选择
+  const handleSelectNews = (newsId) => {
+    setSelectedNewsIds(prev => {
+      if (prev.includes(newsId)) {
+        return prev.filter(id => id !== newsId)
+      } else {
+        return [...prev, newsId]
+      }
+    })
+  }
+
+  // 处理全选/取消全选
+  const handleSelectAll = () => {
+    if (selectAll) {
+      setSelectedNewsIds([])
+    } else {
+      const currentPageNewsIds = newsList.map(news => news.id).filter(id => id)
+      setSelectedNewsIds(currentPageNewsIds)
+    }
+    setSelectAll(!selectAll)
+  }
+
+  // 检查当前页是否全选
+  useEffect(() => {
+    if (newsList.length === 0) {
+      setSelectAll(false)
+      return
+    }
+    
+    const currentPageNewsIds = newsList.map(news => news.id).filter(id => id)
+    const allCurrentPageSelected = currentPageNewsIds.length > 0 && 
+      currentPageNewsIds.every(id => selectedNewsIds.includes(id))
+    
+    setSelectAll(allCurrentPageSelected)
+  }, [newsList, selectedNewsIds])
 
   // 分页计算
   const totalPages = Math.ceil(total / pageSize) || 1
@@ -292,6 +342,172 @@ function ShareNewsPage() {
       return `${dateStr}\n${timeStr}`
     } catch (e) {
       return dateString
+    }
+  }
+
+  // 导出功能
+  const handleExport = async () => {
+    setExportLoading(true)
+    try {
+      const response = await axios.post('/api/news/export', {
+        timeRange: activeTab,
+        exportTimeRange: activeTab === 'all' ? null : activeTab
+      }, {
+        responseType: 'blob',
+        headers: {
+          'share-token': token
+        }
+      })
+
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      
+      const contentDisposition = response.headers['content-disposition']
+      let filename = '舆情信息.xlsx'
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+        if (filenameMatch && filenameMatch[1]) {
+          filename = decodeURIComponent(filenameMatch[1].replace(/['"]/g, ''))
+        }
+      }
+      
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      alert('导出成功')
+    } catch (error) {
+      console.error('导出失败:', error)
+      alert('导出失败：' + (error.response?.data?.message || '请稍后重试'))
+    } finally {
+      setExportLoading(false)
+    }
+  }
+
+  // 清理无效关联（仅清理选中的数据）
+  const handleCleanInvalidAssociations = async () => {
+    if (selectedNewsIds.length === 0) {
+      alert('请先选择要清理的新闻')
+      return
+    }
+
+    if (!confirm(`此操作将检查选中的 ${selectedNewsIds.length} 条新闻的企业关联，并清理不在被投企业数据库中的关联。\n\n是否继续？`)) {
+      return
+    }
+
+    setCleanLoading(true)
+    try {
+      // 调用批量清理接口，传入选中的新闻ID
+      const response = await axios.post('/api/news-analysis/clean-invalid-associations-selected', {
+        newsIds: selectedNewsIds
+      }, {
+        headers: {
+          'share-token': token
+        }
+      })
+      
+      if (response.data.success) {
+        const result = response.data.data
+        let resultMessage = `清理完成！\n\n` +
+          `检查了 ${result.totalChecked || selectedNewsIds.length} 条新闻\n` +
+          `清理了 ${result.cleanedCount || 0} 个无效企业关联\n\n`
+        
+        if (result.invalidEnterprises && result.invalidEnterprises.length > 0) {
+          resultMessage += `清理的无效企业示例：\n`
+          result.invalidEnterprises.slice(0, 5).forEach(item => {
+            resultMessage += `• ${item.invalidEnterprise || item}\n`
+          })
+          if (result.invalidEnterprises.length > 5) {
+            resultMessage += `... 还有 ${result.invalidEnterprises.length - 5} 个\n`
+          }
+        }
+        alert(resultMessage)
+        setSelectedNewsIds([])
+        setSelectAll(false)
+        fetchNews()
+      } else {
+        alert('清理失败：' + response.data.message)
+      }
+    } catch (error) {
+      console.error('清理无效关联失败:', error)
+      alert('清理失败：' + (error.response?.data?.message || error.message || '请稍后重试'))
+    } finally {
+      setCleanLoading(false)
+    }
+  }
+
+  // 刷新功能
+  const handleRefresh = async () => {
+    if (isRefreshing || loading) return
+    
+    setIsRefreshing(true)
+    try {
+      await fetchNews()
+    } catch (error) {
+      console.error('刷新新闻列表失败:', error)
+      alert('刷新失败，请稍后重试')
+    } finally {
+      setTimeout(() => {
+        setIsRefreshing(false)
+      }, 800)
+    }
+  }
+
+  // AI重新分析（仅分析选中的数据）
+  const handleAiReanalyze = async () => {
+    if (selectedNewsIds.length === 0) {
+      alert('请先选择要分析的新闻')
+      return
+    }
+
+    if (!confirm(`确定要对选中的 ${selectedNewsIds.length} 条新闻进行AI重新分析吗？\n\n分析过程可能需要一些时间，请耐心等待。`)) {
+      return
+    }
+
+    setAiAnalysisLoading(true)
+    try {
+      const response = await axios.post('/api/news-analysis/batch-analyze-selected', {
+        newsIds: selectedNewsIds
+      }, {
+        headers: {
+          'share-token': token
+        }
+      })
+      
+      if (response.data.success) {
+        if (response.data.status === 'processing') {
+          alert(`AI分析已开始！正在后台处理 ${response.data.data.total} 条新闻\n\n请稍后刷新页面查看结果`)
+        } else {
+          alert(`AI分析完成！处理了 ${response.data.processed || selectedNewsIds.length} 条新闻`)
+          setSelectedNewsIds([])
+          setSelectAll(false)
+          fetchNews()
+        }
+      } else {
+        alert('分析失败：' + (response.data.message || '未知错误'))
+      }
+    } catch (error) {
+      console.error('AI重新分析失败:', error)
+      let errorMessage = '分析失败：'
+      if (error.code === 'ECONNABORTED') {
+        errorMessage += '请求超时。如果您看到此消息，AI分析可能仍在后台进行中，请等待几分钟后刷新页面查看结果'
+      } else if (error.response) {
+        errorMessage += `服务器错误 (${error.response.status}): ${error.response.data?.message || error.response.statusText}`
+      } else if (error.request) {
+        errorMessage += '网络连接超时或服务器无响应。分析可能仍在后台进行，请稍后刷新页面查看结果'
+      } else {
+        errorMessage += error.message || '未知错误'
+      }
+      alert(errorMessage)
+    } finally {
+      setAiAnalysisLoading(false)
     }
   }
 
@@ -430,6 +646,40 @@ function ShareNewsPage() {
         </div>
       </div>
 
+      {/* 操作按钮组 */}
+      <div className="action-buttons">
+        <button
+          className="action-btn export-btn"
+          onClick={handleExport}
+          disabled={exportLoading}
+        >
+          {exportLoading ? '导出中...' : '导出'}
+        </button>
+        <button
+          className="action-btn clean-btn"
+          onClick={handleCleanInvalidAssociations}
+          disabled={cleanLoading || selectedNewsIds.length === 0}
+          title={selectedNewsIds.length === 0 ? '请先选择要清理的新闻' : ''}
+        >
+          {cleanLoading ? '清理中...' : `清理无效关联${selectedNewsIds.length > 0 ? `(${selectedNewsIds.length})` : ''}`}
+        </button>
+        <button
+          className="action-btn refresh-btn"
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+        >
+          {isRefreshing ? '刷新中...' : '刷新'}
+        </button>
+        <button
+          className="action-btn ai-btn"
+          onClick={handleAiReanalyze}
+          disabled={aiAnalysisLoading || selectedNewsIds.length === 0}
+          title={selectedNewsIds.length === 0 ? '请先选择要分析的新闻' : ''}
+        >
+          {aiAnalysisLoading ? '分析中...' : `AI重新分析${selectedNewsIds.length > 0 ? `(${selectedNewsIds.length})` : ''}`}
+        </button>
+      </div>
+
       {/* 企业相关/全部过滤按钮 */}
       <div className="enterprise-filter-buttons">
         <button
@@ -437,6 +687,8 @@ function ShareNewsPage() {
           onClick={() => {
             setEnterpriseFilter('enterprise')
             setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
           }}
         >
           企业相关
@@ -446,6 +698,8 @@ function ShareNewsPage() {
           onClick={() => {
             setEnterpriseFilter('all')
             setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
           }}
         >
           全部
@@ -459,6 +713,14 @@ function ShareNewsPage() {
           <table className="news-table" style={{ borderCollapse: 'collapse' }}>
             <thead>
               <tr>
+                <th className="checkbox-cell">
+                  <input
+                    type="checkbox"
+                    checked={selectAll && newsList.length > 0}
+                    onChange={handleSelectAll}
+                    title={selectAll ? '取消全选' : '全选'}
+                  />
+                </th>
                 <th className="sequence-number-cell">序号</th>
                 <th className="enterprise-name-cell">被投企业全称</th>
                 <th className="keywords-cell">关键词</th>
@@ -473,13 +735,21 @@ function ShareNewsPage() {
             <tbody>
               {newsList.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="empty-data">
+                  <td colSpan="10" className="empty-data">
                     {search ? '未找到相关数据' : '暂无数据'}
                   </td>
                 </tr>
               ) : (
                 newsList.map((news, index) => (
                   <tr key={news.id || index}>
+                    <td className="checkbox-cell">
+                      <input
+                        type="checkbox"
+                        checked={selectedNewsIds.includes(news.id)}
+                        onChange={() => handleSelectNews(news.id)}
+                        disabled={!news.id}
+                      />
+                    </td>
                     <td className="sequence-number-cell">
                       {(currentPage - 1) * pageSize + index + 1}
                     </td>

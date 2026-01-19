@@ -1009,6 +1009,131 @@ router.post('/clean-invalid-associations', async (req, res) => {
   }
 });
 
+// 批量清理选中的新闻的无效企业关联
+router.post('/clean-invalid-associations-selected', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    const userRole = req.headers['x-user-role'];
+    const shareToken = req.headers['share-token'];
+    
+    // 支持管理员或通过share-token访问
+    let isAuthorized = false;
+    if (userId && userRole === 'admin') {
+      isAuthorized = true;
+    } else if (shareToken) {
+      // 验证share-token
+      const links = await db.query(
+        `SELECT user_id, status, has_expiry, expiry_time
+         FROM news_share_links
+         WHERE share_token = ? AND status = 'active'`,
+        [shareToken]
+      );
+      if (links.length > 0) {
+        const link = links[0];
+        // 检查有效期
+        if (link.has_expiry && link.expiry_time) {
+          const now = new Date();
+          const expiryTime = new Date(link.expiry_time);
+          if (now > expiryTime) {
+            return res.status(403).json({
+              success: false,
+              message: '分享链接已过期'
+            });
+          }
+        }
+        // 检查用户是否为管理员
+        const users = await db.query(
+          'SELECT role FROM users WHERE id = ?',
+          [link.user_id]
+        );
+        if (users.length > 0 && users[0].role === 'admin') {
+          isAuthorized = true;
+          userId = link.user_id;
+        }
+      }
+    }
+    
+    if (!isAuthorized) {
+      return res.status(403).json({
+        success: false,
+        message: '只有管理员可以执行清理操作'
+      });
+    }
+
+    const { newsIds } = req.body;
+    
+    if (!newsIds || !Array.isArray(newsIds) || newsIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '请提供要清理的新闻ID列表'
+      });
+    }
+
+    console.log(`管理员 ${userId} 开始批量清理无效企业关联，选中 ${newsIds.length} 条新闻`);
+
+    // 查找选中的新闻中有企业关联的
+    const placeholders = newsIds.map(() => '?').join(',');
+    const newsWithEnterprises = await db.query(`
+      SELECT id, enterprise_full_name, title
+      FROM news_detail 
+      WHERE id IN (${placeholders})
+        AND enterprise_full_name IS NOT NULL 
+        AND enterprise_full_name != ''
+        AND delete_mark = 0
+    `, newsIds);
+    
+    console.log(`找到 ${newsWithEnterprises.length} 条有企业关联的新闻`);
+
+    let cleanedCount = 0;
+    const invalidEnterprises = [];
+
+    for (const news of newsWithEnterprises) {
+      // 检查企业是否在被投企业表中存在
+      const existsInDB = await db.query(
+        `SELECT enterprise_full_name FROM invested_enterprises 
+         WHERE enterprise_full_name = ? AND delete_mark = 0`,
+        [news.enterprise_full_name]
+      );
+
+      if (existsInDB.length === 0) {
+        // 企业不存在，清理关联
+        await db.execute(
+          `UPDATE news_detail 
+           SET enterprise_full_name = NULL 
+           WHERE id = ?`,
+          [news.id]
+        );
+
+        cleanedCount++;
+        invalidEnterprises.push({
+          newsId: news.id,
+          title: news.title ? news.title.substring(0, 50) + '...' : '',
+          invalidEnterprise: news.enterprise_full_name
+        });
+
+        console.log(`清理无效企业关联: ${news.enterprise_full_name} -> ${news.title ? news.title.substring(0, 50) : ''}...`);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: {
+        totalChecked: newsWithEnterprises.length,
+        cleanedCount: cleanedCount,
+        invalidEnterprises: invalidEnterprises.slice(0, 20), // 最多返回20条示例
+        message: `清理完成：检查了 ${newsWithEnterprises.length} 条新闻，清理了 ${cleanedCount} 个无效企业关联`
+      }
+    });
+
+  } catch (error) {
+    console.error('批量清理无效企业关联失败:', error);
+    res.status(500).json({
+      success: false,
+      message: '清理失败: ' + error.message
+    });
+  }
+});
+
 // 获取分析进度
 router.get('/analysis-progress/:taskId', async (req, res) => {
   try {
