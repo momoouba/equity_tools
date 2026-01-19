@@ -3089,7 +3089,6 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       logWithTag('[手动发送邮件]', `需要重新分析的新闻数量: ${newsList.length}`);
       
       const newsAnalysis = require('../utils/newsAnalysis');
-      const newsAnalysisInstance = new newsAnalysis();
       
       let reanalyzeSuccessCount = 0;
       let reanalyzeErrorCount = 0;
@@ -3117,11 +3116,11 @@ router.post('/recipients/:id/send-email', async (req, res) => {
           if (newsItem.enterprise_full_name) {
             // 有企业关联，使用processNewsWithEnterprise（会保护来自invested_enterprises的企业关联）
             logWithTag('[手动发送邮件]', `新闻 ${news.id} 有企业关联，使用processNewsWithEnterprise`);
-            reanalyzeResult = await newsAnalysisInstance.processNewsWithEnterprise(newsItem);
+            reanalyzeResult = await newsAnalysis.processNewsWithEnterprise(newsItem);
           } else {
             // 无企业关联，使用processNewsWithoutEnterprise
             logWithTag('[手动发送邮件]', `新闻 ${news.id} 无企业关联，使用processNewsWithoutEnterprise`);
-            reanalyzeResult = await newsAnalysisInstance.processNewsWithoutEnterprise(newsItem);
+            reanalyzeResult = await newsAnalysis.processNewsWithoutEnterprise(newsItem);
           }
           
           if (reanalyzeResult) {
@@ -3205,7 +3204,36 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       const { filterNewsByCategory } = require('../utils/scheduledEmailTasks');
       
       // 过滤新闻：根据收件配置的企查查类别编码进行过滤
+      logWithTag('[手动发送邮件]', 'AI重新分析后，重新应用企查查类别过滤...');
+      logWithTag('[手动发送邮件]', `重新分析后的新闻数量: ${newsList.length}`);
+      if (newsList.length > 0) {
+        logWithTag('[手动发送邮件]', `重新分析后的新闻类别详情（前5条）:`, newsList.slice(0, 5).map(n => ({
+          id: n.id,
+          title: n.title?.substring(0, 30),
+          APItype: n.APItype || '(NULL)',
+          news_category: n.news_category || '(NULL)',
+          enterprise_full_name: n.enterprise_full_name || '(NULL)'
+        })));
+      }
       const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
+      logWithTag('[手动发送邮件]', `企查查类别过滤后: ${filteredNewsList.length} 条新闻`);
+      if (filteredNewsList.length < newsList.length) {
+        const filteredOut = newsList.filter(n => {
+          const isQichacha = n.APItype === '企查查' || n.APItype === 'qichacha';
+          if (!isQichacha) return false; // 非企查查新闻不会被类别过滤过滤掉
+          const categoryCode = n.news_category ? String(n.news_category).trim() : '';
+          const isInFiltered = filteredNewsList.some(fn => fn.id === n.id);
+          return !isInFiltered;
+        });
+        if (filteredOut.length > 0) {
+          logWithTag('[手动发送邮件]', `⚠️ 被类别过滤过滤掉的企查查新闻（${filteredOut.length}条）:`, filteredOut.map(n => ({
+            id: n.id,
+            title: n.title?.substring(0, 50),
+            news_category: n.news_category || '(NULL)',
+            enterprise_full_name: n.enterprise_full_name || '(NULL)'
+          })));
+        }
+      }
       
       // 使用finalNewsList的过滤逻辑再次过滤
       const beforeFinalFilterCount = filteredNewsList.length;

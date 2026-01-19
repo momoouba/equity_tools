@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Tabs, Input, Select, Tag, Progress, Checkbox, Radio, Divider } from '@arco-design/web-react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Tabs, Input, Select, Tag, Progress, Checkbox, Radio, Divider, Icon } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdditionalAccounts from './AdditionalAccounts'
 import RecipientManagement from './RecipientManagement'
@@ -203,6 +203,7 @@ function NewsInfo() {
     setSelectAll(false)
   }
 
+
   const handlePageSizeChange = (newPageSize) => {
     setPageSize(newPageSize)
     setCurrentPage(1)
@@ -397,11 +398,11 @@ function NewsInfo() {
     setSelectedNews(null)
   }
 
-  const handleExport = async (exportTimeRange = null) => {
+  const handleExport = useCallback(async (exportTimeRange = null, timeRange = null) => {
     setExportLoading(true)
     try {
       const response = await axios.post('/api/news/export', {
-        timeRange: activeTab,
+        timeRange: timeRange || activeTab,
         exportTimeRange: exportTimeRange
       }, {
         responseType: 'blob'
@@ -438,7 +439,7 @@ function NewsInfo() {
     } finally {
       setExportLoading(false)
     }
-  }
+  }, [activeTab])
 
   const handleSelectNews = (newsId) => {
     setSelectedNewsIds(prev => {
@@ -888,11 +889,26 @@ function NewsInfo() {
               type="line"
               className="time-range-tabs"
             >
-              <TabPane key="yesterday" title="昨日舆情" />
-              <TabPane key="thisWeek" title="本周舆情" />
-              <TabPane key="lastWeek" title="上周舆情" />
-              <TabPane key="thisMonth" title="本月舆情" />
-              <TabPane key="all" title="全部舆情" />
+              <TabPane 
+                key="yesterday" 
+                title="昨日舆情"
+              />
+              <TabPane 
+                key="thisWeek" 
+                title="本周舆情"
+              />
+              <TabPane 
+                key="lastWeek" 
+                title="上周舆情"
+              />
+              <TabPane 
+                key="thisMonth" 
+                title="本月舆情"
+              />
+              <TabPane 
+                key="all" 
+                title="全部舆情"
+              />
             </Tabs>
 
             <div className="toolbar">

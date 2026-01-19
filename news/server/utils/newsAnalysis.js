@@ -3565,32 +3565,87 @@ ${enterpriseList}
       return false;
     }
 
-    // 第一步：检查企业是否在被投企业表中存在
-    const enterpriseExists = await db.query(
-      `SELECT enterprise_full_name FROM invested_enterprises 
-       WHERE enterprise_full_name = ? AND delete_mark = 0`,
-      [enterpriseName]
+    // 第一步：检查企业是否在被投企业表中存在（支持模糊匹配）
+    // 处理企业名称格式，如 "广州瑞派医疗器械有限责任公司(瑞派医疗)"
+    let enterpriseFullName = enterpriseName.trim();
+    let projectAbbreviation = null;
+    
+    // 提取括号内的简称
+    const abbreviationMatch = enterpriseName.match(/\(([^)]+)\)$/);
+    if (abbreviationMatch) {
+      projectAbbreviation = abbreviationMatch[1].trim();
+      // 提取括号前的全称
+      enterpriseFullName = enterpriseName.replace(/\s*\([^)]+\)\s*$/, '').trim();
+    }
+    
+    // 尝试多种方式匹配企业
+    let enterpriseExists = await db.query(
+      `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+       WHERE enterprise_full_name = ? AND delete_mark = 0
+       LIMIT 1`,
+      [enterpriseFullName]
     );
+    
+    // 如果精确匹配失败，尝试用括号内的简称匹配 project_abbreviation
+    if (enterpriseExists.length === 0 && projectAbbreviation) {
+      enterpriseExists = await db.query(
+        `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+         WHERE project_abbreviation = ? AND delete_mark = 0
+         LIMIT 1`,
+        [projectAbbreviation]
+      );
+    }
+    
+    // 如果还是没有匹配到，尝试用原始名称匹配 project_abbreviation（可能是纯简称）
+    if (enterpriseExists.length === 0) {
+      enterpriseExists = await db.query(
+        `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+         WHERE project_abbreviation = ? AND delete_mark = 0
+         LIMIT 1`,
+        [enterpriseName.trim()]
+      );
+    }
 
     if (enterpriseExists.length === 0) {
-      console.log(`🚫 数据库检查：企业"${enterpriseName}"不在被投企业表中，直接解除关联`);
+      logWithTag('[validateExistingAssociation]', `数据库检查：企业"${enterpriseName}"（全称: "${enterpriseFullName}", 简称: "${projectAbbreviation || enterpriseName}"）不在被投企业表中，直接解除关联`);
       return false;
     }
 
     // 第二步：进行基础文本匹配检查
     const fullText = (title + ' ' + content).toLowerCase();
+    
+    // 构建企业关键词列表（包括全称、简称等）
     const enterpriseKeywords = [
       enterpriseName.toLowerCase(),
+      enterpriseFullName.toLowerCase(),
       enterpriseName.replace(/有限公司|股份有限公司|集团|科技|信息|医疗/g, '').toLowerCase(),
-      enterpriseName.split(/有限公司|股份有限公司|集团/)[0].toLowerCase()
-    ].filter(keyword => keyword.length > 2);
+      enterpriseFullName.replace(/有限公司|股份有限公司|集团|科技|信息|医疗/g, '').toLowerCase(),
+      enterpriseName.split(/有限公司|股份有限公司|集团/)[0].toLowerCase(),
+      enterpriseFullName.split(/有限公司|股份有限公司|集团/)[0].toLowerCase()
+    ];
+    
+    // 如果提取到了简称，也加入关键词列表
+    if (projectAbbreviation) {
+      enterpriseKeywords.push(projectAbbreviation.toLowerCase());
+    }
+    
+    // 如果匹配到了企业记录，也使用数据库中的简称
+    if (enterpriseExists.length > 0 && enterpriseExists[0].project_abbreviation) {
+      const dbAbbreviation = enterpriseExists[0].project_abbreviation.toLowerCase();
+      if (!enterpriseKeywords.includes(dbAbbreviation)) {
+        enterpriseKeywords.push(dbAbbreviation);
+      }
+    }
+    
+    // 去重并过滤太短的关键词
+    const uniqueKeywords = [...new Set(enterpriseKeywords)].filter(keyword => keyword && keyword.length > 2);
 
-    const hasDirectMention = enterpriseKeywords.some(keyword => 
+    const hasDirectMention = uniqueKeywords.some(keyword => 
       fullText.includes(keyword) && keyword.length > 2
     );
 
     if (!hasDirectMention) {
-      console.log(`🚫 文本检查：企业"${enterpriseName}"未在新闻内容中出现，解除关联`);
+      logWithTag('[validateExistingAssociation]', `文本检查：企业"${enterpriseName}"（全称: "${enterpriseFullName}", 简称: "${projectAbbreviation || enterpriseName}"）未在新闻内容中出现，解除关联`);
       return false;
     }
 
