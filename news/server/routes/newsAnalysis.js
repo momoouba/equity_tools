@@ -274,28 +274,32 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             newsItem.enterprise_full_name = formattedName;
             console.log(`✓ 匹配成功！企业全称: ${newsItem.enterprise_full_name}`);
             
-            // 获取entity_type
+            // 获取entity_type、fund和sub_fund
             let entityType = null;
+            let fund = null;
+            let sub_fund = null;
             try {
               const enterpriseInfo = await db.query(
-                `SELECT entity_type FROM invested_enterprises 
+                `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                  WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                 [enterpriseResultByName[0].enterprise_full_name]
               );
               if (enterpriseInfo.length > 0) {
                 entityType = enterpriseInfo[0].entity_type;
-                console.log(`✓ 获取entity_type: ${entityType}`);
+                fund = enterpriseInfo[0].fund;
+                sub_fund = enterpriseInfo[0].sub_fund;
+                console.log(`✓ 获取entity_type: ${entityType}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}`);
               }
             } catch (err) {
-              console.warn(`获取entity_type时出错: ${err.message}`);
+              console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
             }
             
-            // 更新数据库中的企业全称和entity_type
-            console.log(`\n--- 步骤3: 更新数据库中的企业全称和entity_type ---`);
-            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', entity_type = '${entityType || 'NULL'}' WHERE id = '${id}'`);
+            // 更新数据库中的企业全称、entity_type、fund和sub_fund
+            console.log(`\n--- 步骤3: 更新数据库中的企业全称、entity_type、fund和sub_fund ---`);
+            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${id}'`);
             await db.execute(
-              'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-              [newsItem.enterprise_full_name, entityType, id]
+              'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+              [newsItem.enterprise_full_name, entityType, fund, sub_fund, id]
             );
             
             // 验证更新是否成功
@@ -734,35 +738,39 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   
                   // 获取entity_type
                   let entityType = null;
+                  let fund = null;
+                  let sub_fund = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [enterpriseResult[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
                       entityType = enterpriseInfo[0].entity_type;
-                      console.log(`✓ 获取entity_type: ${entityType}`);
+                      fund = enterpriseInfo[0].fund;
+                      sub_fund = enterpriseInfo[0].sub_fund;
+                      console.log(`✓ 获取entity_type: ${entityType}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}`);
                     }
                   } catch (err) {
-                    console.warn(`获取entity_type时出错: ${err.message}`);
+                    console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   
-                  // 更新数据库中的企业全称和entity_type
-                  console.log(`\n--- 步骤3: 更新数据库中的企业全称和entity_type ---`);
-                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', entity_type = '${entityType || 'NULL'}' WHERE id = '${news.id}'`);
+                  // 更新数据库中的企业全称、entity_type、fund和sub_fund
+                  console.log(`\n--- 步骤3: 更新数据库中的企业全称、entity_type、fund和sub_fund ---`);
+                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${news.id}'`);
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                    [news.enterprise_full_name, entityType, news.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [news.enterprise_full_name, entityType, fund, sub_fund, news.id]
                   );
                   
                   // 验证更新是否成功
                   const verifyResult = await db.query(
-                    'SELECT enterprise_full_name, entity_type FROM news_detail WHERE id = ?',
+                    'SELECT enterprise_full_name, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
                     [news.id]
                   );
                   if (verifyResult.length > 0) {
-                    console.log(`✓ 更新成功！数据库中的企业全称: "${verifyResult[0].enterprise_full_name}", entity_type: "${verifyResult[0].entity_type || 'NULL'}"`);
+                    console.log(`✓ 更新成功！数据库中的企业全称: "${verifyResult[0].enterprise_full_name}", entity_type: "${verifyResult[0].entity_type || 'NULL'}", fund: "${verifyResult[0].fund || 'NULL'}", sub_fund: "${verifyResult[0].sub_fund || 'NULL'}"`);
                   } else {
                     console.log(`❌ 更新失败！无法验证更新结果`);
                   }
@@ -816,37 +824,41 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   news.enterprise_full_name = formattedName;
                   console.log(`✓ 匹配成功！企业全称: ${news.enterprise_full_name}`);
                   
-                  // 获取entity_type
+                  // 获取entity_type、fund和sub_fund
                   let entityType = null;
+                  let fund = null;
+                  let sub_fund = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [enterpriseResultByName[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
                       entityType = enterpriseInfo[0].entity_type;
-                      console.log(`✓ 获取entity_type: ${entityType}`);
+                      fund = enterpriseInfo[0].fund;
+                      sub_fund = enterpriseInfo[0].sub_fund;
+                      console.log(`✓ 获取entity_type: ${entityType}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}`);
                     }
                   } catch (err) {
-                    console.warn(`获取entity_type时出错: ${err.message}`);
+                    console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   
-                  // 更新数据库中的企业全称和entity_type
-                  console.log(`\n--- 步骤3: 更新数据库中的企业全称和entity_type ---`);
-                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', entity_type = '${entityType || 'NULL'}' WHERE id = '${news.id}'`);
+                  // 更新数据库中的企业全称、entity_type、fund和sub_fund
+                  console.log(`\n--- 步骤3: 更新数据库中的企业全称、entity_type、fund和sub_fund ---`);
+                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${news.id}'`);
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                    [news.enterprise_full_name, entityType, news.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [news.enterprise_full_name, entityType, fund, sub_fund, news.id]
                   );
                   
                   // 验证更新是否成功
                   const verifyResult = await db.query(
-                    'SELECT enterprise_full_name, entity_type FROM news_detail WHERE id = ?',
+                    'SELECT enterprise_full_name, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
                     [news.id]
                   );
                   if (verifyResult.length > 0) {
-                    console.log(`✓ 更新成功！数据库中的企业全称: "${verifyResult[0].enterprise_full_name}", entity_type: "${verifyResult[0].entity_type || 'NULL'}"`);
+                    console.log(`✓ 更新成功！数据库中的企业全称: "${verifyResult[0].enterprise_full_name}", entity_type: "${verifyResult[0].entity_type || 'NULL'}", fund: "${verifyResult[0].fund || 'NULL'}", sub_fund: "${verifyResult[0].sub_fund || 'NULL'}"`);
                   }
                 } else {
                   console.log(`✗ 未找到匹配的企业`);

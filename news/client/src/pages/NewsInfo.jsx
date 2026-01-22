@@ -677,42 +677,51 @@ function NewsInfo() {
     }] : []),
     {
       title: '序号',
-      width: 80,
+      width: 60,
+      align: 'center',
       render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
     },
     {
       title: '企业类型',
       dataIndex: 'entity_type',
-      width: 120,
+      width: 140,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text || '-'
     },
     {
       title: '被投企业全称',
       dataIndex: 'enterprise_full_name',
       width: 200,
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
+      ellipsis: false,
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
     },
     {
       title: '关键词',
       dataIndex: 'keywords',
-      width: 200,
+      width: 150,
+      align: 'center',
+      ellipsis: true,
+      tooltip: true,
       render: (keywords) => {
         if (keywords && Array.isArray(keywords) && keywords.length > 0) {
           return (
-            <Space wrap>
-              {keywords.slice(0, 3).map((keyword, idx) => (
-                <Tag key={idx} size="small">
-                  {keyword.length > 4 ? `${keyword.substring(0, 4)}...` : keyword}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center', whiteSpace: 'nowrap' }}>
+              {keywords.map((keyword, idx) => (
+                <Tag key={idx} size="small" style={{ margin: 0 }}>
+                  {keyword}
                 </Tag>
               ))}
-              {keywords.length > 3 && (
-                <Tag size="small" color="gray">
-                  +{keywords.length - 3}
-                </Tag>
-              )}
-            </Space>
+            </div>
           )
         }
         return '-'
@@ -722,6 +731,8 @@ function NewsInfo() {
       title: '发布时间',
       dataIndex: 'public_time',
       width: 180,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => formatDate(text)
     },
     {
@@ -743,7 +754,7 @@ function NewsInfo() {
     {
       title: '新闻摘要',
       dataIndex: 'news_abstract',
-      width: 300,
+      width: 450,
       ellipsis: false,
       render: (text) => (
         <div style={{ 
@@ -760,11 +771,29 @@ function NewsInfo() {
       title: '文章链接',
       dataIndex: 'source_url',
       width: 120,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text ? (
         <Button type="text" size="small" onClick={() => window.open(text, '_blank')}>
           查看文章
         </Button>
       ) : '-'
+    },
+    {
+      title: '关联基金',
+      dataIndex: 'fund',
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '关联子基金',
+      dataIndex: 'sub_fund',
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
     },
     {
       title: '公众号名称',
@@ -786,16 +815,29 @@ function NewsInfo() {
       title: '创建时间',
       dataIndex: 'created_at',
       width: 180,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => formatDate(text)
     }, {
       title: '操作',
-      width: 200,
+      width: 100,
+      align: 'center',
       render: (_, record) => (
-        <Space size={8}>
+        <div style={{ 
+          display: 'flex', 
+          flexDirection: 'column',
+          justifyContent: 'center', 
+          alignItems: 'center',
+          gap: '4px',
+          paddingLeft: '4px',
+          paddingRight: '4px',
+          width: '100%'
+        }}>
           <Button
             type="outline"
             size="small"
             onClick={() => handleViewDetail(record)}
+            style={{ width: '100%' }}
           >
             详情
           </Button>
@@ -805,6 +847,7 @@ function NewsInfo() {
               size="small"
               status="success"
               onClick={() => handleViewContent(record)}
+              style={{ width: '100%' }}
             >
               正文
             </Button>
@@ -814,10 +857,11 @@ function NewsInfo() {
             size="small"
             status="danger"
             onClick={() => handleDelete(record.id)}
+            style={{ width: '100%' }}
           >
             删除
           </Button>
-        </Space>
+        </div>
       )
     }] : [])
   ]
@@ -1040,6 +1084,9 @@ function NewsInfo() {
                     cell: true
                   }}
                   stripe
+                  scroll={{
+                    x: 'max-content'
+                  }}
                 />
               )}
             </div>

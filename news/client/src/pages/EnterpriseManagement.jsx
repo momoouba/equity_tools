@@ -237,48 +237,66 @@ function EnterpriseManagement() {
     {
       title: '序号',
       width: 80,
+      align: 'center',
       render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
     },
     {
       title: '项目编号',
       dataIndex: 'project_number',
-      width: 150
+      ellipsis: true,
+      tooltip: true
     },
     {
       title: '企业类型',
       dataIndex: 'entity_type',
-      width: 120,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text || '-'
     },
     {
       title: '项目简称',
       dataIndex: 'project_abbreviation',
-      width: 150,
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '关联基金',
+      dataIndex: 'fund',
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
+    },
+    {
+      title: '关联子基金',
+      dataIndex: 'sub_fund',
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text || '-'
     },
     {
       title: '被投企业全称',
       dataIndex: 'enterprise_full_name',
-      width: 250,
       ellipsis: true,
       tooltip: true
     },
     {
       title: '统一信用代码',
       dataIndex: 'unified_credit_code',
-      width: 180,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text || '-'
     },
     {
       title: '企业公众号id',
       dataIndex: 'wechat_official_account_id',
-      width: 180,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text || '-'
     },
     {
       title: '企业官网',
       dataIndex: 'official_website',
-      width: 200,
       ellipsis: true,
       tooltip: true,
       render: (text) => text ? (
@@ -290,11 +308,13 @@ function EnterpriseManagement() {
     {
       title: '退出状态',
       dataIndex: 'exit_status',
-      width: 120
+      ellipsis: true,
+      tooltip: true,
+      render: (text) => text || '-'
     },
     {
       title: '操作',
-      width: 200,
+      width: 220,
       align: 'left',
       render: (_, record) => (
         <Space size={8}>
@@ -455,6 +475,9 @@ function EnterpriseManagement() {
                 cell: true
               }}
               stripe
+              scroll={{
+                x: 'max-content'
+              }}
             />
           )}
         </div>

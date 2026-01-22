@@ -27,6 +27,56 @@ function splitAccountIds(accountIdsStr) {
     .filter(id => id && id !== '');
 }
 
+/**
+ * 根据企业信息从invested_enterprises表中获取fund和sub_fund
+ * @param {string} enterpriseFullName - 企业全称
+ * @param {string} unifiedCreditCode - 统一信用代码（可选）
+ * @param {string} wechatAccountId - 公众号ID（可选）
+ * @returns {Promise<{fund: string|null, sub_fund: string|null}>} - 返回fund和sub_fund
+ */
+async function getFundAndSubFundFromEnterprise(enterpriseFullName, unifiedCreditCode = null, wechatAccountId = null) {
+  try {
+    if (!enterpriseFullName) {
+      return { fund: null, sub_fund: null };
+    }
+
+    let query = `SELECT fund, sub_fund FROM invested_enterprises WHERE delete_mark = 0 AND enterprise_full_name = ?`;
+    const params = [enterpriseFullName];
+
+    // 优先使用统一信用代码匹配
+    if (unifiedCreditCode && unifiedCreditCode.trim() !== '') {
+      query = `SELECT fund, sub_fund FROM invested_enterprises WHERE delete_mark = 0 AND unified_credit_code = ?`;
+      params[0] = unifiedCreditCode.trim();
+    } else if (wechatAccountId && wechatAccountId.trim() !== '') {
+      // 其次使用公众号ID匹配（支持逗号分隔的多个ID）
+      const accountIds = splitAccountIds(wechatAccountId);
+      if (accountIds.length > 0) {
+        const placeholders = accountIds.map(() => '?').join(',');
+        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
+        params[0] = `%${accountIds[0]}%`;
+        // 如果只有一个ID，使用LIKE匹配；如果有多个，尝试FIND_IN_SET
+        if (accountIds.length > 1) {
+          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
+        }
+      }
+    }
+
+    const results = await db.query(query, params);
+    
+    if (results && results.length > 0) {
+      return {
+        fund: results[0].fund || null,
+        sub_fund: results[0].sub_fund || null
+      };
+    }
+
+    return { fund: null, sub_fund: null };
+  } catch (error) {
+    console.error('获取fund和sub_fund失败:', error);
+    return { fund: null, sub_fund: null };
+  }
+}
+
 const router = express.Router();
 
 /**
@@ -773,11 +823,14 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 }
               }
               
+              // 获取fund和sub_fund
+              const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(enterpriseFullName, null, account);
+              
               const newsId = await generateId('news_detail');
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype, fund, sub_fund) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
                   article.name || '',
@@ -792,7 +845,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   null, // keywords - 设为null，等待后续AI分析生成（不使用接口返回的原始关键词）
                   null, // news_abstract - 暂时为空，后续可通过AI分析填充
                   'neutral', // news_sentiment - 默认为中性，后续可通过情感分析填充
-                  '新榜' // APItype - 新榜接口
+                  '新榜', // APItype - 新榜接口
+                  fund, // fund - 从invested_enterprises表获取
+                  sub_fund // sub_fund - 从invested_enterprises表获取
                 ]
               );
               
@@ -4119,11 +4174,13 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
                     // publicTime已在去重检查时处理，这里不需要重复处理
 
-                    // 根据统一信用代码查找对应的企业全称和entity_type
+                    // 根据统一信用代码查找对应的企业全称、entity_type、fund和sub_fund
                     let enterpriseFullName = null;
                     let entityType = null;
+                    let fund = null;
+                    let sub_fund = null;
                     const enterpriseResult = await db.query(
-                      `SELECT enterprise_full_name, entity_type 
+                      `SELECT enterprise_full_name, entity_type, fund, sub_fund 
                        FROM invested_enterprises 
                        WHERE unified_credit_code = ? 
                        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
@@ -4134,6 +4191,8 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     if (enterpriseResult.length > 0) {
                       enterpriseFullName = enterpriseResult[0].enterprise_full_name;
                       entityType = enterpriseResult[0].entity_type;
+                      fund = enterpriseResult[0].fund;
+                      sub_fund = enterpriseResult[0].sub_fund;
                     }
 
                     // 将Category编码转换为中文类别
@@ -4212,8 +4271,8 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     // 所以这里news_abstract设为NULL，等待后续AI分析
                     await db.execute(
                       `INSERT INTO news_detail 
-                       (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                       (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract, fund, sub_fund) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                       [
                         newsId,
                         newsItem.Source || '企查查',
@@ -4229,7 +4288,9 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                         newsSentiment,
                         '企查查', // APItype - 企查查接口
                         newsCategory, // 新闻类别（中文）
-                        null // news_abstract设为NULL，等待后续AI分析基于正文内容生成
+                        null, // news_abstract设为NULL，等待后续AI分析基于正文内容生成
+                        fund, // fund - 从invested_enterprises表获取
+                        sub_fund // sub_fund - 从invested_enterprises表获取
                       ]
                     );
 

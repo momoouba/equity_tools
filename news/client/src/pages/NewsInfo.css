@@ -4,6 +4,11 @@
   width: 100%;
 }
 
+/* 表头居中对齐 */
+.news-info .arco-table-th {
+  text-align: center;
+}
+
 .news-card {
   background: #ffffff;
   border-radius: 4px;
@@ -89,6 +94,39 @@
 
 .table-container {
   margin-bottom: 16px;
+  width: 100%;
+  overflow-x: auto;
+}
+
+/* 确保表格容器和内容区域正确对齐 */
+.news-info .arco-table-container {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
+.news-info .arco-table-content {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+
+.news-info .arco-table-content-inner {
+  min-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
+/* 确保表格的最后一列（操作列）与表格内容区域的最右侧对齐 */
+.news-info .arco-table {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保表格内容区域的table元素使用固定布局，让列宽设置生效 */
+.news-info .arco-table-content-inner table {
+  table-layout: fixed !important;
+  box-sizing: border-box;
+  min-width: 100%;
 }
 
 .pagination-wrapper {
@@ -171,17 +209,74 @@
   border-color: currentColor;
 }
 
-/* 标题和摘要列样式 - 支持换行显示 */
+/* 表格单元格样式 - 默认不换行，只有特定列换行 */
 .news-info .arco-table-cell {
   vertical-align: top;
+  white-space: nowrap !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5 !important;
 }
 
+/* 被投企业全称、标题、新闻摘要列支持换行显示 */
+.news-info .arco-table-cell[data-col-key="enterprise_full_name"],
 .news-info .arco-table-cell[data-col-key="title"],
 .news-info .arco-table-cell[data-col-key="news_abstract"] {
   white-space: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
-  line-height: 1.5 !important;
-  padding: 8px 12px !important;
+}
+
+/* 操作列除外，保持原有样式 */
+.news-info .arco-table-td:last-child .arco-table-cell {
+  white-space: normal !important;
+}
+
+/* 操作列样式 - 3个按钮居中，两侧各留4px，底纹与表格右侧对齐 */
+.news-info .arco-table-th:last-child,
+.news-info .arco-table-td:last-child {
+  padding: 12px 4px !important;
+  box-sizing: border-box;
+}
+
+.news-info .arco-table-th:last-child .arco-table-cell,
+.news-info .arco-table-td:last-child .arco-table-cell {
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.news-info .arco-table-td:last-child > div {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的斑马纹背景与表格右侧对齐 - 继承行的背景色并延伸到边框 */
+.news-info .arco-table-tr-stripe .arco-table-td:last-child {
+  background-color: inherit !important;
+}
+
+/* 确保操作列单元格的背景色延伸到右侧边框 */
+.news-info .arco-table-td:last-child,
+.news-info .arco-table-th:last-child {
+  background-clip: padding-box;
+}
+
+/* 确保操作列的所有内容（包括按钮）都在单元格padding范围内 */
+.news-info .arco-table-td:last-child > * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的表头和数据单元格的右侧边框与表格内容区域对齐 */
+.news-info .arco-table-thead .arco-table-th:last-child,
+.news-info .arco-table-tbody .arco-table-td:last-child {
+  border-right: 1px solid #e5e6eb;
+}
+
+/* 操作列表头样式 - 确保与右侧表框对齐，背景色正确 */
+.news-info .arco-table-th:last-child {
+  background-color: #f7f8fa !important;
 }
 

@@ -4603,7 +4603,7 @@ ${enterpriseList}
             if (formatMatch) {
               const extractedFullName = formatMatch[2];
               enterpriseInfo = await db.query(
-                `SELECT entity_type, enterprise_full_name
+                `SELECT entity_type, enterprise_full_name, fund, sub_fund
                  FROM invested_enterprises 
                  WHERE enterprise_full_name = ? 
                  AND delete_mark = 0 
@@ -4624,12 +4624,32 @@ ${enterpriseList}
         }
       }
       
-      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ? WHERE id = ?`);
-      console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName}", entity_type="${entityType}", sentiment="${validatedAnalysis.sentiment}"`);
+      // 获取fund和sub_fund
+      let fund = null;
+      let sub_fund = null;
+      try {
+        const fundInfo = await db.query(
+          `SELECT fund, sub_fund 
+           FROM invested_enterprises 
+           WHERE enterprise_full_name = ? 
+           AND delete_mark = 0 
+           LIMIT 1`,
+          [finalEnterpriseName]
+        );
+        if (fundInfo.length > 0) {
+          fund = fundInfo[0].fund;
+          sub_fund = fundInfo[0].sub_fund;
+        }
+      } catch (err) {
+        console.warn(`[processNewsWithEnterprise] 获取fund和sub_fund时出错: ${err.message}`);
+      }
+      
+      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ? WHERE id = ?`);
+      console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName}", entity_type="${entityType}", sentiment="${validatedAnalysis.sentiment}", fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
       
       await db.execute(
         `UPDATE news_detail 
-         SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
+         SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
          WHERE id = ?`,
         [
           finalEnterpriseName,
@@ -4638,6 +4658,8 @@ ${enterpriseList}
           JSON.stringify(validatedAnalysis.keywords),
           validatedAnalysis.news_abstract,
           contentToSave,
+          fund,
+          sub_fund,
           newsItem.id
         ]
       );
@@ -5195,12 +5217,29 @@ ${enterpriseList}
                 console.warn(`获取entity_type时出错: ${err.message}`);
               }
               
+              // 获取fund和sub_fund
+              let fund = null;
+              let sub_fund = null;
+              try {
+                const fundInfo = await db.query(
+                  `SELECT fund, sub_fund FROM invested_enterprises 
+                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                  [enterprise.dbInfo.enterprise_full_name]
+                );
+                if (fundInfo.length > 0) {
+                  fund = fundInfo[0].fund;
+                  sub_fund = fundInfo[0].sub_fund;
+                }
+              } catch (err) {
+                console.warn(`获取fund和sub_fund时出错: ${err.message}`);
+              }
+              
               await db.execute(
                 `INSERT INTO news_detail 
                  (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, 
-                  title, summary, public_time, content, keywords, news_abstract, news_sentiment)
+                  title, summary, public_time, content, keywords, news_abstract, news_sentiment, fund, sub_fund)
                  SELECT ?, account_name, wechat_account, ?, ?, source_url, 
-                        title, summary, public_time, content, ?, ?, ?
+                        title, summary, public_time, content, ?, ?, ?, ?, ?
                  FROM news_detail WHERE id = ?`,
                 [
                   newId,
@@ -5209,6 +5248,8 @@ ${enterpriseList}
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
                   validatedAnalysis.sentiment,
+                  fund,
+                  sub_fund,
                   newsItem.id
                 ]
               );
@@ -5415,46 +5456,54 @@ ${enterpriseList}
                       matchedEnterprise.enterprise_full_name,
                       matchedEnterprise.project_abbreviation
                     );
-                    // 获取entity_type
+                    // 获取entity_type、fund和sub_fund
                     let entityType = null;
+                    let fund = null;
+                    let sub_fund = null;
                     try {
                       const enterpriseInfo = await db.query(
-                        `SELECT entity_type FROM invested_enterprises 
+                        `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                          WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                         [matchedEnterprise.enterprise_full_name]
                       );
                       if (enterpriseInfo.length > 0) {
                         entityType = enterpriseInfo[0].entity_type;
+                        fund = enterpriseInfo[0].fund;
+                        sub_fund = enterpriseInfo[0].sub_fund;
                       }
                     } catch (err) {
-                      console.warn(`获取entity_type时出错: ${err.message}`);
+                      console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                      [formattedName, entityType, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                      [formattedName, entityType, fund, sub_fund, newsItem.id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                   } else {
                     // 如果找不到匹配的企业，使用原始名称
-                    // 尝试从invested_enterprises表中获取entity_type
+                    // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund
                     let entityType = null;
+                    let fund = null;
+                    let sub_fund = null;
                     try {
                       const enterpriseInfo = await db.query(
-                        `SELECT entity_type FROM invested_enterprises 
+                        `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                          WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                         [firstEnterprise.enterprise_name]
                       );
                       if (enterpriseInfo.length > 0) {
                         entityType = enterpriseInfo[0].entity_type;
+                        fund = enterpriseInfo[0].fund;
+                        sub_fund = enterpriseInfo[0].sub_fund;
                       }
                     } catch (err) {
-                      console.warn(`获取entity_type时出错: ${err.message}`);
+                      console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                      [firstEnterprise.enterprise_name, entityType, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                      [firstEnterprise.enterprise_name, entityType, fund, sub_fund, newsItem.id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                   }
                 }
               }
@@ -5809,46 +5858,54 @@ ${enterpriseList}
                     matchedEnterprise.enterprise_full_name,
                     matchedEnterprise.project_abbreviation
                   );
-                  // 获取entity_type
+                  // 获取entity_type、fund和sub_fund
                   let entityType = null;
+                  let fund = null;
+                  let sub_fund = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [matchedEnterprise.enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
                       entityType = enterpriseInfo[0].entity_type;
+                      fund = enterpriseInfo[0].fund;
+                      sub_fund = enterpriseInfo[0].sub_fund;
                     }
                   } catch (err) {
-                    console.warn(`获取entity_type时出错: ${err.message}`);
+                    console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                    [formattedName, entityType, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [formattedName, entityType, fund, sub_fund, newsItem.id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                 } else {
                   // 如果找不到匹配的企业，使用原始名称
-                  // 尝试从invested_enterprises表中获取entity_type
+                  // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund
                   let entityType = null;
+                  let fund = null;
+                  let sub_fund = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [firstEnterprise.enterprise_name]
                     );
                     if (enterpriseInfo.length > 0) {
                       entityType = enterpriseInfo[0].entity_type;
+                      fund = enterpriseInfo[0].fund;
+                      sub_fund = enterpriseInfo[0].sub_fund;
                     }
                   } catch (err) {
-                    console.warn(`获取entity_type时出错: ${err.message}`);
+                    console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                    [firstEnterprise.enterprise_name, entityType, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [firstEnterprise.enterprise_name, entityType, fund, sub_fund, newsItem.id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                 }
               }
             }
@@ -5945,24 +6002,28 @@ ${enterpriseList}
                 );
                 newsItem.enterprise_full_name = formattedName;
                 logWithTag('[批量分析]', `✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}`);
-                // 获取entity_type
+                // 获取entity_type、fund和sub_fund
                 let entityType = null;
+                let fund = null;
+                let sub_fund = null;
                 try {
                   const enterpriseInfo = await db.query(
-                    `SELECT entity_type FROM invested_enterprises 
+                    `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
                      WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                     [enterpriseResult[0].enterprise_full_name]
                   );
                   if (enterpriseInfo.length > 0) {
                     entityType = enterpriseInfo[0].entity_type;
+                    fund = enterpriseInfo[0].fund;
+                    sub_fund = enterpriseInfo[0].sub_fund;
                   }
                 } catch (err) {
-                  console.warn(`获取entity_type时出错: ${err.message}`);
+                  console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                 }
-                // 更新数据库中的企业全称和entity_type
+                // 更新数据库中的企业全称、entity_type、fund和sub_fund
                 await db.execute(
-                  'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
-                  [newsItem.enterprise_full_name, entityType, newsItem.id]
+                  'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                  [newsItem.enterprise_full_name, entityType, fund, sub_fund, newsItem.id]
                 );
               }
             } catch (e) {

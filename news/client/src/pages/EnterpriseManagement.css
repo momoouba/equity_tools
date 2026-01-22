@@ -68,6 +68,69 @@
 
 .table-container {
   margin-bottom: 16px;
+  width: 100%;
+}
+
+/* 表格样式优化 - 符合Arco Design规范 */
+.enterprise-management .arco-table {
+  font-size: 14px;
+}
+
+.enterprise-management .arco-table-th {
+  background-color: #f7f8fa;
+  font-weight: 600;
+  color: #1d2129;
+  padding: 12px 16px;
+  white-space: nowrap;
+}
+
+.enterprise-management .arco-table-td {
+  padding: 12px 16px;
+  color: #1d2129;
+  white-space: nowrap;
+}
+
+/* 表格边框样式 */
+.enterprise-management .arco-table-border .arco-table-th,
+.enterprise-management .arco-table-border .arco-table-td {
+  border-color: #e5e6eb;
+}
+
+/* 表格单元格文本对齐优化 - 确保不换行，超长省略 */
+.enterprise-management .arco-table-cell {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5;
+}
+
+/* 确保ellipsis列正确显示省略号 */
+.enterprise-management .arco-table-cell-with-ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 表格列宽自适应 */
+.enterprise-management .arco-table-content-inner table {
+  table-layout: auto;
+  width: 100%;
+}
+
+/* 确保表头和内容对齐 */
+.enterprise-management .arco-table-th,
+.enterprise-management .arco-table-td {
+  vertical-align: middle;
+}
+
+/* 操作列保持固定宽度 */
+.enterprise-management .arco-table-th:last-child,
+.enterprise-management .arco-table-td:last-child {
+  white-space: normal;
+}
+
+.enterprise-management .arco-table-td:last-child .arco-table-cell {
+  white-space: normal;
 }
 
 .pagination-wrapper {
