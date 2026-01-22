@@ -3,6 +3,7 @@ import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Tabs,
 import axios from '../utils/axios'
 import TaskProgressModal from '../components/TaskProgressModal'
 import TaskLogModal from './TaskLogModal'
+import CronGenerator from '../components/CronGenerator'
 import './ScheduledTaskManagement.css'
 
 const Option = Select.Option
@@ -19,10 +20,11 @@ function ScheduledTaskManagement() {
   const pageSize = 10
 
   const [aiAnalysisConfig, setAiAnalysisConfig] = useState({
-    executionTime: '02:00',
+    cron_expression: '0 0 2 * * ? *', // 默认每天凌晨2点
     isActive: true
   })
   const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false)
+  const [showCronModal, setShowCronModal] = useState(false)
 
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingTask, setEditingTask] = useState(null)
@@ -87,7 +89,7 @@ function ScheduledTaskManagement() {
       const response = await axios.get('/api/scheduled-tasks/ai-analysis-config')
       if (response.data.success) {
         setAiAnalysisConfig({
-          executionTime: response.data.data.executionTime || '02:00',
+          cron_expression: response.data.data.cronExpression || '0 0 2 * * ? *',
           isActive: response.data.data.isActive !== undefined ? response.data.data.isActive : true
         })
       }
@@ -100,10 +102,14 @@ function ScheduledTaskManagement() {
   }
 
   const handleSaveAiAnalysisConfig = async () => {
+    if (!aiAnalysisConfig.cron_expression) {
+      Message.warning('请配置Cron表达式')
+      return
+    }
     setAiAnalysisLoading(true)
     try {
       const response = await axios.put('/api/scheduled-tasks/ai-analysis-config', {
-        executionTime: aiAnalysisConfig.executionTime,
+        cron_expression: aiAnalysisConfig.cron_expression,
         isActive: aiAnalysisConfig.isActive
       })
       if (response.data.success) {
@@ -803,18 +809,28 @@ function ScheduledTaskManagement() {
                     <Form
                       initialValues={aiAnalysisConfig}
                       layout="vertical"
-                      style={{ maxWidth: 400 }}
+                      style={{ maxWidth: 600 }}
                     >
                       <FormItem
-                        label="执行时间"
-                        field="executionTime"
-                        rules={[{ required: true, message: '请选择执行时间' }]}
+                        label="定时任务规则"
+                        field="cron_expression"
+                        rules={[{ required: true, message: '请配置定时任务规则' }]}
+                        extra='点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置'
                       >
-                        <Input
-                          type="time"
-                          value={aiAnalysisConfig.executionTime}
-                          onChange={(value) => setAiAnalysisConfig({ ...aiAnalysisConfig, executionTime: value })}
-                        />
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          <Input
+                            value={aiAnalysisConfig.cron_expression}
+                            readOnly
+                            placeholder="请配置Cron表达式"
+                            style={{ flex: 1 }}
+                          />
+                          <Button
+                            type="primary"
+                            onClick={() => setShowCronModal(true)}
+                          >
+                            配置
+                          </Button>
+                        </div>
                       </FormItem>
                       <FormItem
                         label="启用定时任务"
@@ -858,6 +874,22 @@ function ScheduledTaskManagement() {
           </TabPane>
         </Tabs>
       </Card>
+
+      {/* Cron表达式配置弹窗 */}
+      {showCronModal && (
+        <CronGenerator
+          visible={showCronModal}
+          value={aiAnalysisConfig.cron_expression}
+          onChange={(cron) => {
+            setAiAnalysisConfig({
+              ...aiAnalysisConfig,
+              cron_expression: cron
+            })
+            setShowCronModal(false)
+          }}
+          onCancel={() => setShowCronModal(false)}
+        />
+      )}
 
       {/* 编辑任务弹窗 */}
       <Modal

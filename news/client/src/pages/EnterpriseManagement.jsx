@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input } from '@arco-design/web-react'
+import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input, Tabs } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import EnterpriseForm from './EnterpriseForm'
 import BatchImportModal from './BatchImportModal'
@@ -10,6 +10,7 @@ import './EnterpriseManagement.css'
 const Option = Select.Option
 const InputSearch = Input.Search
 const CollapseItem = Collapse.Item
+const TabPane = Tabs.TabPane
 
 function EnterpriseManagement() {
   const [enterprises, setEnterprises] = useState([])
@@ -28,6 +29,9 @@ function EnterpriseManagement() {
   const [searchKeyword, setSearchKeyword] = useState('')
   const [pageSize, setPageSize] = useState(20)
   const [filterCollapsed, setFilterCollapsed] = useState(true)
+  const [activeTab, setActiveTab] = useState('all')
+  const [allEnterprises, setAllEnterprises] = useState([])
+  const [allTotal, setAllTotal] = useState(0)
 
   useEffect(() => {
     const userData = localStorage.getItem('user')
@@ -46,7 +50,7 @@ function EnterpriseManagement() {
 
   useEffect(() => {
     fetchEnterprises()
-  }, [currentPage, selectedUserId, isAdmin, searchKeyword, pageSize])
+  }, [currentPage, selectedUserId, isAdmin, searchKeyword, pageSize, activeTab])
 
   const fetchUsers = async () => {
     try {
@@ -83,10 +87,29 @@ function EnterpriseManagement() {
       if (searchKeyword && searchKeyword.trim()) {
         params.search = searchKeyword.trim()
       }
+      // 根据选中的tab添加企业类型筛选参数
+      if (activeTab === 'invested') {
+        // 被投企业
+        params.entity_type = '被投企业'
+      } else if (activeTab === 'main_fund') {
+        // 基金
+        params.entity_type = '基金'
+      } else if (activeTab === 'fund') {
+        // 子基金
+        params.entity_type = '子基金'
+      } else if (activeTab === 'manager') {
+        // 子基金管理人及GP（后端会处理为OR条件）
+        params.entity_type = 'manager'
+      }
+      // activeTab === 'all' 时不传entity_type，显示所有数据
+      
       const response = await axios.get('/api/enterprises', { params })
       if (response.data.success) {
         setEnterprises(response.data.data)
         setTotal(response.data.total)
+        // 保存所有数据用于统计（如果需要）
+        setAllEnterprises(response.data.data)
+        setAllTotal(response.data.total)
       }
     } catch (error) {
       console.error('获取企业列表失败:', error)
@@ -205,6 +228,11 @@ function EnterpriseManagement() {
     setCurrentPage(1)
   }
 
+  const handleTabChange = (tab) => {
+    setActiveTab(tab)
+    setCurrentPage(1) // 切换tab时重置到第一页
+  }
+
   const columns = [
     {
       title: '序号',
@@ -215,6 +243,12 @@ function EnterpriseManagement() {
       title: '项目编号',
       dataIndex: 'project_number',
       width: 150
+    },
+    {
+      title: '企业类型',
+      dataIndex: 'entity_type',
+      width: 120,
+      render: (text) => text || '-'
     },
     {
       title: '项目简称',
@@ -261,6 +295,7 @@ function EnterpriseManagement() {
     {
       title: '操作',
       width: 200,
+      align: 'left',
       render: (_, record) => (
         <Space size={8}>
           <Button
@@ -298,7 +333,7 @@ function EnterpriseManagement() {
     <div className="enterprise-management">
       <Card className="management-card" bordered={false}>
         <div className="management-header">
-          <h2 className="management-title">被投企业管理</h2>
+          <h2 className="management-title">舆情监控对象</h2>
           <Space>
             <Button
               onClick={fetchEnterprises}
@@ -332,6 +367,21 @@ function EnterpriseManagement() {
             </Button>
           </Space>
         </div>
+
+        {/* Tab页签 */}
+        <Tabs
+          activeTab={activeTab}
+          onChange={handleTabChange}
+          type="line"
+          className="entity-type-tabs"
+          style={{ marginBottom: 16 }}
+        >
+          <TabPane key="all" title="全部" />
+          <TabPane key="invested" title="被投企业" />
+          <TabPane key="main_fund" title="基金" />
+          <TabPane key="fund" title="子基金" />
+          <TabPane key="manager" title="子基金管理人及GP" />
+        </Tabs>
 
         <Collapse
           activeKey={filterCollapsed ? [] : ['filters']}

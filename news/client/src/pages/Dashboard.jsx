@@ -114,7 +114,7 @@ function Dashboard() {
   const menuItems = [
     {
       key: 'enterprises',
-      title: '被投企业管理',
+      title: '舆情监控对象',
       visible: isAdmin || hasNewsPermission
     },
     {

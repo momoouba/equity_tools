@@ -9,6 +9,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
     unified_credit_code: '',
     wechat_official_account_id: '',
     official_website: '',
+    entity_type: '',
     exit_status: '未退出'
   })
   const [projectNumber, setProjectNumber] = useState('')
@@ -30,6 +31,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
         unified_credit_code: enterprise.unified_credit_code || '',
         wechat_official_account_id: enterprise.wechat_official_account_id || '',
         official_website: enterprise.official_website || '',
+        entity_type: enterprise.entity_type || '',
         exit_status: enterprise.exit_status !== undefined && enterprise.exit_status !== null ? enterprise.exit_status : '未退出'
       })
       setProjectNumber(enterprise.project_number)
@@ -301,6 +303,22 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
               onChange={handleChange}
               placeholder="请输入官网地址"
             />
+          </div>
+
+          <div className="form-group">
+            <label>企业类型</label>
+            <select
+              name="entity_type"
+              value={formData.entity_type}
+              onChange={handleChange}
+            >
+              <option value="">请选择企业类型</option>
+              <option value="被投企业">被投企业</option>
+              <option value="基金">基金</option>
+              <option value="子基金">子基金</option>
+              <option value="子基金管理人">子基金管理人</option>
+              <option value="子基金GP">子基金GP</option>
+            </select>
           </div>
 
           <div className="form-group">

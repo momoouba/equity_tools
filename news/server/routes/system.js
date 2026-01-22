@@ -124,12 +124,26 @@ router.get('/news-configs', async (req, res) => {
 
     // 获取分页数据（包括所有接口类型：新榜、企查查等）
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       ORDER BY nic.created_at DESC
       LIMIT ? OFFSET ?
     `, [pageSize, offset]);
+    
+    // 处理 entity_type 字段（JSON格式转换为数组）
+    configs.forEach(config => {
+      if (config.entity_type) {
+        try {
+          if (typeof config.entity_type === 'string') {
+            config.entity_type = JSON.parse(config.entity_type);
+          }
+        } catch (e) {
+          console.warn(`解析 entity_type 失败: ${e.message}`);
+          config.entity_type = null;
+        }
+      }
+    });
 
     res.json({
       success: true,
@@ -149,13 +163,25 @@ router.get('/news-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       WHERE nic.id = ?
     `, [id]);
     if (configs.length > 0) {
-      res.json({ success: true, data: configs[0] });
+      const config = configs[0];
+      // 处理 entity_type 字段（JSON格式转换为数组）
+      if (config.entity_type) {
+        try {
+          if (typeof config.entity_type === 'string') {
+            config.entity_type = JSON.parse(config.entity_type);
+          }
+        } catch (e) {
+          console.warn(`解析 entity_type 失败: ${e.message}`);
+          config.entity_type = null;
+        }
+      }
+      res.json({ success: true, data: config });
     } else {
       res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -171,8 +197,9 @@ router.post('/news-config', [
   body('request_url').notEmpty().withMessage('请求地址不能为空'),
   body('content_type').optional(), // Content-Type为非必填字段
   body('api_key').optional(), // 企查查接口不需要api_key，从qichacha_config获取
-  body('frequency_type').isIn(['day', 'week', 'month']).withMessage('频次类型必须是day、week或month'),
-  body('frequency_value').isInt({ min: 1 }).withMessage('频次值必须大于0'),
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
+  body('frequency_type').optional().isIn(['day', 'week', 'month']).withMessage('频次类型必须是day、week或month'),
+  body('frequency_value').optional().isInt({ min: 1 }).withMessage('频次值必须大于0'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -180,7 +207,12 @@ router.post('/news-config', [
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active } = req.body;
+    const { app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
+    
+    // 验证：必须提供 cron_expression 或 frequency_type + frequency_value
+    if (!cron_expression && (!frequency_type || !frequency_value)) {
+      return res.status(400).json({ success: false, message: '必须提供Cron表达式或频次类型和频次值' });
+    }
 
     // 检查应用是否存在
     const appExists = await db.query('SELECT id FROM applications WHERE id = ?', [app_id]);
@@ -281,11 +313,57 @@ router.post('/news-config', [
     
     const retry_count = req.body.retry_count !== undefined ? parseInt(req.body.retry_count) : 0;
     const retry_interval = req.body.retry_interval !== undefined ? parseInt(req.body.retry_interval) : 0;
+    
+    // 处理 entity_type 字段（验证并转换为JSON格式）
+    const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+    let entityTypeJson = null;
+    if (entity_type !== null && entity_type !== undefined && entity_type !== '') {
+      let entityTypes = entity_type;
+      // 如果是字符串，尝试解析为JSON
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      // 确保是数组
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      
+      // 如果是企查查接口，过滤掉"额外公众号"选项
+      if (interfaceType === '企查查') {
+        entityTypes = entityTypes.filter(type => type !== '额外公众号');
+        if (entityTypes.length === 0) {
+          entityTypes = []; // 如果过滤后为空，设置为空数组
+        }
+      }
+      
+      // 验证所有值是否有效
+      const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+      if (invalidTypes.length > 0) {
+        return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
+      }
+      
+      // 如果是新榜接口，验证"额外公众号"是否与其他类型同时存在（允许同时存在）
+      // 如果是企查查接口，确保不包含"额外公众号"
+      if (interfaceType === '企查查' && entityTypes.includes('额外公众号')) {
+        return res.status(400).json({ success: false, message: '企查查接口不支持"额外公众号"选项' });
+      }
+      
+      // 去重并排序
+      entityTypes = [...new Set(entityTypes)].sort();
+      if (entityTypes.length > 0) {
+        entityTypeJson = JSON.stringify(entityTypes);
+      }
+    }
 
     await db.execute(
       `INSERT INTO news_interface_config 
-       (id, app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         app_id,
@@ -293,15 +371,17 @@ router.post('/news-config', [
         request_url,
         finalContentType,
         api_key || '', // 企查查接口可以为空
-        frequency_type,
-        frequency_value,
+        cron_expression || null,
+        frequency_type || null,
+        frequency_value || null,
         finalSendFrequency,
         finalSendTime,
         weekday || null,
         month_day || null,
         retry_count,
         retry_interval,
-        finalIsActive
+        finalIsActive,
+        entityTypeJson
       ]
     );
 
@@ -357,6 +437,7 @@ router.put('/news-config/:id', [
   body('request_url').optional().notEmpty().withMessage('请求地址不能为空'),
   body('content_type').optional(), // Content-Type为非必填字段
   body('api_key').optional(), // 企查查接口不需要api_key
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
   body('frequency_type').optional().isIn(['day', 'week', 'month']).withMessage('频次类型必须是day、week或month'),
   body('frequency_value').optional().isInt({ min: 1 }).withMessage('频次值必须大于0'),
   body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
@@ -368,7 +449,7 @@ router.put('/news-config/:id', [
     }
 
     const { id } = req.params;
-    const { app_id, interface_type, request_url, content_type, api_key, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval } = req.body;
+    const { app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval, entity_type } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
     const existingConfigs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [id]);
@@ -443,6 +524,10 @@ router.put('/news-config/:id', [
         logWithTag('[新闻接口配置更新]', `企查查接口frequency_type更新为${frequency_type}，同步更新send_frequency为${sendFrequency}`);
       }
     }
+    if (cron_expression !== undefined) {
+      updateFields.push('cron_expression = ?');
+      updateValues.push(cron_expression);
+    }
     if (frequency_value !== undefined) {
       updateFields.push('frequency_value = ?');
       updateValues.push(frequency_value);
@@ -475,6 +560,60 @@ router.put('/news-config/:id', [
       updateFields.push('is_active = ?');
       updateValues.push(is_active ? 1 : 0);
     }
+    
+    // 处理 entity_type 字段（验证并转换为JSON格式）
+    if (entity_type !== undefined) {
+      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+      let entityTypeJson = null;
+      
+      // 获取当前接口类型（用于验证）
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      
+      if (entity_type !== null && entity_type !== '') {
+        let entityTypes = entity_type;
+        // 如果是字符串，尝试解析为JSON
+        if (typeof entityTypes === 'string') {
+          try {
+            entityTypes = JSON.parse(entityTypes);
+          } catch (e) {
+            // 如果不是JSON，可能是单个值，转换为数组
+            entityTypes = [entityTypes];
+          }
+        }
+        // 确保是数组
+        if (!Array.isArray(entityTypes)) {
+          entityTypes = [entityTypes];
+        }
+        
+        // 如果是企查查接口，过滤掉"额外公众号"选项
+        if (currentInterfaceType === '企查查') {
+          entityTypes = entityTypes.filter(type => type !== '额外公众号');
+          if (entityTypes.length === 0) {
+            entityTypes = []; // 如果过滤后为空，设置为空数组
+          }
+        }
+        
+        // 验证所有值是否有效
+        const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+        if (invalidTypes.length > 0) {
+          return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
+        }
+        
+        // 如果是企查查接口，确保不包含"额外公众号"
+        if (currentInterfaceType === '企查查' && entityTypes.includes('额外公众号')) {
+          return res.status(400).json({ success: false, message: '企查查接口不支持"额外公众号"选项' });
+        }
+        
+        // 去重并排序
+        entityTypes = [...new Set(entityTypes)].sort();
+        if (entityTypes.length > 0) {
+          entityTypeJson = JSON.stringify(entityTypes);
+        }
+      }
+      
+      updateFields.push('entity_type = ?');
+      updateValues.push(entityTypeJson);
+    }
 
     if (updateFields.length > 0) {
       updateValues.push(id);
@@ -483,8 +622,9 @@ router.put('/news-config/:id', [
         updateValues
       );
       
-      // 如果更新了定时任务相关字段（send_frequency, send_time, weekday, month_day, is_active），需要更新定时任务调度
+      // 如果更新了定时任务相关字段（cron_expression, send_frequency, send_time, weekday, month_day, is_active），需要更新定时任务调度
       const shouldUpdateScheduledTasks = 
+        cron_expression !== undefined ||
         send_frequency !== undefined || 
         send_time !== undefined || 
         weekday !== undefined || 
@@ -515,6 +655,7 @@ router.put('/news-config/:id', [
           app_id: oldConfig.app_id || '',
           request_url: oldConfig.request_url || '',
           content_type: oldConfig.content_type || '',
+          cron_expression: oldConfig.cron_expression || '',
           frequency_type: oldConfig.frequency_type || '',
           frequency_value: oldConfig.frequency_value ? oldConfig.frequency_value.toString() : '',
           is_active: oldConfig.is_active ? '1' : '0'
@@ -524,6 +665,7 @@ router.put('/news-config/:id', [
           app_id: newConfig.app_id || '',
           request_url: newConfig.request_url || '',
           content_type: newConfig.content_type || '',
+          cron_expression: newConfig.cron_expression || '',
           frequency_type: newConfig.frequency_type || '',
           frequency_value: newConfig.frequency_value ? newConfig.frequency_value.toString() : '',
           is_active: newConfig.is_active ? '1' : '0'

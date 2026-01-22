@@ -126,3 +126,89 @@
   border-color: currentColor;
 }
 
+/* 操作列样式修复 */
+/* 确保表格容器和内容区域正确对齐，宽度100% */
+.enterprise-management .arco-table-container {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.enterprise-management .arco-table-content {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.enterprise-management .arco-table-content-inner {
+  width: 100% !important;
+  box-sizing: border-box;
+}
+
+/* 确保表格的最后一列（操作列）与表格内容区域的最右侧对齐 */
+.enterprise-management .arco-table {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保表格内容区域的table元素宽度100% */
+.enterprise-management .arco-table-content-inner table {
+  width: 100% !important;
+  table-layout: auto;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的单元格有正确的padding，包含所有按钮，最后一个按钮与右侧保持间距 */
+.enterprise-management .arco-table-td:last-child {
+  padding: 12px 16px !important;
+  box-sizing: border-box;
+}
+
+/* 操作列表头样式 - 确保与右侧表框对齐，背景色正确，与arco-table-content-inner最右侧对齐 */
+.enterprise-management .arco-table-th:last-child {
+  padding: 12px 16px !important;
+  box-sizing: border-box;
+  background-color: #f7f8fa !important;
+}
+
+/* 确保操作列的表头单元格内容区域正确对齐，右侧padding与表格边框对齐 */
+.enterprise-management .arco-table-th:last-child .arco-table-cell {
+  padding-right: 16px !important;
+  box-sizing: border-box;
+}
+
+.enterprise-management .arco-table-td:last-child .arco-table-cell {
+  padding-right: 16px !important;
+  box-sizing: border-box;
+}
+
+/* 确保操作列中的Space组件正确显示，包含所有按钮 */
+.enterprise-management .arco-table-td:last-child .arco-space {
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的斑马纹背景与表框对齐 - 继承行的背景色并延伸到边框 */
+.enterprise-management .arco-table-tr-stripe .arco-table-td:last-child {
+  background-color: inherit !important;
+}
+
+/* 确保操作列单元格的背景色延伸到右侧边框 */
+.enterprise-management .arco-table-td:last-child,
+.enterprise-management .arco-table-th:last-child {
+  background-clip: padding-box;
+}
+
+/* 确保操作列的所有内容（包括按钮）都在单元格padding范围内 */
+.enterprise-management .arco-table-td:last-child > * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的表头和数据单元格的右侧边框与表格内容区域对齐 */
+.enterprise-management .arco-table-thead .arco-table-th:last-child,
+.enterprise-management .arco-table-tbody .arco-table-td:last-child {
+  border-right: 1px solid #e5e6eb;
+}
+

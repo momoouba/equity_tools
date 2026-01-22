@@ -150,37 +150,38 @@ router.get('/ai-analysis-config', checkAdminPermission, async (req, res) => {
   try {
     // 从system_config表读取配置
     const configs = await db.query(
-      'SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?)',
-      ['ai_reanalysis_cron', 'ai_reanalysis_active']
+      'SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?, ?)',
+      ['ai_reanalysis_cron', 'ai_reanalysis_cron_expression', 'ai_reanalysis_active']
     );
 
-    let cronExpression = '0 2 * * *'; // 默认每天凌晨2点
+    let cronExpression = '0 2 * * *'; // 默认每天凌晨2点（6字段node-cron格式，向后兼容）
+    let cronExpression7Field = '0 0 2 * * ? *'; // 默认每天凌晨2点（7字段Quartz格式）
     let isActive = true; // 默认启用
 
     for (const config of configs) {
-      if (config.config_key === 'ai_reanalysis_cron') {
+      if (config.config_key === 'ai_reanalysis_cron_expression') {
+        // 优先使用7字段Quartz Cron表达式
+        cronExpression7Field = config.config_value || '0 0 2 * * ? *';
+      } else if (config.config_key === 'ai_reanalysis_cron') {
+        // 向后兼容：使用旧的6字段cron表达式
         cronExpression = config.config_value || '0 2 * * *';
+        // 如果没有7字段配置，将6字段转换为7字段格式
+        if (!configs.find(c => c.config_key === 'ai_reanalysis_cron_expression')) {
+          const parts = cronExpression.trim().split(/\s+/);
+          if (parts.length === 5) {
+            // 6字段：分 时 日 月 周 -> 7字段：秒 分 时 日 月 周 年
+            cronExpression7Field = `0 ${parts[0]} ${parts[1]} ${parts[2]} ${parts[3]} ${parts[4]} *`;
+          }
+        }
       } else if (config.config_key === 'ai_reanalysis_active') {
         isActive = config.config_value === '1' || config.config_value === 'true';
-      }
-    }
-
-    // 解析cron表达式为时间（只处理每天执行的cron：分钟 小时 * * *）
-    let executionTime = '02:00';
-    if (cronExpression && cron.validate(cronExpression)) {
-      const parts = cronExpression.trim().split(/\s+/);
-      if (parts.length >= 2 && parts[2] === '*' && parts[3] === '*' && parts[4] === '*') {
-        const minutes = parts[0].padStart(2, '0');
-        const hours = parts[1].padStart(2, '0');
-        executionTime = `${hours}:${minutes}`;
       }
     }
 
     res.json({
       success: true,
       data: {
-        cronExpression,
-        executionTime,
+        cronExpression: cronExpression7Field, // 返回7字段Quartz格式
         isActive
       }
     });
@@ -193,28 +194,48 @@ router.get('/ai-analysis-config', checkAdminPermission, async (req, res) => {
 // 更新AI分析定时任务配置
 router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
   try {
-    const { executionTime, isActive } = req.body;
+    const { cron_expression, isActive } = req.body;
 
-    // 验证时间格式
-    if (executionTime && !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(executionTime)) {
-      return res.status(400).json({ success: false, message: '时间格式不正确，应为HH:mm格式' });
+    // 验证cron_expression格式（7字段Quartz格式：秒 分 时 日 月 周 年）
+    if (!cron_expression || typeof cron_expression !== 'string' || !cron_expression.trim()) {
+      return res.status(400).json({ success: false, message: 'Cron表达式不能为空' });
     }
 
-    // 将时间转换为cron表达式（每天执行）
-    let cronExpression = '0 2 * * *'; // 默认
-    if (executionTime) {
-      const [hours, minutes] = executionTime.split(':');
-      cronExpression = `${minutes} ${hours} * * *`;
+    const cronParts = cron_expression.trim().split(/\s+/);
+    if (cronParts.length !== 7) {
+      return res.status(400).json({ success: false, message: 'Cron表达式必须是7字段格式（秒 分 时 日 月 周 年）' });
     }
 
-    // 验证cron表达式
-    if (!cron.validate(cronExpression)) {
-      return res.status(400).json({ success: false, message: '无效的时间配置' });
+    // 将7字段Quartz Cron转换为6字段node-cron用于验证
+    const [second, minute, hour, day, month, weekday, year] = cronParts;
+    // 转换星期字段：Quartz (1-7) -> node-cron (0-6)
+    let convertedWeekday = weekday;
+    if (weekday && weekday !== '*' && weekday !== '?') {
+      if (weekday.includes(',')) {
+        convertedWeekday = weekday.split(',').map(w => {
+          const wNum = parseInt(w.trim());
+          if (wNum >= 1 && wNum <= 7) {
+            return (wNum - 1).toString();
+          }
+          return w.trim();
+        }).join(',');
+      } else {
+        const wNum = parseInt(weekday);
+        if (wNum >= 1 && wNum <= 7) {
+          convertedWeekday = (wNum - 1).toString();
+        }
+      }
+    }
+    const nodeCronExpression = `${minute} ${hour} ${day} ${month} ${convertedWeekday}`;
+
+    // 验证6字段cron表达式
+    if (!cron.validate(nodeCronExpression)) {
+      return res.status(400).json({ success: false, message: '无效的Cron表达式' });
     }
 
     // 更新或插入配置
     for (const config of [
-      { key: 'ai_reanalysis_cron', value: cronExpression, desc: 'AI分析定时任务Cron表达式' },
+      { key: 'ai_reanalysis_cron_expression', value: cron_expression.trim(), desc: 'AI分析定时任务Cron表达式（7字段Quartz格式）' },
       { key: 'ai_reanalysis_active', value: isActive ? '1' : '0', desc: 'AI分析定时任务是否启用' }
     ]) {
       const existing = await db.query('SELECT id FROM system_config WHERE config_key = ?', [config.key]);
@@ -235,9 +256,9 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
 
     // 重新初始化定时任务
     try {
-      const { initializeScheduledTask, stopScheduledTask } = require('../utils/scheduledNewsReanalysisTasks');
+      const { initializeScheduledTaskFromConfig, stopScheduledTask } = require('../utils/scheduledNewsReanalysisTasks');
       if (isActive) {
-        initializeScheduledTask(cronExpression);
+        await initializeScheduledTaskFromConfig();
       } else {
         stopScheduledTask();
       }

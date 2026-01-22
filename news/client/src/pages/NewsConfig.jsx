@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
+import CronGenerator from '../components/CronGenerator'
 import './NewsConfig.css'
 
 const Option = Select.Option
@@ -25,10 +26,11 @@ function NewsConfig() {
     request_url: 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
     content_type: 'application/x-www-form-urlencoded;charset=utf-8',
     api_key: '',
-    frequency_type: 'day',
-    frequency_value: 1,
-    is_active: true
+    cron_expression: '0 0 0 * * ? *', // 默认每天0点执行
+    is_active: true,
+    entity_type: []
   })
+  const [showCronModal, setShowCronModal] = useState(false)
 
   useEffect(() => {
     fetchConfigs()
@@ -40,8 +42,7 @@ function NewsConfig() {
       setFormData(prev => ({
         ...prev,
         request_url: prev.request_url || 'https://api.qichacha.com/CompanyNews/SearchNews',
-        frequency_type: prev.frequency_type || 'week',
-        frequency_value: prev.frequency_value || 1
+        cron_expression: prev.cron_expression || '0 0 0 ? * 1 *' // 默认每周一0点执行
       }))
     }
   }, [formData.interface_type, editingConfig])
@@ -87,11 +88,31 @@ function NewsConfig() {
       request_url: 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
       content_type: 'application/x-www-form-urlencoded;charset=utf-8',
       api_key: '',
-      frequency_type: 'day',
-      frequency_value: 1,
-      is_active: true
+      cron_expression: '0 0 0 * * ? *', // 默认每天0点执行
+      is_active: true,
+      entity_type: []
     })
     setShowForm(true)
+  }
+
+  // 将旧的 frequency_type 和 frequency_value 转换为 Cron 表达式
+  const convertToCronExpression = (frequencyType, frequencyValue) => {
+    if (!frequencyType || !frequencyValue) {
+      return '0 0 0 * * ? *' // 默认每天0点
+    }
+    
+    if (frequencyType === 'day') {
+      // 每天执行：0 0 0 * * ? *
+      return '0 0 0 * * ? *'
+    } else if (frequencyType === 'week') {
+      // 每周执行：每周一0点，0 0 0 ? * 1 *
+      return '0 0 0 ? * 1 *'
+    } else if (frequencyType === 'month') {
+      // 每月执行：每月1号0点，0 0 0 1 * ? *
+      return '0 0 0 1 * ? *'
+    }
+    
+    return '0 0 0 * * ? *'
   }
 
   const handleEdit = async (id) => {
@@ -101,17 +122,89 @@ function NewsConfig() {
         const config = response.data.data
         setEditingConfig(config)
         setHasApiKey(true)
+        // 处理 entity_type 字段（可能是JSON字符串或数组）
+        let entityType = config.entity_type || [];
+        if (typeof entityType === 'string') {
+          try {
+            entityType = JSON.parse(entityType);
+          } catch (e) {
+            entityType = [];
+          }
+        }
+        if (!Array.isArray(entityType)) {
+          entityType = [];
+        }
+        
+        // 优先使用 cron_expression，如果没有则从 frequency_type 和 frequency_value 转换
+        let cronExpression = config.cron_expression
+        if (!cronExpression && config.frequency_type) {
+          cronExpression = convertToCronExpression(config.frequency_type, config.frequency_value)
+        }
+        if (!cronExpression) {
+          cronExpression = '0 0 0 * * ? *' // 默认值
+        }
+        
         setFormData({
           app_id: config.app_id,
           interface_type: config.interface_type || '新榜',
           request_url: config.request_url || 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
           content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
           api_key: '',
-          frequency_type: config.frequency_type || 'day',
-          frequency_value: config.frequency_value || 1,
-          is_active: config.is_active === 1
+          cron_expression: cronExpression,
+          is_active: config.is_active === 1,
+          entity_type: entityType
         })
         setShowForm(true)
+      }
+    } catch (error) {
+      console.error('获取新闻接口配置失败:', error)
+      Message.error('获取配置失败')
+    }
+  }
+
+  const handleCopy = async (id) => {
+    try {
+      const response = await axios.get(`/api/system/news-config/${id}`)
+      if (response.data.success) {
+        const config = response.data.data
+        // 复制模式：editingConfig 为 null，表示新增
+        setEditingConfig(null)
+        setHasApiKey(false)
+        // 处理 entity_type 字段（可能是JSON字符串或数组）
+        let entityType = config.entity_type || [];
+        if (typeof entityType === 'string') {
+          try {
+            entityType = JSON.parse(entityType);
+          } catch (e) {
+            entityType = [];
+          }
+        }
+        if (!Array.isArray(entityType)) {
+          entityType = [];
+        }
+        
+        // 优先使用 cron_expression，如果没有则从 frequency_type 和 frequency_value 转换
+        let cronExpression = config.cron_expression
+        if (!cronExpression && config.frequency_type) {
+          cronExpression = convertToCronExpression(config.frequency_type, config.frequency_value)
+        }
+        if (!cronExpression) {
+          cronExpression = '0 0 0 * * ? *' // 默认值
+        }
+        
+        // 复制所有配置，但 api_key 需要重新输入（安全考虑）
+        setFormData({
+          app_id: config.app_id,
+          interface_type: config.interface_type || '新榜',
+          request_url: config.request_url || 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
+          content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
+          api_key: '', // 复制时不包含 api_key，需要用户重新输入
+          cron_expression: cronExpression,
+          is_active: config.is_active === 1,
+          entity_type: entityType
+        })
+        setShowForm(true)
+        Message.success('已复制配置，请检查并保存')
       }
     } catch (error) {
       console.error('获取新闻接口配置失败:', error)
@@ -167,10 +260,21 @@ function NewsConfig() {
   }
 
   const handleChange = (name, value) => {
-    setFormData({
-      ...formData,
-      [name]: value
-    })
+    // 如果切换接口类型为"企查查"，自动清除"额外公众号"选项
+    if (name === 'interface_type' && value === '企查查') {
+      const currentEntityTypes = formData.entity_type || []
+      const filteredEntityTypes = currentEntityTypes.filter(type => type !== '额外公众号')
+      setFormData({
+        ...formData,
+        [name]: value,
+        entity_type: filteredEntityTypes
+      })
+    } else {
+      setFormData({
+        ...formData,
+        [name]: value
+      })
+    }
     
     if (name === 'api_key' && value !== '') {
       setHasApiKey(false)
@@ -185,9 +289,7 @@ function NewsConfig() {
     if (editingConfig) {
       if (!formData.app_id || !formData.request_url || 
           (!isQichacha && !formData.content_type) || 
-          !formData.frequency_type || 
-          !formData.frequency_value || 
-          formData.frequency_value <= 0) {
+          !formData.cron_expression) {
         Message.warning('请填写所有必填字段')
         return
       }
@@ -195,9 +297,7 @@ function NewsConfig() {
       if (!formData.app_id || !formData.request_url || 
           (!isQichacha && !formData.api_key) || 
           (!isQichacha && !formData.content_type) || 
-          !formData.frequency_type || 
-          !formData.frequency_value || 
-          formData.frequency_value <= 0) {
+          !formData.cron_expression) {
         Message.warning('请填写所有必填字段')
         return
       }
@@ -209,9 +309,6 @@ function NewsConfig() {
         const updateData = { ...formData }
         if (!updateData.api_key || updateData.api_key.trim() === '' || updateData.api_key === '****') {
           delete updateData.api_key
-        }
-        if (updateData.frequency_value) {
-          updateData.frequency_value = parseInt(updateData.frequency_value, 10)
         }
         updateData.is_active = updateData.is_active === true || updateData.is_active === 1
         response = await axios.put(`/api/system/news-config/${editingConfig.id}`, updateData)
@@ -247,13 +344,14 @@ function NewsConfig() {
     }
   }
 
-  const getFrequencyName = (type) => {
-    const map = {
-      'day': '天',
-      'week': '周',
-      'month': '月'
-    }
-    return map[type] || type
+  // 格式化 Cron 表达式显示
+  const formatCronExpression = (cron) => {
+    if (!cron) return '-'
+    // 简化显示：如果是常见的表达式，显示友好文本
+    if (cron === '0 0 0 * * ? *') return '每天 00:00:00'
+    if (cron === '0 0 0 ? * 1 *') return '每周一 00:00:00'
+    if (cron === '0 0 0 1 * ? *') return '每月1号 00:00:00'
+    return cron
   }
 
   const columns = [
@@ -278,15 +376,35 @@ function NewsConfig() {
       render: (text) => text || '-'
     },
     {
-      title: '频次类型',
-      dataIndex: 'frequency_type',
-      width: 100,
-      render: (text) => getFrequencyName(text)
+      title: 'Cron表达式',
+      dataIndex: 'cron_expression',
+      width: 200,
+      render: (text, record) => {
+        // 兼容旧数据：如果有 frequency_type，显示旧的格式
+        if (record.frequency_type && !text) {
+          const typeMap = { 'day': '天', 'week': '周', 'month': '月' }
+          return `${typeMap[record.frequency_type] || record.frequency_type} - ${record.frequency_value || '-'}`
+        }
+        return formatCronExpression(text)
+      }
     },
     {
-      title: '频次值',
-      dataIndex: 'frequency_value',
-      width: 100
+      title: '企业类型',
+      dataIndex: 'entity_type',
+      width: 200,
+      render: (entityType) => {
+        if (!entityType) return '-';
+        let types = entityType;
+        if (typeof types === 'string') {
+          try {
+            types = JSON.parse(types);
+          } catch (e) {
+            return entityType;
+          }
+        }
+        if (!Array.isArray(types) || types.length === 0) return '-';
+        return types.join('、');
+      }
     },
     {
       title: '最后同步时间',
@@ -312,7 +430,7 @@ function NewsConfig() {
     },
     {
       title: '操作',
-      width: 320,
+      width: 380,
       render: (_, record) => (
         <Space size={8}>
           <Button
@@ -321,6 +439,13 @@ function NewsConfig() {
             onClick={() => handleEdit(record.id)}
           >
             编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            onClick={() => handleCopy(record.id)}
+          >
+            复制
           </Button>
           <Button
             type="outline"
@@ -509,48 +634,73 @@ function NewsConfig() {
           </div>
 
           <div className="form-group">
-            <label>数据取数频次类型 *</label>
-            <Select
-              value={formData.frequency_type}
-              onChange={(value) => handleChange('frequency_type', value)}
-            >
-              <Option value="day">天</Option>
-              <Option value="week">周</Option>
-              <Option value="month">月</Option>
-            </Select>
-            {formData.interface_type === '企查查' && (
-              <p className="form-hint" style={{ color: '#666', fontSize: '12px', marginTop: '4px' }}>
-                企查查接口频次类型可编辑，编辑后将同步更新到定时任务配置
-              </p>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label>数据取数频次值 *</label>
-            <InputNumber
-              value={formData.frequency_value}
-              onChange={(value) => handleChange('frequency_value', value)}
-              min={1}
-            />
+            <label>定时任务规则 *</label>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <Input
+                value={formData.cron_expression}
+                readOnly
+                placeholder="请配置Cron表达式"
+                style={{ flex: 1 }}
+              />
+              <Button
+                type="primary"
+                onClick={() => setShowCronModal(true)}
+              >
+                配置
+              </Button>
+            </div>
             <p className="form-hint">
-              {formData.frequency_type === 'day' 
-                ? `X天：从设置保存开始的当天0点到${formData.frequency_value}天后的23:59:59`
-                : formData.frequency_type === 'week'
-                ? formData.interface_type === '企查查'
-                  ? `按周执行：每次同步获取上周周一00:00:00到上周周日23:59:59的数据（企查查接口频次值可编辑）`
-                  : `X周：从设置保存开始的当周周一到${formData.frequency_value}周后的周日23:59:59`
-                : `X月：从设置保存开始的当月1日0点到当月最后一天23:59:59（月份取整）`}
+              点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置
+              {formData.interface_type === '企查查' && (
+                <span style={{ display: 'block', marginTop: '4px' }}>
+                  企查查接口定时规则可编辑，编辑后将同步更新到定时任务配置
+                </span>
+              )}
             </p>
           </div>
 
           <div className="form-group">
-            <label>
+            <label>企业类型</label>
+            <Select
+              mode="multiple"
+              value={formData.entity_type}
+              onChange={(value) => handleChange('entity_type', value)}
+              placeholder="请选择企业类型（可多选）"
+              allowClear
+            >
+              <Option value="被投企业">被投企业</Option>
+              <Option value="基金">基金</Option>
+              <Option value="子基金">子基金</Option>
+              <Option value="子基金管理人">子基金管理人</Option>
+              <Option value="子基金GP">子基金GP</Option>
+              {formData.interface_type === '新榜' && (
+                <Option value="额外公众号">额外公众号</Option>
+              )}
+            </Select>
+            <p className="form-hint">
+              {formData.interface_type === '新榜' ? (
+                <>
+                  根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。
+                  <br />
+                  <strong>额外公众号</strong>：选择此项将只抓取 additional_wechat_accounts 表中状态为 active 的额外公众号数据。
+                  <br />
+                  留空表示抓取所有类型（包括企业公众号和额外公众号）。
+                </>
+              ) : (
+                '根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。留空表示抓取所有类型。'
+              )}
+            </p>
+          </div>
+
+          <div className="form-group">
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 0 }}>
+              <span>启用配置</span>
               <input
                 type="checkbox"
                 checked={formData.is_active}
                 onChange={(e) => handleChange('is_active', e.target.checked)}
+                style={{ margin: 0, cursor: 'pointer', width: 'auto', flexShrink: 0 }}
               />
-              启用配置
             </label>
           </div>
 
@@ -567,6 +717,17 @@ function NewsConfig() {
           </div>
         </form>
       </Modal>
+
+      {/* Cron表达式配置弹窗 */}
+      <CronGenerator
+        visible={showCronModal}
+        value={formData.cron_expression}
+        onChange={(cron) => {
+          handleChange('cron_expression', cron)
+          setShowCronModal(false)
+        }}
+        onCancel={() => setShowCronModal(false)}
+      />
 
       {/* 日志弹窗 */}
       {showLogModal && (

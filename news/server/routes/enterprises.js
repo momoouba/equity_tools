@@ -10,7 +10,7 @@ const { queryExternal, getExternalPool, createExternalPool } = require('../utils
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
-const TEMPLATE_HEADERS = ['项目简称', '被投企业全称', '统一信用代码', '企业公众号id', '企业官网', '退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）'];
+const TEMPLATE_HEADERS = ['项目简称', '被投企业全称', '统一信用代码', '企业公众号id', '企业官网', '企业类型（被投企业/基金/子基金/子基金管理人/子基金GP）', '退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）'];
 
 /**
  * 合并微信公众号ID
@@ -136,6 +136,7 @@ async function insertEnterpriseRow({
   unified_credit_code,
   wechat_official_account_id,
   official_website,
+  entity_type = null,
   exit_status = '未退出',
   userId = null
 }) {
@@ -146,8 +147,8 @@ async function insertEnterpriseRow({
   await db.execute(
     `INSERT INTO invested_enterprises 
      (id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
-      wechat_official_account_id, official_website, exit_status, creator_user_id) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      wechat_official_account_id, official_website, entity_type, exit_status, creator_user_id) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       enterpriseId,
       project_number,
@@ -156,6 +157,7 @@ async function insertEnterpriseRow({
       unified_credit_code || '',
       wechat_official_account_id || '',
       official_website || '',
+      entity_type || null,
       exit_status || '未退出',
       userId
     ]
@@ -282,6 +284,7 @@ router.get('/', async (req, res) => {
     const pageSize = parseInt(req.query.pageSize, 10) || 10;
     const search = req.query.search || '';
     const filterUserId = req.query.filter_user_id || ''; // 用户筛选（仅admin使用）
+    const entityType = req.query.entity_type || ''; // 企业类型筛选
     const offset = (page - 1) * pageSize;
 
     let condition = 'FROM invested_enterprises WHERE delete_mark = 0';
@@ -307,6 +310,19 @@ router.get('/', async (req, res) => {
       if (filterUserId && filterUserId.trim() !== '') {
         condition += ' AND creator_user_id = ?';
         params.push(filterUserId);
+      }
+    }
+
+    // 企业类型筛选
+    if (entityType) {
+      if (entityType === 'manager') {
+        // 子基金管理人及GP：包含子基金管理人或子基金GP
+        condition += ' AND (entity_type = ? OR entity_type = ?)';
+        params.push('子基金管理人', '子基金GP');
+      } else {
+        // 其他类型：直接匹配
+        condition += ' AND entity_type = ?';
+        params.push(entityType);
       }
     }
 
@@ -570,6 +586,7 @@ router.post('/', [
   body('unified_credit_code').optional(),
   body('wechat_official_account_id').optional(),
   body('official_website').optional(),
+  body('entity_type').optional(),
   body('exit_status').optional(),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -584,6 +601,7 @@ router.post('/', [
       unified_credit_code,
       wechat_official_account_id,
       official_website,
+      entity_type,
       exit_status = '未退出'
     } = req.body;
 
@@ -596,6 +614,7 @@ router.post('/', [
       unified_credit_code,
       wechat_official_account_id,
       official_website,
+      entity_type: entity_type || null,
       exit_status,
       userId: userId
     });
@@ -635,6 +654,7 @@ router.put('/:id', [
   body('unified_credit_code').optional(),
   body('wechat_official_account_id').optional(),
   body('official_website').optional(),
+  body('entity_type').optional(),
   body('exit_status').optional(),
 ], async (req, res) => {
   const errors = validationResult(req);
@@ -650,6 +670,7 @@ router.put('/:id', [
       unified_credit_code,
       wechat_official_account_id,
       official_website,
+      entity_type,
       exit_status
     } = req.body;
 
@@ -673,13 +694,14 @@ router.put('/:id', [
       unified_credit_code: unified_credit_code || '',
       wechat_official_account_id: wechat_official_account_id || '',
       official_website: official_website || '',
+      entity_type: entity_type || null,
       exit_status: exit_status || '未退出'
     };
 
     const result = await db.execute(
       `UPDATE invested_enterprises 
        SET project_abbreviation = ?, enterprise_full_name = ?, unified_credit_code = ?,
-           wechat_official_account_id = ?, official_website = ?, exit_status = ?,
+           wechat_official_account_id = ?, official_website = ?, entity_type = ?, exit_status = ?,
            modifier_user_id = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND delete_mark = 0`,
       [
@@ -688,6 +710,7 @@ router.put('/:id', [
         newData.unified_credit_code,
         newData.wechat_official_account_id,
         newData.official_website,
+        newData.entity_type,
         newData.exit_status,
         userId,
         id
@@ -856,6 +879,7 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
         unified_credit_code = '',
         wechat_official_account_id = '',
         official_website = '',
+        entity_type = '',
         exit_status = '未退出'
       ] = dataRows[index].map((cell) => String(cell || '').trim());
 
@@ -894,6 +918,7 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
           unified_credit_code,
           wechat_official_account_id,
           official_website,
+          entity_type: entity_type || null,
           exit_status,
           userId: userId
         });
@@ -1052,22 +1077,91 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     };
   }
 
+  // 获取invested_enterprises表的所有字段（排除系统字段）
+  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id'];
+  const tableColumns = await db.query(`
+    SELECT COLUMN_NAME 
+    FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_SCHEMA = DATABASE() 
+    AND TABLE_NAME = 'invested_enterprises'
+    AND COLUMN_NAME NOT IN (${systemFields.map(() => '?').join(',')})
+    ORDER BY ORDINAL_POSITION
+  `, systemFields);
+  
+  const availableFields = tableColumns.map(col => col.COLUMN_NAME);
+  console.log(`[企业同步任务] 可同步的字段列表: ${availableFields.join(', ')}`);
+
+  /**
+   * 将驼峰命名转换为下划线命名
+   */
+  function camelToSnake(str) {
+    return str.replace(/([A-Z])/g, '_$1').toLowerCase();
+  }
+
+  /**
+   * 将下划线命名转换为驼峰命名
+   */
+  function snakeToCamel(str) {
+    return str.replace(/_([a-z])/g, (g) => g[1].toUpperCase());
+  }
+
+  /**
+   * 从查询结果中获取字段值（支持下划线和驼峰命名）
+   */
+  function getFieldValue(row, fieldName) {
+    // 直接匹配
+    if (row[fieldName] !== undefined) {
+      return row[fieldName];
+    }
+    // 尝试驼峰命名
+    const camelName = snakeToCamel(fieldName);
+    if (row[camelName] !== undefined) {
+      return row[camelName];
+    }
+    // 尝试下划线命名（如果字段名是驼峰）
+    const snakeName = camelToSnake(fieldName);
+    if (snakeName !== fieldName && row[snakeName] !== undefined) {
+      return row[snakeName];
+    }
+    return undefined;
+  }
+
   // 同步数据到被投企业表
   let synced = 0;
   let updated = 0;
   let inserted = 0;
 
   for (const row of externalData) {
-    // 映射字段（支持不同的字段名）
-    const enterpriseData = {
-      project_number: row.project_number || row.projectNumber || null,
-      project_abbreviation: row.project_abbreviation || row.projectAbbreviation || row.project_abbr || '',
-      enterprise_full_name: row.enterprise_full_name || row.enterpriseFullName || row.enterprise_name || row.enterpriseName || '',
-      unified_credit_code: row.unified_credit_code || row.unifiedCreditCode || row.credit_code || '',
-      wechat_official_account_id: row.wechat_official_account_id || row.wechatOfficialAccountId || row.wechat_account_id || '',
-      official_website: row.official_website || row.officialWebsite || row.website || '',
-      exit_status: row.exit_status || row.exitStatus || '未退出'
-    };
+    // 动态映射所有字段（支持不同的字段名格式）
+    const enterpriseData = {};
+    
+    // 为每个可用字段尝试匹配
+    for (const fieldName of availableFields) {
+      const value = getFieldValue(row, fieldName);
+      if (value !== undefined) {
+        enterpriseData[fieldName] = value;
+      }
+    }
+
+    // 特殊处理：支持旧字段名的兼容性（向后兼容）
+    if (enterpriseData.enterprise_full_name === undefined) {
+      enterpriseData.enterprise_full_name = row.enterprise_full_name || row.enterpriseFullName || row.enterprise_name || row.enterpriseName || '';
+    }
+    if (enterpriseData.project_abbreviation === undefined) {
+      enterpriseData.project_abbreviation = row.project_abbreviation || row.projectAbbreviation || row.project_abbr || '';
+    }
+    if (enterpriseData.unified_credit_code === undefined) {
+      enterpriseData.unified_credit_code = row.unified_credit_code || row.unifiedCreditCode || row.credit_code || '';
+    }
+    if (enterpriseData.wechat_official_account_id === undefined) {
+      enterpriseData.wechat_official_account_id = row.wechat_official_account_id || row.wechatOfficialAccountId || row.wechat_account_id || '';
+    }
+    if (enterpriseData.official_website === undefined) {
+      enterpriseData.official_website = row.official_website || row.officialWebsite || row.website || '';
+    }
+    if (enterpriseData.exit_status === undefined) {
+      enterpriseData.exit_status = row.exit_status || row.exitStatus || '未退出';
+    }
 
     // 必填字段检查
     if (!enterpriseData.enterprise_full_name) {
@@ -1098,27 +1192,35 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
         continue; // 跳过这条数据，不进行更新
       }
       
-      // 统一信用代码一致，更新项目简称、被投企业全称、企业公众号ID、企业官网和退出状态
-      await db.execute(
-        `UPDATE invested_enterprises 
-         SET project_abbreviation = ?,
-             enterprise_full_name = ?,
-             wechat_official_account_id = ?,
-             official_website = ?,
-             exit_status = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [
-          enterpriseData.project_abbreviation,
-          enterpriseData.enterprise_full_name,
-          enterpriseData.wechat_official_account_id || null,
-          enterpriseData.official_website || null,
-          enterpriseData.exit_status,
-          existing.id
-        ]
-      );
-      updated++;
-      console.log(`更新企业：统一信用代码 ${enterpriseData.unified_credit_code}，更新项目简称、企业全称、企业公众号ID、企业官网和退出状态`);
+      // 统一信用代码一致，动态更新所有匹配的字段
+      const updateFields = [];
+      const updateValues = [];
+      
+      // 构建动态UPDATE语句，包含所有匹配的字段
+      for (const fieldName of availableFields) {
+        if (enterpriseData[fieldName] !== undefined) {
+          updateFields.push(`${fieldName} = ?`);
+          // 处理空值：空字符串转为null
+          const value = enterpriseData[fieldName];
+          updateValues.push(value === '' ? null : value);
+        }
+      }
+      
+      if (updateFields.length > 0) {
+        updateFields.push('updated_at = CURRENT_TIMESTAMP');
+        updateValues.push(existing.id);
+        
+        await db.execute(
+          `UPDATE invested_enterprises 
+           SET ${updateFields.join(', ')}
+           WHERE id = ?`,
+          updateValues
+        );
+        updated++;
+        console.log(`更新企业：统一信用代码 ${enterpriseData.unified_credit_code}，更新字段: ${updateFields.slice(0, -1).map(f => f.split('=')[0].trim()).join(', ')}`);
+      } else {
+        console.warn(`跳过更新：没有匹配的字段，统一信用代码 ${enterpriseData.unified_credit_code}`);
+      }
       
       // 同步更新到 company 表
       if (enterpriseData.unified_credit_code && enterpriseData.unified_credit_code.trim() !== '') {
@@ -1204,25 +1306,33 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
       const projectNumber = await generateProjectNumber();
       const enterpriseId = await generateId('invested_enterprises');
       
-      await db.execute(
-        `INSERT INTO invested_enterprises 
-         (id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
-          wechat_official_account_id, official_website, exit_status, creator_user_id) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          enterpriseId,
-          projectNumber,
-          enterpriseData.project_abbreviation,
-          enterpriseData.enterprise_full_name,
-          enterpriseData.unified_credit_code || null,
-          enterpriseData.wechat_official_account_id || null,
-          enterpriseData.official_website || null,
-          enterpriseData.exit_status,
-          null // 同步的数据没有creator_user_id
-        ]
-      );
-      inserted++;
-      console.log(`新增企业：${enterpriseData.enterprise_full_name}，统一信用代码：${enterpriseData.unified_credit_code || '无'}，项目编号：${projectNumber}`);
+      // 动态构建INSERT语句，包含所有匹配的字段
+      const insertFields = ['id', 'project_number'];
+      const insertValues = [enterpriseId, projectNumber];
+      
+      // 添加所有匹配的字段
+      for (const fieldName of availableFields) {
+        if (enterpriseData[fieldName] !== undefined) {
+          insertFields.push(fieldName);
+          // 处理空值：空字符串转为null
+          const value = enterpriseData[fieldName];
+          insertValues.push(value === '' ? null : value);
+        }
+      }
+      
+      if (insertFields.length > 2) {
+        const placeholders = insertFields.map(() => '?').join(', ');
+        await db.execute(
+          `INSERT INTO invested_enterprises 
+           (${insertFields.join(', ')}) 
+           VALUES (${placeholders})`,
+          insertValues
+        );
+        inserted++;
+        console.log(`新增企业：${enterpriseData.enterprise_full_name}，统一信用代码：${enterpriseData.unified_credit_code || '无'}，项目编号：${projectNumber}，插入字段: ${insertFields.slice(2).join(', ')}`);
+      } else {
+        console.warn(`跳过插入：没有匹配的字段，企业全称：${enterpriseData.enterprise_full_name}`);
+      }
       
       // 同步创建到 company 表
       if (enterpriseData.project_abbreviation && enterpriseData.enterprise_full_name) {

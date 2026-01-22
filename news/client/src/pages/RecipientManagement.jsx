@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Form, Input, Select, Switch, Tag, Checkbox } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
+import CronGenerator from '../components/CronGenerator'
 import './RecipientManagement.css'
 
 const Option = Select.Option
@@ -17,19 +18,21 @@ function RecipientManagement() {
   const [showForm, setShowForm] = useState(false)
   const [editingRecipient, setEditingRecipient] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [form] = Form.useForm()
   const [formData, setFormData] = useState({
     recipient_email: '',
     email_subject: '',
-    send_frequency: 'daily',
-    send_time: '09:00:00',
+    cron_expression: '0 0 9 * * ? *', // 默认每天9点执行
     is_active: true,
-    qichacha_category_codes: null
+    qichacha_category_codes: null,
+    entity_type: null
   })
   const [showLogModal, setShowLogModal] = useState(false)
   const [logRecipientId, setLogRecipientId] = useState(null)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [selectedCategories, setSelectedCategories] = useState([])
   const [categoryMap, setCategoryMap] = useState({})
+  const [showCronModal, setShowCronModal] = useState(false)
 
   useEffect(() => {
     if (showCategoryModal) {
@@ -176,16 +179,37 @@ function RecipientManagement() {
     }
   }
 
+  // 将旧的 send_frequency 和 send_time 转换为 Cron 表达式
+  const convertToCronExpression = (sendFrequency, sendTime) => {
+    if (!sendFrequency || !sendTime) {
+      return '0 0 9 * * ? *' // 默认每天9点
+    }
+    
+    const [hours, minutes] = sendTime.split(':')
+    
+    if (sendFrequency === 'daily') {
+      return `0 ${minutes} ${hours} * * ? *`
+    } else if (sendFrequency === 'weekly') {
+      return `0 ${minutes} ${hours} ? * 2 *` // 每周一
+    } else if (sendFrequency === 'monthly') {
+      return `0 ${minutes} ${hours} 1 * ? *` // 每月1号
+    }
+    
+    return '0 0 9 * * ? *'
+  }
+
   const handleAdd = () => {
     setEditingRecipient(null)
-    setFormData({
+    const defaultData = {
       recipient_email: '',
       email_subject: '',
-      send_frequency: 'daily',
-      send_time: '09:00:00',
+      cron_expression: '0 0 9 * * ? *', // 默认每天9点执行
       is_active: true,
-      qichacha_category_codes: null
-    })
+      qichacha_category_codes: null,
+      entity_type: null
+    }
+    setFormData(defaultData)
+    form.setFieldsValue(defaultData)
     setSelectedCategories([])
     setShowForm(true)
   }
@@ -211,14 +235,42 @@ function RecipientManagement() {
           categoryCodes = null
         }
         
-        setFormData({
+        // 处理entity_type（可能是JSON字符串、数组或单个值）
+        let entityTypes = recipient.entity_type
+        if (entityTypes === null || entityTypes === undefined) {
+          entityTypes = null
+        } else if (typeof entityTypes === 'string') {
+          try {
+            entityTypes = JSON.parse(entityTypes)
+          } catch (e) {
+            // 如果不是JSON，可能是单个值，转换为数组
+            entityTypes = entityTypes ? [entityTypes] : null
+          }
+        }
+        if (entityTypes !== null && !Array.isArray(entityTypes)) {
+          // 如果是单个值，转换为数组
+          entityTypes = [entityTypes]
+        }
+        
+        // 优先使用 cron_expression，如果没有则从 send_frequency 和 send_time 转换
+        let cronExpression = recipient.cron_expression
+        if (!cronExpression && recipient.send_frequency) {
+          cronExpression = convertToCronExpression(recipient.send_frequency, recipient.send_time || '09:00:00')
+        }
+        if (!cronExpression) {
+          cronExpression = '0 0 9 * * ? *' // 默认值
+        }
+        
+        const editData = {
           recipient_email: recipient.recipient_email || '',
           email_subject: recipient.email_subject || '',
-          send_frequency: recipient.send_frequency || 'daily',
-          send_time: recipient.send_time || '09:00:00',
+          cron_expression: cronExpression,
           is_active: recipient.is_active === 1,
-          qichacha_category_codes: categoryCodes
-        })
+          qichacha_category_codes: categoryCodes,
+          entity_type: entityTypes
+        }
+        setFormData(editData)
+        form.setFieldsValue(editData)
         const finalCategories = Array.isArray(categoryCodes) ? categoryCodes : []
         setSelectedCategories(finalCategories)
         setShowForm(true)
@@ -279,6 +331,7 @@ function RecipientManagement() {
       
       const submitData = {
         ...values,
+        cron_expression: formData.cron_expression, // 从 formData 中获取 cron_expression
         qichacha_category_codes: categoryCodes
       }
       
@@ -296,10 +349,10 @@ function RecipientManagement() {
         setFormData({
           recipient_email: '',
           email_subject: '',
-          send_frequency: 'daily',
-          send_time: '09:00:00',
+          cron_expression: '0 0 9 * * ? *',
           is_active: true,
-          qichacha_category_codes: null
+          qichacha_category_codes: null,
+          entity_type: null
         })
         setSelectedCategories([])
         setTimeout(() => {
@@ -344,13 +397,14 @@ function RecipientManagement() {
     }
   }
 
-  const getFrequencyName = (frequency) => {
-    const frequencyMap = {
-      daily: '每天',
-      weekly: '每周',
-      monthly: '每月'
-    }
-    return frequencyMap[frequency] || frequency
+  // 格式化 Cron 表达式显示
+  const formatCronExpression = (cron) => {
+    if (!cron) return '-'
+    // 简化显示：如果是常见的表达式，显示友好文本
+    if (cron === '0 0 9 * * ? *') return '每天 09:00:00'
+    if (cron === '0 0 9 ? * 2 *') return '每周一 09:00:00'
+    if (cron === '0 0 9 1 * ? *') return '每月1号 09:00:00'
+    return cron
   }
 
   const columns = [
@@ -383,16 +437,39 @@ function RecipientManagement() {
       render: (text) => text || '-'
     },
     {
-      title: '发送频率',
-      dataIndex: 'send_frequency',
-      width: 100,
-      render: (text) => getFrequencyName(text)
+      title: 'Cron表达式',
+      dataIndex: 'cron_expression',
+      width: 200,
+      render: (text, record) => {
+        // 兼容旧数据：如果有 send_frequency，显示旧的格式
+        if (record.send_frequency && !text) {
+          const typeMap = { 'daily': '每天', 'weekly': '每周', 'monthly': '每月' }
+          return `${typeMap[record.send_frequency] || record.send_frequency} - ${formatTime(record.send_time || '')}`
+        }
+        return formatCronExpression(text)
+      }
     },
     {
-      title: '发送时间',
-      dataIndex: 'send_time',
-      width: 120,
-      render: (text) => formatTime(text)
+      title: '企业类型',
+      dataIndex: 'entity_type',
+      width: 200,
+      render: (text) => {
+        if (!text) return '全部'
+        // 处理JSON字符串或数组
+        let types = text
+        if (typeof text === 'string') {
+          try {
+            types = JSON.parse(text)
+          } catch (e) {
+            // 如果不是JSON，可能是单个值
+            types = [text]
+          }
+        }
+        if (!Array.isArray(types)) {
+          types = [types]
+        }
+        return types.length > 0 ? types.join('、') : '全部'
+      }
     },
     {
       title: '状态',
@@ -521,6 +598,7 @@ function RecipientManagement() {
         style={{ width: 600 }}
       >
         <Form
+          form={form}
           initialValues={formData}
           onSubmit={handleSubmit}
           layout="vertical"
@@ -545,33 +623,50 @@ function RecipientManagement() {
           </FormItem>
 
           <FormItem
-            label="发送频率"
-            field="send_frequency"
-            rules={[{ required: true, message: '请选择发送频率' }]}
+            label="定时任务规则"
+            field="cron_expression"
+            rules={[{ required: true, message: '请配置定时任务规则' }]}
+            extra='点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置'
           >
-            <Select>
-              <Option value="daily">每天</Option>
-              <Option value="weekly">每周</Option>
-              <Option value="monthly">每月</Option>
-            </Select>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <Input
+                value={formData.cron_expression}
+                readOnly
+                placeholder="请配置Cron表达式"
+                style={{ flex: 1 }}
+              />
+              <Button
+                type="primary"
+                onClick={() => setShowCronModal(true)}
+              >
+                配置
+              </Button>
+            </div>
           </FormItem>
 
           <FormItem
-            label="发送时间"
-            field="send_time"
-            rules={[{ required: true, message: '请选择发送时间' }]}
-            extra="格式：HH:mm（例如：09:00）"
+            label="企业类型"
+            field="entity_type"
+            extra="选择要发送的企业类型数据，可多选，不选择则发送所有类型"
           >
-            <Input
-              type="time"
-              value={formData.send_time ? formData.send_time.substring(0, 5) : '09:00'}
+            <Select
+              mode="multiple"
+              placeholder="请选择企业类型（可多选，不选择则发送所有类型）"
+              allowClear
+              value={formData.entity_type}
               onChange={(value) => {
                 setFormData({
                   ...formData,
-                  send_time: value + ':00'
+                  entity_type: value && value.length > 0 ? value : null
                 })
               }}
-            />
+            >
+              <Option value="被投企业">被投企业</Option>
+              <Option value="基金">基金</Option>
+              <Option value="子基金">子基金</Option>
+              <Option value="子基金管理人">子基金管理人</Option>
+              <Option value="子基金GP">子基金GP</Option>
+            </Select>
           </FormItem>
 
           <FormItem
@@ -630,6 +725,22 @@ function RecipientManagement() {
           }}
         />
       )}
+
+      {/* Cron表达式配置弹窗 */}
+      <CronGenerator
+        visible={showCronModal}
+        value={formData.cron_expression}
+        onChange={(cron) => {
+          // 同时更新 formData 和 Form 的值
+          setFormData({
+            ...formData,
+            cron_expression: cron
+          })
+          form.setFieldValue('cron_expression', cron)
+          setShowCronModal(false)
+        }}
+        onCancel={() => setShowCronModal(false)}
+      />
 
       {/* 企查查类别选择弹窗 */}
       <Modal

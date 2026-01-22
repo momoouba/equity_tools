@@ -114,6 +114,14 @@ function NewsInfo() {
         let newsData = response.data.data || []
         const totalCount = response.data.total || 0
         
+        console.log('[获取新闻] 返回数据:', {
+          dataCount: newsData.length,
+          total: totalCount,
+          currentPage,
+          pageSize,
+          totalPages: Math.ceil(totalCount / pageSize)
+        })
+        
         // 处理关键词数据
         newsData = newsData.map(news => {
           let keywords = []
@@ -673,6 +681,12 @@ function NewsInfo() {
       render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
     },
     {
+      title: '企业类型',
+      dataIndex: 'entity_type',
+      width: 120,
+      render: (text) => text || '-'
+    },
+    {
       title: '被投企业全称',
       dataIndex: 'enterprise_full_name',
       width: 200,
@@ -1049,11 +1063,20 @@ function NewsInfo() {
                 </div>
                 <Pagination
                   current={currentPage}
-                  total={total}
-                  pageSize={pageSize}
-                  onChange={(page) => setCurrentPage(page)}
-                  showTotal
+                  total={Number(total)}
+                  pageSize={Number(pageSize)}
+                  onChange={(page) => {
+                    console.log('[分页] 切换到页码:', page, '总数据量:', total, '每页:', pageSize, '总页数:', Math.ceil(total / pageSize))
+                    setCurrentPage(Number(page))
+                  }}
+                  showTotal={(total, range) => {
+                    const totalPages = Math.ceil(total / pageSize)
+                    console.log('[分页显示] total:', total, 'range:', range, '总页数:', totalPages, '当前页:', currentPage, 'pageSize:', pageSize)
+                    return `共 ${total} 条，显示 ${range[0]}-${range[1]} 条`
+                  }}
                   showJumper
+                  sizeCanChange={false}
+                  simple={false}
                 />
               </div>
             )}

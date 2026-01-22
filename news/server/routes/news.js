@@ -30,6 +30,33 @@ function splitAccountIds(accountIdsStr) {
 const router = express.Router();
 
 /**
+ * 将 send_frequency 和 send_time 转换为 Cron 表达式
+ * @param {string} sendFrequency - 发送频率：daily/weekly/monthly
+ * @param {string} sendTime - 发送时间：HH:mm:ss
+ * @returns {string} Cron 表达式
+ */
+function convertToCronExpression(sendFrequency, sendTime) {
+  if (!sendTime) {
+    sendTime = '09:00:00'
+  }
+  const [hours, minutes] = sendTime.split(':')
+  
+  if (sendFrequency === 'daily') {
+    // 每天执行：0 分钟 小时 * * ? *
+    return `0 ${minutes} ${hours} * * ? *`
+  } else if (sendFrequency === 'weekly') {
+    // 每周执行：每周一，0 分钟 小时 ? * 2 *
+    return `0 ${minutes} ${hours} ? * 2 *`
+  } else if (sendFrequency === 'monthly') {
+    // 每月执行：每月1号，0 分钟 小时 1 * ? *
+    return `0 ${minutes} ${hours} 1 * ? *`
+  }
+  
+  // 默认每天
+  return `0 ${minutes} ${hours} * * ? *`
+}
+
+/**
  * 创建新闻同步执行日志
  * @param {Object} params - 日志参数
  * @returns {Promise<string>} - 返回日志ID
@@ -405,33 +432,92 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     console.log(`- 说明: 获取前一天0点到今天0点之间发布的新闻`);
   }
 
-  // 查询invested_enterprises表中退出状态不为"完全退出"、"已上市"和"不再观察"的数据
-  const enterprises = await db.query(
-    `SELECT DISTINCT wechat_official_account_id 
-     FROM invested_enterprises 
-     WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
-     AND wechat_official_account_id IS NOT NULL 
-     AND wechat_official_account_id != ''
-     AND delete_mark = 0`
-  );
+  // 解析 entity_type 配置（仅对新榜接口生效）
+  let entityTypes = [];
+  let includeAdditionalAccounts = false;
+  let includeEnterpriseAccounts = true; // 默认包含企业公众号
+  
+  if (config.interface_type === '新榜' && config.entity_type) {
+    try {
+      // 解析 entity_type（可能是 JSON 字符串或数组）
+      if (typeof config.entity_type === 'string') {
+        entityTypes = JSON.parse(config.entity_type);
+      } else if (Array.isArray(config.entity_type)) {
+        entityTypes = config.entity_type;
+      }
+      
+      // 检查是否包含"额外公众号"
+      includeAdditionalAccounts = entityTypes.includes('额外公众号');
+      
+      // 如果包含"额外公众号"，检查是否还有其他企业类型
+      if (includeAdditionalAccounts) {
+        // 过滤掉"额外公众号"，保留其他企业类型
+        const enterpriseTypes = entityTypes.filter(t => t !== '额外公众号');
+        includeEnterpriseAccounts = enterpriseTypes.length > 0;
+        entityTypes = enterpriseTypes; // 更新 entityTypes，用于后续企业类型过滤
+      } else {
+        // 不包含"额外公众号"，只查询企业公众号
+        includeAdditionalAccounts = false;
+        includeEnterpriseAccounts = entityTypes.length > 0 || entityTypes.length === 0; // 如果为空，查询所有企业类型
+      }
+      
+      console.log(`[新闻同步] 配置 ${config.id} 的 entity_type 过滤:`, {
+        entityTypes,
+        includeAdditionalAccounts,
+        includeEnterpriseAccounts
+      });
+    } catch (e) {
+      console.warn(`[新闻同步] 解析 entity_type 失败: ${e.message}，将查询所有公众号`);
+      // 解析失败，默认查询所有公众号
+      includeAdditionalAccounts = true;
+      includeEnterpriseAccounts = true;
+    }
+  } else {
+    // 企查查接口或未配置 entity_type，查询所有公众号
+    includeAdditionalAccounts = true;
+    includeEnterpriseAccounts = true;
+  }
 
-  // 查询additional_wechat_accounts表中状态为"active"的数据，并进行去重
-  const additionalAccounts = await db.query(
-    `SELECT DISTINCT wechat_account_id 
-     FROM additional_wechat_accounts 
-     WHERE status = 'active' 
-     AND wechat_account_id IS NOT NULL 
-     AND wechat_account_id != ''
-     AND delete_mark = 0`
-  );
+  // 查询企业公众号（根据 entity_type 过滤）
+  let enterpriseAccountIds = [];
+  if (includeEnterpriseAccounts) {
+    let enterpriseQuery = `
+      SELECT DISTINCT wechat_official_account_id, entity_type
+      FROM invested_enterprises 
+      WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+      AND wechat_official_account_id IS NOT NULL 
+      AND wechat_official_account_id != ''
+      AND delete_mark = 0
+    `;
+    
+    // 如果指定了企业类型，添加过滤条件
+    if (entityTypes.length > 0 && config.interface_type === '新榜') {
+      const placeholders = entityTypes.map(() => '?').join(',');
+      enterpriseQuery += ` AND entity_type IN (${placeholders})`;
+    }
+    
+    const enterprises = await db.query(enterpriseQuery, entityTypes.length > 0 ? entityTypes : []);
+    
+    // 合并两个数据源的公众号ID，并拆分逗号分隔的ID
+    enterprises.forEach(e => {
+      const ids = splitAccountIds(e.wechat_official_account_id);
+      enterpriseAccountIds.push(...ids);
+    });
+  }
 
-  // 合并两个数据源的公众号ID，并拆分逗号分隔的ID
-  const enterpriseAccountIds = [];
-  enterprises.forEach(e => {
-    const ids = splitAccountIds(e.wechat_official_account_id);
-    enterpriseAccountIds.push(...ids);
-  });
-  const additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
+  // 查询额外公众号（仅在新榜接口且配置包含"额外公众号"时）
+  let additionalAccountIds = [];
+  if (includeAdditionalAccounts && config.interface_type === '新榜') {
+    const additionalAccounts = await db.query(
+      `SELECT DISTINCT wechat_account_id 
+       FROM additional_wechat_accounts 
+       WHERE status = 'active' 
+       AND wechat_account_id IS NOT NULL 
+       AND wechat_account_id != ''
+       AND delete_mark = 0`
+    );
+    additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
+  }
   
   // 合并并去重：使用Set确保wechat_account_id唯一
   const allAccountIdsSet = new Set([...enterpriseAccountIds, ...additionalAccountIds]);
@@ -649,16 +735,55 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 console.error('[入库] 错误堆栈:', e.stack);
               }
 
+              // 如果企业全称不为空，从invested_enterprises表中获取entity_type
+              let entityType = null;
+              if (enterpriseFullName) {
+                try {
+                  // 尝试匹配格式化后的名称（包含【】），如果失败则尝试匹配原始全称
+                  let enterpriseInfo = await db.query(
+                    `SELECT entity_type, enterprise_full_name
+                     FROM invested_enterprises 
+                     WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+                     AND delete_mark = 0 
+                     LIMIT 1`,
+                    [enterpriseFullName, `%【${enterpriseFullName}】`]
+                  );
+                  
+                  // 如果没找到，尝试从格式化名称中提取全称进行匹配
+                  if (enterpriseInfo.length === 0) {
+                    const formatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+                    if (formatMatch) {
+                      const extractedFullName = formatMatch[2];
+                      enterpriseInfo = await db.query(
+                        `SELECT entity_type, enterprise_full_name
+                         FROM invested_enterprises 
+                         WHERE enterprise_full_name = ? 
+                         AND delete_mark = 0 
+                         LIMIT 1`,
+                        [extractedFullName]
+                      );
+                    }
+                  }
+                  
+                  if (enterpriseInfo.length > 0) {
+                    entityType = enterpriseInfo[0].entity_type;
+                  }
+                } catch (err) {
+                  console.warn(`获取entity_type时出错: ${err.message}`);
+                }
+              }
+              
               const newsId = await generateId('news_detail');
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
                   article.name || '',
                   account, // 直接使用传入的公众号ID，不使用接口返回的article.account
                   enterpriseFullName,
+                  entityType,
                   sourceUrl,
                   article.title || '',
                   article.summary || '',
@@ -1137,7 +1262,10 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     }
 
     // 使用baseRunDate（已基于Asia/Shanghai时区计算）作为toDate
+    // toDate 应该是执行日期的前一天23:59:59，因为要抓取的是执行日期之前的数据
     toDate = new Date(baseRunDate);
+    toDate.setDate(toDate.getDate() - 1); // 执行日期前一天
+    toDate.setHours(23, 59, 59, 999); // 设置为前一天的23:59:59
     
     if (isManual) {
       // 手动触发时，始终使用前一天00:00:00到当天00:00:00，忽略last_sync_time
@@ -1146,14 +1274,38 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
       yesterdayDate.setDate(yesterdayDate.getDate() - 1);
       fromDate = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 0, 0, 0);
     } else {
-      // 定时任务时，查找节假日前的一个工作日到当前工作日之间的新闻
-      // 这样可以确保不遗漏节假日期间的数据
-      const previousWorkday = await findPreviousWorkday(baseRunDate);
-      fromDate = previousWorkday;
-      
-      console.log(`[新闻同步] 查找节假日前的工作日:`);
-      console.log(`[新闻同步] - 当前日期: ${baseRunDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
-      console.log(`[新闻同步] - 前一个工作日: ${previousWorkday.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      // 定时任务时，使用上一次同步日期到当前执行日期之间的范围
+      // 这样可以确保不遗漏跳过节假日期间的数据
+      if (config.last_sync_date) {
+        // 如果有 last_sync_date，从 last_sync_date + 1天 开始
+        const lastSyncDate = new Date(config.last_sync_date);
+        lastSyncDate.setDate(lastSyncDate.getDate() + 1); // 从上次同步日期的下一天开始
+        lastSyncDate.setHours(0, 0, 0, 0);
+        fromDate = lastSyncDate;
+        
+        console.log(`[新闻同步] 使用上次同步日期计算时间范围:`);
+        console.log(`[新闻同步] - 上次同步日期: ${config.last_sync_date}`);
+        console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      } else if (config.last_sync_time) {
+        // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始
+        const lastSyncTime = new Date(config.last_sync_time);
+        const lastSyncDateOnly = new Date(lastSyncTime.getFullYear(), lastSyncTime.getMonth(), lastSyncTime.getDate());
+        lastSyncDateOnly.setDate(lastSyncDateOnly.getDate() + 1); // 从上次同步日期的下一天开始
+        lastSyncDateOnly.setHours(0, 0, 0, 0);
+        fromDate = lastSyncDateOnly;
+        
+        console.log(`[新闻同步] 使用上次同步时间计算时间范围:`);
+        console.log(`[新闻同步] - 上次同步时间: ${config.last_sync_time}`);
+        console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      } else {
+        // 如果没有上次同步记录，使用前一天00:00:00
+        const yesterdayDate = new Date(baseRunDate);
+        yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+        fromDate = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 0, 0, 0);
+        
+        console.log(`[新闻同步] 首次执行，使用前一天作为起始日期:`);
+        console.log(`[新闻同步] - 起始日期: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+      }
     }
     
     console.log(`[新闻同步] 时间范围计算（定时任务）:`);
@@ -1611,6 +1763,7 @@ router.get('/user-news', async (req, res) => {
     
     if (timeRange === 'yesterday') {
       // 昨日：前一天00:00:00到23:59:59
+      // 支持public_time或created_at在昨日范围内（用于处理企查查新闻public_time可能为NULL的情况）
       const yesterday = new Date(now);
       yesterday.setDate(yesterday.getDate() - 1);
       const yesterdayStart = new Date(yesterday);
@@ -1618,8 +1771,8 @@ router.get('/user-news', async (req, res) => {
       const yesterdayEnd = new Date(yesterday);
       yesterdayEnd.setHours(23, 59, 59, 999);
       
-      timeCondition = ' AND public_time >= ? AND public_time <= ?';
-      timeParams = [yesterdayStart, yesterdayEnd];
+      timeCondition = ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND created_at >= ? AND created_at <= ?))';
+      timeParams = [yesterdayStart, yesterdayEnd, yesterdayStart, yesterdayEnd];
     } else if (timeRange === 'thisWeek') {
       // 本周：本周一00:00:00到现在
       const weekStart = new Date(now);
@@ -1853,31 +2006,41 @@ router.get('/', async (req, res) => {
       });
 
       // 构建查询条件
-      let condition = 'FROM news_detail WHERE wechat_account IN (';
+      let whereCondition = 'WHERE nd.wechat_account IN (';
       const params = [];
       
       // 添加微信公众号ID占位符
       const placeholders = accountIds.map(() => '?').join(',');
-      condition += placeholders + ') AND delete_mark = 0';
+      whereCondition += placeholders + ') AND nd.delete_mark = 0';
       params.push(...accountIds);
 
       // 添加搜索条件
       if (search) {
-        condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ?)';
+        whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)';
         const searchTerm = `%${search}%`;
         params.push(searchTerm, searchTerm, searchTerm);
       }
 
       // 查询数据（按发布时间降序）
+      // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
       const data = await db.query(
-        `SELECT account_name, wechat_account, public_time, title, source_url, keywords 
-         ${condition} 
-         ORDER BY public_time DESC, created_at DESC 
+        `SELECT nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, nd.keywords, nd.enterprise_full_name, 
+                COALESCE(nd.entity_type, ie.entity_type) as entity_type
+         FROM news_detail nd
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
+         ${whereCondition} 
+         ORDER BY nd.public_time DESC, nd.created_at DESC 
          LIMIT ? OFFSET ?`,
         [...params, parseInt(pageSize), offset]
       );
       
-      const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
+      const totalRows = await db.query(
+        `SELECT COUNT(*) as total 
+         FROM news_detail nd
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
+         ${whereCondition}`,
+        params
+      );
 
       // 解析 keywords JSON 字段
       const formattedData = data.map(item => {
@@ -1900,6 +2063,8 @@ router.get('/', async (req, res) => {
           public_time: item.public_time || '',
           title: item.title || '',
           source_url: item.source_url || '',
+          enterprise_full_name: item.enterprise_full_name || '',
+          entity_type: item.entity_type || null,
           keywords: keywords
         };
       });
@@ -1917,7 +2082,7 @@ router.get('/', async (req, res) => {
     const { page = 1, pageSize = 10, search, account, timeRange = 'all', enterpriseFilter = 'all' } = req.query;
     const offset = (page - 1) * pageSize;
 
-    let condition = 'FROM news_detail WHERE delete_mark = 0';
+    let whereCondition = 'WHERE nd.delete_mark = 0';
     const params = [];
 
     // 添加时间范围条件（管理员也支持时间筛选）
@@ -1931,8 +2096,9 @@ router.get('/', async (req, res) => {
       const yesterdayEnd = new Date(yesterday);
       yesterdayEnd.setHours(23, 59, 59, 999);
       
-      condition += ' AND public_time >= ? AND public_time <= ?';
-      params.push(yesterdayStart, yesterdayEnd);
+      // 支持public_time或created_at在昨日范围内（用于处理企查查新闻public_time可能为NULL的情况）
+      whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.created_at >= ? AND nd.created_at <= ?))';
+      params.push(yesterdayStart, yesterdayEnd, yesterdayStart, yesterdayEnd);
     } else if (timeRange === 'thisWeek') {
       const weekStart = new Date(now);
       const dayOfWeek = weekStart.getDay();
@@ -1940,7 +2106,7 @@ router.get('/', async (req, res) => {
       weekStart.setDate(weekStart.getDate() - daysToMonday);
       weekStart.setHours(0, 0, 0, 0);
       
-      condition += ' AND public_time >= ?';
+      whereCondition += ' AND nd.public_time >= ?';
       params.push(weekStart);
     } else if (timeRange === 'lastWeek') {
       // 上周：上周一00:00:00到上周日23:59:59
@@ -1957,43 +2123,57 @@ router.get('/', async (req, res) => {
       lastSunday.setHours(23, 59, 59, 999);
       
       // 支持public_time或created_at在上周范围内（用于处理企查查新闻public_time可能为NULL的情况）
-      condition += ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND created_at >= ? AND created_at <= ?))';
+      whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.created_at >= ? AND nd.created_at <= ?))';
       params.push(lastMonday, lastSunday, lastMonday, lastSunday);
     } else if (timeRange === 'thisMonth') {
       const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
       monthStart.setHours(0, 0, 0, 0);
       
-      condition += ' AND public_time >= ?';
+      whereCondition += ' AND nd.public_time >= ?';
       params.push(monthStart);
     }
 
     // 添加企业过滤条件
     if (enterpriseFilter === 'enterprise') {
-      condition += ' AND enterprise_full_name IS NOT NULL AND enterprise_full_name != \'\'';
+      whereCondition += ' AND nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != \'\'';
     }
 
     if (search) {
-      condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)';
+      whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ? OR nd.enterprise_full_name LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (account) {
-      condition += ' AND wechat_account = ?';
+      whereCondition += ' AND nd.wechat_account = ?';
       params.push(account);
     }
 
     // 查询数据（有企业的优先，然后按发布时间降序）
+    // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
+    // 注意：使用COALESCE确保优先使用news_detail表中的entity_type
     const data = await db.query(
-      `SELECT * ${condition} 
+      `SELECT nd.id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, 
+              nd.keywords, nd.enterprise_full_name, nd.news_abstract, nd.news_sentiment, nd.content,
+              nd.created_at, nd.APItype, nd.news_category,
+              COALESCE(nd.entity_type, ie.entity_type) as entity_type
+       FROM news_detail nd
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
+       ${whereCondition}
        ORDER BY 
-         CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
-         public_time DESC, 
-         created_at DESC 
+         CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
+         nd.public_time DESC, 
+         nd.created_at DESC 
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
-    const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
+    const totalRows = await db.query(
+      `SELECT COUNT(*) as total 
+       FROM news_detail nd
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
+       ${whereCondition}`,
+      params
+    );
 
     // 解析 keywords JSON 字段
     const formattedData = data.map(item => {
@@ -2468,7 +2648,7 @@ router.get('/recipients', async (req, res) => {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -2483,7 +2663,7 @@ router.get('/recipients', async (req, res) => {
       // 用户只查看自己的（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.user_id = ? AND rm.is_deleted = 0
@@ -2502,10 +2682,33 @@ router.get('/recipients', async (req, res) => {
 
     // 获取分页数据
     const recipients = await db.query(query, queryParams);
+    
+    // 解析entity_type JSON字段
+    const processedRecipients = (recipients || []).map(recipient => {
+      if (recipient.entity_type) {
+        if (Array.isArray(recipient.entity_type)) {
+          // 已经是数组，直接使用
+        } else if (typeof recipient.entity_type === 'string') {
+          try {
+            const parsed = JSON.parse(recipient.entity_type);
+            if (Array.isArray(parsed)) {
+              recipient.entity_type = parsed;
+            } else {
+              // 如果是单个值，转换为数组
+              recipient.entity_type = [parsed];
+            }
+          } catch (e) {
+            // JSON解析失败，可能是单个值，转换为数组
+            recipient.entity_type = [recipient.entity_type];
+          }
+        }
+      }
+      return recipient;
+    });
 
     res.json({
       success: true,
-      data: recipients || [],
+      data: processedRecipients,
       total: total,
       page: page,
       pageSize: pageSize
@@ -2531,7 +2734,7 @@ router.get('/recipients/:id', async (req, res) => {
     if (userRole === 'admin') {
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -2541,7 +2744,7 @@ router.get('/recipients/:id', async (req, res) => {
     } else {
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.is_active, rm.qichacha_category_codes, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0
@@ -2556,6 +2759,31 @@ router.get('/recipients/:id', async (req, res) => {
       const recipient = recipients[0];
       // 记录从数据库读取的原始值
       console.log(`[获取收件管理] ID: ${id}, 数据库中的qichacha_category_codes:`, recipient.qichacha_category_codes, '类型:', typeof recipient.qichacha_category_codes);
+      console.log(`[获取收件管理] ID: ${id}, 数据库中的entity_type:`, recipient.entity_type, '类型:', typeof recipient.entity_type);
+      
+      // 解析entity_type JSON字段
+      if (recipient.entity_type) {
+        if (Array.isArray(recipient.entity_type)) {
+          // 已经是数组，直接使用
+          console.log(`[获取收件管理] entity_type已经是数组，直接使用:`, recipient.entity_type.length, '个元素');
+        } else if (typeof recipient.entity_type === 'string') {
+          try {
+            const parsed = JSON.parse(recipient.entity_type);
+            if (Array.isArray(parsed)) {
+              recipient.entity_type = parsed;
+              console.log(`[获取收件管理] JSON解析成功:`, parsed, '类型:', typeof parsed, '是否为数组:', Array.isArray(parsed));
+            } else {
+              // 如果是单个值，转换为数组
+              recipient.entity_type = [parsed];
+              console.log(`[获取收件管理] 单个值转换为数组:`, recipient.entity_type);
+            }
+          } catch (e) {
+            // JSON解析失败，可能是单个值，转换为数组
+            recipient.entity_type = [recipient.entity_type];
+            console.log(`[获取收件管理] 解析失败，作为单个值转换为数组:`, recipient.entity_type);
+          }
+        }
+      }
       
       // 解析JSON字段
       if (recipient.qichacha_category_codes) {
@@ -2699,8 +2927,9 @@ const validateMultipleEmails = (emails) => {
 router.post('/recipients', [
   body('recipient_email').notEmpty().withMessage('收件人邮箱不能为空'),
   body('email_subject').optional(),
-  body('send_frequency').isIn(['daily', 'weekly', 'monthly']).withMessage('发送频率必须是daily、weekly或monthly'),
-  body('send_time').matches(/^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).withMessage('发送时间格式不正确，应为HH:mm:ss'),
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
+  body('send_frequency').optional().isIn(['daily', 'weekly', 'monthly']).withMessage('发送频率必须是daily、weekly或monthly'),
+  body('send_time').optional().matches(/^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).withMessage('发送时间格式不正确，应为HH:mm:ss'),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -2713,7 +2942,7 @@ router.post('/recipients', [
       return res.status(401).json({ success: false, message: '未登录' });
     }
 
-    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes } = req.body;
+    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
     
     // 验证多个邮箱格式
     const emailValidation = validateMultipleEmails(recipient_email);
@@ -2738,30 +2967,63 @@ router.post('/recipients', [
       }
     }
 
+    // 处理entity_type（支持数组多选）
+    const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP'];
+    let validatedEntityTypeJson = null;
+    if (entity_type !== null && entity_type !== undefined && entity_type !== '') {
+      let entityTypes = entity_type;
+      // 如果是字符串，尝试解析为JSON
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      // 确保是数组
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      // 验证所有值是否有效
+      const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+      if (invalidTypes.length > 0) {
+        return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}` });
+      }
+      // 如果有有效值，转换为JSON
+      if (entityTypes.length > 0) {
+        validatedEntityTypeJson = JSON.stringify(entityTypes);
+      }
+    }
+
     const recipientId = await generateId('recipient_management');
     const newData = {
       user_id: userId,
       recipient_email: emailValidation.emails,
       email_subject: email_subject || '',
-      send_frequency: send_frequency,
-      send_time: send_time || '09:00:00',
+      cron_expression: finalCronExpression,
+      send_frequency: send_frequency || null,
+      send_time: send_time || null,
       is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1,
-      qichacha_category_codes: categoryCodesJson
+      qichacha_category_codes: categoryCodesJson,
+      entity_type: validatedEntityTypeJson
     };
     
     await db.execute(
       `INSERT INTO recipient_management 
-       (id, user_id, recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recipientId,
         newData.user_id,
         newData.recipient_email,
         newData.email_subject,
+        newData.cron_expression,
         newData.send_frequency,
         newData.send_time,
         newData.is_active,
-        newData.qichacha_category_codes
+        newData.qichacha_category_codes,
+        newData.entity_type
       ]
     );
 
@@ -2782,6 +3044,7 @@ router.post('/recipients', [
 router.put('/recipients/:id', [
   body('recipient_email').optional(),
   body('email_subject').optional(),
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
   body('send_frequency').optional().isIn(['daily', 'weekly', 'monthly']).withMessage('发送频率必须是daily、weekly或monthly'),
   body('send_time').optional().matches(/^([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]$/).withMessage('发送时间格式不正确，应为HH:mm:ss'),
   body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
@@ -2795,7 +3058,13 @@ router.put('/recipients/:id', [
     const { id } = req.params;
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
-    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes } = req.body;
+    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    
+    // 如果没有提供 cron_expression，从 send_frequency 和 send_time 转换（向后兼容）
+    let finalCronExpression = cron_expression
+    if (!finalCronExpression && send_frequency && send_time) {
+      finalCronExpression = convertToCronExpression(send_frequency, send_time)
+    }
 
     // 检查记录是否存在（排除已删除的记录）
     const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND is_deleted = 0', [id]);
@@ -2813,6 +3082,7 @@ router.put('/recipients/:id', [
       user_id: existing[0].user_id,
       recipient_email: existing[0].recipient_email,
       email_subject: existing[0].email_subject || '',
+      cron_expression: existing[0].cron_expression || '',
       send_frequency: existing[0].send_frequency,
       send_time: existing[0].send_time || '',
       is_active: existing[0].is_active,
@@ -2866,6 +3136,10 @@ router.put('/recipients/:id', [
       updateFields.push('email_subject = ?');
       updateValues.push(email_subject);
     }
+    if (cron_expression !== undefined || finalCronExpression) {
+      updateFields.push('cron_expression = ?');
+      updateValues.push(finalCronExpression || cron_expression);
+    }
     if (send_frequency !== undefined) {
       updateFields.push('send_frequency = ?');
       updateValues.push(send_frequency);
@@ -2892,6 +3166,39 @@ router.put('/recipients/:id', [
       console.log(`[更新收件管理] qichacha_category_codes未提供，保持原值`);
     }
 
+    // 处理企业类型（支持数组多选）
+    if (entity_type !== undefined) {
+      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP'];
+      let validatedEntityTypeJson = null;
+      if (entity_type !== null && entity_type !== '') {
+        let entityTypes = entity_type;
+        // 如果是字符串，尝试解析为JSON
+        if (typeof entityTypes === 'string') {
+          try {
+            entityTypes = JSON.parse(entityTypes);
+          } catch (e) {
+            // 如果不是JSON，可能是单个值，转换为数组
+            entityTypes = [entityTypes];
+          }
+        }
+        // 确保是数组
+        if (!Array.isArray(entityTypes)) {
+          entityTypes = [entityTypes];
+        }
+        // 验证所有值是否有效
+        const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+        if (invalidTypes.length > 0) {
+          return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}` });
+        }
+        // 如果有有效值，转换为JSON
+        if (entityTypes.length > 0) {
+          validatedEntityTypeJson = JSON.stringify(entityTypes);
+        }
+      }
+      updateFields.push('entity_type = ?');
+      updateValues.push(validatedEntityTypeJson);
+    }
+
     if (updateFields.length > 0) {
       updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(id);
@@ -2904,6 +3211,9 @@ router.put('/recipients/:id', [
       const newData = { ...oldData };
       if (recipient_email !== undefined) newData.recipient_email = validatedEmail;
       if (email_subject !== undefined) newData.email_subject = email_subject;
+      if (cron_expression !== undefined || finalCronExpression) {
+        newData.cron_expression = finalCronExpression || cron_expression;
+      }
       if (send_frequency !== undefined) newData.send_frequency = send_frequency;
       if (send_time !== undefined) newData.send_time = send_time;
       if (is_active !== undefined) newData.is_active = is_active ? 1 : 0;
@@ -3142,7 +3452,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       logWithTag('[手动发送邮件]', `AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
       logWithTag('[手动发送邮件]', '========== AI重新分析结束 ==========');
       
-      // 重新分析完成后，从数据库重新获取最新的新闻数据
+      // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）
       logWithTag('[手动发送邮件]', '从数据库重新获取最新的新闻数据...');
       const newsIds = newsList.map(n => n.id);
       if (newsIds.length > 0) {
@@ -3150,7 +3460,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
         const refreshedNewsList = await db.query(
           `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                   nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-                  nd.APItype, nd.news_category
+                  nd.APItype, nd.news_category, nd.entity_type
            FROM news_detail nd
            WHERE nd.id IN (${placeholders})
            AND nd.delete_mark = 0`,
@@ -3158,6 +3468,22 @@ router.post('/recipients/:id/send-email', async (req, res) => {
         );
         
         logWithTag('[手动发送邮件]', `重新获取到 ${refreshedNewsList.length} 条新闻数据`);
+        
+        // 检查重新获取的数据中的 entity_type 分布（用于调试）
+        if (refreshedNewsList.length > 0) {
+          const entityTypeStats = {};
+          refreshedNewsList.forEach(n => {
+            const et = n.entity_type || '(NULL)';
+            entityTypeStats[et] = (entityTypeStats[et] || 0) + 1;
+          });
+          logWithTag('[手动发送邮件]', `重新获取的新闻entity_type统计:`, JSON.stringify(entityTypeStats, null, 2));
+          
+          // 显示前5条新闻的详细信息
+          refreshedNewsList.slice(0, 5).forEach((n, index) => {
+            logWithTag('[手动发送邮件]', `重新获取的新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+          });
+        }
+        
         newsList = refreshedNewsList;
       }
       
@@ -3305,6 +3631,30 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     const emailConfig = emailConfigs[0];
     
     // 发送邮件（包含Excel附件），即使没有新闻也发送提示邮件
+    // 确保 newsList 是数组，避免 undefined 错误
+    if (!Array.isArray(newsList)) {
+      logWithTag('[手动发送邮件]', `⚠️ newsList 不是数组，类型: ${typeof newsList}, 值: ${newsList}`);
+      newsList = [];
+    }
+    
+    // 检查最终传入 sendNewsEmailWithExcel 的 newsList 的 entity_type 分布（用于调试）
+    logWithTag('[手动发送邮件]', `========== 最终传入 sendNewsEmailWithExcel 的数据检查 ==========`);
+    logWithTag('[手动发送邮件]', `最终新闻数量: ${newsList.length}`);
+    if (newsList.length > 0) {
+      const finalStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        finalStats[et] = (finalStats[et] || 0) + 1;
+      });
+      logWithTag('[手动发送邮件]', `最终传入的新闻 entity_type 分布:`, JSON.stringify(finalStats, null, 2));
+      
+      // 显示前5条新闻的详细信息
+      newsList.slice(0, 5).forEach((n, index) => {
+        logWithTag('[手动发送邮件]', `最终传入的新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+      });
+    }
+    logWithTag('[手动发送邮件]', `========== 最终数据检查结束 ==========`);
+    
     const result = await sendNewsEmailWithExcel(recipient, emailConfig, newsList);
     
     res.json({
@@ -3490,8 +3840,42 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
     // 从invested_enterprises表获取统一信用代码（排除完全退出的）
     // 使用DISTINCT在SQL层面去重，确保每个统一信用代码只出现一次
+    // 根据配置的 entity_type 过滤企业类型
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') {
+          entityTypes = JSON.parse(entityTypes);
+        }
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          // 构建多选过滤条件
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') {
+              conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            } else if (type === '基金') {
+              conditions.push(`entity_type = '基金'`);
+            } else if (type === '子基金') {
+              conditions.push(`entity_type = '子基金'`);
+            } else if (type === '子基金管理人') {
+              conditions.push(`entity_type = '子基金管理人'`);
+            } else if (type === '子基金GP') {
+              conditions.push(`entity_type = '子基金GP'`);
+            }
+          });
+          if (conditions.length > 0) {
+            entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+            console.log(`[企查查同步] 根据配置的企业类型过滤: ${entityTypes.join(', ')}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`[企查查同步] 解析 entity_type 配置失败: ${e.message}`);
+      }
+    }
+    
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
        FROM invested_enterprises 
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -3499,6 +3883,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
        AND delete_mark = 0
+       ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
 
@@ -3734,10 +4119,11 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
                     // publicTime已在去重检查时处理，这里不需要重复处理
 
-                    // 根据统一信用代码查找对应的企业全称
+                    // 根据统一信用代码查找对应的企业全称和entity_type
                     let enterpriseFullName = null;
+                    let entityType = null;
                     const enterpriseResult = await db.query(
-                      `SELECT enterprise_full_name 
+                      `SELECT enterprise_full_name, entity_type 
                        FROM invested_enterprises 
                        WHERE unified_credit_code = ? 
                        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
@@ -3747,6 +4133,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     );
                     if (enterpriseResult.length > 0) {
                       enterpriseFullName = enterpriseResult[0].enterprise_full_name;
+                      entityType = enterpriseResult[0].entity_type;
                     }
 
                     // 将Category编码转换为中文类别
@@ -3825,13 +4212,14 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     // 所以这里news_abstract设为NULL，等待后续AI分析
                     await db.execute(
                       `INSERT INTO news_detail 
-                       (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                       (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                       [
                         newsId,
                         newsItem.Source || '企查查',
                         newsItem.Source || '企查查',
                         enterpriseFullName,
+                        entityType,
                         newsItem.Url || '',
                         newsItem.Title || '',
                         newsItem.NewsTags || '',

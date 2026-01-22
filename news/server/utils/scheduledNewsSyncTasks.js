@@ -5,6 +5,66 @@ const db = require('../db');
 const scheduledTasks = new Map();
 
 /**
+ * 将7字段的Quartz Cron表达式转换为6字段的node-cron表达式
+ * Quartz格式: 秒 分 时 日 月 周 年
+ * node-cron格式: 分 时 日 月 周
+ * Quartz周: 1=Sunday, 2=Monday, ..., 7=Saturday
+ * node-cron周: 0=Sunday, 1=Monday, ..., 6=Saturday
+ */
+function convertQuartzCronToNodeCron(quartzCron) {
+  if (!quartzCron || typeof quartzCron !== 'string') {
+    return null;
+  }
+  
+  const parts = quartzCron.trim().split(/\s+/);
+  
+  // 如果是6字段，直接返回
+  if (parts.length === 6) {
+    return quartzCron.trim();
+  }
+  
+  // 如果是7字段，转换为6字段
+  if (parts.length === 7) {
+    // 提取: 秒 分 时 日 月 周 年 -> 分 时 日 月 周
+    const [second, minute, hour, day, month, weekday, year] = parts;
+    
+    // 转换日期字段：将 ? 转换为 *（node-cron不支持?）
+    let convertedDay = day === '?' ? '*' : day;
+    
+    // 转换星期字段：Quartz (1-7) -> node-cron (0-6)
+    // 同时将 ? 转换为 *（node-cron不支持?）
+    let convertedWeekday = weekday;
+    if (weekday === '?') {
+      convertedWeekday = '*';
+    } else if (weekday && weekday !== '*') {
+      // 处理逗号分隔的值，如 "2,3,4,5,6"
+      if (weekday.includes(',')) {
+        convertedWeekday = weekday.split(',').map(w => {
+          const wNum = parseInt(w.trim());
+          if (wNum >= 1 && wNum <= 7) {
+            // Quartz: 1=Sunday -> node-cron: 0=Sunday
+            // Quartz: 2=Monday -> node-cron: 1=Monday
+            return (wNum - 1).toString();
+          }
+          return w.trim();
+        }).join(',');
+      } else {
+        // 单个值
+        const wNum = parseInt(weekday);
+        if (wNum >= 1 && wNum <= 7) {
+          convertedWeekday = (wNum - 1).toString();
+        }
+      }
+    }
+    
+    // 构建6字段cron表达式: 分 时 日 月 周
+    return `${minute} ${hour} ${convertedDay} ${month} ${convertedWeekday}`;
+  }
+  
+  return null;
+}
+
+/**
  * 根据发送频率、时间和可选参数生成cron表达式
  * @param {string} sendFrequency - 发送频率: 'daily', 'weekly', 'monthly'
  * @param {string} sendTime - 发送时间，格式: 'HH:mm:ss' 或 'HH:mm'
@@ -142,6 +202,55 @@ async function executeNewsSyncTask(configId) {
 }
 
 /**
+ * 从旧字段（send_frequency, send_time等）生成cron表达式
+ * @param {Object} config - 新闻接口配置对象
+ * @returns {Object|null} - { cronExpression, source } 或 null
+ */
+function getCronFromLegacyFields(config) {
+  // 确定send_frequency和send_time
+  let sendFrequency = config.send_frequency;
+  let sendTime = config.send_time;
+  
+  // 如果send_frequency为空，根据frequency_type设置默认值
+  if (!sendFrequency && config.frequency_type) {
+    if (config.frequency_type === 'week') {
+      sendFrequency = 'weekly';
+    } else if (config.frequency_type === 'month') {
+      sendFrequency = 'monthly';
+    } else {
+      sendFrequency = 'daily';
+    }
+  }
+  
+  // 如果send_time为空，使用默认值
+  if (!sendTime) {
+    sendTime = '00:00:00';
+  }
+  
+  // 确保sendTime格式正确（至少包含HH:mm）
+  if (!sendTime.includes(':')) {
+    sendTime = '00:00:00';
+  }
+  
+  if (!sendFrequency || !sendTime) {
+    return null;
+  }
+  
+  // 生成cron表达式
+  const cronExpression = generateCronExpressionForNewsSync(
+    sendFrequency,
+    sendTime,
+    config.weekday || config.week_day || null,
+    config.monthDay || config.month_day || null
+  );
+  
+  return {
+    cronExpression,
+    source: 'send_frequency/send_time'
+  };
+}
+
+/**
  * 更新所有新闻同步定时任务（根据news_interface_config配置）
  */
 async function updateNewsSyncScheduledTasks() {
@@ -157,12 +266,15 @@ async function updateNewsSyncScheduledTasks() {
     });
     
     // 获取所有启用的新闻接口配置
+    // 查询条件：有 cron_expression 或者有 send_frequency 和 send_time
     const configs = await db.query(
       `SELECT * FROM news_interface_config 
        WHERE is_active = 1 
        AND is_deleted = 0
-       AND send_frequency IS NOT NULL 
-       AND send_time IS NOT NULL`,
+       AND (
+         (cron_expression IS NOT NULL AND cron_expression != '')
+         OR (send_frequency IS NOT NULL AND send_time IS NOT NULL)
+       )`,
       []
     );
     
@@ -171,38 +283,37 @@ async function updateNewsSyncScheduledTasks() {
     // 为每个配置创建定时任务
     for (const config of configs) {
       try {
-        // 确定send_frequency和send_time
-        let sendFrequency = config.send_frequency;
-        let sendTime = config.send_time;
+        let cronExpression = null;
+        let cronSource = '';
         
-        // 如果send_frequency为空，根据frequency_type设置默认值
-        if (!sendFrequency && config.frequency_type) {
-          if (config.frequency_type === 'week') {
-            sendFrequency = 'weekly';
-          } else if (config.frequency_type === 'month') {
-            sendFrequency = 'monthly';
-          } else {
-            sendFrequency = 'daily';
+        // 优先使用 cron_expression 字段
+        if (config.cron_expression && config.cron_expression.trim()) {
+          // 将7字段的Quartz Cron转换为6字段的node-cron
+          cronExpression = convertQuartzCronToNodeCron(config.cron_expression);
+          cronSource = 'cron_expression';
+          
+          if (!cronExpression) {
+            console.warn(`[新闻同步定时任务] 配置 ${config.id} 的 cron_expression 格式无效: ${config.cron_expression}`);
+            // 如果转换失败，尝试使用旧的字段
+            const fallbackResult = getCronFromLegacyFields(config);
+            if (fallbackResult) {
+              cronExpression = fallbackResult.cronExpression;
+              cronSource = fallbackResult.source;
+            }
+          }
+        } else {
+          // 向后兼容：使用旧的 send_frequency 和 send_time
+          const legacyResult = getCronFromLegacyFields(config);
+          if (legacyResult) {
+            cronExpression = legacyResult.cronExpression;
+            cronSource = legacyResult.source;
           }
         }
         
-        // 如果send_time为空，使用默认值
-        if (!sendTime) {
-          sendTime = '00:00:00';
+        if (!cronExpression) {
+          console.error(`[新闻同步定时任务] 配置 ${config.id} 没有有效的定时任务配置`);
+          continue;
         }
-        
-        // 确保sendTime格式正确（至少包含HH:mm）
-        if (!sendTime.includes(':')) {
-          sendTime = '00:00:00';
-        }
-        
-        // 生成cron表达式
-        const cronExpression = generateCronExpressionForNewsSync(
-          sendFrequency,
-          sendTime,
-          config.weekday || config.week_day || null,
-          config.monthDay || config.month_day || null
-        );
         
         // 验证cron表达式
         if (!cron.validate(cronExpression)) {
@@ -210,10 +321,30 @@ async function updateNewsSyncScheduledTasks() {
           continue;
         }
         
-        console.log(`[新闻同步定时任务] 为配置 ${config.id} (${config.interface_type || '新榜'}) 创建定时任务: ${cronExpression} (${sendFrequency}, ${sendTime})`);
+        // 格式化企业类型信息
+        let entityTypeDisplay = '(空)';
+        if (config.entity_type) {
+          try {
+            let entityTypes = config.entity_type;
+            if (typeof entityTypes === 'string') {
+              entityTypes = JSON.parse(entityTypes);
+            }
+            if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+              entityTypeDisplay = entityTypes.join('、');
+            } else if (entityTypes && !Array.isArray(entityTypes)) {
+              entityTypeDisplay = String(entityTypes);
+            }
+          } catch (e) {
+            entityTypeDisplay = String(config.entity_type);
+          }
+        }
+        
+        console.log(`[新闻同步定时任务] 为配置 ${config.id} (${config.interface_type || '新榜'}) 创建定时任务: ${cronExpression} (来源: ${cronSource})`);
+        console.log(`[新闻同步定时任务]   - 原始配置: cron_expression=${config.cron_expression || '(空)'}, send_frequency=${config.send_frequency || '(空)'}, send_time=${config.send_time || '(空)'}, entity_type=${entityTypeDisplay}`);
         
         // 创建定时任务
         const task = cron.schedule(cronExpression, async () => {
+          console.log(`[新闻同步定时任务] 执行配置 ${config.id} 的新闻同步任务`);
           await executeNewsSyncTask(config.id);
         }, {
           scheduled: true,
@@ -221,7 +352,7 @@ async function updateNewsSyncScheduledTasks() {
         });
         
         scheduledTasks.set(config.id, task);
-        console.log(`[新闻同步定时任务] ✓ 定时任务已创建: 配置ID ${config.id}`);
+        console.log(`[新闻同步定时任务] ✓ 配置 ${config.id} 的定时任务已创建并启动`);
       } catch (error) {
         console.error(`[新闻同步定时任务] 创建定时任务失败 (配置ID ${config.id}):`, error);
       }

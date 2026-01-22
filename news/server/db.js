@@ -1079,6 +1079,40 @@ async function initializeTables(dbPool) {
     console.warn('迁移news_interface_config表retry_interval字段时出现警告:', err.message);
   }
 
+  // 迁移news_interface_config表，添加entity_type字段（JSON格式存储企业类型数组）
+  try {
+    const [entityTypeCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'entity_type'
+    `);
+    if (entityTypeCheck.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN entity_type JSON COMMENT \'企业类型数组（JSON格式）：["被投企业","基金","子基金","子基金管理人","子基金GP"]，用于过滤需要抓取的企业信息\'');
+      console.log('已为 news_interface_config 表添加 entity_type 字段');
+    }
+  } catch (err) {
+    console.warn('迁移news_interface_config表entity_type字段时出现警告:', err.message);
+  }
+
+  // 迁移news_interface_config表，添加cron_expression字段（Cron表达式）
+  try {
+    const [cronExprCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'cron_expression'
+    `);
+    if (cronExprCheck.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN cron_expression VARCHAR(100) COMMENT \'Cron表达式（7位）：秒 分 时 日 月 周 年，用于定时任务调度\'');
+      console.log('已为 news_interface_config 表添加 cron_expression 字段');
+    }
+  } catch (err) {
+    console.warn('迁移news_interface_config表cron_expression字段时出现警告:', err.message);
+  }
+
   // 移除news_interface_config表的唯一约束，允许同一应用和接口类型有多个不同配置
   // 注意：需要先删除使用该索引的外键约束，然后才能删除唯一索引
   // 已禁用：此迁移逻辑每次启动都会执行，导致外键约束警告。外键约束已手动修复，不再需要每次启动都执行。
@@ -1516,6 +1550,67 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 recipient_management 表删除字段时出现警告:', err.message);
+  }
+
+  // 检查并添加 entity_type 字段（如果不存在）
+  try {
+    const [entityTypeColumns] = await dbPool.query(`
+      SELECT COLUMN_NAME, DATA_TYPE 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'recipient_management' 
+      AND COLUMN_NAME = 'entity_type'
+    `);
+    
+    if (entityTypeColumns.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE recipient_management 
+        ADD COLUMN entity_type JSON NULL COMMENT '企业类型：被投企业、子基金、子基金管理人、子基金GP（JSON数组，支持多选）'
+      `);
+      console.log('✓ 已添加 recipient_management 表的 entity_type 字段');
+    } else if (entityTypeColumns[0].DATA_TYPE === 'varchar' || entityTypeColumns[0].DATA_TYPE === 'VARCHAR') {
+      // 如果字段存在但是VARCHAR类型，需要迁移为JSON类型
+      try {
+        // 先将现有数据迁移：将单个值转换为JSON数组
+        await dbPool.query(`
+          UPDATE recipient_management 
+          SET entity_type = CASE 
+            WHEN entity_type IS NOT NULL AND entity_type != '' 
+            THEN JSON_ARRAY(entity_type)
+            ELSE NULL
+          END
+          WHERE entity_type IS NOT NULL
+        `);
+        
+        // 修改字段类型为JSON
+        await dbPool.query(`
+          ALTER TABLE recipient_management 
+          MODIFY COLUMN entity_type JSON NULL COMMENT '企业类型：被投企业、子基金、子基金管理人、子基金GP（JSON数组，支持多选）'
+        `);
+        console.log('✓ 已迁移 recipient_management 表的 entity_type 字段为JSON类型');
+      } catch (migrateErr) {
+        console.warn('迁移 entity_type 字段类型时出现警告:', migrateErr.message);
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management 表 entity_type 字段时出现警告:', err.message);
+  }
+
+  // 迁移 recipient_management 表，添加 cron_expression 字段（Cron表达式）
+  try {
+    const [cronExprCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'recipient_management' 
+      AND COLUMN_NAME = 'cron_expression'
+    `);
+    if (cronExprCheck.length === 0) {
+      await dbPool.query('ALTER TABLE recipient_management ADD COLUMN cron_expression VARCHAR(100) COMMENT \'Cron表达式（7位）：秒 分 时 日 月 周 年，用于定时任务调度\'');
+      console.log('✓ 已添加 recipient_management 表的 cron_expression 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management 表 cron_expression 字段时出现警告:', err.message);
   }
 
   // news_sync_execution_log 表：新闻同步执行日志
@@ -2043,6 +2138,27 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('检查/添加 news_category 字段时出现警告:', err.message);
+  }
+
+  // 检查并添加 entity_type 字段（企业类型）
+  try {
+    const [entityTypeColumns] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_detail' 
+      AND COLUMN_NAME = 'entity_type'
+    `);
+    
+    if (entityTypeColumns.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_detail 
+        ADD COLUMN entity_type VARCHAR(50) NULL COMMENT '企业类型：被投企业、基金、子基金、子基金管理人、子基金GP' AFTER enterprise_full_name
+      `);
+      console.log('  ✓ 已为 news_detail 表添加 entity_type 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 entity_type 字段时出现警告:', err.message);
   }
 
   // 为 users 表添加 role 字段（如果不存在）

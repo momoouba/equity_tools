@@ -11,6 +11,37 @@ class NewsAnalysis {
   }
 
   /**
+   * 格式化企业名称为"简称【全称】"格式
+   * @param {string} enterpriseFullName - 企业全称
+   * @param {string} projectAbbreviation - 项目简称
+   * @returns {string} 格式化后的企业名称，格式为"简称【全称】"
+   */
+  formatEnterpriseName(enterpriseFullName, projectAbbreviation) {
+    if (!enterpriseFullName) {
+      return '';
+    }
+
+    // 如果企业名称已经是"简称【全称】"格式，先解析
+    const existingFormatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+    if (existingFormatMatch) {
+      const existingAbbreviation = existingFormatMatch[1];
+      const existingFullName = existingFormatMatch[2];
+      // 使用传入的参数重新格式化，如果没有传入则使用现有的
+      const abbreviation = projectAbbreviation || existingAbbreviation;
+      const fullName = enterpriseFullName || existingFullName;
+      return `${abbreviation}【${fullName}】`;
+    }
+
+    // 如果有简称，使用简称【全称】格式
+    if (projectAbbreviation && projectAbbreviation.trim()) {
+      return `${projectAbbreviation}【${enterpriseFullName}】`;
+    }
+
+    // 如果没有简称，只返回全称
+    return enterpriseFullName;
+  }
+
+  /**
    * 从URL抓取网页内容
    */
   async fetchContentFromUrl(url) {
@@ -3379,6 +3410,7 @@ ${enterpriseList}
 6. **企业名称检查**：如果新闻中没有明确提及企业名称或其产品/服务，相关度应该非常低
 7. **业务匹配**：必须确认新闻内容与企业的具体业务领域有直接关系，而非泛泛的行业关系
 8. **匹配规则**：企业列表格式为"企业全称(项目简称)"，如果新闻中提到企业全称或项目简称中的任何一个，都可以认为相关
+9. **信息源企业识别**：**极其重要** - 信息源企业（如"企查查消息"、"据企查查"、"格隆汇消息"等中的"企查查"、"格隆汇"）**不作为企业关联的直接依据**。这些只是新闻的信息来源，不是新闻的主体企业。必须根据正文内容实际的主要信息判断是否与企业相关。例如，如果新闻开头是"企查查消息，珠海博瑞晶芯完成融资"，那么新闻主体企业是"珠海博瑞晶芯"，而不是"企查查"。只有当信息源企业本身是新闻的主体内容时（如"企查查获得融资"），才应该关联信息源企业。
 
 请按照以下JSON格式返回分析结果：
 {
@@ -3461,19 +3493,43 @@ ${enterpriseList}
           relevance_reason: item.relevance_reason
         }))
         .filter(item => {
-          // 验证企业名称是否在被投企业列表中（匹配企业全称或项目简称，大小写不敏感）
+          // 验证企业名称是否在被投企业列表中（匹配企业全称或项目简称，支持"简称【全称】"格式的模糊匹配）
           const isValidEnterprise = enterprises.some(e => {
             const enterpriseFullName = e.enterprise_full_name || '';
             const projectAbbreviation = e.project_abbreviation || '';
             const itemName = item.enterprise_name || '';
             
-            // 匹配企业全称（大小写不敏感）
-            const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
+            // 解析企业全称，如果是"简称【全称】"格式，分别提取简称和全称
+            let dbAbbreviation = null;
+            let dbFullName = null;
+            const dbFormatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+            if (dbFormatMatch) {
+              dbAbbreviation = dbFormatMatch[1].trim();
+              dbFullName = dbFormatMatch[2].trim();
+            } else {
+              dbFullName = enterpriseFullName;
+            }
             
-            // 匹配项目简称（大小写不敏感）
-            const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+            // 匹配企业全称（大小写不敏感，支持模糊匹配）
+            const matchesFullName = this._caseInsensitiveMatch(dbFullName, itemName) || 
+                                   (dbFullName && itemName && dbFullName.toLowerCase().includes(itemName.toLowerCase())) ||
+                                   (dbFullName && itemName && itemName.toLowerCase().includes(dbFullName.toLowerCase()));
             
-            return matchesFullName || matchesAbbreviation;
+            // 匹配数据库中的简称（如果企业全称是"简称【全称】"格式）
+            const matchesDbAbbreviation = dbAbbreviation && (
+              this._caseInsensitiveMatch(dbAbbreviation, itemName) ||
+              (dbAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+              (itemName.toLowerCase().includes(dbAbbreviation.toLowerCase()))
+            );
+            
+            // 匹配项目简称（大小写不敏感，支持模糊匹配）
+            const matchesAbbreviation = projectAbbreviation && (
+              this._caseInsensitiveMatch(projectAbbreviation, itemName) ||
+              (projectAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+              (itemName.toLowerCase().includes(projectAbbreviation.toLowerCase()))
+            );
+            
+            return matchesFullName || matchesDbAbbreviation || matchesAbbreviation;
           });
           
           if (!isValidEnterprise) {
@@ -3486,19 +3542,43 @@ ${enterpriseList}
       // 二次验证：检查企业名称和关键业务词汇是否在新闻内容中出现
       // 同时检查 enterprise_full_name 和 project_abbreviation，两者有其一即可
       relevantEnterprises = relevantEnterprises.map(enterprise => {
-        // 找到对应的企业信息（包含 project_abbreviation，大小写不敏感）
+        // 找到对应的企业信息（包含 project_abbreviation，支持"简称【全称】"格式的模糊匹配）
         const matchedEnterprise = enterprises.find(e => {
           const enterpriseFullName = e.enterprise_full_name || '';
           const projectAbbreviation = e.project_abbreviation || '';
           const itemName = enterprise.enterprise_name || '';
           
-          // 匹配企业全称（大小写不敏感）
-          const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
+          // 解析企业全称，如果是"简称【全称】"格式，分别提取简称和全称
+          let dbAbbreviation = null;
+          let dbFullName = null;
+          const dbFormatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+          if (dbFormatMatch) {
+            dbAbbreviation = dbFormatMatch[1].trim();
+            dbFullName = dbFormatMatch[2].trim();
+          } else {
+            dbFullName = enterpriseFullName;
+          }
           
-          // 匹配项目简称（大小写不敏感）
-          const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+          // 匹配企业全称（大小写不敏感，支持模糊匹配）
+          const matchesFullName = this._caseInsensitiveMatch(dbFullName, itemName) || 
+                                 (dbFullName && itemName && dbFullName.toLowerCase().includes(itemName.toLowerCase())) ||
+                                 (dbFullName && itemName && itemName.toLowerCase().includes(dbFullName.toLowerCase()));
           
-          return matchesFullName || matchesAbbreviation;
+          // 匹配数据库中的简称（如果企业全称是"简称【全称】"格式）
+          const matchesDbAbbreviation = dbAbbreviation && (
+            this._caseInsensitiveMatch(dbAbbreviation, itemName) ||
+            (dbAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+            (itemName.toLowerCase().includes(dbAbbreviation.toLowerCase()))
+          );
+          
+          // 匹配项目简称（大小写不敏感，支持模糊匹配）
+          const matchesAbbreviation = projectAbbreviation && (
+            this._caseInsensitiveMatch(projectAbbreviation, itemName) ||
+            (projectAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+            (itemName.toLowerCase().includes(projectAbbreviation.toLowerCase()))
+          );
+          
+          return matchesFullName || matchesDbAbbreviation || matchesAbbreviation;
         });
         
         if (!matchedEnterprise) {
@@ -3566,43 +3646,143 @@ ${enterpriseList}
     }
 
     // 第一步：检查企业是否在被投企业表中存在（支持模糊匹配）
-    // 处理企业名称格式，如 "广州瑞派医疗器械有限责任公司(瑞派医疗)"
+    // 处理企业名称格式，可能是：
+    // 1. "简称【全称】"格式（如：瑞派医疗【广州瑞派医疗器械有限责任公司】）
+    // 2. "全称(简称)"格式（如：广州瑞派医疗器械有限责任公司(瑞派医疗)）
+    // 3. 纯全称或纯简称
     let enterpriseFullName = enterpriseName.trim();
     let projectAbbreviation = null;
+    let abbreviation = null;
+    let fullName = null;
     
-    // 提取括号内的简称
-    const abbreviationMatch = enterpriseName.match(/\(([^)]+)\)$/);
-    if (abbreviationMatch) {
-      projectAbbreviation = abbreviationMatch[1].trim();
-      // 提取括号前的全称
-      enterpriseFullName = enterpriseName.replace(/\s*\([^)]+\)\s*$/, '').trim();
+    // 先尝试解析"简称【全称】"格式
+    const formatMatch = enterpriseName.match(/^(.+?)【(.+?)】$/);
+    if (formatMatch) {
+      abbreviation = formatMatch[1].trim();
+      fullName = formatMatch[2].trim();
+      enterpriseFullName = fullName; // 使用全称作为主要匹配字段
+    } else {
+      // 尝试解析"全称(简称)"格式
+      const abbreviationMatch = enterpriseName.match(/\(([^)]+)\)$/);
+      if (abbreviationMatch) {
+        projectAbbreviation = abbreviationMatch[1].trim();
+        // 提取括号前的全称
+        enterpriseFullName = enterpriseName.replace(/\s*\([^)]+\)\s*$/, '').trim();
+      }
     }
     
-    // 尝试多种方式匹配企业
-    let enterpriseExists = await db.query(
-      `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-       WHERE enterprise_full_name = ? AND delete_mark = 0
-       LIMIT 1`,
-      [enterpriseFullName]
-    );
+    // 尝试多种方式匹配企业（支持精确匹配和模糊匹配）
+    let enterpriseExists = [];
     
-    // 如果精确匹配失败，尝试用括号内的简称匹配 project_abbreviation
+    // 方式1：如果解析出了简称和全称（"简称【全称】"格式），分别用简称和全称进行精确匹配
+    if (abbreviation && fullName) {
+      enterpriseExists = await db.query(
+        `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+         WHERE (
+           -- 精确匹配project_abbreviation（简称）
+           project_abbreviation = ?
+           OR
+           -- 精确匹配enterprise_full_name（全称）
+           enterprise_full_name = ?
+           OR
+           -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+           (enterprise_full_name LIKE '%【%】%' 
+            AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
+           OR
+           -- 匹配enterprise_full_name中的简称部分（如果数据库中是"简称【全称】"格式）
+           (enterprise_full_name LIKE '%【%】%' 
+            AND TRIM(SUBSTRING_INDEX(enterprise_full_name, '【', 1)) = ?)
+         ) AND delete_mark = 0
+         LIMIT 1`,
+        [abbreviation, fullName, fullName, abbreviation]
+      );
+      if (enterpriseExists.length > 0) {
+        logWithTag('[validateExistingAssociation]', `精确匹配成功（简称+全称）: ${abbreviation} / ${fullName}`);
+      }
+    }
+    
+    // 方式2：如果精确匹配失败，尝试模糊匹配（使用简称和全称）
+    if (enterpriseExists.length === 0 && abbreviation && fullName) {
+      enterpriseExists = await db.query(
+        `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+         WHERE (
+           enterprise_full_name LIKE ? 
+           OR enterprise_full_name LIKE ?
+           OR project_abbreviation LIKE ?
+         ) AND delete_mark = 0
+         LIMIT 1`,
+        [`%${fullName}%`, `%${abbreviation}%`, `%${abbreviation}%`]
+      );
+      if (enterpriseExists.length > 0) {
+        logWithTag('[validateExistingAssociation]', `模糊匹配成功（简称+全称）: ${abbreviation} / ${fullName}`);
+      }
+    }
+    
+    // 方式3：如果只解析出了全称（非"简称【全称】"格式），用全称进行精确匹配
+    if (enterpriseExists.length === 0 && enterpriseFullName && !fullName) {
+      enterpriseExists = await db.query(
+        `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+         WHERE (
+           enterprise_full_name = ?
+           OR
+           -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+           (enterprise_full_name LIKE '%【%】%' 
+            AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
+         ) AND delete_mark = 0
+         LIMIT 1`,
+        [enterpriseFullName, enterpriseFullName]
+      );
+      if (enterpriseExists.length === 0) {
+        // 如果精确匹配失败，尝试模糊匹配
+        enterpriseExists = await db.query(
+          `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+           WHERE enterprise_full_name LIKE ? AND delete_mark = 0
+           LIMIT 1`,
+          [`%${enterpriseFullName}%`]
+        );
+      }
+    }
+    
+    // 方式4：如果解析出了project_abbreviation（"全称(简称)"格式），用简称做精确匹配
     if (enterpriseExists.length === 0 && projectAbbreviation) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE project_abbreviation = ? AND delete_mark = 0
+         WHERE (
+           project_abbreviation = ?
+           OR enterprise_full_name = ?
+           OR
+           -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+           (enterprise_full_name LIKE '%【%】%' 
+            AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
+         ) AND delete_mark = 0
          LIMIT 1`,
-        [projectAbbreviation]
+        [projectAbbreviation, enterpriseFullName, enterpriseFullName]
       );
+      if (enterpriseExists.length === 0) {
+        // 如果精确匹配失败，尝试模糊匹配
+        enterpriseExists = await db.query(
+          `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+           WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) AND delete_mark = 0
+           LIMIT 1`,
+          [`%${projectAbbreviation}%`, `%${projectAbbreviation}%`]
+        );
+      }
     }
     
-    // 如果还是没有匹配到，尝试用原始名称匹配 project_abbreviation（可能是纯简称）
+    // 方式5：如果还是没有匹配到，尝试用原始名称做模糊匹配（可能是纯简称或纯全称）
     if (enterpriseExists.length === 0) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE project_abbreviation = ? AND delete_mark = 0
+         WHERE (
+           enterprise_full_name LIKE ? 
+           OR project_abbreviation LIKE ?
+           OR
+           -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+           (enterprise_full_name LIKE '%【%】%' 
+            AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) LIKE ?)
+         ) AND delete_mark = 0
          LIMIT 1`,
-        [enterpriseName.trim()]
+        [`%${enterpriseName.trim()}%`, `%${enterpriseName.trim()}%`, `%${enterpriseName.trim()}%`]
       );
     }
 
@@ -3691,11 +3871,14 @@ ${enterpriseList}
 - 医疗行业新闻不等于与医疗企业相关
 - 科技行业新闻不等于与科技企业相关
 - 宁可错误地解除关联，也不要错误地保持关联
+- **信息源企业识别**：**极其重要** - 信息源企业（如"企查查消息"、"据企查查"、"格隆汇消息"等中的"企查查"、"格隆汇"）**不作为企业关联的直接依据**。这些只是新闻的信息来源，不是新闻的主体企业。必须根据正文内容实际的主要信息判断是否与企业相关。例如，如果新闻开头是"企查查消息，珠海博瑞晶芯完成融资"，那么新闻主体企业是"珠海博瑞晶芯"，而不是"企查查"。只有当信息源企业本身是新闻的主体内容时（如"企查查获得融资"），才应该关联信息源企业。
 
 **示例**：
 - "安谋科技发布NPU芯片" 与 "浙江太美医疗" → 不合理（完全不同的公司和业务）
 - "医保局新政策" 与 "医疗企业" → 不合理（通用政策，非企业特定）
 - "AI技术发展趋势" 与 "AI企业" → 不合理（行业趋势，非企业特定）
+- "企查查消息，珠海博瑞晶芯完成融资" 与 "企查查" → 不合理（企查查只是信息源，新闻主体是珠海博瑞晶芯）
+- "企查查消息，珠海博瑞晶芯完成融资" 与 "珠海博瑞晶芯" → 合理（珠海博瑞晶芯是新闻主体）
 
 请返回JSON格式：
 {
@@ -4123,22 +4306,113 @@ ${enterpriseList}
           shouldValidate = true;
         } else {
           // 对于新榜接口的数据，检查企业是否在invested_enterprises表中
-          const enterpriseCheck = await db.query(
-            `SELECT enterprise_full_name, exit_status, delete_mark
-             FROM invested_enterprises 
-             WHERE enterprise_full_name = ? 
-             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-             AND delete_mark = 0 
-             LIMIT 1`,
-            [newsItem.enterprise_full_name]
-          );
+          // 如果enterprise_full_name是"简称【全称】"格式，需要拆成简称和全称分别进行匹配
+          let enterpriseCheck = [];
+          
+          // 解析enterprise_full_name，如果是"简称【全称】"格式，提取简称和全称
+          let abbreviation = null;
+          let fullName = null;
+          const formatMatch = newsItem.enterprise_full_name.match(/^(.+?)【(.+?)】$/);
+          if (formatMatch) {
+            abbreviation = formatMatch[1].trim();
+            fullName = formatMatch[2].trim();
+            console.log(`[processNewsWithEnterprise] 解析"简称【全称】"格式 - 简称: ${abbreviation}, 全称: ${fullName}`);
+          } else {
+            // 如果不是"简称【全称】"格式，则整个值作为全称
+            fullName = newsItem.enterprise_full_name;
+            console.log(`[processNewsWithEnterprise] 非"简称【全称】"格式，使用全称: ${fullName}`);
+          }
+          
+          // 方式1：如果解析出了简称和全称，分别用简称和全称进行匹配
+          if (abbreviation && fullName) {
+            // 用简称匹配project_abbreviation或enterprise_full_name中的简称部分
+            // 用全称匹配enterprise_full_name或enterprise_full_name中的全称部分
+            enterpriseCheck = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+               FROM invested_enterprises 
+               WHERE (
+                 -- 匹配project_abbreviation（简称）
+                 project_abbreviation = ?
+                 OR
+                 -- 匹配enterprise_full_name（全称）
+                 enterprise_full_name = ?
+                 OR
+                 -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+                 (enterprise_full_name LIKE '%【%】%' 
+                  AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
+                 OR
+                 -- 匹配enterprise_full_name中的简称部分（如果数据库中是"简称【全称】"格式）
+                 (enterprise_full_name LIKE '%【%】%' 
+                  AND TRIM(SUBSTRING_INDEX(enterprise_full_name, '【', 1)) = ?)
+                 OR
+                 -- 模糊匹配enterprise_full_name（包含简称或全称）
+                 enterprise_full_name LIKE ? 
+                 OR enterprise_full_name LIKE ?
+               )
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               AND delete_mark = 0 
+               LIMIT 1`,
+              [
+                abbreviation,           // project_abbreviation = 简称
+                fullName,               // enterprise_full_name = 全称
+                fullName,               // 提取的全称部分
+                abbreviation,           // 提取的简称部分
+                `%${abbreviation}%`,   // 模糊匹配简称
+                `%${fullName}%`        // 模糊匹配全称
+              ]
+            );
+            console.log(`[processNewsWithEnterprise] 使用简称和全称匹配，结果: ${enterpriseCheck.length} 条`);
+          }
+          
+          // 方式2：如果只解析出了全称（非"简称【全称】"格式），用全称进行匹配
+          if (enterpriseCheck.length === 0 && fullName && !abbreviation) {
+            enterpriseCheck = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+               FROM invested_enterprises 
+               WHERE (
+                 -- 精确匹配enterprise_full_name
+                 enterprise_full_name = ?
+                 OR
+                 -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
+                 (enterprise_full_name LIKE '%【%】%' 
+                  AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
+                 OR
+                 -- 模糊匹配enterprise_full_name
+                 enterprise_full_name LIKE ?
+               )
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               AND delete_mark = 0 
+               LIMIT 1`,
+              [fullName, fullName, `%${fullName}%`]
+            );
+            console.log(`[processNewsWithEnterprise] 使用全称匹配，结果: ${enterpriseCheck.length} 条`);
+          }
+          
+          // 方式3：如果还是没找到，尝试匹配整个enterprise_full_name（兼容旧数据）
+          if (enterpriseCheck.length === 0) {
+            enterpriseCheck = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+               FROM invested_enterprises 
+               WHERE enterprise_full_name = ?
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               AND delete_mark = 0 
+               LIMIT 1`,
+              [newsItem.enterprise_full_name]
+            );
+            console.log(`[processNewsWithEnterprise] 使用完整enterprise_full_name匹配，结果: ${enterpriseCheck.length} 条`);
+          }
           
           logWithTag('[processNewsWithEnterprise]', `查询结果数量: ${enterpriseCheck.length}`);
           if (enterpriseCheck.length > 0) {
             logWithTag('[processNewsWithEnterprise]', '查询结果详情:', enterpriseCheck[0]);
             // 该企业来自invested_enterprises表且状态不为"完全退出"
             // 对于新榜接口的数据，不需要验证关联性，直接保持企业全称
-            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${newsItem.enterprise_full_name}`);
+            // 确保企业名称是格式化后的"简称【全称】"格式
+            finalEnterpriseName = this.formatEnterpriseName(
+              enterpriseCheck[0].enterprise_full_name,
+              enterpriseCheck[0].project_abbreviation
+            );
+            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${finalEnterpriseName}`);
             shouldValidate = false;
           } else {
             logWithTag('[processNewsWithEnterprise]', '⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性');
@@ -4308,14 +4582,58 @@ ${enterpriseList}
         // 其他情况，使用抓取到的内容或原始content
         contentToSave = contentForAnalysis || newsItem.content || null;
       }
-      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ? WHERE id = ?`);
+      
+      // 如果企业全称不为空，从invested_enterprises表中获取entity_type
+      let entityType = null;
+      if (finalEnterpriseName) {
+        try {
+          // 尝试匹配格式化后的名称（包含【】），如果失败则尝试匹配原始全称
+          let enterpriseInfo = await db.query(
+            `SELECT entity_type, enterprise_full_name
+             FROM invested_enterprises 
+             WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+             AND delete_mark = 0 
+             LIMIT 1`,
+            [finalEnterpriseName, `%【${finalEnterpriseName}】`]
+          );
+          
+          // 如果没找到，尝试从格式化名称中提取全称进行匹配
+          if (enterpriseInfo.length === 0) {
+            const formatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
+            if (formatMatch) {
+              const extractedFullName = formatMatch[2];
+              enterpriseInfo = await db.query(
+                `SELECT entity_type, enterprise_full_name
+                 FROM invested_enterprises 
+                 WHERE enterprise_full_name = ? 
+                 AND delete_mark = 0 
+                 LIMIT 1`,
+                [extractedFullName]
+              );
+            }
+          }
+          
+          if (enterpriseInfo.length > 0) {
+            entityType = enterpriseInfo[0].entity_type;
+            console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取entity_type: ${entityType}`);
+          } else {
+            console.log(`[processNewsWithEnterprise] 未在invested_enterprises表中找到匹配的企业，entity_type设为NULL`);
+          }
+        } catch (err) {
+          console.warn(`[processNewsWithEnterprise] 获取entity_type时出错: ${err.message}`);
+        }
+      }
+      
+      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ? WHERE id = ?`);
+      console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName}", entity_type="${entityType}", sentiment="${validatedAnalysis.sentiment}"`);
       
       await db.execute(
         `UPDATE news_detail 
-         SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
+         SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
          WHERE id = ?`,
         [
           finalEnterpriseName,
+          entityType,
           validatedAnalysis.sentiment,
           JSON.stringify(validatedAnalysis.keywords),
           validatedAnalysis.news_abstract,
@@ -4327,12 +4645,13 @@ ${enterpriseList}
       // 验证更新是否成功
       console.log(`[processNewsWithEnterprise] 验证更新结果...`);
       const verifyResult = await db.query(
-        'SELECT enterprise_full_name, news_sentiment FROM news_detail WHERE id = ?',
+        'SELECT enterprise_full_name, entity_type, news_sentiment FROM news_detail WHERE id = ?',
         [newsItem.id]
       );
       if (verifyResult.length > 0) {
         console.log(`[processNewsWithEnterprise] ✓ 更新成功！`);
         console.log(`[processNewsWithEnterprise] 数据库中的企业全称: "${verifyResult[0].enterprise_full_name || '(空)'}"`);
+        console.log(`[processNewsWithEnterprise] 数据库中的企业类型: "${verifyResult[0].entity_type || '(空)'}"`);
         console.log(`[processNewsWithEnterprise] 数据库中的情绪: ${verifyResult[0].news_sentiment}`);
       } else {
         console.log(`[processNewsWithEnterprise] ❌ 更新失败！无法验证更新结果`);
@@ -4543,35 +4862,106 @@ ${enterpriseList}
         // 最终验证：确保所有企业名称都在被投企业表中存在（检查企业全称或项目简称，大小写不敏感）
         const validEnterprises = [];
         for (const enterprise of relevantEnterprises) {
-          // 先尝试精确匹配企业全称
-          let existsInDB = await db.query(
-            `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-             WHERE enterprise_full_name = ? AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`,
-            [enterprise.enterprise_name]
-          );
+          // 解析企业名称，支持"简称【全称】"格式
+          let itemAbbreviation = null;
+          let itemFullName = null;
+          const itemFormatMatch = enterprise.enterprise_name.match(/^(.+?)【(.+?)】$/);
+          if (itemFormatMatch) {
+            itemAbbreviation = itemFormatMatch[1].trim();
+            itemFullName = itemFormatMatch[2].trim();
+          } else {
+            itemFullName = enterprise.enterprise_name;
+          }
           
-          // 如果精确匹配失败，尝试大小写不敏感匹配（检查企业全称和项目简称）
+          // 尝试多种方式匹配企业（使用模糊匹配）
+          let existsInDB = [];
+          
+          // 方式1：如果解析出了全称，用全称做模糊匹配
+          if (itemFullName) {
+            existsInDB = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
+               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               LIMIT 1`,
+              [`%${itemFullName}%`, itemAbbreviation ? `%${itemAbbreviation}%` : `%${itemFullName}%`]
+            );
+          }
+          
+          // 方式2：如果解析出了简称，用简称做模糊匹配（匹配enterprise_full_name或project_abbreviation）
+          if (existsInDB.length === 0 && itemAbbreviation) {
+            existsInDB = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               LIMIT 1`,
+              [`%${itemAbbreviation}%`, `%${itemAbbreviation}%`]
+            );
+          }
+          
+          // 方式3：如果还是没有匹配到，尝试用原始名称做模糊匹配
+          if (existsInDB.length === 0) {
+            existsInDB = await db.query(
+              `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
+               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               LIMIT 1`,
+              [`%${enterprise.enterprise_name}%`, `%${enterprise.enterprise_name}%`]
+            );
+          }
+          
+          // 如果SQL模糊匹配失败，再尝试大小写不敏感匹配（作为兜底）
           if (existsInDB.length === 0) {
             const allEnterprises = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
                WHERE delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
             );
             
-            // 使用大小写不敏感匹配
+            // 使用大小写不敏感匹配，支持"简称【全称】"格式
             existsInDB = allEnterprises.filter(e => {
               const enterpriseFullName = e.enterprise_full_name || '';
               const projectAbbreviation = e.project_abbreviation || '';
               const itemName = enterprise.enterprise_name || '';
               
-              const matchesFullName = this._caseInsensitiveMatch(enterpriseFullName, itemName);
-              const matchesAbbreviation = projectAbbreviation && this._caseInsensitiveMatch(projectAbbreviation, itemName);
+              // 解析数据库中的企业全称，如果是"简称【全称】"格式
+              let dbAbbreviation = null;
+              let dbFullName = null;
+              const dbFormatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+              if (dbFormatMatch) {
+                dbAbbreviation = dbFormatMatch[1].trim();
+                dbFullName = dbFormatMatch[2].trim();
+              } else {
+                dbFullName = enterpriseFullName;
+              }
               
-              return matchesFullName || matchesAbbreviation;
+              // 匹配全称（大小写不敏感，支持模糊匹配）
+              const matchesFullName = this._caseInsensitiveMatch(dbFullName, itemName) || 
+                                     (dbFullName && itemName && dbFullName.toLowerCase().includes(itemName.toLowerCase())) ||
+                                     (dbFullName && itemName && itemName.toLowerCase().includes(dbFullName.toLowerCase()));
+              
+              // 匹配数据库中的简称（如果企业全称是"简称【全称】"格式）
+              const matchesDbAbbreviation = dbAbbreviation && (
+                this._caseInsensitiveMatch(dbAbbreviation, itemName) ||
+                (dbAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+                (itemName.toLowerCase().includes(dbAbbreviation.toLowerCase()))
+              );
+              
+              // 匹配项目简称（大小写不敏感，支持模糊匹配）
+              const matchesAbbreviation = projectAbbreviation && (
+                this._caseInsensitiveMatch(projectAbbreviation, itemName) ||
+                (projectAbbreviation.toLowerCase().includes(itemName.toLowerCase())) ||
+                (itemName.toLowerCase().includes(projectAbbreviation.toLowerCase()))
+              );
+              
+              return matchesFullName || matchesDbAbbreviation || matchesAbbreviation;
             });
           }
           
           if (existsInDB.length > 0) {
-            validEnterprises.push(enterprise);
+            // 保存企业信息和数据库中的完整信息
+            validEnterprises.push({
+              ...enterprise,
+              dbInfo: existsInDB[0] // 保存数据库中的完整信息（包含project_abbreviation）
+            });
           } else {
             console.log(`🚫 最终验证失败：企业"${enterprise.enterprise_name}"不在被投企业数据库中，已排除`);
           }
@@ -4632,12 +5022,103 @@ ${enterpriseList}
                 contentToSave3 = contentForAnalysis || newsItem.content || null;
               }
               
+              // 格式化企业名称为"简称【全称】"格式
+              const formattedName = this.formatEnterpriseName(
+                enterprise.dbInfo.enterprise_full_name,
+                enterprise.dbInfo.project_abbreviation
+              );
+              
+              // 获取entity_type
+              // 支持"简称【全称】"格式和纯全称格式的匹配
+              let entityType = null;
+              try {
+                console.log(`[processNewsWithoutEnterprise] 开始获取entity_type，企业信息:`, {
+                  enterprise_full_name: enterprise.dbInfo.enterprise_full_name,
+                  project_abbreviation: enterprise.dbInfo.project_abbreviation
+                });
+                
+                // 解析enterprise_full_name，如果是"简称【全称】"格式，提取全称部分
+                let fullNameToMatch = enterprise.dbInfo.enterprise_full_name;
+                const formatMatch = fullNameToMatch.match(/^(.+?)【(.+?)】$/);
+                if (formatMatch) {
+                  fullNameToMatch = formatMatch[2].trim(); // 提取全称部分
+                  console.log(`[processNewsWithoutEnterprise] 解析"简称【全称】"格式，提取全称: ${fullNameToMatch}`);
+                }
+                
+                // 先尝试精确匹配
+                let enterpriseInfo = await db.query(
+                  `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                  [fullNameToMatch]
+                );
+                console.log(`[processNewsWithoutEnterprise] 精确匹配结果: ${enterpriseInfo.length} 条记录`);
+                
+                // 如果精确匹配失败，尝试匹配"简称【全称】"格式（提取全称部分）
+                if (enterpriseInfo.length === 0) {
+                  enterpriseInfo = await db.query(
+                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                    [`%${fullNameToMatch}%`]
+                  );
+                  console.log(`[processNewsWithoutEnterprise] 模糊匹配结果: ${enterpriseInfo.length} 条记录`);
+                }
+                
+                // 如果还是失败，尝试匹配数据库中的"简称【全称】"格式（提取全称部分）
+                if (enterpriseInfo.length === 0) {
+                  enterpriseInfo = await db.query(
+                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                     WHERE (CASE 
+                       WHEN enterprise_full_name LIKE '%【%】%' THEN 
+                         TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
+                       ELSE 
+                         enterprise_full_name
+                     END) = ? AND delete_mark = 0 LIMIT 1`,
+                    [fullNameToMatch]
+                  );
+                  console.log(`[processNewsWithoutEnterprise] 提取全称匹配结果: ${enterpriseInfo.length} 条记录`);
+                }
+                
+                // 如果还是失败，尝试使用原始的企业全称（可能是"简称【全称】"格式）
+                if (enterpriseInfo.length === 0) {
+                  enterpriseInfo = await db.query(
+                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                     WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                    [enterprise.dbInfo.enterprise_full_name]
+                  );
+                  console.log(`[processNewsWithoutEnterprise] 使用原始企业全称匹配结果: ${enterpriseInfo.length} 条记录`);
+                }
+                
+                if (enterpriseInfo.length > 0) {
+                  entityType = enterpriseInfo[0].entity_type;
+                  console.log(`[processNewsWithoutEnterprise] ✓ 从invested_enterprises表获取entity_type: ${entityType || '(NULL)'} (匹配的企业全称: ${enterpriseInfo[0].enterprise_full_name})`);
+                } else {
+                  console.warn(`[processNewsWithoutEnterprise] ⚠️ 未找到entity_type，企业全称: ${enterprise.dbInfo.enterprise_full_name}, 提取的全称: ${fullNameToMatch}`);
+                  console.log(`[processNewsWithoutEnterprise] 调试信息: enterprise.dbInfo =`, enterprise.dbInfo);
+                  // 尝试查询所有可能匹配的企业（用于调试）
+                  const allPossibleMatches = await db.query(
+                    `SELECT enterprise_full_name, entity_type FROM invested_enterprises 
+                     WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
+                     AND delete_mark = 0 LIMIT 5`,
+                    [`%${fullNameToMatch}%`, `%元禾璞华%`]
+                  );
+                  if (allPossibleMatches.length > 0) {
+                    console.log(`[processNewsWithoutEnterprise] 可能的匹配企业（前5条）:`, allPossibleMatches.map(e => ({
+                      enterprise_full_name: e.enterprise_full_name,
+                      entity_type: e.entity_type
+                    })));
+                  }
+                }
+              } catch (err) {
+                console.warn(`[processNewsWithoutEnterprise] 获取entity_type时出错: ${err.message}`);
+              }
+              
               await db.execute(
                 `UPDATE news_detail 
-                 SET enterprise_full_name = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
+                 SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
                  WHERE id = ?`,
                 [
-                  enterprise.enterprise_name,
+                  formattedName,
+                  entityType,
                   validatedAnalysis.sentiment,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
@@ -4645,21 +5126,86 @@ ${enterpriseList}
                   newsItem.id
                 ]
               );
+              
+              // 验证更新结果
+              const verifyResult = await db.query(
+                `SELECT enterprise_full_name, entity_type FROM news_detail WHERE id = ?`,
+                [newsItem.id]
+              );
+              if (verifyResult.length > 0) {
+                console.log(`[processNewsWithoutEnterprise] ✓ 更新成功！`);
+                console.log(`[processNewsWithoutEnterprise] 数据库中的企业全称: "${verifyResult[0].enterprise_full_name || '(NULL)'}"`);
+                console.log(`[processNewsWithoutEnterprise] 数据库中的企业类型: "${verifyResult[0].entity_type || '(NULL)'}"`);
+              }
             } else {
               // 创建新记录
               const { generateId } = require('./idGenerator');
               const newId = await generateId('news_detail');
               
+              // 格式化企业名称为"简称【全称】"格式
+              const formattedName = this.formatEnterpriseName(
+                enterprise.dbInfo.enterprise_full_name,
+                enterprise.dbInfo.project_abbreviation
+              );
+              
+              // 获取entity_type（创建新记录时）
+              // 支持"简称【全称】"格式的匹配：如果数据库中的enterprise_full_name是"简称【全称】"格式，提取全称部分进行匹配
+              let entityType = null;
+              try {
+                // 先尝试精确匹配
+                let enterpriseInfo = await db.query(
+                  `SELECT entity_type FROM invested_enterprises 
+                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                  [enterprise.dbInfo.enterprise_full_name]
+                );
+                
+                // 如果精确匹配失败，尝试提取"简称【全称】"格式中的全称部分进行匹配
+                if (enterpriseInfo.length === 0 && enterprise.dbInfo.enterprise_full_name.includes('【')) {
+                  const fullNameMatch = enterprise.dbInfo.enterprise_full_name.match(/【(.+?)】/);
+                  if (fullNameMatch) {
+                    const extractedFullName = fullNameMatch[1].trim();
+                    enterpriseInfo = await db.query(
+                      `SELECT entity_type FROM invested_enterprises 
+                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                      [extractedFullName]
+                    );
+                  }
+                }
+                
+                // 如果还是没匹配到，尝试模糊匹配（支持数据库中的"简称【全称】"格式）
+                if (enterpriseInfo.length === 0) {
+                  enterpriseInfo = await db.query(
+                    `SELECT entity_type FROM invested_enterprises 
+                     WHERE (enterprise_full_name = ? 
+                       OR enterprise_full_name LIKE ? 
+                       OR (enterprise_full_name LIKE '%【%】%' AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?))
+                     AND delete_mark = 0 LIMIT 1`,
+                    [
+                      enterprise.dbInfo.enterprise_full_name,
+                      `%${enterprise.dbInfo.enterprise_full_name}%`,
+                      enterprise.dbInfo.enterprise_full_name
+                    ]
+                  );
+                }
+                
+                if (enterpriseInfo.length > 0) {
+                  entityType = enterpriseInfo[0].entity_type;
+                }
+              } catch (err) {
+                console.warn(`获取entity_type时出错: ${err.message}`);
+              }
+              
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, source_url, 
+                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, 
                   title, summary, public_time, content, keywords, news_abstract, news_sentiment)
-                 SELECT ?, account_name, wechat_account, ?, source_url, 
+                 SELECT ?, account_name, wechat_account, ?, ?, source_url, 
                         title, summary, public_time, content, ?, ?, ?
                  FROM news_detail WHERE id = ?`,
                 [
                   newId,
-                  enterprise.enterprise_name,
+                  formattedName,
+                  entityType,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
                   validatedAnalysis.sentiment,
@@ -4854,11 +5400,62 @@ ${enterpriseList}
                 if (relevantEnterprises.length > 0) {
                   // 有相关企业，更新企业全称
                   const firstEnterprise = relevantEnterprises[0];
-                  await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
-                    [firstEnterprise.enterprise_name, newsItem.id]
-                  );
-                  logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+                  // 从enterprises数组中查找对应的企业信息
+                  const matchedEnterprise = enterprises.find(e => {
+                    const fullName = e.enterprise_full_name || '';
+                    const abbreviation = e.project_abbreviation || '';
+                    const itemName = firstEnterprise.enterprise_name || '';
+                    return this._caseInsensitiveMatch(fullName, itemName) || 
+                           (abbreviation && this._caseInsensitiveMatch(abbreviation, itemName));
+                  });
+                  
+                  if (matchedEnterprise) {
+                    // 格式化企业名称为"简称【全称】"格式
+                    const formattedName = this.formatEnterpriseName(
+                      matchedEnterprise.enterprise_full_name,
+                      matchedEnterprise.project_abbreviation
+                    );
+                    // 获取entity_type
+                    let entityType = null;
+                    try {
+                      const enterpriseInfo = await db.query(
+                        `SELECT entity_type FROM invested_enterprises 
+                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                        [matchedEnterprise.enterprise_full_name]
+                      );
+                      if (enterpriseInfo.length > 0) {
+                        entityType = enterpriseInfo[0].entity_type;
+                      }
+                    } catch (err) {
+                      console.warn(`获取entity_type时出错: ${err.message}`);
+                    }
+                    await db.execute(
+                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
+                      [formattedName, entityType, newsItem.id]
+                    );
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  } else {
+                    // 如果找不到匹配的企业，使用原始名称
+                    // 尝试从invested_enterprises表中获取entity_type
+                    let entityType = null;
+                    try {
+                      const enterpriseInfo = await db.query(
+                        `SELECT entity_type FROM invested_enterprises 
+                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                        [firstEnterprise.enterprise_name]
+                      );
+                      if (enterpriseInfo.length > 0) {
+                        entityType = enterpriseInfo[0].entity_type;
+                      }
+                    } catch (err) {
+                      console.warn(`获取entity_type时出错: ${err.message}`);
+                    }
+                    await db.execute(
+                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
+                      [firstEnterprise.enterprise_name, entityType, newsItem.id]
+                    );
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  }
                 }
               }
             } catch (enterpriseError) {
@@ -5112,18 +5709,65 @@ ${enterpriseList}
       
       // 更新数据库
       if (analysisResult) {
+        // 如果新闻已有enterprise_full_name，确保entity_type也被设置
+        let entityTypeUpdate = null;
+        if (newsItem.enterprise_full_name) {
+          try {
+            // 尝试匹配格式化后的名称（包含【】），如果失败则尝试匹配原始全称
+            let enterpriseInfo = await db.query(
+              `SELECT entity_type, enterprise_full_name
+               FROM invested_enterprises 
+               WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+               AND delete_mark = 0 
+               LIMIT 1`,
+              [newsItem.enterprise_full_name, `%【${newsItem.enterprise_full_name}】`]
+            );
+            
+            // 如果没找到，尝试从格式化名称中提取全称进行匹配
+            if (enterpriseInfo.length === 0) {
+              const formatMatch = newsItem.enterprise_full_name.match(/^(.+?)【(.+?)】$/);
+              if (formatMatch) {
+                const extractedFullName = formatMatch[2];
+                enterpriseInfo = await db.query(
+                  `SELECT entity_type, enterprise_full_name
+                   FROM invested_enterprises 
+                   WHERE enterprise_full_name = ? 
+                   AND delete_mark = 0 
+                   LIMIT 1`,
+                  [extractedFullName]
+                );
+              }
+            }
+            
+            if (enterpriseInfo.length > 0) {
+              entityTypeUpdate = enterpriseInfo[0].entity_type;
+              logWithTag('[立即分析新榜新闻]', `从invested_enterprises表获取entity_type: ${entityTypeUpdate}`);
+            }
+          } catch (err) {
+            console.warn(`[立即分析新榜新闻] 获取entity_type时出错: ${err.message}`);
+          }
+        }
+        
         await db.execute(
           `UPDATE news_detail 
-           SET news_sentiment = ?, keywords = ?, news_abstract = ?
+           SET news_sentiment = ?, keywords = ?, news_abstract = ?${entityTypeUpdate !== null ? ', entity_type = ?' : ''}
            WHERE id = ?`,
-          [
-            analysisResult.sentiment || 'neutral',
-            JSON.stringify(analysisResult.keywords || []),
-            analysisResult.news_abstract || '',
-            newsItem.id
-          ]
+          entityTypeUpdate !== null
+            ? [
+                analysisResult.sentiment || 'neutral',
+                JSON.stringify(analysisResult.keywords || []),
+                analysisResult.news_abstract || '',
+                entityTypeUpdate,
+                newsItem.id
+              ]
+            : [
+                analysisResult.sentiment || 'neutral',
+                JSON.stringify(analysisResult.keywords || []),
+                analysisResult.news_abstract || '',
+                newsItem.id
+              ]
         );
-        logWithTag('[立即分析新榜新闻]', `✓ 已更新数据库，新闻ID: ${newsItem.id}`);
+        logWithTag('[立即分析新榜新闻]', `✓ 已更新数据库，新闻ID: ${newsItem.id}${entityTypeUpdate !== null ? `, entity_type: ${entityTypeUpdate}` : ''}`);
         
         // 如果是额外公众号，执行企业关联分析和关联验证
         if (isAdditionalAccount && hasContent && !isContentDirty) {
@@ -5150,11 +5794,62 @@ ${enterpriseList}
               if (relevantEnterprises.length > 0) {
                 // 有相关企业，更新企业全称
                 const firstEnterprise = relevantEnterprises[0];
-                await db.execute(
-                  'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
-                  [firstEnterprise.enterprise_name, newsItem.id]
-                );
-                logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 新闻ID: ${newsItem.id}`);
+                // 从enterprises数组中查找对应的企业信息
+                const matchedEnterprise = enterprises.find(e => {
+                  const fullName = e.enterprise_full_name || '';
+                  const abbreviation = e.project_abbreviation || '';
+                  const itemName = firstEnterprise.enterprise_name || '';
+                  return this._caseInsensitiveMatch(fullName, itemName) || 
+                         (abbreviation && this._caseInsensitiveMatch(abbreviation, itemName));
+                });
+                
+                if (matchedEnterprise) {
+                  // 格式化企业名称为"简称【全称】"格式
+                  const formattedName = this.formatEnterpriseName(
+                    matchedEnterprise.enterprise_full_name,
+                    matchedEnterprise.project_abbreviation
+                  );
+                  // 获取entity_type
+                  let entityType = null;
+                  try {
+                    const enterpriseInfo = await db.query(
+                      `SELECT entity_type FROM invested_enterprises 
+                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                      [matchedEnterprise.enterprise_full_name]
+                    );
+                    if (enterpriseInfo.length > 0) {
+                      entityType = enterpriseInfo[0].entity_type;
+                    }
+                  } catch (err) {
+                    console.warn(`获取entity_type时出错: ${err.message}`);
+                  }
+                  await db.execute(
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
+                    [formattedName, entityType, newsItem.id]
+                  );
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                } else {
+                  // 如果找不到匹配的企业，使用原始名称
+                  // 尝试从invested_enterprises表中获取entity_type
+                  let entityType = null;
+                  try {
+                    const enterpriseInfo = await db.query(
+                      `SELECT entity_type FROM invested_enterprises 
+                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                      [firstEnterprise.enterprise_name]
+                    );
+                    if (enterpriseInfo.length > 0) {
+                      entityType = enterpriseInfo[0].entity_type;
+                    }
+                  } catch (err) {
+                    console.warn(`获取entity_type时出错: ${err.message}`);
+                  }
+                  await db.execute(
+                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
+                    [firstEnterprise.enterprise_name, entityType, newsItem.id]
+                  );
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                }
               }
             }
           } catch (enterpriseError) {
@@ -5225,7 +5920,7 @@ ${enterpriseList}
             try {
               const enterpriseResult = await db.query(
                 // 支持逗号分隔的多个公众号ID
-                `SELECT enterprise_full_name 
+                `SELECT enterprise_full_name, project_abbreviation 
                  FROM invested_enterprises 
                  WHERE (wechat_official_account_id = ? 
                    OR wechat_official_account_id LIKE ?
@@ -5243,12 +5938,31 @@ ${enterpriseList}
               );
               
               if (enterpriseResult.length > 0) {
-                newsItem.enterprise_full_name = enterpriseResult[0].enterprise_full_name;
+                // 格式化企业名称为"简称【全称】"格式
+                const formattedName = this.formatEnterpriseName(
+                  enterpriseResult[0].enterprise_full_name,
+                  enterpriseResult[0].project_abbreviation
+                );
+                newsItem.enterprise_full_name = formattedName;
                 logWithTag('[批量分析]', `✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}`);
-                // 更新数据库中的企业全称
+                // 获取entity_type
+                let entityType = null;
+                try {
+                  const enterpriseInfo = await db.query(
+                    `SELECT entity_type FROM invested_enterprises 
+                     WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                    [enterpriseResult[0].enterprise_full_name]
+                  );
+                  if (enterpriseInfo.length > 0) {
+                    entityType = enterpriseInfo[0].entity_type;
+                  }
+                } catch (err) {
+                  console.warn(`获取entity_type时出错: ${err.message}`);
+                }
+                // 更新数据库中的企业全称和entity_type
                 await db.execute(
-                  'UPDATE news_detail SET enterprise_full_name = ? WHERE id = ?',
-                  [newsItem.enterprise_full_name, newsItem.id]
+                  'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ? WHERE id = ?',
+                  [newsItem.enterprise_full_name, entityType, newsItem.id]
                 );
               }
             } catch (e) {

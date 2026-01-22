@@ -212,6 +212,46 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     // 通过公众号ID关联，因为新闻可能通过公众号ID匹配到企业，即使enterprise_full_name为空也能匹配
     
     // 先获取所有满足条件的被投企业的公众号ID
+    // 根据收件配置的企业类型添加过滤条件（支持多选）
+    let entityTypeFilter = '';
+    if (recipientConfig && recipientConfig.entity_type) {
+      // 解析entity_type（可能是JSON字符串、数组或单个值）
+      let entityTypes = recipientConfig.entity_type;
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      
+      if (entityTypes.length > 0) {
+        // 构建多选过滤条件
+        const conditions = [];
+        entityTypes.forEach(type => {
+          if (type === '被投企业') {
+            conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+          } else if (type === '基金') {
+            conditions.push(`entity_type = '基金'`);
+          } else if (type === '子基金') {
+            conditions.push(`entity_type = '子基金'`);
+          } else if (type === '子基金管理人') {
+            conditions.push(`entity_type = '子基金管理人'`);
+          } else if (type === '子基金GP') {
+            conditions.push(`entity_type = '子基金GP'`);
+          }
+        });
+        if (conditions.length > 0) {
+          entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+        console.log(`[邮件发送] 管理员：根据企业类型过滤被投企业 - ${entityTypes.join(', ')}`);
+      }
+    }
+    
     console.log(`[邮件发送] 步骤1：查询满足条件的被投企业...`);
     const enterprises = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
@@ -219,7 +259,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
-       AND delete_mark = 0`
+       AND delete_mark = 0
+       ${entityTypeFilter}`
     );
     
     if (enterprises.length === 0) {
@@ -294,17 +335,82 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       console.log(`[邮件发送]   当前查询的公众号ID列表（前20个）: ${uniqueAccountIds.slice(0, 20).join(', ')}`);
     }
     
+    // 根据收件配置的企业类型过滤条件（支持多选）
+    let entityTypeCondition = '';
+    let entityTypeSubqueryFilter = '';
+    if (recipientConfig && recipientConfig.entity_type) {
+      // 解析entity_type（可能是JSON字符串、数组或单个值）
+      let entityTypes = recipientConfig.entity_type;
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      
+      if (entityTypes.length > 0) {
+        // 构建多选过滤条件
+        // 注意：只使用 news_detail 表中的 entity_type 字段
+        const conditions = [];
+        const subqueryConditions = [];
+        entityTypes.forEach(type => {
+          if (type === '被投企业') {
+            conditions.push(`(nd.entity_type = '被投企业' OR nd.entity_type IS NULL)`);
+            subqueryConditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+          } else if (type === '基金') {
+            conditions.push(`nd.entity_type = '基金'`);
+            subqueryConditions.push(`entity_type = '基金'`);
+          } else if (type === '子基金') {
+            conditions.push(`nd.entity_type = '子基金'`);
+            subqueryConditions.push(`entity_type = '子基金'`);
+          } else if (type === '子基金管理人') {
+            conditions.push(`nd.entity_type = '子基金管理人'`);
+            subqueryConditions.push(`entity_type = '子基金管理人'`);
+          } else if (type === '子基金GP') {
+            conditions.push(`nd.entity_type = '子基金GP'`);
+            subqueryConditions.push(`entity_type = '子基金GP'`);
+          }
+        });
+        if (conditions.length > 0) {
+          entityTypeCondition = `AND (${conditions.join(' OR ')})`;
+          entityTypeSubqueryFilter = `AND (${subqueryConditions.join(' OR ')})`;
+        }
+        console.log(`[邮件发送] 管理员：根据企业类型过滤 - ${entityTypes.join(', ')}`);
+      }
+    }
+
     newsList = await db.query(
       `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
               nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-              nd.APItype, nd.news_category
+              nd.APItype, nd.news_category, nd.entity_type
        FROM news_detail nd
+       LEFT JOIN invested_enterprises ie ON (
+         nd.enterprise_full_name = ie.enterprise_full_name 
+         OR (CASE 
+           WHEN nd.enterprise_full_name LIKE '%(%' THEN 
+             TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '(', 1))
+           ELSE 
+             nd.enterprise_full_name
+         END) = ie.enterprise_full_name
+         OR nd.enterprise_full_name = (CASE 
+           WHEN ie.enterprise_full_name LIKE '%(%' THEN 
+             TRIM(SUBSTRING_INDEX(ie.enterprise_full_name, '(', 1))
+           ELSE 
+             ie.enterprise_full_name
+         END)
+       ) AND ie.delete_mark = 0
        WHERE (
          -- 通过公众号ID匹配
          nd.wechat_account IN (${placeholders})
          OR
          -- 或者通过企业全称匹配（如果企业全称不为空）
          -- 支持精确匹配和模糊匹配（去掉括号内容后匹配，处理"企业全称(简称)"格式）
+         -- 支持"简称【全称】"格式的匹配
          (nd.enterprise_full_name IS NOT NULL 
           AND nd.enterprise_full_name != ''
           AND (
@@ -314,6 +420,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               FROM invested_enterprises 
               WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
+              ${entityTypeSubqueryFilter}
             )
             OR
             -- 模糊匹配：新闻中的企业全称去掉括号内容后，与数据库中的企业全称匹配
@@ -328,6 +435,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               FROM invested_enterprises 
               WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
+              ${entityTypeSubqueryFilter}
             )
             OR
             -- 反向匹配：数据库中的企业全称去掉括号内容后，与新闻中的企业全称匹配
@@ -341,6 +449,51 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               FROM invested_enterprises 
               WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
+              ${entityTypeSubqueryFilter}
+            )
+            OR
+            -- 支持"简称【全称】"格式：提取全称部分进行匹配
+            (CASE 
+              WHEN nd.enterprise_full_name LIKE '%【%】%' THEN 
+                TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(nd.enterprise_full_name, '【', -1), '】', 1))
+              ELSE 
+                NULL
+            END) IN (
+              SELECT enterprise_full_name 
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+              ${entityTypeSubqueryFilter}
+            )
+            OR
+            -- 支持"简称【全称】"格式：提取简称部分进行匹配（匹配project_abbreviation）
+            (CASE 
+              WHEN nd.enterprise_full_name LIKE '%【%】%' THEN 
+                TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '【', 1))
+              ELSE 
+                NULL
+            END) IN (
+              SELECT project_abbreviation 
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+              AND project_abbreviation IS NOT NULL
+              AND project_abbreviation != ''
+              ${entityTypeSubqueryFilter}
+            )
+            OR
+            -- 支持数据库中的"简称【全称】"格式：提取全称部分与新闻中的企业全称匹配
+            nd.enterprise_full_name IN (
+              SELECT CASE 
+                WHEN enterprise_full_name LIKE '%【%】%' THEN 
+                  TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
+                ELSE 
+                  enterprise_full_name
+              END
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+              ${entityTypeSubqueryFilter}
             )
           ))
          OR
@@ -362,6 +515,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
        AND nd.created_at >= ? 
        AND nd.created_at < ?
        AND nd.delete_mark = 0
+       ${entityTypeCondition}
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
       [...uniqueAccountIds, from, to]
     );
@@ -452,6 +606,89 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     }
     
     console.log(`[邮件发送] 管理员：查询到 ${newsList.length} 条新闻（时间范围：${from} 到 ${to}，公众号数量：${uniqueAccountIds.length}）`);
+    
+    // 测试查询：直接查询数据库中的 entity_type 值（用于调试）
+    if (newsList.length > 0) {
+      const testNewsIds = newsList.slice(0, 5).map(n => n.id);
+      const placeholders = testNewsIds.map(() => '?').join(',');
+      const testQuery = await db.query(
+        `SELECT id, entity_type, enterprise_full_name 
+         FROM news_detail 
+         WHERE id IN (${placeholders})`,
+        testNewsIds
+      );
+      console.log(`[邮件发送] ========== 直接查询数据库测试 ==========`);
+      testQuery.forEach(n => {
+        console.log(`[邮件发送] 数据库直接查询: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+      });
+      console.log(`[邮件发送] ========== 直接查询数据库测试结束 ==========`);
+    }
+    
+    // 检查查询结果中的 entity_type 分布（用于调试）
+    if (newsList.length > 0) {
+      const entityTypeStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        entityTypeStats[et] = (entityTypeStats[et] || 0) + 1;
+      });
+      console.log(`[邮件发送] 查询结果中的 entity_type 分布:`, JSON.stringify(entityTypeStats, null, 2));
+      
+      // 显示前5条新闻的 entity_type 信息
+      newsList.slice(0, 5).forEach((n, index) => {
+        console.log(`[邮件发送] 查询结果新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+      });
+    }
+    
+    // 统计企查查新闻数量
+    const qichachaNews = newsList.filter(n => n.APItype === '企查查' || n.APItype === 'qichacha');
+    console.log(`[邮件发送] 管理员：查询到的企查查新闻数量：${qichachaNews.length}`);
+    if (qichachaNews.length > 0) {
+      console.log(`[邮件发送] 管理员：企查查新闻示例（前5条）：`, qichachaNews.slice(0, 5).map(n => ({
+        id: n.id,
+        title: n.title?.substring(0, 50),
+        enterprise_full_name: n.enterprise_full_name || '(NULL)',
+        entity_type: n.entity_type || '(NULL)',
+        news_category: n.news_category || '(NULL)',
+        APItype: n.APItype || '(NULL)',
+        wechat_account: n.wechat_account || '(NULL)'
+      })));
+    } else {
+      // 如果没有查询到企查查新闻，检查时间范围内是否有企查查新闻
+      const qichachaCountQuery = await db.query(
+        `SELECT COUNT(*) as count 
+         FROM news_detail 
+         WHERE (APItype = '企查查' OR APItype = 'qichacha')
+         AND created_at >= ? 
+         AND created_at < ?
+         AND delete_mark = 0`,
+        [from, to]
+      );
+      const qichachaCount = qichachaCountQuery[0]?.count || 0;
+      console.log(`[邮件发送] ⚠️ 时间范围内企查查新闻总数：${qichachaCount}，但查询结果中为0条`);
+      
+      if (qichachaCount > 0) {
+        // 查询一些企查查新闻示例，检查企业全称和entity_type
+        const qichachaSample = await db.query(
+          `SELECT id, title, enterprise_full_name, entity_type, news_category, APItype, wechat_account
+           FROM news_detail 
+           WHERE (APItype = '企查查' OR APItype = 'qichacha')
+           AND created_at >= ? 
+           AND created_at < ?
+           AND delete_mark = 0
+           LIMIT 10`,
+          [from, to]
+        );
+        console.log(`[邮件发送] ⚠️ 企查查新闻示例（前10条）：`, qichachaSample.map(n => ({
+          id: n.id,
+          title: n.title?.substring(0, 50),
+          enterprise_full_name: n.enterprise_full_name || '(NULL)',
+          entity_type: n.entity_type || '(NULL)',
+          news_category: n.news_category || '(NULL)',
+          wechat_account: n.wechat_account || '(NULL)'
+        })));
+      }
+    }
+    
     if (newsList.length > 0) {
       console.log(`[邮件发送] 管理员：查询到的新闻示例（前3条）：`, newsList.slice(0, 3).map(n => ({
         id: n.id,
@@ -461,6 +698,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
         wechat_account: n.wechat_account,
         account_name: n.account_name,
         APItype: n.APItype,
+        entity_type: n.entity_type || '(NULL)',
         hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
         hasSummary: !!(n.summary && n.summary.trim()),
         hasContent: !!(n.content && n.content.trim())
@@ -493,6 +731,46 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     // 普通用户只能看到自己创建的被投企业相关的新闻，以及自己创建的额外公众号数据
     console.log(`[邮件发送] ========== 普通用户查询逻辑 ==========`);
     
+    // 根据收件配置的企业类型添加过滤条件（支持多选）
+    let entityTypeFilter = '';
+    if (recipientConfig && recipientConfig.entity_type) {
+      // 解析entity_type（可能是JSON字符串、数组或单个值）
+      let entityTypes = recipientConfig.entity_type;
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      
+      if (entityTypes.length > 0) {
+        // 构建多选过滤条件
+        const conditions = [];
+        entityTypes.forEach(type => {
+          if (type === '被投企业') {
+            conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+          } else if (type === '基金') {
+            conditions.push(`entity_type = '基金'`);
+          } else if (type === '子基金') {
+            conditions.push(`entity_type = '子基金'`);
+          } else if (type === '子基金管理人') {
+            conditions.push(`entity_type = '子基金管理人'`);
+          } else if (type === '子基金GP') {
+            conditions.push(`entity_type = '子基金GP'`);
+          }
+        });
+        if (conditions.length > 0) {
+          entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+        console.log(`[邮件发送] 普通用户：根据企业类型过滤被投企业 - ${entityTypes.join(', ')}`);
+      }
+    }
+    
     // 1. 查询用户创建的被投企业的微信公众号ID
     const wechatAccounts = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
@@ -501,7 +779,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-       AND delete_mark = 0`,
+       AND delete_mark = 0
+       ${entityTypeFilter}`,
       [userId]
     );
     
@@ -547,8 +826,23 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     newsList = await db.query(
       `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
               nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-              nd.APItype, nd.news_category
+              nd.APItype, nd.news_category, nd.entity_type
        FROM news_detail nd
+       LEFT JOIN invested_enterprises ie ON (
+         nd.enterprise_full_name = ie.enterprise_full_name 
+         OR (CASE 
+           WHEN nd.enterprise_full_name LIKE '%(%' THEN 
+             TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '(', 1))
+           ELSE 
+             nd.enterprise_full_name
+         END) = ie.enterprise_full_name
+         OR nd.enterprise_full_name = (CASE 
+           WHEN ie.enterprise_full_name LIKE '%(%' THEN 
+             TRIM(SUBSTRING_INDEX(ie.enterprise_full_name, '(', 1))
+           ELSE 
+             ie.enterprise_full_name
+         END)
+       ) AND ie.delete_mark = 0
        WHERE nd.wechat_account IN (${placeholders})
        AND nd.created_at >= ? 
        AND nd.created_at < ?
@@ -561,6 +855,21 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     );
     
     console.log(`[邮件发送] 普通用户：查询到 ${newsList.length} 条新闻`);
+    
+    // 检查查询结果中的 entity_type 分布（用于调试）
+    if (newsList.length > 0) {
+      const entityTypeStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        entityTypeStats[et] = (entityTypeStats[et] || 0) + 1;
+      });
+      console.log(`[邮件发送] 普通用户查询结果中的 entity_type 分布:`, JSON.stringify(entityTypeStats, null, 2));
+      
+      // 显示前5条新闻的 entity_type 信息
+      newsList.slice(0, 5).forEach((n, index) => {
+        console.log(`[邮件发送] 普通用户查询结果新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}", enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+      });
+    }
   }
   
   console.log(`[邮件发送] ========== 开始过滤新闻 ==========`);
@@ -611,6 +920,104 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     }
   }
   
+  // 根据企业类型进行二次过滤（如果配置了entity_type，支持多选）
+  if (recipientConfig && recipientConfig.entity_type && newsList.length > 0) {
+    // 解析entity_type（可能是JSON字符串、数组或单个值）
+    let entityTypes = recipientConfig.entity_type;
+    if (typeof entityTypes === 'string') {
+      try {
+        entityTypes = JSON.parse(entityTypes);
+      } catch (e) {
+        // 如果不是JSON，可能是单个值，转换为数组
+        entityTypes = [entityTypes];
+      }
+    }
+    if (!Array.isArray(entityTypes)) {
+      entityTypes = [entityTypes];
+    }
+    
+    if (entityTypes.length > 0) {
+      const beforeFilterCount = newsList.length;
+      
+      // 需要获取每个新闻对应的企业类型，通过企业全称匹配
+      const enterpriseNames = [...new Set(newsList
+        .map(n => n.enterprise_full_name)
+        .filter(name => name && name.trim() !== ''))];
+      
+      if (enterpriseNames.length > 0) {
+        const placeholders = enterpriseNames.map(() => '?').join(',');
+        const enterpriseTypes = await db.query(
+          `SELECT DISTINCT enterprise_full_name, entity_type 
+           FROM invested_enterprises 
+           WHERE enterprise_full_name IN (${placeholders}) 
+           AND delete_mark = 0`,
+          enterpriseNames
+        );
+        
+        // 创建企业名称到类型的映射（支持模糊匹配）
+        const enterpriseTypeMap = new Map();
+        enterpriseTypes.forEach(e => {
+          enterpriseTypeMap.set(e.enterprise_full_name, e.entity_type);
+          // 也支持去掉括号后的匹配
+          if (e.enterprise_full_name.includes('(')) {
+            const nameWithoutBrackets = e.enterprise_full_name.split('(')[0].trim();
+            enterpriseTypeMap.set(nameWithoutBrackets, e.entity_type);
+          }
+        });
+        
+        // 根据多个entity_type过滤新闻
+        newsList = newsList.filter(news => {
+          // 如果没有企业全称，保留（额外公众号新闻等）
+          if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
+            return true;
+          }
+          
+          // 获取企业类型
+          let newsEntityType = enterpriseTypeMap.get(news.enterprise_full_name);
+          if (!newsEntityType && news.enterprise_full_name.includes('(')) {
+            const nameWithoutBrackets = news.enterprise_full_name.split('(')[0].trim();
+            newsEntityType = enterpriseTypeMap.get(nameWithoutBrackets);
+          }
+          
+          // 如果查询结果中已经有entity_type，优先使用
+          if (news.entity_type) {
+            newsEntityType = news.entity_type;
+          }
+          
+          // 检查是否匹配任何一个配置的企业类型
+          for (const entityType of entityTypes) {
+            if (entityType === '被投企业') {
+              if (newsEntityType === '被投企业' || !newsEntityType) {
+                return true;
+              }
+            } else if (entityType === '基金') {
+              if (newsEntityType === '基金') {
+                return true;
+              }
+            } else if (entityType === '子基金') {
+              if (newsEntityType === '子基金') {
+                return true;
+              }
+            } else if (entityType === '子基金管理人') {
+              if (newsEntityType === '子基金管理人') {
+                return true;
+              }
+            } else if (entityType === '子基金GP') {
+              if (newsEntityType === '子基金GP') {
+                return true;
+              }
+            }
+          }
+          
+          // 不匹配任何配置的类型，过滤掉
+          return false;
+        });
+        
+        console.log(`[邮件发送] 根据企业类型(${entityTypes.join(', ')})过滤：${beforeFilterCount} -> ${newsList.length} 条新闻`);
+      }
+    }
+  }
+
   // 过滤新闻：只保留企查查数据源且类别在配置的允许列表中的新闻
   // 注意：此函数会过滤掉类别不在允许列表中的企查查新闻，但会保留所有新榜新闻
   // 如果收件管理配置了自定义类别（qichacha_category_codes），则使用自定义类别；否则使用默认类别
@@ -628,7 +1035,21 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       console.warn(`[邮件发送] 解析收件管理配置的企查查类别编码失败: ${e.message}`);
     }
   }
+  
+  // 确保 newsList 是数组，避免 undefined 错误
+  if (!Array.isArray(newsList)) {
+    console.log(`[邮件发送] ⚠️ newsList 不是数组，类型: ${typeof newsList}, 值: ${newsList}`);
+    newsList = [];
+  }
+  
   const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
+  
+  // 确保 filteredNewsList 是数组
+  if (!Array.isArray(filteredNewsList)) {
+    console.log(`[邮件发送] ⚠️ filterNewsByCategory 返回的不是数组，类型: ${typeof filteredNewsList}, 值: ${filteredNewsList}`);
+    return [];
+  }
+  
   console.log(`[邮件发送] 企查查类别过滤后：${filteredNewsList.length} 条新闻`);
   if (filteredNewsList.length > 0) {
     console.log(`[邮件发送] 企查查类别过滤后的新闻详情：`, filteredNewsList.slice(0, 5).map(n => ({
@@ -888,6 +1309,12 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
  * @returns {Array} - 过滤后的新闻列表
  */
 function filterNewsByCategory(newsList, customCategoryCodes = null) {
+  // 检查 newsList 是否为有效的数组
+  if (!newsList || !Array.isArray(newsList)) {
+    console.log(`[邮件发送] ⚠️ filterNewsByCategory: newsList 不是有效的数组，类型: ${typeof newsList}, 值: ${newsList}`);
+    return [];
+  }
+  
   // 默认类别编码（80000和40000系列，以及荣誉奖项14004，排除80008）
   const defaultCategoryCodes = [
     '80000', '80001', '80002', '80003', '80004', '80005', '80006', '80007',
@@ -919,7 +1346,7 @@ function filterNewsByCategory(newsList, customCategoryCodes = null) {
     console.log(`[邮件发送] 允许的企查查类别名称：${allowedCategoryNames.join(', ')}`);
   }
   
-  return newsList.filter(news => {
+  const filtered = newsList.filter(news => {
     // 只处理企查查数据源的新闻
     if (!news.APItype || (news.APItype !== '企查查' && news.APItype !== 'qichacha')) {
       // 如果不是企查查数据源，保留（可能是新榜等其他数据源）
@@ -949,6 +1376,8 @@ function filterNewsByCategory(newsList, customCategoryCodes = null) {
     }
     return isAllowed;
   });
+  
+  return filtered;
 }
 
 /**
@@ -1020,6 +1449,24 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
   const { generateId } = require('./idGenerator');
   
   try {
+    // 检查传入的新闻列表的 entity_type 分布（用于调试）
+    console.log(`[邮件发送] ========== sendNewsEmailWithExcel 函数开始 ==========`);
+    console.log(`[邮件发送] 传入的新闻数量: ${newsList.length}`);
+    if (newsList.length > 0) {
+      const entityTypeStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        entityTypeStats[et] = (entityTypeStats[et] || 0) + 1;
+      });
+      console.log(`[邮件发送] 传入的新闻 entity_type 分布:`, JSON.stringify(entityTypeStats, null, 2));
+      
+      // 显示前5条新闻的详细信息
+      newsList.slice(0, 5).forEach((n, index) => {
+        console.log(`[邮件发送] 传入的新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+      });
+    }
+    console.log(`[邮件发送] ========== sendNewsEmailWithExcel 函数检查结束 ==========`);
+    
     // 创建邮件传输器
     const port = parseInt(emailConfig.smtp_port, 10);
     
@@ -1049,6 +1496,18 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     // 生成邮件内容
     const { generateEmailContent, generateEmailTextContent } = require('./emailSender');
+    
+    // 检查过滤前的 entity_type 分布（用于调试）
+    console.log(`[邮件发送] ========== 开始过滤广告新闻 ==========`);
+    console.log(`[邮件发送] 过滤前新闻数量: ${newsList.length}`);
+    if (newsList.length > 0) {
+      const beforeFilterStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        beforeFilterStats[et] = (beforeFilterStats[et] || 0) + 1;
+      });
+      console.log(`[邮件发送] 过滤前的 entity_type 分布:`, JSON.stringify(beforeFilterStats, null, 2));
+    }
     
     // 过滤掉广告类型的新闻（广告推广、商业广告、营销推广），以及企业名称为null或空的新闻
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
@@ -1107,8 +1566,8 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
     }
     
-    // 按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
-    const newsByEnterprise = {};
+    // 先按企业类型分组，再按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
+    const newsByEntityTypeAndEnterprise = {};
     for (const news of filteredNewsList) {
       // 过滤掉企业名称为null或空字符串的新闻
       if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
@@ -1116,10 +1575,40 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         continue;
       }
       
+      // 获取企业类型，直接使用 news_detail 表中的 entity_type 字段
+      // 如果 entity_type 为空（null、undefined 或空字符串），且有企业全称，默认为"被投企业"（兼容旧数据）
+      let entityType = news.entity_type;
+      
+      // 记录原始 entity_type 值（用于调试）
+      const originalEntityType = entityType;
+      
+      if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
+        if (news.enterprise_full_name && news.enterprise_full_name.trim() !== '') {
+          entityType = '被投企业';
+          console.log(`[邮件发送] ⚠️ 新闻 ${news.id} 的 entity_type 为空，使用默认值"被投企业"`);
+        } else {
+          entityType = '其他';
+        }
+      }
+      
+      // 确保 entityType 是有效的分组类型
+      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+      if (!validEntityTypes.includes(entityType)) {
+        // 如果 entityType 不在有效列表中，默认为"被投企业"
+        console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
+        entityType = '被投企业';
+      }
+      
+      // 记录分组信息（前10条新闻都记录，便于调试）
+      if (filteredNewsList.indexOf(news) < 10) {
+        console.log(`[邮件发送] 分组新闻: ID=${news.id}, entity_type="${entityType}" (原始值: "${originalEntityType || '(NULL)'}"), enterprise="${news.enterprise_full_name?.substring(0, 30)}"`);
+      }
+      
       let enterpriseName = news.enterprise_full_name;
       let groupKey = enterpriseName;
       
       // 只有来自额外公众号的新闻，且企业名称为空，且包含"榜单"或"获奖"标签的，才使用null作为分组键
+      // 注意：这里不应该覆盖已经正确设置的 entityType
       if ((!enterpriseName || enterpriseName === '' || enterpriseName === 'null')) {
         // 检查是否来自额外公众号
         const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
@@ -1141,31 +1630,76 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
           
           const hasAwardTag = keywords.some(k => k === '榜单' || k === '获奖');
           if (hasAwardTag) {
-            // 只有来自额外公众号且包含"榜单"或"获奖"标签的，才使用null作为分组键
+            // 只有来自额外公众号且包含"榜单"或"获奖"标签的，归类为"其他"
+            // 但只有在 entityType 还没有被正确设置时才覆盖
+            if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
+              entityType = '其他';
+            }
             groupKey = null;
           } else {
             // 来自额外公众号但没有标签的，保持原值（使用空字符串作为分组键）
+            // 但只有在 entityType 还没有被正确设置时才覆盖
+            if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
+              entityType = '其他';
+            }
             groupKey = enterpriseName || '';
           }
         } else {
           // 不是来自额外公众号的，保持原值（使用空字符串作为分组键）
+          // 但只有在 entityType 还没有被正确设置时才覆盖
+          if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
+            entityType = '其他';
+          }
           groupKey = enterpriseName || '';
         }
       }
       
-      // 确保groupKey不为undefined
-      if (groupKey === undefined) {
+      // 确保groupKey不为undefined或null，统一使用字符串
+      if (groupKey === undefined || groupKey === null) {
         groupKey = '';
       }
+      // 确保 groupKey 是字符串类型
+      groupKey = String(groupKey);
       
-      if (!newsByEnterprise[groupKey]) {
-        newsByEnterprise[groupKey] = [];
+      if (!newsByEntityTypeAndEnterprise[entityType]) {
+        newsByEntityTypeAndEnterprise[entityType] = {};
       }
-      newsByEnterprise[groupKey].push(news);
+      if (!newsByEntityTypeAndEnterprise[entityType][groupKey]) {
+        newsByEntityTypeAndEnterprise[entityType][groupKey] = [];
+      }
+      // 确保 news 对象存在且是有效的
+      if (news && typeof news === 'object') {
+        newsByEntityTypeAndEnterprise[entityType][groupKey].push(news);
+      } else {
+        console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
+      }
     }
     
-    const htmlContent = generateEmailContent(newsByEnterprise);
-    const textContent = generateEmailTextContent(newsByEnterprise);
+    // 记录分组统计信息（用于调试）
+    const groupingStats = {};
+    Object.keys(newsByEntityTypeAndEnterprise).forEach(et => {
+      const entityGroup = newsByEntityTypeAndEnterprise[et] || {};
+      const enterpriseCount = Object.keys(entityGroup).length;
+      const newsCount = Object.values(entityGroup).reduce((sum, arr) => {
+        // 确保 arr 是数组，避免 undefined 错误
+        return sum + (Array.isArray(arr) ? arr.length : 0);
+      }, 0);
+      groupingStats[et] = { enterprises: enterpriseCount, news: newsCount };
+    });
+    console.log(`[邮件发送] ========== 分组统计 ==========`);
+    console.log(`[邮件发送] 分组统计:`, JSON.stringify(groupingStats, null, 2));
+    
+    // 检查每个分组的前几条新闻，确认 entity_type 是否正确
+    Object.keys(newsByEntityTypeAndEnterprise).forEach(et => {
+      const firstNews = Object.values(newsByEntityTypeAndEnterprise[et] || {})[0]?.[0];
+      if (firstNews) {
+        console.log(`[邮件发送] 分组"${et}"的第一条新闻: ID=${firstNews.id}, entity_type="${firstNews.entity_type || '(NULL)'}", enterprise="${firstNews.enterprise_full_name?.substring(0, 30)}"`);
+      }
+    });
+    console.log(`[邮件发送] ========== 分组统计结束 ==========`);
+    
+    const htmlContent = generateEmailContent(newsByEntityTypeAndEnterprise);
+    const textContent = generateEmailTextContent(newsByEntityTypeAndEnterprise);
     
     // 生成Excel附件（使用过滤后的列表，与邮件正文保持一致）
     let excelBuffer = null;
@@ -1452,7 +1986,17 @@ async function executeEmailTask(recipientId) {
     }
     
     // ========== 邮件发送前AI重新分析 ==========
+    logWithTimestamp(`[邮件发送] ========== 检查是否需要AI重新分析 ==========`);
+    logWithTimestamp(`[邮件发送] 当前新闻数量: ${newsList.length}`);
     if (newsList.length > 0) {
+      // 检查当前新闻列表的 entity_type 分布（重新分析前）
+      const beforeReanalyzeStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        beforeReanalyzeStats[et] = (beforeReanalyzeStats[et] || 0) + 1;
+      });
+      logWithTimestamp(`[邮件发送] 重新分析前的 entity_type 分布:`, JSON.stringify(beforeReanalyzeStats, null, 2));
+      
       logWithTimestamp(`[邮件发送] ========== 开始AI重新分析 ==========`);
       logWithTimestamp(`[邮件发送] 需要重新分析的新闻数量: ${newsList.length}`);
       
@@ -1510,15 +2054,27 @@ async function executeEmailTask(recipientId) {
       logWithTimestamp(`[邮件发送] AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
       logWithTimestamp(`[邮件发送] ========== AI重新分析结束 ==========`);
       
-      // 重新分析完成后，从数据库重新获取最新的新闻数据
+      // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）
       logWithTimestamp(`[邮件发送] 从数据库重新获取最新的新闻数据...`);
       const newsIds = newsList.map(n => n.id);
       if (newsIds.length > 0) {
+        // 先测试查询一条新闻，确认 entity_type 是否有值
+        const testNewsId = newsIds[0];
+        const testQuery = await db.query(
+          `SELECT id, entity_type, enterprise_full_name 
+           FROM news_detail 
+           WHERE id = ?`,
+          [testNewsId]
+        );
+        if (testQuery.length > 0) {
+          logWithTimestamp(`[邮件发送] 测试查询新闻 ${testNewsId}: entity_type="${testQuery[0].entity_type || '(NULL)'}" (类型: ${typeof testQuery[0].entity_type})`);
+        }
+        
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
           `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                   nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-                  nd.APItype, nd.news_category
+                  nd.APItype, nd.news_category, nd.entity_type
            FROM news_detail nd
            WHERE nd.id IN (${placeholders})
            AND nd.delete_mark = 0`,
@@ -1526,7 +2082,36 @@ async function executeEmailTask(recipientId) {
         );
         
         logWithTimestamp(`[邮件发送] 重新获取到 ${refreshedNewsList.length} 条新闻数据`);
+        // 记录entity_type信息（用于调试）
+        if (refreshedNewsList.length > 0) {
+          const entityTypeStats = {};
+          refreshedNewsList.forEach(n => {
+            const et = n.entity_type || '(NULL)';
+            entityTypeStats[et] = (entityTypeStats[et] || 0) + 1;
+          });
+          logWithTimestamp(`[邮件发送] 重新获取的新闻entity_type统计:`, JSON.stringify(entityTypeStats, null, 2));
+          
+          // 显示前5条新闻的详细信息
+          refreshedNewsList.slice(0, 5).forEach((n, index) => {
+            logWithTimestamp(`[邮件发送] 重新获取的新闻 ${index + 1}: ID=${n.id}, entity_type="${n.entity_type || '(NULL)'}" (类型: ${typeof n.entity_type}), enterprise="${n.enterprise_full_name?.substring(0, 30)}"`);
+            // 检查对象是否包含 entity_type 属性
+            logWithTimestamp(`[邮件发送]   对象属性检查: hasOwnProperty('entity_type')=${n.hasOwnProperty('entity_type')}, 'entity_type' in n=${'entity_type' in n}`);
+          });
+        }
+        
+        // 重要：更新 newsList 引用
+        logWithTimestamp(`[邮件发送] 更新 newsList 引用，从 ${newsList.length} 条更新为 ${refreshedNewsList.length} 条`);
         newsList = refreshedNewsList;
+        
+        // 验证更新后的 newsList
+        if (newsList.length > 0) {
+          const afterUpdateStats = {};
+          newsList.forEach(n => {
+            const et = n.entity_type || '(NULL)';
+            afterUpdateStats[et] = (afterUpdateStats[et] || 0) + 1;
+          });
+          logWithTimestamp(`[邮件发送] 更新后的 newsList entity_type 分布:`, JSON.stringify(afterUpdateStats, null, 2));
+        }
       }
     }
     
@@ -1548,8 +2133,18 @@ async function executeEmailTask(recipientId) {
     const emailConfig = emailConfigs[0];
     
     // 过滤新闻：根据收件配置的企查查类别编码进行过滤
-    logWithTimestamp(`[邮件发送] AI重新分析后，重新应用企查查类别过滤...`);
+    logWithTimestamp(`[邮件发送] ========== AI重新分析后，重新应用企查查类别过滤 ==========`);
     logWithTimestamp(`[邮件发送] 重新分析后的新闻数量: ${newsList.length}`);
+    
+    // 检查过滤前的 entity_type 分布
+    if (newsList.length > 0) {
+      const beforeCategoryFilterStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        beforeCategoryFilterStats[et] = (beforeCategoryFilterStats[et] || 0) + 1;
+      });
+      logWithTimestamp(`[邮件发送] 类别过滤前的 entity_type 分布:`, JSON.stringify(beforeCategoryFilterStats, null, 2));
+    }
     if (newsList.length > 0) {
       logWithTimestamp(`[邮件发送] 重新分析后的新闻类别详情（前5条）:`, newsList.slice(0, 5).map(n => ({
         id: n.id,
@@ -1559,8 +2154,36 @@ async function executeEmailTask(recipientId) {
         enterprise_full_name: n.enterprise_full_name || '(NULL)'
       })));
     }
+    // 检查过滤前的 newsList 的 entity_type 分布
+    if (newsList.length > 0) {
+      const beforeFilterStats = {};
+      newsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        beforeFilterStats[et] = (beforeFilterStats[et] || 0) + 1;
+      });
+      logWithTimestamp(`[邮件发送] filterNewsByCategory 过滤前的 entity_type 分布:`, JSON.stringify(beforeFilterStats, null, 2));
+      
+      // 检查第一条新闻的详细信息
+      const firstNews = newsList[0];
+      logWithTimestamp(`[邮件发送] filterNewsByCategory 过滤前的第一条新闻: ID=${firstNews.id}, entity_type="${firstNews.entity_type || '(NULL)'}" (类型: ${typeof firstNews.entity_type}), hasOwnProperty=${firstNews.hasOwnProperty('entity_type')}`);
+    }
+    
     const filteredNewsList = filterNewsByCategory(newsList, categoryCodes);
     logWithTimestamp(`[邮件发送] 企查查类别过滤后: ${filteredNewsList.length} 条新闻`);
+    
+    // 检查过滤后的 filteredNewsList 的 entity_type 分布
+    if (filteredNewsList.length > 0) {
+      const afterFilterStats = {};
+      filteredNewsList.forEach(n => {
+        const et = n.entity_type || '(NULL)';
+        afterFilterStats[et] = (afterFilterStats[et] || 0) + 1;
+      });
+      logWithTimestamp(`[邮件发送] filterNewsByCategory 过滤后的 entity_type 分布:`, JSON.stringify(afterFilterStats, null, 2));
+      
+      // 检查第一条新闻的详细信息
+      const firstNews = filteredNewsList[0];
+      logWithTimestamp(`[邮件发送] filterNewsByCategory 过滤后的第一条新闻: ID=${firstNews.id}, entity_type="${firstNews.entity_type || '(NULL)'}" (类型: ${typeof firstNews.entity_type}), hasOwnProperty=${firstNews.hasOwnProperty('entity_type')}`);
+    }
     if (filteredNewsList.length < newsList.length) {
       const filteredOut = newsList.filter(n => {
         const isQichacha = n.APItype === '企查查' || n.APItype === 'qichacha';
@@ -1652,6 +2275,21 @@ async function executeEmailTask(recipientId) {
     }
     logWithTimestamp(`[邮件发送] ========== 最终过滤完成 ==========`);
     
+    // 检查最终过滤后的新闻列表的 entity_type 分布（用于调试）
+    logWithTimestamp(`[邮件发送] ========== 最终过滤后的新闻 entity_type 分布 ==========`);
+    const entityTypeDistribution = {};
+    finalFilteredNewsList.forEach(news => {
+      const et = news.entity_type || '(NULL)';
+      entityTypeDistribution[et] = (entityTypeDistribution[et] || 0) + 1;
+    });
+    logWithTimestamp(`[邮件发送] entity_type 分布:`, JSON.stringify(entityTypeDistribution, null, 2));
+    
+    // 显示前5条新闻的 entity_type 信息
+    finalFilteredNewsList.slice(0, 5).forEach((news, index) => {
+      logWithTimestamp(`[邮件发送] 新闻 ${index + 1}: ID=${news.id}, entity_type="${news.entity_type || '(NULL)'}", enterprise="${news.enterprise_full_name?.substring(0, 30)}"`);
+    });
+    logWithTimestamp(`[邮件发送] ========== entity_type 分布检查结束 ==========`);
+    
     // 发送邮件（包含Excel附件），使用最终过滤后的新闻列表
     await sendNewsEmailWithExcel(recipient, emailConfig, finalFilteredNewsList);
     
@@ -1664,6 +2302,66 @@ async function executeEmailTask(recipientId) {
 /**
  * 根据发送频率和时间生成cron表达式
  */
+/**
+ * 将7字段的Quartz Cron表达式转换为6字段的node-cron表达式
+ * Quartz格式: 秒 分 时 日 月 周 年
+ * node-cron格式: 分 时 日 月 周
+ * Quartz周: 1=Sunday, 2=Monday, ..., 7=Saturday
+ * node-cron周: 0=Sunday, 1=Monday, ..., 6=Saturday
+ */
+function convertQuartzCronToNodeCron(quartzCron) {
+  if (!quartzCron || typeof quartzCron !== 'string') {
+    return null;
+  }
+  
+  const parts = quartzCron.trim().split(/\s+/);
+  
+  // 如果是6字段，直接返回
+  if (parts.length === 6) {
+    return quartzCron.trim();
+  }
+  
+  // 如果是7字段，转换为6字段
+  if (parts.length === 7) {
+    // 提取: 秒 分 时 日 月 周 年 -> 分 时 日 月 周
+    const [second, minute, hour, day, month, weekday, year] = parts;
+    
+    // 转换日期字段：将 ? 转换为 *（node-cron不支持?）
+    let convertedDay = day === '?' ? '*' : day;
+    
+    // 转换星期字段：Quartz (1-7) -> node-cron (0-6)
+    // 同时将 ? 转换为 *（node-cron不支持?）
+    let convertedWeekday = weekday;
+    if (weekday === '?') {
+      convertedWeekday = '*';
+    } else if (weekday && weekday !== '*') {
+      // 处理逗号分隔的值，如 "2,3,4,5,6"
+      if (weekday.includes(',')) {
+        convertedWeekday = weekday.split(',').map(w => {
+          const wNum = parseInt(w.trim());
+          if (wNum >= 1 && wNum <= 7) {
+            // Quartz: 1=Sunday -> node-cron: 0=Sunday
+            // Quartz: 2=Monday -> node-cron: 1=Monday
+            return (wNum - 1).toString();
+          }
+          return w.trim();
+        }).join(',');
+      } else {
+        // 单个值
+        const wNum = parseInt(weekday);
+        if (wNum >= 1 && wNum <= 7) {
+          convertedWeekday = (wNum - 1).toString();
+        }
+      }
+    }
+    
+    // 构建6字段cron表达式: 分 时 日 月 周
+    return `${minute} ${hour} ${convertedDay} ${month} ${convertedWeekday}`;
+  }
+  
+  return null;
+}
+
 function generateCronExpression(sendFrequency, sendTime) {
   // sendTime格式: HH:mm:ss
   const [hours, minutes] = sendTime.split(':');
@@ -1714,10 +2412,45 @@ async function updateScheduledTasks() {
     // 为每个配置创建定时任务
     for (const recipient of recipients) {
       try {
-        const cronExpression = generateCronExpression(recipient.send_frequency, recipient.send_time);
-        console.log(`为收件管理配置 ${recipient.id} 创建定时任务: ${cronExpression} (${recipient.send_frequency})`);
+        let cronExpression = null;
+        let cronSource = '';
+        
+        // 优先使用 cron_expression 字段
+        if (recipient.cron_expression && recipient.cron_expression.trim()) {
+          // 将7字段的Quartz Cron转换为6字段的node-cron
+          cronExpression = convertQuartzCronToNodeCron(recipient.cron_expression);
+          cronSource = 'cron_expression';
+          
+          if (!cronExpression) {
+            console.warn(`收件管理配置 ${recipient.id} 的 cron_expression 格式无效: ${recipient.cron_expression}`);
+            // 如果转换失败，尝试使用旧的字段
+            if (recipient.send_frequency && recipient.send_time) {
+              cronExpression = generateCronExpression(recipient.send_frequency, recipient.send_time);
+              cronSource = 'send_frequency/send_time (fallback)';
+            }
+          }
+        } else if (recipient.send_frequency && recipient.send_time) {
+          // 向后兼容：使用旧的 send_frequency 和 send_time
+          cronExpression = generateCronExpression(recipient.send_frequency, recipient.send_time);
+          cronSource = 'send_frequency/send_time';
+        }
+        
+        if (!cronExpression) {
+          console.error(`收件管理配置 ${recipient.id} 没有有效的定时任务配置`);
+          continue;
+        }
+        
+        console.log(`为收件管理配置 ${recipient.id} 创建定时任务: ${cronExpression} (来源: ${cronSource})`);
+        console.log(`  - 原始配置: cron_expression=${recipient.cron_expression || '(空)'}, send_frequency=${recipient.send_frequency || '(空)'}, send_time=${recipient.send_time || '(空)'}`);
+        
+        // 验证cron表达式
+        if (!cron.validate(cronExpression)) {
+          console.error(`收件管理配置 ${recipient.id} 的 cron 表达式无效: ${cronExpression}`);
+          continue;
+        }
         
         const task = cron.schedule(cronExpression, async () => {
+          console.log(`[定时任务] 执行收件管理配置 ${recipient.id} 的邮件发送任务`);
           await executeEmailTask(recipient.id);
         }, {
           scheduled: true,
@@ -1725,6 +2458,7 @@ async function updateScheduledTasks() {
         });
         
         scheduledTasks.set(recipient.id, task);
+        console.log(`✓ 收件管理配置 ${recipient.id} 的定时任务已创建并启动`);
       } catch (error) {
         console.error(`创建定时任务失败 (收件管理配置 ${recipient.id}):`, error);
       }

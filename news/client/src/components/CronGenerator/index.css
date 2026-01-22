@@ -1,0 +1,17 @@
+.cron-generator-modal .arco-modal-body {
+  padding: 20px;
+}
+
+.cron-generator {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.cron-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+}

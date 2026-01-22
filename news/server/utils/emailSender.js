@@ -162,18 +162,98 @@ function formatPublicTime(timeStr) {
 }
 
 /**
+ * HTML转义函数，防止XSS攻击
+ * @param {string} text - 需要转义的文本
+ * @returns {string} 转义后的文本
+ */
+function escapeHtml(text) {
+  if (!text) return '';
+  const map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, m => map[m]);
+}
+
+/**
+ * 解析企业名称，提取简称和全称
+ * @param {string} enterpriseName - 企业名称（可能是"简称【全称】"格式或纯全称）
+ * @returns {Object} { abbreviation: 简称, fullName: 全称 }
+ */
+function parseEnterpriseName(enterpriseName) {
+  if (!enterpriseName) {
+    return { abbreviation: '', fullName: '' };
+  }
+
+  // 检查是否是"简称【全称】"格式
+  const formatMatch = enterpriseName.match(/^(.+?)【(.+?)】$/);
+  if (formatMatch) {
+    return {
+      abbreviation: formatMatch[1].trim(),
+      fullName: formatMatch[2].trim()
+    };
+  }
+
+  // 如果不是格式化后的名称，返回全称作为默认值
+  return {
+    abbreviation: enterpriseName.trim(),
+    fullName: enterpriseName.trim()
+  };
+}
+
+/**
+ * 获取企业类型的显示名称
+ */
+function getEntityTypeDisplayName(entityType) {
+  const typeMap = {
+    '被投企业': '被投企业',
+    '基金': '基金',
+    '子基金': '子基金',
+    '子基金管理人': '子基金管理人',
+    '子基金GP': '子基金GP',
+    '其他': '其他',
+    null: '被投企业' // 兼容旧数据，默认为被投企业
+  };
+  return typeMap[entityType] || '其他';
+}
+
+/**
  * 生成邮件HTML内容
- * @param {Object} newsByEnterprise - 按企业分组的新闻数据
+ * @param {Object} newsData - 按企业类型和企业分组的新闻数据，格式：{ entityType: { enterpriseName: [news...] } }
+ *                            或旧格式：{ enterpriseName: [news...] }（兼容）
  * @param {string} timeRangeFrom - 时间范围开始时间（可选）
  */
-function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
+function generateEmailContent(newsData, timeRangeFrom = null) {
   // 如果没有提供时间范围，使用默认的昨天（兼容旧代码）
   const dateStr = timeRangeFrom || (() => {
     const { from } = getYesterdayTimeRange();
     return from;
   })();
   
-  if (Object.keys(newsByEnterprise).length === 0) {
+  // 检测数据结构：新格式（按企业类型分组）还是旧格式（只按企业分组）
+  const isNewFormat = Object.values(newsData).some(value => 
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  );
+  
+  // 转换为统一格式：{ entityType: { enterpriseName: [news...] } }
+  let newsByEntityTypeAndEnterprise = {};
+  if (isNewFormat) {
+    newsByEntityTypeAndEnterprise = newsData;
+  } else {
+    // 旧格式：按企业分组，需要转换为新格式
+    // 默认归类为"被投企业"（兼容旧数据）
+    newsByEntityTypeAndEnterprise['被投企业'] = newsData;
+  }
+  
+  // 检查是否有数据
+  const hasData = Object.keys(newsByEntityTypeAndEnterprise).some(entityType => 
+    Object.keys(newsByEntityTypeAndEnterprise[entityType] || {}).length > 0
+  );
+  
+  if (!hasData) {
     return `
       <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
         <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">
@@ -193,29 +273,72 @@ function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
     `;
   }
   
+  // 定义企业类型的显示顺序
+  const entityTypeOrder = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+  
   let html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
-      <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">
-        舆情信息日报
-      </h2>
       <p style="color: #666; margin-bottom: 30px;">
         日期：${formatPublicTime(dateStr)}
       </p>
   `;
   
-  // 按企业分组显示
-  for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
+  // 按企业类型分组显示
+  for (const entityType of entityTypeOrder) {
+    const newsByEnterprise = newsByEntityTypeAndEnterprise[entityType];
+    if (!newsByEnterprise || Object.keys(newsByEnterprise).length === 0) {
+      continue;
+    }
+    
+    // 企业类型标题
+    const entityTypeDisplayName = getEntityTypeDisplayName(entityType);
+    html += `
+      <h2 style="color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; margin-top: 30px; margin-bottom: 20px;">
+        舆情信息日报-${entityTypeDisplayName}
+      </h2>
+    `;
+    
+    // 按企业分组显示
+    for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
     // 只有分组键为null的才显示"——榜单或获奖信息"（这些是包含榜单/获奖标签的额外公众号新闻）
     // 其他空企业名称的新闻保持原样显示（可能是空字符串或其他值）
-    const displayEnterpriseName = (enterpriseName === null) 
-      ? '——榜单或获奖信息' 
-      : (enterpriseName || '未关联企业');
+    let enterpriseDisplayHtml = '';
+    
+    if (enterpriseName === null) {
+      enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">——榜单或获奖信息</h3>';
+    } else if (!enterpriseName || enterpriseName === '') {
+      enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">未关联企业</h3>';
+    } else {
+      // 解析企业名称，提取简称和全称
+      const { abbreviation, fullName } = parseEnterpriseName(enterpriseName);
+      
+      // 转义HTML，防止XSS攻击
+      const escapedAbbreviation = escapeHtml(abbreviation);
+      const escapedFullName = escapeHtml(fullName);
+      
+      // 如果简称和全称相同，说明没有简称，只显示全称
+      if (abbreviation === fullName) {
+        enterpriseDisplayHtml = `
+          <h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">
+            ${escapedAbbreviation}
+          </h3>
+        `;
+      } else {
+        // 显示简称为大字体粗体，全称为小字体灰色（使用正文的字号16px）
+        enterpriseDisplayHtml = `
+          <h3 style="color: #2c3e50; margin-bottom: 8px; font-size: 18px;">
+            ${escapedAbbreviation}
+          </h3>
+          <div style="color: #888; font-size: 16px; margin-bottom: 20px; line-height: 1.6;">
+            ${escapedFullName}
+          </div>
+        `;
+      }
+    }
     
     html += `
       <div style="margin-bottom: 40px; border-left: 4px solid #4CAF50; padding-left: 20px;">
-        <h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">
-          ${displayEnterpriseName}
-        </h3>
+        ${enterpriseDisplayHtml}
     `;
     
     for (const news of newsList) {
@@ -250,7 +373,13 @@ function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
       `;
     }
     
-    html += `</div>`;
+      html += `</div>`;
+    }
+    
+    // 每个企业类型之间添加分隔线
+    html += `
+      <hr style="border: none; border-top: 2px solid #ddd; margin: 40px 0;">
+    `;
   }
   
   html += `
@@ -266,39 +395,95 @@ function generateEmailContent(newsByEnterprise, timeRangeFrom = null) {
 
 /**
  * 生成邮件纯文本内容（备用）
- * @param {Object} newsByEnterprise - 按企业分组的新闻数据
+ * @param {Object} newsData - 按企业类型和企业分组的新闻数据，格式：{ entityType: { enterpriseName: [news...] } }
+ *                            或旧格式：{ enterpriseName: [news...] }（兼容）
  * @param {string} timeRangeFrom - 时间范围开始时间（可选）
  */
-function generateEmailTextContent(newsByEnterprise, timeRangeFrom = null) {
+function generateEmailTextContent(newsData, timeRangeFrom = null) {
   // 如果没有提供时间范围，使用默认的昨天（兼容旧代码）
   const dateStr = timeRangeFrom || (() => {
     const { from } = getYesterdayTimeRange();
     return from;
   })();
   
-  if (Object.keys(newsByEnterprise).length === 0) {
+  // 检测数据结构：新格式（按企业类型分组）还是旧格式（只按企业分组）
+  const isNewFormat = Object.values(newsData).some(value => 
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+  );
+  
+  // 转换为统一格式：{ entityType: { enterpriseName: [news...] } }
+  let newsByEntityTypeAndEnterprise = {};
+  if (isNewFormat) {
+    newsByEntityTypeAndEnterprise = newsData;
+  } else {
+    // 旧格式：按企业分组，需要转换为新格式
+    newsByEntityTypeAndEnterprise['被投企业'] = newsData;
+  }
+  
+  // 检查是否有数据
+  const hasData = Object.keys(newsByEntityTypeAndEnterprise).some(entityType => 
+    Object.keys(newsByEntityTypeAndEnterprise[entityType] || {}).length > 0
+  );
+  
+  if (!hasData) {
     return `【企业新闻】未获取到企业相关信息\n\n日期：${formatPublicTime(dateStr)}\n\n未获取到企业相关信息\n`;
   }
   
-  let text = `舆情信息日报\n\n日期：${formatPublicTime(dateStr)}\n\n`;
+  // 定义企业类型的显示顺序
+  const entityTypeOrder = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
   
-  for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
-    text += `${enterpriseName}\n${'='.repeat(50)}\n\n`;
-    
-    for (const news of newsList) {
-      const tags = formatNewsTags(news.keywords);
-      const sentiment = formatNewsSentiment(news.news_sentiment);
-      const publicTime = formatPublicTime(news.public_time);
-      const accountName = news.account_name || '未知公众号';
-      const sourceUrl = news.source_url || '#';
-      const abstract = news.news_abstract || '暂无摘要';
-      
-      text += `${news.title || '无标题'} ${tags} ${sentiment}\n`;
-      text += `${abstract}\n`;
-      text += `${publicTime}，${accountName}，${sourceUrl}\n\n`;
+  let text = `日期：${formatPublicTime(dateStr)}\n\n`;
+  
+  // 按企业类型分组显示
+  for (const entityType of entityTypeOrder) {
+    const newsByEnterprise = newsByEntityTypeAndEnterprise[entityType];
+    if (!newsByEnterprise || Object.keys(newsByEnterprise).length === 0) {
+      continue;
     }
     
-    text += '\n';
+    // 企业类型标题
+    const entityTypeDisplayName = getEntityTypeDisplayName(entityType);
+    text += `舆情信息日报-${entityTypeDisplayName}\n\n`;
+    
+    // 按企业分组显示
+    for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
+      // 只有分组键为null的才显示"——榜单或获奖信息"（这些是包含榜单/获奖标签的额外公众号新闻）
+      // 其他空企业名称的新闻保持原样显示（可能是空字符串或其他值）
+      if (enterpriseName === null) {
+        text += `——榜单或获奖信息\n${'='.repeat(50)}\n\n`;
+      } else if (!enterpriseName || enterpriseName === '') {
+        text += `未关联企业\n${'='.repeat(50)}\n\n`;
+      } else {
+        // 解析企业名称，提取简称和全称
+        const { abbreviation, fullName } = parseEnterpriseName(enterpriseName);
+        
+        // 如果简称和全称相同，说明没有简称，只显示全称
+        if (abbreviation === fullName) {
+          text += `${abbreviation}\n${'='.repeat(50)}\n\n`;
+        } else {
+          // 显示简称和全称
+          text += `${abbreviation}\n${fullName}\n${'='.repeat(50)}\n\n`;
+        }
+      }
+      
+      for (const news of newsList) {
+        const tags = formatNewsTags(news.keywords);
+        const sentiment = formatNewsSentiment(news.news_sentiment);
+        const publicTime = formatPublicTime(news.public_time);
+        const accountName = news.account_name || '未知公众号';
+        const sourceUrl = news.source_url || '#';
+        const abstract = news.news_abstract || '暂无摘要';
+        
+        text += `${news.title || '无标题'} ${tags} ${sentiment}\n`;
+        text += `${abstract}\n`;
+        text += `${publicTime}，${accountName}，${sourceUrl}\n\n`;
+      }
+      
+      text += '\n';
+    }
+    
+    // 每个企业类型之间添加分隔
+    text += `${'='.repeat(60)}\n\n`;
   }
   
   return text;
@@ -455,8 +640,43 @@ async function sendNewsEmailToRecipient(recipientId) {
       throw new Error('收件管理配置未启用');
     }
     
-    // 获取今天获取到的新闻（按企业分组）
-    const newsByEnterprise = await getYesterdayNewsByEnterprise();
+    // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企业类型和企查查类别过滤）
+    const { getUserVisibleYesterdayNews } = require('./scheduledEmailTasks');
+    const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    
+    // 先按企业类型分组，再按企业分组
+    // 结构：{ entityType: { enterpriseName: [news...] } }
+    const newsByEntityTypeAndEnterprise = {};
+    for (const news of newsList) {
+      // 获取企业类型，直接使用 news_detail 表中的 entity_type 字段
+      // 如果 entity_type 为空（null、undefined 或空字符串），且有企业全称，默认为"被投企业"（兼容旧数据）
+      let entityType = news.entity_type;
+      if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
+        if (news.enterprise_full_name && news.enterprise_full_name.trim() !== '') {
+          entityType = '被投企业';
+        } else {
+          entityType = '其他';
+        }
+      }
+      
+      // 确保 entityType 是有效的分组类型
+      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+      if (!validEntityTypes.includes(entityType)) {
+        // 如果 entityType 不在有效列表中，默认为"被投企业"
+        console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
+        entityType = '被投企业';
+      }
+      
+      const enterpriseName = news.enterprise_full_name || (news.account_name || news.wechat_account || '其他');
+      
+      if (!newsByEntityTypeAndEnterprise[entityType]) {
+        newsByEntityTypeAndEnterprise[entityType] = {};
+      }
+      if (!newsByEntityTypeAndEnterprise[entityType][enterpriseName]) {
+        newsByEntityTypeAndEnterprise[entityType][enterpriseName] = [];
+      }
+      newsByEntityTypeAndEnterprise[entityType][enterpriseName].push(news);
+    }
     
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
     const emailConfigs = await db.query(
@@ -475,8 +695,8 @@ async function sendNewsEmailToRecipient(recipientId) {
     
     const emailConfig = emailConfigs[0];
     
-    // 发送邮件
-    const result = await sendNewsEmail(recipient, emailConfig, newsByEnterprise);
+    // 发送邮件（传递按企业类型和企业分组的嵌套结构）
+    const result = await sendNewsEmail(recipient, emailConfig, newsByEntityTypeAndEnterprise);
     
     return {
       success: true,
@@ -522,10 +742,10 @@ async function sendNewsEmailsToAllRecipients() {
     
     console.log(`找到 ${recipients.length} 个启用的收件管理配置`);
     
-    // 获取今天获取到的新闻（按企业分组）
-    const newsByEnterprise = await getYesterdayNewsByEnterprise();
+    // 为每个收件人获取对应的新闻（根据各自的entity_type配置）
+    const { getUserVisibleYesterdayNews } = require('./scheduledEmailTasks');
     
-    if (Object.keys(newsByEnterprise).length === 0) {
+    if (recipients.length === 0) {
       console.log('今天没有获取到相关企业的新闻，将发送空数据通知邮件');
     }
     
@@ -552,10 +772,54 @@ async function sendNewsEmailsToAllRecipients() {
     let errorCount = 0;
     const results = [];
     
-    // 为每个收件人发送邮件
+    // 为每个收件人发送邮件（根据各自的entity_type配置获取对应的新闻）
     for (const recipient of recipients) {
       try {
-        const result = await sendNewsEmail(recipient, emailConfig, newsByEnterprise);
+        // 获取该收件人可见的昨日舆情信息（根据entity_type过滤）
+        const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+        
+        // 先按企业类型分组，再按企业分组
+        const newsByEntityTypeAndEnterprise = {};
+        for (const news of newsList) {
+          // 获取企业类型，直接使用 news_detail 表中的 entity_type 字段
+          // 如果 entity_type 为空（null、undefined 或空字符串），且有企业全称，默认为"被投企业"（兼容旧数据）
+          let entityType = news.entity_type;
+          if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
+            if (news.enterprise_full_name && news.enterprise_full_name.trim() !== '') {
+              entityType = '被投企业';
+            } else {
+              entityType = '其他';
+            }
+          }
+          
+          // 确保 entityType 是有效的分组类型
+          const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+          if (!validEntityTypes.includes(entityType)) {
+            // 如果 entityType 不在有效列表中，默认为"被投企业"
+            console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
+            entityType = '被投企业';
+          }
+          
+          const enterpriseName = news.enterprise_full_name || (news.account_name || news.wechat_account || '其他');
+          
+          if (!newsByEntityTypeAndEnterprise[entityType]) {
+            newsByEntityTypeAndEnterprise[entityType] = {};
+          }
+          if (!newsByEntityTypeAndEnterprise[entityType][enterpriseName]) {
+            newsByEntityTypeAndEnterprise[entityType][enterpriseName] = [];
+          }
+          newsByEntityTypeAndEnterprise[entityType][enterpriseName].push(news);
+        }
+        
+        const hasData = Object.keys(newsByEntityTypeAndEnterprise).some(entityType => 
+          Object.keys(newsByEntityTypeAndEnterprise[entityType] || {}).length > 0
+        );
+        
+        if (!hasData) {
+          console.log(`收件人 ${recipient.id}：今天没有获取到相关企业的新闻，将发送空数据通知邮件`);
+        }
+        
+        const result = await sendNewsEmail(recipient, emailConfig, newsByEntityTypeAndEnterprise);
         successCount++;
         results.push({
           recipientId: recipient.id,
