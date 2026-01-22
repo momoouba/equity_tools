@@ -684,7 +684,7 @@ function NewsInfo() {
     {
       title: '企业类型',
       dataIndex: 'entity_type',
-      width: 140,
+      width: 84,
       ellipsis: true,
       tooltip: true,
       render: (text) => text || '-'
@@ -708,7 +708,7 @@ function NewsInfo() {
     {
       title: '关键词',
       dataIndex: 'keywords',
-      width: 150,
+      width: 80,
       align: 'center',
       ellipsis: true,
       tooltip: true,
@@ -730,7 +730,7 @@ function NewsInfo() {
     {
       title: '发布时间',
       dataIndex: 'public_time',
-      width: 180,
+      width: 100,
       ellipsis: true,
       tooltip: true,
       render: (text) => formatDate(text)
@@ -738,7 +738,7 @@ function NewsInfo() {
     {
       title: '标题',
       dataIndex: 'title',
-      width: 300,
+      width: 250,
       ellipsis: false,
       render: (text) => (
         <div style={{ 
@@ -754,7 +754,7 @@ function NewsInfo() {
     {
       title: '新闻摘要',
       dataIndex: 'news_abstract',
-      width: 450,
+      width: 400,
       ellipsis: false,
       render: (text) => (
         <div style={{ 
