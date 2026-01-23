@@ -785,13 +785,14 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 console.error('[入库] 错误堆栈:', e.stack);
               }
 
-              // 如果企业全称不为空，从invested_enterprises表中获取entity_type
+              // 如果企业全称不为空，从invested_enterprises表中获取entity_type和project_abbreviation
               let entityType = null;
+              let enterpriseAbbreviation = null;
               if (enterpriseFullName) {
                 try {
                   // 尝试匹配格式化后的名称（包含【】），如果失败则尝试匹配原始全称
                   let enterpriseInfo = await db.query(
-                    `SELECT entity_type, enterprise_full_name
+                    `SELECT entity_type, enterprise_full_name, project_abbreviation
                      FROM invested_enterprises 
                      WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
                      AND delete_mark = 0 
@@ -799,13 +800,13 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                     [enterpriseFullName, `%【${enterpriseFullName}】`]
                   );
                   
-                  // 如果没找到，尝试从格式化名称中提取全称进行匹配
+                  // 如果没找到，尝试从格式化名称中提取全称进行匹配（兼容旧数据）
                   if (enterpriseInfo.length === 0) {
                     const formatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
                     if (formatMatch) {
                       const extractedFullName = formatMatch[2];
                       enterpriseInfo = await db.query(
-                        `SELECT entity_type, enterprise_full_name
+                        `SELECT entity_type, enterprise_full_name, project_abbreviation
                          FROM invested_enterprises 
                          WHERE enterprise_full_name = ? 
                          AND delete_mark = 0 
@@ -817,9 +818,10 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   
                   if (enterpriseInfo.length > 0) {
                     entityType = enterpriseInfo[0].entity_type;
+                    enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation || null;
                   }
                 } catch (err) {
-                  console.warn(`获取entity_type时出错: ${err.message}`);
+                  console.warn(`获取entity_type和project_abbreviation时出错: ${err.message}`);
                 }
               }
               
@@ -829,13 +831,14 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
               const newsId = await generateId('news_detail');
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype, fund, sub_fund) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype, fund, sub_fund) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
                   article.name || '',
                   account, // 直接使用传入的公众号ID，不使用接口返回的article.account
                   enterpriseFullName,
+                  enterpriseAbbreviation,
                   entityType,
                   sourceUrl,
                   article.title || '',
@@ -1956,16 +1959,16 @@ router.get('/user-news', async (req, res) => {
 
     // 查询数据（有企业的优先，然后按发布时间降序）
     const data = await db.query(
-      `SELECT account_name, wechat_account, enterprise_full_name, public_time, title, source_url, keywords 
-       ${condition} 
-       ORDER BY 
+      `SELECT account_name, wechat_account, enterprise_full_name, public_time, title, source_url, keywords, fund, sub_fund, entity_type, news_abstract, news_sentiment
+       ${condition}
+       ORDER BY
          CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
-         public_time DESC, 
-         created_at DESC 
+         public_time DESC,
+         created_at DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
-    
+
     const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
 
     // 解析 keywords JSON 字段
@@ -1990,7 +1993,12 @@ router.get('/user-news', async (req, res) => {
         public_time: item.public_time || '',
         title: item.title || '',
         source_url: item.source_url || '',
-        keywords: keywords
+        keywords: keywords,
+        fund: item.fund || null,
+        sub_fund: item.sub_fund || null,
+        entity_type: item.entity_type || null,
+        news_abstract: item.news_abstract || null,
+        news_sentiment: item.news_sentiment || null
       };
     });
 
@@ -2079,18 +2087,19 @@ router.get('/', async (req, res) => {
       // 查询数据（按发布时间降序）
       // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
       const data = await db.query(
-        `SELECT nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, nd.keywords, nd.enterprise_full_name, 
+        `SELECT nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, nd.keywords, nd.enterprise_full_name,
+                nd.fund, nd.sub_fund, nd.news_abstract, nd.news_sentiment,
                 COALESCE(nd.entity_type, ie.entity_type) as entity_type
          FROM news_detail nd
          LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
-         ${whereCondition} 
-         ORDER BY nd.public_time DESC, nd.created_at DESC 
+         ${whereCondition}
+         ORDER BY nd.public_time DESC, nd.created_at DESC
          LIMIT ? OFFSET ?`,
         [...params, parseInt(pageSize), offset]
       );
-      
+
       const totalRows = await db.query(
-        `SELECT COUNT(*) as total 
+        `SELECT COUNT(*) as total
          FROM news_detail nd
          LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
          ${whereCondition}`,
@@ -2120,6 +2129,10 @@ router.get('/', async (req, res) => {
           source_url: item.source_url || '',
           enterprise_full_name: item.enterprise_full_name || '',
           entity_type: item.entity_type || null,
+          fund: item.fund || null,
+          sub_fund: item.sub_fund || null,
+          news_abstract: item.news_abstract || null,
+          news_sentiment: item.news_sentiment || null,
           keywords: keywords
         };
       });
@@ -2208,17 +2221,18 @@ router.get('/', async (req, res) => {
     // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
     // 注意：使用COALESCE确保优先使用news_detail表中的entity_type
     const data = await db.query(
-      `SELECT nd.id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, 
+      `SELECT nd.id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url,
               nd.keywords, nd.enterprise_full_name, nd.news_abstract, nd.news_sentiment, nd.content,
               nd.created_at, nd.APItype, nd.news_category,
+              nd.fund, nd.sub_fund,
               COALESCE(nd.entity_type, ie.entity_type) as entity_type
        FROM news_detail nd
        LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0
        ${whereCondition}
-       ORDER BY 
+       ORDER BY
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
-         nd.public_time DESC, 
-         nd.created_at DESC 
+         nd.public_time DESC,
+         nd.created_at DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
@@ -2997,7 +3011,17 @@ router.post('/recipients', [
       return res.status(401).json({ success: false, message: '未登录' });
     }
 
-    const { recipient_email, email_subject, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    
+    // 如果没有提供 cron_expression，从 send_frequency 和 send_time 转换（向后兼容）
+    let finalCronExpression = cron_expression;
+    if (!finalCronExpression && send_frequency && send_time) {
+      finalCronExpression = convertToCronExpression(send_frequency, send_time);
+    }
+    // 如果还是没有，使用默认值
+    if (!finalCronExpression) {
+      finalCronExpression = '0 0 9 * * ? *'; // 默认每天9点执行
+    }
     
     // 验证多个邮箱格式
     const emailValidation = validateMultipleEmails(recipient_email);
@@ -3052,13 +3076,19 @@ router.post('/recipients', [
     }
 
     const recipientId = await generateId('recipient_management');
+    
+    // 如果提供了 cron_expression，send_frequency 和 send_time 可以为 null（已废弃）
+    // 如果没有提供 cron_expression，需要从 send_frequency 和 send_time 转换
+    const finalSendFrequency = finalCronExpression ? null : (send_frequency || 'daily');
+    const finalSendTime = finalCronExpression ? null : (send_time || '09:00:00');
+    
     const newData = {
       user_id: userId,
       recipient_email: emailValidation.emails,
       email_subject: email_subject || '',
       cron_expression: finalCronExpression,
-      send_frequency: send_frequency || null,
-      send_time: send_time || null,
+      send_frequency: finalSendFrequency,
+      send_time: finalSendTime,
       is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1,
       qichacha_category_codes: categoryCodesJson,
       entity_type: validatedEntityTypeJson
@@ -4179,8 +4209,9 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     let entityType = null;
                     let fund = null;
                     let sub_fund = null;
+                    let enterpriseAbbreviation = null;
                     const enterpriseResult = await db.query(
-                      `SELECT enterprise_full_name, entity_type, fund, sub_fund 
+                      `SELECT enterprise_full_name, entity_type, fund, sub_fund, project_abbreviation 
                        FROM invested_enterprises 
                        WHERE unified_credit_code = ? 
                        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
@@ -4193,6 +4224,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                       entityType = enterpriseResult[0].entity_type;
                       fund = enterpriseResult[0].fund;
                       sub_fund = enterpriseResult[0].sub_fund;
+                      enterpriseAbbreviation = enterpriseResult[0].project_abbreviation || null;
                     }
 
                     // 将Category编码转换为中文类别
@@ -4271,13 +4303,14 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                     // 所以这里news_abstract设为NULL，等待后续AI分析
                     await db.execute(
                       `INSERT INTO news_detail 
-                       (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract, fund, sub_fund) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                       (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract, fund, sub_fund) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                       [
                         newsId,
                         newsItem.Source || '企查查',
                         newsItem.Source || '企查查',
                         enterpriseFullName,
+                        enterpriseAbbreviation,
                         entityType,
                         newsItem.Url || '',
                         newsItem.Title || '',

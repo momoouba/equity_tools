@@ -209,9 +209,9 @@ router.post('/news-config', [
 
     const { app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
     
-    // 验证：必须提供 cron_expression 或 frequency_type + frequency_value
-    if (!cron_expression && (!frequency_type || !frequency_value)) {
-      return res.status(400).json({ success: false, message: '必须提供Cron表达式或频次类型和频次值' });
+    // 验证：必须提供 cron_expression（frequency_type 和 frequency_value 已废弃）
+    if (!cron_expression) {
+      return res.status(400).json({ success: false, message: '必须提供Cron表达式' });
     }
 
     // 检查应用是否存在
@@ -360,6 +360,11 @@ router.post('/news-config', [
       }
     }
 
+    // 如果使用 cron_expression，frequency_type 和 frequency_value 应该为 NULL（已废弃）
+    // 如果使用 frequency_type（旧方式），则设置这些字段
+    const finalFrequencyType = cron_expression ? null : (frequency_type || null);
+    const finalFrequencyValue = cron_expression ? null : (frequency_value || null);
+    
     await db.execute(
       `INSERT INTO news_interface_config 
        (id, app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, entity_type) 
@@ -372,8 +377,8 @@ router.post('/news-config', [
         finalContentType,
         api_key || '', // 企查查接口可以为空
         cron_expression || null,
-        frequency_type || null,
-        frequency_value || null,
+        finalFrequencyType,
+        finalFrequencyValue,
         finalSendFrequency,
         finalSendTime,
         weekday || null,
@@ -395,8 +400,9 @@ router.post('/news-config', [
           app_id,
           request_url,
           content_type: content_type || 'application/x-www-form-urlencoded;charset=utf-8',
-          frequency_type,
-          frequency_value: frequency_value.toString(),
+          cron_expression: cron_expression || '',
+          frequency_type: frequency_type || '',
+          frequency_value: frequency_value ? frequency_value.toString() : '',
           is_active: '1'
         },
         userId
@@ -458,25 +464,11 @@ router.put('/news-config/:id', [
     }
     const oldConfig = existingConfigs[0];
 
-    // 如果更新应用ID或接口类型，检查应用是否存在，以及是否重复
-    if (app_id || interface_type) {
-      const checkAppId = app_id || oldConfig.app_id;
-      const checkInterfaceType = interface_type || oldConfig.interface_type || '新榜';
-      
-      if (app_id) {
-        const appExists = await db.query('SELECT id FROM applications WHERE id = ?', [app_id]);
-        if (appExists.length === 0) {
-          return res.status(400).json({ success: false, message: '应用不存在' });
-        }
-      }
-      
-      // 检查是否存在相同应用和接口类型的配置（排除当前配置）
-      const duplicate = await db.query(
-        'SELECT id FROM news_interface_config WHERE app_id = ? AND interface_type = ? AND id != ?', 
-        [checkAppId, checkInterfaceType, id]
-      );
-      if (duplicate.length > 0) {
-        return res.status(400).json({ success: false, message: `该应用已存在接口类型为"${checkInterfaceType}"的新闻接口配置` });
+    // 如果更新应用ID，检查应用是否存在（不再限制同一应用不能有多个相同接口类型的配置）
+    if (app_id) {
+      const appExists = await db.query('SELECT id FROM applications WHERE id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
       }
     }
 
@@ -3234,6 +3226,138 @@ router.post('/database-config/:id/test', async (req, res) => {
     res.status(500).json({
       success: false,
       message: '测试失败：' + error.message
+    });
+  }
+});
+
+// 解析 Cron 表达式并返回执行时间
+router.post('/cron/parse', async (req, res) => {
+  try {
+    const { cronExpression, count = 5, isSkipHoliday = false } = req.body;
+
+    if (!cronExpression || typeof cronExpression !== 'string') {
+      return res.status(400).json({ success: false, message: 'Cron表达式不能为空' });
+    }
+
+    // 使用 cron-parser 解析（后端可以使用 Node.js 库）
+    const { parseExpression } = require('cron-parser');
+
+    // 将7位表达式转换为6位（cron-parser只支持6位）
+    const parts = cronExpression.trim().split(/\s+/);
+    let cron6Field = null;
+    
+    if (parts.length === 7) {
+      // 去掉最后一个字段（年份），返回前6位
+      cron6Field = parts.slice(0, 6).join(' ');
+    } else if (parts.length === 6) {
+      cron6Field = cronExpression.trim();
+    } else {
+      return res.status(400).json({ success: false, message: 'Cron表达式格式错误：必须是6位或7位' });
+    }
+
+    // 转换星期字段：Quartz Cron使用1-7（1=周日），cron-parser使用0-6（0=周日）
+    const cron6Parts = cron6Field.split(/\s+/);
+    if (cron6Parts.length === 6) {
+      const weekdayField = cron6Parts[5];
+      if (weekdayField && weekdayField !== '*' && weekdayField !== '?') {
+        // 处理逗号分隔的多个值
+        if (weekdayField.includes(',')) {
+          const values = weekdayField.split(',').map(v => {
+            const trimmed = v.trim();
+            const num = parseInt(trimmed, 10);
+            if (!isNaN(num) && num >= 1 && num <= 7) {
+              return (num - 1) % 7;
+            }
+            return trimmed;
+          });
+          cron6Parts[5] = values.join(',');
+        } else if (weekdayField.includes('-')) {
+          // 处理范围
+          const [startStr, endStr] = weekdayField.split('-');
+          const start = parseInt(startStr.trim(), 10);
+          const end = parseInt(endStr.trim(), 10);
+          if (!isNaN(start) && !isNaN(end) && start >= 1 && start <= 7 && end >= 1 && end <= 7) {
+            cron6Parts[5] = `${(start - 1) % 7}-${(end - 1) % 7}`;
+          }
+        } else {
+          // 处理单个数字
+          const num = parseInt(weekdayField, 10);
+          if (!isNaN(num) && num >= 1 && num <= 7) {
+            cron6Parts[5] = String((num - 1) % 7);
+          }
+        }
+      }
+      cron6Field = cron6Parts.join(' ');
+    }
+
+    // 解析 cron 表达式
+    const interval = parseExpression(cron6Field, {
+      currentDate: new Date()
+    });
+
+    // 生成执行时间列表
+    const executionTimes = [];
+    const candidateCount = isSkipHoliday ? count * 4 : count; // 如果跳过节假日，生成更多候选
+    
+    for (let i = 0; i < candidateCount && executionTimes.length < count; i++) {
+      try {
+        const nextDate = interval.next().toDate();
+        executionTimes.push(nextDate.toISOString());
+      } catch (e) {
+        break; // 如果超出范围，停止
+      }
+    }
+
+    // 如果跳过节假日，过滤掉节假日
+    let filteredTimes = executionTimes;
+    if (isSkipHoliday && executionTimes.length > 0) {
+      try {
+        // 获取节假日列表
+        const currentYear = new Date().getFullYear();
+        const years = [currentYear, currentYear + 1, currentYear + 2];
+        const allHolidays = [];
+        
+        for (const year of years) {
+          const holidays = await db.query(
+            'SELECT holiday_date FROM holiday_calendar WHERE YEAR(holiday_date) = ? AND is_workday = 0',
+            [year]
+          );
+          allHolidays.push(...holidays.map(h => h.holiday_date.toISOString().split('T')[0]));
+        }
+        
+        const holidaySet = new Set(allHolidays);
+        filteredTimes = executionTimes.filter(dateStr => {
+          const date = new Date(dateStr);
+          const dateOnly = date.toISOString().split('T')[0];
+          return !holidaySet.has(dateOnly);
+        });
+      } catch (holidayError) {
+        console.warn('获取节假日列表失败:', holidayError);
+        // 如果获取节假日失败，返回未过滤的结果
+      }
+    }
+
+    // 格式化时间并返回前 count 个
+    const formattedTimes = filteredTimes.slice(0, count).map(dateStr => {
+      const date = new Date(dateStr);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    });
+
+    res.json({
+      success: true,
+      data: formattedTimes
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '解析Cron表达式失败：', error);
+    res.status(400).json({
+      success: false,
+      message: `表达式格式错误：${error.message}`
     });
   }
 });

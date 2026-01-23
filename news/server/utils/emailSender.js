@@ -183,24 +183,26 @@ function escapeHtml(text) {
  * @param {string} enterpriseName - 企业名称（可能是"简称【全称】"格式或纯全称）
  * @returns {Object} { abbreviation: 简称, fullName: 全称 }
  */
-function parseEnterpriseName(enterpriseName) {
-  if (!enterpriseName) {
+/**
+ * 从新闻数据中解析企业名称（简称和全称）
+ * 不再解析"简称【全称】"格式，直接从enterprise_abbreviation和enterprise_full_name字段读取
+ * @param {string} enterpriseAbbreviation - 企业简称（从enterprise_abbreviation字段获取）
+ * @param {string} enterpriseFullName - 企业全称（从enterprise_full_name字段获取）
+ * @returns {Object} { abbreviation: string, fullName: string }
+ */
+function parseEnterpriseName(enterpriseAbbreviation, enterpriseFullName) {
+  // 如果全称为空，返回空值
+  if (!enterpriseFullName) {
     return { abbreviation: '', fullName: '' };
   }
 
-  // 检查是否是"简称【全称】"格式
-  const formatMatch = enterpriseName.match(/^(.+?)【(.+?)】$/);
-  if (formatMatch) {
-    return {
-      abbreviation: formatMatch[1].trim(),
-      fullName: formatMatch[2].trim()
-    };
-  }
+  // 如果简称为空，使用全称作为简称
+  const abbreviation = enterpriseAbbreviation || enterpriseFullName;
+  const fullName = enterpriseFullName;
 
-  // 如果不是格式化后的名称，返回全称作为默认值
   return {
-    abbreviation: enterpriseName.trim(),
-    fullName: enterpriseName.trim()
+    abbreviation: abbreviation.trim(),
+    fullName: fullName.trim()
   };
 }
 
@@ -309,8 +311,14 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     } else if (!enterpriseName || enterpriseName === '') {
       enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">未关联企业</h3>';
     } else {
+      // 从第一条新闻中获取enterprise_abbreviation和enterprise_full_name
+      // 不再解析"简称【全称】"格式，直接从字段读取
+      const firstNews = newsList && newsList.length > 0 ? newsList[0] : null;
+      const enterpriseAbbreviation = firstNews?.enterprise_abbreviation || null;
+      const enterpriseFullName = firstNews?.enterprise_full_name || enterpriseName; // 兼容旧数据，如果字段为空则使用分组键
+      
       // 解析企业名称，提取简称和全称
-      const { abbreviation, fullName } = parseEnterpriseName(enterpriseName);
+      const { abbreviation, fullName } = parseEnterpriseName(enterpriseAbbreviation, enterpriseFullName);
       
       // 转义HTML，防止XSS攻击
       const escapedAbbreviation = escapeHtml(abbreviation);
@@ -333,6 +341,60 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
             ${escapedFullName}
           </div>
         `;
+      }
+      
+      // 从第一条新闻中获取fund和sub_fund（同一企业的所有新闻应该有相同的值）
+      // firstNews已在上面声明，这里直接使用
+      const subFund = firstNews?.sub_fund || null;
+      const fund = firstNews?.fund || null;
+      
+      // 调试日志：检查数据
+      if (entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') {
+        console.log(`[邮件生成] 企业类型: ${entityType}, 企业名称: ${enterpriseName}`);
+        console.log(`[邮件生成] 第一条新闻ID: ${firstNews?.id}, fund: ${fund || '(NULL)'}, sub_fund: ${subFund || '(NULL)'}`);
+        if (firstNews) {
+          console.log(`[邮件生成] 新闻数据包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
+          console.log(`[邮件生成] 新闻数据所有字段:`, Object.keys(firstNews).join(', '));
+        }
+      }
+      
+      // 如果是子基金管理人或子基金GP，显示关联子基金和关联母基金（蓝色字体）
+      if (entityType === '子基金管理人' || entityType === '子基金GP') {
+        // 构建关联基金信息HTML（蓝色字体）
+        let fundInfoHtml = '<div style="font-size: 14px; margin-bottom: 20px; line-height: 1.8;">';
+        let hasFundInfo = false;
+        
+        if (subFund) {
+          fundInfoHtml += `<span style="margin-right: 20px;">关联子基金: <strong style="color: #1890ff;">${escapeHtml(subFund)}</strong></span>`;
+          hasFundInfo = true;
+        }
+        if (fund) {
+          fundInfoHtml += `<span>关联基金: <strong style="color: #1890ff;">${escapeHtml(fund)}</strong></span>`;
+          hasFundInfo = true;
+        }
+        fundInfoHtml += '</div>';
+        
+        // 只有在有数据时才显示
+        if (hasFundInfo) {
+          enterpriseDisplayHtml += fundInfoHtml;
+        } else {
+          console.log(`[邮件生成] ⚠️ 子基金管理人/子基金GP类型，但fund和sub_fund都为空: ${enterpriseName}`);
+        }
+      }
+      
+      // 如果是子基金类型，在简称下面显示关联基金（参考子基金管理人的样式）
+      if (entityType === '子基金') {
+        if (fund) {
+          // 构建关联基金信息HTML（在简称下面，字号稍小，标签黑色，值蓝色）
+          let fundInfoHtml = '<div style="font-size: 14px; margin-bottom: 20px; line-height: 1.8;">';
+          fundInfoHtml += `<span>关联基金: <strong style="color: #1890ff;">${escapeHtml(fund)}</strong></span>`;
+          fundInfoHtml += '</div>';
+          
+          // 将关联基金信息添加到企业显示HTML后面
+          enterpriseDisplayHtml += fundInfoHtml;
+        } else {
+          console.log(`[邮件生成] ⚠️ 子基金类型，但fund为空: ${enterpriseName}`);
+        }
       }
     }
     
@@ -454,16 +516,49 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
       } else if (!enterpriseName || enterpriseName === '') {
         text += `未关联企业\n${'='.repeat(50)}\n\n`;
       } else {
+        // 从第一条新闻中获取enterprise_abbreviation和enterprise_full_name
+        // 不再解析"简称【全称】"格式，直接从字段读取
+        const firstNews = newsList && newsList.length > 0 ? newsList[0] : null;
+        const enterpriseAbbreviation = firstNews?.enterprise_abbreviation || null;
+        const enterpriseFullName = firstNews?.enterprise_full_name || enterpriseName; // 兼容旧数据，如果字段为空则使用分组键
+        
         // 解析企业名称，提取简称和全称
-        const { abbreviation, fullName } = parseEnterpriseName(enterpriseName);
+        const { abbreviation, fullName } = parseEnterpriseName(enterpriseAbbreviation, enterpriseFullName);
+        
+        // 从第一条新闻中获取fund和sub_fund（同一企业的所有新闻应该有相同的值）
+        const subFund = firstNews?.sub_fund || null;
+        const fund = firstNews?.fund || null;
         
         // 如果简称和全称相同，说明没有简称，只显示全称
         if (abbreviation === fullName) {
-          text += `${abbreviation}\n${'='.repeat(50)}\n\n`;
+          // 如果是子基金类型，在全称后面显示关联基金
+          if (entityType === '子基金' && fund) {
+            text += `${abbreviation}    关联基金: ${fund}\n`;
+          } else {
+            text += `${abbreviation}\n`;
+          }
         } else {
           // 显示简称和全称
-          text += `${abbreviation}\n${fullName}\n${'='.repeat(50)}\n\n`;
+          text += `${abbreviation}\n`;
+          // 如果是子基金类型，在全称后面显示关联基金
+          if (entityType === '子基金' && fund) {
+            text += `${fullName}    关联基金: ${fund}\n`;
+          } else {
+            text += `${fullName}\n`;
+          }
         }
+        
+        // 如果是子基金管理人或子基金GP，显示关联子基金和关联基金
+        if (entityType === '子基金管理人' || entityType === '子基金GP') {
+          if (subFund) {
+            text += `关联子基金: ${subFund}\n`;
+          }
+          if (fund) {
+            text += `关联基金: ${fund}\n`;
+          }
+        }
+        
+        text += `${'='.repeat(50)}\n\n`;
       }
       
       for (const news of newsList) {
@@ -666,9 +761,11 @@ async function sendNewsEmailToRecipient(recipientId) {
         console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
         entityType = '被投企业';
       }
-      
+
+      // 不再构建"简称【全称】"格式，直接使用enterprise_full_name作为分组键
+      // enterprise_abbreviation和enterprise_full_name将在邮件生成时分别使用
       const enterpriseName = news.enterprise_full_name || (news.account_name || news.wechat_account || '其他');
-      
+
       if (!newsByEntityTypeAndEnterprise[entityType]) {
         newsByEntityTypeAndEnterprise[entityType] = {};
       }
@@ -677,7 +774,7 @@ async function sendNewsEmailToRecipient(recipientId) {
       }
       newsByEntityTypeAndEnterprise[entityType][enterpriseName].push(news);
     }
-    
+
     // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
     const emailConfigs = await db.query(
       `SELECT ec.*, a.app_name

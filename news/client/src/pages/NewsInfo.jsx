@@ -261,12 +261,20 @@ function NewsInfo() {
   }
 
   const cleanInvalidAssociations = async () => {
+    // 检查是否有选中的数据
+    if (selectedNewsIds.length === 0) {
+      Message.warning('请先选择要清理的新闻')
+      return
+    }
+
     Modal.confirm({
       title: '确认清理',
-      content: '此操作将检查所有新闻的企业关联，并清理不在被投企业数据库中的关联。\n\n这可能会影响大量数据，是否继续？',
+      content: `此操作将清理选中 ${selectedNewsIds.length} 条新闻的企业关联信息（被投企业全称、企业类型、关联基金、关联子基金都将设置为空）。\n\n是否继续？`,
       onOk: async () => {
         try {
-          const response = await axios.post('/api/news-analysis/clean-invalid-associations')
+          const response = await axios.post('/api/news-analysis/clean-invalid-associations-selected', {
+            newsIds: selectedNewsIds
+          })
           if (response.data.success) {
             const result = response.data.data
             let resultMessage = `清理完成！\n\n` +
@@ -283,6 +291,8 @@ function NewsInfo() {
               }
             }
             Message.success(resultMessage.replace(/\n/g, ' '))
+            setSelectedNewsIds([])
+            setSelectAll(false)
             fetchNews()
           } else {
             Message.error('清理失败：' + response.data.message)
@@ -694,16 +704,38 @@ function NewsInfo() {
       dataIndex: 'enterprise_full_name',
       width: 200,
       ellipsis: false,
-      render: (text) => (
-        <div style={{ 
-          whiteSpace: 'normal', 
-          wordWrap: 'break-word', 
-          wordBreak: 'break-word',
-          lineHeight: '1.5'
-        }}>
-          {text || '-'}
-        </div>
-      )
+      render: (text, record) => {
+        // 从enterprise_abbreviation和enterprise_full_name字段读取，不再解析"简称【全称】"格式
+        const abbreviation = record.enterprise_abbreviation || null;
+        const fullName = record.enterprise_full_name || text || null;
+        
+        // 如果简称和全称都存在且不同，显示"简称\n全称"格式
+        if (abbreviation && fullName && abbreviation !== fullName) {
+          return (
+            <div style={{ 
+              whiteSpace: 'normal', 
+              wordWrap: 'break-word', 
+              wordBreak: 'break-word',
+              lineHeight: '1.5'
+            }}>
+              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>{abbreviation}</div>
+              <div style={{ color: '#888', fontSize: '12px' }}>{fullName}</div>
+            </div>
+          );
+        }
+        
+        // 如果只有全称，只显示全称
+        return (
+          <div style={{ 
+            whiteSpace: 'normal', 
+            wordWrap: 'break-word', 
+            wordBreak: 'break-word',
+            lineHeight: '1.5'
+          }}>
+            {fullName || '-'}
+          </div>
+        );
+      }
     },
     {
       title: '关键词',
@@ -1036,8 +1068,9 @@ function NewsInfo() {
                     type="outline"
                     status="warning"
                     onClick={cleanInvalidAssociations}
+                    disabled={selectedNewsIds.length === 0}
                   >
-                    清理无效关联
+                    清理无效关联{selectedNewsIds.length > 0 ? `(${selectedNewsIds.length})` : ''}
                   </Button>
                 )}
 

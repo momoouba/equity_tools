@@ -379,38 +379,52 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
         if (conditions.length > 0) {
           entityTypeCondition = `AND (${conditions.join(' OR ')})`;
           entityTypeSubqueryFilter = `AND (${subqueryConditions.join(' OR ')})`;
+          // 调试：验证entityTypeSubqueryFilter不包含nd.前缀
+          if (entityTypeSubqueryFilter.includes('nd.')) {
+            console.error(`[邮件发送] ⚠️ 错误：entityTypeSubqueryFilter包含nd.前缀: ${entityTypeSubqueryFilter}`);
+            // 修复：移除nd.前缀
+            entityTypeSubqueryFilter = entityTypeSubqueryFilter.replace(/nd\.entity_type/g, 'entity_type');
+            console.log(`[邮件发送] ✓ 已修复entityTypeSubqueryFilter: ${entityTypeSubqueryFilter}`);
+          }
         }
         console.log(`[邮件发送] 管理员：根据企业类型过滤 - ${entityTypes.join(', ')}`);
+        console.log(`[邮件发送] entityTypeCondition: ${entityTypeCondition}`);
+        console.log(`[邮件发送] entityTypeSubqueryFilter: ${entityTypeSubqueryFilter}`);
       }
     }
 
+    // 按照用户要求：简化查询，只查询需要的字段
+    // 步骤2：查询created_at为今天的且enterprise_full_name不为null的数据
+    // 先简化查询，不使用LEFT JOIN，直接查询news_detail表，确保fund和sub_fund字段能正确返回
     newsList = await db.query(
-      `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
-              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-              nd.APItype, nd.news_category, nd.entity_type
+      `SELECT 
+              nd.id, 
+              nd.enterprise_full_name, 
+              nd.enterprise_abbreviation,
+              nd.title, 
+              nd.news_abstract, 
+              nd.news_sentiment, 
+              nd.entity_type,
+              nd.fund, 
+              nd.sub_fund,
+              nd.keywords,
+              nd.summary, 
+              nd.content, 
+              nd.public_time, 
+              nd.account_name, 
+              nd.wechat_account, 
+              nd.source_url, 
+              nd.created_at,
+              nd.APItype, 
+              nd.news_category
        FROM news_detail nd
-       LEFT JOIN invested_enterprises ie ON (
-         nd.enterprise_full_name = ie.enterprise_full_name 
-         OR (CASE 
-           WHEN nd.enterprise_full_name LIKE '%(%' THEN 
-             TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '(', 1))
-           ELSE 
-             nd.enterprise_full_name
-         END) = ie.enterprise_full_name
-         OR nd.enterprise_full_name = (CASE 
-           WHEN ie.enterprise_full_name LIKE '%(%' THEN 
-             TRIM(SUBSTRING_INDEX(ie.enterprise_full_name, '(', 1))
-           ELSE 
-             ie.enterprise_full_name
-         END)
-       ) AND ie.delete_mark = 0
        WHERE (
          -- 通过公众号ID匹配
          nd.wechat_account IN (${placeholders})
          OR
          -- 或者通过企业全称匹配（如果企业全称不为空）
          -- 支持精确匹配和模糊匹配（去掉括号内容后匹配，处理"企业全称(简称)"格式）
-         -- 支持"简称【全称】"格式的匹配
+         -- 企业全称匹配（不再解析"简称【全称】"格式，直接使用enterprise_full_name字段）
          (nd.enterprise_full_name IS NOT NULL 
           AND nd.enterprise_full_name != ''
           AND (
@@ -452,7 +466,18 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               ${entityTypeSubqueryFilter}
             )
             OR
-            -- 支持"简称【全称】"格式：提取全称部分进行匹配
+            -- 支持通过enterprise_abbreviation字段匹配（匹配project_abbreviation）
+            nd.enterprise_abbreviation IN (
+              SELECT project_abbreviation 
+              FROM invested_enterprises 
+              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              AND delete_mark = 0
+              AND project_abbreviation IS NOT NULL
+              AND project_abbreviation != ''
+              ${entityTypeSubqueryFilter}
+            )
+            -- 兼容旧数据：如果enterprise_full_name中仍存在"简称【全称】"格式，提取全称部分进行匹配
+            OR
             (CASE 
               WHEN nd.enterprise_full_name LIKE '%【%】%' THEN 
                 TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(nd.enterprise_full_name, '【', -1), '】', 1))
@@ -465,24 +490,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
+            -- 兼容旧数据：如果数据库中的enterprise_full_name仍存在"简称【全称】"格式，提取全称部分与新闻中的企业全称匹配
             OR
-            -- 支持"简称【全称】"格式：提取简称部分进行匹配（匹配project_abbreviation）
-            (CASE 
-              WHEN nd.enterprise_full_name LIKE '%【%】%' THEN 
-                TRIM(SUBSTRING_INDEX(nd.enterprise_full_name, '【', 1))
-              ELSE 
-                NULL
-            END) IN (
-              SELECT project_abbreviation 
-              FROM invested_enterprises 
-              WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
-              AND project_abbreviation IS NOT NULL
-              AND project_abbreviation != ''
-              ${entityTypeSubqueryFilter}
-            )
-            OR
-            -- 支持数据库中的"简称【全称】"格式：提取全称部分与新闻中的企业全称匹配
             nd.enterprise_full_name IN (
               SELECT CASE 
                 WHEN enterprise_full_name LIKE '%【%】%' THEN 
@@ -515,10 +524,79 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
        AND nd.created_at >= ? 
        AND nd.created_at < ?
        AND nd.delete_mark = 0
+       AND nd.enterprise_full_name IS NOT NULL
+       AND nd.enterprise_full_name != ''
        ${entityTypeCondition}
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
       [...uniqueAccountIds, from, to]
     );
+    
+    // 调试：立即检查查询结果是否包含fund和sub_fund字段
+    console.log(`[邮件发送] ========== 查询结果检查 ==========`);
+    if (newsList.length > 0) {
+      const firstNews = newsList[0];
+      console.log(`[邮件发送] 查询到的第一条新闻ID: ${firstNews.id}`);
+      console.log(`[邮件发送] 查询到的第一条新闻字段:`, Object.keys(firstNews).join(', '));
+      console.log(`[邮件发送] 查询到的第一条新闻包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
+      
+      // 直接查询数据库验证
+      const testQuery = await db.query(
+        `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+        [firstNews.id]
+      );
+      if (testQuery.length > 0) {
+        console.log(`[邮件发送] 数据库直接查询验证，ID=${firstNews.id}, fund="${testQuery[0].fund || '(NULL)'}", sub_fund="${testQuery[0].sub_fund || '(NULL)'}"`);
+      }
+      
+      if ('fund' in firstNews) {
+        console.log(`[邮件发送] 查询结果中第一条新闻的fund值: "${firstNews.fund || '(NULL)'}"`);
+      }
+      if ('sub_fund' in firstNews) {
+        console.log(`[邮件发送] 查询结果中第一条新闻的sub_fund值: "${firstNews.sub_fund || '(NULL)'}"`);
+      }
+      
+      // 如果查询结果中没有fund和sub_fund字段，手动补充
+      if (!('fund' in firstNews)) {
+        console.log(`[邮件发送] ⚠️ 查询结果中缺少fund和sub_fund字段，手动补充...`);
+        const newsIds = newsList.map(n => n.id);
+        const placeholders = newsIds.map(() => '?').join(',');
+        const fundData = await db.query(
+          `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+          newsIds
+        );
+        
+        const fundMap = {};
+        fundData.forEach(item => {
+          fundMap[item.id] = {
+            fund: item.fund || null,
+            sub_fund: item.sub_fund || null
+          };
+        });
+        
+        newsList.forEach(news => {
+          if (fundMap[news.id]) {
+            news.fund = fundMap[news.id].fund;
+            news.sub_fund = fundMap[news.id].sub_fund;
+          } else {
+            news.fund = null;
+            news.sub_fund = null;
+          }
+        });
+        
+        console.log(`[邮件发送] ✓ 已手动补充fund和sub_fund字段，共 ${newsList.length} 条新闻`);
+        
+        // 验证补充后的结果
+        const firstAfter = newsList[0];
+        console.log(`[邮件发送] 补充后第一条新闻包含fund字段: ${'fund' in firstAfter}, 包含sub_fund字段: ${'sub_fund' in firstAfter}`);
+        if ('fund' in firstAfter) {
+          console.log(`[邮件发送] 补充后第一条新闻的fund值: "${firstAfter.fund || '(NULL)'}"`);
+        }
+        if ('sub_fund' in firstAfter) {
+          console.log(`[邮件发送] 补充后第一条新闻的sub_fund值: "${firstAfter.sub_fund || '(NULL)'}"`);
+        }
+      }
+    }
+    console.log(`[邮件发送] ========== 查询结果检查结束 ==========`);
     
     // 特别查询量子位公众号的新闻（用于调试）
     if (quantumBitAccountId) {
@@ -606,6 +684,64 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     }
     
     console.log(`[邮件发送] 管理员：查询到 ${newsList.length} 条新闻（时间范围：${from} 到 ${to}，公众号数量：${uniqueAccountIds.length}）`);
+    
+    // 如果查询结果中没有fund和sub_fund字段，手动补充这些字段
+    if (newsList.length > 0 && !('fund' in newsList[0])) {
+      console.log(`[邮件发送] ⚠️ 查询结果中缺少fund和sub_fund字段，手动补充...`);
+      const newsIds = newsList.map(n => n.id);
+      const placeholders = newsIds.map(() => '?').join(',');
+      const fundData = await db.query(
+        `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+        newsIds
+      );
+      
+      // 创建映射表
+      const fundMap = {};
+      fundData.forEach(item => {
+        fundMap[item.id] = {
+          fund: item.fund || null,
+          sub_fund: item.sub_fund || null
+        };
+      });
+      
+      // 补充字段
+      newsList.forEach(news => {
+        if (fundMap[news.id]) {
+          news.fund = fundMap[news.id].fund;
+          news.sub_fund = fundMap[news.id].sub_fund;
+        } else {
+          news.fund = null;
+          news.sub_fund = null;
+        }
+      });
+      
+      console.log(`[邮件发送] ✓ 已手动补充fund和sub_fund字段，共 ${newsList.length} 条新闻`);
+    }
+    
+    // 调试：检查查询结果是否包含fund和sub_fund字段
+    if (newsList.length > 0) {
+      const firstNews = newsList[0];
+      console.log(`[邮件发送] 调试：第一条新闻的字段:`, Object.keys(firstNews).join(', '));
+      console.log(`[邮件发送] 调试：第一条新闻包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
+      
+      // 直接测试查询这条新闻的fund和sub_fund
+      if (firstNews.id) {
+        const testQuery = await db.query(
+          `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+          [firstNews.id]
+        );
+        if (testQuery.length > 0) {
+          console.log(`[邮件发送] 调试：直接查询数据库，ID=${firstNews.id}, fund="${testQuery[0].fund || '(NULL)'}", sub_fund="${testQuery[0].sub_fund || '(NULL)'}"`);
+        }
+      }
+      
+      if ('fund' in firstNews) {
+        console.log(`[邮件发送] 调试：第一条新闻的fund值: "${firstNews.fund || '(NULL)'}"`);
+      }
+      if ('sub_fund' in firstNews) {
+        console.log(`[邮件发送] 调试：第一条新闻的sub_fund值: "${firstNews.sub_fund || '(NULL)'}"`);
+      }
+    }
     
     // 测试查询：直接查询数据库中的 entity_type 值（用于调试）
     if (newsList.length > 0) {
@@ -824,9 +960,10 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     // 1. 通过公众号ID匹配且有企业全称的新闻（来自被投企业）
     // 2. 通过公众号ID匹配的额外公众号新闻（可能有企业全称，也可能没有）
     newsList = await db.query(
-      `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+      `SELECT nd.id, nd.title, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_sentiment, nd.keywords, 
               nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-              nd.APItype, nd.news_category, nd.entity_type
+              nd.APItype, nd.news_category, nd.entity_type, 
+              nd.fund, nd.sub_fund
        FROM news_detail nd
        LEFT JOIN invested_enterprises ie ON (
          nd.enterprise_full_name = ie.enterprise_full_name 
@@ -855,6 +992,39 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     );
     
     console.log(`[邮件发送] 普通用户：查询到 ${newsList.length} 条新闻`);
+    
+    // 如果查询结果中没有fund和sub_fund字段，手动补充这些字段
+    if (newsList.length > 0 && !('fund' in newsList[0])) {
+      console.log(`[邮件发送] ⚠️ 普通用户查询结果中缺少fund和sub_fund字段，手动补充...`);
+      const newsIds = newsList.map(n => n.id);
+      const placeholders = newsIds.map(() => '?').join(',');
+      const fundData = await db.query(
+        `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+        newsIds
+      );
+      
+      // 创建映射表
+      const fundMap = {};
+      fundData.forEach(item => {
+        fundMap[item.id] = {
+          fund: item.fund || null,
+          sub_fund: item.sub_fund || null
+        };
+      });
+      
+      // 补充字段
+      newsList.forEach(news => {
+        if (fundMap[news.id]) {
+          news.fund = fundMap[news.id].fund;
+          news.sub_fund = fundMap[news.id].sub_fund;
+        } else {
+          news.fund = null;
+          news.sub_fund = null;
+        }
+      });
+      
+      console.log(`[邮件发送] ✓ 普通用户已手动补充fund和sub_fund字段，共 ${newsList.length} 条新闻`);
+    }
     
     // 检查查询结果中的 entity_type 分布（用于调试）
     if (newsList.length > 0) {
@@ -1249,6 +1419,52 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
   
   console.log(`[邮件发送] ========== 过滤完成 ==========`);
   console.log(`[邮件发送] 最终返回：${finalNewsList.length} 条新闻`);
+  
+  // 在返回前，确保finalNewsList中的所有新闻都有fund和sub_fund字段
+  if (finalNewsList.length > 0 && !('fund' in finalNewsList[0])) {
+    console.log(`[邮件发送] ⚠️ 返回前检查：最终结果中缺少fund和sub_fund字段，手动补充...`);
+    const newsIds = finalNewsList.map(n => n.id);
+    const placeholders = newsIds.map(() => '?').join(',');
+    const fundData = await db.query(
+      `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+      newsIds
+    );
+    
+    // 创建映射表
+    const fundMap = {};
+    fundData.forEach(item => {
+      fundMap[item.id] = {
+        fund: item.fund || null,
+        sub_fund: item.sub_fund || null
+      };
+    });
+    
+    // 补充字段
+    finalNewsList.forEach(news => {
+      if (fundMap[news.id]) {
+        news.fund = fundMap[news.id].fund;
+        news.sub_fund = fundMap[news.id].sub_fund;
+      } else {
+        news.fund = null;
+        news.sub_fund = null;
+      }
+    });
+    
+    console.log(`[邮件发送] ✓ 返回前已手动补充fund和sub_fund字段，共 ${finalNewsList.length} 条新闻`);
+    
+    // 验证补充后的结果
+    if (finalNewsList.length > 0) {
+      const firstAfter = finalNewsList[0];
+      console.log(`[邮件发送] 返回前补充后第一条新闻包含fund字段: ${'fund' in firstAfter}, 包含sub_fund字段: ${'sub_fund' in firstAfter}`);
+      if ('fund' in firstAfter) {
+        console.log(`[邮件发送] 返回前补充后第一条新闻的fund值: "${firstAfter.fund || '(NULL)'}"`);
+      }
+      if ('sub_fund' in firstAfter) {
+        console.log(`[邮件发送] 返回前补充后第一条新闻的sub_fund值: "${firstAfter.sub_fund || '(NULL)'}"`);
+      }
+    }
+  }
+  
   if (finalNewsList.length > 0) {
     console.log(`[邮件发送] 最终新闻示例（前3条）：`, finalNewsList.slice(0, 3).map(n => ({
       id: n.id,
@@ -1258,7 +1474,11 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
       public_time: n.public_time,
       hasAbstract: !!(n.news_abstract && n.news_abstract.trim()),
       hasSummary: !!(n.summary && n.summary.trim()),
-      hasContent: !!(n.content && n.content.trim())
+      hasContent: !!(n.content && n.content.trim()),
+      hasFund: 'fund' in n,
+      hasSubFund: 'sub_fund' in n,
+      fund: n.fund || '(NULL)',
+      sub_fund: n.sub_fund || '(NULL)'
     })));
     
     // 检查最终结果中是否包含量子位公众号的新闻
@@ -1509,6 +1729,68 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       console.log(`[邮件发送] 过滤前的 entity_type 分布:`, JSON.stringify(beforeFilterStats, null, 2));
     }
     
+    // 在过滤前，确保newsList中的所有新闻都有fund和sub_fund字段
+    // 如果查询结果中没有fund和sub_fund字段，手动补充这些字段
+    if (newsList.length > 0) {
+      const firstNews = newsList[0];
+      console.log(`[邮件发送] 过滤前检查：第一条新闻的字段:`, Object.keys(firstNews).join(', '));
+      console.log(`[邮件发送] 过滤前检查：第一条新闻包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
+      
+      if (!('fund' in firstNews)) {
+        console.log(`[邮件发送] ⚠️ 过滤前检查：查询结果中缺少fund和sub_fund字段，手动补充...`);
+        const newsIds = newsList.map(n => n.id);
+        const placeholders = newsIds.map(() => '?').join(',');
+        const fundData = await db.query(
+          `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+          newsIds
+        );
+        
+        console.log(`[邮件发送] 从数据库查询到 ${fundData.length} 条fund和sub_fund数据`);
+        
+        // 创建映射表
+        const fundMap = {};
+        fundData.forEach(item => {
+          fundMap[item.id] = {
+            fund: item.fund || null,
+            sub_fund: item.sub_fund || null
+          };
+        });
+        
+        // 补充字段
+        newsList.forEach(news => {
+          if (fundMap[news.id]) {
+            news.fund = fundMap[news.id].fund;
+            news.sub_fund = fundMap[news.id].sub_fund;
+          } else {
+            news.fund = null;
+            news.sub_fund = null;
+          }
+        });
+        
+        console.log(`[邮件发送] ✓ 过滤前已手动补充fund和sub_fund字段，共 ${newsList.length} 条新闻`);
+        
+        // 验证补充后的结果
+        if (newsList.length > 0) {
+          const firstAfter = newsList[0];
+          console.log(`[邮件发送] 过滤前补充后第一条新闻包含fund字段: ${'fund' in firstAfter}, 包含sub_fund字段: ${'sub_fund' in firstAfter}`);
+          if ('fund' in firstAfter) {
+            console.log(`[邮件发送] 过滤前补充后第一条新闻的fund值: "${firstAfter.fund || '(NULL)'}"`);
+          }
+          if ('sub_fund' in firstAfter) {
+            console.log(`[邮件发送] 过滤前补充后第一条新闻的sub_fund值: "${firstAfter.sub_fund || '(NULL)'}"`);
+          }
+        }
+      } else {
+        console.log(`[邮件发送] ✓ 过滤前检查：第一条新闻已包含fund和sub_fund字段`);
+        if ('fund' in firstNews) {
+          console.log(`[邮件发送] 过滤前第一条新闻的fund值: "${firstNews.fund || '(NULL)'}"`);
+        }
+        if ('sub_fund' in firstNews) {
+          console.log(`[邮件发送] 过滤前第一条新闻的sub_fund值: "${firstNews.sub_fund || '(NULL)'}"`);
+        }
+      }
+    }
+    
     // 过滤掉广告类型的新闻（广告推广、商业广告、营销推广），以及企业名称为null或空的新闻
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
@@ -1549,7 +1831,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
     
     // 查询所有额外公众号的ID列表（用于判断新闻是否来自额外公众号）
-    const db = require('../db');
+    // 注意：db已经在文件顶部导入，不需要重新导入
     let additionalAccountIds = [];
     try {
       const additionalAccounts = await db.query(
@@ -1669,6 +1951,27 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       }
       // 确保 news 对象存在且是有效的
       if (news && typeof news === 'object') {
+        // 调试：检查分组时的数据是否包含fund和sub_fund字段
+        if ((entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') && filteredNewsList.indexOf(news) < 3) {
+          console.log(`[邮件发送] 分组时检查新闻 ID=${news.id}: 包含fund字段=${'fund' in news}, 包含sub_fund字段=${'sub_fund' in news}`);
+          if ('fund' in news) {
+            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的fund值: "${news.fund || '(NULL)'}"`);
+          }
+          if ('sub_fund' in news) {
+            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的sub_fund值: "${news.sub_fund || '(NULL)'}"`);
+          }
+        }
+        // 调试：检查分组时的数据是否包含fund和sub_fund字段
+        if ((entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') && filteredNewsList.indexOf(news) < 3) {
+          console.log(`[邮件发送] 分组时检查新闻 ID=${news.id}: 包含fund字段=${'fund' in news}, 包含sub_fund字段=${'sub_fund' in news}`);
+          console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的所有字段:`, Object.keys(news).join(', '));
+          if ('fund' in news) {
+            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的fund值: "${news.fund || '(NULL)'}"`);
+          }
+          if ('sub_fund' in news) {
+            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的sub_fund值: "${news.sub_fund || '(NULL)'}"`);
+          }
+        }
         newsByEntityTypeAndEnterprise[entityType][groupKey].push(news);
       } else {
         console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
@@ -1694,6 +1997,15 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       const firstNews = Object.values(newsByEntityTypeAndEnterprise[et] || {})[0]?.[0];
       if (firstNews) {
         console.log(`[邮件发送] 分组"${et}"的第一条新闻: ID=${firstNews.id}, entity_type="${firstNews.entity_type || '(NULL)'}", enterprise="${firstNews.enterprise_full_name?.substring(0, 30)}"`);
+        // 检查fund和sub_fund字段
+        console.log(`[邮件发送] 分组"${et}"的第一条新闻字段:`, Object.keys(firstNews).join(', '));
+        console.log(`[邮件发送] 分组"${et}"的第一条新闻包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
+        if ('fund' in firstNews) {
+          console.log(`[邮件发送] 分组"${et}"的第一条新闻fund值: "${firstNews.fund || '(NULL)'}"`);
+        }
+        if ('sub_fund' in firstNews) {
+          console.log(`[邮件发送] 分组"${et}"的第一条新闻sub_fund值: "${firstNews.sub_fund || '(NULL)'}"`);
+        }
       }
     });
     console.log(`[邮件发送] ========== 分组统计结束 ==========`);
@@ -2074,7 +2386,8 @@ async function executeEmailTask(recipientId) {
         const refreshedNewsList = await db.query(
           `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                   nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
-                  nd.APItype, nd.news_category, nd.entity_type
+                  nd.APItype, nd.news_category, nd.entity_type, 
+                  nd.fund, nd.sub_fund
            FROM news_detail nd
            WHERE nd.id IN (${placeholders})
            AND nd.delete_mark = 0`,
@@ -2082,6 +2395,62 @@ async function executeEmailTask(recipientId) {
         );
         
         logWithTimestamp(`[邮件发送] 重新获取到 ${refreshedNewsList.length} 条新闻数据`);
+        
+        // 检查重新获取的数据是否包含fund和sub_fund字段
+        if (refreshedNewsList.length > 0) {
+          const firstRefreshed = refreshedNewsList[0];
+          logWithTimestamp(`[邮件发送] ========== 检查重新获取的数据 ==========`);
+          logWithTimestamp(`[邮件发送] 重新获取的第一条新闻ID: ${firstRefreshed.id}`);
+          logWithTimestamp(`[邮件发送] 重新获取的第一条新闻字段:`, Object.keys(firstRefreshed).join(', '));
+          logWithTimestamp(`[邮件发送] 重新获取的第一条新闻包含fund字段: ${'fund' in firstRefreshed}, 包含sub_fund字段: ${'sub_fund' in firstRefreshed}`);
+          
+          // 直接查询数据库验证
+          const testQuery = await db.query(
+            `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+            [firstRefreshed.id]
+          );
+          if (testQuery.length > 0) {
+            logWithTimestamp(`[邮件发送] 数据库直接查询，ID=${firstRefreshed.id}, fund="${testQuery[0].fund || '(NULL)'}", sub_fund="${testQuery[0].sub_fund || '(NULL)'}"`);
+          }
+          
+          if ('fund' in firstRefreshed) {
+            logWithTimestamp(`[邮件发送] 重新获取的第一条新闻fund值: "${firstRefreshed.fund || '(NULL)'}"`);
+          }
+          if ('sub_fund' in firstRefreshed) {
+            logWithTimestamp(`[邮件发送] 重新获取的第一条新闻sub_fund值: "${firstRefreshed.sub_fund || '(NULL)'}"`);
+          }
+          
+          // 如果缺少字段，手动补充
+          if (!('fund' in firstRefreshed)) {
+            logWithTimestamp(`[邮件发送] ⚠️ 重新获取的数据缺少fund和sub_fund字段，手动补充...`);
+            const fundData = await db.query(
+              `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+              newsIds
+            );
+            
+            const fundMap = {};
+            fundData.forEach(item => {
+              fundMap[item.id] = {
+                fund: item.fund || null,
+                sub_fund: item.sub_fund || null
+              };
+            });
+            
+            refreshedNewsList.forEach(news => {
+              if (fundMap[news.id]) {
+                news.fund = fundMap[news.id].fund;
+                news.sub_fund = fundMap[news.id].sub_fund;
+              } else {
+                news.fund = null;
+                news.sub_fund = null;
+              }
+            });
+            
+            logWithTimestamp(`[邮件发送] ✓ 已手动补充fund和sub_fund字段`);
+          }
+          logWithTimestamp(`[邮件发送] ========== 检查结束 ==========`);
+        }
+        
         // 记录entity_type信息（用于调试）
         if (refreshedNewsList.length > 0) {
           const entityTypeStats = {};

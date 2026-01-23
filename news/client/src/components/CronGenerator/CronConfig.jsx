@@ -7,7 +7,7 @@ const Option = Select.Option
 const DIMENSIONS = [
   { key: 'second', label: '秒', min: 0, max: 59 },
   { key: 'minute', label: '分钟', min: 0, max: 59 },
-  { key: 'hour', label: '小时', min: 0, max: 23 },
+  { key: 'hour', label: '小时', min: 1, max: 23 }, // 用户要求：小时是1-23
   { key: 'day', label: '日', min: 1, max: 31 },
   { key: 'month', label: '月', min: 1, max: 12 },
   { key: 'weekday', label: '周', min: 1, max: 7 },
@@ -68,15 +68,20 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
 
   // 处理指定值变化
   const handleSpecifyChange = (value) => {
-    // 解析输入的值（支持逗号分隔）
+    // 处理多选下拉框的值（直接是数组）或输入框的值（逗号分隔的字符串）
     let values = []
-    if (typeof value === 'string') {
+    if (Array.isArray(value)) {
+      // 多选下拉框返回的是数组
+      values = value.filter(v => {
+        const num = typeof v === 'number' ? v : parseInt(v, 10)
+        return !isNaN(num) && num >= currentDimension.min && num <= currentDimension.max
+      }).sort((a, b) => a - b) // 排序，便于阅读
+    } else if (typeof value === 'string') {
+      // 输入框的值（逗号分隔的字符串）
       values = value.split(',').map(v => {
         const num = parseInt(v.trim(), 10)
         return isNaN(num) ? null : num
       }).filter(v => v !== null && v >= currentDimension.min && v <= currentDimension.max)
-    } else if (Array.isArray(value)) {
-      values = value.filter(v => v >= currentDimension.min && v <= currentDimension.max)
     } else if (typeof value === 'number') {
       values = [value]
     }
@@ -150,7 +155,7 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
             {activeTab === 'weekday' ? (
               <Select
                 mode="multiple"
-                value={Array.isArray(currentConfig.value) ? currentConfig.value : (currentConfig.value ? [currentConfig.value] : [])}
+                value={Array.isArray(currentConfig.value) ? currentConfig.value : (currentConfig.value != null ? [currentConfig.value] : [])}
                 onChange={handleSpecifyChange}
                 disabled={mode !== 'specify'}
                 style={{ width: 200, margin: '0 8px' }}
@@ -159,6 +164,25 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
                 {WEEKDAY_NAMES.map((name, index) => (
                   <Option key={index + 1} value={index + 1}>{name}</Option>
                 ))}
+              </Select>
+            ) : (activeTab === 'second' || activeTab === 'minute' || activeTab === 'hour' || activeTab === 'day' || activeTab === 'month') ? (
+              <Select
+                mode="multiple"
+                value={Array.isArray(currentConfig.value) ? currentConfig.value : (currentConfig.value != null ? [currentConfig.value] : [])}
+                onChange={handleSpecifyChange}
+                disabled={mode !== 'specify'}
+                style={{ width: 300, margin: '0 8px' }}
+                placeholder={`请选择${currentDimension.label}（可多选）`}
+                maxTagCount="responsive"
+              >
+                {Array.from({ length: currentDimension.max - currentDimension.min + 1 }, (_, i) => {
+                  const value = currentDimension.min + i
+                  return (
+                    <Option key={value} value={value}>
+                      {value}
+                    </Option>
+                  )
+                })}
               </Select>
             ) : (
               <Input

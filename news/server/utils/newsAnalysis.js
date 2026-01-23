@@ -4292,6 +4292,7 @@ ${enterpriseList}
       // 对于企查查接口的数据，无论企业是否在invested_enterprises表中，都需要进行二次校验
       // 对于新榜接口的数据，如果企业来自invested_enterprises表且状态不为"完全退出"，则不需要验证
       let finalEnterpriseName = newsItem.enterprise_full_name;
+      let enterpriseAbbreviation = null;  // 企业简称，从invested_enterprises.project_abbreviation获取
       let shouldValidate = true;
       const interfaceType = newsItem.APItype || '新榜';
       const isXinbang = (interfaceType === '新榜' || interfaceType === '新榜接口');
@@ -4407,12 +4408,12 @@ ${enterpriseList}
             logWithTag('[processNewsWithEnterprise]', '查询结果详情:', enterpriseCheck[0]);
             // 该企业来自invested_enterprises表且状态不为"完全退出"
             // 对于新榜接口的数据，不需要验证关联性，直接保持企业全称
-            // 确保企业名称是格式化后的"简称【全称】"格式
-            finalEnterpriseName = this.formatEnterpriseName(
-              enterpriseCheck[0].enterprise_full_name,
-              enterpriseCheck[0].project_abbreviation
-            );
-            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${finalEnterpriseName}`);
+            // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+            // 简称存储在enterprise_abbreviation字段中
+            finalEnterpriseName = enterpriseCheck[0].enterprise_full_name;
+            // 保存project_abbreviation，后续用于更新enterprise_abbreviation字段
+            enterpriseAbbreviation = enterpriseCheck[0].project_abbreviation || null;
+            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${finalEnterpriseName}, 简称: ${enterpriseAbbreviation || 'NULL'}`);
             shouldValidate = false;
           } else {
             logWithTag('[processNewsWithEnterprise]', '⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性');
@@ -4583,39 +4584,53 @@ ${enterpriseList}
         contentToSave = contentForAnalysis || newsItem.content || null;
       }
       
-      // 如果企业全称不为空，从invested_enterprises表中获取entity_type
+      // 如果企业全称不为空，从invested_enterprises表中获取entity_type、fund、sub_fund、project_abbreviation
       let entityType = null;
+      let enterpriseInfo = [];  // 声明在try块外部，以便后续使用
       if (finalEnterpriseName) {
         try {
-          // 尝试匹配格式化后的名称（包含【】），如果失败则尝试匹配原始全称
-          let enterpriseInfo = await db.query(
-            `SELECT entity_type, enterprise_full_name
-             FROM invested_enterprises 
-             WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
-             AND delete_mark = 0 
+          // 尝试匹配企业全称（不再解析"简称【全称】"格式，因为enterprise_full_name现在只存储全称）
+          enterpriseInfo = await db.query(
+            `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
+             FROM invested_enterprises
+             WHERE enterprise_full_name = ?
+             AND delete_mark = 0
              LIMIT 1`,
-            [finalEnterpriseName, `%【${finalEnterpriseName}】`]
+            [finalEnterpriseName]
           );
-          
-          // 如果没找到，尝试从格式化名称中提取全称进行匹配
+
+          // 如果精确匹配失败，尝试模糊匹配（兼容旧数据中可能存在的"简称【全称】"格式）
+          if (enterpriseInfo.length === 0) {
+            enterpriseInfo = await db.query(
+              `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
+               FROM invested_enterprises
+               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?)
+               AND delete_mark = 0
+               LIMIT 1`,
+              [`%${finalEnterpriseName}%`, finalEnterpriseName]
+            );
+          }
+
+          // 如果还是没找到，尝试从可能的"简称【全称】"格式中提取全称进行匹配（兼容旧数据）
           if (enterpriseInfo.length === 0) {
             const formatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
             if (formatMatch) {
               const extractedFullName = formatMatch[2];
               enterpriseInfo = await db.query(
-                `SELECT entity_type, enterprise_full_name, fund, sub_fund
-                 FROM invested_enterprises 
-                 WHERE enterprise_full_name = ? 
-                 AND delete_mark = 0 
+                `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
+                 FROM invested_enterprises
+                 WHERE enterprise_full_name = ?
+                 AND delete_mark = 0
                  LIMIT 1`,
                 [extractedFullName]
               );
             }
           }
-          
+
           if (enterpriseInfo.length > 0) {
             entityType = enterpriseInfo[0].entity_type;
-            console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取entity_type: ${entityType}`);
+            enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation || null;
+            console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取entity_type: ${entityType}, project_abbreviation: ${enterpriseAbbreviation || 'NULL'}`);
           } else {
             console.log(`[processNewsWithEnterprise] 未在invested_enterprises表中找到匹配的企业，entity_type设为NULL`);
           }
@@ -4623,36 +4638,26 @@ ${enterpriseList}
           console.warn(`[processNewsWithEnterprise] 获取entity_type时出错: ${err.message}`);
         }
       }
-      
-      // 获取fund和sub_fund
+
+      // 从enterpriseInfo中获取fund和sub_fund
       let fund = null;
       let sub_fund = null;
-      try {
-        const fundInfo = await db.query(
-          `SELECT fund, sub_fund 
-           FROM invested_enterprises 
-           WHERE enterprise_full_name = ? 
-           AND delete_mark = 0 
-           LIMIT 1`,
-          [finalEnterpriseName]
-        );
-        if (fundInfo.length > 0) {
-          fund = fundInfo[0].fund;
-          sub_fund = fundInfo[0].sub_fund;
-        }
-      } catch (err) {
-        console.warn(`[processNewsWithEnterprise] 获取fund和sub_fund时出错: ${err.message}`);
+      if (enterpriseInfo.length > 0) {
+        fund = enterpriseInfo[0].fund;
+        sub_fund = enterpriseInfo[0].sub_fund;
+        console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取fund和sub_fund: fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
       }
       
-      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ? WHERE id = ?`);
-      console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName}", entity_type="${entityType}", sentiment="${validatedAnalysis.sentiment}", fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
+      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ? WHERE id = ?`);
+      console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName || 'NULL'}", enterprise_abbreviation="${enterpriseAbbreviation || 'NULL'}", entity_type="${entityType || 'NULL'}", sentiment="${validatedAnalysis.sentiment}", fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
       
       await db.execute(
         `UPDATE news_detail 
-         SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
+         SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
          WHERE id = ?`,
         [
           finalEnterpriseName,
+          enterpriseAbbreviation,
           entityType,
           validatedAnalysis.sentiment,
           JSON.stringify(validatedAnalysis.keywords),
@@ -5044,107 +5049,89 @@ ${enterpriseList}
                 contentToSave3 = contentForAnalysis || newsItem.content || null;
               }
               
-              // 格式化企业名称为"简称【全称】"格式
-              const formattedName = this.formatEnterpriseName(
-                enterprise.dbInfo.enterprise_full_name,
-                enterprise.dbInfo.project_abbreviation
-              );
+              // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+              // 简称存储在enterprise_abbreviation字段中
+              const enterpriseFullName = enterprise.dbInfo.enterprise_full_name;
+              const enterpriseAbbreviation = enterprise.dbInfo.project_abbreviation || null;
               
-              // 获取entity_type
-              // 支持"简称【全称】"格式和纯全称格式的匹配
+              // 获取entity_type、fund、sub_fund
+              // 不再解析"简称【全称】"格式，因为enterprise_full_name现在只存储全称
               let entityType = null;
+              let fund = null;
+              let sub_fund = null;
               try {
-                console.log(`[processNewsWithoutEnterprise] 开始获取entity_type，企业信息:`, {
-                  enterprise_full_name: enterprise.dbInfo.enterprise_full_name,
-                  project_abbreviation: enterprise.dbInfo.project_abbreviation
+                console.log(`[processNewsWithoutEnterprise] 开始获取entity_type、fund、sub_fund，企业信息:`, {
+                  enterprise_full_name: enterpriseFullName,
+                  project_abbreviation: enterpriseAbbreviation
                 });
                 
-                // 解析enterprise_full_name，如果是"简称【全称】"格式，提取全称部分
-                let fullNameToMatch = enterprise.dbInfo.enterprise_full_name;
-                const formatMatch = fullNameToMatch.match(/^(.+?)【(.+?)】$/);
-                if (formatMatch) {
-                  fullNameToMatch = formatMatch[2].trim(); // 提取全称部分
-                  console.log(`[processNewsWithoutEnterprise] 解析"简称【全称】"格式，提取全称: ${fullNameToMatch}`);
-                }
-                
-                // 先尝试精确匹配
+                // 直接使用enterprise_full_name进行匹配（不再解析"简称【全称】"格式）
                 let enterpriseInfo = await db.query(
-                  `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                  `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                    WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                  [fullNameToMatch]
+                  [enterpriseFullName]
                 );
                 console.log(`[processNewsWithoutEnterprise] 精确匹配结果: ${enterpriseInfo.length} 条记录`);
                 
-                // 如果精确匹配失败，尝试匹配"简称【全称】"格式（提取全称部分）
+                // 如果精确匹配失败，尝试模糊匹配（兼容旧数据中可能存在的"简称【全称】"格式）
                 if (enterpriseInfo.length === 0) {
                   enterpriseInfo = await db.query(
-                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
+                    `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                      WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
-                    [`%${fullNameToMatch}%`]
+                    [`%${enterpriseFullName}%`]
                   );
                   console.log(`[processNewsWithoutEnterprise] 模糊匹配结果: ${enterpriseInfo.length} 条记录`);
                 }
                 
-                // 如果还是失败，尝试匹配数据库中的"简称【全称】"格式（提取全称部分）
+                // 如果还是失败，尝试匹配数据库中的"简称【全称】"格式（提取全称部分，兼容旧数据）
                 if (enterpriseInfo.length === 0) {
-                  enterpriseInfo = await db.query(
-                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
-                     WHERE (CASE 
-                       WHEN enterprise_full_name LIKE '%【%】%' THEN 
-                         TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
-                       ELSE 
-                         enterprise_full_name
-                     END) = ? AND delete_mark = 0 LIMIT 1`,
-                    [fullNameToMatch]
-                  );
-                  console.log(`[processNewsWithoutEnterprise] 提取全称匹配结果: ${enterpriseInfo.length} 条记录`);
-                }
-                
-                // 如果还是失败，尝试使用原始的企业全称（可能是"简称【全称】"格式）
-                if (enterpriseInfo.length === 0) {
-                  enterpriseInfo = await db.query(
-                    `SELECT entity_type, enterprise_full_name FROM invested_enterprises 
-                     WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                    [enterprise.dbInfo.enterprise_full_name]
-                  );
-                  console.log(`[processNewsWithoutEnterprise] 使用原始企业全称匹配结果: ${enterpriseInfo.length} 条记录`);
+                  const formatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+                  if (formatMatch) {
+                    const extractedFullName = formatMatch[2].trim();
+                    enterpriseInfo = await db.query(
+                      `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
+                       WHERE (CASE 
+                         WHEN enterprise_full_name LIKE '%【%】%' THEN 
+                           TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
+                         ELSE 
+                           enterprise_full_name
+                       END) = ? AND delete_mark = 0 LIMIT 1`,
+                      [extractedFullName]
+                    );
+                    console.log(`[processNewsWithoutEnterprise] 提取全称匹配结果: ${enterpriseInfo.length} 条记录`);
+                  }
                 }
                 
                 if (enterpriseInfo.length > 0) {
                   entityType = enterpriseInfo[0].entity_type;
-                  console.log(`[processNewsWithoutEnterprise] ✓ 从invested_enterprises表获取entity_type: ${entityType || '(NULL)'} (匹配的企业全称: ${enterpriseInfo[0].enterprise_full_name})`);
-                } else {
-                  console.warn(`[processNewsWithoutEnterprise] ⚠️ 未找到entity_type，企业全称: ${enterprise.dbInfo.enterprise_full_name}, 提取的全称: ${fullNameToMatch}`);
-                  console.log(`[processNewsWithoutEnterprise] 调试信息: enterprise.dbInfo =`, enterprise.dbInfo);
-                  // 尝试查询所有可能匹配的企业（用于调试）
-                  const allPossibleMatches = await db.query(
-                    `SELECT enterprise_full_name, entity_type FROM invested_enterprises 
-                     WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
-                     AND delete_mark = 0 LIMIT 5`,
-                    [`%${fullNameToMatch}%`, `%元禾璞华%`]
-                  );
-                  if (allPossibleMatches.length > 0) {
-                    console.log(`[processNewsWithoutEnterprise] 可能的匹配企业（前5条）:`, allPossibleMatches.map(e => ({
-                      enterprise_full_name: e.enterprise_full_name,
-                      entity_type: e.entity_type
-                    })));
+                  fund = enterpriseInfo[0].fund;
+                  sub_fund = enterpriseInfo[0].sub_fund;
+                  // 如果查询到的project_abbreviation不为空，使用查询到的值（更准确）
+                  if (enterpriseInfo[0].project_abbreviation) {
+                    enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation;
                   }
+                  console.log(`[processNewsWithoutEnterprise] ✓ 从invested_enterprises表获取entity_type: ${entityType || '(NULL)'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, project_abbreviation: ${enterpriseAbbreviation || 'NULL'}`);
+                } else {
+                  console.warn(`[processNewsWithoutEnterprise] ⚠️ 未找到企业信息，企业全称: ${enterpriseFullName}`);
                 }
               } catch (err) {
-                console.warn(`[processNewsWithoutEnterprise] 获取entity_type时出错: ${err.message}`);
+                console.warn(`[processNewsWithoutEnterprise] 获取entity_type、fund、sub_fund时出错: ${err.message}`);
               }
               
               await db.execute(
                 `UPDATE news_detail 
-                 SET enterprise_full_name = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
+                 SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
                  WHERE id = ?`,
                 [
-                  formattedName,
+                  enterpriseFullName,
+                  enterpriseAbbreviation,
                   entityType,
                   validatedAnalysis.sentiment,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
                   contentToSave3,
+                  fund,
+                  sub_fund,
                   newsItem.id
                 ]
               );
@@ -5164,86 +5151,76 @@ ${enterpriseList}
               const { generateId } = require('./idGenerator');
               const newId = await generateId('news_detail');
               
-              // 格式化企业名称为"简称【全称】"格式
-              const formattedName = this.formatEnterpriseName(
-                enterprise.dbInfo.enterprise_full_name,
-                enterprise.dbInfo.project_abbreviation
-              );
+              // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+              // 简称存储在enterprise_abbreviation字段中
+              const enterpriseFullName = enterprise.dbInfo.enterprise_full_name;
+              const enterpriseAbbreviation = enterprise.dbInfo.project_abbreviation || null;
               
-              // 获取entity_type（创建新记录时）
-              // 支持"简称【全称】"格式的匹配：如果数据库中的enterprise_full_name是"简称【全称】"格式，提取全称部分进行匹配
+              // 获取entity_type、fund、sub_fund（创建新记录时）
+              // 不再解析"简称【全称】"格式，因为enterprise_full_name现在只存储全称
               let entityType = null;
+              let fund = null;
+              let sub_fund = null;
               try {
-                // 先尝试精确匹配
+                // 直接使用enterprise_full_name进行匹配
                 let enterpriseInfo = await db.query(
-                  `SELECT entity_type FROM invested_enterprises 
+                  `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                    WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                  [enterprise.dbInfo.enterprise_full_name]
+                  [enterpriseFullName]
                 );
                 
-                // 如果精确匹配失败，尝试提取"简称【全称】"格式中的全称部分进行匹配
-                if (enterpriseInfo.length === 0 && enterprise.dbInfo.enterprise_full_name.includes('【')) {
-                  const fullNameMatch = enterprise.dbInfo.enterprise_full_name.match(/【(.+?)】/);
-                  if (fullNameMatch) {
-                    const extractedFullName = fullNameMatch[1].trim();
+                // 如果精确匹配失败，尝试模糊匹配（兼容旧数据）
+                if (enterpriseInfo.length === 0) {
+                  enterpriseInfo = await db.query(
+                    `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
+                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                    [`%${enterpriseFullName}%`]
+                  );
+                }
+                
+                // 如果还是没匹配到，尝试从可能的"简称【全称】"格式中提取全称进行匹配（兼容旧数据）
+                if (enterpriseInfo.length === 0) {
+                  const formatMatch = enterpriseFullName.match(/^(.+?)【(.+?)】$/);
+                  if (formatMatch) {
+                    const extractedFullName = formatMatch[2].trim();
                     enterpriseInfo = await db.query(
-                      `SELECT entity_type FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                      `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
+                       WHERE (CASE 
+                         WHEN enterprise_full_name LIKE '%【%】%' THEN 
+                           TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
+                         ELSE 
+                           enterprise_full_name
+                       END) = ? AND delete_mark = 0 LIMIT 1`,
                       [extractedFullName]
                     );
                   }
                 }
                 
-                // 如果还是没匹配到，尝试模糊匹配（支持数据库中的"简称【全称】"格式）
-                if (enterpriseInfo.length === 0) {
-                  enterpriseInfo = await db.query(
-                    `SELECT entity_type FROM invested_enterprises 
-                     WHERE (enterprise_full_name = ? 
-                       OR enterprise_full_name LIKE ? 
-                       OR (enterprise_full_name LIKE '%【%】%' AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?))
-                     AND delete_mark = 0 LIMIT 1`,
-                    [
-                      enterprise.dbInfo.enterprise_full_name,
-                      `%${enterprise.dbInfo.enterprise_full_name}%`,
-                      enterprise.dbInfo.enterprise_full_name
-                    ]
-                  );
-                }
-                
                 if (enterpriseInfo.length > 0) {
                   entityType = enterpriseInfo[0].entity_type;
+                  fund = enterpriseInfo[0].fund;
+                  sub_fund = enterpriseInfo[0].sub_fund;
+                  // 如果查询到的project_abbreviation不为空，使用查询到的值（更准确）
+                  if (enterpriseInfo[0].project_abbreviation) {
+                    enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation;
+                  }
+                  console.log(`[processNewsWithoutEnterprise] ✓ 从invested_enterprises表获取entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, project_abbreviation: ${enterpriseAbbreviation || 'NULL'}`);
                 }
               } catch (err) {
-                console.warn(`获取entity_type时出错: ${err.message}`);
-              }
-              
-              // 获取fund和sub_fund
-              let fund = null;
-              let sub_fund = null;
-              try {
-                const fundInfo = await db.query(
-                  `SELECT fund, sub_fund FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                  [enterprise.dbInfo.enterprise_full_name]
-                );
-                if (fundInfo.length > 0) {
-                  fund = fundInfo[0].fund;
-                  sub_fund = fundInfo[0].sub_fund;
-                }
-              } catch (err) {
-                console.warn(`获取fund和sub_fund时出错: ${err.message}`);
+                console.warn(`[processNewsWithoutEnterprise] 获取entity_type、fund、sub_fund时出错: ${err.message}`);
               }
               
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, entity_type, source_url, 
+                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, 
                   title, summary, public_time, content, keywords, news_abstract, news_sentiment, fund, sub_fund)
-                 SELECT ?, account_name, wechat_account, ?, ?, source_url, 
+                 SELECT ?, account_name, wechat_account, ?, ?, ?, source_url, 
                         title, summary, public_time, content, ?, ?, ?, ?, ?
                  FROM news_detail WHERE id = ?`,
                 [
                   newId,
-                  formattedName,
+                  enterpriseFullName,
+                  enterpriseAbbreviation,
                   entityType,
                   JSON.stringify(validatedAnalysis.keywords),
                   validatedAnalysis.news_abstract,
@@ -5451,43 +5428,47 @@ ${enterpriseList}
                   });
                   
                   if (matchedEnterprise) {
-                    // 格式化企业名称为"简称【全称】"格式
-                    const formattedName = this.formatEnterpriseName(
-                      matchedEnterprise.enterprise_full_name,
-                      matchedEnterprise.project_abbreviation
-                    );
+                    // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+                    // 简称存储在enterprise_abbreviation字段中
+                    const enterpriseFullName = matchedEnterprise.enterprise_full_name;
+                    const enterpriseAbbreviation = matchedEnterprise.project_abbreviation || null;
                     // 获取entity_type、fund和sub_fund
                     let entityType = null;
                     let fund = null;
                     let sub_fund = null;
                     try {
                       const enterpriseInfo = await db.query(
-                        `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
+                        `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                          WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                        [matchedEnterprise.enterprise_full_name]
+                        [enterpriseFullName]
                       );
                       if (enterpriseInfo.length > 0) {
                         entityType = enterpriseInfo[0].entity_type;
                         fund = enterpriseInfo[0].fund;
                         sub_fund = enterpriseInfo[0].sub_fund;
+                        // 如果查询到的project_abbreviation不为空，使用查询到的值（更准确）
+                        if (enterpriseInfo[0].project_abbreviation) {
+                          enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation;
+                        }
                       }
                     } catch (err) {
                       console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                      [formattedName, entityType, fund, sub_fund, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                      [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                   } else {
                     // 如果找不到匹配的企业，使用原始名称
-                    // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund
+                    // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund、project_abbreviation
                     let entityType = null;
                     let fund = null;
                     let sub_fund = null;
+                    let enterpriseAbbreviation = null;
                     try {
                       const enterpriseInfo = await db.query(
-                        `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
+                        `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                          WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                         [firstEnterprise.enterprise_name]
                       );
@@ -5495,15 +5476,16 @@ ${enterpriseList}
                         entityType = enterpriseInfo[0].entity_type;
                         fund = enterpriseInfo[0].fund;
                         sub_fund = enterpriseInfo[0].sub_fund;
+                        enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation || null;
                       }
                     } catch (err) {
                       console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                      [firstEnterprise.enterprise_name, entityType, fund, sub_fund, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                      [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                   }
                 }
               }
@@ -5853,43 +5835,47 @@ ${enterpriseList}
                 });
                 
                 if (matchedEnterprise) {
-                  // 格式化企业名称为"简称【全称】"格式
-                  const formattedName = this.formatEnterpriseName(
-                    matchedEnterprise.enterprise_full_name,
-                    matchedEnterprise.project_abbreviation
-                  );
+                  // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+                  // 简称存储在enterprise_abbreviation字段中
+                  const enterpriseFullName = matchedEnterprise.enterprise_full_name;
+                  const enterpriseAbbreviation = matchedEnterprise.project_abbreviation || null;
                   // 获取entity_type、fund和sub_fund
                   let entityType = null;
                   let fund = null;
                   let sub_fund = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
-                      [matchedEnterprise.enterprise_full_name]
+                      [enterpriseFullName]
                     );
                     if (enterpriseInfo.length > 0) {
                       entityType = enterpriseInfo[0].entity_type;
                       fund = enterpriseInfo[0].fund;
                       sub_fund = enterpriseInfo[0].sub_fund;
+                      // 如果查询到的project_abbreviation不为空，使用查询到的值（更准确）
+                      if (enterpriseInfo[0].project_abbreviation) {
+                        enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation;
+                      }
                     }
                   } catch (err) {
                     console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                    [formattedName, entityType, fund, sub_fund, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${formattedName}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                 } else {
                   // 如果找不到匹配的企业，使用原始名称
-                  // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund
+                  // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund、project_abbreviation
                   let entityType = null;
                   let fund = null;
                   let sub_fund = null;
+                  let enterpriseAbbreviation = null;
                   try {
                     const enterpriseInfo = await db.query(
-                      `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
+                      `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                        WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [firstEnterprise.enterprise_name]
                     );
@@ -5897,15 +5883,16 @@ ${enterpriseList}
                       entityType = enterpriseInfo[0].entity_type;
                       fund = enterpriseInfo[0].fund;
                       sub_fund = enterpriseInfo[0].sub_fund;
+                      enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation || null;
                     }
                   } catch (err) {
                     console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                    [firstEnterprise.enterprise_name, entityType, fund, sub_fund, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
                 }
               }
             }
@@ -5995,20 +5982,18 @@ ${enterpriseList}
               );
               
               if (enterpriseResult.length > 0) {
-                // 格式化企业名称为"简称【全称】"格式
-                const formattedName = this.formatEnterpriseName(
-                  enterpriseResult[0].enterprise_full_name,
-                  enterpriseResult[0].project_abbreviation
-                );
-                newsItem.enterprise_full_name = formattedName;
-                logWithTag('[批量分析]', `✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}`);
+                // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
+                // 简称存储在enterprise_abbreviation字段中
+                newsItem.enterprise_full_name = enterpriseResult[0].enterprise_full_name;
+                newsItem.enterprise_abbreviation = enterpriseResult[0].project_abbreviation || null;
+                logWithTag('[批量分析]', `✓ 匹配到企业公众号，设置企业全称: ${newsItem.enterprise_full_name}, 简称: ${newsItem.enterprise_abbreviation || 'NULL'}`);
                 // 获取entity_type、fund和sub_fund
                 let entityType = null;
                 let fund = null;
                 let sub_fund = null;
                 try {
                   const enterpriseInfo = await db.query(
-                    `SELECT entity_type, fund, sub_fund FROM invested_enterprises 
+                    `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
                      WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                     [enterpriseResult[0].enterprise_full_name]
                   );
@@ -6016,14 +6001,18 @@ ${enterpriseList}
                     entityType = enterpriseInfo[0].entity_type;
                     fund = enterpriseInfo[0].fund;
                     sub_fund = enterpriseInfo[0].sub_fund;
+                    // 如果查询到的project_abbreviation不为空，使用查询到的值（更准确）
+                    if (enterpriseInfo[0].project_abbreviation) {
+                      newsItem.enterprise_abbreviation = enterpriseInfo[0].project_abbreviation;
+                    }
                   }
                 } catch (err) {
                   console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                 }
-                // 更新数据库中的企业全称、entity_type、fund和sub_fund
+                // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund
                 await db.execute(
-                  'UPDATE news_detail SET enterprise_full_name = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                  [newsItem.enterprise_full_name, entityType, fund, sub_fund, newsItem.id]
+                  'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                  [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, newsItem.id]
                 );
               }
             } catch (e) {

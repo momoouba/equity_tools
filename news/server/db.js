@@ -1113,6 +1113,39 @@ async function initializeTables(dbPool) {
     console.warn('迁移news_interface_config表cron_expression字段时出现警告:', err.message);
   }
 
+  // 迁移news_interface_config表，将frequency_type和frequency_value改为允许NULL（因为现在使用cron_expression）
+  try {
+    const [freqTypeCol] = await dbPool.query(`
+      SELECT COLUMN_NAME, IS_NULLABLE 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'frequency_type'
+    `);
+    if (freqTypeCol.length > 0 && freqTypeCol[0].IS_NULLABLE === 'NO') {
+      await dbPool.query('ALTER TABLE news_interface_config MODIFY COLUMN frequency_type VARCHAR(20) NULL COMMENT \'频次类型：day-天，week-周，month-月（已废弃，使用cron_expression替代）\'');
+      console.log('已修改 news_interface_config 表的 frequency_type 字段为允许 NULL');
+    }
+  } catch (err) {
+    console.warn('修改news_interface_config表frequency_type字段时出现警告:', err.message);
+  }
+
+  try {
+    const [freqValueCol] = await dbPool.query(`
+      SELECT COLUMN_NAME, IS_NULLABLE 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'frequency_value'
+    `);
+    if (freqValueCol.length > 0 && freqValueCol[0].IS_NULLABLE === 'NO') {
+      await dbPool.query('ALTER TABLE news_interface_config MODIFY COLUMN frequency_value INT NULL COMMENT \'频次值（X天或X月）（已废弃，使用cron_expression替代）\'');
+      console.log('已修改 news_interface_config 表的 frequency_value 字段为允许 NULL');
+    }
+  } catch (err) {
+    console.warn('修改news_interface_config表frequency_value字段时出现警告:', err.message);
+  }
+
   // 移除news_interface_config表的唯一约束，允许同一应用和接口类型有多个不同配置
   // 注意：需要先删除使用该索引的外键约束，然后才能删除唯一索引
   // 已禁用：此迁移逻辑每次启动都会执行，导致外键约束警告。外键约束已手动修复，不再需要每次启动都执行。
@@ -1611,6 +1644,23 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 recipient_management 表 cron_expression 字段时出现警告:', err.message);
+  }
+
+  // 迁移 recipient_management 表，将 send_frequency 改为允许 NULL（因为现在使用 cron_expression）
+  try {
+    const [sendFreqCol] = await dbPool.query(`
+      SELECT COLUMN_NAME, IS_NULLABLE 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'recipient_management' 
+      AND COLUMN_NAME = 'send_frequency'
+    `);
+    if (sendFreqCol.length > 0 && sendFreqCol[0].IS_NULLABLE === 'NO') {
+      await dbPool.query('ALTER TABLE recipient_management MODIFY COLUMN send_frequency VARCHAR(20) NULL COMMENT \'发送频率：daily-每天，weekly-每周，monthly-每月（已废弃，使用cron_expression替代）\'');
+      console.log('✓ 已修改 recipient_management 表的 send_frequency 字段为允许 NULL');
+    }
+  } catch (err) {
+    console.warn('修改 recipient_management 表 send_frequency 字段时出现警告:', err.message);
   }
 
   // news_sync_execution_log 表：新闻同步执行日志
@@ -2159,6 +2209,27 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('检查/添加 entity_type 字段时出现警告:', err.message);
+  }
+
+  // 检查并添加 enterprise_abbreviation 字段（企业简称）
+  try {
+    const [abbreviationColumns] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_detail' 
+      AND COLUMN_NAME = 'enterprise_abbreviation'
+    `);
+    
+    if (abbreviationColumns.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_detail 
+        ADD COLUMN enterprise_abbreviation VARCHAR(255) NULL COMMENT '企业简称（从invested_enterprises.project_abbreviation获取）' AFTER enterprise_full_name
+      `);
+      console.log('  ✓ 已为 news_detail 表添加 enterprise_abbreviation 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 enterprise_abbreviation 字段时出现警告:', err.message);
   }
 
   // 为 users 表添加 role 字段（如果不存在）

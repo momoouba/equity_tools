@@ -282,9 +282,11 @@ div.share-news-page div.table-container table.news-table thead tr th {
 
 .share-news-page .news-table {
   width: 100% !important;
+  min-width: 100% !important;
   border-collapse: collapse !important;
   border-spacing: 0 !important;
   border: 1px solid #e5e6eb !important;
+  table-layout: fixed !important;
 }
 
 /* 覆盖所有可能的全局样式 - 最高优先级 */
@@ -303,18 +305,22 @@ div.share-news-page div.table-container table.news-table th {
 div.share-news-page div.table-container table.news-table thead tr th,
 div.share-news-page div.table-container table.news-table thead tr th.checkbox-cell,
 div.share-news-page div.table-container table.news-table thead tr th.sequence-number-cell,
-div.share-news-page div.table-container table.news-table thead tr th.enterprise-name-cell,
+div.share-news-page div.table-container table.news-table thead tr th.entity-type-cell,
+div.share-news-page div.table-container table.news-table thead tr th.enterprise-abbreviation-cell,
+div.share-news-page div.table-container table.news-table thead tr th.fund-cell,
+div.share-news-page div.table-container table.news-table thead tr th.sub-fund-cell,
 div.share-news-page div.table-container table.news-table thead tr th.keywords-cell,
 div.share-news-page div.table-container table.news-table thead tr th.publish-time-cell,
 div.share-news-page div.table-container table.news-table thead tr th.title-cell,
 div.share-news-page div.table-container table.news-table thead tr th.abstract-cell,
 div.share-news-page div.table-container table.news-table thead tr th.article-link-cell,
 div.share-news-page div.table-container table.news-table thead tr th.account-name-cell,
-div.share-news-page div.table-container table.news-table thead tr th.wechat-account-cell {
+div.share-news-page div.table-container table.news-table thead tr th.wechat-account-cell,
+div.share-news-page div.table-container table.news-table thead tr th.enterprise-name-cell {
   background-color: #165dff !important;
   background: #165dff !important;
   padding: 12px 16px !important;
-  text-align: left !important;
+  text-align: center !important;
   font-weight: 500 !important;
   color: #ffffff !important;
   border: 1px solid #165dff !important;
@@ -340,6 +346,8 @@ div.share-news-page div.table-container table.news-table thead tr th:last-child 
   color: #4e5969 !important;
   font-size: 14px !important;
   background-color: #ffffff !important;
+  vertical-align: middle !important;
+  text-align: center !important;
 }
 
 /* 第一行添加顶部边框 */
@@ -490,14 +498,18 @@ div.share-news-page div.table-container table.news-table thead tr th:last-child 
 /* 单元格样式 - 表头单元格特殊处理，确保背景色和颜色不被覆盖 - 使用最高优先级选择器 */
 div.share-news-page div.table-container table.news-table thead .checkbox-cell,
 div.share-news-page div.table-container table.news-table thead .sequence-number-cell,
-div.share-news-page div.table-container table.news-table thead .enterprise-name-cell,
+div.share-news-page div.table-container table.news-table thead .entity-type-cell,
+div.share-news-page div.table-container table.news-table thead .enterprise-abbreviation-cell,
+div.share-news-page div.table-container table.news-table thead .fund-cell,
+div.share-news-page div.table-container table.news-table thead .sub-fund-cell,
 div.share-news-page div.table-container table.news-table thead .keywords-cell,
 div.share-news-page div.table-container table.news-table thead .publish-time-cell,
 div.share-news-page div.table-container table.news-table thead .title-cell,
 div.share-news-page div.table-container table.news-table thead .abstract-cell,
 div.share-news-page div.table-container table.news-table thead .article-link-cell,
 div.share-news-page div.table-container table.news-table thead .account-name-cell,
-div.share-news-page div.table-container table.news-table thead .wechat-account-cell {
+div.share-news-page div.table-container table.news-table thead .wechat-account-cell,
+div.share-news-page div.table-container table.news-table thead .enterprise-name-cell {
   background-color: #165dff !important;
   background: #165dff !important;
   color: #ffffff !important;
@@ -528,58 +540,109 @@ div.share-news-page div.table-container table.news-table thead .wechat-account-c
 /* 单元格样式 - 数据行 */
 .share-news-page .sequence-number-cell {
   width: 60px;
-  text-align: center;
+  text-align: center !important;
+  vertical-align: middle !important;
 }
 
-.share-news-page .enterprise-name-cell {
-  max-width: 200px;
+.share-news-page .entity-type-cell {
+  width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-news-page .enterprise-abbreviation-cell {
+  width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left !important;
+  vertical-align: middle !important;
+}
+
+.share-news-page .fund-cell {
+  width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-news-page .sub-fund-cell {
+  width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .share-news-page .keywords-cell {
-  max-width: 200px;
+  width: 100px;
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  line-height: 1.5 !important;
+  vertical-align: middle !important;
+  text-align: center !important;
+  padding: 8px !important;
+}
+
+.share-news-page .enterprise-name-cell {
+  width: 240px; /* 15字 × 16px = 240px */
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+  line-height: 1.5 !important;
+  vertical-align: middle !important;
+  text-align: left !important;
+  padding: 8px !important;
+}
+
+/* 确保企业全称列的对齐样式优先级最高 */
+.share-news-page .news-table tbody td.enterprise-name-cell {
+  vertical-align: middle !important;
+  text-align: left !important;
 }
 
 .share-news-page .publish-time-cell {
-  width: 150px;
+  width: 100px;
   white-space: pre-line;
 }
 
 .share-news-page .title-cell {
-  max-width: 300px;
+  width: 250px;
   white-space: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
   line-height: 1.5 !important;
-  vertical-align: top !important;
+  vertical-align: middle !important;
+  text-align: center !important;
   padding: 8px !important;
 }
 
 .share-news-page .abstract-cell {
-  max-width: 300px;
+  width: 400px; /* 25字 × 16px = 400px */
   white-space: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
   line-height: 1.5 !important;
-  vertical-align: top !important;
+  vertical-align: middle !important;
+  text-align: left !important;
   padding: 8px !important;
 }
 
 .share-news-page .article-link-cell {
   width: 100px;
+  text-align: center;
 }
 
 .share-news-page .account-name-cell {
-  max-width: 150px;
+  width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .share-news-page .wechat-account-cell {
-  max-width: 150px;
+  width: 150px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -61,7 +61,7 @@ COPY package*.json ./
 RUN npm config set registry https://registry.npmmirror.com \
     && npm config set fetch-timeout 300000 \
     && npm config set fetch-retries 5 \
-    && npm ci --only=production \
+    && npm ci --omit=dev \
     && apt-get purge -y build-essential \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*

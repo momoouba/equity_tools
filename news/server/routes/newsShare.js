@@ -628,7 +628,7 @@ router.get('/news/:token', async (req, res) => {
     if (!isAdmin) {
       whereConditions.push(`EXISTS (
         SELECT 1 FROM invested_enterprises ie
-        WHERE ie.user_id = ? AND ie.full_name = nd.enterprise_full_name
+        WHERE ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
       )`);
       queryParams.push(userId);
     }
@@ -670,6 +670,10 @@ router.get('/news/:token', async (req, res) => {
         nd.account_name,
         nd.wechat_account,
         nd.enterprise_full_name,
+        nd.enterprise_abbreviation,
+        nd.entity_type,
+        nd.fund,
+        nd.sub_fund,
         nd.news_abstract,
         nd.keywords,
         nd.news_sentiment

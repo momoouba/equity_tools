@@ -722,7 +722,10 @@ function ShareNewsPage() {
                   />
                 </th>
                 <th className="sequence-number-cell">序号</th>
-                <th className="enterprise-name-cell">被投企业全称</th>
+                <th className="entity-type-cell">企业类型</th>
+                <th className="enterprise-abbreviation-cell">企业简称</th>
+                <th className="fund-cell">关联基金</th>
+                <th className="sub-fund-cell">关联子基金</th>
                 <th className="keywords-cell">关键词</th>
                 <th className="publish-time-cell">发布时间</th>
                 <th className="title-cell">标题</th>
@@ -730,12 +733,13 @@ function ShareNewsPage() {
                 <th className="article-link-cell">文章链接</th>
                 <th className="account-name-cell">公众号名称</th>
                 <th className="wechat-account-cell">微信账号</th>
+                <th className="enterprise-name-cell">企业全称</th>
               </tr>
             </thead>
             <tbody>
               {newsList.length === 0 ? (
                 <tr>
-                  <td colSpan="10" className="empty-data">
+                  <td colSpan="14" className="empty-data">
                     {search ? '未找到相关数据' : '暂无数据'}
                   </td>
                 </tr>
@@ -753,8 +757,17 @@ function ShareNewsPage() {
                     <td className="sequence-number-cell">
                       {(currentPage - 1) * pageSize + index + 1}
                     </td>
-                    <td className="enterprise-name-cell" title={news.enterprise_full_name || ''}>
-                      {news.enterprise_full_name || '-'}
+                    <td className="entity-type-cell" title={news.entity_type || ''}>
+                      {news.entity_type || '-'}
+                    </td>
+                    <td className="enterprise-abbreviation-cell" title={news.enterprise_abbreviation || ''}>
+                      {news.enterprise_abbreviation || '-'}
+                    </td>
+                    <td className="fund-cell" title={news.fund || ''}>
+                      {news.fund || '-'}
+                    </td>
+                    <td className="sub-fund-cell" title={news.sub_fund || ''}>
+                      {news.sub_fund || '-'}
                     </td>
                     <td className="keywords-cell">
                       {(() => {
@@ -806,6 +819,9 @@ function ShareNewsPage() {
                     </td>
                     <td className="wechat-account-cell" title={news.wechat_account || ''}>
                       {news.wechat_account || '-'}
+                    </td>
+                    <td className="enterprise-name-cell" title={news.enterprise_full_name || ''}>
+                      {news.enterprise_full_name || '-'}
                     </td>
                   </tr>
                 ))
