@@ -52,17 +52,14 @@ export default defineConfig({
       // 限制并发处理，避免一次性处理太多文件（降低到1，进一步减少内存占用）
       maxParallelFileOps: 1,
       // 禁用某些优化以减少内存占用
+      // 注意：preset: 'smallest' 可能过度优化，导致代码被错误移除
       treeshake: {
-        preset: 'smallest',
-        moduleSideEffects: false
+        preset: 'recommended',
+        moduleSideEffects: 'no-external'
       },
       output: {
-        // 手动分包，减少单个chunk大小
-        manualChunks: {
-          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
-          'arco-vendor': ['@arco-design/web-react'],
-          'utils-vendor': ['axios', 'dayjs', 'file-saver', 'xlsx']
-        },
+        // 移除手动分包，让 Vite 自动处理 chunk 分离
+        // 这样可以确保正确的依赖顺序，避免循环依赖和加载顺序问题
         // 减少内联资源，降低内存占用
         inlineDynamicImports: false,
         // 优化输出格式

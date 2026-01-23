@@ -1,0 +1,87 @@
+# 立即修复空白页面 - 强制重新构建（在服务器上执行）
+
+cd /opt/newsapp/news
+
+# 1. 先检查应用容器中的文件
+echo "=== 检查当前文件 ==="
+docker compose exec app stat -c%s /app/client/dist/index.html
+docker compose exec app head -5 /app/client/dist/index.html
+
+# 2. 强制重新构建（不使用缓存）- 这会重新构建前端
+echo ""
+echo "=== 强制重新构建（不使用缓存）==="
+echo "这可能需要5-10分钟..."
+docker compose build --no-cache app
+
+# 3. 重启应用容器
+echo ""
+echo "=== 重启应用容器 ==="
+docker compose restart app
+sleep 10
+
+# 4. 检查新构建的文件
+echo ""
+echo "=== 检查新构建的文件 ==="
+NEW_SIZE=$(docker compose exec -T app stat -c%s /app/client/dist/index.html 2>/dev/null || echo "0")
+echo "新构建的 index.html 大小: $NEW_SIZE 字节"
+
+if [ "$NEW_SIZE" -lt 1000 ]; then
+    echo "✗ 错误: 重新构建后文件仍然异常小"
+    echo "检查文件内容："
+    docker compose exec -T app head -20 /app/client/dist/index.html
+    exit 1
+fi
+
+# 5. 删除volume，让它从镜像中重新获取文件（最简单的方法）
+echo ""
+echo "=== 删除旧volume，使用镜像中的新文件 ==="
+docker compose down
+docker volume rm news_app_frontend 2>/dev/null || true
+
+# 6. 重新启动所有容器
+echo ""
+echo "=== 重新启动容器 ==="
+docker compose up -d
+
+# 7. 等待容器启动
+echo ""
+echo "=== 等待容器启动 ==="
+sleep 15
+
+# 8. 检查volume中的文件（应该自动从镜像复制）
+echo ""
+echo "=== 检查volume中的文件 ==="
+VOLUME_PATH=$(docker volume inspect news_app_frontend | grep -i "Mountpoint" | awk '{print $2}' | tr -d '",')
+sudo ls -lh "$VOLUME_PATH/index.html"
+VOLUME_SIZE=$(sudo stat -c%s "$VOLUME_PATH/index.html" 2>/dev/null || echo "0")
+echo "Volume中 index.html 大小: $VOLUME_SIZE 字节"
+
+# 9. 如果volume仍然是空的或文件很小，手动复制
+if [ "$VOLUME_SIZE" -lt 1000 ]; then
+    echo ""
+    echo "=== Volume文件异常，手动复制 ==="
+    sudo rm -rf "$VOLUME_PATH"/*
+    docker compose exec -T app tar -czf - -C /app/client/dist . | sudo tar -xzf - -C "$VOLUME_PATH"
+    docker compose restart nginx
+    sleep 3
+fi
+
+# 10. 最终验证
+echo ""
+echo "=== 最终验证 ==="
+NGINX_SIZE=$(docker compose exec -T nginx stat -c%s /usr/share/nginx/html/index.html 2>/dev/null || echo "0")
+echo "Nginx容器中 index.html 大小: $NGINX_SIZE 字节"
+
+if [ "$NGINX_SIZE" -ge 1000 ]; then
+    echo ""
+    echo "=========================================="
+    echo "✓ 修复成功！"
+    echo "=========================================="
+    echo "请清除浏览器缓存并刷新页面"
+else
+    echo ""
+    echo "=========================================="
+    echo "✗ 修复失败，请检查日志"
+    echo "=========================================="
+    docker compose logs app --tail 50
+fi

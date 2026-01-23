@@ -1,0 +1,27 @@
+# 立即修复空白页面 - 在服务器上执行以下命令
+
+cd /opt/newsapp/news
+
+# 1. 先检查应用容器中的文件是否正确
+echo "检查应用容器中的文件..."
+docker compose exec app ls -la /app/client/dist/ | head -10
+docker compose exec app stat -c%s /app/client/dist/index.html
+
+# 2. 如果应用容器中的文件正常，使用tar方式复制（最可靠）
+VOLUME_PATH=$(docker volume inspect news_app_frontend | grep -i "Mountpoint" | awk '{print $2}' | tr -d '",')
+echo "Volume路径: $VOLUME_PATH"
+
+# 3. 清空volume并重新复制
+sudo rm -rf "$VOLUME_PATH"/*
+docker compose exec -T app tar -czf - -C /app/client/dist . | sudo tar -xzf - -C "$VOLUME_PATH"
+
+# 4. 验证
+sudo ls -lh "$VOLUME_PATH/index.html"
+sudo stat -c%s "$VOLUME_PATH/index.html"
+
+# 5. 重启nginx
+docker compose restart nginx
+
+# 6. 最终验证
+docker compose exec nginx stat -c%s /usr/share/nginx/html/index.html
+docker compose exec nginx ls -la /usr/share/nginx/html/ | head -10

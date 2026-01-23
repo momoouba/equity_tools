@@ -1,0 +1,74 @@
+# 从本地构建并上传到服务器的步骤
+
+## 步骤1: 在本地构建前端
+
+在本地 PowerShell 中执行：
+
+```powershell
+cd E:\USER\SUREAL\Desktop\equity_news\news\client
+npm run build
+```
+
+## 步骤2: 打包构建文件
+
+在本地 PowerShell 中执行：
+
+```powershell
+cd E:\USER\SUREAL\Desktop\equity_news\news
+cd client
+tar -czf ..\dist.tar.gz dist\
+cd ..
+```
+
+或者使用 WinRAR/7-Zip 压缩 `client/dist` 目录为 `dist.tar.gz` 或 `dist.zip`
+
+## 步骤3: 上传到服务器
+
+使用 WinSCP 或 scp 将 `dist.tar.gz` 上传到服务器的 `/opt/newsapp/news/` 目录
+
+## 步骤4: 在服务器上解压并复制到 volume
+
+在服务器上执行：
+
+```bash
+cd /opt/newsapp/news
+
+# 解压（如果上传的是 tar.gz）
+tar -xzf dist.tar.gz -C client/
+
+# 或者如果上传的是 zip
+# unzip dist.zip -d client/
+
+# 复制到 volume
+VOLUME_PATH=$(docker volume inspect news_app_frontend | grep -i "Mountpoint" | awk '{print $2}' | tr -d '",')
+sudo rm -rf "$VOLUME_PATH"/*
+sudo cp -r client/dist/* "$VOLUME_PATH/"
+
+# 验证
+sudo ls -lh "$VOLUME_PATH/index.html"
+sudo stat -c%s "$VOLUME_PATH/index.html"
+
+# 重启 nginx
+docker compose restart nginx
+
+# 最终验证
+docker compose exec nginx stat -c%s /usr/share/nginx/html/index.html
+```
+
+## 或者：直接使用 scp 上传整个 dist 目录
+
+在本地 PowerShell 中执行：
+
+```powershell
+# 上传整个 dist 目录到服务器
+scp -r E:\USER\SUREAL\Desktop\equity_news\news\client\dist guofang@服务器IP:/tmp/dist
+```
+
+然后在服务器上执行：
+
+```bash
+VOLUME_PATH=$(docker volume inspect news_app_frontend | grep -i "Mountpoint" | awk '{print $2}' | tr -d '",')
+sudo rm -rf "$VOLUME_PATH"/*
+sudo cp -r /tmp/dist/* "$VOLUME_PATH/"
+docker compose restart nginx
+```

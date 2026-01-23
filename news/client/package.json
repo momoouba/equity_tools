@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "NODE_OPTIONS=--max-old-space-size=2048 vite build",
-    "build:low-memory": "NODE_OPTIONS=--max-old-space-size=1536 vite build",
-    "build:minimal": "NODE_OPTIONS=--max-old-space-size=1024 vite build",
+    "build": "cross-env NODE_OPTIONS=--max-old-space-size=2048 vite build",
+    "build:low-memory": "cross-env NODE_OPTIONS=--max-old-space-size=1536 vite build",
+    "build:minimal": "cross-env NODE_OPTIONS=--max-old-space-size=1024 vite build",
+    "build:win": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^4.2.1",
+    "cross-env": "^10.1.0",
     "vite": "^5.0.8"
   }
 }
