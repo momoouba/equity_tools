@@ -14,6 +14,15 @@ export function generateCron(config) {
   let dayValue = day.value
   let weekdayValue = weekday.value
 
+  // 如果周字段是指定模式，检查是否选择了所有7天
+  if (weekday.mode === 'specify' && Array.isArray(weekday.value)) {
+    // 如果选择了所有7天（1-7），自动转换为通配符 *
+    const sortedValues = [...weekday.value].sort((a, b) => a - b);
+    if (sortedValues.length === 7 && sortedValues.every((v, i) => v === i + 1)) {
+      weekdayValue = '*';
+    }
+  }
+
   // 如果日不是通配符，周必须是 ?
   if (dayValue !== '*' && dayValue !== '?') {
     weekdayValue = '?'
@@ -58,7 +67,14 @@ function formatDimensionValue(config) {
     return `${start}/${step}`
   } else if (mode === 'specify') {
     // 指定具体值：可以是单个值或逗号分隔的多个值
-    return Array.isArray(value) ? value.join(',') : String(value)
+    if (Array.isArray(value)) {
+      // 对于周字段，如果选择了所有7天（1-7），自动转换为 *
+      if (value.length === 7 && value.every((v, i) => v === i + 1)) {
+        return '*'
+      }
+      return value.join(',')
+    }
+    return String(value)
   }
 
   return '*'

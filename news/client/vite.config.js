@@ -44,6 +44,43 @@ if (process.env.NODE_ENV === 'development') {
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // 优化构建配置，减少内存占用
+    chunkSizeWarningLimit: 1000,
+    // 限制构建时的并发数，减少CPU和内存占用
+    rollupOptions: {
+      // 限制并发处理，避免一次性处理太多文件（降低到1，进一步减少内存占用）
+      maxParallelFileOps: 1,
+      // 禁用某些优化以减少内存占用
+      treeshake: {
+        preset: 'smallest',
+        moduleSideEffects: false
+      },
+      output: {
+        // 手动分包，减少单个chunk大小
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'arco-vendor': ['@arco-design/web-react'],
+          'utils-vendor': ['axios', 'dayjs', 'file-saver', 'xlsx']
+        },
+        // 减少内联资源，降低内存占用
+        inlineDynamicImports: false,
+        // 优化输出格式
+        format: 'es'
+      }
+    },
+    // 使用 esbuild 压缩（默认，更快，内存占用更少）
+    // 如果需要更小的文件大小，可以安装 terser 并使用 minify: 'terser'
+    minify: 'esbuild',
+    // 减少源映射生成，降低内存占用（生产环境通常不需要）
+    sourcemap: false,
+    // 启用压缩，但使用更快的算法
+    cssMinify: 'esbuild',
+    // 禁用报告压缩，减少内存占用
+    reportCompressedSize: false,
+    // 减少构建输出，降低内存占用
+    write: true
+  },
   server: {
     port: 5173,
     // 减少日志输出，避免启动时的错误信息刷屏

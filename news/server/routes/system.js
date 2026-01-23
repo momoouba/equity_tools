@@ -3240,7 +3240,29 @@ router.post('/cron/parse', async (req, res) => {
     }
 
     // 使用 cron-parser 解析（后端可以使用 Node.js 库）
-    const { parseExpression } = require('cron-parser');
+    // cron-parser v5.x 的用法：使用 CronExpressionParser.parse()
+    let parseExpression;
+    try {
+      const cronParser = require('cron-parser');
+      
+      // cron-parser v5.x 导出 CronExpressionParser 类，使用静态方法 parse()
+      if (cronParser.CronExpressionParser && typeof cronParser.CronExpressionParser.parse === 'function') {
+        parseExpression = cronParser.CronExpressionParser.parse.bind(cronParser.CronExpressionParser);
+      } else if (cronParser.default && cronParser.default.CronExpressionParser && typeof cronParser.default.CronExpressionParser.parse === 'function') {
+        parseExpression = cronParser.default.CronExpressionParser.parse.bind(cronParser.default.CronExpressionParser);
+      } else if (typeof cronParser.parseExpression === 'function') {
+        // 向后兼容：某些版本可能直接导出 parseExpression
+        parseExpression = cronParser.parseExpression;
+      } else {
+        throw new Error(`cron-parser 模块导出格式不正确。模块类型: ${typeof cronParser}, 可用属性: ${Object.keys(cronParser).join(', ')}`);
+      }
+    } catch (requireError) {
+      errorWithTag('[系统配置]', '加载 cron-parser 模块失败：', requireError);
+      return res.status(500).json({
+        success: false,
+        message: `无法加载 cron-parser 模块：${requireError.message}`
+      });
+    }
 
     // 将7位表达式转换为6位（cron-parser只支持6位）
     const parts = cronExpression.trim().split(/\s+/);
@@ -3291,9 +3313,18 @@ router.post('/cron/parse', async (req, res) => {
     }
 
     // 解析 cron 表达式
-    const interval = parseExpression(cron6Field, {
-      currentDate: new Date()
-    });
+    let interval;
+    try {
+      interval = parseExpression(cron6Field, {
+        currentDate: new Date()
+      });
+    } catch (parseError) {
+      errorWithTag('[系统配置]', '解析 Cron 表达式失败：', parseError);
+      return res.status(400).json({
+        success: false,
+        message: `表达式格式错误：${parseError.message}`
+      });
+    }
 
     // 生成执行时间列表
     const executionTimes = [];
@@ -3301,7 +3332,11 @@ router.post('/cron/parse', async (req, res) => {
     
     for (let i = 0; i < candidateCount && executionTimes.length < count; i++) {
       try {
-        const nextDate = interval.next().toDate();
+        // cron-parser v5.x: next() 返回 CronDate 对象，调用 toDate() 或 toString() 获取日期
+        const nextResult = interval.next();
+        const nextDate = nextResult && typeof nextResult.toDate === 'function' 
+          ? nextResult.toDate() 
+          : (nextResult instanceof Date ? nextResult : new Date(nextResult));
         executionTimes.push(nextDate.toISOString());
       } catch (e) {
         break; // 如果超出范围，停止

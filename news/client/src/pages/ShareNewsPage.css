@@ -472,8 +472,10 @@ div.share-news-page div.table-container table.news-table thead tr th:last-child 
 /* 关键词样式 */
 .share-news-page .keywords-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  flex-wrap: nowrap;
   gap: 4px;
+  align-items: flex-start;
 }
 
 .share-news-page .keyword-tag {
@@ -575,7 +577,8 @@ div.share-news-page div.table-container table.news-table thead .enterprise-name-
 }
 
 .share-news-page .keywords-cell {
-  width: 100px;
+  width: 120px;
+  min-width: 120px;
   white-space: normal !important;
   word-wrap: break-word !important;
   word-break: break-word !important;
@@ -583,6 +586,7 @@ div.share-news-page div.table-container table.news-table thead .enterprise-name-
   vertical-align: middle !important;
   text-align: center !important;
   padding: 8px !important;
+  overflow: visible !important;
 }
 
 .share-news-page .enterprise-name-cell {

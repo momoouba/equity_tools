@@ -16,7 +16,10 @@ RUN npm config set registry https://registry.npmmirror.com \
 # 复制前端源代码
 COPY client/ ./
 
-# 构建前端
+# 构建前端（增加Node.js内存限制，避免构建时内存不足）
+# 支持通过构建参数传递内存限制，默认4GB
+ARG NODE_OPTIONS="--max-old-space-size=4096"
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 RUN npm run build
 
 # 阶段2: 构建后端并运行

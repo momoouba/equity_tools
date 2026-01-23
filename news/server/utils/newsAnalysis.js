@@ -2739,12 +2739,16 @@ class NewsAnalysis {
         console.log(`[analyzeNewsSentimentAndType] 关键词: ${JSON.stringify(finalKeywords)}`);
         console.log(`[analyzeNewsSentimentAndType] 摘要: ${finalAbstract}`);
         
-        return {
+        const imageResult = {
           sentiment: 'neutral',
           sentiment_reason: '无正文内容，该新闻为图片，请查看详情',
           keywords: finalKeywords,
           news_abstract: finalAbstract
         };
+        
+        console.log(`[analyzeNewsSentimentAndType] 图片内容处理 - 情绪: ${imageResult.sentiment}, 情绪原因: ${imageResult.sentiment_reason}`);
+        
+        return imageResult;
     }
     
     // 获取提示词配置（包含关联的AI模型配置）
@@ -2830,6 +2834,7 @@ class NewsAnalysis {
 情绪分类标准（重要：请仔细区分以下情况）：
 - positive: 正面新闻
   * 获奖、融资、业务增长、产品发布、合作等
+  * **IPO/上市相关进展（重要）：包括IPO申请、审核问询回复、上市进程推进、过会、注册生效、上市发行、成功上市等所有IPO相关进展，都属于正面新闻**
   * 企业及时响应外部风险/漏洞并提供解决方案（展示企业能力和产品优势）
   * 企业主动发现并修复问题（展示技术实力和责任心）
   * 企业帮助客户或行业应对风险（展示专业能力）
@@ -2970,6 +2975,14 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
             .trim();
           
           result = JSON.parse(jsonStr);
+          
+          // 记录AI返回的完整JSON，用于调试
+          console.log(`[analyzeNewsSentimentAndType] AI返回的JSON: ${JSON.stringify(result, null, 2)}`);
+          
+          // 检查sentiment_reason是否存在
+          if (!result.sentiment_reason || result.sentiment_reason.trim() === '') {
+            console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI未返回sentiment_reason或为空，sentiment: ${result.sentiment || '(无)'}`);
+          }
         } else {
           throw new Error('未找到JSON格式的响应');
         }
@@ -2977,6 +2990,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         console.warn('AI响应解析失败，使用默认值:', parseError.message);
         console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
         console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
+        console.warn('AI完整响应内容:', response);
         // 生成默认摘要，确保是完整句子，并跳过引导语
         const processedContent = this.skipIrrelevantContent(content || '');
         const contentPreview = processedContent.substring(0, 100);
@@ -3312,12 +3326,46 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         }
       }
 
-      return {
+      // 处理sentiment_reason：如果AI没有返回，根据sentiment生成默认原因
+      let sentimentReason = result.sentiment_reason || '';
+      if (!sentimentReason || sentimentReason.trim() === '') {
+        const sentiment = result.sentiment || 'neutral';
+        if (sentiment === 'positive') {
+          sentimentReason = 'AI判断为正面，但未提供具体原因';
+        } else if (sentiment === 'negative') {
+          sentimentReason = 'AI判断为负面，但未提供具体原因';
+        } else {
+          sentimentReason = 'AI判断为中性，但未提供具体原因';
+        }
+        console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI未返回sentiment_reason，已生成默认原因: ${sentimentReason}`);
+      }
+      
+      const finalResult = {
         sentiment: result.sentiment || 'neutral',
-        sentiment_reason: result.sentiment_reason || '',
+        sentiment_reason: sentimentReason,
         keywords: keywords.length > 0 ? keywords : ['其他'],
         news_abstract: abstract
       };
+      
+      // 记录情绪分析结果（包含情绪原因）
+      console.log(`[analyzeNewsSentimentAndType] 分析结果 - 情绪: ${finalResult.sentiment}, 情绪原因: ${finalResult.sentiment_reason}, 关键词: ${JSON.stringify(finalResult.keywords)}, 摘要长度: ${finalResult.news_abstract ? finalResult.news_abstract.length : 0}字符`);
+      
+      // 如果情绪判断可能不准确，记录警告（例如：内容明显正面但判断为中性）
+      if (finalResult.sentiment === 'neutral') {
+        const contentLower = (content || '').toLowerCase();
+        const titleLower = (title || '').toLowerCase();
+        const positiveKeywords = ['成功', '突破', '完成', '获得', '增长', '提升', '利好', '上市', 'ipo', '融资', '合作', '达成', '获奖', '荣誉', '认证'];
+        const hasPositiveKeywords = positiveKeywords.some(keyword => 
+          contentLower.includes(keyword) || titleLower.includes(keyword)
+        );
+        if (hasPositiveKeywords) {
+          console.warn(`[analyzeNewsSentimentAndType] ⚠️ 警告：内容包含正面关键词但被判断为中性，建议检查情绪判断准确性`);
+          console.warn(`[analyzeNewsSentimentAndType] 标题: ${title}`);
+          console.warn(`[analyzeNewsSentimentAndType] 内容预览: ${(content || '').substring(0, 200)}...`);
+        }
+      }
+      
+      return finalResult;
     } catch (error) {
       console.error('新闻分析失败:', error);
       // 生成默认摘要，确保是完整句子，并跳过引导语
@@ -3326,12 +3374,16 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       const lastSentenceMatch = contentPreview.match(/(.+[。！？.!?])/);
       const defaultAbstract = lastSentenceMatch ? lastSentenceMatch[1] : (contentPreview || '新闻内容摘要') + '。';
       
-      return {
+      const errorResult = {
         sentiment: 'neutral',
         sentiment_reason: '分析失败',
         keywords: ['其他'],
         news_abstract: defaultAbstract
       };
+      
+      console.error(`[analyzeNewsSentimentAndType] 分析失败 - 情绪: ${errorResult.sentiment}, 情绪原因: ${errorResult.sentiment_reason}, 错误: ${error.message}`);
+      
+      return errorResult;
     }
   }
 
@@ -4506,7 +4558,7 @@ ${enterpriseList}
           keywords: ['政策信息'],
           news_abstract: '网页设置了反爬虫机制，无法获取正文'
         };
-        console.log(`[processNewsWithEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
+        console.log(`[processNewsWithEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
       } else {
         // interfaceType已在前面声明，直接使用
         analysis = await this.analyzeNewsSentimentAndType(
@@ -4516,7 +4568,7 @@ ${enterpriseList}
           isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
           interfaceType
         );
-        console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 关键词: ${JSON.stringify(analysis.keywords)}`);
+        console.log(`[processNewsWithEnterprise] 分析完成 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 关键词: ${JSON.stringify(analysis.keywords)}`);
       }
 
       // 在更新数据库之前，校验分析结果（摘要和关键词）
@@ -4567,7 +4619,7 @@ ${enterpriseList}
       // 更新数据库，包括可能的企业关联变更
       console.log(`[processNewsWithEnterprise] 准备更新数据库`);
       console.log(`[processNewsWithEnterprise] 企业全称: "${finalEnterpriseName || '(空)'}"`);
-      console.log(`[processNewsWithEnterprise] 情绪: ${validatedAnalysis.sentiment}`);
+      console.log(`[processNewsWithEnterprise] 情绪: ${validatedAnalysis.sentiment}, 情绪原因: ${validatedAnalysis.sentiment_reason || '(无)'}`);
       console.log(`[processNewsWithEnterprise] 关键词: ${JSON.stringify(validatedAnalysis.keywords)}`);
       console.log(`[processNewsWithEnterprise] 摘要: ${validatedAnalysis.news_abstract.substring(0, 100)}...`);
       console.log(`[processNewsWithEnterprise] 内容长度: ${contentForAnalysis ? contentForAnalysis.length : 0}字符`);
@@ -4787,7 +4839,7 @@ ${enterpriseList}
           keywords: ['政策信息'],
           news_abstract: '网页设置了反爬虫机制，无法获取正文'
         };
-        logWithTag('[processNewsWithoutEnterprise]', `反爬虫阻塞 - 情绪: ${analysis.sentiment}, 摘要: ${analysis.news_abstract}`);
+        logWithTag('[processNewsWithoutEnterprise]', `反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
       } else {
         // 分析新闻情绪和类型（使用已确保的content）
         analysis = await this.analyzeNewsSentimentAndType(
@@ -4797,6 +4849,7 @@ ${enterpriseList}
           isAdditionalAccount.length > 0, // 传递是否是额外公众号的标志
           interfaceType
         );
+        logWithTag('[processNewsWithoutEnterprise]', `分析完成 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 关键词: ${JSON.stringify(analysis.keywords)}`);
       }
 
       // 检查是否为广告类型

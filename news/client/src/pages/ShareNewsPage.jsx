@@ -786,14 +786,11 @@ function ShareNewsPage() {
                         
                         return keywords.length > 0 ? (
                           <div className="keywords-list">
-                            {keywords.slice(0, 3).map((keyword, idx) => (
+                            {keywords.map((keyword, idx) => (
                               <span key={idx} className="keyword-tag" title={keyword}>
                                 {keyword}
                               </span>
                             ))}
-                            {keywords.length > 3 && (
-                              <span className="keyword-more">+{keywords.length - 3}</span>
-                            )}
                           </div>
                         ) : '-'
                       })()}

@@ -28,6 +28,11 @@ const checkAdminPermission = (req, res, next) => {
 
 // 计算下次执行时间
 function calculateNextExecutionTime(sendFrequency, sendTime, weekday = null, monthDay = null) {
+  // 如果 sendTime 为 null 或 undefined，返回 null
+  if (!sendTime || typeof sendTime !== 'string') {
+    return null;
+  }
+  
   const now = new Date();
   const [hours, minutes] = sendTime.split(':');
   
@@ -143,6 +148,99 @@ function calculateNextExecutionTime(sendFrequency, sendTime, weekday = null, mon
   return nextExecution;
 }
 
+// 从 cron 表达式计算下次执行时间
+function calculateNextExecutionTimeFromCron(cronExpression) {
+  if (!cronExpression || typeof cronExpression !== 'string') {
+    return null;
+  }
+
+  try {
+    // 使用 cron-parser 解析 cron 表达式
+    const cronParser = require('cron-parser');
+    let parseExpression;
+    
+    // 尝试不同的导入方式
+    if (cronParser.CronExpressionParser && typeof cronParser.CronExpressionParser.parse === 'function') {
+      parseExpression = cronParser.CronExpressionParser.parse.bind(cronParser.CronExpressionParser);
+    } else if (cronParser.default && cronParser.default.CronExpressionParser && typeof cronParser.default.CronExpressionParser.parse === 'function') {
+      parseExpression = cronParser.default.CronExpressionParser.parse.bind(cronParser.default.CronExpressionParser);
+    } else if (typeof cronParser.parseExpression === 'function') {
+      parseExpression = cronParser.parseExpression;
+    } else {
+      throw new Error('无法加载 cron-parser 模块');
+    }
+
+    // 将7字段Quartz Cron转换为6字段（cron-parser只支持6字段）
+    const parts = cronExpression.trim().split(/\s+/);
+    let cron6Field = null;
+    
+    if (parts.length === 7) {
+      // 去掉最后一个字段（年份），返回前6位
+      cron6Field = parts.slice(0, 6).join(' ');
+    } else if (parts.length === 6) {
+      cron6Field = cronExpression.trim();
+    } else {
+      throw new Error('Cron表达式格式错误：必须是6位或7位');
+    }
+
+    // 转换星期字段：Quartz Cron使用1-7（1=周日），cron-parser使用0-6（0=周日）
+    const cron6Parts = cron6Field.split(/\s+/);
+    if (cron6Parts.length === 6) {
+      const weekdayField = cron6Parts[5];
+      if (weekdayField && weekdayField !== '*' && weekdayField !== '?') {
+        // 处理逗号分隔的多个值
+        if (weekdayField.includes(',')) {
+          const values = weekdayField.split(',').map(v => {
+            const trimmed = v.trim();
+            const num = parseInt(trimmed, 10);
+            if (!isNaN(num) && num >= 1 && num <= 7) {
+              return (num - 1) % 7;
+            }
+            return trimmed;
+          });
+          cron6Parts[5] = values.join(',');
+        } else if (weekdayField.includes('-')) {
+          // 处理范围
+          const [startStr, endStr] = weekdayField.split('-');
+          const start = parseInt(startStr.trim(), 10);
+          const end = parseInt(endStr.trim(), 10);
+          if (!isNaN(start) && !isNaN(end) && start >= 1 && start <= 7 && end >= 1 && end <= 7) {
+            cron6Parts[5] = `${(start - 1) % 7}-${(end - 1) % 7}`;
+          }
+        } else {
+          // 处理单个数字
+          const num = parseInt(weekdayField, 10);
+          if (!isNaN(num) && num >= 1 && num <= 7) {
+            cron6Parts[5] = String((num - 1) % 7);
+          }
+        }
+      }
+      
+      // 转换日期字段：node-cron不支持?，如果day是?，转换为*
+      if (cron6Parts[2] === '?') {
+        cron6Parts[2] = '*';
+      }
+      
+      cron6Field = cron6Parts.join(' ');
+    }
+
+    // 解析 cron 表达式并获取下次执行时间
+    const interval = parseExpression(cron6Field, {
+      currentDate: new Date()
+    });
+
+    const nextResult = interval.next();
+    const nextDate = nextResult && typeof nextResult.toDate === 'function' 
+      ? nextResult.toDate() 
+      : (nextResult instanceof Date ? nextResult : new Date(nextResult));
+
+    return nextDate;
+  } catch (error) {
+    errorWithTag('[定时任务]', '从cron表达式计算下次执行时间失败:', error);
+    return null;
+  }
+}
+
 // ========== AI分析定时任务配置路由（必须在动态路由之前） ==========
 
 // 获取AI分析定时任务配置
@@ -226,7 +324,13 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
         }
       }
     }
-    const nodeCronExpression = `${minute} ${hour} ${day} ${month} ${convertedWeekday}`;
+    // 转换日期字段：node-cron不支持?，如果day是?，转换为*
+    // 当指定了weekday时，day字段在node-cron中应该使用*（表示不指定具体日期）
+    let convertedDay = day;
+    if (day === '?') {
+      convertedDay = '*';
+    }
+    const nodeCronExpression = `${minute} ${hour} ${convertedDay} ${month} ${convertedWeekday}`;
 
     // 验证6字段cron表达式
     if (!cron.validate(nodeCronExpression)) {
@@ -333,7 +437,22 @@ router.get('/', checkAdminPermission, async (req, res) => {
       // 为每个配置添加定时任务信息
       const tasks = recipients.map(recipient => {
         const isActive = recipient.is_active === 1 && recipient.is_deleted === 0;
-        const nextExecution = isActive ? calculateNextExecutionTime(recipient.send_frequency, recipient.send_time) : null;
+        
+        // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
+        let nextExecution = null;
+        if (isActive) {
+          if (recipient.cron_expression && recipient.cron_expression.trim()) {
+            // 使用 cron 表达式计算下次执行时间
+            try {
+              nextExecution = calculateNextExecutionTimeFromCron(recipient.cron_expression);
+            } catch (error) {
+              errorWithTag('[定时任务]', `计算收件配置 ${recipient.id} 的cron表达式下次执行时间失败:`, error);
+            }
+          } else if (recipient.send_frequency && recipient.send_time) {
+            // 使用传统的 send_frequency 和 send_time
+            nextExecution = calculateNextExecutionTime(recipient.send_frequency, recipient.send_time, recipient.weekday || null, recipient.month_day || null);
+          }
+        }
         
         return {
           id: recipient.id,
@@ -344,6 +463,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
           emailSubject: recipient.email_subject,
           sendFrequency: recipient.send_frequency,
           sendTime: recipient.send_time,
+          cronExpression: recipient.cron_expression,
           isActive: isActive,
           isDeleted: recipient.is_deleted === 1,
           nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
@@ -493,7 +613,22 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
 
     const recipient = recipients[0];
     const isActive = recipient.is_active === 1 && recipient.is_deleted === 0;
-    const nextExecution = isActive ? calculateNextExecutionTime(recipient.send_frequency, recipient.send_time) : null;
+    
+    // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
+    let nextExecution = null;
+    if (isActive) {
+      if (recipient.cron_expression && recipient.cron_expression.trim()) {
+        // 使用 cron 表达式计算下次执行时间
+        try {
+          nextExecution = calculateNextExecutionTimeFromCron(recipient.cron_expression);
+        } catch (error) {
+          errorWithTag('[定时任务]', `计算收件配置 ${recipient.id} 的cron表达式下次执行时间失败:`, error);
+        }
+      } else if (recipient.send_frequency && recipient.send_time) {
+        // 使用传统的 send_frequency 和 send_time
+        nextExecution = calculateNextExecutionTime(recipient.send_frequency, recipient.send_time, recipient.weekday || null, recipient.month_day || null);
+      }
+    }
 
     const task = {
       id: recipient.id,
@@ -504,6 +639,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       emailSubject: recipient.email_subject,
       sendFrequency: recipient.send_frequency,
       sendTime: recipient.send_time,
+      cronExpression: recipient.cron_expression,
       isActive: isActive,
       isDeleted: recipient.is_deleted === 1,
       nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
