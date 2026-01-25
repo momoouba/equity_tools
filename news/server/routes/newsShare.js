@@ -103,7 +103,11 @@ router.post('/create', checkAuth, async (req, res) => {
     // 生成分享链接URL（前端路由）
     // 开发环境使用前端端口5173，生产环境使用环境变量或默认前端域名
     let frontendHost;
-    if (process.env.NODE_ENV === 'development') {
+    const requestHost = req.get('host') || '';
+    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
+    if (process.env.NODE_ENV === 'development' || 
+        requestHost.includes('localhost:3001') || 
+        requestHost.includes('127.0.0.1:3001')) {
       // 开发环境：使用localhost:5173（Vite默认端口）
       frontendHost = 'localhost:5173';
     } else {
@@ -171,7 +175,11 @@ router.get('/current', checkAuth, async (req, res) => {
 
     // 生成完整URL（前端路由）
     let frontendHost;
-    if (process.env.NODE_ENV === 'development') {
+    const requestHost = req.get('host') || '';
+    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
+    if (process.env.NODE_ENV === 'development' || 
+        requestHost.includes('localhost:3001') || 
+        requestHost.includes('127.0.0.1:3001')) {
       frontendHost = 'localhost:5173';
     } else {
       frontendHost = process.env.FRONTEND_HOST || req.get('host');
@@ -217,7 +225,11 @@ router.get('/list', checkAuth, async (req, res) => {
 
     // 生成完整URL（前端路由）
     let frontendHost;
-    if (process.env.NODE_ENV === 'development') {
+    const requestHost = req.get('host') || '';
+    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
+    if (process.env.NODE_ENV === 'development' || 
+        requestHost.includes('localhost:3001') || 
+        requestHost.includes('127.0.0.1:3001')) {
       frontendHost = 'localhost:5173';
     } else {
       frontendHost = process.env.FRONTEND_HOST || req.get('host');

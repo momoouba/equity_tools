@@ -60,6 +60,11 @@ if (typeof window !== 'undefined') {
 }
 
 function ShareNewsPage() {
+  // 调试信息：确保组件已加载
+  useEffect(() => {
+    console.log('[ShareNewsPage] 组件已加载，当前路径:', window.location.pathname)
+    console.log('[ShareNewsPage] 版本:', VERSION)
+  }, [])
   
   const { token } = useParams()
   const [newsList, setNewsList] = useState([])
@@ -89,31 +94,47 @@ function ShareNewsPage() {
     let isMounted = true
     
     const verifyToken = async () => {
+      console.log('[ShareNewsPage] 开始验证token:', token)
       try {
         const response = await axios.get(`/api/news-share/verify/${token}`, {
           timeout: 10000
         })
         
+        console.log('[ShareNewsPage] Token验证响应:', response.data)
+        
         if (!isMounted) return
         
         if (response.data?.success) {
           if (response.data.data?.hasPassword) {
+            console.log('[ShareNewsPage] 需要密码验证')
             setShowPasswordModal(true)
             setVerifying(false)
           } else {
+            console.log('[ShareNewsPage] Token验证成功，无需密码')
             setVerified(true)
             setVerifying(false)
           }
         } else {
+          console.error('[ShareNewsPage] Token验证失败:', response.data?.message)
           setVerifying(false)
           setError(response.data?.message || '分享链接验证失败')
         }
       } catch (error) {
         if (!isMounted) return
         
+        console.error('[ShareNewsPage] Token验证错误:', error)
+        console.error('[ShareNewsPage] 错误详情:', {
+          message: error.message,
+          response: error.response?.data,
+          status: error.response?.status,
+          code: error.code
+        })
+        
         setVerifying(false)
         if (error.response) {
           setError(error.response.data?.message || `服务器错误 (${error.response.status})`)
+        } else if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
+          setError('无法连接到服务器，请确保后端服务正在运行 (localhost:3001)')
         } else {
           setError(error.message || '分享链接无效或已过期')
         }
@@ -123,6 +144,7 @@ function ShareNewsPage() {
     if (token) {
       verifyToken()
     } else {
+      console.error('[ShareNewsPage] 缺少token')
       setVerifying(false)
       setError('缺少分享链接token')
     }
@@ -511,11 +533,26 @@ function ShareNewsPage() {
     }
   }
 
+  // 调试信息：显示当前状态
+  useEffect(() => {
+    console.log('[ShareNewsPage] 当前状态:', {
+      verifying,
+      verified,
+      error,
+      showPasswordModal,
+      token,
+      hasToken: !!token
+    })
+  }, [verifying, verified, error, showPasswordModal, token])
+
   if (verifying) {
     return (
       <div className="share-news-page">
         <div className="loading-container">
           <div className="loading">验证分享链接中...</div>
+          <div style={{ marginTop: '10px', fontSize: '12px', color: '#86909c' }}>
+            如果长时间无响应，请检查后端服务是否运行 (localhost:3001)
+          </div>
         </div>
       </div>
     )
@@ -526,6 +563,20 @@ function ShareNewsPage() {
       <div className="share-news-page">
         <div className="error-container">
           <div className="error-message">{error}</div>
+          <div style={{ marginTop: '20px', fontSize: '14px', color: '#86909c' }}>
+            <p>调试信息：</p>
+            <ul style={{ textAlign: 'left', display: 'inline-block' }}>
+              <li>Token: {token || '未提供'}</li>
+              <li>当前URL: {window.location.href}</li>
+              <li>API地址: {axios.defaults.baseURL || window.location.origin}/api/news-share/verify/{token}</li>
+            </ul>
+            <p style={{ marginTop: '10px' }}>
+              请检查：
+              <br />1. 后端服务是否正在运行 (localhost:3001)
+              <br />2. 分享链接是否有效
+              <br />3. 浏览器控制台是否有错误信息
+            </p>
+          </div>
         </div>
       </div>
     )

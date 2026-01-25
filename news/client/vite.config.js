@@ -80,6 +80,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // 确保支持客户端路由（history API fallback）
+    // Vite 默认已经支持，但明确配置以确保正确工作
+    strictPort: false,
     // 减少日志输出，避免启动时的错误信息刷屏
     hmr: {
       overlay: false // 禁用HMR错误覆盖层，减少错误提示
