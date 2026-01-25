@@ -119,6 +119,44 @@ function BasicSystemConfig() {
     return false
   }
 
+  const handleDeleteLogo = async () => {
+    try {
+      setLoading(true)
+      const updatedData = {
+        system_name: form.getFieldValue('system_name'),
+        login_background: form.getFieldValue('login_background'),
+        logo: ''
+      }
+      form.setFieldsValue({ logo: '' })
+      setLogoPreview('')
+      await submitConfig(updatedData, 'Logo删除成功', 'Logo删除失败')
+    } catch (error) {
+      console.error('删除Logo失败:', error)
+      Message.error('删除Logo失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleDeleteBackground = async () => {
+    try {
+      setLoading(true)
+      const updatedData = {
+        system_name: form.getFieldValue('system_name'),
+        login_background: '',
+        logo: form.getFieldValue('logo')
+      }
+      form.setFieldsValue({ login_background: '' })
+      setBackgroundPreview('')
+      await submitConfig(updatedData, '登录页底图删除成功', '登录页底图删除失败')
+    } catch (error) {
+      console.error('删除底图失败:', error)
+      Message.error('删除底图失败：' + (error.response?.data?.message || '未知错误'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const submitConfig = async (data, successText, errorText) => {
     try {
       const response = await axios.put('/api/system/basic-config', data)
@@ -178,6 +216,15 @@ function BasicSystemConfig() {
                     src={logoPreview} 
                     alt="Logo预览" 
                   />
+                  <Button
+                    type="text"
+                    size="mini"
+                    className="delete-image-btn"
+                    onClick={handleDeleteLogo}
+                    disabled={loading}
+                  >
+                    ×
+                  </Button>
                 </div>
               )}
               <Upload
@@ -205,6 +252,15 @@ function BasicSystemConfig() {
                     src={backgroundPreview} 
                     alt="底图预览" 
                   />
+                  <Button
+                    type="text"
+                    size="mini"
+                    className="delete-image-btn"
+                    onClick={handleDeleteBackground}
+                    disabled={loading}
+                  >
+                    ×
+                  </Button>
                 </div>
               )}
               <Upload
