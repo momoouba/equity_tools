@@ -23,16 +23,31 @@ function splitAccountIds(accountIdsStr) {
 const scheduledTasks = new Map();
 
 /**
- * 检查指定日期是否为工作日
+ * 格式化日期为 YYYY-MM-DD，使用北京时区
+ * @param {Date} date - 日期对象
+ * @returns {string} YYYY-MM-DD 格式的日期字符串（北京时区）
+ */
+function formatDateOnly(date) {
+  // 使用北京时区格式化日期，确保日期计算基于北京时间
+  const beijingDateStr = date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  // 解析格式：2024/12/8 或 2024-12-8
+  const datePart = beijingDateStr.split(' ')[0];
+  const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/**
+ * 检查指定日期是否为工作日，使用北京时区
+ * @param {Date} date - 日期对象
+ * @returns {Promise<boolean>} 是否为工作日
  */
 async function isWorkdayDate(date) {
-  const formatDateOnly = (date) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  };
-  
+  // 使用北京时区格式化日期，确保与节假日表中的日期（北京时区）一致
   const dateStr = formatDateOnly(date);
   try {
     const db = require('../db');
@@ -46,8 +61,10 @@ async function isWorkdayDate(date) {
   } catch (error) {
     console.warn('查询节假日数据失败：', error.message);
   }
-  const day = date.getDay();
-  return day !== 0 && day !== 6;
+  // 如果没有节假日记录，使用北京时区判断星期几
+  // 使用北京时区的日期来判断星期几
+  const beijingDay = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getDay();
+  return beijingDay !== 0 && beijingDay !== 6; // 0=周日, 6=周六
 }
 
 /**
@@ -2140,9 +2157,15 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
  * 检查指定日期是否为工作日（不在节假日表中或is_workday=1）
  * 用于收件管理的"每日"发送：只有工作日才发送，节假日不发送
  */
+/**
+ * 检查指定日期是否为工作日（用于邮件发送），使用北京时区
+ * @param {Date} date - 日期对象
+ * @returns {Promise<boolean>} 是否为工作日
+ */
 async function isWorkdayForEmail(date) {
   try {
-    const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD格式
+    // 使用北京时区格式化日期，确保与节假日表中的日期（北京时区）一致
+    const dateStr = formatDateOnly(date);
     const holidays = await db.query(
       'SELECT is_workday, workday_type FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
       [dateStr]
@@ -2153,7 +2176,7 @@ async function isWorkdayForEmail(date) {
       // is_workday = 1 表示工作日，is_workday = 0 表示非工作日（节假日）
       const isWorkday = holidays[0].is_workday === 1;
       if (!isWorkday) {
-        console.log(`[邮件发送] 日期 ${dateStr} 在节假日表中，类型：${holidays[0].workday_type || '节假日'}，跳过发送`);
+        console.log(`[邮件发送] 日期 ${dateStr}（北京时区）在节假日表中，类型：${holidays[0].workday_type || '节假日'}，跳过发送`);
       }
       return isWorkday;
     }
@@ -2215,8 +2238,8 @@ async function executeEmailTask(recipientId) {
       const isTodayWorkday = await isWorkdayForEmail(today);
       
       if (!isTodayWorkday) {
-        const dateStr = today.toISOString().split('T')[0];
-        console.log(`[邮件发送] 收件管理配置 ${recipientId} 在 ${dateStr} 为节假日，跳过发送`);
+        const dateStr = formatDateOnly(today); // 使用北京时区格式化日期
+        console.log(`[邮件发送] 收件管理配置 ${recipientId} 在 ${dateStr}（北京时区）为节假日，跳过发送`);
         return;
       }
     }

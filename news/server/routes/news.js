@@ -282,11 +282,23 @@ function createShanghaiDate(date = null) {
   return new Date(dateStr);
 }
 
+/**
+ * 格式化日期为 YYYY-MM-DD，使用北京时区
+ * @param {Date} date - 日期对象
+ * @returns {string} YYYY-MM-DD 格式的日期字符串（北京时区）
+ */
 function formatDateOnly(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // 使用北京时区格式化日期，确保日期计算基于北京时间
+  const beijingDateStr = date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  // 解析格式：2024/12/8 或 2024-12-8
+  const datePart = beijingDateStr.split(' ')[0];
+  const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function startOfDay(date) {
@@ -301,7 +313,13 @@ function addDays(date, days) {
   return d;
 }
 
+/**
+ * 判断指定日期是否为工作日，使用北京时区
+ * @param {Date} date - 日期对象
+ * @returns {Promise<boolean>} 是否为工作日
+ */
 async function isWorkdayDate(date) {
+  // 使用北京时区格式化日期，确保与节假日表中的日期（北京时区）一致
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
@@ -314,8 +332,10 @@ async function isWorkdayDate(date) {
   } catch (error) {
     console.warn('查询节假日数据失败：', error.message);
   }
-  const day = date.getDay();
-  return day !== 0 && day !== 6;
+  // 如果没有节假日记录，使用北京时区判断星期几
+  // 使用北京时区的日期来判断星期几
+  const beijingDay = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' })).getDay();
+  return beijingDay !== 0 && beijingDay !== 6; // 0=周日, 6=周六
 }
 
 /**
@@ -1332,36 +1352,46 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
       yesterdayDate.setDate(yesterdayDate.getDate() - 1);
       fromDate = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 0, 0, 0);
     } else {
-      // 定时任务时，使用上一次同步日期到当前执行日期之间的范围
+      // 定时任务时，使用上一次同步日期到当前执行日期之间的范围（使用北京时区）
       // 这样可以确保不遗漏跳过节假日期间的数据
       if (config.last_sync_date) {
-        // 如果有 last_sync_date，从 last_sync_date + 1天 开始
-        const lastSyncDate = new Date(config.last_sync_date);
+        // 如果有 last_sync_date，从 last_sync_date + 1天 开始（北京时区）
+        // last_sync_date 是 YYYY-MM-DD 格式，直接解析为北京时区的日期
+        const [year, month, day] = config.last_sync_date.split('-').map(Number);
+        const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
         lastSyncDate.setDate(lastSyncDate.getDate() + 1); // 从上次同步日期的下一天开始
-        lastSyncDate.setHours(0, 0, 0, 0);
         fromDate = lastSyncDate;
         
-        console.log(`[新闻同步] 使用上次同步日期计算时间范围:`);
+        console.log(`[新闻同步] 使用上次同步日期计算时间范围（北京时区）:`);
         console.log(`[新闻同步] - 上次同步日期: ${config.last_sync_date}`);
         console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       } else if (config.last_sync_time) {
-        // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始
+        // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始（北京时区）
         const lastSyncTime = new Date(config.last_sync_time);
-        const lastSyncDateOnly = new Date(lastSyncTime.getFullYear(), lastSyncTime.getMonth(), lastSyncTime.getDate());
+        // 获取北京时区的日期部分
+        const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const datePart = beijingDateStr.split(' ')[0];
+        const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+        const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
         lastSyncDateOnly.setDate(lastSyncDateOnly.getDate() + 1); // 从上次同步日期的下一天开始
-        lastSyncDateOnly.setHours(0, 0, 0, 0);
         fromDate = lastSyncDateOnly;
         
-        console.log(`[新闻同步] 使用上次同步时间计算时间范围:`);
+        console.log(`[新闻同步] 使用上次同步时间计算时间范围（北京时区）:`);
         console.log(`[新闻同步] - 上次同步时间: ${config.last_sync_time}`);
         console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       } else {
-        // 如果没有上次同步记录，使用前一天00:00:00
+        // 如果没有上次同步记录，使用前一天00:00:00（北京时区）
         const yesterdayDate = new Date(baseRunDate);
         yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-        fromDate = new Date(yesterdayDate.getFullYear(), yesterdayDate.getMonth(), yesterdayDate.getDate(), 0, 0, 0);
+        yesterdayDate.setHours(0, 0, 0, 0);
+        fromDate = yesterdayDate;
         
-        console.log(`[新闻同步] 首次执行，使用前一天作为起始日期:`);
+        console.log(`[新闻同步] 首次执行，使用前一天作为起始日期（北京时区）:`);
         console.log(`[新闻同步] - 起始日期: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       }
     }
@@ -1813,42 +1843,60 @@ router.get('/user-news', async (req, res) => {
     const enterpriseFilter = req.query.enterpriseFilter || 'all'; // enterprise, all
     const offset = (page - 1) * pageSize;
 
-    // 计算时间范围
+    // 计算时间范围（使用北京时区）
     let timeCondition = '';
     let timeParams = [];
     
+    // 使用北京时区获取当前时间
     const now = new Date();
+    const beijingNow = createShanghaiDate(now);
     
     if (timeRange === 'yesterday') {
-      // 昨日：前一天00:00:00到23:59:59
-      // 支持public_time或created_at在昨日范围内（用于处理企查查新闻public_time可能为NULL的情况）
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStart = new Date(yesterday);
-      yesterdayStart.setHours(0, 0, 0, 0);
-      const yesterdayEnd = new Date(yesterday);
-      yesterdayEnd.setHours(23, 59, 59, 999);
+      // 昨日舆情：显示今天创建的数据（created_at是今天，北京时区）
+      const todayStart = new Date(beijingNow);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(beijingNow);
+      todayEnd.setHours(23, 59, 59, 999);
       
-      timeCondition = ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND created_at >= ? AND created_at <= ?))';
-      timeParams = [yesterdayStart, yesterdayEnd, yesterdayStart, yesterdayEnd];
+      timeCondition = ' AND created_at >= ? AND created_at <= ?';
+      timeParams = [todayStart, todayEnd];
     } else if (timeRange === 'thisWeek') {
-      // 本周：本周一00:00:00到现在
-      const weekStart = new Date(now);
-      const dayOfWeek = weekStart.getDay();
-      const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // 0是周日，需要调整
+      // 本周：本周一00:00:00到现在（北京时区）
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      // 获取北京时区的星期几（0=周日, 1=周一, ..., 6=周六）
+      const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
+      const daysToMonday = beijingDayOfWeek === 0 ? 6 : beijingDayOfWeek - 1; // 0是周日，需要调整
+      
+      const weekStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
       weekStart.setDate(weekStart.getDate() - daysToMonday);
       weekStart.setHours(0, 0, 0, 0);
       
       timeCondition = ' AND public_time >= ?';
       timeParams = [weekStart];
     } else if (timeRange === 'lastWeek') {
-      // 上周：上周一00:00:00到上周日23:59:59
-      // 对于企查查新闻，如果public_time为NULL，使用created_at作为替代
-      const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
+      // 上周：上周一00:00:00到上周日23:59:59（北京时区）
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      // 获取北京时区的星期几（0=周日, 1=周一, ..., 6=周六）
+      const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
       // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
-      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
-      const lastMonday = new Date(now);
-      lastMonday.setDate(now.getDate() - daysToLastMonday);
+      const daysToLastMonday = beijingDayOfWeek === 0 ? 14 : beijingDayOfWeek - 1 + 7; // 上周一
+      
+      const lastMonday = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
+      lastMonday.setDate(lastMonday.getDate() - daysToLastMonday);
       lastMonday.setHours(0, 0, 0, 0);
       
       const lastSunday = new Date(lastMonday);
@@ -1859,9 +1907,16 @@ router.get('/user-news', async (req, res) => {
       timeCondition = ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND created_at >= ? AND created_at <= ?))';
       timeParams = [lastMonday, lastSunday, lastMonday, lastSunday];
     } else if (timeRange === 'thisMonth') {
-      // 本月：本月1日00:00:00到现在
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      monthStart.setHours(0, 0, 0, 0);
+      // 本月：本月1日00:00:00到现在（北京时区）
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      const monthStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-01T00:00:00+08:00`);
       
       timeCondition = ' AND public_time >= ?';
       timeParams = [monthStart];
@@ -1947,7 +2002,14 @@ router.get('/user-news', async (req, res) => {
 
     // 添加企业过滤条件
     if (enterpriseFilter === 'enterprise') {
-      condition += ' AND enterprise_full_name IS NOT NULL AND enterprise_full_name != \'\'';
+      // 企业相关：只显示企业类型为被投企业的数据
+      condition += ' AND entity_type = \'被投企业\'';
+    } else if (enterpriseFilter === 'fund') {
+      // 基金相关主体：只显示企业类型为基金相关主体的数据
+      condition += ' AND entity_type = \'基金相关主体\'';
+    } else if (enterpriseFilter === 'sub_fund') {
+      // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
+      condition += ' AND entity_type IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
     }
 
     // 添加搜索条件
@@ -1959,7 +2021,7 @@ router.get('/user-news', async (req, res) => {
 
     // 查询数据（有企业的优先，然后按发布时间降序）
     const data = await db.query(
-      `SELECT account_name, wechat_account, enterprise_full_name, public_time, title, source_url, keywords, fund, sub_fund, entity_type, news_abstract, news_sentiment
+      `SELECT account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, public_time, title, source_url, keywords, fund, sub_fund, entity_type, news_abstract, news_sentiment
        ${condition}
        ORDER BY
          CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
@@ -1990,6 +2052,7 @@ router.get('/user-news', async (req, res) => {
         account_name: item.account_name || '',
         wechat_account: item.wechat_account || '',
         enterprise_full_name: item.enterprise_full_name || '',
+        enterprise_abbreviation: item.enterprise_abbreviation || null,
         public_time: item.public_time || '',
         title: item.title || '',
         source_url: item.source_url || '',
@@ -2087,7 +2150,7 @@ router.get('/', async (req, res) => {
       // 查询数据（按发布时间降序）
       // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
       const data = await db.query(
-        `SELECT nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, nd.keywords, nd.enterprise_full_name,
+        `SELECT nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url, nd.keywords, nd.enterprise_full_name, nd.enterprise_abbreviation,
                 nd.fund, nd.sub_fund, nd.news_abstract, nd.news_sentiment,
                 COALESCE(nd.entity_type, ie.entity_type) as entity_type
          FROM news_detail nd
@@ -2128,6 +2191,7 @@ router.get('/', async (req, res) => {
           title: item.title || '',
           source_url: item.source_url || '',
           enterprise_full_name: item.enterprise_full_name || '',
+          enterprise_abbreviation: item.enterprise_abbreviation || null,
           entity_type: item.entity_type || null,
           fund: item.fund || null,
           sub_fund: item.sub_fund || null,
@@ -2153,37 +2217,57 @@ router.get('/', async (req, res) => {
     let whereCondition = 'WHERE nd.delete_mark = 0';
     const params = [];
 
-    // 添加时间范围条件（管理员也支持时间筛选）
+    // 添加时间范围条件（管理员也支持时间筛选，使用北京时区）
     const now = new Date();
+    const beijingNow = createShanghaiDate(now);
     
     if (timeRange === 'yesterday') {
-      const yesterday = new Date(now);
-      yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayStart = new Date(yesterday);
-      yesterdayStart.setHours(0, 0, 0, 0);
-      const yesterdayEnd = new Date(yesterday);
-      yesterdayEnd.setHours(23, 59, 59, 999);
+      // 昨日舆情：显示今天创建的数据（created_at是今天，北京时区）
+      const todayStart = new Date(beijingNow);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(beijingNow);
+      todayEnd.setHours(23, 59, 59, 999);
       
-      // 支持public_time或created_at在昨日范围内（用于处理企查查新闻public_time可能为NULL的情况）
-      whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.created_at >= ? AND nd.created_at <= ?))';
-      params.push(yesterdayStart, yesterdayEnd, yesterdayStart, yesterdayEnd);
+      whereCondition += ' AND nd.created_at >= ? AND nd.created_at <= ?';
+      params.push(todayStart, todayEnd);
     } else if (timeRange === 'thisWeek') {
-      const weekStart = new Date(now);
-      const dayOfWeek = weekStart.getDay();
-      const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      // 本周：本周一00:00:00到现在（北京时区）
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      // 获取北京时区的星期几（0=周日, 1=周一, ..., 6=周六）
+      const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
+      const daysToMonday = beijingDayOfWeek === 0 ? 6 : beijingDayOfWeek - 1;
+      
+      const weekStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
       weekStart.setDate(weekStart.getDate() - daysToMonday);
       weekStart.setHours(0, 0, 0, 0);
       
       whereCondition += ' AND nd.public_time >= ?';
       params.push(weekStart);
     } else if (timeRange === 'lastWeek') {
-      // 上周：上周一00:00:00到上周日23:59:59
+      // 上周：上周一00:00:00到上周日23:59:59（北京时区）
       // 对于企查查新闻，如果public_time为NULL，使用created_at作为替代
-      const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      // 获取北京时区的星期几（0=周日, 1=周一, ..., 6=周六）
+      const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
       // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
-      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
-      const lastMonday = new Date(now);
-      lastMonday.setDate(now.getDate() - daysToLastMonday);
+      const daysToLastMonday = beijingDayOfWeek === 0 ? 14 : beijingDayOfWeek - 1 + 7; // 上周一
+      
+      const lastMonday = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
+      lastMonday.setDate(lastMonday.getDate() - daysToLastMonday);
       lastMonday.setHours(0, 0, 0, 0);
       
       const lastSunday = new Date(lastMonday);
@@ -2194,8 +2278,16 @@ router.get('/', async (req, res) => {
       whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.created_at >= ? AND nd.created_at <= ?))';
       params.push(lastMonday, lastSunday, lastMonday, lastSunday);
     } else if (timeRange === 'thisMonth') {
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      monthStart.setHours(0, 0, 0, 0);
+      // 本月：本月1日00:00:00到现在（北京时区）
+      const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth] = beijingDateStr.split(/[\/\-]/).map(Number);
+      
+      const monthStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-01T00:00:00+08:00`);
       
       whereCondition += ' AND nd.public_time >= ?';
       params.push(monthStart);
@@ -2203,7 +2295,14 @@ router.get('/', async (req, res) => {
 
     // 添加企业过滤条件
     if (enterpriseFilter === 'enterprise') {
-      whereCondition += ' AND nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != \'\'';
+      // 企业相关：只显示企业类型为被投企业的数据
+      whereCondition += ' AND COALESCE(nd.entity_type, ie.entity_type) = \'被投企业\'';
+    } else if (enterpriseFilter === 'fund') {
+      // 基金相关主体：只显示企业类型为基金相关主体的数据
+      whereCondition += ' AND COALESCE(nd.entity_type, ie.entity_type) = \'基金相关主体\'';
+    } else if (enterpriseFilter === 'sub_fund') {
+      // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
+      whereCondition += ' AND COALESCE(nd.entity_type, ie.entity_type) IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
     }
 
     if (search) {
@@ -2222,7 +2321,7 @@ router.get('/', async (req, res) => {
     // 注意：使用COALESCE确保优先使用news_detail表中的entity_type
     const data = await db.query(
       `SELECT nd.id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url,
-              nd.keywords, nd.enterprise_full_name, nd.news_abstract, nd.news_sentiment, nd.content,
+              nd.keywords, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_abstract, nd.news_sentiment, nd.content,
               nd.created_at, nd.APItype, nd.news_category,
               nd.fund, nd.sub_fund,
               COALESCE(nd.entity_type, ie.entity_type) as entity_type
@@ -2296,37 +2395,62 @@ router.post('/export', async (req, res) => {
       return res.status(401).json({ success: false, message: '未登录' });
     }
 
-    // 计算时间范围
+    // 计算时间范围（使用北京时区）
     let timeCondition = '';
     let timeParams = [];
     let fileNameSuffix = '';
     
     const now = new Date();
+    const beijingNow = createShanghaiDate(now);
     
     // 如果是全部舆情tab且指定了导出时间范围
     if (timeRange === 'all' && exportTimeRange) {
       if (exportTimeRange === 'thisWeek') {
-        const weekStart = new Date(now);
-        const dayOfWeek = weekStart.getDay();
-        const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        // 本周：本周一00:00:00到现在（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
+        const daysToMonday = beijingDayOfWeek === 0 ? 6 : beijingDayOfWeek - 1;
+        
+        const weekStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
         weekStart.setDate(weekStart.getDate() - daysToMonday);
         weekStart.setHours(0, 0, 0, 0);
         
         timeCondition = ' AND public_time >= ?';
         timeParams = [weekStart];
         
-        const weekEnd = new Date(now);
+        const weekEnd = new Date(beijingNow);
         fileNameSuffix = `${formatDateForFileName(weekStart)}-${formatDateForFileName(weekEnd)}舆情信息`;
       } else if (exportTimeRange === 'thisMonth') {
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        monthStart.setHours(0, 0, 0, 0);
+        // 本月：本月1日00:00:00到现在（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const monthStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-01T00:00:00+08:00`);
         
         timeCondition = ' AND public_time >= ?';
         timeParams = [monthStart];
-        fileNameSuffix = `${now.getFullYear()}年${String(now.getMonth() + 1).padStart(2, '0')}月舆情信息`;
+        fileNameSuffix = `${beijingYear}年${String(beijingMonth).padStart(2, '0')}月舆情信息`;
       } else if (exportTimeRange === 'lastMonth') {
-        const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+        // 上月：上月1日00:00:00到上月最后一天23:59:59（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const lastMonthStart = new Date(beijingYear, beijingMonth - 2, 1); // 上月1日
+        const lastMonthEnd = new Date(beijingYear, beijingMonth - 1, 0); // 上月最后一天
         lastMonthStart.setHours(0, 0, 0, 0);
         lastMonthEnd.setHours(23, 59, 59, 999);
         
@@ -2337,9 +2461,10 @@ router.post('/export', async (req, res) => {
         fileNameSuffix = '全部舆情信息';
       }
     } else {
-      // 使用当前tab的时间范围
+      // 使用当前tab的时间范围（北京时区）
       if (timeRange === 'yesterday') {
-        const yesterday = new Date(now);
+        // 昨日：前一天00:00:00到23:59:59（北京时区）
+        const yesterday = new Date(beijingNow);
         yesterday.setDate(yesterday.getDate() - 1);
         const yesterdayStart = new Date(yesterday);
         yesterdayStart.setHours(0, 0, 0, 0);
@@ -2350,24 +2475,40 @@ router.post('/export', async (req, res) => {
         timeParams = [yesterdayStart, yesterdayEnd];
         fileNameSuffix = `${formatDateForFileName(yesterday)}舆情信息`;
       } else if (timeRange === 'thisWeek') {
-        const weekStart = new Date(now);
-        const dayOfWeek = weekStart.getDay();
-        const daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+        // 本周：本周一00:00:00到现在（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
+        const daysToMonday = beijingDayOfWeek === 0 ? 6 : beijingDayOfWeek - 1;
+        
+        const weekStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
         weekStart.setDate(weekStart.getDate() - daysToMonday);
         weekStart.setHours(0, 0, 0, 0);
         
         timeCondition = ' AND public_time >= ?';
         timeParams = [weekStart];
         
-        const weekEnd = new Date(now);
+        const weekEnd = new Date(beijingNow);
         fileNameSuffix = `${formatDateForFileName(weekStart)}-${formatDateForFileName(weekEnd)}舆情信息`;
       } else if (timeRange === 'lastWeek') {
-        // 上周：上周一00:00:00到上周日23:59:59
-        const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-        // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
-        const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
-        const lastMonday = new Date(now);
-        lastMonday.setDate(now.getDate() - daysToLastMonday);
+        // 上周：上周一00:00:00到上周日23:59:59（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const beijingDayOfWeek = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`).getDay();
+        const daysToLastMonday = beijingDayOfWeek === 0 ? 14 : beijingDayOfWeek - 1 + 7;
+        
+        const lastMonday = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
+        lastMonday.setDate(lastMonday.getDate() - daysToLastMonday);
         lastMonday.setHours(0, 0, 0, 0);
         
         const lastSunday = new Date(lastMonday);
@@ -2378,12 +2519,19 @@ router.post('/export', async (req, res) => {
         timeParams = [lastMonday, lastSunday];
         fileNameSuffix = `${formatDateForFileName(lastMonday)}-${formatDateForFileName(lastSunday)}舆情信息`;
       } else if (timeRange === 'thisMonth') {
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        monthStart.setHours(0, 0, 0, 0);
+        // 本月：本月1日00:00:00到现在（北京时区）
+        const beijingDateStr = beijingNow.toLocaleString('zh-CN', { 
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const [beijingYear, beijingMonth] = beijingDateStr.split(/[\/\-]/).map(Number);
+        const monthStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-01T00:00:00+08:00`);
         
         timeCondition = ' AND public_time >= ?';
         timeParams = [monthStart];
-        fileNameSuffix = `${now.getFullYear()}年${String(now.getMonth() + 1).padStart(2, '0')}月舆情信息`;
+        fileNameSuffix = `${beijingYear}年${String(beijingMonth).padStart(2, '0')}月舆情信息`;
       } else {
         fileNameSuffix = '全部舆情信息';
       }
@@ -3047,7 +3195,7 @@ router.post('/recipients', [
     }
 
     // 处理entity_type（支持数组多选）
-    const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP'];
+    const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP'];
     let validatedEntityTypeJson = null;
     if (entity_type !== null && entity_type !== undefined && entity_type !== '') {
       let entityTypes = entity_type;
@@ -3253,7 +3401,7 @@ router.put('/recipients/:id', [
 
     // 处理企业类型（支持数组多选）
     if (entity_type !== undefined) {
-      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP'];
+      const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP'];
       let validatedEntityTypeJson = null;
       if (entity_type !== null && entity_type !== '') {
         let entityTypes = entity_type;
@@ -3813,115 +3961,62 @@ async function syncQichachaNewsData(configId = null, logId = null) {
     }
 
     console.log(`企查查每日查询限制次数: ${dailyLimit}`);
-    console.log(`企查查接口频次类型: ${config.frequency_type || 'week'}`);
 
-    // 根据frequency_type和weekday计算时间范围
-    let startDate, endDate;
+    // 使用Asia/Shanghai时区计算本地日期
     const now = new Date();
-    const frequencyType = config.frequency_type || 'week'; // 默认按周执行
-    const sendFrequency = config.send_frequency || 'weekly';
-    const weekday = config.weekday || config.week_day || null;
+    const baseRunDate = createShanghaiDate(now);
     
-    // 星期映射：monday=1, tuesday=2, ..., sunday=0
-    const weekdayMap = {
-      'monday': 1,
-      'tuesday': 2,
-      'wednesday': 3,
-      'thursday': 4,
-      'friday': 5,
-      'saturday': 6,
-      'sunday': 0
-    };
+    // 计算时间范围：基于last_sync_date或last_sync_time
+    // 如果是首次执行（没有last_sync_date和last_sync_time），使用前一天00:00:00到当前执行时间
+    let startDate, endDate;
     
-    // 如果是每周执行且有weekday配置，使用新的周期逻辑
-    if (frequencyType === 'week' && sendFrequency === 'weekly' && weekday && weekdayMap[weekday] !== undefined) {
-      const targetWeekday = weekdayMap[weekday];
-      const currentDay = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
+    // endDate：当前执行日期的前一天（北京时区）（因为要抓取的是执行日期之前的数据）
+    const toDate = new Date(baseRunDate);
+    toDate.setDate(toDate.getDate() - 1); // 执行日期前一天
+    endDate = formatDateOnly(toDate); // 使用北京时区格式化日期
+    
+    // startDate：根据是否有上次同步记录来决定（使用北京时区）
+    if (config.last_sync_date) {
+      // 如果有 last_sync_date，从 last_sync_date + 1天 开始（北京时区）
+      // last_sync_date 是 YYYY-MM-DD 格式，直接解析为北京时区的日期
+      const [year, month, day] = config.last_sync_date.split('-').map(Number);
+      const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
+      lastSyncDate.setDate(lastSyncDate.getDate() + 1); // 从上次同步日期的下一天开始
+      startDate = formatDateOnly(lastSyncDate);
       
-      if (targetWeekday === 4) {
-        // 周四执行：取数周期从本周一00:00:00到本周四00:00:00
-        const daysToMonday = currentDay === 0 ? 6 : currentDay - 1; // 到本周一的天数
-        const thisMonday = new Date(now);
-        thisMonday.setDate(now.getDate() - daysToMonday);
-        thisMonday.setHours(0, 0, 0, 0);
-        
-        const thisThursday = new Date(thisMonday);
-        thisThursday.setDate(thisMonday.getDate() + 3); // 周一+3天=周四
-        thisThursday.setHours(0, 0, 0, 0);
-        
-        startDate = thisMonday.toISOString().slice(0, 10);
-        endDate = thisThursday.toISOString().slice(0, 10);
-      } else if (targetWeekday === 1) {
-        // 周一执行：取数周期从上周四00:00:00到本周一00:00:00
-        const daysToMonday = currentDay === 0 ? 6 : currentDay - 1; // 到本周一的天数
-        const thisMonday = new Date(now);
-        thisMonday.setDate(now.getDate() - daysToMonday);
-        thisMonday.setHours(0, 0, 0, 0);
-        
-        const lastThursday = new Date(thisMonday);
-        lastThursday.setDate(thisMonday.getDate() - 4); // 本周一-4天=上周四
-        lastThursday.setHours(0, 0, 0, 0);
-        
-        startDate = lastThursday.toISOString().slice(0, 10);
-        endDate = thisMonday.toISOString().slice(0, 10);
-      } else {
-        // 其他星期几：默认使用上周一至上周日
-        // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(currentDay - 1 + 7)天
-        const daysToLastMonday = currentDay === 0 ? 14 : currentDay - 1 + 7;
-        const lastMonday = new Date(now);
-        lastMonday.setDate(now.getDate() - daysToLastMonday);
-        lastMonday.setHours(0, 0, 0, 0);
-        
-        const lastSunday = new Date(lastMonday);
-        lastSunday.setDate(lastMonday.getDate() + 6);
-        lastSunday.setHours(23, 59, 59, 999);
-        
-        startDate = lastMonday.toISOString().slice(0, 10);
-        endDate = lastSunday.toISOString().slice(0, 10);
-      }
-    } else if (frequencyType === 'week') {
-      // 按周执行（无weekday配置）：计算上周周一和周日日期
-      const dayOfWeek = now.getDay(); // 0=周日, 1=周一, ..., 6=周六
-      // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
-      const daysToLastMonday = dayOfWeek === 0 ? 14 : dayOfWeek - 1 + 7; // 上周一
-      const lastMonday = new Date(now);
-      lastMonday.setDate(now.getDate() - daysToLastMonday);
-      lastMonday.setHours(0, 0, 0, 0);
+      console.log(`[企查查同步] 使用上次同步日期计算时间范围（北京时区）:`);
+      console.log(`[企查查同步] - 上次同步日期: ${config.last_sync_date}`);
+      console.log(`[企查查同步] - 起始日期（上次同步日期+1天）: ${startDate}`);
+    } else if (config.last_sync_time) {
+      // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始（北京时区）
+      const lastSyncTime = new Date(config.last_sync_time);
+      // 获取北京时区的日期部分
+      const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const datePart = beijingDateStr.split(' ')[0];
+      const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+      const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
+      lastSyncDateOnly.setDate(lastSyncDateOnly.getDate() + 1); // 从上次同步日期的下一天开始
+      startDate = formatDateOnly(lastSyncDateOnly);
       
-      const lastSunday = new Date(lastMonday);
-      lastSunday.setDate(lastMonday.getDate() + 6);
-      lastSunday.setHours(23, 59, 59, 999);
-
-      startDate = lastMonday.toISOString().slice(0, 10); // YYYY-MM-DD
-      endDate = lastSunday.toISOString().slice(0, 10); // YYYY-MM-DD
-    } else if (frequencyType === 'day') {
-      // 按天执行：计算前N天
-      const days = config.frequency_value || 1;
-      const fromDate = new Date(now);
-      fromDate.setDate(now.getDate() - days);
-      fromDate.setHours(0, 0, 0, 0);
-      
-      const toDate = new Date(now);
-      toDate.setHours(0, 0, 0, 0);
-
-      startDate = fromDate.toISOString().slice(0, 10);
-      endDate = toDate.toISOString().slice(0, 10);
+      console.log(`[企查查同步] 使用上次同步时间计算时间范围（北京时区）:`);
+      console.log(`[企查查同步] - 上次同步时间: ${config.last_sync_time}`);
+      console.log(`[企查查同步] - 起始日期（上次同步日期+1天）: ${startDate}`);
     } else {
-      // 按月执行：计算上个月
-      const lastMonth = new Date(now);
-      lastMonth.setMonth(now.getMonth() - 1);
-      lastMonth.setDate(1);
-      lastMonth.setHours(0, 0, 0, 0);
+      // 首次执行：使用前一天00:00:00（北京时区）
+      const yesterdayDate = new Date(baseRunDate);
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      startDate = formatDateOnly(yesterdayDate);
       
-      const lastDayOfMonth = new Date(now);
-      lastDayOfMonth.setDate(0); // 上个月的最后一天
-      lastDayOfMonth.setHours(23, 59, 59, 999);
-
-      startDate = lastMonth.toISOString().slice(0, 10);
-      endDate = lastDayOfMonth.toISOString().slice(0, 10);
+      console.log(`[企查查同步] 首次执行，使用前一天作为起始日期（北京时区）:`);
+      console.log(`[企查查同步] - 起始日期: ${startDate}`);
     }
 
-    console.log(`企查查舆情同步时间范围（${frequencyType}）：${startDate} 至 ${endDate}`);
+    console.log(`企查查舆情同步时间范围：${startDate} 至 ${endDate}`);
 
     // 从invested_enterprises表获取统一信用代码（排除完全退出的）
     // 使用DISTINCT在SQL层面去重，确保每个统一信用代码只出现一次
@@ -3939,8 +4034,8 @@ async function syncQichachaNewsData(configId = null, logId = null) {
           entityTypes.forEach(type => {
             if (type === '被投企业') {
               conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
-            } else if (type === '基金') {
-              conditions.push(`entity_type = '基金'`);
+            } else if (type === '基金相关主体') {
+              conditions.push(`entity_type = '基金相关主体'`);
             } else if (type === '子基金') {
               conditions.push(`entity_type = '子基金'`);
             } else if (type === '子基金管理人') {

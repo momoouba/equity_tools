@@ -548,9 +548,10 @@ div.share-news-page div.table-container table.news-table thead .enterprise-name-
 
 .share-news-page .entity-type-cell {
   width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  word-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.5;
 }
 
 .share-news-page .enterprise-abbreviation-cell {

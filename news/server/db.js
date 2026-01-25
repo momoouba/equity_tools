@@ -1146,6 +1146,23 @@ async function initializeTables(dbPool) {
     console.warn('修改news_interface_config表frequency_value字段时出现警告:', err.message);
   }
 
+  // 迁移 news_interface_config 表，添加 skip_holiday 字段（跳过节假日）
+  try {
+    const [skipHolidayCol] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'skip_holiday'
+    `);
+    if (skipHolidayCol.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN skip_holiday TINYINT(1) DEFAULT 0 COMMENT \'是否跳过节假日：1-跳过，0-不跳过\'');
+      console.log('✓ 已添加 news_interface_config 表的 skip_holiday 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 news_interface_config 表 skip_holiday 字段时出现警告:', err.message);
+  }
+
   // 移除news_interface_config表的唯一约束，允许同一应用和接口类型有多个不同配置
   // 注意：需要先删除使用该索引的外键约束，然后才能删除唯一索引
   // 已禁用：此迁移逻辑每次启动都会执行，导致外键约束警告。外键约束已手动修复，不再需要每次启动都执行。
@@ -1661,6 +1678,23 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('修改 recipient_management 表 send_frequency 字段时出现警告:', err.message);
+  }
+
+  // 迁移 recipient_management 表，添加 skip_holiday 字段（跳过节假日）
+  try {
+    const [skipHolidayCol] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'recipient_management' 
+      AND COLUMN_NAME = 'skip_holiday'
+    `);
+    if (skipHolidayCol.length === 0) {
+      await dbPool.query('ALTER TABLE recipient_management ADD COLUMN skip_holiday TINYINT(1) DEFAULT 0 COMMENT \'是否跳过节假日：1-跳过，0-不跳过\'');
+      console.log('✓ 已添加 recipient_management 表的 skip_holiday 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management 表 skip_holiday 字段时出现警告:', err.message);
   }
 
   // news_sync_execution_log 表：新闻同步执行日志

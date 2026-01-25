@@ -595,31 +595,48 @@ router.get('/news/:token', async (req, res) => {
     let whereConditions = [];
     let queryParams = [];
 
-    // 时间范围过滤
+    // 时间范围过滤（使用北京时区）
     if (timeRange !== 'all') {
       const now = new Date();
+      // 使用北京时区获取当前日期
+      const beijingDateStr = now.toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const [beijingYear, beijingMonth, beijingDay] = beijingDateStr.split(/[\/\-]/).map(Number);
+      const beijingNow = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-${String(beijingDay).padStart(2, '0')}T00:00:00+08:00`);
+      
       let startDate = null;
 
       switch (timeRange) {
         case 'yesterday':
-          startDate = new Date(now);
-          startDate.setDate(startDate.getDate() - 1);
-          startDate.setHours(0, 0, 0, 0);
-          const endDate = new Date(startDate);
-          endDate.setHours(23, 59, 59, 999);
-          whereConditions.push('nd.public_time >= ? AND nd.public_time <= ?');
-          queryParams.push(startDate, endDate);
+          // 昨日舆情：显示今天创建的数据（created_at是今天，北京时区）
+          const todayStart = new Date(beijingNow);
+          todayStart.setHours(0, 0, 0, 0);
+          const todayEnd = new Date(beijingNow);
+          todayEnd.setHours(23, 59, 59, 999);
+          whereConditions.push('nd.created_at >= ? AND nd.created_at <= ?');
+          queryParams.push(todayStart, todayEnd);
           break;
         case 'thisWeek':
-          const thisWeekStart = new Date(now);
-          thisWeekStart.setDate(now.getDate() - now.getDay() + 1);
+          // 本周：本周一00:00:00到现在（北京时区）
+          const beijingDayOfWeek = beijingNow.getDay(); // 0=周日, 1=周一, ..., 6=周六
+          const daysToMonday = beijingDayOfWeek === 0 ? 6 : beijingDayOfWeek - 1; // 0是周日，需要调整
+          const thisWeekStart = new Date(beijingNow);
+          thisWeekStart.setDate(thisWeekStart.getDate() - daysToMonday);
           thisWeekStart.setHours(0, 0, 0, 0);
           whereConditions.push('nd.public_time >= ?');
           queryParams.push(thisWeekStart);
           break;
         case 'lastWeek':
-          const lastWeekStart = new Date(now);
-          lastWeekStart.setDate(now.getDate() - now.getDay() - 6);
+          // 上周：上周一00:00:00到上周日23:59:59（北京时区）
+          const beijingDayOfWeekForLast = beijingNow.getDay(); // 0=周日, 1=周一, ..., 6=周六
+          // 计算上周一：周日需要回退14天（本周一往前推7天），其他天回退(dayOfWeek - 1 + 7)天
+          const daysToLastMonday = beijingDayOfWeekForLast === 0 ? 14 : beijingDayOfWeekForLast - 1 + 7; // 上周一
+          const lastWeekStart = new Date(beijingNow);
+          lastWeekStart.setDate(lastWeekStart.getDate() - daysToLastMonday);
           lastWeekStart.setHours(0, 0, 0, 0);
           const lastWeekEnd = new Date(lastWeekStart);
           lastWeekEnd.setDate(lastWeekEnd.getDate() + 6);
@@ -628,8 +645,8 @@ router.get('/news/:token', async (req, res) => {
           queryParams.push(lastWeekStart, lastWeekEnd);
           break;
         case 'thisMonth':
-          const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-          thisMonthStart.setHours(0, 0, 0, 0);
+          // 本月：本月1日00:00:00到现在（北京时区）
+          const thisMonthStart = new Date(`${beijingYear}-${String(beijingMonth).padStart(2, '0')}-01T00:00:00+08:00`);
           whereConditions.push('nd.public_time >= ?');
           queryParams.push(thisMonthStart);
           break;

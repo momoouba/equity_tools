@@ -464,6 +464,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
           sendFrequency: recipient.send_frequency,
           sendTime: recipient.send_time,
           cronExpression: recipient.cron_expression,
+          skipHoliday: recipient.skip_holiday === 1,
           isActive: isActive,
           isDeleted: recipient.is_deleted === 1,
           nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
@@ -556,6 +557,16 @@ router.get('/', checkAdminPermission, async (req, res) => {
           // 如果查询失败，继续使用config.last_sync_time
         }
         
+        // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
+        let nextExecutionFromCron = null;
+        if (isActive && config.cron_expression && config.cron_expression.trim()) {
+          try {
+            nextExecutionFromCron = calculateNextExecutionTimeFromCron(config.cron_expression);
+          } catch (error) {
+            errorWithTag('[定时任务]', `计算配置 ${config.id} 的cron表达式下次执行时间失败:`, error);
+          }
+        }
+        
         return {
           id: config.id,
           appId: config.app_id,
@@ -564,6 +575,8 @@ router.get('/', checkAdminPermission, async (req, res) => {
           requestUrl: config.request_url,
           sendFrequency: sendFrequency,
           sendTime: sendTime,
+          cronExpression: config.cron_expression || null,
+          skipHoliday: config.skip_holiday === 1,
           isActive: isActive,
           weekday: config.weekday || config.week_day || null,
           monthDay: config.monthDay || config.month_day || null,
@@ -571,7 +584,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
           retry_count: config.retry_count || 0,
           retryInterval: config.retry_interval || 0,
           retry_interval: config.retry_interval || 0,
-          nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
+          nextExecutionTime: (nextExecutionFromCron || nextExecution) ? (nextExecutionFromCron || nextExecution).toISOString() : null,
           lastSyncTime: lastSyncTime,
           createdAt: config.created_at,
           updatedAt: config.updated_at
@@ -640,6 +653,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       sendFrequency: recipient.send_frequency,
       sendTime: recipient.send_time,
       cronExpression: recipient.cron_expression,
+      skipHoliday: recipient.skip_holiday === 1,
       isActive: isActive,
       isDeleted: recipient.is_deleted === 1,
       nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
@@ -914,7 +928,7 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
 router.put('/:id', checkAdminPermission, async (req, res) => {
   try {
     const { id } = req.params;
-    const { send_frequency, send_time, is_active, task_type = 'email' } = req.body;
+    const { send_frequency, send_time, is_active, skip_holiday, task_type = 'email' } = req.body;
 
     if (task_type === 'email') {
       // 检查收件管理配置是否存在
@@ -942,6 +956,10 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (is_active !== undefined) {
         updateFields.push('is_active = ?');
         updateValues.push(is_active ? 1 : 0);
+      }
+      if (skip_holiday !== undefined) {
+        updateFields.push('skip_holiday = ?');
+        updateValues.push(skip_holiday ? 1 : 0);
       }
 
       if (updateFields.length > 0) {
@@ -1004,6 +1022,10 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (is_active !== undefined) {
         updateFields.push('is_active = ?');
         updateValues.push(is_active ? 1 : 0);
+      }
+      if (skip_holiday !== undefined) {
+        updateFields.push('skip_holiday = ?');
+        updateValues.push(skip_holiday ? 1 : 0);
       }
       
       // 添加星期和日期字段

@@ -217,8 +217,19 @@ function ShareNewsPage() {
 
         // 客户端过滤
         if (enterpriseFilter === 'enterprise') {
+          // 企业相关：只显示企业类型为被投企业的数据
           allNewsData = allNewsData.filter(news => 
-            news.enterprise_full_name && news.enterprise_full_name.trim() !== ''
+            news.entity_type === '被投企业'
+          )
+        } else if (enterpriseFilter === 'fund') {
+          // 基金相关主体：只显示企业类型为基金相关主体的数据
+          allNewsData = allNewsData.filter(news => 
+            news.entity_type === '基金相关主体'
+          )
+        } else if (enterpriseFilter === 'sub_fund') {
+          // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
+          allNewsData = allNewsData.filter(news => 
+            news.entity_type === '子基金' || news.entity_type === '子基金管理人' || news.entity_type === '子基金GP'
           )
         }
 
@@ -745,6 +756,28 @@ function ShareNewsPage() {
           企业相关
         </button>
         <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'fund' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('fund')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          基金相关主体
+        </button>
+        <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'sub_fund' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('sub_fund')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          子基金
+        </button>
+        <button
           className={`enterprise-filter-btn ${enterpriseFilter === 'all' ? 'active' : ''}`}
           onClick={() => {
             setEnterpriseFilter('all')
@@ -775,7 +808,7 @@ function ShareNewsPage() {
                 <th className="sequence-number-cell">序号</th>
                 <th className="entity-type-cell">企业类型</th>
                 <th className="enterprise-abbreviation-cell">企业简称</th>
-                <th className="fund-cell">关联基金</th>
+                <th className="fund-cell">基金相关主体</th>
                 <th className="sub-fund-cell">关联子基金</th>
                 <th className="keywords-cell">关键词</th>
                 <th className="publish-time-cell">发布时间</th>

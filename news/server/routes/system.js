@@ -315,7 +315,7 @@ router.post('/news-config', [
     const retry_interval = req.body.retry_interval !== undefined ? parseInt(req.body.retry_interval) : 0;
     
     // 处理 entity_type 字段（验证并转换为JSON格式）
-    const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+    const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
     let entityTypeJson = null;
     if (entity_type !== null && entity_type !== undefined && entity_type !== '') {
       let entityTypes = entity_type;
@@ -555,7 +555,7 @@ router.put('/news-config/:id', [
     
     // 处理 entity_type 字段（验证并转换为JSON格式）
     if (entity_type !== undefined) {
-      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+      const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
       let entityTypeJson = null;
       
       // 获取当前接口类型（用于验证）
@@ -3343,11 +3343,26 @@ router.post('/cron/parse', async (req, res) => {
       }
     }
 
-    // 如果跳过节假日，过滤掉节假日
+    // 如果跳过节假日，过滤掉节假日（使用北京时区）
     let filteredTimes = executionTimes;
     if (isSkipHoliday && executionTimes.length > 0) {
       try {
-        // 获取节假日列表
+        // 格式化日期为 YYYY-MM-DD，使用北京时区
+        const formatDateOnly = (date) => {
+          // 使用北京时区格式化日期，确保日期计算基于北京时间
+          const beijingDateStr = date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          });
+          // 解析格式：2024/12/8 或 2024-12-8
+          const datePart = beijingDateStr.split(' ')[0];
+          const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+          return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        };
+        
+        // 获取节假日列表（使用北京时区）
         const currentYear = new Date().getFullYear();
         const years = [currentYear, currentYear + 1, currentYear + 2];
         const allHolidays = [];
@@ -3357,13 +3372,19 @@ router.post('/cron/parse', async (req, res) => {
             'SELECT holiday_date FROM holiday_calendar WHERE YEAR(holiday_date) = ? AND is_workday = 0',
             [year]
           );
-          allHolidays.push(...holidays.map(h => h.holiday_date.toISOString().split('T')[0]));
+          // 使用北京时区格式化节假日日期
+          allHolidays.push(...holidays.map(h => {
+            // holiday_date 可能是 Date 对象或字符串
+            const holidayDate = h.holiday_date instanceof Date ? h.holiday_date : new Date(h.holiday_date);
+            return formatDateOnly(holidayDate);
+          }));
         }
         
         const holidaySet = new Set(allHolidays);
         filteredTimes = executionTimes.filter(dateStr => {
           const date = new Date(dateStr);
-          const dateOnly = date.toISOString().split('T')[0];
+          // 使用北京时区格式化执行时间日期
+          const dateOnly = formatDateOnly(date);
           return !holidaySet.has(dateOnly);
         });
       } catch (holidayError) {

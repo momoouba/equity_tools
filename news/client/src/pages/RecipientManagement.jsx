@@ -662,7 +662,7 @@ function RecipientManagement() {
               }}
             >
               <Option value="被投企业">被投企业</Option>
-              <Option value="基金">基金</Option>
+              <Option value="基金相关主体">基金相关主体</Option>
               <Option value="子基金">子基金</Option>
               <Option value="子基金管理人">子基金管理人</Option>
               <Option value="子基金GP">子基金GP</Option>

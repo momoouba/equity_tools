@@ -39,6 +39,7 @@ function ScheduledTaskManagement() {
     send_frequency: 'daily',
     send_time: '09:00:00',
     is_active: true,
+    skip_holiday: false,
     weekday: 'monday',
     month_day: 'first',
     retry_count: 0,
@@ -175,6 +176,7 @@ function ScheduledTaskManagement() {
     const frequency = task.sendFrequency || task.send_frequency || 'daily'
     const time = task.sendTime || task.send_time || '09:00:00'
     const active = task.isActive !== undefined ? task.isActive : (task.is_active !== undefined ? task.is_active : true)
+    const skipHoliday = task.skipHoliday !== undefined ? task.skipHoliday : (task.skip_holiday !== undefined ? task.skip_holiday : false)
     
     setFormData({
       app_id: task.appId || '',
@@ -184,6 +186,7 @@ function ScheduledTaskManagement() {
       send_frequency: frequency,
       send_time: time,
       is_active: active,
+      skip_holiday: skipHoliday,
       weekday: task.weekday || task.week_day || 'monday',
       month_day: task.monthDay || task.month_day || 'first',
       retry_count: task.retryCount || task.retry_count || 0,
@@ -372,6 +375,7 @@ function ScheduledTaskManagement() {
       send_frequency: 'daily',
       send_time: '00:00:00',
       is_active: true,
+      skip_holiday: false,
       weekday: 'monday',
       month_day: 'first',
       retry_count: 0,
@@ -408,6 +412,7 @@ function ScheduledTaskManagement() {
         send_frequency: originalData.send_frequency || (originalData.frequency_type === 'week' ? 'weekly' : (originalData.frequency_type === 'month' ? 'monthly' : 'daily')),
         send_time: sendTime,
         is_active: originalData.is_active !== undefined ? (originalData.is_active === 1 || originalData.is_active === true) : true,
+        skip_holiday: originalData.skip_holiday !== undefined ? (originalData.skip_holiday === 1 || originalData.skip_holiday === true) : false,
         weekday: originalData.weekday || 'monday',
         month_day: originalData.month_day || 'first',
         retry_count: originalData.retry_count || 0,
@@ -445,6 +450,22 @@ function ScheduledTaskManagement() {
     } catch (e) {
       return timeString
     }
+  }
+
+  const formatCronExpression = (cron) => {
+    if (!cron) return '-'
+    // 简化显示：如果是常见的表达式，显示友好文本
+    if (cron === '0 0 0 * * ? *') return '每天 00:00:00'
+    if (cron === '0 0 0 ? * 1 *') return '每周日 00:00:00'
+    if (cron === '0 0 0 ? * 2 *') return '每周一 00:00:00'
+    if (cron === '0 0 0 ? * 3 *') return '每周二 00:00:00'
+    if (cron === '0 0 0 ? * 4 *') return '每周三 00:00:00'
+    if (cron === '0 0 0 ? * 5 *') return '每周四 00:00:00'
+    if (cron === '0 0 0 ? * 6 *') return '每周五 00:00:00'
+    if (cron === '0 0 0 ? * 7 *') return '每周六 00:00:00'
+    if (cron === '0 0 0 1 * ? *') return '每月1号 00:00:00'
+    // 返回原始表达式
+    return cron
   }
 
   const getFrequencyName = (frequency) => {
@@ -506,16 +527,17 @@ function ScheduledTaskManagement() {
       tooltip: true
     },
     {
-      title: '发送频率',
-      dataIndex: 'sendFrequency',
-      width: 100,
-      render: (text) => getFrequencyName(text)
-    },
-    {
-      title: '发送时间',
-      dataIndex: 'sendTime',
-      width: 120,
-      render: (text) => formatTime(text)
+      title: 'Cron表达式',
+      dataIndex: 'cronExpression',
+      width: 200,
+      render: (text, record) => {
+        // 兼容旧数据：如果有 send_frequency，显示旧的格式
+        if (record.sendFrequency && !text) {
+          const typeMap = { 'daily': '每天', 'weekly': '每周', 'monthly': '每月' }
+          return `${typeMap[record.sendFrequency] || record.sendFrequency} - ${formatTime(record.sendTime || '')}`
+        }
+        return formatCronExpression(text)
+      }
     },
     {
       title: '下次执行时间',
@@ -597,28 +619,24 @@ function ScheduledTaskManagement() {
       tooltip: true
     },
     {
-      title: '同步频率',
-      dataIndex: 'sendFrequency',
-      width: 100,
-      render: (text) => getFrequencyName(text)
-    },
-    {
-      title: '星期',
-      dataIndex: 'weekday',
-      width: 100,
-      render: (text, record) => record.sendFrequency === 'weekly' ? getWeekdayName(text || record.week_day) : '-'
-    },
-    {
-      title: '日期',
-      dataIndex: 'monthDay',
-      width: 100,
-      render: (text, record) => record.sendFrequency === 'monthly' ? getMonthDayName(text || record.month_day) : '-'
-    },
-    {
-      title: '同步时间',
-      dataIndex: 'sendTime',
-      width: 120,
-      render: (text) => formatTime(text)
+      title: 'Cron表达式',
+      dataIndex: 'cronExpression',
+      width: 200,
+      render: (text, record) => {
+        // 兼容旧数据：如果有 send_frequency，显示旧的格式
+        if (record.sendFrequency && !text) {
+          const typeMap = { 'daily': '每天', 'weekly': '每周', 'monthly': '每月' }
+          let displayText = `${typeMap[record.sendFrequency] || record.sendFrequency} - ${formatTime(record.sendTime || '')}`
+          if (record.sendFrequency === 'weekly' && record.weekday) {
+            displayText += ` (${getWeekdayName(record.weekday)})`
+          }
+          if (record.sendFrequency === 'monthly' && record.monthDay) {
+            displayText += ` (${getMonthDayName(record.monthDay)})`
+          }
+          return displayText
+        }
+        return formatCronExpression(text)
+      }
     },
     {
       title: '下次执行时间',
@@ -1022,6 +1040,14 @@ function ScheduledTaskManagement() {
             field="is_active"
           >
             <Switch checked={formData.is_active} />
+          </FormItem>
+
+          <FormItem
+            label="跳过节假日"
+            field="skip_holiday"
+            extra="开启后，定时任务在节假日将不会执行"
+          >
+            <Switch checked={formData.skip_holiday} />
           </FormItem>
 
           {activeTab === 'news_sync' && (

@@ -695,47 +695,35 @@ function NewsInfo() {
       title: '企业类型',
       dataIndex: 'entity_type',
       width: 84,
-      ellipsis: true,
+      ellipsis: false,
       tooltip: true,
-      render: (text) => text || '-'
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
     },
     {
-      title: '被投企业全称',
-      dataIndex: 'enterprise_full_name',
-      width: 200,
+      title: '被投企业简称',
+      dataIndex: 'enterprise_abbreviation',
+      width: 120,
       ellipsis: false,
-      render: (text, record) => {
-        // 从enterprise_abbreviation和enterprise_full_name字段读取，不再解析"简称【全称】"格式
-        const abbreviation = record.enterprise_abbreviation || null;
-        const fullName = record.enterprise_full_name || text || null;
-        
-        // 如果简称和全称都存在且不同，显示"简称\n全称"格式
-        if (abbreviation && fullName && abbreviation !== fullName) {
-          return (
-            <div style={{ 
-              whiteSpace: 'normal', 
-              wordWrap: 'break-word', 
-              wordBreak: 'break-word',
-              lineHeight: '1.5'
-            }}>
-              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>{abbreviation}</div>
-              <div style={{ color: '#888', fontSize: '12px' }}>{fullName}</div>
-            </div>
-          );
-        }
-        
-        // 如果只有全称，只显示全称
-        return (
-          <div style={{ 
-            whiteSpace: 'normal', 
-            wordWrap: 'break-word', 
-            wordBreak: 'break-word',
-            lineHeight: '1.5'
-          }}>
-            {fullName || '-'}
-          </div>
-        );
-      }
+      tooltip: true,
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
     },
     {
       title: '关键词',
@@ -812,7 +800,7 @@ function NewsInfo() {
       ) : '-'
     },
     {
-      title: '关联基金',
+      title: '基金相关主体',
       dataIndex: 'fund',
       width: 150,
       ellipsis: true,
@@ -826,6 +814,22 @@ function NewsInfo() {
       ellipsis: true,
       tooltip: true,
       render: (text) => text || '-'
+    },
+    {
+      title: '被投企业全称',
+      dataIndex: 'enterprise_full_name',
+      width: 200,
+      ellipsis: false,
+      render: (text) => (
+        <div style={{ 
+          whiteSpace: 'normal', 
+          wordWrap: 'break-word', 
+          wordBreak: 'break-word',
+          lineHeight: '1.5'
+        }}>
+          {text || '-'}
+        </div>
+      )
     },
     {
       title: '公众号名称',
@@ -1095,6 +1099,8 @@ function NewsInfo() {
               style={{ marginBottom: '16px' }}
             >
               <Radio value="enterprise">企业相关</Radio>
+              <Radio value="fund">基金相关主体</Radio>
+              <Radio value="sub_fund">子基金</Radio>
               <Radio value="all">全部</Radio>
             </RadioGroup>
 

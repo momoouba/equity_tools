@@ -212,7 +212,8 @@ function parseEnterpriseName(enterpriseAbbreviation, enterpriseFullName) {
 function getEntityTypeDisplayName(entityType) {
   const typeMap = {
     '被投企业': '被投企业',
-    '基金': '基金',
+    '基金相关主体': '基金相关主体',
+    '基金': '基金相关主体', // 兼容旧数据
     '子基金': '子基金',
     '子基金管理人': '子基金管理人',
     '子基金GP': '子基金GP',

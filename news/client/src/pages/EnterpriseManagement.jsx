@@ -92,8 +92,8 @@ function EnterpriseManagement() {
         // 被投企业
         params.entity_type = '被投企业'
       } else if (activeTab === 'main_fund') {
-        // 基金
-        params.entity_type = '基金'
+        // 基金相关主体
+        params.entity_type = '基金相关主体'
       } else if (activeTab === 'fund') {
         // 子基金
         params.entity_type = '子基金'
@@ -398,7 +398,7 @@ function EnterpriseManagement() {
         >
           <TabPane key="all" title="全部" />
           <TabPane key="invested" title="被投企业" />
-          <TabPane key="main_fund" title="基金" />
+          <TabPane key="main_fund" title="基金相关主体" />
           <TabPane key="fund" title="子基金" />
           <TabPane key="manager" title="子基金管理人及GP" />
         </Tabs>
