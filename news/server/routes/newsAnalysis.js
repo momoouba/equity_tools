@@ -67,7 +67,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     
     // 获取新闻详情，包括公众号信息和现有分析结果
     const newsItems = await db.query(
-      'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords FROM news_detail WHERE id = ?',
+      'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
       [id]
     );
     
@@ -81,6 +81,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     console.log(`当前企业全称: "${newsItem.enterprise_full_name || '(空)'}"`);
     console.log(`公众号ID (wechat_account): "${newsItem.wechat_account || '(空)'}"`);
     console.log(`公众号名称 (account_name): "${newsItem.account_name || '(空)'}"`);
+    console.log(`接口类型 (APItype): "${newsItem.APItype || '(空)'}"`);
     console.log(`当前摘要: "${newsItem.news_abstract ? newsItem.news_abstract.substring(0, 80) + '...' : '(空)'}"`);
     
     // 检查摘要是否不完整（以数字结尾、以省略号结尾等）
@@ -600,10 +601,10 @@ router.post('/batch-analyze-selected', async (req, res) => {
 
     console.log(`用户 ${userId} 触发批量分析，新闻数量: ${newsIds.length}`);
     
-    // 查询选中的新闻，包括公众号信息
+    // 查询选中的新闻，包括公众号信息和APItype（接口类型）
     const placeholders = newsIds.map(() => '?').join(',');
     const newsToAnalyze = await db.query(
-      `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name
+      `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, APItype
        FROM news_detail 
        WHERE id IN (${placeholders}) AND delete_mark = 0`,
       newsIds
@@ -928,7 +929,21 @@ router.post('/batch-analyze-selected', async (req, res) => {
           
           console.log(`\n========== 批量分析完成 (${i + 1}/${newsToAnalyze.length}) ==========\n`);
 
-          if (result) {
+          // 正确区分AI分析成功/失败
+          // 如果result包含_aiAnalysisFailed标记，说明AI分析失败（即使数据库更新成功）
+          if (result && result._aiAnalysisFailed) {
+            // AI分析失败，但使用了兜底逻辑
+            errorCount++;
+            results.push({
+              id: news.id,
+              title: news.title,
+              status: 'error',
+              error: result._errorMessage || 'AI分析失败',
+              _aiAnalysisFailed: true
+            });
+            console.warn(`[批量分析] 新闻 ${news.id} AI分析失败，使用兜底逻辑: ${result._errorMessage || '未知错误'}`);
+          } else if (result) {
+            // AI分析成功
             successCount++;
             results.push({
               id: news.id,
@@ -936,6 +951,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
               status: 'success'
             });
           } else {
+            // 完全失败（result为null）
             errorCount++;
             results.push({
               id: news.id,

@@ -210,6 +210,15 @@ class NewsAnalysis {
 
       if (text.length === 0) {
         warnWithTag('[fetchContentFromUrl]', `未能提取到文本内容, URL: ${url}`);
+        // 检查是否是今日头条等可能被反爬虫处理的网站
+        const isToutiao = /toutiao\.com/i.test(url);
+        if (isToutiao) {
+          warnWithTag('[fetchContentFromUrl]', `今日头条网站提取失败，可能是反爬虫机制，URL: ${url}`);
+          // 抛出特殊错误，标识为反爬虫阻塞
+          const error = new Error('ANTI_CRAWLER_BLOCKED');
+          error.status = 521;
+          throw error;
+        }
         return null;
       }
 
@@ -2164,6 +2173,346 @@ class NewsAnalysis {
   }
 
   /**
+   * 清理内容用于AI分析：移除非正文内容（新闻来源、广告链接、版权信息等）
+   * 如果正文中有图片也有文字，仅基于文字内容分析
+   * @param {string} content - 原始内容
+   * @returns {string} - 清理后的内容
+   */
+  cleanContentForAnalysis(content) {
+    if (!content || content.trim() === '') {
+      return content;
+    }
+
+    let cleanedContent = content;
+
+    // 1. 移除HTML标签中的图片（但保留图片的alt文本，如果包含有用信息）
+    // 移除<img>标签，但保留alt属性中的文字（如果有）
+    cleanedContent = cleanedContent.replace(/<img[^>]*alt\s*=\s*["']([^"']*)["'][^>]*>/gi, (match, altText) => {
+      // 如果alt文本较长且包含有意义的内容，保留；否则移除
+      if (altText && altText.trim().length > 10 && !/^(图片|图|image|photo)$/i.test(altText.trim())) {
+        return `[图片：${altText}]`;
+      }
+      return '';
+    });
+    // 移除没有alt属性的图片标签
+    cleanedContent = cleanedContent.replace(/<img[^>]*>/gi, '');
+    // 移除图片相关的其他标签
+    cleanedContent = cleanedContent.replace(/<figure[^>]*>[\s\S]*?<\/figure>/gi, '');
+    cleanedContent = cleanedContent.replace(/<picture[^>]*>[\s\S]*?<\/picture>/gi, '');
+
+    // 2. 移除新闻来源信息（在文本开头或结尾）
+    const sourcePatterns = [
+      // 来源：XXX（在开头）
+      /^(来源|来源：|来源:|消息来源|信息来源|新闻来源|稿件来源|报道来源)[：:：]\s*[^\n。！？]{0,50}?[。！？\n]/gi,
+      // 来源：XXX（在结尾）
+      /(来源|来源：|来源:|消息来源|信息来源|新闻来源|稿件来源|报道来源)[：:：]\s*[^\n。！？]{0,50}?[。！？\n]?$/gi,
+      // 据XXX报道/消息（在开头）
+      /^据[^\n。！？]{0,30}?(报道|消息|透露|获悉|了解)[，,。！？\n]/gi,
+      // 据XXX报道/消息（在结尾）
+      /据[^\n。！？]{0,30}?(报道|消息|透露|获悉|了解)[，,。！？\n]?$/gi,
+      // XXX消息/报道（在开头）
+      /^[^\n。！？]{0,30}?(消息|报道|讯)[，,。！？\n]/gi,
+      // 本网/本报/本刊（在开头）
+      /^(本网|本报|本刊|本站)[讯消息报道][，,。！？\n]/gi,
+      // 记者 XXX（在开头或结尾）
+      /^(记者|编辑)\s+[^\n。！？]{0,20}?[，,。！？\n]/gi,
+      /(记者|编辑)\s+[^\n。！？]{0,20}?[，,。！？\n]?$/gi,
+      // 原标题：XXX
+      /原标题[：:：]\s*[^\n]{0,100}?[\n]/gi,
+      /原标题[：:：]\s*[^\n]{0,100}?$/gi,
+      // 本文来源/本文来自
+      /(本文来源|本文来自|文章来源|文章出处)[：:：]\s*[^\n。！？]{0,50}?[。！？\n]?$/gi,
+    ];
+    for (const pattern of sourcePatterns) {
+      cleanedContent = cleanedContent.replace(pattern, '');
+    }
+
+    // 3. 移除广告链接和其他新闻链接
+    // 移除包含"广告"、"推广"、"推荐阅读"等关键词的链接
+    cleanedContent = cleanedContent.replace(/<a[^>]*(广告|推广|推荐|点击|下载|注册|购买|立即|马上)[^>]*>[\s\S]*?<\/a>/gi, '');
+    // 移除"相关新闻"、"相关文章"、"推荐阅读"等区块（增强匹配，包括更多变体）
+    cleanedContent = cleanedContent.replace(/(相关新闻|相关文章|推荐阅读|热门文章|最新文章|更多阅读|延伸阅读|猜你喜欢|你可能还喜欢|热门推荐|编辑推荐|精彩推荐|推荐内容|相关推荐|为您推荐)[：:：]?[\s\S]{0,2000}?$/gi, '');
+    // 移除包含链接的"查看更多"、"点击查看"等文本
+    cleanedContent = cleanedContent.replace(/(查看更多|点击查看|阅读全文|查看详情|了解更多|加载更多|展开更多)[：:：]?[\s\S]{0,200}?$/gi, '');
+    // 移除URL链接（保留链接文本，如果是有意义的文字）
+    cleanedContent = cleanedContent.replace(/https?:\/\/[^\s<>"']+/gi, '');
+    // 移除纯链接文本（如"www.xxx.com"）
+    cleanedContent = cleanedContent.replace(/www\.\S+/gi, '');
+    
+    // 3.1. 移除尾部推荐新闻内容（识别模式：新闻标题列表）
+    // 匹配模式：类似"任志强：房地产不管怎么调也不能让它掉下去"、"奶茶妹妹 4 万元裙子抢镜京东年会"等新闻标题
+    // 这些通常出现在正文尾部，是推荐阅读的内容
+    const recommendedNewsPattern = /(?:相关阅读|推荐阅读|热门文章|最新文章|编辑推荐|精彩推荐|为您推荐|猜你喜欢|你可能还喜欢|更多精彩)[：:：]?[\s\S]{0,3000}?$/gi;
+    cleanedContent = cleanedContent.replace(recommendedNewsPattern, '');
+    
+    // 3.2. 移除留言板、评论区内容
+    cleanedContent = cleanedContent.replace(/(留言板|评论区|网友评论|用户评论|发表评论|我要评论|写评论|评论\(|评论数|条评论)[：:：]?[\s\S]{0,2000}?$/gi, '');
+    
+    // 3.3. 移除加载中、加载更多等提示
+    cleanedContent = cleanedContent.replace(/(加载中|加载更多|正在加载|加载失败|点击加载|刷新|重新加载)[：:：]?[\s\S]{0,500}?$/gi, '');
+    
+    // 3.4. 移除分享、收藏等社交功能提示
+    cleanedContent = cleanedContent.replace(/(分享到|分享给|收藏|点赞|转发|关注|订阅|关注我们|订阅我们)[：:：]?[\s\S]{0,500}?$/gi, '');
+
+    // 4. 移除网页底部版权和其他信息（增强识别，包括更多变体）
+    const footerPatterns = [
+      // 版权信息（增强匹配）
+      /(版权所有|Copyright|©|©️|版权|All rights reserved)[\s\S]{0,500}?$/gi,
+      // ICP备案信息
+      /(ICP|备案号|备案|京ICP|沪ICP|粤ICP|浙ICP)[\s\S]{0,200}?$/gi,
+      // 联系方式
+      /(联系我们|联系方式|联系地址|联系电话|联系邮箱|客服|客服电话|服务热线)[：:：]?[\s\S]{0,300}?$/gi,
+      // 网站声明
+      /(免责声明|隐私政策|服务条款|使用条款|网站声明|法律声明|用户协议|服务协议)[：:：]?[\s\S]{0,500}?$/gi,
+      // 举报信息
+      /(举报|投诉|不良信息举报|违法信息举报|举报电话|举报邮箱)[：:：]?[\s\S]{0,300}?$/gi,
+      // 关于我们
+      /(关于我们|关于本站|网站介绍|关于|公司简介)[：:：]?[\s\S]{0,300}?$/gi,
+      // 合作伙伴
+      /(合作伙伴|友情链接|合作媒体|战略合作)[：:：]?[\s\S]{0,500}?$/gi,
+      // 网站地图
+      /(网站地图|站点地图|网站导航)[：:：]?[\s\S]{0,200}?$/gi,
+      // 关注我们/订阅
+      /(关注我们|订阅我们|关注公众号|订阅公众号|扫码关注|扫码订阅|微信关注|微博关注)[：:：]?[\s\S]{0,300}?$/gi,
+      // 新浪财经特有的尾部内容
+      /(新浪财经|新浪网|新浪)[：:：]?[\s\S]{0,500}?$/gi,
+      // 其他常见尾部标识
+      /(返回顶部|回到顶部|顶部|底部|页脚|footer)[：:：]?[\s\S]{0,200}?$/gi,
+    ];
+    
+    // 从后往前查找，找到第一个匹配的尾部模式，截断其后所有内容
+    let lastMatchIndex = -1;
+    for (const pattern of footerPatterns) {
+      const matches = [...cleanedContent.matchAll(pattern)];
+      for (const match of matches) {
+        // 只在文本的后30%部分移除这些内容（避免误删正文中的相关内容）
+        if (match.index > cleanedContent.length * 0.7) {
+          if (lastMatchIndex === -1 || match.index < lastMatchIndex) {
+            lastMatchIndex = match.index;
+          }
+        }
+      }
+    }
+    
+    if (lastMatchIndex > cleanedContent.length * 0.7) {
+      cleanedContent = cleanedContent.substring(0, lastMatchIndex).trim();
+      console.log(`[cleanContentForAnalysis] 移除了尾部冗余内容（从位置${lastMatchIndex}开始），清理后长度: ${cleanedContent.length}字符`);
+    }
+
+    // 5. 移除HTML标签（保留文本内容）
+    cleanedContent = cleanedContent.replace(/<[^>]+>/g, ' ');
+
+    // 6. 清理多余的空白字符
+    cleanedContent = cleanedContent
+      .replace(/\s+/g, ' ')
+      .replace(/\s*[。！？]\s*[。！？]+/g, '。')
+      .replace(/^\s*[，。！？、]\s*/g, '')
+      .trim();
+
+    // 7. 移除重复的段落（如果同一段文字出现多次）
+    const lines = cleanedContent.split(/[。！？\n]/);
+    const uniqueLines = [];
+    const seenLines = new Set();
+    for (const line of lines) {
+      const trimmedLine = line.trim();
+      if (trimmedLine.length > 10) {
+        // 只检查长度大于10的行，避免误删短句
+        const normalizedLine = trimmedLine.replace(/\s+/g, '');
+        if (!seenLines.has(normalizedLine)) {
+          seenLines.add(normalizedLine);
+          uniqueLines.push(trimmedLine);
+        }
+      } else if (trimmedLine.length > 0) {
+        uniqueLines.push(trimmedLine);
+      }
+    }
+    cleanedContent = uniqueLines.join('。').replace(/。+/g, '。').trim();
+
+    // 8. 智能识别并移除尾部推荐新闻内容（基于内容特征）
+    // 识别模式：在文本后30%部分，如果出现大量短句（类似新闻标题），可能是推荐内容
+    if (cleanedContent.length > 500) {
+      const contentLength = cleanedContent.length;
+      const tailStartIndex = Math.floor(contentLength * 0.7);
+      const tailContent = cleanedContent.substring(tailStartIndex);
+      
+      // 检查尾部是否包含大量短句（类似新闻标题列表）
+      const tailSentences = tailContent.split(/[。！？\n]/).filter(s => s.trim().length > 0);
+      const shortSentences = tailSentences.filter(s => s.trim().length > 10 && s.trim().length < 100);
+      const shortSentenceRatio = tailSentences.length > 0 ? shortSentences.length / tailSentences.length : 0;
+      
+      // 如果尾部短句比例超过60%，且短句数量超过3个，可能是推荐内容
+      if (shortSentenceRatio > 0.6 && shortSentences.length >= 3) {
+        // 进一步检查：这些短句是否包含新闻标题特征（如人名、数字、引号等）
+        const hasTitleFeatures = shortSentences.some(s => {
+          const sentence = s.trim();
+          // 新闻标题特征：包含人名、数字、引号、冒号等
+          return /[：:：]/.test(sentence) || 
+                 /["""'']/.test(sentence) || 
+                 /\d+/.test(sentence) ||
+                 /[任志强|奶茶妹妹|京东|年会|房地产|美国两房|崩盘]/.test(sentence); // 扩展关键词
+        });
+        
+        if (hasTitleFeatures) {
+          // 找到第一个短句的位置，截断其后所有内容
+          const firstShortSentence = tailSentences.find(s => s.trim().length > 10 && s.trim().length < 100);
+          if (firstShortSentence) {
+            const firstShortIndex = cleanedContent.indexOf(firstShortSentence.trim(), tailStartIndex);
+            if (firstShortIndex > tailStartIndex) {
+              cleanedContent = cleanedContent.substring(0, firstShortIndex).trim();
+              console.log(`[cleanContentForAnalysis] 识别到尾部推荐新闻内容（${shortSentences.length}个短句），已移除，清理后长度: ${cleanedContent.length}字符`);
+            }
+          }
+        }
+      }
+    }
+    
+    // 9. 移除无关话题内容（如"奶茶妹妹"、"房地产调控"、"美国两房崩盘"等）
+    // 这些内容通常出现在推荐新闻中，与正文核心内容无关
+    const unrelatedTopics = [
+      /奶茶妹妹[\s\S]{0,200}?/gi,
+      /任志强[\s\S]{0,200}?/gi,
+      /房地产.*调控[\s\S]{0,200}?/gi,
+      /美国两房[\s\S]{0,200}?/gi,
+      /崩盘[\s\S]{0,200}?/gi,
+      /热文排行榜[\s\S]{0,1000}?/gi,
+      /今日推荐[\s\S]{0,1000}?/gi,
+    ];
+    
+    for (const pattern of unrelatedTopics) {
+      const beforeLength = cleanedContent.length;
+      cleanedContent = cleanedContent.replace(pattern, '');
+      if (cleanedContent.length < beforeLength) {
+        console.log(`[cleanContentForAnalysis] 移除了无关话题内容，长度从${beforeLength}减少到${cleanedContent.length}字符`);
+      }
+    }
+    
+    // 10. 移除重复的情绪分类标准、类型标签说明等Prompt重复文本
+    // 这些内容可能是从其他文档复制过来的，不应该出现在正文中
+    const promptPatterns = [
+      /情绪分类标准[\s\S]{0,500}?/gi,
+      /类型标签包括但不限于[\s\S]{0,500}?/gi,
+      /每个类型标签必须控制在[\s\S]{0,200}?/gi,
+      /必须根据新闻的实际内容选择[\s\S]{0,200}?/gi,
+    ];
+    
+    for (const pattern of promptPatterns) {
+      cleanedContent = cleanedContent.replace(pattern, '');
+    }
+    
+    // 11. 最终清理：移除多余的空白和标点
+    cleanedContent = cleanedContent
+      .replace(/\s{3,}/g, ' ')  // 多个空格替换为单个空格
+      .replace(/[。！？]{2,}/g, '。')  // 多个句号替换为单个句号
+      .trim();
+
+    return cleanedContent;
+  }
+
+  /**
+   * 估算文本的token数量（粗略估算，中文约1.5字符=1 token，英文约4字符=1 token）
+   * @param {string} text - 文本内容
+   * @returns {number} - 估算的token数量
+   */
+  estimateTokenCount(text) {
+    if (!text || text.trim().length === 0) {
+      return 0;
+    }
+    
+    // 统计中文字符数（包括中文标点）
+    const chineseChars = (text.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+    // 统计非中文字符数（英文、数字、符号等）
+    const nonChineseChars = text.length - chineseChars;
+    
+    // 估算：中文约1.5字符=1 token，英文/数字约4字符=1 token
+    const chineseTokens = Math.ceil(chineseChars / 1.5);
+    const nonChineseTokens = Math.ceil(nonChineseChars / 4);
+    
+    return chineseTokens + nonChineseTokens;
+  }
+
+  /**
+   * 截断内容到指定字符数，保留核心信息
+   * @param {string} content - 原始内容
+   * @param {number} maxLength - 最大字符数（默认3000）
+   * @returns {string} - 截断后的内容
+   */
+  truncateContentToLength(content, maxLength = 3000) {
+    if (!content || content.length <= maxLength) {
+      return content;
+    }
+    
+    // 如果内容过长，截断到最后一个完整句子
+    const truncated = content.substring(0, maxLength);
+    const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
+    if (lastSentenceMatch) {
+      return lastSentenceMatch[1].trim();
+    }
+    
+    // 如果没有找到完整句子，直接截断
+    return truncated.trim() + '。';
+  }
+
+  /**
+   * 验证内容是否有效（用于AI分析）
+   * @param {string} content - 内容
+   * @param {string} title - 标题
+   * @returns {Object} - { isValid: boolean, reason: string, validContentRatio: number }
+   */
+  validateContentForAnalysis(content, title) {
+    if (!content || content.trim().length === 0) {
+      return { isValid: false, reason: '内容为空', validContentRatio: 0 };
+    }
+    
+    const trimmedContent = content.trim();
+    
+    // 检查内容长度
+    if (trimmedContent.length < 50) {
+      return { isValid: false, reason: '内容太短（少于50字符）', validContentRatio: 0 };
+    }
+    
+    // 检查是否包含大量无效内容标识
+    const invalidPatterns = [
+      /(加载中|加载更多|正在加载|加载失败)/gi,
+      /(点击加载|刷新|重新加载)/gi,
+      /(相关新闻|相关文章|推荐阅读|热门文章)/gi,
+      /(留言板|评论区|网友评论|用户评论)/gi,
+      /(版权所有|Copyright|©|备案号|ICP)/gi,
+    ];
+    
+    let invalidMatchCount = 0;
+    for (const pattern of invalidPatterns) {
+      const matches = trimmedContent.match(pattern);
+      if (matches) {
+        invalidMatchCount += matches.length;
+      }
+    }
+    
+    // 如果无效标识过多（超过5个），认为内容质量差
+    if (invalidMatchCount > 5) {
+      return { 
+        isValid: false, 
+        reason: `包含过多无效内容标识（${invalidMatchCount}个）`, 
+        validContentRatio: Math.max(0, 1 - invalidMatchCount / 10) 
+      };
+    }
+    
+    // 检查有效内容比例（非空白、非标点的字符）
+    const validChars = trimmedContent.replace(/[\s\n\r\t\u3000\u00a0]/g, '').length;
+    const totalChars = trimmedContent.length;
+    const validContentRatio = totalChars > 0 ? validChars / totalChars : 0;
+    
+    if (validContentRatio < 0.3) {
+      return { 
+        isValid: false, 
+        reason: `有效内容比例过低（${(validContentRatio * 100).toFixed(1)}%）`, 
+        validContentRatio 
+      };
+    }
+    
+    return { isValid: true, reason: '内容有效', validContentRatio };
+  }
+
+  /**
    * 检查内容是否包含导航信息（需要重新抓取）
    */
   isContentContaminated(content) {
@@ -2254,6 +2603,23 @@ class NewsAnalysis {
       return true;
     }
 
+    // 检查内容是否包含汉字（如果没有汉字，可能是乱码或无效内容）
+    // 统计中文字符数（包括中文标点）
+    const chineseChars = (content.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+    const totalChars = content.replace(/\s/g, '').length; // 去除空白字符后的总字符数
+    
+    // 如果内容长度超过100字符，但中文字符数少于总字符数的10%，可能是乱码
+    if (totalChars > 100 && chineseChars < totalChars * 0.1) {
+      console.log(`[isContentContaminated] 检测到内容中汉字比例过低（${chineseChars}/${totalChars}，约${(chineseChars/totalChars*100).toFixed(1)}%），可能是乱码，需要重新抓取`);
+      return true;
+    }
+    
+    // 如果内容长度在50-100字符之间，但完全没有汉字，可能是乱码
+    if (totalChars >= 50 && totalChars <= 100 && chineseChars === 0) {
+      console.log(`[isContentContaminated] 检测到内容长度为${totalChars}字符但完全没有汉字，可能是乱码，需要重新抓取`);
+      return true;
+    }
+
     return false;
   }
 
@@ -2271,8 +2637,20 @@ class NewsAnalysis {
                             !newsItem.content.includes('无法提取正文内容') &&
                             !newsItem.content.includes('正文无文字');
     
-    // 检查content是否包含JavaScript/CSS代码（这是乱码的标志）
-    const isContentContaminated = this.isContentContaminated(newsItem.content || '');
+    // 检查content是否包含JavaScript/CSS代码或没有汉字（这是乱码的标志）
+    // isContentContaminated 函数已经包含了检测"没有汉字"的逻辑
+    let isContentContaminated = this.isContentContaminated(newsItem.content || '');
+    
+    // 额外检查：如果内容长度足够但完全没有汉字，也认为是乱码（补充检查，确保覆盖所有情况）
+    if (!isContentContaminated && newsItem.content && newsItem.content.trim().length > 50) {
+      const chineseChars = (newsItem.content.match(/[\u4e00-\u9fa5]/g) || []).length;
+      const totalChars = newsItem.content.replace(/\s/g, '').length;
+      // 如果完全没有汉字，或者汉字比例极低（少于5%），认为是乱码
+      if (chineseChars === 0 || (totalChars > 100 && chineseChars < totalChars * 0.05)) {
+        console.log(`[ensureNewsContent] 检测到内容长度为${newsItem.content.length}字符，汉字数${chineseChars}，汉字比例${totalChars > 0 ? (chineseChars/totalChars*100).toFixed(1) : 0}%，标记为乱码`);
+        isContentContaminated = true; // 标记为乱码，触发重新抓取
+      }
+    }
     
     // 对于新榜接口的新闻，如果content已经存在且有效，不应该强制重新抓取
     // 只有在content为空、无效或包含乱码时，才应该从URL抓取
@@ -2418,6 +2796,17 @@ class NewsAnalysis {
             console.warn(`[ensureNewsContent] 清理后的内容仍然包含脏信息，但继续使用清理后的版本`);
           }
           
+          // 检查清理后的内容是否为空或太短（可能是反爬虫导致）
+          if (cleanedContent.trim().length === 0 || cleanedContent.length < 50) {
+            console.warn(`[ensureNewsContent] 清理后的内容为空或太短（${cleanedContent.length}字符），可能是反爬虫阻塞`);
+            const isToutiao = /toutiao\.com/i.test(newsItem.source_url);
+            if (isToutiao || cleanedContent.trim().length === 0) {
+              console.warn(`[ensureNewsContent] 检测到可能被反爬虫处理的网站（${isToutiao ? '今日头条' : '其他'}），标记为反爬虫阻塞`);
+              newsItem._antiCrawlerBlocked = true;
+              return '';
+            }
+          }
+          
           // 将清理后的内容更新到数据库
           try {
             await db.execute(
@@ -2434,7 +2823,16 @@ class NewsAnalysis {
             return cleanedContent;
           }
         } else {
+          // 如果提取的内容为空或太短，可能是反爬虫阻塞
           console.warn(`[ensureNewsContent] 无法从source_url抓取有效内容，新闻ID: ${newsItem.id}, URL: ${newsItem.source_url}`);
+          // 检查是否是今日头条等可能被反爬虫处理的网站
+          const isToutiao = /toutiao\.com/i.test(newsItem.source_url);
+          if (isToutiao || !fetchedContent || fetchedContent.trim().length === 0) {
+            console.warn(`[ensureNewsContent] 检测到可能被反爬虫处理的网站（${isToutiao ? '今日头条' : '其他'}），标记为反爬虫阻塞`);
+            newsItem._antiCrawlerBlocked = true;
+            // 返回空字符串而不是null，以便后续处理能够识别这种情况
+            return '';
+          }
           return null;
         }
       }
@@ -2494,6 +2892,41 @@ class NewsAnalysis {
   /**
    * 获取活跃的AI配置
    */
+  /**
+   * 根据模型名称获取AI模型配置
+   * @param {string} modelName - 模型名称（如 'qwen-plus'）
+   * @returns {Object|null} - AI模型配置对象
+   */
+  async getAIModelConfigByName(modelName) {
+    try {
+      const result = await db.query(
+        `SELECT * FROM ai_model_config 
+         WHERE model_name = ? AND is_active = 1 AND delete_mark = 0
+         ORDER BY id DESC
+         LIMIT 1`,
+        [modelName]
+      );
+      
+      if (result.length > 0) {
+        const config = result[0];
+        return {
+          provider: config.provider || 'alibaba',
+          model_name: config.model_name,
+          api_key: config.api_key,
+          api_endpoint: config.api_endpoint,
+          temperature: config.temperature || 0.7,
+          max_tokens: config.max_tokens || 2000,
+          top_p: config.top_p || 0.9
+        };
+      }
+      
+      return null;
+    } catch (error) {
+      console.error(`[getAIModelConfigByName] 获取模型配置失败: ${error.message}`);
+      return null;
+    }
+  }
+
   async getActiveAIConfig() {
     if (!this.aiConfig) {
       const configs = await db.query(
@@ -2599,18 +3032,45 @@ class NewsAnalysis {
     // OpenAI兼容格式的端点
     const endpoint = config.api_endpoint || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
     
+    // 清理prompt中的特殊字符，确保格式正确
+    let cleanedPrompt = prompt;
+    // 移除未转义的引号（保留已转义的）
+    cleanedPrompt = cleanedPrompt.replace(/(?<!\\)"/g, '"');
+    // 确保换行符正确
+    cleanedPrompt = cleanedPrompt.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    
+    // 验证prompt长度和token数
+    const promptTokens = this.estimateTokenCount(cleanedPrompt);
+    if (promptTokens > 6000) {
+      console.warn(`[callAlibabaModelOpenAIFormat] ⚠️ Prompt token数过大（${promptTokens}），可能超出模型限制`);
+    }
+    
     const requestData = {
       model: config.model_name,
       messages: [
         {
           role: "user",
-          content: prompt
+          content: cleanedPrompt
         }
       ],
-      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
-      top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
+      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : (config.temperature || 0.7),
+      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : (config.max_tokens || 2000),
+      top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : (config.top_p || 0.9)
     };
+    
+    // 验证请求参数
+    if (!requestData.model) {
+      throw new Error('模型名称不能为空');
+    }
+    if (!requestData.messages || requestData.messages.length === 0) {
+      throw new Error('消息内容不能为空');
+    }
+    if (!requestData.messages[0].content || requestData.messages[0].content.trim().length === 0) {
+      throw new Error('消息内容不能为空');
+    }
+    
+    // 记录请求参数（用于调试）
+    console.log(`[callAlibabaModelOpenAIFormat] 请求参数: 模型=${requestData.model}, temperature=${requestData.temperature}, max_tokens=${requestData.max_tokens}, prompt长度=${cleanedPrompt.length}字符, prompt token=${promptTokens}`);
 
     const response = await axios.post(endpoint, requestData, {
       headers: {
@@ -2909,16 +3369,54 @@ class NewsAnalysis {
    * 分析新闻情绪和类型
    */
   async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false, interfaceType = '新榜') {
+    // 保存原始内容，以便在清理后内容太短时使用
+    const originalContent = content;
+    
+    // 在AI分析前，清理内容：移除非正文内容（新闻来源、广告链接、版权信息等）
+    // 如果正文中有图片也有文字，仅基于文字内容分析
+    if (content && content.trim().length > 0) {
+      const originalContentLength = content.length;
+      const cleanedContent = this.cleanContentForAnalysis(content);
+      const cleanedContentLength = cleanedContent ? cleanedContent.length : 0;
+      
+      if (originalContentLength > 0 && cleanedContentLength > 0) {
+        const reductionRatio = ((originalContentLength - cleanedContentLength) / originalContentLength * 100).toFixed(1);
+        if (reductionRatio > 5) {
+          console.log(`[analyzeNewsSentimentAndType] 内容清理：原始长度 ${originalContentLength}字符，清理后 ${cleanedContentLength}字符，减少 ${reductionRatio}%`);
+        }
+      }
+      
+      // 如果清理后内容仍然有效（长度大于50字符），使用清理后的内容
+      // 否则使用原始内容（避免过度清理）
+      if (cleanedContent && cleanedContent.trim().length >= 50) {
+        content = cleanedContent;
+      } else if (cleanedContent && cleanedContent.trim().length > 0) {
+        // 清理后内容太短但非空，使用原始内容
+        console.warn(`[analyzeNewsSentimentAndType] 清理后内容太短（${cleanedContent.trim().length}字符），使用原始内容`);
+        content = originalContent;
+      } else {
+        // 清理后内容为空，使用原始内容
+        console.warn(`[analyzeNewsSentimentAndType] 清理后内容为空，使用原始内容`);
+        content = originalContent;
+      }
+    }
+    
     // 特殊处理：新榜接口的微信公众号里面是图片且无正文内容的情况
     // 注意：只有当content真正是图片内容（通过isImageOnlyContent检测）或者是空的时候，才跳过AI分析
     // 如果content很短但不是图片内容，应该继续走正常的AI分析流程
     // 同时检查内容是否被污染（包含JavaScript代码等脏信息）
+    // 注意：企查查新闻即使内容被判断为脏内容，也应该尝试进行AI分析，不应该直接跳过
     const isContentDirty = content && this.isContentContaminated(content);
     const isImageOnly = this.isImageOnlyContent(content) || 
-                       (!content || content.trim().length === 0) ||
-                       isContentDirty;
+                       (!content || content.trim().length === 0);
     
-    if ((interfaceType === '新榜' || interfaceType === '新榜接口') && isImageOnly) {
+    // 对于企查查新闻，即使内容被判断为脏内容或图片内容，也应该尝试进行AI分析
+    // 只有新榜接口的图片内容或脏内容才跳过AI分析
+    const isQichacha = interfaceType === '企查查' || interfaceType === 'qichacha';
+    // 企查查新闻不跳过AI分析，即使内容被判断为脏内容
+    const shouldSkipAI = !isQichacha && (interfaceType === '新榜' || interfaceType === '新榜接口') && (isImageOnly || isContentDirty);
+    
+    if (shouldSkipAI) {
       console.log(`[analyzeNewsSentimentAndType] 检测到新榜接口的图片内容或脏内容，跳过AI分析`);
       if (isContentDirty) {
         console.log(`[analyzeNewsSentimentAndType] 内容被污染（包含JavaScript代码等），视为图片内容处理`);
@@ -3031,9 +3529,11 @@ class NewsAnalysis {
    - 摘要应该包含：时间、主体、事件、结果或意义等关键信息
    - **极其重要**：摘要必须是文章正文内容的核心关键内容的**总结和提炼**，而不是简单提取正文的第一句话、第一段话或每一段的首句
    - **绝对禁止**：直接摘取第一段话、摘取每一段的首句、或简单复制原文的某句话作为摘要
+   - **绝对禁止**：直接复制正文开头的前100字、前150字或任何固定长度的文字作为摘要
    - **必须跳过**：正文开头的引导语、关注提示、广告语等无关内容（如"点击关注"、"点击左上方关注"、"欢迎关注"、"扫描二维码"等），直接总结文章的核心主题和关键信息
    - **摘要应该是总结性的**：需要阅读**完整文章**后，提炼出核心要点，形成总结性的表述。如果正文开头只是引入，应该总结后续的核心内容。摘要应该是对全文信息的提炼和概括，而不是原文的片段拼接
    - **摘要生成方法**：通读全文，理解文章的核心主题、关键信息、主要观点，然后用简洁的语言总结成150字左右的完整句子（最多不超过170字）。不要逐段摘取，而要提炼整合
+   - **关键要求**：摘要必须是对全文内容的**重新组织和总结**，使用自己的语言表达，不能是原文的直接复制。即使摘要包含了原文中的关键信息，也应该用不同的表述方式来组织这些信息
    - **特别重要**：如果文章是负面新闻（看衰、质疑、担忧企业），摘要必须准确反映文章的核心观点和担忧点，不能只是复制开头段落。例如，如果文章质疑企业能否成功上市、指出现金流紧张、债务压力大等风险，摘要应该总结这些核心担忧点，而不是只提取开头引入性文字。
    - 摘要长度应该在150字左右，最多不超过170字，即使需要压缩也要确保句子完整，不能中途截断，不能以数字、未完成的短语结尾
    - **绝对禁止**：在不完整的句子后直接加句号。必须生成完整的句子。禁止以数字、未完成的短语、未完成的句子结尾。
@@ -3168,24 +3668,210 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       contentNote = '\n**注意：新闻正文似乎只是一个链接地址，请根据标题和链接地址进行判断，如果可能，请说明链接指向的内容类型。**';
     }
     
-    // 发送完整内容给AI，不截取（确保AI能看到全文进行准确分析）
-    // 注意：如果内容过长，AI模型配置中的max_tokens会限制响应长度，但输入内容应该完整发送
-    const contentForAnalysis = processedContent;
+    // 控制内容长度：确保核心内容不超过3000字符
+    // 先截断到3000字符，保留核心信息
+    let contentForAnalysis = this.truncateContentToLength(processedContent, 3000);
     
-    console.log(`[analyzeNewsSentimentAndType] 发送给AI的内容长度: ${contentForAnalysis.length}字符`);
+    console.log(`[analyzeNewsSentimentAndType] 内容清理后长度: ${processedContent.length}字符，截断后长度: ${contentForAnalysis.length}字符`);
+    if (contentForAnalysis && contentForAnalysis.length > 0) {
+      console.log(`[analyzeNewsSentimentAndType] 发送给AI的内容预览（前200字符）: ${contentForAnalysis.substring(0, 200)}...`);
+      console.log(`[analyzeNewsSentimentAndType] 发送给AI的内容预览（后200字符）: ...${contentForAnalysis.substring(Math.max(0, contentForAnalysis.length - 200))}`);
+    }
+    
+    // 前置校验：验证内容有效性
+    const contentValidation = this.validateContentForAnalysis(contentForAnalysis, title);
+    if (!contentValidation.isValid) {
+      console.warn(`[analyzeNewsSentimentAndType] ⚠️ 内容验证失败: ${contentValidation.reason}`);
+      // 如果内容无效，但有效内容比例>0.2，仍然尝试分析
+      if (contentValidation.validContentRatio < 0.2) {
+        throw new Error(`内容无效，无法进行AI分析: ${contentValidation.reason}`);
+      }
+    } else {
+      console.log(`[analyzeNewsSentimentAndType] ✓ 内容验证通过: ${contentValidation.reason}, 有效内容比例: ${(contentValidation.validContentRatio * 100).toFixed(1)}%`);
+    }
+    
+    // 前置校验：估算token数量，检查是否超限（目标：总token数≤6000）
+    let contentTokens = this.estimateTokenCount(contentForAnalysis);
+    let promptTokens = this.estimateTokenCount(promptTemplate);
+    let totalInputTokens = contentTokens + promptTokens;
+    
+    console.log(`[analyzeNewsSentimentAndType] Token估算: 内容${contentTokens}, Prompt${promptTokens}, 总计${totalInputTokens}`);
+    
+    // 如果总token数超过6000，进一步截断内容
+    const MAX_INPUT_TOKENS = 6000; // 预留模型响应空间
+    if (totalInputTokens > MAX_INPUT_TOKENS) {
+      const maxContentTokens = MAX_INPUT_TOKENS - promptTokens - 500; // 预留500 token缓冲
+      const maxContentLength = Math.floor(maxContentTokens * 1.5); // 中文约1.5字符=1 token
+      
+      if (contentForAnalysis.length > maxContentLength) {
+        console.warn(`[analyzeNewsSentimentAndType] ⚠️ 输入token数过大（${totalInputTokens}），截断内容到${maxContentLength}字符（约${maxContentTokens} token）`);
+        contentForAnalysis = this.truncateContentToLength(contentForAnalysis, maxContentLength);
+        contentTokens = this.estimateTokenCount(contentForAnalysis);
+        totalInputTokens = contentTokens + promptTokens;
+        console.log(`[analyzeNewsSentimentAndType] 截断后Token估算: 内容${contentTokens}, Prompt${promptTokens}, 总计${totalInputTokens}`);
+      }
+    }
 
-    // 替换变量
-    const prompt = this.replacePromptVariables(promptTemplate, {
+    // 替换变量（确保所有模板变量都被正确替换）
+    // 先处理isAdditionalAccount条件表达式
+    let processedPrompt = promptTemplate;
+    
+    // 处理${isAdditionalAccount ? `...` : ''}这种条件表达式（多行模板字符串）
+    // 匹配模式：${isAdditionalAccount ? `...` : ''} 或 ${isAdditionalAccount ? ... : ''}
+    // 需要匹配多行内容，使用[\s\S]*?来匹配
+    const conditionalPattern1 = /\$\{isAdditionalAccount\s*\?\s*`([\s\S]*?)`\s*:\s*['"]?['"]?\s*\}/g;
+    if (isAdditionalAccount) {
+      processedPrompt = processedPrompt.replace(conditionalPattern1, (match, trueValue) => {
+        // 提取trueValue部分（保留原始格式，包括换行）
+        return trueValue.trim();
+      });
+    } else {
+      processedPrompt = processedPrompt.replace(conditionalPattern1, '');
+    }
+    
+    // 也处理不带反引号的格式：${isAdditionalAccount ? ... : ''}（单行）
+    const conditionalPattern2 = /\$\{isAdditionalAccount\s*\?\s*([^:]+?)\s*:\s*['"]?['"]?\s*\}/g;
+    if (isAdditionalAccount) {
+      processedPrompt = processedPrompt.replace(conditionalPattern2, (match, trueValue) => {
+        // 提取trueValue部分
+        return trueValue.trim();
+      });
+    } else {
+      processedPrompt = processedPrompt.replace(conditionalPattern2, '');
+    }
+    
+    // 然后替换其他变量
+    const prompt = this.replacePromptVariables(processedPrompt, {
       title: title || '',
       content: contentForAnalysis + contentNote,
       sourceUrl: sourceUrl || '',
       isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。注意区分"榜单"和"获奖"：只有明确由企业发布的榜单或标题包含"榜单"字样时才使用"榜单"标签，企业单独获奖应使用"获奖"标签。**' : ''
     });
+    
+    // 验证Prompt中是否还有未替换的模板变量
+    let finalPrompt = prompt;
+    const remainingVars = finalPrompt.match(/\$\{[^}]+\}/g);
+    if (remainingVars && remainingVars.length > 0) {
+      console.warn(`[analyzeNewsSentimentAndType] ⚠️ Prompt中仍有未替换的模板变量: ${remainingVars.join(', ')}`);
+      // 移除未替换的变量，避免发送给AI
+      finalPrompt = finalPrompt.replace(/\$\{[^}]+\}/g, '');
+    }
+    
+    // 记录最终Prompt的长度（用于调试）
+    console.log(`[analyzeNewsSentimentAndType] 最终Prompt长度: ${finalPrompt.length}字符`);
 
+    // 重试机制：对于400错误（请求非法），尝试清理内容后重试，第三次重试时切换到qwen-plus
+    let maxRetries = 3;
+    let retryCount = 0;
+    let response = null;
+    let lastError = null;
+    let currentPrompt = finalPrompt;
+    let currentContent = contentForAnalysis;
+    let currentModelConfig = aiModelConfig;
+    let switchedToBackupModel = false;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        // 记录每次重试的请求参数
+        const requestContentTokens = this.estimateTokenCount(currentContent);
+        const requestPromptTokens = this.estimateTokenCount(currentPrompt);
+        const requestTotalTokens = requestContentTokens + requestPromptTokens;
+        console.log(`[analyzeNewsSentimentAndType] 第${retryCount + 1}次尝试 - 模型: ${currentModelConfig?.model_name || 'default'}, 内容长度: ${currentContent.length}字符, Token: 内容${requestContentTokens}, Prompt${requestPromptTokens}, 总计${requestTotalTokens}`);
+        
+        // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
+        response = await this.callAIModel(currentPrompt, currentModelConfig);
+        // 如果成功，跳出重试循环
+        lastError = null;
+        if (switchedToBackupModel) {
+          console.log(`[analyzeNewsSentimentAndType] ✓ 使用备用模型（qwen-plus）成功完成分析`);
+        }
+        break;
+      } catch (error) {
+        lastError = error;
+        
+        // 检查是否是400错误（请求非法）或其他可恢复错误
+        const is400Error = error.response && error.response.status === 400;
+        const isRequestError = is400Error || 
+                              (error.message && (error.message.includes('请求') || error.message.includes('非法') || error.message.includes('格式错误')));
+        
+        if (isRequestError && retryCount < maxRetries) {
+          retryCount++;
+          console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI调用失败（400错误），尝试第${retryCount}次重试`);
+          
+          // 第一次和第二次重试：清理内容 + 精简Prompt
+          if (retryCount <= 2) {
+            // 如果是400错误，可能是内容问题，进一步清理内容
+            if (is400Error) {
+              console.warn(`[analyzeNewsSentimentAndType] 检测到400错误，进一步清理内容`);
+              const furtherCleanedContent = this.cleanContentForAnalysis(currentContent);
+              
+              // 如果清理后内容变化较大，更新内容并重新构建prompt
+              if (furtherCleanedContent.length < currentContent.length * 0.9) {
+                console.log(`[analyzeNewsSentimentAndType] 进一步清理后，内容从${currentContent.length}字符减少到${furtherCleanedContent.length}字符`);
+                currentContent = furtherCleanedContent;
+                
+                // 进一步截断到2000字符（更保守）
+                if (currentContent.length > 2000) {
+                  currentContent = this.truncateContentToLength(currentContent, 2000);
+                  console.log(`[analyzeNewsSentimentAndType] 内容截断到2000字符`);
+                }
+                
+                // 重新构建prompt
+                currentPrompt = this.replacePromptVariables(processedPrompt, {
+                  title: title || '',
+                  content: currentContent + contentNote,
+                  sourceUrl: sourceUrl || '',
+                  isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。注意区分"榜单"和"获奖"：只有明确由企业发布的榜单或标题包含"榜单"字样时才使用"榜单"标签，企业单独获奖应使用"获奖"标签。**' : ''
+                });
+                
+                // 验证并移除未替换的变量
+                const remainingVarsRetry = currentPrompt.match(/\$\{[^}]+\}/g);
+                if (remainingVarsRetry && remainingVarsRetry.length > 0) {
+                  console.warn(`[analyzeNewsSentimentAndType] ⚠️ 重试时Prompt中仍有未替换的模板变量: ${remainingVarsRetry.join(', ')}`);
+                  currentPrompt = currentPrompt.replace(/\$\{[^}]+\}/g, '');
+                }
+                
+                // 重新估算token
+                const newContentTokens = this.estimateTokenCount(currentContent);
+                const newPromptTokens = this.estimateTokenCount(currentPrompt);
+                console.log(`[analyzeNewsSentimentAndType] 重试前Token重新估算: 内容${newContentTokens}, Prompt${newPromptTokens}, 总计${newContentTokens + newPromptTokens}`);
+              }
+            }
+          } else if (retryCount === 3) {
+            // 第三次重试：切换到备用模型（qwen-plus）
+            console.warn(`[analyzeNewsSentimentAndType] 前两次重试均失败，切换到备用模型 qwen-plus`);
+            try {
+              // 尝试获取qwen-plus模型配置
+              const backupModelConfig = await this.getAIModelConfigByName('qwen-plus');
+              if (backupModelConfig) {
+                currentModelConfig = backupModelConfig;
+                switchedToBackupModel = true;
+                console.log(`[analyzeNewsSentimentAndType] ✓ 已切换到备用模型: ${backupModelConfig.model_name}`);
+              } else {
+                console.warn(`[analyzeNewsSentimentAndType] ⚠️ 未找到qwen-plus模型配置，继续使用原模型`);
+              }
+            } catch (configError) {
+              console.warn(`[analyzeNewsSentimentAndType] ⚠️ 获取备用模型配置失败: ${configError.message}，继续使用原模型`);
+            }
+          }
+          
+          // 等待一小段时间后重试（避免立即重试）
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          continue; // 继续重试
+        } else {
+          // 不是400错误，或者已达到最大重试次数，抛出错误
+          throw error;
+        }
+      }
+    }
+    
+    // 如果重试后仍然失败，抛出最后一个错误
+    if (!response && lastError) {
+      throw lastError;
+    }
+    
+    // 如果成功，继续处理响应
     try {
-      // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
-      const response = await this.callAIModel(prompt, aiModelConfig);
-      
       // 尝试解析JSON响应
       let result;
       try {
@@ -3217,6 +3903,24 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
           
           // 记录AI返回的完整JSON，用于调试
           console.log(`[analyzeNewsSentimentAndType] AI返回的JSON: ${JSON.stringify(result, null, 2)}`);
+          console.log(`[analyzeNewsSentimentAndType] AI返回的摘要长度: ${result.news_abstract ? result.news_abstract.length : 0}字符`);
+          if (result.news_abstract) {
+            console.log(`[analyzeNewsSentimentAndType] AI返回的摘要预览: ${result.news_abstract.substring(0, 150)}...`);
+            // 检查摘要是否与原文开头高度相似
+            const contentStart = (contentForAnalysis || '').trim().substring(0, Math.min(result.news_abstract.length + 50, (contentForAnalysis || '').length));
+            const abstractStart = result.news_abstract.substring(0, Math.min(result.news_abstract.length, 100));
+            let sameCount = 0;
+            const checkLen = Math.min(abstractStart.length, contentStart.length);
+            for (let i = 0; i < checkLen; i++) {
+              if (abstractStart[i] === contentStart[i]) {
+                sameCount++;
+              }
+            }
+            const copySimilarity = checkLen > 0 ? sameCount / checkLen : 0;
+            if (copySimilarity > 0.5) {
+              console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI返回的摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%，可能是简单复制第一段话`);
+            }
+          }
           
           // 检查sentiment_reason是否存在
           if (!result.sentiment_reason || result.sentiment_reason.trim() === '') {
@@ -3365,35 +4069,55 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
           }
         }
         
+        // 检查摘要是否与原文开头高度相似（可能是简单复制第一段话）
+        // 即使摘要看起来完整，也要检查是否只是复制了原文开头
+        const contentStart = (content || '').trim().substring(0, Math.min(abstract.length + 50, (content || '').length));
+        const abstractStart = abstract.substring(0, Math.min(abstract.length, 150));
+        let sameCount = 0;
+        const checkLen = Math.min(abstractStart.length, contentStart.length);
+        for (let i = 0; i < checkLen; i++) {
+          if (abstractStart[i] === contentStart[i]) {
+            sameCount++;
+          }
+        }
+        const copySimilarity = checkLen > 0 ? sameCount / checkLen : 0;
+        
+        // 如果相似度超过50%，认为是简单复制第一段话，需要重新生成总结性摘要
+        if (copySimilarity > 0.5) {
+          console.warn(`⚠️ 检测到摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%，可能是简单复制第一段话，将重新提取总结性摘要`);
+          console.warn(`当前摘要: ${abstract.substring(0, 100)}...`);
+          console.warn(`原文开头: ${contentStart.substring(0, 100)}...`);
+          
+          // 使用extractCompleteAbstract重新提取，它会跳过第一段话，提取核心内容
+          const extractedAbstract = this.extractCompleteAbstract(title, content, abstract);
+          if (extractedAbstract && extractedAbstract.length >= 50) {
+            // 检查提取的摘要是否与原文开头相似度降低
+            const extractedStart = extractedAbstract.substring(0, Math.min(extractedAbstract.length, 100));
+            let extractedSameCount = 0;
+            const extractedCheckLen = Math.min(extractedStart.length, contentStart.length);
+            for (let i = 0; i < extractedCheckLen; i++) {
+              if (extractedStart[i] === contentStart[i]) {
+                extractedSameCount++;
+              }
+            }
+            const extractedSimilarity = extractedCheckLen > 0 ? extractedSameCount / extractedCheckLen : 0;
+            
+            if (extractedSimilarity < copySimilarity) {
+              abstract = extractedAbstract;
+              console.log(`✓ 已从原文重新提取总结性摘要（跳过第一段话），长度: ${abstract.length}字符，相似度从${(copySimilarity * 100).toFixed(1)}%降至${(extractedSimilarity * 100).toFixed(1)}%`);
+              console.log(`新摘要预览: ${abstract.substring(0, 150)}...`);
+              // 重新检查是否完整
+              isComplete = this.isAbstractComplete(abstract, title, content);
+            } else {
+              console.warn(`⚠️ 重新提取的摘要相似度仍然较高（${(extractedSimilarity * 100).toFixed(1)}%），保留AI返回的摘要`);
+            }
+          }
+        }
+        
         if (!isComplete) {
           console.warn('⚠️ AI返回的摘要不完整或只是第一段话，尝试生成总结性摘要');
           console.warn(`当前摘要: ${abstract.substring(0, 80)}...`);
           console.warn(`摘要长度: ${abstract.length}字符，内容长度: ${(content || '').length}字符`);
-          
-          // 检查摘要是否与原文开头高度相似（可能是简单复制第一段话）
-          const contentStart = (content || '').trim().substring(0, Math.min(abstract.length + 50, (content || '').length));
-          const abstractStart = abstract.substring(0, Math.min(abstract.length, 100));
-          let sameCount = 0;
-          const checkLen = Math.min(abstractStart.length, contentStart.length);
-          for (let i = 0; i < checkLen; i++) {
-            if (abstractStart[i] === contentStart[i]) {
-              sameCount++;
-            }
-          }
-          const copySimilarity = checkLen > 0 ? sameCount / checkLen : 0;
-          
-          // 如果相似度超过60%，认为是简单复制第一段话，直接使用extractCompleteAbstract重新提取
-          if (copySimilarity > 0.6) {
-            console.warn(`⚠️ 检测到摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%，可能是简单复制第一段话，将重新提取`);
-            const extractedAbstract = this.extractCompleteAbstract(title, content, abstract);
-            if (extractedAbstract && extractedAbstract.length >= 30) {
-              abstract = extractedAbstract;
-              console.log(`✓ 已从原文重新提取摘要（跳过第一段话），长度: ${abstract.length}字符`);
-              console.log(`新摘要预览: ${abstract.substring(0, 80)}...`);
-              // 重新检查是否完整
-              isComplete = this.isAbstractComplete(abstract, title, content);
-            }
-          }
           
           // 如果摘要以数字结尾，先尝试补充完整
           if (!isComplete && endsWithNumber) {
@@ -3607,20 +4331,114 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       return finalResult;
     } catch (error) {
       console.error('新闻分析失败:', error);
+      console.error(`[analyzeNewsSentimentAndType] 错误详情: ${error.message}`);
+      if (error.response) {
+        console.error(`[analyzeNewsSentimentAndType] HTTP状态码: ${error.response.status}`);
+        console.error(`[analyzeNewsSentimentAndType] 错误响应: ${JSON.stringify(error.response.data)}`);
+      }
+      
+      // 改进兜底逻辑：基于内容判断情绪，而不是直接设为neutral
+      let inferredSentiment = 'neutral';
+      let inferredReason = 'AI分析失败，基于内容推断为中性';
+      
+      if (content && content.trim().length > 0) {
+        const contentLower = (content || '').toLowerCase();
+        const titleLower = (title || '').toLowerCase();
+        
+        // 负面关键词：质疑、担忧、风险、问题、亏损、债务、压力等
+        const negativeKeywords = ['质疑', '担忧', '风险', '问题', '亏损', '债务', '压力', '存疑', '挑战', '困境', '困难', '危机', '失败', '下跌', '下降', '减少', '不利', '负面', '看衰', '能否', '不好说', '紧张', '逾期', '依赖', '过山车'];
+        const hasNegativeKeywords = negativeKeywords.some(keyword => 
+          contentLower.includes(keyword) || titleLower.includes(keyword)
+        );
+        
+        // 正面关键词：成功、突破、完成、获得、增长等
+        const positiveKeywords = ['成功', '突破', '完成', '获得', '增长', '提升', '利好', '上市', 'ipo', '融资', '合作', '达成', '获奖', '荣誉', '认证', '增长', '提升', '利好'];
+        const hasPositiveKeywords = positiveKeywords.some(keyword => 
+          contentLower.includes(keyword) || titleLower.includes(keyword)
+        );
+        
+        if (hasNegativeKeywords && !hasPositiveKeywords) {
+          inferredSentiment = 'negative';
+          inferredReason = 'AI分析失败，但内容包含负面关键词（质疑、风险、债务等），推断为负面';
+        } else if (hasPositiveKeywords && !hasNegativeKeywords) {
+          inferredSentiment = 'positive';
+          inferredReason = 'AI分析失败，但内容包含正面关键词（成功、增长、融资等），推断为正面';
+        }
+      }
+      
       // 生成默认摘要，确保是完整句子，并跳过引导语
-      const processedContent = this.skipIrrelevantContent(content || '');
-      const contentPreview = processedContent.substring(0, 100);
-      const lastSentenceMatch = contentPreview.match(/(.+[。！？.!?])/);
-      const defaultAbstract = lastSentenceMatch ? lastSentenceMatch[1] : (contentPreview || '新闻内容摘要') + '。';
+      // 使用extractCompleteAbstract提取摘要，而不是简单截取前100字
+      let defaultAbstract = '';
+      if (content && content.trim().length > 50) {
+        defaultAbstract = this.extractCompleteAbstract(title, content, '');
+        // 限制摘要长度在200字以内
+        if (defaultAbstract.length > 200) {
+          // 截断到最后一个完整句子
+          const truncated = defaultAbstract.substring(0, 200);
+          const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
+          defaultAbstract = lastSentenceMatch ? lastSentenceMatch[1] : truncated.trim() + '。';
+        }
+      } else {
+        // 内容太短，基于标题生成
+        if (title && title.length > 5) {
+          defaultAbstract = `${title}相关新闻报道。`;
+        } else {
+          defaultAbstract = '新闻内容摘要。';
+        }
+      }
+      
+      // 从标题和内容推断关键词（智能推断，避免只返回"其他"）
+      let inferredKeywords = this.inferKeywordsFromContent(title, content || '');
+      
+      // 如果推断的关键词只有"其他"，尝试基于标题和内容特征推断更具体的标签
+      if (inferredKeywords.length === 0 || (inferredKeywords.length === 1 && inferredKeywords[0] === '其他')) {
+        const titleLower = (title || '').toLowerCase();
+        const contentLower = (content || '').toLowerCase();
+        const fullText = titleLower + ' ' + contentLower.substring(0, 500); // 只检查前500字
+        
+        // 根据关键词推断标签
+        if (/财务|收入|利润|亏损|债务|现金流|毛利率|应收款/.test(fullText)) {
+          inferredKeywords = ['财务数据'];
+        } else if (/风险|挑战|困境|存疑|质疑|担忧/.test(fullText)) {
+          inferredKeywords = ['经营风险'];
+        } else if (/ipo|上市|招股|问询|回复函/.test(fullText)) {
+          inferredKeywords = ['融资消息'];
+        } else if (/红筹|架构|收入确认|客户依赖/.test(fullText)) {
+          inferredKeywords = ['财务数据', '经营风险'];
+        } else {
+          // 如果还是推断不出来，使用通用标签
+          inferredKeywords = ['行业分析'];
+        }
+      }
+      
+      // 确保关键词不为空
+      const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['行业分析'];
+      
+      // 如果摘要为空或太短，基于标题和内容生成更详细的摘要
+      if (!defaultAbstract || defaultAbstract.length < 50) {
+        // 尝试从标题和内容中提取核心信息
+        if (title && title.length > 5) {
+          // 检查标题是否包含关键信息（如"13问"、"招股书"等）
+          if (/问|招股|回复函/.test(title)) {
+            defaultAbstract = `${title}，涉及财务数据、经营风险等多方面疑问，需要进一步关注。`;
+          } else {
+            defaultAbstract = `${title}相关新闻报道，涉及企业运营和发展情况。`;
+          }
+        } else {
+          defaultAbstract = '新闻内容摘要，涉及企业相关信息。';
+        }
+      }
       
       const errorResult = {
-        sentiment: 'neutral',
-        sentiment_reason: '分析失败',
-        keywords: ['其他'],
-        news_abstract: defaultAbstract
+        sentiment: inferredSentiment,
+        sentiment_reason: inferredReason,
+        keywords: finalKeywords,
+        news_abstract: defaultAbstract,
+        _aiAnalysisFailed: true, // 标记AI分析失败，用于任务统计
+        _errorMessage: error.message
       };
       
-      console.error(`[analyzeNewsSentimentAndType] 分析失败 - 情绪: ${errorResult.sentiment}, 情绪原因: ${errorResult.sentiment_reason}, 错误: ${error.message}`);
+      console.error(`[analyzeNewsSentimentAndType] 分析失败 - 情绪: ${errorResult.sentiment}, 情绪原因: ${errorResult.sentiment_reason}, 关键词: ${JSON.stringify(errorResult.keywords)}, 摘要长度: ${errorResult.news_abstract.length}字符, 错误: ${error.message}`);
       
       return errorResult;
     }
@@ -4360,8 +5178,17 @@ ${enterpriseList}
         if (content && content.trim().length > 20) {
           const extractedAbstract = this.extractCompleteAbstract(title, content, '');
           if (extractedAbstract && extractedAbstract.length >= 20) {
-            validatedAbstract = extractedAbstract;
-            console.log(`[validateAnalysisResult] ✓ 已从原文重新提取摘要，长度: ${validatedAbstract.length}字符`);
+            // 限制摘要长度在200字以内（摘要要求是150字左右，最多不超过170字，但修复时可以稍微放宽到200字）
+            if (extractedAbstract.length > 200) {
+              // 截断到最后一个完整句子
+              const truncated = extractedAbstract.substring(0, 200);
+              const lastSentenceMatch = truncated.match(/(.+[。！？.!?])/);
+              validatedAbstract = lastSentenceMatch ? lastSentenceMatch[1] : truncated.trim() + '。';
+              console.log(`[validateAnalysisResult] ✓ 已从原文重新提取摘要，长度: ${validatedAbstract.length}字符（已截断到200字以内）`);
+            } else {
+              validatedAbstract = extractedAbstract;
+              console.log(`[validateAnalysisResult] ✓ 已从原文重新提取摘要，长度: ${validatedAbstract.length}字符`);
+            }
           } else {
             // 如果提取失败，基于标题生成
             validatedAbstract = title && title.length > 5 ? `${title}相关新闻报道。` : '新闻内容摘要。';
@@ -4786,16 +5613,20 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
       }
       
-      // 检查是否遇到反爬虫阻塞
+      // 检查是否遇到反爬虫阻塞或内容提取失败
       let analysis;
-      if (newsItem._antiCrawlerBlocked) {
-        console.log(`[processNewsWithEnterprise] 检测到反爬虫阻塞，设置特殊摘要`);
+      const isAntiCrawlerBlocked = newsItem._antiCrawlerBlocked || 
+                                   (contentForAnalysis && contentForAnalysis.trim().length === 0 && newsItem.source_url) ||
+                                   (/toutiao\.com/i.test(newsItem.source_url) && (!contentForAnalysis || contentForAnalysis.trim().length === 0));
+      
+      if (isAntiCrawlerBlocked) {
+        console.log(`[processNewsWithEnterprise] 检测到反爬虫阻塞或内容提取失败，设置特殊摘要`);
         // 设置特殊摘要和关键词
         analysis = {
           sentiment: 'neutral',
-          sentiment_reason: '网页设置了反爬虫机制，无法获取正文',
+          sentiment_reason: '由于新闻链接中有反爬虫程序，无法获取正文',
           keywords: ['政策信息'],
-          news_abstract: '网页设置了反爬虫机制，无法获取正文'
+          news_abstract: '由于新闻链接中有反爬虫程序，请直接查看原文'
         };
         console.log(`[processNewsWithEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
       } else {
@@ -5067,16 +5898,20 @@ ${enterpriseList}
         console.log(`[processNewsWithoutEnterprise] 内容预览: ${contentForAnalysis.substring(0, 100)}...`);
       }
       
-      // 检查是否遇到反爬虫阻塞
+      // 检查是否遇到反爬虫阻塞或内容提取失败
       let analysis;
-      if (newsItem._antiCrawlerBlocked) {
-        console.log(`[processNewsWithoutEnterprise] 检测到反爬虫阻塞，设置特殊摘要`);
+      const isAntiCrawlerBlocked = newsItem._antiCrawlerBlocked || 
+                                   (contentForAnalysis && contentForAnalysis.trim().length === 0 && newsItem.source_url) ||
+                                   (/toutiao\.com/i.test(newsItem.source_url) && (!contentForAnalysis || contentForAnalysis.trim().length === 0));
+      
+      if (isAntiCrawlerBlocked) {
+        console.log(`[processNewsWithoutEnterprise] 检测到反爬虫阻塞或内容提取失败，设置特殊摘要`);
         // 设置特殊摘要和关键词
         analysis = {
           sentiment: 'neutral',
-          sentiment_reason: '网页设置了反爬虫机制，无法获取正文',
+          sentiment_reason: '由于新闻链接中有反爬虫程序，无法获取正文',
           keywords: ['政策信息'],
-          news_abstract: '网页设置了反爬虫机制，无法获取正文'
+          news_abstract: '由于新闻链接中有反爬虫程序，请直接查看原文'
         };
         logWithTag('[processNewsWithoutEnterprise]', `反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
       } else {
@@ -6879,8 +7714,18 @@ ${enterpriseList}
       return '新闻内容摘要。';
     }
     
+    // 先清理内容：移除非正文内容（新闻来源、广告链接、版权信息等）
+    // 注意：如果content已经是清理后的内容，cleanContentForAnalysis会进一步清理，但不会造成问题
+    let processedText = this.cleanContentForAnalysis(fullText);
+    
+    // 如果清理后内容太短，使用原始内容
+    if (!processedText || processedText.trim().length < 50) {
+      console.warn(`[extractCompleteAbstract] 清理后内容太短（${processedText ? processedText.length : 0}字符），使用原始内容`);
+      processedText = fullText;
+    }
+    
     // 跳过开头的引导语、关注提示等无关内容
-    let processedText = this.skipIrrelevantContent(fullText);
+    processedText = this.skipIrrelevantContent(processedText);
     
     // 策略：不要简单提取前170字，而是提取文章的核心内容
     // 1. 将文章按句子分割
