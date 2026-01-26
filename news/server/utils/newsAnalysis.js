@@ -43,8 +43,10 @@ class NewsAnalysis {
 
   /**
    * 从URL抓取网页内容
+   * @param {string} url - 网页URL
+   * @param {string} accountName - 公众号名称（可选，用于特殊处理）
    */
-  async fetchContentFromUrl(url) {
+  async fetchContentFromUrl(url, accountName = '') {
     try {
       if (!url || typeof url !== 'string' || (!url.startsWith('http://') && !url.startsWith('https://'))) {
         warnWithTag('[fetchContentFromUrl]', `无效的URL: ${url}`);
@@ -159,7 +161,7 @@ class NewsAnalysis {
       const isGelonghui = /gelonghui\.com/i.test(url);
       logWithTag('[fetchContentFromUrl]', `HTML检查: hasArticleTag=${hasArticleTag}, hasMainNews=${hasMainNews}, hasArticleWithHtml=${hasArticleWithHtml}, isGelonghui=${isGelonghui}`);
       
-      let text = this.extractArticleContent(html, url);
+      let text = this.extractArticleContent(html, url, accountName);
       logWithTag('[fetchContentFromUrl]', `提取完成，文本长度: ${text.length}字符`);
 
       // 如果提取的文本太短（少于50个字符），可能提取失败
@@ -238,8 +240,9 @@ class NewsAnalysis {
    * 从HTML中智能提取正文内容
    * @param {string} html - HTML内容
    * @param {string} url - 网页URL（可选，用于特殊处理）
+   * @param {string} accountName - 公众号名称（可选，用于特殊处理）
    */
-  extractArticleContent(html, url = '') {
+  extractArticleContent(html, url = '', accountName = '') {
     // 特殊处理：百度移动端页面（mbd.baidu.com）
     // 百度移动端页面需要JavaScript渲染，HTML内容很少，无法直接提取
     if (url && url.includes('mbd.baidu.com')) {
@@ -281,16 +284,31 @@ class NewsAnalysis {
       return null;
     }
     
-    // 特殊处理：新浪新闻（sina.com.cn）
-    // 新浪新闻的正文在 <div class="article" id="artibody"> 中
-    if (url && url.includes('sina.com.cn')) {
-      console.log(`[extractArticleContent] 检测到新浪新闻URL，使用特殊提取逻辑`);
+    // 特殊处理：新浪新闻（统一处理 cj.sina.com.cn 和 finance.sina.com.cn）
+    // 这两类新闻的正文都在 <div class="article" id="artibody"> 中，使用相同的提取方法
+    // cj.sina.com.cn（account_name: 新浪）
+    // finance.sina.com.cn（account_name: 新浪财经）
+    const isSinaCj = (url && url.includes('cj.sina.com.cn')) || 
+                     (accountName && accountName.includes('新浪') && !accountName.includes('新浪财经'));
+    const isSinaFinance = (url && url.includes('finance.sina.com.cn')) || 
+                          (accountName && accountName.includes('新浪财经'));
+    
+    if (isSinaCj || isSinaFinance) {
+      const sourceType = isSinaCj ? '新浪财经头条(cj.sina.com.cn)' : '新浪财经(finance.sina.com.cn)';
+      logWithTag('[extractArticleContent]', `检测到${sourceType}（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用特殊提取逻辑`);
       
       // 智能匹配div标签（处理嵌套）
       const findSinaArticleDiv = (html) => {
-        // 查找id="artibody"的div开始标签
-        const divStartRegex = /<div[^>]*id\s*=\s*["']artibody["'][^>]*>/i;
-        const startMatch = html.match(divStartRegex);
+        // 查找class="article"且id="artibody"的div开始标签
+        // 优先匹配同时包含class="article"和id="artibody"的div
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\barticle\b[^"']*["'][^>]*id\s*=\s*["']artibody["'][^>]*>/i;
+        let startMatch = html.match(divStartRegex);
+        
+        // 如果没找到完整匹配，尝试只匹配id="artibody"（兼容没有class的情况）
+        if (!startMatch) {
+          const divStartRegex2 = /<div[^>]*id\s*=\s*["']artibody["'][^>]*>/i;
+          startMatch = html.match(divStartRegex2);
+        }
         
         if (!startMatch) {
           return null;
@@ -367,14 +385,14 @@ class NewsAnalysis {
         const sinaText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
         
         if (sinaText.length > 100) {
-          logWithTag('[extractArticleContent]', `✓ 成功提取新浪新闻正文，长度: ${sinaText.length}字符`);
-          logWithTag('[extractArticleContent]', `✓ 新浪新闻内容预览（前300字符）: ${sinaText.substring(0, 300)}...`);
+          logWithTag('[extractArticleContent]', `✓ 成功提取${sourceType}正文，长度: ${sinaText.length}字符`);
+          logWithTag('[extractArticleContent]', `✓ ${sourceType}内容预览（前300字符）: ${sinaText.substring(0, 300)}...`);
           return cleanedContent;
         } else {
-          warnWithTag('[extractArticleContent]', `⚠️ 新浪新闻提取的内容太短（${sinaText.length}字符），继续使用通用提取逻辑`);
+          warnWithTag('[extractArticleContent]', `⚠️ ${sourceType}提取的内容太短（${sinaText.length}字符），继续使用通用提取逻辑`);
         }
       } else {
-        console.log(`[extractArticleContent] ⚠️ 未找到新浪新闻的artibody div，继续使用通用提取逻辑`);
+        logWithTag('[extractArticleContent]', `⚠️ 未找到${sourceType}的artibody div，继续使用通用提取逻辑`);
       }
     }
     
@@ -755,137 +773,6 @@ class NewsAnalysis {
       }
     }
     
-    // 特殊处理：新浪财经（finance.sina.com.cn）
-    // 正文在 <div class="article" id="artibody"> 中
-    if (url && url.includes('finance.sina.com.cn')) {
-      console.log(`[extractArticleContent] 检测到新浪财经URL，使用特殊提取逻辑`);
-      
-      const findSinaFinanceDiv = (html) => {
-        // 查找class包含article且id="artibody"的div
-        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\barticle\b[^"']*["'][^>]*id\s*=\s*["']artibody["'][^>]*>/i;
-        const startMatch = html.match(divStartRegex);
-        
-        if (!startMatch) {
-          // 如果没找到，尝试只匹配id="artibody"
-          const divStartRegex2 = /<div[^>]*id\s*=\s*["']artibody["'][^>]*>/i;
-          const startMatch2 = html.match(divStartRegex2);
-          if (!startMatch2) {
-            return null;
-          }
-          const startPos = startMatch2.index;
-          const tagEnd = startPos + startMatch2[0].length;
-          
-          let depth = 1;
-          let pos = tagEnd;
-          let endPos = -1;
-          
-          while (pos < html.length && depth > 0) {
-            const nextOpen = html.indexOf('<div', pos);
-            const nextClose = html.indexOf('</div>', pos);
-            
-            if (nextClose === -1) {
-              endPos = html.length;
-              break;
-            }
-            
-            if (nextOpen !== -1 && nextOpen < nextClose) {
-              const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
-              const scriptAfterDiv = html.indexOf('</script>', nextOpen);
-              if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
-                pos = scriptAfterDiv + 9;
-                continue;
-              }
-              depth++;
-              pos = nextOpen + 4;
-            } else {
-              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
-              const scriptAfterClose = html.indexOf('</script>', nextClose);
-              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
-                pos = scriptAfterClose + 9;
-                continue;
-              }
-              depth--;
-              if (depth === 0) {
-                endPos = nextClose;
-                break;
-              }
-              pos = nextClose + 6;
-            }
-          }
-          
-          if (endPos !== -1) {
-            return html.substring(tagEnd, endPos);
-          }
-          return null;
-        }
-        
-        const startPos = startMatch.index;
-        const tagEnd = startPos + startMatch[0].length;
-        
-        let depth = 1;
-        let pos = tagEnd;
-        let endPos = -1;
-        
-        while (pos < html.length && depth > 0) {
-          const nextOpen = html.indexOf('<div', pos);
-          const nextClose = html.indexOf('</div>', pos);
-          
-          if (nextClose === -1) {
-            endPos = html.length;
-            break;
-          }
-          
-          if (nextOpen !== -1 && nextOpen < nextClose) {
-            const scriptBeforeDiv = html.lastIndexOf('<script', nextOpen);
-            const scriptAfterDiv = html.indexOf('</script>', nextOpen);
-            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
-              pos = scriptAfterDiv + 9;
-              continue;
-            }
-            depth++;
-            pos = nextOpen + 4;
-          } else {
-            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
-            const scriptAfterClose = html.indexOf('</script>', nextClose);
-            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
-              pos = scriptAfterClose + 9;
-              continue;
-            }
-            depth--;
-            if (depth === 0) {
-              endPos = nextClose;
-              break;
-            }
-            pos = nextClose + 6;
-          }
-        }
-        
-        if (endPos !== -1) {
-          return html.substring(tagEnd, endPos);
-        }
-        return null;
-      };
-      
-      const sinaFinanceContent = findSinaFinanceDiv(html);
-      if (sinaFinanceContent) {
-        let cleanedContent = sinaFinanceContent
-          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
-          .replace(/<!--[\s\S]*?-->/g, '');
-        
-        const sinaFinanceText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        if (sinaFinanceText.length > 100) {
-          console.log(`[extractArticleContent] ✓ 成功提取新浪财经正文，长度: ${sinaFinanceText.length}字符`);
-          return cleanedContent;
-        } else {
-          console.log(`[extractArticleContent] ⚠️ 新浪财经提取的内容太短（${sinaFinanceText.length}字符），继续使用通用提取逻辑`);
-        }
-      } else {
-        console.log(`[extractArticleContent] ⚠️ 未找到新浪财经的article artibody div，继续使用通用提取逻辑`);
-      }
-    }
-    
     // 特殊处理：科创板日报
     // 正文在 <div class="_18p7x" data-testid="article"> 中
     if (url && (url.includes('stcn.com') || url.includes('chinastarmarket.cn'))) {
@@ -1177,6 +1064,155 @@ class NewsAnalysis {
         }
       } else {
         console.log(`[extractArticleContent] ⚠️ 未找到东方财富网的ContentBody div，继续使用通用提取逻辑`);
+      }
+    }
+    
+    // 特殊处理：今日头条（toutiao.com）
+    // 今日头条的正文在 <article class="syl-article-base syl-page-article tt-article-content syl-device-pc"> 中
+    // 可以通过URL或account_name判断
+    const isToutiao = (url && (url.includes('toutiao.com') || url.includes('tt.com'))) || 
+                      (accountName && accountName.includes('今日头条'));
+    if (isToutiao) {
+      logWithTag('[extractArticleContent]', `检测到今日头条（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用特殊提取逻辑`);
+      
+      // 智能匹配article标签（处理嵌套）
+      const findToutiaoArticle = (html) => {
+        // 查找包含特定class的article标签
+        // class包含: syl-article-base syl-page-article tt-article-content syl-device-pc
+        const articleStartRegex = /<article[^>]*class\s*=\s*["'][^"']*\bsyl-article-base\b[^"']*\btt-article-content\b[^"']*["'][^>]*>/i;
+        const startMatch = html.match(articleStartRegex);
+        
+        if (!startMatch) {
+          // 如果没找到完整匹配，尝试只匹配包含 tt-article-content 的article
+          const articleStartRegex2 = /<article[^>]*class\s*=\s*["'][^"']*\btt-article-content\b[^"']*["'][^>]*>/i;
+          const startMatch2 = html.match(articleStartRegex2);
+          if (!startMatch2) {
+            return null;
+          }
+          const startPos = startMatch2.index;
+          const tagEnd = startPos + startMatch2[0].length;
+          
+          // 从开始标签后查找对应的结束标签（处理嵌套article）
+          let depth = 1;
+          let pos = tagEnd;
+          let endPos = -1;
+          
+          while (pos < html.length && depth > 0) {
+            const nextOpen = html.indexOf('<article', pos);
+            const nextClose = html.indexOf('</article>', pos);
+            
+            if (nextClose === -1) {
+              endPos = html.length;
+              break;
+            }
+            
+            // 检查是否有嵌套的article
+            if (nextOpen !== -1 && nextOpen < nextClose) {
+              // 检查这个<article是否在script标签内
+              const scriptBeforeArticle = html.lastIndexOf('<script', nextOpen);
+              const scriptAfterArticle = html.indexOf('</script>', nextOpen);
+              if (scriptBeforeArticle !== -1 && scriptAfterArticle !== -1 && scriptAfterArticle > nextOpen) {
+                pos = scriptAfterArticle + 9;
+                continue;
+              }
+              depth++;
+              pos = nextOpen + 8;
+            } else {
+              // 检查这个</article>是否在script标签内
+              const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+              const scriptAfterClose = html.indexOf('</script>', nextClose);
+              if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+                pos = scriptAfterClose + 9;
+                continue;
+              }
+              depth--;
+              if (depth === 0) {
+                endPos = nextClose;
+                break;
+              }
+              pos = nextClose + 10;
+            }
+          }
+          
+          if (endPos !== -1) {
+            return html.substring(tagEnd, endPos);
+          }
+          return null;
+        }
+        
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        
+        // 从开始标签后查找对应的结束标签（处理嵌套article）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<article', pos);
+          const nextClose = html.indexOf('</article>', pos);
+          
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          
+          // 检查是否有嵌套的article
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<article是否在script标签内
+            const scriptBeforeArticle = html.lastIndexOf('<script', nextOpen);
+            const scriptAfterArticle = html.indexOf('</script>', nextOpen);
+            if (scriptBeforeArticle !== -1 && scriptAfterArticle !== -1 && scriptAfterArticle > nextOpen) {
+              pos = scriptAfterArticle + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 8;
+          } else {
+            // 检查这个</article>是否在script标签内
+            const scriptBeforeClose = html.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = html.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 10;
+          }
+        }
+        
+        if (endPos !== -1) {
+          return html.substring(tagEnd, endPos);
+        }
+        return null;
+      };
+      
+      const toutiaoContent = findToutiaoArticle(html);
+      
+      if (toutiaoContent) {
+        // 清理script、style等标签
+        let cleanedContent = toutiaoContent
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+        
+        // 检查内容长度
+        const toutiaoText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        
+        if (toutiaoText.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 成功提取今日头条正文，长度: ${toutiaoText.length}字符`);
+          logWithTag('[extractArticleContent]', `✓ 今日头条内容预览（前300字符）: ${toutiaoText.substring(0, 300)}...`);
+          return cleanedContent;
+        } else {
+          warnWithTag('[extractArticleContent]', `⚠️ 今日头条提取的内容太短（${toutiaoText.length}字符），继续使用通用提取逻辑`);
+        }
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到今日头条的article标签，继续使用通用提取逻辑');
       }
     }
     
@@ -2274,7 +2310,7 @@ class NewsAnalysis {
               // Python脚本提取失败，尝试使用常规方法作为备用
               console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
               try {
-                fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+                fetchedContent = await this.fetchContentFromUrl(newsItem.source_url, newsItem.account_name);
               } catch (fetchError) {
                 // 检查是否是反爬虫阻塞错误或需要JavaScript渲染的错误
                 if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
@@ -2295,7 +2331,7 @@ class NewsAnalysis {
             // Python脚本提取失败，尝试使用常规方法作为备用
             console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
             try {
-              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url, newsItem.account_name);
             } catch (fetchError) {
               // 检查是否是反爬虫阻塞错误
               if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
@@ -2310,7 +2346,7 @@ class NewsAnalysis {
         } else {
           // 非微信公众号文章，使用常规提取
           try {
-            fetchedContent = await this.fetchContentFromUrl(newsItem.source_url);
+            fetchedContent = await this.fetchContentFromUrl(newsItem.source_url, newsItem.account_name);
           } catch (fetchError) {
             // 检查是否是反爬虫阻塞错误或需要JavaScript渲染的错误
             if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
@@ -2508,11 +2544,24 @@ class NewsAnalysis {
           request_id: errorData.request_id
         });
         
+        // 创建带有特殊标识的错误对象，便于调用方识别和处理
+        const quotaError = new Error(`AI模型配额超限：${errorMessage}。请增加配额限制或稍后重试。`);
+        quotaError.isQuotaExceeded = true;
+        quotaError.errorCode = errorCode;
+        quotaError.provider = aiConfig.provider;
+        quotaError.model = aiConfig.model_name;
+        quotaError.requestId = errorData.request_id;
+        
         // 如果是配额超限，提供更详细的错误信息
         if (errorCode === 'Throttling.AllocationQuota') {
-          throw new Error(`AI模型配额超限：${errorMessage}。请增加配额限制或稍后重试。`);
+          throw quotaError;
         } else {
-          throw new Error(`AI模型调用失败 (429): ${errorMessage}`);
+          const rateLimitError = new Error(`AI模型调用失败 (429): ${errorMessage}`);
+          rateLimitError.isQuotaExceeded = true;
+          rateLimitError.errorCode = errorCode;
+          rateLimitError.provider = aiConfig.provider;
+          rateLimitError.model = aiConfig.model_name;
+          throw rateLimitError;
         }
       }
       
@@ -2523,8 +2572,61 @@ class NewsAnalysis {
 
   /**
    * 调用阿里云千问模型
+   * 支持两种API格式：
+   * 1. 阿里云原生格式（传统方式）
+   * 2. OpenAI兼容格式（推荐，避免配额限制）
    */
   async callAlibabaModel(prompt, config) {
+    // 检查是否使用OpenAI兼容格式（通过api_endpoint判断）
+    const useOpenAIFormat = config.api_endpoint && 
+                            (config.api_endpoint.includes('/compatible-mode/v1') || 
+                             config.api_endpoint.includes('/v1/chat/completions'));
+    
+    if (useOpenAIFormat) {
+      // 使用OpenAI兼容格式（推荐，避免配额限制）
+      return await this.callAlibabaModelOpenAIFormat(prompt, config);
+    } else {
+      // 使用阿里云原生格式（传统方式）
+      return await this.callAlibabaModelNativeFormat(prompt, config);
+    }
+  }
+
+  /**
+   * 使用OpenAI兼容格式调用阿里云千问模型（推荐）
+   * 这种方式可以避免配额限制，费用也更低
+   */
+  async callAlibabaModelOpenAIFormat(prompt, config) {
+    // OpenAI兼容格式的端点
+    const endpoint = config.api_endpoint || 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+    
+    const requestData = {
+      model: config.model_name,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
+      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
+    };
+
+    const response = await axios.post(endpoint, requestData, {
+      headers: {
+        'Authorization': `Bearer ${config.api_key}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 60000
+    });
+
+    return response.data.choices?.[0]?.message?.content;
+  }
+
+  /**
+   * 使用阿里云原生格式调用千问模型（传统方式）
+   */
+  async callAlibabaModelNativeFormat(prompt, config) {
     const requestData = {
       model: config.model_name,
       input: {
@@ -2551,6 +2653,143 @@ class NewsAnalysis {
     });
 
     return response.data.output?.text || response.data.output?.choices?.[0]?.message?.content;
+  }
+
+  /**
+   * 使用Batch接口调用阿里云千问模型（OpenAI兼容格式）
+   * 注意：Batch接口是异步的，适合批量处理场景
+   */
+  async callAlibabaModelBatch(prompt, config) {
+    // Batch接口需要使用OpenAI兼容的API端点
+    const baseUrl = config.api_endpoint?.replace(/\/v1\/.*$/, '') || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
+    
+    // 准备Batch请求的JSONL格式数据
+    const requestBody = {
+      model: config.model_name,
+      messages: [
+        {
+          role: "user",
+          content: prompt
+        }
+      ],
+      temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
+      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
+    };
+
+    // 创建JSONL格式的请求
+    const jsonlRequest = {
+      custom_id: `request-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      method: "POST",
+      url: "/v1/chat/completions",
+      body: requestBody
+    };
+
+    // 将JSONL请求转换为字符串（用于上传文件）
+    const jsonlContent = JSON.stringify(jsonlRequest) + '\n';
+
+    try {
+      // Step 1: 上传文件
+      const FormData = require('form-data');
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      
+      // 创建临时文件
+      const tempDir = os.tmpdir();
+      const tempFilePath = path.join(tempDir, `batch-${Date.now()}-${Math.random().toString(36).substr(2, 9)}.jsonl`);
+      fs.writeFileSync(tempFilePath, jsonlContent, 'utf8');
+
+      const formData = new FormData();
+      formData.append('file', fs.createReadStream(tempFilePath));
+      formData.append('purpose', 'batch');
+
+      const uploadResponse = await axios.post(`${baseUrl}/files`, formData, {
+        headers: {
+          'Authorization': `Bearer ${config.api_key}`,
+          ...formData.getHeaders()
+        },
+        timeout: 60000
+      });
+
+      const fileId = uploadResponse.data.id;
+      
+      // 清理临时文件
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch (e) {
+        // 忽略删除失败
+      }
+
+      // Step 2: 创建Batch任务
+      const batchResponse = await axios.post(`${baseUrl}/batches`, {
+        input_file_id: fileId,
+        endpoint: "/v1/chat/completions",
+        completion_window: "24h"
+      }, {
+        headers: {
+          'Authorization': `Bearer ${config.api_key}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000
+      });
+
+      const batchId = batchResponse.data.id;
+      
+      // Step 3: 轮询任务状态（最多等待5分钟）
+      const maxWaitTime = 5 * 60 * 1000; // 5分钟
+      const pollInterval = 10000; // 10秒
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        
+        const statusResponse = await axios.get(`${baseUrl}/batches/${batchId}`, {
+          headers: {
+            'Authorization': `Bearer ${config.api_key}`
+          },
+          timeout: 30000
+        });
+
+        const status = statusResponse.data.status;
+        
+        if (status === 'completed') {
+          // Step 4: 下载结果
+          const outputFileId = statusResponse.data.output_file_id;
+          if (outputFileId) {
+            const resultResponse = await axios.get(`${baseUrl}/files/${outputFileId}/content`, {
+              headers: {
+                'Authorization': `Bearer ${config.api_key}`
+              },
+              timeout: 60000,
+              responseType: 'text'
+            });
+
+            // 解析JSONL结果
+            const lines = resultResponse.data.trim().split('\n');
+            if (lines.length > 0) {
+              const result = JSON.parse(lines[0]);
+              if (result.response && result.response.body && result.response.body.choices) {
+                return result.response.body.choices[0].message.content;
+              }
+            }
+          }
+          throw new Error('Batch任务完成但未找到结果');
+        } else if (status === 'failed' || status === 'expired' || status === 'cancelled') {
+          throw new Error(`Batch任务失败，状态: ${status}`);
+        }
+        // 继续等待
+      }
+      
+      throw new Error('Batch任务超时，未在5分钟内完成');
+    } catch (error) {
+      // 如果是配额超限错误，提供更友好的提示
+      if (error.response && error.response.status === 429) {
+        const errorData = error.response.data || {};
+        throw new Error(`Batch接口调用失败（配额超限）：${errorData.message || error.message}。Batch接口不受限流限制，但需要配额支持。`);
+      }
+      throw error;
+    }
   }
 
   /**

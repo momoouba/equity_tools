@@ -318,7 +318,45 @@ async function updateNewsSyncScheduledTasks() {
         // 验证cron表达式
         if (!cron.validate(cronExpression)) {
           console.error(`[新闻同步定时任务] 无效的cron表达式: ${cronExpression} (配置ID: ${config.id})`);
+          console.error(`[新闻同步定时任务]   原始cron_expression: ${config.cron_expression || '(空)'}`);
           continue;
+        }
+        
+        // 额外验证：尝试解析cron表达式以确认格式正确（可选，用于显示下次执行时间）
+        try {
+          const cronParser = require('cron-parser');
+          let parseExpression;
+          
+          // 尝试不同的导入方式（兼容不同版本的cron-parser）
+          if (cronParser.CronExpressionParser && typeof cronParser.CronExpressionParser.parse === 'function') {
+            parseExpression = cronParser.CronExpressionParser.parse.bind(cronParser.CronExpressionParser);
+          } else if (cronParser.default && cronParser.default.CronExpressionParser && typeof cronParser.default.CronExpressionParser.parse === 'function') {
+            parseExpression = cronParser.default.CronExpressionParser.parse.bind(cronParser.default.CronExpressionParser);
+          } else if (typeof cronParser.parseExpression === 'function') {
+            parseExpression = cronParser.parseExpression;
+          } else {
+            // 如果无法加载cron-parser，跳过额外验证，但继续创建任务（因为node-cron.validate已经验证过了）
+            console.warn(`[新闻同步定时任务]   无法加载cron-parser进行额外验证，但cron表达式已通过node-cron验证`);
+            parseExpression = null;
+          }
+          
+          if (parseExpression) {
+            const interval = parseExpression(cronExpression, {
+              tz: 'Asia/Shanghai',
+              currentDate: new Date()
+            });
+            const nextResult = interval.next();
+            const nextExecution = nextResult && typeof nextResult.toDate === 'function' 
+              ? nextResult.toDate() 
+              : (nextResult instanceof Date ? nextResult : new Date(nextResult));
+            console.log(`[新闻同步定时任务]   验证通过，下次执行时间: ${nextExecution.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} (北京时间)`);
+          }
+        } catch (parseError) {
+          // 如果解析失败，只记录警告，不阻止任务创建（因为node-cron.validate已经验证过了）
+          console.warn(`[新闻同步定时任务]   ⚠️ 无法计算下次执行时间: ${parseError.message}`);
+          console.warn(`[新闻同步定时任务]   转换后的表达式: ${cronExpression}`);
+          console.warn(`[新闻同步定时任务]   原始表达式: ${config.cron_expression || '(空)'}`);
+          // 继续创建任务，因为node-cron.validate已经验证过了
         }
         
         // 格式化企业类型信息
@@ -344,15 +382,35 @@ async function updateNewsSyncScheduledTasks() {
         
         // 创建定时任务
         const task = cron.schedule(cronExpression, async () => {
+          const now = new Date();
+          console.log(`[新闻同步定时任务] ========== 定时任务触发 ==========`);
           console.log(`[新闻同步定时任务] 执行配置 ${config.id} 的新闻同步任务`);
-          await executeNewsSyncTask(config.id);
+          console.log(`[新闻同步定时任务] 触发时间: ${now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} (北京时间)`);
+          console.log(`[新闻同步定时任务] Cron表达式: ${cronExpression}`);
+          try {
+            await executeNewsSyncTask(config.id);
+            console.log(`[新闻同步定时任务] ========== 定时任务执行完成 ==========`);
+          } catch (error) {
+            console.error(`[新闻同步定时任务] ========== 定时任务执行失败 ==========`);
+            console.error(`[新闻同步定时任务] 错误详情:`, error);
+          }
         }, {
           scheduled: true,
           timezone: 'Asia/Shanghai'
         });
         
         scheduledTasks.set(config.id, task);
-        console.log(`[新闻同步定时任务] ✓ 配置 ${config.id} 的定时任务已创建并启动`);
+        
+        // 验证任务是否真的被调度
+        if (task && typeof task.getStatus === 'function') {
+          const status = task.getStatus();
+          console.log(`[新闻同步定时任务] ✓ 配置 ${config.id} 的定时任务已创建并启动，状态: ${status}`);
+        } else {
+          console.log(`[新闻同步定时任务] ✓ 配置 ${config.id} 的定时任务已创建并启动`);
+        }
+        
+        // 添加调试信息：计算下次执行时间（如果上面的验证已经计算过，这里就不重复计算了）
+        // 注意：这个计算已经在验证步骤中完成，所以这里可以省略
       } catch (error) {
         console.error(`[新闻同步定时任务] 创建定时任务失败 (配置ID ${config.id}):`, error);
       }

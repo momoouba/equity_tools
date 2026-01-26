@@ -188,8 +188,11 @@ function getYesterdayTimeRange() {
 /**
  * 获取用户可见的舆情信息（根据用户权限过滤）
  * 时间范围：今天创建（获取）的新闻（基于 created_at）
+ * @param {string} userId - 用户ID
+ * @param {Object|null} recipientConfig - 收件管理配置（可选）
+ * @param {boolean} skipFinalFilter - 是否跳过最终过滤（用于邮件发送前的AI重新分析）
  */
-async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
+async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipFinalFilter = false) {
   logWithTimestamp(`[邮件发送] ========== 开始获取用户可见的舆情信息 ==========`);
   logWithTimestamp(`[邮件发送] 用户ID: ${userId}`);
   if (recipientConfig) {
@@ -1205,6 +1208,17 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null) {
     }
   }
 
+  // 如果skipFinalFilter为true，跳过企查查类别过滤和最终过滤，直接返回基本查询结果（用于邮件发送前的AI重新分析）
+  if (skipFinalFilter) {
+    console.log(`[邮件发送] 跳过企查查类别过滤和最终过滤，返回基本查询结果（用于AI重新分析）`);
+    // 确保 newsList 是数组
+    if (!Array.isArray(newsList)) {
+      console.log(`[邮件发送] ⚠️ newsList 不是数组，类型: ${typeof newsList}, 值: ${newsList}`);
+      newsList = [];
+    }
+    return newsList;
+  }
+  
   // 过滤新闻：只保留企查查数据源且类别在配置的允许列表中的新闻
   // 注意：此函数会过滤掉类别不在允许列表中的企查查新闻，但会保留所有新榜新闻
   // 如果收件管理配置了自定义类别（qichacha_category_codes），则使用自定义类别；否则使用默认类别
@@ -2340,9 +2354,20 @@ async function executeEmailTask(recipientId) {
       let reanalyzeSuccessCount = 0;
       let reanalyzeErrorCount = 0;
       
+      // 导入AI分析缓存工具
+      const aiAnalysisCache = require('./aiAnalysisCache');
+      
       // 批量重新分析新闻
+      let skippedCount = 0;
       for (const news of newsList) {
         try {
+          // 检查是否在20分钟内已分析过
+          if (aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
+            skippedCount++;
+            logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
+            continue;
+          }
+          
           logWithTimestamp(`[邮件发送] 正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
           
           // 获取完整的新闻数据（包括content）
@@ -2372,6 +2397,8 @@ async function executeEmailTask(recipientId) {
           
           if (reanalyzeResult) {
             reanalyzeSuccessCount++;
+            // 记录分析时间戳到缓存
+            aiAnalysisCache.recordAnalysis(news.id);
             logWithTimestamp(`[邮件发送] ✓ 新闻 ${news.id} 重新分析成功`);
           } else {
             reanalyzeErrorCount++;
@@ -2386,7 +2413,11 @@ async function executeEmailTask(recipientId) {
         }
       }
       
-      logWithTimestamp(`[邮件发送] AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
+      if (skippedCount > 0) {
+        logWithTimestamp(`[邮件发送] ⏭️ 跳过 ${skippedCount} 条在20分钟内已分析过的新闻`);
+      }
+      
+      logWithTimestamp(`[邮件发送] AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条, 跳过 ${skippedCount || 0} 条`);
       logWithTimestamp(`[邮件发送] ========== AI重新分析结束 ==========`);
       
       // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）

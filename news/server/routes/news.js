@@ -1356,17 +1356,37 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
       // 这样可以确保不遗漏跳过节假日期间的数据
       if (config.last_sync_date) {
         // 如果有 last_sync_date，从 last_sync_date + 1天 开始（北京时区）
-        // last_sync_date 是 YYYY-MM-DD 格式，直接解析为北京时区的日期
-        const [year, month, day] = config.last_sync_date.split('-').map(Number);
+        // last_sync_date 可能是字符串（YYYY-MM-DD格式）或Date对象
+        let lastSyncDateStr;
+        if (config.last_sync_date instanceof Date) {
+          // 如果是Date对象，转换为YYYY-MM-DD格式字符串（北京时区）
+          const beijingDateStr = config.last_sync_date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          });
+          const datePart = beijingDateStr.split(' ')[0];
+          const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+          lastSyncDateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        } else if (typeof config.last_sync_date === 'string') {
+          lastSyncDateStr = config.last_sync_date;
+        } else {
+          // 其他类型，尝试转换为字符串
+          lastSyncDateStr = String(config.last_sync_date);
+        }
+        
+        // 解析日期字符串，从上次同步日期开始（不+1天，因为要包含上次同步的那一天）
+        const [year, month, day] = lastSyncDateStr.split('-').map(Number);
         const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-        lastSyncDate.setDate(lastSyncDate.getDate() + 1); // 从上次同步日期的下一天开始
+        // 从上次同步日期开始（不+1天），确保包含上次同步的那一天
         fromDate = lastSyncDate;
         
         console.log(`[新闻同步] 使用上次同步日期计算时间范围（北京时区）:`);
-        console.log(`[新闻同步] - 上次同步日期: ${config.last_sync_date}`);
-        console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+        console.log(`[新闻同步] - 上次同步日期: ${lastSyncDateStr}`);
+        console.log(`[新闻同步] - 起始日期（从上次同步日期开始）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       } else if (config.last_sync_time) {
-        // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始（北京时区）
+        // 如果有 last_sync_time，从 last_sync_time 的日期开始（北京时区，不+1天）
         const lastSyncTime = new Date(config.last_sync_time);
         // 获取北京时区的日期部分
         const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
@@ -1378,12 +1398,12 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
         const datePart = beijingDateStr.split(' ')[0];
         const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
         const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-        lastSyncDateOnly.setDate(lastSyncDateOnly.getDate() + 1); // 从上次同步日期的下一天开始
+        // 从上次同步日期开始（不+1天），确保包含上次同步的那一天
         fromDate = lastSyncDateOnly;
         
         console.log(`[新闻同步] 使用上次同步时间计算时间范围（北京时区）:`);
         console.log(`[新闻同步] - 上次同步时间: ${config.last_sync_time}`);
-        console.log(`[新闻同步] - 起始日期（上次同步日期+1天）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+        console.log(`[新闻同步] - 起始日期（从上次同步日期开始）: ${fromDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
       } else {
         // 如果没有上次同步记录，使用前一天00:00:00（北京时区）
         const yesterdayDate = new Date(baseRunDate);
@@ -3623,22 +3643,117 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     
     const recipient = existing[0];
     
-    // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企查查类别过滤）
-    let newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    // 获取用户可见的昨日舆情信息（传入收件管理配置，跳过最终过滤，用于AI重新分析）
+    // 注意：这里先获取基本查询结果（跳过企查查类别过滤和最终过滤）
+    // 然后对这些新闻进行基本过滤（标题、关键词、企业全称、新闻摘要都有数据）
+    // 再进行AI重新分析，分析后再应用企查查类别过滤等
+    let newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient, true); // skipFinalFilter = true
     
-    // ========== 邮件发送前AI重新分析 ==========
-    if (newsList.length > 0) {
+    // ========== 步骤1：基本过滤（标题、关键词、企业全称、新闻摘要都有数据）==========
+    logWithTag('[手动发送邮件]', '========== 步骤1：基本过滤 ==========');
+    logWithTag('[手动发送邮件]', `初始查询结果：${newsList.length} 条新闻`);
+    
+    // 预先获取所有额外公众号的ID列表（用于后续过滤判断）
+    let additionalAccountIdsSet = new Set();
+    try {
+      const additionalAccounts = await db.query(
+        `SELECT DISTINCT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE status = 'active' 
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''
+         AND delete_mark = 0`
+      );
+      additionalAccounts.forEach(acc => {
+        if (acc.wechat_account_id) {
+          additionalAccountIdsSet.add(acc.wechat_account_id);
+        }
+      });
+      logWithTag('[手动发送邮件]', `预先获取额外公众号ID列表，共 ${additionalAccountIdsSet.size} 个`);
+    } catch (err) {
+      warnWithTag('[手动发送邮件]', `获取额外公众号列表失败: ${err.message}`);
+    }
+    
+    // 基本过滤：标题、关键词、企业全称、新闻摘要都有数据
+    const basicFilteredNewsList = newsList.filter(news => {
+      // 1. 检查标题（标题是必需的）
+      if (!news.title || news.title.trim() === '') {
+        return false;
+      }
+      
+      // 2. 检查关键词（关键词是必需的，可能是JSON字符串或数组）
+      let hasKeywords = false;
+      if (news.keywords) {
+        if (typeof news.keywords === 'string') {
+          // 尝试解析JSON字符串
+          try {
+            const parsed = JSON.parse(news.keywords);
+            hasKeywords = Array.isArray(parsed) ? parsed.length > 0 : parsed.trim() !== '';
+          } catch (e) {
+            // 如果不是JSON，直接检查字符串
+            hasKeywords = news.keywords.trim() !== '';
+          }
+        } else if (Array.isArray(news.keywords)) {
+          hasKeywords = news.keywords.length > 0;
+        } else {
+          hasKeywords = String(news.keywords).trim() !== '';
+        }
+      }
+      if (!hasKeywords) {
+        logWithTag('[手动发送邮件]', `新闻 ${news.id} 被基本过滤：关键词为空`);
+        return false;
+      }
+      
+      // 3. 检查企业全称（额外公众号的新闻可能没有企业名称）
+      const enterpriseName = news.enterprise_full_name;
+      const hasEnterpriseName = enterpriseName && enterpriseName.trim() !== '';
+      
+      // 对于没有企业名称的新闻，检查是否是额外公众号的新闻
+      if (!hasEnterpriseName) {
+        const isAdditionalAccountNews = news.wechat_account && additionalAccountIdsSet.has(news.wechat_account);
+        if (!isAdditionalAccountNews) {
+          // 非额外公众号的新闻，企业全称是必需的
+          return false;
+        }
+      }
+      
+      // 4. 检查新闻摘要（news_abstract 或 summary）
+      const hasAbstract = news.news_abstract && news.news_abstract.trim() !== '';
+      const hasSummary = news.summary && news.summary.trim() !== '';
+      
+      if (!hasAbstract && !hasSummary) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    logWithTag('[手动发送邮件]', `基本过滤后：${basicFilteredNewsList.length} 条新闻（满足标题、关键词、企业全称、新闻摘要都有数据的条件）`);
+    
+    // ========== 步骤2：AI重新分析 ==========
+    if (basicFilteredNewsList.length > 0) {
       logWithTag('[手动发送邮件]', '========== 开始AI重新分析 ==========');
-      logWithTag('[手动发送邮件]', `需要重新分析的新闻数量: ${newsList.length}`);
+      logWithTag('[手动发送邮件]', `需要重新分析的新闻数量: ${basicFilteredNewsList.length}`);
       
       const newsAnalysis = require('../utils/newsAnalysis');
       
       let reanalyzeSuccessCount = 0;
       let reanalyzeErrorCount = 0;
       
-      // 批量重新分析新闻
-      for (const news of newsList) {
+      // 导入AI分析缓存工具
+      const aiAnalysisCache = require('../utils/aiAnalysisCache');
+      
+      // 批量重新分析新闻（使用基本过滤后的新闻列表）
+      let skippedCount = 0;
+      for (const news of basicFilteredNewsList) {
         try {
+          // 检查是否在20分钟内已分析过
+          if (aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
+            skippedCount++;
+            logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
+            continue;
+          }
+          
           logWithTag('[手动发送邮件]', `正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
           
           // 获取完整的新闻数据（包括content）
@@ -3668,6 +3783,8 @@ router.post('/recipients/:id/send-email', async (req, res) => {
           
           if (reanalyzeResult) {
             reanalyzeSuccessCount++;
+            // 记录分析时间戳到缓存
+            aiAnalysisCache.recordAnalysis(news.id);
             logWithTag('[手动发送邮件]', `✓ 新闻 ${news.id} 重新分析成功`);
           } else {
             reanalyzeErrorCount++;
@@ -3682,12 +3799,16 @@ router.post('/recipients/:id/send-email', async (req, res) => {
         }
       }
       
-      logWithTag('[手动发送邮件]', `AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条`);
+      if (skippedCount > 0) {
+        logWithTag('[手动发送邮件]', `⏭️ 跳过 ${skippedCount} 条在20分钟内已分析过的新闻`);
+      }
+      
+      logWithTag('[手动发送邮件]', `AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条, 跳过 ${skippedCount || 0} 条`);
       logWithTag('[手动发送邮件]', '========== AI重新分析结束 ==========');
       
       // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）
       logWithTag('[手动发送邮件]', '从数据库重新获取最新的新闻数据...');
-      const newsIds = newsList.map(n => n.id);
+      const newsIds = basicFilteredNewsList.map(n => n.id);
       if (newsIds.length > 0) {
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
@@ -3978,17 +4099,37 @@ async function syncQichachaNewsData(configId = null, logId = null) {
     // startDate：根据是否有上次同步记录来决定（使用北京时区）
     if (config.last_sync_date) {
       // 如果有 last_sync_date，从 last_sync_date + 1天 开始（北京时区）
-      // last_sync_date 是 YYYY-MM-DD 格式，直接解析为北京时区的日期
-      const [year, month, day] = config.last_sync_date.split('-').map(Number);
+      // last_sync_date 可能是字符串（YYYY-MM-DD格式）或Date对象
+      let lastSyncDateStr;
+      if (config.last_sync_date instanceof Date) {
+        // 如果是Date对象，转换为YYYY-MM-DD格式字符串（北京时区）
+        const beijingDateStr = config.last_sync_date.toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const datePart = beijingDateStr.split(' ')[0];
+        const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+        lastSyncDateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } else if (typeof config.last_sync_date === 'string') {
+        lastSyncDateStr = config.last_sync_date;
+      } else {
+        // 其他类型，尝试转换为字符串
+        lastSyncDateStr = String(config.last_sync_date);
+      }
+      
+      // 解析日期字符串，从上次同步日期开始（不+1天，因为要包含上次同步的那一天）
+      const [year, month, day] = lastSyncDateStr.split('-').map(Number);
       const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-      lastSyncDate.setDate(lastSyncDate.getDate() + 1); // 从上次同步日期的下一天开始
+      // 从上次同步日期开始（不+1天），确保包含上次同步的那一天
       startDate = formatDateOnly(lastSyncDate);
       
       console.log(`[企查查同步] 使用上次同步日期计算时间范围（北京时区）:`);
-      console.log(`[企查查同步] - 上次同步日期: ${config.last_sync_date}`);
-      console.log(`[企查查同步] - 起始日期（上次同步日期+1天）: ${startDate}`);
+      console.log(`[企查查同步] - 上次同步日期: ${lastSyncDateStr}`);
+      console.log(`[企查查同步] - 起始日期（从上次同步日期开始）: ${startDate}`);
     } else if (config.last_sync_time) {
-      // 如果有 last_sync_time，从 last_sync_time 的日期 + 1天 开始（北京时区）
+      // 如果有 last_sync_time，从 last_sync_time 的日期开始（北京时区，不+1天）
       const lastSyncTime = new Date(config.last_sync_time);
       // 获取北京时区的日期部分
       const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
@@ -4000,12 +4141,12 @@ async function syncQichachaNewsData(configId = null, logId = null) {
       const datePart = beijingDateStr.split(' ')[0];
       const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
       const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-      lastSyncDateOnly.setDate(lastSyncDateOnly.getDate() + 1); // 从上次同步日期的下一天开始
+      // 从上次同步日期开始（不+1天），确保包含上次同步的那一天
       startDate = formatDateOnly(lastSyncDateOnly);
       
       console.log(`[企查查同步] 使用上次同步时间计算时间范围（北京时区）:`);
       console.log(`[企查查同步] - 上次同步时间: ${config.last_sync_time}`);
-      console.log(`[企查查同步] - 起始日期（上次同步日期+1天）: ${startDate}`);
+      console.log(`[企查查同步] - 起始日期（从上次同步日期开始）: ${startDate}`);
     } else {
       // 首次执行：使用前一天00:00:00（北京时区）
       const yesterdayDate = new Date(baseRunDate);
@@ -4360,7 +4501,9 @@ async function syncQichachaNewsData(configId = null, logId = null) {
                         const newsAnalysis = require('../utils/newsAnalysis');
                         
                         // 先尝试使用 fetchContentFromUrl 方法（会使用 extractArticleContent 查找标记）
-                        let extractedContent = await newsAnalysis.fetchContentFromUrl(newsItem.Url);
+                        // 传入Source字段作为account_name，用于判断今日头条等特殊网站
+                        const accountName = newsItem.Source || '';
+                        let extractedContent = await newsAnalysis.fetchContentFromUrl(newsItem.Url, accountName);
                         
                         if (extractedContent && extractedContent.trim().length > 50) {
                           finalContent = extractedContent;
