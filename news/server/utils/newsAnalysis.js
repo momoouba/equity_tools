@@ -5436,6 +5436,7 @@ ${enterpriseList}
       // 对于新榜接口的数据，如果企业来自invested_enterprises表且状态不为"完全退出"，则不需要验证
       let finalEnterpriseName = newsItem.enterprise_full_name;
       let enterpriseAbbreviation = null;  // 企业简称，从invested_enterprises.project_abbreviation获取
+      let entityTypeFromEnterpriseCheck = null;  // 企业类型，从 enterpriseCheck 同一次查询获取，避免 enterpriseInfo 失败时 entity_type 为空但简称不为空
       let shouldValidate = true;
       const interfaceType = newsItem.APItype || '新榜';
       const isXinbang = (interfaceType === '新榜' || interfaceType === '新榜接口');
@@ -5472,7 +5473,7 @@ ${enterpriseList}
             // 用简称匹配project_abbreviation或enterprise_full_name中的简称部分
             // 用全称匹配enterprise_full_name或enterprise_full_name中的全称部分
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
                WHERE (
                  -- 匹配project_abbreviation（简称）
@@ -5511,7 +5512,7 @@ ${enterpriseList}
           // 方式2：如果只解析出了全称（非"简称【全称】"格式），用全称进行匹配
           if (enterpriseCheck.length === 0 && fullName && !abbreviation) {
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
                WHERE (
                  -- 精确匹配enterprise_full_name
@@ -5535,7 +5536,7 @@ ${enterpriseList}
           // 方式3：如果还是没找到，尝试匹配整个enterprise_full_name（兼容旧数据）
           if (enterpriseCheck.length === 0) {
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
                WHERE enterprise_full_name = ?
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
@@ -5551,12 +5552,11 @@ ${enterpriseList}
             logWithTag('[processNewsWithEnterprise]', '查询结果详情:', enterpriseCheck[0]);
             // 该企业来自invested_enterprises表且状态不为"完全退出"
             // 对于新榜接口的数据，不需要验证关联性，直接保持企业全称
-            // 不再使用formatEnterpriseName，直接使用enterprise_full_name（全称）
-            // 简称存储在enterprise_abbreviation字段中
+            // 简称与 entity_type 从同一次查询获取，避免后续 enterpriseInfo 失败时 entity_type 为空但简称不为空
             finalEnterpriseName = enterpriseCheck[0].enterprise_full_name;
-            // 保存project_abbreviation，后续用于更新enterprise_abbreviation字段
             enterpriseAbbreviation = enterpriseCheck[0].project_abbreviation || null;
-            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${finalEnterpriseName}, 简称: ${enterpriseAbbreviation || 'NULL'}`);
+            entityTypeFromEnterpriseCheck = enterpriseCheck[0].entity_type || null;
+            logWithTag('[processNewsWithEnterprise]', `✅ 企业来自invested_enterprises表且状态不为"完全退出"，保持关联: ${finalEnterpriseName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityTypeFromEnterpriseCheck || 'NULL'}`);
             shouldValidate = false;
           } else {
             logWithTag('[processNewsWithEnterprise]', '⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性');
@@ -5732,7 +5732,8 @@ ${enterpriseList}
       }
       
       // 如果企业全称不为空，从invested_enterprises表中获取entity_type、fund、sub_fund、project_abbreviation
-      let entityType = null;
+      // 当 enterpriseInfo 未命中或异常时，使用 entityTypeFromEnterpriseCheck 兜底，避免 entity_type 为空但简称不为空
+      let entityType = entityTypeFromEnterpriseCheck;
       let enterpriseInfo = [];  // 声明在try块外部，以便后续使用
       if (finalEnterpriseName) {
         try {
@@ -5779,10 +5780,14 @@ ${enterpriseList}
             enterpriseAbbreviation = enterpriseInfo[0].project_abbreviation || null;
             console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取entity_type: ${entityType}, project_abbreviation: ${enterpriseAbbreviation || 'NULL'}`);
           } else {
-            console.log(`[processNewsWithEnterprise] 未在invested_enterprises表中找到匹配的企业，entity_type设为NULL`);
+            if (entityTypeFromEnterpriseCheck != null) {
+              console.log(`[processNewsWithEnterprise] enterpriseInfo未命中，使用enterpriseCheck的entity_type兜底: ${entityTypeFromEnterpriseCheck}`);
+            } else {
+              console.log(`[processNewsWithEnterprise] 未在invested_enterprises表中找到匹配的企业，entity_type设为NULL`);
+            }
           }
         } catch (err) {
-          console.warn(`[processNewsWithEnterprise] 获取entity_type时出错: ${err.message}`);
+          console.warn(`[processNewsWithEnterprise] 获取entity_type时出错: ${err.message}，使用enterpriseCheck的entity_type兜底: ${entityTypeFromEnterpriseCheck || 'NULL'}`);
         }
       }
 
