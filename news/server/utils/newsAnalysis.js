@@ -3760,7 +3760,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
     // 记录最终Prompt的长度（用于调试）
     console.log(`[analyzeNewsSentimentAndType] 最终Prompt长度: ${finalPrompt.length}字符`);
 
-    // 重试机制：对于400错误（请求非法），尝试清理内容后重试，第三次重试时切换到qwen-plus
+    // 重试机制：对于400错误（请求非法），如果max模型失败直接切换到qwen-plus，不再重试3次
     let maxRetries = 3;
     let retryCount = 0;
     let response = null;
@@ -3794,11 +3794,36 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         const isRequestError = is400Error || 
                               (error.message && (error.message.includes('请求') || error.message.includes('非法') || error.message.includes('格式错误')));
         
-        if (isRequestError && retryCount < maxRetries) {
+        // 检查当前模型是否是max模型
+        const isMaxModel = currentModelConfig?.model_name === 'qwen-max-longcontext' || 
+                          currentModelConfig?.model_name === 'qwen-max';
+        
+        // 如果是max模型且第一次失败，直接切换到qwen-plus
+        if (isRequestError && retryCount === 0 && isMaxModel && !switchedToBackupModel) {
+          retryCount++;
+          console.warn(`[analyzeNewsSentimentAndType] ⚠️ max模型调用失败，直接切换到备用模型 qwen-plus`);
+          try {
+            // 尝试获取qwen-plus模型配置
+            const backupModelConfig = await this.getAIModelConfigByName('qwen-plus');
+            if (backupModelConfig) {
+              currentModelConfig = backupModelConfig;
+              switchedToBackupModel = true;
+              console.log(`[analyzeNewsSentimentAndType] ✓ 已切换到备用模型: ${backupModelConfig.model_name}`);
+            } else {
+              console.warn(`[analyzeNewsSentimentAndType] ⚠️ 未找到qwen-plus模型配置，继续使用原模型`);
+            }
+          } catch (configError) {
+            console.warn(`[analyzeNewsSentimentAndType] ⚠️ 获取备用模型配置失败: ${configError.message}，继续使用原模型`);
+          }
+          
+          // 等待一小段时间后重试（避免立即重试）
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue; // 继续重试
+        } else if (isRequestError && retryCount < maxRetries) {
           retryCount++;
           console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI调用失败（400错误），尝试第${retryCount}次重试`);
           
-          // 第一次和第二次重试：清理内容 + 精简Prompt
+          // 如果不是max模型或已经切换到plus，使用原有的重试逻辑：清理内容 + 精简Prompt
           if (retryCount <= 2) {
             // 如果是400错误，可能是内容问题，进一步清理内容
             if (is400Error) {
@@ -3838,7 +3863,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
               }
             }
           } else if (retryCount === 3) {
-            // 第三次重试：切换到备用模型（qwen-plus）
+            // 第三次重试：切换到备用模型（qwen-plus）（仅当不是max模型时才会到这里）
             console.warn(`[analyzeNewsSentimentAndType] 前两次重试均失败，切换到备用模型 qwen-plus`);
             try {
               // 尝试获取qwen-plus模型配置
