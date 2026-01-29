@@ -166,14 +166,7 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
           }
         }
 
-        // 检查内容是否被污染（乱码）
-        const isContentDirty = news.content && newsAnalysis.isContentContaminated(news.content);
-        if (isContentDirty) {
-          console.log(`[空摘要重新分析定时任务] 新闻 ${news.id} 内容被污染，跳过分析`);
-          errorCount++;
-          continue;
-        }
-
+        // 不再跳过乱码：乱码时 processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
         const interfaceType = news.APItype || '新榜';
 
         // 如果有企业全称，使用 processNewsWithEnterprise

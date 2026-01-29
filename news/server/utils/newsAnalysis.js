@@ -1,6 +1,39 @@
 const axios = require('axios');
+const iconv = require('iconv-lite');
 const db = require('../db');
 const { logWithTag, errorWithTag, warnWithTag } = require('./logUtils');
+
+/** 编码敏感站点（格隆汇、新浪、21经济网、新浪财经、腾讯科技、中新经纬等），抓取时需尝试 UTF-8 / GBK 解码 */
+const ENCODING_SENSITIVE_DOMAINS = [
+  'gelonghui.com',           // 格隆汇
+  'cj.sina.com.cn',          // 新浪
+  'finance.sina.com.cn',     // 新浪财经
+  '21jingji.com',            // 21经济网
+  'jwview.com',              // 中新经纬
+  'chinanews.com.cn',        // 中新经纬 / 中国新闻网
+  'tech.qq.com',             // 腾讯科技
+  'news.qq.com',
+  'new.qq.com'
+];
+
+/**
+ * 判断文本是否像「解码错误」导致的乱码（如 GBK 被误当 UTF-8 解析）。
+ * 用于在抓取时决定是否改用 GBK 解码。
+ * @param {string} text
+ * @returns {boolean}
+ */
+function looksLikeEncodingGarbled(text) {
+  if (!text || typeof text !== 'string' || text.length < 80) return false;
+  const chinese = (text.match(/[\u4e00-\u9fa5]/g) || []).length;
+  const total = text.replace(/\s/g, '').length;
+  if (total > 0 && chinese / total < 0.08) return true;
+  const replacement = (text.match(/\uFFFD/g) || []).length;
+  if (replacement > 8 || (text.length > 200 && replacement > 3)) return true;
+  const mojibake = /¾|γ|Ͻ|\uFFFD/g;
+  const m = text.match(mojibake);
+  if (m && m.length >= 5) return true;
+  return false;
+}
 
 /**
  * 新闻分析工具类
@@ -55,8 +88,8 @@ class NewsAnalysis {
 
       logWithTag('[fetchContentFromUrl]', `开始抓取网页内容: ${url}`);
       
-      // 检测是否是中国经营网（cb.com.cn），需要特殊处理
       const isCbnet = url.includes('cb.com.cn') || url.includes('cbnet.com');
+      const isEncodingSensitive = ENCODING_SENSITIVE_DOMAINS.some(d => url.toLowerCase().includes(d));
       
       // 设置请求头，模拟浏览器访问
       const headers = {
@@ -79,23 +112,23 @@ class NewsAnalysis {
         headers['Origin'] = 'https://www.cb.com.cn';
       }
       
+      const axiosOpts = {
+        timeout: 20000,
+        headers: headers,
+        maxRedirects: 5,
+        validateStatus: (status) => status < 400 || status === 521
+      };
+      if (isEncodingSensitive) {
+        axiosOpts.responseType = 'arraybuffer';
+      }
+
       let response;
       try {
-        response = await axios.get(url, {
-          timeout: 20000, // 20秒超时
-          headers: headers,
-          maxRedirects: 5,
-          validateStatus: (status) => {
-            // 允许2xx、3xx状态码，对于521等特殊状态码也尝试处理
-            return status < 400 || status === 521;
-          }
-        });
+        response = await axios.get(url, axiosOpts);
       } catch (error) {
-        // 如果是521错误，尝试使用更完整的浏览器请求头重试
         if (error.response && error.response.status === 521) {
           logWithTag('[fetchContentFromUrl]', '检测到521错误，尝试使用更完整的请求头重试');
           try {
-            // 添加更多浏览器特征
             const retryHeaders = {
               ...headers,
               'DNT': '1',
@@ -103,13 +136,7 @@ class NewsAnalysis {
               'Sec-Ch-Ua-Mobile': '?0',
               'Sec-Ch-Ua-Platform': '"Windows"'
             };
-            
-            response = await axios.get(url, {
-              timeout: 20000,
-              headers: retryHeaders,
-              maxRedirects: 5,
-              validateStatus: (status) => status < 400 || status === 521
-            });
+            response = await axios.get(url, { ...axiosOpts, headers: retryHeaders });
           } catch (retryError) {
             errorWithTag('[fetchContentFromUrl]', `重试后仍然失败: ${retryError.message}`);
             throw retryError;
@@ -136,7 +163,14 @@ class NewsAnalysis {
         return null;
       }
 
-      const html = response.data;
+      let html;
+      let rawBuffer = null; // 编码敏感站点保留原始字节，供「提取正文乱码→GBK 再解码再提取」使用
+      if (isEncodingSensitive && (Buffer.isBuffer(response.data) || response.data instanceof ArrayBuffer)) {
+        rawBuffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
+        html = rawBuffer.toString('utf8');
+      } else {
+        html = response.data;
+      }
       if (!html || typeof html !== 'string') {
         warnWithTag('[fetchContentFromUrl]', `返回内容不是HTML字符串, URL: ${url}`);
         return null;
@@ -163,6 +197,21 @@ class NewsAnalysis {
       
       let text = this.extractArticleContent(html, url, accountName);
       logWithTag('[fetchContentFromUrl]', `提取完成，文本长度: ${text.length}字符`);
+
+      // 编码敏感站点：若提取正文疑似解码乱码，按 GBK 重新解码 HTML 再提取
+      if (isEncodingSensitive && rawBuffer && text && looksLikeEncodingGarbled(text)) {
+        try {
+          const htmlGbk = iconv.decode(rawBuffer, 'gbk');
+          const textGbk = this.extractArticleContent(htmlGbk, url, accountName);
+          if (textGbk && textGbk.length >= 50 && !looksLikeEncodingGarbled(textGbk)) {
+            text = textGbk;
+            html = htmlGbk;
+            logWithTag('[fetchContentFromUrl]', `提取正文疑似解码乱码，已按 GBK 重新解码并再提取，长度: ${text.length} 字符`);
+          }
+        } catch (e) {
+          warnWithTag('[fetchContentFromUrl]', `GBK 再解码失败: ${e.message}，沿用原提取结果`);
+        }
+      }
 
       // 如果提取的文本太短（少于50个字符），可能提取失败
       if (text.length < 50) {
@@ -292,6 +341,242 @@ class NewsAnalysis {
       warnWithTag('[extractArticleContent]', '⚠️ 百度移动端页面无法提取正文，需要JavaScript渲染');
       return null;
     }
+
+    // 特殊处理：21经济网（21jingji.com，account_name: 21经济网）
+    // 正文仅从 <div class="content"> 中提取，并剔除页脚（分享、扫码、公告、备案等）
+    const is21Jingji = (url && /21jingji\.com/i.test(url)) ||
+                       (accountName && (accountName.includes('21经济网') || accountName.includes('21财经')));
+    if (is21Jingji) {
+      logWithTag('[extractArticleContent]', `检测到21经济网（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用 div.content 提取`);
+
+      const find21JingjiContentDiv = (h) => {
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bcontent\b[^"']*["'][^>]*>/i;
+        const startMatch = h.match(divStartRegex);
+        if (!startMatch) return null;
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        while (pos < h.length && depth > 0) {
+          const nextOpen = h.indexOf('<div', pos);
+          const nextClose = h.indexOf('</div>', pos);
+          if (nextClose === -1) {
+            endPos = h.length;
+            break;
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        if (endPos === -1) return null;
+        return h.substring(tagEnd, endPos);
+      };
+
+      let raw = find21JingjiContentDiv(html);
+      if (raw) {
+        raw = raw
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+
+        const footerPatterns = [
+          /21经济网首页\s*>>[\s\S]*/i,
+          /分享到微信朋友圈[\s\S]*/i,
+          /扫描二维码关注[\s\S]*/i,
+          />>\s*分享到[\s\S]*/i,
+          /公告\s*自拟项目选择制度[\s\S]*/i,
+          /粤ICP[\s\S]*/i,
+          /互联网新闻信息服务许可证[\s\S]*/i,
+          /中国互联网举报中心[\s\S]*/i,
+          /违法与不良信息举报[\s\S]*/i,
+          /广东二十一世纪经济报道[\s\S]*/i,
+          /粤公网安备[\s\S]*/i,
+          /(自拟项目选择制度|差额选举程序|基金会[\s\S]{0,50}?审计报告|绩效考核制度|考勤管理制度|秘书长绩效考核[\s\S]{0,50}?)[\s\S]*/gi,
+        ];
+        for (const p of footerPatterns) {
+          const m = raw.match(p);
+          if (m && m.index > raw.length * 0.5) {
+            raw = raw.substring(0, m.index).trim();
+            break;
+          }
+        }
+
+        const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 21经济网 div.content 提取成功，长度: ${textOnly.length}字符`);
+          return textOnly;
+        }
+        logWithTag('[extractArticleContent]', `⚠️ 21经济网 div.content 提取过短（${textOnly.length}字符），走通用逻辑`);
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到21经济网 div.content，走通用逻辑');
+      }
+    }
+
+    // 特殊处理：腾讯科技（account_name: 腾讯科技）
+    // 正文从 <div class="rich_media_content"> 提取，剔除 bottom、recommend 等无关内容
+    const isTencentTech = accountName && (accountName.includes('腾讯科技') || accountName === '腾讯科技');
+    if (isTencentTech) {
+      logWithTag('[extractArticleContent]', `检测到腾讯科技（account_name: ${accountName}），使用 div.rich_media_content 提取`);
+
+      const findRichMediaContentDiv = (h) => {
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\brich_media_content\b[^"']*["'][^>]*>/i;
+        const startMatch = h.match(divStartRegex);
+        if (!startMatch) return null;
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        while (pos < h.length && depth > 0) {
+          const nextOpen = h.indexOf('<div', pos);
+          const nextClose = h.indexOf('</div>', pos);
+          if (nextClose === -1) {
+            endPos = h.length;
+            break;
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        if (endPos === -1) return null;
+        return h.substring(tagEnd, endPos);
+      };
+
+      let raw = findRichMediaContentDiv(html);
+      if (raw) {
+        raw = raw
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+
+        const footerPatterns = [
+          /<div[^>]*class\s*=\s*["'][^"']*\bbottom\b[^"']*["'][^>]*>[\s\S]*/i,
+          /<div[^>]*class\s*=\s*["'][^"']*\brecommend\b[^"']*["'][^>]*>[\s\S]*/i,
+          /<section[^>]*class\s*=\s*["'][^"']*\b(recommend|bottom)\b[^"']*["'][^>]*>[\s\S]*/i,
+          /相关阅读[\s\S]*/i,
+          /推荐阅读[\s\S]*/i,
+          /延伸阅读[\s\S]*/i,
+          /热门推荐[\s\S]*/i,
+          /猜你喜欢[\s\S]*/i,
+          /阅读原文[\s\S]*/i,
+          /分享到朋友圈[\s\S]*/i,
+          /扫描二维码关注[\s\S]*/i,
+          /点击上方关注[\s\S]*/i,
+          /查看更多[\s\S]*/i,
+        ];
+        for (const p of footerPatterns) {
+          const m = raw.match(p);
+          if (m && m.index > raw.length * 0.5) {
+            raw = raw.substring(0, m.index).trim();
+            break;
+          }
+        }
+
+        const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 腾讯科技 rich_media_content 提取成功，长度: ${textOnly.length}字符`);
+          return textOnly;
+        }
+        logWithTag('[extractArticleContent]', `⚠️ 腾讯科技 rich_media_content 提取过短（${textOnly.length}字符），走通用逻辑`);
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到腾讯科技 div.rich_media_content，走通用逻辑');
+      }
+    }
+
+    // 特殊处理：中新经纬（account_name: 中新经纬 或 URL 含 jwview.com）
+    // 正文从 <div class="content_zw borderee bgwhite"> 提取，过滤掉 <!--<div class="title"> 等注释块
+    const isZxJw = (url && /jwview\.com/i.test(url)) ||
+                   (accountName && (accountName.includes('中新经纬') || accountName === '中新经纬'));
+    if (isZxJw) {
+      logWithTag('[extractArticleContent]', `检测到中新经纬（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用 div.content_zw 提取`);
+
+      const findZxjwContentDiv = (h) => {
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bcontent_zw\b[^"']*["'][^>]*>/i;
+        const startMatch = h.match(divStartRegex);
+        if (!startMatch) return null;
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        while (pos < h.length && depth > 0) {
+          const nextOpen = h.indexOf('<div', pos);
+          const nextClose = h.indexOf('</div>', pos);
+          if (nextClose === -1) {
+            endPos = h.length;
+            break;
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        if (endPos === -1) return null;
+        return h.substring(tagEnd, endPos);
+      };
+
+      let raw = findZxjwContentDiv(html);
+      if (raw) {
+        raw = raw
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+        // 过滤掉各种注释块：<!--<div class="title">...-->、<!--<div class="editor">...--> 等
+        raw = raw.replace(/<!--[\s\S]*?-->/g, '');
+
+        // 移除 <div class="texttips"> 及其后的所有内容（版权、来源、编辑等信息）
+        const texttipsIdx = raw.search(/<div[^>]*class\s*=\s*["'][^"']*\btexttips\b[^"']*["'][^>]*>/i);
+        if (texttipsIdx !== -1) {
+          raw = raw.substring(0, texttipsIdx).trim();
+        }
+
+        // 移除 <div class="info borderee"> 块（版权声明等）
+        raw = raw.replace(/<div[^>]*class\s*=\s*["'][^"']*\binfo\b[^"']*\bborderee\b[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+        raw = raw.replace(/<div[^>]*class\s*=\s*["'][^"']*\bborderee\b[^"']*\binfo\b[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+        // 移除 <div style="text-align:center"> 块（居中图片/广告等）
+        raw = raw.replace(/<div[^>]*style\s*=\s*["'][^"']*text-align\s*:\s*center[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+        // 移除 <div class="time"> 块（发布时间等）
+        raw = raw.replace(/<div[^>]*class\s*=\s*["'][^"']*\btime\b[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+        const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 中新经纬 div.content_zw 提取成功，长度: ${textOnly.length}字符`);
+          return textOnly;
+        }
+        logWithTag('[extractArticleContent]', `⚠️ 中新经纬 div.content_zw 提取过短（${textOnly.length}字符），走通用逻辑`);
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到中新经纬 div.content_zw，走通用逻辑');
+      }
+    }
     
     // 特殊处理：新浪新闻（统一处理 cj.sina.com.cn 和 finance.sina.com.cn）
     // 这两类新闻的正文都在 <div class="article" id="artibody"> 中，使用相同的提取方法
@@ -387,16 +672,48 @@ class NewsAnalysis {
         let cleanedContent = sinaContent
           .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
           .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
-          .replace(/<!--[\s\S]*?-->/g, '');
-        
-        // 检查内容长度
-        const sinaText = cleanedContent.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '');
+
+        // 移除 <!--article_adlist[...]article_adlist--> 广告注释块
+        cleanedContent = cleanedContent.replace(/<!--article_adlist\[[\s\S]*?\]article_adlist-->/gi, '');
+        // 移除其他注释（如 <!-- news_keyword_pub,stock, --> 等）
+        cleanedContent = cleanedContent.replace(/<!--[\s\S]*?-->/g, '');
+
+        // 移除二维码区块 <div class="appendQr_wrap">...</div>
+        cleanedContent = cleanedContent.replace(/<div[^>]*class\s*=\s*["'][^"']*\bappendQr[^"']*["'][^>]*>[\s\S]*?<\/div>\s*<\/div>/gi, '');
+        cleanedContent = cleanedContent.replace(/<div[^>]*class\s*=\s*["'][^"']*\bappendQr[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+        // 移除广告区块 <div id="ad_...">...</div>
+        cleanedContent = cleanedContent.replace(/<div[^>]*id\s*=\s*["']ad_[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+        // 移除 sinaads 广告
+        cleanedContent = cleanedContent.replace(/<ins[^>]*class\s*=\s*["'][^"']*sinaads[^"']*["'][^>]*>[\s\S]*?<\/ins>/gi, '');
+
+        // 移除 otherContent 区块
+        cleanedContent = cleanedContent.replace(/<div[^>]*class\s*=\s*["'][^"']*\botherContent[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+
+        // 移除空的 <p cms-style="..."></p> 标签
+        cleanedContent = cleanedContent.replace(/<p[^>]*cms-style[^>]*>\s*<\/p>/gi, '');
+
+        // 只提取有实际内容的 <p> 标签文本
+        const paragraphs = [];
+        const pRegex = /<p[^>]*>([\s\S]*?)<\/p>/gi;
+        let match;
+        while ((match = pRegex.exec(cleanedContent)) !== null) {
+          // 移除内部 HTML 标签，保留文本
+          const text = match[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+          // 只保留有实际内容的段落（长度 > 10 且不是纯链接/广告文字）
+          if (text.length > 10 && 
+              !/^(SEMI|www\.|http|官方|微信|公众号|小程序|官网|展会|杂志|订阅)/i.test(text)) {
+            paragraphs.push(text);
+          }
+        }
+
+        const sinaText = paragraphs.join(' ').trim();
         
         if (sinaText.length > 100) {
           logWithTag('[extractArticleContent]', `✓ 成功提取${sourceType}正文，长度: ${sinaText.length}字符`);
           logWithTag('[extractArticleContent]', `✓ ${sourceType}内容预览（前300字符）: ${sinaText.substring(0, 300)}...`);
-          return cleanedContent;
+          return sinaText;
         } else {
           warnWithTag('[extractArticleContent]', `⚠️ ${sourceType}提取的内容太短（${sinaText.length}字符），继续使用通用提取逻辑`);
         }
@@ -2130,7 +2447,22 @@ class NewsAnalysis {
       /深圳格隆汇信息科技有限公司[\s\S]*/gi,
       /合作伙伴[\s\S]*/gi,
       /查看全部[\s\S]*/gi,
-      /查看更多[\s\S]*/gi
+      /查看更多[\s\S]*/gi,
+      // 21经济网页脚
+      /21经济网首页\s*>>[\s\S]*/gi,
+      /分享到微信朋友圈[\s\S]*/gi,
+      /扫描二维码关注[\s\S]*/gi,
+      />>\s*分享到[\s\S]*/gi,
+      /粤ICP[\s\S]*/gi,
+      /互联网新闻信息服务许可证[\s\S]*/gi,
+      /中国互联网举报中心[\s\S]*/gi,
+      /广东二十一世纪经济报道[\s\S]*/gi,
+      /粤公网安备[\s\S]*/gi,
+      // 腾讯科技 / 公众号风格页脚
+      /相关阅读[\s\S]*/gi,
+      /延伸阅读[\s\S]*/gi,
+      /猜你喜欢[\s\S]*/gi,
+      /阅读原文[\s\S]*/gi,
     ];
 
     // 循环清理，直到没有变化或达到最大迭代次数
@@ -2225,6 +2557,20 @@ class NewsAnalysis {
     ];
     for (const pattern of sourcePatterns) {
       cleanedContent = cleanedContent.replace(pattern, '');
+    }
+
+    // 2.5. 正文开头的面包屑、导航、日期+来源（避免被摘入摘要或误作正文）
+    const leadingMetaPatterns = [
+      /\s*-\s*21经济网\s+21财经APP\s*>\s*[^\n]+/g,
+      /\s*-\s*[^\n]{0,24}网\s+[^\n]{0,24}APP\s*>\s*[^\n]+/g,
+      /\s*\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}\s+[^\n。！？]{0,50}/g,
+      /_\s*腾讯新闻\s*/g,
+      /_\s*[^\n_\s]{0,20}新闻\s*/g,
+      /\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g,
+      /\s*[^\n。]{0,12}领域创作者\s*/g,
+    ];
+    for (const p of leadingMetaPatterns) {
+      cleanedContent = cleanedContent.replace(p, '');
     }
 
     // 3. 移除广告链接和其他新闻链接
@@ -3530,6 +3876,8 @@ class NewsAnalysis {
    - **极其重要**：摘要必须是文章正文内容的核心关键内容的**总结和提炼**，而不是简单提取正文的第一句话、第一段话或每一段的首句
    - **绝对禁止**：直接摘取第一段话、摘取每一段的首句、或简单复制原文的某句话作为摘要
    - **绝对禁止**：直接复制正文开头的前100字、前150字或任何固定长度的文字作为摘要
+   - **禁止包含元信息**：摘要中不得包含**信息源**（如来自哪家媒体、哪篇报道、网址、链接等）或**报道/发布日期**（如"X月X日报道"、"据XX网X日报道"等）；只提炼新闻事实本身的关键内容
+   - **禁止包含非正文片段**：摘要中**绝对不得**出现面包屑、导航、网站名、APP名、具体日期时间、媒体名称、创作者等页面元信息，例如禁止出现" - 21经济网 21财经APP > …"、"2026年01月27日 19:24 投资快报"、"燧原科技IPO…_腾讯新闻"、"2026-01-23 12:54 发布于北京"、"科技领域创作者"、"XX网"、"XX财经APP"等；摘要只写新闻事实的概括，不写来源、渠道、发布时间、发布地、创作者
    - **必须跳过**：正文开头的引导语、关注提示、广告语等无关内容（如"点击关注"、"点击左上方关注"、"欢迎关注"、"扫描二维码"等），直接总结文章的核心主题和关键信息
    - **摘要应该是总结性的**：需要阅读**完整文章**后，提炼出核心要点，形成总结性的表述。如果正文开头只是引入，应该总结后续的核心内容。摘要应该是对全文信息的提炼和概括，而不是原文的片段拼接
    - **摘要生成方法**：通读全文，理解文章的核心主题、关键信息、主要观点，然后用简洁的语言总结成150字左右的完整句子（最多不超过170字）。不要逐段摘取，而要提炼整合
@@ -3547,9 +3895,11 @@ class NewsAnalysis {
      ❌ 错误："12月13日是国家公祭日，全国各地举行纪念活动，缅怀遇难同胞。"（只是开头，不是总结）
      ❌ 错误："点击左上方关注"博睿康"！《CAAE脑电读图会》第三十九期，本期读图会由来自空军军医大学第一附属医院的刘永红教授担任主持人。"（这是第一段话的摘取，不是总结）
      ❌ 错误：逐段摘取首句拼接而成的摘要（如"首先...接着...然后..."这种结构，明显是逐段摘取）
+     ❌ 错误：摘要中出现面包屑、来源、日期等非正文（如"…- 21经济网 21财经APP > …"、"…_腾讯新闻"、"2026-01-23 12:54 发布于北京 科技领域创作者"、"国产GPU四小龙…"直接复制正文首段）；应删除" _腾讯新闻"、"日期 发布于"、"领域创作者"等，且**不得直接摘取正文开头引入段**（如"当国产GPU四小龙齐聚资本市场…"），须通读全文后总结
    - 如果新闻正文只是一个链接地址（URL），请根据标题推断新闻主题，生成完整的摘要句子
    - 如果新闻正文包含图片链接，请根据标题和上下文推断图片内容，生成完整的摘要句子
    - **关键**：摘要必须能够独立阅读，不需要依赖原文就能理解新闻的核心内容，必须反映文章的核心主题和关键信息，是总结性的表述，而不是原文的片段
+   - **再次强调**：摘要只写新闻事实本身，不要写"据XX报道"、"XX网X月X日消息"、"来源于XXX"等信息来源或报道日期
 
 2. **标签要求（极其重要，必须严格遵守）**：
    - news_type字段必须包含具体的、有意义的标签，**绝对不能只返回["其他"]**
@@ -3564,7 +3914,7 @@ class NewsAnalysis {
      * 如果新闻涉及融资、投资 → 选择"融资消息"
      * 如果新闻涉及合作、伙伴关系 → 选择"合作伙伴"
      * 如果新闻涉及榜单 → **严格判断**：只有明确由某家企业发布的榜单信息，或标题中包含"榜单"字样时，才选择"榜单"标签。行业分享会、企业单独获奖信息不应标记为"榜单"
-     * 如果新闻涉及广告、推广 → 选择"广告推广"、"营销推广"等
+     * 如果新闻涉及广告、推广 → **仅限节假日类官方营销**：仅当内容属于节假日庆祝、节日工作安排、节日放假安排（如春节、元旦、中秋节、国庆节、劳动节等）的官方节日营销、祝福、放假通知时，才选择"广告推广"、"商业广告"或"营销推广"。**企业推介自家产品、服务、品牌的发展类内容不要标这三种标签**（股权投资关注企业发展，此类新闻应保留）
      * 如果新闻涉及纪念活动、社会事件、行业分享会（但不是节假日） → 根据内容选择合适标签，如"行业分析"等
    - **只有当新闻内容确实无法归类到任何具体类别时，才使用"其他"标签，且必须作为最后一个补充标签，前面要有至少1-2个具体标签**
    - **绝对禁止**：只返回["其他"]，必须至少包含1个具体标签
@@ -3616,9 +3966,7 @@ class NewsAnalysis {
 - 节假日（**优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等，如国家公祭日、春节、国庆节、清明节等，应标记为"节假日"。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签）
 - 榜单（**严格使用**：仅用于明确由某家企业发布的榜单信息，或标题中包含"榜单"字样的新闻。行业分享会、企业单独获奖信息不应使用此标签）
 - 获奖（**严格使用**：仅用于明确在标题或正文中描述对应的企业获得**具体的**奖项、荣誉、认证时（如"获得XX奖"、"荣获XX奖"）。**必须排除**：①论坛、座谈会、会诊、会议、分享会、研讨会、读图会、病例分享等活动；②泛泛而谈的表述（如"获得了众多荣誉"，没有具体奖项名称）；③参与性表述（如"成为XX供应商"、"成为XX协办方"等）。注意：企业单独的获奖信息应使用"获奖"标签，不是"榜单"标签）
-- 广告推广
-- 商业广告
-- 营销推广
+- 广告推广、商业广告、营销推广（**仅限节假日类官方营销**：仅用于春节、元旦、中秋节、国庆节、劳动节等的节日庆祝、节日工作安排、节日放假安排等官方节日营销内容；**企业推介自家产品、服务、品牌的发展类内容不要使用**）
 - 其他（仅在确实无法归类时使用，且应作为补充标签）
 
 **标签选择要求（非常重要）**：
@@ -3640,10 +3988,9 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 - 请仔细分析内容，区分"榜单"和"获奖"，确保标签准确。特别注意：论坛、座谈会、会诊等活动不应标记为"获奖"
 ` : ''}
 
-**广告识别重要提示：**
-- 如果文章主要目的是推销产品、服务或品牌，请标记为"广告推广"、"商业广告"或"营销推广"
-- 广告特征包括：产品宣传、服务推介、品牌营销、促销活动、商业合作推广等
-- 即使涉及真实的企业信息，如果主要目的是营销推广，仍应标记为广告类型
+**广告识别重要提示（仅限节假日类官方营销）：**
+- **仅当**内容属于节假日类官方营销时才使用"广告推广"、"商业广告"或"营销推广"：如春节、元旦、中秋节、国庆节、劳动节等的**节日庆祝、节日工作安排、节日放假安排**等官方节日祝福、放假通知、节日营销文案
+- **不要**对以下内容使用这三种标签：企业推介自家产品、服务、品牌的发展类新闻；企业产品发布、市场拓展、合作推广等（股权投资关注企业发展，此类新闻应保留并正常推送）
 
 请确保返回的是有效的JSON格式。
 `;
@@ -4016,6 +4363,19 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 
       // 处理摘要：确保完整句子，去除末尾的省略号
       let abstract = result.news_abstract || '';
+
+      // 移除摘要中误带入的面包屑、来源、日期等非正文片段
+      abstract = abstract
+        .replace(/\s*[。\.]?\s*-\s*21经济网\s+21财经APP\s*>\s*[^\n。]+[。]?\s*/g, '')
+        .replace(/\s*-\s*[^\n]{0,24}网\s+[^\n]{0,24}APP\s*>\s*[^\n。]+[。]?\s*/g, '')
+        .replace(/\s*\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}\s+[^\n。！？]{0,50}/g, '')
+        .replace(/_腾讯新闻\s*/g, '')
+        .replace(/_[^\n_]{0,20}新闻\s*/g, '')
+        .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
+        .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+        .replace(/\s*[。\.]\s*[。\.]+/g, '。')
+        .replace(/\s+/g, ' ')
+        .trim();
       
       // 检查摘要是否是错误消息（AI返回的错误提示）
       const errorMessages = [
@@ -4095,8 +4455,9 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         }
         
         // 检查摘要是否与原文开头高度相似（可能是简单复制第一段话）
-        // 即使摘要看起来完整，也要检查是否只是复制了原文开头
-        const contentStart = (content || '').trim().substring(0, Math.min(abstract.length + 50, (content || '').length));
+        // 与发送给AI的 contentForAnalysis 对比，阈值 40% 即触发重提取
+        const refContent = (contentForAnalysis || content || '').trim();
+        const contentStart = refContent.substring(0, Math.min(abstract.length + 80, refContent.length));
         const abstractStart = abstract.substring(0, Math.min(abstract.length, 150));
         let sameCount = 0;
         const checkLen = Math.min(abstractStart.length, contentStart.length);
@@ -4106,17 +4467,15 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
           }
         }
         const copySimilarity = checkLen > 0 ? sameCount / checkLen : 0;
-        
-        // 如果相似度超过50%，认为是简单复制第一段话，需要重新生成总结性摘要
-        if (copySimilarity > 0.5) {
-          console.warn(`⚠️ 检测到摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%，可能是简单复制第一段话，将重新提取总结性摘要`);
+        const SIMILARITY_THRESHOLD = 0.4;
+
+        if (copySimilarity > SIMILARITY_THRESHOLD) {
+          console.warn(`⚠️ 检测到摘要与原文开头相似度${(copySimilarity * 100).toFixed(1)}%（阈值${SIMILARITY_THRESHOLD * 100}%），可能为复制首段，将重新提取总结性摘要`);
           console.warn(`当前摘要: ${abstract.substring(0, 100)}...`);
           console.warn(`原文开头: ${contentStart.substring(0, 100)}...`);
-          
-          // 使用extractCompleteAbstract重新提取，它会跳过第一段话，提取核心内容
+
           const extractedAbstract = this.extractCompleteAbstract(title, content, abstract);
           if (extractedAbstract && extractedAbstract.length >= 50) {
-            // 检查提取的摘要是否与原文开头相似度降低
             const extractedStart = extractedAbstract.substring(0, Math.min(extractedAbstract.length, 100));
             let extractedSameCount = 0;
             const extractedCheckLen = Math.min(extractedStart.length, contentStart.length);
@@ -4126,15 +4485,14 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
               }
             }
             const extractedSimilarity = extractedCheckLen > 0 ? extractedSameCount / extractedCheckLen : 0;
-            
+
             if (extractedSimilarity < copySimilarity) {
               abstract = extractedAbstract;
-              console.log(`✓ 已从原文重新提取总结性摘要（跳过第一段话），长度: ${abstract.length}字符，相似度从${(copySimilarity * 100).toFixed(1)}%降至${(extractedSimilarity * 100).toFixed(1)}%`);
+              console.log(`✓ 已从原文重新提取总结性摘要（跳过首段），长度: ${abstract.length}字符，相似度从${(copySimilarity * 100).toFixed(1)}%降至${(extractedSimilarity * 100).toFixed(1)}%`);
               console.log(`新摘要预览: ${abstract.substring(0, 150)}...`);
-              // 重新检查是否完整
               isComplete = this.isAbstractComplete(abstract, title, content);
             } else {
-              console.warn(`⚠️ 重新提取的摘要相似度仍然较高（${(extractedSimilarity * 100).toFixed(1)}%），保留AI返回的摘要`);
+              console.warn(`⚠️ 重新提取的摘要相似度仍较高（${(extractedSimilarity * 100).toFixed(1)}%），保留AI摘要`);
             }
           }
         }
@@ -5112,6 +5470,17 @@ ${enterpriseList}
    */
   validateAnalysisResult(analysis, title, content, interfaceType = '新榜') {
     let validatedAbstract = analysis.news_abstract || '';
+    validatedAbstract = validatedAbstract
+      .replace(/\s*[。\.]?\s*-\s*21经济网\s+21财经APP\s*>\s*[^\n。]+[。]?\s*/g, '')
+      .replace(/\s*-\s*[^\n]{0,24}网\s+[^\n]{0,24}APP\s*>\s*[^\n。]+[。]?\s*/g, '')
+      .replace(/\s*\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}\s+[^\n。！？]{0,50}/g, '')
+      .replace(/_腾讯新闻\s*/g, '')
+      .replace(/_[^\n_]{0,20}新闻\s*/g, '')
+      .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
+      .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+      .replace(/\s*[。\.]\s*[。\.]+/g, '。')
+      .replace(/\s+/g, ' ')
+      .trim();
     let validatedKeywords = [...(analysis.keywords || [])];
     let needsFix = false;
     
@@ -5956,15 +6325,10 @@ ${enterpriseList}
         logWithTag('[processNewsWithoutEnterprise]', `分析完成 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 关键词: ${JSON.stringify(analysis.keywords)}`);
       }
 
-      // 检查是否为广告类型
+      // 检查是否为广告类型（仅认三种完整标签，对应「节假日类官方营销」；企业推介产品不打此类标签故不会误判）
       const isAdvertisement = analysis.keywords.some(keyword => {
-        const keywordLower = keyword.toLowerCase();
-        return keywordLower.includes('广告') || 
-               keywordLower.includes('推广') || 
-               keywordLower.includes('营销') ||
-               keywordLower === '商业广告' ||
-               keywordLower === '营销推广' ||
-               keywordLower === '广告推广';
+        const k = (typeof keyword === 'string' ? keyword : '').trim().toLowerCase();
+        return k === '商业广告' || k === '营销推广' || k === '广告推广';
       });
 
       if (relevantEnterprises.length === 0 || isAdvertisement) {
@@ -7096,24 +7460,14 @@ ${enterpriseList}
 
       for (const newsItem of newsItems) {
         try {
-          // 检查内容是否是乱码（针对新榜接口的新闻）
+          // 不再跳过乱码：乱码时 processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
           const interfaceType = newsItem.APItype || '新榜';
-          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content) {
-            // 检查内容是否被污染（包含JavaScript代码、CSS样式等脏信息）
-            if (this.isContentContaminated(newsItem.content)) {
-              warnWithTag('[批量分析]', `⚠️ 跳过乱码内容（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
-              errorCount++;
-              continue;
-            }
-            
-            // 检查内容长度（至少20字符才认为是有效正文）
-            if (newsItem.content.trim().length < 20) {
-              warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
-              errorCount++;
-              continue;
-            }
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content && newsItem.content.trim().length < 20) {
+            warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+            errorCount++;
+            continue;
           }
-          
+
           let result;
           // 在AI分析前，先检查是否是企业公众号发的
           // 如果是invested_enterprises表中状态不为"完全退出"的企业公众号，直接设置企业全称
@@ -7579,7 +7933,19 @@ ${enterpriseList}
       { keywords: ['市场', '拓展', '扩张', '布局', '进入'], tag: '市场拓展' },
       { keywords: ['人事', '任命', '离职', '加入', '高管'], tag: '人事变动' },
       { keywords: ['财务', '财报', '营收', '利润', '业绩'], tag: '财务报告' },
-      { keywords: ['广告', '推广', '营销', '宣传', '促销'], tag: '广告推广' },
+      // 仅节假日类官方营销（节日庆祝、节日工作安排、节日放假安排）才推断为广告推广；企业推介产品不标
+      { 
+        keywords: ['春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销'],
+        tag: '广告推广',
+        validate: (title, content) => {
+          const full = ((title || '') + ' ' + (content || '')).toLowerCase();
+          const holidayKw = ['春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销'];
+          const marketingKw = ['推广', '营销', '广告', '宣传', '促销', '祝福', '放假通知', '工作安排'];
+          const hasHoliday = holidayKw.some(k => full.includes(k));
+          const hasMarketing = marketingKw.some(k => full.includes(k));
+          return hasHoliday && hasMarketing; // 仅当同时具备节日+营销语境时才标为广告推广
+        }
+      },
       { keywords: ['安全', '防护', '漏洞', '修复', '安全'], tag: '安全防护' },
       { keywords: ['发展', '成长', '壮大', '进步'], tag: '企业发展' },
     ];
@@ -7772,10 +8138,16 @@ ${enterpriseList}
     // 2. 跳过前1-2句（通常是引入性内容），寻找核心内容
     const titleKeywords = (title || '').split(/[，。！？\s]+/).filter(w => w.length > 1);
     let startIndex = 0;
-    
-    // 跳过前1-2句引入性内容
-    if (sentences.length > 2) {
-      startIndex = Math.min(1, sentences.length - 1); // 从第2句开始
+
+    // 若首句为 "当…" 引入式（如 "当国产GPU四小龙齐聚资本市场…"），优先跳过
+    if (sentences.length > 1 && /^当/.test(sentences[0]) && sentences[0].length > 15) {
+      startIndex = 1;
+    }
+    // 跳过前2句引入性内容（至少跳过2句再找核心，避免直接用开头作摘要）
+    if (sentences.length > 3 && startIndex < 2) {
+      startIndex = Math.min(2, sentences.length - 1);
+    } else if (sentences.length > 2 && startIndex === 0) {
+      startIndex = Math.min(1, sentences.length - 1);
     }
     
     // 查找包含标题关键词或重要信息的句子（核心内容通常在文章前1/3处）

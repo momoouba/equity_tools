@@ -108,37 +108,48 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
                             !newsItem.content.includes('无法提取正文内容') &&
                             !newsItem.content.includes('正文无文字');
     
-    // 如果content无效，也清空content字段，强制重新抓取
+    // 检查正文是否乱码（需从 URL 重新抓取）
+    let isContentContaminated = false;
+    try {
+      isContentContaminated = !!(newsItem.content && typeof newsAnalysis.isContentContaminated === 'function' && newsAnalysis.isContentContaminated(newsItem.content));
+    } catch (e) {
+      console.warn(`检查正文乱码时出错: ${e.message}`);
+    }
+    
+    // 若正文乱码且有 source_url：清空 content，分析时从 URL 重新抓取
+    const needClearContentForRefetch = (!hasValidContent && newsItem.source_url) || (isContentContaminated && newsItem.source_url);
+    
+    // 如果content无效、乱码或需清空分析结果，则清空相应字段
     // 如果是强制重新分析，即使content有效，也要清空分析结果字段，强制重新生成摘要和关键词
-    if (shouldClearResults || !hasValidContent) {
-      if (!hasValidContent && newsItem.source_url) {
-        console.log(`⚠️ 检测到content无效（${newsItem.content ? `长度: ${newsItem.content.length}字符` : '为空'}），将清空content字段并重新抓取`);
+    if (shouldClearResults || !hasValidContent || isContentContaminated) {
+      if (needClearContentForRefetch) {
+        const reason = isContentContaminated ? '正文乱码，清空 content 并从 URL 重新抓取' : `content 无效（${newsItem.content ? `长度: ${newsItem.content.length} 字符` : '为空'}），清空并重新抓取`;
+        console.log(`⚠️ 检测到 ${reason}`);
         await db.execute(
           'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL, content = NULL WHERE id = ?',
           [id]
         );
-        // 更新newsItem对象
         newsItem.content = null;
       } else {
-        // 即使content有效，如果是强制重新分析，也要清空分析结果字段
         await db.execute(
           'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE id = ?',
           [id]
         );
-        console.log(`✓ 已清空分析结果字段（保留企业全称和content），将重新生成摘要和关键词`);
+        console.log(`✓ 已清空分析结果字段（保留企业全称和 content），将重新生成摘要和关键词`);
       }
-      console.log(`✓ 已清空分析结果字段（保留企业全称）`);
       if (forceReanalyze) {
         console.log(`清空原因: 强制重新分析`);
       } else if (isAbstractIncomplete) {
         console.log(`清空原因: 摘要不完整（以数字结尾或太短）`);
+      } else if (isContentContaminated) {
+        console.log(`清空原因: 正文乱码，将从 source_url 重新抓取`);
       } else if (!hasValidContent) {
-        console.log(`清空原因: content无效，需要重新抓取`);
+        console.log(`清空原因: content 无效，需要重新抓取`);
       } else {
         console.log(`清空原因: 分析结果不完整（缺少摘要、情绪或关键词）`);
       }
     } else {
-      console.log(`⚠️ 分析结果已存在且完整，如需重新分析请设置forceReanalyze=true`);
+      console.log(`⚠️ 分析结果已存在且完整，如需重新分析请设置 forceReanalyze=true`);
     }
     
     // 在重新分析前，先根据公众号匹配企业（如果新闻来自invested_enterprises表的公众号）
@@ -1400,36 +1411,9 @@ router.post('/reanalyze-xinbang-missing', checkAdminPermission, async (req, res)
       });
     }
 
-    // 过滤掉乱码内容
-    const validNews = [];
-    for (const news of newsToAnalyze) {
-      // 检查内容是否是乱码（使用 newsAnalysis 实例的方法）
-      try {
-        // newsAnalysis 是一个实例，直接调用方法
-        if (news.content && typeof newsAnalysis.isContentContaminated === 'function' && newsAnalysis.isContentContaminated(news.content)) {
-          console.log(`跳过乱码内容: ${news.id} - ${news.title.substring(0, 50)}`);
-          continue;
-        }
-      } catch (error) {
-        console.warn(`检查乱码内容时出错: ${error.message}，继续处理该新闻`);
-      }
-      validNews.push(news);
-    }
-
-    console.log(`过滤后有效新闻数量: ${validNews.length} 条`);
-
-    if (validNews.length === 0) {
-      return res.json({
-        success: true,
-        message: '所有新闻都是乱码内容，无需分析',
-        data: {
-          total: newsToAnalyze.length,
-          processed: 0,
-          successCount: 0,
-          errorCount: 0
-        }
-      });
-    }
+    // 不再过滤乱码：乱码新闻也参与分析，processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
+    const validNews = newsToAnalyze;
+    console.log(`待分析新闻数量: ${validNews.length} 条（含乱码则将从 URL 重新抓取正文）`);
 
     // 生成任务ID
     const taskId = `xinbang-missing-${Date.now()}`;

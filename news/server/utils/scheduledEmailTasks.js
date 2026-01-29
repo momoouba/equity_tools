@@ -201,7 +201,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
   
   const { from, to } = await getEmailTimeRange();
   console.log(`[邮件发送] 时间范围（基于创建时间）: ${from} 到 ${to}`);
-  
+
   // 先检查用户角色（管理员自动拥有所有权限）
   const users = await db.query('SELECT role FROM users WHERE id = ?', [userId]);
   const userRole = users.length > 0 ? users[0].role : 'user';
@@ -1822,7 +1822,8 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       }
     }
     
-    // 过滤掉广告类型的新闻（广告推广、商业广告、营销推广），以及企业名称为null或空的新闻
+    // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，如春节/元旦/中秋等）；
+    // 企业推介自家产品、服务、品牌的发展类内容不打此类标签，故不会被过滤（股权投资关注企业发展）
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
       // 首先过滤掉企业名称为null或空字符串的新闻
@@ -2266,8 +2267,7 @@ async function executeEmailTask(recipientId) {
       console.log(`[邮件发送] 收件人ID为14004，额外添加荣誉奖项关键词的企查查新闻（基于创建时间）`);
       const { from, to } = await getEmailTimeRange();
       
-      // 查询包含荣誉奖项关键词的企查查新闻（基于创建时间筛选）
-      // 条件：类别为"荣誉奖项"或关键词/标题/摘要中包含荣誉奖项相关关键词
+      // 查询包含荣誉奖项关键词的企查查新闻（仅按创建时间筛选）
       const honorAwardNews = await db.query(
         `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                 nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
