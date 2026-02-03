@@ -6079,6 +6079,25 @@ ${enterpriseList}
           }
         }
       }
+
+      // 新榜接口 + 企业公众号：不允许打负面，只能是正面或中性
+      if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.wechat_account && validatedAnalysis.sentiment === 'negative') {
+        try {
+          const fromEnterpriseAccount = await db.query(
+            `SELECT 1 FROM invested_enterprises 
+             WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+            [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
+          );
+          if (fromEnterpriseAccount.length > 0) {
+            validatedAnalysis.sentiment = 'neutral';
+            validatedAnalysis.sentiment_reason = (validatedAnalysis.sentiment_reason || '') + '（企业公众号新闻不允许标注负面，已调整为中性）';
+            logWithTag('[processNewsWithEnterprise]', '新榜企业公众号新闻不允许负面，已调整为中性');
+          }
+        } catch (e) {
+          console.warn(`[processNewsWithEnterprise] 检查企业公众号时出错: ${e.message}`);
+        }
+      }
       
       // 更新数据库，包括可能的企业关联变更
       console.log(`[processNewsWithEnterprise] 准备更新数据库`);
@@ -6377,6 +6396,25 @@ ${enterpriseList}
             }
           }
         }
+
+        // 新榜接口 + 企业公众号：不允许打负面，只能是正面或中性
+        if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.wechat_account && validatedAnalysis.sentiment === 'negative') {
+          try {
+            const fromEnterpriseAccount = await db.query(
+              `SELECT 1 FROM invested_enterprises 
+               WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+              [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
+            );
+            if (fromEnterpriseAccount.length > 0) {
+              validatedAnalysis.sentiment = 'neutral';
+              validatedAnalysis.sentiment_reason = (validatedAnalysis.sentiment_reason || '') + '（企业公众号新闻不允许标注负面，已调整为中性）';
+              logWithTag('[processNewsWithoutEnterprise]', '新榜企业公众号新闻不允许负面，已调整为中性');
+            }
+          } catch (e) {
+            console.warn(`[processNewsWithoutEnterprise] 检查企业公众号时出错: ${e.message}`);
+          }
+        }
         
         // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
         // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
@@ -6519,7 +6557,24 @@ ${enterpriseList}
           // 没有有效的企业关联，保持enterprise_full_name为空
           // 在更新数据库之前，校验分析结果（摘要和关键词）
           logWithTag('[processNewsWithoutEnterprise]', '开始校验分析结果（无有效企业关联）...');
-          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
+          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+          // 新榜接口 + 企业公众号：不允许打负面
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.wechat_account && validatedAnalysis.sentiment === 'negative') {
+            try {
+              const fromEnterpriseAccount = await db.query(
+                `SELECT 1 FROM invested_enterprises 
+                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+                [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
+              );
+              if (fromEnterpriseAccount.length > 0) {
+                validatedAnalysis.sentiment = 'neutral';
+                validatedAnalysis.sentiment_reason = (validatedAnalysis.sentiment_reason || '') + '（企业公众号新闻不允许标注负面，已调整为中性）';
+              }
+            } catch (e) {
+              console.warn(`[processNewsWithoutEnterprise] 检查企业公众号时出错: ${e.message}`);
+            }
+          }
           
           // 确保content字段也被更新（如果ensureNewsContent成功抓取了内容）
           // 对于新榜接口，如果原始content有效且不包含乱码，优先使用原始content
@@ -6551,7 +6606,24 @@ ${enterpriseList}
           // 处理有效的企业关联
           // 在更新数据库之前，先校验分析结果（摘要和关键词），所有记录使用相同的校验结果
           logWithTag('[processNewsWithoutEnterprise]', '开始校验分析结果（有企业关联）...');
-          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis);
+          const validatedAnalysis = this.validateAnalysisResult(analysis, newsItem.title, contentForAnalysis, interfaceType);
+          // 新榜接口 + 企业公众号：不允许打负面
+          if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.wechat_account && validatedAnalysis.sentiment === 'negative') {
+            try {
+              const fromEnterpriseAccount = await db.query(
+                `SELECT 1 FROM invested_enterprises 
+                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+                [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
+              );
+              if (fromEnterpriseAccount.length > 0) {
+                validatedAnalysis.sentiment = 'neutral';
+                validatedAnalysis.sentiment_reason = (validatedAnalysis.sentiment_reason || '') + '（企业公众号新闻不允许标注负面，已调整为中性）';
+              }
+            } catch (e) {
+              console.warn(`[processNewsWithoutEnterprise] 检查企业公众号时出错: ${e.message}`);
+            }
+          }
           
           for (let i = 0; i < validEnterprises.length; i++) {
             const enterprise = validEnterprises[i];
