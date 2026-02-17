@@ -75,6 +75,61 @@ class NewsAnalysis {
   }
 
   /**
+   * 从正文中移除免责声明、版权页脚、公众号引导等及之后的所有内容（含该类信息之间的其他信息），不写入正文。
+   * 「编辑/xxx」仅在正文较后位置（页脚）才截断，出现在标题后、正文前时保留，避免正文被误删。
+   * @param {string} text - 正文内容
+   * @returns {string} 处理后的正文
+   */
+  stripDisclaimerAndAfter(text) {
+    if (!text || typeof text !== 'string') return text;
+    // 编辑类标记：仅当出现在正文较后位置（≥ 该字符数）时才截断，避免「标题+编辑/张三+正文」中的编辑信息被删
+    const EDITOR_FOOTER_THRESHOLD = 400;
+    const markers = [
+      '免责声明',
+      '风险提示',
+      '地址：北京市朝阳区小关北里217号',
+      '邮编：100029 电话：010-50953088',
+      '举报邮箱：jubao@eeo.com.cn',
+      '举报受理处置规则',
+      'Copyright @ 经济观察网',
+      '京ICP备18019893号',
+      '京公网安备 11010802028547号',
+      '广播电视节目制作经营许可证',
+      '增值电信业务经营许可证',
+      '京网文[',
+      'Copyright Contact Us About Us',
+      '友情链接 Links',
+      '经观招聘 EEO Jobs',
+      '订购中心 Subscribe',
+      '编辑/风口财经编辑王雪',
+      '商务合作 开白转载',
+      'FKCJ20200918(微信号）',
+      '下方查看 精选 文章',
+      '预览时标签不可点',
+      '微信扫一扫 关注该公众号',
+      '继续滑动看下一个',
+      '第一风口 向上滑动看下一个',
+      '微信扫一扫 使用小程序',
+      '微信扫一扫可打开此内容',
+      '轻点两下取消赞',
+      '轻点两下取消在看',
+      '分享 留言 收藏 听过'
+    ];
+    let minIdx = text.length;
+    for (const marker of markers) {
+      const idx = text.indexOf(marker);
+      if (idx === -1) continue;
+      // 编辑/xxx 在文首（标题后、正文前）时保留，仅当在较后位置时才作为截断点
+      if (marker.startsWith('编辑/') && idx < EDITOR_FOOTER_THRESHOLD) continue;
+      if (idx < minIdx) minIdx = idx;
+    }
+    if (minIdx < text.length) {
+      return text.substring(0, minIdx).trim();
+    }
+    return text;
+  }
+
+  /**
    * 从URL抓取网页内容
    * @param {string} url - 网页URL
    * @param {string} accountName - 公众号名称（可选，用于特殊处理）
@@ -275,6 +330,9 @@ class NewsAnalysis {
       if (text.length > 50000) {
         text = text.substring(0, 50000) + '...[内容已截断]';
       }
+
+      // 移除「免责声明」「风险提示」及之后的内容，不写入正文
+      text = this.stripDisclaimerAndAfter(text);
 
       logWithTag('[fetchContentFromUrl]', `✓ 成功抓取网页内容，长度: ${text.length}字符`);
       return text;
@@ -3109,8 +3167,9 @@ class NewsAnalysis {
             const extractor = new WebContentExtractor();
             const aiResult = await extractor.extractFromUrl(newsItem.source_url, newsItem.title);
             if (aiResult && aiResult.content && aiResult.content.length > 100) {
-              // 清理AI提取的内容中的页脚信息
-              let cleanedAiContent = aiResult.content;
+              // 先移除「免责声明」「风险提示」及之后的内容
+              let cleanedAiContent = this.stripDisclaimerAndAfter(aiResult.content);
+              // 再清理AI提取的内容中的页脚信息
               cleanedAiContent = cleanedAiContent.replace(/实时快讯[\s\S]*/i, '').trim();
               cleanedAiContent = cleanedAiContent.replace(/格隆汇APP下载[\s\S]*/i, '').trim();
               cleanedAiContent = cleanedAiContent.replace(/关于格隆汇[\s\S]*/i, '').trim();

@@ -4534,7 +4534,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
                         );
                         
                           if (extractedResult.content && extractedResult.content.trim().length > 50) {
-                          finalContent = extractedResult.content;
+                          finalContent = newsAnalysis.stripDisclaimerAndAfter(extractedResult.content);
                             console.log(`[企查查同步] ✓ 使用AI提取成功提取正文，长度: ${finalContent.length} 字符`);
                           console.log(`[企查查同步] 注意：摘要、关键词、情感分析将在后续的AI分析中基于正文内容生成`);
                         } else {
@@ -5002,21 +5002,21 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
 
       requestIndex += 1;
       const maskedCode = instnIdtfnCd.substring(0, 4) + '****' + instnIdtfnCd.slice(-4);
-      console.log(`[上海国际集团同步] 请求第 ${requestIndex}/${totalEnterprises} 个企业 机构:${maskedCode} 时间:${startDate} 00:00:00 ~ ${endDate} 00:00:00`);
+      console.log(`[上海国际集团同步] 请求第 ${requestIndex}/${totalEnterprises} 个企业 机构:${maskedCode} 时间:${startDate} ~ ${endDate}`);
 
       try {
         const uuid = require('crypto').randomUUID();
         const timestamp = String(Date.now());
 
-        // 按文档：instn_idtfn_cd 为数组；start_time/end_time 为 "yyyy-MM-dd 00:00:00"，end_time 可为空表示至今
+        // 按文档：instn_idtfn_cd 为 String；start_time/end_time 为 yyyy-MM-dd（仅日期）
         const requestBody = {
-          instn_idtfn_cd: [instnIdtfnCd],
-          start_time: `${String(startDate)} 00:00:00`,
-          end_time: endDate ? `${String(endDate)} 00:00:00` : ''
+          instn_idtfn_cd: instnIdtfnCd,
+          start_time: String(startDate),
+          end_time: endDate ? String(endDate) : ''
         };
         if (!firstRequestLogged) {
           firstRequestLogged = true;
-          const masked = { instn_idtfn_cd: [maskedCode], start_time: requestBody.start_time, end_time: requestBody.end_time };
+          const masked = { instn_idtfn_cd: maskedCode, start_time: requestBody.start_time, end_time: requestBody.end_time };
           console.log(`[上海国际集团同步] 首条请求报文示例: ${JSON.stringify(masked)}`);
         }
 
@@ -5117,7 +5117,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                     const extractor = new WebContentExtractor();
                     const extractedResult = await extractor.extractFromUrl(sourceUrl, title);
                     if (extractedResult.content && extractedResult.content.trim().length > 50) {
-                      finalContent = extractedResult.content;
+                      finalContent = newsAnalysis.stripDisclaimerAndAfter(extractedResult.content);
                       console.log(`[上海国际集团同步] ✓ AI提取正文成功，长度: ${finalContent.length} 字符`);
                     }
                   }
