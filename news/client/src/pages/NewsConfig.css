@@ -126,3 +126,98 @@
   border-top: 1px solid #e5e6eb;
 }
 
+/* 同步时间范围弹窗 - 独立实现，仅用 news-config-sync- 前缀，避免与 Arco 组件冲突 */
+.news-config-sync-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+.news-config-sync-modal-box {
+  width: 460px;
+  max-width: 90vw;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  padding: 20px 24px;
+}
+.news-config-sync-modal-header {
+  margin-bottom: 16px;
+}
+.news-config-sync-modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d2129;
+}
+.news-config-sync-modal-desc {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: #4e5969;
+  line-height: 1.5;
+}
+.news-config-sync-modal-field {
+  margin-bottom: 16px;
+}
+.news-config-sync-modal-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #1d2129;
+}
+.news-config-sync-modal-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #e5e6eb;
+  border-radius: 2px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.news-config-sync-modal-input:focus {
+  outline: none;
+  border-color: #165dff;
+  box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.2);
+}
+.news-config-sync-modal-footer {
+  margin-top: 24px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.news-config-sync-modal-btn {
+  min-width: 64px;
+  height: 32px;
+  padding: 0 16px;
+  font-size: 14px;
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.news-config-sync-modal-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.news-config-sync-modal-btn-cancel {
+  background: #f7f8fa;
+  border-color: #e5e6eb;
+  color: #1d2129;
+}
+.news-config-sync-modal-btn-cancel:hover:not(:disabled) {
+  background: #e5e6eb;
+}
+.news-config-sync-modal-btn-ok {
+  background: #165dff;
+  color: #fff;
+}
+.news-config-sync-modal-btn-ok:hover:not(:disabled) {
+  opacity: 0.9;
+}
+

@@ -55,7 +55,7 @@ async function getNewsWithEmptyAbstract(limit = 50) {
     
     // 查询条件：
     // 1. 摘要为空或null
-    // 2. 有正文内容
+    // 2. 有正文内容 OR（企查查/上海国际集团且有source_url，可从链接抓取正文）
     // 3. 未被删除
     // 4. created_at在当天的00:00:00到23:59:59之间
     // 使用DATE函数确保只查询当天的数据，避免时区问题
@@ -64,9 +64,12 @@ async function getNewsWithEmptyAbstract(limit = 50) {
               wechat_account, account_name, APItype, news_abstract, keywords, created_at
        FROM news_detail
        WHERE (news_abstract IS NULL OR news_abstract = '')
-       AND content IS NOT NULL
-       AND content != ''
-       AND LENGTH(content) > 20
+       AND (
+         (content IS NOT NULL AND content != '' AND LENGTH(content) > 20)
+         OR
+         (source_url IS NOT NULL AND source_url != '' 
+          AND APItype IN ('企查查', 'qichacha', '上海国际集团'))
+       )
        AND delete_mark = 0
        AND DATE(created_at) = DATE(?)
        ORDER BY created_at DESC

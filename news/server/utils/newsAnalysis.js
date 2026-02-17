@@ -3756,11 +3756,11 @@ class NewsAnalysis {
     const isImageOnly = this.isImageOnlyContent(content) || 
                        (!content || content.trim().length === 0);
     
-    // 对于企查查新闻，即使内容被判断为脏内容或图片内容，也应该尝试进行AI分析
+    // 对于企查查、上海国际集团新闻，即使内容被判断为脏内容或图片内容，也应该尝试进行AI分析
     // 只有新榜接口的图片内容或脏内容才跳过AI分析
-    const isQichacha = interfaceType === '企查查' || interfaceType === 'qichacha';
-    // 企查查新闻不跳过AI分析，即使内容被判断为脏内容
-    const shouldSkipAI = !isQichacha && (interfaceType === '新榜' || interfaceType === '新榜接口') && (isImageOnly || isContentDirty);
+    const isQichachaOrSIG = interfaceType === '企查查' || interfaceType === 'qichacha' || interfaceType === '上海国际集团';
+    // 企查查、上海国际集团新闻不跳过AI分析，即使内容被判断为脏内容
+    const shouldSkipAI = !isQichachaOrSIG && (interfaceType === '新榜' || interfaceType === '新榜接口') && (isImageOnly || isContentDirty);
     
     if (shouldSkipAI) {
       console.log(`[analyzeNewsSentimentAndType] 检测到新榜接口的图片内容或脏内容，跳过AI分析`);
@@ -5814,7 +5814,7 @@ ${enterpriseList}
       logWithTag('[processNewsWithEnterprise]', `接口类型: ${interfaceType}`);
       
       try {
-        // 对于企查查接口的数据，始终需要进行二次校验
+        // 对于企查查接口的数据，需要进行二次校验；上海国际集团企业名称来自接口，不做关联性判断
         if (interfaceType === '企查查' || interfaceType === 'qichacha') {
           logWithTag('[processNewsWithEnterprise]', '企查查接口数据，需要进行二次校验关联性');
           shouldValidate = true;

@@ -182,6 +182,13 @@ async function executeNewsSyncTask(configId) {
       } else {
         throw new Error('企查查舆情同步功能未实现');
       }
+    } else if (interfaceType === '上海国际集团') {
+      // 上海国际集团舆情接口同步
+      if (newsRoutes.syncShanghaiInternationalGroupNewsData) {
+        await newsRoutes.syncShanghaiInternationalGroupNewsData(configId, logId);
+      } else {
+        throw new Error('上海国际集团舆情同步功能未实现');
+      }
     } else {
       // 新榜接口同步
       if (newsRoutes.syncNewsData) {

@@ -1446,6 +1446,10 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     // 企查查接口使用syncQichachaNewsData，它有自己的时间范围计算逻辑
     console.log(`[新闻同步] 企查查接口，调用syncQichachaNewsData`);
     result = await syncQichachaNewsData(config.id, logId);
+  } else if (interfaceType === '上海国际集团') {
+    // 上海国际集团接口使用syncShanghaiInternationalGroupNewsData
+    console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
+    result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
   } else {
     // 新榜接口使用executeNewsSyncForConfig
     console.log(`[新闻同步] 新榜接口，调用executeNewsSyncForConfig`);
@@ -1456,8 +1460,8 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
   const syncedCount = result.data?.synced || 0;
   
   // 拖底逻辑：如果有上一次同步时间但没有获取到数据，使用前一天00:00:00到当天00:00:00
-  // 注意：企查查接口不需要拖底逻辑，因为它有自己的时间范围计算逻辑
-  if (interfaceType !== '企查查' && config.last_sync_time && syncedCount === 0 && !customRangeEnabled) {
+  // 注意：企查查、上海国际集团接口不需要拖底逻辑，它们有自己的时间范围计算逻辑
+  if (interfaceType !== '企查查' && interfaceType !== '上海国际集团' && config.last_sync_time && syncedCount === 0 && !customRangeEnabled) {
     console.log(`[新闻同步] 配置 ${config.id} 使用上一次同步时间未获取到数据，启用拖底逻辑：获取前一天00:00:00到当天00:00:00的新闻`);
     
     // 使用拖底逻辑：前一天00:00:00到当天00:00:00
@@ -1614,11 +1618,11 @@ async function syncNewsData(options = {}) {
 /**
  * 手动同步公众号文章数据
  */
-// 手动触发新闻同步接口
+// 手动触发新闻同步接口（支持可选 start_time、end_time 控制同步时间范围，格式：YYYY-MM-DD HH:mm:ss）
 router.post('/sync', async (req, res) => {
   let logId = null;
   try {
-    const { config_id } = req.body;
+    const { config_id, start_time, end_time } = req.body;
     const userId = req.headers['x-user-id'] || null;
 
     if (!config_id) {
@@ -1636,6 +1640,14 @@ router.post('/sync', async (req, res) => {
       return res.status(400).json({ success: false, message: '配置未启用' });
     }
 
+    // 自定义时间范围（弹窗传入）：格式 YYYY-MM-DD HH:mm:ss
+    const customRange = (start_time && end_time && String(start_time).trim() && String(end_time).trim())
+      ? { from: String(start_time).trim(), to: String(end_time).trim() }
+      : null;
+    if (customRange) {
+      logWithTag('[手动同步]', `使用自定义时间范围: ${customRange.from} 至 ${customRange.to}`);
+    }
+
     // 创建日志记录
     try {
       logId = await createSyncLog({
@@ -1644,7 +1656,8 @@ router.post('/sync', async (req, res) => {
         userId: userId,
         executionDetails: {
           interfaceType: config.interface_type || '新榜',
-          requestUrl: config.request_url
+          requestUrl: config.request_url,
+          ...(customRange && { customRange })
         }
       });
     } catch (logError) {
@@ -1662,32 +1675,31 @@ router.post('/sync', async (req, res) => {
     
     if (interfaceType === '企查查') {
       logWithTag('[手动同步]', '执行企查查新闻同步...');
-      result = await syncQichachaNewsData(config_id, logId);
+      result = await syncQichachaNewsData(config_id, logId, customRange);
+    } else if (interfaceType === '上海国际集团') {
+      logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
+      result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
     } else {
       logWithTag('[手动同步]', '执行新榜新闻同步...');
       
-      // 获取当前时间（Asia/Shanghai时区）
       const now = new Date();
-      logWithTag('[手动同步]', `服务器当前时间: ${now.toISOString()}`);
-      logWithTag('[手动同步]', `服务器本地时间: ${now.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
-      
-      // 使用本地时区计算日期，确保基于Asia/Shanghai时区
-      // 获取本地时间的年月日（基于Asia/Shanghai时区）
-      // 创建Asia/Shanghai时区的今天00:00:00
       const todayStart = createShanghaiDate(now);
-      
-      // 创建本地时区的昨天00:00:00
       const yesterdayStart = new Date(todayStart);
       yesterdayStart.setDate(yesterdayStart.getDate() - 1);
-      
-      logWithTag('[手动同步]', '计算的时间范围:');
-      logWithTag('[手动同步]', `- 昨天开始: ${formatDate(yesterdayStart)} (${yesterdayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
-      logWithTag('[手动同步]', `- 今天开始: ${formatDate(todayStart)} (${todayStart.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })})`);
+      const defaultRange = { from: formatDate(yesterdayStart), to: formatDate(todayStart) };
+      const rangeToUse = customRange || defaultRange;
+
+      if (!customRange) {
+        logWithTag('[手动同步]', `服务器当前时间: ${now.toISOString()}`);
+        logWithTag('[手动同步]', '计算的时间范围:');
+        logWithTag('[手动同步]', `- 昨天开始: ${rangeToUse.from}`);
+        logWithTag('[手动同步]', `- 今天开始: ${rangeToUse.to}`);
+      }
       
       result = await syncNewsData({
         isManual: true,
         configId: config_id,
-        customRange: { from: formatDate(yesterdayStart), to: formatDate(todayStart) },
+        customRange: rangeToUse,
         logId: logId
       });
     }
@@ -4035,7 +4047,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
  * @param {string|null} configId - 新闻接口配置ID，如果为null则自动查找企查查舆情接口配置
  * @returns {Promise<object>} 同步结果
  */
-async function syncQichachaNewsData(configId = null, logId = null) {
+async function syncQichachaNewsData(configId = null, logId = null, customRange = null) {
   try {
     // 获取企查查舆情接口配置
     let config;
@@ -4083,21 +4095,21 @@ async function syncQichachaNewsData(configId = null, logId = null) {
 
     console.log(`企查查每日查询限制次数: ${dailyLimit}`);
 
-    // 使用Asia/Shanghai时区计算本地日期
     const now = new Date();
     const baseRunDate = createShanghaiDate(now);
-    
-    // 计算时间范围：基于last_sync_date或last_sync_time
-    // 如果是首次执行（没有last_sync_date和last_sync_time），使用前一天00:00:00到当前执行时间
     let startDate, endDate;
-    
-    // endDate：当前执行日期的前一天（北京时区）（因为要抓取的是执行日期之前的数据）
-    const toDate = new Date(baseRunDate);
-    toDate.setDate(toDate.getDate() - 1); // 执行日期前一天
-    endDate = formatDateOnly(toDate); // 使用北京时区格式化日期
-    
-    // startDate：根据是否有上次同步记录来决定（使用北京时区）
-    if (config.last_sync_date) {
+
+    // 手动同步时若传入自定义时间范围，优先使用（from/to 格式：YYYY-MM-DD HH:mm:ss，取日期部分）
+    if (customRange && customRange.from && customRange.to) {
+      startDate = customRange.from.split(' ')[0];
+      endDate = customRange.to.split(' ')[0];
+      console.log(`[企查查同步] 使用自定义时间范围: ${startDate} 至 ${endDate}`);
+    } else {
+      const toDate = new Date(baseRunDate);
+      toDate.setDate(toDate.getDate() - 1);
+      endDate = formatDateOnly(toDate);
+
+      if (config.last_sync_date) {
       // 如果有 last_sync_date，从 last_sync_date + 1天 开始（北京时区）
       // last_sync_date 可能是字符串（YYYY-MM-DD格式）或Date对象
       let lastSyncDateStr;
@@ -4155,6 +4167,7 @@ async function syncQichachaNewsData(configId = null, logId = null) {
       
       console.log(`[企查查同步] 首次执行，使用前一天作为起始日期（北京时区）:`);
       console.log(`[企查查同步] - 起始日期: ${startDate}`);
+    }
     }
 
     console.log(`企查查舆情同步时间范围：${startDate} 至 ${endDate}`);
@@ -4780,10 +4793,465 @@ async function syncQichachaNewsData(configId = null, logId = null) {
   }
 }
 
+/**
+ * 上海国际集团舆情和公司公告接口同步函数
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupNewsData(configId = null, logId = null, customRange = null) {
+  try {
+    // 获取上海国际集团舆情接口配置
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团舆情接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团舆情接口');
+      }
+      config = configs[0];
+    }
+
+    const { request_url } = config;
+
+    // 获取上海国际集团接口配置（从shanghai_international_group_config表）
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit
+       FROM shanghai_international_group_config
+       WHERE is_active = 1
+       ORDER BY created_at DESC LIMIT 1`
+    );
+
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = parseInt(sigConfigs[0].daily_limit || '100', 10);
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    console.log(`[上海国际集团同步] 每日查询限制次数: ${dailyLimit}`);
+
+    const now = new Date();
+    const baseRunDate = createShanghaiDate(now);
+    let startDate, endDate;
+
+    // 手动同步时若传入自定义时间范围，优先使用（from/to 格式：YYYY-MM-DD HH:mm:ss）
+    if (customRange && customRange.from && customRange.to) {
+      startDate = customRange.from.split(' ')[0];
+      endDate = customRange.to.split(' ')[0];
+      console.log(`[上海国际集团同步] 使用自定义时间范围: ${startDate} 至 ${endDate}`);
+    } else {
+      const toDate = new Date(baseRunDate);
+      toDate.setDate(toDate.getDate() - 1);
+      endDate = formatDateOnly(toDate);
+
+      if (config.last_sync_date) {
+      let lastSyncDateStr;
+      if (config.last_sync_date instanceof Date) {
+        const beijingDateStr = config.last_sync_date.toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+        const datePart = beijingDateStr.split(' ')[0];
+        const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+        lastSyncDateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      } else {
+        lastSyncDateStr = String(config.last_sync_date);
+      }
+      const [year, month, day] = lastSyncDateStr.split('-').map(Number);
+      const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
+      startDate = formatDateOnly(lastSyncDate);
+    } else if (config.last_sync_time) {
+      const lastSyncTime = new Date(config.last_sync_time);
+      const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      const datePart = beijingDateStr.split(' ')[0];
+      const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+      const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
+      startDate = formatDateOnly(lastSyncDateOnly);
+    } else {
+      const yesterdayDate = new Date(baseRunDate);
+      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+      startDate = formatDateOnly(yesterdayDate);
+    }
+    }
+
+    // 接口要求 start_time <= end_time，否则返回「请输入正确的报文格式」
+    if (startDate > endDate) {
+      console.warn(`[上海国际集团同步] 修正日期范围：start_date(${startDate}) 晚于 end_date(${endDate})，已改为 start_date=${endDate}`);
+      startDate = endDate;
+    }
+    // 部分网关要求 start_time 早于 end_time（不能同一天），同一天时改为查询 [endDate-1, endDate]
+    if (startDate === endDate) {
+      const prev = new Date(endDate + 'T00:00:00+08:00');
+      prev.setDate(prev.getDate() - 1);
+      const prevStr = formatDateOnly(prev);
+      if (prevStr < endDate) {
+        startDate = prevStr;
+        console.log(`[上海国际集团同步] 同一天查询改为两天范围：${startDate} 至 ${endDate}`);
+      }
+    }
+
+    console.log(`[上海国际集团同步] 时间范围：${startDate} 至 ${endDate}`);
+
+    // 根据entity_type过滤企业
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') {
+          entityTypes = JSON.parse(entityTypes);
+        }
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') {
+              conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            } else if (type === '基金相关主体') {
+              conditions.push(`entity_type = '基金相关主体'`);
+            } else if (type === '子基金') {
+              conditions.push(`entity_type = '子基金'`);
+            } else if (type === '子基金管理人') {
+              conditions.push(`entity_type = '子基金管理人'`);
+            } else if (type === '子基金GP') {
+              conditions.push(`entity_type = '子基金GP'`);
+            }
+          });
+          if (conditions.length > 0) {
+            entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+          }
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团同步] 解析 entity_type 配置失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return {
+        success: true,
+        message: '没有需要同步的企业',
+        data: { synced: 0, total: 0 }
+      };
+    }
+
+    const creditCodes = enterprises
+      .map(e => e.unified_credit_code)
+      .filter(code => code && code.trim() !== '' && code !== 'null');
+    let uniqueCreditCodes = [...new Set(creditCodes)];
+
+    const maxEnterprisesPerSync = Math.max(1, dailyLimit);
+    const enterprisesToSync = uniqueCreditCodes.slice(0, maxEnterprisesPerSync);
+
+    let totalSynced = 0;
+    const errors = [];
+
+    const apiUrl = request_url || 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote';
+
+    // 规范化机构唯一识别码：去空格/横线，接口要求 18 位统一社会信用代码
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    let firstRequestLogged = false;
+    let firstMessageFormatErrorLogged = false;
+    const totalEnterprises = enterprisesToSync.length;
+    let requestIndex = 0;
+    for (const creditCode of enterprisesToSync) {
+      const instnIdtfnCd = normalizeCreditCode(creditCode);
+      if (instnIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团同步] 跳过无效机构代码（需18位统一社会信用代码）: ${creditCode.substring(0, 10)}... 长度=${instnIdtfnCd.length}`);
+        errors.push(`机构代码格式无效 (${creditCode.substring(0, 12)}...): 需18位`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = instnIdtfnCd.substring(0, 4) + '****' + instnIdtfnCd.slice(-4);
+      console.log(`[上海国际集团同步] 请求第 ${requestIndex}/${totalEnterprises} 个企业 机构:${maskedCode} 时间:${startDate} 00:00:00 ~ ${endDate} 00:00:00`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+
+        // 按文档：instn_idtfn_cd 为数组；start_time/end_time 为 "yyyy-MM-dd 00:00:00"，end_time 可为空表示至今
+        const requestBody = {
+          instn_idtfn_cd: [instnIdtfnCd],
+          start_time: `${String(startDate)} 00:00:00`,
+          end_time: endDate ? `${String(endDate)} 00:00:00` : ''
+        };
+        if (!firstRequestLogged) {
+          firstRequestLogged = true;
+          const masked = { instn_idtfn_cd: [maskedCode], start_time: requestBody.start_time, end_time: requestBody.end_time };
+          console.log(`[上海国际集团同步] 首条请求报文示例: ${JSON.stringify(masked)}`);
+        }
+
+        // 显式以 UTF-8 JSON 字符串发送，避免网关对报文格式的严格校验
+        const bodyString = JSON.stringify(requestBody);
+        const response = await axios.post(apiUrl, bodyString, {
+          headers: {
+            'Content-Type': 'application/json; charset=UTF-8',
+            'X-App-Id': String(xAppId).trim(),
+            'X-Sequence-No': uuid,
+            'X-Timestamp': timestamp,
+            'APIkey': String(apiKey).trim()
+          },
+          timeout: 60000,
+          transformRequest: [(data) => data] // 不再让 axios 二次序列化
+        });
+
+        if (response.data && response.data.Code === '200' && response.data.Data) {
+          const data = response.data.Data;
+          const newsItems = [...(data.instn_news || []), ...(data.instn_pubnote || [])];
+
+          const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+          let enterpriseFullName = enterpriseInfo.enterprise_full_name || null;
+          let entityType = enterpriseInfo.entity_type || null;
+          let enterpriseAbbreviation = null;
+          let fund = null;
+          let sub_fund = null;
+
+          const enterpriseResult = await db.query(
+            `SELECT enterprise_full_name, entity_type, fund, sub_fund, project_abbreviation
+             FROM invested_enterprises
+             WHERE unified_credit_code = ?
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+             AND delete_mark = 0
+             LIMIT 1`,
+            [creditCode]
+          );
+          if (enterpriseResult.length > 0) {
+            enterpriseFullName = enterpriseResult[0].enterprise_full_name;
+            entityType = enterpriseResult[0].entity_type;
+            fund = enterpriseResult[0].fund;
+            sub_fund = enterpriseResult[0].sub_fund;
+            enterpriseAbbreviation = enterpriseResult[0].project_abbreviation || null;
+          }
+
+          for (const item of newsItems) {
+            try {
+              const sourceUrl = item.news_url || '';
+              const title = item.news_title || '';
+              let publicTime = null;
+              if (item.disp_time) {
+                try {
+                  publicTime = item.disp_time.replace('T', ' ').substring(0, 19);
+                } catch (e) {}
+              }
+
+              if (!sourceUrl && !title && !publicTime) continue;
+
+              let existing = [];
+              if (sourceUrl) {
+                existing = await db.query(
+                  'SELECT id, delete_mark FROM news_detail WHERE source_url = ? LIMIT 1',
+                  [sourceUrl]
+                );
+              } else if (title && publicTime) {
+                existing = await db.query(
+                  'SELECT id, delete_mark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
+                  [title, publicTime]
+                );
+              }
+              if (existing.length > 0) {
+                if (existing[0].delete_mark === 1) {
+                  console.log(`[上海国际集团同步] 跳过已删除的新闻: ${sourceUrl || title}`);
+                }
+                continue;
+              }
+
+              let newsSentiment = 'neutral';
+              const sentimentTyp = item.sentiment_typ || '';
+              if (sentimentTyp === '正面') newsSentiment = 'positive';
+              else if (sentimentTyp === '负面') newsSentiment = 'negative';
+
+              const accountName = item.pbls_src || '上海国际集团';
+              const newsId = await generateId('news_detail');
+              const newsAnalysis = require('../utils/newsAnalysis');
+
+              // 上海国际集团流程：入库前提取正文（含中新经纬等规则）→ AI分析摘要关键词 → 校验 → 入库
+              let finalContent = item.news_content || '';
+              if (!finalContent && sourceUrl) {
+                try {
+                  console.log(`[上海国际集团同步] 检测到content为空，从链接提取正文（使用accountName: ${accountName}，支持中新经纬等规则）: ${sourceUrl}`);
+                  let extractedContent = await newsAnalysis.fetchContentFromUrl(sourceUrl, accountName);
+                  if (extractedContent && extractedContent.trim().length > 50) {
+                    finalContent = extractedContent;
+                    console.log(`[上海国际集团同步] ✓ 提取正文成功，长度: ${finalContent.length} 字符`);
+                  } else {
+                    const WebContentExtractor = require('../utils/webContentExtractor');
+                    const extractor = new WebContentExtractor();
+                    const extractedResult = await extractor.extractFromUrl(sourceUrl, title);
+                    if (extractedResult.content && extractedResult.content.trim().length > 50) {
+                      finalContent = extractedResult.content;
+                      console.log(`[上海国际集团同步] ✓ AI提取正文成功，长度: ${finalContent.length} 字符`);
+                    }
+                  }
+                } catch (extractError) {
+                  console.error(`[上海国际集团同步] 提取网页内容失败 (${sourceUrl}):`, extractError.message);
+                }
+              }
+
+              // 无正文则跳过（无法进行AI分析）
+              if (!finalContent || finalContent.trim().length < 20) {
+                console.log(`[上海国际集团同步] 跳过：无有效正文内容 (${sourceUrl || title})`);
+                continue;
+              }
+
+              // 入库前AI分析：摘要、关键词、情感
+              let analysisResult = null;
+              try {
+                analysisResult = await newsAnalysis.analyzeNewsSentimentAndType(
+                  title, finalContent, sourceUrl, false, '上海国际集团'
+                );
+              } catch (analysisError) {
+                console.error(`[上海国际集团同步] AI分析失败，跳过: ${analysisError.message}`);
+                continue;
+              }
+
+              // 检查摘要和关键词是否为空，有空则跳过不入库
+              const hasAbstract = analysisResult.news_abstract && analysisResult.news_abstract.trim().length > 0;
+              const hasKeywords = analysisResult.keywords && Array.isArray(analysisResult.keywords) && analysisResult.keywords.length > 0;
+              if (!hasAbstract || !hasKeywords) {
+                console.log(`[上海国际集团同步] 跳过：摘要或关键词为空 (摘要:${hasAbstract ? '有' : '空'}, 关键词:${hasKeywords ? '有' : '空'}) - ${title}`);
+                continue;
+              }
+
+              // 使用AI分析结果入库（企业名称来自接口，不做关联性判断）
+              const finalSentiment = analysisResult.sentiment === 'positive' ? 'positive'
+                : analysisResult.sentiment === 'negative' ? 'negative' : newsSentiment;
+              const keywordsJson = JSON.stringify(analysisResult.keywords);
+
+              await db.execute(
+                `INSERT INTO news_detail
+                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_abstract, fund, sub_fund)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  newsId,
+                  accountName,
+                  accountName,
+                  item.instn_nm || enterpriseFullName,
+                  enterpriseAbbreviation,
+                  entityType,
+                  sourceUrl,
+                  title,
+                  item.event_nm_lv12 || item.risk_nm_lv12 || '',
+                  publicTime,
+                  finalContent,
+                  keywordsJson,
+                  finalSentiment,
+                  '上海国际集团',
+                  analysisResult.news_abstract,
+                  fund,
+                  sub_fund
+                ]
+              );
+              totalSynced++;
+            } catch (insertError) {
+              console.error(`[上海国际集团同步] 插入新闻失败:`, insertError.message);
+              errors.push(`插入失败 (${creditCode}): ${insertError.message}`);
+            }
+          }
+        } else {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团同步] 接口返回错误: ${code}, ${desc}`);
+          if (code === '500' && desc && desc.includes('报文格式') && !firstMessageFormatErrorLogged) {
+            firstMessageFormatErrorLogged = true;
+            console.warn(`[上海国际集团同步] 报文格式错误时响应体(仅首条):`, JSON.stringify(response.data));
+          }
+          errors.push(`接口错误 (${creditCode}): ${code} - ${desc}`);
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团同步] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    // 更新日志记录
+    if (logId) {
+      try {
+        const errorSummary = errors.length > 0
+          ? `共 ${errors.length} 个错误，详见接口详情`
+          : null;
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: enterprisesToSync.length,
+          errorCount: errors.length,
+          errorMessage: errorSummary,
+          executionDetails: {
+            timeRange: { startDate, endDate },
+            interfaceType: '上海国际集团',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: enterprisesToSync.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团同步] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: `同步完成，共同步 ${totalSynced} 条新闻`,
+      data: {
+        synced: totalSynced,
+        total: uniqueCreditCodes.length,
+        errors: errors.length > 0 ? errors.slice(0, 10) : []
+      }
+    };
+  } catch (error) {
+    console.error('上海国际集团舆情同步失败：', error);
+    throw error;
+  }
+}
+
 module.exports = router;
 // 导出同步函数供定时任务使用
 router.syncNewsData = syncNewsData;
 router.syncQichachaNewsData = syncQichachaNewsData;
+router.syncShanghaiInternationalGroupNewsData = syncShanghaiInternationalGroupNewsData;
 router.createSyncLog = createSyncLog;
 router.updateSyncLog = updateSyncLog;
 

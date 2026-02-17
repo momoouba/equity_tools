@@ -21,6 +21,7 @@ function QichachaConfig() {
   const [hasSecretKey, setHasSecretKey] = useState(false)
   const [showLogModal, setShowLogModal] = useState(false)
   const [logConfigId, setLogConfigId] = useState(null)
+  const [testingConfigId, setTestingConfigId] = useState(null)
   const [formData, setFormData] = useState({
     app_id: '',
     qichacha_app_key: '',
@@ -101,6 +102,22 @@ function QichachaConfig() {
     } catch (error) {
       console.error('获取企查查配置失败:', error)
       Message.error('获取配置失败')
+    }
+  }
+
+  const handleTest = async (id) => {
+    setTestingConfigId(id)
+    try {
+      const response = await axios.post(`/api/system/qichacha-config/${id}/test`)
+      if (response.data.success) {
+        Message.success(response.data.message || '接口连接成功')
+      } else {
+        Message.error(response.data.message || '接口测试失败')
+      }
+    } catch (error) {
+      Message.error(error.response?.data?.message || '接口测试失败')
+    } finally {
+      setTestingConfigId(null)
     }
   }
 
@@ -227,7 +244,7 @@ function QichachaConfig() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 260,
       render: (_, record) => (
         <Space size={8}>
           <Button
@@ -236,6 +253,15 @@ function QichachaConfig() {
             onClick={() => handleEdit(record.id)}
           >
             编辑
+          </Button>
+          <Button
+            type="outline"
+            size="small"
+            status="warning"
+            loading={testingConfigId === record.id}
+            onClick={() => handleTest(record.id)}
+          >
+            测试
           </Button>
           <Button
             type="outline"

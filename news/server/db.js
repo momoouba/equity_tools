@@ -538,6 +538,35 @@ async function initializeTables(dbPool) {
     console.warn('迁移qichacha_config表时出现警告:', err.message);
   }
 
+  // shanghai_international_group_config 表：上海国际集团接口配置（类似qichacha_config）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS shanghai_international_group_config (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      app_id VARCHAR(19) NOT NULL COMMENT '应用ID',
+      x_app_id VARCHAR(255) COMMENT 'X-App-Id：Ipass平台授权的消费方标识',
+      api_key VARCHAR(255) COMMENT 'APIkey：消费方认证',
+      daily_limit INT DEFAULT 100 COMMENT '每日查询限制次数',
+      is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      UNIQUE KEY uk_app_id (app_id),
+      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  // 迁移 news_sync_detail_log 表：添加上海国际集团到 interface_type ENUM
+  try {
+    await dbPool.query(`
+      ALTER TABLE news_sync_detail_log 
+      MODIFY COLUMN interface_type ENUM('新榜', '企查查', '上海国际集团') NOT NULL COMMENT '接口类型'
+    `);
+    console.log('✓ 已为 news_sync_detail_log 添加 上海国际集团 接口类型');
+  } catch (err) {
+    if (!err.message.includes('Duplicate column name') && !err.message.includes('check that it exists')) {
+      console.warn('迁移 news_sync_detail_log interface_type 时出现警告:', err.message);
+    }
+  }
+
   // qichacha_news_categories 表：企查查新闻类别列表
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS qichacha_news_categories (
@@ -1094,6 +1123,57 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移news_interface_config表entity_type字段时出现警告:', err.message);
+  }
+
+  // 迁移news_interface_config表，添加news_type字段（新闻类型）
+  try {
+    const [newsTypeCheck] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'news_interface_config' 
+      AND COLUMN_NAME = 'news_type'
+    `);
+    if (newsTypeCheck.length === 0) {
+      await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN news_type VARCHAR(50) DEFAULT \'新闻舆情\' COMMENT \'新闻类型：新闻舆情、行政处罚、被执行人、失信被执行人、限制高消费、终本案件、破产重组、裁判文书、法院公告、开庭公告、送达公告、立案信息\'');
+      await dbPool.query('UPDATE news_interface_config SET news_type = \'新闻舆情\' WHERE news_type IS NULL');
+      console.log('已为 news_interface_config 表添加 news_type 字段');
+    }
+  } catch (err) {
+    console.warn('迁移news_interface_config表news_type字段时出现警告:', err.message);
+  }
+
+  // interface_news_type_enabled 表：接口类型与新闻类型的启用关系（后续开发新类型时更新is_enabled）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS interface_news_type_enabled (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
+      interface_type VARCHAR(50) NOT NULL COMMENT '接口类型：新榜/企查查/上海国际集团',
+      news_type VARCHAR(50) NOT NULL COMMENT '新闻类型',
+      is_enabled TINYINT(1) DEFAULT 0 COMMENT '是否已开发可选用：1-是，0-否',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_interface_news (interface_type, news_type)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+  try {
+    const [countResult] = await dbPool.query('SELECT COUNT(*) as cnt FROM interface_news_type_enabled');
+    if (countResult[0].cnt === 0) {
+      const allNewsTypes = ['新闻舆情', '行政处罚', '被执行人', '失信被执行人', '限制高消费', '终本案件', '破产重组', '裁判文书', '法院公告', '开庭公告', '送达公告', '立案信息'];
+      let seq = 0;
+      for (const interfaceType of ['新榜', '企查查', '上海国际集团']) {
+        for (const newsType of allNewsTypes) {
+          const isEnabled = newsType === '新闻舆情';
+          const id = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}${String(++seq).padStart(5, '0')}`;
+          await dbPool.query(
+            'INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, ?)',
+            [id, interfaceType, newsType, isEnabled ? 1 : 0]
+          );
+        }
+      }
+      console.log('已初始化 interface_news_type_enabled 表数据');
+    }
+  } catch (err) {
+    console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }
 
   // 迁移news_interface_config表，添加cron_expression字段（Cron表达式）

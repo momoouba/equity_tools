@@ -967,6 +967,7 @@ function ScheduledTaskManagement() {
                 <Select>
                   <Option value="新榜">新榜</Option>
                   <Option value="企查查">企查查</Option>
+                  <Option value="上海国际集团">上海国际集团</Option>
                 </Select>
               </FormItem>
               <FormItem

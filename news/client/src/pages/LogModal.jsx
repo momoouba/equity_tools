@@ -25,6 +25,8 @@ function LogModal({ type, id, onClose }) {
         apiPath = '/api/system/email-config'
       } else if (type === 'qichacha_config') {
         apiPath = '/api/system/qichacha-config'
+      } else if (type === 'shanghai_international_group_config') {
+        apiPath = '/api/system/shanghai-international-group-config'
       } else if (type === 'news_config') {
         apiPath = '/api/system/news-config'
       } else if (type === 'recipient_management') {
@@ -70,6 +72,9 @@ function LogModal({ type, id, onClose }) {
       is_active: '状态',
       qichacha_app_key: '应用凭证',
       qichacha_daily_limit: '每日查询限制',
+      x_app_id: 'X-App-Id',
+      api_key: 'APIkey',
+      daily_limit: '每日查询限制',
       request_url: '请求地址',
       content_type: 'Content-Type',
       frequency_type: '频次类型',

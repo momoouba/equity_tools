@@ -285,6 +285,11 @@ async function initPrompts() {
     // 企查查接口 - 关联验证提示词（与新榜相同）
     const qichachaValidationPrompt = xinbangValidationPrompt;
 
+    // 上海国际集团接口 - 与企查查使用相同的提示词
+    const sigSentimentPrompt = qichachaSentimentPrompt;
+    const sigEnterpriseRelevancePrompt = qichachaEnterpriseRelevancePrompt;
+    const sigValidationPrompt = qichachaValidationPrompt;
+
     const prompts = [
       {
         prompt_name: '新榜-情绪分析',
@@ -321,6 +326,24 @@ async function initPrompts() {
         interface_type: '企查查',
         prompt_type: 'validation',
         prompt_content: qichachaValidationPrompt
+      },
+      {
+        prompt_name: '上海国际集团-情绪分析',
+        interface_type: '上海国际集团',
+        prompt_type: 'sentiment_analysis',
+        prompt_content: sigSentimentPrompt
+      },
+      {
+        prompt_name: '上海国际集团-企业关联分析',
+        interface_type: '上海国际集团',
+        prompt_type: 'enterprise_relevance',
+        prompt_content: sigEnterpriseRelevancePrompt
+      },
+      {
+        prompt_name: '上海国际集团-关联验证',
+        interface_type: '上海国际集团',
+        prompt_type: 'validation',
+        prompt_content: sigValidationPrompt
       }
     ];
 

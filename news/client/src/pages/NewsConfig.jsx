@@ -3,9 +3,37 @@ import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input,
 import axios from '../utils/axios'
 import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
+import dayjs from 'dayjs'
 import './NewsConfig.css'
 
 const Option = Select.Option
+
+// 默认同步时间范围：前一天 00:00:00 至 今天 23:59:59
+function getDefaultSyncRange() {
+  const yesterdayStart = dayjs().subtract(1, 'day').startOf('day')
+  const todayEnd = dayjs().endOf('day')
+  return {
+    start: yesterdayStart.format('YYYY-MM-DD HH:mm:ss'),
+    end: todayEnd.format('YYYY-MM-DD HH:mm:ss')
+  }
+}
+
+// datetime-local 的 value 格式为 "YYYY-MM-DDTHH:mm"，转为 "YYYY-MM-DD HH:mm:ss"
+function toApiFormat(datetimeLocalValue) {
+  if (!datetimeLocalValue || typeof datetimeLocalValue !== 'string') return ''
+  const s = datetimeLocalValue.trim().replace('T', ' ')
+  if (!s) return ''
+  return s.length === 16 ? s + ':00' : s
+}
+
+// "YYYY-MM-DD HH:mm:ss" 转为 datetime-local 的 "YYYY-MM-DDTHH:mm"
+function toDatetimeLocalValue(apiValue) {
+  if (!apiValue || typeof apiValue !== 'string') return ''
+  const s = apiValue.trim()
+  if (!s) return ''
+  const base = s.replace(/\s+/, 'T').substring(0, 16)
+  return base.length >= 16 ? base : s
+}
 
 function NewsConfig() {
   const [configs, setConfigs] = useState([])
@@ -20,9 +48,14 @@ function NewsConfig() {
   const [syncing, setSyncing] = useState(null)
   const [showLogModal, setShowLogModal] = useState(false)
   const [logConfigId, setLogConfigId] = useState(null)
+  const [showSyncModal, setShowSyncModal] = useState(false)
+  const [syncConfigId, setSyncConfigId] = useState(null)
+  const [syncStartTime, setSyncStartTime] = useState('')
+  const [syncEndTime, setSyncEndTime] = useState('')
   const [formData, setFormData] = useState({
     app_id: '',
     interface_type: '新榜',
+    news_type: '新闻舆情',
     request_url: 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
     content_type: 'application/x-www-form-urlencoded;charset=utf-8',
     api_key: '',
@@ -30,6 +63,7 @@ function NewsConfig() {
     is_active: true,
     entity_type: []
   })
+  const [newsTypeOptions, setNewsTypeOptions] = useState([])
   const [showCronModal, setShowCronModal] = useState(false)
 
   useEffect(() => {
@@ -41,11 +75,39 @@ function NewsConfig() {
     if (formData.interface_type === '企查查' && !editingConfig) {
       setFormData(prev => ({
         ...prev,
+        news_type: '新闻舆情',
         request_url: prev.request_url || 'https://api.qichacha.com/CompanyNews/SearchNews',
         cron_expression: prev.cron_expression || '0 0 0 ? * 1 *' // 默认每周一0点执行
       }))
     }
+    if (formData.interface_type === '上海国际集团' && !editingConfig) {
+      setFormData(prev => ({
+        ...prev,
+        news_type: '新闻舆情',
+        request_url: prev.request_url || 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote',
+        cron_expression: prev.cron_expression || '0 0 0 ? * 1 *' // 默认每周一0点执行
+      }))
+    }
   }, [formData.interface_type, editingConfig])
+
+  useEffect(() => {
+    const fetchNewsTypeOptions = async () => {
+      try {
+        const response = await axios.get('/api/system/news-type-options', {
+          params: { interface_type: formData.interface_type }
+        })
+        if (response.data.success) {
+          setNewsTypeOptions(response.data.data || [])
+        }
+      } catch (e) {
+        console.error('获取新闻类型选项失败:', e)
+        setNewsTypeOptions([])
+      }
+    }
+    if (showForm) {
+      fetchNewsTypeOptions()
+    }
+  }, [formData.interface_type, showForm])
 
   const fetchConfigs = async () => {
     setLoading(true)
@@ -85,6 +147,7 @@ function NewsConfig() {
     setFormData({
       app_id: '',
       interface_type: '新榜',
+      news_type: '新闻舆情',
       request_url: 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
       content_type: 'application/x-www-form-urlencoded;charset=utf-8',
       api_key: '',
@@ -147,6 +210,7 @@ function NewsConfig() {
         setFormData({
           app_id: config.app_id,
           interface_type: config.interface_type || '新榜',
+          news_type: config.news_type || '新闻舆情',
           request_url: config.request_url || 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
           content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
           api_key: '',
@@ -196,6 +260,7 @@ function NewsConfig() {
         setFormData({
           app_id: config.app_id,
           interface_type: config.interface_type || '新榜',
+          news_type: config.news_type || '新闻舆情',
           request_url: config.request_url || 'https://api.newrank.cn/api/sync/weixin/account/articles_content',
           content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
           api_key: '', // 复制时不包含 api_key，需要用户重新输入
@@ -231,51 +296,76 @@ function NewsConfig() {
     })
   }
 
-  const handleSync = async (id) => {
-    Modal.confirm({
-      title: '确认同步',
-      content: '确定要开始同步公众号数据吗？',
-      onOk: async () => {
-        setSyncing(id)
-        try {
-          const response = await axios.post('/api/news/sync', { config_id: id })
-          if (response.data.success) {
-            Message.success(`同步完成：${response.data.message}`)
-            fetchConfigs()
-          } else {
-            Message.error('同步失败：' + (response.data.message || '未知错误'))
-          }
-        } catch (error) {
-          console.error('同步请求失败:', error)
-          if (error.code === 'ECONNABORTED') {
-            Message.warning('同步超时，但数据可能仍在后台处理中，请稍后查看结果')
-          } else {
-            Message.error('同步失败：' + (error.response?.data?.message || error.message || '网络错误'))
-          }
-        } finally {
-          setSyncing(null)
-        }
+  const handleSync = (id) => {
+    const def = getDefaultSyncRange()
+    setSyncConfigId(id)
+    setSyncStartTime(def.start)
+    setSyncEndTime(def.end)
+    setShowSyncModal(true)
+  }
+
+  useEffect(() => {
+    if (showSyncModal) {
+      console.log('[NewsConfig] 同步弹窗已打开 (v2-native，若看到此日志说明当前运行的是新前端)')
+    }
+  }, [showSyncModal])
+
+  const handleSyncConfirm = async () => {
+    if (!syncConfigId) return
+    const start = (syncStartTime || '').trim()
+    const end = (syncEndTime || '').trim()
+    if (!start || !end) {
+      Message.warning('请填写开始时间和结束时间')
+      return
+    }
+    if (dayjs(start).isAfter(dayjs(end))) {
+      Message.warning('开始时间不能晚于结束时间')
+      return
+    }
+    setSyncing(syncConfigId)
+    try {
+      const response = await axios.post('/api/news/sync', {
+        config_id: syncConfigId,
+        start_time: start,
+        end_time: end
+      })
+      if (response.data.success) {
+        Message.success(`同步完成：${response.data.message}`)
+        setShowSyncModal(false)
+        setSyncConfigId(null)
+        fetchConfigs()
+      } else {
+        Message.error('同步失败：' + (response.data.message || '未知错误'))
       }
-    })
+    } catch (error) {
+      console.error('同步请求失败:', error)
+      if (error.code === 'ECONNABORTED') {
+        Message.warning('同步超时，但数据可能仍在后台处理中，请稍后查看结果')
+      } else {
+        Message.error('同步失败：' + (error.response?.data?.message || error.message || '网络错误'))
+      }
+    } finally {
+      setSyncing(null)
+    }
   }
 
   const handleChange = (name, value) => {
-    // 如果切换接口类型为"企查查"，自动清除"额外公众号"选项
-    if (name === 'interface_type' && value === '企查查') {
+    if (name === 'interface_type') {
       const currentEntityTypes = formData.entity_type || []
-      const filteredEntityTypes = currentEntityTypes.filter(type => type !== '额外公众号')
-      setFormData({
-        ...formData,
+      const filteredEntityTypes = (value === '企查查' || value === '上海国际集团') ? currentEntityTypes.filter(type => type !== '额外公众号') : currentEntityTypes
+      setFormData(prev => ({
+        ...prev,
         [name]: value,
+        news_type: '新闻舆情',
         entity_type: filteredEntityTypes
-      })
+      }))
+    } else if (name === 'entity_type' && (formData.interface_type === '企查查' || formData.interface_type === '上海国际集团')) {
+      const currentEntityTypes = value || []
+      const filteredEntityTypes = Array.isArray(currentEntityTypes) ? currentEntityTypes.filter(type => type !== '额外公众号') : []
+      setFormData(prev => ({ ...prev, [name]: filteredEntityTypes }))
     } else {
-      setFormData({
-        ...formData,
-        [name]: value
-      })
+      setFormData(prev => ({ ...prev, [name]: value }))
     }
-    
     if (name === 'api_key' && value !== '') {
       setHasApiKey(false)
     }
@@ -285,18 +375,20 @@ function NewsConfig() {
     e.preventDefault()
     
     const isQichacha = formData.interface_type === '企查查'
+    const isShanghaiInternationalGroup = formData.interface_type === '上海国际集团'
+    const useGroupConfig = isQichacha || isShanghaiInternationalGroup
     
     if (editingConfig) {
       if (!formData.app_id || !formData.request_url || 
-          (!isQichacha && !formData.content_type) || 
+          (!useGroupConfig && !formData.content_type) || 
           !formData.cron_expression) {
         Message.warning('请填写所有必填字段')
         return
       }
     } else {
       if (!formData.app_id || !formData.request_url || 
-          (!isQichacha && !formData.api_key) || 
-          (!isQichacha && !formData.content_type) || 
+          (!useGroupConfig && !formData.api_key) || 
+          (!useGroupConfig && !formData.content_type) || 
           !formData.cron_expression) {
         Message.warning('请填写所有必填字段')
         return
@@ -364,8 +456,14 @@ function NewsConfig() {
     {
       title: '新闻接口类型',
       dataIndex: 'interface_type',
-      width: 150,
+      width: 130,
       render: (text) => text || '新榜'
+    },
+    {
+      title: '新闻类型',
+      dataIndex: 'news_type',
+      width: 120,
+      render: (text) => text || '新闻舆情'
     },
     {
       title: '请求地址',
@@ -575,8 +673,33 @@ function NewsConfig() {
             >
               <Option value="新榜">新榜</Option>
               <Option value="企查查">企查查</Option>
+              <Option value="上海国际集团">上海国际集团</Option>
             </Select>
             <p className="form-hint">{editingConfig ? '编辑时不能修改接口类型' : '选择新闻接口类型'}</p>
+          </div>
+
+          <div className="form-group">
+            <label>新闻类型 *</label>
+            <Select
+              value={formData.news_type}
+              onChange={(value) => handleChange('news_type', value)}
+              placeholder="请选择新闻类型"
+            >
+              {newsTypeOptions.map((opt) => (
+                <Option key={opt.value} value={opt.value} disabled={opt.disabled}>
+                  {opt.label}
+                  {opt.disabled && <span style={{ marginLeft: 8, color: '#86909c', fontSize: 12 }}>（未开发）</span>}
+                </Option>
+              ))}
+              {newsTypeOptions.length === 0 && (
+                <Option value="新闻舆情">新闻舆情</Option>
+              )}
+            </Select>
+            <p className="form-hint">
+              {formData.interface_type === '新榜'
+                ? '新榜接口仅支持新闻舆情类型'
+                : '灰色选项为尚未开发的类型，后续开发完成后可选用'}
+            </p>
           </div>
 
           <div className="form-group">
@@ -584,34 +707,40 @@ function NewsConfig() {
             <Input
               value={formData.request_url}
               onChange={(value) => handleChange('request_url', value)}
-              placeholder={formData.interface_type === '企查查' 
-                ? 'https://api.qichacha.com/CompanyNews/SearchNews' 
-                : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'}
+              placeholder={
+                formData.interface_type === '企查查'
+                  ? 'https://api.qichacha.com/CompanyNews/SearchNews'
+                  : formData.interface_type === '上海国际集团'
+                    ? 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote'
+                    : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'
+              }
             />
             <p className="form-hint">
-              {formData.interface_type === '企查查' 
-                ? '企查查舆情接口地址' 
-                : '新榜接口地址'}
+              {formData.interface_type === '企查查'
+                ? '企查查舆情接口地址'
+                : formData.interface_type === '上海国际集团'
+                  ? '上海国际集团舆情和公司公告查询接口地址'
+                  : '新榜接口地址'}
             </p>
           </div>
 
           <div className="form-group">
-            <label>Content-Type {formData.interface_type === '企查查' ? '' : '*'}</label>
+            <label>Content-Type {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') ? '' : '*'}</label>
             <Input
               value={formData.content_type}
               onChange={(value) => handleChange('content_type', value)}
               placeholder="application/x-www-form-urlencoded;charset=utf-8"
-              disabled={formData.interface_type === '企查查'}
+              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团'}
             />
             <p className="form-hint">
-              {formData.interface_type === '企查查' 
-                ? '企查查接口不需要Content-Type字段' 
+              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团')
+                ? '该接口类型使用application/json，无需单独配置Content-Type'
                 : '请求的Content-Type'}
             </p>
           </div>
 
           <div className="form-group">
-            <label>Key {formData.interface_type === '企查查' ? '' : '*'}</label>
+            <label>Key {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') ? '' : '*'}</label>
             <Input.Password
               value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
               onChange={(value) => handleChange('api_key', value)}
@@ -621,15 +750,25 @@ function NewsConfig() {
                   setFormData({ ...formData, api_key: '' })
                 }
               }}
-              placeholder={editingConfig ? (hasApiKey ? '****' : '留空则不更新密钥') : formData.interface_type === '企查查' ? '企查查接口使用企查查配置中的凭证' : '请输入Key'}
-              disabled={formData.interface_type === '企查查'}
+              placeholder={
+                editingConfig
+                  ? (hasApiKey ? '****' : '留空则不更新密钥')
+                  : formData.interface_type === '企查查'
+                    ? '企查查接口使用企查查配置中的凭证'
+                    : formData.interface_type === '上海国际集团'
+                      ? '上海国际集团接口使用上海国际集团配置中的凭证'
+                      : '请输入Key'
+              }
+              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团'}
             />
             <p className="form-hint">
-              {formData.interface_type === '企查查' 
-                ? '企查查接口使用"企查查接口配置"中的新闻舆情接口凭证，无需在此填写' 
-                : editingConfig 
-                  ? '留空则不更新密钥' 
-                  : '在控制台获取的Key'}
+              {formData.interface_type === '企查查'
+                ? '企查查接口使用"企查查接口配置"中的新闻舆情接口凭证，无需在此填写'
+                : formData.interface_type === '上海国际集团'
+                  ? '上海国际集团接口使用"上海国际集团接口配置"中的X-App-Id、APIkey等凭证，无需在此填写'
+                  : editingConfig
+                    ? '留空则不更新密钥'
+                    : '在控制台获取的Key'}
             </p>
           </div>
 
@@ -651,9 +790,9 @@ function NewsConfig() {
             </div>
             <p className="form-hint">
               点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置
-              {formData.interface_type === '企查查' && (
+              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') && (
                 <span style={{ display: 'block', marginTop: '4px' }}>
-                  企查查接口定时规则可编辑，编辑后将同步更新到定时任务配置
+                  该接口定时规则可编辑，编辑后将同步更新到定时任务配置
                 </span>
               )}
             </p>
@@ -673,7 +812,7 @@ function NewsConfig() {
               <Option value="子基金">子基金</Option>
               <Option value="子基金管理人">子基金管理人</Option>
               <Option value="子基金GP">子基金GP</Option>
-              {formData.interface_type === '新榜' && (
+              {(formData.interface_type === '新榜') && (
                 <Option value="额外公众号">额外公众号</Option>
               )}
             </Select>
@@ -687,7 +826,7 @@ function NewsConfig() {
                   留空表示抓取所有类型（包括企业公众号和额外公众号）。
                 </>
               ) : (
-                '根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。留空表示抓取所有类型。'
+                '根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。留空表示抓取所有类型。（企查查、上海国际集团接口不支持"额外公众号"）'
               )}
             </p>
           </div>
@@ -728,6 +867,89 @@ function NewsConfig() {
         }}
         onCancel={() => setShowCronModal(false)}
       />
+
+      {/* 同步时间范围弹窗：完全独立实现，不使用 Arco Modal/Button；所有元素带 news-config-sync- 前缀。data-sync-modal-version 用于排查是否加载到新代码 */}
+      {showSyncModal && (
+        <div
+          className="news-config-sync-modal-overlay"
+          id="news-config-sync-modal-overlay"
+          data-sync-modal-version="v2-native"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="news-config-sync-modal-title"
+          onClick={(e) => {
+            if (e.target.id === 'news-config-sync-modal-overlay') {
+              setShowSyncModal(false)
+              setSyncConfigId(null)
+            }
+          }}
+        >
+          <div
+            className="news-config-sync-modal-box"
+            id="news-config-sync-modal-box"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="news-config-sync-modal-header">
+              <h2 id="news-config-sync-modal-title" className="news-config-sync-modal-title">同步时间范围</h2>
+            </div>
+            <p className="news-config-sync-modal-desc">
+              设置本次同步的查询时间范围，将作为参数传入接口（默认：前一天 0 点至今天 23:59:59）。
+            </p>
+            <div className="news-config-sync-modal-field">
+              <label htmlFor="news-config-sync-start-time" className="news-config-sync-modal-label">开始时间</label>
+              <input
+                id="news-config-sync-start-time"
+                name="news-config-sync-start-time"
+                type="datetime-local"
+                className="news-config-sync-modal-input"
+                value={toDatetimeLocalValue(syncStartTime)}
+                onChange={(e) => {
+                  const localTimeString = e.target.value
+                  const apiFormattedTime = toApiFormat(localTimeString)
+                  setSyncStartTime(apiFormattedTime)
+                }}
+              />
+            </div>
+            <div className="news-config-sync-modal-field">
+              <label htmlFor="news-config-sync-end-time" className="news-config-sync-modal-label">结束时间</label>
+              <input
+                id="news-config-sync-end-time"
+                name="news-config-sync-end-time"
+                type="datetime-local"
+                className="news-config-sync-modal-input"
+                value={toDatetimeLocalValue(syncEndTime)}
+                onChange={(e) => {
+                  const localTimeString = e.target.value
+                  const apiFormattedTime = toApiFormat(localTimeString)
+                  setSyncEndTime(apiFormattedTime)
+                }}
+              />
+            </div>
+            <div className="news-config-sync-modal-footer">
+              <button
+                type="button"
+                className="news-config-sync-modal-btn news-config-sync-modal-btn-cancel"
+                id="news-config-sync-modal-cancel"
+                onClick={() => {
+                  setShowSyncModal(false)
+                  setSyncConfigId(null)
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="news-config-sync-modal-btn news-config-sync-modal-btn-ok"
+                id="news-config-sync-modal-ok"
+                disabled={syncing !== null}
+                onClick={() => handleSyncConfirm()}
+              >
+                {syncing !== null ? '处理中...' : '确定'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 日志弹窗 */}
       {showLogModal && (

@@ -60,9 +60,19 @@ async function logDataChange(tableName, recordId, oldData, newData, userId) {
         'qichacha_daily_limit',
         'is_active'
       ];
+    } else if (tableName === 'shanghai_international_group_config') {
+      fields = [
+        'app_id',
+        'x_app_id',
+        'api_key',
+        'daily_limit',
+        'is_active'
+      ];
     } else if (tableName === 'news_interface_config') {
       fields = [
         'app_id',
+        'interface_type',
+        'news_type',
         'request_url',
         'content_type',
         'frequency_type',
@@ -185,6 +195,17 @@ async function logQichachaConfigChange(configId, oldData, newData, userId) {
 }
 
 /**
+ * 记录上海国际集团配置变更日志
+ * @param {string} configId - 上海国际集团配置ID
+ * @param {object} oldData - 旧数据
+ * @param {object} newData - 新数据
+ * @param {string} userId - 变更人ID
+ */
+async function logShanghaiInternationalGroupConfigChange(configId, oldData, newData, userId) {
+  return logDataChange('shanghai_international_group_config', configId, oldData, newData, userId);
+}
+
+/**
  * 记录新闻接口配置变更日志
  * @param {string} configId - 新闻接口配置ID
  * @param {object} oldData - 旧数据
@@ -213,6 +234,7 @@ module.exports = {
   logAdditionalAccountChange,
   logEmailConfigChange,
   logQichachaConfigChange,
+  logShanghaiInternationalGroupConfigChange,
   logNewsConfigChange,
   logRecipientChange
 };

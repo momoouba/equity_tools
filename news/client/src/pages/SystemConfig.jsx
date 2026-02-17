@@ -4,6 +4,7 @@ import BasicSystemConfig from './BasicSystemConfig'
 import AIConfig from './AIConfig'
 import EmailConfig from './EmailConfig'
 import QichachaConfig from './QichachaConfig'
+import ShanghaiInternationalGroupConfig from './ShanghaiInternationalGroupConfig'
 import NewsConfig from './NewsConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
@@ -32,6 +33,12 @@ function SystemConfig() {
           <TabPane key="qichacha" title="企查查接口配置">
             <div className="config-content">
               <QichachaConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="shanghai-international-group" title="上海国际集团接口配置">
+            <div className="config-content">
+              <ShanghaiInternationalGroupConfig />
             </div>
           </TabPane>
 

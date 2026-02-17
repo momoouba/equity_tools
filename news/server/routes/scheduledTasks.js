@@ -899,6 +899,13 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
         } else {
           throw new Error('企查查舆情同步功能未实现');
         }
+      } else if (interfaceType === '上海国际集团') {
+        // 上海国际集团舆情接口同步
+        if (newsRoutes.syncShanghaiInternationalGroupNewsData) {
+          await newsRoutes.syncShanghaiInternationalGroupNewsData(id, logId);
+        } else {
+          throw new Error('上海国际集团舆情同步功能未实现');
+        }
       } else {
         if (newsRoutes.syncNewsData) {
           // 手动触发时，isManual应该为true，确保获取昨天的数据

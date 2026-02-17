@@ -1,8 +1,9 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const axios = require('axios');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
-const { logEmailConfigChange, logQichachaConfigChange, logNewsConfigChange } = require('../utils/logger');
+const { logEmailConfigChange, logQichachaConfigChange, logShanghaiInternationalGroupConfigChange, logNewsConfigChange } = require('../utils/logger');
 const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
 const xlsx = require('xlsx');
 const multer = require('multer');
@@ -124,7 +125,7 @@ router.get('/news-configs', async (req, res) => {
 
     // 获取分页数据（包括所有接口类型：新榜、企查查等）
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       ORDER BY nic.created_at DESC
@@ -163,7 +164,7 @@ router.get('/news-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       WHERE nic.id = ?
@@ -191,6 +192,33 @@ router.get('/news-config/:id', async (req, res) => {
   }
 });
 
+// 获取新闻类型选项（根据接口类型返回可用及禁用的选项）
+// 新榜：仅返回新闻舆情；企查查/上海国际集团：返回全部选项，未开发的置为disabled
+router.get('/news-type-options', async (req, res) => {
+  try {
+    const { interface_type } = req.query;
+    const interfaceType = interface_type || '新榜';
+    const rows = await db.query(
+      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ORDER BY FIELD(news_type, "新闻舆情", "行政处罚", "被执行人", "失信被执行人", "限制高消费", "终本案件", "破产重组", "裁判文书", "法院公告", "开庭公告", "送达公告", "立案信息")',
+      [interfaceType]
+    );
+    let options;
+    if (interfaceType === '新榜') {
+      options = rows.filter(r => r.is_enabled === 1).map(r => ({ value: r.news_type, label: r.news_type, disabled: false }));
+    } else {
+      options = rows.map(r => ({
+        value: r.news_type,
+        label: r.news_type,
+        disabled: r.is_enabled !== 1
+      }));
+    }
+    res.json({ success: true, data: options });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取新闻类型选项失败：', error);
+    res.status(500).json({ success: false, message: '获取新闻类型选项失败' });
+  }
+});
+
 // 创建新闻接口配置
 router.post('/news-config', [
   body('app_id').notEmpty().withMessage('应用ID不能为空'),
@@ -207,7 +235,7 @@ router.post('/news-config', [
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
+    const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
     
     // 验证：必须提供 cron_expression（frequency_type 和 frequency_value 已废弃）
     if (!cron_expression) {
@@ -221,7 +249,20 @@ router.post('/news-config', [
     }
 
     const interfaceType = interface_type || '新榜';
-    
+    const finalNewsType = news_type || '新闻舆情';
+
+    // 验证 news_type 是否对当前接口类型有效
+    const enabledRows = await db.query(
+      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? AND news_type = ?',
+      [interfaceType, finalNewsType]
+    );
+    if (enabledRows.length === 0) {
+      return res.status(400).json({ success: false, message: `新闻类型"${finalNewsType}"在该接口类型下不可用` });
+    }
+    if (enabledRows[0].is_enabled !== 1) {
+      return res.status(400).json({ success: false, message: `新闻类型"${finalNewsType}"尚未开发，暂不可选` });
+    }
+
     // 根据frequency_type设置默认的send_frequency和send_time
     let finalSendFrequency = send_frequency;
     if (!finalSendFrequency && frequency_type) {
@@ -290,14 +331,21 @@ router.post('/news-config', [
       if (qichachaConfigs.length === 0) {
         return res.status(400).json({ success: false, message: '请先配置企查查新闻舆情接口的应用凭证和秘钥' });
       }
+    } else if (interfaceType === '上海国际集团') {
+      const sigConfigs = await db.query(
+        `SELECT id FROM shanghai_international_group_config WHERE is_active = 1 LIMIT 1`
+      );
+      if (sigConfigs.length === 0) {
+        return res.status(400).json({ success: false, message: '请先配置上海国际集团接口的X-App-Id、APIkey等凭证' });
+      }
     } else if (!api_key) {
       return res.status(400).json({ success: false, message: 'Key不能为空' });
     }
 
     const configId = await generateId('news_interface_config');
-    // 企查查接口不需要content_type，其他接口使用默认值
-    const finalContentType = interfaceType === '企查查' 
-      ? null 
+    // 企查查、上海国际集团接口不需要content_type，其他接口使用默认值
+    const finalContentType = (interfaceType === '企查查' || interfaceType === '上海国际集团')
+      ? null
       : (content_type || 'application/x-www-form-urlencoded;charset=utf-8');
     
     // 如果没有提供send_frequency，根据frequency_type设置默认值
@@ -333,8 +381,8 @@ router.post('/news-config', [
         entityTypes = [entityTypes];
       }
       
-      // 如果是企查查接口，过滤掉"额外公众号"选项
-      if (interfaceType === '企查查') {
+      // 如果是企查查或上海国际集团接口，过滤掉"额外公众号"选项
+      if (interfaceType === '企查查' || interfaceType === '上海国际集团') {
         entityTypes = entityTypes.filter(type => type !== '额外公众号');
         if (entityTypes.length === 0) {
           entityTypes = []; // 如果过滤后为空，设置为空数组
@@ -348,9 +396,9 @@ router.post('/news-config', [
       }
       
       // 如果是新榜接口，验证"额外公众号"是否与其他类型同时存在（允许同时存在）
-      // 如果是企查查接口，确保不包含"额外公众号"
-      if (interfaceType === '企查查' && entityTypes.includes('额外公众号')) {
-        return res.status(400).json({ success: false, message: '企查查接口不支持"额外公众号"选项' });
+      // 如果是企查查或上海国际集团接口，确保不包含"额外公众号"
+      if ((interfaceType === '企查查' || interfaceType === '上海国际集团') && entityTypes.includes('额外公众号')) {
+        return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
       }
       
       // 去重并排序
@@ -367,12 +415,13 @@ router.post('/news-config', [
     
     await db.execute(
       `INSERT INTO news_interface_config 
-       (id, app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, entity_type) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         app_id,
         interfaceType,
+        finalNewsType,
         request_url,
         finalContentType,
         api_key || '', // 企查查接口可以为空
@@ -455,7 +504,7 @@ router.put('/news-config/:id', [
     }
 
     const { id } = req.params;
-    const { app_id, interface_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval, entity_type } = req.body;
+    const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval, entity_type } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
     const existingConfigs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [id]);
@@ -484,6 +533,18 @@ router.put('/news-config/:id', [
       updateFields.push('interface_type = ?');
       updateValues.push(interface_type);
     }
+    if (news_type !== undefined) {
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      const enabledRows = await db.query(
+        'SELECT is_enabled FROM interface_news_type_enabled WHERE interface_type = ? AND news_type = ?',
+        [currentInterfaceType, news_type]
+      );
+      if (enabledRows.length === 0 || enabledRows[0].is_enabled !== 1) {
+        return res.status(400).json({ success: false, message: `新闻类型"${news_type}"在该接口类型下不可选或尚未开发` });
+      }
+      updateFields.push('news_type = ?');
+      updateValues.push(news_type);
+    }
     if (request_url !== undefined) {
       updateFields.push('request_url = ?');
       updateValues.push(request_url);
@@ -502,7 +563,7 @@ router.put('/news-config/:id', [
       
       // 如果是企查查接口，根据frequency_type自动更新send_frequency，同步到定时任务
       const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
-      if (currentInterfaceType === '企查查') {
+      if (currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') {
         let sendFrequency = 'daily';
         if (frequency_type === 'week') {
           sendFrequency = 'weekly';
@@ -577,8 +638,8 @@ router.put('/news-config/:id', [
           entityTypes = [entityTypes];
         }
         
-        // 如果是企查查接口，过滤掉"额外公众号"选项
-        if (currentInterfaceType === '企查查') {
+        // 如果是企查查或上海国际集团接口，过滤掉"额外公众号"选项
+        if (currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') {
           entityTypes = entityTypes.filter(type => type !== '额外公众号');
           if (entityTypes.length === 0) {
             entityTypes = []; // 如果过滤后为空，设置为空数组
@@ -591,9 +652,9 @@ router.put('/news-config/:id', [
           return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
         }
         
-        // 如果是企查查接口，确保不包含"额外公众号"
-        if (currentInterfaceType === '企查查' && entityTypes.includes('额外公众号')) {
-          return res.status(400).json({ success: false, message: '企查查接口不支持"额外公众号"选项' });
+        // 如果是企查查或上海国际集团接口，确保不包含"额外公众号"
+        if ((currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') && entityTypes.includes('额外公众号')) {
+          return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
         }
         
         // 去重并排序
@@ -933,6 +994,360 @@ router.delete('/qichacha-config/:id', async (req, res) => {
   } catch (error) {
     console.error('删除企查查配置失败：', error);
     res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 测试企查查接口连通性
+router.post('/qichacha-config/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query('SELECT * FROM qichacha_config WHERE id = ?', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const config = configs[0];
+    const appKey = config.qichacha_app_key || '';
+    const secretKey = config.qichacha_secret_key || '';
+    const interfaceType = config.interface_type || '企业信息';
+
+    if (!appKey || !secretKey) {
+      return res.status(400).json({ success: false, message: '应用凭证或密钥未配置' });
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const token = require('crypto')
+      .createHash('md5')
+      .update(appKey + timestamp + secretKey)
+      .digest('hex')
+      .toUpperCase();
+
+    if (interfaceType === '新闻舆情') {
+      const today = new Date();
+      const endDate = today.toISOString().slice(0, 10);
+      const startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const params = new URLSearchParams({
+        key: appKey,
+        searchKey: '91511500MA62A0WM8P',
+        startDate,
+        endDate,
+        pageSize: '1',
+        pageIndex: '1'
+      });
+      const response = await axios.get(`https://api.qichacha.com/CompanyNews/SearchNews?${params.toString()}`, {
+        headers: { Token: token, Timespan: timestamp },
+        timeout: 15000
+      });
+      const status = response.data?.Status || response.data?.status;
+      if (status === '200') {
+        return res.json({ success: true, message: '接口连接成功' });
+      }
+      return res.json({ success: false, message: response.data?.Message || response.data?.message || '接口返回异常' });
+    } else {
+      const response = await axios.get('https://api.qichacha.com/FuzzySearch/GetList', {
+        params: { key: appKey, searchKey: '测试', pageIndex: 1 },
+        headers: { Token: token, Timespan: timestamp },
+        timeout: 15000
+      });
+      const status = response.data?.Status || response.data?.status;
+      if (status === '200') {
+        return res.json({ success: true, message: '接口连接成功' });
+      }
+      return res.json({ success: false, message: response.data?.Message || response.data?.message || '接口返回异常' });
+    }
+  } catch (error) {
+    const msg = error.response?.data?.Message || error.response?.data?.message || error.message || '网络或接口异常';
+    errorWithTag('[系统配置]', '企查查接口测试失败：', error);
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+// ========== 上海国际集团接口配置 API ==========
+
+// 获取上海国际集团配置列表（支持分页）
+router.get('/shanghai-international-group-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM shanghai_international_group_config');
+    const total = totalResult[0].total;
+
+    const configs = await db.query(`
+      SELECT sigc.id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.daily_limit, sigc.is_active, sigc.created_at, sigc.updated_at
+      FROM shanghai_international_group_config sigc
+      LEFT JOIN applications a ON sigc.app_id = a.id
+      ORDER BY sigc.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [pageSize, offset]);
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取单个上海国际集团配置（不包含api_key）
+router.get('/shanghai-international-group-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query(`
+      SELECT sigc.id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.api_key, sigc.daily_limit, sigc.is_active, sigc.created_at, sigc.updated_at
+      FROM shanghai_international_group_config sigc
+      LEFT JOIN applications a ON sigc.app_id = a.id
+      WHERE sigc.id = ?
+    `, [id]);
+    if (configs.length > 0) {
+      res.json({ success: true, data: configs[0] });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 创建上海国际集团配置
+router.post('/shanghai-international-group-config', [
+  body('app_id').notEmpty().withMessage('应用ID不能为空'),
+  body('x_app_id').notEmpty().withMessage('X-App-Id不能为空'),
+  body('api_key').notEmpty().withMessage('APIkey不能为空'),
+  body('daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { app_id, x_app_id, api_key, daily_limit } = req.body;
+
+    const appExists = await db.query('SELECT id FROM applications WHERE id = ?', [app_id]);
+    if (appExists.length === 0) {
+      return res.status(400).json({ success: false, message: '应用不存在' });
+    }
+
+    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE app_id = ?', [app_id]);
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, message: '该应用已存在上海国际集团配置' });
+    }
+
+    const configId = await generateId('shanghai_international_group_config');
+    await db.execute(
+      'INSERT INTO shanghai_international_group_config (id, app_id, x_app_id, api_key, daily_limit) VALUES (?, ?, ?, ?, ?)',
+      [configId, app_id, x_app_id, api_key, daily_limit || 100]
+    );
+
+    const userId = req.headers['x-user-id'] || null;
+    if (userId) {
+      await logShanghaiInternationalGroupConfigChange(
+        configId,
+        {},
+        {
+          app_id,
+          x_app_id,
+          daily_limit: (daily_limit || 100).toString(),
+          is_active: '1'
+        },
+        userId
+      );
+    }
+
+    res.json({ success: true, message: '上海国际集团配置创建成功', data: { id: configId } });
+  } catch (error) {
+    errorWithTag('[系统配置]', '创建上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新上海国际集团配置
+router.put('/shanghai-international-group-config/:id', [
+  body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
+  body('x_app_id').optional().notEmpty().withMessage('X-App-Id不能为空'),
+  body('api_key').optional().notEmpty().withMessage('APIkey不能为空'),
+  body('daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { app_id, x_app_id, api_key, daily_limit, is_active } = req.body;
+
+    const existingConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const oldConfig = existingConfigs[0];
+
+    if (app_id) {
+      const appExists = await db.query('SELECT id FROM applications WHERE id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
+      }
+      const duplicate = await db.query(
+        'SELECT id FROM shanghai_international_group_config WHERE app_id = ? AND id != ?',
+        [app_id, id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({ success: false, message: '该应用已存在上海国际集团配置' });
+      }
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+
+    if (app_id !== undefined) {
+      updateFields.push('app_id = ?');
+      updateValues.push(app_id);
+    }
+    if (x_app_id !== undefined) {
+      updateFields.push('x_app_id = ?');
+      updateValues.push(x_app_id);
+    }
+    if (api_key !== undefined) {
+      updateFields.push('api_key = ?');
+      updateValues.push(api_key);
+    }
+    if (daily_limit !== undefined) {
+      updateFields.push('daily_limit = ?');
+      updateValues.push(daily_limit);
+    }
+    if (is_active !== undefined) {
+      updateFields.push('is_active = ?');
+      updateValues.push(is_active ? 1 : 0);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE shanghai_international_group_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        updateValues
+      );
+
+      const userId = req.headers['x-user-id'] || null;
+      if (userId) {
+        const updatedConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+        const newConfig = updatedConfigs[0];
+        const oldData = {
+          app_id: oldConfig.app_id || '',
+          x_app_id: oldConfig.x_app_id || '',
+          daily_limit: oldConfig.daily_limit ? oldConfig.daily_limit.toString() : '',
+          is_active: oldConfig.is_active ? '1' : '0'
+        };
+        const newData = {
+          app_id: newConfig.app_id || '',
+          x_app_id: newConfig.x_app_id || '',
+          daily_limit: newConfig.daily_limit ? newConfig.daily_limit.toString() : '',
+          is_active: newConfig.is_active ? '1' : '0'
+        };
+        await logShanghaiInternationalGroupConfigChange(id, oldData, newData, userId);
+      }
+    }
+
+    res.json({ success: true, message: '上海国际集团配置更新成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '更新上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败' });
+  }
+});
+
+// 获取上海国际集团配置的变更日志
+router.get('/shanghai-international-group-config/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.change_user_id = u.id
+       WHERE l.table_name = 'shanghai_international_group_config' AND l.record_id = ?
+       ORDER BY l.change_time DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 删除上海国际集团配置
+router.delete('/shanghai-international-group-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    await db.execute('DELETE FROM shanghai_international_group_config WHERE id = ?', [id]);
+    res.json({ success: true, message: '上海国际集团配置删除成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '删除上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 测试上海国际集团接口连通性
+router.post('/shanghai-international-group-config/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { request_url } = req.body || {};
+    const configs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const config = configs[0];
+    const xAppId = config.x_app_id || '';
+    const apiKey = config.api_key || '';
+    const apiUrl = request_url || 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote';
+
+    if (!xAppId || !apiKey) {
+      return res.status(400).json({ success: false, message: 'X-App-Id或APIkey未配置' });
+    }
+
+    const today = new Date();
+    const endDate = today.toISOString().slice(0, 10);
+    const startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const uuid = require('crypto').randomUUID();
+    const timestamp = Date.now().toString();
+
+    const response = await axios.post(
+      apiUrl,
+      { instn_idtfn_cd: '91511500MA62A0WM8P', start_time: startDate, end_time: endDate },
+      {
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-App-Id': xAppId,
+          'X-Sequence-No': uuid,
+          'X-Timestamp': timestamp,
+          'APIkey': apiKey
+        },
+        timeout: 15000
+      }
+    );
+
+    if (response.data && response.data.Code === '200') {
+      return res.json({ success: true, message: '接口连接成功' });
+    }
+    return res.json({
+      success: false,
+      message: response.data?.Desc || response.data?.message || '接口返回异常'
+    });
+  } catch (error) {
+    const msg = error.response?.data?.Desc || error.response?.data?.message || error.message || '网络或接口异常';
+    errorWithTag('[系统配置]', '上海国际集团接口测试失败：', error);
+    res.status(500).json({ success: false, message: msg });
   }
 });
 

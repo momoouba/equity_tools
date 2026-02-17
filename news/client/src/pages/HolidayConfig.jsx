@@ -496,10 +496,15 @@ function HolidayConfig() {
             <label>日期 *</label>
             <DatePicker
               value={formData.holiday_date}
-              onChange={(value) => {
-                const dateStr = value ? value.format('YYYY-MM-DD') : ''
+              onChange={(dateString, date) => {
+                const dateStr = (dateString && typeof dateString === 'string')
+                  ? dateString.trim()
+                  : (date && typeof date?.format === 'function')
+                    ? date.format('YYYY-MM-DD')
+                    : ''
                 setFormData(prev => ({ ...prev, holiday_date: dateStr }))
               }}
+              format="YYYY-MM-DD"
               style={{ width: '100%' }}
             />
           </div>

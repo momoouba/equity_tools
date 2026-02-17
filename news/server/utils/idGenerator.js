@@ -27,9 +27,9 @@ async function generateId(tableName) {
       'applications', 'membership_levels', 'users', 'invested_enterprises',
       'company', 'system_config', 'data_change_log', 'news_interface_config', 'news_detail',
       'email_config', 'additional_wechat_accounts', 'ai_model_config', 'qichacha_config',
-      'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage', 
+      'shanghai_international_group_config', 'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage',
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log',
-      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links'
+      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled'
     ];
     
     if (!validTableNames.includes(tableName)) {
