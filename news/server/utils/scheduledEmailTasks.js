@@ -99,6 +99,80 @@ async function findPreviousWorkday(date) {
   return fallbackDate;
 }
 
+/** 语义相似度阈值：标题或摘要相似度 >= 此值视为“讲同一件事”，只保留排序后第一条 */
+const SEMANTIC_SIMILARITY_THRESHOLD = 50;
+
+/**
+ * 按企业分组，对同一企业内新闻做标题/摘要语义相似度分析，相似度>=50%则只保留按 title 倒序、account_name 倒序、wechat_account 倒序的第一条。
+ * @param {Array<Object>} newsList - 待发送的新闻列表（含 title、news_abstract/summary、enterprise_full_name、account_name、wechat_account）
+ * @param {string} logTag - 日志前缀，如 '[邮件发送]' 或 '[手动发送邮件]'
+ * @returns {Promise<Array<Object>>} 去重后的新闻列表
+ */
+async function deduplicateNewsBySemanticSimilarity(newsList, logTag = '[邮件发送]') {
+  if (!Array.isArray(newsList) || newsList.length <= 1) {
+    return newsList || [];
+  }
+
+  const newsAnalysis = require('./newsAnalysis');
+
+  // 按企业分组（无企业名称的用空字符串作为 key，单独一组）
+  const byEnterprise = new Map();
+  for (const n of newsList) {
+    const key = (n.enterprise_full_name && String(n.enterprise_full_name).trim()) || '';
+    if (!byEnterprise.has(key)) byEnterprise.set(key, []);
+    byEnterprise.get(key).push(n);
+  }
+
+  const sortKey = (n) => [
+    (n.title && String(n.title).trim()) || '',
+    (n.account_name && String(n.account_name).trim()) || '',
+    (n.wechat_account && String(n.wechat_account).trim()) || ''
+  ];
+  const cmp = (a, b) => {
+    const [t1, ac1, w1] = sortKey(a);
+    const [t2, ac2, w2] = sortKey(b);
+    if (t1 !== t2) return t2.localeCompare(t1, 'zh-CN');
+    if (ac1 !== ac2) return ac2.localeCompare(ac1, 'zh-CN');
+    return w2.localeCompare(w1, 'zh-CN');
+  };
+
+  const result = [];
+  let totalDropped = 0;
+
+  for (const [entName, group] of byEnterprise.entries()) {
+    if (group.length <= 1) {
+      result.push(...group);
+      continue;
+    }
+
+    group.sort(cmp);
+    const kept = [group[0]];
+
+    for (let i = 1; i < group.length; i++) {
+      const candidate = group[i];
+      let isSimilar = false;
+      for (const k of kept) {
+        const { titleSimilarity, summarySimilarity } = await newsAnalysis.checkNewsSemanticSimilarity(candidate, k);
+        if (titleSimilarity >= SEMANTIC_SIMILARITY_THRESHOLD || summarySimilarity >= SEMANTIC_SIMILARITY_THRESHOLD) {
+          isSimilar = true;
+          totalDropped++;
+          logWithTimestamp(`${logTag} 语义去重：企业="${(entName || '(无)').substring(0, 30)}"，跳过相似新闻 ID=${candidate.id}（与已保留 ID=${k.id} 标题相似度=${titleSimilarity}% 摘要相似度=${summarySimilarity}%）`);
+          break;
+        }
+      }
+      if (!isSimilar) kept.push(candidate);
+    }
+
+    result.push(...kept);
+  }
+
+  if (totalDropped > 0) {
+    logWithTimestamp(`${logTag} 语义去重完成：共去掉 ${totalDropped} 条相似新闻，保留 ${result.length} 条`);
+  }
+
+  return result;
+}
+
 /**
  * 获取邮件发送的时间范围（基于创建时间：今天获取到的新闻）
  * 说明：节假日后第一天获取到的新闻，本身就包含了节假日期间的新闻，所以只需要筛选今天创建（获取）的新闻
@@ -2712,9 +2786,17 @@ async function executeEmailTask(recipientId) {
       logWithTimestamp(`[邮件发送] 新闻 ${index + 1}: ID=${news.id}, entity_type="${news.entity_type || '(NULL)'}", enterprise="${news.enterprise_full_name?.substring(0, 30)}"`);
     });
     logWithTimestamp(`[邮件发送] ========== entity_type 分布检查结束 ==========`);
+
+    // 按企业做标题/摘要语义相似度去重：同一企业内若存在相似度>=50%的新闻，只保留按 title、account_name、wechat_account 倒序的第一条
+    let newsListToSend = finalFilteredNewsList;
+    if (finalFilteredNewsList.length > 1) {
+      logWithTimestamp(`[邮件发送] ========== 开始语义相似度去重 ==========`);
+      newsListToSend = await deduplicateNewsBySemanticSimilarity(finalFilteredNewsList, '[邮件发送]');
+      logWithTimestamp(`[邮件发送] ========== 语义相似度去重结束，将发送 ${newsListToSend.length} 条 ==========`);
+    }
     
-    // 发送邮件（包含Excel附件），使用最终过滤后的新闻列表
-    await sendNewsEmailWithExcel(recipient, emailConfig, finalFilteredNewsList);
+    // 发送邮件（包含Excel附件），使用最终过滤并去重后的新闻列表
+    await sendNewsEmailWithExcel(recipient, emailConfig, newsListToSend);
     
     console.log(`✓ 邮件发送任务完成: 收件管理配置 ${recipientId}`);
   } catch (error) {
@@ -2912,7 +2994,8 @@ module.exports = {
   getEmailTimeRange,
   findPreviousWorkday,
   isWorkdayDate,
-  filterNewsByCategory
+  filterNewsByCategory,
+  deduplicateNewsBySemanticSimilarity
 };
 
 

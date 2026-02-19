@@ -8620,6 +8620,50 @@ ${enterpriseList}
     
     return null;
   }
+
+  /**
+   * 对两条新闻做语义相似度分析（标题与标题、摘要与摘要），用于邮件发送前去重。
+   * @param {Object} newsA - 新闻A，需含 title、摘要用 news_abstract 或 summary
+   * @param {Object} newsB - 新闻B
+   * @returns {Promise<{ titleSimilarity: number, summarySimilarity: number }>} 0-100
+   */
+  async checkNewsSemanticSimilarity(newsA, newsB) {
+    const getTitle = (n) => (n && n.title && String(n.title).trim()) || '';
+    const getSummary = (n) => {
+      const s = (n && (n.news_abstract || n.summary)) ? String(n.news_abstract || n.summary).trim() : '';
+      return s;
+    };
+    const title1 = getTitle(newsA);
+    const title2 = getTitle(newsB);
+    const summary1 = getSummary(newsA);
+    const summary2 = getSummary(newsB);
+
+    const prompt = `请判断以下两条新闻的标题是否在讲同一件事、摘要是否在讲同一件事。
+仅输出两个0-100的整数，用英文逗号分隔，格式为：标题相似度,摘要相似度
+- 100表示完全同一件事，0表示完全无关。50及以上视为在讲同一件事。
+- 若某条没有摘要，该维度输出0。
+
+标题1：${title1}
+标题2：${title2}
+摘要1：${summary1 || '（无）'}
+摘要2：${summary2 || '（无）'}
+
+只输出两个数字，例如：85,70`;
+
+    try {
+      const raw = await this.callAIModel(prompt);
+      const text = (raw && String(raw).trim()) || '';
+      const match = text.match(/(\d+)\s*[,，]\s*(\d+)/);
+      if (match) {
+        const titleSimilarity = Math.min(100, Math.max(0, parseInt(match[1], 10)));
+        const summarySimilarity = Math.min(100, Math.max(0, parseInt(match[2], 10)));
+        return { titleSimilarity, summarySimilarity };
+      }
+    } catch (err) {
+      console.warn('[checkNewsSemanticSimilarity] AI调用失败:', err.message);
+    }
+    return { titleSimilarity: 0, summarySimilarity: 0 };
+  }
 }
 
 module.exports = new NewsAnalysis();

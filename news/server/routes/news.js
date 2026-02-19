@@ -7,7 +7,7 @@ const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../utils/emailSender');
-const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews } = require('../utils/scheduledEmailTasks');
+const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews, deduplicateNewsBySemanticSimilarity } = require('../utils/scheduledEmailTasks');
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
@@ -4001,6 +4001,13 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     if (!Array.isArray(newsList)) {
       logWithTag('[手动发送邮件]', `⚠️ newsList 不是数组，类型: ${typeof newsList}, 值: ${newsList}`);
       newsList = [];
+    }
+
+    // 按企业做标题/摘要语义相似度去重：同一企业内若存在相似度>=50%的新闻，只保留按 title、account_name、wechat_account 倒序的第一条
+    if (newsList.length > 1) {
+      logWithTag('[手动发送邮件]', '========== 开始语义相似度去重 ==========');
+      newsList = await deduplicateNewsBySemanticSimilarity(newsList, '[手动发送邮件]');
+      logWithTag('[手动发送邮件]', `========== 语义相似度去重结束，将发送 ${newsList.length} 条 ==========`);
     }
     
     // 检查最终传入 sendNewsEmailWithExcel 的 newsList 的 entity_type 分布（用于调试）
