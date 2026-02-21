@@ -5855,6 +5855,11 @@ ${enterpriseList}
    */
   async processNewsWithEnterprise(newsItem) {
     try {
+      // 裁判文书接口数据仅拼接入库，不进行AI分析
+      if (newsItem.account_name === '裁判文书' && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
+        logWithTag('[processNewsWithEnterprise]', '裁判文书数据仅拼接入库，跳过AI分析');
+        return null;
+      }
       logWithTag('[processNewsWithEnterprise]', '\n开始分析有企业关联的新闻');
       logWithTag('[processNewsWithEnterprise]', `新闻标题: ${newsItem.title}`);
       logWithTag('[processNewsWithEnterprise]', `当前企业全称: "${newsItem.enterprise_full_name}"`);
@@ -6296,6 +6301,11 @@ ${enterpriseList}
    */
   async processNewsWithoutEnterprise(newsItem) {
     try {
+      // 裁判文书接口数据仅拼接入库，不进行AI分析
+      if (newsItem.account_name === '裁判文书' && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
+        logWithTag('[processNewsWithoutEnterprise]', '裁判文书数据仅拼接入库，跳过AI分析');
+        return null;
+      }
       logWithTag('[processNewsWithoutEnterprise]', `分析无企业关联的新闻: ${newsItem.title}`);
       
       // 获取所有被投企业信息

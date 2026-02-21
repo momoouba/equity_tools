@@ -1164,7 +1164,7 @@ async function initializeTables(dbPool) {
         for (const newsType of allNewsTypes) {
           let isEnabled = newsType === '新闻舆情';
           if (interfaceType === '上海国际集团') {
-            isEnabled = ['新闻舆情', '被执行人'].includes(newsType);
+            isEnabled = ['新闻舆情', '被执行人', '裁判文书'].includes(newsType);
           }
           const id = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}${String(++seq).padStart(5, '0')}`;
           await dbPool.query(
@@ -1179,9 +1179,13 @@ async function initializeTables(dbPool) {
     await dbPool.query(
       `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '被执行人'`
     );
-    // 迁移：上海国际集团下「行政处罚」不可选，仅新闻舆情、被执行人可选
+    // 迁移：上海国际集团下「行政处罚」不可选，仅新闻舆情、被执行人、裁判文书可选
     await dbPool.query(
       `UPDATE interface_news_type_enabled SET is_enabled = 0 WHERE interface_type = '上海国际集团' AND news_type = '行政处罚'`
+    );
+    // 迁移：为上海国际集团启用「裁判文书」新闻类型
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '裁判文书'`
     );
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);

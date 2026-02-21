@@ -324,11 +324,16 @@ function NewsConfig() {
     }
     setSyncing(syncConfigId)
     try {
-      const response = await axios.post('/api/news/sync', {
-        config_id: syncConfigId,
-        start_time: start,
-        end_time: end
-      })
+      // 同步可能较久（如裁判文书、舆情按企业逐个请求），使用 10 分钟超时，避免提前断开
+      const response = await axios.post(
+        '/api/news/sync',
+        {
+          config_id: syncConfigId,
+          start_time: start,
+          end_time: end
+        },
+        { timeout: 600000 }
+      )
       if (response.data.success) {
         Message.success(`同步完成：${response.data.message}`)
         setShowSyncModal(false)
@@ -340,7 +345,10 @@ function NewsConfig() {
     } catch (error) {
       console.error('同步请求失败:', error)
       if (error.code === 'ECONNABORTED') {
-        Message.warning('同步超时，但数据可能仍在后台处理中，请稍后查看结果')
+        Message.warning('同步请求已超时，任务可能仍在后台执行，请稍后在「日志」中查看结果')
+        setShowSyncModal(false)
+        setSyncConfigId(null)
+        fetchConfigs()
       } else {
         Message.error('同步失败：' + (error.response?.data?.message || error.message || '网络错误'))
       }
