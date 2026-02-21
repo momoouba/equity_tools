@@ -1179,9 +1179,9 @@ async function initializeTables(dbPool) {
     await dbPool.query(
       `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '被执行人'`
     );
-    // 迁移：上海国际集团下「行政处罚」不可选，仅新闻舆情、被执行人、裁判文书可选
+    // 迁移：上海国际集团下「行政处罚」已开发，设为可选
     await dbPool.query(
-      `UPDATE interface_news_type_enabled SET is_enabled = 0 WHERE interface_type = '上海国际集团' AND news_type = '行政处罚'`
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '行政处罚'`
     );
     // 迁移：为上海国际集团启用「裁判文书」新闻类型
     await dbPool.query(

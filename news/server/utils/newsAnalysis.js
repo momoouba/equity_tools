@@ -5855,8 +5855,8 @@ ${enterpriseList}
    */
   async processNewsWithEnterprise(newsItem) {
     try {
-      // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费接口数据仅拼接入库，不进行AI分析
-      if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
+      // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚接口数据仅拼接入库，不进行AI分析
+      if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费' || newsItem.account_name === '行政处罚') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
         logWithTag('[processNewsWithEnterprise]', `${newsItem.account_name}数据仅拼接入库，跳过AI分析`);
         return null;
       }
@@ -6301,8 +6301,8 @@ ${enterpriseList}
    */
   async processNewsWithoutEnterprise(newsItem) {
     try {
-      // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费接口数据仅拼接入库，不进行AI分析
-      if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
+      // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚接口数据仅拼接入库，不进行AI分析
+      if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费' || newsItem.account_name === '行政处罚') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
         logWithTag('[processNewsWithoutEnterprise]', `${newsItem.account_name}数据仅拼接入库，跳过AI分析`);
         return null;
       }

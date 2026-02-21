@@ -1475,6 +1475,9 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     } else if (newsType === '限制高消费') {
       console.log(`[新闻同步] 上海国际集团接口(限制高消费)，调用syncShanghaiInternationalGroupRestrictHighConsData`);
       result = await syncShanghaiInternationalGroupRestrictHighConsData(config.id, logId);
+    } else if (newsType === '行政处罚') {
+      console.log(`[新闻同步] 上海国际集团接口(行政处罚)，调用syncShanghaiInternationalGroupAdminPnshData`);
+      result = await syncShanghaiInternationalGroupAdminPnshData(config.id, logId);
     } else {
       console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
       result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
@@ -1735,6 +1738,9 @@ router.post('/sync', async (req, res) => {
       } else if (newsType === '限制高消费') {
         logWithTag('[手动同步]', '执行上海国际集团限制高消费同步...');
         result = await syncShanghaiInternationalGroupRestrictHighConsData(config_id, logId);
+      } else if (newsType === '行政处罚') {
+        logWithTag('[手动同步]', '执行上海国际集团行政处罚同步...');
+        result = await syncShanghaiInternationalGroupAdminPnshData(config_id, logId);
       } else {
         logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
         result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
@@ -3840,6 +3846,13 @@ router.post('/recipients/:id/send-email', async (req, res) => {
             logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
             continue;
           }
+          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚等仅拼接入库的数据不做 AI 重新分析
+          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚'];
+          if (skipReanalyzeAccountNames.includes(news.account_name) && (news.APItype === '上海国际' || news.APItype === '上海国际集团')) {
+            skippedCount++;
+            logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 为仅拼接入库数据(${news.account_name})，跳过AI重新分析`);
+            continue;
+          }
           
           logWithTag('[手动发送邮件]', `正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
           
@@ -4902,6 +4915,9 @@ const SHANGHAI_INTERNATIONAL_DISCRDTEXEC_URL = 'http://114.141.181.181:8000/dofp
 /** 上海国际集团限制高消费接口地址（与 1.12 同环境） */
 const SHANGHAI_INTERNATIONAL_RESTRICTHIGHCONS_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/restricthighcons';
 
+/** 上海国际集团行政处罚接口地址（与 1.12 同环境） */
+const SHANGHAI_INTERNATIONAL_ADMINPNSH_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/adminPnsh';
+
 /**
  * 将接口日期格式（如 2025-10-11T00:00:00）格式化为中文「2025年10月11日」
  * @param {string} dt - 日期字符串
@@ -5216,6 +5232,43 @@ function buildRestrictHighConsAbstract(item, enterpriseFullName) {
   const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
   const pubDtZh = formatJudgmentDateToZh(item.pub_dt);
   return `${name}涉及限制高消费事项，关联案号为 ${caseNo}，相关受限人员${restrPersNm}，案件于 ${filingDtZh} 立案，${pubDtZh} 发布`;
+}
+
+/**
+ * 拼接单条行政处罚记录的 summary（不做 AI 分析，仅拼接）
+ */
+function buildAdminPnshSummary(item, enterpriseFullName) {
+  const name = enterpriseFullName || item.pnsh_instn_nm || '';
+  const decisionDtZh = formatJudgmentDateToZh(item.pnsh_decision_dt);
+  const dept = item.decision_dept || '';
+  const instrmntNo = item.pnsh_instrmnt_no || '';
+  const amt = item.pnsh_amt != null ? Number(item.pnsh_amt) : null;
+  const amtStr = amt !== null && !Number.isNaN(amt) ? `${amt} 万元` : '未载明金额';
+  const rslt = (item.pnsh_rslt || '').trim();
+  const rsltSnippet = rslt.length > 60 ? rslt.substring(0, 60) + '…' : rslt;
+  const resultPart = rsltSnippet ? `，处罚结果为${rsltSnippet}` : '';
+  return `${name}于 ${decisionDtZh} 收到${dept}出具的编号为 ${instrmntNo} 的行政处罚决定书，处罚金额为 ${amtStr}${resultPart}`;
+}
+
+/**
+ * 拼接单条行政处罚记录的 content（不做 AI 分析，仅拼接）
+ */
+function buildAdminPnshContent(item, enterpriseFullName) {
+  const name = enterpriseFullName || item.pnsh_instn_nm || '';
+  const instnIdThs = item.pnsh_instn_id_ths || '';
+  const idtfnCd = item.pnsh_idtfn_cd || '';
+  const decisionDtZh = formatJudgmentDateToZh(item.pnsh_decision_dt);
+  const dept = item.decision_dept || '';
+  const instrmntNo = item.pnsh_instrmnt_no || '';
+  const rslt = (item.pnsh_rslt || '').trim() || '相关行政处罚';
+  return `${name}（同花顺机构编码：${instnIdThs}，唯一识别码：${idtfnCd}）于 ${decisionDtZh} 收到${dept}出具的编号为 ${instrmntNo} 的行政处罚决定书，处罚结果为${rslt}`;
+}
+
+/**
+ * 拼接单条行政处罚记录的 news_abstract（不做 AI 分析，仅拼接）
+ */
+function buildAdminPnshAbstract(item, enterpriseFullName) {
+  return buildAdminPnshContent(item, enterpriseFullName);
 }
 
 /**
@@ -5944,6 +5997,249 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
     };
   } catch (error) {
     console.error('上海国际集团限制高消费同步失败：', error);
+    throw error;
+  }
+}
+
+/**
+ * 上海国际集团行政处罚接口同步函数（仅拼接入库，不做 AI 分析）
+ * 增量逻辑：对比接口返回的 pnsh_instrmnt_no 与库中 wechat_account（行政处罚存案号）取增量，每条单独入库。
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logId = null) {
+  try {
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团行政处罚接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团', '行政处罚']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团行政处罚接口');
+      }
+      config = configs[0];
+    }
+
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = Math.max(1, parseInt(sigConfigs[0].daily_limit || '100', 10));
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    // 存量案号：行政处罚数据 wechat_account 存 pnsh_instrmnt_no
+    const existingRows = await db.query(
+      "SELECT wechat_account FROM news_detail WHERE APItype = '上海国际' AND account_name = '行政处罚' AND (wechat_account IS NOT NULL AND wechat_account != '')"
+    );
+    const existingInstrmntNos = new Set((existingRows || []).map(r => (r.wechat_account || '').trim()).filter(Boolean));
+
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') entityTypes = JSON.parse(entityTypes);
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            else if (type === '基金相关主体') conditions.push(`entity_type = '基金相关主体'`);
+            else if (type === '子基金') conditions.push(`entity_type = '子基金'`);
+            else if (type === '子基金管理人') conditions.push(`entity_type = '子基金管理人'`);
+            else if (type === '子基金GP') conditions.push(`entity_type = '子基金GP'`);
+          });
+          if (conditions.length > 0) entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团行政处罚] 解析 entity_type 失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return { success: true, message: '没有需要同步的企业', data: { synced: 0, total: 0 } };
+    }
+
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    const creditCodes = enterprises.map(e => e.unified_credit_code).filter(c => c && c.trim() !== '' && c !== 'null');
+    const uniqueCreditCodes = [...new Set(creditCodes)];
+    const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
+
+    const apiUrl = SHANGHAI_INTERNATIONAL_ADMINPNSH_URL;
+    let totalSynced = 0;
+    const errors = [];
+    let requestIndex = 0;
+
+    for (const creditCode of toProcess) {
+      const pnshIdtfnCd = normalizeCreditCode(creditCode);
+      if (pnshIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团行政处罚] 跳过无效机构代码: ${(creditCode || '').substring(0, 10)}... 长度=${pnshIdtfnCd.length}`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = pnshIdtfnCd.substring(0, 4) + '****' + pnshIdtfnCd.slice(-4);
+      console.log(`[上海国际集团行政处罚] 请求第 ${requestIndex}/${toProcess.length} 个企业 机构:${maskedCode}`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+        const response = await axios.post(
+          apiUrl,
+          JSON.stringify({ pnsh_idtfn_cd: pnshIdtfnCd }),
+          {
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-App-Id': String(xAppId).trim(),
+              'X-Sequence-No': uuid,
+              'X-Timestamp': timestamp,
+              'APIkey': String(apiKey).trim()
+            },
+            timeout: 60000,
+            transformRequest: [(data) => data]
+          }
+        );
+
+        if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团行政处罚] 接口错误: ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          continue;
+        }
+
+        const list = response.data.Data;
+        const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '行政处罚';
+        const keywords = JSON.stringify([accountName]);
+        const APItype = '上海国际';
+
+        for (const item of list) {
+          const instrmntNo = (item.pnsh_instrmnt_no || '').trim();
+          if (!instrmntNo) continue;
+          if (existingInstrmntNos.has(instrmntNo)) continue;
+
+          let publicTime = null;
+          if (item.pnsh_decision_dt) {
+            const s = String(item.pnsh_decision_dt).replace('T', ' ').substring(0, 19);
+            if (s.length >= 19) publicTime = s;
+          }
+          if (!publicTime) publicTime = formatDate(new Date());
+
+          const title = `行政处罚 - ${enterpriseFullName || item.pnsh_instn_nm || ''}`;
+          const summary = buildAdminPnshSummary(item, enterpriseFullName);
+          const content = buildAdminPnshContent(item, enterpriseFullName);
+          const newsAbstract = buildAdminPnshAbstract(item, enterpriseFullName);
+
+          const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
+            enterpriseFullName,
+            item.pnsh_idtfn_cd || creditCode,
+            instrmntNo
+          );
+
+          const newsId = await generateId('news_detail');
+          await db.execute(
+            `INSERT INTO news_detail
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newsId,
+              accountName,
+              instrmntNo,
+              enterpriseFullName || item.pnsh_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
+              '无',
+              title,
+              summary,
+              publicTime,
+              content,
+              'negative',
+              APItype,
+              newsAbstract,
+              keywords,
+              fund,
+              sub_fund
+            ]
+          );
+          existingInstrmntNos.add(instrmntNo);
+          totalSynced++;
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团行政处罚] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: toProcess.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? `共 ${errors.length} 个错误` : null,
+          executionDetails: {
+            interfaceType: '上海国际集团',
+            newsType: '行政处罚',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: toProcess.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors.slice(0, 20) : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团行政处罚] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: totalSynced > 0 ? `行政处罚同步完成，共入库 ${totalSynced} 条` : '没有新增行政处罚数据',
+      data: { synced: totalSynced, total: uniqueCreditCodes.length }
+    };
+  } catch (error) {
+    console.error('上海国际集团行政处罚同步失败：', error);
     throw error;
   }
 }

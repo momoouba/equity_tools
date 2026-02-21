@@ -2441,6 +2441,14 @@ async function executeEmailTask(recipientId) {
             logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
             continue;
           }
+
+          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚等仅拼接入库的数据不做 AI 重新分析
+          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚'];
+          if (skipReanalyzeAccountNames.includes(news.account_name) && (news.APItype === '上海国际' || news.APItype === '上海国际集团')) {
+            skippedCount++;
+            logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 为仅拼接入库数据(${news.account_name})，跳过AI重新分析`);
+            continue;
+          }
           
           logWithTimestamp(`[邮件发送] 正在重新分析新闻 ${news.id}: ${news.title?.substring(0, 50)}`);
           
