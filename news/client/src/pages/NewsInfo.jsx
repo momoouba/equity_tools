@@ -793,11 +793,14 @@ function NewsInfo() {
       width: 120,
       ellipsis: true,
       tooltip: true,
-      render: (text) => text ? (
-        <Button type="text" size="small" onClick={() => window.open(text, '_blank')}>
-          查看文章
-        </Button>
-      ) : '-'
+      render: (text) => {
+        const hasValidUrl = text && String(text).trim() !== '' && text !== '无';
+        return hasValidUrl ? (
+          <Button type="text" size="small" onClick={() => window.open(text, '_blank')}>
+            查看文章
+          </Button>
+        ) : '-';
+      }
     },
     {
       title: '基金相关主体',
@@ -1412,11 +1415,15 @@ function NewsInfo() {
             <div className="detail-row">
               <label>原文链接：</label>
               <span>
-                {selectedNews.source_url ? (
-                  <a href={selectedNews.source_url} target="_blank" rel="noopener noreferrer">
-                    {selectedNews.source_url}
-                  </a>
-                ) : '-'}
+                {(() => {
+                  const url = selectedNews.source_url;
+                  const hasValidUrl = url && String(url).trim() !== '' && url !== '无';
+                  return hasValidUrl ? (
+                    <a href={url} target="_blank" rel="noopener noreferrer">
+                      {url}
+                    </a>
+                  ) : '-';
+                })()}
               </span>
             </div>
             {selectedNews.keywords && selectedNews.keywords.length > 0 && (

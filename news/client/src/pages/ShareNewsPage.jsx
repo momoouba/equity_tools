@@ -889,11 +889,15 @@ function ShareNewsPage() {
                       {news.news_abstract || '-'}
                     </td>
                     <td className="article-link-cell">
-                      {news.source_url ? (
-                        <a href={news.source_url} target="_blank" rel="noopener noreferrer">
-                          查看
-                        </a>
-                      ) : '-'}
+                      {(() => {
+                        const url = news.source_url;
+                        const hasValidUrl = url && String(url).trim() !== '' && url !== '无';
+                        return hasValidUrl ? (
+                          <a href={url} target="_blank" rel="noopener noreferrer">
+                            查看
+                          </a>
+                        ) : '-';
+                      })()}
                     </td>
                     <td className="account-name-cell" title={news.account_name || ''}>
                       {news.account_name || '-'}
