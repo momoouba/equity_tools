@@ -1463,6 +1463,9 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     } else if (newsType === '开庭公告') {
       console.log(`[新闻同步] 上海国际集团接口(开庭公告)，调用syncShanghaiInternationalGroupCourtHearingData`);
       result = await syncShanghaiInternationalGroupCourtHearingData(config.id, logId);
+    } else if (newsType === '立案信息') {
+      console.log(`[新闻同步] 上海国际集团接口(立案信息)，调用syncShanghaiInternationalGroupFilingData`);
+      result = await syncShanghaiInternationalGroupFilingData(config.id, logId);
     } else {
       console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
       result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
@@ -1710,6 +1713,9 @@ router.post('/sync', async (req, res) => {
       } else if (newsType === '开庭公告') {
         logWithTag('[手动同步]', '执行上海国际集团开庭公告同步...');
         result = await syncShanghaiInternationalGroupCourtHearingData(config_id, logId);
+      } else if (newsType === '立案信息') {
+        logWithTag('[手动同步]', '执行上海国际集团立案信息同步...');
+        result = await syncShanghaiInternationalGroupFilingData(config_id, logId);
       } else {
         logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
         result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
@@ -4850,6 +4856,9 @@ const SHANGHAI_INTERNATIONAL_DELIVANNCMNT_URL = 'http://114.141.181.181:8000/dof
 /** 上海国际集团开庭公告概要接口地址（与 1.12 同环境） */
 const SHANGHAI_INTERNATIONAL_SESSANNCMNT_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/sessAnncmnt';
 
+/** 上海国际集团立案信息概要接口地址（与 1.12 同环境） */
+const SHANGHAI_INTERNATIONAL_FILING_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/filing';
+
 /**
  * 将接口日期格式（如 2025-10-11T00:00:00）格式化为中文「2025年10月11日」
  * @param {string} dt - 日期字符串
@@ -4984,6 +4993,34 @@ function buildCourtHearingContent(item) {
   const crtNm = item.crt_nm || '';
   const courtroom = item.courtroom || '';
   return `${subjInstnNm}作为${subjRole}涉及案号为 ${caseNo} 的${caseCause}案件，于 ${sessDtZh} 开庭，承办部门为${adminDept}，主审人为${judNm}，审理法院为${crtNm}，审理法庭为${courtroom}，地区及排期日期信息未披露，公告内容未披露`;
+}
+
+/**
+ * 拼接单条立案信息记录的 summary（不做 AI 分析，仅拼接）
+ * 示例：中国建筑第三工程局第三建筑安装工程公司作为被执行人涉及 (2000) 沪一中执字第 00631 号执行案件，2000 年 6 月 6 日立案
+ */
+function buildFilingSummary(item) {
+  const partyInstnNm = item.party_instn_nm || '';
+  const partyRole = item.party_role || '';
+  const caseNo = item.case_no || '';
+  const caseTyp = item.case_typ || '';
+  const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
+  return `${partyInstnNm}作为${partyRole}涉及 ${caseNo} ${caseTyp}案件，${filingDtZh}立案`;
+}
+
+/**
+ * 拼接单条立案信息记录的 content/news_abstract（不做 AI 分析，仅拼接）
+ * 示例：中国建筑第三工程局第三建筑安装工程公司作为被执行人涉及案号为 (2000) 沪一中执字第 00631 号的执行案件，案件类型为执行案件，于 2000 年 6 月 6 日立案，案件相关信息中案由、审理法院、承办部门、案件进度、地区、立案人及审判成员等信息未披露，数据创建时间为 2025 年 10 月 17 日，更新时间为 2025 年 10 月 21 日
+ */
+function buildFilingContent(item) {
+  const partyInstnNm = item.party_instn_nm || '';
+  const partyRole = item.party_role || '';
+  const caseNo = item.case_no || '';
+  const caseTyp = item.case_typ || '';
+  const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
+  const createTimeZh = formatJudgmentDateToZh(item.create_time) || '';
+  const updateTimeZh = formatJudgmentDateToZh(item.update_time) || '';
+  return `${partyInstnNm}作为${partyRole}涉及案号为 ${caseNo} 的${caseTyp}案件，于 ${filingDtZh} 立案，案件相关信息中案由、审理法院、承办部门、案件进度、地区、立案人及审判成员等信息未披露，数据创建时间为 ${createTimeZh}，更新时间为 ${updateTimeZh}`;
 }
 
 /**
@@ -5951,6 +5988,245 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     };
   } catch (error) {
     console.error('上海国际集团开庭公告同步失败：', error);
+    throw error;
+  }
+}
+
+/**
+ * 上海国际集团立案信息概要接口同步函数（仅拼接入库，不做 AI 分析）
+ * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（立案信息存 case_no）取增量，每条单独入库。
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupFilingData(configId = null, logId = null) {
+  try {
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团立案信息接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团', '立案信息']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团立案信息接口');
+      }
+      config = configs[0];
+    }
+
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = Math.max(1, parseInt(sigConfigs[0].daily_limit || '100', 10));
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    // 存量 case_no：立案信息数据 wechat_account 存案号
+    const existingRows = await db.query(
+      "SELECT wechat_account FROM news_detail WHERE APItype = '上海国际' AND account_name = '立案信息' AND (wechat_account IS NOT NULL AND wechat_account != '')"
+    );
+    const existingCaseNos = new Set((existingRows || []).map(r => (r.wechat_account || '').trim()).filter(Boolean));
+
+    // 企业列表（与开庭公告一致，按 entity_type 过滤）
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') entityTypes = JSON.parse(entityTypes);
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            else if (type === '基金相关主体') conditions.push(`entity_type = '基金相关主体'`);
+            else if (type === '子基金') conditions.push(`entity_type = '子基金'`);
+            else if (type === '子基金管理人') conditions.push(`entity_type = '子基金管理人'`);
+            else if (type === '子基金GP') conditions.push(`entity_type = '子基金GP'`);
+          });
+          if (conditions.length > 0) entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团立案信息] 解析 entity_type 失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return { success: true, message: '没有需要同步的企业', data: { synced: 0, total: 0 } };
+    }
+
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    const creditCodes = enterprises.map(e => e.unified_credit_code).filter(c => c && c.trim() !== '' && c !== 'null');
+    const uniqueCreditCodes = [...new Set(creditCodes)];
+    const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
+
+    const apiUrl = SHANGHAI_INTERNATIONAL_FILING_URL;
+    let totalSynced = 0;
+    const errors = [];
+    let requestIndex = 0;
+
+    for (const creditCode of toProcess) {
+      const partyIdtfnCd = normalizeCreditCode(creditCode);
+      if (partyIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团立案信息] 跳过无效机构代码: ${(creditCode || '').substring(0, 10)}... 长度=${partyIdtfnCd.length}`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = partyIdtfnCd.substring(0, 4) + '****' + partyIdtfnCd.slice(-4);
+      console.log(`[上海国际集团立案信息] 请求第 ${requestIndex}/${toProcess.length} 个企业 机构:${maskedCode}`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+        const response = await axios.post(
+          apiUrl,
+          JSON.stringify({ party_idtfn_cd: partyIdtfnCd }),
+          {
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-App-Id': String(xAppId).trim(),
+              'X-Sequence-No': uuid,
+              'X-Timestamp': timestamp,
+              'APIkey': String(apiKey).trim()
+            },
+            timeout: 60000,
+            transformRequest: [(data) => data]
+          }
+        );
+
+        if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团立案信息] 接口错误: ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          continue;
+        }
+
+        const list = response.data.Data;
+        const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+
+        for (const item of list) {
+          const caseNo = (item.case_no || '').trim();
+          if (!caseNo) continue;
+          if (existingCaseNos.has(caseNo)) continue;
+
+          // 立案时间 filing_dt 作为 public_time
+          let publicTime = null;
+          if (item.filing_dt) {
+            const s = String(item.filing_dt).replace('T', ' ').substring(0, 19);
+            if (s.length >= 19) publicTime = s;
+          }
+          if (!publicTime) publicTime = formatDate(new Date());
+
+          const partyInstnNm = item.party_instn_nm || defaultEnterpriseName;
+          const title = `立案信息 - ${partyInstnNm}`;
+          const summary = buildFilingSummary(item);
+          const content = buildFilingContent(item);
+          const accountName = '立案信息';
+          const APItype = '上海国际';
+
+          const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
+            partyInstnNm,
+            item.party_idtfn_cd || creditCode,
+            caseNo
+          );
+
+          const newsId = await generateId('news_detail');
+          await db.execute(
+            `INSERT INTO news_detail
+             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newsId,
+              accountName,
+              caseNo,
+              partyInstnNm,
+              '无',
+              title,
+              summary,
+              publicTime,
+              content,
+              'negative',
+              APItype,
+              content,
+              fund,
+              sub_fund
+            ]
+          );
+          existingCaseNos.add(caseNo);
+          totalSynced++;
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团立案信息] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: toProcess.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? `共 ${errors.length} 个错误` : null,
+          executionDetails: {
+            interfaceType: '上海国际集团',
+            newsType: '立案信息',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: toProcess.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors.slice(0, 20) : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团立案信息] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: `立案信息同步完成，共同步 ${totalSynced} 条`,
+      data: { synced: totalSynced, total: toProcess.length, errors: errors.slice(0, 10) }
+    };
+  } catch (error) {
+    console.error('上海国际集团立案信息同步失败：', error);
     throw error;
   }
 }

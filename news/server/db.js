@@ -1199,6 +1199,10 @@ async function initializeTables(dbPool) {
     await dbPool.query(
       `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '开庭公告'`
     );
+    // 迁移：为上海国际集团启用「立案信息」新闻类型
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '立案信息'`
+    );
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }
