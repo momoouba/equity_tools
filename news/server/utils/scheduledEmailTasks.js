@@ -2442,8 +2442,8 @@ async function executeEmailTask(recipientId) {
             continue;
           }
 
-          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚等仅拼接入库的数据不做 AI 重新分析
-          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚'];
+          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚、终本案件等仅拼接入库的数据不做 AI 重新分析
+          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚', '终本案件'];
           if (skipReanalyzeAccountNames.includes(news.account_name) && (news.APItype === '上海国际' || news.APItype === '上海国际集团')) {
             skippedCount++;
             logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 为仅拼接入库数据(${news.account_name})，跳过AI重新分析`);

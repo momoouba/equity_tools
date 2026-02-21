@@ -1230,6 +1230,11 @@ async function initializeTables(dbPool) {
       `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '限制高消费'`
     );
     console.log('已为上海国际集团启用「限制高消费」新闻类型');
+    // 迁移：为上海国际集团启用「终本案件」新闻类型
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '终本案件'`
+    );
+    console.log('已为上海国际集团启用「终本案件」新闻类型');
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }

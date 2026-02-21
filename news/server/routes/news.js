@@ -1478,6 +1478,9 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     } else if (newsType === '行政处罚') {
       console.log(`[新闻同步] 上海国际集团接口(行政处罚)，调用syncShanghaiInternationalGroupAdminPnshData`);
       result = await syncShanghaiInternationalGroupAdminPnshData(config.id, logId);
+    } else if (newsType === '终本案件') {
+      console.log(`[新闻同步] 上海国际集团接口(终本案件)，调用syncShanghaiInternationalGroupFinalCaseData`);
+      result = await syncShanghaiInternationalGroupFinalCaseData(config.id, logId);
     } else {
       console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
       result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
@@ -1741,6 +1744,9 @@ router.post('/sync', async (req, res) => {
       } else if (newsType === '行政处罚') {
         logWithTag('[手动同步]', '执行上海国际集团行政处罚同步...');
         result = await syncShanghaiInternationalGroupAdminPnshData(config_id, logId);
+      } else if (newsType === '终本案件') {
+        logWithTag('[手动同步]', '执行上海国际集团终本案件同步...');
+        result = await syncShanghaiInternationalGroupFinalCaseData(config_id, logId);
       } else {
         logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
         result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
@@ -3846,8 +3852,8 @@ router.post('/recipients/:id/send-email', async (req, res) => {
             logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
             continue;
           }
-          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚等仅拼接入库的数据不做 AI 重新分析
-          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚'];
+          // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚、终本案件等仅拼接入库的数据不做 AI 重新分析
+          const skipReanalyzeAccountNames = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚', '终本案件'];
           if (skipReanalyzeAccountNames.includes(news.account_name) && (news.APItype === '上海国际' || news.APItype === '上海国际集团')) {
             skippedCount++;
             logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 为仅拼接入库数据(${news.account_name})，跳过AI重新分析`);
@@ -4888,7 +4894,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
   }
 }
 
-/** 上海国际集团被执行人接口地址（与 1.12 同环境） */
+/** 上海国际集团各接口默认地址：当新闻接口配置中未填写 request_url 时使用，优先从配置的 request_url 读取以便后续替换接口地址 */
 const SHANGHAI_INTERNATIONAL_EXECPERS_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/execPers';
 
 /** 上海国际集团裁判文书概要接口地址（与 1.12 同环境） */
@@ -4917,6 +4923,9 @@ const SHANGHAI_INTERNATIONAL_RESTRICTHIGHCONS_URL = 'http://114.141.181.181:8000
 
 /** 上海国际集团行政处罚接口地址（与 1.12 同环境） */
 const SHANGHAI_INTERNATIONAL_ADMINPNSH_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/adminPnsh';
+
+/** 上海国际集团终本案件接口地址（与 1.12 同环境） */
+const SHANGHAI_INTERNATIONAL_FINALCASE_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/finalCase';
 
 /**
  * 将接口日期格式（如 2025-10-11T00:00:00）格式化为中文「2025年10月11日」
@@ -5272,6 +5281,55 @@ function buildAdminPnshAbstract(item, enterpriseFullName) {
 }
 
 /**
+ * 拼接单条终本案件记录的 summary（不做 AI 分析，仅拼接）
+ * 示例：四川永星电子有限公司涉及 (2021) 沪 01 执 1248 号终本案件，2021 年 7 月 2 日立案，2021 年 9 月 28 日终本，执行标的 209078333，未履行金额 209078333 元，执行法院为上海市第一中级人民法院
+ */
+function buildFinalCaseSummary(item, enterpriseFullName) {
+  const name = enterpriseFullName || item.exec_instn_nm || '';
+  const caseNo = item.case_no || '';
+  const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
+  const stpDtZh = formatJudgmentDateToZh(item.stp_dt);
+  const brchAmt = item.brch_amt != null && String(item.brch_amt).trim() !== '' ? String(item.brch_amt).trim() : '';
+  const execUndl = item.exec_undl != null && String(item.exec_undl).trim() !== '' ? String(item.exec_undl).trim() : '';
+  const execCrt = item.exec_crt || '';
+  return `${name}涉及 ${caseNo} 终本案件，${filingDtZh}立案，${stpDtZh}终本，执行标的 ${brchAmt}，未履行金额 ${execUndl} 元，执行法院为${execCrt}`;
+}
+
+/**
+ * 拼接单条终本案件记录的 content（不做 AI 分析，仅拼接）
+ */
+function buildFinalCaseContent(item, enterpriseFullName) {
+  const name = enterpriseFullName || item.exec_instn_nm || '';
+  const execInstnIdThs = item.exec_instn_id_ths || '';
+  const execIdtfnCd = item.exec_idtfn_cd || '';
+  const caseNo = item.case_no || '';
+  const execBssSymb = item.exec_bss_symb || '';
+  const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
+  const stpDtZh = formatJudgmentDateToZh(item.stp_dt);
+  const brchAmt = item.brch_amt != null && String(item.brch_amt).trim() !== '' ? String(item.brch_amt).trim() : '';
+  const execUndl = item.exec_undl != null && String(item.exec_undl).trim() !== '' ? String(item.exec_undl).trim() : '';
+  const execCrt = item.exec_crt || '';
+  const addr = item.addr || '';
+  return `${name}（被执行人同花顺编码：${execInstnIdThs}，唯一识别码：${execIdtfnCd}）涉及案号为 ${caseNo} 的终本案件，执行依据文号为 ${execBssSymb}，于 ${filingDtZh} 立案，${stpDtZh} 终本，执行标的为 ${brchAmt}，未履行金额为 ${execUndl}，执行法院为${execCrt}，企业地址为${addr}`;
+}
+
+/**
+ * 拼接单条终本案件记录的 news_abstract（不做 AI 分析，仅拼接）
+ */
+function buildFinalCaseAbstract(item, enterpriseFullName) {
+  const name = enterpriseFullName || item.exec_instn_nm || '';
+  const caseNo = item.case_no || '';
+  const execBssSymb = item.exec_bss_symb || '';
+  const filingDtZh = formatJudgmentDateToZh(item.filing_dt);
+  const stpDtZh = formatJudgmentDateToZh(item.stp_dt);
+  const brchAmt = item.brch_amt != null && String(item.brch_amt).trim() !== '' ? String(item.brch_amt).trim() : '';
+  const execUndl = item.exec_undl != null && String(item.exec_undl).trim() !== '' ? String(item.exec_undl).trim() : '';
+  const execCrt = item.exec_crt || '';
+  const addr = item.addr || '';
+  return `${name}涉及案号为 ${caseNo} 的终本案件，执行依据文号为 ${execBssSymb}，于 ${filingDtZh} 立案，${stpDtZh} 终本，执行标的为 ${brchAmt}，未履行金额为 ${execUndl}，执行法院为${execCrt}，企业地址为${addr}`;
+}
+
+/**
  * 上海国际集团被执行人接口同步函数（仅拼接入库，不做 AI 分析）
  * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（被执行人存 case_no）取增量，每条单独入库。
  * @param {string|null} configId - 新闻接口配置ID
@@ -5369,7 +5427,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_EXECPERS_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_EXECPERS_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -5611,7 +5669,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_DISCRDTEXEC_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_DISCRDTEXEC_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -5855,7 +5913,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_RESTRICTHIGHCONS_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_RESTRICTHIGHCONS_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -6098,7 +6156,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_ADMINPNSH_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_ADMINPNSH_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -6245,6 +6303,251 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
 }
 
 /**
+ * 上海国际集团终本案件接口同步函数（仅拼接入库，不做 AI 分析）
+ * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（终本案件存 case_no）取增量，每条单独入库。
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logId = null) {
+  try {
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团终本案件接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团', '终本案件']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团终本案件接口');
+      }
+      config = configs[0];
+    }
+
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = Math.max(1, parseInt(sigConfigs[0].daily_limit || '100', 10));
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    // 存量 case_no：终本案件数据 wechat_account 存案号
+    const existingRows = await db.query(
+      "SELECT wechat_account FROM news_detail WHERE APItype = '上海国际' AND account_name = '终本案件' AND (wechat_account IS NOT NULL AND wechat_account != '')"
+    );
+    const existingCaseNos = new Set((existingRows || []).map(r => (r.wechat_account || '').trim()).filter(Boolean));
+
+    // 企业列表（与被执行人接口一致，按 entity_type 过滤）
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') entityTypes = JSON.parse(entityTypes);
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            else if (type === '基金相关主体') conditions.push(`entity_type = '基金相关主体'`);
+            else if (type === '子基金') conditions.push(`entity_type = '子基金'`);
+            else if (type === '子基金管理人') conditions.push(`entity_type = '子基金管理人'`);
+            else if (type === '子基金GP') conditions.push(`entity_type = '子基金GP'`);
+          });
+          if (conditions.length > 0) entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团终本案件] 解析 entity_type 失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return { success: true, message: '没有需要同步的企业', data: { synced: 0, total: 0 } };
+    }
+
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    const creditCodes = enterprises.map(e => e.unified_credit_code).filter(c => c && c.trim() !== '' && c !== 'null');
+    const uniqueCreditCodes = [...new Set(creditCodes)];
+    const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
+
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_FINALCASE_URL;
+    let totalSynced = 0;
+    const errors = [];
+    let requestIndex = 0;
+
+    for (const creditCode of toProcess) {
+      const execIdtfnCd = normalizeCreditCode(creditCode);
+      if (execIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团终本案件] 跳过无效机构代码: ${(creditCode || '').substring(0, 10)}... 长度=${execIdtfnCd.length}`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = execIdtfnCd.substring(0, 4) + '****' + execIdtfnCd.slice(-4);
+      console.log(`[上海国际集团终本案件] 请求第 ${requestIndex}/${toProcess.length} 个企业 机构:${maskedCode}`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+        const response = await axios.post(
+          apiUrl,
+          JSON.stringify({ exec_idtfn_cd: execIdtfnCd }),
+          {
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-App-Id': String(xAppId).trim(),
+              'X-Sequence-No': uuid,
+              'X-Timestamp': timestamp,
+              'APIkey': String(apiKey).trim()
+            },
+            timeout: 60000,
+            transformRequest: [(data) => data]
+          }
+        );
+
+        if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团终本案件] 接口错误: ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          continue;
+        }
+
+        const list = response.data.Data;
+        const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '终本案件';
+        const keywords = JSON.stringify([accountName]);
+        const APItype = '上海国际';
+
+        for (const item of list) {
+          const caseNo = (item.case_no || '').trim();
+          if (!caseNo) continue;
+          if (existingCaseNos.has(caseNo)) continue;
+
+          // public_time 取 stp_dt（终本日期）
+          let publicTime = null;
+          if (item.stp_dt) {
+            const s = String(item.stp_dt).replace('T', ' ').substring(0, 19);
+            if (s.length >= 19) publicTime = s;
+          }
+          if (!publicTime) publicTime = formatDate(new Date());
+
+          const title = `终本案件 - ${enterpriseFullName || item.exec_instn_nm || ''}`;
+          const summary = buildFinalCaseSummary(item, enterpriseFullName);
+          const content = buildFinalCaseContent(item, enterpriseFullName);
+          const newsAbstract = buildFinalCaseAbstract(item, enterpriseFullName);
+
+          const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
+            enterpriseFullName,
+            item.exec_idtfn_cd || creditCode,
+            caseNo
+          );
+
+          const newsId = await generateId('news_detail');
+          await db.execute(
+            `INSERT INTO news_detail
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newsId,
+              accountName,
+              caseNo,
+              enterpriseFullName || item.exec_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
+              '无',
+              title,
+              summary,
+              publicTime,
+              content,
+              'negative',
+              APItype,
+              newsAbstract,
+              keywords,
+              fund,
+              sub_fund
+            ]
+          );
+          existingCaseNos.add(caseNo);
+          totalSynced++;
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团终本案件] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: toProcess.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? `共 ${errors.length} 个错误` : null,
+          executionDetails: {
+            interfaceType: '上海国际集团',
+            newsType: '终本案件',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: toProcess.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors.slice(0, 20) : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团终本案件] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: totalSynced > 0 ? `终本案件同步完成，共同步 ${totalSynced} 条` : '没有新增终本案件数据',
+      data: { synced: totalSynced, total: toProcess.length, errors: errors.slice(0, 10) }
+    };
+  } catch (error) {
+    console.error('上海国际集团终本案件同步失败：', error);
+    throw error;
+  }
+}
+
+/**
  * 上海国际集团裁判文书概要接口同步函数（仅拼接入库，不做 AI 分析）
  * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（裁判文书存 case_no）取增量，每条单独入库。
  * @param {string|null} configId - 新闻接口配置ID
@@ -6342,7 +6645,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_JUDINSTRMNT_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_JUDINSTRMNT_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -6585,7 +6888,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_CRTANNCMNT_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_CRTANNCMNT_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -6828,7 +7131,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_SESSANNCMNT_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_SESSANNCMNT_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -7072,7 +7375,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_FILING_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_FILING_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -7316,7 +7619,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_DELIVANNCMNT_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_DELIVANNCMNT_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
@@ -7558,7 +7861,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
     const uniqueCreditCodes = [...new Set(creditCodes)];
     const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
 
-    const apiUrl = SHANGHAI_INTERNATIONAL_BANKRPTREORG_URL;
+    const apiUrl = (config.request_url && String(config.request_url).trim()) ? String(config.request_url).trim() : SHANGHAI_INTERNATIONAL_BANKRPTREORG_URL;
     let totalSynced = 0;
     const errors = [];
     let requestIndex = 0;
