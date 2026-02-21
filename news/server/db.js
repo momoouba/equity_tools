@@ -1203,6 +1203,23 @@ async function initializeTables(dbPool) {
     await dbPool.query(
       `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '立案信息'`
     );
+    // 迁移：为上海国际集团新增并启用「破产重整」新闻类型
+    const [hasBankrpt] = await dbPool.query(
+      `SELECT 1 FROM interface_news_type_enabled WHERE interface_type = '上海国际集团' AND news_type = '破产重整' LIMIT 1`
+    );
+    if (hasBankrpt.length === 0) {
+      const bankrptId = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}00001`;
+      await dbPool.query(
+        `INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, '上海国际集团', '破产重整', 1)`,
+        [bankrptId]
+      );
+      console.log('已为上海国际集团启用「破产重整」新闻类型');
+    }
+    // 迁移：上海国际集团、企查查接口中删除「破产重组」新闻类型选项（置为不可选）
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 0 WHERE interface_type IN ('上海国际集团', '企查查') AND news_type = '破产重组'`
+    );
+    console.log('已禁用上海国际集团、企查查接口下的「破产重组」新闻类型选项');
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }

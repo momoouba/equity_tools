@@ -1466,6 +1466,9 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     } else if (newsType === '立案信息') {
       console.log(`[新闻同步] 上海国际集团接口(立案信息)，调用syncShanghaiInternationalGroupFilingData`);
       result = await syncShanghaiInternationalGroupFilingData(config.id, logId);
+    } else if (newsType === '破产重整') {
+      console.log(`[新闻同步] 上海国际集团接口(破产重整)，调用syncShanghaiInternationalGroupBankrptReorgData`);
+      result = await syncShanghaiInternationalGroupBankrptReorgData(config.id, logId);
     } else {
       console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
       result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
@@ -1716,6 +1719,9 @@ router.post('/sync', async (req, res) => {
       } else if (newsType === '立案信息') {
         logWithTag('[手动同步]', '执行上海国际集团立案信息同步...');
         result = await syncShanghaiInternationalGroupFilingData(config_id, logId);
+      } else if (newsType === '破产重整') {
+        logWithTag('[手动同步]', '执行上海国际集团破产重整同步...');
+        result = await syncShanghaiInternationalGroupBankrptReorgData(config_id, logId);
       } else {
         logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
         result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
@@ -4859,6 +4865,9 @@ const SHANGHAI_INTERNATIONAL_SESSANNCMNT_URL = 'http://114.141.181.181:8000/dofp
 /** 上海国际集团立案信息概要接口地址（与 1.12 同环境） */
 const SHANGHAI_INTERNATIONAL_FILING_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/filing';
 
+/** 上海国际集团破产重整概要接口地址（与 1.12 同环境） */
+const SHANGHAI_INTERNATIONAL_BANKRPTREORG_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/bankrptReorgSumm';
+
 /**
  * 将接口日期格式（如 2025-10-11T00:00:00）格式化为中文「2025年10月11日」
  * @param {string} dt - 日期字符串
@@ -5024,6 +5033,47 @@ function buildFilingContent(item) {
 }
 
 /**
+ * 拼接单条破产重整记录的 summary（不做 AI 分析，仅拼接）
+ * 示例：兰州远东化肥有限责任公司作为破产案件的申请人，相关案件公开于 2025 年 7 月 23 日
+ */
+function buildBankrptReorgSummary(item) {
+  const subjInstnNm = item.subj_instn_nm || '';
+  const caseTyp = item.case_typ || '破产案件';
+  const subjRole = item.subj_role || '';
+  const pubDtZh = formatJudgmentDateToZh(item.pub_dt);
+  return `${subjInstnNm}作为${caseTyp}的${subjRole}，相关案件公开于 ${pubDtZh}`;
+}
+
+/**
+ * 拼接单条破产重整记录的 content（不做 AI 分析，仅拼接）
+ * 示例：兰州远东化肥有限责任公司涉及案号为 (2013) 兰民破预字第 6 号的破产案件，案件类型编码为 C29002，案件类型为破产案件，破产重整主体唯一识别码为 91620100MA74AADC6G，主体身份为申请人，公告 ID 为 1f682ac7d09c070181e40278b348cf99，2025 年 7 月 23 日公开
+ */
+function buildBankrptReorgContent(item) {
+  const subjInstnNm = item.subj_instn_nm || '';
+  const caseNo = item.case_no || '';
+  const caseTyp = item.case_typ || '破产案件';
+  const caseTypCd = item.case_typ_cd || '';
+  const subjIdtfnCd = item.subj_idtfn_cd || '';
+  const subjRole = item.subj_role || '';
+  const pubId = item.pub_id || '';
+  const pubDtZh = formatJudgmentDateToZh(item.pub_dt);
+  return `${subjInstnNm}涉及案号为 ${caseNo} 的${caseTyp}，案件类型编码为 ${caseTypCd}，案件类型为${caseTyp}，破产重整主体唯一识别码为 ${subjIdtfnCd}，主体身份为${subjRole}，公告 ID 为 ${pubId}，${pubDtZh}公开`;
+}
+
+/**
+ * 拼接单条破产重整记录的 news_abstract（不做 AI 分析，仅拼接）
+ * 示例：兰州远东化肥有限责任公司涉及案号为 (2013) 兰民破预字第 6 号的破产案件，案件类型为破产案件，主体身份为申请人，2025 年 7 月 23 日公开
+ */
+function buildBankrptReorgAbstract(item) {
+  const subjInstnNm = item.subj_instn_nm || '';
+  const caseNo = item.case_no || '';
+  const caseTyp = item.case_typ || '破产案件';
+  const subjRole = item.subj_role || '';
+  const pubDtZh = formatJudgmentDateToZh(item.pub_dt);
+  return `${subjInstnNm}涉及案号为 ${caseNo} 的${caseTyp}，案件类型为${caseTyp}，主体身份为${subjRole}，${pubDtZh}公开`;
+}
+
+/**
  * 拼接单条被执行人记录的 summary/content/news_abstract 文案（不做 AI 分析，仅拼接）
  * @param {object} item - 接口单条 Data 项
  * @returns {string}
@@ -5114,7 +5164,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -5184,7 +5234,11 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const execInstnNm = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '被执行人';
+        const keywords = accountName;
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5198,13 +5252,12 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const title = `被执行人 - ${item.exec_instn_nm || execInstnNm}`;
+          const title = `被执行人 - ${enterpriseFullName || item.exec_instn_nm || ''}`;
           const summary = buildExecPersSummary(item);
-          const accountName = '被执行人';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            item.exec_instn_nm || execInstnNm,
+            enterpriseFullName,
             item.exec_idtfn_cd || creditCode,
             caseNo
           );
@@ -5212,21 +5265,24 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               caseNo,
-              item.exec_instn_nm || execInstnNm,
+              enterpriseFullName || item.exec_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
               publicTime,
               summary,
-              'negative', // news_sentiment 为 ENUM('positive','neutral','negative')，负面对应 negative
+              'negative',
               APItype,
               summary,
+              keywords,
               fund,
               sub_fund
             ]
@@ -5350,7 +5406,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -5420,7 +5476,11 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '裁判文书';
+        const keywords = accountName;
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5434,15 +5494,13 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const subjInstnNm = item.subj_instn_nm || defaultEnterpriseName;
-          const title = `裁判文书 - ${subjInstnNm}`;
+          const title = `裁判文书 - ${enterpriseFullName || item.subj_instn_nm || ''}`;
           const summary = buildJudgmentSummary(item);
           const content = buildJudgmentContent(item);
-          const accountName = '裁判文书';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            subjInstnNm,
+            enterpriseFullName || item.subj_instn_nm,
             item.subj_idtfn_cd || creditCode,
             caseNo
           );
@@ -5450,13 +5508,15 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               caseNo,
-              subjInstnNm,
+              enterpriseFullName || item.subj_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
@@ -5465,6 +5525,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
               'negative',
               APItype,
               content,
+              keywords,
               fund,
               sub_fund
             ]
@@ -5588,7 +5649,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -5658,7 +5719,11 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '法院公告';
+        const keywords = accountName;
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5672,15 +5737,13 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const subjInstnNm = item.subj_instn_nm || defaultEnterpriseName;
-          const title = `法院公告 - ${subjInstnNm}`;
+          const title = `法院公告 - ${enterpriseFullName || item.subj_instn_nm || ''}`;
           const summary = buildCourtAnnouncementSummary(item);
           const content = buildCourtAnnouncementContent(item);
-          const accountName = '法院公告';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            subjInstnNm,
+            enterpriseFullName || item.subj_instn_nm,
             item.subj_idtfn_cd || creditCode,
             caseNo
           );
@@ -5688,13 +5751,15 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               caseNo,
-              subjInstnNm,
+              enterpriseFullName || item.subj_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
@@ -5703,6 +5768,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
               'negative',
               APItype,
               content,
+              keywords,
               fund,
               sub_fund
             ]
@@ -5826,7 +5892,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -5896,7 +5962,11 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '开庭公告';
+        const keywords = accountName;
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5911,15 +5981,13 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const subjInstnNm = item.subj_instn_nm || defaultEnterpriseName;
-          const title = `开庭公告 - ${subjInstnNm}`;
+          const title = `开庭公告 - ${enterpriseFullName || item.subj_instn_nm || ''}`;
           const summary = buildCourtHearingSummary(item);
           const content = buildCourtHearingContent(item);
-          const accountName = '开庭公告';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            subjInstnNm,
+            enterpriseFullName || item.subj_instn_nm,
             item.subj_idtfn_cd || creditCode,
             caseNo
           );
@@ -5927,13 +5995,15 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               caseNo,
-              subjInstnNm,
+              enterpriseFullName || item.subj_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
@@ -5942,6 +6012,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
               'negative',
               APItype,
               content,
+              keywords,
               fund,
               sub_fund
             ]
@@ -6065,7 +6136,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -6135,7 +6206,11 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '立案信息';
+        const keywords = accountName;
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -6150,15 +6225,13 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const partyInstnNm = item.party_instn_nm || defaultEnterpriseName;
-          const title = `立案信息 - ${partyInstnNm}`;
+          const title = `立案信息 - ${enterpriseFullName || item.party_instn_nm || ''}`;
           const summary = buildFilingSummary(item);
           const content = buildFilingContent(item);
-          const accountName = '立案信息';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            partyInstnNm,
+            enterpriseFullName || item.party_instn_nm,
             item.party_idtfn_cd || creditCode,
             caseNo
           );
@@ -6166,13 +6239,15 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               caseNo,
-              partyInstnNm,
+              enterpriseFullName || item.party_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
@@ -6181,6 +6256,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
               'negative',
               APItype,
               content,
+              keywords,
               fund,
               sub_fund
             ]
@@ -6304,7 +6380,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     }
 
     const enterprises = await db.query(
-      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
        WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
@@ -6374,7 +6450,11 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
 
         const list = response.data.Data;
         const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
-        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseFullName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+        const accountName = '送达公告';
+        const keywords = accountName;
 
         for (const item of list) {
           const title = (item.anncmnt_title || '').trim();
@@ -6388,14 +6468,12 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
-          const subjInstnNm = item.subj_instn_nm || defaultEnterpriseName;
           const summary = buildDeliveryAnnouncementSummary(item);
           const content = buildDeliveryAnnouncementContent(item);
-          const accountName = '送达公告';
           const APItype = '上海国际';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
-            subjInstnNm,
+            enterpriseFullName || item.subj_instn_nm,
             item.subj_idtfn_cd || creditCode,
             accountName
           );
@@ -6403,13 +6481,15 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
               accountName,
               accountName,
-              subjInstnNm,
+              enterpriseFullName || item.subj_instn_nm || '',
+              enterpriseAbbreviation,
+              entityType,
               '无',
               title,
               summary,
@@ -6418,6 +6498,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
               'negative',
               APItype,
               content,
+              keywords,
               fund,
               sub_fund
             ]
@@ -6464,6 +6545,251 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     };
   } catch (error) {
     console.error('上海国际集团送达公告同步失败：', error);
+    throw error;
+  }
+}
+
+/**
+ * 上海国际集团破产重整概要接口同步函数（仅拼接入库，不做 AI 分析）
+ * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（破产重整存 case_no）取增量，每条单独入库。
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, logId = null) {
+  try {
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团破产重整接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团', '破产重整']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团破产重整接口');
+      }
+      config = configs[0];
+    }
+
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = Math.max(1, parseInt(sigConfigs[0].daily_limit || '100', 10));
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    // 存量 wechat_account：破产重整数据 wechat_account 存案号 case_no，取数时与接口 case_no 对比取增量
+    const existingRows = await db.query(
+      "SELECT wechat_account FROM news_detail WHERE APItype = '上海国际' AND account_name = '破产重整' AND (wechat_account IS NOT NULL AND wechat_account != '')"
+    );
+    const existingCaseNos = new Set((existingRows || []).map(r => (r.wechat_account || '').trim()).filter(Boolean));
+
+    // 企业列表（按 entity_type 过滤），并查询 project_abbreviation 用于 enterprise_abbreviation
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') entityTypes = JSON.parse(entityTypes);
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            else if (type === '基金相关主体') conditions.push(`entity_type = '基金相关主体'`);
+            else if (type === '子基金') conditions.push(`entity_type = '子基金'`);
+            else if (type === '子基金管理人') conditions.push(`entity_type = '子基金管理人'`);
+            else if (type === '子基金GP') conditions.push(`entity_type = '子基金GP'`);
+          });
+          if (conditions.length > 0) entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团破产重整] 解析 entity_type 失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return { success: true, message: '没有需要同步的企业', data: { synced: 0, total: 0 } };
+    }
+
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    const creditCodes = enterprises.map(e => e.unified_credit_code).filter(c => c && c.trim() !== '' && c !== 'null');
+    const uniqueCreditCodes = [...new Set(creditCodes)];
+    const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
+
+    const apiUrl = SHANGHAI_INTERNATIONAL_BANKRPTREORG_URL;
+    let totalSynced = 0;
+    const errors = [];
+    let requestIndex = 0;
+
+    for (const creditCode of toProcess) {
+      const subjIdtfnCd = normalizeCreditCode(creditCode);
+      if (subjIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团破产重整] 跳过无效机构代码: ${(creditCode || '').substring(0, 10)}... 长度=${subjIdtfnCd.length}`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
+      console.log(`[上海国际集团破产重整] 请求第 ${requestIndex}/${toProcess.length} 个企业 机构:${maskedCode}`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+        const response = await axios.post(
+          apiUrl,
+          JSON.stringify({ subj_idtfn_cd: subjIdtfnCd }),
+          {
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-App-Id': String(xAppId).trim(),
+              'X-Sequence-No': uuid,
+              'X-Timestamp': timestamp,
+              'APIkey': String(apiKey).trim()
+            },
+            timeout: 60000,
+            transformRequest: [(data) => data]
+          }
+        );
+
+        if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团破产重整] 接口错误: ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          continue;
+        }
+
+        const list = response.data.Data;
+        const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+        const defaultEnterpriseName = enterpriseInfo.enterprise_full_name || '';
+        const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
+        const entityType = enterpriseInfo.entity_type || null;
+
+        for (const item of list) {
+          const caseNo = (item.case_no || '').trim();
+          if (!caseNo) continue;
+          if (existingCaseNos.has(caseNo)) continue;
+
+          let publicTime = null;
+          if (item.pub_dt) {
+            const s = String(item.pub_dt).replace('T', ' ').substring(0, 19);
+            if (s.length >= 19) publicTime = s;
+          }
+          if (!publicTime) publicTime = formatDate(new Date());
+
+          const subjInstnNm = item.subj_instn_nm || defaultEnterpriseName;
+          const title = `破产重整 - ${subjInstnNm}`;
+          const summary = buildBankrptReorgSummary(item);
+          const content = buildBankrptReorgContent(item);
+          const newsAbstract = buildBankrptReorgAbstract(item);
+          const accountName = '破产重整';
+          const APItype = '上海国际';
+          const keywords = '破产重整';
+
+          const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
+            subjInstnNm,
+            item.subj_idtfn_cd || creditCode,
+            caseNo
+          );
+
+          const newsId = await generateId('news_detail');
+          await db.execute(
+            `INSERT INTO news_detail
+             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newsId,
+              accountName,
+              caseNo,
+              subjInstnNm,
+              enterpriseAbbreviation,
+              entityType,
+              '无',
+              title,
+              summary,
+              publicTime,
+              content,
+              'negative',
+              APItype,
+              newsAbstract,
+              keywords,
+              fund,
+              sub_fund
+            ]
+          );
+          existingCaseNos.add(caseNo);
+          totalSynced++;
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团破产重整] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: toProcess.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? `共 ${errors.length} 个错误` : null,
+          executionDetails: {
+            interfaceType: '上海国际集团',
+            newsType: '破产重整',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: toProcess.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors.slice(0, 20) : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团破产重整] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: `破产重整同步完成，共同步 ${totalSynced} 条`,
+      data: { synced: totalSynced, total: toProcess.length, errors: errors.slice(0, 10) }
+    };
+  } catch (error) {
+    console.error('上海国际集团破产重整同步失败：', error);
     throw error;
   }
 }

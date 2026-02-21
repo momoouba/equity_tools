@@ -193,20 +193,25 @@ router.get('/news-config/:id', async (req, res) => {
 });
 
 // 获取新闻类型选项（根据接口类型返回可用及禁用的选项）
-// 新榜：仅返回新闻舆情；企查查/上海国际集团：返回全部选项，未开发的置为disabled
+// 新榜：仅返回新闻舆情；企查查/上海国际集团：返回全部选项，未开发的置为disabled；上海国际集团/企查查不返回「破产重组」选项
 router.get('/news-type-options', async (req, res) => {
   try {
     const { interface_type } = req.query;
     const interfaceType = interface_type || '新榜';
     const rows = await db.query(
-      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ORDER BY FIELD(news_type, "新闻舆情", "行政处罚", "被执行人", "失信被执行人", "限制高消费", "终本案件", "破产重组", "裁判文书", "法院公告", "开庭公告", "送达公告", "立案信息")',
+      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ORDER BY FIELD(news_type, "新闻舆情", "行政处罚", "被执行人", "失信被执行人", "限制高消费", "终本案件", "破产重组", "破产重整", "裁判文书", "法院公告", "开庭公告", "送达公告", "立案信息")',
       [interfaceType]
     );
+    // 上海国际集团、企查查接口不返回「破产重组」选项（已删除该类型）
+    let filteredRows = rows;
+    if (interfaceType === '上海国际集团' || interfaceType === '企查查') {
+      filteredRows = rows.filter(r => r.news_type !== '破产重组');
+    }
     let options;
     if (interfaceType === '新榜') {
-      options = rows.filter(r => r.is_enabled === 1).map(r => ({ value: r.news_type, label: r.news_type, disabled: false }));
+      options = filteredRows.filter(r => r.is_enabled === 1).map(r => ({ value: r.news_type, label: r.news_type, disabled: false }));
     } else {
-      options = rows.map(r => ({
+      options = filteredRows.map(r => ({
         value: r.news_type,
         label: r.news_type,
         disabled: r.is_enabled !== 1
