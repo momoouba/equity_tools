@@ -60,6 +60,7 @@ function NewsConfig() {
     content_type: 'application/x-www-form-urlencoded;charset=utf-8',
     api_key: '',
     cron_expression: '0 0 0 * * ? *', // 默认每天0点执行
+    skip_holiday: false,
     is_active: true,
     entity_type: []
   })
@@ -152,6 +153,7 @@ function NewsConfig() {
       content_type: 'application/x-www-form-urlencoded;charset=utf-8',
       api_key: '',
       cron_expression: '0 0 0 * * ? *', // 默认每天0点执行
+      skip_holiday: false,
       is_active: true,
       entity_type: []
     })
@@ -215,6 +217,7 @@ function NewsConfig() {
           content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
           api_key: '',
           cron_expression: cronExpression,
+          skip_holiday: config.skip_holiday === 1,
           is_active: config.is_active === 1,
           entity_type: entityType
         })
@@ -265,6 +268,7 @@ function NewsConfig() {
           content_type: config.content_type || 'application/x-www-form-urlencoded;charset=utf-8',
           api_key: '', // 复制时不包含 api_key，需要用户重新输入
           cron_expression: cronExpression,
+          skip_holiday: config.skip_holiday === 1,
           is_active: config.is_active === 1,
           entity_type: entityType
         })
@@ -865,12 +869,14 @@ function NewsConfig() {
         </form>
       </Modal>
 
-      {/* Cron表达式配置弹窗 */}
+      {/* Cron表达式配置弹窗：回传 cron 与「跳过节假日」，便于保存到新闻接口配置 */}
       <CronGenerator
         visible={showCronModal}
         value={formData.cron_expression}
-        onChange={(cron) => {
+        skipHoliday={formData.skip_holiday}
+        onChange={(cron, isSkipHoliday) => {
           handleChange('cron_expression', cron)
+          if (isSkipHoliday !== undefined) handleChange('skip_holiday', isSkipHoliday)
           setShowCronModal(false)
         }}
         onCancel={() => setShowCronModal(false)}

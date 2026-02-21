@@ -125,7 +125,7 @@ router.get('/news-configs', async (req, res) => {
 
     // 获取分页数据（包括所有接口类型：新榜、企查查等）
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.skip_holiday, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       ORDER BY nic.created_at DESC
@@ -164,7 +164,7 @@ router.get('/news-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const configs = await db.query(`
-      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
+      SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.skip_holiday, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
       WHERE nic.id = ?
@@ -241,6 +241,7 @@ router.post('/news-config', [
     }
 
     const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
+    const skip_holiday_create = req.body.skip_holiday === true || req.body.skip_holiday === 1 || req.body.skip_holiday === '1' || req.body.skip_holiday === 'true';
     
     // 验证：必须提供 cron_expression（frequency_type 和 frequency_value 已废弃）
     if (!cron_expression) {
@@ -420,8 +421,8 @@ router.post('/news-config', [
     
     await db.execute(
       `INSERT INTO news_interface_config 
-       (id, app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, entity_type) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, skip_holiday, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         app_id,
@@ -440,6 +441,7 @@ router.post('/news-config', [
         retry_count,
         retry_interval,
         finalIsActive,
+        skip_holiday_create ? 1 : 0,
         entityTypeJson
       ]
     );
@@ -510,6 +512,8 @@ router.put('/news-config/:id', [
 
     const { id } = req.params;
     const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval, entity_type } = req.body;
+    const skip_holiday_raw = req.body.skip_holiday;
+    const skip_holiday = skip_holiday_raw === true || skip_holiday_raw === 1 || skip_holiday_raw === '1' || skip_holiday_raw === 'true';
 
     // 检查配置是否存在，并获取旧数据用于日志记录
     const existingConfigs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [id]);
@@ -618,6 +622,10 @@ router.put('/news-config/:id', [
       updateFields.push('is_active = ?');
       updateValues.push(is_active ? 1 : 0);
     }
+    if (req.body.skip_holiday !== undefined) {
+      updateFields.push('skip_holiday = ?');
+      updateValues.push(skip_holiday ? 1 : 0);
+    }
     
     // 处理 entity_type 字段（验证并转换为JSON格式）
     if (entity_type !== undefined) {
@@ -688,7 +696,8 @@ router.put('/news-config/:id', [
         weekday !== undefined || 
         month_day !== undefined || 
         is_active !== undefined ||
-        frequency_type !== undefined; // frequency_type变更可能影响send_frequency的默认值
+        frequency_type !== undefined || // frequency_type变更可能影响send_frequency的默认值
+        req.body.skip_holiday !== undefined;
       
       if (shouldUpdateScheduledTasks) {
         try {
