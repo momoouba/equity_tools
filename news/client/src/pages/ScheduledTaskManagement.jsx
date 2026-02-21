@@ -262,6 +262,7 @@ function ScheduledTaskManagement() {
             send_frequency: values.send_frequency,
             send_time: values.send_time,
             is_active: values.is_active,
+            skip_holiday: values.skip_holiday !== undefined ? values.skip_holiday : formData.skip_holiday,
             weekday: values.send_frequency === 'weekly' ? (values.weekday || null) : null,
             month_day: values.send_frequency === 'monthly' ? (values.month_day || null) : null,
             retry_count: values.retry_count !== undefined ? parseInt(values.retry_count) : 0,
@@ -288,6 +289,8 @@ function ScheduledTaskManagement() {
         }
         delete submitData.weekday
         delete submitData.month_day
+        // 始终用 formData 中的开关状态提交，避免 Form 未收集 Switch 导致后端收到 undefined 不更新
+        submitData.skip_holiday = Boolean(formData.skip_holiday)
 
         const response = await axios.put(`/api/scheduled-tasks/${editingTask.id}`, submitData)
         if (response.data.success) {
@@ -924,6 +927,7 @@ function ScheduledTaskManagement() {
         style={{ width: 600 }}
       >
         <Form
+          key={activeTab === 'email' ? (editingTask ? `email-${editingTask.id}` : 'email-new') : (editingTask ? `sync-${editingTask.id}` : 'sync-new')}
           initialValues={formData}
           onSubmit={handleSave}
           layout="vertical"
@@ -1046,9 +1050,12 @@ function ScheduledTaskManagement() {
           <FormItem
             label="跳过节假日"
             field="skip_holiday"
-            extra="开启后，定时任务在节假日将不会执行"
+            extra="开启后，定时任务在节假日将不会执行；节假日表中标记为工作日的日期会照常执行"
           >
-            <Switch checked={formData.skip_holiday} />
+            <Switch
+              checked={formData.skip_holiday}
+              onChange={(checked) => setFormData((prev) => ({ ...prev, skip_holiday: !!checked }))}
+            />
           </FormItem>
 
           {activeTab === 'news_sync' && (

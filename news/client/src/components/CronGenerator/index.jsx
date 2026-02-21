@@ -10,10 +10,11 @@ import './index.css'
  * Cron 表达式可视化配置组件
  * @param {boolean} visible - 是否显示弹窗
  * @param {string} value - 初始 Cron 表达式值
- * @param {function} onChange - 值变化回调 (cron: string) => void
+ * @param {boolean} skipHoliday - 初始「跳过节假日」状态（可选，用于收件管理等编辑回显）
+ * @param {function} onChange - 值变化回调 (cron: string, isSkipHoliday?: boolean) => void
  * @param {function} onCancel - 取消回调
  */
-function CronGenerator({ visible, value, onChange, onCancel }) {
+function CronGenerator({ visible, value, skipHoliday: initialSkipHoliday, onChange, onCancel }) {
   // 默认配置：所有维度为通配符
   const defaultConfig = {
     second: { mode: 'wildcard', value: '*' },
@@ -30,7 +31,7 @@ function CronGenerator({ visible, value, onChange, onCancel }) {
   const [isSkipHoliday, setIsSkipHoliday] = useState(false)
   const [activeTab, setActiveTab] = useState('second')
 
-  // 初始化：如果有传入值，解析它
+  // 初始化：如果有传入值，解析它；若有 skipHoliday 初始值则同步
   useEffect(() => {
     if (visible && value) {
       try {
@@ -48,7 +49,10 @@ function CronGenerator({ visible, value, onChange, onCancel }) {
       setCronConfig(defaultConfig)
       setFullCron('* * * * * ? *')
     }
-  }, [visible, value])
+    if (visible && initialSkipHoliday !== undefined && initialSkipHoliday !== null) {
+      setIsSkipHoliday(Boolean(initialSkipHoliday))
+    }
+  }, [visible, value, initialSkipHoliday])
 
   // 当配置变化时，重新生成 Cron 表达式
   useEffect(() => {
@@ -91,10 +95,10 @@ function CronGenerator({ visible, value, onChange, onCancel }) {
     setActiveTab('second')
   }
 
-  // 确定
+  // 确定：回传 cron 与「跳过节假日」状态，便于收件管理持久化（仅收一个参数的回调会忽略第二参）
   const handleConfirm = () => {
     if (onChange) {
-      onChange(fullCron)
+      onChange(fullCron, isSkipHoliday)
     }
     if (onCancel) {
       onCancel()

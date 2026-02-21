@@ -2343,14 +2343,13 @@ async function executeEmailTask(recipientId) {
     
     console.log(`[邮件发送] 收件配置 ${recipientId} 使用${categoryCodes ? '自定义' : '默认'}企查查类别`);
     
-    // 如果是每日发送，需要检查今天是否为工作日（排除节假日）
-    if (recipient.send_frequency === 'daily') {
+    // 当「跳过节假日」开启时：查询节假日表，仅在今日为工作日时发送；表中标记为工作日的日期照常发送
+    if (recipient.skip_holiday === 1) {
       const today = new Date();
       const isTodayWorkday = await isWorkdayForEmail(today);
-      
       if (!isTodayWorkday) {
-        const dateStr = formatDateOnly(today); // 使用北京时区格式化日期
-        console.log(`[邮件发送] 收件管理配置 ${recipientId} 在 ${dateStr}（北京时区）为节假日，跳过发送`);
+        const dateStr = formatDateOnly(today);
+        console.log(`[邮件发送] 收件管理配置 ${recipientId} 已开启跳过节假日，${dateStr}（北京时区）为节假日，跳过发送`);
         return;
       }
     }

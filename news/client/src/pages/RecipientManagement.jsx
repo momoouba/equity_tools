@@ -23,6 +23,7 @@ function RecipientManagement() {
     recipient_email: '',
     email_subject: '',
     cron_expression: '0 0 9 * * ? *', // 默认每天9点执行
+    skip_holiday: false,
     is_active: true,
     qichacha_category_codes: null,
     entity_type: null
@@ -265,6 +266,7 @@ function RecipientManagement() {
           recipient_email: recipient.recipient_email || '',
           email_subject: recipient.email_subject || '',
           cron_expression: cronExpression,
+          skip_holiday: recipient.skip_holiday === 1,
           is_active: recipient.is_active === 1,
           qichacha_category_codes: categoryCodes,
           entity_type: entityTypes
@@ -332,6 +334,7 @@ function RecipientManagement() {
       const submitData = {
         ...values,
         cron_expression: formData.cron_expression, // 从 formData 中获取 cron_expression
+        skip_holiday: formData.skip_holiday, // 从 formData 中获取（在 Cron 弹窗中设置）
         qichacha_category_codes: categoryCodes
       }
       
@@ -350,6 +353,7 @@ function RecipientManagement() {
           recipient_email: '',
           email_subject: '',
           cron_expression: '0 0 9 * * ? *',
+          skip_holiday: false,
           is_active: true,
           qichacha_category_codes: null,
           entity_type: null
@@ -726,16 +730,17 @@ function RecipientManagement() {
         />
       )}
 
-      {/* Cron表达式配置弹窗 */}
+      {/* Cron表达式配置弹窗：回传 cron 与「跳过节假日」，便于保存到收件管理 */}
       <CronGenerator
         visible={showCronModal}
         value={formData.cron_expression}
-        onChange={(cron) => {
-          // 同时更新 formData 和 Form 的值
-          setFormData({
-            ...formData,
-            cron_expression: cron
-          })
+        skipHoliday={formData.skip_holiday}
+        onChange={(cron, isSkipHoliday) => {
+          setFormData((prev) => ({
+            ...prev,
+            cron_expression: cron,
+            skip_holiday: isSkipHoliday !== undefined ? isSkipHoliday : prev.skip_holiday
+          }))
           form.setFieldValue('cron_expression', cron)
           setShowCronModal(false)
         }}

@@ -935,7 +935,10 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
 router.put('/:id', checkAdminPermission, async (req, res) => {
   try {
     const { id } = req.params;
-    const { send_frequency, send_time, is_active, skip_holiday, task_type = 'email' } = req.body;
+    const { send_frequency, send_time, is_active, task_type = 'email' } = req.body;
+    // 明确从 body 取 skip_holiday，兼容 true/false/1/0 和字符串 "true"/"false"
+    const skip_holiday_raw = req.body.skip_holiday;
+    const skip_holiday = skip_holiday_raw === true || skip_holiday_raw === 1 || skip_holiday_raw === '1' || skip_holiday_raw === 'true';
 
     if (task_type === 'email') {
       // 检查收件管理配置是否存在
@@ -964,10 +967,9 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
         updateFields.push('is_active = ?');
         updateValues.push(is_active ? 1 : 0);
       }
-      if (skip_holiday !== undefined) {
-        updateFields.push('skip_holiday = ?');
-        updateValues.push(skip_holiday ? 1 : 0);
-      }
+      // 收件管理编辑时始终更新 skip_holiday（前端会显式提交该字段）
+      updateFields.push('skip_holiday = ?');
+      updateValues.push(skip_holiday ? 1 : 0);
 
       if (updateFields.length > 0) {
         updateValues.push(id);

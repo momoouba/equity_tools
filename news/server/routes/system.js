@@ -3746,11 +3746,11 @@ router.post('/cron/parse', async (req, res) => {
       });
     }
 
-    // 生成执行时间列表
+    // 生成执行时间列表：跳过节假日时先生成更多候选再过滤，否则只生成 count 个
     const executionTimes = [];
-    const candidateCount = isSkipHoliday ? count * 4 : count; // 如果跳过节假日，生成更多候选
+    const candidateCount = isSkipHoliday ? count * 4 : count; // 跳过节假日时多取候选，过滤后再取前 count 个
     
-    for (let i = 0; i < candidateCount && executionTimes.length < count; i++) {
+    for (let i = 0; i < candidateCount; i++) {
       try {
         // cron-parser v5.x: next() 返回 CronDate 对象，调用 toDate() 或 toString() 获取日期
         const nextResult = interval.next();

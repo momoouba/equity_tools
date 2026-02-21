@@ -2984,7 +2984,7 @@ router.get('/recipients', async (req, res) => {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -2999,7 +2999,7 @@ router.get('/recipients', async (req, res) => {
       // 用户只查看自己的（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.user_id = ? AND rm.is_deleted = 0
@@ -3070,7 +3070,7 @@ router.get('/recipients/:id', async (req, res) => {
     if (userRole === 'admin') {
       query = `
         SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -3080,7 +3080,7 @@ router.get('/recipients/:id', async (req, res) => {
     } else {
       query = `
         SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0
@@ -3411,6 +3411,8 @@ router.put('/recipients/:id', [
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
     const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    const skip_holiday_raw = req.body.skip_holiday;
+    const skip_holiday = skip_holiday_raw === true || skip_holiday_raw === 1 || skip_holiday_raw === '1' || skip_holiday_raw === 'true';
     
     // 如果没有提供 cron_expression，从 send_frequency 和 send_time 转换（向后兼容）
     let finalCronExpression = cron_expression
@@ -3503,6 +3505,10 @@ router.put('/recipients/:id', [
     if (is_active !== undefined) {
       updateFields.push('is_active = ?');
       updateValues.push(is_active ? 1 : 0);
+    }
+    if (req.body.skip_holiday !== undefined) {
+      updateFields.push('skip_holiday = ?');
+      updateValues.push(skip_holiday ? 1 : 0);
     }
     // 处理企查查类别编码：即使为null也要更新（允许清空类别）
     if (qichacha_category_codes !== undefined) {
