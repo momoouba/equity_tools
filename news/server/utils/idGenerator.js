@@ -29,7 +29,13 @@ async function generateId(tableName) {
       'email_config', 'additional_wechat_accounts', 'ai_model_config', 'qichacha_config',
       'shanghai_international_group_config', 'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage',
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log',
-      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled'
+      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled',
+      // 业绩看板相关表
+      'b_version', 'b_indicator_describe', 'b_sql',
+      'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',
+      'b_all_indicator', 'b_investment', 'b_investment_sum', 'b_investor_list',
+      'b_transaction', 'b_project', 'b_project_a', 'b_project_all',
+      'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a'
     ];
     
     if (!validTableNames.includes(tableName)) {

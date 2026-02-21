@@ -1,0 +1,315 @@
+openapi: 3.0.3
+info:
+  title: Equity News API
+  description: |
+    对外访问接口（基于当前数据库）。
+    本文档描述 **news_detail（新闻详情）** 表的只读访问接口，供外部系统查询新闻列表与单条详情。
+    **鉴权**：所有接口均需在请求头携带用户 Token（存于用户表 `users.api_token`）。支持两种方式：
+    - `Authorization: Bearer <token>`
+    - `X-Api-Token: <token>`
+    用户可在登录后调用 `GET /api/auth/api-token` 获取或生成 Token。
+  version: 1.0.0
+
+servers:
+  - url: https://news.gf-dsai.com/api
+    description: 生产环境（news.gf-dsai.com）
+  - url: /api
+    description: 相对路径（当前域名 + /api）
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---------- news_detail 对外接口 ----------
+  /news-detail:
+    get:
+      summary: 获取新闻详情列表（分页）
+      description: |
+        分页查询 news_detail 表，仅返回未删除（delete_mark=0）的记录。
+        支持按关键词、企业全称、公众号、时间范围、实体类型等筛选。
+      operationId: listNewsDetail
+      tags:
+        - news-detail
+      parameters:
+        - name: page
+          in: query
+          description: 页码，从 1 开始
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          description: 每页条数
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: keyword
+          in: query
+          description: 关键词（匹配标题、公众号名称、微信号、企业全称）
+          schema:
+            type: string
+        - name: enterpriseFullName
+          in: query
+          description: 按被投企业全称精确或列表筛选
+          schema:
+            type: string
+        - name: wechatAccount
+          in: query
+          description: 微信号（公众号）
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          description: 实体类型（如 被投企业、基金相关主体、子基金、子基金管理人、子基金GP）
+          schema:
+            type: string
+        - name: startTime
+          in: query
+          description: 发布时间起始（ISO 8601 或 YYYY-MM-DD）
+          schema:
+            type: string
+            format: date-time
+        - name: endTime
+          in: query
+          description: 发布时间截止（ISO 8601 或 YYYY-MM-DD）
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: 成功返回分页列表
+        '401':
+          description: 未提供 Token 或 Token 无效/已失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data, total, page, pageSize]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NewsDetailListItem'
+                  total:
+                    type: integer
+                    description: 符合条件的总条数
+                  page:
+                    type: integer
+                  pageSize:
+                    type: integer
+        '400':
+          description: 请求参数错误
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /news-detail/{id}:
+    get:
+      summary: 根据 ID 获取单条新闻详情
+      description: |
+        根据 news_detail 主键 id 查询单条记录。
+        若记录不存在或已删除（delete_mark=1），返回 404。
+      operationId: getNewsDetailById
+      tags:
+        - news-detail
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 新闻详情 ID（VARCHAR 19，如年月日时分秒+5位序列）
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功返回单条详情（含正文等完整字段）
+        '401':
+          description: 未提供 Token 或 Token 无效/已失效
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, data]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  data:
+                    $ref: '#/components/schemas/NewsDetail'
+        '404':
+          description: 未找到该 ID 或已删除
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500':
+          description: 服务器内部错误
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Token
+      description: 用户 API Token（来自 users.api_token）。也可使用请求头 X-Api-Token 传递同一 token。
+  schemas:
+    # 列表项：对外可只返回部分字段，减少体积
+    NewsDetailListItem:
+      type: object
+      properties:
+        id:
+          type: string
+          description: 数据ID（年月日时分秒+5位自增序列）
+        account_name:
+          type: string
+          description: 公众号名称
+        wechat_account:
+          type: string
+          description: 微信号
+        enterprise_full_name:
+          type: string
+          nullable: true
+          description: 被投企业全称
+        enterprise_abbreviation:
+          type: string
+          nullable: true
+          description: 企业简称
+        entity_type:
+          type: string
+          nullable: true
+          description: 企业类型（被投企业/基金相关主体/子基金/子基金管理人/子基金GP）
+        public_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: 发布时间
+        title:
+          type: string
+          nullable: true
+          description: 图文标题
+        source_url:
+          type: string
+          nullable: true
+          description: 原文链接
+        keywords:
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: object
+          nullable: true
+          description: 关键词（JSON 数组或对象）
+        fund:
+          type: string
+          nullable: true
+          description: 基金
+        sub_fund:
+          type: string
+          nullable: true
+          description: 子基金
+        news_abstract:
+          type: string
+          nullable: true
+          description: 新闻摘要（AI 提取）
+        news_sentiment:
+          type: string
+          enum: [positive, neutral, negative]
+          description: 新闻情绪
+
+    # 单条详情：包含正文等完整字段
+    NewsDetail:
+      type: object
+      description: news_detail 表单条记录（对外暴露字段）
+      properties:
+        id:
+          type: string
+          description: 数据ID
+        account_name:
+          type: string
+        wechat_account:
+          type: string
+        enterprise_full_name:
+          type: string
+          nullable: true
+        enterprise_abbreviation:
+          type: string
+          nullable: true
+        entity_type:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 创建时间（入库时间）
+        source_url:
+          type: string
+          nullable: true
+        title:
+          type: string
+          nullable: true
+        summary:
+          type: string
+          nullable: true
+          description: 图文摘要
+        public_time:
+          type: string
+          format: date-time
+          nullable: true
+        content:
+          type: string
+          nullable: true
+          description: 正文（LONGTEXT）
+        keywords:
+          oneOf:
+            - type: array
+              items: { type: string }
+            - type: object
+          nullable: true
+        news_abstract:
+          type: string
+          nullable: true
+        news_sentiment:
+          type: string
+          enum: [positive, neutral, negative]
+        APItype:
+          type: string
+          nullable: true
+          description: 接口类型（如 新榜/企查查）
+        news_category:
+          type: string
+          nullable: true
+          description: 新闻类别（中文）
+        fund:
+          type: string
+          nullable: true
+        sub_fund:
+          type: string
+          nullable: true
+
+    Error:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          description: 错误信息

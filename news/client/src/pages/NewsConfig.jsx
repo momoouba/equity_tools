@@ -371,6 +371,9 @@ function NewsConfig() {
         news_type: '新闻舆情',
         entity_type: filteredEntityTypes
       }))
+    } else if (name === 'news_type' && value === '同花顺订阅') {
+      // 同花顺订阅：企业类型默认为空，不参与接口参数
+      setFormData(prev => ({ ...prev, [name]: value, entity_type: [] }))
     } else if (name === 'entity_type' && (formData.interface_type === '企查查' || formData.interface_type === '上海国际集团')) {
       const currentEntityTypes = value || []
       const filteredEntityTypes = Array.isArray(currentEntityTypes) ? currentEntityTypes.filter(type => type !== '额外公众号') : []
@@ -816,8 +819,13 @@ function NewsConfig() {
               mode="multiple"
               value={formData.entity_type}
               onChange={(value) => handleChange('entity_type', value)}
-              placeholder="请选择企业类型（可多选）"
+              placeholder={
+                formData.news_type === '同花顺订阅'
+                  ? '同花顺订阅不需要传企业类型，可不选'
+                  : '请选择企业类型（可多选）'
+              }
               allowClear
+              disabled={formData.news_type === '同花顺订阅'}
             >
               <Option value="被投企业">被投企业</Option>
               <Option value="基金相关主体">基金相关主体</Option>
@@ -829,7 +837,9 @@ function NewsConfig() {
               )}
             </Select>
             <p className="form-hint">
-              {formData.interface_type === '新榜' ? (
+              {formData.news_type === '同花顺订阅' ? (
+                '同花顺订阅接口按 company 表 updated_at 筛选企业，不传企业类型参数，此处可不选。'
+              ) : formData.interface_type === '新榜' ? (
                 <>
                   根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。
                   <br />

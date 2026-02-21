@@ -18,6 +18,7 @@ const emailRoutes = require('./routes/email');
 const scheduledTasksRoutes = require('./routes/scheduledTasks');
 const externalDbRoutes = require('./routes/externalDb');
 const newsShareRoutes = require('./routes/newsShare');
+const newsDetailRoutes = require('./routes/newsDetail');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
@@ -135,6 +136,7 @@ app.use('/api/email', emailRoutes);
 app.use('/api/scheduled-tasks', scheduledTasksRoutes);
 app.use('/api/external-db', externalDbRoutes);
 app.use('/api/news-share', newsShareRoutes);
+app.use('/api/news-detail', newsDetailRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
