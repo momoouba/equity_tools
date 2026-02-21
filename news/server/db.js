@@ -1162,7 +1162,10 @@ async function initializeTables(dbPool) {
       let seq = 0;
       for (const interfaceType of ['新榜', '企查查', '上海国际集团']) {
         for (const newsType of allNewsTypes) {
-          const isEnabled = newsType === '新闻舆情';
+          let isEnabled = newsType === '新闻舆情';
+          if (interfaceType === '上海国际集团') {
+            isEnabled = ['新闻舆情', '被执行人'].includes(newsType);
+          }
           const id = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}${String(++seq).padStart(5, '0')}`;
           await dbPool.query(
             'INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, ?)',
@@ -1172,6 +1175,14 @@ async function initializeTables(dbPool) {
       }
       console.log('已初始化 interface_news_type_enabled 表数据');
     }
+    // 迁移：为上海国际集团启用「被执行人」新闻类型（兼容已有库）
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '被执行人'`
+    );
+    // 迁移：上海国际集团下「行政处罚」不可选，仅新闻舆情、被执行人可选
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 0 WHERE interface_type = '上海国际集团' AND news_type = '行政处罚'`
+    );
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }

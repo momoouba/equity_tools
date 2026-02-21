@@ -1447,9 +1447,14 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     console.log(`[新闻同步] 企查查接口，调用syncQichachaNewsData`);
     result = await syncQichachaNewsData(config.id, logId);
   } else if (interfaceType === '上海国际集团') {
-    // 上海国际集团接口使用syncShanghaiInternationalGroupNewsData
-    console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
-    result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
+    const newsType = (config.news_type || '新闻舆情').trim();
+    if (newsType === '被执行人') {
+      console.log(`[新闻同步] 上海国际集团接口(被执行人)，调用syncShanghaiInternationalGroupExecPersData`);
+      result = await syncShanghaiInternationalGroupExecPersData(config.id, logId);
+    } else {
+      console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
+      result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
+    }
   } else {
     // 新榜接口使用executeNewsSyncForConfig
     console.log(`[新闻同步] 新榜接口，调用executeNewsSyncForConfig`);
@@ -1677,8 +1682,14 @@ router.post('/sync', async (req, res) => {
       logWithTag('[手动同步]', '执行企查查新闻同步...');
       result = await syncQichachaNewsData(config_id, logId, customRange);
     } else if (interfaceType === '上海国际集团') {
-      logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
-      result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
+      const newsType = (config.news_type || '新闻舆情').trim();
+      if (newsType === '被执行人') {
+        logWithTag('[手动同步]', '执行上海国际集团被执行人同步...');
+        result = await syncShanghaiInternationalGroupExecPersData(config_id, logId);
+      } else {
+        logWithTag('[手动同步]', '执行上海国际集团新闻同步...');
+        result = await syncShanghaiInternationalGroupNewsData(config_id, logId, customRange);
+      }
     } else {
       logWithTag('[手动同步]', '执行新榜新闻同步...');
       
@@ -4800,6 +4811,263 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
   }
 }
 
+/** 上海国际集团被执行人接口地址（与 1.12 同环境） */
+const SHANGHAI_INTERNATIONAL_EXECPERS_URL = 'http://114.141.181.181:8000/dofp/v2/ipaas/query/execPers';
+
+/**
+ * 拼接单条被执行人记录的 summary/content/news_abstract 文案（不做 AI 分析，仅拼接）
+ * @param {object} item - 接口单条 Data 项
+ * @returns {string}
+ */
+function buildExecPersSummary(item) {
+  const execInstnNm = item.exec_instn_nm || '';
+  const caseNo = item.case_no || '';
+  const execUndl = item.exec_undl != null && String(item.exec_undl).trim() !== '' ? String(item.exec_undl).trim() : null;
+  const execCrt = item.exec_crt != null && String(item.exec_crt).trim() !== '' ? String(item.exec_crt).trim() : null;
+  const caseSts = item.case_sts;
+  const statusText = caseSts === '1' ? '结案' : '其他';
+  let middle = '';
+  if (execUndl) middle = `执行标的为 ${execUndl}，`;
+  else if (execCrt) middle = `执行法院为 ${execCrt}，`;
+  return `${execInstnNm}涉及被执行人案件，案号为 ${caseNo} 的案件，${middle}案件状态均为${statusText}。`;
+}
+
+/**
+ * 上海国际集团被执行人接口同步函数（仅拼接入库，不做 AI 分析）
+ * 增量逻辑：对比接口返回的 case_no 与库中 wechat_account（被执行人存 case_no）取增量，每条单独入库。
+ * @param {string|null} configId - 新闻接口配置ID
+ * @param {string|null} logId - 同步日志ID
+ * @returns {Promise<object>} 同步结果
+ */
+async function syncShanghaiInternationalGroupExecPersData(configId = null, logId = null) {
+  try {
+    let config;
+    if (configId) {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        [configId, '上海国际集团']
+      );
+      if (configs.length === 0) {
+        throw new Error('上海国际集团被执行人接口配置不存在或未启用');
+      }
+      config = configs[0];
+    } else {
+      const configs = await db.query(
+        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        ['上海国际集团', '被执行人']
+      );
+      if (configs.length === 0) {
+        throw new Error('请先配置上海国际集团被执行人接口');
+      }
+      config = configs[0];
+    }
+
+    const sigConfigs = await db.query(
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+    );
+    if (sigConfigs.length === 0) {
+      throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
+    }
+    const xAppId = sigConfigs[0].x_app_id;
+    const apiKey = sigConfigs[0].api_key;
+    const dailyLimit = Math.max(1, parseInt(sigConfigs[0].daily_limit || '100', 10));
+
+    if (!xAppId || !apiKey) {
+      throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
+    }
+
+    // 存量 case_no：被执行人数据 wechat_account 存案号
+    const existingRows = await db.query(
+      "SELECT wechat_account FROM news_detail WHERE APItype = '上海国际' AND account_name = '被执行人' AND (wechat_account IS NOT NULL AND wechat_account != '')"
+    );
+    const existingCaseNos = new Set((existingRows || []).map(r => (r.wechat_account || '').trim()).filter(Boolean));
+
+    // 企业列表（与舆情接口一致，按 entity_type 过滤）
+    let entityTypeFilter = '';
+    if (config.entity_type) {
+      try {
+        let entityTypes = config.entity_type;
+        if (typeof entityTypes === 'string') entityTypes = JSON.parse(entityTypes);
+        if (Array.isArray(entityTypes) && entityTypes.length > 0) {
+          const conditions = [];
+          entityTypes.forEach(type => {
+            if (type === '被投企业') conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
+            else if (type === '基金相关主体') conditions.push(`entity_type = '基金相关主体'`);
+            else if (type === '子基金') conditions.push(`entity_type = '子基金'`);
+            else if (type === '子基金管理人') conditions.push(`entity_type = '子基金管理人'`);
+            else if (type === '子基金GP') conditions.push(`entity_type = '子基金GP'`);
+          });
+          if (conditions.length > 0) entityTypeFilter = `AND (${conditions.join(' OR ')})`;
+        }
+      } catch (e) {
+        console.warn(`[上海国际集团被执行人] 解析 entity_type 失败: ${e.message}`);
+      }
+    }
+
+    const enterprises = await db.query(
+      `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
+       FROM invested_enterprises
+       WHERE exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND exit_status IS NOT NULL
+       AND unified_credit_code IS NOT NULL
+       AND unified_credit_code != ''
+       AND unified_credit_code != 'null'
+       AND delete_mark = 0
+       ${entityTypeFilter}
+       ORDER BY unified_credit_code`
+    );
+
+    if (enterprises.length === 0) {
+      return { success: true, message: '没有需要同步的企业', data: { synced: 0, total: 0 } };
+    }
+
+    const normalizeCreditCode = (code) => {
+      if (code == null || typeof code !== 'string') return '';
+      return code.trim().replace(/[\s\-]/g, '');
+    };
+
+    const creditCodes = enterprises.map(e => e.unified_credit_code).filter(c => c && c.trim() !== '' && c !== 'null');
+    const uniqueCreditCodes = [...new Set(creditCodes)];
+    const toProcess = uniqueCreditCodes.slice(0, dailyLimit);
+
+    const apiUrl = SHANGHAI_INTERNATIONAL_EXECPERS_URL;
+    let totalSynced = 0;
+    const errors = [];
+    let requestIndex = 0;
+
+    for (const creditCode of toProcess) {
+      const execIdtfnCd = normalizeCreditCode(creditCode);
+      if (execIdtfnCd.length !== 18) {
+        console.warn(`[上海国际集团被执行人] 跳过无效机构代码: ${(creditCode || '').substring(0, 10)}... 长度=${execIdtfnCd.length}`);
+        continue;
+      }
+
+      requestIndex += 1;
+      const maskedCode = execIdtfnCd.substring(0, 4) + '****' + execIdtfnCd.slice(-4);
+      console.log(`[上海国际集团被执行人] 请求第 ${requestIndex}/${toProcess.length} 个企业 机构:${maskedCode}`);
+
+      try {
+        const uuid = require('crypto').randomUUID();
+        const timestamp = String(Date.now());
+        const response = await axios.post(
+          apiUrl,
+          JSON.stringify({ exec_idtfn_cd: execIdtfnCd }),
+          {
+            headers: {
+              'Content-Type': 'application/json; charset=UTF-8',
+              'X-App-Id': String(xAppId).trim(),
+              'X-Sequence-No': uuid,
+              'X-Timestamp': timestamp,
+              'APIkey': String(apiKey).trim()
+            },
+            timeout: 60000,
+            transformRequest: [(data) => data]
+          }
+        );
+
+        if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
+          const code = response.data?.Code || 'unknown';
+          const desc = response.data?.Desc || '未知错误';
+          console.warn(`[上海国际集团被执行人] 接口错误: ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          continue;
+        }
+
+        const list = response.data.Data;
+        const enterpriseInfo = enterprises.find(e => e.unified_credit_code === creditCode) || {};
+        const execInstnNm = enterpriseInfo.enterprise_full_name || '';
+
+        for (const item of list) {
+          const caseNo = (item.case_no || '').trim();
+          if (!caseNo) continue;
+          if (existingCaseNos.has(caseNo)) continue;
+
+          let publicTime = null;
+          if (item.filing_dt) {
+            const s = String(item.filing_dt).replace('T', ' ').substring(0, 19);
+            if (s.length >= 19) publicTime = s;
+          }
+          if (!publicTime) publicTime = formatDate(new Date());
+
+          const title = `被执行人 - ${item.exec_instn_nm || execInstnNm}`;
+          const summary = buildExecPersSummary(item);
+          const accountName = '被执行人';
+          const APItype = '上海国际';
+
+          const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
+            item.exec_instn_nm || execInstnNm,
+            item.exec_idtfn_cd || creditCode,
+            caseNo
+          );
+
+          const newsId = await generateId('news_detail');
+          await db.execute(
+            `INSERT INTO news_detail
+             (id, account_name, wechat_account, enterprise_full_name, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, fund, sub_fund)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newsId,
+              accountName,
+              caseNo,
+              item.exec_instn_nm || execInstnNm,
+              '无',
+              title,
+              summary,
+              publicTime,
+              summary,
+              'negative', // news_sentiment 为 ENUM('positive','neutral','negative')，负面对应 negative
+              APItype,
+              summary,
+              fund,
+              sub_fund
+            ]
+          );
+          existingCaseNos.add(caseNo);
+          totalSynced++;
+        }
+      } catch (apiError) {
+        console.error(`[上海国际集团被执行人] 请求失败 (${creditCode}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+      }
+    }
+
+    if (logId) {
+      try {
+        await updateSyncLog(logId, {
+          status: errors.length > 0 && totalSynced === 0 ? 'failed' : 'success',
+          syncedCount: totalSynced,
+          totalEnterprises: uniqueCreditCodes.length,
+          processedEnterprises: toProcess.length,
+          errorCount: errors.length,
+          errorMessage: errors.length > 0 ? `共 ${errors.length} 个错误` : null,
+          executionDetails: {
+            interfaceType: '上海国际集团',
+            newsType: '被执行人',
+            requestUrl: apiUrl,
+            configId: configId || config.id,
+            totalEnterprises: uniqueCreditCodes.length,
+            processedEnterprises: toProcess.length,
+            syncedCount: totalSynced,
+            errorCount: errors.length,
+            errors: errors.length > 0 ? errors.slice(0, 20) : undefined
+          }
+        });
+      } catch (logError) {
+        console.warn(`[上海国际集团被执行人] 更新同步日志失败:`, logError.message);
+      }
+    }
+
+    return {
+      success: true,
+      message: `被执行人同步完成，共同步 ${totalSynced} 条`,
+      data: { synced: totalSynced, total: toProcess.length, errors: errors.slice(0, 10) }
+    };
+  } catch (error) {
+    console.error('上海国际集团被执行人同步失败：', error);
+    throw error;
+  }
+}
+
 /**
  * 上海国际集团舆情和公司公告接口同步函数
  * @param {string|null} configId - 新闻接口配置ID
@@ -5259,6 +5527,7 @@ module.exports = router;
 router.syncNewsData = syncNewsData;
 router.syncQichachaNewsData = syncQichachaNewsData;
 router.syncShanghaiInternationalGroupNewsData = syncShanghaiInternationalGroupNewsData;
+router.syncShanghaiInternationalGroupExecPersData = syncShanghaiInternationalGroupExecPersData;
 router.createSyncLog = createSyncLog;
 router.updateSyncLog = updateSyncLog;
 
