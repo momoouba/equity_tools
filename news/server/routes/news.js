@@ -1690,6 +1690,7 @@ router.post('/sync', async (req, res) => {
     logWithTag('[手动同步]', '========== 开始手动同步 ==========');
     logWithTag('[手动同步]', `配置ID: ${config_id}`);
     logWithTag('[手动同步]', `接口类型: ${config.interface_type || '新榜'}`);
+    const syncStartTime = Date.now(); // 接口触发开始时间，用于计算取数耗时
     logWithTag('[手动同步]', `触发时间: ${formatDate(new Date())}`);
     
     // 根据接口类型选择同步函数
@@ -1750,20 +1751,35 @@ router.post('/sync', async (req, res) => {
         logId: logId
       });
     }
+
+    // 本次接口取数时间 = 接口触发结束时间 - 接口触发开始时间
+    const syncEndTime = Date.now();
+    const durationMs = syncEndTime - syncStartTime;
+    const durationSec = Math.floor(durationMs / 1000);
+    const durationMin = Math.floor(durationSec / 60);
+    const durationRemSec = durationSec % 60;
+    const durationText = `${durationMin}分${durationRemSec}秒`;
+    const summaryMessage = (result.message || '同步完成') + `，本次接口取数时间 ${durationText}`;
     
+    const syncedCount = result.data?.synced ?? (Array.isArray(result.data) && result.data[0] ? (result.data[0].data?.synced ?? 0) : 0);
+    const totalCount = result.data?.total ?? (Array.isArray(result.data) && result.data[0] ? (result.data[0].data?.total ?? 0) : 0);
     logWithTag('[手动同步]', '========== 同步完成 ==========');
     logWithTag('[手动同步]', '结果:', JSON.stringify({
       success: result.success,
-      message: result.message,
-      synced: result.data?.synced || 0,
-      total: result.data?.total || 0
+      message: summaryMessage,
+      synced: syncedCount,
+      total: totalCount,
+      duration: durationText,
+      durationSeconds: durationSec
     }, null, 2));
     console.log(`[手动同步] =============================`);
     
     res.json({
       success: true,
-      message: result.message,
+      message: summaryMessage,
       data: result.data,
+      duration: durationText,
+      durationSeconds: durationSec,
       logId: logId
     });
   } catch (error) {
@@ -5238,7 +5254,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '被执行人';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5480,7 +5496,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '裁判文书';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5723,7 +5739,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '法院公告';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -5966,7 +5982,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '开庭公告';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -6210,7 +6226,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '立案信息';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const caseNo = (item.case_no || '').trim();
@@ -6454,7 +6470,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
         const enterpriseAbbreviation = enterpriseInfo.project_abbreviation || null;
         const entityType = enterpriseInfo.entity_type || null;
         const accountName = '送达公告';
-        const keywords = accountName;
+        const keywords = JSON.stringify([accountName]); // keywords 列为 JSON 类型
 
         for (const item of list) {
           const title = (item.anncmnt_title || '').trim();
@@ -6715,7 +6731,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           const newsAbstract = buildBankrptReorgAbstract(item);
           const accountName = '破产重整';
           const APItype = '上海国际';
-          const keywords = '破产重整';
+          const keywords = JSON.stringify(['破产重整']); // keywords 列为 JSON 类型
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
             subjInstnNm,
