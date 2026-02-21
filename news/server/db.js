@@ -1220,6 +1220,11 @@ async function initializeTables(dbPool) {
       `UPDATE interface_news_type_enabled SET is_enabled = 0 WHERE interface_type IN ('上海国际集团', '企查查') AND news_type = '破产重组'`
     );
     console.log('已禁用上海国际集团、企查查接口下的「破产重组」新闻类型选项');
+    // 迁移：为上海国际集团启用「失信被执行人」新闻类型
+    await dbPool.query(
+      `UPDATE interface_news_type_enabled SET is_enabled = 1 WHERE interface_type = '上海国际集团' AND news_type = '失信被执行人'`
+    );
+    console.log('已为上海国际集团启用「失信被执行人」新闻类型');
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }
