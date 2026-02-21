@@ -123,6 +123,11 @@ function Dashboard() {
       visible: isAdmin || hasNewsPermission
     },
     {
+      key: 'system',
+      title: '系统配置',
+      visible: true
+    },
+    {
       key: 'companies',
       title: '企业列表',
       visible: isAdmin
@@ -140,11 +145,6 @@ function Dashboard() {
     {
       key: 'scheduled-tasks',
       title: '定时任务管理',
-      visible: isAdmin
-    },
-    {
-      key: 'system',
-      title: '系统配置',
       visible: isAdmin
     }
   ].filter(item => item.visible)
@@ -207,7 +207,7 @@ function Dashboard() {
             <Route path="/email" element={<EmailManagement />} />
             <Route path="/users" element={<UserManagement />} />
             <Route path="/scheduled-tasks" element={<ScheduledTaskManagement />} />
-            <Route path="/system" element={<SystemConfig />} />
+            <Route path="/system" element={<SystemConfig isAdmin={isAdmin} />} />
             <Route path="/" element={
               (isAdmin || hasNewsPermission) ? <EnterpriseManagement /> : <CompanyManagement />
             } />

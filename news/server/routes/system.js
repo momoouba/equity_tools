@@ -3333,25 +3333,36 @@ router.get('/holidays/:id/logs', async (req, res) => {
 });
 
 // 数据库连接配置相关路由
-// 获取数据库配置列表（支持分页）
+// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的
 router.get('/database-configs', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
 
-    // 获取总数
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM external_db_config WHERE is_deleted = 0');
+    const isAdmin = userRole === 'admin';
+    const whereClause = isAdmin
+      ? 'WHERE is_deleted = 0'
+      : 'WHERE is_deleted = 0 AND created_by = ?';
+    const countParams = isAdmin ? [] : [userId];
+    const listParams = isAdmin ? [pageSize, offset] : [userId, pageSize, offset];
+
+    const totalResult = await db.query(
+      `SELECT COUNT(*) as total FROM external_db_config ${whereClause}`,
+      countParams
+    );
     const total = totalResult[0].total;
 
-    // 获取分页数据
-    const configs = await db.query(`
-      SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
-      FROM external_db_config
-      WHERE is_deleted = 0
-      ORDER BY created_at DESC
-      LIMIT ? OFFSET ?
-    `, [pageSize, offset]);
+    const configs = await db.query(
+      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
+       FROM external_db_config
+       ${whereClause}
+       ORDER BY created_at DESC
+       LIMIT ? OFFSET ?`,
+      listParams
+    );
 
     res.json({
       success: true,
@@ -3366,15 +3377,20 @@ router.get('/database-configs', async (req, res) => {
   }
 });
 
-// 获取单个数据库配置（不包含密码）
+// 获取单个数据库配置（不包含密码）。普通用户只能查看自己创建的
 router.get('/database-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const configs = await db.query(`
-      SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
-      FROM external_db_config
-      WHERE id = ? AND is_deleted = 0
-    `, [id]);
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    const configs = await db.query(
+      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
+       FROM external_db_config
+       WHERE id = ? AND is_deleted = 0 ${isAdmin ? '' : 'AND created_by = ?'}`,
+      isAdmin ? [id] : [id, userId]
+    );
     if (configs.length > 0) {
       res.json({ success: true, data: configs[0] });
     } else {
@@ -3462,10 +3478,16 @@ router.put('/database-config/:id', [
     const { id } = req.params;
     const { name, host, port, user, password, database, is_active } = req.body;
 
-    // 检查配置是否存在
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
     const existingConfigs = await db.query('SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
     if (existingConfigs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    if (!isAdmin && existingConfigs[0].created_by !== userId) {
+      return res.status(403).json({ success: false, message: '无权修改该配置' });
     }
 
     // 如果更新配置名称，检查是否重复
@@ -3513,7 +3535,6 @@ router.put('/database-config/:id', [
     }
 
     if (updateFields.length > 0) {
-      const userId = req.headers['x-user-id'] || null;
       updateFields.push('updated_by = ?');
       updateValues.push(userId);
       updateValues.push(id);
@@ -3530,16 +3551,22 @@ router.put('/database-config/:id', [
   }
 });
 
-// 删除数据库配置
+// 删除数据库配置。普通用户只能删除自己创建的
 router.delete('/database-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    const existing = await db.query('SELECT id, created_by FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
+    if (!isAdmin && existing[0].created_by !== userId) {
+      return res.status(403).json({ success: false, message: '无权删除该配置' });
+    }
 
-    const userId = req.headers['x-user-id'] || null;
     await db.execute(
       `UPDATE external_db_config 
        SET is_deleted = 1, deleted_by = ?, deleted_at = CURRENT_TIMESTAMP 

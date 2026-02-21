@@ -1,5 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { body, validationResult } = require('express-validator');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
@@ -60,6 +61,13 @@ router.post('/register', [
       [userId, account, phone, email, hashedPassword, company_name || '', membershipLevelId, 'active']
     );
 
+    // 注册时生成 API Token 并写入 user 表（用于对外接口鉴权）
+    const apiToken = crypto.randomBytes(32).toString('hex');
+    await db.execute(
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      [apiToken, userId]
+    );
+
     res.json({
       success: true,
       message: '注册成功',
@@ -68,7 +76,8 @@ router.post('/register', [
         account,
         phone,
         email,
-        company_name: company_name || ''
+        company_name: company_name || '',
+        api_token: apiToken
       }
     });
   } catch (error) {
@@ -141,6 +150,16 @@ router.post('/login', [
       return res.status(403).json({ success: false, message: '账号已被禁用' });
     }
 
+    // 登录时若该用户尚无 API Token，则生成并写入 user 表（后续不自动更新）
+    if (!user.api_token) {
+      const apiToken = crypto.randomBytes(32).toString('hex');
+      await db.execute(
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        [apiToken, user.id]
+      );
+      user.api_token = apiToken;
+    }
+
     // 获取用户的应用权限（通过membership_levels关联applications）
     const appPermissions = [];
     if (user.app_id && user.app_name) {
@@ -178,6 +197,78 @@ router.post('/login', [
   } catch (error) {
     console.error('登录错误：', error);
     res.status(500).json({ success: false, message: '服务器错误' });
+  }
+});
+
+// 查询当前用户的 API Token（用于对外接口鉴权，如 /api/news-detail）
+// Token 已在注册时生成、登录时若无则补生成，后续不自动更新。本接口用于查询或兼容历史无 token 用户
+// 需已登录（请求头带 x-user-id）
+router.get('/api-token', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录，请先登录后获取 API Token' });
+    }
+    const users = await db.query(
+      'SELECT id, account, api_token, account_status FROM users WHERE id = ?',
+      [userId]
+    );
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    const user = users[0];
+    if (user.account_status !== 'active') {
+      return res.status(403).json({ success: false, message: '账号已被禁用' });
+    }
+    let token = user.api_token;
+    if (!token) {
+      token = crypto.randomBytes(32).toString('hex');
+      await db.execute(
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        [token, userId]
+      );
+    }
+    return res.json({
+      success: true,
+      message: 'API Token 获取成功，请妥善保管。调用对外接口时在请求头添加：Authorization: Bearer <token> 或 X-Api-Token: <token>',
+      token
+    });
+  } catch (error) {
+    console.error('获取 API Token 失败：', error);
+    return res.status(500).json({ success: false, message: '获取 API Token 失败' });
+  }
+});
+
+// 重新生成 API Token（旧 token 立即失效）
+router.post('/api-token/regenerate', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+    const users = await db.query(
+      'SELECT id, account_status FROM users WHERE id = ?',
+      [userId]
+    );
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+    if (users[0].account_status !== 'active') {
+      return res.status(403).json({ success: false, message: '账号已被禁用' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    await db.execute(
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      [token, userId]
+    );
+    return res.json({
+      success: true,
+      message: 'API Token 已重新生成，旧 Token 已失效',
+      token
+    });
+  } catch (error) {
+    console.error('重新生成 API Token 失败：', error);
+    return res.status(500).json({ success: false, message: '重新生成 API Token 失败' });
   }
 });
 

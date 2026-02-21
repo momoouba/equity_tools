@@ -2427,6 +2427,24 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 enterprise_abbreviation 字段时出现警告:', err.message);
   }
 
+  // 检查并添加 news_detail 表 fund、sub_fund 字段（对外接口与内部查询使用）
+  for (const col of ['fund', 'sub_fund']) {
+    try {
+      const [cols] = await dbPool.query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_detail' AND COLUMN_NAME = ?
+      `, [col]);
+      if (cols.length === 0) {
+        await dbPool.query(`
+          ALTER TABLE news_detail ADD COLUMN ${col} VARCHAR(255) NULL COMMENT '${col === 'fund' ? '基金' : '子基金'}' AFTER entity_type
+        `);
+        console.log(`  ✓ 已为 news_detail 表添加 ${col} 字段`);
+      }
+    } catch (err) {
+      console.warn(`检查/添加 news_detail.${col} 时出现警告:`, err.message);
+    }
+  }
+
   // 为 users 表添加 role 字段（如果不存在）
   try {
     const [roleColumns] = await dbPool.query(`
@@ -2446,6 +2464,24 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('检查/添加 role 字段时出现警告:', err.message);
+  }
+
+  // 为 users 表添加 api_token 字段（对外接口鉴权，每个用户一个长期有效 token）
+  try {
+    const [tokenColumns] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'api_token'
+    `);
+    if (tokenColumns.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE users
+        ADD COLUMN api_token VARCHAR(64) NULL UNIQUE COMMENT '对外API鉴权Token，用于 /api/news-detail 等接口' AFTER role,
+        ADD COLUMN api_token_updated_at TIMESTAMP NULL COMMENT 'api_token 最近更新时间' AFTER api_token
+      `);
+      console.log('  ✓ 已为 users 表添加 api_token、api_token_updated_at 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 api_token 字段时出现警告:', err.message);
   }
 
   console.log('  开始初始化基础数据...');

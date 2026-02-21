@@ -12,8 +12,20 @@ import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
 
-function SystemConfig() {
-  const [activeTab, setActiveTab] = useState('basic')
+function SystemConfig({ isAdmin = true }) {
+  const [activeTab, setActiveTab] = useState(isAdmin ? 'basic' : 'database')
+
+  if (!isAdmin) {
+    return (
+      <div className="system-config">
+        <Card className="config-card" bordered={false}>
+          <div className="config-content">
+            <DatabaseConfig />
+          </div>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div className="system-config">

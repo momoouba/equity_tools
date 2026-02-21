@@ -1432,21 +1432,26 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
   };
 }
 
-// 根据数据库配置ID获取定时任务
+// 根据数据库配置ID获取当前用户的定时任务（管理员可查任意，普通用户仅本人）
 router.get('/sync-task/by-db/:db_config_id', async (req, res) => {
   try {
     const { db_config_id } = req.params;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
     const tasks = await db.query(
       `SELECT id, db_config_id, sql_query, cron_expression, description, is_active, 
               last_execution_time, last_execution_status, last_execution_message, execution_count,
               created_at, updated_at
        FROM enterprise_sync_task 
        WHERE db_config_id = ? AND is_active = 1
+         ${isAdmin ? '' : 'AND created_by = ?'}
        ORDER BY created_at DESC 
        LIMIT 1`,
-      [db_config_id]
+      isAdmin ? [db_config_id] : [db_config_id, userId]
     );
-    
+
     if (tasks.length > 0) {
       res.json({ success: true, data: tasks[0] });
     } else {
@@ -1479,7 +1484,11 @@ router.post('/sync-task', [
       return res.status(400).json({ success: false, message: 'SQL语句必须以SELECT或WITH开头' });
     }
 
-    // 检查数据库配置是否存在
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    // 检查数据库配置是否存在且当前用户有权限（本人创建的或管理员）
     const dbConfigs = await db.query(
       'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
       [db_config_id]
@@ -1487,14 +1496,16 @@ router.post('/sync-task', [
     if (dbConfigs.length === 0) {
       return res.status(400).json({ success: false, message: '数据库配置不存在或未启用' });
     }
+    if (!isAdmin && dbConfigs[0].created_by !== userId) {
+      return res.status(403).json({ success: false, message: '只能选择自己创建的数据库配置' });
+    }
 
-    // 检查是否已存在任务（每个数据库配置只能有一个任务）
+    // 检查是否已存在该用户在此数据库下的任务（按用户维度一个库一条）
     const existing = await db.query(
-      'SELECT id FROM enterprise_sync_task WHERE db_config_id = ?',
-      [db_config_id]
+      'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?',
+      [db_config_id, userId]
     );
 
-    const userId = req.headers['x-user-id'] || null;
     const taskId = existing.length > 0 ? existing[0].id : await generateId('enterprise_sync_task');
 
     if (existing.length > 0) {
@@ -1538,18 +1549,33 @@ router.post('/sync-task/execute', [
     }
 
     const { db_config_id, sql_query } = req.body;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
 
-    // 如果未提供SQL查询语句，从数据库读取已保存的任务
+    // 校验是否有权使用该数据库配置
+    const dbConfigs = await db.query(
+      'SELECT id, created_by FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+      [db_config_id]
+    );
+    if (dbConfigs.length === 0) {
+      return res.status(400).json({ success: false, message: '数据库配置不存在或未启用' });
+    }
+    if (!isAdmin && dbConfigs[0].created_by !== userId) {
+      return res.status(403).json({ success: false, message: '只能执行自己创建的数据库配置下的任务' });
+    }
+
+    // 如果未提供SQL查询语句，从当前用户已保存的任务中读取
     let finalSqlQuery = sql_query;
     if (!finalSqlQuery || finalSqlQuery.trim() === '') {
       const tasks = await db.query(
-        'SELECT sql_query FROM enterprise_sync_task WHERE db_config_id = ? AND is_active = 1',
-        [db_config_id]
+        `SELECT sql_query FROM enterprise_sync_task WHERE db_config_id = ? AND is_active = 1 ${isAdmin ? '' : 'AND created_by = ?'}`,
+        isAdmin ? [db_config_id] : [db_config_id, userId]
       );
       if (tasks.length === 0) {
-        return res.status(400).json({ 
-          success: false, 
-          message: '该数据库配置没有已保存的定时任务，请先保存任务或提供SQL查询语句' 
+        return res.status(400).json({
+          success: false,
+          message: '该数据库配置没有已保存的定时任务，请先保存任务或提供SQL查询语句'
         });
       }
       finalSqlQuery = tasks[0].sql_query;
@@ -1570,11 +1596,11 @@ router.post('/sync-task/execute', [
     // 执行同步任务
     const result = await executeSyncTask(db_config_id, finalSqlQuery);
 
-    // 更新任务执行记录（如果任务存在）
+    // 更新当前用户该库下的任务执行记录（如果存在）
     try {
       const tasks = await db.query(
-        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ?',
-        [db_config_id]
+        `SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?`,
+        [db_config_id, userId]
       );
       if (tasks.length > 0) {
         await db.execute(
@@ -1594,12 +1620,12 @@ router.post('/sync-task/execute', [
     res.json(result);
   } catch (error) {
     console.error('执行同步任务失败：', error);
-    
-    // 尝试更新任务执行记录为失败
+    const failedUserId = req.headers['x-user-id'] || null;
+    // 尝试更新当前用户该库下的任务执行记录为失败
     try {
       const tasks = await db.query(
-        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ?',
-        [req.body.db_config_id]
+        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?',
+        [req.body.db_config_id, failedUserId]
       );
       if (tasks.length > 0) {
         await db.execute(
