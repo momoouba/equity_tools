@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const db = require('../db');
-const { sendNewsEmailToRecipient, getYesterdayNewsByEnterprise } = require('./emailSender');
+const { sendNewsEmailToRecipient, getYesterdayNewsByEnterprise, truncateContentForEmailLog } = require('./emailSender');
 const XLSX = require('xlsx');
 const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
 
@@ -2205,7 +2205,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     // 发送邮件
     const info = await transporter.sendMail(mailOptions);
     
-    // 记录成功日志
+    // 记录成功日志（content 截断以避免超出 email_logs.content TEXT 长度）
     const logId = await generateId('email_logs');
     await db.execute(
       `INSERT INTO email_logs 
@@ -2218,7 +2218,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         emailConfig.from_email,
         recipientEmails.join(','),
         subject,
-        htmlContent,
+        truncateContentForEmailLog(htmlContent),
         recipientConfig.user_id || null
       ]
     );

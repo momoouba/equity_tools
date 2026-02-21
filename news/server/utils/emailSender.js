@@ -2,6 +2,18 @@ const db = require('../db');
 const nodemailer = require('nodemailer');
 const { generateId } = require('./idGenerator');
 
+/** APItype 为上海国际/企查查且 account_name 为以下类型时：邮件正文与附件均不显示原文链接 */
+const NO_LINK_ACCOUNT_NAMES = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚', '终本案件'];
+
+function isNoLinkType(news) {
+  if (!news) return false;
+  const apiType = (news.APItype && String(news.APItype).trim()) || '';
+  const isApi = apiType === '上海国际' || apiType === '上海国际集团' || apiType === '企查查' || apiType === 'qichacha';
+  if (!isApi) return false;
+  const name = (news.account_name && String(news.account_name).trim()) || '';
+  return NO_LINK_ACCOUNT_NAMES.includes(name);
+}
+
 /**
  * 格式化日期为 yyyy-MM-dd HH:mm:ss
  */
@@ -409,8 +421,11 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
       const sentiment = formatNewsSentiment(news.news_sentiment);
       const publicTime = formatPublicTime(news.public_time);
       const accountName = news.account_name || '未知公众号';
-      const sourceUrl = news.source_url || '#';
       const abstract = news.news_abstract || '暂无摘要';
+      const showSourceLink = !isNoLinkType(news);
+      const sourceLinkHtml = showSourceLink
+        ? `<a href="${news.source_url || '#'}" target="_blank" style="color: #4CAF50; text-decoration: none;">原文链接</a>`
+        : '';
       
       html += `
         <div style="margin-bottom: 25px; padding: 15px; background-color: #f9f9f9; border-radius: 5px;">
@@ -427,10 +442,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
             ${abstract}
           </div>
           <div style="color: #888; font-size: 13px;">
-            ${publicTime}，${accountName}，
-            <a href="${sourceUrl}" target="_blank" style="color: #4CAF50; text-decoration: none;">
-              原文链接
-            </a>
+            ${publicTime}，${accountName}${showSourceLink ? '，' + sourceLinkHtml : ''}
           </div>
         </div>
       `;
@@ -567,12 +579,12 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
         const sentiment = formatNewsSentiment(news.news_sentiment);
         const publicTime = formatPublicTime(news.public_time);
         const accountName = news.account_name || '未知公众号';
-        const sourceUrl = news.source_url || '#';
         const abstract = news.news_abstract || '暂无摘要';
+        const sourcePart = isNoLinkType(news) ? '' : `，${news.source_url || ''}`;
         
         text += `${news.title || '无标题'} ${tags} ${sentiment}\n`;
         text += `${abstract}\n`;
-        text += `${publicTime}，${accountName}，${sourceUrl}\n\n`;
+        text += `${publicTime}，${accountName}${sourcePart}\n\n`;
       }
       
       text += '\n';
@@ -650,7 +662,7 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
     // 发送邮件
     const info = await transporter.sendMail(mailOptions);
     
-    // 记录成功日志
+    // 记录成功日志（content 截断以避免超出 email_logs.content TEXT 长度）
     const logId = await generateId('email_logs');
     await db.execute(
       `INSERT INTO email_logs 
@@ -663,7 +675,7 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
         emailConfig.from_email,
         recipientEmails.join(','),
         subject,
-        htmlContent,
+        truncateContentForEmailLog(htmlContent),
         recipientConfig.user_id || null
       ]
     );
@@ -952,11 +964,25 @@ async function sendNewsEmailsToAllRecipients() {
   }
 }
 
+/**
+ * 将邮件内容截断到适合写入 email_logs.content 的长度（MySQL TEXT 约 64KB，utf8mb4 下约 16000 字符内安全）
+ * @param {string|null|undefined} content - 邮件内容
+ * @param {number} [maxChars=16000] - 最大字符数
+ * @returns {string}
+ */
+function truncateContentForEmailLog(content, maxChars = 16000) {
+  if (content == null || typeof content !== 'string') return content || '';
+  const suffix = '...(邮件内容已截断)';
+  if (content.length <= maxChars) return content;
+  return content.slice(0, maxChars) + suffix;
+}
+
 module.exports = {
   sendNewsEmailsToAllRecipients,
   sendNewsEmailToRecipient,
   getYesterdayNewsByEnterprise,
   generateEmailContent,
-  generateEmailTextContent
+  generateEmailTextContent,
+  truncateContentForEmailLog
 };
 

@@ -1685,6 +1685,24 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  // 迁移 email_logs 表：将 content 从 TEXT(64KB) 改为 MEDIUMTEXT(16MB)，避免邮件正文过长写入失败
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'email_logs' AND COLUMN_NAME = 'content'
+    `);
+    if (cols.length > 0 && cols[0].DATA_TYPE === 'text' && cols[0].CHARACTER_MAXIMUM_LENGTH === 65535) {
+      await dbPool.query(`
+        ALTER TABLE email_logs 
+        MODIFY COLUMN content MEDIUMTEXT COMMENT '邮件内容'
+      `);
+      console.log('✓ 已更新 email_logs 表的 content 字段为 MEDIUMTEXT 类型');
+    }
+  } catch (err) {
+    console.warn('迁移 email_logs.content 时出现警告:', err.message);
+  }
   
   // 迁移 recipient_management 表，将 recipient_email 字段从 VARCHAR 改为 TEXT
   try {

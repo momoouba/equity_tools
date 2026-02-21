@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const nodemailer = require('nodemailer');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
+const { truncateContentForEmailLog } = require('../utils/emailSender');
 
 const router = express.Router();
 
@@ -270,7 +271,7 @@ router.post('/send', [
       // 发送邮件
       await transporter.sendMail(mailOptions);
 
-      // 记录成功日志
+      // 记录成功日志（content 截断以避免超出 email_logs.content TEXT 长度）
       logId = generateId('email_logs');
       await db.query(
         `INSERT INTO email_logs 
@@ -278,7 +279,7 @@ router.post('/send', [
           subject, content, status, created_by) 
          VALUES (?, ?, 'send', ?, ?, ?, ?, ?, ?, 'success', ?)`,
         [logId, email_config_id, config.from_email, to_email, cc_email || null, 
-         bcc_email || null, subject, content, userId]
+         bcc_email || null, subject, truncateContentForEmailLog(content), userId]
       );
 
       res.json({
@@ -298,7 +299,7 @@ router.post('/send', [
           subject, content, status, error_message, created_by) 
          VALUES (?, ?, 'send', ?, ?, ?, ?, ?, ?, 'failed', ?, ?)`,
         [logId, email_config_id, config.from_email, to_email, cc_email || null, 
-         bcc_email || null, subject, content, errorMessage, userId]
+         bcc_email || null, subject, truncateContentForEmailLog(content), errorMessage, userId]
       );
 
       console.error('邮件发送失败：', sendError);
