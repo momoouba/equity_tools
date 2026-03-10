@@ -10,6 +10,9 @@ import EmailManagement from './EmailManagement'
 import UserManagement from './UserManagement'
 import ScheduledTaskManagement from './ScheduledTaskManagement'
 import UserProfileModal from '../components/UserProfileModal'
+// 业绩看板应用扩展 - 导入业绩看板组件
+import PerformanceDashboardPage from './业绩看板应用/PerformanceDashboardPage'
+import PerformanceSettingsPage from './业绩看板应用/PerformanceSettingsPage'
 import './Dashboard.css'
 
 const { Header, Sider, Content } = Layout
@@ -63,6 +66,10 @@ function Dashboard() {
       setSelectedKeys(['users'])
     } else if (location.pathname.includes('scheduled-tasks')) {
       setSelectedKeys(['scheduled-tasks'])
+    } else if (location.pathname.includes('performance-settings')) {
+      setSelectedKeys(['performance-settings'])
+    } else if (location.pathname.includes('performance')) {
+      setSelectedKeys(['performance'])
     }
   }, [location])
 
@@ -121,6 +128,17 @@ function Dashboard() {
       key: 'news',
       title: '舆情信息',
       visible: isAdmin || hasNewsPermission
+    },
+    // 业绩看板应用扩展 - 业绩看板菜单
+    {
+      key: 'performance',
+      title: '业绩看板',
+      visible: true
+    },
+    {
+      key: 'performance-settings',
+      title: '业绩看板设置',
+      visible: isAdmin
     },
     {
       key: 'system',
@@ -208,6 +226,9 @@ function Dashboard() {
             <Route path="/users" element={<UserManagement />} />
             <Route path="/scheduled-tasks" element={<ScheduledTaskManagement />} />
             <Route path="/system" element={<SystemConfig isAdmin={isAdmin} />} />
+            {/* 业绩看板应用扩展 - 业绩看板路由 */}
+            <Route path="/performance" element={<PerformanceDashboardPage />} />
+            <Route path="/performance-settings" element={isAdmin ? <PerformanceSettingsPage /> : <div>您没有访问权限</div>} />
             <Route path="/" element={
               (isAdmin || hasNewsPermission) ? <EnterpriseManagement /> : <CompanyManagement />
             } />

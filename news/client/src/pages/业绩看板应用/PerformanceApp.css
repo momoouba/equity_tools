@@ -1,0 +1,1144 @@
+/* 业绩看板应用 - 样式文件 */
+
+.perf-app {
+  padding: 20px;
+  background: #f5f7fa;
+  min-height: 100%;
+}
+
+/* 工具栏 */
+.perf-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.perf-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.perf-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.perf-toolbar-desc {
+  font-size: 13px;
+  color: #86909c;
+  max-width: 360px;
+  margin-right: 8px;
+}
+
+/* 系统标题 */
+.perf-system-header {
+  text-align: center;
+  margin-bottom: 20px;
+  padding: 20px;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.perf-system-name {
+  font-size: 26px;
+  font-weight: 700;
+  color: #00024C;
+  margin: 0 0 8px 0;
+}
+
+.perf-system-info {
+  color: #86909c;
+  font-size: 14px;
+}
+
+/* 指标说明图标：显示在指标右上角，悬停显示说明 */
+.perf-indicator-label-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.perf-indicator-desc-icon {
+  margin-left: 4px;
+  vertical-align: middle;
+  color: #86909c;
+  font-size: 14px;
+  cursor: help;
+}
+
+.perf-indicator-desc-icon:hover {
+  color: #00024C;
+}
+
+/* 板块容器 */
+.perf-section {
+  background: #fff;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.perf-section.perf-clickable {
+  cursor: pointer;
+  transition: box-shadow 0.3s;
+}
+
+.perf-section.perf-clickable:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+.perf-section-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  background: #00024C;
+  border-bottom: none;
+  text-align: center;
+}
+
+.perf-subsection-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #4e5969;
+  margin-bottom: 12px;
+}
+
+/* 指标卡网格 */
+.perf-indicator-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+
+.perf-indicator-grid-5 {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+.perf-indicator-grid-6 {
+  grid-template-columns: repeat(6, 1fr);
+}
+
+.perf-indicator-sub {
+  font-size: 12px;
+  color: #86909c;
+  margin-top: 6px;
+}
+
+.perf-indicator-sub .positive { color: #1AA8E9; }
+.perf-indicator-sub .negative { color: #f53f3f; }
+
+.perf-indicator-item {
+  text-align: center;
+  padding: 16px;
+  background: #f7f8fa;
+  border-radius: 6px;
+}
+
+.perf-indicator-label {
+  font-size: 13px;
+  color: #86909c;
+  margin-bottom: 8px;
+}
+
+.perf-indicator-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: #1d2129;
+}
+
+.perf-indicator-value.positive {
+  color: #1AA8E9;
+}
+
+.perf-indicator-value.negative {
+  color: #f53f3f;
+}
+
+/* 认缴/实缴/累计分配主数值红色 */
+.perf-indicator-value-red {
+  color: #f53f3f !important;
+}
+
+/* 底层资产网格 */
+/* 底层资产：两行排布，左侧色块+右侧四卡，紧凑 */
+.perf-underlying-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.perf-underlying-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-height: 0;
+}
+
+.perf-underlying-label {
+  width: 88px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 6px;
+  border-radius: 4px 0 0 4px;
+}
+
+.perf-underlying-label-cumulative {
+  background: #00024C;
+}
+
+.perf-underlying-label-current {
+  background: #00024C;
+}
+
+.perf-underlying-cards {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  padding: 8px 0 8px 12px;
+  min-width: 0;
+}
+
+.perf-underlying-item {
+  background: #f7f8fa;
+  border-radius: 4px;
+  padding: 10px 12px;
+  text-align: center;
+  border: 1px solid #e5e6eb;
+}
+
+.perf-underlying-item.perf-clickable {
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.perf-underlying-item.perf-clickable:hover {
+  background: #e8e9eb;
+  border-color: #c9cdd4;
+}
+
+.perf-underlying-item-label {
+  font-size: 13px;
+  color: #4e5969;
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.perf-underlying-values {
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  justify-content: space-around;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.perf-underlying-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.perf-underlying-val {
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.perf-underlying-val-main {
+  color: #1d2129;
+}
+
+.perf-underlying-val-secondary {
+  color: #00024C;
+}
+
+.perf-underlying-sub {
+  font-size: 12px;
+  color: #86909c;
+  margin-top: 2px;
+}
+
+.perf-underlying-footnote {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e6eb;
+  font-size: 12px;
+  color: #86909c;
+}
+
+/* 基金表格 */
+.perf-fund-table-wrap {
+  overflow-x: auto;
+}
+
+.perf-fund-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 800px;
+}
+
+.perf-fund-table th,
+.perf-fund-table td {
+  padding: 10px 14px;
+  text-align: center;
+  border-bottom: 1px solid #e5e6eb;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.perf-fund-table th {
+  background: #e8f3ff;
+  font-weight: 500;
+  color: #1d2129;
+}
+
+.perf-sticky-col {
+  position: sticky;
+  left: 0;
+  background: #e8f3ff;
+  font-weight: 500;
+  color: #1d2129;
+  z-index: 1;
+}
+
+/* 基金产品表：左侧指标列仅用背景色区分，不显示蓝色指标文字；深蓝/浅蓝分组 */
+.perf-fund-table th.perf-sticky-col {
+  background: #00024C;
+  color: #fff;
+  z-index: 2;
+}
+
+.perf-fund-table tbody td.perf-sticky-col {
+  font-weight: 500;
+  color: #1d2129;
+}
+
+/* 深蓝：投资人认缴/实缴/分配、投资金额认缴/实缴、退出金额（仅左侧指标列深蓝底；数据格背景白、数字深蓝） */
+.perf-fund-table tbody tr.perf-row-group-1 td.perf-sticky-col,
+.perf-fund-table tbody tr.perf-row-group-3 td.perf-sticky-col {
+  background: #00024C;
+  color: #fff;
+}
+
+.perf-fund-table tbody tr.perf-row-group-1 .perf-clickable-cell,
+.perf-fund-table tbody tr.perf-row-group-3 .perf-clickable-cell {
+  color: #00024C;
+}
+
+/* TVPI/DPI/RVPI/NIRR、GIRR/MOC：左侧指标列绿色底，突出收益指标 */
+.perf-fund-table tbody tr.perf-row-group-2 td.perf-sticky-col,
+.perf-fund-table tbody tr.perf-row-group-4 td.perf-sticky-col {
+  background: #1AA8E9;
+  color: #fff;
+}
+
+.perf-fund-table tbody tr.perf-row-group-2 .perf-clickable-cell,
+.perf-fund-table tbody tr.perf-row-group-4 .perf-clickable-cell {
+  color: #1AA8E9;
+}
+
+.perf-clickable-cell {
+  cursor: pointer;
+  color: #00024C;
+}
+
+.perf-clickable-cell:hover {
+  background: #f2f3f5;
+}
+
+.perf-portfolio-table th,
+.perf-portfolio-table td {
+  min-width: 72px;
+}
+
+/* 投资组合表：左侧标签区隔（子基金/直投项目）、每基金投/退两列 */
+.perf-portfolio-wrap .perf-portfolio-label-col {
+  min-width: 88px;
+  background: #00024C;
+  color: #fff;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.perf-portfolio-fund-th {
+  background: #e8f3ff;
+  color: #1d2129;
+  font-weight: 500;
+  padding: 8px 6px;
+}
+
+.perf-portfolio-invest-th {
+  background: #f2f3f5;
+  color: #1d2129;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 4px;
+  min-width: 56px;
+}
+
+.perf-portfolio-exit-th {
+  background: #e8f3ff;
+  color: #00024C;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 4px;
+  min-width: 56px;
+}
+
+.perf-portfolio-group-row .perf-portfolio-group-label {
+  background: #00024C;
+  color: #fff !important;
+  font-weight: 600;
+  padding: 10px 12px;
+}
+
+.perf-portfolio-metric-label {
+  background: #e8f3ff;
+  color: #1d2129;
+  font-weight: 500;
+  padding: 8px 12px;
+}
+
+.perf-portfolio-empty {
+  background: #f7f8fa;
+  border: none;
+  padding: 0;
+  min-width: 0;
+}
+
+.perf-invest-cell {
+  color: #1d2129;
+}
+
+.perf-exit-cell {
+  color: #00024C;
+}
+
+/* 整体组合：左侧色块 + 子基金/直投项目区隔 */
+.perf-portfolio-overall-block {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 8px;
+}
+
+.perf-portfolio-overall-bar {
+  width: 88px;
+  min-height: 140px;
+  background: #1AA8E9;
+  border-radius: 4px 0 0 4px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 0;
+}
+
+.perf-portfolio-overall-bar-text {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 24px;
+  font-weight: 600;
+  color: #fff;
+  letter-spacing: 6px;
+}
+
+.perf-portfolio-overall-content {
+  flex: 1;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.perf-portfolio-block {
+  padding-left: 0;
+}
+
+.perf-portfolio-block-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 12px;
+}
+
+.perf-portfolio-block-cards {
+  padding-left: 12px;
+  border-left: 4px solid #00024C;
+}
+
+.perf-exit-value {
+  color: #00024C;
+}
+
+/* 弹窗头部信息 */
+.perf-modal-header {
+  display: flex;
+  gap: 20px;
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: #f7f8fa;
+  border-radius: 4px;
+  color: #4e5969;
+  font-size: 13px;
+}
+
+.perf-modal-header-with-action {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.perf-modal-footer {
+  margin-top: 16px;
+  text-align: right;
+}
+
+/* 在管产品清单等表格：列间竖线 */
+.perf-table-bordered th,
+.perf-table-bordered td {
+  border: 1px solid #e5e6eb;
+}
+
+/* 在管产品清单：表头居中，数字列右对齐 */
+/* 在管产品清单表头居中（需高于 .perf-table th 的 text-align: left） */
+.perf-table.perf-table-bordered th {
+  text-align: center;
+}
+
+.perf-table-bordered td:nth-child(4),
+.perf-table-bordered td:nth-child(5),
+.perf-table-bordered td:nth-child(6),
+.perf-table-bordered td:nth-child(7),
+.perf-table-bordered td:nth-child(8),
+.perf-table-bordered td:nth-child(9) {
+  text-align: right;
+}
+
+/* 投资人名录：数字列（认缴金额～最近三次分配）右对齐，共 12 列，第 5～12 列为数字 */
+.perf-table-investors.perf-table-bordered td:nth-child(5),
+.perf-table-investors.perf-table-bordered td:nth-child(6),
+.perf-table-investors.perf-table-bordered td:nth-child(7),
+.perf-table-investors.perf-table-bordered td:nth-child(8),
+.perf-table-investors.perf-table-bordered td:nth-child(9),
+.perf-table-investors.perf-table-bordered td:nth-child(10),
+.perf-table-investors.perf-table-bordered td:nth-child(11),
+.perf-table-investors.perf-table-bordered td:nth-child(12) {
+  text-align: right;
+}
+
+/* 投资人名录弹窗：列表框在弹窗内，一页最多 9 行数据+合计，右侧纵向滚动 */
+.perf-modal-investors-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+/* 列表区域固定高度：约 9 行数据 + 表头 2 行 + 合计 1 行，超出显示右侧滚动条 */
+.perf-modal-investors-scroll {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 500px;
+  overflow-x: auto;
+  overflow-y: auto;
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+}
+
+.perf-modal-investors-scroll .perf-table-investors {
+  min-width: 1600px;
+  width: 100%;
+  table-layout: fixed;
+}
+
+/* 基金名称：最多一行 8 个汉字，超出省略 */
+.perf-table-investors .perf-col-fund {
+  width: 8em;
+  max-width: 8em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 合伙人类型：完整显示 5 个汉字（如“有限合伙人”），在原基础上宽度增加约 20% */
+.perf-table-investors .perf-col-lp-type {
+  width: 8em;
+  min-width: 8em;
+  white-space: nowrap;
+}
+/* 投资人名称及其他数字列：能显示全内容，最小宽度便于横向滚动 */
+.perf-table-investors .perf-th-lp,
+.perf-table-investors .perf-td-lp {
+  min-width: 20em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
+}
+.perf-modal-investors-scroll .perf-table-investors tbody td:nth-child(n+5),
+.perf-modal-investors-scroll .perf-table-investors tfoot td:nth-child(n+5) {
+  min-width: 11em;
+}
+
+/* 表头固定：第一行吸顶，第二行（三次分配日期）紧贴第一行下方 */
+.perf-modal-investors-scroll .perf-table-investors thead th {
+  position: sticky;
+  z-index: 2;
+  background: #f7f8fa;
+  box-shadow: 0 1px 0 #e5e6eb;
+  height: 33px;
+  min-height: 33px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  padding: 6px 10px;
+}
+.perf-modal-investors-scroll .perf-table-investors thead tr:first-child th {
+  top: 0;
+}
+.perf-modal-investors-scroll .perf-table-investors thead tr:nth-child(2) th {
+  top: 33px;
+}
+
+/* 内容行行高较表头减少约 20%（35px ≈ 44px×0.8），表头保持 44px */
+.perf-modal-investors-scroll .perf-table-investors tbody tr {
+  height: 35px;
+}
+.perf-modal-investors-scroll .perf-table-investors tbody td {
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+.perf-modal-investors-scroll .perf-table-investors tfoot tr td {
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+}
+
+.perf-modal-investors-scroll .perf-table-investors tfoot tr {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+.perf-modal-investors-scroll .perf-table-investors tfoot td {
+  background: #00024C;
+  color: #fff;
+  font-weight: 500;
+  border: 1px solid #00024C;
+}
+
+/* 合计行单行显示，文字列左对齐 */
+.perf-modal-investors-scroll .perf-table-investors tfoot tr.perf-table-summary {
+  white-space: nowrap;
+}
+
+.perf-modal-investors-scroll .perf-table-investors tfoot tr.perf-table-summary td:nth-child(1),
+.perf-modal-investors-scroll .perf-table-investors tfoot tr.perf-table-summary td:nth-child(2),
+.perf-modal-investors-scroll .perf-table-investors tfoot tr.perf-table-summary td:nth-child(3),
+.perf-modal-investors-scroll .perf-table-investors tfoot tr.perf-table-summary td:nth-child(4) {
+  text-align: left;
+}
+
+/* 投资人名录：文字列（序号、基金名称、合伙人类型、投资人名称）左对齐 */
+.perf-table-investors.perf-table-bordered td:nth-child(1),
+.perf-table-investors.perf-table-bordered td:nth-child(2),
+.perf-table-investors.perf-table-bordered td:nth-child(3),
+.perf-table-investors.perf-table-bordered td:nth-child(4) {
+  text-align: left;
+}
+
+.perf-th-nowrap {
+  white-space: nowrap;
+}
+
+.perf-th-wrap {
+  white-space: normal;
+}
+
+.perf-td-nowrap {
+  white-space: nowrap;
+}
+
+.perf-td-wrap {
+  white-space: normal;
+  word-break: break-word;
+}
+
+
+/* 投资人名录：序号列宽度缩小约 25%（原约 64px → 48px） */
+.perf-table-investors .perf-col-index {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  box-sizing: border-box;
+}
+
+/* 在管产品清单合计行：蓝底白字 */
+.perf-table-summary td {
+  background: #00024C;
+  color: #fff;
+  font-weight: 500;
+}
+
+/* 基金业绩指标及现金流底表弹窗 */
+.perf-modal-fundperf-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.perf-modal-fundperf-scroll {
+  flex: 0 0 auto;
+  min-height: 0;
+  /* 稍微降低高度，避免列表底部超出弹窗可视区域 */
+  max-height: 460px;
+  overflow-x: auto;
+  overflow-y: auto;
+  /* 保持在弹窗内，不再向左右扩展出边界 */
+  margin: 0;
+  padding: 0 16px;
+  background: #fff;
+  /* 去掉外围线框，只保留表格自身边框 */
+  border: none;
+  border-radius: 0;
+  position: relative;
+}
+
+/* 基金业绩指标等上半部分：与下方现金流明细表完全对齐（左右同样内边距与外边距） */
+.perf-modal-fundperf-inner {
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #fff;
+}
+
+.perf-fundperf-section-title {
+  font-size: 15px;
+  font-weight: 500;
+  color: #1d2129;
+  margin: 16px 0 8px 0;
+}
+
+.perf-fundperf-section-title:first-of-type {
+  margin-top: 0;
+}
+
+/* 基金业绩指标表格区域：正常随内容滚动（不单独吸顶） */
+.perf-modal-fundperf-scroll .perf-fundperf-sticky {
+  position: static;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+}
+
+.perf-table-fundperf.perf-table-bordered th,
+.perf-table-fundperf.perf-table-bordered td {
+  border: 1px solid #e5e6eb;
+}
+
+.perf-table-fundperf.perf-table-bordered th {
+  text-align: center;
+  background: #f7f8fa;
+}
+
+.perf-table-fundperf .perf-col-index {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+/* 现金流明细表：表头在滚动时固定在列表顶部（与投资人名录一致） */
+.perf-table-fundperf-cashflow thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f7f8fa;
+  box-shadow: 0 1px 0 0 #e5e6eb;
+}
+
+/* 项目现金流及业绩指标：现金流明细表独立滚动区域 */
+.perf-modal-fundperf-scroll-cashflow {
+  /* 略低于整体弹窗高度，避免底部超出 */
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: auto;
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #fff;
+}
+
+.perf-table-fundperf th.perf-td-center,
+.perf-table-fundperf td.perf-td-center {
+  text-align: center;
+}
+
+.perf-table-fundperf .perf-td-num {
+  text-align: right;
+}
+
+/* 基金投资组合明细：小计行灰底，总合计行沿用蓝色样式 */
+.perf-table-subtotal td {
+  background: #f7f8fa;
+  font-weight: 500;
+}
+
+/* 基金投资组合明细：表头吸顶，随滚动固定在顶部 */
+.perf-table-fundportfolio thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f5f7fa;
+  box-shadow: 0 1px 0 0 #e5e6eb;
+}
+
+/* 基金投资组合明细：行高略窄，表头与数据行统一缩小上下内边距 */
+.perf-table-fundportfolio th,
+.perf-table-fundportfolio td {
+  padding: 6px 12px;
+  line-height: 1.35;
+}
+
+/* 基金投资组合明细：第二行表头（累计值/本月变动）吸顶时紧贴第一行表头下方 */
+.perf-table-fundportfolio thead tr:nth-child(2) th {
+  position: sticky;
+  top: 36px;
+  z-index: 1;
+  background: #f5f7fa;
+  box-shadow: 0 1px 0 0 #e5e6eb;
+}
+
+/* 基金投资组合明细：整体表格宽度=列宽之和(48+90+160+90+120*11+60*2=1918)，避免多余空间撑大前几列 */
+.perf-table-fundportfolio {
+  width: 1918px;
+  min-width: 1918px;
+  table-layout: fixed;
+}
+
+/* 整体基金投资组合明细：无投资时间列，宽度=列宽之和(48+90+160+120*11+60*2=1738) */
+.perf-table-portfolio-detail {
+  width: 1738px;
+  min-width: 1738px;
+}
+
+/* 基金投资组合明细：所有列标题、数据不换行 */
+.perf-table-fundportfolio th,
+.perf-table-fundportfolio td {
+  white-space: nowrap;
+}
+
+/* 基金投资组合明细：序号列宽（覆盖通用 min-width） */
+.perf-table-fundportfolio .perf-col-index {
+  min-width: 48px;
+  width: 48px;
+  max-width: 48px;
+}
+
+/* 基金投资组合明细：投资类别、项目名称、投资时间列宽 */
+.perf-table-fundportfolio .perf-col-type {
+  min-width: 90px;
+  width: 90px;
+  max-width: 90px;
+}
+.perf-table-fundportfolio .perf-col-project {
+  min-width: 160px;
+  width: 160px;
+  max-width: 160px;
+}
+.perf-table-fundportfolio .perf-col-date {
+  min-width: 90px;
+  width: 90px;
+  max-width: 90px;
+}
+
+/* 基金投资组合明细：认缴/实缴/退出/回款/未实现（累计值、本月变动）、总价值列宽 120px */
+.perf-table-fundportfolio .perf-col-amount,
+.perf-table-fundportfolio .perf-col-total-value {
+  min-width: 120px;
+  width: 120px;
+  max-width: 120px;
+}
+
+.perf-table-fundportfolio .perf-col-ratio {
+  min-width: 60px;
+  width: 60px;
+  max-width: 60px;
+}
+
+/* 上市企业明细：单表 + 吸顶表头 + 吸底合计 + 固定高度滚动（与投资人名录一致） */
+.perf-ipo-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.perf-modal-ipo-scroll {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 500px;
+  overflow-x: auto;
+  overflow-y: auto;
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+}
+
+.perf-modal-ipo-scroll .perf-table-ipo {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 748px;
+}
+
+/* 表头吸顶 */
+.perf-modal-ipo-scroll .perf-table-ipo thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+  box-shadow: 0 1px 0 #e5e6eb;
+  height: 33px;
+  min-height: 33px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  padding: 6px 10px;
+}
+
+/* 合计行吸底 */
+.perf-modal-ipo-scroll .perf-table-ipo tfoot tr {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+.perf-modal-ipo-scroll .perf-table-ipo tfoot td {
+  background: #00024C;
+  color: #fff;
+  font-weight: 500;
+  border: 1px solid #00024C;
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+}
+
+/* 数据行行高 */
+.perf-modal-ipo-scroll .perf-table-ipo tbody tr {
+  height: 35px;
+}
+.perf-modal-ipo-scroll .perf-table-ipo tbody td {
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+/* 序号、项目简称列横向滚动时固定 */
+.perf-modal-ipo-scroll .perf-table-ipo td.perf-col-index,
+.perf-modal-ipo-scroll .perf-table-ipo th.perf-col-index {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  text-align: center;
+  box-sizing: border-box;
+}
+.perf-modal-ipo-scroll .perf-table-ipo td.perf-col-index {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 1;
+}
+.perf-modal-ipo-scroll .perf-table-ipo td.perf-col-project {
+  position: sticky;
+  left: 48px;
+  background: #fff;
+  z-index: 1;
+}
+.perf-modal-ipo-scroll .perf-table-ipo thead th.perf-col-index {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.perf-modal-ipo-scroll .perf-table-ipo thead th.perf-col-project {
+  position: sticky;
+  left: 48px;
+  z-index: 3;
+}
+/* tfoot 固定列背景与合计行一致 */
+.perf-modal-ipo-scroll .perf-table-ipo tfoot td.perf-col-index,
+.perf-modal-ipo-scroll .perf-table-ipo tfoot td.perf-col-project {
+  background: #00024C;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+}
+.perf-modal-ipo-scroll .perf-table-ipo tfoot td.perf-col-project {
+  left: 48px;
+}
+
+/* 数据行 hover 时整行高亮 */
+.perf-modal-ipo-scroll .perf-table-ipo tbody tr:hover td {
+  background: #f2f3f5 !important;
+}
+
+/* 合计行投资金额右对齐 */
+.perf-table-ipo-summary-row td.perf-td-num {
+  text-align: right;
+}
+
+/* 底层企业明细：两级表头，合计行灰底 */
+.perf-table-underlying .perf-col-index {
+  text-align: center;
+}
+.perf-table-underlying .perf-col-group {
+  text-align: center;
+  background: #f7f8fa;
+}
+.perf-table-underlying .perf-col-amount,
+.perf-table-underlying .perf-td-num {
+  text-align: right;
+}
+.perf-table-underlying tr.perf-table-summary {
+  background: #e8f3ff;
+  font-weight: 500;
+}
+.perf-table-underlying tr.perf-table-summary td {
+  border-bottom: 1px solid #b3d8ff;
+}
+
+/* 区域企业明细：两级表头，合计/合计(去重)蓝底白字 */
+.perf-table-region .perf-col-index {
+  text-align: center;
+}
+.perf-table-region .perf-col-group {
+  text-align: center;
+  background: #f7f8fa;
+}
+.perf-table-region .perf-col-amount,
+.perf-table-region .perf-td-num {
+  text-align: right;
+}
+.perf-table-region tr.perf-table-summary td {
+  background: #00024C;
+  color: #fff;
+  font-weight: 500;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.perf-modal-link {
+  margin-top: 10px;
+  color: #86909c;
+  font-size: 13px;
+}
+
+.perf-modal-link a {
+  color: #00024C;
+}
+
+/* 弹窗数据表格 */
+.perf-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.perf-table th,
+.perf-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid #e5e6eb;
+  font-size: 13px;
+}
+
+.perf-table th {
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+}
+
+.perf-table tbody tr:hover {
+  background: #f2f3f5;
+}
+
+/* 数据版本更新 - 选择年月（年 + 12 个月网格） */
+.perf-month-year-picker {
+  padding: 8px 0;
+  min-width: 240px;
+}
+.perf-month-year-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+.perf-month-year-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1d2129;
+}
+.perf-month-year-nav {
+  cursor: pointer;
+  color: #86909c;
+  font-size: 14px;
+  padding: 4px 8px;
+  user-select: none;
+}
+.perf-month-year-nav:hover {
+  color: #00024C;
+}
+.perf-month-year-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+.perf-month-year-cell {
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #1d2129;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.perf-month-year-cell:hover {
+  border-color: #00024C;
+  color: #00024C;
+}
+.perf-month-year-cell.active {
+  background: #e8f3ff;
+  border-color: #00024C;
+  color: #00024C;
+}

@@ -138,6 +138,10 @@ app.use('/api/external-db', externalDbRoutes);
 app.use('/api/news-share', newsShareRoutes);
 app.use('/api/news-detail', newsDetailRoutes);
 
+// 业绩看板应用扩展 - 挂载业绩看板路由
+const performanceRoutes = require('./routes/业绩看板应用');
+app.use('/api/performance', performanceRoutes);
+
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
 const clientDistPath = path.join(__dirname, '../client/dist');

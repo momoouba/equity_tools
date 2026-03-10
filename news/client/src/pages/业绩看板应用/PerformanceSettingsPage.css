@@ -1,0 +1,245 @@
+/**
+ * 业绩看板应用 - 设置页面样式
+ * 业绩看板应用扩展
+ */
+
+.perf-settings-page {
+  padding: 24px;
+  background: #f5f6f7;
+  min-height: 100%;
+}
+
+.perf-settings-header {
+  margin-bottom: 20px;
+}
+
+.perf-settings-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0 0 4px;
+}
+
+.perf-settings-desc {
+  font-size: 13px;
+  color: #86909c;
+}
+
+.perf-settings-tabs {
+  background: #fff;
+  border-radius: 8px;
+  padding: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.perf-settings-tabs .arco-tabs-nav {
+  padding: 0 16px;
+  border-bottom: 1px solid #e5e8ef;
+}
+
+.perf-settings-tab {
+  padding: 16px;
+}
+
+.perf-settings-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* SQL测试结果 */
+.perf-test-result {
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid;
+}
+
+.perf-test-result.success {
+  background: #e8f5e9;
+  border-color: #52c41a;
+}
+
+.perf-test-result.error {
+  background: #fff2f0;
+  border-color: #f53f3f;
+}
+
+.perf-test-result-title {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+/* 测试结果表格 */
+.perf-test-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.perf-test-table th,
+.perf-test-table td {
+  border: 1px solid #e5e8ef;
+  padding: 4px 8px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.perf-test-table th {
+  background: #f7f8fa;
+  font-weight: 600;
+  color: #4e5969;
+}
+
+.perf-test-table tr:hover td {
+  background: #f2f8ff;
+}
+
+/* 飞书风格 SQL 代码块：行号 + 语法高亮 */
+.perf-sql-code-block {
+  background: #e8f4ff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  border: 1px solid #c9e0f5;
+  line-height: 1.5;
+}
+.perf-sql-code-block table {
+  font-size: 13px;
+}
+.perf-sql-line-num {
+  min-width: 28px;
+  text-align: right;
+  color: #86909c;
+}
+.perf-sql-code-wrap .perf-sql-code-block {
+  margin: 0;
+}
+.perf-sql-preview-cell .perf-sql-code-block {
+  max-height: 88px;
+  overflow: hidden;
+  padding: 8px 10px;
+}
+/* 语法高亮颜色（与飞书示例一致） */
+.sql-hl-keyword { color: #722ed1; font-weight: 500; }
+.sql-hl-ident   { color: #1d4ed8; }
+.sql-hl-string  { color: #0d9d4b; }
+.sql-hl-comment { color: #86909c; font-style: italic; }
+
+/* 可编辑飞书风格 SQL：一块区域，即编即显高亮 */
+.perf-sql-editor {
+  display: flex;
+  min-height: 200px;
+  max-height: 360px;
+  overflow: hidden;
+}
+.perf-sql-editor-line-nums {
+  flex-shrink: 0;
+  width: 36px;
+  padding: 12px 0 12px 0;
+  padding-right: 12px;
+  text-align: right;
+  line-height: 1.5;
+  font-size: 13px;
+  font-family: monospace;
+  color: #86909c;
+  user-select: none;
+}
+.perf-sql-editor-code-wrap {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  min-width: 0;
+}
+/* 内层高度由 JS 设为内容高度，保证只有 code-wrap 一层滚动 */
+.perf-sql-editor-inner {
+  position: relative;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+.perf-sql-editor-highlight {
+  padding: 12px 16px;
+  font-size: 13px;
+  font-family: monospace;
+  line-height: 1.5;
+  white-space: pre;
+  word-break: break-all;
+  color: #1d2129;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+.perf-sql-editor-line {
+  min-height: 1.5em;
+}
+.perf-sql-editor-textarea {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 100%;
+  padding: 12px 16px;
+  font-size: 13px;
+  font-family: monospace;
+  line-height: 1.5;
+  white-space: pre;
+  word-break: break-all;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: #1d2129;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.perf-sql-editor-textarea::placeholder {
+  color: #86909c;
+}
+
+/* 业绩看板说明配置 Tab */
+.perf-indicator-desc-table-wrap {
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+}
+
+.perf-indicator-desc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.perf-indicator-desc-table th,
+.perf-indicator-desc-table td {
+  padding: 10px 12px;
+  border: 1px solid #e5e6eb;
+  text-align: left;
+  vertical-align: top;
+}
+
+.perf-indicator-desc-table th {
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+}
+
+.perf-indicator-desc-area {
+  width: 120px;
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+}
+
+.perf-indicator-desc-name {
+  width: 200px;
+}
+
+.perf-indicator-desc-input {
+  min-width: 300px;
+}
+
+.perf-indicator-desc-input .arco-textarea {
+  min-height: 56px;
+}

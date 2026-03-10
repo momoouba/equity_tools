@@ -1,0 +1,74 @@
+select fund as 基金名称,fund_type as 基金类型,sub_amount as 认缴规模,sub_add as 本年新增认缴,paid_in_amount as 实缴规模 ,paid_in_add as 本年新增实缴,dis_amount as 累计分配金额,dis_add as 本年新增分配 from b_manage
+where version = '20260228V5' and F_DeleteMark = 0
+Order by fund_type,set_up_date ASC
+
+SELECT date(b_date) as 时间 ,version as 版本号 ,fund as  基金名称,lp as 投资人名称, transaction_type as 交易类型,transaction_date as 交易时间, transaction_amount as 交易金额 , capital as 分配成本,profit as 分配收益
+from b_transaction 
+where version = '20260228V5'  and F_DeleteMark = 0 and transaction_type in ('实缴','分配','认缴') and lp is not NULL
+ORDER BY fund,transaction_date asc
+
+SELECT date(b_date) as 时间 ,version as 版本号 ,fund as  基金名称,lp as 投资人名称, spv as spv名称, sub_fund as 子基金名称, company as 被投企业名称, transaction_type as 交易类型,transaction_date as 交易时间, transaction_amount as 交易金额 , capital as 分配成本,profit as 分配收益
+from b_transaction 
+where version = '20260228V5'  and F_DeleteMark = 0 
+ORDER BY fund,transaction_date asc
+
+
+
+select fund as 基金名称  ,lp_sub as 投资人认缴,paidin as 投资人实缴,distribution as 投资人分配,TVPI as TVPI , DPI as DPI,RVPI as RVPI, NIRR as NIRR ,sub_amount as 投资金额_认缴, inv_amount as 投资金额_实缴, exit_amount as 退出金额, GIRR AS GIRR , MOC AS MOC
+from b_transaction_indicator
+where version = '20260228V5' and F_DeleteMark = 0
+Order by fund_type,set_up_date ASC
+
+SELECT 
+fund as 基金名称,lp_type as 合伙人类型,lp AS 投资人名称subscription_amount as 认缴金额, subscription_ratio as 认缴比例, paidin as 累计实缴金额 , distribution as 累计分配金额,first_date  as 第N次分配时间,first_amount,second_date,second_amount as '第N-1次分配时间',third_date,third_amount
+from b_investor_list
+where version = '20260228V5' and F_DeleteMark = 0
+ORDER BY FUND
+
+
+
+SELECT
+ fund as 基金名称, transaction_type as 投资类别, project as 项目名称, first_date as 投资时间, acc_sub as 认缴金额本月累计,change_sub AS 认缴金额本月变动, acc_paidin as 实缴金额累计, change_paidin AS 实际金额本月变动, acc_exit as 退出金额累计, change_exit AS 退出金额本月变动, acc_receive AS 回款金额累计,change_receive AS 回款金额本月变动,unrealized as 未实现价值, change_unrealized as 未实现价值变动, total_value as 总价值,moc as MOC, dpi as DPI
+from b_investment
+where version = '20260228V5' and F_DeleteMark = 0 and fund ='国方一期' and transaction_type ='直投项目'
+
+select 
+fund_inv as 子基金投资数量, fund_exit AS 子基金退出数量,fund_sub AS 子基金认缴金额, fund_exit_amount as 子基金退出金额, fund_paidin as 子基金实缴金额,fund_receive AS 子基金回款金额, project_inv as 项目投资数量, project_exit as 项目退出数量,project_paidin AS 项目实缴金额, project_receive as 项目回款金额 
+from b_investment_indicator
+where version = '20260228V5' and F_DeleteMark = 0 and fund ='国方一期产品' 
+
+SELECT 
+fund_inv as 子基金累计投资数量, fund_inv_change as 子基金累计投资数量变动, fund_sub as 子基金累计认缴金额 ,fund_sub_change AS 子基金累计认缴金额变动 ,fund_paidin AS 子基金累计实缴金额,fund_paidin_change AS 子基金累计实缴金额变动,fund_exit AS 子基金累计退出数量,fund_exit_change AS 子基金累计退出数量变动,fund_exit_amount AS 子基金累计退出金额,fund_exit_amount_change AS 子基金累计退出金额变动,fund_receive AS 子基金累计回款金额,fund_receive_change AS 子基金累计回款金额变动,project_inv AS 累计直投项目数量,project_inv_change AS 累计直投项目数量变动, project_paidin AS 直投项目累计投资金额,project_paidin_change AS 直投项目累计投资金额变动, project_exit AS 直投项目累计退出数量, project_exit_change AS 直投项目累计退出数量变动,project_receive AS 直投项目累计回款金额,project_receive_change AS 直投项目累计回款金额变动
+from b_all_indicator
+where version = '20260228V5' and F_DeleteMark = 0 
+
+
+SELECT
+ transaction_type as 投资类别, project as 项目名称, acc_sub as 认缴金额本月累计,change_sub AS 认缴金额本月变动, acc_paidin as 实缴金额累计, change_paidin AS 实际金额本月变动, acc_exit as 退出金额累计, change_exit AS 退出金额本月变动, acc_receive AS 回款金额累计,change_receive AS 回款金额本月变动,unrealized as 未实现价值, change_unrealized as 未实现价值变动, total_value as 总价值,moc as MOC, dpi as DPI
+from b_investment_sum
+where version = '20260228V5'  and F_DeleteMark = 0  and transaction_type ='子基金'
+
+
+SELECT
+project_num AS 项目数量累计, company_num as 企业数量累计,total_amount AS 总投资金额累计,ct_amount AS 穿透金额累计,ipo_num as 上市项目数量累计,ipo_amount AS 上市项目投资金额累计,sh_num as 上海企业数量累计,sh_amount as 上海企业投资金额累计
+from b_project_aLL 
+where  version = '20260228V5'  and F_DeleteMark = 0
+
+
+select 
+fund as 所属基金名称,project_num AS 投资项目数量,company_num as 企业数量,total_amount AS 投资金额, project_amount AS 穿透金额,ipo_num AS 上市企业数量,ipo_amount AS 上市穿透金额
+from b_project_a 
+where  version = '20260228V6'  and F_DeleteMark = 0
+order by set_up_date ASC
+
+SELECT
+project as 项目简称, ipo_date AS 上市时间, fund as 所属基金, amount as 投资金额 
+from b_ipo_a 
+where  version = '20260228V6'  and F_DeleteMark = 0 
+ORDER BY ipo_date DESC
+
+SELECT 
+fund as 所属基金,csj_num as 长三角数量,csj_amount as 长三角金额,sh_num as 上海数量, sh_amount as 上海金额, pd_num as 浦东数量, pd_amount as 浦东金额
+from b_region_a 
+where  version = '20260228V6'  and F_DeleteMark = 0 
+ORDER BY set_up_date ASC

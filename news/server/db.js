@@ -1,6 +1,8 @@
 // 加载 .env 文件，但不覆盖已存在的环境变量（Docker 环境变量优先级更高）
 require('dotenv').config({ override: false });
 const mysql = require('mysql2/promise');
+const fs = require('fs');
+const path = require('path');
 
 const {
   DB_HOST = 'localhost',
@@ -11,6 +13,81 @@ const {
 } = process.env;
 
 let pool;
+
+// 从 performance.sql 中解析各 b_* 表的列注释，缓存到内存中
+let performanceCommentsCache = null;
+
+function loadPerformanceComments() {
+  if (performanceCommentsCache) return performanceCommentsCache;
+  performanceCommentsCache = {};
+  try {
+    const sqlPath = path.join(__dirname, '../业绩看板应用/performance.sql');
+    const content = fs.readFileSync(sqlPath, 'utf8');
+    const tableRegex = /CREATE TABLE\s+`(b_[^`]+)`\s*\(([\s\S]*?)\)\s*ENGINE/gi;
+    let tMatch;
+    // 遍历所有 b_* 表的建表语句
+    while ((tMatch = tableRegex.exec(content)) != null) {
+      const table = tMatch[1];
+      const body = tMatch[2];
+      // 更稳健的列匹配：允许类型/默认值中包含逗号，只要在本列定义内遇到 COMMENT 即可
+      const colRegex = /`([^`]+)`\s+([\s\S]*?)COMMENT\s+'([^']*)'/g;
+      let cMatch;
+      while ((cMatch = colRegex.exec(body)) != null) {
+        const col = cMatch[1];
+        const comment = cMatch[3] || '';
+        if (!performanceCommentsCache[table]) performanceCommentsCache[table] = {};
+        performanceCommentsCache[table][col] = comment;
+      }
+    }
+  } catch (e) {
+    // 读取或解析失败时，不影响主流程，只是不做注释同步
+    performanceCommentsCache = {};
+  }
+  return performanceCommentsCache;
+}
+
+// 为已有的 b_* 表（除 b_sql、b_sql_change_log、b_indicator_describe 外）补齐列注释
+async function ensureBTableComments(dbPool) {
+  const commentDefs = loadPerformanceComments();
+  if (!commentDefs || Object.keys(commentDefs).length === 0) return;
+
+  const excludeTables = new Set(['b_sql', 'b_sql_change_log', 'b_indicator_describe']);
+
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME LIKE 'b_%'
+    `);
+
+    for (const colInfo of cols || []) {
+      const table = colInfo.TABLE_NAME;
+      const col = colInfo.COLUMN_NAME;
+      if (excludeTables.has(table)) continue;
+      if (!commentDefs[table] || !commentDefs[table][col]) continue;
+      const desiredComment = commentDefs[table][col];
+      const currentComment = colInfo.COLUMN_COMMENT || '';
+      if (currentComment && currentComment.trim().length > 0) continue; // 已有注释则跳过
+
+      const type = colInfo.COLUMN_TYPE;
+      const notNull = colInfo.IS_NULLABLE === 'NO' ? 'NOT NULL' : 'NULL';
+      const def = colInfo.COLUMN_DEFAULT;
+      const defaultSql = def !== null ? ` DEFAULT ${dbPool.escape(def)}` : '';
+      const alterSql = `
+        ALTER TABLE \`${table}\`
+        MODIFY COLUMN \`${col}\` ${type} ${notNull}${defaultSql} COMMENT ${dbPool.escape(desiredComment)}
+      `;
+      try {
+        await dbPool.query(alterSql);
+      } catch (e) {
+        // 单列失败不影响整体，同步时忽略
+      }
+    }
+  } catch (e) {
+    // 同步过程中整体失败时忽略，不阻塞启动
+  }
+}
 
 async function createDatabaseIfNeeded() {
   try {
@@ -2243,6 +2320,787 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 db_type 字段时出现警告:', err.message);
   }
 
+  // ========== 业绩看板应用（performance.sql）表结构，字段注释与 performance.sql 一致 ==========
+  // b_all_indicator - 定开看板-管理人整体指标
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_all_indicator (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      fund_inv INT NULL DEFAULT NULL COMMENT '子基金累计投资数量',
+      lm_fund_inv INT NULL DEFAULT NULL COMMENT '上月累计子基金投资数量',
+      fund_inv_change INT NULL DEFAULT NULL COMMENT '子基金累计投资数量变动',
+      fund_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计认缴金额',
+      lm_fund_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计认缴金额',
+      fund_sub_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计认缴金额变动',
+      fund_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计实缴金额',
+      lm_fund_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计实缴金额',
+      fund_paidin_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计实缴金额变动',
+      fund_exit INT NULL DEFAULT NULL COMMENT '子基金累计退出数量',
+      lm_fund_exit INT NULL DEFAULT NULL COMMENT '上月子基金累计退出数量',
+      fund_exit_change INT NULL DEFAULT NULL COMMENT '子基金累计退出数量变动',
+      fund_exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计退出金额',
+      lm_fund_exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计退出金额',
+      fund_exit_amount_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计退出金额变动',
+      fund_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额',
+      lm_fund_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计回款金额',
+      fund_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额变动',
+      project_inv INT NULL DEFAULT NULL COMMENT '累计直投项目数量',
+      lm_project_inv INT NULL DEFAULT NULL COMMENT '上月累计直投项目数量',
+      project_inv_change INT NULL DEFAULT NULL COMMENT '累计直投项目数量变动',
+      project_paidin DECIMAL(30,10) NULL DEFAULT 0 COMMENT '直投项目累计投资金额',
+      lm_project_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月直投项目累计投资金额',
+      project_exit INT NULL DEFAULT NULL COMMENT '直投项目累计退出数量',
+      lm_project_exit INT NULL DEFAULT NULL COMMENT '上月直投项目累计退出数量',
+      project_exit_change INT NULL DEFAULT NULL COMMENT '直投项目累计退出数量变动',
+      project_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目累计回款金额',
+      lm_project_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月直投项目累计回款金额',
+      project_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目累计回款金额变动',
+      project_paidin_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目累计投资金额变动',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理人整体指标';
+  `);
+  // b_investment - 定开看板-基金投资组合明细
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investment (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-4',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资类别-6',
+      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-9',
+      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额本月变动-10',
+      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-11',
+      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额本月变动-12',
+      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-13',
+      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额本月变动-14',
+      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-15',
+      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额本月变动-16',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目名称-7',
+      first_date DATETIME NULL DEFAULT NULL COMMENT '首次投资时间-8',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-3',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-5',
+      unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值-17',
+      change_unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值变动-18',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-19',
+      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-20',
+      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-21',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      acc_exit_profit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计退出收益-23',
+      acc_exit_capital DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计退出成本-22',
+      acc_dividend DECIMAL(30,10) NULL DEFAULT NULL COMMENT '其中:累计分红-24',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细';
+  `);
+  // b_investment_indicator
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investment_indicator (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      fund_inv INT NULL DEFAULT NULL COMMENT '子基金投资数量',
+      fund_exit INT NULL DEFAULT NULL COMMENT '子基金退出数量',
+      fund_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金认缴金额',
+      fund_exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金退出金额',
+      fund_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金实缴金额',
+      fund_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金回款金额',
+      project_inv INT NULL DEFAULT NULL COMMENT '直投项目投资数量',
+      project_exit INT NULL DEFAULT NULL COMMENT '直投项目退出数量',
+      project_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目实缴金额',
+      project_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目回款金额',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合指标';
+  `);
+  // b_investment_sum
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investment_sum (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资类别-3',
+      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-5',
+      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额本月变动-6',
+      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-7',
+      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额本月变动-8',
+      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-9',
+      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额本月变动-10',
+      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-11',
+      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额本月变动-12',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目名称-4',
+      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-13',
+      change_unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值变动-14',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-15',
+      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-16',
+      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-17',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细汇总';
+  `);
+  // b_investor_list
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investor_list (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3',
+      lp VARCHAR(300) NULL DEFAULT NULL COMMENT '投资人名称-5',
+      subscription_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额-6',
+      subscription_ratio DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴比例-7',
+      distribution DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计分配金额-9',
+      paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计实缴金额-8',
+      first_date DATETIME NULL DEFAULT NULL COMMENT '第N次分配时间-10',
+      first_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '第N次分配金额-11',
+      second_date DATETIME NULL DEFAULT NULL COMMENT '第N-1次分配时间-12',
+      second_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '第N-1次分配金额-13',
+      third_date DATETIME NULL DEFAULT NULL COMMENT '第N-2次分配时间-14',
+      third_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '第N-2次分配金额-15',
+      lp_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资人类型-4',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-投资人名录';
+  `);
+  // b_ipo
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_ipo (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目简称-5',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '所属基金-3',
+      amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额-9',
+      ipo_date DATETIME NULL DEFAULT NULL COMMENT '上市日期-08',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      stock_name VARCHAR(300) NULL DEFAULT NULL COMMENT '股票简称-6',
+      stock_num VARCHAR(300) NULL DEFAULT NULL COMMENT '股票代码-7',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-上市企业明细';
+  `);
+  // b_ipo_a
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_ipo_a (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目简称-5',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '所属基金-3',
+      amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额-9',
+      ipo_date DATETIME NULL DEFAULT NULL COMMENT '上市日期-8',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      stock_num VARCHAR(300) NULL DEFAULT NULL COMMENT '股票代码-7',
+      stock_name VARCHAR(300) NULL DEFAULT NULL COMMENT '股票简称-6',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-上市企业明细-累计';
+  `);
+  // b_manage
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_manage (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-04',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-03',
+      sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴规模-06',
+      paid_in_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴规模-08',
+      dis_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计分配金额-10',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-02',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-01',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-05',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      sub_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增认缴-07',
+      paid_in_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增实缴-09',
+      dis_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增分配-11',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理规模';
+  `);
+  // b_manage_indicator
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_manage_indicator (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      fof_num INT NULL DEFAULT NULL COMMENT '母基金数量',
+      direct_num INT NULL DEFAULT NULL COMMENT '直投基金数量',
+      sub_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '认缴管理规模',
+      paid_in_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '实缴管理规模',
+      dis_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '累计分配金额',
+      sub_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '认缴规模较上年变动',
+      paid_in_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '实缴规模较上年度变动',
+      dis_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '累计分配总额较上年度变动',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理人指标显示';
+  `);
+
+  // b_project - 定开看板-底层资产明细
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_project (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      company_num INT NULL DEFAULT NULL COMMENT '被投企业数量',
+      ipo_num INT NULL DEFAULT NULL COMMENT '上市企业数量',
+      csj_num INT NULL DEFAULT NULL COMMENT '长三角企业数量',
+      total_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '总投资金额',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间',
+      sh_num INT NULL DEFAULT NULL COMMENT '上海项目数量',
+      ipo_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上市企业投资金额',
+      project_num INT NULL DEFAULT NULL COMMENT '投资项目数量',
+      sh_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海项目投资金额',
+      project_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '穿透投资金额',
+      csj_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区投资金额',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-底层资产明细';
+  `);
+  // b_project_a
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_project_a (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      company_num INT NULL DEFAULT NULL COMMENT '被投企业数量',
+      total_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '总投资金额',
+      ipo_num INT NULL DEFAULT NULL COMMENT '上市企业数量',
+      ipo_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上市企业投资金额',
+      project_num INT NULL DEFAULT NULL COMMENT '投资项目数量',
+      project_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '穿透金额',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-底层资产明细-累计';
+  `);
+  // b_project_all - 定开看板-底层资产指标
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_project_all (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      company_num INT NULL DEFAULT NULL COMMENT '被投企业数量',
+      lm_company_num INT NULL DEFAULT NULL COMMENT '上月被投企业数量',
+      company_num_change INT NULL DEFAULT NULL COMMENT '被投企业数量变动',
+      ipo_num INT NULL DEFAULT NULL COMMENT '上市企业数量',
+      lm_ipo_num INT NULL DEFAULT NULL COMMENT '上月上市企业数量',
+      ipo_num_change INT NULL DEFAULT NULL COMMENT '上市企业数量变动',
+      csj_num INT NULL DEFAULT NULL COMMENT '长三角企业数量',
+      lm_csj_num INT NULL DEFAULT NULL COMMENT '上月长三角企业数量',
+      csj_num_change INT NULL DEFAULT NULL COMMENT '长三角企业数量变动',
+      total_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总投资金额',
+      lm_total_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月总投资金额',
+      total_amount_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总投资金额变动',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      sh_num INT NULL DEFAULT NULL COMMENT '上海企业数量',
+      lm_sh_num INT NULL DEFAULT NULL COMMENT '上月上海企业数量',
+      sh_num_change INT NULL DEFAULT NULL COMMENT '上海企业数量变动',
+      sh_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海企业投资金额',
+      csj_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区投资金额',
+      ipo_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上市项目投资金额',
+      company_num_a INT NULL DEFAULT NULL COMMENT '被投企业数量-累计',
+      project_num INT NULL DEFAULT NULL COMMENT '项目数量',
+      project_num_a INT NULL DEFAULT NULL COMMENT '项目数量-累计',
+      total_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '总投资金额-累计',
+      ct_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '穿透金额',
+      ct_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '穿透金额-累计',
+      ipo_num_a INT NULL DEFAULT NULL COMMENT '上市企业数量-累计',
+      ipo_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上市项目投资金额-累计',
+      sh_num_a INT NULL DEFAULT NULL COMMENT '上海企业数量-累计',
+      sh_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海企业投资金额-累计',
+      csj_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区投资金额-累计',
+      csj_num_a INT NULL DEFAULT NULL COMMENT '长三角企业数量-累计',
+      pd_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区企业投资金额',
+      pd_amount_a DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区企业投资金额-累计',
+      pd_num INT NULL DEFAULT NULL COMMENT '浦东地区投资数量',
+      pd_num_a INT NULL DEFAULT NULL COMMENT '浦东地区投资数量-累计',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-底层资产指标';
+  `);
+  // b_region - 定开看板-区域企业明细
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_region (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间',
+      csj_num INT NULL DEFAULT NULL COMMENT '长三角地区企业数量',
+      csj_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区企业投资金额',
+      sh_num INT NULL DEFAULT NULL COMMENT '上海地区企业数量',
+      sh_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海地区投资金额',
+      pd_num INT NULL DEFAULT NULL COMMENT '浦东地区企业数量',
+      pd_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区投资金额',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      t_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '总投资金额',
+      sh_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海数量占比',
+      sh_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海金额占比',
+      csj_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角数量占比',
+      csj_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角金额占比',
+      pd_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东数量占比',
+      pd_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东金额占比',
+      t_num INT NULL DEFAULT NULL COMMENT '总项目数量',
+      csj_amount_ct DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区金额_穿透',
+      sh_amount_ct DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上海地区金额_穿透',
+      pd_amount_ct DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区金额_穿透',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-区域企业明细';
+  `);
+  // b_region_a
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_region_a (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间',
+      csj_num INT NULL DEFAULT NULL COMMENT '长三角地区企业数量',
+      csj_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区企业投资金额',
+      sh_num INT NULL DEFAULT NULL COMMENT '上海地区企业数量',
+      sh_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海地区投资金额',
+      pd_num INT NULL DEFAULT NULL COMMENT '浦东地区企业数量',
+      pd_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区投资金额',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      t_amount DECIMAL(30,10) NULL DEFAULT 0 COMMENT '总投资金额',
+      sh_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海数量占比',
+      sh_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '上海金额占比',
+      csj_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角数量占比',
+      csj_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角金额占比',
+      pd_num_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东数量占比',
+      pd_amount_ratio DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东金额占比',
+      t_num INT NULL DEFAULT NULL COMMENT '总项目数量',
+      csj_amount_ct DECIMAL(30,10) NULL DEFAULT 0 COMMENT '长三角地区金额_穿透',
+      sh_amount_ct DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上海地区金额_穿透',
+      pd_amount_ct DECIMAL(30,10) NULL DEFAULT 0 COMMENT '浦东地区金额_穿透',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-区域企业明细-累计';
+  `);
+  // b_transaction - 定开看板-交易明细底表
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_transaction (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3',
+      spv VARCHAR(300) NULL DEFAULT NULL COMMENT 'spv名称-5',
+      sub_fund VARCHAR(300) NULL DEFAULT NULL COMMENT '子基金名称-6',
+      company VARCHAR(300) NULL DEFAULT NULL COMMENT '被投企业名称-7',
+      transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '交易类型-8',
+      transaction_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '交易金额-10',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      lp VARCHAR(300) NULL DEFAULT NULL COMMENT '投资人名称-4',
+      transaction_date DATETIME NULL DEFAULT NULL COMMENT '交易时间-9',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      company_name VARCHAR(300) NULL DEFAULT NULL COMMENT '被投企业全称-16',
+      sub_fund_name VARCHAR(300) NULL DEFAULT NULL COMMENT '子基金全称-17',
+      capital DECIMAL(30,10) NULL DEFAULT NULL COMMENT '分配成本-11',
+      profit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '分配收益-12',
+      dividend DECIMAL(30,10) NULL DEFAULT NULL COMMENT '其中:分红-13',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-交易明细底表';
+  `);
+  // b_transaction_indicator - 定开看板-基金产品指标
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_transaction_indicator (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NOT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      inv_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/实缴-14',
+      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-16',
+      girr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'GIRR-17',
+      nirr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'NIRR-12',
+      paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人实缴-7',
+      distribution DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人分配-8',
+      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-10',
+      rvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'RVPI-11',
+      tvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'TVPI-9',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3',
+      sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/认缴-13',
+      lp_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人认缴-6',
+      exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额-15',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-5',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      d_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投整体MOC-18',
+      d_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投DPI-19',
+      d_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投实缴-20',
+      d_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投回款-21',
+      sf_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金整体MOC-24',
+      sf_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金DPI-25',
+      sf_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金实缴-26',
+      sf_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金回款-27',
+      d_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投未实现价值-22',
+      dt_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投总价值-23',
+      sf_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金未实现价值-28',
+      sft_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金总价值-29',
+      net_asset DECIMAL(30,10) NULL DEFAULT NULL COMMENT '资本账户-30',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金产品指标';
+  `);
+  // b_transaction_indicator 表若已存在则更新列注释（与 performance.sql 一致）
+  try {
+    const [rows] = await dbPool.query(`
+      SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_transaction_indicator'
+    `);
+    if (rows.length > 0) {
+      const alters = [
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_Id VARCHAR(50) NOT NULL COMMENT '主键'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteMark INT NOT NULL DEFAULT 0 COMMENT '删除状态'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN inv_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/实缴-14'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-16'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN girr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'GIRR-17'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN nirr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'NIRR-12'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人实缴-7'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN distribution DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人分配-8'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-10'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN rvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'RVPI-11'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN tvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'TVPI-9'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/认缴-13'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN lp_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人认缴-6'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额-15'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-5'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投整体MOC-18'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投DPI-19'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投实缴-20'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投回款-21'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金整体MOC-24'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金DPI-25'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金实缴-26'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金回款-27'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投未实现价值-22'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN dt_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投总价值-23'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金未实现价值-28'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sft_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金总价值-29'",
+        "ALTER TABLE b_transaction_indicator MODIFY COLUMN net_asset DECIMAL(30,10) NULL DEFAULT NULL COMMENT '资本账户-30'"
+      ];
+      for (const sql of alters) {
+        await dbPool.query(sql);
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_version - 管理人看板版本管理
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_version (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理人看板版本管理';
+  `);
+  // b_indicator_describe - 管理人看板说明
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_indicator_describe (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户',
+      F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      system_name TEXT NULL COMMENT '系统名称',
+      manual_url TEXT NULL COMMENT '操作手册地址',
+      redirect_url TEXT NULL COMMENT '页面跳转地址',
+      fof_num_desc TEXT NULL COMMENT '母基金数量',
+      direct_num_desc TEXT NULL COMMENT '直投基金数量',
+      sub_amount_desc TEXT NULL COMMENT '认缴管理规模',
+      paid_in_amount_desc TEXT NULL COMMENT '实缴管理规模',
+      dis_amount_desc TEXT NULL COMMENT '累计分配总额',
+      lp_sub_desc TEXT NULL COMMENT '投资人认缴',
+      paidin_desc TEXT NULL COMMENT '投资人实缴',
+      distribution_desc TEXT NULL COMMENT '投资人分配',
+      tvpi_desc TEXT NULL COMMENT 'TVPI',
+      dpi_desc TEXT NULL COMMENT 'DPI',
+      rvpi_desc TEXT NULL COMMENT 'RVPI',
+      nirr_desc TEXT NULL COMMENT 'NIRR',
+      sub_amount_inv_desc TEXT NULL COMMENT '投资金额_认缴',
+      inv_amount_desc TEXT NULL COMMENT '投资金额_实缴',
+      exit_amount_desc TEXT NULL COMMENT '退出金额',
+      girr_desc TEXT NULL COMMENT 'GIRR',
+      moc_desc TEXT NULL COMMENT 'MOC',
+      fund_inv_exit_desc TEXT NULL COMMENT '子基金_投_退数量',
+      fund_sub_exit_desc TEXT NULL COMMENT '子基金_认缴_退出',
+      fund_paidin_receive_desc TEXT NULL COMMENT '子基金_实缴_回款',
+      project_inv_exit_desc TEXT NULL COMMENT '直投项目_投_退数量',
+      project_paidin_receive_desc TEXT NULL COMMENT '直投项目_实缴_回款',
+      fund_inv_acc_desc TEXT NULL COMMENT '子基金_累计投资数量',
+      fund_sub_acc_desc TEXT NULL COMMENT '子基金_累计认缴金额',
+      fund_paidin_acc_desc TEXT NULL COMMENT '子基金_累计实缴金额',
+      fund_exit_acc_desc TEXT NULL COMMENT '子基金_累计退出数量',
+      fund_exit_amount_acc_desc TEXT NULL COMMENT '子基金_累计退出金额',
+      fund_receive_acc_desc TEXT NULL COMMENT '子基金_累计回款金额',
+      project_inv_acc_desc TEXT NULL COMMENT '直投项目_累计投资数量',
+      project_paidin_acc_desc TEXT NULL COMMENT '直投项目_累计投资金额',
+      project_exit_acc_desc TEXT NULL COMMENT '直投项目_累计退出数量',
+      project_exit_amount_acc_desc TEXT NULL COMMENT '直投项目_累计退出金额',
+      project_receive_acc_desc TEXT NULL COMMENT '直投项目_累计回款金额',
+      project_num_a_desc TEXT NULL COMMENT '累计组合_底层资产_数量',
+      total_amount_a_desc TEXT NULL COMMENT '累计组合_底层资产_金额',
+      ipo_num_a_desc TEXT NULL COMMENT '累计组合_上市企业',
+      sh_num_a_desc TEXT NULL COMMENT '累计组合_上海地区企业',
+      project_num_desc TEXT NULL COMMENT '当前组合_底层资产_数量',
+      total_amount_desc TEXT NULL COMMENT '当前组合_底层资产_金额',
+      ipo_num_desc TEXT NULL COMMENT '当前组合_上市企业',
+      sh_num_desc TEXT NULL COMMENT '当前组合_上海地区企业',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理人看板说明';
+  `);
+  // b_indicator_describe 表若已存在则补充 F_LastModifyUserId、F_LastModifyTime 列（若缺失）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_indicator_describe' AND COLUMN_NAME = 'F_LastModifyUserId'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_indicator_describe ADD COLUMN F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户' AFTER F_CreatorTime`);
+      await dbPool.query(`ALTER TABLE b_indicator_describe ADD COLUMN F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间' AFTER F_LastModifyUserId`);
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_indicator_describe 表若已存在则更新列注释（与 performance.sql 一致）
+  try {
+    const [rows] = await dbPool.query(`
+      SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_indicator_describe'
+    `);
+    if (rows.length > 0) {
+      const alters = [
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_Id VARCHAR(50) NOT NULL COMMENT '主键'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN system_name TEXT NULL COMMENT '系统名称'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN manual_url TEXT NULL COMMENT '操作手册地址'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN redirect_url TEXT NULL COMMENT '页面跳转地址'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fof_num_desc TEXT NULL COMMENT '母基金数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN direct_num_desc TEXT NULL COMMENT '直投基金数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN sub_amount_desc TEXT NULL COMMENT '认缴管理规模'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN paid_in_amount_desc TEXT NULL COMMENT '实缴管理规模'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN dis_amount_desc TEXT NULL COMMENT '累计分配总额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN lp_sub_desc TEXT NULL COMMENT '投资人认缴'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN paidin_desc TEXT NULL COMMENT '投资人实缴'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN distribution_desc TEXT NULL COMMENT '投资人分配'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN tvpi_desc TEXT NULL COMMENT 'TVPI'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN dpi_desc TEXT NULL COMMENT 'DPI'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN rvpi_desc TEXT NULL COMMENT 'RVPI'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN nirr_desc TEXT NULL COMMENT 'NIRR'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN sub_amount_inv_desc TEXT NULL COMMENT '投资金额_认缴'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN inv_amount_desc TEXT NULL COMMENT '投资金额_实缴'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN exit_amount_desc TEXT NULL COMMENT '退出金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN girr_desc TEXT NULL COMMENT 'GIRR'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN moc_desc TEXT NULL COMMENT 'MOC'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_inv_exit_desc TEXT NULL COMMENT '子基金_投_退数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_sub_exit_desc TEXT NULL COMMENT '子基金_认缴_退出'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_paidin_receive_desc TEXT NULL COMMENT '子基金_实缴_回款'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_inv_exit_desc TEXT NULL COMMENT '直投项目_投_退数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_paidin_receive_desc TEXT NULL COMMENT '直投项目_实缴_回款'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_inv_acc_desc TEXT NULL COMMENT '子基金_累计投资数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_sub_acc_desc TEXT NULL COMMENT '子基金_累计认缴金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_paidin_acc_desc TEXT NULL COMMENT '子基金_累计实缴金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_exit_acc_desc TEXT NULL COMMENT '子基金_累计退出数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_exit_amount_acc_desc TEXT NULL COMMENT '子基金_累计退出金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN fund_receive_acc_desc TEXT NULL COMMENT '子基金_累计回款金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_inv_acc_desc TEXT NULL COMMENT '直投项目_累计投资数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_paidin_acc_desc TEXT NULL COMMENT '直投项目_累计投资金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_exit_acc_desc TEXT NULL COMMENT '直投项目_累计退出数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_exit_amount_acc_desc TEXT NULL COMMENT '直投项目_累计退出金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_receive_acc_desc TEXT NULL COMMENT '直投项目_累计回款金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_num_a_desc TEXT NULL COMMENT '累计组合_底层资产_数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN total_amount_a_desc TEXT NULL COMMENT '累计组合_底层资产_金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN ipo_num_a_desc TEXT NULL COMMENT '累计组合_上市企业'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN sh_num_a_desc TEXT NULL COMMENT '累计组合_上海地区企业'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN project_num_desc TEXT NULL COMMENT '当前组合_底层资产_数量'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN total_amount_desc TEXT NULL COMMENT '当前组合_底层资产_金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN ipo_num_desc TEXT NULL COMMENT '当前组合_上市企业'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN sh_num_desc TEXT NULL COMMENT '当前组合_上海地区企业'"
+      ];
+      for (const sql of alters) {
+        await dbPool.query(sql);
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_sql - 数据接口 SQL 配置（保留 F_LastModifyUserId/F_LastModifyTime 记录修改人与修改时间）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_sql (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户',
+      F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      database_name VARCHAR(500) NULL DEFAULT NULL COMMENT '数据库选择',
+      interface_name VARCHAR(500) NULL DEFAULT NULL COMMENT '接口名称',
+      sql_content LONGTEXT NULL COMMENT '查询sql',
+      exec_order INT NULL DEFAULT 0 COMMENT '执行顺序',
+      external_db_config_id VARCHAR(50) NULL DEFAULT NULL COMMENT '外部数据库配置ID',
+      target_table VARCHAR(300) NULL DEFAULT NULL COMMENT '目标表',
+      remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
+      PRIMARY KEY (F_Id), INDEX idx_exec_order (exec_order), INDEX idx_delete_mark (F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-数据接口SQL配置';
+  `);
+  // b_sql 表若已存在则补充 F_LastModifyUserId、F_LastModifyTime 列（若缺失）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_sql' AND COLUMN_NAME = 'F_LastModifyUserId'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_sql ADD COLUMN F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户' AFTER F_CreatorTime`);
+      await dbPool.query(`ALTER TABLE b_sql ADD COLUMN F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间' AFTER F_LastModifyUserId`);
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_sql_change_log - 数据接口配置修改日志（记录每次修改的字段级变更）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_sql_change_log (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      b_sql_id VARCHAR(50) NOT NULL COMMENT 'b_sql配置ID',
+      modify_time DATETIME NOT NULL COMMENT '修改时间',
+      modify_user_id VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户id',
+      changes_json TEXT NULL COMMENT '变更明细JSON：[{field,fieldLabel,oldVal,newVal}]',
+      PRIMARY KEY (F_Id), INDEX idx_b_sql_id (b_sql_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-数据接口配置修改日志';
+  `);
+
+  // 业绩看板 b_* 表（除 b_sql、b_sql_change_log 外）：初始化时删除 F_LastModifyUserId、F_LastModifyTime 列（若存在）
+  const [bTableRows] = await dbPool.query(`
+    SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'b_%'
+  `);
+  const excludeTables = ['b_sql', 'b_sql_change_log', 'b_indicator_describe'];
+  for (const row of bTableRows || []) {
+    const table = row.TABLE_NAME;
+    if (excludeTables.includes(table)) continue;
+    try {
+      const [cols] = await dbPool.query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'F_LastModifyUserId'
+      `, [table]);
+      if (cols.length > 0) {
+        await dbPool.query(`ALTER TABLE \`${table}\` DROP COLUMN F_LastModifyUserId`);
+        await dbPool.query(`ALTER TABLE \`${table}\` DROP COLUMN F_LastModifyTime`);
+      }
+    } catch (e) {
+      // 表不存在或列已不存在时忽略
+    }
+  }
+
+  // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
+  await ensureBTableComments(dbPool);
+
   // enterprise_sync_task 表：被投企业数据同步定时任务
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS enterprise_sync_task (
@@ -2267,6 +3125,27 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  // performance_scheduled 表：业绩看板定时任务配置
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS performance_scheduled (
+      id VARCHAR(19) NOT NULL COMMENT '任务ID：年月日时分秒+5位自增序列',
+      task_name VARCHAR(200) NULL DEFAULT NULL COMMENT '任务名称',
+      app_name VARCHAR(200) NULL DEFAULT NULL COMMENT '应用名称，如：业绩看板应用',
+      interface_type VARCHAR(50) NULL DEFAULT NULL COMMENT '接口类型：数据生成/数据清理/HTTP',
+      request_url VARCHAR(500) NULL DEFAULT NULL COMMENT '请求URL',
+      cron_expression VARCHAR(200) NULL DEFAULT NULL COMMENT 'Cron表达式（7字段Quartz格式）',
+      is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-停用',
+      retry_count INT DEFAULT 0 COMMENT '重试次数',
+      retry_interval INT DEFAULT 0 COMMENT '重试间隔（秒）',
+      last_run_at DATETIME NULL DEFAULT NULL COMMENT '最后执行时间',
+      last_run_status VARCHAR(20) NULL DEFAULT NULL COMMENT '最后执行状态：success/failed',
+      remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      PRIMARY KEY (id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-定时任务配置';
   `);
 
   // 为已存在的 news_detail 表添加 enterprise_full_name 字段（如果不存在）
