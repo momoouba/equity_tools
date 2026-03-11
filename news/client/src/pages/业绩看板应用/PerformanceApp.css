@@ -492,6 +492,31 @@
   color: #00024C;
 }
 
+/* 所有弹窗顶部标题栏：深蓝底 #00024C，白色字 */
+.perf-data-modal .arco-modal-header {
+  background: #00024C !important;
+  color: #fff;
+  border-bottom-color: rgba(255, 255, 255, 0.15);
+}
+.perf-data-modal .arco-modal-title {
+  color: #fff !important;
+}
+.perf-data-modal .arco-modal-close-icon {
+  color: #fff !important;
+}
+.perf-data-modal .arco-modal-close-icon:hover {
+  color: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* 导出底稿按钮：深蓝底 #00024C，白色字 */
+.perf-export-btn.arco-btn-primary,
+.perf-export-btn.arco-btn-primary:hover,
+.perf-export-btn.arco-btn-primary:focus {
+  background: #00024C !important;
+  border-color: #00024C !important;
+  color: #fff !important;
+}
+
 /* 弹窗头部信息 */
 .perf-modal-header {
   display: flex;
@@ -649,10 +674,10 @@
 }
 
 .perf-modal-investors-scroll .perf-table-investors tfoot td {
-  background: #00024C;
+  background: #1AA8E9;
   color: #fff;
   font-weight: 500;
-  border: 1px solid #00024C;
+  border: 1px solid #1AA8E9;
 }
 
 /* 合计行单行显示，文字列左对齐 */
@@ -701,9 +726,9 @@
   box-sizing: border-box;
 }
 
-/* 在管产品清单合计行：蓝底白字 */
+/* 在管产品清单合计行：浅蓝底 #1AA8E9 白字 */
 .perf-table-summary td {
-  background: #00024C;
+  background: #1AA8E9;
   color: #fff;
   font-weight: 500;
 }
@@ -945,10 +970,10 @@
 }
 
 .perf-modal-ipo-scroll .perf-table-ipo tfoot td {
-  background: #00024C;
+  background: #1AA8E9;
   color: #fff;
   font-weight: 500;
-  border: 1px solid #00024C;
+  border: 1px solid #1AA8E9;
   height: 35px;
   min-height: 35px;
   vertical-align: middle;
@@ -999,7 +1024,7 @@
 /* tfoot 固定列背景与合计行一致 */
 .perf-modal-ipo-scroll .perf-table-ipo tfoot td.perf-col-index,
 .perf-modal-ipo-scroll .perf-table-ipo tfoot td.perf-col-project {
-  background: #00024C;
+  background: #1AA8E9;
   position: sticky;
   left: 0;
   z-index: 3;
@@ -1051,7 +1076,7 @@
   text-align: right;
 }
 .perf-table-region tr.perf-table-summary td {
-  background: #00024C;
+  background: #1AA8E9;
   color: #fff;
   font-weight: 500;
   border: 1px solid rgba(255, 255, 255, 0.5);

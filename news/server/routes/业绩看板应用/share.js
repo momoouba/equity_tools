@@ -18,7 +18,11 @@ router.use(getCurrentUser);
  */
 router.post('/create', async (req, res) => {
   try {
-    const userId = req.currentUserId;
+    // 使用请求头中的原始 user_id 字符串，避免 19 位 ID 被 parseInt 精度丢失导致与 users.id 不一致
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() : (req.currentUserId != null ? String(req.currentUserId) : null);
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '请先登录' });
+    }
     const {
       version,
       hasExpiry,
@@ -30,6 +34,15 @@ router.post('/create', async (req, res) => {
     
     if (!version) {
       return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    // 外键约束：user_id 必须存在于 users 表
+    const userRows = await db.query('SELECT id FROM users WHERE id = ? LIMIT 1', [userId]);
+    if (!userRows || userRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '当前用户未在系统用户表中，无法创建分享链接。请联系管理员在「用户管理」中添加或同步您的账号。'
+      });
     }
     
     // 检查是否已有活跃的业绩看板分享链接
@@ -242,7 +255,7 @@ router.get('/data', async (req, res) => {
  */
 router.post('/close', async (req, res) => {
   try {
-    const userId = req.currentUserId;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() : (req.currentUserId != null ? String(req.currentUserId) : null);
     const { shareToken } = req.body;
     
     if (!shareToken) {

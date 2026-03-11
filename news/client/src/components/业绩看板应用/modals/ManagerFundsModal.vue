@@ -185,6 +185,15 @@ watch(() => props.visible, (val) => {
 
 .modal-header-btn {
   margin-left: auto;
+  background: #00024C !important;
+  border-color: #00024C !important;
+  color: #fff !important;
+}
+.modal-header-btn:hover {
+  background: #00024C !important;
+  border-color: #00024C !important;
+  color: #fff !important;
+  opacity: 0.9;
 }
 
 /* 列间竖线；表头居中 */
@@ -209,9 +218,9 @@ watch(() => props.visible, (val) => {
   border-right: none;
 }
 
-/* 合计行：蓝底白字 */
+/* 合计行：浅蓝底 #1AA8E9 白字 */
 .manager-funds-table :deep(.summary-row .arco-table-td) {
-  background: #165dff !important;
+  background: #1AA8E9 !important;
   color: #fff !important;
   font-weight: 500;
 }

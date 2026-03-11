@@ -3711,7 +3711,46 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
-  
+
+  // 业绩看板分享：为 news_share_links 表添加 link_type、performance_version、can_export 字段（若不存在）
+  try {
+    const [linkTypeCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_share_links' AND COLUMN_NAME = 'link_type'
+    `);
+    if (linkTypeCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_share_links
+        ADD COLUMN link_type VARCHAR(50) NULL DEFAULT 'news' COMMENT '链接类型：news-舆情分享，performance-业绩看板分享'
+      `);
+      console.log('✓ news_share_links 表已添加 link_type 字段');
+    }
+    const [perfVersionCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_share_links' AND COLUMN_NAME = 'performance_version'
+    `);
+    if (perfVersionCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_share_links
+        ADD COLUMN performance_version VARCHAR(50) NULL COMMENT '业绩看板版本号'
+      `);
+      console.log('✓ news_share_links 表已添加 performance_version 字段');
+    }
+    const [canExportCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_share_links' AND COLUMN_NAME = 'can_export'
+    `);
+    if (canExportCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_share_links
+        ADD COLUMN can_export TINYINT(1) DEFAULT 0 COMMENT '是否允许导出：1-是，0-否'
+      `);
+      console.log('✓ news_share_links 表已添加 can_export 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 news_share_links 表业绩看板字段时出现警告:', err.message);
+  }
+
   console.log('✓ 所有数据库表结构初始化完成');
   
   // 初始化提示词配置（异步执行，不阻塞服务器启动）

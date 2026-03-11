@@ -94,36 +94,39 @@ export default defineConfig({
         secure: false,
         ws: true,
         configure: (proxy, _options) => {
-          // 使用闭包保持状态，记录是否已经显示过启动提示
+          const proxyStartTime = Date.now()
           let lastWarningTime = 0
-          let errorCount = 0
-          
+          let startupLogged = false
+
           proxy.on('error', (err, req, _res) => {
-            // ECONNREFUSED 错误通常发生在服务器启动时，前端在服务器完全启动之前尝试连接
-            // 这是正常情况，完全抑制这些错误，避免刷屏
-            const isConnectionRefused = 
-              err.code === 'ECONNREFUSED' || 
+            const isConnectionRefused =
+              err.code === 'ECONNREFUSED' ||
               err.message?.includes('ECONNREFUSED') ||
               err.message?.includes('connect ECONNREFUSED') ||
               (err.cause && (err.cause.code === 'ECONNREFUSED' || err.cause.message?.includes('ECONNREFUSED'))) ||
-              (err.name === 'AggregateError' && err.errors?.some(e => 
+              (err.name === 'AggregateError' && err.errors?.some(e =>
                 e.code === 'ECONNREFUSED' || e.message?.includes('ECONNREFUSED')
               ))
-            
+
             if (isConnectionRefused) {
-              errorCount++
-              // 显示连接错误，不要抑制
               const now = Date.now()
-              if (process.env.NODE_ENV === 'development' && (now - lastWarningTime > 10000)) {
-                console.error('[Vite代理] ❌ 无法连接到后端服务器 (localhost:3001)，请确保后端服务正在运行')
+              const isStartupPhase = now - proxyStartTime < 20000
+              // 启动阶段（20 秒内）：只打一次友好提示，避免刷屏
+              if (isStartupPhase) {
+                if (!startupLogged) {
+                  console.warn('[Vite代理] 后端正在启动 (localhost:3001)，API 请求将自动重试…')
+                  startupLogged = true
+                }
+                return
+              }
+              // 启动阶段过后仍连不上：提示检查后端
+              if (now - lastWarningTime > 10000) {
+                console.error('[Vite代理] ❌ 无法连接到后端 (localhost:3001)，请确认已执行 npm run server 或后端服务已启动')
                 console.error('[Vite代理] 错误详情:', err.message, err.code)
                 lastWarningTime = now
-                errorCount = 0
               }
-              // 不再抑制错误，让错误传播
               return
             }
-            // 其他错误显示
             console.error('[Vite代理] ❌ 代理错误:', err.message, err.code)
           })
           

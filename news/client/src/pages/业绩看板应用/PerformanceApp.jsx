@@ -764,6 +764,7 @@ function PerformanceApp() {
               <span>版本号：{selectedVersion}</span>
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport('managerFunds', null)}
                 style={{ marginLeft: 'auto' }}
@@ -848,6 +849,7 @@ function PerformanceApp() {
               <Button
                 type="primary"
                 icon={<IconDownload />}
+                className="perf-export-btn"
                 onClick={() => handleExport('investors', modal.fund)}
                 style={{ marginLeft: 'auto' }}
               >
@@ -924,6 +926,7 @@ function PerformanceApp() {
               <span>版本号：{selectedVersion}</span>
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport('fundPerformance', modal.fund)}
                 style={{ marginLeft: 'auto' }}
@@ -1070,6 +1073,7 @@ function PerformanceApp() {
               <span>版本号：{selectedVersion}</span>
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport('fundPortfolio', modal.fund)}
                 style={{ marginLeft: 'auto' }}
@@ -1271,6 +1275,7 @@ function PerformanceApp() {
               <span>版本号：{selectedVersion}</span>
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport('portfolioDetail', null)}
                 style={{ marginLeft: 'auto' }}
@@ -1401,6 +1406,7 @@ function PerformanceApp() {
               <span>版本号：{selectedVersion}</span>
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport('projectCashflow', modal.fund)}
                 style={{ marginLeft: 'auto' }}
@@ -1852,6 +1858,7 @@ function PerformanceApp() {
       {/* 数据弹窗 */}
       {modal.type && !['versionUpdate', 'share'].includes(modal.type) && (
         <Modal
+          className="perf-data-modal"
           title={
             ['underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) && systemConfig.redirectUrl ? (
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 8 }}>
@@ -1876,6 +1883,7 @@ function PerformanceApp() {
             <div className="perf-modal-footer">
               <Button
                 type="primary"
+                className="perf-export-btn"
                 icon={<IconDownload />}
                 onClick={() => handleExport(modal.type, modal.fund)}
               >
@@ -1889,6 +1897,7 @@ function PerformanceApp() {
       {/* 数据版本更新弹窗：选择月份、预览版本、更新数据 */}
       {modal.type === 'versionUpdate' && (
         <Modal
+          className="perf-data-modal"
           title="数据版本更新"
           visible
           onCancel={closeModal}
@@ -1992,6 +2001,7 @@ function PerformanceApp() {
       {/* 分享弹窗（简化版） */}
       {modal.type === 'share' && (
         <Modal
+          className="perf-data-modal"
           title="分享业绩看板"
           visible
           onCancel={closeModal}
