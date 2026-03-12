@@ -349,6 +349,7 @@ function NewsInfo() {
       if (value && !searchTags.includes(value)) {
         setSearchTags([...searchTags, value])
         setSearchInputValue('')
+        setSearch('') // 清空单次搜索状态
         setCurrentPage(1)
       }
     }

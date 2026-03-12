@@ -2198,17 +2198,26 @@ router.get('/user-news', async (req, res) => {
     // 添加搜索条件（支持多标签搜索）
     const userSearchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
     if (userSearchTags.length > 0) {
-      // 多标签搜索：每个标签都要匹配至少一个字段
-      const tagConditions = userSearchTags.map(() => '(title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)').join(' AND ');
+      // 多标签搜索：任一标签匹配即可（OR关系）
+      const tagConditions = userSearchTags.map(() => `(
+        title LIKE ? OR 
+        news_abstract LIKE ? OR 
+        enterprise_full_name LIKE ? OR 
+        fund LIKE ? OR 
+        sub_fund LIKE ? OR 
+        enterprise_abbreviation LIKE ? OR 
+        account_name LIKE ? OR 
+        wechat_account LIKE ?
+      )`).join(' OR ');
       condition += ' AND (' + tagConditions + ')';
       userSearchTags.forEach(tag => {
         const searchTerm = `%${tag.trim()}%`;
-        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
       });
     } else if (search) {
-      condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)';
+      condition += ' AND (title LIKE ? OR news_abstract LIKE ? OR enterprise_full_name LIKE ? OR fund LIKE ? OR sub_fund LIKE ? OR enterprise_abbreviation LIKE ? OR account_name LIKE ? OR wechat_account LIKE ?)';
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     // 查询数据（有企业的优先，然后按发布时间降序）
@@ -2335,17 +2344,26 @@ router.get('/', async (req, res) => {
       // 添加搜索条件（支持多标签搜索）
       const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
       if (searchTags.length > 0) {
-        // 多标签搜索：每个标签都要匹配至少一个字段
-        const tagConditions = searchTags.map(() => '(nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)').join(' AND ');
+        // 多标签搜索：任一标签匹配即可（OR关系）
+        const tagConditions = searchTags.map(() => `(
+          nd.title LIKE ? OR 
+          nd.news_abstract LIKE ? OR 
+          nd.enterprise_full_name LIKE ? OR 
+          nd.fund LIKE ? OR 
+          nd.sub_fund LIKE ? OR 
+          nd.enterprise_abbreviation LIKE ? OR 
+          nd.account_name LIKE ? OR 
+          nd.wechat_account LIKE ?
+        )`).join(' OR ');
         whereCondition += ' AND (' + tagConditions + ')';
         searchTags.forEach(tag => {
           const searchTerm = `%${tag.trim()}%`;
-          params.push(searchTerm, searchTerm, searchTerm);
+          params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
         });
       } else if (search) {
-        whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)';
+        whereCondition += ' AND (nd.title LIKE ? OR nd.news_abstract LIKE ? OR nd.enterprise_full_name LIKE ? OR nd.fund LIKE ? OR nd.sub_fund LIKE ? OR nd.enterprise_abbreviation LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)';
         const searchTerm = `%${search}%`;
-        params.push(searchTerm, searchTerm, searchTerm);
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
       }
 
       // 查询数据（按发布时间降序）
@@ -2509,17 +2527,26 @@ router.get('/', async (req, res) => {
     // 添加搜索条件（支持多标签搜索）
     const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
     if (searchTags.length > 0) {
-      // 多标签搜索：每个标签都要匹配至少一个字段
-      const tagConditions = searchTags.map(() => '(nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ? OR nd.enterprise_full_name LIKE ?)').join(' AND ');
+      // 多标签搜索：任一标签匹配即可（OR关系）
+      const tagConditions = searchTags.map(() => `(
+        nd.title LIKE ? OR 
+        nd.news_abstract LIKE ? OR 
+        nd.enterprise_full_name LIKE ? OR 
+        nd.fund LIKE ? OR 
+        nd.sub_fund LIKE ? OR 
+        nd.enterprise_abbreviation LIKE ? OR 
+        nd.account_name LIKE ? OR 
+        nd.wechat_account LIKE ?
+      )`).join(' OR ');
       whereCondition += ' AND (' + tagConditions + ')';
       searchTags.forEach(tag => {
         const searchTerm = `%${tag.trim()}%`;
-        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
       });
     } else if (search) {
-      whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ? OR nd.enterprise_full_name LIKE ?)';
+      whereCondition += ' AND (nd.title LIKE ? OR nd.news_abstract LIKE ? OR nd.enterprise_full_name LIKE ? OR nd.fund LIKE ? OR nd.sub_fund LIKE ? OR nd.enterprise_abbreviation LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)';
       const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
     if (account) {

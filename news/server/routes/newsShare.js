@@ -665,25 +665,35 @@ router.get('/news/:token', async (req, res) => {
     // 搜索条件（支持多标签搜索）
     const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
     if (searchTags.length > 0) {
-      // 多标签搜索：每个标签都要匹配至少一个字段
+      // 多标签搜索：任一标签匹配即可（OR关系）
       const tagConditions = searchTags.map(() => `(
         nd.title LIKE ? OR 
+        nd.news_abstract LIKE ? OR 
+        nd.enterprise_full_name LIKE ? OR 
+        nd.fund LIKE ? OR 
+        nd.sub_fund LIKE ? OR 
+        nd.enterprise_abbreviation LIKE ? OR 
         nd.account_name LIKE ? OR 
         nd.wechat_account LIKE ?
-      )`).join(' AND ');
+      )`).join(' OR ');
       whereConditions.push(`(${tagConditions})`);
       searchTags.forEach(tag => {
         const searchPattern = `%${tag.trim()}%`;
-        queryParams.push(searchPattern, searchPattern, searchPattern);
+        queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
       });
     } else if (search) {
       whereConditions.push(`(
         nd.title LIKE ? OR 
+        nd.news_abstract LIKE ? OR 
+        nd.enterprise_full_name LIKE ? OR 
+        nd.fund LIKE ? OR 
+        nd.sub_fund LIKE ? OR 
+        nd.enterprise_abbreviation LIKE ? OR 
         nd.account_name LIKE ? OR 
         nd.wechat_account LIKE ?
       )`);
       const searchPattern = `%${search}%`;
-      queryParams.push(searchPattern, searchPattern, searchPattern);
+      queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
     }
 
     // 企业相关过滤（客户端过滤，这里先获取所有数据）
