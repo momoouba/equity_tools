@@ -110,6 +110,7 @@ div.share-news-page div.table-container table.news-table thead tr th {
 .share-news-page .search-form {
   display: flex;
   gap: 10px;
+  align-items: flex-start;
 }
 
 .share-news-page .search-input {
@@ -127,6 +128,89 @@ div.share-news-page div.table-container table.news-table thead tr th {
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  height: fit-content;
+}
+
+/* 多标签搜索样式 */
+.share-news-page .multi-search-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 8px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  width: 500px;
+  background-color: #fff;
+  flex-wrap: wrap;
+}
+
+.share-news-page .multi-search-container:focus-within {
+  border-color: #165dff;
+  box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.1);
+}
+
+.share-news-page .search-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background-color: #f0f5ff;
+  border: 1px solid #165dff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #165dff;
+  margin: 2px;
+}
+
+.share-news-page .tag-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  color: #165dff;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 50%;
+}
+
+.share-news-page .tag-remove-btn:hover {
+  background-color: #165dff;
+  color: white;
+}
+
+.share-news-page .multi-search-input {
+  flex: 1;
+  min-width: 120px;
+  padding: 4px 8px;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  background: transparent;
+}
+
+.share-news-page .multi-search-input::placeholder {
+  color: #999;
+}
+
+.share-news-page .clear-tags-btn {
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: #86909c;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.share-news-page .clear-tags-btn:hover {
+  color: #165dff;
 }
 
 .share-news-page .news-tabs {

@@ -2195,8 +2195,17 @@ router.get('/user-news', async (req, res) => {
       condition += ' AND entity_type IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
     }
 
-    // 添加搜索条件
-    if (search) {
+    // 添加搜索条件（支持多标签搜索）
+    const userSearchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
+    if (userSearchTags.length > 0) {
+      // 多标签搜索：每个标签都要匹配至少一个字段
+      const tagConditions = userSearchTags.map(() => '(title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)').join(' AND ');
+      condition += ' AND (' + tagConditions + ')';
+      userSearchTags.forEach(tag => {
+        const searchTerm = `%${tag.trim()}%`;
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      });
+    } else if (search) {
       condition += ' AND (title LIKE ? OR account_name LIKE ? OR wechat_account LIKE ? OR enterprise_full_name LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);
@@ -2323,8 +2332,17 @@ router.get('/', async (req, res) => {
       whereCondition += placeholders + ') AND nd.delete_mark = 0';
       params.push(...accountIds);
 
-      // 添加搜索条件
-      if (search) {
+      // 添加搜索条件（支持多标签搜索）
+      const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
+      if (searchTags.length > 0) {
+        // 多标签搜索：每个标签都要匹配至少一个字段
+        const tagConditions = searchTags.map(() => '(nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)').join(' AND ');
+        whereCondition += ' AND (' + tagConditions + ')';
+        searchTags.forEach(tag => {
+          const searchTerm = `%${tag.trim()}%`;
+          params.push(searchTerm, searchTerm, searchTerm);
+        });
+      } else if (search) {
         whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ?)';
         const searchTerm = `%${search}%`;
         params.push(searchTerm, searchTerm, searchTerm);
@@ -2488,7 +2506,17 @@ router.get('/', async (req, res) => {
       whereCondition += ' AND COALESCE(nd.entity_type, ie.entity_type) IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
     }
 
-    if (search) {
+    // 添加搜索条件（支持多标签搜索）
+    const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
+    if (searchTags.length > 0) {
+      // 多标签搜索：每个标签都要匹配至少一个字段
+      const tagConditions = searchTags.map(() => '(nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ? OR nd.enterprise_full_name LIKE ?)').join(' AND ');
+      whereCondition += ' AND (' + tagConditions + ')';
+      searchTags.forEach(tag => {
+        const searchTerm = `%${tag.trim()}%`;
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm);
+      });
+    } else if (search) {
       whereCondition += ' AND (nd.title LIKE ? OR nd.account_name LIKE ? OR nd.wechat_account LIKE ? OR nd.enterprise_full_name LIKE ?)';
       const searchTerm = `%${search}%`;
       params.push(searchTerm, searchTerm, searchTerm, searchTerm);

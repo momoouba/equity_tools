@@ -662,8 +662,21 @@ router.get('/news/:token', async (req, res) => {
       queryParams.push(userId);
     }
 
-    // 搜索条件
-    if (search) {
+    // 搜索条件（支持多标签搜索）
+    const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
+    if (searchTags.length > 0) {
+      // 多标签搜索：每个标签都要匹配至少一个字段
+      const tagConditions = searchTags.map(() => `(
+        nd.title LIKE ? OR 
+        nd.account_name LIKE ? OR 
+        nd.wechat_account LIKE ?
+      )`).join(' AND ');
+      whereConditions.push(`(${tagConditions})`);
+      searchTags.forEach(tag => {
+        const searchPattern = `%${tag.trim()}%`;
+        queryParams.push(searchPattern, searchPattern, searchPattern);
+      });
+    } else if (search) {
       whereConditions.push(`(
         nd.title LIKE ? OR 
         nd.account_name LIKE ? OR 

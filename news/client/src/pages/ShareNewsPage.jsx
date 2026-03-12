@@ -73,6 +73,8 @@ function ShareNewsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
+  const [searchTags, setSearchTags] = useState([])  // 多标签搜索
+  const [searchInputValue, setSearchInputValue] = useState('')  // 搜索输入框值
   const [activeTab, setActiveTab] = useState('yesterday')
   const [pageSize, setPageSize] = useState(10)
   const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise')
@@ -177,8 +179,8 @@ function ShareNewsPage() {
     }
   }
 
-  // 获取舆情信息
-  const fetchNews = useCallback(async () => {
+  // 获取舆情信息 - 使用当前最新的searchTags
+  const fetchNews = useCallback(async (currentSearchTags = searchTags) => {
     setLoading(true)
     try {
       const params = {
@@ -186,7 +188,9 @@ function ShareNewsPage() {
         pageSize: 100000,
         timeRange: activeTab
       }
-      if (search) {
+      if (currentSearchTags.length > 0) {
+        params.searchTags = currentSearchTags.join(',')
+      } else if (search) {
         params.search = search
       }
 
@@ -289,6 +293,40 @@ function ShareNewsPage() {
     fetchNews()
   }
 
+  // 处理搜索标签输入
+  const handleSearchInputKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const value = searchInputValue.trim()
+      if (value && !searchTags.includes(value)) {
+        const newTags = [...searchTags, value]
+        setSearchTags(newTags)
+        setSearchInputValue('')
+        setCurrentPage(1)
+        // 使用新的标签列表立即触发搜索
+        fetchNews(newTags)
+      }
+    }
+  }
+
+  // 删除搜索标签
+  const handleRemoveSearchTag = (tagToRemove) => {
+    const newTags = searchTags.filter(tag => tag !== tagToRemove)
+    setSearchTags(newTags)
+    setCurrentPage(1)
+    // 使用新的标签列表立即触发搜索
+    fetchNews(newTags)
+  }
+
+  // 清空所有搜索标签
+  const handleClearSearchTags = () => {
+    setSearchTags([])
+    setSearchInputValue('')
+    setCurrentPage(1)
+    // 使用空的标签列表立即触发搜索
+    fetchNews([])
+  }
+
   // Tab切换
   const handleTabChange = (tab) => {
     setActiveTab(tab)
@@ -301,7 +339,7 @@ function ShareNewsPage() {
   useEffect(() => {
     setSelectedNewsIds([])
     setSelectAll(false)
-  }, [currentPage, activeTab, enterpriseFilter, search])
+  }, [currentPage, activeTab, enterpriseFilter, search, searchTags])
 
   // 处理单个新闻选择
   const handleSelectNews = (newsId) => {
@@ -635,18 +673,50 @@ function ShareNewsPage() {
       {/* 主要内容 */}
       <div className="share-header">
         <h2>舆情信息</h2>
-        <form onSubmit={handleSearch} className="search-form">
-          <input
-            type="text"
-            placeholder="搜索标题、公众号名称或微信号..."
-            value={search}
-            onChange={handleSearchChange}
-            className="search-input"
-          />
-          <button type="submit" className="search-button">
+        <div className="search-form">
+          <div className="multi-search-container">
+            {searchTags.map((tag, index) => (
+              <span key={index} className="search-tag">
+                {tag}
+                <button
+                  type="button"
+                  className="tag-remove-btn"
+                  onClick={() => handleRemoveSearchTag(tag)}
+                  title="删除"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <input
+              type="text"
+              placeholder={searchTags.length === 0 ? "搜索标题、公众号名称或微信号，回车添加..." : "继续输入..."}
+              value={searchInputValue}
+              onChange={(e) => setSearchInputValue(e.target.value)}
+              onKeyDown={handleSearchInputKeyDown}
+              className="multi-search-input"
+            />
+            {searchTags.length > 0 && (
+              <button
+                type="button"
+                className="clear-tags-btn"
+                onClick={handleClearSearchTags}
+              >
+                清空
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            className="search-button"
+            onClick={() => {
+              setCurrentPage(1)
+              fetchNews()
+            }}
+          >
             搜索
           </button>
-        </form>
+        </div>
       </div>
 
       {/* 统计信息 */}

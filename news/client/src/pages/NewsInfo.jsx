@@ -17,6 +17,8 @@ function NewsInfo() {
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
+  const [searchTags, setSearchTags] = useState([])  // 多标签搜索
+  const [searchInputValue, setSearchInputValue] = useState('')  // 搜索输入框值
   const [user, setUser] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [selectedNews, setSelectedNews] = useState(null)
@@ -103,7 +105,9 @@ function NewsInfo() {
         timeRange: activeTab,
         enterpriseFilter: enterpriseFilter // 传递企业过滤参数到后端
       }
-      if (search) {
+      if (searchTags.length > 0) {
+        params.searchTags = searchTags.join(',')
+      } else if (search) {
         params.search = search
       }
       
@@ -177,7 +181,7 @@ function NewsInfo() {
       try {
         await fetchNews()
       } catch (error) {
-        if (isMounted && currentPage === 1 && !search) {
+        if (isMounted && currentPage === 1 && !search && searchTags.length === 0) {
           if (error.message && !error.message.includes('ECONNREFUSED')) {
             Message.error(error.message)
           }
@@ -198,7 +202,7 @@ function NewsInfo() {
     return () => {
       isMounted = false
     }
-  }, [search, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter, currentPage])
+  }, [search, searchTags, isAdmin, user, activeTab, pageSize, adminActiveTab, enterpriseFilter, currentPage])
 
   const shouldShowCheckbox = () => {
     return ['yesterday', 'thisWeek', 'lastWeek', 'thisMonth', 'all'].includes(activeTab)
@@ -334,6 +338,32 @@ function NewsInfo() {
   }
 
   const handleSearch = () => {
+    setCurrentPage(1)
+  }
+
+  // 处理搜索标签输入
+  const handleSearchInputKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const value = searchInputValue.trim()
+      if (value && !searchTags.includes(value)) {
+        setSearchTags([...searchTags, value])
+        setSearchInputValue('')
+        setCurrentPage(1)
+      }
+    }
+  }
+
+  // 删除搜索标签
+  const handleRemoveSearchTag = (tagToRemove) => {
+    setSearchTags(searchTags.filter(tag => tag !== tagToRemove))
+    setCurrentPage(1)
+  }
+
+  // 清空所有搜索标签
+  const handleClearSearchTags = () => {
+    setSearchTags([])
+    setSearchInputValue('')
     setCurrentPage(1)
   }
 
@@ -921,15 +951,62 @@ function NewsInfo() {
                 {isAdmin && <Tag color="orange" style={{ marginLeft: '8px' }}>（管理员 - 全部数据）</Tag>}
                 {!isAdmin && <Tag color="blue" style={{ marginLeft: '8px' }}>（我的企业相关）</Tag>}
               </h2>
-              <Space>
-                <InputSearch
-                  value={search}
-                  onChange={(value) => setSearch(value)}
-                  placeholder="搜索标题、公众号名称或微信号..."
-                  style={{ width: 400 }}
-                  allowClear
-                  onSearch={handleSearch}
-                />
+              <Space align="start">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div style={{ 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    gap: '8px',
+                    minHeight: '32px',
+                    padding: '4px 8px',
+                    border: '1px solid #d9d9d9',
+                    borderRadius: '4px',
+                    width: '500px',
+                    backgroundColor: '#fff'
+                  }}>
+                    {searchTags.map((tag, index) => (
+                      <Tag
+                        key={index}
+                        closable
+                        onClose={() => handleRemoveSearchTag(tag)}
+                        style={{ margin: '2px' }}
+                      >
+                        {tag}
+                      </Tag>
+                    ))}
+                    <Input
+                      value={searchInputValue}
+                      onChange={(value) => setSearchInputValue(value)}
+                      onKeyDown={handleSearchInputKeyDown}
+                      placeholder={searchTags.length === 0 ? "搜索标题、公众号名称或微信号，回车添加搜索条件..." : "继续输入..."}
+                      style={{ 
+                        flex: 1,
+                        minWidth: '100px',
+                        border: 'none',
+                        boxShadow: 'none'
+                      }}
+                      onFocus={(e) => {
+                        e.target.style.boxShadow = 'none'
+                        e.target.style.border = 'none'
+                      }}
+                    />
+                    {searchTags.length > 0 && (
+                      <Button
+                        type="text"
+                        size="small"
+                        onClick={handleClearSearchTags}
+                        style={{ padding: '0 4px' }}
+                      >
+                        清空
+                      </Button>
+                    )}
+                  </div>
+                  {searchTags.length > 0 && (
+                    <div style={{ fontSize: '12px', color: '#86909c' }}>
+                      已添加 {searchTags.length} 个搜索条件，按回车继续添加
+                    </div>
+                  )}
+                </div>
                 <Button
                   type="primary"
                   status="danger"
