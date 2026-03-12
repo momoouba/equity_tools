@@ -341,7 +341,7 @@ router.get('/', async (req, res) => {
     }
 
     const data = await db.query(
-      `SELECT * ${condition} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT * ${condition} ORDER BY project_number DESC, id DESC LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
     const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
@@ -419,7 +419,7 @@ router.get('/export', async (req, res) => {
 
     // 查询所有符合条件的数据（不分页）
     const data = await db.query(
-      `SELECT * ${condition} ORDER BY created_at DESC`,
+      `SELECT * ${condition} ORDER BY project_number DESC, id DESC`,
       params
     );
 
