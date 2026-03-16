@@ -14,6 +14,7 @@ function AdditionalAccounts() {
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [quota, setQuota] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
@@ -87,6 +88,10 @@ function AdditionalAccounts() {
       if (!abortSignal?.aborted && response.data.success) {
         setAccountsList(response.data.data)
         setTotal(response.data.total)
+        // 仅当后端返回quota字段时更新额度信息
+        if (Object.prototype.hasOwnProperty.call(response.data, 'quota')) {
+          setQuota(response.data.quota)
+        }
       }
     } catch (error) {
       if (error.name === 'CanceledError' || error.name === 'AbortError') {
@@ -123,6 +128,11 @@ function AdditionalAccounts() {
   }
 
   const handleAdd = () => {
+    // 如果有额度信息且已用完，则不弹出新增窗口
+    if (quota && typeof quota.remaining === 'number' && quota.remaining <= 0) {
+      Message.warning('当前会员等级的额外公众号数量已用完，如需增加请联系管理员升级会员等级')
+      return
+    }
     setFormData({
       account_name: '',
       wechat_account_id: '',
@@ -212,6 +222,10 @@ function AdditionalAccounts() {
   }
 
   const handleImport = async () => {
+    if (quota && typeof quota.remaining === 'number' && quota.remaining <= 0) {
+      Message.warning('当前会员等级的额外公众号数量已用完，无法继续导入，如需增加请联系管理员升级会员等级')
+      return
+    }
     if (!importFile) {
       Message.warning('请选择要导入的文件')
       return
@@ -333,17 +347,24 @@ function AdditionalAccounts() {
     <div className="additional-accounts">
       <Card className="management-card" bordered={false}>
         <div className="management-header">
-          <h2 className="management-title">额外公众号管理</h2>
+          <h2 className="management-title">第三方公众号管理</h2>
+          {userRole !== 'admin' && quota && typeof quota.totalLimit === 'number' && (
+            <div style={{ marginRight: 16, color: '#666', fontSize: 13 }}>
+              已用额度：{quota.usedCount || 0} / {quota.totalLimit}（剩余 {Math.max(0, quota.remaining || 0)}）
+            </div>
+          )}
           <Space>
             <Button
               onClick={handleAdd}
               type="primary"
+              disabled={userRole !== 'admin' && quota && typeof quota.remaining === 'number' && quota.remaining <= 0}
             >
               新增公众号
             </Button>
             <Button
               onClick={() => setShowImportModal(true)}
               type="outline"
+              disabled={userRole !== 'admin' && quota && typeof quota.remaining === 'number' && quota.remaining <= 0}
             >
               批量导入
             </Button>

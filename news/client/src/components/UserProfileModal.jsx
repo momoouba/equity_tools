@@ -9,6 +9,7 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
   const [showChangePassword, setShowChangePassword] = useState(false)
+  const [appMemberships, setAppMemberships] = useState([])
 
   useEffect(() => {
     if (isOpen) {
@@ -21,10 +22,15 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
       setLoading(true)
       const response = await axios.get('/api/auth/profile')
       if (response.data.success) {
+        const profile = response.data.data || {}
+        const memberships = Array.isArray(profile.app_memberships) ? profile.app_memberships : []
+        setAppMemberships(memberships)
+
         form.setFieldsValue({
-          account: response.data.data.account || '',
-          phone: response.data.data.phone || '',
-          email: response.data.data.email || ''
+          account: profile.account || '',
+          phone: profile.phone || '',
+          email: profile.email || '',
+          main_membership_level: profile.main_membership_level || '—'
         })
       }
     } catch (error) {
@@ -104,6 +110,48 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
             field="account"
           >
             <Input disabled />
+          </FormItem>
+
+          <FormItem
+            label="主会员等级"
+            field="main_membership_level"
+          >
+            <Input disabled />
+          </FormItem>
+
+          <FormItem label="应用名称和会员等级（只读）">
+            {appMemberships && appMemberships.length > 0 ? (
+              <div style={{ border: '1px solid #e5e6eb', borderRadius: 4, padding: 0 }}>
+                {appMemberships.map((m, idx) => (
+                  <div
+                    key={`${m.app_id || m.app_name || idx}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: 13,
+                      padding: '6px 12px',
+                      borderTop: idx === 0 ? 'none' : '1px solid #e5e6eb'
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{m.app_name || m.app_id || '-'}</span>
+                    <span
+                      style={{
+                        flexBasis: 100,
+                        textAlign: 'right',
+                        color: '#4e5969',
+                        borderLeft: '1px solid #e5e6eb',
+                        paddingLeft: 12,
+                        marginLeft: 12
+                      }}
+                    >
+                      {m.level_name || '无会员等级'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ color: '#86909c', fontSize: 13 }}>当前账号尚未配置任何应用会员等级</div>
+            )}
           </FormItem>
 
           <FormItem

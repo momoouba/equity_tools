@@ -160,23 +160,52 @@ router.post('/login', [
       user.api_token = apiToken;
     }
 
-    // 获取用户的应用权限（通过membership_levels关联applications）
+    // 获取用户的应用权限（通过 membership_levels 关联 applications）
     const appPermissions = [];
     if (user.app_id && user.app_name) {
       appPermissions.push({
         app_id: user.app_id,
-        app_name: user.app_name
+        app_name: user.app_name,
+        membership_level_id: user.membership_level_id || null
       });
     }
 
-    // 如果app_permissions字段有值，也解析它（JSON格式）
+    // 如果 app_permissions 字段有值，也解析它（JSON 格式），并补全 app_name
     if (user.app_permissions) {
       try {
         const parsedPermissions = JSON.parse(user.app_permissions);
         if (Array.isArray(parsedPermissions)) {
+          const missingName = parsedPermissions.filter(
+            p => p.membership_level_id && !p.app_name
+          );
+          let levelRows = [];
+          if (missingName.length > 0) {
+            const levelIds = missingName.map(p => p.membership_level_id);
+            levelRows = await db.query(
+              `SELECT ml.id AS membership_level_id, a.id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.id
+               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+          }
+
           parsedPermissions.forEach(perm => {
-            if (perm.app_id && !appPermissions.find(p => p.app_id === perm.app_id)) {
-              appPermissions.push(perm);
+            let enriched = { ...perm };
+            if (perm.membership_level_id && !perm.app_name && levelRows.length) {
+              const match = levelRows.find(
+                r => r.membership_level_id === perm.membership_level_id
+              );
+              if (match) {
+                enriched.app_name = match.app_name;
+                enriched.app_id = match.app_id;
+              }
+            }
+            if (
+              enriched.app_id &&
+              !appPermissions.find(p => p.app_id === enriched.app_id)
+            ) {
+              appPermissions.push(enriched);
             }
           });
         }
@@ -197,6 +226,99 @@ router.post('/login', [
   } catch (error) {
     console.error('登录错误：', error);
     res.status(500).json({ success: false, message: '服务器错误' });
+  }
+});
+
+// 获取当前登录用户最新信息（含应用会员权限）
+// 需在请求头携带 x-user-id，由前端 axios 拦截器自动注入
+router.get('/me', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+
+    const users = await db.query(
+      `SELECT u.*, ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.id as application_id
+       FROM users u 
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id 
+       LEFT JOIN applications a ON ml.app_id = a.id
+       WHERE u.id = ?`,
+      [userId]
+    );
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    const user = users[0];
+    if (user.account_status !== 'active') {
+      return res.status(403).json({ success: false, message: '账号已被禁用' });
+    }
+
+    const appPermissions = [];
+    if (user.app_id && user.app_name) {
+      appPermissions.push({
+        app_id: user.app_id,
+        app_name: user.app_name,
+        membership_level_id: user.membership_level_id || null
+      });
+    }
+
+    if (user.app_permissions) {
+      try {
+        const parsedPermissions = JSON.parse(user.app_permissions);
+        if (Array.isArray(parsedPermissions)) {
+          const missingName = parsedPermissions.filter(
+            p => p.membership_level_id && !p.app_name
+          );
+          let levelRows = [];
+          if (missingName.length > 0) {
+            const levelIds = missingName.map(p => p.membership_level_id);
+            levelRows = await db.query(
+              `SELECT ml.id AS membership_level_id, a.id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.id
+               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+          }
+
+          parsedPermissions.forEach(perm => {
+            let enriched = { ...perm };
+            if (perm.membership_level_id && !perm.app_name && levelRows.length) {
+              const match = levelRows.find(
+                r => r.membership_level_id === perm.membership_level_id
+              );
+              if (match) {
+                enriched.app_name = match.app_name;
+                enriched.app_id = match.app_id;
+              }
+            }
+            if (
+              enriched.app_id &&
+              !appPermissions.find(p => p.app_id === enriched.app_id)
+            ) {
+              appPermissions.push(enriched);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('解析app_permissions失败:', e);
+      }
+    }
+
+    const { password, app_id, app_name, application_id, ...userInfo } = user;
+    return res.json({
+      success: true,
+      user: {
+        ...userInfo,
+        app_permissions: appPermissions
+      }
+    });
+  } catch (error) {
+    console.error('获取当前用户信息失败：', error);
+    return res.status(500).json({ success: false, message: '获取当前用户信息失败' });
   }
 });
 
@@ -491,7 +613,12 @@ router.get('/profile', async (req, res) => {
     }
 
     const users = await db.query(
-      'SELECT id, account, phone, email, company_name FROM users WHERE id = ?',
+      `SELECT u.id, u.account, u.phone, u.email, u.company_name,
+              u.membership_level_id, ml.level_name AS main_membership_level,
+              u.app_permissions, u.account_status
+       FROM users u
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
+       WHERE u.id = ?`,
       [userId]
     );
 
@@ -499,9 +626,46 @@ router.get('/profile', async (req, res) => {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
 
+    const user = users[0];
+
+    // 解析应用会员配置，拼出「应用名称 + 会员等级名称」
+    let appMemberships = [];
+    if (user.app_permissions) {
+      try {
+        const parsed = JSON.parse(user.app_permissions);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const levelIds = parsed
+            .map(p => p.membership_level_id)
+            .filter(Boolean);
+          if (levelIds.length > 0) {
+            const levelRows = await db.query(
+              `SELECT ml.id AS membership_level_id, ml.level_name, a.id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.id
+               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+            appMemberships = parsed.map(p => {
+              const match = levelRows.find(r => r.membership_level_id === p.membership_level_id);
+              return {
+                app_id: match?.app_id || p.app_id,
+                app_name: match?.app_name || p.app_id,
+                level_name: match?.level_name || ''
+              };
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('解析用户 app_permissions 失败：', e);
+      }
+    }
+
     res.json({
       success: true,
-      data: users[0]
+      data: {
+        ...user,
+        app_memberships: appMemberships
+      }
     });
   } catch (error) {
     console.error('获取用户信息失败：', error);

@@ -3413,6 +3413,75 @@ async function initializeTables(dbPool) {
     } else {
       console.log('  应用数据已存在，跳过创建');
     }
+
+    // ========== 新增：确保「业绩看板应用」及其会员等级存在 ==========
+    const [perfApps] = await dbPool.query(
+      "SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
+      ['业绩看板应用']
+    );
+
+    let perfAppId;
+    if (perfApps.length === 0) {
+      const now2 = new Date();
+      const year2 = now2.getFullYear();
+      const month2 = String(now2.getMonth() + 1).padStart(2, '0');
+      const day2 = String(now2.getDate()).padStart(2, '0');
+      const hours2 = String(now2.getHours()).padStart(2, '0');
+      const minutes2 = String(now2.getMinutes()).padStart(2, '0');
+      const seconds2 = String(now2.getSeconds()).padStart(2, '0');
+      const prefix2 = `${year2}${month2}${day2}${hours2}${minutes2}${seconds2}`;
+
+      perfAppId = `${prefix2}10001`;
+      console.log(`  创建业绩看板应用，ID: ${perfAppId}`);
+      await dbPool.execute('INSERT INTO applications (id, app_name) VALUES (?, ?)', [perfAppId, '业绩看板应用']);
+    } else {
+      perfAppId = perfApps[0].id;
+    }
+
+    // 兼容历史数据：如果 membership_levels 中存在 app_id 为空的记录，统一补上业绩看板应用的 app_id
+    await dbPool.execute(
+      'UPDATE membership_levels SET app_id = ? WHERE app_id IS NULL',
+      [perfAppId]
+    );
+
+    const [perfLevels] = await dbPool.query(
+      'SELECT COUNT(*) as count FROM membership_levels WHERE app_id = ?',
+      [perfAppId]
+    );
+    if (perfLevels[0].count === 0) {
+      const now3 = new Date();
+      const year3 = now3.getFullYear();
+      const month3 = String(now3.getMonth() + 1).padStart(2, '0');
+      const day3 = String(now3.getDate()).padStart(2, '0');
+      const hours3 = String(now3.getHours()).padStart(2, '0');
+      const minutes3 = String(now3.getMinutes()).padStart(2, '0');
+      const seconds3 = String(now3.getSeconds()).padStart(2, '0');
+      const prefix3 = `${year3}${month3}${day3}${hours3}${minutes3}${seconds3}`;
+
+      const pLevel1Id = `${prefix3}20001`;
+      const pLevel2Id = `${prefix3}20002`;
+      const pLevel3Id = `${prefix3}20003`;
+
+      console.log(`  为业绩看板应用初始化会员等级: ${pLevel1Id}, ${pLevel2Id}, ${pLevel3Id}`);
+
+      await dbPool.execute(
+        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+        [pLevel1Id, '普通会员', 30, perfAppId]
+      );
+      await dbPool.execute(
+        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+        [pLevel2Id, '高级会员', 90, perfAppId]
+      );
+      await dbPool.execute(
+        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+        [pLevel3Id, 'VIP会员', 365, perfAppId]
+      );
+      console.log('  ✓ 业绩看板应用会员等级初始化完成');
+    } else {
+      console.log('  业绩看板应用会员等级已存在，跳过初始化');
+    }
+    // ============================================================
+
   } catch (err) {
     console.error('  初始化基础数据时出错:', err.message);
     console.error('  错误堆栈:', err.stack);

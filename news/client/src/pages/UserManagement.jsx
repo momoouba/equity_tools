@@ -325,11 +325,12 @@ function UserManagement() {
               {applications.map((app) => {
                 const levels = membershipLevels[app.id] || []
                 const currentLevelId = userMembershipConfig[app.id] || null
+                const displayAppName = app.app_name === '业绩看板应用' ? '业绩看板' : app.app_name
                 
                 return (
                   <div key={app.id} style={{ marginBottom: '16px', padding: '16px', border: '1px solid #e5e6eb', borderRadius: '4px' }}>
                     <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>
-                      {app.app_name}
+                      {displayAppName}
                     </label>
                     <Select
                       value={currentLevelId || ''}

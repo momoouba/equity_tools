@@ -499,8 +499,21 @@ function PerformanceApp() {
   const [versionUpdateMonths, setVersionUpdateMonths] = useState([{ value: new Date() }])
   const [versionUpdateExisting, setVersionUpdateExisting] = useState({})
   const [versionUpdateSubmitting, setVersionUpdateSubmitting] = useState(false)
+  const [permissions, setPermissions] = useState({
+    levelName: null,
+    canView: false,
+    canConfig: false,
+    canOpenModal: false,
+    canExport: false
+  })
 
   const openModal = (type, fund = null, modalType = null) => {
+    // 数据版本更新、分享等配置类弹窗不受 canOpenModal 限制
+    const configTypes = ['versionUpdate', 'share']
+    if (!configTypes.includes(type) && !permissions.canOpenModal) {
+      Message.warning('当前会员等级不可查看业绩明细弹窗，如需查看请升级会员')
+      return
+    }
     setModal({ type, fund, modalType })
     setModalData(
       type === 'investors' ? { list: [] } :
@@ -564,6 +577,18 @@ function PerformanceApp() {
       }
     } catch (error) {
       console.error('加载系统配置失败:', error)
+    }
+  }
+
+  // 加载当前用户在业绩看板中的权限
+  const loadPermissions = async () => {
+    try {
+      const res = await axios.get('/api/performance/permissions')
+      if (res.data?.success && res.data.data) {
+        setPermissions(res.data.data)
+      }
+    } catch (error) {
+      console.error('加载业绩看板权限失败:', error)
     }
   }
 
@@ -661,6 +686,7 @@ function PerformanceApp() {
   useEffect(() => {
     loadDates()
     loadSystemConfig()
+    loadPermissions()
   }, [])
 
   useEffect(() => {
@@ -703,6 +729,10 @@ function PerformanceApp() {
 
   // 导出文件
   const handleExport = async (type, fund) => {
+  if (!permissions.canExport) {
+    Message.warning('当前会员等级不支持导出业绩看板数据，如需导出请升级为 VIP 会员')
+    return
+  }
     try {
       let res
       const date = new Date().toISOString().split('T')[0].replace(/-/g, '')

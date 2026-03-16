@@ -29,6 +29,47 @@ const checkAuth = (req, res, next) => {
   next();
 };
 
+// 根据会员等级计算当前用户允许创建的额外公众号数量
+async function getUserAdditionalAccountLimit(userId) {
+  if (!userId) return 0;
+
+  // 查询用户的主会员等级及名称
+  const rows = await db.query(
+    `SELECT u.membership_level_id, ml.level_name
+     FROM users u
+     LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
+     WHERE u.id = ?`,
+    [userId]
+  );
+
+  if (!rows || rows.length === 0) {
+    return 0;
+  }
+
+  const levelName = rows[0].level_name || '';
+
+  // 根据新闻舆情会员等级名称控制额度
+  if (levelName === '普通会员') return 5;
+  if (levelName === '高级会员') return 10;
+  if (levelName === 'VIP会员') return 15;
+
+  // 其他未知等级暂不允许创建
+  return 0;
+}
+
+// 统计用户当前已创建的额外公众号数量（未删除）
+async function getUserAdditionalAccountCount(userId) {
+  if (!userId) return 0;
+  const rows = await db.query(
+    `SELECT COUNT(*) AS total
+     FROM additional_wechat_accounts
+     WHERE creator_user_id = ?
+       AND delete_mark = 0`,
+    [userId]
+  );
+  return rows[0]?.total || 0;
+}
+
 // 获取额外公众号列表
 router.get('/', checkAuth, async (req, res) => {
   try {
@@ -83,12 +124,25 @@ router.get('/', checkAuth, async (req, res) => {
       params
     );
 
+    // 仅当查询当前登录用户自己的列表时，返回额度信息
+    let quota = null;
+    if (!isAdmin || (isAdmin && !userId)) {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      quota = {
+        totalLimit: limit,
+        usedCount: used,
+        remaining: Math.max(0, limit - used)
+      };
+    }
+
     res.json({
       success: true,
       data: data || [],
       total: totalRows[0]?.total || 0,
       page: parseInt(page),
-      pageSize: parseInt(pageSize)
+      pageSize: parseInt(pageSize),
+      quota
     });
   } catch (error) {
     console.error('查询额外公众号列表失败：', error);
@@ -110,6 +164,23 @@ router.post('/', checkAuth, async (req, res) => {
       return res.status(400).json({ 
         success: false, 
         message: '公众号名称和账号ID不能为空' 
+      });
+    }
+
+    // 会员额度检查：根据 membership_levels 限制可创建数量
+    const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+    if (limit <= 0) {
+      return res.status(403).json({
+        success: false,
+        message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+      });
+    }
+
+    const used = await getUserAdditionalAccountCount(req.currentUserId);
+    if (used >= limit) {
+      return res.status(400).json({
+        success: false,
+        message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个）`
       });
     }
 
@@ -294,11 +365,35 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
       });
     }
 
+    // 会员额度检查：计算剩余可创建数量
+    const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+    if (limit <= 0) {
+      return res.status(403).json({
+        success: false,
+        message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+      });
+    }
+
+    const used = await getUserAdditionalAccountCount(req.currentUserId);
+    const remainingQuota = limit - used;
+    if (remainingQuota <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个），无法继续导入`
+      });
+    }
+
     let successCount = 0;
     let skipCount = 0;
     const errors = [];
 
     for (let i = 0; i < data.length; i++) {
+      // 若达到本次导入可用额度，则停止后续导入
+      if (successCount >= remainingQuota) {
+        errors.push(`已成功导入 ${successCount} 条记录，达到当前会员等级允许的最大新增数量（本次最多可新增 ${remainingQuota} 条），其余记录未导入`);
+        break;
+      }
+
       const row = data[i];
       const rowNum = i + 2; // Excel行号（从第2行开始）
 

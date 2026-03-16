@@ -1979,11 +1979,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     // 先按企业类型分组，再按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
     const newsByEntityTypeAndEnterprise = {};
     for (const news of filteredNewsList) {
-      // 过滤掉企业名称为null或空字符串的新闻
-      if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
-        console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
-        continue;
-      }
+      const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
       
       // 获取企业类型，直接使用 news_detail 表中的 entity_type 字段
       // 如果 entity_type 为空（null、undefined 或空字符串），且有企业全称，默认为"被投企业"（兼容旧数据）
@@ -1993,7 +1989,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       const originalEntityType = entityType;
       
       if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
-        if (news.enterprise_full_name && news.enterprise_full_name.trim() !== '') {
+        if (hasEnterpriseName) {
           entityType = '被投企业';
           console.log(`[邮件发送] ⚠️ 新闻 ${news.id} 的 entity_type 为空，使用默认值"被投企业"`);
         } else {
@@ -2014,12 +2010,12 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         console.log(`[邮件发送] 分组新闻: ID=${news.id}, entity_type="${entityType}" (原始值: "${originalEntityType || '(NULL)'}"), enterprise="${news.enterprise_full_name?.substring(0, 30)}"`);
       }
       
-      let enterpriseName = news.enterprise_full_name;
+      let enterpriseName = hasEnterpriseName ? news.enterprise_full_name : '';
       let groupKey = enterpriseName;
       
       // 只有来自额外公众号的新闻，且企业名称为空，且包含"榜单"或"获奖"标签的，才使用null作为分组键
       // 注意：这里不应该覆盖已经正确设置的 entityType
-      if ((!enterpriseName || enterpriseName === '' || enterpriseName === 'null')) {
+      if (!hasEnterpriseName || enterpriseName === '' || enterpriseName === 'null') {
         // 检查是否来自额外公众号
         const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
         
@@ -2047,12 +2043,12 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
             }
             groupKey = null;
           } else {
-            // 来自额外公众号但没有标签的，保持原值（使用空字符串作为分组键）
+            // 来自额外公众号但没有标签的：使用公众号名称作为分组名称（第三方公众号名）
             // 但只有在 entityType 还没有被正确设置时才覆盖
             if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
               entityType = '其他';
             }
-            groupKey = enterpriseName || '';
+            groupKey = news.account_name || news.wechat_account || '';
           }
         } else {
           // 不是来自额外公众号的，保持原值（使用空字符串作为分组键）

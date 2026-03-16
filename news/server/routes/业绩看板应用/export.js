@@ -6,6 +6,7 @@ const router = express.Router();
 const XLSX = require('xlsx');
 const db = require('../../db');
 const { getCurrentUser } = require('../../middleware/auth');
+const { checkUserAppPermission } = require('../../utils/permissionChecker');
 
 // 构造安全的 Content-Disposition，避免中文/换行等导致 ERR_INVALID_CHAR
 function buildContentDisposition(filename) {
@@ -133,11 +134,46 @@ async function buildSheetFromRows(tableName, rows) {
 
 router.use(getCurrentUser);
 
+// 导出权限中间件：只允许拥有业绩看板导出权限的用户访问
+async function checkExportPermission(req, res, next) {
+  try {
+    const user = req.currentUser;
+    if (!user) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+    // admin 账号可以导出全部
+    if (user.role === 'admin') {
+      return next();
+    }
+
+    // 通过业绩看板权限接口的逻辑判断导出能力（普通/高级会员不允许导出，VIP允许）
+    // 这里直接重用 membership_levels 的规则：只有 VIP会员 才允许导出
+    const levelRows = await db.query(
+      `SELECT ml.level_name
+       FROM users u
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
+       WHERE u.id = ?
+       LIMIT 1`,
+      [user.id]
+    );
+
+    const levelName = levelRows[0]?.level_name || '';
+    if (levelName !== 'VIP会员') {
+      return res.status(403).json({ success: false, message: '当前会员等级不支持导出业绩看板数据' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('[业绩看板] 导出权限检查失败：', error);
+    return res.status(500).json({ success: false, message: '导出权限检查失败' });
+  }
+}
+
 /**
  * 导出在管产品清单
  * POST /api/performance/exports/manager-funds
  */
-router.post('/manager-funds', async (req, res) => {
+router.post('/manager-funds', checkExportPermission, async (req, res) => {
   try {
     const { version } = req.body;
     if (!version) {
@@ -194,7 +230,7 @@ router.post('/manager-funds', async (req, res) => {
  * 导出投资人名录
  * POST /api/performance/exports/investors
  */
-router.post('/investors', async (req, res) => {
+router.post('/investors', checkExportPermission, async (req, res) => {
   try {
     const { version, fund } = req.body;
     if (!version || !fund) {
@@ -242,7 +278,7 @@ router.post('/investors', async (req, res) => {
  * 导出基金业绩指标及现金流底表
  * POST /api/performance/exports/fund-performance
  */
-router.post('/fund-performance', async (req, res) => {
+router.post('/fund-performance', checkExportPermission, async (req, res) => {
   try {
     const { version, fund } = req.body;
     if (!version || !fund) {
@@ -290,7 +326,7 @@ router.post('/fund-performance', async (req, res) => {
  * 导出基金投资组合明细
  * POST /api/performance/exports/fund-portfolio
  */
-router.post('/fund-portfolio', async (req, res) => {
+router.post('/fund-portfolio', checkExportPermission, async (req, res) => {
   try {
     const { version, fund } = req.body;
     if (!version || !fund) {
@@ -339,7 +375,7 @@ router.post('/fund-portfolio', async (req, res) => {
  * 导出项目现金流及业绩指标
  * POST /api/performance/exports/project-cashflow
  */
-router.post('/project-cashflow', async (req, res) => {
+router.post('/project-cashflow', checkExportPermission, async (req, res) => {
   try {
     const { version, fund } = req.body;
     if (!version || !fund) {
@@ -387,7 +423,7 @@ router.post('/project-cashflow', async (req, res) => {
  * 导出整体基金投资组合明细
  * POST /api/performance/exports/portfolio-detail
  */
-router.post('/portfolio-detail', async (req, res) => {
+router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
   try {
     const { version } = req.body;
     if (!version) {
@@ -436,7 +472,7 @@ router.post('/portfolio-detail', async (req, res) => {
  * 导出上市企业明细
  * POST /api/performance/exports/ipo-companies
  */
-router.post('/ipo-companies', async (req, res) => {
+router.post('/ipo-companies', checkExportPermission, async (req, res) => {
   try {
     const { version, type = 'cumulative' } = req.body;
     if (!version) {
