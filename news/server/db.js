@@ -2019,11 +2019,12 @@ async function initializeTables(dbPool) {
 
 
   // additional_wechat_accounts 表：额外公众号数据源
+  // 校验规则：同一用户(creator_user_id)下 wechat_account_id 唯一，不同用户可创建相同的 wechat_account_id
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS additional_wechat_accounts (
       id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       account_name VARCHAR(255) NOT NULL COMMENT '公众号名称',
-      wechat_account_id VARCHAR(255) NOT NULL UNIQUE COMMENT '微信账号ID',
+      wechat_account_id VARCHAR(255) NOT NULL COMMENT '微信账号ID',
       status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态：active-生效，inactive-失效',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -2032,6 +2033,7 @@ async function initializeTables(dbPool) {
       delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
       delete_time DATETIME NULL COMMENT '删除时间',
       delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      UNIQUE KEY uk_creator_wechat (creator_user_id, wechat_account_id) COMMENT '同一用户下公众号ID唯一',
       INDEX idx_wechat_account_id (wechat_account_id),
       INDEX idx_status (status),
       INDEX idx_delete_mark (delete_mark),
@@ -2040,6 +2042,29 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  // 迁移：将 wechat_account_id 从全局唯一改为 (creator_user_id, wechat_account_id) 联合唯一
+  try {
+    const [indexes] = await dbPool.query(`
+      SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'additional_wechat_accounts'
+      AND INDEX_NAME = 'wechat_account_id' AND NON_UNIQUE = 0
+    `);
+    if (indexes && indexes.length > 0) {
+      await dbPool.query('ALTER TABLE additional_wechat_accounts DROP INDEX wechat_account_id');
+    }
+    const [ukExists] = await dbPool.query(`
+      SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'additional_wechat_accounts'
+      AND INDEX_NAME = 'uk_creator_wechat'
+    `);
+    if (!ukExists || ukExists.length === 0) {
+      await dbPool.query('ALTER TABLE additional_wechat_accounts ADD UNIQUE KEY uk_creator_wechat (creator_user_id, wechat_account_id)');
+      console.log('  additional_wechat_accounts: 已迁移为 (creator_user_id, wechat_account_id) 联合唯一');
+    }
+  } catch (migrateErr) {
+    console.warn('  迁移 additional_wechat_accounts 唯一约束时出现警告:', migrateErr.message);
+  }
 
   // ai_model_config 表：AI模型配置
   await dbPool.query(`

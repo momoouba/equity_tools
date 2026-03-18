@@ -1918,13 +1918,35 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       }
     }
     
+    // 查询所有额外公众号的ID列表（用于判断新闻是否来自额外公众号）
+    // 注意：db已经在文件顶部导入，不需要重新导入
+    let additionalAccountIds = [];
+    try {
+      const additionalAccounts = await db.query(
+        `SELECT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE status = 'active' 
+         AND delete_mark = 0
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''`
+      );
+      additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
+      console.log(`[邮件发送] 查询到 ${additionalAccountIds.length} 个额外公众号ID`);
+    } catch (e) {
+      console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
+    }
+
     // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，如春节/元旦/中秋等）；
     // 企业推介自家产品、服务、品牌的发展类内容不打此类标签，故不会被过滤（股权投资关注企业发展）
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
-      // 首先过滤掉企业名称为null或空字符串的新闻
-      if (!news.enterprise_full_name || news.enterprise_full_name.trim() === '') {
-        console.log(`[邮件发送] 过滤掉企业名称为空的新闻: ${news.id} - ${news.title}`);
+      const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
+      const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
+
+      // 对于普通企业新闻：仍然要求有企业名称
+      // 对于额外公众号新闻：允许企业名称为空，只要后续满足摘要等条件
+      if (!hasEnterpriseName && !isFromAdditionalAccount) {
+        console.log(`[邮件发送] 过滤掉企业名称为空且非额外公众号的新闻: ${news.id} - ${news.title}`);
         return false;
       }
       
@@ -1957,24 +1979,6 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     });
     
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
-    
-    // 查询所有额外公众号的ID列表（用于判断新闻是否来自额外公众号）
-    // 注意：db已经在文件顶部导入，不需要重新导入
-    let additionalAccountIds = [];
-    try {
-      const additionalAccounts = await db.query(
-        `SELECT wechat_account_id 
-         FROM additional_wechat_accounts 
-         WHERE status = 'active' 
-         AND delete_mark = 0
-         AND wechat_account_id IS NOT NULL 
-         AND wechat_account_id != ''`
-      );
-      additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
-      console.log(`[邮件发送] 查询到 ${additionalAccountIds.length} 个额外公众号ID`);
-    } catch (e) {
-      console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
-    }
     
     // 先按企业类型分组，再按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
     const newsByEntityTypeAndEnterprise = {};

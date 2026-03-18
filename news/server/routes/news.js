@@ -1931,8 +1931,31 @@ router.get('/user-stats', async (req, res) => {
     `;
     
     const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
-    
-    if (wechatAccounts.length === 0) {
+
+    // 查询用户添加的额外公众号ID
+    const userAdditionalAccounts = await db.query(
+      `SELECT DISTINCT wechat_account_id 
+       FROM additional_wechat_accounts 
+       WHERE creator_user_id = ? 
+       AND status = 'active' 
+       AND wechat_account_id IS NOT NULL 
+       AND wechat_account_id != ''
+       AND delete_mark = 0`,
+      [userId]
+    );
+
+    // 提取微信公众号ID列表：被投企业 + 用户添加的额外公众号
+    const accountIds = [];
+    wechatAccounts.forEach(item => {
+      const ids = splitAccountIds(item.wechat_official_account_id);
+      accountIds.push(...ids);
+    });
+    userAdditionalAccounts.forEach(item => {
+      accountIds.push(item.wechat_account_id);
+    });
+    const uniqueAccountIds = [...new Set(accountIds)];
+
+    if (uniqueAccountIds.length === 0) {
       return res.json({
         success: true,
         data: {
@@ -1945,21 +1968,14 @@ router.get('/user-stats', async (req, res) => {
       });
     }
 
-    // 提取微信公众号ID列表，并拆分逗号分隔的ID
-    const accountIds = [];
-    wechatAccounts.forEach(item => {
-      const ids = splitAccountIds(item.wechat_official_account_id);
-      accountIds.push(...ids);
-    });
-
     // 构建查询条件
     let condition = 'FROM news_detail WHERE wechat_account IN (';
     const params = [];
     
-    // 添加微信公众号ID占位符
-    const placeholders = accountIds.map(() => '?').join(',');
+    // 添加微信公众号ID占位符（包含被投企业 + 额外公众号）
+    const placeholders = uniqueAccountIds.map(() => '?').join(',');
     condition += placeholders + ') AND delete_mark = 0';
-    params.push(...accountIds);
+    params.push(...uniqueAccountIds);
 
     // 计算昨日日期范围
     const yesterday = new Date();
@@ -1991,7 +2007,7 @@ router.get('/user-stats', async (req, res) => {
         yesterdayCount: yesterdayResult[0].count,
         yesterdayAccountsCount: yesterdayAccountsResult[0].count,
         totalCount: totalResult[0].count,
-        totalAccountsCount: accountIds.length,
+        totalAccountsCount: uniqueAccountIds.length,
         totalEnterprises: totalEnterprises
       }
     });
@@ -2125,21 +2141,27 @@ router.get('/user-news', async (req, res) => {
     `;
     
     const enterprises = await db.query(enterprisesQuery, [userId]);
-    
-    if (enterprises.length === 0) {
-      return res.json({
-        success: true,
-        data: [],
-        total: 0,
-        page,
-        pageSize
-      });
-    }
 
-    // 提取微信公众号ID列表（用于匹配新榜新闻）
+    // 查询用户添加的额外公众号ID
+    const userAdditionalAccounts = await db.query(
+      `SELECT DISTINCT wechat_account_id 
+       FROM additional_wechat_accounts 
+       WHERE creator_user_id = ? 
+       AND status = 'active' 
+       AND wechat_account_id IS NOT NULL 
+       AND wechat_account_id != ''
+       AND delete_mark = 0`,
+      [userId]
+    );
+
+    // 提取微信公众号ID列表（用于匹配新榜新闻）：被投企业 + 用户添加的额外公众号
     const accountIds = enterprises
       .filter(item => item.wechat_official_account_id && item.wechat_official_account_id !== '')
-      .map(item => item.wechat_official_account_id);
+      .flatMap(item => splitAccountIds(item.wechat_official_account_id));
+    userAdditionalAccounts.forEach(item => {
+      accountIds.push(item.wechat_account_id);
+    });
+    const uniqueAccountIds = [...new Set(accountIds)];
     
     // 提取企业全称列表（用于匹配企查查新闻）
     const enterpriseNames = enterprises
@@ -2151,11 +2173,11 @@ router.get('/user-news', async (req, res) => {
     const params = [];
     const conditions = [];
     
-    // 新榜新闻：通过wechat_account匹配
-    if (accountIds.length > 0) {
-      const placeholders = accountIds.map(() => '?').join(',');
+    // 新榜新闻：通过wechat_account匹配（含被投企业 + 额外公众号）
+    if (uniqueAccountIds.length > 0) {
+      const placeholders = uniqueAccountIds.map(() => '?').join(',');
       conditions.push(`wechat_account IN (${placeholders})`);
-      params.push(...accountIds);
+      params.push(...uniqueAccountIds);
     }
     
     // 企查查新闻：通过enterprise_full_name匹配
@@ -2314,8 +2336,31 @@ router.get('/', async (req, res) => {
       `;
       
       const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
+
+      // 查询用户添加的额外公众号ID
+      const userAdditionalAccounts = await db.query(
+        `SELECT DISTINCT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE creator_user_id = ? 
+         AND status = 'active' 
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''
+         AND delete_mark = 0`,
+        [userId]
+      );
+
+      // 提取微信公众号ID列表：被投企业 + 用户添加的额外公众号
+      const accountIds = [];
+      wechatAccounts.forEach(item => {
+        const ids = splitAccountIds(item.wechat_official_account_id);
+        accountIds.push(...ids);
+      });
+      userAdditionalAccounts.forEach(item => {
+        accountIds.push(item.wechat_account_id);
+      });
+      const uniqueAccountIds = [...new Set(accountIds)];
       
-      if (wechatAccounts.length === 0) {
+      if (uniqueAccountIds.length === 0) {
         return res.json({
           success: true,
           data: [],
@@ -2325,21 +2370,14 @@ router.get('/', async (req, res) => {
         });
       }
 
-      // 提取微信公众号ID列表，并拆分逗号分隔的ID
-      const accountIds = [];
-      wechatAccounts.forEach(item => {
-        const ids = splitAccountIds(item.wechat_official_account_id);
-        accountIds.push(...ids);
-      });
-
       // 构建查询条件
       let whereCondition = 'WHERE nd.wechat_account IN (';
       const params = [];
       
-      // 添加微信公众号ID占位符
-      const placeholders = accountIds.map(() => '?').join(',');
+      // 添加微信公众号ID占位符（包含被投企业 + 额外公众号）
+      const placeholders = uniqueAccountIds.map(() => '?').join(',');
       whereCondition += placeholders + ') AND nd.delete_mark = 0';
-      params.push(...accountIds);
+      params.push(...uniqueAccountIds);
 
       // 添加搜索条件（支持多标签搜索）
       const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
@@ -2787,7 +2825,7 @@ router.post('/export', async (req, res) => {
         params.push(...timeParams);
       }
     } else {
-      // 普通用户只能导出自己相关的数据
+      // 普通用户只能导出自己相关的数据（被投企业 + 额外公众号）
       const wechatAccountsQuery = `
         SELECT DISTINCT wechat_official_account_id 
         FROM invested_enterprises 
@@ -2799,24 +2837,40 @@ router.post('/export', async (req, res) => {
       `;
       
       const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
+
+      const userAdditionalAccounts = await db.query(
+        `SELECT DISTINCT wechat_account_id 
+         FROM additional_wechat_accounts 
+         WHERE creator_user_id = ? 
+         AND status = 'active' 
+         AND wechat_account_id IS NOT NULL 
+         AND wechat_account_id != ''
+         AND delete_mark = 0`,
+        [userId]
+      );
+
+      // 提取微信公众号ID列表：被投企业 + 额外公众号
+      const accountIds = [];
+      wechatAccounts.forEach(item => {
+        const ids = splitAccountIds(item.wechat_official_account_id);
+        accountIds.push(...ids);
+      });
+      userAdditionalAccounts.forEach(item => {
+        accountIds.push(item.wechat_account_id);
+      });
+      const uniqueAccountIds = [...new Set(accountIds)];
       
-      if (wechatAccounts.length === 0) {
+      if (uniqueAccountIds.length === 0) {
         return res.json({
           success: false,
           message: '没有可导出的数据'
         });
       }
 
-      // 提取微信公众号ID列表，并拆分逗号分隔的ID
-      const accountIds = [];
-      wechatAccounts.forEach(item => {
-        const ids = splitAccountIds(item.wechat_official_account_id);
-        accountIds.push(...ids);
-      });
-      const placeholders = accountIds.map(() => '?').join(',');
+      const placeholders = uniqueAccountIds.map(() => '?').join(',');
       
       condition = `FROM news_detail WHERE wechat_account IN (${placeholders}) AND delete_mark = 0`;
-      params = [...accountIds];
+      params = [...uniqueAccountIds];
       
       if (timeCondition) {
         condition += timeCondition;
