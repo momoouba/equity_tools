@@ -40,14 +40,21 @@ router.post('/register', [
 
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    // 查询普通会员等级，如果不存在则使用null（允许注册）
+    // 查询新闻舆情应用的普通会员等级，作为新用户的默认会员等级
     let membershipLevelId = null;
     try {
-      const levelRows = await db.query('SELECT id FROM membership_levels WHERE level_name = ? LIMIT 1', ['普通会员']);
+      const levelRows = await db.query(
+        `SELECT ml.id FROM membership_levels ml
+         JOIN applications a ON ml.app_id = a.id
+         WHERE a.app_name = '新闻舆情'
+         AND ml.level_name = '普通会员'
+         LIMIT 1`
+      );
       if (levelRows.length > 0) {
         membershipLevelId = levelRows[0].id;
+        console.log(`  ✓ 新用户将注册为：新闻舆情 - 普通会员 (ID: ${membershipLevelId})`);
       } else {
-        console.warn('警告：未找到"普通会员"等级，用户将注册为无会员等级');
+        console.warn('警告：未找到"新闻舆情-普通会员"等级，用户将注册为无会员等级');
       }
     } catch (err) {
       console.warn('查询会员等级时出错（将使用null）：', err.message);

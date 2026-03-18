@@ -41,14 +41,17 @@ function Dashboard() {
     setIsAdmin(isAdminUser)
 
     const appPermissions = userInfo.app_permissions || []
+    
+    // 新闻舆情权限：只要存在 app_permissions 中 app_name='新闻舆情' 的记录即可
     const hasNewsPerm = appPermissions.some(
       perm => perm.app_name === '新闻舆情'
     )
-    // 业绩看板权限：仅依赖 app_permissions 中是否存在带 app_id 和 membership_level_id 的记录，
-    // 使用 ID 判断，不再依赖中文应用名称
+    
+    // 业绩看板权限：必须存在 app_permissions 中 app_name='业绩看板应用' 的记录（必须有会员等级配置）
     const hasPerfPerm = appPermissions.some(
-      perm => perm.app_id && perm.membership_level_id
+      perm => perm.app_name === '业绩看板应用' && perm.membership_level_id
     )
+    
     const newsEnabled = hasNewsPerm || isAdminUser
     const perfEnabled = hasPerfPerm || isAdminUser
     setHasNewsPermission(newsEnabled)
