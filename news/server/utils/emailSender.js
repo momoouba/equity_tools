@@ -223,6 +223,8 @@ function parseEnterpriseName(enterpriseAbbreviation, enterpriseFullName) {
  */
 function getEntityTypeDisplayName(entityType) {
   const typeMap = {
+    '企业新闻': '企业新闻',
+    '第三方公众号': '第三方公众号',
     '被投企业': '被投企业',
     '基金相关主体': '基金相关主体',
     '基金': '基金相关主体', // 兼容旧数据
@@ -232,7 +234,7 @@ function getEntityTypeDisplayName(entityType) {
     '其他': '其他',
     null: '被投企业' // 兼容旧数据，默认为被投企业
   };
-  return typeMap[entityType] || '其他';
+  return typeMap[entityType] || entityType || '其他';
 }
 
 /**
@@ -288,8 +290,8 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     `;
   }
   
-  // 定义企业类型的显示顺序
-  const entityTypeOrder = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号；兼容旧数据）
+  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
   
   let html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
@@ -319,10 +321,10 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     // 其他空企业名称的新闻保持原样显示（可能是空字符串或其他值）
     let enterpriseDisplayHtml = '';
     
-    if (enterpriseName === null) {
+    if (enterpriseName === null || enterpriseName === '——榜单或获奖信息') {
       enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">——榜单或获奖信息</h3>';
     } else if (!enterpriseName || enterpriseName === '') {
-      enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">未关联企业</h3>';
+      enterpriseDisplayHtml = '<h3 style="color: #2c3e50; margin-bottom: 20px; font-size: 18px;">其他公众号</h3>';
     } else {
       // 从第一条新闻中获取enterprise_abbreviation和enterprise_full_name
       // 不再解析"简称【全称】"格式，直接从字段读取
@@ -504,8 +506,8 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
     return `【企业新闻】未获取到企业相关信息\n\n日期：${formatPublicTime(dateStr)}\n\n未获取到企业相关信息\n`;
   }
   
-  // 定义企业类型的显示顺序
-  const entityTypeOrder = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号）
+  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
   
   let text = `日期：${formatPublicTime(dateStr)}\n\n`;
   
@@ -522,12 +524,10 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
     
     // 按企业分组显示
     for (const [enterpriseName, newsList] of Object.entries(newsByEnterprise)) {
-      // 只有分组键为null的才显示"——榜单或获奖信息"（这些是包含榜单/获奖标签的额外公众号新闻）
-      // 其他空企业名称的新闻保持原样显示（可能是空字符串或其他值）
-      if (enterpriseName === null) {
+      if (enterpriseName === null || enterpriseName === '——榜单或获奖信息') {
         text += `——榜单或获奖信息\n${'='.repeat(50)}\n\n`;
       } else if (!enterpriseName || enterpriseName === '') {
-        text += `未关联企业\n${'='.repeat(50)}\n\n`;
+        text += `其他公众号\n${'='.repeat(50)}\n\n`;
       } else {
         // 从第一条新闻中获取enterprise_abbreviation和enterprise_full_name
         // 不再解析"简称【全称】"格式，直接从字段读取

@@ -152,11 +152,12 @@ router.post('/', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 验证接口类型
-    if (!['新榜', '企查查'].includes(interface_type)) {
+    // 验证接口类型（支持：新榜、企查查、上海国际集团）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团'];
+    if (!validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是"新榜"或"企查查"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"或\"上海国际集团\"' 
       });
     }
 
@@ -233,11 +234,12 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       is_active: existing[0].is_active
     };
 
-    // 验证接口类型
-    if (interface_type && !['新榜', '企查查'].includes(interface_type)) {
+    // 验证接口类型（支持：新榜、企查查、上海国际集团）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团'];
+    if (interface_type && !validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是"新榜"或"企查查"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"或\"上海国际集团\"' 
       });
     }
 

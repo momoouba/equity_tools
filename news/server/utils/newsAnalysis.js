@@ -400,6 +400,57 @@ class NewsAnalysis {
       return null;
     }
 
+    // 特殊处理：人民网（people.com.cn）正文从 <div id="rm_txt_zw"> 中提取
+    if (url && /people\.com\.cn/i.test(url)) {
+      logWithTag('[extractArticleContent]', `检测到人民网URL，使用 div#rm_txt_zw 提取`);
+      const divStartRegex = /<div[^>]*id\s*=\s*["']rm_txt_zw["'][^>]*>/i;
+      const startMatch = html.match(divStartRegex);
+      if (startMatch) {
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        if (endPos !== -1) {
+          let raw = html.substring(tagEnd, endPos);
+          raw = raw
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+            .replace(/<!--[\s\S]*?-->/g, '');
+          const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (textOnly.length > 100) {
+            logWithTag('[extractArticleContent]', `✓ 人民网 div#rm_txt_zw 提取成功，长度: ${textOnly.length}字符`);
+            return textOnly;
+          }
+          logWithTag('[extractArticleContent]', `⚠️ 人民网 div#rm_txt_zw 提取过短（${textOnly.length}字符），走通用逻辑`);
+        } else {
+          logWithTag('[extractArticleContent]', '⚠️ 未找到人民网 rm_txt_zw 的闭合标签，走通用逻辑');
+        }
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到人民网 div#rm_txt_zw，走通用逻辑');
+      }
+    }
+
     // 特殊处理：21经济网（21jingji.com，account_name: 21经济网）
     // 正文仅从 <div class="content"> 中提取，并剔除页脚（分享、扫码、公告、备案等）
     const is21Jingji = (url && /21jingji\.com/i.test(url)) ||
@@ -2622,7 +2673,13 @@ class NewsAnalysis {
       /\s*-\s*21经济网\s+21财经APP\s*>\s*[^\n]+/g,
       /\s*-\s*[^\n]{0,24}网\s+[^\n]{0,24}APP\s*>\s*[^\n]+/g,
       /\s*\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}\s+[^\n。！？]{0,50}/g,
-      /_\s*腾讯新闻\s*/g,
+      // 版头整行：如 2026年03月17日08:21 | 来源：成都商报电子版 订阅 已订阅 已收藏 收藏 小字号 原标题：xxx
+      /^\s*\d{4}年\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}\s*\|\s*来源[：:][^\n]+$/gm,
+      /^\s*\d{4}年\d{1,2}月\d{1,2}日\s*\|\s*来源[：:][^\n]+$/gm,
+      // 正文开头的「订阅 已订阅 已收藏 收藏 小字号 原标题：xxx」等版头信息块
+      /^\s*(订阅\s*已订阅\s*已收藏\s*收藏\s*小字号\s*原标题[：:]\s*[^\n]*)\s*/gm,
+      /^\s*(已订阅\s*已收藏\s*收藏\s*小字号\s*原标题[：:]\s*[^\n]*)\s*/gm,
+      /\s*腾讯新闻\s*/g,
       /_\s*[^\n_\s]{0,20}新闻\s*/g,
       /\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g,
       /\s*[^\n。]{0,12}领域创作者\s*/g,
@@ -3338,7 +3395,8 @@ class NewsAnalysis {
         `SELECT * FROM ai_model_config 
          WHERE application_type = 'news_analysis' 
          AND is_active = 1 
-         AND delete_mark = 0 
+         AND delete_mark = 0
+         AND model_name NOT IN ('qwen-max', 'qwen-max-longcontext')
          ORDER BY created_at DESC 
          LIMIT 1`
       );

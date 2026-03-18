@@ -1980,127 +1980,35 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
     
-    // 先按企业类型分组，再按企业分组新闻（使用过滤后的列表，过滤掉企业名称为null或空的新闻）
+    // 仅两种分类：1）企业新闻（有企业名称，按企业名称分组） 2）第三方公众号（无企业名称，按公众号名称分组）。不出现「未关联企业」。
     const newsByEntityTypeAndEnterprise = {};
     for (const news of filteredNewsList) {
       const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
-      
-      // 获取企业类型，直接使用 news_detail 表中的 entity_type 字段
-      // 如果 entity_type 为空（null、undefined 或空字符串），且有企业全称，默认为"被投企业"（兼容旧数据）
-      let entityType = news.entity_type;
-      
-      // 记录原始 entity_type 值（用于调试）
-      const originalEntityType = entityType;
-      
-      if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
-        if (hasEnterpriseName) {
-          entityType = '被投企业';
-          console.log(`[邮件发送] ⚠️ 新闻 ${news.id} 的 entity_type 为空，使用默认值"被投企业"`);
-        } else {
-          entityType = '其他';
-        }
+      let categoryKey;   // '企业新闻' | '第三方公众号'
+      let groupKey;     // 小标题：企业全称 或 公众号名称
+
+      if (hasEnterpriseName) {
+        categoryKey = '企业新闻';
+        groupKey = news.enterprise_full_name.trim();
+      } else {
+        // 第三方公众号：统一按公众号名称（或微信号）分组，不再单独拆出「榜单或获奖信息」分类
+        categoryKey = '第三方公众号';
+        const accountNameOrId = (news.account_name || news.wechat_account || '').trim();
+        groupKey = accountNameOrId || '其他公众号';
       }
-      
-      // 确保 entityType 是有效的分组类型
-      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
-      if (!validEntityTypes.includes(entityType)) {
-        // 如果 entityType 不在有效列表中，默认为"被投企业"
-        console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
-        entityType = '被投企业';
-      }
-      
-      // 记录分组信息（前10条新闻都记录，便于调试）
+
       if (filteredNewsList.indexOf(news) < 10) {
-        console.log(`[邮件发送] 分组新闻: ID=${news.id}, entity_type="${entityType}" (原始值: "${originalEntityType || '(NULL)'}"), enterprise="${news.enterprise_full_name?.substring(0, 30)}"`);
+        console.log(`[邮件发送] 分组新闻: ID=${news.id}, 分类=${categoryKey}, 小标题="${(groupKey || '').substring(0, 40)}"`);
       }
-      
-      let enterpriseName = hasEnterpriseName ? news.enterprise_full_name : '';
-      let groupKey = enterpriseName;
-      
-      // 只有来自额外公众号的新闻，且企业名称为空，且包含"榜单"或"获奖"标签的，才使用null作为分组键
-      // 注意：这里不应该覆盖已经正确设置的 entityType
-      if (!hasEnterpriseName || enterpriseName === '' || enterpriseName === 'null') {
-        // 检查是否来自额外公众号
-        const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
-        
-        if (isFromAdditionalAccount) {
-          // 检查是否包含"榜单"或"获奖"标签
-          let keywords = [];
-          if (news.keywords) {
-            try {
-              if (typeof news.keywords === 'string') {
-                keywords = JSON.parse(news.keywords);
-              } else if (Array.isArray(news.keywords)) {
-                keywords = news.keywords;
-              }
-            } catch (e) {
-              // 解析失败，忽略
-            }
-          }
-          
-          const hasAwardTag = keywords.some(k => k === '榜单' || k === '获奖');
-          if (hasAwardTag) {
-            // 只有来自额外公众号且包含"榜单"或"获奖"标签的，归类为"其他"
-            // 但只有在 entityType 还没有被正确设置时才覆盖
-            if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
-              entityType = '其他';
-            }
-            groupKey = null;
-          } else {
-            // 来自额外公众号但没有标签的：使用公众号名称作为分组名称（第三方公众号名）
-            // 但只有在 entityType 还没有被正确设置时才覆盖
-            if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
-              entityType = '其他';
-            }
-            groupKey = news.account_name || news.wechat_account || '';
-          }
-        } else {
-          // 不是来自额外公众号的，保持原值（使用空字符串作为分组键）
-          // 但只有在 entityType 还没有被正确设置时才覆盖
-          if (!originalEntityType || (typeof originalEntityType === 'string' && originalEntityType.trim() === '')) {
-            entityType = '其他';
-          }
-          groupKey = enterpriseName || '';
-        }
+
+      if (!newsByEntityTypeAndEnterprise[categoryKey]) {
+        newsByEntityTypeAndEnterprise[categoryKey] = {};
       }
-      
-      // 确保groupKey不为undefined或null，统一使用字符串
-      if (groupKey === undefined || groupKey === null) {
-        groupKey = '';
+      if (!newsByEntityTypeAndEnterprise[categoryKey][groupKey]) {
+        newsByEntityTypeAndEnterprise[categoryKey][groupKey] = [];
       }
-      // 确保 groupKey 是字符串类型
-      groupKey = String(groupKey);
-      
-      if (!newsByEntityTypeAndEnterprise[entityType]) {
-        newsByEntityTypeAndEnterprise[entityType] = {};
-      }
-      if (!newsByEntityTypeAndEnterprise[entityType][groupKey]) {
-        newsByEntityTypeAndEnterprise[entityType][groupKey] = [];
-      }
-      // 确保 news 对象存在且是有效的
       if (news && typeof news === 'object') {
-        // 调试：检查分组时的数据是否包含fund和sub_fund字段
-        if ((entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') && filteredNewsList.indexOf(news) < 3) {
-          console.log(`[邮件发送] 分组时检查新闻 ID=${news.id}: 包含fund字段=${'fund' in news}, 包含sub_fund字段=${'sub_fund' in news}`);
-          if ('fund' in news) {
-            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的fund值: "${news.fund || '(NULL)'}"`);
-          }
-          if ('sub_fund' in news) {
-            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的sub_fund值: "${news.sub_fund || '(NULL)'}"`);
-          }
-        }
-        // 调试：检查分组时的数据是否包含fund和sub_fund字段
-        if ((entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') && filteredNewsList.indexOf(news) < 3) {
-          console.log(`[邮件发送] 分组时检查新闻 ID=${news.id}: 包含fund字段=${'fund' in news}, 包含sub_fund字段=${'sub_fund' in news}`);
-          console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的所有字段:`, Object.keys(news).join(', '));
-          if ('fund' in news) {
-            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的fund值: "${news.fund || '(NULL)'}"`);
-          }
-          if ('sub_fund' in news) {
-            console.log(`[邮件发送] 分组时新闻 ID=${news.id} 的sub_fund值: "${news.sub_fund || '(NULL)'}"`);
-          }
-        }
-        newsByEntityTypeAndEnterprise[entityType][groupKey].push(news);
+        newsByEntityTypeAndEnterprise[categoryKey][groupKey].push(news);
       } else {
         console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
       }
