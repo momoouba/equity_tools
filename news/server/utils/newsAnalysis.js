@@ -3395,8 +3395,7 @@ class NewsAnalysis {
         `SELECT * FROM ai_model_config 
          WHERE application_type = 'news_analysis' 
          AND is_active = 1 
-         AND delete_mark = 0
-         AND model_name NOT IN ('qwen-max', 'qwen-max-longcontext')
+         AND delete_mark = 0 
          ORDER BY created_at DESC 
          LIMIT 1`
       );
