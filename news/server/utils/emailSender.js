@@ -290,8 +290,8 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     `;
   }
   
-  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号；兼容旧数据）
-  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号；其后与舆情 entity_type 一致）
+  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
   
   let html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
@@ -506,8 +506,8 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
     return `【企业新闻】未获取到企业相关信息\n\n日期：${formatPublicTime(dateStr)}\n\n未获取到企业相关信息\n`;
   }
   
-  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号）
-  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+  // 定义企业类型的显示顺序（优先两分类：企业新闻、第三方公众号；其后与舆情 entity_type 一致）
+  const entityTypeOrder = ['企业新闻', '第三方公众号', '被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
   
   let text = `日期：${formatPublicTime(dateStr)}\n\n`;
   
@@ -768,7 +768,7 @@ async function sendNewsEmailToRecipient(recipientId) {
       }
       
       // 确保 entityType 是有效的分组类型
-      const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+      const validEntityTypes = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
       if (!validEntityTypes.includes(entityType)) {
         // 如果 entityType 不在有效列表中，默认为"被投企业"
         console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
@@ -903,7 +903,7 @@ async function sendNewsEmailsToAllRecipients() {
           }
           
           // 确保 entityType 是有效的分组类型
-          const validEntityTypes = ['被投企业', '基金', '子基金', '子基金管理人', '子基金GP', '其他'];
+          const validEntityTypes = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
           if (!validEntityTypes.includes(entityType)) {
             // 如果 entityType 不在有效列表中，默认为"被投企业"
             console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);

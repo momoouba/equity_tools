@@ -1980,24 +1980,39 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
     
-    // 仅两种分类：1）企业新闻（有企业名称，按企业名称分组） 2）第三方公众号（无企业名称，按公众号名称分组）。不出现「未关联企业」。
+    // 与 sendNewsEmailToRecipient / emailSender 一致：有企业全称时按 news_detail.entity_type 分组（子基金、被投企业等）；
+    // 无企业全称时仍归入「第三方公众号」，按公众号分组（与无 Excel 的邮件逻辑对齐）。
     const newsByEntityTypeAndEnterprise = {};
-    for (const news of filteredNewsList) {
+    const validEntityTypesForEmail = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
+    filteredNewsList.forEach((news, idx) => {
+      if (!news || typeof news !== 'object') {
+        console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
+        return;
+      }
       const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
-      let categoryKey;   // '企业新闻' | '第三方公众号'
-      let groupKey;     // 小标题：企业全称 或 公众号名称
+      let categoryKey;
+      let groupKey;
 
-      if (hasEnterpriseName) {
-        categoryKey = '企业新闻';
-        groupKey = news.enterprise_full_name.trim();
-      } else {
-        // 第三方公众号：统一按公众号名称（或微信号）分组，不再单独拆出「榜单或获奖信息」分类
+      if (!hasEnterpriseName) {
         categoryKey = '第三方公众号';
         const accountNameOrId = (news.account_name || news.wechat_account || '').trim();
         groupKey = accountNameOrId || '其他公众号';
+      } else {
+        let entityType = news.entity_type;
+        if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
+          entityType = '被投企业';
+        } else if (typeof entityType === 'string') {
+          entityType = entityType.trim();
+        }
+        if (!validEntityTypesForEmail.includes(entityType)) {
+          console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
+          entityType = '被投企业';
+        }
+        categoryKey = entityType;
+        groupKey = news.enterprise_full_name.trim();
       }
 
-      if (filteredNewsList.indexOf(news) < 10) {
+      if (idx < 10) {
         console.log(`[邮件发送] 分组新闻: ID=${news.id}, 分类=${categoryKey}, 小标题="${(groupKey || '').substring(0, 40)}"`);
       }
 
@@ -2007,12 +2022,8 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       if (!newsByEntityTypeAndEnterprise[categoryKey][groupKey]) {
         newsByEntityTypeAndEnterprise[categoryKey][groupKey] = [];
       }
-      if (news && typeof news === 'object') {
-        newsByEntityTypeAndEnterprise[categoryKey][groupKey].push(news);
-      } else {
-        console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
-      }
-    }
+      newsByEntityTypeAndEnterprise[categoryKey][groupKey].push(news);
+    });
     
     // 记录分组统计信息（用于调试）
     const groupingStats = {};
