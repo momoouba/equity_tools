@@ -33,9 +33,9 @@ const checkAuth = (req, res, next) => {
 async function getUserAdditionalAccountLimit(userId) {
   if (!userId) return 0;
 
-  // 查询用户的主会员等级及名称
+  // 查询用户角色及主会员等级名称
   const rows = await db.query(
-    `SELECT u.membership_level_id, ml.level_name
+    `SELECT u.role, u.membership_level_id, ml.level_name
      FROM users u
      LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
      WHERE u.id = ?`,
@@ -46,7 +46,11 @@ async function getUserAdditionalAccountLimit(userId) {
     return 0;
   }
 
+  const role = rows[0].role || 'user';
   const levelName = rows[0].level_name || '';
+
+  // 管理员账号不受数量限制
+  if (role === 'admin') return Number.MAX_SAFE_INTEGER;
 
   // 根据新闻舆情会员等级名称控制额度
   if (levelName === '普通会员') return 5;
@@ -167,21 +171,23 @@ router.post('/', checkAuth, async (req, res) => {
       });
     }
 
-    // 会员额度检查：根据 membership_levels 限制可创建数量
-    const limit = await getUserAdditionalAccountLimit(req.currentUserId);
-    if (limit <= 0) {
-      return res.status(403).json({
-        success: false,
-        message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
-      });
-    }
+    // 会员额度检查：管理员不受限；普通用户按 membership_levels 限制可创建数量
+    if (req.currentUserRole !== 'admin') {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      if (limit <= 0) {
+        return res.status(403).json({
+          success: false,
+          message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+        });
+      }
 
-    const used = await getUserAdditionalAccountCount(req.currentUserId);
-    if (used >= limit) {
-      return res.status(400).json({
-        success: false,
-        message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个）`
-      });
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      if (used >= limit) {
+        return res.status(400).json({
+          success: false,
+          message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个）`
+        });
+      }
     }
 
     // 检查是否已存在（允许不同用户创建相同的公众号ID，但在同步时会去重）
@@ -365,22 +371,25 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
       });
     }
 
-    // 会员额度检查：计算剩余可创建数量
-    const limit = await getUserAdditionalAccountLimit(req.currentUserId);
-    if (limit <= 0) {
-      return res.status(403).json({
-        success: false,
-        message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
-      });
-    }
+    // 会员额度检查：管理员不受限；普通用户按 membership_levels 计算剩余可创建数量
+    let remainingQuota = Number.MAX_SAFE_INTEGER;
+    if (req.currentUserRole !== 'admin') {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      if (limit <= 0) {
+        return res.status(403).json({
+          success: false,
+          message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+        });
+      }
 
-    const used = await getUserAdditionalAccountCount(req.currentUserId);
-    const remainingQuota = limit - used;
-    if (remainingQuota <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个），无法继续导入`
-      });
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      remainingQuota = limit - used;
+      if (remainingQuota <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个），无法继续导入`
+        });
+      }
     }
 
     let successCount = 0;
