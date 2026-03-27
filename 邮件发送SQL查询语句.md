@@ -59,6 +59,14 @@ WHERE (
 )
 AND nd.created_at >= '2026-01-21 00:00:00'  -- 需要替换为实际的时间范围
 AND nd.created_at < '2026-01-22 00:00:00'
+AND (
+    nd.APItype != '上海国际'
+    OR (
+        nd.public_time IS NOT NULL
+        AND nd.public_time != ''
+        AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
+    )
+)
 AND nd.delete_mark = 0
 ORDER BY nd.enterprise_full_name, nd.public_time DESC;
 ```
@@ -174,7 +182,12 @@ AND delete_mark = 0;
 
 3. **字段名大小写**：MySQL在某些配置下可能对字段名大小写敏感，确保字段名正确。
 
-4. **测试步骤**：
+4. **上海国际邮件发送限制**：当 `APItype = '上海国际'` 时，邮件发送需要额外满足：
+   - `public_time` 非空
+   - `DATEDIFF(DATE(created_at), DATE(public_time)) <= 30`
+   - 若日期差为负数（`public_time` 晚于 `created_at`）或大于30天，均不发送
+
+5. **测试步骤**：
    - 先执行第6个简化SQL，确认字段能正常返回
    - 再执行第2个SQL（重新获取数据的SQL），检查是否包含字段
    - 最后执行第1个SQL（完整查询），检查是否包含字段

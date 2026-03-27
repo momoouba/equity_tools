@@ -42,6 +42,27 @@ function formatDateOnly(date) {
 }
 
 /**
+ * 上海国际邮件发送时间窗口校验：
+ * - 仅对 APItype = '上海国际' 生效
+ * - public_time 为空时不发送
+ * - 仅发送 public_time 与 created_at 日期差 <= 30 天的数据
+ */
+function passShanghaiInternationalTimeWindow(news) {
+  if (!news || news.APItype !== '上海国际') return true;
+  if (!news.public_time || !news.created_at) return false;
+
+  const publicDate = new Date(news.public_time);
+  const createdDate = new Date(news.created_at);
+  if (Number.isNaN(publicDate.getTime()) || Number.isNaN(createdDate.getTime())) {
+    return false;
+  }
+
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const dayDiff = Math.floor((createdDate - publicDate) / msPerDay);
+  return dayDiff >= 0 && dayDiff <= 30;
+}
+
+/**
  * 检查指定日期是否为工作日，使用北京时区
  * @param {Date} date - 日期对象
  * @returns {Promise<boolean>} 是否为工作日
@@ -639,6 +660,14 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        )
        AND nd.created_at >= ? 
        AND nd.created_at < ?
+       AND (
+         nd.APItype != '上海国际'
+         OR (
+           nd.public_time IS NOT NULL
+           AND nd.public_time != ''
+           AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
+         )
+       )
        AND nd.delete_mark = 0
        AND nd.enterprise_full_name IS NOT NULL
        AND nd.enterprise_full_name != ''
@@ -1099,6 +1128,14 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        WHERE nd.wechat_account IN (${placeholders})
        AND nd.created_at >= ? 
        AND nd.created_at < ?
+       AND (
+         nd.APItype != '上海国际'
+         OR (
+           nd.public_time IS NOT NULL
+           AND nd.public_time != ''
+           AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
+         )
+       )
        AND nd.delete_mark = 0
        ORDER BY 
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
@@ -1488,6 +1525,10 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     if (isXinbang) {
       // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
       if (hasAbstract || hasSummary) {
+        if (!passShanghaiInternationalTimeWindow(news)) {
+          console.log(`[邮件发送] 过滤掉上海国际新闻（public_time为空或与created_at日期差超过30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
+          return false;
+        }
         // 特别记录量子位公众号的新闻
         const isQuantumBit = (news.account_name && news.account_name.includes('量子位')) || 
                             (news.wechat_account && news.wechat_account.includes('gh_114e76fd6e5d'));
@@ -1524,6 +1565,10 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 注意：企查查新闻的类别检查已经在 filterNewsByCategory 函数中完成
       // 进入此过滤的企查查新闻都是类别在配置的允许列表中的
       if (hasAbstract || hasContent) {
+        if (!passShanghaiInternationalTimeWindow(news)) {
+          console.log(`[邮件发送] 过滤掉上海国际新闻（public_time为空或与created_at日期差超过30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
+          return false;
+        }
         if (isTargetNews) {
           console.log(`[邮件发送] ✓✓✓ 目标新闻 ${targetNewsId} 通过过滤（企查查新闻，有摘要或正文）`);
         }
@@ -2706,10 +2751,10 @@ async function executeEmailTask(recipientId) {
       
       if (isXinbang) {
         // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
-        return hasAbstract || hasSummary;
+        return (hasAbstract || hasSummary) && passShanghaiInternationalTimeWindow(news);
       } else {
         // 企查查新闻：有摘要（news_abstract）或正文即可推送
-        return hasAbstract || hasContent;
+        return (hasAbstract || hasContent) && passShanghaiInternationalTimeWindow(news);
       }
     });
     
