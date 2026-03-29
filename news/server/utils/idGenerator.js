@@ -4,7 +4,7 @@ const db = require('../db');
  * 生成年月日时分秒+5位自增序列的ID
  * 格式：YYYYMMDDHHmmss + 5位自增序列（例如：2025112015304500001）
  * @param {string} tableName - 表名
- * @param {object} [connection] - 可选，事务连接；传入时用该连接查 max id，可看到本事务未提交的插入，避免重复
+ * @param {object} [connection] - 可选，mysql2 连接/连接池/事务连接。在 db.js 初始化阶段必须传入，否则内部 db.query 会 await init 完成而造成死锁
  * @returns {Promise<string>} 生成的ID
  */
 async function generateId(tableName, connection) {

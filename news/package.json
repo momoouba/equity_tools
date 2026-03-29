@@ -5,7 +5,8 @@
   "main": "server/index.js",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
-    "server": "nodemon server/index.js",
+    "server": "nodemon --exec \"node --disable-warning=DEP0169\" server/index.js",
+    "start": "node --disable-warning=DEP0169 server/index.js",
     "client": "cd client && npm run dev",
     "install-all": "npm install && cd client && npm install"
   },

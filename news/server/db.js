@@ -95,7 +95,8 @@ async function createDatabaseIfNeeded() {
       host: DB_HOST,
       port: DB_PORT,
       user: DB_USER,
-      password: DB_PASSWORD
+      password: DB_PASSWORD,
+      connectTimeout: 20000
     });
     await connection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.end();
@@ -261,6 +262,7 @@ async function migrateTableIdField(dbPool, tableName) {
 
 async function initializeTables(dbPool) {
   try {
+    console.log('  → 正在校验并创建数据表（步骤很多，首次或迁移时可能需 1～3 分钟，请耐心等待）…');
     // 注释掉表迁移逻辑（系统已稳定运行，所有表结构已正确）
     // 如果需要重新启用迁移，取消下面的注释
     /*
@@ -631,19 +633,6 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
-  // 迁移 news_sync_detail_log 表：添加上海国际集团到 interface_type ENUM
-  try {
-    await dbPool.query(`
-      ALTER TABLE news_sync_detail_log 
-      MODIFY COLUMN interface_type ENUM('新榜', '企查查', '上海国际集团') NOT NULL COMMENT '接口类型'
-    `);
-    console.log('✓ 已为 news_sync_detail_log 添加 上海国际集团 接口类型');
-  } catch (err) {
-    if (!err.message.includes('Duplicate column name') && !err.message.includes('check that it exists')) {
-      console.warn('迁移 news_sync_detail_log interface_type 时出现警告:', err.message);
-    }
-  }
-
   // qichacha_news_categories 表：企查查新闻类别列表
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS qichacha_news_categories (
@@ -834,7 +823,8 @@ async function initializeTables(dbPool) {
 
       const generateId = require('./utils/idGenerator').generateId;
       for (const category of defaultCategories) {
-        const categoryId = await generateId('qichacha_news_categories');
+        // 必须传入 dbPool：否则 generateId 内部 db.query 会 await ready，与正在执行的 init() 死锁
+        const categoryId = await generateId('qichacha_news_categories', dbPool);
         await dbPool.execute(
           'INSERT INTO qichacha_news_categories (id, category_code, category_name) VALUES (?, ?, ?)',
           [categoryId, category.code, category.name]
@@ -845,6 +835,8 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('初始化企查查新闻类别数据时出现警告:', err.message);
   }
+
+  console.log('  → 进度：系统配置、邮件与新闻同步相关表…');
 
   // system_config 表：系统配置（保留用于其他配置）
   await dbPool.query(`
@@ -1980,7 +1972,7 @@ async function initializeTables(dbPool) {
     CREATE TABLE IF NOT EXISTS news_sync_detail_log (
       id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       sync_log_id VARCHAR(19) NOT NULL COMMENT '关联的同步执行日志ID',
-      interface_type ENUM('新榜', '企查查') NOT NULL COMMENT '接口类型',
+      interface_type ENUM('新榜', '企查查', '上海国际集团') NOT NULL COMMENT '接口类型',
       account_id VARCHAR(255) NOT NULL COMMENT '公众号ID（新榜）或统一信用代码（企查查）',
       has_data TINYINT(1) DEFAULT 0 COMMENT '是否有数据返回：0-否，1-是',
       data_count INT DEFAULT 0 COMMENT '返回内容的条数',
@@ -1995,6 +1987,19 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (sync_log_id) REFERENCES news_sync_execution_log(id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  // 迁移 news_sync_detail_log 表：为已存在且 ENUM 较旧的库补充「上海国际集团」（须在 CREATE TABLE 之后执行）
+  try {
+    await dbPool.query(`
+      ALTER TABLE news_sync_detail_log 
+      MODIFY COLUMN interface_type ENUM('新榜', '企查查', '上海国际集团') NOT NULL COMMENT '接口类型'
+    `);
+    console.log('✓ 已为 news_sync_detail_log 同步 上海国际集团 接口类型');
+  } catch (err) {
+    if (!err.message.includes('Duplicate column name') && !err.message.includes("doesn't exist")) {
+      console.warn('迁移 news_sync_detail_log interface_type 时出现警告:', err.message);
+    }
+  }
 
   // news_detail 表：公众号文章详情
   await dbPool.query(`
@@ -2344,6 +2349,8 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('检查/添加 db_type 字段时出现警告:', err.message);
   }
+
+  console.log('  → 进度：业绩看板 b_* 主表（创建与字段迁移，可能较慢）…');
 
   // ========== 业绩看板应用（performance.sql）表结构，字段注释与 performance.sql 一致 ==========
   // b_all_indicator - 定开看板-管理人整体指标
@@ -3100,6 +3107,8 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-数据接口配置修改日志';
   `);
 
+  console.log('  → 进度：业绩看板 b_* 表列清理与注释同步（数据多时可能需数十秒）…');
+
   // 业绩看板 b_* 表（除 b_sql、b_sql_change_log 外）：初始化时删除 F_LastModifyUserId、F_LastModifyTime 列（若存在）
   const [bTableRows] = await dbPool.query(`
     SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
@@ -3125,6 +3134,7 @@ async function initializeTables(dbPool) {
 
   // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
   await ensureBTableComments(dbPool);
+  console.log('  ✓ 业绩看板相关表列注释已检查');
 
   // enterprise_sync_task 表：被投企业数据同步定时任务
   await dbPool.query(`
@@ -3508,9 +3518,10 @@ async function initializeTables(dbPool) {
     // ============================================================
 
   } catch (err) {
+    // 不可向上抛出：否则后续建表（如 news_share_links）与迁移不会执行，导致新库表不完整
     console.error('  初始化基础数据时出错:', err.message);
     console.error('  错误堆栈:', err.stack);
-    throw err;
+    console.warn('  将继续执行后续表结构与迁移；请根据上述错误修复数据或清空相关表后重试。');
   }
 
   // 创建默认 admin 账号（如果不存在）
@@ -3521,7 +3532,7 @@ async function initializeTables(dbPool) {
     const [adminUsers] = await dbPool.query('SELECT id FROM users WHERE account = ?', ['admin']);
     if (adminUsers.length === 0) {
       const hashedPassword = await bcrypt.hash('wenchao', 10);
-      const adminId = await generateId('users');
+      const adminId = await generateId('users', dbPool);
       console.log(`  生成admin用户ID: ${adminId}`);
       await dbPool.execute(
         'INSERT INTO users (id, account, phone, email, password, role, account_status) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -3880,7 +3891,8 @@ async function init() {
       database: DB_NAME,
       waitForConnections: true,
       connectionLimit: 10,
-      charset: 'utf8mb4'
+      charset: 'utf8mb4',
+      connectTimeout: 20000
     });
     // 初始化数据库表结构
     await initializeTables(pool);

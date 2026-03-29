@@ -1,3 +1,12 @@
+// Express/parseurl、axios/follow-redirects 等仍会触发对 legacy url.parse() 的 DEP0169。
+// 推荐用 npm scripts（已带 node --disable-warning=DEP0169）；若直接执行 node server/index.js，由此处兜底。
+process.on('warning', (w) => {
+  if (!w) return;
+  if (w.code === 'DEP0169') return;
+  if (typeof w.message === 'string' && w.message.includes('url.parse')) return;
+  console.warn(w.stack || w);
+});
+
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -318,7 +327,7 @@ app.get('/api/test-upload-file/:filename', (req, res) => {
 async function startServer() {
   try {
     // 等待数据库初始化（通过执行一个查询来确保数据库已就绪）
-    console.log('正在初始化数据库...');
+    console.log('正在等待数据库表结构初始化完成（与上方「正在初始化数据库」为同一流程，请勿关闭）…');
     try {
       await db.query('SELECT 1');
       console.log('✓ 数据库连接已就绪');
