@@ -687,6 +687,106 @@ class NewsAnalysis {
       }
     }
     
+    // 特殊处理：财中社（caizhongshe.cn）
+    // 正文在 <div class="detail-content"> 中
+    const isCaizhongshe = (url && /caizhongshe\.cn/i.test(url)) ||
+                          (accountName && accountName.includes('财中社'));
+    if (isCaizhongshe) {
+      logWithTag('[extractArticleContent]', `检测到财中社（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用 div.detail-content 提取`);
+
+      const findCaizhongsheContentDiv = (h) => {
+        // 查找class="detail-content"的div开始标签
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bdetail-content\b[^"']*["'][^>]*>/i;
+        const startMatch = h.match(divStartRegex);
+        if (!startMatch) return null;
+
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+
+        while (pos < h.length && depth > 0) {
+          const nextOpen = h.indexOf('<div', pos);
+          const nextClose = h.indexOf('</div>', pos);
+
+          if (nextClose === -1) {
+            endPos = h.length;
+            break;
+          }
+
+          // 检查是否有嵌套的div
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<div是否在script标签内
+            const scriptBeforeDiv = h.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = h.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            // 检查这个</div>是否在script标签内
+            const scriptBeforeClose = h.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = h.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+
+        if (endPos === -1) return null;
+        return h.substring(tagEnd, endPos);
+      };
+
+      let raw = findCaizhongsheContentDiv(html);
+      if (raw) {
+        raw = raw
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+
+        // 移除页脚相关的内容
+        const footerPatterns = [
+          /重要提示：本文著作权归财中社所有[\s\S]*/i,
+          /相关推荐[\s\S]*/i,
+          /最新文章推荐[\s\S]*/i,
+          /财中社公众号[\s\S]*/i,
+          /官方声明：[\s\S]*/i,
+          /©2026 北京光刻智慧传媒科技有限公司[\s\S]*/i,
+          /京ICP备[\s\S]*/i,
+          /分享[\s\S]*长按保存图片[\s\S]*/i,
+        ];
+        for (const p of footerPatterns) {
+          const m = raw.match(p);
+          if (m && m.index > raw.length * 0.5) {
+            raw = raw.substring(0, m.index).trim();
+            break;
+          }
+        }
+
+        const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 财中社 div.detail-content 提取成功，长度: ${textOnly.length}字符`);
+          return textOnly;
+        }
+        logWithTag('[extractArticleContent]', `⚠️ 财中社 div.detail-content 提取过短（${textOnly.length}字符），走通用逻辑`);
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到财中社 div.detail-content，走通用逻辑');
+      }
+    }
+
     // 特殊处理：新浪新闻（统一处理 cj.sina.com.cn 和 finance.sina.com.cn）
     // 这两类新闻的正文都在 <div class="article" id="artibody"> 中，使用相同的提取方法
     // cj.sina.com.cn（account_name: 新浪）
@@ -695,7 +795,7 @@ class NewsAnalysis {
                      (accountName && accountName.includes('新浪') && !accountName.includes('新浪财经'));
     const isSinaFinance = (url && url.includes('finance.sina.com.cn')) || 
                           (accountName && accountName.includes('新浪财经'));
-    
+
     if (isSinaCj || isSinaFinance) {
       const sourceType = isSinaCj ? '新浪财经头条(cj.sina.com.cn)' : '新浪财经(finance.sina.com.cn)';
       logWithTag('[extractArticleContent]', `检测到${sourceType}（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用特殊提取逻辑`);
@@ -4489,6 +4589,21 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         .replace(/_[^\n_]{0,20}新闻\s*/g, '')
         .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
         .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+        // 财中社特有的清理规则
+        .replace(/\s*\d+%\s*阅读\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*/g, '') // 移除"2.3w阅读 2026-03-27 17:31"
+        .replace(/\s*财中社\s+[^\n]{0,20}\s+\d+[\w\.]*w?阅读\s*/g, '') // 移除"财中社 李熹 2.3w阅读"
+        .replace(/\s*当前位置：[^\n]*\s*/g, '') // 移除"当前位置：北京"
+        .replace(/\s*历史搜索[^\n]*\s*/g, '') // 移除"历史搜索"
+        .replace(/\s*热门搜索[^\n]*\s*/g, '') // 移除"热门搜索"
+        .replace(/\s*数据查询\s+行情分析\s+公司分析\s*/g, '') // 移除"数据查询 行情分析 公司分析"
+        .replace(/\s*\*\s*推荐\s*\*\s*A股\s*\*\s*港美股[^\n]*\s*/g, '') // 移除导航标签
+        .replace(/\s*\d+\s+["']?[^"'\n]{10,100}["']?\s*/g, '') // 移除热门新闻列表（如"1 \"宁智毋庸...\""）
+        .replace(/\s*相关推荐[^\n]*\s*/g, '') // 移除"相关推荐"
+        .replace(/\s*最新文章推荐[^\n]*\s*/g, '') // 移除"最新文章推荐"
+        .replace(/\s*分享\s*长按保存图片[^\n]*\s*/g, '') // 移除分享按钮
+        .replace(/\s*官方声明：[^\n]*\s*/g, '') // 移除官方声明
+        .replace(/\s*©\d{4}\s+[^\n]{0,30}科技有限公司[^\n]*\s*/g, '') // 移除版权信息
+        .replace(/\s*京ICP备[^\n]*\s*/g, '') // 移除ICP备案
         .replace(/\s*[。\.]\s*[。\.]+/g, '。')
         .replace(/\s+/g, ' ')
         .trim();
@@ -5594,6 +5709,21 @@ ${enterpriseList}
       .replace(/_[^\n_]{0,20}新闻\s*/g, '')
       .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
       .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+      // 财中社特有的清理规则
+      .replace(/\s*\d+%\s*阅读\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*/g, '') // 移除"2.3w阅读 2026-03-27 17:31"
+      .replace(/\s*财中社\s+[^\n]{0,20}\s+\d+[\w\.]*w?阅读\s*/g, '') // 移除"财中社 李熹 2.3w阅读"
+      .replace(/\s*当前位置：[^\n]*\s*/g, '') // 移除"当前位置：北京"
+      .replace(/\s*历史搜索[^\n]*\s*/g, '') // 移除"历史搜索"
+      .replace(/\s*热门搜索[^\n]*\s*/g, '') // 移除"热门搜索"
+      .replace(/\s*数据查询\s+行情分析\s+公司分析\s*/g, '') // 移除"数据查询 行情分析 公司分析"
+      .replace(/\s*\*\s*推荐\s*\*\s*A股\s*\*\s*港美股[^\n]*\s*/g, '') // 移除导航标签
+      .replace(/\s*\d+\s+["']?[^"'\n]{10,100}["']?\s*/g, '') // 移除热门新闻列表（如"1 \"宁智毋庸...\""）
+      .replace(/\s*相关推荐[^\n]*\s*/g, '') // 移除"相关推荐"
+      .replace(/\s*最新文章推荐[^\n]*\s*/g, '') // 移除"最新文章推荐"
+      .replace(/\s*分享\s*长按保存图片[^\n]*\s*/g, '') // 移除分享按钮
+      .replace(/\s*官方声明：[^\n]*\s*/g, '') // 移除官方声明
+      .replace(/\s*©\d{4}\s+[^\n]{0,30}科技有限公司[^\n]*\s*/g, '') // 移除版权信息
+      .replace(/\s*京ICP备[^\n]*\s*/g, '') // 移除ICP备案
       .replace(/\s*[。\.]\s*[。\.]+/g, '。')
       .replace(/\s+/g, ' ')
       .trim();
