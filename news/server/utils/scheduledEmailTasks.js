@@ -664,7 +664,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
          nd.APItype != '上海国际'
          OR (
            nd.public_time IS NOT NULL
-           AND nd.public_time != ''
+           AND nd.public_time > '1970-01-01'
            AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
          )
        )
@@ -1132,7 +1132,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
          nd.APItype != '上海国际'
          OR (
            nd.public_time IS NOT NULL
-           AND nd.public_time != ''
+           AND nd.public_time > '1970-01-01'
            AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
          )
        )
