@@ -12,6 +12,9 @@ const {
   DB_NAME = 'investment_tools'
 } = process.env;
 
+/** 端口统一为数字，避免 .env 中写成字符串导致异常连接行为 */
+const DB_PORT_NUM = parseInt(String(DB_PORT), 10) || 3306;
+
 let pool;
 
 // 从 performance.sql 中解析各 b_* 表的列注释，缓存到内存中
@@ -93,7 +96,7 @@ async function createDatabaseIfNeeded() {
   try {
     const connection = await mysql.createConnection({
       host: DB_HOST,
-      port: DB_PORT,
+      port: DB_PORT_NUM,
       user: DB_USER,
       password: DB_PASSWORD,
       connectTimeout: 20000
@@ -102,10 +105,32 @@ async function createDatabaseIfNeeded() {
     await connection.end();
     // 不再单独输出日志，合并到初始化流程中
   } catch (err) {
-    console.error('✗ 数据库连接失败:', err.message);
+    const detail =
+      [
+        err.code,
+        err.errno,
+        err.sqlState,
+        err.sqlMessage,
+        err.syscall,
+        err.address != null && err.port != null ? `${err.address}:${err.port}` : null,
+        err.message
+      ]
+        .filter(Boolean)
+        .join(' | ') || '(无详细消息)';
+    console.error('✗ 数据库连接失败:', detail);
+    console.error(
+      `   尝试连接: host=${DB_HOST} port=${DB_PORT_NUM} user=${DB_USER} database(将创建): ${DB_NAME}`
+    );
     if (err.code === 'ER_ACCESS_DENIED_ERROR') {
       console.error('提示：用户名或密码错误，请检查 .env 文件中的 DB_USER 和 DB_PASSWORD');
       console.error('当前配置 - 用户:', DB_USER, '密码:', DB_PASSWORD ? '***已设置***' : '***未设置***');
+    } else if (err.code === 'ECONNREFUSED') {
+      console.error('提示：连接被拒绝。请确认本机 MySQL 已启动，且端口与 DB_PORT 一致（默认 3306）。');
+      console.error('      Windows 可在「服务」中查看 MySQL 是否正在运行；或用 `mysql -h 127.0.0.1 -P 3306 -u root -p` 测试。');
+    } else if (err.code === 'ENOTFOUND') {
+      console.error('提示：无法解析 DB_HOST，请检查 .env 中 DB_HOST 是否拼写正确（如 localhost 或 127.0.0.1）。');
+    } else if (err.code === 'ETIMEDOUT') {
+      console.error('提示：连接超时，请检查 DB_HOST/DB_PORT 是否可达、防火墙是否放行。');
     }
     throw err;
   }
@@ -3332,6 +3357,27 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 entity_type 字段时出现警告:', err.message);
   }
 
+  // 检查并添加 invested_enterprises.entity_type（新闻列表 COALESCE(nd.entity_type, ie.entity_type) 依赖）
+  try {
+    const [ieEntityCols] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'invested_enterprises' 
+      AND COLUMN_NAME = 'entity_type'
+    `);
+
+    if (ieEntityCols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE invested_enterprises 
+        ADD COLUMN entity_type VARCHAR(50) NULL COMMENT '企业类型：被投企业、基金相关主体、子基金、子基金管理人、子基金GP' AFTER enterprise_full_name
+      `);
+      console.log('  ✓ 已为 invested_enterprises 表添加 entity_type 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 invested_enterprises.entity_type 时出现警告:', err.message);
+  }
+
   // 检查并添加 enterprise_abbreviation 字段（企业简称）
   try {
     const [abbreviationColumns] = await dbPool.query(`
@@ -3412,110 +3458,261 @@ async function initializeTables(dbPool) {
 
   console.log('  开始初始化基础数据...');
   try {
-    const [apps] = await dbPool.query('SELECT COUNT(*) as count FROM applications');
-    if (apps[0].count === 0) {
-      console.log('  创建应用和会员等级数据...');
-      
-      // 直接生成ID，不查询表（因为表刚创建，肯定是空的）
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const hours = String(now.getHours()).padStart(2, '0');
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      const seconds = String(now.getSeconds()).padStart(2, '0');
-      const prefix = `${year}${month}${day}${hours}${minutes}${seconds}`;
-      
-      // 生成应用ID（序列号从00001开始）
-      const appId = `${prefix}00001`;
-      console.log(`  生成应用ID: ${appId}`);
-      await dbPool.execute('INSERT INTO applications (id, app_name) VALUES (?, ?)', [appId, '股权投资小工具锦集']);
-      console.log('  应用数据插入成功');
-      
-      // 生成会员等级ID（序列号递增）
-      const level1Id = `${prefix}00002`;
-      const level2Id = `${prefix}00003`;
-      const level3Id = `${prefix}00004`;
-      console.log(`  生成会员等级ID: ${level1Id}, ${level2Id}, ${level3Id}`);
-      
-      await dbPool.execute('INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [level1Id, '普通会员', 30, appId]);
-      await dbPool.execute('INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [level2Id, '高级会员', 90, appId]);
-      await dbPool.execute('INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [level3Id, 'VIP会员', 365, appId]);
-      console.log('  ✓ 应用和会员等级数据创建完成');
-    } else {
-      console.log('  应用数据已存在，跳过创建');
+    const { generateId } = require('./utils/idGenerator');
+    const APPS = {
+      performance: { id: '2026031616180010001', name: '业绩看板', created_at: '2026-03-16 16:18:00' },
+      news: { id: '2025112019132600001', name: '新闻舆情', created_at: '2025-11-20 19:13:31' },
+      listing: { id: '2026033000000000001', name: '上市进展', created_at: '2026-03-30 18:00:00' },
+    };
+
+    async function remapAppRelations(fromId, toId) {
+      if (!fromId || !toId || fromId === toId) return;
+
+      // email_config: app_id 唯一，避免冲突
+      const [toEmail] = await dbPool.query('SELECT id FROM email_config WHERE app_id = ? LIMIT 1', [toId]);
+      if (toEmail.length > 0) {
+        await dbPool.execute('DELETE FROM email_config WHERE app_id = ?', [fromId]);
+      } else {
+        await dbPool.execute('UPDATE email_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+      }
+
+      // qichacha_config: (app_id, interface_type) 唯一，逐类型迁移避免冲突
+      const [fromQc] = await dbPool.query('SELECT id, interface_type FROM qichacha_config WHERE app_id = ?', [fromId]);
+      for (const row of fromQc) {
+        const [dupQc] = await dbPool.query(
+          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
+          [toId, row.interface_type]
+        );
+        if (dupQc.length > 0) {
+          await dbPool.execute('DELETE FROM qichacha_config WHERE id = ?', [row.id]);
+        } else {
+          await dbPool.execute('UPDATE qichacha_config SET app_id = ? WHERE id = ?', [toId, row.id]);
+        }
+      }
+
+      // 其余按 app_id 直接迁移
+      await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+      await dbPool.execute('UPDATE news_interface_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+      await dbPool.execute('UPDATE recipient_management SET app_id = ? WHERE app_id = ?', [toId, fromId]);
     }
 
-    // ========== 新增：确保「业绩看板应用」及其会员等级存在 ==========
-    const [perfApps] = await dbPool.query(
-      "SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
-      ['业绩看板应用']
-    );
+    async function ensureCanonicalApp(app) {
+      const [byId] = await dbPool.query('SELECT id, app_name FROM applications WHERE id = ? LIMIT 1', [app.id]);
+      if (byId.length > 0) {
+        if (byId[0].app_name !== app.name) {
+          await dbPool.execute('UPDATE applications SET app_name = ?, created_at = ? WHERE id = ?', [
+            app.name,
+            app.created_at,
+            app.id,
+          ]);
+        }
+        return;
+      }
 
-    let perfAppId;
-    if (perfApps.length === 0) {
-      const now2 = new Date();
-      const year2 = now2.getFullYear();
-      const month2 = String(now2.getMonth() + 1).padStart(2, '0');
-      const day2 = String(now2.getDate()).padStart(2, '0');
-      const hours2 = String(now2.getHours()).padStart(2, '0');
-      const minutes2 = String(now2.getMinutes()).padStart(2, '0');
-      const seconds2 = String(now2.getSeconds()).padStart(2, '0');
-      const prefix2 = `${year2}${month2}${day2}${hours2}${minutes2}${seconds2}`;
+      const [byName] = await dbPool.query(
+        'SELECT id, app_name FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1',
+        [app.name]
+      );
+      if (byName.length > 0) {
+        const oldId = byName[0].id;
+        if (oldId === app.id) return;
+        // app_name 有 UNIQUE：INSERT IGNORE 会因同名已存在而跳过插入，导致标准 id 不存在，后续 UPDATE membership_levels 外键失败
+        await dbPool.execute(
+          `UPDATE applications SET app_name = CONCAT('__migrate_app_', id) WHERE id = ?`,
+          [oldId]
+        );
+        await dbPool.execute('INSERT INTO applications (id, app_name, created_at) VALUES (?, ?, ?)', [
+          app.id,
+          app.name,
+          app.created_at,
+        ]);
+        await remapAppRelations(oldId, app.id);
+        await dbPool.execute('DELETE FROM applications WHERE id = ?', [oldId]);
+        return;
+      }
 
-      perfAppId = `${prefix2}10001`;
-      console.log(`  创建业绩看板应用，ID: ${perfAppId}`);
-      await dbPool.execute('INSERT INTO applications (id, app_name) VALUES (?, ?)', [perfAppId, '业绩看板应用']);
-    } else {
-      perfAppId = perfApps[0].id;
+      await dbPool.execute('INSERT IGNORE INTO applications (id, app_name, created_at) VALUES (?, ?, ?)', [
+        app.id,
+        app.name,
+        app.created_at,
+      ]);
     }
 
-    // 兼容历史数据：如果 membership_levels 中存在 app_id 为空的记录，统一补上业绩看板应用的 app_id
-    await dbPool.execute(
-      'UPDATE membership_levels SET app_id = ? WHERE app_id IS NULL',
-      [perfAppId]
+    await ensureCanonicalApp(APPS.performance);
+    await ensureCanonicalApp(APPS.news);
+    await ensureCanonicalApp(APPS.listing);
+
+    // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
+    const [legacyPerfApps] = await dbPool.query(
+      `SELECT id, app_name FROM applications
+       WHERE id <> ?
+         AND (
+           app_name LIKE '%业绩看板%'
+           OR app_name LIKE '%业绩应用看板%'
+           OR BINARY app_name = BINARY '业绩看板应用'
+           OR BINARY app_name = BINARY '股权投资小工具锦集'
+         )`,
+      [APPS.performance.id]
     );
-
-    const [perfLevels] = await dbPool.query(
-      'SELECT COUNT(*) as count FROM membership_levels WHERE app_id = ?',
-      [perfAppId]
-    );
-    if (perfLevels[0].count === 0) {
-      const now3 = new Date();
-      const year3 = now3.getFullYear();
-      const month3 = String(now3.getMonth() + 1).padStart(2, '0');
-      const day3 = String(now3.getDate()).padStart(2, '0');
-      const hours3 = String(now3.getHours()).padStart(2, '0');
-      const minutes3 = String(now3.getMinutes()).padStart(2, '0');
-      const seconds3 = String(now3.getSeconds()).padStart(2, '0');
-      const prefix3 = `${year3}${month3}${day3}${hours3}${minutes3}${seconds3}`;
-
-      const pLevel1Id = `${prefix3}20001`;
-      const pLevel2Id = `${prefix3}20002`;
-      const pLevel3Id = `${prefix3}20003`;
-
-      console.log(`  为业绩看板应用初始化会员等级: ${pLevel1Id}, ${pLevel2Id}, ${pLevel3Id}`);
-
-      await dbPool.execute(
-        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [pLevel1Id, '普通会员', 30, perfAppId]
-      );
-      await dbPool.execute(
-        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [pLevel2Id, '高级会员', 90, perfAppId]
-      );
-      await dbPool.execute(
-        'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
-        [pLevel3Id, 'VIP会员', 365, perfAppId]
-      );
-      console.log('  ✓ 业绩看板应用会员等级初始化完成');
-    } else {
-      console.log('  业绩看板应用会员等级已存在，跳过初始化');
+    for (const app of legacyPerfApps) {
+      await remapAppRelations(app.id, APPS.performance.id);
+      await dbPool.execute('DELETE FROM applications WHERE id = ?', [app.id]);
+      console.log(`  ✓ 已归并历史应用 ${app.app_name}(${app.id}) -> 业绩看板(${APPS.performance.id})`);
     }
-    // ============================================================
+
+    // 兜底：membership_levels 中 app_id 为空，统一补为新闻舆情（历史默认应用）
+    await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE app_id IS NULL', [APPS.news.id]);
+
+    // 统一会员等级：以“新闻舆情”应用为模板，同步到其他应用并去重
+    const defaultLevelTemplate = [
+      { level_name: '普通会员', validity_days: 30 },
+      { level_name: '高级会员', validity_days: 90 },
+      { level_name: 'VIP会员', validity_days: 365 },
+    ];
+    let levelTemplate = defaultLevelTemplate;
+
+    const [newsTemplateRows] = await dbPool.query(
+      `SELECT level_name, validity_days
+       FROM membership_levels
+       WHERE app_id = ?
+       ORDER BY validity_days ASC, created_at ASC`,
+      [APPS.news.id]
+    );
+    if (newsTemplateRows.length > 0) {
+      // 新闻舆情已有配置时，按其等级设计做全应用统一
+      const dedup = new Map();
+      for (const row of newsTemplateRows) {
+        if (!dedup.has(row.level_name)) dedup.set(row.level_name, Number(row.validity_days || 0));
+      }
+      levelTemplate = Array.from(dedup.entries()).map(([level_name, validity_days]) => ({ level_name, validity_days }));
+    } else {
+      // 新闻舆情无历史等级时，先补默认模板
+      for (const level of defaultLevelTemplate) {
+        const newId = await generateId('membership_levels', dbPool);
+        await dbPool.execute(
+          'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+          [newId, level.level_name, level.validity_days, APPS.news.id]
+        );
+      }
+      console.log('  ✓ 新闻舆情会员等级模板已初始化');
+    }
+
+    async function remapMembershipLevelReferences(fromLevelId, toLevelId) {
+      if (!fromLevelId || !toLevelId || fromLevelId === toLevelId) return;
+
+      // 主会员等级外键可直接更新
+      await dbPool.execute('UPDATE users SET membership_level_id = ? WHERE membership_level_id = ?', [
+        toLevelId,
+        fromLevelId,
+      ]);
+
+      // app_permissions 是 JSON 文本，逐用户解析更新，避免字符串替换误伤
+      const [permUsers] = await dbPool.query(
+        `SELECT id, app_permissions FROM users
+         WHERE app_permissions IS NOT NULL
+           AND app_permissions <> ''`
+      );
+      for (const user of permUsers) {
+        let parsed;
+        try {
+          parsed = JSON.parse(user.app_permissions);
+        } catch (e) {
+          continue;
+        }
+        if (!Array.isArray(parsed)) continue;
+        let changed = false;
+        const nextPermissions = parsed.map((perm) => {
+          if (perm && perm.membership_level_id === fromLevelId) {
+            changed = true;
+            return { ...perm, membership_level_id: toLevelId };
+          }
+          return perm;
+        });
+        if (changed) {
+          await dbPool.execute('UPDATE users SET app_permissions = ? WHERE id = ?', [
+            JSON.stringify(nextPermissions),
+            user.id,
+          ]);
+        }
+      }
+    }
+
+    async function ensureAppMembershipLevels(appId, appName) {
+      // 1) 先确保模板等级存在
+      for (const level of levelTemplate) {
+        const [sameNameRows] = await dbPool.query(
+          `SELECT id, validity_days, created_at
+           FROM membership_levels
+           WHERE app_id = ? AND level_name = ?
+           ORDER BY created_at ASC, id ASC`,
+          [appId, level.level_name]
+        );
+
+        if (sameNameRows.length === 0) {
+          const newId = await generateId('membership_levels', dbPool);
+          await dbPool.execute(
+            'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+            [newId, level.level_name, level.validity_days, appId]
+          );
+          continue;
+        }
+
+        // 2) 保留首条，修正有效期，删除同名重复
+        const keeper = sameNameRows[0];
+        if (Number(keeper.validity_days) !== Number(level.validity_days)) {
+          await dbPool.execute('UPDATE membership_levels SET validity_days = ? WHERE id = ?', [
+            level.validity_days,
+            keeper.id,
+          ]);
+        }
+        for (let i = 1; i < sameNameRows.length; i += 1) {
+          await remapMembershipLevelReferences(sameNameRows[i].id, keeper.id);
+          await dbPool.execute('DELETE FROM membership_levels WHERE id = ?', [sameNameRows[i].id]);
+        }
+      }
+
+      // 3) 全量兜底去重：同 app + 同等级名 只保留一条（避免历史脏数据）
+      const [dups] = await dbPool.query(
+        `SELECT level_name, MIN(id) AS keep_id, COUNT(*) AS c
+         FROM membership_levels
+         WHERE app_id = ?
+         GROUP BY level_name
+         HAVING c > 1`,
+        [appId]
+      );
+      for (const dup of dups) {
+        const [dupRows] = await dbPool.query(
+          `SELECT id FROM membership_levels
+           WHERE app_id = ? AND level_name = ? AND id <> ?`,
+          [appId, dup.level_name, dup.keep_id]
+        );
+        for (const row of dupRows) {
+          await remapMembershipLevelReferences(row.id, dup.keep_id);
+        }
+        await dbPool.execute(
+          'DELETE FROM membership_levels WHERE app_id = ? AND level_name = ? AND id <> ?',
+          [appId, dup.level_name, dup.keep_id]
+        );
+      }
+
+      console.log(`  ✓ ${appName} 会员等级已按新闻舆情模板统一`);
+    }
+
+    await ensureAppMembershipLevels(APPS.news.id, APPS.news.name);
+    await ensureAppMembershipLevels(APPS.performance.id, APPS.performance.name);
+    await ensureAppMembershipLevels(APPS.listing.id, APPS.listing.name);
+
+    // 防止后续重复写入：同应用下等级名称唯一
+    const [lvlUniqIdx] = await dbPool.query(
+      `SHOW INDEX FROM membership_levels WHERE Key_name = 'uk_membership_levels_app_level'`
+    );
+    if (lvlUniqIdx.length === 0) {
+      await dbPool.query(
+        `ALTER TABLE membership_levels
+         ADD UNIQUE KEY uk_membership_levels_app_level (app_id, level_name)`
+      );
+      console.log('  ✓ membership_levels 已添加唯一索引(app_id, level_name)');
+    }
 
   } catch (err) {
     // 不可向上抛出：否则后续建表（如 news_share_links）与迁移不会执行，导致新库表不完整
@@ -3856,6 +4053,424 @@ async function initializeTables(dbPool) {
     console.warn('迁移 news_share_links 表业绩看板字段时出现警告:', err.message);
   }
 
+  // ========== 上市进展：业务表与 recipient_management.app_id ==========
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_progress (
+        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        f_create_date DATE NOT NULL COMMENT '入库日期（北京时间）',
+        f_update_time DATETIME NOT NULL COMMENT '交易所侧更新日期时间',
+        code VARCHAR(20) NOT NULL DEFAULT '' COMMENT '证券代码',
+        project_name TEXT NOT NULL COMMENT '项目简称',
+        status VARCHAR(50) NOT NULL COMMENT '审核状态',
+        register_address VARCHAR(200) NOT NULL DEFAULT '' COMMENT '注册地',
+        receive_date DATE NULL COMMENT '受理日期',
+        company TEXT NOT NULL COMMENT '公司全称',
+        board VARCHAR(20) NOT NULL COMMENT '板块',
+        exchange VARCHAR(20) NOT NULL COMMENT '交易所',
+        F_CreatorUserId VARCHAR(19) NULL COMMENT '创建用户ID',
+        F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID',
+        F_LastModifyTime DATETIME NULL COMMENT '修改时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        KEY idx_ipo_progress_f_update_time (f_update_time),
+        KEY idx_ipo_progress_delete (F_DeleteMark)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展（交易所爬取）';
+    `);
+    console.log('✓ ipo_progress 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_progress 表时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_project (
+        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        project_no VARCHAR(64) NOT NULL COMMENT '项目编号',
+        biz_update_time DATETIME NULL COMMENT '更新日期（业务库同步更新时间）',
+        F_CreatorTime DATETIME NOT NULL COMMENT '创建时间',
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID',
+        F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID',
+        F_LastModifyTime DATETIME NULL COMMENT '修改时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        project_name TEXT NOT NULL COMMENT '项目简称',
+        company TEXT NOT NULL COMMENT '企业全称',
+        inv_amount DECIMAL(20,2) NOT NULL COMMENT '投资成本',
+        residual_amount DECIMAL(20,2) NOT NULL COMMENT '剩余成本',
+        ratio DECIMAL(10,4) NOT NULL COMMENT '穿透权益占比',
+        ct_amount DECIMAL(20,2) NOT NULL COMMENT '穿透投资成本',
+        ct_residual DECIMAL(20,2) NOT NULL COMMENT '穿透剩余成本',
+        fund TEXT NOT NULL COMMENT '归属基金',
+        sub TEXT NULL COMMENT '归属子基金/SPV',
+        UNIQUE KEY uk_ipo_project_no (project_no),
+        KEY idx_ipo_project_creator (F_CreatorUserId),
+        KEY idx_ipo_project_delete (F_DeleteMark)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展-底层项目';
+    `);
+    console.log('✓ ipo_project 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_project 表时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_project_progress (
+        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        f_create_date DATETIME NOT NULL COMMENT '创建时间',
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID',
+        ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id',
+        ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照',
+        fund TEXT NOT NULL COMMENT '归属基金',
+        sub TEXT NULL COMMENT '归属子基金/SPV',
+        project_name TEXT NOT NULL COMMENT '项目简称',
+        company TEXT NOT NULL COMMENT '企业全称',
+        inv_amount DECIMAL(20,2) NOT NULL COMMENT '投资成本',
+        residual_amount DECIMAL(20,2) NOT NULL COMMENT '剩余成本',
+        ratio DECIMAL(10,4) NOT NULL COMMENT '穿透权益占比',
+        ct_amount DECIMAL(20,2) NOT NULL COMMENT '穿透投资成本',
+        ct_residual DECIMAL(20,2) NOT NULL COMMENT '穿透剩余成本',
+        status VARCHAR(50) NOT NULL COMMENT '审核状态',
+        board VARCHAR(20) NOT NULL COMMENT '板块',
+        exchange VARCHAR(20) NOT NULL COMMENT '交易所',
+        f_update_time DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.f_update_time）',
+        KEY idx_ipp_creator (F_CreatorUserId),
+        KEY idx_ipp_update (f_update_time)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目与上市进展匹配结果';
+    `);
+    console.log('✓ ipo_project_progress 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_project_progress 表时出现警告:', err.message);
+  }
+
+  // ipo_* 三张业务表：为已存在历史库补齐字段注释（与《上市进展需求》一致）
+  try {
+    const ipoProgressCommentSql = [
+      "ALTER TABLE ipo_progress COMMENT='上市进展（交易所爬取）'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN f_create_date DATE NOT NULL COMMENT '入库日期（北京时间）'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN f_update_time DATETIME NOT NULL COMMENT '交易所侧更新日期时间'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN code VARCHAR(20) NOT NULL DEFAULT '' COMMENT '证券代码'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN project_name TEXT NOT NULL COMMENT '项目简称'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN status VARCHAR(50) NOT NULL COMMENT '审核状态'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN register_address VARCHAR(200) NOT NULL DEFAULT '' COMMENT '注册地'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN receive_date DATE NULL COMMENT '受理日期'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN company TEXT NOT NULL COMMENT '公司全称'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN board VARCHAR(20) NOT NULL COMMENT '板块'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN exchange VARCHAR(20) NOT NULL COMMENT '交易所'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_CreatorUserId VARCHAR(19) NULL COMMENT '创建用户ID'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_LastModifyTime DATETIME NULL COMMENT '修改时间'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态：0未删除，1已删除'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_DeleteTime DATETIME NULL COMMENT '删除时间'",
+    ];
+    const ipoProjectCommentSql = [
+      "ALTER TABLE ipo_project COMMENT='上市进展-底层项目'",
+      "ALTER TABLE ipo_project MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_project MODIFY COLUMN project_no VARCHAR(64) NOT NULL COMMENT '项目编号'",
+      "ALTER TABLE ipo_project MODIFY COLUMN biz_update_time DATETIME NULL COMMENT '更新日期（业务库同步更新时间）'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_CreatorTime DATETIME NOT NULL COMMENT '创建时间'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_LastModifyTime DATETIME NULL COMMENT '修改时间'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态：0未删除，1已删除'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_DeleteTime DATETIME NULL COMMENT '删除时间'",
+      "ALTER TABLE ipo_project MODIFY COLUMN project_name TEXT NOT NULL COMMENT '项目简称'",
+      "ALTER TABLE ipo_project MODIFY COLUMN company TEXT NOT NULL COMMENT '企业全称'",
+      "ALTER TABLE ipo_project MODIFY COLUMN inv_amount DECIMAL(20,2) NOT NULL COMMENT '投资成本'",
+      "ALTER TABLE ipo_project MODIFY COLUMN residual_amount DECIMAL(20,2) NOT NULL COMMENT '剩余成本'",
+      "ALTER TABLE ipo_project MODIFY COLUMN ratio DECIMAL(10,4) NOT NULL COMMENT '穿透权益占比'",
+      "ALTER TABLE ipo_project MODIFY COLUMN ct_amount DECIMAL(20,2) NOT NULL COMMENT '穿透投资成本'",
+      "ALTER TABLE ipo_project MODIFY COLUMN ct_residual DECIMAL(20,2) NOT NULL COMMENT '穿透剩余成本'",
+      "ALTER TABLE ipo_project MODIFY COLUMN fund TEXT NOT NULL COMMENT '归属基金'",
+      "ALTER TABLE ipo_project MODIFY COLUMN sub TEXT NULL COMMENT '归属子基金/SPV'",
+    ];
+    const ipoProjectProgressCommentSql = [
+      "ALTER TABLE ipo_project_progress COMMENT='底层项目与上市进展匹配结果'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_create_date DATETIME NOT NULL COMMENT '创建时间'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN fund TEXT NOT NULL COMMENT '归属基金'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN sub TEXT NULL COMMENT '归属子基金/SPV'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN project_name TEXT NOT NULL COMMENT '项目简称'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN company TEXT NOT NULL COMMENT '企业全称'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN inv_amount DECIMAL(20,2) NOT NULL COMMENT '投资成本'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN residual_amount DECIMAL(20,2) NOT NULL COMMENT '剩余成本'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ratio DECIMAL(10,4) NOT NULL COMMENT '穿透权益占比'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ct_amount DECIMAL(20,2) NOT NULL COMMENT '穿透投资成本'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ct_residual DECIMAL(20,2) NOT NULL COMMENT '穿透剩余成本'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN status VARCHAR(50) NOT NULL COMMENT '审核状态'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN board VARCHAR(20) NOT NULL COMMENT '板块'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN exchange VARCHAR(20) NOT NULL COMMENT '交易所'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_update_time DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.f_update_time）'",
+    ];
+
+    for (const sql of [...ipoProgressCommentSql, ...ipoProjectCommentSql, ...ipoProjectProgressCommentSql]) {
+      await dbPool.query(sql);
+    }
+    console.log('✓ ipo_* 三张表字段注释已检查并补齐');
+  } catch (err) {
+    console.warn('补齐 ipo_* 字段注释时出现警告:', err.message);
+  }
+
+  try {
+    const [ippProjCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'ipo_project_f_id'
+    `);
+    if (ippProjCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_progress
+        ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id' AFTER F_CreatorUserId
+      `);
+      console.log('✓ ipo_project_progress 已添加 ipo_project_f_id');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress.ipo_project_f_id 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS listing_data_config (
+        id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
+        name VARCHAR(200) NOT NULL COMMENT '配置名称',
+        interface_type VARCHAR(20) NOT NULL COMMENT 'crawler|api',
+        request_url VARCHAR(1000) NULL,
+        cron_expression VARCHAR(100) NULL,
+        last_sync_time DATETIME NULL,
+        last_sync_range_end DATE NULL COMMENT '上次成功同步的闭区间结束日(北京时间)，用于定时补抓',
+        skip_holiday TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=节假日不执行定时任务，工作日补抓区间',
+        status VARCHAR(50) NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        news_interface_type VARCHAR(50) NULL COMMENT '上海国际集团|企查查|其他',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置-上市数据配置';
+    `);
+    console.log('✓ listing_data_config 表已就绪');
+  } catch (err) {
+    console.warn('创建 listing_data_config 表时出现警告:', err.message);
+  }
+
+  try {
+    const [ldcSkip] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = 'skip_holiday'
+    `);
+    if (ldcSkip.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE listing_data_config
+        ADD COLUMN skip_holiday TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=节假日不执行定时任务' AFTER last_sync_time
+      `);
+      console.log('✓ listing_data_config 已添加 skip_holiday');
+    }
+  } catch (err) {
+    console.warn('迁移 listing_data_config.skip_holiday 时出现警告:', err.message);
+  }
+
+  try {
+    const [ldcEnd] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = 'last_sync_range_end'
+    `);
+    if (ldcEnd.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE listing_data_config
+        ADD COLUMN last_sync_range_end DATE NULL COMMENT '上次成功同步的闭区间结束日(北京时间)' AFTER last_sync_time
+      `);
+      console.log('✓ listing_data_config 已添加 last_sync_range_end');
+    }
+  } catch (err) {
+    console.warn('迁移 listing_data_config.last_sync_range_end 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_project_sql_sync_setting (
+        id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
+        user_id VARCHAR(50) NOT NULL COMMENT '用户ID',
+        external_db_config_id VARCHAR(19) NULL COMMENT 'external_db_config.id',
+        sql_text TEXT NULL COMMENT '只读查询 SQL',
+        is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0禁用',
+        cron_expression VARCHAR(100) NULL COMMENT '定时同步Cron表达式（5位或Quartz 6/7位）',
+        column_map JSON NULL COMMENT 'SQL列名 -> ipo_project 业务字段名',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_ipo_sql_sync_user_db (user_id, external_db_config_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目-业务库SQL同步配置（按用户+数据库连接）';
+    `);
+    console.log('✓ ipo_project_sql_sync_setting 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_project_sql_sync_setting 表时出现警告:', err.message);
+  }
+
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting' AND COLUMN_NAME = 'is_enabled'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        ADD COLUMN is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0禁用' AFTER sql_text
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已添加 is_enabled');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_sql_sync_setting.is_enabled 时出现警告:', err.message);
+  }
+
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting' AND COLUMN_NAME = 'cron_expression'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        ADD COLUMN cron_expression VARCHAR(100) NULL COMMENT '定时同步Cron表达式（5位或Quartz 6/7位）' AFTER is_enabled
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已添加 cron_expression');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_sql_sync_setting.cron_expression 时出现警告:', err.message);
+  }
+
+  try {
+    const [idx] = await dbPool.query(`
+      SELECT INDEX_NAME
+      FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ipo_project_sql_sync_setting'
+        AND INDEX_NAME = 'uk_ipo_sql_sync_user'
+      LIMIT 1
+    `);
+    if (idx.length > 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        DROP INDEX uk_ipo_sql_sync_user
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已移除旧唯一索引 uk_ipo_sql_sync_user');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_sql_sync_setting 旧唯一索引时出现警告:', err.message);
+  }
+
+  try {
+    const [idx] = await dbPool.query(`
+      SELECT INDEX_NAME
+      FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ipo_project_sql_sync_setting'
+        AND INDEX_NAME = 'uk_ipo_sql_sync_user_db'
+      LIMIT 1
+    `);
+    if (idx.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        ADD UNIQUE KEY uk_ipo_sql_sync_user_db (user_id, external_db_config_id)
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已添加唯一索引 uk_ipo_sql_sync_user_db');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_sql_sync_setting 复合唯一索引时出现警告:', err.message);
+  }
+
+  try {
+    const [rcpAppId] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipient_management' AND COLUMN_NAME = 'app_id'
+    `);
+    if (rcpAppId.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE recipient_management
+        ADD COLUMN app_id VARCHAR(19) NULL COMMENT '应用ID' AFTER user_id
+      `);
+      const [newsApps] = await dbPool.query(
+        `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+        ['新闻舆情']
+      );
+      if (newsApps.length > 0) {
+        await dbPool.query(`UPDATE recipient_management SET app_id = ? WHERE app_id IS NULL`, [newsApps[0].id]);
+      }
+      console.log('✓ recipient_management 已添加 app_id 并回填新闻舆情应用');
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management.app_id 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      INSERT IGNORE INTO applications (id, app_name, created_at)
+      VALUES ('2026033000000000001', '上市进展', '2026-03-30 18:00:00')
+    `);
+    console.log('✓ applications 上市进展应用记录已就绪');
+  } catch (err) {
+    console.warn('插入 applications 上市进展时出现警告:', err.message);
+  }
+
+  // 上市进展：会员等级（用户管理中可选）+ 邮件配置（复制新闻舆情 SMTP，便于开箱发信）
+  try {
+    const { generateId } = require('./utils/idGenerator');
+    const [listingApps] = await dbPool.query(
+      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      ['上市进展']
+    );
+    if (listingApps.length) {
+      const listingAppId = listingApps[0].id;
+      const [existEc] = await dbPool.query(
+        `SELECT id FROM email_config WHERE app_id = ? LIMIT 1`,
+        [listingAppId]
+      );
+      if (existEc.length === 0) {
+        const [newsEc] = await dbPool.query(
+          `SELECT ec.* FROM email_config ec
+           INNER JOIN applications a ON ec.app_id = a.id
+           WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
+          ['新闻舆情']
+        );
+        if (newsEc.length > 0) {
+          const ne = newsEc[0];
+          const newEcId = await generateId('email_config', dbPool);
+          await dbPool.execute(
+            `INSERT INTO email_config (
+              id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
+              from_email, from_name, pop_host, pop_port, pop_secure, pop_user, pop_password, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              newEcId,
+              listingAppId,
+              ne.smtp_host,
+              ne.smtp_port,
+              ne.smtp_secure,
+              ne.smtp_user,
+              ne.smtp_password,
+              ne.from_email,
+              ne.from_name || '上市进展',
+              ne.pop_host,
+              ne.pop_port,
+              ne.pop_secure,
+              ne.pop_user,
+              ne.pop_password,
+              ne.is_active !== undefined ? ne.is_active : 1,
+            ]
+          );
+          console.log('✓ 已按新闻舆情 SMTP 复制上市进展 email_config');
+        } else {
+          console.warn('  未找到新闻舆情 email_config，跳过上市进展邮件配置自动创建（请管理员在「邮件配置」中手动添加上市进展应用）');
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('上市进展会员等级或邮件配置初始化时出现警告:', err.message);
+  }
+
   console.log('✓ 所有数据库表结构初始化完成');
   
   // 初始化提示词配置（异步执行，不阻塞服务器启动）
@@ -3885,7 +4500,7 @@ async function init() {
     // 创建数据库连接池
     pool = mysql.createPool({
       host: DB_HOST,
-      port: DB_PORT,
+      port: DB_PORT_NUM,
       user: DB_USER,
       password: DB_PASSWORD,
       database: DB_NAME,
@@ -3917,14 +4532,38 @@ async function init() {
 
     console.log('✓ 数据库初始化完成');
   } catch (error) {
-    console.error('数据库初始化过程中出错:', error.message);
+    const detail =
+      [
+        error.code,
+        error.errno,
+        error.sqlState,
+        error.sqlMessage,
+        error.syscall,
+        error.address != null && error.port != null ? `${error.address}:${error.port}` : null,
+        error.message
+      ]
+        .filter(Boolean)
+        .join(' | ') || '(无详细消息)';
+    console.error('数据库初始化过程中出错:', detail);
     console.error('错误堆栈:', error.stack);
     throw error;
   }
 }
 
 const ready = init().catch((err) => {
-  console.error('数据库初始化失败:', err.message);
+  const detail =
+    [
+      err.code,
+      err.errno,
+      err.sqlState,
+      err.sqlMessage,
+      err.syscall,
+      err.address != null && err.port != null ? `${err.address}:${err.port}` : null,
+      err.message
+    ]
+      .filter(Boolean)
+      .join(' | ') || '(无详细消息)';
+  console.error('数据库初始化失败:', detail);
   console.error('错误堆栈:', err.stack);
   if (err.code === 'ER_ACCESS_DENIED_ERROR') {
     console.error('\n❌ MySQL 连接被拒绝！');

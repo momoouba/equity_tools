@@ -66,7 +66,14 @@ function UserManagement() {
           try {
             const levelsResponse = await axios.get(`/api/auth/membership-levels/${app.id}`)
             if (levelsResponse.data.success) {
-              levelsMap[app.id] = levelsResponse.data.data || []
+              const rawLevels = levelsResponse.data.data || []
+              const dedupMap = new Map()
+              rawLevels
+                .sort((a, b) => (a.validity_days || 0) - (b.validity_days || 0))
+                .forEach((level) => {
+                  if (!dedupMap.has(level.level_name)) dedupMap.set(level.level_name, level)
+                })
+              levelsMap[app.id] = Array.from(dedupMap.values())
             }
           } catch (error) {
             console.error(`获取应用 ${app.app_name} 的会员等级失败:`, error)
@@ -325,7 +332,12 @@ function UserManagement() {
               {applications.map((app) => {
                 const levels = membershipLevels[app.id] || []
                 const currentLevelId = userMembershipConfig[app.id] || null
-                const displayAppName = app.app_name === '业绩看板应用' ? '业绩看板' : app.app_name
+                const displayAppName =
+                  app.app_name === '业绩看板应用'
+                    ? '业绩看板'
+                    : app.app_name === '上市进展'
+                      ? '上市进展'
+                      : app.app_name
                 
                 return (
                   <div key={app.id} style={{ marginBottom: '16px', padding: '16px', border: '1px solid #e5e6eb', borderRadius: '4px' }}>

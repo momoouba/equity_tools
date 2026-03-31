@@ -77,8 +77,14 @@ async function checkNewsPermission(userId) {
   return checkUserAppPermission(userId, '新闻舆情');
 }
 
+/** 上市进展菜单权限 */
+async function checkListingPermission(userId) {
+  return checkUserAppPermission(userId, '上市进展');
+}
+
 module.exports = {
   checkUserAppPermission,
-  checkNewsPermission
+  checkNewsPermission,
+  checkListingPermission,
 };
 

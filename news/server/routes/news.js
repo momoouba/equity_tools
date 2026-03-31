@@ -3516,6 +3516,12 @@ router.post('/recipients', [
     }
 
     const recipientId = await generateId('recipient_management');
+
+    const newsAppRows = await db.query(
+      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      ['新闻舆情']
+    );
+    const newsAppId = newsAppRows.length ? newsAppRows[0].id : null;
     
     // 如果提供了 cron_expression，send_frequency 和 send_time 可以为 null（已废弃）
     // 如果没有提供 cron_expression，需要从 send_frequency 和 send_time 转换
@@ -3524,6 +3530,7 @@ router.post('/recipients', [
     
     const newData = {
       user_id: userId,
+      app_id: newsAppId,
       recipient_email: emailValidation.emails,
       email_subject: email_subject || '',
       cron_expression: finalCronExpression,
@@ -3536,11 +3543,12 @@ router.post('/recipients', [
     
     await db.execute(
       `INSERT INTO recipient_management 
-       (id, user_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, app_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recipientId,
         newData.user_id,
+        newData.app_id,
         newData.recipient_email,
         newData.email_subject,
         newData.cron_expression,

@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard'
 import ShareNewsPage from './pages/ShareNewsPage'
 // 业绩看板应用扩展 - 导入业绩看板分享页
 import PerformanceSharePage from './pages/PerformanceSharePage'
+import ShareListingProjectProgressPage from './pages/ShareListingProjectProgressPage'
 
 function App() {
   return (
@@ -18,6 +19,7 @@ function App() {
         {/* 业绩看板应用扩展 - 业绩看板分享路由 */}
         <Route path="/share/:token" element={<ShareNewsPage />} />
         <Route path="/performance/share/:token" element={<PerformanceSharePage />} />
+        <Route path="/share/listing-project-progress/:token" element={<ShareListingProjectProgressPage />} />
       </Routes>
     </Router>
   )

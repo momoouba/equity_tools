@@ -4,9 +4,10 @@
  */
 
 .perf-settings-page {
-  padding: 24px;
+  padding: 0 ;
   background: #f5f6f7;
-  min-height: 100%;
+  min-height: calc(100vh - 74px);
+  overflow: hidden;
 }
 
 .perf-settings-header {
@@ -37,14 +38,28 @@
   border-bottom: 1px solid #e5e8ef;
 }
 
+.perf-settings-tabs .arco-tabs-content-horizontal {
+  padding-top: 8px !important;
+}
+
 .perf-settings-tab {
   padding: 16px;
 }
 
 .perf-settings-toolbar {
   display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: 0px;
+  margin-bottom: 0px;
+}
+
+.perf-settings-tab .arco-table .arco-table-th,
+.perf-settings-tab .arco-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+
+.perf-settings-tab .arco-table .arco-table-th:last-child,
+.perf-settings-tab .arco-table .arco-table-td:last-child {
+  border-right: none !important;
 }
 
 /* SQL测试结果 */

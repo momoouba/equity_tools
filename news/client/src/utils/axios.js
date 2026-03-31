@@ -1,13 +1,17 @@
 import axios from 'axios'
 
 // 创建axios实例
-// 如果当前访问的是后端端口（3001），API请求也应该指向同一端口
+// 开发环境下优先直连后端，避免代理偶发未生效导致 404
 const getBaseURL = () => {
-  // 开发环境：如果当前在localhost:3001，API也指向3001
-  if (window.location.hostname === 'localhost' && window.location.port === '3001') {
+  const isDev = import.meta.env.DEV
+  if (!isDev) return ''
+
+  // 本地开发：无论前端是否跑在 5173，都直连后端 3001
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://localhost:3001'
   }
-  // 其他情况：使用相对路径，由代理或服务器处理
+
+  // 其他主机（如局域网 IP）继续走相对路径，由代理处理
   return ''
 }
 

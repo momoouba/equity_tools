@@ -126,6 +126,8 @@ function SqlCodeEditor({ value = '', onChange, placeholder, minRows = 6 }) {
 function SqlConfigTab() {
   const [list, setList] = useState([])
   const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [showModal, setShowModal] = useState(false)
   const [editRecord, setEditRecord] = useState(null)
   const [form] = Form.useForm()
@@ -146,11 +148,29 @@ function SqlConfigTab() {
 
   // 外部数据库列表
   const [dbConfigs, setDbConfigs] = useState([])
+  const [tableScrollY, setTableScrollY] = useState(520)
 
   useEffect(() => {
     fetchList()
     fetchDbConfigs()
   }, [])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(list.length / pageSize))
+    if (page > maxPage) setPage(maxPage)
+  }, [list.length, page, pageSize])
+
+  useEffect(() => {
+    const calc = () => {
+      const y = Math.max(320, window.innerHeight - 370)
+      setTableScrollY(y)
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [])
+
+  const pagedList = list.slice((page - 1) * pageSize, page * pageSize)
 
   const fetchList = async () => {
     setLoading(true)
@@ -300,7 +320,7 @@ function SqlConfigTab() {
     {
       title: '数据库',
       dataIndex: 'external_db_config_id',
-      width: 120,
+      width: 80,
       render: (v) => {
         if (!v) return <Tag color="blue">主库</Tag>
         const db = dbConfigs.find(d => d.id === v)
@@ -311,13 +331,14 @@ function SqlConfigTab() {
     {
       title: 'SQL预览',
       dataIndex: 'sql_content',
+      width: 240,
       render: (v) => (
-        <Tooltip content={<pre style={{ maxWidth: 400, whiteSpace: 'pre-wrap', fontSize: 12 }}>{v}</pre>}>
+        <Tooltip content={<pre style={{ maxWidth: 200, whiteSpace: 'pre-wrap', fontSize: 12 }}>{v}</pre>}>
           <Text ellipsis style={{ maxWidth: 200, display: 'inline-block' }}>{v}</Text>
         </Tooltip>
       )
     },
-    { title: '备注', dataIndex: 'remark', width: 120 },
+    { title: '备注', dataIndex: 'remark', width: 80 },
     {
       title: '创建时间',
       dataIndex: 'F_CreatorTime',
@@ -332,15 +353,15 @@ function SqlConfigTab() {
     },
     {
       title: '操作',
-      width: 240,
+      width: 260,
       fixed: 'right',
       render: (_, record) => (
-        <Space>
-          <Button size="mini" type="text" icon={<IconPlayArrow />} onClick={() => handleTest(record)}>测试</Button>
-          <Button size="mini" type="text" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
-          <Button size="mini" type="text" icon={<IconHistory />} onClick={() => handleOpenLog(record)}>日志</Button>
+        <Space size={8} style={{ padding: '0 10px' }}>
+          <Button size="mini" type="outline" icon={<IconPlayArrow />} onClick={() => handleTest(record)}>测试</Button>
+          <Button size="mini" type="primary" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
+          <Button size="mini" type="outline" status="success" icon={<IconHistory />} onClick={() => handleOpenLog(record)}>日志</Button>
           <Popconfirm title="确认删除该SQL配置？" onOk={() => handleDelete(record.id)}>
-            <Button size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button size="mini" type="outline" status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>
         </Space>
       )
@@ -356,11 +377,30 @@ function SqlConfigTab() {
 
       <Table
         columns={columns}
-        data={list}
+        data={pagedList}
         loading={loading}
         rowKey="id"
-        scroll={{ x: 1200 }}
-        pagination={{ pageSize: 20, showTotal: true }}
+        border
+        stripe
+        scroll={{ x: 1400, y: tableScrollY }}
+        pagination={{
+          current: page,
+          pageSize,
+          total: list.length,
+          sizeCanChange: true,
+          pageSizeChangeResetCurrent: true,
+          showTotal: true,
+          showJumper: true,
+          pageSizeOptions: [10, 20, 50, 100, 200],
+          onChange: (p, ps) => {
+            setPage(p)
+            if (ps !== pageSize) setPageSize(ps)
+          },
+          onPageSizeChange: (ps) => {
+            setPage(1)
+            setPageSize(ps)
+          },
+        }}
         defaultSortOrder={[{ field: 'exec_order', order: 'asc' }]}
       />
 
@@ -761,15 +801,35 @@ function IndicatorDescribeTab() {
 function ScheduledTaskTab() {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(false)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
   const [showModal, setShowModal] = useState(false)
   const [editTask, setEditTask] = useState(null)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [showCronModal, setShowCronModal] = useState(false)
+  const [tableScrollY, setTableScrollY] = useState(520)
 
   useEffect(() => {
     fetchTasks()
   }, [])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(tasks.length / pageSize))
+    if (page > maxPage) setPage(maxPage)
+  }, [tasks.length, page, pageSize])
+
+  useEffect(() => {
+    const calc = () => {
+      const y = Math.max(330, window.innerHeight - 340)
+      setTableScrollY(y)
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [])
+
+  const pagedTasks = tasks.slice((page - 1) * pageSize, page * pageSize)
 
   const fetchTasks = async () => {
     setLoading(true)
@@ -898,17 +958,17 @@ function ScheduledTaskTab() {
     { title: '备注', dataIndex: 'remark', width: 120 },
     {
       title: '操作',
-      width: 240,
+      width: 280,
       fixed: 'right',
       render: (_, record) => (
-        <Space>
-          <Button size="mini" type="text" icon={<IconPlayArrow />} onClick={() => handleRunNow(record)}>立即执行</Button>
-          <Button size="mini" type="text" onClick={() => handleToggle(record)}>
+        <Space size={8} style={{ padding: '0 10px' }}>
+          <Button size="mini" type="outline" icon={<IconPlayArrow />} onClick={() => handleRunNow(record)}>立即执行</Button>
+          <Button size="mini" type="outline" onClick={() => handleToggle(record)}>
             {record.is_active ? '停用' : '启用'}
           </Button>
-          <Button size="mini" type="text" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
+          <Button size="mini" type="primary" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
           <Popconfirm title="确认删除该定时任务？" onOk={() => handleDelete(record.id)}>
-            <Button size="mini" type="text" status="danger" icon={<IconDelete />}>删除</Button>
+            <Button size="mini" type="outline" status="danger" icon={<IconDelete />}>删除</Button>
           </Popconfirm>
         </Space>
       )
@@ -934,11 +994,30 @@ function ScheduledTaskTab() {
 
       <Table
         columns={columns}
-        data={tasks}
+        data={pagedTasks}
         loading={loading}
         rowKey="id"
-        scroll={{ x: 1000 }}
-        pagination={{ pageSize: 20, showTotal: true }}
+        border
+        stripe
+        scroll={{ x: 1200, y: tableScrollY }}
+        pagination={{
+          current: page,
+          pageSize,
+          total: tasks.length,
+          sizeCanChange: true,
+          pageSizeChangeResetCurrent: true,
+          showTotal: true,
+          showJumper: true,
+          pageSizeOptions: [10, 20, 50, 100, 200],
+          onChange: (p, ps) => {
+            setPage(p)
+            if (ps !== pageSize) setPageSize(ps)
+          },
+          onPageSizeChange: (ps) => {
+            setPage(1)
+            setPageSize(ps)
+          },
+        }}
       />
 
       {/* 新增/编辑弹窗 */}
@@ -1036,7 +1115,7 @@ function PerformanceSettingsPage() {
         <div className="perf-settings-desc">管理业绩看板的数据接口配置和定时任务</div>
       </div>
 
-      <Tabs activeTab={activeTab} onChange={setActiveTab} className="perf-settings-tabs">
+      <Tabs activeTab={activeTab} onChange={setActiveTab} type="line" style={{ marginBottom: 8 }} className="perf-settings-tabs">
         <TabPane key="sql" title="数据接口配置">
           <SqlConfigTab />
         </TabPane>

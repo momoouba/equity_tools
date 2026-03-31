@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate, Routes, Route, useLocation } from 'react-router-dom'
 import { Layout, Button, Spin, Message } from '@arco-design/web-react'
-import { IconCommon, IconApps, IconSettings } from '@arco-design/web-react/icon'
+import { IconCommon, IconApps, IconSettings, IconFolder } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
 import EnterpriseManagement from './EnterpriseManagement'
 import CompanyManagement from './CompanyManagement'
@@ -12,6 +12,9 @@ import UserManagement from './UserManagement'
 import ScheduledTaskManagement from './ScheduledTaskManagement'
 import PerformanceDashboardPage from './业绩看板应用/PerformanceDashboardPage'
 import PerformanceSettingsPage from './业绩看板应用/PerformanceSettingsPage'
+import ListingProjectProgressPage from './上市进展/ListingProjectProgressPage'
+import ListingIpoProjectPage from './上市进展/ListingIpoProjectPage'
+import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
@@ -23,6 +26,7 @@ function Dashboard() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [hasNewsPermission, setHasNewsPermission] = useState(false)
   const [hasPerformancePermission, setHasPerformancePermission] = useState(false)
+  const [hasListingPermission, setHasListingPermission] = useState(false)
   const [systemConfig, setSystemConfig] = useState({
     system_name: '',
     logo: ''
@@ -51,16 +55,42 @@ function Dashboard() {
     const hasPerfPerm = appPermissions.some(
       perm => perm.app_name === '业绩看板应用' && perm.membership_level_id
     )
+
+    const hasListingPerm = appPermissions.some(
+      (perm) => perm.app_name === '上市进展' && perm.membership_level_id
+    )
     
     const newsEnabled = hasNewsPerm || isAdminUser
     const perfEnabled = hasPerfPerm || isAdminUser
+    const listingEnabled = hasListingPerm || isAdminUser
     setHasNewsPermission(newsEnabled)
     setHasPerformancePermission(perfEnabled)
+    setHasListingPermission(listingEnabled)
 
-    if (newsEnabled) {
+    // 优先保持与当前路由一致，避免刷新用户信息后顶栏高亮跳回新闻舆情
+    const p = location.pathname
+    if (
+      p.includes('listing-project-progress') ||
+      p.includes('listing-ipo-project') ||
+      p.includes('listing-ipo-progress')
+    ) {
+      setActiveAppKey('listing-app')
+    } else if (p.includes('performance-settings') || p.includes('performance')) {
+      setActiveAppKey('performance-app')
+    } else if (
+      p.includes('users') ||
+      p.includes('system') ||
+      p.includes('companies') ||
+      p.includes('email') ||
+      p.includes('scheduled-tasks')
+    ) {
+      setActiveAppKey('admin')
+    } else if (newsEnabled) {
       setActiveAppKey('news-app')
     } else if (perfEnabled) {
       setActiveAppKey('performance-app')
+    } else if (listingEnabled) {
+      setActiveAppKey('listing-app')
     } else if (isAdminUser) {
       setActiveAppKey('admin')
     }
@@ -113,6 +143,15 @@ function Dashboard() {
     } else if (location.pathname.includes('performance')) {
       setSelectedKeys(['performance'])
       setActiveAppKey('performance-app')
+    } else if (location.pathname.includes('listing-project-progress')) {
+      setSelectedKeys(['listing-project-progress'])
+      setActiveAppKey('listing-app')
+    } else if (location.pathname.includes('listing-ipo-project')) {
+      setSelectedKeys(['listing-ipo-project'])
+      setActiveAppKey('listing-app')
+    } else if (location.pathname.includes('listing-ipo-progress')) {
+      setSelectedKeys(['listing-ipo-progress'])
+      setActiveAppKey('listing-app')
     } else if (location.pathname.includes('companies')) {
       setSelectedKeys(['companies'])
       setActiveAppKey('admin')
@@ -211,6 +250,18 @@ function Dashboard() {
         { key: 'performance',          title: '业绩看板' },
         { key: 'performance-settings', title: '业绩看板设置' },
         { key: 'system-db',            title: '数据库连接配置' }
+      ]
+    },
+    {
+      key: 'listing-app',
+      title: '上市进展',
+      icon: <IconFolder />,
+      visible: isAdmin || hasListingPermission,
+      children: [
+        { key: 'listing-project-progress', title: '底层项目上市进展' },
+        { key: 'listing-ipo-project', title: '底层项目表' },
+        { key: 'listing-ipo-progress', title: '上市信息表' },
+        { key: 'system-db', title: '数据库连接配置' }
       ]
     },
     {
@@ -338,6 +389,30 @@ function Dashboard() {
               element={
                 (isAdmin || hasPerformancePermission)
                   ? <PerformanceSettingsPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/listing-project-progress"
+              element={
+                (isAdmin || hasListingPermission)
+                  ? <ListingProjectProgressPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/listing-ipo-project"
+              element={
+                (isAdmin || hasListingPermission)
+                  ? <ListingIpoProjectPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/listing-ipo-progress"
+              element={
+                (isAdmin || hasListingPermission)
+                  ? <ListingIpoProgressPage />
                   : <div>您没有访问权限</div>
               }
             />

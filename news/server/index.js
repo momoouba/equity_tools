@@ -29,14 +29,32 @@ const externalDbRoutes = require('./routes/externalDb');
 const newsShareRoutes = require('./routes/newsShare');
 const newsDetailRoutes = require('./routes/newsDetail');
 const performanceRoutes = require('./routes/业绩看板应用');
+const listingRoutes = require('./routes/上市进展');
+const listingShareRoutes = require('./routes/listingShare');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
+const { initializeListingScheduledTasks } = require('./utils/上市进展/scheduledListingTasks');
 const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+/** mysql2 等连接错误下 message 可能为空，避免日志只显示「Error」而无原因 */
+function formatStartupError(err) {
+  if (!err) return String(err);
+  const parts = [
+    err.code,
+    err.errno,
+    err.sqlState,
+    err.sqlMessage,
+    err.syscall,
+    err.address != null && err.port != null ? `${err.address}:${err.port}` : null,
+    err.message
+  ].filter(Boolean);
+  return parts.length ? parts.join(' | ') : String(err);
+}
 
 // 服务器就绪标志（在服务器完全初始化前为false）
 let serverReady = false;
@@ -148,6 +166,8 @@ app.use('/api/external-db', externalDbRoutes);
 app.use('/api/news-share', newsShareRoutes);
 app.use('/api/news-detail', newsDetailRoutes);
 app.use('/api/performance', performanceRoutes);
+app.use('/api/listing', listingRoutes);
+app.use('/api/listing-share', listingShareRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
@@ -304,7 +324,11 @@ app.get('/api/health', async (req, res) => {
     }
     res.json({ status: 'ok', message: '服务器运行正常', database: 'connected' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: '数据库连接失败', error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: '数据库连接失败',
+      error: formatStartupError(error)
+    });
   }
 });
 
@@ -333,7 +357,7 @@ async function startServer() {
       console.log('✓ 数据库连接已就绪');
       await restoreStoredConfigFiles();
     } catch (dbError) {
-      console.error('✗ 数据库初始化失败:', dbError.message);
+      console.error('✗ 数据库初始化失败:', formatStartupError(dbError));
       console.error('错误堆栈:', dbError.stack);
       console.error('请检查：');
       console.error('1. MySQL 服务是否已启动');
@@ -361,6 +385,11 @@ async function startServer() {
           console.log('正在初始化新闻同步定时任务...');
           initializeNewsSyncScheduledTasks().catch(error => {
             console.error('初始化新闻同步定时任务失败:', error);
+          });
+
+          console.log('正在初始化上市进展定时任务...');
+          initializeListingScheduledTasks().catch((error) => {
+            console.error('初始化上市进展定时任务失败:', error);
           });
           
           // 初始化空摘要新闻重新分析定时任务
@@ -410,13 +439,13 @@ async function startServer() {
         console.error(`  Windows: netstat -ano | findstr :${PORT}`);
         console.error(`  然后使用 taskkill /F /PID <进程ID> 结束进程`);
       } else {
-        console.error('✗ 服务器启动失败:', error.message);
+        console.error('✗ 服务器启动失败:', formatStartupError(error));
         console.error('错误详情:', error);
       }
       process.exit(1);
     });
   } catch (error) {
-    console.error('✗ 服务器启动失败:', error.message);
+    console.error('✗ 服务器启动失败:', formatStartupError(error));
     console.error('错误堆栈:', error.stack);
     console.error('请检查：');
     console.error('1. MySQL 服务是否已启动');

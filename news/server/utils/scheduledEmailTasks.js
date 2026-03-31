@@ -663,9 +663,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        AND (
          nd.APItype != '上海国际'
          OR (
-           nd.public_time IS NOT NULL
-           AND nd.public_time > '1970-01-01'
-           AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
+          NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
+          AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
+          AND DATEDIFF(DATE(nd.created_at), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
          )
        )
        AND nd.delete_mark = 0
@@ -1131,9 +1131,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        AND (
          nd.APItype != '上海国际'
          OR (
-           nd.public_time IS NOT NULL
-           AND nd.public_time > '1970-01-01'
-           AND DATEDIFF(DATE(nd.created_at), DATE(nd.public_time)) BETWEEN 0 AND 30
+          NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
+          AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
+          AND DATEDIFF(DATE(nd.created_at), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
          )
        )
        AND nd.delete_mark = 0
@@ -2289,6 +2289,17 @@ async function executeEmailTask(recipientId) {
     }
     
     const recipient = recipients[0];
+
+    const listingAppRows = await db.query(
+      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      ['上市进展']
+    );
+    const listingAppId = listingAppRows.length ? listingAppRows[0].id : null;
+    if (listingAppId && recipient.app_id === listingAppId) {
+      const { executeListingEmailDigest } = require('./上市进展/listingEmailDigest');
+      await executeListingEmailDigest(recipient);
+      return;
+    }
     
     // 解析企查查类别编码（JSON格式）
     let categoryCodes = null;

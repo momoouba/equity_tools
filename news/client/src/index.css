@@ -69,3 +69,8 @@ body {
   --color-bg-active: #e8e9ed;
 }
 
+/* 隐藏 dashboard-content 滚动条，但保持表格内部滚动 */
+.dashboard-content::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+}
