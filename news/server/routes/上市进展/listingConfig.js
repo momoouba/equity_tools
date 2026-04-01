@@ -194,7 +194,11 @@ async function syncListingConfig(req, res) {
     const type = (cfg.interface_type || '').toLowerCase();
 
     if (type === 'crawler') {
-      const result = await runListingExchangeCrawler({ startDate, endDate });
+      const crawlLogTag = `[上市进展手动同步][${cfg.name || cfg.id}][交易所爬虫]`;
+      console.log(
+        `${crawlLogTag} 开始执行，配置=${cfg.id}，区间=${startDate}~${endDate}，触发人=${user.account || user.id}`
+      );
+      const result = await runListingExchangeCrawler({ startDate, endDate, logTag: crawlLogTag });
       const matchResult = await runListingMatchBatch({
         startDate,
         endDate,
@@ -205,9 +209,20 @@ async function syncListingConfig(req, res) {
         [endDate, cfg.id]
       );
       const f = result.fetched || {};
+      const errs = result.exchangeErrors || [];
+      console.log(
+        `${crawlLogTag} 执行完成：抓取=${f.total ?? 0}（深交所${f.szse ?? 0}/上交所${f.sse ?? 0}/北交所${f.bse ?? 0}），` +
+          `入库新增=${result.inserted} 更正更早=${result.updatedEarlier ?? 0} 跳过=${result.skipped}，` +
+          `项目匹配写入=${matchResult.inserted} 进展=${matchResult.progressCount} 项目=${matchResult.projectCount}`
+      );
+      if (errs.length) {
+        console.warn(
+          `${crawlLogTag} 部分交易所拉取失败: ${errs.map((e) => `${e.exchange}:${e.message}`).join(' | ')}`
+        );
+      }
       return res.json({
         success: true,
-        message: `同步完成：抓取 ${f.total ?? 0} 条（深交所 ${f.szse ?? 0}、上交所 ${f.sse ?? 0}、北交所 ${f.bse ?? 0}），入库新增 ${result.inserted}、跳过 ${result.skipped}；匹配写入 ${matchResult.inserted} 条`,
+        message: `同步完成：抓取 ${f.total ?? 0} 条（深交所 ${f.szse ?? 0}、上交所 ${f.sse ?? 0}、北交所 ${f.bse ?? 0}），入库新增 ${result.inserted}、更正更早快照 ${result.updatedEarlier ?? 0}、跳过 ${result.skipped}；匹配写入 ${matchResult.inserted} 条`,
         data: { crawler: result, match: matchResult },
       });
     }

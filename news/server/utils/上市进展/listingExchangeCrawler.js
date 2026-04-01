@@ -32,6 +32,14 @@ function ymdInRange(ymd, startYmd, endYmd) {
   return d >= startYmd && d <= endYmd;
 }
 
+/**
+ * 接口按「更新日期降序」分页时，应用本页的最大更新日判断是否已无更多可能落在 [startYmd,∞) 的数据。
+ * 误用「本页最小更新日 < start」会提前停页：同一页若混有更早的记录，会漏掉后续页里仍在区间内的行。
+ */
+function shouldStopDescPagedFetch(pageMaxYmd, startYmd) {
+  return Boolean(pageMaxYmd && pageMaxYmd < startYmd);
+}
+
 /** SSE updateDate: 20260330100926 */
 function sseUpdateToSqlDateTime(s) {
   const x = String(s || '');
@@ -117,10 +125,10 @@ async function fetchSzseIpoInRange(startYmd, endYmd) {
     if (!data || data.totalPage == null) break;
     totalPage = data.totalPage;
     const rows = data.data || [];
-    let minU = '9999-99-99';
+    let pageMaxU = '';
     for (const r of rows) {
       const u = r.updtdt ? String(r.updtdt).slice(0, 10) : '';
-      if (u && u < minU) minU = u;
+      if (u && (!pageMaxU || u > pageMaxU)) pageMaxU = u;
       if (!ymdInRange(u, startYmd, endYmd)) continue;
       out.push({
         exchange: '\u6df1\u4ea4\u6240',
@@ -135,7 +143,7 @@ async function fetchSzseIpoInRange(startYmd, endYmd) {
       });
     }
     if (rows.length === 0) break;
-    if (minU !== '9999-99-99' && minU < startYmd) break;
+    if (shouldStopDescPagedFetch(pageMaxU, startYmd)) break;
     pageIndex += 1;
   }
   return out;
@@ -171,10 +179,10 @@ async function fetchSseIpoInRange(startYmd, endYmd) {
     const list = data && data.result ? data.result : [];
     const ph = data && data.pageHelp ? data.pageHelp : {};
     pageCount = ph.pageCount || 1;
-    let minYmdOnPage = '9999-99-99';
+    let pageMaxYmd = '';
     for (const v of list) {
       const u = sseUpdateToYmd(v.updateDate);
-      if (u && u < minYmdOnPage) minYmdOnPage = u;
+      if (u && (!pageMaxYmd || u > pageMaxYmd)) pageMaxYmd = u;
       if (!u || !ymdInRange(u, startYmd, endYmd)) continue;
       const issuer = v.stockIssuer && v.stockIssuer[0] ? v.stockIssuer[0] : {};
       const company = (issuer.s_issueCompanyFullName || v.stockAuditName || '').trim();
@@ -193,7 +201,7 @@ async function fetchSseIpoInRange(startYmd, endYmd) {
       });
     }
     if (list.length === 0) break;
-    if (minYmdOnPage !== '9999-99-99' && minYmdOnPage < startYmd) break;
+    if (shouldStopDescPagedFetch(pageMaxYmd, startYmd)) break;
     pageNo += 1;
   }
   return out;
@@ -377,10 +385,10 @@ async function fetchBseIpoInRange(startYmd, endYmd) {
     const listInfo = pack && pack.listInfo ? pack.listInfo : {};
     totalPages = listInfo.totalPages != null ? Number(listInfo.totalPages) : 1;
     const content = listInfo.content || [];
-    let minYmd = '9999-99-99';
+    let pageMaxYmd = '';
     for (const r of content) {
       const u = bseTimeToYmd(r.updateDate);
-      if (u && u < minYmd) minYmd = u;
+      if (u && (!pageMaxYmd || u > pageMaxYmd)) pageMaxYmd = u;
       if (!u || !ymdInRange(u, startYmd, endYmd)) continue;
       out.push({
         exchange: '\u5317\u4ea4\u6240',
@@ -395,35 +403,157 @@ async function fetchBseIpoInRange(startYmd, endYmd) {
       });
     }
     if (content.length === 0) break;
-    if (minYmd !== '9999-99-99' && minYmd < startYmd) break;
+    if (shouldStopDescPagedFetch(pageMaxYmd, startYmd)) break;
     page += 1;
   }
   return out;
 }
 
+function parseRowDateTimeMs(v) {
+  if (v == null || v === '') return null;
+  const t = new Date(v);
+  return Number.isNaN(t.getTime()) ? null : t.getTime();
+}
+
+function stringifyFetchedSampleRow(row, idx) {
+  const exchange = row.exchange || '-';
+  const board = row.board || '-';
+  const company = row.company || '-';
+  const projectName = row.project_name || company;
+  const status = row.status || '-';
+  const fUpdateTime = row.f_update_time || '-';
+  const receiveDate = row.receive_date || '-';
+  const code = row.code || '-';
+  return `  [${idx + 1}] ${exchange} | ${board} | ${company} | 项目=${projectName} | 状态=${status} | 更新=${fUpdateTime} | 受理=${receiveDate} | 代码=${code}`;
+}
+
+function logFetchedDetails(logTag, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    console.log(`${logTag} 抓取明细：本次区间内未返回任何记录`);
+    return;
+  }
+
+  const exchangeCounter = {};
+  const exchangeCompanySet = {};
+  let minUpdate = '';
+  let maxUpdate = '';
+  list.forEach((r) => {
+    const ex = String(r.exchange || '-').trim() || '-';
+    exchangeCounter[ex] = (exchangeCounter[ex] || 0) + 1;
+    if (!exchangeCompanySet[ex]) exchangeCompanySet[ex] = new Set();
+    if (r.company) exchangeCompanySet[ex].add(String(r.company).trim());
+    const t = String(r.f_update_time || '').slice(0, 19);
+    if (t) {
+      if (!minUpdate || t < minUpdate) minUpdate = t;
+      if (!maxUpdate || t > maxUpdate) maxUpdate = t;
+    }
+  });
+
+  const exchangeSummary = Object.keys(exchangeCounter)
+    .sort()
+    .map((ex) => `${ex}=${exchangeCounter[ex]}(公司${exchangeCompanySet[ex]?.size || 0})`)
+    .join(' / ');
+  console.log(
+    `${logTag} 抓取明细汇总：总记录=${list.length}；按交易所=${exchangeSummary || '-'}；更新时间范围=${minUpdate || '-'} ~ ${maxUpdate || '-'}`
+  );
+
+  const sampleLimit = 20;
+  const sampleRows = list.slice(0, sampleLimit);
+  const lines = sampleRows.map((r, i) => stringifyFetchedSampleRow(r, i));
+  console.log(
+    `${logTag} 抓取明细样例（原始抓取，最多${sampleLimit}条）:\n${lines.join('\n')}`
+  );
+}
+
+/**
+ * 业务唯一键：交易所 + 公司全称 + 审核状态 + 上市板块。
+ * 同一键只保留「更新时间」最早的一条：库中已有且新数据时间不更早则跳过；新数据更早则整行更新为该快照。
+ */
 async function insertRows(rows, adminId) {
   let inserted = 0;
+  let updatedEarlier = 0;
   let skipped = 0;
+  const insertedByExchange = {};
+  let skippedNoCompany = 0;
+  let skippedNoDate = 0;
+  let skippedDupSameOrLater = 0;
+  /** @type {{ exchange: string, company: string, project_name: string, status: string, f_update_time: string }[]} */
+  const insertedSamples = [];
+
   for (const r of rows) {
-    const company = r.company;
+    const company = (r.company || '').trim();
     if (!company) {
+      skippedNoCompany += 1;
       skipped += 1;
       continue;
     }
     const dateStr = r.f_update_time ? String(r.f_update_time).slice(0, 10) : '';
     if (!dateStr) {
+      skippedNoDate += 1;
       skipped += 1;
       continue;
     }
-    const dup = await db.query(
-      `SELECT f_id FROM ipo_progress
-       WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND DATE(f_update_time) = ? LIMIT 1`,
-      [r.exchange, company, dateStr]
+    const exchange = String(r.exchange || '').trim();
+    const status = String(r.status || '-').trim() || '-';
+    const board = String(r.board || '').trim();
+    const newTs = parseRowDateTimeMs(r.f_update_time || `${dateStr} 00:00:00`);
+    if (newTs == null) {
+      skippedNoDate += 1;
+      skipped += 1;
+      continue;
+    }
+
+    const existing = await db.query(
+      `SELECT f_id, f_update_time FROM ipo_progress
+       WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND status = ? AND board = ?
+       ORDER BY f_update_time ASC LIMIT 1`,
+      [exchange, company, status, board]
     );
-    if (dup.length) {
-      skipped += 1;
+
+    if (existing.length) {
+      const oldTs = parseRowDateTimeMs(existing[0].f_update_time);
+      if (oldTs != null && newTs >= oldTs) {
+        skippedDupSameOrLater += 1;
+        skipped += 1;
+        continue;
+      }
+      await db.execute(
+        `UPDATE ipo_progress SET
+          f_create_date = ?, f_update_time = ?, code = ?, project_name = ?, status = ?, register_address = ?,
+          receive_date = ?, company = ?, board = ?, exchange = ?,
+          F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+         WHERE f_id = ? AND F_DeleteMark = 0`,
+        [
+          dateStr,
+          r.f_update_time || `${dateStr} 00:00:00`,
+          r.code || '',
+          r.project_name || company,
+          status,
+          r.register_address || '',
+          r.receive_date || null,
+          company,
+          board,
+          exchange,
+          adminId,
+          existing[0].f_id,
+        ]
+      );
+      updatedEarlier += 1;
+      const ex = exchange || '-';
+      insertedByExchange[ex] = (insertedByExchange[ex] || 0) + 1;
+      if (insertedSamples.length < 10) {
+        insertedSamples.push({
+          exchange: ex,
+          company,
+          project_name: (r.project_name || company).slice(0, 80),
+          status: status.slice(0, 40),
+          f_update_time: String(r.f_update_time || '').slice(0, 19),
+        });
+      }
       continue;
     }
+
     await db.execute(
       `INSERT INTO ipo_progress (
         f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
@@ -434,51 +564,102 @@ async function insertRows(rows, adminId) {
         r.f_update_time || `${dateStr} 00:00:00`,
         r.code || '',
         r.project_name || company,
-        r.status || '-',
+        status,
         r.register_address || '',
         r.receive_date || null,
         company,
-        r.board || '',
-        r.exchange,
+        board,
+        exchange,
         adminId,
         adminId,
       ]
     );
     inserted += 1;
+    const ex = exchange || '-';
+    insertedByExchange[ex] = (insertedByExchange[ex] || 0) + 1;
+    if (insertedSamples.length < 10) {
+      insertedSamples.push({
+        exchange: ex,
+        company,
+        project_name: (r.project_name || company).slice(0, 80),
+        status: status.slice(0, 40),
+        f_update_time: String(r.f_update_time || '').slice(0, 19),
+      });
+    }
   }
-  return { inserted, skipped };
+  return {
+    inserted,
+    updatedEarlier,
+    skipped,
+    insertedByExchange,
+    skipBreakdown: { skippedNoCompany, skippedNoDate, skippedDupSameOrLater },
+    insertedSamples,
+  };
 }
 
 /**
- * @returns {{ inserted: number, skipped: number, fetched: { sse: number, szse: number, bse: number } }}
+ * @returns {Promise<object>}
  */
-async function runListingExchangeCrawler({ startDate, endDate }) {
+async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市进展爬虫]' } = {}) {
   const adminRows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
   const adminId = adminRows[0]?.id;
-  if (!adminId) throw new Error('??? account=admin ??????????????');
+  if (!adminId) throw new Error('未找到 account=admin 用户，无法写入上市进展数据');
 
   const startYmd = String(startDate).trim().slice(0, 10);
   const endYmd = String(endDate).trim().slice(0, 10);
   const start = new Date(`${startYmd}T00:00:00+08:00`);
   const end = new Date(`${endYmd}T23:59:59+08:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) throw new Error('??????');
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    throw new Error('上市进展爬虫：日期区间无效');
+  }
+
+  console.log(`${logTag} 开始拉取 日期闭区间=${startYmd}~${endYmd}（按各所「更新日期」筛选落在此区间内）`);
 
   const settled = await Promise.allSettled([
     fetchSzseIpoInRange(startYmd, endYmd),
     fetchSseIpoInRange(startYmd, endYmd),
     fetchBseIpoInRange(startYmd, endYmd),
   ]);
-  const labels = ['\u6df1\u4ea4\u6240', '\u4e0a\u4ea4\u6240', '\u5317\u4ea4\u6240'];
+  const labels = ['深交所', '上交所', '北交所'];
   const parts = [[], [], []];
+  /** @type {{ exchange: string, message: string }[]} */
+  const exchangeErrors = [];
   settled.forEach((s, i) => {
     if (s.status === 'fulfilled') {
       parts[i] = s.value;
+      console.log(`${logTag} ${labels[i]} 接口返回 ${parts[i].length} 条（区间内）`);
     } else {
-      console.error(`[??????] ${labels[i]} ????:`, s.reason?.message || s.reason);
+      const msg = s.reason?.message || String(s.reason);
+      exchangeErrors.push({ exchange: labels[i], message: msg });
+      console.error(`${logTag} ${labels[i]} 拉取失败:`, msg);
     }
   });
   const merged = [...parts[0], ...parts[1], ...parts[2]];
+  console.log(`${logTag} 三家合并共 ${merged.length} 条，开始去重入库 ipo_progress`);
+  logFetchedDetails(logTag, merged);
+
   const result = await insertRows(merged, adminId);
+
+  const ins = result.insertedByExchange || {};
+  const sb = result.skipBreakdown || {};
+  const ue = result.updatedEarlier ?? 0;
+  console.log(
+    `${logTag} 入库完成 新增=${result.inserted} 更正为更早快照=${ue} 跳过=${result.skipped}（无公司名=${sb.skippedNoCompany ?? 0} 无更新日=${sb.skippedNoDate ?? 0} ` +
+      `同键已存在且更新时间不更早=${sb.skippedDupSameOrLater ?? 0}） ` +
+      `分所写入(新+更正): 深交所=${ins['深交所'] ?? 0} 上交所=${ins['上交所'] ?? 0} 北交所=${ins['北交所'] ?? 0}`
+  );
+  if (result.insertedSamples && result.insertedSamples.length > 0) {
+    const lines = result.insertedSamples.map(
+      (s, idx) =>
+        `  [${idx + 1}] ${s.exchange} | ${s.company} | ${s.project_name} | 状态=${s.status} | 更新=${s.f_update_time}`
+    );
+    console.log(`${logTag} 本次写入样例（新插入或更正，最多10条）:\n${lines.join('\n')}`);
+  } else if (result.inserted === 0 && ue === 0 && merged.length > 0) {
+    console.log(
+      `${logTag} 本次无写入（同交易所+公司+状态+板块已存在且本条更新时间未更早）`
+    );
+  }
+
   return {
     ...result,
     fetched: {
@@ -487,6 +668,7 @@ async function runListingExchangeCrawler({ startDate, endDate }) {
       bse: parts[2].length,
       total: merged.length,
     },
+    exchangeErrors,
   };
 }
 

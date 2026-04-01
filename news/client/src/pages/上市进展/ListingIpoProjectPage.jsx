@@ -773,9 +773,13 @@ export default function ListingIpoProjectPage() {
           <FormItem label="是否启用" field="is_enabled" triggerPropName="checked">
             <Switch checkedText="启用" uncheckedText="禁用" />
           </FormItem>
-          <FormItem label="定时 Cron（可选）" field="cron_expression">
+          <FormItem
+            label="底层项目同步 Cron（可选）"
+            field="cron_expression"
+            extra="独立定时任务：将外部业务库数据同步至本系统底层项目（ipo_project），与「系统设置 → 上市数据配置」中的交易所爬虫互不干扰，需分别配置执行时间。"
+          >
             <Input
-              placeholder="点击右侧按钮可视化配置 Cron 表达式"
+              placeholder="点击右侧按钮配置 Cron（Quartz）"
               readOnly
               addAfter={
                 <Button type="text" size="small" onClick={() => setShowCronModal(true)}>

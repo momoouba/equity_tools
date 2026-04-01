@@ -1,68 +1,9 @@
 const cron = require('node-cron');
 const db = require('../db');
+const { convertQuartzCronToNodeCron } = require('./cronQuartzToNode');
 
 // 存储所有定时任务的Map
 const scheduledTasks = new Map();
-
-/**
- * 将7字段的Quartz Cron表达式转换为6字段的node-cron表达式
- * Quartz格式: 秒 分 时 日 月 周 年
- * node-cron格式: 分 时 日 月 周
- * Quartz周: 1=Sunday, 2=Monday, ..., 7=Saturday
- * node-cron周: 0=Sunday, 1=Monday, ..., 6=Saturday
- */
-function convertQuartzCronToNodeCron(quartzCron) {
-  if (!quartzCron || typeof quartzCron !== 'string') {
-    return null;
-  }
-  
-  const parts = quartzCron.trim().split(/\s+/);
-  
-  // 如果是6字段，直接返回
-  if (parts.length === 6) {
-    return quartzCron.trim();
-  }
-  
-  // 如果是7字段，转换为6字段
-  if (parts.length === 7) {
-    // 提取: 秒 分 时 日 月 周 年 -> 分 时 日 月 周
-    const [second, minute, hour, day, month, weekday, year] = parts;
-    
-    // 转换日期字段：将 ? 转换为 *（node-cron不支持?）
-    let convertedDay = day === '?' ? '*' : day;
-    
-    // 转换星期字段：Quartz (1-7) -> node-cron (0-6)
-    // 同时将 ? 转换为 *（node-cron不支持?）
-    let convertedWeekday = weekday;
-    if (weekday === '?') {
-      convertedWeekday = '*';
-    } else if (weekday && weekday !== '*') {
-      // 处理逗号分隔的值，如 "2,3,4,5,6"
-      if (weekday.includes(',')) {
-        convertedWeekday = weekday.split(',').map(w => {
-          const wNum = parseInt(w.trim());
-          if (wNum >= 1 && wNum <= 7) {
-            // Quartz: 1=Sunday -> node-cron: 0=Sunday
-            // Quartz: 2=Monday -> node-cron: 1=Monday
-            return (wNum - 1).toString();
-          }
-          return w.trim();
-        }).join(',');
-      } else {
-        // 单个值
-        const wNum = parseInt(weekday);
-        if (wNum >= 1 && wNum <= 7) {
-          convertedWeekday = (wNum - 1).toString();
-        }
-      }
-    }
-    
-    // 构建6字段cron表达式: 分 时 日 月 周
-    return `${minute} ${hour} ${convertedDay} ${month} ${convertedWeekday}`;
-  }
-  
-  return null;
-}
 
 /**
  * 根据发送频率、时间和可选参数生成cron表达式

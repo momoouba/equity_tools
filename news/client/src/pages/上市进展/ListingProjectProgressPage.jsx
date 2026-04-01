@@ -26,6 +26,7 @@ import {
   getListingProjectProgressShareCurrent,
   createListingProjectProgressShare,
 } from '../../api/上市进展'
+import CronGenerator from '../../components/CronGenerator'
 
 const TabPane = Tabs.TabPane
 const FormItem = Form.Item
@@ -55,6 +56,7 @@ function ListingRecipientsTab() {
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState(null)
   const [form] = Form.useForm()
+  const [showCronModal, setShowCronModal] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -213,14 +215,36 @@ function ListingRecipientsTab() {
           <FormItem label="邮件主题" field="email_subject">
             <Input />
           </FormItem>
-          <FormItem label="Cron 表达式" field="cron_expression">
-            <Input placeholder="如 0 0 9 * * ? *" />
+          <FormItem
+            label="Cron 表达式"
+            field="cron_expression"
+            extra="与系统配置共用同一套可视化配置（Quartz 7 段）"
+          >
+            <Input
+              placeholder="点击右侧「配置」打开系统 Cron 配置器"
+              readOnly
+              addAfter={
+                <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
+                  配置
+                </Button>
+              }
+            />
           </FormItem>
           <FormItem label="启用" field="is_active" triggerPropName="checked">
             <Switch />
           </FormItem>
         </Form>
       </Modal>
+
+      <CronGenerator
+        visible={showCronModal}
+        value={form.getFieldValue('cron_expression')}
+        onChange={(cron) => {
+          form.setFieldValue('cron_expression', cron)
+          setShowCronModal(false)
+        }}
+        onCancel={() => setShowCronModal(false)}
+      />
     </div>
   )
 }

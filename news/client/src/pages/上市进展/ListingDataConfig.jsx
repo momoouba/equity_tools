@@ -14,6 +14,7 @@ import {
 import dayjs from 'dayjs'
 import axios from '../../utils/axios'
 import { postListingConfigSync, postListingConfigCopy } from '../../api/上市进展'
+import CronGenerator from '../../components/CronGenerator'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -41,6 +42,7 @@ export default function ListingDataConfig() {
   const [syncing, setSyncing] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
   const [logRecord, setLogRecord] = useState(null)
+  const [showCronModal, setShowCronModal] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -272,8 +274,16 @@ export default function ListingDataConfig() {
           <FormItem label="请求地址" field="request_url">
             <Input placeholder="可选，数据接口时填写" />
           </FormItem>
-          <FormItem label="Cron 表达式" field="cron_expression">
-            <Input placeholder="如 0 0 8 * * ? *" />
+          <FormItem label="Cron 表达式" field="cron_expression" extra="与新闻接口、收件管理等共用同一套可视化配置（Quartz 7 段），保存后由服务端转为 node-cron 调度">
+            <Input
+              placeholder="点击右侧「配置」打开系统 Cron 配置器"
+              readOnly
+              addAfter={
+                <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
+                  配置
+                </Button>
+              }
+            />
           </FormItem>
           <FormItem
             label="跳过节假日"
@@ -298,6 +308,20 @@ export default function ListingDataConfig() {
           </FormItem>
         </Form>
       </Modal>
+
+      <CronGenerator
+        visible={showCronModal}
+        value={form.getFieldValue('cron_expression')}
+        skipHoliday={form.getFieldValue('skip_holiday')}
+        onChange={(cron, isSkipHoliday) => {
+          form.setFieldValue('cron_expression', cron)
+          if (isSkipHoliday !== undefined) {
+            form.setFieldValue('skip_holiday', isSkipHoliday)
+          }
+          setShowCronModal(false)
+        }}
+        onCancel={() => setShowCronModal(false)}
+      />
 
       <Modal
         title="上市数据同步 — 时间范围"
