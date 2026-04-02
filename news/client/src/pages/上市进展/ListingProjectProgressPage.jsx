@@ -31,6 +31,8 @@ import CronGenerator from '../../components/CronGenerator'
 const TabPane = Tabs.TabPane
 const FormItem = Form.Item
 
+const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
+
 function readIsAdmin() {
   try {
     const u = JSON.parse(localStorage.getItem('user') || '{}')
@@ -255,7 +257,7 @@ export default function ListingProjectProgressPage() {
   const [data, setData] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(100)
+  const [pageSize, setPageSize] = useState(15)
   const [rangePreset, setRangePreset] = useState('all')
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState(null)
@@ -292,8 +294,10 @@ export default function ListingProjectProgressPage() {
       const params = { page, pageSize, rangePreset: rangePreset === 'all' ? '' : rangePreset }
       const res = await fetchIpoProjectProgressList(params)
       if (res.data?.success) {
-        setData(res.data.data?.list || [])
-        setTotal(res.data.data?.total || 0)
+        const d = res.data.data || {}
+        setData(d.list || [])
+        setTotal(d.total || 0)
+        if (d.pageSize != null) setPageSize(Number(d.pageSize))
       } else {
         Message.error(res.data?.message || '加载失败')
       }
@@ -607,13 +611,14 @@ export default function ListingProjectProgressPage() {
             scroll={{ x: isAdmin ? 2200 : 2000, y: tableScrollY }}
             pagination={{
               current: page,
-              pageSize,
+              pageSize: Number(pageSize),
+              defaultPageSize: 15,
               total,
               sizeCanChange: true,
               pageSizeChangeResetCurrent: true,
               showTotal: true,
               showJumper: true,
-              pageSizeOptions: [20, 50, 100, 200],
+              sizeOptions: LISTING_PAGE_SIZE_OPTIONS,
               onChange: (p, ps) => {
                 setPage(p)
                 if (ps !== pageSize) setPageSize(ps)

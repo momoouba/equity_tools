@@ -12,6 +12,8 @@ import {
 
 const FormItem = Form.Item
 
+const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
+
 function readIsAdmin() {
   try {
     const u = JSON.parse(localStorage.getItem('user') || '{}')
@@ -36,7 +38,7 @@ export default function ListingIpoProgressPage() {
   const [data, setData] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(100)
+  const [pageSize, setPageSize] = useState(15)
   const [keyword, setKeyword] = useState('')
   const [kwSearch, setKwSearch] = useState('')
   const isAdmin = useMemo(() => readIsAdmin(), [])
@@ -63,8 +65,10 @@ export default function ListingIpoProgressPage() {
     try {
       const res = await fetchIpoProgressList({ page, pageSize, keyword: kwSearch })
       if (res.data?.success) {
-        setData(res.data.data?.list || [])
-        setTotal(res.data.data?.total || 0)
+        const d = res.data.data || {}
+        setData(d.list || [])
+        setTotal(d.total || 0)
+        if (d.pageSize != null) setPageSize(Number(d.pageSize))
       } else {
         Message.error(res.data?.message || '加载失败')
       }
@@ -316,13 +320,14 @@ export default function ListingIpoProgressPage() {
         stripe
         pagination={{
           current: page,
-          pageSize,
+          pageSize: Number(pageSize),
+          defaultPageSize: 15,
           total,
           sizeCanChange: true,
           pageSizeChangeResetCurrent: true,
           showTotal: true,
           showJumper: true,
-          pageSizeOptions: [20, 50, 100, 200],
+          sizeOptions: LISTING_PAGE_SIZE_OPTIONS,
           onChange: (p, ps) => {
             setPage(p)
             if (ps !== pageSize) setPageSize(ps)

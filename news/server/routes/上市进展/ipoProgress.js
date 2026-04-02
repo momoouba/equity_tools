@@ -35,7 +35,7 @@ async function listIpoProgress(req, res) {
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 15));
 
     const { whereSql, params } = await buildIpoProgressWhere(req);
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_progress ${whereSql}`, params);

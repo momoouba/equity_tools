@@ -154,3 +154,19 @@ export function verifyListingProjectProgressSharePassword(token, body) {
 export function fetchListingProjectProgressShareData(token, params) {
   return axios.get(`/api/listing-share/data/${token}`, { params })
 }
+
+export function downloadListingProjectProgressShareExport(token, params) {
+  return axios.get(`/api/listing-share/project-progress-export/${token}`, { params, responseType: 'blob' })
+}
+
+export function fetchListingIpoProgressShareStats(token) {
+  return axios.get(`/api/listing-share/ipo-progress-stats/${token}`)
+}
+
+export function fetchListingIpoProgressShareData(token, params) {
+  return axios.get(`/api/listing-share/ipo-progress-data/${token}`, { params })
+}
+
+export function downloadListingIpoProgressShareExport(token, params) {
+  return axios.get(`/api/listing-share/ipo-progress-export/${token}`, { params, responseType: 'blob' })
+}
