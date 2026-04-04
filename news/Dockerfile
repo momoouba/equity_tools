@@ -28,8 +28,14 @@ FROM node:18-slim
 WORKDIR /app
 
 # 安装系统依赖（MySQL客户端、Python3、pip等）
-# 使用Debian包管理器
-RUN apt-get update && \
+# 使用Debian包管理器（配置国内镜像源加速）
+RUN { \
+        echo "deb http://mirrors.aliyun.com/debian bookworm main"; \
+        echo "deb http://mirrors.aliyun.com/debian bookworm-updates main"; \
+        echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main"; \
+        echo "deb http://mirrors.aliyun.com/debian bullseye main"; \
+    } > /etc/apt/sources.list \
+    && apt-get update && \
     apt-get install -y --no-install-recommends \
     default-mysql-client \
     python3 \
@@ -52,6 +58,12 @@ RUN apt-get update && \
     libpangocairo-1.0-0 \
     libgtk-3-0 \
     libxshmfence1 \
+    # iFinD SDK 需要的依赖
+    libstdc++6 \
+    zlib1g \
+    libidn11 \
+    libgssapi-krb5-2 \
+    libldap-2.5-0 \
     && rm -rf /var/lib/apt/lists/* \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
@@ -77,6 +89,16 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip install --upgrade pip \
     && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt \
     && playwright install chromium || echo "Playwright安装失败，将在运行时提示安装"
+
+# 安装同花顺 iFinD SDK（港股上市申请数据源）
+# 1. 复制整个 SDK 到临时目录
+COPY deploy/ths_sdk /opt/ths_sdk
+
+# 2. 安装 iFinD SDK（运行安装脚本，会在 site-packages 创建 iFinDPy.pth 指向 bin64）
+RUN python3 /opt/ths_sdk/bin64/installiFinDPy.py /opt/ths_sdk
+
+# 3. 验证安装
+RUN python3 -c "import iFinDPy; print('iFinDPy installed successfully')"
 
 # 复制后端源代码
 COPY server/ ./server/

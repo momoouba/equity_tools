@@ -42,6 +42,7 @@ tests/
 
 # 部署脚本（不需要在镜像中）
 deploy/
+!deploy/ths_sdk/
 *.sh
 
 # 数据库文件

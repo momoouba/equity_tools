@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="gbk"?>
+<hosts>
+	<host main="auth.10jqka.com.cn">
+		<backup_host>auth.0033.cn</backup_host>
+		<backup_ip channel="1">122.224.106.14</backup_ip>
+		<backup_ip channel="2">101.71.41.216</backup_ip>
+	</host>
+</hosts>
