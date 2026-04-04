@@ -83,13 +83,21 @@ RUN npm config set registry https://registry.npmmirror.com \
 
 # 复制Python依赖文件并安装（在创建非root用户之前，使用root安装）
 COPY server/utils/requirements.txt ./server/utils/
+
+# 配置pip使用国内镜像源
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip config set global.timeout 300 \
-    && pip config set global.retries 5 \
-    && pip install --upgrade pip \
-    && pip install --break-system-packages --no-cache-dir pandas \
-    && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt \
-    && playwright install chromium || echo "Playwright安装失败，将在运行时提示安装"
+    && pip config set global.retries 5
+
+# 升级pip并安装核心依赖（确保pandas先安装）
+RUN pip install --upgrade pip \
+    && pip install --break-system-packages --no-cache-dir pandas pymysql akshare requests beautifulsoup4 lxml Pillow
+
+# 安装其他Python依赖
+RUN pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt || echo "部分依赖安装失败，继续构建"
+
+# 安装Playwright（可选，失败不阻断构建）
+RUN playwright install chromium || echo "Playwright安装失败，将在运行时提示安装"
 
 # 安装同花顺 iFinD SDK（港股上市申请数据源）
 # 1. 复制整个 SDK 到临时目录
