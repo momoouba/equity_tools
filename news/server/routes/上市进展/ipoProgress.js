@@ -128,12 +128,12 @@ async function fetchIpoProgressStats(req, res) {
          SUM(CASE WHEN DATE(f_update_time) >= ? THEN 1 ELSE 0 END) AS year_count
        FROM ipo_progress
        WHERE F_DeleteMark = 0
-         AND exchange IN ('深交所', '上交所', '北交所')
+         AND exchange IN ('深交所', '上交所', '北交所', '港交所')
        GROUP BY exchange`,
       [yest, yearStart]
     );
 
-    const byExchange = { 深交所: { yesterday: 0, year: 0 }, 上交所: { yesterday: 0, year: 0 }, 北交所: { yesterday: 0, year: 0 } };
+    const byExchange = { 深交所: { yesterday: 0, year: 0 }, 上交所: { yesterday: 0, year: 0 }, 北交所: { yesterday: 0, year: 0 }, 港交所: { yesterday: 0, year: 0 } };
     rows.forEach((r) => {
       byExchange[r.exchange] = {
         yesterday: Number(r.yesterday_count || 0),

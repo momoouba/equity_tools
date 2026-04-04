@@ -126,6 +126,7 @@ async function executeListingSyncTask(configId) {
         startDate,
         endDate,
         logTag: crawlLogTag,
+        config: cfg,
       });
       await db.execute(
         `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
@@ -134,7 +135,7 @@ async function executeListingSyncTask(configId) {
       const f = result.fetched || {};
       const errs = result.exchangeErrors || [];
       console.log(
-        `[上市进展定时] 配置「${cfg.name || configId}」爬虫汇总 区间内抓取=${f.total ?? 0}（深交所${f.szse ?? 0}/上交所${f.sse ?? 0}/北交所${f.bse ?? 0}） ` +
+        `[上市进展定时] 配置「${cfg.name || configId}」爬虫汇总 区间内抓取=${f.total ?? 0}（深交所${f.szse ?? 0}/上交所${f.sse ?? 0}/北交所${f.bse ?? 0}/港交所${f.hkex ?? 0}） ` +
           `入库新增=${result.inserted} 更正更早=${result.updatedEarlier ?? 0} 跳过=${result.skipped} last_sync_range_end已更新=${endDate}`
       );
       if (errs.length) {

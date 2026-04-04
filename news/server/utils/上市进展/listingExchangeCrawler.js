@@ -4,6 +4,9 @@
 
 const axios = require('axios');
 const db = require('../../db');
+const { runHkexAkshareIpoSync } = require('./hkexAkshareIpoSync');
+const { runIfindIpoSync } = require('./ifindIpoSync');
+const { decryptText } = require('./listingSecret');
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -600,7 +603,7 @@ async function insertRows(rows, adminId) {
 /**
  * @returns {Promise<object>}
  */
-async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市进展爬虫]' } = {}) {
+async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市进展爬虫]', config = null } = {}) {
   const adminRows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
   const adminId = adminRows[0]?.id;
   if (!adminId) throw new Error('未找到 account=admin 用户，无法写入上市进展数据');
@@ -638,7 +641,46 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
   console.log(`${logTag} 三家合并共 ${merged.length} 条，开始去重入库 ipo_progress`);
   logFetchedDetails(logTag, merged);
 
-  const result = await insertRows(merged, adminId);
+  let ifindIpo = null;
+  let hkexIpo = null;
+  let mergedAll = merged;
+  const cfg = config || {};
+  const ifindEnabled = cfg.ifind_enabled === 1 || cfg.ifind_enabled === true;
+  if (ifindEnabled) {
+    const username = decryptText(cfg.ifind_username || '');
+    const password = decryptText(cfg.ifind_password || '');
+    const token = decryptText(cfg.ifind_token || '');
+    ifindIpo = runIfindIpoSync({
+      startDate: startYmd,
+      endDate: endYmd,
+      username,
+      password,
+      token,
+      drCode: cfg.ifind_dr_code || 'p04920',
+      queryParams: cfg.ifind_query_params || 'iv_sfss=0;iv_sqlx=0;iv_sqzt=0',
+      fields:
+        cfg.ifind_fields ||
+        'p04920_f001:Y,p04920_f002:Y,p04920_f003:Y,p04920_f004:Y,p04920_f005:Y,p04920_f006:Y,p04920_f037:Y,p04920_f007:Y,p04920_f008:Y,p04920_f021:Y,p04920_f022:Y',
+      format: cfg.ifind_format || 'json',
+      logTag: `${logTag}[港交所iFinD]`,
+    });
+    if (ifindIpo.ok && Array.isArray(ifindIpo.rows) && ifindIpo.rows.length > 0) {
+      mergedAll = [...merged, ...ifindIpo.rows];
+      console.log(`${logTag}[港交所iFinD] 合并后总记录=${mergedAll.length}`);
+    }
+  }
+
+  const fallbackToHkex = cfg.ifind_fallback_to_hkex === 1 || cfg.ifind_fallback_to_hkex === true;
+  const shouldRunHkexFallback = !ifindEnabled || !ifindIpo?.ok || (ifindIpo?.rows || []).length === 0 || fallbackToHkex;
+  if (shouldRunHkexFallback) {
+    hkexIpo = runHkexAkshareIpoSync({
+      startDate: startYmd,
+      endDate: endYmd,
+      logTag: `${logTag}[港交所]`,
+    });
+  }
+
+  const result = await insertRows(mergedAll, adminId);
 
   const ins = result.insertedByExchange || {};
   const sb = result.skipBreakdown || {};
@@ -666,9 +708,12 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
       szse: parts[0].length,
       sse: parts[1].length,
       bse: parts[2].length,
+      hkex: Array.isArray(ifindIpo?.rows) ? ifindIpo.rows.length : 0,
       total: merged.length,
     },
     exchangeErrors,
+    ifindIpo,
+    hkexIpo,
   };
 }
 

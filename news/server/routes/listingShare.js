@@ -378,7 +378,7 @@ router.get('/ipo-progress-stats/:token', async (req, res) => {
          SUM(CASE WHEN DATE(f_update_time) >= ? THEN 1 ELSE 0 END) AS year_count
        FROM ipo_progress
        WHERE F_DeleteMark = 0
-         AND exchange IN ('深交所', '上交所', '北交所')
+         AND exchange IN ('深交所', '上交所', '北交所', '港交所')
        GROUP BY exchange`,
       [yest, yearStart]
     );
@@ -387,6 +387,7 @@ router.get('/ipo-progress-stats/:token', async (req, res) => {
       深交所: { yesterday: 0, year: 0 },
       上交所: { yesterday: 0, year: 0 },
       北交所: { yesterday: 0, year: 0 },
+      港交所: { yesterday: 0, year: 0 },
     };
     rows.forEach((r) => {
       byExchange[r.exchange] = {

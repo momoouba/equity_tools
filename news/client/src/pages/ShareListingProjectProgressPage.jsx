@@ -43,6 +43,7 @@ function ShareIpoAuditTab({ token }) {
       深交所: { yesterday: 0, year: 0 },
       上交所: { yesterday: 0, year: 0 },
       北交所: { yesterday: 0, year: 0 },
+      港交所: { yesterday: 0, year: 0 },
     },
   })
   const [tableScrollY, setTableScrollY] = useState(520)
@@ -184,7 +185,7 @@ function ShareIpoAuditTab({ token }) {
           </Space>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-          {['深交所', '上交所', '北交所'].map((ex) => {
+          {['深交所', '上交所', '北交所', '港交所'].map((ex) => {
             const s = stats.byExchange?.[ex] || { yesterday: 0, year: 0 }
             return (
               <div

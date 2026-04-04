@@ -4246,6 +4246,15 @@ async function initializeTables(dbPool) {
         last_sync_time DATETIME NULL,
         last_sync_range_end DATE NULL COMMENT '上次成功同步的闭区间结束日(北京时间)，用于定时补抓',
         skip_holiday TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=节假日不执行定时任务，工作日补抓区间',
+        ifind_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=启用同花顺iFinD港股上市申请抓取',
+        ifind_username TEXT NULL COMMENT '同花顺iFinD用户名（服务端加密存储）',
+        ifind_password TEXT NULL COMMENT '同花顺iFinD密码（服务端加密存储）',
+        ifind_token TEXT NULL COMMENT '同花顺iFinD token（服务端加密存储，Linux环境用）',
+        ifind_dr_code VARCHAR(50) NOT NULL DEFAULT 'p04920' COMMENT 'THS_DR 数据集编码',
+        ifind_query_params VARCHAR(1000) NOT NULL DEFAULT 'iv_sfss=0;iv_sqlx=0;iv_sqzt=0' COMMENT 'THS_DR 入参',
+        ifind_fields TEXT NULL COMMENT 'THS_DR 字段选择',
+        ifind_format VARCHAR(20) NOT NULL DEFAULT 'json' COMMENT 'THS_DR 返回格式',
+        ifind_fallback_to_hkex TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'iFinD无数据/失败时是否回退港交所网页抓取',
         status VARCHAR(50) NULL,
         is_active TINYINT(1) NOT NULL DEFAULT 1,
         news_interface_type VARCHAR(50) NULL COMMENT '上海国际集团|企查查|其他',
@@ -4256,6 +4265,32 @@ async function initializeTables(dbPool) {
     console.log('✓ listing_data_config 表已就绪');
   } catch (err) {
     console.warn('创建 listing_data_config 表时出现警告:', err.message);
+  }
+
+  try {
+    const columnDefs = [
+      ["ifind_enabled", "ADD COLUMN ifind_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=启用同花顺iFinD港股上市申请抓取' AFTER skip_holiday"],
+      ["ifind_username", "ADD COLUMN ifind_username TEXT NULL COMMENT '同花顺iFinD用户名（服务端加密存储）' AFTER ifind_enabled"],
+      ["ifind_password", "ADD COLUMN ifind_password TEXT NULL COMMENT '同花顺iFinD密码（服务端加密存储）' AFTER ifind_username"],
+      ["ifind_token", "ADD COLUMN ifind_token TEXT NULL COMMENT '同花顺iFinD token（服务端加密存储，Linux环境用）' AFTER ifind_password"],
+      ["ifind_dr_code", "ADD COLUMN ifind_dr_code VARCHAR(50) NOT NULL DEFAULT 'p04920' COMMENT 'THS_DR 数据集编码' AFTER ifind_token"],
+      ["ifind_query_params", "ADD COLUMN ifind_query_params VARCHAR(1000) NOT NULL DEFAULT 'iv_sfss=0;iv_sqlx=0;iv_sqzt=0' COMMENT 'THS_DR 入参' AFTER ifind_dr_code"],
+      ["ifind_fields", "ADD COLUMN ifind_fields TEXT NULL COMMENT 'THS_DR 字段选择' AFTER ifind_query_params"],
+      ["ifind_format", "ADD COLUMN ifind_format VARCHAR(20) NOT NULL DEFAULT 'json' COMMENT 'THS_DR 返回格式' AFTER ifind_fields"],
+      ["ifind_fallback_to_hkex", "ADD COLUMN ifind_fallback_to_hkex TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'iFinD无数据/失败时是否回退港交所网页抓取' AFTER ifind_format"],
+    ];
+    for (const [name, ddl] of columnDefs) {
+      const [rows] = await dbPool.query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = '${name}'
+      `);
+      if (rows.length === 0) {
+        await dbPool.query(`ALTER TABLE listing_data_config ${ddl}`);
+        console.log(`✓ listing_data_config 已添加 ${name}`);
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 listing_data_config iFinD 字段时出现警告:', err.message);
   }
 
   try {

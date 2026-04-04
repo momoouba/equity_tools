@@ -6,3 +6,11 @@ playwright>=1.40.0
 selenium>=4.15.0
 chromedriver-autoinstaller>=0.6.0
 
+# 港交所 IPO（AKShare / CSV 入库 ipo_progress），安装示例：pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+akshare>=1.18.0
+pandas>=2.0.0
+pymysql>=1.1.0
+
+# 同花顺 iFinD SDK（THS_iFinD）通常由同花顺提供离线安装包，不通过 PyPI 安装；
+# Linux 生产环境请按同花顺官方文档安装后再启用上市进展 iFinD 同步。
+
