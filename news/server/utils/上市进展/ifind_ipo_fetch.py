@@ -163,20 +163,12 @@ def _call_ths_dr(username: str, password: str, token: str, dr_code: str, query_p
     # 方式2：Token（Linux 环境）
     if not login_ok and token and hasattr(ths, "THS_iFinDLogin"):
         try:
-            # 尝试各种 token 登录方式
-            attempts = [
-                (token,),
-                ("", token),
-            ]
-            for args in attempts:
-                try:
-                    ret = ths.THS_iFinDLogin(*args)
-                    txt = str(ret or "")
-                    if ret == 0 or "success" in txt.lower() or "登录成功" in txt:
-                        login_ok = True
-                        break
-                except Exception:
-                    pass
+            # Linux 版本的 iFinDPy 需要两个参数 (username, password)
+            # Token 登录时，username 传空字符串，password 传 token
+            ret = ths.THS_iFinDLogin("", token)
+            txt = str(ret or "")
+            if ret == 0 or "success" in txt.lower() or "登录成功" in txt:
+                login_ok = True
         except Exception as e:
             login_errors.append(f"Token登录: {e}")
 
