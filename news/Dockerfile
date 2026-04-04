@@ -87,6 +87,7 @@ RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip config set global.timeout 300 \
     && pip config set global.retries 5 \
     && pip install --upgrade pip \
+    && pip install --break-system-packages --no-cache-dir pandas \
     && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt \
     && playwright install chromium || echo "Playwright安装失败，将在运行时提示安装"
 
