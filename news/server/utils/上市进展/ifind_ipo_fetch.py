@@ -333,24 +333,28 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
         matched = False
         match_reason = ""
         update_ymd = ""
+        final_status = status  # 最终状态，可能根据匹配原因调整
 
-        # 1. 首次申请日期在区间内 → 新递表
+        # 1. 首次申请日期在区间内 → 新递表（状态改为"递交A1"）
         if first_apply_date and start_date <= first_apply_date <= end_date:
             matched = True
             match_reason = "首次申请"
             update_ymd = first_apply_date
+            final_status = "递交A1"  # 首次申请时状态应为"递交A1"
 
         # 2. 通过聆讯日期在区间内 → 通过聆讯
         if not matched and hear_date and start_date <= hear_date <= end_date:
             matched = True
             match_reason = "通过聆讯"
             update_ymd = hear_date
+            final_status = "通过聆讯"
 
         # 3. 上市日期在区间内 → 上市
         if not matched and list_date and start_date <= list_date <= end_date:
             matched = True
             match_reason = "上市"
             update_ymd = list_date
+            final_status = "上市"
 
         # 4. 申请状态更新日期在区间内 + 状态是终止类 → 状态变更
         if not matched and status_upd_date and start_date <= status_upd_date <= end_date:
@@ -358,6 +362,7 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
                 matched = True
                 match_reason = "状态变更"
                 update_ymd = status_upd_date
+                # 保持原始终止状态
 
         if not matched:
             continue
@@ -368,7 +373,7 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
                 "board": board,
                 "company": company,
                 "project_name": short or company,
-                "status": status,
+                "status": final_status,
                 "register_address": "",
                 "code": code,
                 "receive_date": receive_date or None,
