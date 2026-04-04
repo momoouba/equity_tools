@@ -81,7 +81,7 @@ RUN npm config set registry https://registry.npmmirror.com \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制Python依赖文件并安装
+# 复制Python依赖文件并安装（在创建非root用户之前，使用root安装）
 COPY server/utils/requirements.txt ./server/utils/
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip config set global.timeout 300 \
@@ -114,7 +114,7 @@ COPY --from=frontend-builder /app/client/dist ./client/dist
 # 创建必要的目录
 RUN mkdir -p uploads logs
 
-# 创建非root用户
+# 创建非root用户（在Python依赖安装之后）
 RUN groupadd -r nodejs && \
     useradd -r -g nodejs nodejs && \
     chown -R nodejs:nodejs /app
