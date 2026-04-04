@@ -116,17 +116,118 @@ def _to_frame(result: Any) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _get_access_token_via_http(refresh_token: str) -> str:
+    """
+    通过 HTTP API 获取 access_token（Linux 环境使用）
+    参考: https://quantapi.51ifind.com/gwstatic/static/ds_web/quantapi-web/example.html
+    """
+    import urllib.request
+    import urllib.error
+    
+    url = "https://quantapi.51ifind.com/api/v1/get_access_token"
+    headers = {
+        "Content-Type": "application/json",
+        "refresh_token": refresh_token
+    }
+    
+    try:
+        req = urllib.request.Request(url, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            if 'data' in data and 'access_token' in data['data']:
+                return data['data']['access_token']
+            else:
+                raise RuntimeError(f"获取 access_token 失败: {data}")
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTP 错误 {e.code}: {e.reason}")
+    except Exception as e:
+        raise RuntimeError(f"请求 access_token 失败: {e}")
+
+
+def _call_ths_dr_http_api(access_token: str, dr_code: str, query_params: str, fields: str) -> pd.DataFrame:
+    """
+    使用 HTTP API 调用 THS_DR（Linux 环境）
+    """
+    import urllib.request
+    import urllib.error
+    
+    url = "https://quantapi.51ifind.com/api/v1/data_pool"
+    headers = {
+        "Content-Type": "application/json",
+        "access_token": access_token
+    }
+    
+    # 构建请求参数
+    # 将 fields 从 "p04920_f001:Y,p04920_f002:Y" 格式转换为列表
+    output_fields = [f.strip() for f in fields.split(',')]
+    
+    # 解析 query_params (如 "iv_sfss=0;iv_sqlx=0;iv_sqzt=0")
+    function_params = {}
+    for param in query_params.split(';'):
+        if '=' in param:
+            key, value = param.split('=', 1)
+            function_params[key.strip()] = value.strip()
+    
+    payload = {
+        "reportname": dr_code,
+        "functionpara": function_params,
+        "outputpara": ','.join(output_fields)
+    }
+    
+    try:
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=60) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            
+            # 解析返回的数据
+            if 'tables' in data and data['tables']:
+                t0 = data['tables'][0]
+                if 'table' in t0 and isinstance(t0['table'], dict):
+                    return pd.DataFrame(t0['table'])
+            return pd.DataFrame()
+    except Exception as e:
+        raise RuntimeError(f"HTTP API 调用失败: {e}")
+
+
 def _call_ths_dr(username: str, password: str, token: str, dr_code: str, query_params: str, fields: str, fmt: str) -> pd.DataFrame:
     """
     调用同花顺 iFinD 数据接口。
     支持两种 SDK 和两种认证方式：
     1. THS_iFinD（新版）
     2. iFinDPy（旧版，常见于 THSDataInterface_Windows）
+    3. HTTP API（Linux 环境，使用 refresh_token 获取 access_token）
     
     认证方式：
-    - Windows：用户名 + 密码
-    - Linux：Token
+    - Windows：用户名 + 密码（本地 SDK）
+    - Linux：refresh_token -> HTTP API 获取 access_token
     """
+    
+    # 检测是否在 Linux 环境（有 token 但没有本地 SDK登录成功）
+    is_linux = False
+    try:
+        import platform
+        is_linux = platform.system() == "Linux"
+    except:
+        pass
+       
+    # 如果是 Linux 环境且有 token，使用 HTTP API
+    if is_linux and token:
+        try:
+            # 使用 refresh_token 获取 access_token
+            access_token = _get_access_token_via_http(token)
+            print(f"[iFinD] HTTP API 获取 access_token 成功", file=sys.stderr)
+            return _call_ths_dr_http_api(access_token, dr_code, query_params, fields)
+        except Exception as e:
+            print(f"[iFinD] HTTP API 方式失败: {e}，尝试本地 SDK...", file=sys.stderr)
+            # 如果 HTTP API 失败，继续尝试本地 SDK
+            pass
+    
+    # 本地 SDK 方式（Windows 环境）
     ths = None
     module_name = ""
 
@@ -160,11 +261,9 @@ def _call_ths_dr(username: str, password: str, token: str, dr_code: str, query_p
         except Exception as e:
             login_errors.append(f"用户名密码登录: {e}")
 
-    # 方式2：Token（Linux 环境）
+    # 方式2：Token（Linux 本地 SDK 环境 - 通常不会走到这里）
     if not login_ok and token and hasattr(ths, "THS_iFinDLogin"):
         try:
-            # Linux 版本的 iFinDPy 需要两个参数 (username, password)
-            # Token 登录时，username 传空字符串，password 传 token
             ret = ths.THS_iFinDLogin("", token)
             txt = str(ret or "")
             if ret == 0 or "success" in txt.lower() or "登录成功" in txt:
