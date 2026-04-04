@@ -9,3 +9,9 @@ dist/
 build/
 *.log
 
+# 同花顺 iFinD SDK (需要从官网单独下载)
+THSDataInterface_*/
+deploy/ths_sdk/
+*.tar
+*.zip
+
