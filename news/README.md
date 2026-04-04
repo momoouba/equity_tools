@@ -82,6 +82,9 @@
   - 安装并确保 MySQL 服务已启动
   - 创建数据库用户并记录主机、端口、用户名、密码
   - 首次运行前创建 `.env` 文件写入数据库配置（示例见 `.env.example`）
+- **Python 3.8+** (可选，用于 iFinD 数据接口)
+  - 如需使用同花顺 iFinD 港交所数据同步功能，需要安装 Python
+  - 详见 [iFinD 集成说明](./iFinD集成说明.md)
 
 ## 安装和运行
 
@@ -148,6 +151,40 @@ npm run dev
 系统默认使用 **MySQL**，首次运行会自动创建数据库及表结构，并插入默认的应用与会员等级数据。请确保 `.env` 中的数据库账户拥有创建数据库与建表权限。
 
 详细运行说明请查看 `运行指南.md` 文件。
+
+## 同花顺 iFinD 集成（可选）
+
+系统支持通过同花顺 iFinD 数据接口获取港交所 IPO 上市申请数据。
+
+### 快速开始
+
+1. **安装 iFinD SDK**
+   ```powershell
+   # Windows 环境
+   .\scripts\install-ifind-sdk.ps1
+   ```
+
+2. **获取 refresh_token**
+   - 打开同花顺 iFinD 金融数据终端
+   - 登录账号 → 「超级命令」→「工具」→「refresh_token 查询」
+   - 复制 refresh_token
+
+3. **配置系统**
+   - 进入管理后台 → 系统设置 → 上市数据配置
+   - 开启「启用 iFinD 港交所」
+   - 填写用户名和 refresh_token
+   - 保存配置
+
+### 详细文档
+
+- [iFinD 集成详细说明](./iFinD集成说明.md)
+- [生产环境部署指南](./生产环境更新指南.md)
+
+### 注意事项
+
+- **Windows 环境**：使用本地 iFinDPy SDK，需要下载安装 SDK
+- **Linux/Docker 环境**：使用 HTTP API，SDK 已在 Dockerfile 中自动安装
+- SDK 文件较大（约 2-3GB），不包含在代码仓库中，需要单独下载
 
 ## 项目结构
 
