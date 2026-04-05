@@ -133,9 +133,13 @@ def _get_access_token_via_http(refresh_token: str) -> str:
     try:
         req = urllib.request.Request(url, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=30) as response:
-            data = json.loads(response.read().decode('utf-8'))
+            raw_data = response.read().decode('utf-8')
+            print(f"[DEBUG] Token API 响应: {raw_data[:200]}...", file=sys.stderr)
+            data = json.loads(raw_data)
             if 'data' in data and 'access_token' in data['data']:
-                return data['data']['access_token']
+                token = data['data']['access_token']
+                print(f"[DEBUG] 获取 access_token 成功: {token[:20]}...", file=sys.stderr)
+                return token
             else:
                 raise RuntimeError(f"获取 access_token 失败: {data}")
     except urllib.error.HTTPError as e:
@@ -182,15 +186,24 @@ def _call_ths_dr_http_api(access_token: str, dr_code: str, query_params: str, fi
             method="POST"
         )
         with urllib.request.urlopen(req, timeout=60) as response:
-            data = json.loads(response.read().decode('utf-8'))
+            raw_data = response.read().decode('utf-8')
+            print(f"[DEBUG] HTTP API 原始响应: {raw_data[:500]}...", file=sys.stderr)
+            data = json.loads(raw_data)
             
             # 解析返回的数据
-            if 'tables' in data and data['tables']:
-                t0 = data['tables'][0]
-                if 'table' in t0 and isinstance(t0['table'], dict):
-                    return pd.DataFrame(t0['table'])
+            print(f"[DEBUG] 响应结构: {list(data.keys())}", file=sys.stderr)
+            if 'tables' in data:
+                print(f"[DEBUG] tables 数量: {len(data['tables'])}", file=sys.stderr)
+                if data['tables']:
+                    t0 = data['tables'][0]
+                    print(f"[DEBUG] 第一个 table 结构: {list(t0.keys())}", file=sys.stderr)
+                    if 'table' in t0:
+                        print(f"[DEBUG] table 数据类型: {type(t0['table'])}, 行数: {len(t0['table']) if isinstance(t0['table'], (list, dict)) else 'N/A'}", file=sys.stderr)
+                        if isinstance(t0['table'], dict):
+                            return pd.DataFrame(t0['table'])
             return pd.DataFrame()
     except Exception as e:
+        print(f"[DEBUG] HTTP API 异常: {e}", file=sys.stderr)
         raise RuntimeError(f"HTTP API 调用失败: {e}")
 
 
