@@ -305,6 +305,11 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
     if df.empty:
         return out
 
+    # 调试：打印数据框列名和前几条数据
+    print(f"[DEBUG] 数据框列名: {list(df.columns)}", file=sys.stderr)
+    print(f"[DEBUG] 数据框前3行:\n{df.head(3).to_string()}", file=sys.stderr)
+    print(f"[DEBUG] 筛选区间: {start_date} ~ {end_date}", file=sys.stderr)
+
     # 终止状态集合
     END_STATUSES = {"失效", "撤回", "被拒绝", "被发回", "拒绝", "发回"}
 
