@@ -20,6 +20,64 @@ function splitAccountIds(accountIdsStr) {
     .filter(id => id && id !== '');
 }
 
+/**
+ * 解析新闻关键词，兼容 JSON 数组、逗号/顿号分隔字符串、单个字符串。
+ * @param {any} rawKeywords
+ * @returns {string[]}
+ */
+function parseNewsKeywords(rawKeywords) {
+  if (!rawKeywords) return [];
+  if (Array.isArray(rawKeywords)) {
+    return rawKeywords.map(k => String(k || '').trim()).filter(Boolean);
+  }
+  if (typeof rawKeywords === 'string') {
+    const s = rawKeywords.trim();
+    if (!s) return [];
+    // 优先按 JSON 解析
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) {
+        return parsed.map(k => String(k || '').trim()).filter(Boolean);
+      }
+      if (typeof parsed === 'string' && parsed.trim()) {
+        return [parsed.trim()];
+      }
+    } catch (e) {
+      // 非 JSON，走分隔字符串兜底
+    }
+    // 兼容 "A,B"、"A，B"、"A、B"、"A;B"
+    return s
+      .split(/[,\uFF0C\u3001;；|]/)
+      .map(k => k.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+/**
+ * 判断是否为节假日类官方营销文案（兜底规则）
+ * 仅在 AI 标签缺失/异常时辅助过滤，避免节假日祝福/放假通知进入邮件。
+ * @param {object} news
+ * @returns {boolean}
+ */
+function isHolidayMarketingNews(news) {
+  const title = String(news?.title || '');
+  const content = String(news?.content || '');
+  const summary = String(news?.news_abstract || news?.summary || '');
+  const text = `${title} ${summary} ${content}`.toLowerCase();
+
+  const holidayKeywords = [
+    '春节', '元旦', '中秋', '国庆', '端午', '清明', '劳动节', '节日', '节假日', '假期'
+  ];
+  const marketingKeywords = [
+    '放假', '放假安排', '节日祝福', '祝大家', '温馨提示', '值班安排', '放假通知', 'happy new year'
+  ];
+
+  const hasHoliday = holidayKeywords.some(k => text.includes(k.toLowerCase()));
+  const hasMarketing = marketingKeywords.some(k => text.includes(k.toLowerCase()));
+  return hasHoliday && hasMarketing;
+}
+
 // 存储所有定时任务的Map
 const scheduledTasks = new Map();
 
@@ -1780,7 +1838,7 @@ function exportNewsToExcel(newsList) {
   // 准备Excel数据
   // 注意：对于没有企业名称的额外公众号新闻，显示公众号名称
   const excelData = newsList.map((news, index) => {
-    const keywords = news.keywords ? (typeof news.keywords === 'string' ? JSON.parse(news.keywords) : news.keywords) : [];
+    const keywords = parseNewsKeywords(news.keywords);
     const sentimentMap = {
       'positive': '正面',
       'negative': '负面',
@@ -1996,19 +2054,8 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         return false;
       }
       
-      // 解析keywords字段（可能是JSON字符串或数组）
-      let keywords = [];
-      if (news.keywords) {
-        try {
-          if (typeof news.keywords === 'string') {
-            keywords = JSON.parse(news.keywords);
-          } else if (Array.isArray(news.keywords)) {
-            keywords = news.keywords;
-          }
-        } catch (e) {
-          // 解析失败，忽略
-        }
-      }
+      // 解析 keywords（兼容 JSON/逗号分隔/单值）
+      const keywords = parseNewsKeywords(news.keywords);
       
       // 检查是否包含广告相关标签
       const hasAdvertisementTag = keywords.some(keyword => 
@@ -2018,6 +2065,13 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       // 如果包含广告标签，过滤掉（不包含在邮件正文中）
       if (hasAdvertisementTag) {
         console.log(`[邮件发送] 过滤广告新闻: ${news.title} (标签: ${keywords.join(', ')})`);
+        return false;
+      }
+
+      // 兜底：新榜新闻若命中节假日官方营销文案，也过滤掉（防止关键词字段异常导致漏拦截）
+      const isXinbang = news.APItype === '新榜' || news.APItype === '新榜接口' || !news.APItype;
+      if (isXinbang && isHolidayMarketingNews(news)) {
+        console.log(`[邮件发送] 过滤节假日营销新闻(兜底规则): ${news.title}`);
         return false;
       }
       
