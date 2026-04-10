@@ -6,11 +6,20 @@ const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
-const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient } = require('../utils/emailSender');
+const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient, getEmailConfigForRecipient } = require('../utils/emailSender');
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews, deduplicateNewsBySemanticSimilarity } = require('../utils/scheduledEmailTasks');
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
+
+/** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
+async function getNewsSentimentAppId() {
+  const rows = await db.query(
+    `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+    ['新闻舆情']
+  );
+  return rows.length ? rows[0].id : null;
+}
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -3146,6 +3155,18 @@ router.get('/recipients', async (req, res) => {
     if (!userId) {
       return res.status(401).json({ success: false, message: '未登录' });
     }
+
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId) {
+      return res.json({
+        success: true,
+        data: [],
+        total: 0,
+        page: parseInt(req.query.page, 10) || 1,
+        pageSize: parseInt(req.query.pageSize, 10) || 10,
+        message: '未找到「新闻舆情」应用，收件列表为空'
+      });
+    }
     
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
@@ -3156,37 +3177,37 @@ router.get('/recipients', async (req, res) => {
     if (userRole === 'admin') {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
-        SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
+        SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
         LEFT JOIN users u2 ON rm.deleted_by = u2.id
-        WHERE rm.is_deleted = 0
+        WHERE rm.is_deleted = 0 AND rm.app_id = ?
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE is_deleted = 0';
-      queryParams = [pageSize, offset];
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE is_deleted = 0 AND app_id = ?';
+      queryParams = [newsAppId, pageSize, offset];
     } else {
       // 用户只查看自己的（排除已删除的记录）
       query = `
-        SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
+        SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
-        WHERE rm.user_id = ? AND rm.is_deleted = 0
+        WHERE rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND is_deleted = 0';
-      queryParams = [userId, pageSize, offset];
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND is_deleted = 0 AND app_id = ?';
+      queryParams = [userId, newsAppId, pageSize, offset];
     }
 
     // 获取总数
     const totalResult = userRole === 'admin' 
-      ? await db.query(countQuery)
-      : await db.query(countQuery, [userId]);
+      ? await db.query(countQuery, [newsAppId])
+      : await db.query(countQuery, [userId, newsAppId]);
     const total = totalResult[0]?.total || 0;
 
     // 获取分页数据
@@ -3239,30 +3260,35 @@ router.get('/recipients/:id', async (req, res) => {
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
 
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId) {
+      return res.status(404).json({ success: false, message: '记录不存在' });
+    }
+
     let query;
     if (userRole === 'admin') {
       query = `
-        SELECT rm.id, rm.user_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
+        SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
         LEFT JOIN users u2 ON rm.deleted_by = u2.id
-        WHERE rm.id = ? AND rm.is_deleted = 0
+        WHERE rm.id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
       `;
     } else {
       query = `
-        SELECT rm.id, rm.user_id, rm.recipient_email, rm.email_subject, 
+        SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
-        WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0
+        WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
       `;
     }
 
     const recipients = userRole === 'admin' 
-      ? await db.query(query, [id])
-      : await db.query(query, [id, userId]);
+      ? await db.query(query, [id, newsAppId])
+      : await db.query(query, [id, userId, newsAppId]);
 
     if (recipients.length > 0) {
       const recipient = recipients[0];
@@ -3607,6 +3633,11 @@ router.put('/recipients/:id', [
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
 
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId || String(existing[0].app_id) !== String(newsAppId)) {
+      return res.status(404).json({ success: false, message: '记录不存在或属于其他应用，请到对应模块管理' });
+    }
+
     // 非管理员只能修改自己的记录
     if (userRole !== 'admin' && existing[0].user_id !== userId) {
       return res.status(403).json({ success: false, message: '无权修改此记录' });
@@ -3794,6 +3825,11 @@ router.delete('/recipients/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
 
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId || String(existing[0].app_id) !== String(newsAppId)) {
+      return res.status(404).json({ success: false, message: '记录不存在或属于其他应用，请到对应模块管理' });
+    }
+
     // 非管理员只能删除自己的记录
     if (userRole !== 'admin' && existing[0].user_id !== userId) {
       return res.status(403).json({ success: false, message: '无权删除此记录' });
@@ -3850,6 +3886,11 @@ router.get('/recipients/:id/logs', async (req, res) => {
     const existing = await db.query('SELECT * FROM recipient_management WHERE id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在' });
+    }
+
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId || String(existing[0].app_id) !== String(newsAppId)) {
+      return res.status(404).json({ success: false, message: '记录不存在或属于其他应用' });
     }
 
     // 非管理员只能查看自己的记录日志
@@ -3923,6 +3964,14 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     // 非管理员只能发送自己的邮件
     if (userRole !== 'admin' && existing[0].user_id !== userId) {
       return res.status(403).json({ success: false, message: '无权发送此收件管理配置的邮件' });
+    }
+
+    const newsAppId = await getNewsSentimentAppId();
+    if (!newsAppId || String(existing[0].app_id) !== String(newsAppId)) {
+      return res.status(403).json({
+        success: false,
+        message: '该收件配置不属于「新闻舆情」应用，请从「上市进展」等对应模块操作'
+      });
     }
     
     console.log(`收到发送邮件请求，收件管理配置ID: ${id}`);
@@ -4260,22 +4309,13 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       newsList = finalFilteredNewsList;
     }
     
-    // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
-    const emailConfigs = await db.query(
-      `SELECT ec.*, a.app_name
-       FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
-       AND ec.is_active = 1
-       LIMIT 1`,
-      ['新闻舆情']
-    );
-    
-    if (emailConfigs.length === 0) {
-      return res.status(404).json({ success: false, message: '未找到"新闻舆情"应用的邮件配置' });
+    // 按收件所属应用解析邮件配置（与定时任务、群发逻辑一致，发件人显示名与对应应用配置一致）
+    let emailConfig;
+    try {
+      emailConfig = await getEmailConfigForRecipient(recipient);
+    } catch (cfgErr) {
+      return res.status(404).json({ success: false, message: cfgErr.message || '未找到邮件发送配置' });
     }
-    
-    const emailConfig = emailConfigs[0];
     
     // 发送邮件（包含Excel附件），即使没有新闻也发送提示邮件
     // 确保 newsList 是数组，避免 undefined 错误
