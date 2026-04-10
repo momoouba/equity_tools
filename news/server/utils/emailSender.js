@@ -722,6 +722,53 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
 }
 
 /**
+ * 按收件管理所属应用解析邮件配置（发件人名称、SMTP 等与「邮件发送配置」页一致）
+ * 优先 recipient.app_id → email_config.app_id；若无 app_id 或未配置则回退「新闻舆情」应用。
+ * @param {{ app_id?: string|null }} recipient - recipient_management 一行
+ * @returns {Promise<object>} email_config 行（含联表 app_name）
+ */
+async function getEmailConfigForRecipient(recipient) {
+  const appId = recipient && recipient.app_id ? String(recipient.app_id).trim() : '';
+  if (appId) {
+    const byApp = await db.query(
+      `SELECT ec.*, a.app_name
+       FROM email_config ec
+       LEFT JOIN applications a ON ec.app_id = a.id
+       WHERE ec.app_id = ?
+         AND ec.is_active = 1
+       LIMIT 1`,
+      [appId]
+    );
+    if (byApp.length > 0) {
+      console.log(
+        `[邮件发送] 使用收件所属应用邮件配置: app_id=${appId}, app_name=${byApp[0].app_name || '-'}, from_name=${byApp[0].from_name || '-'}`
+      );
+      return byApp[0];
+    }
+    console.warn(
+      `[邮件发送] 收件配置所属应用 app_id=${appId} 未找到启用的 email_config，将回退查找「新闻舆情」`
+    );
+  }
+
+  const fallback = await db.query(
+    `SELECT ec.*, a.app_name
+     FROM email_config ec
+     LEFT JOIN applications a ON ec.app_id = a.id
+     WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+      AND ec.is_active = 1
+     LIMIT 1`,
+    ['新闻舆情']
+  );
+  if (fallback.length === 0) {
+    throw new Error('未找到邮件发送配置（收件所属应用未配置 SMTP，且未找到默认「新闻舆情」邮件配置）');
+  }
+  console.log(
+    `[邮件发送] 使用默认「新闻舆情」邮件配置: from_name=${fallback[0].from_name || '-'}`
+  );
+  return fallback[0];
+}
+
+/**
  * 发送舆情信息邮件给指定的收件管理配置
  */
 async function sendNewsEmailToRecipient(recipientId) {
@@ -788,22 +835,7 @@ async function sendNewsEmailToRecipient(recipientId) {
       newsByEntityTypeAndEnterprise[entityType][enterpriseName].push(news);
     }
 
-    // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
-    const emailConfigs = await db.query(
-      `SELECT ec.*, a.app_name
-       FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
-       AND ec.is_active = 1
-       LIMIT 1`,
-      ['新闻舆情']
-    );
-    
-    if (emailConfigs.length === 0) {
-      throw new Error('未找到"新闻舆情"应用的邮件配置');
-    }
-    
-    const emailConfig = emailConfigs[0];
+    const emailConfig = await getEmailConfigForRecipient(recipient);
     
     // 发送邮件（传递按企业类型和企业分组的嵌套结构）
     const result = await sendNewsEmail(recipient, emailConfig, newsByEntityTypeAndEnterprise);
@@ -859,32 +891,31 @@ async function sendNewsEmailsToAllRecipients() {
       console.log('今天没有获取到相关企业的新闻，将发送空数据通知邮件');
     }
     
-    // 获取邮件配置（使用第一个可用的配置，或者根据应用ID匹配）
-    // 这里假设使用"新闻舆情"应用的邮件配置
-    const emailConfigs = await db.query(
-      `SELECT ec.*, a.app_name
-       FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
-       AND ec.is_active = 1
-       LIMIT 1`,
-      ['新闻舆情']
-    );
-    
-    if (emailConfigs.length === 0) {
-      throw new Error('未找到"新闻舆情"应用的邮件配置');
-    }
-    
-    const emailConfig = emailConfigs[0];
-    console.log(`使用邮件配置: ${emailConfig.app_name} (${emailConfig.from_email})`);
-    
     let successCount = 0;
     let errorCount = 0;
     const results = [];
-    
+
+    const listingAppRows = await db.query(
+      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      ['上市进展']
+    );
+    const listingAppId = listingAppRows.length ? listingAppRows[0].id : null;
+
     // 为每个收件人发送邮件（根据各自的entity_type配置获取对应的新闻）
     for (const recipient of recipients) {
       try {
+        if (listingAppId && recipient.app_id === listingAppId) {
+          console.log(
+            `[邮件发送] 跳过收件配置 ${recipient.id}：所属应用为「上市进展」（由定时任务 executeEmailTask 单独处理）`
+          );
+          continue;
+        }
+
+        const emailConfig = await getEmailConfigForRecipient(recipient);
+        console.log(
+          `[邮件发送] 群发使用配置: app=${emailConfig.app_name || '-'}, from="${emailConfig.from_name || emailConfig.from_email}" <${emailConfig.from_email}>`
+        );
+
         // 获取该收件人可见的昨日舆情信息（根据entity_type过滤）
         const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
         
@@ -980,6 +1011,7 @@ function truncateContentForEmailLog(content, maxChars = 16000) {
 module.exports = {
   sendNewsEmailsToAllRecipients,
   sendNewsEmailToRecipient,
+  getEmailConfigForRecipient,
   getYesterdayNewsByEnterprise,
   generateEmailContent,
   generateEmailTextContent,

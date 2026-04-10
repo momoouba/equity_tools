@@ -1,6 +1,11 @@
 const cron = require('node-cron');
 const db = require('../db');
-const { sendNewsEmailToRecipient, getYesterdayNewsByEnterprise, truncateContentForEmailLog } = require('./emailSender');
+const {
+  sendNewsEmailToRecipient,
+  getYesterdayNewsByEnterprise,
+  truncateContentForEmailLog,
+  getEmailConfigForRecipient,
+} = require('./emailSender');
 const XLSX = require('xlsx');
 const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
 const { convertQuartzCronToNodeCron } = require('./cronQuartzToNode');
@@ -2671,22 +2676,8 @@ async function executeEmailTask(recipientId) {
       }
     }
     
-    // 获取邮件配置（使用"新闻舆情"应用的邮件配置）
-    const emailConfigs = await db.query(
-      `SELECT ec.*, a.app_name
-       FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
-       AND ec.is_active = 1
-       LIMIT 1`,
-      ['新闻舆情']
-    );
-    
-    if (emailConfigs.length === 0) {
-      throw new Error('未找到"新闻舆情"应用的邮件配置');
-    }
-    
-    const emailConfig = emailConfigs[0];
+    // 按收件所属应用加载邮件配置（与「邮件发送配置」页一致，发件人名称区分应用）
+    const emailConfig = await getEmailConfigForRecipient(recipient);
     
     // 过滤新闻：根据收件配置的企查查类别编码进行过滤
     logWithTimestamp(`[邮件发送] ========== AI重新分析后，重新应用企查查类别过滤 ==========`);
