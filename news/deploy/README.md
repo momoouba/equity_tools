@@ -321,6 +321,12 @@ tail -f /var/log/nginx/newsapp_error.log
 sudo journalctl -u newsapp -f
 ```
 
+## Python / 上市进展（辅导备案 Playwright）
+
+若使用 **Docker** 部署且需 **证监会辅导备案**（`eid.csrc.gov.cn`）按「备案时间」表头排序抓取，除 `requirements.txt` 中的 Python 包外，须在镜像或容器内执行 **`python3 -m playwright install chromium`**。Windows 本机开发与 PATH 说明见项目内：
+
+- **`news/上市进展/辅导备案与Playwright部署说明.md`**
+
 ## 🆘 故障排除
 
 ### 1. 应用无法启动

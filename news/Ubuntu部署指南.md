@@ -3,6 +3,7 @@
 ## 📋 目录
 - [系统要求](#系统要求)
 - [快速部署](#快速部署)
+- [上市进展与 Playwright 辅导备案](#上市进展与-playwright-辅导备案)
 - [配置说明](#配置说明)
 - [运维管理](#运维管理)
 - [故障排除](#故障排除)
@@ -256,6 +257,35 @@ docker compose logs mysql
 # 查看 Nginx 日志
 docker compose logs nginx
 ```
+
+## 上市进展与 Playwright 辅导备案
+
+**背景**：上市进展中的 **证监会辅导备案** 抓取（`server/utils/上市进展/guidance_progress_fetch.py`）在访问 **`https://eid.csrc.gov.cn/`** 时，默认通过 **Playwright** 模拟点击「备案时间」表头，使列表按备案时间 **降序**；未安装 Chromium 二进制时会 **自动回退** 为纯 HTTP（无点击排序）。
+
+**首次部署或更新 `server/utils/requirements.txt` 后**，在应用项目目录执行（与 `docker-compose.yml` 同级）：
+
+```bash
+cd /opt/newsapp/news
+
+# 安装浏览器（推荐用 python -m，避免 PATH 中无 playwright 命令）
+sudo docker compose exec -u root app python3 -m playwright install chromium
+```
+
+自检（可选）：
+
+```bash
+sudo docker compose exec app python3 -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    b.close()
+print('playwright chromium OK')
+"
+```
+
+**详细说明**（Windows 本机、环境变量、关闭浏览器模式等）：见仓库内文档  
+**`news/上市进展/辅导备案与Playwright部署说明.md`**。  
+排错与手动安装可参考 **`news/手动安装Playwright.md`**、**`news/验证依赖安装.md`**。
 
 ## ⚙️ 配置说明
 

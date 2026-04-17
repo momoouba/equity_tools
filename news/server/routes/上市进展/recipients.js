@@ -3,6 +3,22 @@ const { generateId } = require('../../utils/idGenerator');
 const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
 const { executeListingEmailDigest } = require('../../utils/上市进展/listingEmailDigest');
 
+function normalizeListingMailTypes(raw) {
+  const allowed = new Set(['listing_project_progress', 'listing_progress', 'listing_guidance', 'overseas_filing', 'new_share']);
+  let arr = raw;
+  if (arr == null || arr === '') return ['listing_project_progress', 'listing_progress'];
+  if (typeof arr === 'string') {
+    try {
+      arr = JSON.parse(arr);
+    } catch {
+      arr = [arr];
+    }
+  }
+  if (!Array.isArray(arr)) arr = [arr];
+  const out = Array.from(new Set(arr.map((v) => String(v || '').trim()).filter((v) => allowed.has(v))));
+  return out.length ? out : ['listing_project_progress', 'listing_progress'];
+}
+
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
 }
@@ -104,6 +120,7 @@ async function createRecipient(req, res) {
       email_subject,
       cron_expression,
       is_active,
+      listing_mail_types,
     } = req.body || {};
 
     if (!recipient_email || String(recipient_email).trim() === '') {
@@ -116,8 +133,8 @@ async function createRecipient(req, res) {
     await db.execute(
       `INSERT INTO recipient_management (
         id, user_id, app_id, recipient_email, email_subject, cron_expression,
-        send_frequency, send_time, is_active, qichacha_category_codes, entity_type
-      ) VALUES (?, ?, ?, ?, ?, ?, 'daily', NULL, ?, NULL, NULL)`,
+        send_frequency, send_time, is_active, qichacha_category_codes, entity_type, listing_mail_types
+      ) VALUES (?, ?, ?, ?, ?, ?, 'daily', NULL, ?, NULL, NULL, ?)`,
       [
         recipientId,
         user.id,
@@ -126,6 +143,7 @@ async function createRecipient(req, res) {
         email_subject || '上市进展通知',
         finalCron,
         is_active !== undefined ? (is_active ? 1 : 0) : 1,
+        JSON.stringify(normalizeListingMailTypes(listing_mail_types)),
       ]
     );
 
@@ -159,15 +177,19 @@ async function updateRecipient(req, res) {
     }
 
     const body = req.body || {};
+    const nextMailTypes = Object.prototype.hasOwnProperty.call(body, 'listing_mail_types')
+      ? normalizeListingMailTypes(body.listing_mail_types)
+      : normalizeListingMailTypes(existing[0].listing_mail_types);
     await db.execute(
       `UPDATE recipient_management SET
-        recipient_email = ?, email_subject = ?, cron_expression = ?, is_active = ?
+        recipient_email = ?, email_subject = ?, cron_expression = ?, is_active = ?, listing_mail_types = ?
        WHERE id = ?`,
       [
         body.recipient_email ?? existing[0].recipient_email,
         body.email_subject ?? existing[0].email_subject,
         body.cron_expression ?? existing[0].cron_expression,
         body.is_active !== undefined ? (body.is_active ? 1 : 0) : existing[0].is_active,
+        JSON.stringify(nextMailTypes),
         id,
       ]
     );
@@ -241,9 +263,9 @@ async function sendTest(req, res) {
     if (!to || !to.includes('@')) {
       return res.status(400).json({ success: false, message: '收件人邮箱无效' });
     }
-    // 与定时任务保持一致：发送“前一日底层项目上市进展 + 前一日上市进展”两层内容，主题使用收件配置
+    // 与定时任务保持一致：按收件配置所选发件内容发送对应摘要分段
     await executeListingEmailDigest(existing[0], { skipHolidayCheck: false });
-    return res.json({ success: true, message: '邮件已发送（前一日上市进展双层摘要）' });
+    return res.json({ success: true, message: '邮件已发送（按发件内容配置生成）' });
   } catch (e) {
     console.error('sendTest', e);
     return res.status(500).json({ success: false, message: e.message || '发送失败' });

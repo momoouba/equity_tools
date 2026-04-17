@@ -57,6 +57,65 @@ function formatPercentForEmail(val) {
   return `${(n * 100).toFixed(2)}%`;
 }
 
+function formatPercentNumberForEmail(val) {
+  if (val === null || val === undefined || val === '') return '-';
+  const n = Number(val);
+  if (!Number.isFinite(n)) return '-';
+  return `${n.toFixed(2)}%`;
+}
+
+const LISTING_CONTENT_TYPES = {
+  LISTING_PROJECT_PROGRESS: 'listing_project_progress',
+  LISTING_PROGRESS: 'listing_progress',
+  LISTING_GUIDANCE: 'listing_guidance',
+  OVERSEAS_FILING: 'overseas_filing',
+  NEW_SHARE: 'new_share',
+};
+
+function parseListingMailTypes(raw) {
+  if (!raw) return [LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS, LISTING_CONTENT_TYPES.LISTING_PROGRESS];
+  let arr = raw;
+  if (typeof arr === 'string') {
+    try {
+      arr = JSON.parse(arr);
+    } catch {
+      arr = [arr];
+    }
+  }
+  if (!Array.isArray(arr)) arr = [arr];
+  const set = new Set(
+    arr
+      .map((v) => String(v || '').trim())
+      .filter((v) =>
+        [
+          LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS,
+          LISTING_CONTENT_TYPES.LISTING_PROGRESS,
+          LISTING_CONTENT_TYPES.LISTING_GUIDANCE,
+          LISTING_CONTENT_TYPES.OVERSEAS_FILING,
+          LISTING_CONTENT_TYPES.NEW_SHARE,
+        ].includes(v)
+      )
+  );
+  if (!set.size) {
+    set.add(LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS);
+    set.add(LISTING_CONTENT_TYPES.LISTING_PROGRESS);
+  }
+  return Array.from(set);
+}
+
+function weekdayZh(dateObj) {
+  const names = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  return names[dateObj.getDay()] || '';
+}
+
+function weekRangeMonFri(today) {
+  const dow = today.getDay();
+  const mondayOffset = dow === 0 ? -6 : 1 - dow;
+  const mon = addDaysCalendar(today, mondayOffset);
+  const fri = addDaysCalendar(mon, 4);
+  return { mon: formatDateOnly(mon), fri: formatDateOnly(fri) };
+}
+
 /**
  * 收件管理定时任务：上市进展应用日报（无详情链接，两段结构）
  */
@@ -83,33 +142,127 @@ async function executeListingEmailDigest(recipient, options = {}) {
 
   const y = addDaysCalendar(createShanghaiDate(), -1);
   const reportDay = formatDateOnly(y);
+  const today = createShanghaiDate();
+  const todayYmd = formatDateOnly(today);
+  const selectedTypes = parseListingMailTypes(recipient.listing_mail_types);
+  const includeListingProjectProgress = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS);
+  const includeListingProgress = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_PROGRESS);
+  const includeListingGuidance = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_GUIDANCE);
+  const includeOverseasFiling = selectedTypes.includes(LISTING_CONTENT_TYPES.OVERSEAS_FILING);
+  const includeNewShare = selectedTypes.includes(LISTING_CONTENT_TYPES.NEW_SHARE);
 
-  const ipp = await db.query(
-    `SELECT fund, sub, project_name, company, status, exchange, board, f_update_time,
-            inv_amount, residual_amount, ratio, ct_amount, ct_residual
-     FROM ipo_project_progress
-     WHERE F_CreatorUserId = ?
-       AND DATE(f_update_time) = ?`,
-    [recipient.user_id, reportDay]
-  );
+  let ipp = [];
+  let ipoExchangeYesterday = [];
+  let ipoGuidanceYesterday = [];
+  let ipoOverseasMonday = [];
+  if (includeListingProjectProgress) {
+    ipp = await db.query(
+      `SELECT fund, sub, project_name, company, status, exchange, board, f_update_time,
+              inv_amount, residual_amount, ratio, ct_amount, ct_residual
+       FROM ipo_project_progress
+       WHERE F_CreatorUserId = ?
+         AND DATE(f_update_time) = ?`,
+      [recipient.user_id, reportDay]
+    );
+  }
+  if (includeListingProgress) {
+    ipoExchangeYesterday = await db.query(
+      `SELECT company, status, exchange, board, f_update_time, project_name
+       FROM ipo_progress
+       WHERE F_DeleteMark = 0
+         AND DATE(f_update_time) = ?
+         AND exchange IN ('北交所','深交所','上交所','香港联交所','港交所')
+       ORDER BY f_update_time DESC
+       LIMIT 300`,
+      [reportDay]
+    );
+  }
+  if (includeListingGuidance) {
+    ipoGuidanceYesterday = await db.query(
+      `SELECT company, status, register_address, f_update_time
+       FROM ipo_progress
+       WHERE F_DeleteMark = 0
+         AND DATE(f_update_time) = ?
+         AND exchange = '证监会辅导备案'
+       ORDER BY f_update_time DESC
+       LIMIT 200`,
+      [reportDay]
+    );
+  }
+  if (includeOverseasFiling) {
+    const isMonday = today.getDay() === 1;
+    if (isMonday) {
+      ipoOverseasMonday = await db.query(
+        `SELECT company, status, exchange, DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date
+         FROM ipo_progress
+         WHERE F_DeleteMark = 0
+           AND DATE(f_create_date) = ?
+           AND (exchange = '境外发行备案' OR board = '境外发行备案')
+         ORDER BY receive_date DESC, f_update_time DESC
+         LIMIT 200`,
+        [todayYmd]
+      );
+    }
+  }
 
-  const ipo = await db.query(
-    `SELECT company, status, exchange, board, f_update_time, project_name
-     FROM ipo_progress
-     WHERE F_DeleteMark = 0
-       AND DATE(f_update_time) = ?
-     ORDER BY f_update_time DESC
-     LIMIT 200`,
-    [reportDay]
-  );
+  let nsApplyRows = [];
+  let nsUpcomingListRows = [];
+  let nsFirstDayRows = [];
+  if (includeNewShare) {
+    const dow = today.getDay();
+    let applyFrom = null;
+    let applyTo = null;
+    if (dow === 1) {
+      const { mon, fri } = weekRangeMonFri(today);
+      applyFrom = mon;
+      applyTo = fri;
+    } else if (dow >= 2 && dow <= 4) {
+      applyFrom = todayYmd;
+      applyTo = todayYmd;
+    }
+    if (applyFrom && applyTo) {
+      nsApplyRows = await db.query(
+        `SELECT stock_code, stock_name, DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date, issue_weekday, exchange,
+                issue_price, limit_shares
+         FROM ipo_new_share
+         WHERE issue_date IS NOT NULL
+           AND DATE(issue_date) BETWEEN ? AND ?
+         ORDER BY issue_date ASC, stock_code ASC
+         LIMIT 300`,
+        [applyFrom, applyTo]
+      );
+    }
+    nsUpcomingListRows = await db.query(
+      `SELECT stock_code, stock_name, DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
+              DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date, exchange, issue_price
+       FROM ipo_new_share
+       WHERE public_date IS NOT NULL
+         AND DATE(public_date) > ?
+         AND DATE(public_date) <= DATE_ADD(?, INTERVAL 5 DAY)
+       ORDER BY public_date ASC, stock_code ASC
+       LIMIT 500`,
+      [todayYmd, todayYmd]
+    );
+    nsFirstDayRows = await db.query(
+      `SELECT stock_code, stock_name, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
+              exchange, issue_price, first_day_close, first_day_chg_pct
+       FROM ipo_new_share
+       WHERE public_date IS NOT NULL
+         AND DATE(public_date) = DATE_SUB(?, INTERVAL 1 DAY)
+       ORDER BY stock_code ASC
+       LIMIT 300`,
+      [todayYmd]
+    );
+  }
 
   const tableBaseStyle =
     'width:100%;border-collapse:collapse;font-size:13px;table-layout:auto;border:1px solid #e5e6eb;background:#fff;';
   const thStyle =
     'background:#f2f3f5;color:#1d2129;text-align:left;padding:10px 8px;border:1px solid #e5e6eb;font-weight:600;';
   const tdStyle = 'padding:9px 8px;border:1px solid #e5e6eb;color:#1d2129;';
+  const tdNumStyle = 'padding:9px 8px;border:1px solid #e5e6eb;color:#1d2129;text-align:right;';
 
-  const part1 =
+  const part1Project =
     ipp.length === 0
       ? '<p style="margin:0 0 12px;color:#4e5969;">（前一日无匹配的底层项目上市进展记录）</p>'
       : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
@@ -124,14 +277,14 @@ async function executeListingEmailDigest(recipient, options = {}) {
             .join('')}
         </table>`;
 
-  const part2 =
-    ipo.length === 0
-      ? '<p style="margin:0 0 12px;color:#4e5969;">（前一日无上市进展更新记录）</p>'
+  const part2Exchange =
+    ipoExchangeYesterday.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（前一日无交易所上市进展更新记录）</p>'
       : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
           <tr>
             <th style="${thStyle}">公司全称</th><th style="${thStyle}">项目简称</th><th style="${thStyle}">审核状态</th><th style="${thStyle}">交易所</th><th style="${thStyle}">板块</th>
           </tr>
-          ${ipo
+          ${ipoExchangeYesterday
             .map(
               (r, i) =>
                 `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.company)}</td><td style="${tdStyle}">${escapeHtml(r.project_name)}</td><td style="${tdStyle}">${escapeHtml(r.status)}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdStyle}">${escapeHtml(r.board)}</td></tr>`
@@ -139,13 +292,116 @@ async function executeListingEmailDigest(recipient, options = {}) {
             .join('')}
         </table>`;
 
+  const part2Guidance =
+    ipoGuidanceYesterday.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（前一日无证监会辅导备案更新记录）</p>'
+      : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
+          <tr>
+            <th style="${thStyle}">公司全称</th><th style="${thStyle}">审核状态</th>
+          </tr>
+          ${ipoGuidanceYesterday
+            .map(
+              (r, i) =>
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.company)}</td><td style="${tdStyle}">${escapeHtml(r.status)}</td></tr>`
+            )
+            .join('')}
+        </table>`;
+
+  const part2OverseasMonday =
+    ipoOverseasMonday.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（本周一无新增境外发行备案记录）</p>'
+      : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
+          <tr>
+            <th style="${thStyle}">公司全称</th><th style="${thStyle}">接收日期</th><th style="${thStyle}">审核状态</th><th style="${thStyle}">申请交易所</th>
+          </tr>
+          ${ipoOverseasMonday
+            .map(
+              (r, i) =>
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.company)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.receive_date))}</td><td style="${tdStyle}">${escapeHtml(r.status)}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td></tr>`
+            )
+            .join('')}
+        </table>`;
+
+  const newSharePart1 =
+    nsApplyRows.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（当前规则下无可发送的申购日历数据）</p>'
+      : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
+          <tr>
+            <th style="${thStyle}">股票代码</th><th style="${thStyle}">股票简称</th><th style="${thStyle}">申购日期</th><th style="${thStyle}">星期</th><th style="${thStyle}">交易所</th><th style="${thStyle}">发行价</th><th style="${thStyle}">申购上限</th>
+          </tr>
+          ${nsApplyRows
+            .map(
+              (r, i) =>
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.stock_code)}</td><td style="${tdStyle}">${escapeHtml(r.stock_name)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.issue_date))}</td><td style="${tdStyle}">${escapeHtml(r.issue_weekday || weekdayZh(new Date(`${formatDateYmdForEmail(r.issue_date)}T00:00:00+08:00`)) || '-')}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.issue_price))}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.limit_shares))}</td></tr>`
+            )
+            .join('')}
+        </table>`;
+
+  const newSharePart2 =
+    nsUpcomingListRows.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（无上市日期大于等于今日的数据）</p>'
+      : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
+          <tr>
+            <th style="${thStyle}">股票代码</th><th style="${thStyle}">股票简称</th><th style="${thStyle}">申购日期</th><th style="${thStyle}">上市日期</th><th style="${thStyle}">交易所</th><th style="${thStyle}">发行价</th>
+          </tr>
+          ${nsUpcomingListRows
+            .map(
+              (r, i) =>
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.stock_code)}</td><td style="${tdStyle}">${escapeHtml(r.stock_name)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.issue_date))}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.public_date))}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.issue_price))}</td></tr>`
+            )
+            .join('')}
+        </table>`;
+
+  const newSharePart3 =
+    nsFirstDayRows.length === 0
+      ? '<p style="margin:0 0 12px;color:#4e5969;">（昨日无上市首日表现数据）</p>'
+      : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
+          <tr>
+            <th style="${thStyle}">股票代码</th><th style="${thStyle}">股票简称</th><th style="${thStyle}">上市日期</th><th style="${thStyle}">交易所</th><th style="${thStyle}">发行价</th><th style="${thStyle}">上市首日收盘价</th><th style="${thStyle}">首日涨幅</th>
+          </tr>
+          ${nsFirstDayRows
+            .map(
+              (r, i) =>
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.stock_code)}</td><td style="${tdStyle}">${escapeHtml(r.stock_name)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.public_date))}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.issue_price))}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.first_day_close))}</td><td style="${tdNumStyle}">${escapeHtml(formatPercentNumberForEmail(r.first_day_chg_pct))}</td></tr>`
+            )
+            .join('')}
+        </table>`;
+
+  const sectionNo = ['一', '二', '三', '四', '五', '六', '七'];
+  let sectionIndex = 0;
+  const renderSectionTitle = (title, color = '#00b42a') =>
+    `<h3 style="margin:16px 0 10px;padding-left:10px;border-left:4px solid ${color};color:${color};">${sectionNo[sectionIndex++]}、${title}</h3>`;
+  let listingSectionHtml = '';
+  if (includeListingProjectProgress) {
+    listingSectionHtml += `${renderSectionTitle('底层项目上市进展（昨日更新）', '#1677ff')}${part1Project}`;
+  }
+  if (includeListingProgress) {
+    listingSectionHtml += `${renderSectionTitle('上市进展（各交易所 IPO 审核进度，昨日更新）', '#00b42a')}${part2Exchange}`;
+  }
+  if (includeListingGuidance) {
+    listingSectionHtml += `${renderSectionTitle('上市辅导（证监会辅导备案，昨日更新）', '#ff7d00')}${part2Guidance}`;
+  }
+  if (includeOverseasFiling && today.getDay() === 1) {
+    listingSectionHtml += `${renderSectionTitle('境外备案（境内企业境外上市备案，本周一新增）', '#f7ba1e')}${part2OverseasMonday}`;
+  }
+
+  const newShareSectionHtml = includeNewShare
+    ? `
+      ${renderSectionTitle('打新日历', '#f53f3f')}
+      <h4 style="margin:10px 0 8px;color:#1d2129;">打新申购（本周）</h4>
+      ${newSharePart1}
+      <h4 style="margin:10px 0 8px;color:#1d2129;">上市日历（未来5天上市股票）</h4>
+      ${newSharePart2}
+      <h4 style="margin:10px 0 8px;color:#1d2129;">上市首日表现（上市日期 = 昨日）</h4>
+      ${newSharePart3}
+    `
+    : '';
+
   const html = `
     <div style="font-family:Arial,'PingFang SC','Microsoft YaHei',sans-serif;line-height:1.6;color:#1d2129;background:#fff;">
       <h2 style="margin:0 0 12px 0;padding-bottom:10px;border-bottom:2px solid #4CAF50;">IPO 进展日报 - ${reportDay}</h2>
-      <h3 style="margin:14px 0 10px;padding-left:10px;border-left:4px solid #1677ff;color:#1677ff;">一、底层项目上市进展</h3>
-      ${part1}
-      <h3 style="margin:16px 0 10px;padding-left:10px;border-left:4px solid #00b42a;color:#00b42a;">二、上市进展</h3>
-      ${part2}
+      ${listingSectionHtml}
+      ${newShareSectionHtml}
     </div>
   `;
 

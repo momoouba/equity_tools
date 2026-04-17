@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { Table, Button, Message, Space, Input, Modal, Form } from '@arco-design/web-react'
+import { Table, Button, Message, Space, Input, Modal, Form, Select } from '@arco-design/web-react'
 import './ListingIpoProgressPage.css'
 import {
   fetchIpoProgressList,
@@ -11,6 +11,7 @@ import {
 } from '../../api/上市进展'
 
 const FormItem = Form.Item
+const Option = Select.Option
 
 const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
 
@@ -41,6 +42,10 @@ export default function ListingIpoProgressPage() {
   const [pageSize, setPageSize] = useState(15)
   const [keyword, setKeyword] = useState('')
   const [kwSearch, setKwSearch] = useState('')
+  const [sourceCategory, setSourceCategory] = useState('')
+  const [exchange, setExchange] = useState('')
+  const [board, setBoard] = useState('')
+  const [status, setStatus] = useState('')
   const isAdmin = useMemo(() => readIsAdmin(), [])
 
   const [editOpen, setEditOpen] = useState(false)
@@ -64,7 +69,15 @@ export default function ListingIpoProgressPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchIpoProgressList({ page, pageSize, keyword: kwSearch })
+      const res = await fetchIpoProgressList({
+        page,
+        pageSize,
+        keyword: kwSearch,
+        sourceCategory,
+        exchange,
+        board,
+        status,
+      })
       if (res.data?.success) {
         const d = res.data.data || {}
         setData(d.list || [])
@@ -78,7 +91,7 @@ export default function ListingIpoProgressPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, kwSearch])
+  }, [page, pageSize, kwSearch, sourceCategory, exchange, board, status])
 
   useEffect(() => {
     load()
@@ -102,7 +115,7 @@ export default function ListingIpoProgressPage() {
   useEffect(() => {
     const updateTableHeight = () => {
       // 仅让“表头以下数据区”滚动，顶部标题/筛选区保持不动
-      const h = Math.max(360, window.innerHeight - 280)
+      const h = Math.max(340, window.innerHeight - 300)
       setTableScrollY(h)
     }
     updateTableHeight()
@@ -112,7 +125,7 @@ export default function ListingIpoProgressPage() {
 
   const handleExport = async () => {
     try {
-      const res = await downloadIpoProgressExport({ keyword: kwSearch })
+      const res = await downloadIpoProgressExport({ keyword: kwSearch, sourceCategory, exchange, board, status })
       saveBlobAsCsv(res)
       Message.success('已开始下载')
     } catch (e) {
@@ -122,6 +135,10 @@ export default function ListingIpoProgressPage() {
 
   const handleReset = () => {
     setKeyword('')
+    setSourceCategory('')
+    setExchange('')
+    setBoard('')
+    setStatus('')
     setPage(1)
     if (kwSearch) {
       setKwSearch('')
@@ -207,12 +224,12 @@ export default function ListingIpoProgressPage() {
       width: 120,
       render: (v) => (v ? String(v).slice(0, 10) : '-'),
     },
-    { title: '项目简称', dataIndex: 'project_name', width: 140 },
+    { title: '项目简称', dataIndex: 'project_name', width: 140, render: (v, r) => v || r.company || '-' },
     { title: '公司全称', dataIndex: 'company', width: 220, ellipsis: true },
-    { title: '审核状态', dataIndex: 'status', width: 150 },
-    { title: '交易所', dataIndex: 'exchange', width: 100 },
-    { title: '板块', dataIndex: 'board', width: 100 },
-    { title: '注册地', dataIndex: 'register_address', width: 140, ellipsis: true },
+    { title: '审核状态', dataIndex: 'status', width: 150, render: (v) => v || '-' },
+    { title: '交易所', dataIndex: 'exchange', width: 140, render: (v) => v || '-' },
+    { title: '板块', dataIndex: 'board', width: 120, render: (v) => v || '-' },
+    { title: '注册地', dataIndex: 'register_address', width: 140, ellipsis: true, render: (v) => v || '-' },
   ]
 
   if (isAdmin) {
@@ -258,6 +275,47 @@ export default function ListingIpoProgressPage() {
               onPressEnter={() => {
                 setPage(1)
                 setKwSearch(keyword.trim())
+              }}
+            />
+            <Select
+              style={{ width: 200 }}
+              allowClear
+              placeholder="来源筛选"
+              value={sourceCategory || undefined}
+              onChange={(v) => {
+                setPage(1)
+                setSourceCategory(v || '')
+              }}
+            >
+              <Option value="exchange_ipo">交易所IPO</Option>
+              <Option value="guidance_record">证监会辅导备案</Option>
+              <Option value="overseas_filing">境外上市备案</Option>
+            </Select>
+            <Input
+              style={{ width: 140 }}
+              placeholder="交易所"
+              value={exchange}
+              onChange={(v) => {
+                setPage(1)
+                setExchange(v.trim())
+              }}
+            />
+            <Input
+              style={{ width: 140 }}
+              placeholder="板块"
+              value={board}
+              onChange={(v) => {
+                setPage(1)
+                setBoard(v.trim())
+              }}
+            />
+            <Input
+              style={{ width: 160 }}
+              placeholder="审核状态"
+              value={status}
+              onChange={(v) => {
+                setPage(1)
+                setStatus(v.trim())
               }}
             />
             <Button

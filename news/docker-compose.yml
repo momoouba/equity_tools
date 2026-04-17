@@ -1,3 +1,4 @@
+# 基础镜像使用阿里云公开镜像（国内拉取更快）；若镜像不可用可改回 mysql:8.0 / nginx:alpine
 services:
   # MySQL 数据库服务
   mysql:
@@ -46,6 +47,13 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-NewsApp@2024}
       DB_NAME: ${DB_NAME:-investment_tools}
       TZ: Asia/Shanghai
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # 代理配置 - 用于访问被墙的网站(证监会等)
+      # 格式: http://<Mac局域网IP>:<代理端口>
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql}
+      ALL_PROXY: ${ALL_PROXY:-}
     ports:
       - "${APP_PORT:-3001}:3001"
     volumes:

@@ -9,6 +9,7 @@ import {
   Form,
   Input,
   Switch,
+  Select,
 } from '@arco-design/web-react'
 import './ListingProjectProgressPage.css'
 import {
@@ -60,6 +61,38 @@ function ListingRecipientsTab() {
   const [form] = Form.useForm()
   const [showCronModal, setShowCronModal] = useState(false)
 
+  const parseListingMailTypes = (raw) => {
+    if (!raw) return ['listing_project_progress', 'listing_progress']
+    let arr = raw
+    if (typeof arr === 'string') {
+      try {
+        arr = JSON.parse(arr)
+      } catch {
+        arr = [arr]
+      }
+    }
+    if (!Array.isArray(arr)) arr = [arr]
+    const valid = Array.from(
+      new Set(
+        arr
+          .map((v) => String(v || '').trim())
+          .filter((v) =>
+            ['listing_project_progress', 'listing_progress', 'listing_guidance', 'overseas_filing', 'new_share'].includes(v)
+          )
+      )
+    )
+    return valid.length ? valid : ['listing_project_progress', 'listing_progress']
+  }
+
+  const listingMailTypeLabel = (v) => {
+    if (v === 'listing_project_progress') return '底层项目上市进展'
+    if (v === 'listing_progress') return '上市进展'
+    if (v === 'listing_guidance') return '上市辅导'
+    if (v === 'overseas_filing') return '境外备案'
+    if (v === 'new_share') return '打新日历'
+    return '上市进展'
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -88,6 +121,7 @@ function ListingRecipientsTab() {
       email_subject: '上市进展通知',
       cron_expression: '0 0 9 * * ? *',
       is_active: true,
+      listing_mail_types: ['listing_project_progress', 'listing_progress'],
     })
     setShowModal(true)
   }
@@ -99,6 +133,7 @@ function ListingRecipientsTab() {
       email_subject: record.email_subject || '',
       cron_expression: record.cron_expression || '',
       is_active: record.is_active === 1 || record.is_active === true,
+      listing_mail_types: parseListingMailTypes(record.listing_mail_types),
     })
     setShowModal(true)
   }
@@ -109,6 +144,10 @@ function ListingRecipientsTab() {
       const payload = {
         ...v,
         is_active: v.is_active,
+        listing_mail_types:
+          Array.isArray(v.listing_mail_types) && v.listing_mail_types.length
+            ? v.listing_mail_types
+            : ['listing_project_progress', 'listing_progress'],
       }
       if (editing) {
         await updateListingRecipient(editing.id, payload)
@@ -154,6 +193,12 @@ function ListingRecipientsTab() {
     { title: '用户名称', dataIndex: 'user_account', width: 120 },
     { title: '收件人邮箱', dataIndex: 'recipient_email', ellipsis: true },
     { title: '邮件主题', dataIndex: 'email_subject', width: 180, ellipsis: true },
+    {
+      title: '发件内容',
+      dataIndex: 'listing_mail_types',
+      width: 180,
+      render: (v) => parseListingMailTypes(v).map(listingMailTypeLabel).join('、'),
+    },
     { title: 'Cron 表达式', dataIndex: 'cron_expression', width: 140, ellipsis: true },
     {
       title: '状态',
@@ -216,6 +261,20 @@ function ListingRecipientsTab() {
           </FormItem>
           <FormItem label="邮件主题" field="email_subject">
             <Input />
+          </FormItem>
+          <FormItem
+            label="发件内容"
+            field="listing_mail_types"
+            rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
+            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周一展示）、打新日历。"
+          >
+            <Select mode="multiple" placeholder="请选择发件内容">
+              <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>
+              <Select.Option value="listing_progress">上市进展</Select.Option>
+              <Select.Option value="listing_guidance">上市辅导</Select.Option>
+              <Select.Option value="overseas_filing">境外备案</Select.Option>
+              <Select.Option value="new_share">打新日历</Select.Option>
+            </Select>
           </FormItem>
           <FormItem
             label="Cron 表达式"

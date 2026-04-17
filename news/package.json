@@ -32,13 +32,13 @@
     "multer": "^2.0.2",
     "mysql2": "^3.9.1",
     "node-cron": "^4.2.1",
-    "nodemailer": "^7.0.10",
+    "nodemailer": "^8.0.5",
     "pg": "^8.11.3",
     "sharp": "^0.33.5",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "baseline-browser-mapping": "^2.10.0",
+    "baseline-browser-mapping": "^2.10.19",
     "concurrently": "^8.2.2",
     "nodemon": "^3.0.1"
   }

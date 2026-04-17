@@ -42,8 +42,58 @@ async function listDataChangeLog(req, res) {
   }
 }
 
+/**
+ * GET /listing-sync-execution-log
+ * 查询上市进展同步执行日志
+ */
+async function listSyncExecutionLog(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
+    const offset = (page - 1) * pageSize;
+    const sourceType = String(req.query.sourceType || '').trim();
+    const status = String(req.query.status || '').trim();
+
+    const where = ['1=1'];
+    const params = [];
+    if (sourceType) {
+      where.push('source_type = ?');
+      params.push(sourceType);
+    }
+    if (status) {
+      where.push('status = ?');
+      params.push(status);
+    }
+    const whereSql = `WHERE ${where.join(' AND ')}`;
+    const countRows = await db.query(
+      `SELECT COUNT(*) AS total FROM listing_sync_execution_log ${whereSql}`,
+      params
+    );
+    const rows = await db.query(
+      `SELECT *
+       FROM listing_sync_execution_log
+       ${whereSql}
+       ORDER BY started_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+    return res.json({
+      success: true,
+      data: { list: rows, total: Number(countRows[0].total || 0), page, pageSize },
+    });
+  } catch (e) {
+    console.error('listSyncExecutionLog', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
 function registerListingLogsRoutes(router) {
   router.get('/listing-data-change-log', listDataChangeLog);
+  router.get('/listing-sync-execution-log', listSyncExecutionLog);
 }
 
 module.exports = { registerListingLogsRoutes };

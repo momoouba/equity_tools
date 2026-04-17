@@ -1,5 +1,19 @@
 # 手动安装Playwright
 
+## 上市进展 · 辅导备案（2026-04 起）
+
+`eid.csrc.gov.cn` 辅导公示列表的抓取在 `guidance_progress_fetch.py` 中默认使用 **Playwright** 模拟点击「备案时间」排序。部署时除安装 Python 包外，**必须**安装 Chromium 浏览器二进制，详见：
+
+- **`news/上市进展/辅导备案与Playwright部署说明.md`**
+
+**Windows 本机**：`pip install playwright` 后若直接运行 `playwright install chromium` 提示找不到命令，是因为 `Scripts` 未加入 PATH，请使用：
+
+```powershell
+python -m playwright install chromium
+```
+
+---
+
 ## 问题
 容器启动后，Playwright模块未安装。
 
@@ -28,11 +42,11 @@ sudo docker compose exec -u root app pip install -i https://pypi.tuna.tsinghua.e
 ### 步骤3：安装Chromium浏览器
 
 ```bash
-# 安装Chromium（需要root权限）
-sudo docker compose exec -u root app playwright install chromium
-
-# 或者使用python模块方式
+# 推荐：不依赖 PATH 中的 playwright 可执行文件（与 pip 使用同一 Python）
 sudo docker compose exec -u root app python3 -m playwright install chromium
+
+# 若已将 Python Scripts 加入 PATH，也可：
+# sudo docker compose exec -u root app playwright install chromium
 ```
 
 ### 步骤4：验证安装
@@ -70,8 +84,8 @@ sudo docker compose exec -u root app PLAYWRIGHT_BROWSERS_PATH=/app/.playwright p
 ### 问题3：权限问题
 
 ```bash
-# 确保使用root用户
-sudo docker compose exec -u root app sh -c "pip install playwright && playwright install chromium"
+# 确保使用 root，并用 python -m 安装浏览器（推荐）
+sudo docker compose exec -u root app sh -c "pip install playwright && python3 -m playwright install chromium"
 ```
 
 ## 永久解决方案：重新构建镜像

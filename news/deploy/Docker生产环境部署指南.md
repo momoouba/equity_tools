@@ -136,6 +136,31 @@ curl http://localhost/api/health
 docker compose logs app --tail 100
 ```
 
+#### 步骤8：Playwright Chromium（上市进展 · 辅导备案）
+
+若使用 **上市进展 · 证监会辅导备案** 同步（数据源为 `eid.csrc.gov.cn`），除镜像内 `pip install -r server/utils/requirements.txt` 已包含的 `playwright` 包外，须在容器内安装 **Chromium 浏览器二进制**，否则抓取会回退为纯 HTTP、**无法**模拟点击「备案时间」排序。
+
+在项目根目录（含 `docker-compose.yml`）执行：
+
+```bash
+# 推荐：不依赖 PATH 中的 playwright 可执行文件
+sudo docker compose exec -u root app python3 -m playwright install chromium
+```
+
+验证：
+
+```bash
+docker compose exec app python3 -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    b = p.chromium.launch(headless=True)
+    b.close()
+print('playwright chromium OK')
+"
+```
+
+完整参数说明见：**`news/上市进展/辅导备案与Playwright部署说明.md`**；容器内手动排错见 **`news/手动安装Playwright.md`**。
+
 ### 方法2：使用部署脚本
 
 如果服务器上有 `deploy/docker-deploy.sh` 脚本：
@@ -267,8 +292,9 @@ docker stats
 1. **数据备份**：部署前建议备份数据库和上传的文件
 2. **环境变量**：确保 `.env` 文件配置正确
 3. **端口冲突**：确保端口 3001、80、443 未被占用
-4. **磁盘空间**：确保有足够的磁盘空间用于构建镜像
+4. **磁盘空间**：确保有足够的磁盘空间用于构建镜像（**Playwright Chromium** 约数百 MB，见 **`news/上市进展/辅导备案与Playwright部署说明.md`**）
 5. **构建时间**：首次构建可能需要较长时间，请耐心等待
+6. **上市进展 · 辅导备案**：更新 Python 依赖或新装机后，勿忘在容器内执行 **`python3 -m playwright install chromium`**（见上文「步骤8」）
 
 ## 🔄 回滚操作
 

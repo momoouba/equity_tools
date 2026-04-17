@@ -469,11 +469,52 @@ function logFetchedDetails(logTag, rows) {
   );
 }
 
+const EXCHANGES_IPO_PROGRESS_DEDUPE = ['深交所', '上交所', '北交所', '港交所'];
+
+/**
+ * 同步入库前：按与 insertRows 一致的业务键合并历史重复行（仅四家交易所，不含证监会辅导备案）。
+ * 保留 f_update_time 最早的一条，时间相同则保留 f_id 最小的一条；其余 F_DeleteMark=1。
+ * @returns {Promise<{ softDeleted: number }>}
+ */
+async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市进展爬虫]') {
+  const now = new Date();
+  const placeholders = EXCHANGES_IPO_PROGRESS_DEDUPE.map(() => '?').join(',');
+  const sql = `
+    UPDATE ipo_progress p
+    INNER JOIN (
+      SELECT p1.f_id
+      FROM ipo_progress p1
+      INNER JOIN ipo_progress p2
+        ON p2.F_DeleteMark = 0
+        AND p1.F_DeleteMark = 0
+        AND p2.exchange = p1.exchange
+        AND p2.company = p1.company
+        AND p2.status = p1.status
+        AND p2.board = p1.board
+        AND p2.f_id <> p1.f_id
+        AND (
+          p2.f_update_time < p1.f_update_time
+          OR (p2.f_update_time = p1.f_update_time AND p2.f_id < p1.f_id)
+        )
+      WHERE p1.exchange IN (${placeholders})
+    ) d ON p.f_id = d.f_id
+    SET p.F_DeleteMark = 1, p.F_DeleteTime = ?, p.F_DeleteUserId = ?
+    WHERE p.F_DeleteMark = 0`;
+  const header = await db.execute(sql, [...EXCHANGES_IPO_PROGRESS_DEDUPE, now, adminId]);
+  const softDeleted = Number(header?.affectedRows || 0);
+  if (softDeleted > 0) {
+    console.log(`${logTag} 同步前已合并同键重复行，软删除=${softDeleted}（保留每键 f_update_time 最早、f_id 最小的一条）`);
+  }
+  return { softDeleted };
+}
+
 /**
  * 业务唯一键：交易所 + 公司全称 + 审核状态 + 上市板块。
  * 同一键只保留「更新时间」最早的一条：库中已有且新数据时间不更早则跳过；新数据更早则整行更新为该快照。
  */
-async function insertRows(rows, adminId) {
+async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
+  const { softDeleted: dedupeSoftDeleted } = await mergeDuplicateIpoProgressExchangeRows(adminId, logTag);
+
   let inserted = 0;
   let updatedEarlier = 0;
   let skipped = 0;
@@ -510,7 +551,7 @@ async function insertRows(rows, adminId) {
     const existing = await db.query(
       `SELECT f_id, f_update_time FROM ipo_progress
        WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND status = ? AND board = ?
-       ORDER BY f_update_time ASC LIMIT 1`,
+       ORDER BY f_update_time ASC, f_id ASC LIMIT 1`,
       [exchange, company, status, board]
     );
 
@@ -594,6 +635,7 @@ async function insertRows(rows, adminId) {
     inserted,
     updatedEarlier,
     skipped,
+    dedupeSoftDeleted,
     insertedByExchange,
     skipBreakdown: { skippedNoCompany, skippedNoDate, skippedDupSameOrLater },
     insertedSamples,
@@ -680,13 +722,14 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
     });
   }
 
-  const result = await insertRows(mergedAll, adminId);
+  const result = await insertRows(mergedAll, adminId, logTag);
 
   const ins = result.insertedByExchange || {};
   const sb = result.skipBreakdown || {};
   const ue = result.updatedEarlier ?? 0;
+  const dsd = result.dedupeSoftDeleted ?? 0;
   console.log(
-    `${logTag} 入库完成 新增=${result.inserted} 更正为更早快照=${ue} 跳过=${result.skipped}（无公司名=${sb.skippedNoCompany ?? 0} 无更新日=${sb.skippedNoDate ?? 0} ` +
+    `${logTag} 入库完成 同步前合并软删重复=${dsd} 新增=${result.inserted} 更正为更早快照=${ue} 跳过=${result.skipped}（无公司名=${sb.skippedNoCompany ?? 0} 无更新日=${sb.skippedNoDate ?? 0} ` +
       `同键已存在且更新时间不更早=${sb.skippedDupSameOrLater ?? 0}） ` +
       `分所写入(新+更正): 深交所=${ins['深交所'] ?? 0} 上交所=${ins['上交所'] ?? 0} 北交所=${ins['北交所'] ?? 0}`
   );

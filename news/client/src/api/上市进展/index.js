@@ -76,6 +76,10 @@ export function postListingConfigCopy(id) {
   return axios.post(`${base}/listing-config/${id}/copy`)
 }
 
+export function postListingConfigInitDefaults() {
+  return axios.post(`${base}/listing-config/init-defaults`)
+}
+
 export function fetchListingDataChangeLog(params) {
   return axios.get(`${base}/listing-data-change-log`, { params })
 }
@@ -90,6 +94,42 @@ export function downloadIpoProjectExport(params) {
 
 export function downloadIpoProgressExport(params) {
   return axios.get(`${base}/ipo-progress/export`, { params, responseType: 'blob' })
+}
+
+export function fetchNewShareList(params) {
+  return axios.get(`${base}/new-share`, { params })
+}
+
+export function postNewShareSync(body) {
+  return axios.post(`${base}/new-share/sync`, body, { timeout: 600000 })
+}
+
+export function downloadNewShareExport(params) {
+  return axios.get(`${base}/new-share/export`, { params, responseType: 'blob' })
+}
+
+export function fetchGuidanceProgressList(params) {
+  return axios.get(`${base}/guidance-progress`, { params })
+}
+
+export function postGuidanceProgressSync(body) {
+  return axios.post(`${base}/guidance-progress/sync`, body, { timeout: 600000 })
+}
+
+export function downloadGuidanceProgressExport(params) {
+  return axios.get(`${base}/guidance-progress/export`, { params, responseType: 'blob' })
+}
+
+export function fetchOverseasFilingList(params) {
+  return axios.get(`${base}/overseas-filing`, { params })
+}
+
+export function postOverseasFilingSync(body) {
+  return axios.post(`${base}/overseas-filing/sync`, body, { timeout: 600000 })
+}
+
+export function downloadOverseasFilingExport(params) {
+  return axios.get(`${base}/overseas-filing/export`, { params, responseType: 'blob' })
 }
 
 export function putIpoProjectProgress(fId, body) {

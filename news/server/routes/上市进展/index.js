@@ -7,6 +7,9 @@ const { registerListingConfigRoutes } = require('./listingConfig');
 const { registerRecipientRoutes } = require('./recipients');
 const { registerIpoProjectSyncRoutes } = require('./ipoProjectSync');
 const { registerListingLogsRoutes } = require('./listingLogs');
+const { registerNewShareRoutes } = require('./newShare');
+const { registerGuidanceProgressRoutes } = require('./guidanceProgress');
+const { registerOverseasFilingRoutes } = require('./overseasFiling');
 
 const router = express.Router();
 
@@ -18,5 +21,8 @@ registerIpoProjectProgressRoutes(router);
 registerMatchRoutes(router);
 registerListingConfigRoutes(router);
 registerRecipientRoutes(router);
+registerNewShareRoutes(router);
+registerGuidanceProgressRoutes(router);
+registerOverseasFilingRoutes(router);
 
 module.exports = router;

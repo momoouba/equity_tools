@@ -1495,6 +1495,7 @@ async function initializeTables(dbPool) {
       send_time TIME COMMENT '发送时间（格式：HH:mm:ss）',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       qichacha_category_codes JSON COMMENT '企查查新闻类别编码列表（JSON数组），为空时使用默认类别',
+      listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -1962,6 +1963,28 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 recipient_management 表 skip_holiday 字段时出现警告:', err.message);
+  }
+
+  // 迁移 recipient_management 表，添加 listing_mail_types 字段（上市进展发件内容多选）
+  try {
+    const [mailTypesCol] = await dbPool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'recipient_management'
+      AND COLUMN_NAME = 'listing_mail_types'
+    `);
+    if (mailTypesCol.length === 0) {
+      await dbPool.query(
+        "ALTER TABLE recipient_management ADD COLUMN listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share'"
+      );
+      await dbPool.query(
+        "UPDATE recipient_management SET listing_mail_types = JSON_ARRAY('listing_progress') WHERE listing_mail_types IS NULL"
+      );
+      console.log('✓ 已添加 recipient_management 表的 listing_mail_types 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management 表 listing_mail_types 字段时出现警告:', err.message);
   }
 
   // news_sync_execution_log 表：新闻同步执行日志
@@ -3465,6 +3488,44 @@ async function initializeTables(dbPool) {
       listing: { id: '2026033000000000001', name: '上市进展', created_at: '2026-03-30 18:00:00' },
     };
 
+    async function remapMembershipLevelReferences(fromLevelId, toLevelId) {
+      if (!fromLevelId || !toLevelId || fromLevelId === toLevelId) return;
+
+      await dbPool.execute('UPDATE users SET membership_level_id = ? WHERE membership_level_id = ?', [
+        toLevelId,
+        fromLevelId,
+      ]);
+
+      const [permUsers] = await dbPool.query(
+        `SELECT id, app_permissions FROM users
+         WHERE app_permissions IS NOT NULL
+           AND app_permissions <> ''`
+      );
+      for (const user of permUsers) {
+        let parsed;
+        try {
+          parsed = JSON.parse(user.app_permissions);
+        } catch (e) {
+          continue;
+        }
+        if (!Array.isArray(parsed)) continue;
+        let changed = false;
+        const nextPermissions = parsed.map((perm) => {
+          if (perm && perm.membership_level_id === fromLevelId) {
+            changed = true;
+            return { ...perm, membership_level_id: toLevelId };
+          }
+          return perm;
+        });
+        if (changed) {
+          await dbPool.execute('UPDATE users SET app_permissions = ? WHERE id = ?', [
+            JSON.stringify(nextPermissions),
+            user.id,
+          ]);
+        }
+      }
+    }
+
     async function remapAppRelations(fromId, toId) {
       if (!fromId || !toId || fromId === toId) return;
 
@@ -3490,8 +3551,27 @@ async function initializeTables(dbPool) {
         }
       }
 
-      // 其余按 app_id 直接迁移
-      await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+      // membership_levels：(app_id, level_name) 唯一；批量 UPDATE app_id 会与目标应用已有等级撞键
+      const [fromLevels] = await dbPool.query(
+        'SELECT id, level_name FROM membership_levels WHERE app_id = ?',
+        [fromId]
+      );
+      for (const lvl of fromLevels) {
+        const [dupLvl] = await dbPool.query(
+          `SELECT id FROM membership_levels
+           WHERE app_id = ? AND CAST(level_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
+                 CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+           LIMIT 1`,
+          [toId, lvl.level_name]
+        );
+        if (dupLvl.length > 0) {
+          await remapMembershipLevelReferences(lvl.id, dupLvl[0].id);
+          await dbPool.execute('DELETE FROM membership_levels WHERE id = ?', [lvl.id]);
+        } else {
+          await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE id = ?', [toId, lvl.id]);
+        }
+      }
+
       await dbPool.execute('UPDATE news_interface_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
       await dbPool.execute('UPDATE recipient_management SET app_id = ? WHERE app_id = ?', [toId, fromId]);
     }
@@ -3595,46 +3675,6 @@ async function initializeTables(dbPool) {
         );
       }
       console.log('  ✓ 新闻舆情会员等级模板已初始化');
-    }
-
-    async function remapMembershipLevelReferences(fromLevelId, toLevelId) {
-      if (!fromLevelId || !toLevelId || fromLevelId === toLevelId) return;
-
-      // 主会员等级外键可直接更新
-      await dbPool.execute('UPDATE users SET membership_level_id = ? WHERE membership_level_id = ?', [
-        toLevelId,
-        fromLevelId,
-      ]);
-
-      // app_permissions 是 JSON 文本，逐用户解析更新，避免字符串替换误伤
-      const [permUsers] = await dbPool.query(
-        `SELECT id, app_permissions FROM users
-         WHERE app_permissions IS NOT NULL
-           AND app_permissions <> ''`
-      );
-      for (const user of permUsers) {
-        let parsed;
-        try {
-          parsed = JSON.parse(user.app_permissions);
-        } catch (e) {
-          continue;
-        }
-        if (!Array.isArray(parsed)) continue;
-        let changed = false;
-        const nextPermissions = parsed.map((perm) => {
-          if (perm && perm.membership_level_id === fromLevelId) {
-            changed = true;
-            return { ...perm, membership_level_id: toLevelId };
-          }
-          return perm;
-        });
-        if (changed) {
-          await dbPool.execute('UPDATE users SET app_permissions = ? WHERE id = ?', [
-            JSON.stringify(nextPermissions),
-            user.id,
-          ]);
-        }
-      }
     }
 
     async function ensureAppMembershipLevels(appId, appName) {
@@ -4067,7 +4107,7 @@ async function initializeTables(dbPool) {
         receive_date DATE NULL COMMENT '受理日期',
         company TEXT NOT NULL COMMENT '公司全称',
         board VARCHAR(20) NOT NULL COMMENT '板块',
-        exchange VARCHAR(20) NOT NULL COMMENT '交易所',
+        exchange VARCHAR(100) NOT NULL DEFAULT '' COMMENT '交易所/拟上市地',
         F_CreatorUserId VARCHAR(19) NULL COMMENT '创建用户ID',
         F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID',
         F_LastModifyTime DATETIME NULL COMMENT '修改时间',
@@ -4145,6 +4185,143 @@ async function initializeTables(dbPool) {
     console.warn('创建 ipo_project_progress 表时出现警告:', err.message);
   }
 
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_new_share (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
+        stock_name VARCHAR(200) NOT NULL COMMENT '股票简称',
+        issue_date DATE NOT NULL COMMENT '申购日期（北京时间）',
+        issue_weekday VARCHAR(10) NULL COMMENT '星期几',
+        issue_price DECIMAL(12,4) NULL COMMENT '发行价',
+        offer_pe DECIMAL(12,4) NULL COMMENT '发行市盈率',
+        limit_shares DECIMAL(20,2) NULL COMMENT '申购上限',
+        total_issued_shares DECIMAL(20,2) NULL COMMENT '总发行数量（股）',
+        exchange VARCHAR(20) NOT NULL COMMENT '交易所',
+        public_date DATE NULL COMMENT '上市日期（北京时间）',
+        win_rate DECIMAL(12,6) NULL COMMENT '中签率（北交所为空）',
+        first_day_close DECIMAL(12,4) NULL COMMENT '上市首日收盘价',
+        first_day_chg_pct DECIMAL(10,4) NULL COMMENT '首日涨幅（数值，不含%）',
+        first_day_market_cap DECIMAL(20,2) NULL COMMENT '首日市值（首日收盘价×总发行数量）',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        UNIQUE KEY uk_ipo_new_share_code_exchange (stock_code, exchange),
+        KEY idx_ipo_new_share_issue_date (issue_date),
+        KEY idx_ipo_new_share_public_date (public_date)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='新股申购日历';
+    `);
+    console.log('✓ ipo_new_share 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_new_share 表时出现警告:', err.message);
+  }
+
+  // 历史库兼容：补齐 ipo_new_share 的首日表现字段
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN total_issued_shares DECIMAL(20,2) NULL COMMENT '总发行数量（股）' AFTER limit_shares`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 total_issued_shares 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN first_day_close DECIMAL(12,4) NULL COMMENT '上市首日收盘价' AFTER win_rate`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 first_day_close 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN first_day_chg_pct DECIMAL(10,4) NULL COMMENT '首日涨幅（数值，不含%）' AFTER first_day_close`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 first_day_chg_pct 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN first_day_market_cap DECIMAL(20,2) NULL COMMENT '首日市值（首日收盘价×总发行数量）' AFTER first_day_chg_pct`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 first_day_market_cap 时出现警告:', err.message);
+    }
+  }
+
+  // 境外备案：已并入 ipo_progress（board=境外发行备案），不再创建 ipo_overseas_filing
+  try {
+    const [legacyOt] = await dbPool.query(`
+      SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_overseas_filing'
+    `);
+    if (legacyOt.length) {
+      try {
+        await dbPool.query(
+          `ALTER TABLE ipo_progress MODIFY COLUMN exchange VARCHAR(100) NOT NULL DEFAULT '' COMMENT '交易所/拟上市地'`
+        );
+      } catch (e2) {
+        console.warn('扩展 ipo_progress.exchange 长度时出现警告（可忽略）:', e2.message);
+      }
+      await dbPool.query(`
+        INSERT INTO ipo_progress (
+          f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+          company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
+        )
+        SELECT
+          DATE(COALESCE(o.created_at, CURDATE())),
+          CONCAT(DATE_FORMAT(o.receive_date, '%Y-%m-%d'), ' 00:00:00'),
+          '',
+          o.company_name,
+          LEFT(COALESCE(o.filing_status, ''), 50),
+          LEFT(COALESCE(o.filing_type, ''), 200),
+          o.receive_date,
+          COALESCE(NULLIF(TRIM(o.filing_entity), ''), o.company_name),
+          '境外发行备案',
+          LEFT(COALESCE(NULLIF(TRIM(o.target_exchange), ''), ''), 100),
+          NULL,
+          NULL,
+          NOW(),
+          0
+        FROM ipo_overseas_filing o
+        WHERE NOT EXISTS (
+          SELECT 1 FROM ipo_progress p
+          WHERE p.F_DeleteMark = 0 AND p.board = '境外发行备案'
+            AND p.project_name = o.company_name
+            AND p.receive_date = o.receive_date
+            AND p.register_address = LEFT(COALESCE(o.filing_type, ''), 200)
+        )
+      `);
+      await dbPool.query(`DROP TABLE IF EXISTS ipo_overseas_filing`);
+      console.log('✓ 原 ipo_overseas_filing 已迁移至 ipo_progress 并删除扩展表');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_overseas_filing → ipo_progress 时出现警告:', err.message);
+  }
+
+  // 境外发行备案：申报主体在 Excel 为「/」等占位时已写入 company，启动时纠为公司全称=企业名称
+  try {
+    const [fixOw] = await dbPool.query(`
+      UPDATE ipo_progress SET company = project_name, F_LastModifyTime = NOW()
+      WHERE F_DeleteMark = 0 AND board = '境外发行备案'
+        AND project_name IS NOT NULL AND CHAR_LENGTH(TRIM(project_name)) > 0
+        AND TRIM(company) IN ('/', '-', '—', '／', '－', '\\\\')
+    `);
+    if (fixOw.affectedRows > 0) {
+      console.log(`✓ 已纠正境外发行备案占位 company（${fixOw.affectedRows} 行）`);
+    }
+  } catch (err) {
+    console.warn('纠正境外发行备案 company 占位时出现警告:', err.message);
+  }
+
   // ipo_* 三张业务表：为已存在历史库补齐字段注释（与《上市进展需求》一致）
   try {
     const ipoProgressCommentSql = [
@@ -4159,7 +4336,7 @@ async function initializeTables(dbPool) {
       "ALTER TABLE ipo_progress MODIFY COLUMN receive_date DATE NULL COMMENT '受理日期'",
       "ALTER TABLE ipo_progress MODIFY COLUMN company TEXT NOT NULL COMMENT '公司全称'",
       "ALTER TABLE ipo_progress MODIFY COLUMN board VARCHAR(20) NOT NULL COMMENT '板块'",
-      "ALTER TABLE ipo_progress MODIFY COLUMN exchange VARCHAR(20) NOT NULL COMMENT '交易所'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN exchange VARCHAR(100) NOT NULL DEFAULT '' COMMENT '交易所/拟上市地'",
       "ALTER TABLE ipo_progress MODIFY COLUMN F_CreatorUserId VARCHAR(19) NULL COMMENT '创建用户ID'",
       "ALTER TABLE ipo_progress MODIFY COLUMN F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改用户ID'",
       "ALTER TABLE ipo_progress MODIFY COLUMN F_LastModifyTime DATETIME NULL COMMENT '修改时间'",
@@ -4323,6 +4500,131 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 listing_data_config.last_sync_range_end 时出现警告:', err.message);
+  }
+
+  try {
+    const [legacyPerf] = await dbPool.query(
+      `SELECT id FROM listing_data_config
+       WHERE IFNULL(news_interface_type, '') = 'listed_performance'
+          OR name = '新股五日表现'`
+    );
+    if (legacyPerf.length > 0) {
+      await dbPool.query(
+        `DELETE FROM listing_data_config
+         WHERE IFNULL(news_interface_type, '') = 'listed_performance'
+            OR name = '新股五日表现'`
+      );
+      console.log(`✓ listing_data_config 已清理新股五日表现历史配置: ${legacyPerf.length} 条`);
+    }
+
+    const defaults = [
+      { name: '交易所IPO主爬虫', interface_type: 'crawler', news_interface_type: 'exchange_ipo', request_url: null },
+      { name: '打新日历', interface_type: 'crawler', news_interface_type: 'new_share', request_url: null },
+      {
+        name: '证监会辅导备案',
+        interface_type: 'crawler',
+        news_interface_type: 'guidance_progress',
+        request_url: 'https://eid.csrc.gov.cn/csrcfd/index.html',
+      },
+      {
+        name: '境外上市备案审核',
+        interface_type: 'api',
+        news_interface_type: 'overseas_filing',
+        request_url: process.env.OVERSEAS_FILING_FILE_URL || null,
+      },
+    ];
+
+    const makeId = async () => {
+      for (let i = 0; i < 5; i += 1) {
+        const id = `${Date.now()}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`.slice(0, 19);
+        const [rows] = await dbPool.query(`SELECT id FROM listing_data_config WHERE id = ? LIMIT 1`, [id]);
+        if (!rows.length) return id;
+      }
+      throw new Error('生成 listing_data_config.id 失败');
+    };
+
+    let created = 0;
+    for (const d of defaults) {
+      const [rows] = await dbPool.query(
+        `SELECT id, request_url FROM listing_data_config WHERE name = ? AND interface_type = ? AND IFNULL(news_interface_type, '') = ? LIMIT 1`,
+        [d.name, d.interface_type, d.news_interface_type]
+      );
+      if (rows.length) {
+        const currentUrl = String(rows[0].request_url || '').trim();
+        const targetUrl = String(d.request_url || '').trim();
+        if (!currentUrl && targetUrl) {
+          await dbPool.query(`UPDATE listing_data_config SET request_url = ? WHERE id = ?`, [targetUrl, rows[0].id]);
+        }
+        continue;
+      }
+      const id = await makeId();
+      await dbPool.query(
+        `INSERT INTO listing_data_config (
+          id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          d.name,
+          d.interface_type,
+          d.request_url || null,
+          '0 0 8 * * ? *',
+          'active',
+          1,
+          d.news_interface_type,
+          0,
+          0,
+          null,
+          null,
+          null,
+          'p04920',
+          'iv_sfss=0;iv_sqlx=0;iv_sqzt=0',
+          'p04920_f001:Y,p04920_f002:Y,p04920_f003:Y,p04920_f004:Y,p04920_f005:Y,p04920_f006:Y,p04920_f037:Y,p04920_f007:Y,p04920_f008:Y,p04920_f021:Y,p04920_f022:Y',
+          'json',
+          0,
+        ]
+      );
+      created += 1;
+    }
+    if (created > 0) {
+      console.log(`✓ listing_data_config 默认接口配置已自动补齐: ${created} 条`);
+    } else {
+      console.log('✓ listing_data_config 默认接口配置已存在');
+    }
+  } catch (err) {
+    console.warn('自动补齐 listing_data_config 默认接口配置时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS listing_sync_execution_log (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        config_id VARCHAR(19) NULL COMMENT '配置ID',
+        config_name VARCHAR(200) NULL COMMENT '配置名称',
+        task_key VARCHAR(255) NULL COMMENT '互斥任务键',
+        source_type VARCHAR(100) NULL COMMENT '来源类型',
+        trigger_type VARCHAR(20) NOT NULL COMMENT '触发方式：scheduled/manual',
+        window_start DATE NULL COMMENT '同步窗口开始日',
+        window_end DATE NULL COMMENT '同步窗口结束日',
+        retry_count INT NOT NULL DEFAULT 0 COMMENT '重试次数',
+        dedup_hits INT NOT NULL DEFAULT 0 COMMENT '去重命中数',
+        inserted_count INT NOT NULL DEFAULT 0 COMMENT '新增入库数',
+        updated_count INT NOT NULL DEFAULT 0 COMMENT '更新入库数',
+        skipped_count INT NOT NULL DEFAULT 0 COMMENT '跳过数',
+        status VARCHAR(20) NOT NULL DEFAULT 'running' COMMENT 'running/success/failed/skipped',
+        error_message TEXT NULL COMMENT '错误摘要',
+        started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_listing_sync_log_cfg_time (config_id, started_at),
+        KEY idx_listing_sync_log_status_time (status, started_at),
+        KEY idx_listing_sync_log_task_key (task_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展同步执行日志';
+    `);
+    console.log('✓ listing_sync_execution_log 表已就绪');
+  } catch (err) {
+    console.warn('创建 listing_sync_execution_log 表时出现警告:', err.message);
   }
 
   try {

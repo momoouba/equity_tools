@@ -13,6 +13,10 @@ function forbidden(res) {
 
 async function buildIpoProgressWhere(req) {
   const keyword = (req.query.keyword || '').trim();
+  const sourceCategory = (req.query.sourceCategory || '').trim();
+  const exchange = (req.query.exchange || '').trim();
+  const board = (req.query.board || '').trim();
+  const status = (req.query.status || '').trim();
 
   const where = ['F_DeleteMark = 0'];
   const params = [];
@@ -22,6 +26,25 @@ async function buildIpoProgressWhere(req) {
       `(company LIKE ? OR project_name LIKE ? OR status LIKE ? OR exchange LIKE ? OR board LIKE ? OR register_address LIKE ?)`
     );
     params.push(like, like, like, like, like, like);
+  }
+  if (sourceCategory === 'exchange_ipo') {
+    where.push(`exchange IN ('深交所', '上交所', '北交所', '港交所')`);
+  } else if (sourceCategory === 'guidance_record') {
+    where.push(`exchange = '证监会辅导备案'`);
+  } else if (sourceCategory === 'overseas_filing') {
+    where.push(`board = '境外发行备案'`);
+  }
+  if (exchange) {
+    where.push('exchange = ?');
+    params.push(exchange);
+  }
+  if (board) {
+    where.push('board = ?');
+    params.push(board);
+  }
+  if (status) {
+    where.push('status = ?');
+    params.push(status);
   }
 
   const whereSql = `WHERE ${where.join(' AND ')}`;

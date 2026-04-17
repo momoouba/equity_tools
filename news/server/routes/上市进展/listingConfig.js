@@ -5,6 +5,31 @@ const { runListingExchangeCrawler } = require('../../utils/上市进展/listingE
 const { runListingMatchBatch } = require('../../utils/上市进展/listingMatchRunner');
 const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
 const { encryptText, decryptText, maskToken } = require('../../utils/上市进展/listingSecret');
+const { normalizeSourceType, buildTaskKey } = require('../../utils/上市进展/listingSourceType');
+const { executeWithRetry } = require('../../utils/上市进展/listingRetry');
+const { createExecutionLog, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
+const { syncNewShareCalendar } = require('../../utils/上市进展/newShareService');
+const { syncGuidanceProgress } = require('../../utils/上市进展/guidanceProgressService');
+const { syncOverseasFiling } = require('../../utils/上市进展/overseasFilingService');
+const { createShanghaiDate, formatDateOnly } = require('../../utils/上市进展/listingBeijingDate');
+
+const runningManualTaskKeys = new Set();
+const LISTING_DEFAULT_CONFIG_TEMPLATES = [
+  { name: '交易所IPO主爬虫', interface_type: 'crawler', news_interface_type: 'exchange_ipo', request_url: null },
+  { name: '打新日历', interface_type: 'crawler', news_interface_type: 'new_share', request_url: null },
+  {
+    name: '证监会辅导备案',
+    interface_type: 'crawler',
+    news_interface_type: 'guidance_progress',
+    request_url: 'https://eid.csrc.gov.cn/csrcfd/index.html',
+  },
+  {
+    name: '境外上市备案审核',
+    interface_type: 'api',
+    news_interface_type: 'overseas_filing',
+    request_url: process.env.OVERSEAS_FILING_FILE_URL || null,
+  },
+];
 
 async function refreshListingCrons() {
   try {
@@ -136,6 +161,80 @@ async function createConfig(req, res) {
     return res.json({ success: true, data: row[0] });
   } catch (e) {
     console.error('createConfig', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
+/** POST /listing-config/init-defaults */
+async function initDefaultConfigs(req, res) {
+  try {
+    const user = await assertAdminListing(req, res);
+    if (!user) return;
+
+    // 兼容历史配置：初始化默认接口前，先清理已废弃的“新股五日表现”配置
+    await db.execute(
+      `DELETE FROM listing_data_config
+       WHERE IFNULL(news_interface_type, '') = 'listed_performance'
+          OR name = '新股五日表现'`
+    );
+
+    const existing = await db.query(
+      `SELECT id, name, interface_type, news_interface_type, request_url FROM listing_data_config WHERE is_active = 1`
+    );
+    const existsSet = new Set(
+      existing.map((r) => `${String(r.name || '').trim()}|${String(r.interface_type || '').trim()}|${String(r.news_interface_type || '').trim()}`)
+    );
+
+    const created = [];
+    for (const tpl of LISTING_DEFAULT_CONFIG_TEMPLATES) {
+      const key = `${tpl.name}|${tpl.interface_type}|${tpl.news_interface_type}`;
+      if (existsSet.has(key)) {
+        const hit = existing.find(
+          (r) =>
+            `${String(r.name || '').trim()}|${String(r.interface_type || '').trim()}|${String(r.news_interface_type || '').trim()}` ===
+            key
+        );
+        const reqUrl = String(hit?.request_url || '').trim();
+        const targetUrl = String(tpl.request_url || '').trim();
+        if (hit?.id && !reqUrl && targetUrl) {
+          await db.execute(`UPDATE listing_data_config SET request_url = ? WHERE id = ?`, [targetUrl, hit.id]);
+        }
+        continue;
+      }
+      const id = await generateId('listing_data_config');
+      await db.execute(
+        `INSERT INTO listing_data_config (
+          id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
+        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          tpl.name,
+          tpl.interface_type,
+          tpl.request_url || null,
+          '0 0 8 * * ? *',
+          'active',
+          1,
+          tpl.news_interface_type,
+          0,
+          0,
+          null,
+          null,
+          null,
+          'p04920',
+          'iv_sfss=0;iv_sqlx=0;iv_sqzt=0',
+          'p04920_f001:Y,p04920_f002:Y,p04920_f003:Y,p04920_f004:Y,p04920_f005:Y,p04920_f006:Y,p04920_f037:Y,p04920_f007:Y,p04920_f008:Y,p04920_f021:Y,p04920_f022:Y',
+          'json',
+          0,
+        ]
+      );
+      created.push({ id, ...tpl });
+    }
+
+    await refreshListingCrons();
+    return res.json({ success: true, data: { createdCount: created.length, created } });
+  } catch (e) {
+    console.error('initDefaultConfigs', e);
     return res.status(500).json({ success: false, message: e.message || '服务器错误' });
   }
 }
@@ -289,8 +388,7 @@ async function copyListingConfig(req, res) {
 
 /**
  * POST /listing-config/:id/sync
- * body: { startDate, endDate } — 与新闻接口配置手动同步一致，闭区间
- * 爬虫类型：三大交易所公开接口入库；数据接口类型暂返回 501
+ * body: { startDate, endDate? } — 打新日历仅需 startDate（取「申购/上市日期」> startDate）；其余类型仍为闭区间
  */
 async function syncListingConfig(req, res) {
   try {
@@ -298,8 +396,8 @@ async function syncListingConfig(req, res) {
     if (!user) return;
 
     const { startDate, endDate } = req.body || {};
-    if (!startDate || !endDate) {
-      return res.status(400).json({ success: false, message: '请提供 startDate、endDate（YYYY-MM-DD）' });
+    if (!startDate) {
+      return res.status(400).json({ success: false, message: '请提供 startDate（YYYY-MM-DD）' });
     }
 
     const rows = await db.query(`SELECT * FROM listing_data_config WHERE id = ? LIMIT 1`, [req.params.id]);
@@ -307,50 +405,130 @@ async function syncListingConfig(req, res) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
     const cfg = rows[0];
-    const type = (cfg.interface_type || '').toLowerCase();
+    const sourceType = normalizeSourceType(cfg);
+    const endDateFinal =
+      sourceType === 'new_share'
+        ? String(endDate || '').trim().slice(0, 10) || '2099-12-31'
+        : String(endDate || '').trim().slice(0, 10);
+    if (sourceType !== 'new_share' && !endDateFinal) {
+      return res.status(400).json({ success: false, message: '请提供 startDate、endDate（YYYY-MM-DD）' });
+    }
+    const taskKey = buildTaskKey(cfg, startDate, endDateFinal);
+    if (runningManualTaskKeys.has(taskKey)) {
+      return res.status(409).json({ success: false, message: '同源同窗口任务正在执行，请稍后重试' });
+    }
+    runningManualTaskKeys.add(taskKey);
 
-    if (type === 'crawler') {
-      const crawlLogTag = `[上市进展手动同步][${cfg.name || cfg.id}][交易所爬虫]`;
-      console.log(
-        `${crawlLogTag} 开始执行，配置=${cfg.id}，区间=${startDate}~${endDate}，触发人=${user.account || user.id}`
-      );
-      const result = await runListingExchangeCrawler({ startDate, endDate, logTag: crawlLogTag, config: cfg });
-      const matchResult = await runListingMatchBatch({
-        startDate,
-        endDate,
-        restrictProjectUserId: null,
+    let logId = null;
+    try {
+      logId = await createExecutionLog({
+        configId: cfg.id,
+        configName: cfg.name,
+        sourceType,
+        triggerType: 'manual',
+        windowStart: startDate,
+        windowEnd: endDateFinal,
+        taskKey,
       });
+
+      const wrapped = await executeWithRetry(
+        async (attempt) => {
+          console.log(
+            `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${startDate}~${endDateFinal} operator=${user.account || user.id}`
+          );
+          if (sourceType === 'new_share') {
+            return syncNewShareCalendar({
+              from: startDate,
+              to: endDateFinal,
+              issueDateAfterExclusive: startDate,
+              triggerType: 'manual',
+              operatorUserId: user.id,
+              logTag: `[上市进展手动同步][${cfg.name || cfg.id}][打新日历]`,
+            });
+          }
+          if (sourceType === 'guidance_progress') {
+            return syncGuidanceProgress({
+              from: startDate,
+              to: endDateFinal,
+              source: 'html',
+              sourceUrl: String(cfg.request_url || '').trim(),
+              triggerType: 'manual',
+              operatorUserId: user.id,
+              logTag: `[上市进展手动同步][${cfg.name || cfg.id}][辅导备案]`,
+            });
+          }
+          if (sourceType === 'overseas_filing') {
+            return syncOverseasFiling({
+              from: startDate,
+              to: endDateFinal,
+              source: 'url',
+              sourceUrl: String(cfg.request_url || '').trim(),
+              triggerType: 'manual',
+              operatorUserId: user.id,
+              logTag: `[上市进展手动同步][${cfg.name || cfg.id}][境外备案审核]`,
+            });
+          }
+          if (sourceType === 'exchange_crawler') {
+            const crawlLogTag = `[上市进展手动同步][${cfg.name || cfg.id}][交易所爬虫]`;
+            const crawlerResult = await runListingExchangeCrawler({
+              startDate,
+              endDate: endDateFinal,
+              logTag: crawlLogTag,
+              config: cfg,
+            });
+            const matchResult = await runListingMatchBatch({
+              startDate,
+              endDate: endDateFinal,
+              restrictProjectUserId: null,
+            });
+            return { ...crawlerResult, matchResult };
+          }
+          throw new Error(`未识别来源类型: ${sourceType}`);
+        },
+        {
+          maxAttempts: 5,
+          baseDelayMs: 1000,
+          factor: 2,
+          onRetry: ({ attempt, delay, error }) => {
+            console.warn(
+              `[上市进展手动同步] retry=${attempt + 1} delay=${delay}ms cfg=${cfg.id} err=${error.message}`
+            );
+          },
+        }
+      );
+
+      const result = wrapped.result || {};
+      const rangeEndStored =
+        sourceType === 'new_share' ? formatDateOnly(createShanghaiDate()) : endDateFinal;
       await db.execute(
         `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
-        [endDate, cfg.id]
+        [rangeEndStored, cfg.id]
       );
-      const f = result.fetched || {};
-      const errs = result.exchangeErrors || [];
-      console.log(
-        `${crawlLogTag} 执行完成：抓取=${f.total ?? 0}（深交所${f.szse ?? 0}/上交所${f.sse ?? 0}/北交所${f.bse ?? 0}/港交所${f.hkex ?? 0}），` +
-          `入库新增=${result.inserted} 更正更早=${result.updatedEarlier ?? 0} 跳过=${result.skipped}，` +
-          `项目匹配写入=${matchResult.inserted} 进展=${matchResult.progressCount} 项目=${matchResult.projectCount}`
-      );
-      if (errs.length) {
-        console.warn(
-          `${crawlLogTag} 部分交易所拉取失败: ${errs.map((e) => `${e.exchange}:${e.message}`).join(' | ')}`
-        );
-      }
+      await finishExecutionLog(logId, {
+        status: 'success',
+        retryCount: Number(wrapped.attemptCount || 1) - 1,
+        insertedCount: Number(result.inserted || 0),
+        updatedCount: Number(result.updated || result.updatedEarlier || 0),
+        skippedCount: Number(result.skipped || 0),
+        dedupHits: Number(result.skipped || 0),
+      });
       return res.json({
         success: true,
-        message: `同步完成：抓取 ${f.total ?? 0} 条（深交所 ${f.szse ?? 0}、上交所 ${f.sse ?? 0}、北交所 ${f.bse ?? 0}、港交所 ${f.hkex ?? 0}），入库新增 ${result.inserted}、更正更早快照 ${result.updatedEarlier ?? 0}、跳过 ${result.skipped}；匹配写入 ${matchResult.inserted} 条`,
-        data: { crawler: result, match: matchResult },
+        message: `同步完成（source=${sourceType}）：新增 ${result.inserted || 0}，更新 ${result.updated || result.updatedEarlier || 0}，跳过 ${result.skipped || 0}`,
+        data: result,
       });
+    } catch (syncErr) {
+      if (logId) {
+        await finishExecutionLog(logId, {
+          status: 'failed',
+          retryCount: Number(syncErr.attemptCount || 5),
+          errorMessage: String(syncErr.message || syncErr),
+        });
+      }
+      throw syncErr;
+    } finally {
+      runningManualTaskKeys.delete(taskKey);
     }
-
-    if (type === 'api') {
-      return res.status(501).json({
-        success: false,
-        message: '数据接口类同步尚未接入（可后续对接上海国际集团/企查查等）',
-      });
-    }
-
-    return res.status(400).json({ success: false, message: `未知的 interface_type: ${cfg.interface_type}` });
   } catch (e) {
     console.error('syncListingConfig', e);
     return res.status(500).json({ success: false, message: e.message || '服务器错误' });
@@ -360,6 +538,7 @@ async function syncListingConfig(req, res) {
 function registerListingConfigRoutes(router) {
   router.get('/listing-config', listConfig);
   router.post('/listing-config', createConfig);
+  router.post('/listing-config/init-defaults', initDefaultConfigs);
   router.put('/listing-config/:id', updateConfig);
   router.delete('/listing-config/:id', deleteConfig);
   router.post('/listing-config/:id/copy', copyListingConfig);

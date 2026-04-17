@@ -37,6 +37,7 @@ const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks')
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
 const { initializeListingScheduledTasks } = require('./utils/上市进展/scheduledListingTasks');
 const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
+const { ensureUploadsDir } = require('./utils/uploadsPath');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -83,12 +84,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// 静态文件服务 - 提供uploads目录的访问
-// 注意：必须在所有路由之前配置，以确保静态文件请求不会被其他路由拦截
-const uploadsDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// 静态文件服务 - 提供 uploads 目录（与 system 路由上传落盘目录一致，可用 UPLOADS_DIR 覆盖）
+const uploadsDir = ensureUploadsDir();
 
 // 添加调试中间件（记录静态文件请求）
 app.use('/api/uploads', (req, res, next) => {
@@ -122,6 +119,41 @@ app.use('/api/uploads', express.static(uploadsDir, {
   dotfiles: 'ignore',
   index: false
 }));
+
+// 磁盘无文件时从 system_file_storage 读取（避免容器重建、误删 uploads 后 Logo 丢失）
+app.use('/api/uploads', async (req, res, next) => {
+  const name = path.basename(req.path || '');
+  if (!name || name === '.' || name === '..') {
+    return res.status(404).end();
+  }
+  try {
+    const rows = await db.query(
+      'SELECT mime_type, file_data FROM system_file_storage WHERE filename = ? AND file_data IS NOT NULL LIMIT 1',
+      [name]
+    );
+    if (!rows.length) {
+      return res.status(404).end();
+    }
+    const row = rows[0];
+    const buf = Buffer.isBuffer(row.file_data) ? row.file_data : Buffer.from(row.file_data);
+    const targetPath = path.join(uploadsDir, name);
+    try {
+      if (!fs.existsSync(targetPath)) {
+        fs.writeFileSync(targetPath, buf);
+      }
+    } catch (w) {
+      console.warn('[uploads] 从数据库恢复文件写入磁盘失败:', name, w.message);
+    }
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Content-Type', row.mime_type || 'application/octet-stream');
+    return res.send(buf);
+  } catch (err) {
+    if (err.message?.includes('system_file_storage')) {
+      return res.status(404).end();
+    }
+    return next(err);
+  }
+});
 
 async function restoreStoredConfigFiles() {
   try {
@@ -370,6 +402,7 @@ async function startServer() {
     // 启动服务器
     console.log(`正在启动服务器，监听端口 ${PORT}...`);
     const server = app.listen(PORT, '0.0.0.0', async () => {
+      console.log(`✓ 上传文件目录: ${uploadsDir}`);
       console.log(`✓ 服务器运行在 http://localhost:${PORT}`);
       console.log(`✓ 服务器正在初始化，健康检查端点已可用`);
       

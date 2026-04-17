@@ -13,11 +13,23 @@ import {
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import axios from '../../utils/axios'
-import { postListingConfigSync, postListingConfigCopy } from '../../api/上市进展'
+import { postListingConfigSync, postListingConfigCopy, postListingConfigInitDefaults } from '../../api/上市进展'
 import CronGenerator from '../../components/CronGenerator'
 
 const FormItem = Form.Item
 const Option = Select.Option
+const LISTING_INTERFACE_SUB_TYPES = [
+  { value: 'exchange_ipo', label: '交易所IPO主爬虫' },
+  { value: 'new_share', label: '打新日历' },
+  { value: 'guidance_progress', label: '证监会辅导备案' },
+  { value: 'overseas_filing', label: '境外上市备案审核' },
+];
+const LISTING_REQUEST_URL_HINTS = {
+  exchange_ipo: '交易所IPO主爬虫默认走内置抓取/iFinD能力，无需填写请求地址（可留空）。',
+  new_share: '打新日历默认走 AkShare + 港交所网页抓取，无需填写请求地址（可留空）。',
+  guidance_progress: '证监会辅导备案为地址型数据源，建议填写官方页面地址（默认已初始化）。',
+  overseas_filing: '境外上市备案审核为地址型数据源，请填写线上 Excel/CSV 的 URL。',
+};
 
 const emptyForm = {
   name: '',
@@ -49,10 +61,12 @@ export default function ListingDataConfig() {
   const [syncOpen, setSyncOpen] = useState(false)
   const [syncRow, setSyncRow] = useState(null)
   const [syncRange, setSyncRange] = useState([dayjs().subtract(1, 'day'), dayjs()])
+  const [syncSingleDate, setSyncSingleDate] = useState(() => dayjs())
   const [syncing, setSyncing] = useState(false)
   const [logOpen, setLogOpen] = useState(false)
   const [logRecord, setLogRecord] = useState(null)
   const [showCronModal, setShowCronModal] = useState(false)
+  const watchNewsSubType = Form.useWatch('news_interface_type', form)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -145,7 +159,11 @@ export default function ListingDataConfig() {
 
   const openSync = (record) => {
     setSyncRow(record)
-    setSyncRange([dayjs().subtract(1, 'day'), dayjs()])
+    if (record.news_interface_type === 'new_share') {
+      setSyncSingleDate(dayjs())
+    } else {
+      setSyncRange([dayjs().subtract(1, 'day'), dayjs()])
+    }
     setSyncOpen(true)
   }
 
@@ -157,15 +175,27 @@ export default function ListingDataConfig() {
       const x = dayjs(d)
       return x.isValid() ? x.format('YYYY-MM-DD') : ''
     }
-    const startDate = toYmd(syncRange[0])
-    const endDate = toYmd(syncRange[1])
-    if (!startDate || !endDate) {
-      Message.warning('请选择开始与结束日期')
-      return
+    const isNewShare = syncRow?.news_interface_type === 'new_share'
+    let payload
+    if (isNewShare) {
+      const startDate = toYmd(syncSingleDate)
+      if (!startDate) {
+        Message.warning('请选择开始日期')
+        return
+      }
+      payload = { startDate }
+    } else {
+      const startDate = toYmd(syncRange[0])
+      const endDate = toYmd(syncRange[1])
+      if (!startDate || !endDate) {
+        Message.warning('请选择开始与结束日期')
+        return
+      }
+      payload = { startDate, endDate }
     }
     setSyncing(true)
     try {
-      const res = await postListingConfigSync(syncRow.id, { startDate, endDate })
+      const res = await postListingConfigSync(syncRow.id, payload)
       if (res.data?.success) {
         Message.success(res.data.message || '同步完成')
         setSyncOpen(false)
@@ -195,6 +225,21 @@ export default function ListingDataConfig() {
     }
   }
 
+  const handleInitDefaults = async () => {
+    try {
+      const res = await postListingConfigInitDefaults()
+      if (res.data?.success) {
+        const n = Number(res.data?.data?.createdCount || 0)
+        Message.success(n > 0 ? `已初始化 ${n} 条默认接口配置` : '默认接口配置已存在，无需新增')
+        load()
+      } else {
+        Message.error(res.data?.message || '初始化失败')
+      }
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '初始化失败')
+    }
+  }
+
   const openLog = (record) => {
     setLogRecord(record)
     setLogOpen(true)
@@ -219,6 +264,12 @@ export default function ListingDataConfig() {
   const columns = [
     { title: '配置名称', dataIndex: 'name', width: 160 },
     { title: '接口类型', dataIndex: 'interface_type', width: 100 },
+    {
+      title: '接口子类型',
+      dataIndex: 'news_interface_type',
+      width: 170,
+      render: (v) => LISTING_INTERFACE_SUB_TYPES.find((x) => x.value === v)?.label || v || '-',
+    },
     {
       title: 'iFinD',
       width: 140,
@@ -287,6 +338,7 @@ export default function ListingDataConfig() {
         <Button type="primary" onClick={openAdd}>
           新增配置
         </Button>
+        <Button onClick={handleInitDefaults}>初始化默认接口</Button>
         <Button onClick={load} loading={loading}>
           刷新
         </Button>
@@ -317,8 +369,19 @@ export default function ListingDataConfig() {
             </Select>
           </FormItem>
           <FormItem label="请求地址" field="request_url">
-            <Input placeholder="可选，数据接口时填写" />
+            <Input
+              placeholder={
+                watchNewsSubType === 'guidance_progress' || watchNewsSubType === 'overseas_filing'
+                  ? '地址型数据源请填写 URL'
+                  : '当前子类型可留空'
+              }
+            />
           </FormItem>
+          {watchNewsSubType ? (
+            <div style={{ marginTop: -4, marginBottom: 12, color: 'var(--color-text-2)', fontSize: 12 }}>
+              {LISTING_REQUEST_URL_HINTS[watchNewsSubType] || '请按当前接口子类型填写配置。'}
+            </div>
+          ) : null}
           <FormItem label="Cron 表达式" field="cron_expression" extra="与新闻接口、收件管理等共用同一套可视化配置（Quartz 7 段），保存后由服务端转为 node-cron 调度">
             <Input
               placeholder="点击右侧「配置」打开系统 Cron 配置器"
@@ -342,10 +405,12 @@ export default function ListingDataConfig() {
             <Input placeholder="如 active" />
           </FormItem>
           <FormItem label="接口子类型（数据接口时）" field="news_interface_type">
-            <Select allowClear placeholder="上海国际集团 / 企查查 / 其他">
-              <Option value="上海国际集团">上海国际集团</Option>
-              <Option value="企查查">企查查</Option>
-              <Option value="其他">其他</Option>
+            <Select allowClear placeholder="请选择上市进展接口子类型">
+              {LISTING_INTERFACE_SUB_TYPES.map((x) => (
+                <Option key={x.value} value={x.value}>
+                  {x.label}
+                </Option>
+              ))}
             </Select>
           </FormItem>
           <FormItem label="启用 iFinD 港交所" field="ifind_enabled" triggerPropName="checked">
@@ -425,20 +490,31 @@ export default function ListingDataConfig() {
         style={{ width: 480 }}
       >
         <p style={{ marginBottom: 12, color: 'var(--color-text-2)' }}>
-          与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。
+          {syncRow?.news_interface_type === 'new_share'
+            ? '打新日历：只需选择「开始日期」。将同步「申购日期（A 股）/ 上市日期（港股）」严格大于该日的数据；已入库记录按字段比对更新。未传结束日时服务端上界为远期。'
+            : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。'}
         </p>
-        <DatePicker.RangePicker
-          style={{ width: '100%' }}
-          value={syncRange}
-          onChange={(v) => {
-            if (!v || !v.length) {
-              setSyncRange([])
-              return
-            }
-            setSyncRange([dayjs(v[0]), dayjs(v[1])])
-          }}
-          allowClear={false}
-        />
+        {syncRow?.news_interface_type === 'new_share' ? (
+          <DatePicker
+            style={{ width: '100%' }}
+            value={syncSingleDate}
+            onChange={(v) => setSyncSingleDate(v ? dayjs(v) : dayjs())}
+            allowClear={false}
+          />
+        ) : (
+          <DatePicker.RangePicker
+            style={{ width: '100%' }}
+            value={syncRange}
+            onChange={(v) => {
+              if (!v || !v.length) {
+                setSyncRange([])
+                return
+              }
+              setSyncRange([dayjs(v[0]), dayjs(v[1])])
+            }}
+            allowClear={false}
+          />
+        )}
       </Modal>
 
       <Modal

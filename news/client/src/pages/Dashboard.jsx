@@ -15,6 +15,7 @@ import PerformanceSettingsPage from './业绩看板应用/PerformanceSettingsPag
 import ListingProjectProgressPage from './上市进展/ListingProjectProgressPage'
 import ListingIpoProjectPage from './上市进展/ListingIpoProjectPage'
 import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
+import ListingNewSharePage from './上市进展/ListingNewSharePage'
 import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
@@ -72,7 +73,8 @@ function Dashboard() {
     if (
       p.includes('listing-project-progress') ||
       p.includes('listing-ipo-project') ||
-      p.includes('listing-ipo-progress')
+      p.includes('listing-ipo-progress') ||
+      p.includes('listing-new-share')
     ) {
       setActiveAppKey('listing-app')
     } else if (p.includes('performance-settings') || p.includes('performance')) {
@@ -151,6 +153,9 @@ function Dashboard() {
       setActiveAppKey('listing-app')
     } else if (location.pathname.includes('listing-ipo-progress')) {
       setSelectedKeys(['listing-ipo-progress'])
+      setActiveAppKey('listing-app')
+    } else if (location.pathname.includes('listing-new-share')) {
+      setSelectedKeys(['listing-new-share'])
       setActiveAppKey('listing-app')
     } else if (location.pathname.includes('companies')) {
       setSelectedKeys(['companies'])
@@ -261,6 +266,7 @@ function Dashboard() {
         { key: 'listing-project-progress', title: '底层项目上市进展' },
         { key: 'listing-ipo-project', title: '底层项目表' },
         { key: 'listing-ipo-progress', title: '上市信息表' },
+        { key: 'listing-new-share', title: '打新日历' },
         { key: 'system-db', title: '数据库连接配置' }
       ]
     },
@@ -413,6 +419,14 @@ function Dashboard() {
               element={
                 (isAdmin || hasListingPermission)
                   ? <ListingIpoProgressPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/listing-new-share"
+              element={
+                (isAdmin || hasListingPermission)
+                  ? <ListingNewSharePage />
                   : <div>您没有访问权限</div>
               }
             />

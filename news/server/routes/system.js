@@ -2305,12 +2305,9 @@ router.post('/email-config/:id/test', async (req, res) => {
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
+const { ensureUploadsDir } = require('../utils/uploadsPath');
 
-// 确保uploads目录存在
-const uploadsDir = path.join(__dirname, '../../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+const uploadsDir = ensureUploadsDir();
 
 // 配置multer用于文件上传
 const storage = multer.diskStorage({
@@ -2484,7 +2481,12 @@ const storeConfigFile = async (configKey, filename, mimeType) => {
   try {
     if (!filename) return;
     const filePath = path.join(uploadsDir, filename);
-    if (!fs.existsSync(filePath)) return;
+    if (!fs.existsSync(filePath)) {
+      console.error(
+        `[系统配置] 无法写入 system_file_storage：磁盘上不存在文件 ${filePath}（重启后可能无法从数据库恢复 Logo）`
+      );
+      return;
+    }
     const fileData = fs.readFileSync(filePath);
     const fileSize = fileData.length;
     const existing = await db.query(
@@ -2504,7 +2506,10 @@ const storeConfigFile = async (configKey, filename, mimeType) => {
       );
     }
   } catch (error) {
-    console.error(`存储配置文件 ${configKey} 失败：`, error);
+    console.error(
+      `[系统配置] 存储配置文件 ${configKey} 到 system_file_storage 失败（Logo/背景在仅删磁盘时可能丢失）：`,
+      error.message || error
+    );
   }
 };
 
