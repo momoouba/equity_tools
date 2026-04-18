@@ -27,6 +27,12 @@ FROM node:18-slim
 
 WORKDIR /app
 
+# 构建阶段拉取 Playwright 浏览器可走代理：docker compose build --build-arg HTTP_PROXY=http://host:port app
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY}
+
 # 安装系统依赖（MySQL客户端、Python3、pip等）
 # 使用Debian包管理器（配置国内镜像源加速）
 RUN { \
@@ -84,17 +90,32 @@ RUN npm config set registry https://registry.npmmirror.com \
 # 复制Python依赖文件并安装（在创建非root用户之前，使用root安装）
 COPY server/utils/requirements.txt ./server/utils/
 
-# Playwright 浏览器二进制走国内镜像（构建时下载 Chromium 明显加速）
-ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
+# Playwright 浏览器：与 Python playwright 包版本严格匹配，勿用系统 apt chromium（易 crashpad 不兼容）
+# 默认走官方 CDN（npmmirror 常滞后，新版 Chromium 易 404）。
+# 国内可尝试加速：docker compose build --build-arg PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright app
+# 若镜像无该版本，下方脚本会自动去掉镜像改走官方。
+# 构建机 HTTP 代理：--build-arg HTTP_PROXY=http://host:port
+ARG PLAYWRIGHT_DOWNLOAD_HOST=
+ENV PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST}
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=600000
 
 # 配置 pip + 一次性安装依赖（Debian PEP668 需 --break-system-packages）
-# 注意：playwright 仅兜底 echo，不可让 pip 失败被吞掉
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
     && pip config set global.timeout 300 \
     && pip config set global.retries 5 \
     && pip install --break-system-packages --upgrade pip \
     && pip install --break-system-packages --no-cache-dir -r ./server/utils/requirements.txt \
-    && (playwright install chromium || echo "Playwright安装失败，将在运行时提示安装")
+    && mkdir -p /ms-playwright \
+    && sh -c 'set -e; \
+      pw_install() { python3 -m playwright install chromium; }; \
+      if [ -n "$PLAYWRIGHT_DOWNLOAD_HOST" ]; then \
+        pw_install || { echo "[playwright] mirror failed or 404, falling back to official CDN..."; unset PLAYWRIGHT_DOWNLOAD_HOST; export PLAYWRIGHT_DOWNLOAD_HOST=; \
+          for j in 1 2 3 4 5; do pw_install && break || sleep 30; done; }; \
+      else \
+        for j in 1 2 3 4 5; do pw_install && break || sleep 30; done; \
+      fi' \
+    && python3 -c "from pathlib import Path; p=Path('/ms-playwright'); assert any(p.glob('chromium*')), 'Playwright Chromium 未安装到 /ms-playwright'"
 
 # 安装同花顺 iFinD SDK（港股上市申请数据源）
 # 1. 复制整个 SDK 到临时目录
@@ -122,7 +143,7 @@ RUN mkdir -p uploads logs
 # 创建非root用户（在Python依赖安装之后）
 RUN groupadd -r nodejs && \
     useradd -r -g nodejs nodejs && \
-    chown -R nodejs:nodejs /app
+    chown -R nodejs:nodejs /app /ms-playwright
 
 USER nodejs
 

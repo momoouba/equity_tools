@@ -2,7 +2,8 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
 Pillow>=10.0.0
-playwright>=1.40.0
+# 上限避免装到极新版导致国内镜像未同步 Chromium、Docker 构建 404；需要新版时再调高
+playwright>=1.40.0,<1.58
 selenium>=4.15.0
 chromedriver-autoinstaller>=0.6.0
 

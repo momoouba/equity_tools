@@ -48,6 +48,11 @@ services:
       DB_NAME: ${DB_NAME:-investment_tools}
       TZ: Asia/Shanghai
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # 不设 CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE 时使用镜像构建阶段安装的 Playwright Chromium
+      CSRC_GUIDANCE_USE_PLAYWRIGHT: ${CSRC_GUIDANCE_USE_PLAYWRIGHT:-1}
+      # 生产建议强制 Playwright，避免 silently fallback 到 requests 导致取到旧页 0 条
+      CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT: ${CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT:-1}
+      CSRC_GUIDANCE_TLS_VERIFY: ${CSRC_GUIDANCE_TLS_VERIFY:-0}
       # 代理配置 - 用于访问被墙的网站(证监会等)
       # 格式: http://<Mac局域网IP>:<代理端口>
       HTTP_PROXY: ${HTTP_PROXY:-}

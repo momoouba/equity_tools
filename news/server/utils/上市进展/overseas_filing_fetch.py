@@ -14,10 +14,30 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse, urlsplit, urlunsplit
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
+
+_pw_utils = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _pw_utils not in sys.path:
+    sys.path.insert(0, _pw_utils)
+from playwright_host import ensure_playwright_browser_path  # noqa: E402
+
+
+def _encode_http_url_iri(url: str) -> str:
+    """pandas 经 urllib 访问 URL 时，路径含中文等非 ASCII 会触发 http.client ASCII 编码错误。"""
+    s = (url or "").strip()
+    if not s or s.startswith("/"):
+        return s
+    try:
+        parts = urlsplit(s)
+    except ValueError:
+        return s
+    if not parts.scheme or not parts.netloc:
+        return s
+    new_path = quote(parts.path, safe="/%")
+    return urlunsplit((parts.scheme, parts.netloc, new_path, parts.query, parts.fragment))
 
 
 def _norm_date(v):
@@ -202,6 +222,39 @@ def _read_overseas_excel_to_normalized_df(source):
     """以 header=None 读入，再按证监会双行表头解析（path / url / BytesIO）。"""
     import pandas as pd  # noqa: PLC0415
 
+    if isinstance(source, str):
+        sl = source.strip().lower()
+        if sl.startswith("http://") or sl.startswith("https://"):
+            enc = _encode_http_url_iri(source.strip())
+            # 勿用 pandas 直接读 URL；证监会需 Session+详情页 Referer，见 _http_get_bytes_csrc_xlsx
+            if "csrc.gov.cn" in enc.lower():
+                body = _http_get_bytes_csrc_xlsx(enc)
+                if not _looks_like_xlsx_bytes(body):
+                    detail_for_pw = (
+                        os.environ.get("OVERSEAS_FILING_EXCEL_REFERER", "").strip()
+                        or os.environ.get("OVERSEAS_FILING_DETAIL_PAGE_URL", "").strip()
+                    )
+                    if detail_for_pw and os.environ.get(
+                        "OVERSEAS_FILING_DISABLE_PLAYWRIGHT_XLSX", ""
+                    ).strip().lower() not in ("1", "true", "yes"):
+                        try:
+                            body = _download_csrc_xlsx_via_playwright(enc, detail_for_pw)
+                        except Exception as ex:
+                            hint = _guess_fetch_not_xlsx_hint(
+                                body if isinstance(body, (bytes, bytearray)) else b""
+                            )
+                            raise RuntimeError(
+                                f"下载内容不是有效 xlsx（{hint}）；Playwright 回退失败: {ex}"
+                            ) from ex
+                if not _looks_like_xlsx_bytes(body):
+                    hint = _guess_fetch_not_xlsx_hint(body)
+                    raise RuntimeError(f"下载内容不是有效 xlsx（{hint}）")
+            else:
+                body = _http_get_bytes(enc)
+                if not _looks_like_xlsx_bytes(body):
+                    hint = _guess_fetch_not_xlsx_hint(body)
+                    raise RuntimeError(f"下载内容不是有效 xlsx（{hint}）")
+            source = io.BytesIO(body)
     raw = pd.read_excel(source, header=None, dtype=object)
     return _raw_sheet_to_dataframe(raw)
 
@@ -244,19 +297,132 @@ def _looks_like_xlsx_bytes(content):
     return isinstance(content, (bytes, bytearray)) and len(content) > 4 and content[:2] == b"PK"
 
 
-def _http_get_bytes(target_url, timeout=90):
-    import requests  # noqa: PLC0415
+def _excel_download_referer(target_url: str) -> str:
+    """
+    证监会 /files/ 下附件常要求 Referer 为详情页（content.shtml），仅站点根不够。
+    优先级：OVERSEAS_FILING_EXCEL_REFERER > OVERSEAS_FILING_DETAIL_PAGE_URL（Node 自动传入）> 站点根。
+    """
+    custom = os.environ.get("OVERSEAS_FILING_EXCEL_REFERER", "").strip()
+    if custom:
+        return custom
+    detail = os.environ.get("OVERSEAS_FILING_DETAIL_PAGE_URL", "").strip()
+    if detail:
+        return detail
+    try:
+        sp = urlsplit(target_url)
+        host = (sp.netloc or "").lower()
+        if "csrc.gov.cn" in host:
+            return f"{sp.scheme}://{sp.netloc}/"
+    except Exception:
+        pass
+    return ""
 
-    headers = {
+
+def _guess_fetch_not_xlsx_hint(body: bytes) -> str:
+    if not body or len(body) < 4:
+        return "响应过短"
+    if body[:2] == b"PK":
+        return ""
+    try:
+        head = body[:400].decode("utf-8", errors="replace").lower()
+    except Exception:
+        return "无法解码为文本"
+    if "<html" in head or "<!doctype" in head:
+        return "响应为 HTML（多为风控或 Referer 不符，需详情页作 Referer）"
+    return "非 xlsx ZIP 文件头"
+
+
+def _browser_base_headers():
+    return {
         "User-Agent": os.environ.get(
             "CSRC_HTTP_USER_AGENT",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         ),
-        "Accept": "*/*",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     }
+
+
+def _http_get_bytes(target_url, timeout=90, referer=None):
+    import requests  # noqa: PLC0415
+
+    headers = {**_browser_base_headers(), "Accept": "*/*"}
+    ref = referer if referer is not None else _excel_download_referer(target_url)
+    if ref:
+        headers["Referer"] = ref
+    low = (target_url or "").lower()
+    if "csrc.gov.cn" in low:
+        headers["Accept"] = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/octet-stream,*/*;q=0.8"
+        )
+        headers["Sec-Fetch-Dest"] = "empty"
+        headers["Sec-Fetch-Mode"] = "navigate"
+        headers["Sec-Fetch-Site"] = "same-origin"
+        headers["Sec-Fetch-User"] = "?1"
     r = requests.get(target_url, timeout=timeout, headers=headers, allow_redirects=True)
+    r.raise_for_status()
+    return r.content
+
+
+def _http_get_bytes_csrc_xlsx(file_url: str, timeout=90) -> bytes:
+    """
+    证监会：机房环境仅带 Referer 仍可能返回 HTML，需与浏览器一致——
+    同一 Session 先 GET 详情页（写入 Cookie），再 GET 附件链接。
+    """
+    import requests  # noqa: PLC0415
+
+    low = (file_url or "").lower()
+    if "csrc.gov.cn" not in low:
+        return _http_get_bytes(file_url, timeout=timeout)
+
+    detail = (
+        os.environ.get("OVERSEAS_FILING_EXCEL_REFERER", "").strip()
+        or os.environ.get("OVERSEAS_FILING_DETAIL_PAGE_URL", "").strip()
+    )
+    ref = _excel_download_referer(file_url)
+    s = requests.Session()
+    base = _browser_base_headers()
+
+    if detail:
+        try:
+            sp = urlsplit(detail)
+            site_root = f"{sp.scheme}://{sp.netloc}/"
+        except Exception:
+            site_root = "https://www.csrc.gov.cn/"
+        try:
+            s.get(
+                detail,
+                timeout=min(timeout, 90),
+                headers={
+                    **base,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Referer": site_root,
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Sec-Fetch-User": "?1",
+                },
+                allow_redirects=True,
+            )
+        except Exception:
+            pass
+
+    headers = {
+        **base,
+        "Accept": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/octet-stream,*/*;q=0.8"
+        ),
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+    }
+    if ref:
+        headers["Referer"] = ref
+
+    r = s.get(file_url, timeout=timeout, headers=headers, allow_redirects=True)
     r.raise_for_status()
     return r.content
 
@@ -283,6 +449,118 @@ def _try_discover_excel_bytes(portal_url):
     return None, ""
 
 
+def _overseas_playwright_launch_kwargs(headless):
+    """
+    勿写死 Docker 内 /ms-playwright/.../chrome-linux64/chrome：本地 Windows/macOS 不存在该路径。
+    默认让 Playwright 使用已安装的 Chromium（PLAYWRIGHT_BROWSERS_PATH 或用户目录 .cache/ms-playwright）。
+    可选：OVERSEAS_FILING_PLAYWRIGHT_EXECUTABLE 或 CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE 指向本机可执行文件。
+    """
+    kwargs = {"headless": headless}
+    for key in ("OVERSEAS_FILING_PLAYWRIGHT_EXECUTABLE", "CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE"):
+        exe = str(os.environ.get(key, "")).strip()
+        if exe and os.path.isfile(exe):
+            kwargs["executable_path"] = exe
+            break
+    return kwargs
+
+
+def _playwright_proxy_from_env():
+    """与 Docker 中 HTTP_PROXY/HTTPS_PROXY 一致，供 Chromium 出口访问外网。"""
+    u = (os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or "").strip()
+    if not u:
+        return None
+    return {"server": u}
+
+
+def _download_csrc_xlsx_via_playwright(file_url: str, detail_url: str) -> bytes:
+    """
+    机房下 requests 可能拿 HTML；Playwright 亦可能无法完成 domcontentloaded。
+    顺序：① context.request 直拉（不打开页）② commit 级打开详情页再 request（不强依赖页面就绪）
+    并继承 HTTP_PROXY，避免容器直连被拦。
+    """
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    except ImportError as e:
+        raise RuntimeError(
+            "未安装 playwright，请执行: pip install playwright && playwright install chromium"
+        ) from e
+
+    timeout_ms = int(os.environ.get("OVERSEAS_FILING_PW_TIMEOUT_MS", "120000"))
+    headless = os.environ.get("OVERSEAS_FILING_PW_HEADLESS", "1").strip().lower() not in ("0", "false", "no")
+    enc_file = _encode_http_url_iri(file_url.strip())
+    du = (detail_url or "").strip()
+    if not du:
+        raise RuntimeError("Playwright 下载需 OVERSEAS_FILING_DETAIL_PAGE_URL（详情页）")
+
+    ensure_playwright_browser_path()
+    ua = os.environ.get(
+        "CSRC_HTTP_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    )
+    after_ms = min(int(os.environ.get("OVERSEAS_FILING_PW_AFTER_GOTO_MS", "2000")), 5000)
+    req_hdr = {
+        "Referer": du,
+        "Accept": (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,"
+            "application/octet-stream,*/*;q=0.8"
+        ),
+    }
+    t_req = min(timeout_ms, 180000)
+    t_goto = min(timeout_ms, 45000)
+
+    launch_kw = dict(_overseas_playwright_launch_kwargs(headless))
+    px = _playwright_proxy_from_env()
+    if px:
+        launch_kw["proxy"] = px
+
+    last_err = None
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(**launch_kw)
+        try:
+            context = browser.new_context(
+                locale="zh-CN",
+                user_agent=ua,
+                ignore_https_errors=True,
+            )
+
+            # ① 不加载详情页：部分环境页面永不触发 domcontentloaded，但直链仍可拉
+            try:
+                r0 = context.request.get(enc_file, headers=req_hdr, timeout=t_req)
+                if r0.ok:
+                    b0 = r0.body()
+                    if _looks_like_xlsx_bytes(b0):
+                        return b0
+                last_err = RuntimeError(f"context.request 直链 HTTP {r0.status}，且非 xlsx")
+            except Exception as e:
+                last_err = e
+
+            page = context.new_page()
+            page.set_default_timeout(t_goto)
+            try:
+                page.goto(du, wait_until="commit", timeout=t_goto)
+                page.wait_for_timeout(after_ms)
+            except Exception as e:
+                last_err = e
+
+            r1 = page.request.get(enc_file, headers=req_hdr, timeout=t_req)
+            if r1.status >= 400:
+                raise RuntimeError(
+                    f"Playwright 下载 Excel HTTP {r1.status}；"
+                    f"若容器无法访问证监会，请为 app 配置 HTTPS_PROXY 或使用内网文件源。 "
+                    f"此前错误: {last_err!r}"
+                )
+            b1 = r1.body()
+            if _looks_like_xlsx_bytes(b1):
+                return b1
+            raise RuntimeError(
+                f"Playwright 响应仍非 xlsx；可能出口无法访问 csrc.gov.cn。最后异常: {last_err!r}"
+            )
+        finally:
+            browser.close()
+
+
 def _fetch_excel_via_playwright(portal_url):
     """模拟：打开门户 → 搜索关键词 → 点首条 → 详情页取 .xlsx 链接 → 下载。"""
     try:
@@ -304,11 +582,9 @@ def _fetch_excel_via_playwright(portal_url):
     custom_sel_in = os.environ.get("OVERSEAS_FILING_PW_SEARCH_INPUT", "").strip()
     custom_sel_btn = os.environ.get("OVERSEAS_FILING_PW_SEARCH_BUTTON", "").strip()
 
+    ensure_playwright_browser_path()
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            executable_path="/ms-playwright/chromium-1208/chrome-linux64/chrome",
-        )
+        browser = p.chromium.launch(**_overseas_playwright_launch_kwargs(headless))
         context = browser.new_context(
             locale="zh-CN",
             user_agent=os.environ.get(

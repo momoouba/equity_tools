@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import axios from '../utils/axios'
+import { DEV_API_PORT } from '../config/devApiPort'
 import Pagination from '../components/Pagination'
 import './ShareNewsPage.css'
 
@@ -136,7 +137,7 @@ function ShareNewsPage() {
         if (error.response) {
           setError(error.response.data?.message || `服务器错误 (${error.response.status})`)
         } else if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
-          setError('无法连接到服务器，请确保后端服务正在运行 (localhost:3001)')
+          setError(`无法连接到服务器，请确保后端服务正在运行 (localhost:${DEV_API_PORT})`)
         } else {
           setError(error.message || '分享链接无效或已过期')
         }
@@ -600,7 +601,7 @@ function ShareNewsPage() {
         <div className="loading-container">
           <div className="loading">验证分享链接中...</div>
           <div style={{ marginTop: '10px', fontSize: '12px', color: '#86909c' }}>
-            如果长时间无响应，请检查后端服务是否运行 (localhost:3001)
+            {`如果长时间无响应，请检查后端服务是否运行 (localhost:${DEV_API_PORT})`}
           </div>
         </div>
       </div>
@@ -621,7 +622,7 @@ function ShareNewsPage() {
             </ul>
             <p style={{ marginTop: '10px' }}>
               请检查：
-              <br />1. 后端服务是否正在运行 (localhost:3001)
+              <br />1. {`后端服务是否正在运行 (localhost:${DEV_API_PORT})`}
               <br />2. 分享链接是否有效
               <br />3. 浏览器控制台是否有错误信息
             </p>

@@ -66,7 +66,11 @@ def _strip_em_tags(s):
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _abs_url(href):
+def _abs_url(href, base_url=None):
+    """
+    详情页内附件常为 ../../7627090/files/xxx.xlsx，必须以详情页 URL 为 base 解析。
+    误用 https://www.csrc.gov.cn/ 作 base 会得到 /7627090/files/...（缺 csrc），站点返回 HTML 而非文件。
+    """
     h = (href or "").strip()
     if not h:
         return ""
@@ -74,19 +78,21 @@ def _abs_url(href):
         return "https:" + h
     if h.startswith("http://") or h.startswith("https://"):
         return h
-    return urljoin("https://www.csrc.gov.cn/", h)
+    base = (base_url or "").strip() or "https://www.csrc.gov.cn/"
+    return urljoin(base, h)
 
 
 def _pick_excel_url(soup, page_url):
     """Prefer .xlsx/.xls whose link text or href suggests 备案情况表."""
     candidates = []
+    base = (page_url or "").strip() or "https://www.csrc.gov.cn/"
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         low = href.lower()
         if not (low.endswith(".xlsx") or low.endswith(".xls")):
             continue
         text = _strip_em_tags(a.get_text())
-        full = _abs_url(href)
+        full = _abs_url(href, base)
         score = 0
         if "备案情况表" in text or "备案情况表" in href:
             score += 10
@@ -101,7 +107,7 @@ def _pick_excel_url(soup, page_url):
     for m in re.finditer(
         r'href=["\']([^"\']+\.(?:xlsx|xls))["\']', raw, flags=re.I
     ):
-        u = _abs_url(m.group(1))
+        u = _abs_url(m.group(1), base)
         if u:
             return u
     return ""
@@ -152,7 +158,7 @@ def discover_excel_url(page_url=None, keyword=None):
     title_html = first.get("title") or first.get("subTitle") or ""
     title_plain = _strip_em_tags(title_html)
 
-    detail_url = _abs_url(detail_rel)
+    detail_url = _abs_url(detail_rel, page_url)
     if not detail_url:
         raise RuntimeError("首条结果缺少 url")
 

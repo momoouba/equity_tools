@@ -5,6 +5,7 @@ const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../utils/上市进展/listingBeijingDate');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../utils/上市进展/listingCsv');
+const { shouldUseViteFrontendHost } = require('../utils/devHost');
 
 const router = express.Router();
 
@@ -39,11 +40,7 @@ async function ensureListingShareTable() {
 }
 
 function buildShareUrl(req, token) {
-  const requestHost = req.get('host') || '';
-  const isDev =
-    process.env.NODE_ENV === 'development' ||
-    requestHost.includes('localhost:3001') ||
-    requestHost.includes('127.0.0.1:3001');
+  const isDev = shouldUseViteFrontendHost(req);
   const frontendHost = isDev ? 'localhost:5173' : (process.env.FRONTEND_HOST || req.get('host'));
   return `${req.protocol}://${frontendHost}/share/listing-project-progress/${token}`;
 }

@@ -8,14 +8,20 @@ function runOverseasFilingSync(opts) {
   const source = String(opts.source || 'url').trim().toLowerCase();
   const sourceUrl = String(opts.sourceUrl || '').trim();
   const sourceFile = String(opts.sourceFile || '').trim();
+  /** 证监会详情页 URL，作 Excel 下载 Referer（与浏览器从详情页点附件一致） */
+  const detailPageUrl = String(opts.detailPageUrl || '').trim();
   if (!startDate || !endDate) return { ok: false, skipped: true, stderr: 'date invalid' };
   const script = path.join(__dirname, 'overseas_filing_fetch.py');
   const py = process.env.PYTHON || 'python';
   const args = [script, '--start-date', startDate, '--end-date', endDate, '--source', source];
   if (sourceUrl) args.push('--url', sourceUrl);
   if (sourceFile) args.push('--file', sourceFile);
+  const childEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+  if (detailPageUrl) {
+    childEnv.OVERSEAS_FILING_DETAIL_PAGE_URL = detailPageUrl;
+  }
   const r = spawnSync(py, args, {
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    env: childEnv,
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 20 * 1024 * 1024,

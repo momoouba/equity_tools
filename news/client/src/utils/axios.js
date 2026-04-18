@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { devApiOrigin } from '../config/devApiPort'
 
 // 创建axios实例
 // 开发环境下优先直连后端，避免代理偶发未生效导致 404
@@ -6,9 +7,9 @@ const getBaseURL = () => {
   const isDev = import.meta.env.DEV
   if (!isDev) return ''
 
-  // 本地开发：无论前端是否跑在 5173，都直连后端 3001
+  // 本地开发：无论前端是否跑在 5173，都直连后端（端口见 .env VITE_DEV_API_PORT）
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return 'http://localhost:3001'
+    return devApiOrigin()
   }
 
   // 其他主机（如局域网 IP）继续走相对路径，由代理处理

@@ -6,14 +6,21 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
+import tempfile
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-DEFAULT_CSRC_GUIDANCE_URL = "https://eid.csrc.gov.cn/csrcfd/index.html"
+_pw_utils = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _pw_utils not in sys.path:
+    sys.path.insert(0, _pw_utils)
+from playwright_host import ensure_playwright_browser_path  # noqa: E402
+
+DEFAULT_CSRC_GUIDANCE_URL = "http://eid.csrc.gov.cn/csrcfd/index_f.html"
 RE_ONCLICK_DATE = re.compile(r"'(\d{4}-\d{2}-\d{2})'")
 # 单元格内常见 2026-04-14 或 2026/04/14
 RE_CELL_YMD = re.compile(r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})")
@@ -43,6 +50,132 @@ def _resolve_proxy_for_playwright():
     if not proxy_url.startswith(("http://", "https://", "socks5://", "socks5h://")):
         proxy_url = "http://" + proxy_url
     return proxy_url
+
+
+def _bool_env(name, default=True):
+    raw = os.environ.get(name, "1" if default else "0").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
+def _strip_outer_quotes(s):
+    t = str(s or "").strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in ("'", '"'):
+        return t[1:-1].strip()
+    return t
+
+
+def _parse_shell_like_args(s):
+    t = _strip_outer_quotes(str(s or "").strip())
+    if not t:
+        return []
+    try:
+        return shlex.split(t, posix=True)
+    except ValueError:
+        return [t]
+
+
+def _playwright_launch_args():
+    """
+    Playwright 启动参数合并顺序：
+    - 固定基础参数（反自动化指纹）
+    - PLAYWRIGHT_CHROMIUM_ARGS（Playwright 官方环境变量）
+    - CSRC_GUIDANCE_PLAYWRIGHT_EXTRA_ARGS（项目自定义，shell-like）
+    """
+    base = ["--disable-blink-features=AutomationControlled"]
+    merged = list(base)
+
+    def extend_unique(items):
+        for it in items:
+            if not it:
+                continue
+            if it not in merged:
+                merged.append(it)
+
+    extend_unique(_parse_shell_like_args(os.environ.get("PLAYWRIGHT_CHROMIUM_ARGS", "")))
+    extend_unique(_parse_shell_like_args(os.environ.get("CSRC_GUIDANCE_PLAYWRIGHT_EXTRA_ARGS", "")))
+    return merged
+
+
+def _is_packaged_chromium_wrapper(path):
+    """Debian/Ubuntu 常见包装脚本路径（真实二进制一般在 /usr/lib/chromium/chromium）。"""
+    if not path:
+        return False
+    p = path.strip()
+    if p in ("/usr/bin/chromium", "/usr/bin/chromium-browser"):
+        return True
+    return os.path.basename(p) in ("chromium", "chromium-browser") and p.startswith("/usr/bin/")
+
+
+def _resolve_chromium_executable():
+    """
+    Debian/Ubuntu 的 /usr/bin/chromium 常为包装脚本，在 Docker + Playwright 下易触发
+    chrome_crashpad_handler: --database is required。优先使用包内真实二进制。
+    """
+    preferred = str(os.environ.get("CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE", "")).strip()
+    real_bins = [
+        "/usr/lib/chromium/chromium",
+        "/usr/lib64/chromium/chromium",
+        "/usr/lib/chromium/chrome",
+    ]
+    fallbacks = ["/usr/bin/chromium", "/usr/bin/chromium-browser"]
+    candidates = []
+    # 自定义绝对路径（非发行版包装脚本）优先
+    if preferred and not _is_packaged_chromium_wrapper(preferred):
+        candidates.append(preferred)
+    candidates.extend(real_bins)
+    if preferred:
+        candidates.append(preferred)
+    for fb in fallbacks:
+        if fb not in candidates:
+            candidates.append(fb)
+
+    seen = set()
+    for p in candidates:
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        try:
+            rp = os.path.realpath(p)
+        except OSError:
+            rp = p
+        if os.path.isfile(rp) and os.access(rp, os.X_OK):
+            return rp
+    return preferred or "/usr/lib/chromium/chromium"
+
+
+def _playwright_launch_env():
+    """继承进程环境，并为 crashpad 提供可写目录（部分容器缺省路径会异常）。"""
+    env = dict(os.environ)
+    db = str(env.get("CHROME_CRASHPAD_DATABASE", "")).strip()
+    if not db:
+        db = os.path.join(tempfile.gettempdir(), "chromium-crashpad-db")
+    try:
+        os.makedirs(db, mode=0o755, exist_ok=True)
+    except OSError:
+        pass
+    env["CHROME_CRASHPAD_DATABASE"] = db
+    return env
+
+
+def _build_csrc_url_candidates(url):
+    """构造证监会辅导页候选 URL，提升不同网络环境成功率。"""
+    u = str(url or "").strip()
+    if not u:
+        return []
+    out = [u]
+    low = u.lower()
+    if "eid.csrc.gov.cn/csrcfd/" in low:
+        # 对证监会辅导页做 http/https + index/index_f 兜底尝试
+        variants = [
+            "http://eid.csrc.gov.cn/csrcfd/index_f.html",
+            "https://eid.csrc.gov.cn/csrcfd/index_f.html",
+            "http://eid.csrc.gov.cn/csrcfd/index.html",
+            "https://eid.csrc.gov.cn/csrcfd/index.html",
+        ]
+        for v in variants:
+            if v not in out:
+                out.append(v)
+    return out
 
 
 def _fetch_html_playwright(page_url):
@@ -170,17 +303,25 @@ def _fetch_html_playwright(page_url):
 
     html_holder = {"html": ""}
 
+    ensure_playwright_browser_path()
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=headless,
-            args=["--disable-blink-features=AutomationControlled"],
-            executable_path="/ms-playwright/chromium-1208/chrome-linux64/chrome",
-            proxy={"server": proxy_url} if proxy_url else None,
-        )
+        launch_kwargs = {
+            "headless": headless,
+            "args": _playwright_launch_args(),
+            "proxy": {"server": proxy_url} if proxy_url else None,
+        }
+        # 默认使用 PLAYWRIGHT_BROWSERS_PATH 下与当前 playwright 版本匹配的 Chromium（推荐）。
+        # 仅当显式配置 CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE 时才覆盖为系统浏览器（易与 Playwright 不兼容）。
+        exe_override = str(os.environ.get("CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE", "")).strip()
+        if exe_override:
+            launch_kwargs["executable_path"] = _resolve_chromium_executable()
+            launch_kwargs["env"] = _playwright_launch_env()
+        browser = p.chromium.launch(**launch_kwargs)
         try:
             ctx = browser.new_context(
                 locale="zh-CN",
                 timezone_id="Asia/Shanghai",
+                ignore_https_errors=not _bool_env("CSRC_GUIDANCE_TLS_VERIFY", default=True),
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -291,7 +432,10 @@ def _build_rows(df, start_date, end_date):
         )
         if not company:
             continue
-        record_date = _norm_date(_pick(d, ["辅导备案日期", "备案日期", "受理日期", "日期", "时间"]))
+        # 证监会公开发行辅导公示常见字段为「备案时间」
+        record_date = _norm_date(
+            _pick(d, ["辅导备案日期", "备案日期", "备案时间", "受理日期", "日期", "时间"])
+        )
         if not record_date:
             continue
         if record_date < start_date or record_date > end_date:
@@ -507,40 +651,107 @@ def _read_html_source(url, use_playwright=True):
 
     html = None
     fetch_via = "requests"
+    candidates = _build_csrc_url_candidates(url)
+    tls_verify = _bool_env("CSRC_GUIDANCE_TLS_VERIFY", default=True)
+
     pw_ok = (
         use_playwright
         and os.environ.get("CSRC_GUIDANCE_USE_PLAYWRIGHT", "1").strip().lower()
         not in ("0", "false", "no")
         and "eid.csrc.gov.cn" in (url or "").lower()
     )
+    require_pw = _bool_env("CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT", default=False)
     if pw_ok:
-        try:
-            html = _fetch_html_playwright(url)
-            fetch_via = "playwright"
-        except Exception as e:
+        last_pw_err = None
+        for candidate_url in candidates:
+            try:
+                html = _fetch_html_playwright(candidate_url)
+                fetch_via = f"playwright:{candidate_url}"
+                break
+            except Exception as e:
+                last_pw_err = e
+        if html is None and last_pw_err is not None:
             print(
-                f"[guidance_progress_fetch] Playwright 拉取失败，回退 requests: {e}",
+                f"[guidance_progress_fetch] Playwright 拉取失败，回退 requests: {last_pw_err}",
                 file=sys.stderr,
             )
+            if require_pw:
+                raise RuntimeError(
+                    f"Playwright 拉取失败且已启用 CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT=1: {last_pw_err}"
+                )
+
+    def looks_like_guidance_payload(raw_html):
+        t = str(raw_html or "")
+        low = t.lower()
+        if "downloadpdf1" in low:
+            return True
+        key_hit = 0
+        for k in ("辅导对象", "备案时间", "辅导状态", "派出机构"):
+            if k in t:
+                key_hit += 1
+        return key_hit >= 2
 
     if html is None:
+        try:
+            import urllib3  # noqa: PLC0415
+
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
             ),
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "http://eid.csrc.gov.cn/",
+            "Connection": "keep-alive",
         }
         # requests 支持从环境变量 HTTP_PROXY/HTTPS_PROXY 读取代理
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        html = resp.text
+        errs = []
+        for candidate_url in candidates:
+            try:
+                resp = requests.get(candidate_url, headers=headers, timeout=30, verify=tls_verify)
+                resp.raise_for_status()
+                body = resp.text
+                if not looks_like_guidance_payload(body):
+                    errs.append(f"{candidate_url}: non-guidance-page")
+                    continue
+                html = body
+                fetch_via = f"requests:{candidate_url}:verify={int(bool(tls_verify))}"
+                break
+            except requests.exceptions.SSLError as e:
+                errs.append(f"{candidate_url} SSL: {e}")
+                if tls_verify:
+                    try:
+                        resp = requests.get(candidate_url, headers=headers, timeout=30, verify=False)
+                        resp.raise_for_status()
+                        body = resp.text
+                        if not looks_like_guidance_payload(body):
+                            errs.append(f"{candidate_url} verify=0: non-guidance-page")
+                            continue
+                        html = body
+                        fetch_via = f"requests:{candidate_url}:verify=0"
+                        break
+                    except Exception as e2:
+                        errs.append(f"{candidate_url} verify=0: {e2}")
+            except Exception as e:
+                errs.append(f"{candidate_url}: {e}")
+        if html is None:
+            raise RuntimeError(" ; ".join(errs[-6:]) or "请求证监会页面失败")
     df = None
     try:
         # 必须包一层 StringIO：否则部分环境会把长 HTML 当成「文件路径」触发 ENOENT
         tables = pd.read_html(io.StringIO(html))
         if tables:
-            df = tables[0] if len(tables) == 1 else pd.concat(tables, ignore_index=True)
+            expected_cols = ("辅导对象", "备案时间", "备案日期", "辅导状态", "派出机构")
+            picked = []
+            for t in tables:
+                cols = [str(c).strip() for c in t.columns]
+                if any(any(ec in c for ec in expected_cols) for c in cols):
+                    picked.append(t)
+            using = picked if picked else tables
+            df = using[0] if len(using) == 1 else pd.concat(using, ignore_index=True)
     except (ValueError, ImportError, OSError, FileNotFoundError):
         df = None
     return html, df, fetch_via

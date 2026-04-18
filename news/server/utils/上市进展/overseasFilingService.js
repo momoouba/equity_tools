@@ -152,6 +152,7 @@ async function syncOverseasFiling(options = {}) {
     sourceUrl,
     sourceFile: explicitFile,
     logTag,
+    detailPageUrl: csrcDiscover?.detailUrl || '',
   });
   if (!fetched.ok) {
     throw new Error(fetched.stderr || '境外备案抓取失败');

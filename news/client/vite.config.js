@@ -1,5 +1,10 @@
-import { defineConfig } from 'vite'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const newsRoot = path.resolve(__dirname, '..')
 
 // 在启动阶段临时抑制ECONNREFUSED错误输出（仅针对Vite代理错误）
 let startupPhase = true
@@ -42,7 +47,14 @@ if (process.env.NODE_ENV === 'development') {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, newsRoot, '')
+  const devApiPort = env.VITE_DEV_API_PORT || env.PORT || '3001'
+  const devApiTarget = `http://localhost:${devApiPort}`
+
+  return {
+  // 与 loadEnv(newsRoot) 一致：否则 Vite 默认只读 client/ 下的 .env，axios 拿不到 VITE_DEV_API_PORT，会退回 3001
+  envDir: newsRoot,
   plugins: [react()],
   build: {
     // 优化构建配置，减少内存占用
@@ -89,7 +101,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: devApiTarget,
         changeOrigin: true,
         secure: false,
         ws: true,
@@ -114,14 +126,14 @@ export default defineConfig({
               // 启动阶段（20 秒内）：只打一次友好提示，避免刷屏
               if (isStartupPhase) {
                 if (!startupLogged) {
-                  console.warn('[Vite代理] 后端正在启动 (localhost:3001)，API 请求将自动重试…')
+                  console.warn(`[Vite代理] 后端正在启动 (${devApiTarget})，API 请求将自动重试…`)
                   startupLogged = true
                 }
                 return
               }
               // 启动阶段过后仍连不上：提示检查后端
               if (now - lastWarningTime > 10000) {
-                console.error('[Vite代理] ❌ 无法连接到后端 (localhost:3001)，请确认已执行 npm run server 或后端服务已启动')
+                console.error(`[Vite代理] ❌ 无法连接到后端 (${devApiTarget})，请确认已执行 npm run server 或后端服务已启动`)
                 console.error('[Vite代理] 错误详情:', err.message, err.code)
                 lastWarningTime = now
               }
@@ -138,5 +150,6 @@ export default defineConfig({
   // 自定义日志级别，减少错误输出
   logLevel: 'info', // 显示所有日志，便于调试
   clearScreen: false // 不清屏，保持日志连续性
+  }
 })
 
