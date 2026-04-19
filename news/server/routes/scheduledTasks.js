@@ -755,9 +755,9 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       });
     } else {
       // 邮件发送日志查询（原有逻辑）
-    // 获取收件管理配置
+    // 获取收件管理配置（含 app_id：上市进展与新闻舆情等分应用发信，email_logs 按对应应用的 email_config 落库）
     const recipients = await db.query(
-      'SELECT recipient_email FROM recipient_management WHERE id = ?',
+      'SELECT recipient_email, app_id FROM recipient_management WHERE id = ?',
       [id]
     );
 
@@ -781,16 +781,25 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 获取邮件配置ID（新闻舆情应用）
-    const emailConfigs = await db.query(
-      `SELECT ec.id
-       FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
-       AND ec.is_active = 1
-       LIMIT 1`,
-      ['新闻舆情']
-    );
+    let emailConfigs = [];
+    if (recipient.app_id) {
+      emailConfigs = await db.query(
+        `SELECT ec.id FROM email_config ec WHERE ec.app_id = ? AND ec.is_active = 1 LIMIT 1`,
+        [recipient.app_id]
+      );
+    }
+    if (!emailConfigs.length) {
+      // 兼容旧数据：未绑定 app_id 的收件配置默认按「新闻舆情」应用查日志
+      emailConfigs = await db.query(
+        `SELECT ec.id
+         FROM email_config ec
+         LEFT JOIN applications a ON ec.app_id = a.id
+         WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
+         AND ec.is_active = 1
+         LIMIT 1`,
+        ['新闻舆情']
+      );
+    }
 
     if (emailConfigs.length === 0) {
       return res.json({

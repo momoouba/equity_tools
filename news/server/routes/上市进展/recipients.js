@@ -2,6 +2,7 @@ const db = require('../../db');
 const { generateId } = require('../../utils/idGenerator');
 const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
 const { executeListingEmailDigest } = require('../../utils/上市进展/listingEmailDigest');
+const { updateScheduledTasks } = require('../../utils/scheduledEmailTasks');
 
 function normalizeListingMailTypes(raw) {
   const allowed = new Set(['listing_project_progress', 'listing_progress', 'listing_guidance', 'overseas_filing', 'new_share']);
@@ -148,6 +149,11 @@ async function createRecipient(req, res) {
     );
 
     const row = await db.query(`SELECT * FROM recipient_management WHERE id = ?`, [recipientId]);
+    try {
+      await updateScheduledTasks();
+    } catch (schedErr) {
+      console.warn('[listing recipients] 刷新收件定时任务失败:', schedErr.message);
+    }
     return res.json({ success: true, data: row[0] });
   } catch (e) {
     console.error('createRecipient', e);
@@ -195,6 +201,11 @@ async function updateRecipient(req, res) {
     );
 
     const row = await db.query(`SELECT * FROM recipient_management WHERE id = ?`, [id]);
+    try {
+      await updateScheduledTasks();
+    } catch (schedErr) {
+      console.warn('[listing recipients] 刷新收件定时任务失败:', schedErr.message);
+    }
     return res.json({ success: true, data: row[0] });
   } catch (e) {
     console.error('updateRecipient', e);
@@ -227,6 +238,11 @@ async function deleteRecipient(req, res) {
       `UPDATE recipient_management SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?`,
       [user.id, id]
     );
+    try {
+      await updateScheduledTasks();
+    } catch (schedErr) {
+      console.warn('[listing recipients] 刷新收件定时任务失败:', schedErr.message);
+    }
     return res.json({ success: true });
   } catch (e) {
     console.error('deleteRecipient', e);
