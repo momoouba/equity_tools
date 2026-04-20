@@ -382,7 +382,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
     listingSectionHtml += `${renderSectionTitle('上市辅导（证监会辅导备案，昨日更新）', '#ff7d00')}${part2Guidance}`;
   }
   if (includeOverseasFiling && today.getDay() === 1) {
-    listingSectionHtml += `${renderSectionTitle('境外备案（境内企业境外上市备案，本周一新增）', '#f7ba1e')}${part2OverseasMonday}`;
+    listingSectionHtml += `${renderSectionTitle('境内企业境外上市备案（上周新增）', '#f7ba1e')}${part2OverseasMonday}`;
   }
 
   const newShareSectionHtml = includeNewShare

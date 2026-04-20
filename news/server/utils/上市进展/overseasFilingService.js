@@ -2,8 +2,136 @@ const db = require('../../db');
 const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
 const { runOverseasFilingDiscoverSync } = require('./overseasFilingDiscoverSync');
 const { runOverseasFilingSync } = require('./overseasFilingSync');
+const { runOverseasFilingNoticeSync } = require('./overseasFilingNoticeSync');
 
 const OVERSEAS_BOARD = '境外发行备案';
+
+/** 企业名称匹配：规范化后全等（与需求 2026-04-20 一致） */
+function normalizeOverseasNameKey(name) {
+  return String(name || '')
+    .normalize('NFKC')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+/** `register_address` 是否像公文文号（国合函〔…〕号） */
+function looksLikeCsrcDocNumber(registerAddress) {
+  const ra = String(registerAddress || '').trim();
+  if (!ra) return false;
+  if (/国合函/.test(ra)) return true;
+  return /〔\s*\d{4}\s*〕/.test(ra) && /号\s*$/.test(ra);
+}
+
+/**
+ * 与 Excel 先入行合并：同日、同企业（规范化全等），且 register_address 尚非文号。
+ */
+async function findOverseasExcelMergeTarget(projectName, receiveYmd) {
+  const key = normalizeOverseasNameKey(projectName);
+  if (!key) return null;
+  const rows = await db.query(
+    `SELECT f_id, project_name, register_address, status, company, exchange
+     FROM ipo_progress
+     WHERE F_DeleteMark = 0 AND board = ? AND receive_date = ?
+     ORDER BY f_id ASC`,
+    [OVERSEAS_BOARD, receiveYmd]
+  );
+  for (const r of rows) {
+    if (normalizeOverseasNameKey(r.project_name) !== key) continue;
+    if (!looksLikeCsrcDocNumber(r.register_address)) return r;
+  }
+  return null;
+}
+
+function assertManualOverseasDateRange(from, to, triggerType) {
+  if (triggerType !== 'manual' || !from || !to) return;
+  const a = String(from).slice(0, 10);
+  const b = String(to).slice(0, 10);
+  const d0 = new Date(`${a}T12:00:00+08:00`);
+  const d1 = new Date(`${b}T12:00:00+08:00`);
+  if (Number.isNaN(d0.getTime()) || Number.isNaN(d1.getTime())) return;
+  const inclusiveDays = Math.floor((d1.getTime() - d0.getTime()) / 86400000) + 1;
+  if (inclusiveDays > 30) {
+    throw new Error('手动同步时间区间不得超过 30 天（含起止日期）');
+  }
+}
+
+/**
+ * 备案通知书行写入 ipo_progress：优先合并 Excel 行；否则按文号 upsert。
+ */
+async function upsertNoticeFilingRow(row, adminId, writeDate) {
+  if (row && row.error && !row.company_name) return 'skipped';
+  const projectName = String(row.company_name || '').trim();
+  const receiveYmd = String(row.receive_date || '').slice(0, 10);
+  const docNo = String(row.filing_type || '').trim().slice(0, 200);
+  if (!receiveYmd || !docNo) return 'skipped';
+  if (!projectName) return 'skipped';
+
+  const company = overseasCompanyFromRow(row.filing_entity, projectName);
+  const status = '备案完成';
+  const exchange = String(row.target_exchange || '').trim().slice(0, 100);
+  const fUpdateTime = `${receiveYmd} 00:00:00`;
+  const writeYmd = String(writeDate || '').slice(0, 10) || receiveYmd;
+
+  const merge = await findOverseasExcelMergeTarget(projectName, receiveYmd);
+  if (merge) {
+    await db.execute(
+      `UPDATE ipo_progress SET
+        f_update_time = ?, status = ?, company = ?, exchange = ?, project_name = ?,
+        register_address = ?, F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+       WHERE f_id = ? AND F_DeleteMark = 0`,
+      [fUpdateTime, status, company, exchange, projectName, docNo, adminId, merge.f_id]
+    );
+    return 'updated';
+  }
+
+  const byDoc = await db.query(
+    `SELECT f_id, project_name, status, company, exchange, receive_date
+     FROM ipo_progress
+     WHERE F_DeleteMark = 0 AND board = ? AND register_address = ?`,
+    [OVERSEAS_BOARD, docNo]
+  );
+  if (byDoc.length) {
+    const old = byDoc[0];
+    const changed =
+      String(old.status || '') !== status ||
+      String(old.company || '') !== company ||
+      String(old.exchange || '') !== exchange ||
+      String(old.project_name || '') !== projectName ||
+      String(old.receive_date || '').slice(0, 10) !== receiveYmd;
+    if (!changed) return 'skipped';
+    await db.execute(
+      `UPDATE ipo_progress SET
+        f_update_time = ?, status = ?, company = ?, exchange = ?, project_name = ?, receive_date = ?,
+        F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+       WHERE f_id = ? AND F_DeleteMark = 0`,
+      [fUpdateTime, status, company, exchange, projectName, receiveYmd, adminId, old.f_id]
+    );
+    return 'updated';
+  }
+
+  await db.execute(
+    `INSERT INTO ipo_progress (
+      f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+      company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
+    [
+      writeYmd,
+      fUpdateTime,
+      '',
+      projectName,
+      status,
+      docNo,
+      receiveYmd,
+      company,
+      OVERSEAS_BOARD,
+      exchange,
+      adminId,
+      adminId,
+    ]
+  );
+  return 'inserted';
+}
 
 /**
  * 申报主体（Excel）为空或为 /、— 等占位时，公司全称用企业名称（project_name）。
@@ -120,6 +248,8 @@ async function syncOverseasFiling(options = {}) {
   const explicitFile = String(options.sourceFile || '').trim();
   const useCsrcDiscover = options.useCsrcDiscover !== false;
 
+  assertManualOverseasDateRange(from, to, triggerType);
+
   console.log(`${logTag} 执行开始 from=${from} to=${to} trigger=${triggerType}`);
   let sourceUrl = explicitUrl || (source === 'url' ? await resolveOverseasSourceUrl() : '');
   let csrcDiscover = null;
@@ -169,6 +299,37 @@ async function syncOverseasFiling(options = {}) {
     else if (state === 'updated') updated += 1;
     else skipped += 1;
   }
+
+  let noticeFetched = 0;
+  let noticeInserted = 0;
+  let noticeUpdated = 0;
+  let noticeSkipped = 0;
+  const noticeDisabled = String(process.env.OVERSEAS_FILING_NOTICE_DISABLE || '').trim() === '1';
+  const noticeListUrl = String(process.env.OVERSEAS_FILING_NOTICE_LIST_URL || '').trim();
+
+  if (source !== 'file' && !noticeDisabled) {
+    const noticeLog = `${logTag}[备案通知书HTML]`;
+    console.log(`${noticeLog} 开始 from=${from} to=${to}`);
+    const noticeRun = runOverseasFilingNoticeSync({
+      startDate: from,
+      endDate: to,
+      listUrl: noticeListUrl,
+      logTag: noticeLog,
+    });
+    if (!noticeRun.ok) {
+      throw new Error(noticeRun.stderr || '境外备案通知书 HTML 抓取失败');
+    }
+    const nrows = noticeRun.rows || [];
+    noticeFetched = nrows.length;
+    for (const nrow of nrows) {
+      const st = await upsertNoticeFilingRow(nrow, adminId, writeDate);
+      if (st === 'inserted') noticeInserted += 1;
+      else if (st === 'updated') noticeUpdated += 1;
+      else noticeSkipped += 1;
+    }
+    console.log(`${noticeLog} 完成 fetched=${noticeFetched} inserted=${noticeInserted} updated=${noticeUpdated} skipped=${noticeSkipped}`);
+  }
+
   const result = {
     from,
     to,
@@ -179,6 +340,11 @@ async function syncOverseasFiling(options = {}) {
     skipped,
     sourceRows: Number((fetched.summary && fetched.summary.sourceRows) || 0),
     source: String((fetched.summary && fetched.summary.source) || source),
+    noticeFetched,
+    noticeInserted,
+    noticeUpdated,
+    noticeSkipped,
+    noticeSkippedReason: noticeDisabled ? 'OVERSEAS_FILING_NOTICE_DISABLE=1' : source === 'file' ? 'source=file' : null,
     message: '境外备案审核同步完成（已写入 ipo_progress，board=境外发行备案）',
     executedAt: new Date().toISOString(),
     ...(csrcDiscover ? { csrcDiscover, usedCsrcAutoDiscover: true } : {}),
@@ -189,4 +355,5 @@ async function syncOverseasFiling(options = {}) {
 
 module.exports = {
   syncOverseasFiling,
+  assertManualOverseasDateRange,
 };
