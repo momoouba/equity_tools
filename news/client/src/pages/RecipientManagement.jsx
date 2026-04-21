@@ -708,11 +708,11 @@ function RecipientManagement() {
           <FormItem
             label="企业类型"
             field="entity_type"
-            extra="选择要发送的企业类型数据，可多选，不选择则发送所有类型"
+            extra="选择要发送的企业类型数据，可多选；不选择时不发送企业端信息（仅按第三方公众号配置发送）"
           >
             <Select
               mode="multiple"
-              placeholder="请选择企业类型（可多选，不选择则发送所有类型）"
+              placeholder="请选择企业类型（可多选，不选择则不发送企业端信息）"
               allowClear
               value={formData.entity_type}
               onChange={(value) => {

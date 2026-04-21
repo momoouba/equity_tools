@@ -4174,10 +4174,10 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       let skippedCount = 0;
       for (const news of basicFilteredNewsList) {
         try {
-          // 检查是否在20分钟内已分析过
-          if (aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
+          // 检查是否在2小时内已分析过
+          if (await aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
             skippedCount++;
-            logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
+            logWithTag('[手动发送邮件]', `⏭️ 新闻 ${news.id} 在2小时内已分析过，跳过重新分析`);
             continue;
           }
           // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚、终本案件等仅拼接入库的数据不做 AI 重新分析
@@ -4218,7 +4218,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
           if (reanalyzeResult) {
             reanalyzeSuccessCount++;
             // 记录分析时间戳到缓存
-            aiAnalysisCache.recordAnalysis(news.id);
+            await aiAnalysisCache.recordAnalysis(news.id);
             logWithTag('[手动发送邮件]', `✓ 新闻 ${news.id} 重新分析成功`);
           } else {
             reanalyzeErrorCount++;
@@ -4234,7 +4234,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       }
       
       if (skippedCount > 0) {
-        logWithTag('[手动发送邮件]', `⏭️ 跳过 ${skippedCount} 条在20分钟内已分析过的新闻`);
+        logWithTag('[手动发送邮件]', `⏭️ 跳过 ${skippedCount} 条在2小时内已分析过的新闻`);
       }
       
       logWithTag('[手动发送邮件]', `AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条, 跳过 ${skippedCount || 0} 条`);

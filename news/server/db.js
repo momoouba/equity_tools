@@ -2131,6 +2131,16 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // ai_news_analysis_cache 表：AI分析时间缓存（持久化，避免2小时内重复分析）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS ai_news_analysis_cache (
+      news_id VARCHAR(19) PRIMARY KEY COMMENT 'news_detail.id',
+      analyzed_at DATETIME NOT NULL COMMENT '最近一次传入AI分析时间',
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      INDEX idx_ai_news_analyzed_at (analyzed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
   // news_sync_detail_log 表：新闻同步详细记录（每个公众号/企业的同步详情）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_sync_detail_log (

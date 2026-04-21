@@ -819,9 +819,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
           AND DATEDIFF(DATE(nd.created_at), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
          )
        )
-       AND nd.delete_mark = 0
-       AND nd.enterprise_full_name IS NOT NULL
-       AND nd.enterprise_full_name != ''
+      AND nd.delete_mark = 0
        ${entityTypeCondition}
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
       [...uniqueAccountIds, from, to]
@@ -1372,6 +1370,30 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
 
   if (recipientConfig && recipientConfig.user_id) {
     newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipientConfig);
+  }
+
+  // 收件配置未选择企业类型时，不发送企业端信息（仅保留第三方公众号来源新闻）
+  if (recipientConfig) {
+    let entityTypesRaw = recipientConfig.entity_type;
+    if (typeof entityTypesRaw === 'string') {
+      try {
+        entityTypesRaw = JSON.parse(entityTypesRaw);
+      } catch (e) {
+        entityTypesRaw = entityTypesRaw ? [entityTypesRaw] : [];
+      }
+    }
+    if (entityTypesRaw === null || entityTypesRaw === undefined || entityTypesRaw === '') {
+      entityTypesRaw = [];
+    }
+    if (!Array.isArray(entityTypesRaw)) {
+      entityTypesRaw = [entityTypesRaw];
+    }
+    const entityTypes = entityTypesRaw.map((x) => String(x || '').trim()).filter(Boolean);
+    if (entityTypes.length === 0 && newsList.length > 0) {
+      const beforeCount = newsList.length;
+      newsList = newsList.filter((n) => n.wechat_account && additionalAccountIdsSet.has(n.wechat_account));
+      console.log(`[邮件发送] 收件配置未选择企业类型，仅保留第三方公众号来源新闻：${beforeCount} -> ${newsList.length}`);
+    }
   }
   
   if (newsList.length > 0) {
@@ -2582,10 +2604,10 @@ async function executeEmailTask(recipientId) {
       let skippedCount = 0;
       for (const news of newsList) {
         try {
-          // 检查是否在20分钟内已分析过
-          if (aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
+          // 检查是否在2小时内已分析过
+          if (await aiAnalysisCache.isRecentlyAnalyzed(news.id)) {
             skippedCount++;
-            logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 在20分钟内已分析过，跳过重新分析`);
+            logWithTimestamp(`[邮件发送] ⏭️ 新闻 ${news.id} 在2小时内已分析过，跳过重新分析`);
             continue;
           }
 
@@ -2627,7 +2649,7 @@ async function executeEmailTask(recipientId) {
           if (reanalyzeResult) {
             reanalyzeSuccessCount++;
             // 记录分析时间戳到缓存
-            aiAnalysisCache.recordAnalysis(news.id);
+            await aiAnalysisCache.recordAnalysis(news.id);
             logWithTimestamp(`[邮件发送] ✓ 新闻 ${news.id} 重新分析成功`);
           } else {
             reanalyzeErrorCount++;
@@ -2643,7 +2665,7 @@ async function executeEmailTask(recipientId) {
       }
       
       if (skippedCount > 0) {
-        logWithTimestamp(`[邮件发送] ⏭️ 跳过 ${skippedCount} 条在20分钟内已分析过的新闻`);
+        logWithTimestamp(`[邮件发送] ⏭️ 跳过 ${skippedCount} 条在2小时内已分析过的新闻`);
       }
       
       logWithTimestamp(`[邮件发送] AI重新分析完成: 成功 ${reanalyzeSuccessCount} 条, 失败 ${reanalyzeErrorCount} 条, 跳过 ${skippedCount || 0} 条`);

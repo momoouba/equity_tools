@@ -353,10 +353,12 @@ router.put('/:id', checkAuth, async (req, res) => {
       });
     }
 
-    // 检查微信账号ID是否重复（排除当前记录，只检查当前用户创建的）
+    // 检查微信账号ID是否重复（排除当前记录，按被编辑记录所属用户维度校验）
+    // 管理员编辑他人记录时，仍应沿用该记录 creator_user_id 的唯一约束范围
+    const duplicateScopeUserId = oldData.creator_user_id || req.currentUserId;
     const duplicate = await db.query(
       'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND id != ? AND creator_user_id = ? AND delete_mark = 0',
-      [wechat_account_id, id, req.currentUserId]
+      [wechat_account_id, id, duplicateScopeUserId]
     );
 
     if (duplicate.length > 0) {
