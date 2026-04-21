@@ -1182,6 +1182,7 @@ function NewsInfo() {
               <Radio value="enterprise">企业相关</Radio>
               <Radio value="fund">基金相关主体</Radio>
               <Radio value="sub_fund">子基金</Radio>
+              <Radio value="third_party">第三方公众号</Radio>
               <Radio value="all">全部</Radio>
             </RadioGroup>
 

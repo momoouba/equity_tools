@@ -3879,5 +3879,357 @@ router.post('/cron/parse', async (req, res) => {
   }
 });
 
+// ==================== 数据字典（base_dictionary） ====================
+
+// 获取字典类型列表（parent_id IS NULL）
+router.get('/base-dictionaries', async (req, res) => {
+  try {
+    const rows = await db.query(
+      `SELECT
+        d.id, d.dict_code, d.dict_name, d.sort_order, d.is_enabled, d.created_at, d.updated_at,
+        (
+          SELECT COUNT(1)
+          FROM base_dictionary c
+          WHERE c.parent_id = d.id AND c.delete_mark = 0
+        ) AS item_count
+       FROM base_dictionary d
+       WHERE d.delete_mark = 0 AND d.parent_id IS NULL
+       ORDER BY d.sort_order ASC, d.created_at DESC`
+    );
+    res.json({ success: true, data: rows || [] });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '获取字典类型列表失败：', error);
+    res.status(500).json({ success: false, message: '获取字典类型列表失败' });
+  }
+});
+
+// 新增字典类型
+router.post('/base-dictionaries', async (req, res) => {
+  try {
+    const { dict_code, dict_name, sort_order = 0, is_enabled = 1 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!dict_code || !String(dict_code).trim() || !dict_name || !String(dict_name).trim()) {
+      return res.status(400).json({ success: false, message: '字典编码和字典名称不能为空' });
+    }
+    const code = String(dict_code).trim();
+    const name = String(dict_name).trim();
+    const dup = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE delete_mark = 0 AND parent_id IS NULL AND dict_code = ?
+       LIMIT 1`,
+      [code]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '字典编码已存在' });
+    }
+    const id = await generateId('base_dictionary');
+    await db.execute(
+      `INSERT INTO base_dictionary
+       (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, created_by, updated_by)
+       VALUES (?, NULL, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+      [id, code, name, Number(sort_order || 0), Number(is_enabled) === 0 ? 0 : 1, userId, userId]
+    );
+    res.json({ success: true, message: '新增字典类型成功', data: { id } });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '新增字典类型失败：', error);
+    res.status(500).json({ success: false, message: '新增字典类型失败' });
+  }
+});
+
+// 更新字典类型
+router.put('/base-dictionaries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dict_code, dict_name, sort_order = 0 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!dict_code || !String(dict_code).trim() || !dict_name || !String(dict_name).trim()) {
+      return res.status(400).json({ success: false, message: '字典编码和字典名称不能为空' });
+    }
+    const oldRows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!oldRows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const code = String(dict_code).trim();
+    const name = String(dict_name).trim();
+    const dup = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE delete_mark = 0 AND parent_id IS NULL AND dict_code = ? AND id != ?
+       LIMIT 1`,
+      [code, id]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '字典编码已存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET dict_code = ?, dict_name = ?, sort_order = ?, updated_by = ?
+       WHERE id = ?`,
+      [code, name, Number(sort_order || 0), userId, id]
+    );
+    // 同步更新子项的 dict_code、dict_name，保持单表语义一致
+    await db.execute(
+      `UPDATE base_dictionary
+       SET dict_code = ?, dict_name = ?, updated_by = ?
+       WHERE parent_id = ? AND delete_mark = 0`,
+      [code, name, userId, id]
+    );
+    res.json({ success: true, message: '更新字典类型成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典类型失败：', error);
+    res.status(500).json({ success: false, message: '更新字典类型失败' });
+  }
+});
+
+// 启用/停用字典类型
+router.put('/base-dictionaries/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_enabled } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    const enabled = Number(is_enabled) === 0 ? 0 : 1;
+    const rows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET is_enabled = ?, updated_by = ?
+       WHERE id = ?`,
+      [enabled, userId, id]
+    );
+    // 字典类型停用时，子项同步停用；启用时不强制开启子项（保留子项独立状态）
+    if (enabled === 0) {
+      await db.execute(
+        `UPDATE base_dictionary
+         SET is_enabled = 0, updated_by = ?
+         WHERE parent_id = ? AND delete_mark = 0`,
+        [userId, id]
+      );
+    }
+    res.json({ success: true, message: enabled ? '启用成功' : '停用成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典类型状态失败：', error);
+    res.status(500).json({ success: false, message: '更新字典类型状态失败' });
+  }
+});
+
+// 删除字典类型（软删除，连带子项）
+router.delete('/base-dictionaries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] || null;
+    const rows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_by = ?
+       WHERE id = ? OR parent_id = ?`,
+      [userId, userId, id, id]
+    );
+    res.json({ success: true, message: '删除字典类型成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '删除字典类型失败：', error);
+    res.status(500).json({ success: false, message: '删除字典类型失败' });
+  }
+});
+
+// 获取指定字典类型下的选项
+router.get('/base-dictionaries/:id/items', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parentRows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!parentRows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const rows = await db.query(
+      `SELECT id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, created_at, updated_at
+       FROM base_dictionary
+       WHERE parent_id = ? AND delete_mark = 0
+       ORDER BY sort_order ASC, created_at DESC`,
+      [id]
+    );
+    res.json({ success: true, data: rows || [] });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '获取字典选项失败：', error);
+    res.status(500).json({ success: false, message: '获取字典选项失败' });
+  }
+});
+
+// 新增字典选项
+router.post('/base-dictionaries/:id/items', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { item_code, item_name, sort_order = 0, is_enabled = 1 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!item_code || !String(item_code).trim() || !item_name || !String(item_name).trim()) {
+      return res.status(400).json({ success: false, message: '选项编码和选项名称不能为空' });
+    }
+    const parents = await db.query(
+      `SELECT id, dict_code, dict_name FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!parents.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const parent = parents[0];
+    const code = String(item_code).trim();
+    const name = String(item_name).trim();
+    const dup = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE parent_id = ? AND delete_mark = 0 AND item_code = ?
+       LIMIT 1`,
+      [id, code]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '选项编码已存在' });
+    }
+    const newId = await generateId('base_dictionary');
+    await db.execute(
+      `INSERT INTO base_dictionary
+       (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, created_by, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        id,
+        parent.dict_code,
+        parent.dict_name,
+        code,
+        name,
+        Number(sort_order || 0),
+        Number(is_enabled) === 0 ? 0 : 1,
+        userId,
+        userId,
+      ]
+    );
+    res.json({ success: true, message: '新增字典选项成功', data: { id: newId } });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '新增字典选项失败：', error);
+    res.status(500).json({ success: false, message: '新增字典选项失败' });
+  }
+});
+
+// 更新字典选项
+router.put('/base-dictionary-items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { item_code, item_name, sort_order = 0 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!item_code || !String(item_code).trim() || !item_name || !String(item_name).trim()) {
+      return res.status(400).json({ success: false, message: '选项编码和选项名称不能为空' });
+    }
+    const rows = await db.query(
+      `SELECT id, parent_id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    const row = rows[0];
+    const code = String(item_code).trim();
+    const name = String(item_name).trim();
+    const dup = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE parent_id = ? AND delete_mark = 0 AND item_code = ? AND id != ?
+       LIMIT 1`,
+      [row.parent_id, code, id]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '选项编码已存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET item_code = ?, item_name = ?, sort_order = ?, updated_by = ?
+       WHERE id = ?`,
+      [code, name, Number(sort_order || 0), userId, id]
+    );
+    res.json({ success: true, message: '更新字典选项成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典选项失败：', error);
+    res.status(500).json({ success: false, message: '更新字典选项失败' });
+  }
+});
+
+// 启用/停用字典选项
+router.put('/base-dictionary-items/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_enabled } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    const enabled = Number(is_enabled) === 0 ? 0 : 1;
+    const rows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET is_enabled = ?, updated_by = ?
+       WHERE id = ?`,
+      [enabled, userId, id]
+    );
+    res.json({ success: true, message: enabled ? '启用成功' : '停用成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典选项状态失败：', error);
+    res.status(500).json({ success: false, message: '更新字典选项状态失败' });
+  }
+});
+
+// 删除字典选项（软删除）
+router.delete('/base-dictionary-items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] || null;
+    const rows = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE id = ? AND delete_mark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_by = ?
+       WHERE id = ?`,
+      [userId, userId, id]
+    );
+    res.json({ success: true, message: '删除字典选项成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '删除字典选项失败：', error);
+    res.status(500).json({ success: false, message: '删除字典选项失败' });
+  }
+});
+
 module.exports = router;
 

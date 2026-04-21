@@ -25,6 +25,93 @@ function splitAccountIds(accountIdsStr) {
     .filter(id => id && id !== '');
 }
 
+/** 无行业标签的第三方公众号在收件筛选中的占位值 */
+const ADDITIONAL_ACCOUNT_TAG_NONE = '__NONE__';
+
+/**
+ * 按收件管理配置的 industry 标签筛选「当前用户名下第三方公众号」相关新闻。
+ * - additional_account_tag_codes 为 NULL：旧数据，不筛除（兼容历史行为）
+ * - []：筛掉所有来源为当前用户 additional_wechat_accounts 的新闻
+ * - 非空：仅保留 wechat_account 命中所选标签（含 __NONE__ 表示 industry_tag_code 为空）
+ * @param {Array} newsList
+ * @param {{ user_id?: string, additional_account_tag_codes?: any }} recipientConfig
+ * @returns {Promise<Array>}
+ */
+async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfig) {
+  if (!recipientConfig || !recipientConfig.user_id || !Array.isArray(newsList)) {
+    return newsList;
+  }
+  let raw = recipientConfig.additional_account_tag_codes;
+  if (raw === null || raw === undefined) {
+    return newsList;
+  }
+  let selected = raw;
+  if (typeof selected === 'string') {
+    try {
+      selected = JSON.parse(selected);
+    } catch (e) {
+      return newsList;
+    }
+  }
+  if (!Array.isArray(selected)) {
+    return newsList;
+  }
+
+  let scopedRows;
+  try {
+    scopedRows = await db.query(
+      `SELECT wechat_account_id, industry_tag_code
+       FROM additional_wechat_accounts
+       WHERE creator_user_id = ? AND status = 'active' AND delete_mark = 0
+         AND wechat_account_id IS NOT NULL AND wechat_account_id != ''`,
+      [recipientConfig.user_id]
+    );
+  } catch (err) {
+    console.warn(`[邮件发送] 加载当前用户第三方公众号失败: ${err.message}`);
+    return newsList;
+  }
+
+  const scopedSet = new Set(scopedRows.map((r) => r.wechat_account_id));
+  const tagByAccount = new Map(
+    scopedRows.map((r) => {
+      const c = r.industry_tag_code;
+      const normalized = c != null && String(c).trim() !== '' ? String(c).trim() : null;
+      return [r.wechat_account_id, normalized];
+    })
+  );
+
+  if (selected.length === 0) {
+    const filtered = newsList.filter(
+      (n) => !n.wechat_account || !scopedSet.has(n.wechat_account)
+    );
+    console.log(
+      `[邮件发送] 第三方公众号标签：未选任何标签，已排除当前用户名下第三方公众号来源新闻 ${newsList.length} -> ${filtered.length}`
+    );
+    return filtered;
+  }
+
+  const allowNone = selected.includes(ADDITIONAL_ACCOUNT_TAG_NONE);
+  const codes = new Set(selected.filter((x) => x !== ADDITIONAL_ACCOUNT_TAG_NONE).map(String));
+
+  const filtered = newsList.filter((n) => {
+    if (!n.wechat_account || !scopedSet.has(n.wechat_account)) {
+      return true;
+    }
+    const tc = tagByAccount.get(n.wechat_account);
+    if (allowNone && !tc) {
+      return true;
+    }
+    if (tc && codes.has(tc)) {
+      return true;
+    }
+    return false;
+  });
+  console.log(
+    `[邮件发送] 第三方公众号标签筛选（已选 ${selected.length} 项）：${newsList.length} -> ${filtered.length} 条`
+  );
+  return filtered;
+}
+
 /**
  * 解析新闻关键词，兼容 JSON 数组、逗号/顿号分隔字符串、单个字符串。
  * @param {any} rawKeywords
@@ -1281,6 +1368,10 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     console.log(`[邮件发送] 预先获取额外公众号ID列表，共 ${additionalAccountIdsSet.size} 个`);
   } catch (err) {
     console.warn(`[邮件发送] 获取额外公众号列表失败: ${err.message}`);
+  }
+
+  if (recipientConfig && recipientConfig.user_id) {
+    newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipientConfig);
   }
   
   if (newsList.length > 0) {
@@ -2663,6 +2754,7 @@ async function executeEmailTask(recipientId) {
         // 重要：更新 newsList 引用
         logWithTimestamp(`[邮件发送] 更新 newsList 引用，从 ${newsList.length} 条更新为 ${refreshedNewsList.length} 条`);
         newsList = refreshedNewsList;
+        newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipient);
         
         // 验证更新后的 newsList
         if (newsList.length > 0) {

@@ -12,9 +12,62 @@ function weekdayZh(ymd) {
   return names[d.getDay()] || null;
 }
 
+/** MySQL DATE / DATETIME / 'YYYY-MM-DD' → 日历日 YYYY-MM-DD（与抓取侧一致） */
+function toYmdDb(v) {
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') {
+    const s = v.trim().slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  }
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    try {
+      return formatDateOnly(v);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
+function isProvidedOptionalString(v) {
+  if (v === undefined || v === null) return false;
+  return String(v).trim() !== '';
+}
+
+function isProvidedNumber(v) {
+  if (v === undefined || v === null) return false;
+  if (typeof v === 'string' && v.trim() === '') return false;
+  return Number.isFinite(Number(v));
+}
+
+function numClose(a, b) {
+  const na = Number(a);
+  const nb = Number(b);
+  if (!Number.isFinite(na) && !Number.isFinite(nb)) return true;
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return false;
+  return Math.abs(na - nb) < 1e-6;
+}
+
+function pickFiniteNumberOrNull(rowVal, oldVal) {
+  if (!isProvidedNumber(rowVal)) {
+    const o = Number(oldVal);
+    return Number.isFinite(o) ? o : null;
+  }
+  const n = Number(rowVal);
+  return Number.isFinite(n) ? n : null;
+}
+
+function pickPositiveOrNullFromRow(rowVal, oldVal) {
+  if (rowVal === undefined || rowVal === null || (typeof rowVal === 'string' && rowVal.trim() === '')) {
+    return normalizePositiveOrNull(oldVal);
+  }
+  const fromRow = normalizePositiveOrNull(rowVal);
+  if (fromRow !== null) return fromRow;
+  return normalizePositiveOrNull(oldVal);
+}
+
 async function upsertNewShareRow(row) {
-  const issueDate = String(row.issue_date || '').slice(0, 10);
-  const issueWeekday = weekdayZh(issueDate);
+  const rowIssueSlice = String(row.issue_date || '').slice(0, 10);
   const existing = await db.query(
     `SELECT id, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares,
             public_date, win_rate, first_day_close, first_day_chg_pct, first_day_market_cap
@@ -25,6 +78,8 @@ async function upsertNewShareRow(row) {
   );
 
   if (!existing.length) {
+    const issueDate = isYmd(rowIssueSlice) ? rowIssueSlice : '';
+    const issueWeekday = weekdayZh(issueDate);
     await db.execute(
       `INSERT INTO ipo_new_share
       (stock_code, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares, exchange, public_date, win_rate,
@@ -51,27 +106,44 @@ async function upsertNewShareRow(row) {
   }
 
   const old = existing[0];
-  const nextTotalIssuedShares =
-    row.total_issued_shares === undefined ? old.total_issued_shares : normalizePositiveOrNull(row.total_issued_shares);
-  const nextFirstDayClose =
-    row.first_day_close === undefined ? old.first_day_close : normalizePositiveOrNull(row.first_day_close);
+  const oldIssueYmd = toYmdDb(old.issue_date);
+  const issueDate = isYmd(rowIssueSlice) ? rowIssueSlice : oldIssueYmd;
+  const issueWeekday = weekdayZh(issueDate);
+
+  const nextStockName = isProvidedOptionalString(row.stock_name)
+    ? String(row.stock_name).trim()
+    : String(old.stock_name || '');
+
+  const nextIssuePrice = pickFiniteNumberOrNull(row.issue_price, old.issue_price);
+  const nextOfferPe = pickFiniteNumberOrNull(row.offer_pe, old.offer_pe);
+  const nextLimitShares = pickFiniteNumberOrNull(row.limit_shares, old.limit_shares);
+  const nextTotalIssuedShares = pickPositiveOrNullFromRow(row.total_issued_shares, old.total_issued_shares);
+
+  const rowPubSlice = String(row.public_date || '').trim().slice(0, 10);
+  const nextPublicDate = isYmd(rowPubSlice) ? rowPubSlice : toYmdDb(old.public_date) || null;
+
+  const nextWinRate = pickFiniteNumberOrNull(row.win_rate, old.win_rate);
+
+  const nextFirstDayClose = pickPositiveOrNullFromRow(row.first_day_close, old.first_day_close);
   const nextFirstDayChgPct =
-    row.first_day_chg_pct === undefined ? old.first_day_chg_pct : (row.first_day_chg_pct ?? null);
-  const nextFirstDayMarketCap =
-    row.first_day_market_cap === undefined ? old.first_day_market_cap : normalizePositiveOrNull(row.first_day_market_cap);
+    row.first_day_chg_pct === undefined || row.first_day_chg_pct === null || (typeof row.first_day_chg_pct === 'string' && row.first_day_chg_pct.trim() === '')
+      ? (old.first_day_chg_pct != null && old.first_day_chg_pct !== '' ? Number(old.first_day_chg_pct) : null)
+      : Number(row.first_day_chg_pct);
+  const nextFirstDayMarketCap = pickPositiveOrNullFromRow(row.first_day_market_cap, old.first_day_market_cap);
+
   const changed =
-    String(old.stock_name || '') !== String(row.stock_name || '') ||
-    String(old.issue_date || '') !== issueDate ||
+    String(old.stock_name || '') !== nextStockName ||
+    toYmdDb(old.issue_date) !== issueDate ||
     String(old.issue_weekday || '') !== String(issueWeekday || '') ||
-    Number(old.issue_price || 0) !== Number(row.issue_price || 0) ||
-    Number(old.offer_pe || 0) !== Number(row.offer_pe || 0) ||
-    Number(old.limit_shares || 0) !== Number(row.limit_shares || 0) ||
-    Number(old.total_issued_shares || 0) !== Number(nextTotalIssuedShares || 0) ||
-    String(old.public_date || '') !== String(row.public_date || '') ||
-    Number(old.win_rate || 0) !== Number(row.win_rate || 0) ||
-    Number(old.first_day_close || 0) !== Number(nextFirstDayClose || 0) ||
-    Number(old.first_day_chg_pct || 0) !== Number(nextFirstDayChgPct || 0) ||
-    Number(old.first_day_market_cap || 0) !== Number(nextFirstDayMarketCap || 0);
+    !numClose(old.issue_price, nextIssuePrice) ||
+    !numClose(old.offer_pe, nextOfferPe) ||
+    !numClose(old.limit_shares, nextLimitShares) ||
+    !numClose(old.total_issued_shares, nextTotalIssuedShares) ||
+    toYmdDb(old.public_date) !== (nextPublicDate || '') ||
+    !numClose(old.win_rate, nextWinRate) ||
+    !numClose(old.first_day_close, nextFirstDayClose) ||
+    !numClose(old.first_day_chg_pct, nextFirstDayChgPct) ||
+    !numClose(old.first_day_market_cap, nextFirstDayMarketCap);
 
   if (!changed) return 'skipped';
 
@@ -82,17 +154,17 @@ async function upsertNewShareRow(row) {
           first_day_close = ?, first_day_chg_pct = ?, first_day_market_cap = ?
       WHERE id = ?`,
     [
-      row.stock_name,
+      nextStockName,
       issueDate,
       issueWeekday,
-      row.issue_price ?? null,
-      row.offer_pe ?? null,
-      row.limit_shares ?? null,
+      nextIssuePrice,
+      nextOfferPe,
+      nextLimitShares,
       nextTotalIssuedShares,
-      row.public_date || null,
-      row.win_rate ?? null,
+      nextPublicDate,
+      nextWinRate,
       nextFirstDayClose,
-      nextFirstDayChgPct,
+      Number.isFinite(nextFirstDayChgPct) ? nextFirstDayChgPct : null,
       nextFirstDayMarketCap,
       old.id,
     ]
@@ -282,18 +354,25 @@ async function syncNewShareCalendar(options = {}) {
   const triggerType = options.triggerType || 'manual';
   const logTag = options.logTag || '[打新日历同步]';
   const issueAfter = String(options.issueDateAfterExclusive || '').trim().slice(0, 10) || null;
+  const updateAfter = String(options.updateDateAfterExclusive || '').trim().slice(0, 10) || null;
+  const listingDateLookbackDays =
+    Math.max(0, Number(options.listingDateLookbackDays || process.env.NEW_SHARE_LISTING_DATE_LOOKBACK_DAYS || 14));
   const hkRecentDays =
     triggerType === 'scheduled' && !issueAfter ? 7 : 0;
 
   console.log(
     `${logTag} 执行开始 from=${from} to=${to} trigger=${triggerType}` +
-      (issueAfter ? ` issueDate>${issueAfter}` : '')
+      (issueAfter ? ` issueDate>${issueAfter}` : '') +
+      (updateAfter ? ` upDate>=${updateAfter}` : '') +
+      (issueAfter ? ` listingDateLookbackDays=${listingDateLookbackDays}` : '')
   );
   const fetched = runNewShareAkSync({
     startDate: from,
     endDate: to,
     hkRecentDays,
     issueDateAfterExclusive: issueAfter,
+    updateDateAfterExclusive: updateAfter,
+    listingDateLookbackDays: issueAfter ? listingDateLookbackDays : 0,
     logTag,
   });
   if (!fetched.ok) {

@@ -7,6 +7,35 @@ const { logDataChange } = require('../utils/logger');
 
 const router = express.Router();
 
+/** 第三方公众号「行业」标签：与数据字典类型 dict_code = industry 的选项 item_code 对应 */
+const INDUSTRY_DICT_CODE = 'industry';
+
+async function normalizeIndustryTagCode(raw) {
+  if (raw === null || raw === undefined) {
+    return { ok: true, value: null };
+  }
+  const s = String(raw).trim();
+  if (!s) {
+    return { ok: true, value: null };
+  }
+  const rows = await db.query(
+    `SELECT c.item_code
+     FROM base_dictionary p
+     INNER JOIN base_dictionary c ON c.parent_id = p.id AND c.delete_mark = 0
+     WHERE p.delete_mark = 0 AND p.parent_id IS NULL AND p.dict_code = ?
+       AND c.item_code = ? AND p.is_enabled = 1 AND c.is_enabled = 1
+     LIMIT 1`,
+    [INDUSTRY_DICT_CODE, s]
+  );
+  if (!rows.length) {
+    return {
+      ok: false,
+      message: '行业标签无效或已停用，请填写数据字典「行业」下已启用的选项编码'
+    };
+  }
+  return { ok: true, value: rows[0].item_code };
+}
+
 // 配置multer用于文件上传
 const upload = multer({ 
   storage: multer.memoryStorage(),
@@ -15,8 +44,13 @@ const upload = multer({
   }
 });
 
+function isAdminUser(user) {
+  if (!user) return false;
+  return String(user.account || '').trim() === 'admin' || String(user.role || '').trim() === 'admin';
+}
+
 // 用户认证中间件（所有用户都可以访问）
-const checkAuth = (req, res, next) => {
+const checkAuth = async (req, res, next) => {
   const userRole = req.headers['x-user-role'] || 'user';
   const userId = req.headers['x-user-id'] || null;
 
@@ -24,9 +58,23 @@ const checkAuth = (req, res, next) => {
     return res.status(401).json({ success: false, message: '未登录' });
   }
 
-  req.currentUserId = userId;
-  req.currentUserRole = userRole;
-  next();
+  try {
+    const rows = await db.query(
+      'SELECT id, account, role FROM users WHERE id = ? LIMIT 1',
+      [userId]
+    );
+    const currentUser = rows[0] || null;
+    const isAdmin = isAdminUser(currentUser) || String(userRole).trim() === 'admin';
+
+    req.currentUserId = userId;
+    req.currentUserRole = currentUser?.role || userRole;
+    req.currentUserAccount = currentUser?.account || '';
+    req.isAdmin = isAdmin;
+    next();
+  } catch (error) {
+    console.error('额外公众号鉴权失败：', error);
+    return res.status(500).json({ success: false, message: '鉴权失败' });
+  }
 };
 
 // 根据会员等级计算当前用户允许创建的额外公众号数量
@@ -35,7 +83,7 @@ async function getUserAdditionalAccountLimit(userId) {
 
   // 查询用户角色及主会员等级名称
   const rows = await db.query(
-    `SELECT u.role, u.membership_level_id, ml.level_name
+    `SELECT u.account, u.role, u.membership_level_id, ml.level_name
      FROM users u
      LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
      WHERE u.id = ?`,
@@ -47,10 +95,11 @@ async function getUserAdditionalAccountLimit(userId) {
   }
 
   const role = rows[0].role || 'user';
+  const account = rows[0].account || '';
   const levelName = rows[0].level_name || '';
 
   // 管理员账号不受数量限制
-  if (role === 'admin') return Number.MAX_SAFE_INTEGER;
+  if (role === 'admin' || account === 'admin') return Number.MAX_SAFE_INTEGER;
 
   // 根据新闻舆情会员等级名称控制额度
   if (levelName === '普通会员') return 5;
@@ -79,7 +128,7 @@ router.get('/', checkAuth, async (req, res) => {
   try {
     const { page = 1, pageSize = 10, search, status, userId } = req.query;
     const offset = (page - 1) * pageSize;
-    const isAdmin = req.currentUserRole === 'admin';
+    const isAdmin = req.isAdmin === true;
 
     let condition = 'WHERE a.delete_mark = 0';
     const params = [];
@@ -106,18 +155,23 @@ router.get('/', checkAuth, async (req, res) => {
       params.push(status);
     }
 
-    // 查询数据，包含创建人信息
+    // 查询数据，包含创建人信息、行业标签名称（数据字典 industry）
     const data = await db.query(
       `SELECT 
-        a.id, a.account_name, a.wechat_account_id, a.status, 
+        a.id, a.account_name, a.wechat_account_id, a.status, a.industry_tag_code,
+        tag.item_name AS industry_tag_name,
         a.creator_user_id, a.created_at, a.updater_user_id, a.updated_at,
         u.account as creator_account
        FROM additional_wechat_accounts a
        LEFT JOIN users u ON a.creator_user_id = u.id
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.delete_mark = 0
+         AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
+       LEFT JOIN base_dictionary tag ON tag.delete_mark = 0
+         AND tag.parent_id = ind_parent.id AND tag.item_code = a.industry_tag_code
        ${condition} 
        ORDER BY a.created_at DESC 
        LIMIT ? OFFSET ?`,
-      [...params, parseInt(pageSize), offset]
+      [INDUSTRY_DICT_CODE, ...params, parseInt(pageSize), offset]
     );
 
     // 查询总数
@@ -159,10 +213,36 @@ router.get('/', checkAuth, async (req, res) => {
   }
 });
 
+// 行业标签下拉选项（数据字典 industry，仅已启用项）
+router.get('/industry-tag-options', checkAuth, async (req, res) => {
+  try {
+    const parent = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE delete_mark = 0 AND parent_id IS NULL AND dict_code = ?
+       LIMIT 1`,
+      [INDUSTRY_DICT_CODE]
+    );
+    if (!parent.length) {
+      return res.json({ success: true, data: [] });
+    }
+    const items = await db.query(
+      `SELECT item_code AS value, item_name AS label, sort_order
+       FROM base_dictionary
+       WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
+       ORDER BY sort_order ASC, created_at DESC`,
+      [parent[0].id]
+    );
+    res.json({ success: true, data: items || [] });
+  } catch (error) {
+    console.error('获取行业标签选项失败：', error);
+    res.status(500).json({ success: false, message: '获取行业标签选项失败' });
+  }
+});
+
 // 新增额外公众号（所有用户都可以创建）
 router.post('/', checkAuth, async (req, res) => {
   try {
-    const { account_name, wechat_account_id, status = 'active' } = req.body;
+    const { account_name, wechat_account_id, status = 'active', industry_tag_code } = req.body;
 
     if (!account_name || !wechat_account_id) {
       return res.status(400).json({ 
@@ -172,7 +252,7 @@ router.post('/', checkAuth, async (req, res) => {
     }
 
     // 会员额度检查：管理员不受限；普通用户按 membership_levels 限制可创建数量
-    if (req.currentUserRole !== 'admin') {
+    if (!req.isAdmin) {
       const limit = await getUserAdditionalAccountLimit(req.currentUserId);
       if (limit <= 0) {
         return res.status(403).json({
@@ -204,19 +284,25 @@ router.post('/', checkAuth, async (req, res) => {
       });
     }
 
+    const tagNorm = await normalizeIndustryTagCode(industry_tag_code);
+    if (!tagNorm.ok) {
+      return res.status(400).json({ success: false, message: tagNorm.message });
+    }
+
     const accountId = await generateId('additional_wechat_accounts');
     await db.execute(
       `INSERT INTO additional_wechat_accounts 
-       (id, account_name, wechat_account_id, status, creator_user_id) 
-       VALUES (?, ?, ?, ?, ?)`,
-      [accountId, account_name, wechat_account_id, status, req.currentUserId]
+       (id, account_name, wechat_account_id, status, industry_tag_code, creator_user_id) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [accountId, account_name, wechat_account_id, status, tagNorm.value, req.currentUserId]
     );
 
     // 记录新增日志（新增时旧数据为空）
     const newData = {
       account_name,
       wechat_account_id,
-      status
+      status,
+      industry_tag_code: tagNorm.value
     };
     await logDataChange('additional_wechat_accounts', accountId, {}, newData, req.currentUserId);
 
@@ -235,7 +321,7 @@ router.post('/', checkAuth, async (req, res) => {
 router.put('/:id', checkAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { account_name, wechat_account_id, status } = req.body;
+    const { account_name, wechat_account_id, status, industry_tag_code } = req.body;
 
     if (!account_name || !wechat_account_id) {
       return res.status(400).json({ 
@@ -260,7 +346,7 @@ router.put('/:id', checkAuth, async (req, res) => {
     const oldData = existing[0];
     
     // 权限检查：普通用户只能更新自己创建的
-    if (req.currentUserRole !== 'admin' && oldData.creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && oldData.creator_user_id !== req.currentUserId) {
       return res.status(403).json({ 
         success: false, 
         message: '无权更新此记录' 
@@ -280,18 +366,24 @@ router.put('/:id', checkAuth, async (req, res) => {
       });
     }
 
+    const tagNorm = await normalizeIndustryTagCode(industry_tag_code);
+    if (!tagNorm.ok) {
+      return res.status(400).json({ success: false, message: tagNorm.message });
+    }
+
     await db.execute(
       `UPDATE additional_wechat_accounts 
-       SET account_name = ?, wechat_account_id = ?, status = ?, updater_user_id = ?
+       SET account_name = ?, wechat_account_id = ?, status = ?, industry_tag_code = ?, updater_user_id = ?
        WHERE id = ?`,
-      [account_name, wechat_account_id, status, req.currentUserId, id]
+      [account_name, wechat_account_id, status, tagNorm.value, req.currentUserId, id]
     );
 
     // 记录变更日志
     const newData = {
       account_name,
       wechat_account_id,
-      status
+      status,
+      industry_tag_code: tagNorm.value
     };
     await logDataChange('additional_wechat_accounts', id, oldData, newData, req.currentUserId);
 
@@ -324,7 +416,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
     }
     
     // 权限检查：普通用户只能删除自己创建的
-    if (req.currentUserRole !== 'admin' && existing[0].creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && existing[0].creator_user_id !== req.currentUserId) {
       return res.status(403).json({ 
         success: false, 
         message: '无权删除此记录' 
@@ -373,7 +465,7 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
 
     // 会员额度检查：管理员不受限；普通用户按 membership_levels 计算剩余可创建数量
     let remainingQuota = Number.MAX_SAFE_INTEGER;
-    if (req.currentUserRole !== 'admin') {
+    if (!req.isAdmin) {
       const limit = await getUserAdditionalAccountLimit(req.currentUserId);
       if (limit <= 0) {
         return res.status(403).json({
@@ -409,9 +501,16 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
       try {
         const account_name = row['公众号名称'] || row['account_name'];
         const wechat_account_id = row['账号ID'] || row['wechat_account_id'];
+        const rawIndustryTag = row['行业标签'] || row['industry_tag_code'];
 
         if (!account_name || !wechat_account_id) {
           errors.push(`第${rowNum}行：公众号名称和账号ID不能为空`);
+          continue;
+        }
+
+        const tagNorm = await normalizeIndustryTagCode(rawIndustryTag);
+        if (!tagNorm.ok) {
+          errors.push(`第${rowNum}行：${tagNorm.message}`);
           continue;
         }
 
@@ -430,9 +529,9 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
         const accountId = await generateId('additional_wechat_accounts');
         await db.execute(
           `INSERT INTO additional_wechat_accounts 
-           (id, account_name, wechat_account_id, status, creator_user_id) 
-           VALUES (?, ?, ?, 'active', ?)`,
-          [accountId, account_name, wechat_account_id, req.currentUserId]
+           (id, account_name, wechat_account_id, status, industry_tag_code, creator_user_id) 
+           VALUES (?, ?, ?, 'active', ?, ?)`,
+          [accountId, account_name, wechat_account_id, tagNorm.value, req.currentUserId]
         );
 
         successCount++;
@@ -464,11 +563,13 @@ router.get('/download-template', checkAuth, (req, res) => {
     const templateData = [
       {
         '公众号名称': '示例公众号',
-        '账号ID': 'example_account'
+        '账号ID': 'example_account',
+        '行业标签': ''
       },
       {
         '公众号名称': '测试公众号',
-        '账号ID': 'test_account'
+        '账号ID': 'test_account',
+        '行业标签': 'semiconductor'
       }
     ];
 
@@ -479,7 +580,8 @@ router.get('/download-template', checkAuth, (req, res) => {
     // 设置列宽
     ws['!cols'] = [
       { wch: 20 }, // 公众号名称
-      { wch: 20 }  // 账号ID
+      { wch: 20 }, // 账号ID
+      { wch: 18 } // 行业标签：填数据字典 industry 下选项编码，可留空
     ];
 
     // 设置表头样式
@@ -527,7 +629,7 @@ router.get('/:id/logs', checkAuth, async (req, res) => {
     }
     
     // 权限检查：普通用户只能查看自己创建的
-    if (req.currentUserRole !== 'admin' && existing[0].creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && existing[0].creator_user_id !== req.currentUserId) {
       return res.status(403).json({ success: false, message: '无权查看此记录的日志' });
     }
     

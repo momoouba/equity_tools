@@ -120,11 +120,14 @@ async function executeListingSyncTask(configId) {
   let endDate;
   // 打新日历：仅保留申购日期（A 股）/ 上市日期（港股）严格大于该自然日（不含当日）
   let newShareIssueAfterExclusive = null;
+  // 打新日历（A股）：补抓最近由东财 UP_DATE 更新的数据，避免申购日较早但次日补齐上市日期时被漏掉
+  let newShareUpdateAfterExclusive = null;
   if (sourceType === 'new_share') {
     const todayYmd = formatDateOnly(baseRunDate);
     startDate = todayYmd;
     endDate = formatDateOnly(addDaysCalendar(baseRunDate, 730));
     newShareIssueAfterExclusive = todayYmd;
+    newShareUpdateAfterExclusive = todayYmd;
   } else {
     const r = computeScheduledSyncRange(cfg, baseRunDate);
     startDate = r.startDate;
@@ -137,7 +140,7 @@ async function executeListingSyncTask(configId) {
 
   console.log(
     sourceType === 'new_share'
-      ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：申购/上市日期 > ${newShareIssueAfterExclusive} 且 ≤ ${endDate}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
+      ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：申购/上市日期 > ${newShareIssueAfterExclusive} 且 ≤ ${endDate}；A股补抓 UP_DATE > ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
       : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
   );
   const taskKey = buildTaskKey(cfg, startDate, endDate);
@@ -177,6 +180,7 @@ async function executeListingSyncTask(configId) {
             from: startDate,
             to: endDate,
             issueDateAfterExclusive: newShareIssueAfterExclusive,
+            updateDateAfterExclusive: newShareUpdateAfterExclusive,
             triggerType: 'scheduled',
             logTag: `[上市进展定时][${cfg.name || configId}][打新日历]`,
           });

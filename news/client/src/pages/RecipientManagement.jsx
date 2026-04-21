@@ -8,6 +8,8 @@ import './RecipientManagement.css'
 const Option = Select.Option
 const FormItem = Form.Item
 const TextArea = Input.TextArea
+/** 与数据字典行业标签及后端 scheduledEmailTasks 中 __NONE__ 一致 */
+const ADDITIONAL_TAG_NONE = '__NONE__'
 
 function RecipientManagement() {
   const [recipients, setRecipients] = useState([])
@@ -19,6 +21,7 @@ function RecipientManagement() {
   const [editingRecipient, setEditingRecipient] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [form] = Form.useForm()
+
   const [formData, setFormData] = useState({
     recipient_email: '',
     email_subject: '',
@@ -26,8 +29,10 @@ function RecipientManagement() {
     skip_holiday: false,
     is_active: true,
     qichacha_category_codes: null,
-    entity_type: null
+    entity_type: null,
+    additional_account_tag_codes: []
   })
+  const [industryTagOptions, setIndustryTagOptions] = useState([])
   const [showLogModal, setShowLogModal] = useState(false)
   const [logRecipientId, setLogRecipientId] = useState(null)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
@@ -146,8 +151,20 @@ function RecipientManagement() {
       }
     }
     
+    const loadIndustryTags = async () => {
+      try {
+        const res = await axios.get('/api/additional-accounts/industry-tag-options')
+        if (isMounted && res.data?.success) {
+          setIndustryTagOptions(res.data.data || [])
+        }
+      } catch (e) {
+        console.error('获取行业标签失败:', e)
+      }
+    }
+
     loadData()
     loadCategoryMap()
+    loadIndustryTags()
     
     return () => {
       isMounted = false
@@ -207,7 +224,8 @@ function RecipientManagement() {
       cron_expression: '0 0 9 * * ? *', // 默认每天9点执行
       is_active: true,
       qichacha_category_codes: null,
-      entity_type: null
+      entity_type: null,
+      additional_account_tag_codes: []
     }
     setFormData(defaultData)
     form.setFieldsValue(defaultData)
@@ -252,6 +270,20 @@ function RecipientManagement() {
           // 如果是单个值，转换为数组
           entityTypes = [entityTypes]
         }
+
+        let additionalTags = recipient.additional_account_tag_codes
+        if (additionalTags == null || additionalTags === undefined) {
+          additionalTags = []
+        } else if (typeof additionalTags === 'string') {
+          try {
+            additionalTags = JSON.parse(additionalTags)
+          } catch (e) {
+            additionalTags = []
+          }
+        }
+        if (!Array.isArray(additionalTags)) {
+          additionalTags = []
+        }
         
         // 优先使用 cron_expression，如果没有则从 send_frequency 和 send_time 转换
         let cronExpression = recipient.cron_expression
@@ -269,7 +301,8 @@ function RecipientManagement() {
           skip_holiday: recipient.skip_holiday === 1,
           is_active: recipient.is_active === 1,
           qichacha_category_codes: categoryCodes,
-          entity_type: entityTypes
+          entity_type: entityTypes,
+          additional_account_tag_codes: additionalTags
         }
         setFormData(editData)
         form.setFieldsValue(editData)
@@ -335,7 +368,10 @@ function RecipientManagement() {
         ...values,
         cron_expression: formData.cron_expression, // 从 formData 中获取 cron_expression
         skip_holiday: formData.skip_holiday, // 从 formData 中获取（在 Cron 弹窗中设置）
-        qichacha_category_codes: categoryCodes
+        qichacha_category_codes: categoryCodes,
+        additional_account_tag_codes: Array.isArray(values.additional_account_tag_codes)
+          ? values.additional_account_tag_codes
+          : []
       }
       
       let response
@@ -356,7 +392,8 @@ function RecipientManagement() {
           skip_holiday: false,
           is_active: true,
           qichacha_category_codes: null,
-          entity_type: null
+          entity_type: null,
+          additional_account_tag_codes: []
         })
         setSelectedCategories([])
         setTimeout(() => {
@@ -451,6 +488,26 @@ function RecipientManagement() {
           return `${typeMap[record.send_frequency] || record.send_frequency} - ${formatTime(record.send_time || '')}`
         }
         return formatCronExpression(text)
+      }
+    },
+    {
+      title: '第三方公众号',
+      dataIndex: 'additional_account_tag_codes',
+      width: 160,
+      ellipsis: true,
+      render: (val) => {
+        if (val === null || val === undefined) return <span style={{ color: '#86909c' }}>未配置</span>
+        let tags = val
+        if (typeof tags === 'string') {
+          try {
+            tags = JSON.parse(tags)
+          } catch (e) {
+            return '-'
+          }
+        }
+        if (!Array.isArray(tags)) return '-'
+        if (tags.length === 0) return '不发送'
+        return `已选 ${tags.length} 项`
       }
     },
     {
@@ -599,7 +656,7 @@ function RecipientManagement() {
           setEditingRecipient(null)
         }}
         footer={null}
-        style={{ width: 600 }}
+        style={{ width: 640 }}
       >
         <Form
           form={form}
@@ -670,6 +727,32 @@ function RecipientManagement() {
               <Option value="子基金">子基金</Option>
               <Option value="子基金管理人">子基金管理人</Option>
               <Option value="子基金GP">子基金GP</Option>
+            </Select>
+          </FormItem>
+
+          <FormItem
+            label="第三方公众号"
+            field="additional_account_tag_codes"
+            extra="按第三方公众号的「行业」标签筛选（与公众号管理中标签一致）。不选任何项时，邮件中不附带第三方公众号来源的新闻；选「无」可包含未设置标签的账号。历史「未配置」行保存一次后即按本规则生效。"
+          >
+            <Select
+              mode="multiple"
+              placeholder="不选择则不发送第三方公众号相关新闻"
+              allowClear
+              value={formData.additional_account_tag_codes}
+              onChange={(value) => {
+                setFormData({
+                  ...formData,
+                  additional_account_tag_codes: value && value.length > 0 ? value : []
+                })
+              }}
+            >
+              <Option value={ADDITIONAL_TAG_NONE} key="__none__">
+                无（未打标签的公众号）
+              </Option>
+              {industryTagOptions.map((o) => (
+                <Option key={o.value} value={o.value}>{o.label}</Option>
+              ))}
             </Select>
           </FormItem>
 

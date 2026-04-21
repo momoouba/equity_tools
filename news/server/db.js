@@ -888,6 +888,31 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // base_dictionary 表：数据字典（单表存储字典类型 + 字典选项）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS base_dictionary (
+      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      parent_id VARCHAR(19) NULL COMMENT '父级字典ID，NULL=字典类型，非NULL=字典选项',
+      dict_code VARCHAR(100) NOT NULL COMMENT '字典编码（类型和选项都保留，选项继承所属类型编码）',
+      dict_name VARCHAR(200) NOT NULL COMMENT '字典名称（类型名称）',
+      item_code VARCHAR(100) NULL COMMENT '选项编码（仅选项行有值）',
+      item_name VARCHAR(200) NULL COMMENT '选项名称（仅选项行有值）',
+      sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值，越小越靠前',
+      is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0停用',
+      delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+      created_by VARCHAR(19) NULL COMMENT '创建人ID',
+      updated_by VARCHAR(19) NULL COMMENT '更新人ID',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_base_dict_parent (parent_id),
+      INDEX idx_base_dict_code (dict_code),
+      INDEX idx_base_dict_enabled (is_enabled),
+      INDEX idx_base_dict_delete (delete_mark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
   // data_change_log 表：统一的数据变更日志表
   // 先创建表（不包含外键约束，稍后添加）
   await dbPool.query(`
@@ -1987,6 +2012,26 @@ async function initializeTables(dbPool) {
     console.warn('迁移 recipient_management 表 listing_mail_types 字段时出现警告:', err.message);
   }
 
+  // 迁移 recipient_management：第三方公众号按行业标签筛选（邮件内「第三方公众号」区块）
+  try {
+    const [tagCol] = await dbPool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'recipient_management'
+      AND COLUMN_NAME = 'additional_account_tag_codes'
+    `);
+    if (tagCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE recipient_management
+        ADD COLUMN additional_account_tag_codes JSON NULL COMMENT '第三方公众号：industry字典item_code与__NONE__(无标签)；NULL=不按标签排除(旧数据)；[]=邮件中不包含第三方公众号新闻'
+      `);
+      console.log('✓ 已添加 recipient_management 表的 additional_account_tag_codes 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 recipient_management.additional_account_tag_codes 时出现警告:', err.message);
+  }
+
   // news_sync_execution_log 表：新闻同步执行日志
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_sync_execution_log (
@@ -2079,6 +2124,7 @@ async function initializeTables(dbPool) {
       account_name VARCHAR(255) NOT NULL COMMENT '公众号名称',
       wechat_account_id VARCHAR(255) NOT NULL COMMENT '微信账号ID',
       status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态：active-生效，inactive-失效',
+      industry_tag_code VARCHAR(100) NULL COMMENT '行业标签：数据字典 industry 的 item_code',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updater_user_id VARCHAR(19) COMMENT '更新用户ID',
@@ -2117,6 +2163,24 @@ async function initializeTables(dbPool) {
     }
   } catch (migrateErr) {
     console.warn('  迁移 additional_wechat_accounts 唯一约束时出现警告:', migrateErr.message);
+  }
+
+  try {
+    const [colIndustryTag] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'additional_wechat_accounts'
+        AND COLUMN_NAME = 'industry_tag_code'
+    `);
+    if (!colIndustryTag || colIndustryTag.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE additional_wechat_accounts
+        ADD COLUMN industry_tag_code VARCHAR(100) NULL COMMENT '行业标签：数据字典 industry 的 item_code'
+        AFTER status
+      `);
+      console.log('  additional_wechat_accounts: 已添加 industry_tag_code');
+    }
+  } catch (migrateIndustryTagErr) {
+    console.warn('  迁移 additional_wechat_accounts.industry_tag_code 时出现警告:', migrateIndustryTagErr.message);
   }
 
   // ai_model_config 表：AI模型配置

@@ -113,8 +113,23 @@ def _extract_rows(df, start_date, end_date, issue_date_after_exclusive=None):
     return rows
 
 
-def _extract_a_rows_from_ipoapply(start_date, end_date, issue_date_after_exclusive=None):
+def _extract_a_rows_from_ipoapply(
+    start_date,
+    end_date,
+    issue_date_after_exclusive=None,
+    update_date_after_exclusive=None,
+    listing_date_lookback_days=0,
+):
     after = (issue_date_after_exclusive or "").strip()[:10] or None
+    updated_after = (update_date_after_exclusive or "").strip()[:10] or None
+    listing_lookback = max(0, int(listing_date_lookback_days or 0))
+    listing_after_inclusive = None
+    if after and listing_lookback > 0:
+        try:
+            aft_dt = datetime.strptime(after, "%Y-%m-%d")
+            listing_after_inclusive = (aft_dt - timedelta(days=listing_lookback)).strftime("%Y-%m-%d")
+        except Exception:
+            listing_after_inclusive = None
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
         "sortColumns": "APPLY_DATE,SECURITY_CODE",
@@ -124,7 +139,7 @@ def _extract_a_rows_from_ipoapply(start_date, end_date, issue_date_after_exclusi
         "reportName": "RPTA_APP_IPOAPPLY",
         "columns": (
             "SECURITY_CODE,SECURITY_NAME,APPLY_DATE,LISTING_DATE,ISSUE_PRICE,AFTER_ISSUE_PE,"
-            "ONLINE_APPLY_UPPER,ONLINE_ISSUE_LWR,TOTAL_ISSUE_NUM,ISSUE_NUM,MARKET_TYPE_NEW"
+            "ONLINE_APPLY_UPPER,ONLINE_ISSUE_LWR,TOTAL_ISSUE_NUM,ISSUE_NUM,MARKET_TYPE_NEW,UP_DATE"
         ),
     }
     r = requests.get(url, params=params, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
@@ -137,13 +152,26 @@ def _extract_a_rows_from_ipoapply(start_date, end_date, issue_date_after_exclusi
         if market == "港交所":
             continue
         issue_date = _to_date_text(d.get("APPLY_DATE"))
-        if not issue_date:
-            continue
+        listing_date = _to_date_text(d.get("LISTING_DATE"))
+        update_date = _to_date_text(d.get("UP_DATE"))
         if after:
-            if issue_date <= after or issue_date > end_date:
+            issue_ok = bool(issue_date and issue_date > after and issue_date <= end_date)
+            # UP_DATE 回看使用含当日口径，避免同日补齐上市日期时漏抓
+            update_ok = bool(updated_after and update_date and update_date >= updated_after and update_date <= end_date)
+            # 兜底：部分 A 股行 UP_DATE 为空，但 LISTING_DATE 已补齐（如 920191），允许按上市日期回看窗口纳入
+            listing_ok = bool(
+                listing_after_inclusive
+                and listing_date
+                and listing_date >= listing_after_inclusive
+                and listing_date <= end_date
+            )
+            if not (issue_ok or update_ok or listing_ok):
                 continue
-        elif issue_date < start_date or issue_date > end_date:
-            continue
+        else:
+            if not issue_date:
+                continue
+            if issue_date < start_date or issue_date > end_date:
+                continue
         stock_code = str(d.get("SECURITY_CODE") or "").strip().zfill(6)
         if not stock_code:
             continue
@@ -226,6 +254,54 @@ def _extract_hk_rows(df, start_date, end_date, issue_date_after_exclusive=None):
     return rows
 
 
+def _is_nonempty_field(v):
+    if v is None:
+        return False
+    if isinstance(v, bool):
+        return True
+    if isinstance(v, (int, float)):
+        return not (isinstance(v, float) and str(v) == "nan")
+    if isinstance(v, str):
+        return v.strip() != ""
+    return bool(v)
+
+
+def _merge_ipo_row_pair(a, b):
+    """同一 (stock_code, exchange) 多行合并：字段取有值的一方；两边都有时保留先出现的 a。"""
+    keys = set(a) | set(b)
+    out = {}
+    for k in keys:
+        va, vb = a.get(k), b.get(k)
+        a_ok, b_ok = _is_nonempty_field(va), _is_nonempty_field(vb)
+        if a_ok and b_ok:
+            out[k] = va
+        elif a_ok:
+            out[k] = va
+        elif b_ok:
+            out[k] = vb
+        else:
+            out[k] = va if va is not None else vb
+    return out
+
+
+def _dedupe_merge_ipo_rows(rows):
+    """东方财富等接口可能对同一证券返回多行：合并后再给 Node，避免第二条被误判为无变化或空字段覆盖。"""
+    from collections import OrderedDict
+
+    od = OrderedDict()
+    for r in rows:
+        code = str(r.get("stock_code") or "").strip()
+        ex = str(r.get("exchange") or "").strip()
+        if not code:
+            continue
+        key = (code, ex)
+        if key not in od:
+            od[key] = r
+        else:
+            od[key] = _merge_ipo_row_pair(od[key], r)
+    return list(od.values())
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--start-date", required=True)
@@ -236,16 +312,31 @@ def main():
         default="",
         help="若传入 YYYY-MM-DD，则仅保留申购/上市日期 **>** 该日且 ≤ end-date 的行（与闭区间二选一）",
     )
+    p.add_argument(
+        "--update-date-after",
+        default="",
+        help="可选：按东财 UP_DATE 回看更新，若传入 YYYY-MM-DD，则保留 UP_DATE > 该日 且 ≤ end-date 的行（A股）",
+    )
+    p.add_argument(
+        "--listing-date-lookback-days",
+        type=int,
+        default=0,
+        help="可选：issue-date-after 模式下，按 LISTING_DATE 向前回看 N 天兜底纳入（用于 UP_DATE 为空场景）",
+    )
     args = p.parse_args()
 
     start_date = args.start_date.strip()[:10]
     end_date = args.end_date.strip()[:10]
     issue_after = (args.issue_date_after or "").strip()[:10] or None
+    update_after = (args.update_date_after or "").strip()[:10] or None
+    listing_lookback_days = max(0, int(args.listing_date_lookback_days or 0))
 
     a_source = "eastmoney.datacenter.RPTA_APP_IPOAPPLY"
     a_source_rows = 0
     try:
-        a_rows, a_source_rows = _extract_a_rows_from_ipoapply(start_date, end_date, issue_after)
+        a_rows, a_source_rows = _extract_a_rows_from_ipoapply(
+            start_date, end_date, issue_after, update_after, listing_lookback_days
+        )
     except Exception:
         import akshare as ak  # noqa: PLC0415
 
@@ -274,13 +365,15 @@ def main():
         hk_rows = hk_calendar_rows_from_etnet(hk_start, hk_end, issue_after)
         hk_meta = f"etnet listingipos built={len(hk_rows)}"
 
-    rows = a_rows + hk_rows
+    rows = _dedupe_merge_ipo_rows(a_rows + hk_rows)
+    raw_concat_len = len(a_rows) + len(hk_rows)
     print(
         json.dumps(
             {
                 "ok": True,
                 "source": f"{a_source} + {hk_src}({hk_meta})",
                 "sourceRows": int(a_source_rows) + int(len(hk_rows)),
+                "rawBuiltRows": raw_concat_len,
                 "builtRows": len(rows),
                 "rows": rows,
             },

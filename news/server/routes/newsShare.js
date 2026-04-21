@@ -686,6 +686,17 @@ router.get('/news/:token', async (req, res) => {
     }
 
     // 企业相关过滤（客户端过滤，这里先获取所有数据）
+    if (enterpriseFilter === 'third_party') {
+      // 第三方公众号：按公众号ID映射 additional_wechat_accounts 判定
+      whereConditions.push(`EXISTS (
+        SELECT 1
+        FROM additional_wechat_accounts awa
+        WHERE awa.delete_mark = 0
+          AND awa.wechat_account_id = nd.wechat_account
+      )`);
+    }
+
+    // 企业相关过滤（客户端过滤，这里先获取所有数据）
     const whereClause = whereConditions.length > 0 
       ? `WHERE ${whereConditions.join(' AND ')}`
       : '';
@@ -769,15 +780,22 @@ router.get('/news/:token', async (req, res) => {
     // 应用企业相关过滤
     let filteredNews = processedNews;
     if (enterpriseFilter === 'enterprise') {
-      filteredNews = processedNews.filter(news => 
-        news.enterprise_full_name && news.enterprise_full_name.trim() !== ''
+      filteredNews = processedNews.filter(news => news.entity_type === '被投企业');
+    } else if (enterpriseFilter === 'fund') {
+      filteredNews = processedNews.filter(news => news.entity_type === '基金相关主体');
+    } else if (enterpriseFilter === 'sub_fund') {
+      filteredNews = processedNews.filter(
+        news => news.entity_type === '子基金' || news.entity_type === '子基金管理人' || news.entity_type === '子基金GP'
       );
+    } else if (enterpriseFilter === 'third_party') {
+      // third_party 已在 SQL 层按 wechat_account 映射过滤，这里不再依赖 entity_type 文本
+      filteredNews = processedNews;
     }
 
     res.json({
       success: true,
       data: filteredNews,
-      total: enterpriseFilter === 'enterprise' ? filteredNews.length : total,
+      total: enterpriseFilter === 'all' ? total : filteredNews.length,
       page: pageNum,
       pageSize: pageSizeNum
     });

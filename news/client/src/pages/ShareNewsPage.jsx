@@ -187,7 +187,8 @@ function ShareNewsPage() {
       const params = {
         page: 1,
         pageSize: 100000,
-        timeRange: activeTab
+        timeRange: activeTab,
+        enterpriseFilter
       }
       if (currentSearchTags.length > 0) {
         params.searchTags = currentSearchTags.join(',')
@@ -236,6 +237,9 @@ function ShareNewsPage() {
           allNewsData = allNewsData.filter(news => 
             news.entity_type === '子基金' || news.entity_type === '子基金管理人' || news.entity_type === '子基金GP'
           )
+        } else if (enterpriseFilter === 'third_party') {
+          // 第三方公众号：只显示企业类型为第三方公众号的数据
+          allNewsData = allNewsData.filter(news => news.entity_type === '第三方公众号')
         }
 
         // 排序
@@ -847,6 +851,17 @@ function ShareNewsPage() {
           }}
         >
           子基金
+        </button>
+        <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'third_party' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('third_party')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          第三方公众号
         </button>
         <button
           className={`enterprise-filter-btn ${enterpriseFilter === 'all' ? 'active' : ''}`}

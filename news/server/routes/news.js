@@ -2048,7 +2048,7 @@ router.get('/user-news', async (req, res) => {
     const pageSize = parseInt(req.query.pageSize, 10) || 10;
     const search = req.query.search || '';
     const timeRange = req.query.timeRange || 'all'; // yesterday, thisWeek, thisMonth, all
-    const enterpriseFilter = req.query.enterpriseFilter || 'all'; // enterprise, all
+    const enterpriseFilter = req.query.enterpriseFilter || 'all'; // enterprise, fund, sub_fund, third_party, all
     const offset = (page - 1) * pageSize;
 
     // 计算时间范围（使用北京时区）
@@ -2224,6 +2224,14 @@ router.get('/user-news', async (req, res) => {
     } else if (enterpriseFilter === 'sub_fund') {
       // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
       condition += ' AND entity_type IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
+    } else if (enterpriseFilter === 'third_party') {
+      // 第三方公众号：按公众号ID映射 additional_wechat_accounts 判定
+      condition += ` AND EXISTS (
+        SELECT 1
+        FROM additional_wechat_accounts awa
+        WHERE awa.delete_mark = 0
+          AND awa.wechat_account_id = wechat_account
+      )`;
     }
 
     // 添加搜索条件（支持多标签搜索）
@@ -2569,6 +2577,14 @@ router.get('/', async (req, res) => {
     } else if (enterpriseFilter === 'sub_fund') {
       // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
       whereCondition += ' AND COALESCE(nd.entity_type, ie.entity_type) IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
+    } else if (enterpriseFilter === 'third_party') {
+      // 第三方公众号：按公众号ID映射 additional_wechat_accounts 判定
+      whereCondition += ` AND EXISTS (
+        SELECT 1
+        FROM additional_wechat_accounts awa
+        WHERE awa.delete_mark = 0
+          AND awa.wechat_account_id = nd.wechat_account
+      )`;
     }
 
     // 添加搜索条件（支持多标签搜索）
@@ -3178,7 +3194,7 @@ router.get('/recipients', async (req, res) => {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -3193,7 +3209,7 @@ router.get('/recipients', async (req, res) => {
       // 用户只查看自己的（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
@@ -3215,6 +3231,21 @@ router.get('/recipients', async (req, res) => {
     
     // 解析entity_type JSON字段
     const processedRecipients = (recipients || []).map(recipient => {
+      if (recipient.additional_account_tag_codes !== null && recipient.additional_account_tag_codes !== undefined) {
+        if (Array.isArray(recipient.additional_account_tag_codes)) {
+          // ok
+        } else if (typeof recipient.additional_account_tag_codes === 'string') {
+          try {
+            const p = JSON.parse(recipient.additional_account_tag_codes);
+            recipient.additional_account_tag_codes = Array.isArray(p) ? p : [];
+          } catch (e) {
+            recipient.additional_account_tag_codes = [];
+          }
+        } else {
+          recipient.additional_account_tag_codes = [];
+        }
+      }
+
       if (recipient.entity_type) {
         if (Array.isArray(recipient.entity_type)) {
           // 已经是数组，直接使用
@@ -3269,7 +3300,7 @@ router.get('/recipients/:id', async (req, res) => {
     if (userRole === 'admin') {
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
@@ -3279,7 +3310,7 @@ router.get('/recipients/:id', async (req, res) => {
     } else {
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.created_at, rm.updated_at,
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
                rm.is_deleted, rm.deleted_at, rm.deleted_by
         FROM recipient_management rm
         WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
@@ -3296,6 +3327,21 @@ router.get('/recipients/:id', async (req, res) => {
       console.log(`[获取收件管理] ID: ${id}, 数据库中的qichacha_category_codes:`, recipient.qichacha_category_codes, '类型:', typeof recipient.qichacha_category_codes);
       console.log(`[获取收件管理] ID: ${id}, 数据库中的entity_type:`, recipient.entity_type, '类型:', typeof recipient.entity_type);
       
+      if (recipient.additional_account_tag_codes !== null && recipient.additional_account_tag_codes !== undefined) {
+        if (Array.isArray(recipient.additional_account_tag_codes)) {
+          // ok
+        } else if (typeof recipient.additional_account_tag_codes === 'string') {
+          try {
+            const p = JSON.parse(recipient.additional_account_tag_codes);
+            recipient.additional_account_tag_codes = Array.isArray(p) ? p : [];
+          } catch (e) {
+            recipient.additional_account_tag_codes = [];
+          }
+        } else {
+          recipient.additional_account_tag_codes = [];
+        }
+      }
+
       // 解析entity_type JSON字段
       if (recipient.entity_type) {
         if (Array.isArray(recipient.entity_type)) {
@@ -3477,7 +3523,7 @@ router.post('/recipients', [
       return res.status(401).json({ success: false, message: '未登录' });
     }
 
-    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type, additional_account_tag_codes } = req.body;
     
     // 如果没有提供 cron_expression，从 send_frequency 和 send_time 转换（向后兼容）
     let finalCronExpression = cron_expression;
@@ -3541,6 +3587,23 @@ router.post('/recipients', [
       }
     }
 
+    let additionalAccountTagJson = JSON.stringify([]);
+    if (additional_account_tag_codes !== undefined && additional_account_tag_codes !== null) {
+      let tags = additional_account_tag_codes;
+      if (typeof tags === 'string') {
+        try {
+          tags = JSON.parse(tags);
+        } catch (e) {
+          return res.status(400).json({ success: false, message: '第三方公众号标签格式无效' });
+        }
+      }
+      if (!Array.isArray(tags)) {
+        return res.status(400).json({ success: false, message: '第三方公众号标签须为数组' });
+      }
+      const cleaned = [...new Set(tags.map((t) => String(t || '').trim()).filter(Boolean))];
+      additionalAccountTagJson = JSON.stringify(cleaned);
+    }
+
     const recipientId = await generateId('recipient_management');
 
     const newsAppRows = await db.query(
@@ -3564,13 +3627,14 @@ router.post('/recipients', [
       send_time: finalSendTime,
       is_active: is_active !== undefined ? (is_active ? 1 : 0) : 1,
       qichacha_category_codes: categoryCodesJson,
-      entity_type: validatedEntityTypeJson
+      entity_type: validatedEntityTypeJson,
+      additional_account_tag_codes: additionalAccountTagJson
     };
     
     await db.execute(
       `INSERT INTO recipient_management 
-       (id, user_id, app_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, user_id, app_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type, additional_account_tag_codes) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recipientId,
         newData.user_id,
@@ -3582,7 +3646,8 @@ router.post('/recipients', [
         newData.send_time,
         newData.is_active,
         newData.qichacha_category_codes,
-        newData.entity_type
+        newData.entity_type,
+        additionalAccountTagJson
       ]
     );
 
@@ -3617,7 +3682,7 @@ router.put('/recipients/:id', [
     const { id } = req.params;
     const userId = req.headers['x-user-id'];
     const userRole = req.headers['x-user-role'];
-    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type } = req.body;
+    const { recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type, additional_account_tag_codes } = req.body;
     const skip_holiday_raw = req.body.skip_holiday;
     const skip_holiday = skip_holiday_raw === true || skip_holiday_raw === 1 || skip_holiday_raw === '1' || skip_holiday_raw === 'true';
     
@@ -3652,7 +3717,8 @@ router.put('/recipients/:id', [
       send_frequency: existing[0].send_frequency,
       send_time: existing[0].send_time || '',
       is_active: existing[0].is_active,
-      qichacha_category_codes: existing[0].qichacha_category_codes
+      qichacha_category_codes: existing[0].qichacha_category_codes,
+      additional_account_tag_codes: existing[0].additional_account_tag_codes
     };
 
     // 如果更新邮箱，验证多个邮箱格式
@@ -3769,6 +3835,29 @@ router.put('/recipients/:id', [
       updateValues.push(validatedEntityTypeJson);
     }
 
+    let validatedAdditionalTagsJson = undefined;
+    if (additional_account_tag_codes !== undefined) {
+      if (additional_account_tag_codes === null) {
+        validatedAdditionalTagsJson = null;
+      } else {
+        let tags = additional_account_tag_codes;
+        if (typeof tags === 'string') {
+          try {
+            tags = JSON.parse(tags);
+          } catch (e) {
+            return res.status(400).json({ success: false, message: '第三方公众号标签格式无效' });
+          }
+        }
+        if (!Array.isArray(tags)) {
+          return res.status(400).json({ success: false, message: '第三方公众号标签须为数组' });
+        }
+        const cleaned = [...new Set(tags.map((t) => String(t || '').trim()).filter(Boolean))];
+        validatedAdditionalTagsJson = JSON.stringify(cleaned);
+      }
+      updateFields.push('additional_account_tag_codes = ?');
+      updateValues.push(validatedAdditionalTagsJson);
+    }
+
     if (updateFields.length > 0) {
       updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(id);
@@ -3790,6 +3879,9 @@ router.put('/recipients/:id', [
       if (qichacha_category_codes !== undefined) {
         newData.qichacha_category_codes = categoryCodesJson;
         console.log(`[更新收件管理] 新数据中的qichacha_category_codes:`, categoryCodesJson);
+      }
+      if (additional_account_tag_codes !== undefined) {
+        newData.additional_account_tag_codes = validatedAdditionalTagsJson;
       }
 
       // 记录更新日志

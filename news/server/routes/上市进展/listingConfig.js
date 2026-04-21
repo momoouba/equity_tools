@@ -441,6 +441,7 @@ async function syncListingConfig(req, res) {
               from: startDate,
               to: endDateFinal,
               issueDateAfterExclusive: startDate,
+              updateDateAfterExclusive: startDate,
               triggerType: 'manual',
               operatorUserId: user.id,
               logTag: `[上市进展手动同步][${cfg.name || cfg.id}][打新日历]`,

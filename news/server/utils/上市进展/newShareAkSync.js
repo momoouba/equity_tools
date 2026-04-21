@@ -6,6 +6,8 @@ function runNewShareAkSync(opts) {
   const endDate = String(opts.endDate || '').trim().slice(0, 10);
   const hkRecentDays = Number(opts.hkRecentDays || 0);
   const issueAfter = String(opts.issueDateAfterExclusive || '').trim().slice(0, 10);
+  const updateAfter = String(opts.updateDateAfterExclusive || '').trim().slice(0, 10);
+  const listingDateLookbackDays = Math.max(0, Number(opts.listingDateLookbackDays || 0));
   const logTag = opts.logTag || '[打新日历-AkShare]';
   if (!startDate || !endDate) {
     return { ok: false, skipped: true, stderr: 'date invalid' };
@@ -16,6 +18,12 @@ function runNewShareAkSync(opts) {
   const args = [script, '--start-date', startDate, '--end-date', endDate];
   if (issueAfter) {
     args.push('--issue-date-after', issueAfter);
+  }
+  if (updateAfter) {
+    args.push('--update-date-after', updateAfter);
+  }
+  if (listingDateLookbackDays > 0) {
+    args.push('--listing-date-lookback-days', String(listingDateLookbackDays));
   }
   if (hkRecentDays > 0) {
     args.push('--hk-recent-days', String(hkRecentDays));

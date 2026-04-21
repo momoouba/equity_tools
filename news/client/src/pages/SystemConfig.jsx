@@ -9,6 +9,7 @@ import NewsConfig from './NewsConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './上市进展/ListingDataConfig'
+import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
@@ -82,6 +83,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="database" title="数据库连接">
             <div className="config-content">
               <DatabaseConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="dictionary" title="数据字典">
+            <div className="config-content">
+              <BaseDictionaryConfig />
             </div>
           </TabPane>
 

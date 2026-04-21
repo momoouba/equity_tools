@@ -26,8 +26,10 @@ function AdditionalAccounts() {
   const [formData, setFormData] = useState({
     account_name: '',
     wechat_account_id: '',
-    status: 'active'
+    status: 'active',
+    industry_tag_code: undefined
   })
+  const [industryTagOptions, setIndustryTagOptions] = useState([])
   const [importFile, setImportFile] = useState(null)
   const [importLoading, setImportLoading] = useState(false)
   const [userRole, setUserRole] = useState('user')
@@ -49,6 +51,21 @@ function AdditionalAccounts() {
         console.error('解析用户信息失败:', e)
       }
     }
+  }, [])
+
+  const fetchIndustryTagOptions = async () => {
+    try {
+      const res = await axios.get('/api/additional-accounts/industry-tag-options')
+      if (res.data?.success) {
+        setIndustryTagOptions(res.data.data || [])
+      }
+    } catch (e) {
+      console.error('获取行业标签选项失败:', e)
+    }
+  }
+
+  useEffect(() => {
+    fetchIndustryTagOptions()
   }, [])
 
   const fetchUsers = async () => {
@@ -136,7 +153,8 @@ function AdditionalAccounts() {
     setFormData({
       account_name: '',
       wechat_account_id: '',
-      status: 'active'
+      status: 'active',
+      industry_tag_code: undefined
     })
     setShowAddModal(true)
   }
@@ -146,7 +164,8 @@ function AdditionalAccounts() {
     setFormData({
       account_name: account.account_name,
       wechat_account_id: account.wechat_account_id,
-      status: account.status
+      status: account.status,
+      industry_tag_code: account.industry_tag_code || undefined
     })
     setShowEditModal(true)
   }
@@ -227,6 +246,7 @@ function AdditionalAccounts() {
       return
     }
     if (!importFile) {
+      console.warn('[AdditionalAccounts] handleImport called without importFile')
       Message.warning('请选择要导入的文件')
       return
     }
@@ -287,6 +307,16 @@ function AdditionalAccounts() {
       title: '账号ID',
       dataIndex: 'wechat_account_id',
       width: 200
+    },
+    {
+      title: '标签',
+      dataIndex: 'industry_tag_name',
+      width: 140,
+      render: (_, record) => {
+        if (record.industry_tag_name) return record.industry_tag_name
+        if (record.industry_tag_code) return record.industry_tag_code
+        return '-'
+      }
     },
     {
       title: '状态',
@@ -362,7 +392,10 @@ function AdditionalAccounts() {
               新增公众号
             </Button>
             <Button
-              onClick={() => setShowImportModal(true)}
+              onClick={() => {
+                setImportFile(null)
+                setShowImportModal(true)
+              }}
               type="outline"
               disabled={userRole !== 'admin' && quota && typeof quota.remaining === 'number' && quota.remaining <= 0}
             >
@@ -495,6 +528,7 @@ function AdditionalAccounts() {
         style={{ width: 500 }}
       >
         <Form
+          key={showAddModal ? 'account-form-add' : `account-form-edit-${selectedAccount?.id || ''}`}
           initialValues={formData}
           onSubmit={handleSubmit}
           layout="vertical"
@@ -520,6 +554,19 @@ function AdditionalAccounts() {
             <Select>
               <Option value="active">生效</Option>
               <Option value="inactive">失效</Option>
+            </Select>
+          </FormItem>
+          <FormItem
+            label="标签"
+            field="industry_tag_code"
+            extra="行业分类，选项来自管理员设置中的数据字典「行业」"
+          >
+            <Select placeholder="请选择行业标签" allowClear>
+              {industryTagOptions.map((o) => (
+                <Option key={o.value} value={o.value}>
+                  {o.label}
+                </Option>
+              ))}
             </Select>
           </FormItem>
           <div className="form-actions">
@@ -564,11 +611,15 @@ function AdditionalAccounts() {
             <h4 style={{ marginBottom: '12px' }}>第二步：填写数据并上传</h4>
             <Upload
               accept=".xlsx,.xls"
-              fileList={importFile ? [importFile] : []}
-              onChange={(fileList) => {
-                setImportFile(fileList[0]?.originFile || null)
+              showUploadList={false}
+              beforeUpload={(file) => {
+                setImportFile(file || null)
+                if (!file) {
+                  console.warn('[AdditionalAccounts] beforeUpload got empty file')
+                }
+                // 阻止自动上传，改为点击“开始导入”后手动提交 FormData
+                return false
               }}
-              beforeUpload={() => false}
             >
               <Button>选择文件</Button>
             </Upload>
@@ -583,6 +634,7 @@ function AdditionalAccounts() {
             <ul style={{ margin: 0, paddingLeft: '20px' }}>
               <li>支持Excel格式文件（.xlsx, .xls）</li>
               <li>必填字段：公众号名称、账号ID</li>
+              <li>选填字段：行业标签，填写数据字典「行业」下的选项编码（与列表/表单中选项对应），留空表示不设置</li>
               <li>重复的账号ID将被跳过，不会导入</li>
               <li>导入后默认状态为"生效"</li>
             </ul>

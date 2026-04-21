@@ -39,7 +39,8 @@ async function generateId(tableName, connection) {
       'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a',
       'performance_scheduled',
       'listing_data_config',
-      'ipo_project_sql_sync_setting'
+      'ipo_project_sql_sync_setting',
+      'base_dictionary'
     ];
     
     if (!validTableNames.includes(tableName)) {
