@@ -913,6 +913,77 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // 初始化 base_dictionary 默认数据：industry（行业）及其选项（幂等）
+  try {
+    const defaultParentId = '2026042114193800001';
+    const defaultOperatorId = '2025112019135100001';
+    const defaultCreatedAt = '2026-04-21 14:19:38';
+    const defaultUpdatedAt = '2026-04-21 14:21:04';
+
+    const [industryTypeRows] = await dbPool.query(
+      `SELECT id
+       FROM base_dictionary
+       WHERE dict_code = 'industry' AND parent_id IS NULL AND delete_mark = 0
+       ORDER BY created_at ASC
+       LIMIT 1`
+    );
+
+    let industryParentId = defaultParentId;
+    if (industryTypeRows && industryTypeRows.length > 0) {
+      industryParentId = industryTypeRows[0].id;
+    } else {
+      await dbPool.execute(
+        `INSERT INTO base_dictionary
+         (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+         VALUES (?, NULL, 'industry', '行业', NULL, NULL, 0, 1, 0, ?, ?, NULL, NULL, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           parent_id = NULL,
+           dict_code = VALUES(dict_code),
+           dict_name = VALUES(dict_name),
+           item_code = NULL,
+           item_name = NULL,
+           sort_order = VALUES(sort_order),
+           is_enabled = VALUES(is_enabled),
+           delete_mark = 0,
+           updated_by = VALUES(updated_by),
+           delete_user_id = NULL,
+           delete_time = NULL,
+           updated_at = VALUES(updated_at)`,
+        [defaultParentId, defaultOperatorId, defaultOperatorId, defaultCreatedAt, defaultUpdatedAt]
+      );
+      industryParentId = defaultParentId;
+    }
+
+    const industryItems = [
+      { id: '2026042114194800001', item_code: 'Biomedicine', item_name: '生物医药', sort_order: 0, created_at: '2026-04-21 14:19:48' },
+      { id: '2026042114195700001', item_code: 'semiconductor', item_name: '半导体', sort_order: 1, created_at: '2026-04-21 14:19:57' },
+      { id: '2026042114200400001', item_code: 'ai', item_name: '人工智能', sort_order: 2, created_at: '2026-04-21 14:20:04' },
+      { id: '2026042114201800001', item_code: 'others', item_name: '其他', sort_order: 3, created_at: '2026-04-21 14:20:18' },
+    ];
+
+    for (const item of industryItems) {
+      const [existingItemRows] = await dbPool.query(
+        `SELECT id
+         FROM base_dictionary
+         WHERE parent_id = ? AND dict_code = 'industry' AND item_code = ? AND delete_mark = 0
+         LIMIT 1`,
+        [industryParentId, item.item_code]
+      );
+      if (existingItemRows && existingItemRows.length > 0) {
+        continue;
+      }
+
+      await dbPool.execute(
+        `INSERT INTO base_dictionary
+         (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+         VALUES (?, ?, 'industry', '行业', ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+        [item.id, industryParentId, item.item_code, item.item_name, item.sort_order, defaultOperatorId, defaultOperatorId, item.created_at, defaultUpdatedAt]
+      );
+    }
+  } catch (err) {
+    console.warn('初始化 base_dictionary 默认行业数据时出现警告:', err.message);
+  }
+
   // data_change_log 表：统一的数据变更日志表
   // 先创建表（不包含外键约束，稍后添加）
   await dbPool.query(`
