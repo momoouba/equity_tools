@@ -92,6 +92,162 @@ async function ensureBTableComments(dbPool) {
   }
 }
 
+// 为核心业务表中「注释为空」的字段补齐标准注释（仅补空，不覆盖已有）
+async function ensureCoreSchemaComments(dbPool) {
+  const commentDefs = {
+    applications: {
+      app_name: '应用名称',
+      created_at: '创建时间'
+    },
+    b_investment_sum: {
+      F_LastModifyTime: '最后修改时间'
+    },
+    b_ipo: {
+      F_LastModifyTime: '最后修改时间'
+    },
+    base_dictionary: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    interface_news_type_enabled: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    invested_enterprises: {
+      project_number: '项目编号',
+      project_abbreviation: '项目简称',
+      enterprise_full_name: '企业全称',
+      unified_credit_code: '统一社会信用代码',
+      wechat_official_account_id: '微信公众号ID',
+      official_website: '公司官网',
+      exit_status: '退出状态'
+    },
+    ipo_project_sql_sync_setting: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    listing_data_config: {
+      request_url: '请求地址',
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    listing_share_links: {
+      share_token: '分享令牌',
+      has_expiry: '是否启用过期时间',
+      expiry_time: '过期时间',
+      has_password: '是否启用访问密码',
+      password_hash: '访问密码哈希',
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    listing_sync_execution_log: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    membership_levels: {
+      level_name: '会员等级名称',
+      validity_days: '有效期天数',
+      activation_date: '生效日期',
+      created_at: '创建时间'
+    },
+    system_config: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    system_file_storage: {
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    },
+    users: {
+      account: '账号',
+      phone: '手机号',
+      email: '邮箱',
+      password: '密码（哈希）',
+      company_name: '公司名称',
+      account_status: '账号状态',
+      membership_level_id: '会员等级ID',
+      app_permissions: '应用权限列表（JSON）',
+      created_at: '创建时间',
+      updated_at: '更新时间'
+    }
+  };
+
+  const tableNames = Object.keys(commentDefs);
+  if (tableNames.length === 0) return;
+
+  const placeholders = tableNames.map(() => '?').join(',');
+
+  try {
+    const [cols] = await dbPool.query(
+      `
+      SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_COMMENT, EXTRA
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME IN (${placeholders})
+      `,
+      tableNames
+    );
+
+    let fixedCount = 0;
+    for (const colInfo of cols || []) {
+      const table = colInfo.TABLE_NAME;
+      const col = colInfo.COLUMN_NAME;
+      const targetComment = commentDefs[table] && commentDefs[table][col];
+      if (!targetComment) continue;
+
+      const currentComment = (colInfo.COLUMN_COMMENT || '').trim();
+      if (currentComment) continue;
+
+      const type = colInfo.COLUMN_TYPE;
+      const nullableSql = colInfo.IS_NULLABLE === 'NO' ? 'NOT NULL' : 'NULL';
+      const extraRaw = String(colInfo.EXTRA || '').trim();
+      const extraUpper = extraRaw.toUpperCase();
+
+      let defaultSql = '';
+      if (colInfo.COLUMN_DEFAULT !== null) {
+        const defStr = String(colInfo.COLUMN_DEFAULT).trim();
+        const defUpper = defStr.toUpperCase();
+        if (defUpper === 'CURRENT_TIMESTAMP' || defUpper === 'CURRENT_TIMESTAMP()' || defUpper.startsWith('CURRENT_TIMESTAMP(')) {
+          defaultSql = ` DEFAULT ${defStr}`;
+        } else {
+          defaultSql = ` DEFAULT ${dbPool.escape(colInfo.COLUMN_DEFAULT)}`;
+        }
+      }
+
+      let extraSql = '';
+      if (extraUpper.includes('AUTO_INCREMENT')) {
+        extraSql += ' AUTO_INCREMENT';
+      }
+      if (extraUpper.includes('ON UPDATE')) {
+        const onUpdateExpr = extraRaw
+          .replace(/.*on update\s+/i, '')
+          .trim();
+        extraSql += ` ON UPDATE ${onUpdateExpr || 'CURRENT_TIMESTAMP'}`;
+      }
+
+      const alterSql = `
+        ALTER TABLE \`${table}\`
+        MODIFY COLUMN \`${col}\` ${type} ${nullableSql}${defaultSql}${extraSql} COMMENT ${dbPool.escape(targetComment)}
+      `;
+
+      try {
+        await dbPool.query(alterSql);
+        fixedCount++;
+      } catch (err) {
+        console.warn(`补齐注释失败 ${table}.${col}:`, err.message);
+      }
+    }
+
+    if (fixedCount > 0) {
+      console.log(`✓ 已补齐 ${fixedCount} 个空字段注释`);
+    } else {
+      console.log('✓ 字段注释检查完成（无需补齐）');
+    }
+  } catch (err) {
+    console.warn('补齐核心表字段注释时出现警告:', err.message);
+  }
+}
+
 async function createDatabaseIfNeeded() {
   try {
     const connection = await mysql.createConnection({
@@ -3328,6 +3484,8 @@ async function initializeTables(dbPool) {
   // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
   await ensureBTableComments(dbPool);
   console.log('  ✓ 业绩看板相关表列注释已检查');
+  await ensureCoreSchemaComments(dbPool);
+  console.log('  ✓ 核心业务表空字段注释已检查');
 
   // enterprise_sync_task 表：被投企业数据同步定时任务
   await dbPool.query(`
