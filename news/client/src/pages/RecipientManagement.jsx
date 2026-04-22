@@ -366,12 +366,15 @@ function RecipientManagement() {
       
       const submitData = {
         ...values,
-        cron_expression: formData.cron_expression, // 从 formData 中获取 cron_expression
-        skip_holiday: formData.skip_holiday, // 从 formData 中获取（在 Cron 弹窗中设置）
+        cron_expression: formData.cron_expression,
+        skip_holiday: formData.skip_holiday,
         qichacha_category_codes: categoryCodes,
-        additional_account_tag_codes: Array.isArray(values.additional_account_tag_codes)
-          ? values.additional_account_tag_codes
-          : []
+        // 企业类型、第三方标签、启用 为受控组件，需从 formData 合并，否则提交时丢失导致保存失败或入库为 null/[] 错误
+        entity_type: formData.entity_type,
+        additional_account_tag_codes: Array.isArray(formData.additional_account_tag_codes)
+          ? formData.additional_account_tag_codes
+          : [],
+        is_active: formData.is_active
       }
       
       let response
@@ -402,12 +405,22 @@ function RecipientManagement() {
           })
         }, 100)
       } else {
-        const errorMsg = response?.data?.message || '响应格式错误'
+        const data = response?.data
+        let errorMsg = data?.message || '响应格式错误'
+        if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+          const fromValidator = data.errors.map((e) => e.msg || e.message).filter(Boolean).join('；')
+          if (fromValidator) errorMsg = fromValidator
+        }
         Message.error('保存失败：' + errorMsg)
       }
     } catch (error) {
       console.error('保存失败:', error)
-      const errorMsg = error.response?.data?.message || error.message || '未知错误'
+      const data = error.response?.data
+      let errorMsg = data?.message || error.message || '未知错误'
+      if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+        const fromValidator = data.errors.map((e) => e.msg || e.message).filter(Boolean).join('；')
+        if (fromValidator) errorMsg = fromValidator
+      }
       Message.error('保存失败：' + errorMsg)
     }
   }
@@ -760,7 +773,10 @@ function RecipientManagement() {
             label="启用"
             field="is_active"
           >
-            <Switch checked={formData.is_active} />
+            <Switch
+              checked={formData.is_active}
+              onChange={(checked) => setFormData((prev) => ({ ...prev, is_active: checked }))}
+            />
           </FormItem>
 
           <FormItem

@@ -30,8 +30,7 @@ const ADDITIONAL_ACCOUNT_TAG_NONE = '__NONE__';
 
 /**
  * 按收件管理配置的 industry 标签筛选「当前用户名下第三方公众号」相关新闻。
- * - additional_account_tag_codes 为 NULL：旧数据，不筛除（兼容历史行为）
- * - []：筛掉所有来源为当前用户 additional_wechat_accounts 的新闻
+ * - additional_account_tag_codes 为 NULL 或 []：均视为未选标签，筛掉来源为当前用户 additional_wechat_accounts 的新闻（与前端默认 [] 一致）
  * - 非空：仅保留 wechat_account 命中所选标签（含 __NONE__ 表示 industry_tag_code 为空）
  * @param {Array} newsList
  * @param {{ user_id?: string, additional_account_tag_codes?: any }} recipientConfig
@@ -42,8 +41,9 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
     return newsList;
   }
   let raw = recipientConfig.additional_account_tag_codes;
+  // 与前端默认 [] 一致：null/undefined 与空数组同为「未选标签」，走同一套筛选逻辑
   if (raw === null || raw === undefined) {
-    return newsList;
+    raw = [];
   }
   let selected = raw;
   if (typeof selected === 'string') {
@@ -523,8 +523,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         entityTypes.forEach(type => {
           if (type === '被投企业') {
             conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
-          } else if (type === '基金') {
-            conditions.push(`entity_type = '基金'`);
+          } else if (type === '基金' || type === '基金相关主体') {
+            conditions.push(`(entity_type = '基金' OR entity_type = '基金相关主体')`);
           } else if (type === '子基金') {
             conditions.push(`entity_type = '子基金'`);
           } else if (type === '子基金管理人') {
@@ -650,9 +650,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
           if (type === '被投企业') {
             conditions.push(`(nd.entity_type = '被投企业' OR nd.entity_type IS NULL)`);
             subqueryConditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
-          } else if (type === '基金') {
-            conditions.push(`nd.entity_type = '基金'`);
-            subqueryConditions.push(`entity_type = '基金'`);
+          } else if (type === '基金' || type === '基金相关主体') {
+            conditions.push(`(nd.entity_type = '基金' OR nd.entity_type = '基金相关主体')`);
+            subqueryConditions.push(`(entity_type = '基金' OR entity_type = '基金相关主体')`);
           } else if (type === '子基金') {
             conditions.push(`nd.entity_type = '子基金'`);
             subqueryConditions.push(`entity_type = '子基金'`);
@@ -1184,8 +1184,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         entityTypes.forEach(type => {
           if (type === '被投企业') {
             conditions.push(`(entity_type = '被投企业' OR entity_type IS NULL)`);
-          } else if (type === '基金') {
-            conditions.push(`entity_type = '基金'`);
+          } else if (type === '基金' || type === '基金相关主体') {
+            conditions.push(`(entity_type = '基金' OR entity_type = '基金相关主体')`);
           } else if (type === '子基金') {
             conditions.push(`entity_type = '子基金'`);
           } else if (type === '子基金管理人') {
@@ -1372,7 +1372,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipientConfig);
   }
 
-  // 收件配置未选择企业类型时，不发送企业端信息（仅保留第三方公众号来源新闻）
+  // 未选择企业类型（entity_type 为 NULL / 空 / 显式 []）：不发送被投企业等「企业端」新闻，仅保留 additional_wechat_accounts 体系内来源（与收件表单说明一致）
   if (recipientConfig) {
     let entityTypesRaw = recipientConfig.entity_type;
     if (typeof entityTypesRaw === 'string') {
@@ -1386,7 +1386,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       entityTypesRaw = [];
     }
     if (!Array.isArray(entityTypesRaw)) {
-      entityTypesRaw = [entityTypesRaw];
+      entityTypesRaw = entityTypesRaw ? [entityTypesRaw] : [];
     }
     const entityTypes = entityTypesRaw.map((x) => String(x || '').trim()).filter(Boolean);
     if (entityTypes.length === 0 && newsList.length > 0) {
@@ -1490,8 +1490,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               if (newsEntityType === '被投企业' || !newsEntityType) {
                 return true;
               }
-            } else if (entityType === '基金') {
-              if (newsEntityType === '基金') {
+            } else if (entityType === '基金' || entityType === '基金相关主体') {
+              if (newsEntityType === '基金' || newsEntityType === '基金相关主体') {
                 return true;
               }
             } else if (entityType === '子基金') {

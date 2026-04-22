@@ -803,6 +803,7 @@ function hasEntityTypeSelection(recipient) {
 async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
   const grouped = {};
   const groupedDedup = new Set();
+  // 未选企业类型时不写入被投企业/子基金等分组，仅展示当前用户第三方公众号区块（与 getUserVisibleYesterdayNews 收窄一致）
   const enableEnterpriseGrouping = hasEntityTypeSelection(recipient);
   const additionalRows = await db.query(
     `SELECT DISTINCT wechat_account_id
