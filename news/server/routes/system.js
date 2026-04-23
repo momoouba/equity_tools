@@ -2561,6 +2561,9 @@ router.get('/basic-config', async (req, res) => {
       }
     }
     
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
     res.json({ success: true, data: result });
   } catch (error) {
     console.error('获取系统基础配置失败：', error);
@@ -2603,8 +2606,29 @@ router.put('/basic-config', async (req, res) => {
         );
       }
     }
-    
-    res.json({ success: true, message: '系统配置更新成功' });
+
+    const latestConfigs = await db.query(
+      'SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?, ?)',
+      ['system_name', 'logo', 'login_background']
+    );
+
+    const result = {
+      system_name: '',
+      logo: '',
+      login_background: ''
+    };
+
+    for (const config of latestConfigs) {
+      if (config.config_key === 'system_name') {
+        result.system_name = config.config_value || '';
+      } else if (config.config_key === 'logo') {
+        result.logo = config.config_value || '';
+      } else if (config.config_key === 'login_background') {
+        result.login_background = config.config_value || '';
+      }
+    }
+
+    res.json({ success: true, message: '系统配置更新成功', data: result });
   } catch (error) {
     console.error('更新系统基础配置失败：', error);
     res.status(500).json({ success: false, message: '更新配置失败：' + error.message });

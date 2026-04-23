@@ -187,7 +187,9 @@ function Dashboard() {
 
   const fetchSystemConfig = async () => {
     try {
-      const response = await axios.get('/api/system/basic-config')
+      const response = await axios.get('/api/system/basic-config', {
+        params: { _t: Date.now() }
+      })
       if (response.data.success) {
         setSystemConfig(response.data.data || { system_name: '', logo: '' })
       }
@@ -197,8 +199,16 @@ function Dashboard() {
   }
 
   useEffect(() => {
-    const handleConfigUpdate = () => {
-      fetchSystemConfig()
+    const handleConfigUpdate = (event) => {
+      const updatedConfig = event?.detail
+      if (updatedConfig && typeof updatedConfig === 'object') {
+        setSystemConfig(prev => ({
+          ...prev,
+          ...updatedConfig
+        }))
+      } else {
+        fetchSystemConfig()
+      }
     }
     window.addEventListener('systemConfigUpdated', handleConfigUpdate)
     return () => {

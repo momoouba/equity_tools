@@ -8,6 +8,7 @@ const FormItem = Form.Item
 function BasicSystemConfig() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [systemName, setSystemName] = useState('')
   const [logoPreview, setLogoPreview] = useState('')
   const [backgroundPreview, setBackgroundPreview] = useState('')
 
@@ -17,7 +18,9 @@ function BasicSystemConfig() {
 
   const fetchConfig = async () => {
     try {
-      const response = await axios.get('/api/system/basic-config')
+      const response = await axios.get('/api/system/basic-config', {
+        params: { _t: Date.now() }
+      })
       if (response.data.success) {
         const config = response.data.data || {}
         form.setFieldsValue({
@@ -25,12 +28,9 @@ function BasicSystemConfig() {
           login_background: config.login_background || '',
           logo: config.logo || ''
         })
-        if (config.logo) {
-          setLogoPreview(`/api/uploads/${config.logo}`)
-        }
-        if (config.login_background) {
-          setBackgroundPreview(`/api/uploads/${config.login_background}`)
-        }
+        setSystemName(config.system_name || '')
+        setLogoPreview(config.logo ? `/api/uploads/${config.logo}` : '')
+        setBackgroundPreview(config.login_background ? `/api/uploads/${config.login_background}` : '')
       }
     } catch (error) {
       console.error('获取系统配置失败:', error)
@@ -61,7 +61,7 @@ function BasicSystemConfig() {
       })
       if (response.data.success) {
         const updatedData = {
-          system_name: form.getFieldValue('system_name'),
+          system_name: systemName,
           login_background: form.getFieldValue('login_background'),
           logo: response.data.filename
         }
@@ -102,7 +102,7 @@ function BasicSystemConfig() {
       })
       if (response.data.success) {
         const updatedData = {
-          system_name: form.getFieldValue('system_name'),
+          system_name: systemName,
           login_background: response.data.filename,
           logo: form.getFieldValue('logo')
         }
@@ -123,7 +123,7 @@ function BasicSystemConfig() {
     try {
       setLoading(true)
       const updatedData = {
-        system_name: form.getFieldValue('system_name'),
+        system_name: systemName,
         login_background: form.getFieldValue('login_background'),
         logo: ''
       }
@@ -142,7 +142,7 @@ function BasicSystemConfig() {
     try {
       setLoading(true)
       const updatedData = {
-        system_name: form.getFieldValue('system_name'),
+        system_name: systemName,
         login_background: '',
         logo: form.getFieldValue('logo')
       }
@@ -161,10 +161,19 @@ function BasicSystemConfig() {
     try {
       const response = await axios.put('/api/system/basic-config', data)
       if (response.data.success) {
+        const latestConfig = response.data.data || data
+        form.setFieldsValue({
+          system_name: latestConfig.system_name || '',
+          login_background: latestConfig.login_background || '',
+          logo: latestConfig.logo || ''
+        })
+        setSystemName(latestConfig.system_name || '')
+        setLogoPreview(latestConfig.logo ? `/api/uploads/${latestConfig.logo}` : '')
+        setBackgroundPreview(latestConfig.login_background ? `/api/uploads/${latestConfig.login_background}` : '')
         if (successText) {
           Message.success(successText)
         }
-        window.dispatchEvent(new CustomEvent('systemConfigUpdated'))
+        window.dispatchEvent(new CustomEvent('systemConfigUpdated', { detail: latestConfig }))
         return true
       }
       throw new Error(response.data.message || '保存失败')
@@ -186,11 +195,23 @@ function BasicSystemConfig() {
     }
   }
 
+  const handleSaveClick = async () => {
+    try {
+      const values = {
+        system_name: systemName || '',
+        logo: form.getFieldValue('logo') || '',
+        login_background: form.getFieldValue('login_background') || ''
+      }
+      await handleSubmit(values)
+    } catch (error) {
+      // 表单校验失败时，Arco 会自动展示错误信息
+    }
+  }
+
   return (
     <div className="basic-system-config">
       <Form
         form={form}
-        onSubmit={handleSubmit}
         layout="vertical"
         autoComplete="off"
       >
@@ -201,7 +222,11 @@ function BasicSystemConfig() {
             label="系统名称"
             field="system_name"
           >
-            <Input placeholder="请输入系统名称" />
+            <Input
+              placeholder="请输入系统名称"
+              value={systemName}
+              onChange={setSystemName}
+            />
             <div className="form-hint">此名称将显示在页面顶部栏</div>
           </FormItem>
 
@@ -279,7 +304,12 @@ function BasicSystemConfig() {
         </div>
 
         <div className="form-actions">
-          <Button type="primary" htmlType="submit" loading={loading}>
+          <Button
+            type="primary"
+            htmlType="button"
+            loading={loading}
+            onClick={handleSaveClick}
+          >
             保存配置
           </Button>
         </div>
