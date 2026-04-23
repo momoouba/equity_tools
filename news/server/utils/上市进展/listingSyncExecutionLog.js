@@ -24,7 +24,27 @@ async function createExecutionLog(payload = {}) {
     payload.status || 'running',
   ];
   const ret = await db.execute(sql, args);
-  return ret.insertId;
+  const insertedId = ret.insertId;
+  if (insertedId) {
+    await appendExecutionLogProgress(insertedId, `任务创建 source=${payload.sourceType || '-'} trigger=${payload.triggerType || 'manual'}`);
+  }
+  return insertedId;
+}
+
+async function appendExecutionLogProgress(logId, message, options = {}) {
+  if (!logId || !message) return;
+  const line = `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${String(message)}`;
+  const maxBytes = Math.max(4000, Math.min(200000, Number(options.maxBytes || 120000)));
+  const rows = await db.query(`SELECT progress_log FROM listing_sync_execution_log WHERE id = ? LIMIT 1`, [logId]);
+  const oldLog = String(rows[0]?.progress_log || '');
+  const next = oldLog ? `${oldLog}\n${line}` : line;
+  const truncated = truncateExecutionLogMessage(next, maxBytes);
+  await db.execute(
+    `UPDATE listing_sync_execution_log
+        SET progress_log = ?, heartbeat_at = NOW(), updated_at = NOW()
+      WHERE id = ?`,
+    [truncated, logId]
+  );
 }
 
 async function finishExecutionLog(logId, payload = {}) {
@@ -38,6 +58,7 @@ async function finishExecutionLog(logId, payload = {}) {
             skipped_count = ?,
             status = ?,
             error_message = ?,
+            heartbeat_at = NOW(),
             finished_at = NOW()
       WHERE id = ?`,
     [
@@ -55,6 +76,7 @@ async function finishExecutionLog(logId, payload = {}) {
 
 module.exports = {
   createExecutionLog,
+  appendExecutionLogProgress,
   finishExecutionLog,
 };
 

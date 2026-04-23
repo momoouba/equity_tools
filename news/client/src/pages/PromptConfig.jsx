@@ -29,13 +29,16 @@ function PromptConfig() {
 
   const interfaceTypes = [
     { value: '新榜', label: '新榜接口' },
-    { value: '企查查', label: '企查查接口' }
+    { value: '企查查', label: '企查查接口' },
+    { value: '上海国际集团', label: '上海国际集团接口' },
+    { value: '打新接口', label: '打新接口' }
   ]
 
   const promptTypes = [
     { value: 'sentiment_analysis', label: '情绪分析' },
     { value: 'enterprise_relevance', label: '企业关联分析' },
-    { value: 'validation', label: '关联验证' }
+    { value: 'validation', label: '关联验证' },
+    { value: 'enterprise_full_name', label: '企业全称补齐' }
   ]
 
   useEffect(() => {

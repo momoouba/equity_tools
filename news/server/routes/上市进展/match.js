@@ -21,7 +21,15 @@ async function runMatch(req, res) {
     if (!user) return unauthorized(res);
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
 
-    let { startDate, endDate } = req.body || {};
+    let { startDate, endDate, newShareStartDate, newShareEndDate, newShareLookbackDays } = req.body || {};
+    const norm = (v) => {
+      const s = String(v || '').trim().slice(0, 10);
+      return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+    };
+    newShareStartDate = norm(newShareStartDate);
+    newShareEndDate = norm(newShareEndDate);
+    const lookback = Number(newShareLookbackDays || 0);
+    newShareLookbackDays = Number.isFinite(lookback) && lookback > 0 ? Math.floor(lookback) : 0;
     if (!startDate || !endDate) {
       const rows = await db.query(
         `SELECT
@@ -44,6 +52,9 @@ async function runMatch(req, res) {
       startDate,
       endDate,
       restrictProjectUserId,
+      newShareStartDate,
+      newShareEndDate,
+      newShareLookbackDays,
     });
 
     return res.json({
@@ -51,6 +62,14 @@ async function runMatch(req, res) {
       data: {
         progressCount: result.progressCount,
         projectCount: result.projectCount,
+        newShareCount: result.newShareCount || 0,
+        newShareMatchCount: result.newShareMatchCount || 0,
+        newShareSkipped: result.newShareSkipped || 0,
+        newSharePublicDate: result.newSharePublicDate || null,
+        insertedFromIpoProgress: result.insertedFromIpoProgress || 0,
+        insertedFromNewShare: result.insertedFromNewShare || 0,
+        yesterdayStatusBackfilled: result.yesterdayStatusBackfilled || 0,
+        yesterdaySourceBackfilled: result.yesterdaySourceBackfilled || 0,
         inserted: result.inserted,
       },
     });

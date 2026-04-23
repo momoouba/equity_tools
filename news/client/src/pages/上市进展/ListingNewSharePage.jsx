@@ -3,6 +3,7 @@ import { Table, Button, Space, Input, Select, Message } from '@arco-design/web-r
 import {
   fetchNewShareList,
   postNewShareSync,
+  postNewShareAiName,
   downloadNewShareExport,
 } from '../../api/上市进展'
 
@@ -34,6 +35,7 @@ function saveBlobAsCsv(res) {
 export default function ListingNewSharePage() {
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [aiNaming, setAiNaming] = useState(false)
   const [data, setData] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -42,6 +44,7 @@ export default function ListingNewSharePage() {
   const [kwSearch, setKwSearch] = useState('')
   const [exchange, setExchange] = useState('')
   const [tableScrollY, setTableScrollY] = useState(620)
+  const [selectedRowKeys, setSelectedRowKeys] = useState([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -51,6 +54,7 @@ export default function ListingNewSharePage() {
         const d = res.data.data || {}
         setData(d.list || [])
         setTotal(Number(d.total || 0))
+        setSelectedRowKeys((prev) => prev.filter((id) => (d.list || []).some((row) => row.id === id)))
       } else {
         Message.error(res.data?.message || '加载失败')
       }
@@ -102,9 +106,47 @@ export default function ListingNewSharePage() {
     }
   }
 
+  const handleAiName = async () => {
+    if (!selectedRowKeys.length) {
+      Message.warning('请先勾选需要AI查名的数据')
+      return
+    }
+    setAiNaming(true)
+    try {
+      const res = await postNewShareAiName({ ids: selectedRowKeys })
+      if (res.data?.success) {
+        const result = res.data?.data || {}
+        Message.success(`AI查名完成：更新${Number(result.updated || 0)}条，跳过${Number(result.skipped || 0)}条，失败${Number(result.failed || 0)}条`)
+        setSelectedRowKeys([])
+        load()
+      } else {
+        Message.error(res.data?.message || 'AI查名失败')
+      }
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || 'AI查名失败')
+    } finally {
+      setAiNaming(false)
+    }
+  }
+
   const columns = [
     { title: '股票代码', dataIndex: 'stock_code', width: 110 },
     { title: '股票简称', dataIndex: 'stock_name', width: 120 },
+    {
+      title: '企业全称（中/英）',
+      dataIndex: 'enterprise_full_name_display',
+      width: 280,
+      ellipsis: true,
+      tooltip: true,
+      render: (v) => (
+        <span
+          title={v || '-'}
+          style={{ display: 'inline-block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
+          {v || '-'}
+        </span>
+      )
+    },
     { title: '申购日期', dataIndex: 'issue_date', width: 120 },
     { title: '星期', dataIndex: 'issue_weekday', width: 90, render: (v) => v || '-' },
     { title: '发行价', dataIndex: 'issue_price', width: 100, render: (v) => (v ?? '-') },
@@ -166,6 +208,15 @@ export default function ListingNewSharePage() {
         </Button>
         <Button loading={loading} onClick={load}>刷新</Button>
         <Button loading={syncing} onClick={handleSync}>手动同步</Button>
+        <Button
+          type="primary"
+          status="success"
+          loading={aiNaming}
+          disabled={!selectedRowKeys.length}
+          onClick={handleAiName}
+        >
+          AI查名
+        </Button>
         <Button onClick={handleExport}>导出 CSV</Button>
       </Space>
       <Table
@@ -173,9 +224,14 @@ export default function ListingNewSharePage() {
         loading={loading}
         columns={columns}
         data={data}
+        rowSelection={{
+          type: 'checkbox',
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        }}
         stripe
         border
-        scroll={{ x: 1600, y: tableScrollY }}
+        scroll={{ x: 1880, y: tableScrollY }}
         pagination={{
           current: page,
           pageSize,

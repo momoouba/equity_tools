@@ -2,6 +2,8 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const IPOAPPLY_CACHE_TTL_MS = Math.max(30_000, Number(process.env.NEW_SHARE_METRICS_IPOAPPLY_CACHE_TTL_MS || 300_000));
+const FETCH_TIMEOUT_MS = Math.max(5000, Number(process.env.NEW_SHARE_METRICS_FETCH_TIMEOUT_MS || 20000));
+const PY_TIMEOUT_MS = Math.max(10000, Number(process.env.NEW_SHARE_METRICS_PY_TIMEOUT_MS || 45000));
 let ipoApplyCache = { expireAt: 0, byCode: new Map() };
 
 function sleep(ms) {
@@ -49,7 +51,14 @@ async function fetchIpoApplySnapshot(force = false) {
     'columns',
     'SECURITY_CODE,SECURITY_NAME,LISTING_DATE,ISSUE_PRICE,ISSUE_NUM,TOTAL_ISSUE_NUM,ONLINE_ISSUE_LWR,CLOSE_PRICE,LD_CLOSE_CHANGE,MARKET_TYPE_NEW',
   );
-  const resp = await fetch(u.toString(), { headers: { 'user-agent': 'Mozilla/5.0' } });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  let resp;
+  try {
+    resp = await fetch(u.toString(), { headers: { 'user-agent': 'Mozilla/5.0' }, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!resp.ok) throw new Error(`ipoapply http ${resp.status}`);
   const payload = await resp.json();
   const data = payload?.result?.data || [];
@@ -111,14 +120,22 @@ async function fetchEastmoneyFirstRow({ stockCode, listDate, market }) {
         u.searchParams.set('ut', 'fa5fd1943c7b386f172d6893dbfba10b');
         u.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
         u.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
-        const resp = await fetch(u.toString(), {
-          headers: {
-            'user-agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-            referer: 'https://quote.eastmoney.com/',
-            accept: 'application/json,text/plain,*/*',
-          },
-        });
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+        let resp;
+        try {
+          resp = await fetch(u.toString(), {
+            headers: {
+              'user-agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+              referer: 'https://quote.eastmoney.com/',
+              accept: 'application/json,text/plain,*/*',
+            },
+            signal: ctrl.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
         if (!resp.ok) throw new Error(`em http ${resp.status}`);
         const payload = await resp.json();
         const klines = payload?.data?.klines || [];
@@ -169,6 +186,8 @@ function runNewShareMetricsSync(opts) {
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 20 * 1024 * 1024,
+    timeout: PY_TIMEOUT_MS,
+    killSignal: 'SIGTERM',
   });
   if (r.error) return { ok: false, stderr: String(r.error.message || 'spawn error') };
   const payload = parsePayload(r.stdout) || parsePayload(r.stderr);
@@ -194,6 +213,28 @@ function runNewShareMetricsSync(opts) {
 
 async function runNewShareMetricsSyncWithFallback(opts) {
   const market = String(opts.market || 'a').trim().toLowerCase();
+  if (market === 'hk') {
+    const firstRow = await fetchEastmoneyFirstRow({
+      stockCode: opts.stockCode,
+      listDate: opts.listDate,
+      market,
+    });
+    if (firstRow) {
+      return {
+        ok: true,
+        source: 'eastmoney.push2his.js-fallback',
+        firstRow,
+        totalShares: null,
+        winRate: null,
+        issuePrice: null,
+      };
+    }
+    const allowPythonForHk = process.env.NEW_SHARE_METRICS_HK_ALLOW_PY === '1';
+    if (!allowPythonForHk) {
+      return { ok: false, stderr: 'hk first row missing (js fallback)' };
+    }
+    return runNewShareMetricsSync(opts);
+  }
   if (market !== 'hk') {
     try {
       const fast = await fetchMetricsFromIpoApplyFast(opts);

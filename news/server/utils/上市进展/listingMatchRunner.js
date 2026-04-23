@@ -1,13 +1,218 @@
 const db = require('../../db');
-const { normalizeCompanyNameForMatch } = require('./listingCompanyNormalize');
+const { normalizeCompanyNameForMatch, fuzzySimilarity } = require('./listingCompanyNormalize');
+const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+
+function deriveBoardFromNewShare(row) {
+  const code = String(row.stock_code || '').trim();
+  const exchange = String(row.exchange || '').trim();
+  if (exchange === '\u5317\u4ea4\u6240') return '\u5317\u4ea4\u6240';
+  if (exchange === '\u6e2f\u4ea4\u6240' || exchange === '\u9999\u6e2f\u8054\u4ea4\u6240') return '\u6e2f\u4ea4\u6240';
+  if (exchange === '\u4e0a\u4ea4\u6240') {
+    if (/^688/.test(code)) return '\u79d1\u521b\u677f';
+    return '\u4e3b\u677f';
+  }
+  if (exchange === '\u6df1\u4ea4\u6240') {
+    if (/^300/.test(code)) return '\u521b\u4e1a\u677f';
+    return '\u4e3b\u677f';
+  }
+  return exchange || '\u5176\u4ed6';
+}
+
+function isNewShareMatch(projectRow, newShareRow, threshold = 0.8) {
+  const projectNameScore = fuzzySimilarity(projectRow.project_name, newShareRow.stock_name);
+  const companyCnScore = fuzzySimilarity(projectRow.company, newShareRow.enterprise_full_name_cn);
+  const companyEnScore = fuzzySimilarity(projectRow.company, newShareRow.enterprise_full_name_en);
+  const hit = projectNameScore >= threshold || companyCnScore >= threshold || companyEnScore >= threshold;
+  return {
+    hit,
+    score: Math.max(projectNameScore, companyCnScore, companyEnScore),
+    projectNameScore,
+    companyCnScore,
+    companyEnScore,
+  };
+}
+
+function normYmd(v) {
+  const s = String(v || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
+async function runNewShareMatchBatch({
+  restrictProjectUserId = null,
+  newShareStartDate = '',
+  newShareEndDate = '',
+  newShareLookbackDays = 0,
+} = {}) {
+  const today = createShanghaiDate();
+  const todayYmd = formatDateOnly(today);
+  const yesterdayYmd = formatDateOnly(addDaysCalendar(today, -1));
+  let startYmd = normYmd(newShareStartDate);
+  let endYmd = normYmd(newShareEndDate);
+  if (!startYmd || !endYmd) {
+    const lookback = Number(newShareLookbackDays || 0);
+    if (Number.isFinite(lookback) && lookback > 1) {
+      endYmd = yesterdayYmd;
+      startYmd = formatDateOnly(addDaysCalendar(new Date(`${yesterdayYmd}T12:00:00+08:00`), -(Math.floor(lookback) - 1)));
+    } else {
+      startYmd = yesterdayYmd;
+      endYmd = yesterdayYmd;
+    }
+  }
+  if (startYmd > endYmd) {
+    const tmp = startYmd;
+    startYmd = endYmd;
+    endYmd = tmp;
+  }
+
+  const newShareRows = await db.query(
+    `SELECT id, stock_code, stock_name, enterprise_full_name_cn, enterprise_full_name_en, exchange
+     FROM ipo_new_share
+     WHERE public_date IS NOT NULL
+       AND DATE(public_date) >= ?
+       AND DATE(public_date) <= ?`,
+    [startYmd, endYmd]
+  );
+
+  let projectSql = `SELECT * FROM ipo_project WHERE F_DeleteMark = 0`;
+  const projectParams = [];
+  if (restrictProjectUserId) {
+    projectSql += ` AND F_CreatorUserId = ?`;
+    projectParams.push(restrictProjectUserId);
+  }
+  projectSql += ` ORDER BY f_id`;
+  const projectRows = await db.query(projectSql, projectParams);
+  console.log(
+    `[listing-match][new-share] public_date=${startYmd}~${endYmd} new_share=${newShareRows.length} projects=${projectRows.length}` +
+      (restrictProjectUserId ? ` user=${restrictProjectUserId}` : '')
+  );
+
+  const now = new Date();
+  const updateAt = new Date(`${todayYmd}T00:00:00+08:00`);
+  let inserted = 0;
+  let matchedPairs = 0;
+  let skipped = 0;
+  for (const ns of newShareRows) {
+    const board = deriveBoardFromNewShare(ns);
+    for (const p of projectRows) {
+      const hitInfo = isNewShareMatch(p, ns, 0.8);
+      if (!hitInfo.hit) continue;
+      matchedPairs += 1;
+      const existing = await db.query(
+        `SELECT f_id
+         FROM ipo_project_progress
+         WHERE match_source = 'new_share'
+           AND ipo_project_f_id = ?
+           AND new_share_row_id = ?
+           AND DATE(f_update_time) = ?
+         LIMIT 1`,
+        [p.f_id, ns.id, todayYmd]
+      );
+      if (existing.length) {
+        skipped += 1;
+        continue;
+      }
+      await db.execute(
+        `INSERT INTO ipo_project_progress (
+          f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+          new_share_row_id, match_source, match_score,
+          fund, sub, project_name, company,
+          inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+          status, board, exchange, f_update_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          now,
+          p.F_CreatorUserId,
+          p.f_id,
+          null,
+          ns.id,
+          'new_share',
+          Number(hitInfo.score.toFixed(4)),
+          p.fund,
+          p.sub,
+          p.project_name,
+          p.company,
+          p.inv_amount,
+          p.residual_amount,
+          p.ratio,
+          p.ct_amount,
+          p.ct_residual,
+          '\u6628\u65e5\u4e0a\u5e02',
+          board,
+          ns.exchange || '',
+          updateAt,
+        ]
+      );
+      inserted += 1;
+    }
+  }
+
+  return {
+    newShareCount: newShareRows.length,
+    projectCount: projectRows.length,
+    matchedPairs,
+    inserted,
+    skipped,
+    publicDate: startYmd === endYmd ? startYmd : `${startYmd}~${endYmd}`,
+    updateDate: todayYmd,
+  };
+}
+
+async function backfillYesterdayListedStatus({ restrictProjectUserId = null }) {
+  const params = [];
+  let whereUser = '';
+  if (restrictProjectUserId) {
+    whereUser = ' AND F_CreatorUserId = ?';
+    params.push(restrictProjectUserId);
+  }
+  const result = await db.execute(
+    `UPDATE ipo_project_progress
+     SET status = '\u6628\u65e5\u4e0a\u5e02'
+     WHERE status != '\u6628\u65e5\u4e0a\u5e02'
+       AND (
+         match_source = 'new_share'
+         OR new_share_row_id IS NOT NULL
+         OR (ipo_progress_row_id IS NULL)
+       )
+       ${whereUser}`,
+    params
+  );
+
+  const sourceFixResult = await db.execute(
+    `UPDATE ipo_project_progress
+     SET match_source = 'new_share'
+     WHERE match_source != 'new_share'
+       AND (
+         new_share_row_id IS NOT NULL
+         OR (ipo_progress_row_id IS NULL AND status = '\u6628\u65e5\u4e0a\u5e02')
+       )
+       ${whereUser}`,
+    params
+  );
+
+  return {
+    statusBackfilled: Number(result?.affectedRows || 0),
+    sourceBackfilled: Number(sourceFixResult?.affectedRows || 0),
+  };
+}
 
 /**
- * 匹配 ipo_progress �?ipo_project，笛卡尔组合写入 ipo_project_progress�? * @param {object} opts
+ * Match ipo_progress with ipo_project and write ipo_project_progress.
+ * Also appends "new-share listed yesterday" fuzzy-matching records.
+ * @param {object} opts
  * @param {string} opts.startDate YYYY-MM-DD
  * @param {string} opts.endDate YYYY-MM-DD
- * @param {string|null} [opts.restrictProjectUserId] 若提供则仅该用户的底层项目参与匹配；定时任务�?null 表示全部项目
+ * @param {string|null} [opts.restrictProjectUserId] Restrict project owner for non-admin
  */
-async function runListingMatchBatch({ startDate, endDate, restrictProjectUserId = null }) {
+async function runListingMatchBatch({
+  startDate,
+  endDate,
+  restrictProjectUserId = null,
+  newShareStartDate = '',
+  newShareEndDate = '',
+  newShareLookbackDays = 0,
+}) {
+  const backfillResult = await backfillYesterdayListedStatus({ restrictProjectUserId });
+
   const progressRows = await db.query(
     `SELECT * FROM ipo_progress
      WHERE F_DeleteMark = 0
@@ -44,15 +249,19 @@ async function runListingMatchBatch({ startDate, endDate, restrictProjectUserId 
       await db.execute(
         `INSERT INTO ipo_project_progress (
           f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+          new_share_row_id, match_source, match_score,
           fund, sub, project_name, company,
           inv_amount, residual_amount, ratio, ct_amount, ct_residual,
           status, board, exchange, f_update_time
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           now,
           p.F_CreatorUserId,
           p.f_id,
           ip.f_id,
+          null,
+          'ipo_progress',
+          null,
           p.fund,
           p.sub,
           p.project_name,
@@ -72,10 +281,25 @@ async function runListingMatchBatch({ startDate, endDate, restrictProjectUserId 
     }
   }
 
+  const newShareResult = await runNewShareMatchBatch({
+    restrictProjectUserId,
+    newShareStartDate,
+    newShareEndDate,
+    newShareLookbackDays,
+  });
+
   return {
     progressCount: progressRows.length,
     projectCount: projectRows.length,
-    inserted,
+    insertedFromIpoProgress: inserted,
+    insertedFromNewShare: Number(newShareResult.inserted || 0),
+    inserted: inserted + Number(newShareResult.inserted || 0),
+    newSharePublicDate: newShareResult.publicDate,
+    newShareMatchCount: Number(newShareResult.matchedPairs || 0),
+    newShareCount: Number(newShareResult.newShareCount || 0),
+    newShareSkipped: Number(newShareResult.skipped || 0),
+    yesterdayStatusBackfilled: Number(backfillResult.statusBackfilled || 0),
+    yesterdaySourceBackfilled: Number(backfillResult.sourceBackfilled || 0),
   };
 }
 

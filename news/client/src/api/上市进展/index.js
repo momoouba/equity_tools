@@ -84,6 +84,10 @@ export function fetchListingDataChangeLog(params) {
   return axios.get(`${base}/listing-data-change-log`, { params })
 }
 
+export function fetchListingSyncExecutionLog(params) {
+  return axios.get(`${base}/listing-sync-execution-log`, { params })
+}
+
 export function downloadIpoProjectProgressExport(params) {
   return axios.get(`${base}/ipo-project-progress/export`, { params, responseType: 'blob' })
 }
@@ -102,6 +106,10 @@ export function fetchNewShareList(params) {
 
 export function postNewShareSync(body) {
   return axios.post(`${base}/new-share/sync`, body, { timeout: 600000 })
+}
+
+export function postNewShareAiName(body) {
+  return axios.post(`${base}/new-share/ai-name`, body, { timeout: 600000 })
 }
 
 export function downloadNewShareExport(params) {

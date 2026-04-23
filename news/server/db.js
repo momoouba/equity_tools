@@ -4466,6 +4466,9 @@ async function initializeTables(dbPool) {
         F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID',
         ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id',
         ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照',
+        new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照',
+        match_source VARCHAR(30) NOT NULL DEFAULT 'ipo_progress' COMMENT '匹配来源：ipo_progress|new_share',
+        match_score DECIMAL(8,4) NULL COMMENT '匹配得分（0~1）',
         fund TEXT NOT NULL COMMENT '归属基金',
         sub TEXT NULL COMMENT '归属子基金/SPV',
         project_name TEXT NOT NULL COMMENT '项目简称',
@@ -4494,6 +4497,9 @@ async function initializeTables(dbPool) {
         id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
         stock_name VARCHAR(200) NOT NULL COMMENT '股票简称',
+        enterprise_full_name_cn VARCHAR(255) NULL COMMENT '企业中文全称（AI补齐）',
+        enterprise_full_name_en VARCHAR(255) NULL COMMENT '企业英文全称（AI补齐）',
+        enterprise_full_name_display VARCHAR(600) NULL COMMENT '企业全称展示值（中/英）',
         issue_date DATE NOT NULL COMMENT '申购日期（北京时间）',
         issue_weekday VARCHAR(10) NULL COMMENT '星期几',
         issue_price DECIMAL(12,4) NULL COMMENT '发行价',
@@ -4519,6 +4525,36 @@ async function initializeTables(dbPool) {
   }
 
   // 历史库兼容：补齐 ipo_new_share 的首日表现字段
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN enterprise_full_name_cn VARCHAR(255) NULL COMMENT '企业中文全称（AI补齐）' AFTER stock_name`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 enterprise_full_name_cn 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN enterprise_full_name_en VARCHAR(255) NULL COMMENT '企业英文全称（AI补齐）' AFTER enterprise_full_name_cn`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 enterprise_full_name_en 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN enterprise_full_name_display VARCHAR(600) NULL COMMENT '企业全称展示值（中/英）' AFTER enterprise_full_name_en`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 enterprise_full_name_display 时出现警告:', err.message);
+    }
+  }
   try {
     await dbPool.query(
       `ALTER TABLE ipo_new_share
@@ -4676,6 +4712,9 @@ async function initializeTables(dbPool) {
       "ALTER TABLE ipo_project_progress MODIFY COLUMN F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN match_source VARCHAR(30) NOT NULL DEFAULT 'ipo_progress' COMMENT '匹配来源：ipo_progress|new_share'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN match_score DECIMAL(8,4) NULL COMMENT '匹配得分（0~1）'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN fund TEXT NOT NULL COMMENT '归属基金'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN sub TEXT NULL COMMENT '归属子基金/SPV'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN project_name TEXT NOT NULL COMMENT '项目简称'",
@@ -4716,12 +4755,61 @@ async function initializeTables(dbPool) {
   }
 
   try {
+    const [ippNewShareRowCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'new_share_row_id'
+    `);
+    if (ippNewShareRowCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_progress
+        ADD COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照' AFTER ipo_progress_row_id
+      `);
+      console.log('✓ ipo_project_progress 已添加 new_share_row_id');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress.new_share_row_id 时出现警告:', err.message);
+  }
+
+  try {
+    const [ippMatchSourceCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'match_source'
+    `);
+    if (ippMatchSourceCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_progress
+        ADD COLUMN match_source VARCHAR(30) NOT NULL DEFAULT 'ipo_progress' COMMENT '匹配来源：ipo_progress|new_share' AFTER new_share_row_id
+      `);
+      console.log('✓ ipo_project_progress 已添加 match_source');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress.match_source 时出现警告:', err.message);
+  }
+
+  try {
+    const [ippMatchScoreCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'match_score'
+    `);
+    if (ippMatchScoreCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_progress
+        ADD COLUMN match_score DECIMAL(8,4) NULL COMMENT '匹配得分（0~1）' AFTER match_source
+      `);
+      console.log('✓ ipo_project_progress 已添加 match_score');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress.match_score 时出现警告:', err.message);
+  }
+
+  try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS listing_data_config (
         id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
         name VARCHAR(200) NOT NULL COMMENT '配置名称',
         interface_type VARCHAR(20) NOT NULL COMMENT 'crawler|api',
         request_url VARCHAR(1000) NULL,
+        min_sync_date DATE NOT NULL DEFAULT '2026-01-01' COMMENT '最早同步日期（该日期之前不处理）',
         cron_expression VARCHAR(100) NULL,
         last_sync_time DATETIME NULL,
         last_sync_range_end DATE NULL COMMENT '上次成功同步的闭区间结束日(北京时间)，用于定时补抓',
@@ -4749,6 +4837,7 @@ async function initializeTables(dbPool) {
 
   try {
     const columnDefs = [
+      ["min_sync_date", "ADD COLUMN min_sync_date DATE NOT NULL DEFAULT '2026-01-01' COMMENT '最早同步日期（该日期之前不处理）' AFTER request_url"],
       ["ifind_enabled", "ADD COLUMN ifind_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=启用同花顺iFinD港股上市申请抓取' AFTER skip_holiday"],
       ["ifind_username", "ADD COLUMN ifind_username TEXT NULL COMMENT '同花顺iFinD用户名（服务端加密存储）' AFTER ifind_enabled"],
       ["ifind_password", "ADD COLUMN ifind_password TEXT NULL COMMENT '同花顺iFinD密码（服务端加密存储）' AFTER ifind_username"],
@@ -4915,6 +5004,8 @@ async function initializeTables(dbPool) {
         updated_count INT NOT NULL DEFAULT 0 COMMENT '更新入库数',
         skipped_count INT NOT NULL DEFAULT 0 COMMENT '跳过数',
         status VARCHAR(20) NOT NULL DEFAULT 'running' COMMENT 'running/success/failed/skipped',
+        progress_log LONGTEXT NULL COMMENT '执行过程日志（滚动追加）',
+        heartbeat_at DATETIME NULL COMMENT '最近进度更新时间',
         error_message TEXT NULL COMMENT '错误摘要',
         started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
         finished_at DATETIME NULL COMMENT '结束时间',
@@ -4928,6 +5019,38 @@ async function initializeTables(dbPool) {
     console.log('✓ listing_sync_execution_log 表已就绪');
   } catch (err) {
     console.warn('创建 listing_sync_execution_log 表时出现警告:', err.message);
+  }
+
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_sync_execution_log' AND COLUMN_NAME = 'progress_log'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE listing_sync_execution_log
+        ADD COLUMN progress_log LONGTEXT NULL COMMENT '执行过程日志（滚动追加）' AFTER status
+      `);
+      console.log('✓ listing_sync_execution_log 已添加 progress_log');
+    }
+  } catch (err) {
+    console.warn('迁移 listing_sync_execution_log.progress_log 时出现警告:', err.message);
+  }
+
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_sync_execution_log' AND COLUMN_NAME = 'heartbeat_at'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE listing_sync_execution_log
+        ADD COLUMN heartbeat_at DATETIME NULL COMMENT '最近进度更新时间' AFTER progress_log
+      `);
+      console.log('✓ listing_sync_execution_log 已添加 heartbeat_at');
+    }
+  } catch (err) {
+    console.warn('迁移 listing_sync_execution_log.heartbeat_at 时出现警告:', err.message);
   }
 
   try {

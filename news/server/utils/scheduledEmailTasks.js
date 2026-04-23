@@ -3049,8 +3049,14 @@ async function updateScheduledTasks() {
           continue;
         }
         
-        console.log(`为收件管理配置 ${recipient.id} 创建定时任务: ${cronExpression} (来源: ${cronSource})`);
-        console.log(`  - 原始配置: cron_expression=${recipient.cron_expression || '(空)'}, send_frequency=${recipient.send_frequency || '(空)'}, send_time=${recipient.send_time || '(空)'}`);
+        console.log(
+          `为收件管理配置 ${recipient.id} 创建定时任务: ${cronExpression} (来源: ${cronSource})` +
+          `, recipient_email=${recipient.recipient_email || '(空)'}, email_subject=${recipient.email_subject || '(空)'}`
+        );
+        console.log(
+          `  - 原始配置: cron_expression=${recipient.cron_expression || '(空)'}, send_frequency=${recipient.send_frequency || '(空)'}, send_time=${recipient.send_time || '(空)'}` +
+          `, recipient_email=${recipient.recipient_email || '(空)'}, email_subject=${recipient.email_subject || '(空)'}, user_account=${recipient.user_account || '(空)'}`
+        );
         
         // 验证cron表达式
         if (!cron.validate(cronExpression)) {

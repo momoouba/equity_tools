@@ -55,11 +55,26 @@ async function listSyncExecutionLog(req, res) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
     const offset = (page - 1) * pageSize;
+    const id = String(req.query.id || '').trim();
+    const configId = String(req.query.configId || '').trim();
+    const taskKey = String(req.query.taskKey || '').trim();
     const sourceType = String(req.query.sourceType || '').trim();
     const status = String(req.query.status || '').trim();
 
     const where = ['1=1'];
     const params = [];
+    if (id) {
+      where.push('id = ?');
+      params.push(Number(id));
+    }
+    if (configId) {
+      where.push('config_id = ?');
+      params.push(configId);
+    }
+    if (taskKey) {
+      where.push('task_key = ?');
+      params.push(taskKey);
+    }
     if (sourceType) {
       where.push('source_type = ?');
       params.push(sourceType);

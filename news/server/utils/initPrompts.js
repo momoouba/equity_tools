@@ -344,6 +344,30 @@ async function initPrompts() {
         interface_type: '上海国际集团',
         prompt_type: 'validation',
         prompt_content: sigValidationPrompt
+      },
+      {
+        prompt_name: '打新接口-企业全称补齐',
+        interface_type: '打新接口',
+        prompt_type: 'enterprise_full_name',
+        prompt_content: `你是上市公司主体识别助手。
+
+输入会提供：
+- 股票代码
+- 股票简称
+
+请识别并返回该股票对应公司的全称信息，严格输出 JSON：
+{
+  "cn": "中文主体全称",
+  "en": "英文主体全称"
+}
+
+规则：
+1. 只输出 JSON，不要输出任何解释、前后缀、markdown。
+2. 必须基于联网检索到的权威信息（交易所公告、公司官网、监管披露、主流财经数据库）填写全称，不允许凭简称自行翻译、音译或臆测。
+3. 国内上市公司优先返回中文备案全称（cn）。
+4. 若主体仅有英文全称，则仅填写 en，cn 置空字符串。
+5. 港股公司优先返回中文全称；若没有中文全称，则返回英文全称。
+6. 如果仅能推测而无法通过网络检索确认，请返回 {"cn":"","en":""}。`
       }
     ];
 

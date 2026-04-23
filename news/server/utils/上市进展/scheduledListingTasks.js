@@ -15,6 +15,20 @@ const { createExecutionLog, finishExecutionLog } = require('./listingSyncExecuti
 const scheduledTasks = new Map();
 const sqlSyncScheduledTasks = new Map();
 const runningTaskKeys = new Set();
+const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
+
+function normalizeYmd(v) {
+  const s = String(v || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
+function maxYmd(a, b) {
+  const aa = normalizeYmd(a);
+  const bb = normalizeYmd(b);
+  if (!aa) return bb;
+  if (!bb) return aa;
+  return aa >= bb ? aa : bb;
+}
 
 function logNextListingCronRun(nodeCron, label) {
   try {
@@ -116,6 +130,7 @@ async function executeListingSyncTask(configId) {
   }
 
   const sourceType = normalizeSourceType(cfg);
+  const minSyncDate = normalizeYmd(cfg.min_sync_date) || DEFAULT_MIN_SYNC_DATE;
   let startDate;
   let endDate;
   // 打新日历：仅保留申购日期（A 股）/ 上市日期（港股）严格大于该自然日（不含当日）
@@ -137,11 +152,16 @@ async function executeListingSyncTask(configId) {
     console.warn(`[上市进展定时] 配置「${cfg.name || configId}」日期区间无效，跳过`);
     return;
   }
+  startDate = maxYmd(startDate, minSyncDate);
+  if (startDate > endDate) {
+    console.log(`[上市进展定时] 配置「${cfg.name || configId}」区间早于最早同步日期(${minSyncDate})，跳过`);
+    return;
+  }
 
   console.log(
     sourceType === 'new_share'
       ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：申购/上市日期 > ${newShareIssueAfterExclusive} 且 ≤ ${endDate}；A股补抓 UP_DATE > ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
-      : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
+      : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
   );
   const taskKey = buildTaskKey(cfg, startDate, endDate);
   if (runningTaskKeys.has(taskKey)) {
@@ -181,6 +201,7 @@ async function executeListingSyncTask(configId) {
             to: endDate,
             issueDateAfterExclusive: newShareIssueAfterExclusive,
             updateDateAfterExclusive: newShareUpdateAfterExclusive,
+            minSyncDate,
             triggerType: 'scheduled',
             logTag: `[上市进展定时][${cfg.name || configId}][打新日历]`,
           });

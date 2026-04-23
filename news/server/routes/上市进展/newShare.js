@@ -1,7 +1,7 @@
 const db = require('../../db');
 const { rowsToCsv, sendCsv } = require('../../utils/上市进展/listingCsv');
 const { getUserFromHeader, canAccessListing } = require('../../utils/上市进展/listingAuth');
-const { syncNewShareCalendar } = require('../../utils/上市进展/newShareService');
+const { syncNewShareCalendar, refreshNewShareEnterpriseFullNamesByIds } = require('../../utils/上市进展/newShareService');
 const { createExecutionLog, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
 const { buildTaskKey } = require('../../utils/上市进展/listingSourceType');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../../utils/上市进展/listingBeijingDate');
@@ -53,6 +53,7 @@ async function listNewShare(req, res) {
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_new_share ${whereSql}`, params);
     const list = await db.query(
       `SELECT id, stock_code, stock_name,
+              enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display,
               DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
               issue_weekday, issue_price, offer_pe, limit_shares,
               exchange, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
@@ -78,6 +79,7 @@ async function exportNewShare(req, res) {
     const { whereSql, params } = buildWhere(req);
     const rows = await db.query(
       `SELECT stock_code, stock_name,
+              enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display,
               DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
               issue_weekday, issue_price, offer_pe, limit_shares, exchange,
               DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
@@ -90,6 +92,9 @@ async function exportNewShare(req, res) {
     const csv = rowsToCsv(rows, [
       { label: '股票代码', key: 'stock_code' },
       { label: '股票简称', key: 'stock_name' },
+      { label: '企业全称（中/英）', key: 'enterprise_full_name_display' },
+      { label: '企业中文全称', key: 'enterprise_full_name_cn' },
+      { label: '企业英文全称', key: 'enterprise_full_name_en' },
       { label: '申购日期', key: 'issue_date' },
       { label: '星期', key: 'issue_weekday' },
       { label: '发行价', key: 'issue_price' },
@@ -182,10 +187,35 @@ async function syncNewShare(req, res) {
   }
 }
 
+async function aiNameNewShare(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const normalizedIds = Array.from(
+      new Set(
+        ids.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0)
+      )
+    );
+    if (!normalizedIds.length) {
+      return res.status(400).json({ success: false, message: '请先选择需要AI查名的数据' });
+    }
+    const result = await refreshNewShareEnterpriseFullNamesByIds(normalizedIds, {
+      logTag: `[打新日历AI查名][user=${user.id}]`,
+    });
+    return res.json({ success: true, data: result });
+  } catch (e) {
+    console.error('aiNameNewShare', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
 function registerNewShareRoutes(router) {
   router.get('/new-share', listNewShare);
   router.get('/new-share/export', exportNewShare);
   router.post('/new-share/sync', syncNewShare);
+  router.post('/new-share/ai-name', aiNameNewShare);
 }
 
 module.exports = { registerNewShareRoutes };

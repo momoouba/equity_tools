@@ -7,13 +7,14 @@ const { updateListingScheduledTasks } = require('../../utils/上市进展/schedu
 const { encryptText, decryptText, maskToken } = require('../../utils/上市进展/listingSecret');
 const { normalizeSourceType, buildTaskKey } = require('../../utils/上市进展/listingSourceType');
 const { executeWithRetry } = require('../../utils/上市进展/listingRetry');
-const { createExecutionLog, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
+const { createExecutionLog, appendExecutionLogProgress, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
 const { syncNewShareCalendar } = require('../../utils/上市进展/newShareService');
 const { syncGuidanceProgress } = require('../../utils/上市进展/guidanceProgressService');
 const { syncOverseasFiling } = require('../../utils/上市进展/overseasFilingService');
 const { createShanghaiDate, formatDateOnly } = require('../../utils/上市进展/listingBeijingDate');
 
 const runningManualTaskKeys = new Set();
+const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
 const LISTING_DEFAULT_CONFIG_TEMPLATES = [
   { name: '交易所IPO主爬虫', interface_type: 'crawler', news_interface_type: 'exchange_ipo', request_url: null },
   { name: '打新日历', interface_type: 'crawler', news_interface_type: 'new_share', request_url: null },
@@ -45,6 +46,19 @@ function unauthorized(res) {
 
 function forbidden(res) {
   return res.status(403).json({ success: false, message: '仅管理员可配置' });
+}
+
+function normalizeYmd(v) {
+  const s = String(v || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
+function maxYmd(a, b) {
+  const aa = normalizeYmd(a);
+  const bb = normalizeYmd(b);
+  if (!aa) return bb;
+  if (!bb) return aa;
+  return aa >= bb ? aa : bb;
 }
 
 /** 对单条配置记录进行敏感字段脱敏处理 */
@@ -121,14 +135,15 @@ async function createConfig(req, res) {
     const encryptedIfindToken = body.ifind_token ? encryptText(String(body.ifind_token).trim()) : null;
     await db.execute(
       `INSERT INTO listing_data_config (
-        id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+        id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         body.name,
         body.interface_type || 'crawler',
         body.request_url || null,
+        normalizeYmd(body.min_sync_date) || DEFAULT_MIN_SYNC_DATE,
         body.cron_expression || null,
         body.status || 'draft',
         body.is_active !== undefined ? body.is_active : 1,
@@ -204,14 +219,15 @@ async function initDefaultConfigs(req, res) {
       const id = await generateId('listing_data_config');
       await db.execute(
         `INSERT INTO listing_data_config (
-          id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+          id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
           ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
-        ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           tpl.name,
           tpl.interface_type,
           tpl.request_url || null,
+          DEFAULT_MIN_SYNC_DATE,
           '0 0 8 * * ? *',
           'active',
           1,
@@ -272,7 +288,7 @@ async function updateConfig(req, res) {
     const ifindEnabled = body.ifind_enabled === true || body.ifind_enabled === 1 || body.ifind_enabled === '1' ? 1 : 0;
     await db.execute(
       `UPDATE listing_data_config SET
-        name = ?, interface_type = ?, request_url = ?, cron_expression = ?, status = ?, is_active = ?, news_interface_type = ?, skip_holiday = ?,
+        name = ?, interface_type = ?, request_url = ?, min_sync_date = ?, cron_expression = ?, status = ?, is_active = ?, news_interface_type = ?, skip_holiday = ?,
         ifind_enabled = ?, ${ifindUsernameSql} ${ifindPasswordSql} ${ifindTokenSql}
         ifind_dr_code = ?, ifind_query_params = ?, ifind_fields = ?, ifind_format = ?, ifind_fallback_to_hkex = ?
        WHERE id = ?`,
@@ -280,6 +296,7 @@ async function updateConfig(req, res) {
         body.name,
         body.interface_type,
         body.request_url,
+        normalizeYmd(body.min_sync_date) || DEFAULT_MIN_SYNC_DATE,
         body.cron_expression,
         body.status,
         body.is_active,
@@ -346,14 +363,15 @@ async function copyListingConfig(req, res) {
     const skip_holiday = src.skip_holiday === 1 || src.skip_holiday === true ? 1 : 0;
     await db.execute(
       `INSERT INTO listing_data_config (
-        id, name, interface_type, request_url, cron_expression, last_sync_time, last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+        id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
-      ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         newId,
         `${src.name}（副本）`,
         src.interface_type,
         src.request_url,
+        normalizeYmd(src.min_sync_date) || DEFAULT_MIN_SYNC_DATE,
         src.cron_expression,
         src.status || 'draft',
         src.is_active,
@@ -413,7 +431,15 @@ async function syncListingConfig(req, res) {
     if (sourceType !== 'new_share' && !endDateFinal) {
       return res.status(400).json({ success: false, message: '请提供 startDate、endDate（YYYY-MM-DD）' });
     }
-    const taskKey = buildTaskKey(cfg, startDate, endDateFinal);
+    const minSyncDate = normalizeYmd(cfg.min_sync_date) || DEFAULT_MIN_SYNC_DATE;
+    const effectiveStart = maxYmd(startDate, minSyncDate);
+    if (effectiveStart > endDateFinal) {
+      return res.status(400).json({
+        success: false,
+        message: `开始日期早于配置最早同步日期，且裁剪后区间无效（min_sync_date=${minSyncDate}）`,
+      });
+    }
+    const taskKey = buildTaskKey(cfg, effectiveStart, endDateFinal);
     if (runningManualTaskKeys.has(taskKey)) {
       return res.status(409).json({ success: false, message: '同源同窗口任务正在执行，请稍后重试' });
     }
@@ -421,35 +447,47 @@ async function syncListingConfig(req, res) {
 
     let logId = null;
     try {
+      console.log(
+        `[上市进展手动同步] 收到触发请求 cfg=${cfg.id} name=${cfg.name || '-'} sourceType=${sourceType} start=${startDate} effectiveStart=${effectiveStart} end=${endDateFinal} operator=${user.account || user.id}`
+      );
       logId = await createExecutionLog({
         configId: cfg.id,
         configName: cfg.name,
         sourceType,
         triggerType: 'manual',
-        windowStart: startDate,
+        windowStart: effectiveStart,
         windowEnd: endDateFinal,
         taskKey,
       });
+      console.log(`[上市进展手动同步] 已创建执行日志 logId=${logId} taskKey=${taskKey}`);
+      await appendExecutionLogProgress(
+        logId,
+        `收到手动触发，配置=${cfg.name || cfg.id}，区间=${effectiveStart}~${endDateFinal}，操作者=${user.account || user.id}`
+      );
 
       const wrapped = await executeWithRetry(
         async (attempt) => {
           console.log(
-            `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${startDate}~${endDateFinal} operator=${user.account || user.id}`
+            `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${effectiveStart}~${endDateFinal} minSyncDate=${minSyncDate} operator=${user.account || user.id}`
           );
           if (sourceType === 'new_share') {
             return syncNewShareCalendar({
-              from: startDate,
+              from: effectiveStart,
               to: endDateFinal,
-              issueDateAfterExclusive: startDate,
-              updateDateAfterExclusive: startDate,
+              issueDateAfterExclusive: effectiveStart,
+              updateDateAfterExclusive: effectiveStart,
+              minSyncDate,
               triggerType: 'manual',
               operatorUserId: user.id,
               logTag: `[上市进展手动同步][${cfg.name || cfg.id}][打新日历]`,
+              progressReporter: async (msg) => {
+                await appendExecutionLogProgress(logId, msg);
+              },
             });
           }
           if (sourceType === 'guidance_progress') {
             return syncGuidanceProgress({
-              from: startDate,
+              from: effectiveStart,
               to: endDateFinal,
               source: 'html',
               sourceUrl: String(cfg.request_url || '').trim(),
@@ -460,7 +498,7 @@ async function syncListingConfig(req, res) {
           }
           if (sourceType === 'overseas_filing') {
             return syncOverseasFiling({
-              from: startDate,
+              from: effectiveStart,
               to: endDateFinal,
               source: 'url',
               sourceUrl: String(cfg.request_url || '').trim(),
@@ -472,13 +510,13 @@ async function syncListingConfig(req, res) {
           if (sourceType === 'exchange_crawler') {
             const crawlLogTag = `[上市进展手动同步][${cfg.name || cfg.id}][交易所爬虫]`;
             const crawlerResult = await runListingExchangeCrawler({
-              startDate,
+              startDate: effectiveStart,
               endDate: endDateFinal,
               logTag: crawlLogTag,
               config: cfg,
             });
             const matchResult = await runListingMatchBatch({
-              startDate,
+              startDate: effectiveStart,
               endDate: endDateFinal,
               restrictProjectUserId: null,
             });
@@ -494,6 +532,10 @@ async function syncListingConfig(req, res) {
             console.warn(
               `[上市进展手动同步] retry=${attempt + 1} delay=${delay}ms cfg=${cfg.id} err=${error.message}`
             );
+            appendExecutionLogProgress(
+              logId,
+              `执行重试 attempt=${attempt + 1} delay=${delay}ms err=${String(error.message || error)}`
+            ).catch(() => {});
           },
         }
       );
@@ -519,6 +561,9 @@ async function syncListingConfig(req, res) {
         data: result,
       });
     } catch (syncErr) {
+      if (logId) {
+        await appendExecutionLogProgress(logId, `执行失败：${String(syncErr.message || syncErr)}`);
+      }
       if (logId) {
         await finishExecutionLog(logId, {
           status: 'failed',

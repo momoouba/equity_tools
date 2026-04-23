@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Table,
   Button,
@@ -13,7 +13,12 @@ import {
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import axios from '../../utils/axios'
-import { postListingConfigSync, postListingConfigCopy, postListingConfigInitDefaults } from '../../api/上市进展'
+import {
+  postListingConfigSync,
+  postListingConfigCopy,
+  postListingConfigInitDefaults,
+  fetchListingSyncExecutionLog,
+} from '../../api/上市进展'
 import CronGenerator from '../../components/CronGenerator'
 
 const FormItem = Form.Item
@@ -35,6 +40,7 @@ const emptyForm = {
   name: '',
   interface_type: 'crawler',
   request_url: '',
+  min_sync_date: dayjs('2026-01-01'),
   cron_expression: '0 0 8 * * ? *',
   status: 'active',
   is_active: true,
@@ -63,6 +69,10 @@ export default function ListingDataConfig() {
   const [syncRange, setSyncRange] = useState([dayjs().subtract(1, 'day'), dayjs()])
   const [syncSingleDate, setSyncSingleDate] = useState(() => dayjs())
   const [syncing, setSyncing] = useState(false)
+  const [syncLiveLog, setSyncLiveLog] = useState('')
+  const [syncLiveStatus, setSyncLiveStatus] = useState('')
+  const [syncLiveStartedAt, setSyncLiveStartedAt] = useState('')
+  const syncPollTimerRef = useRef(null)
   const [logOpen, setLogOpen] = useState(false)
   const [logRecord, setLogRecord] = useState(null)
   const [showCronModal, setShowCronModal] = useState(false)
@@ -100,6 +110,7 @@ export default function ListingDataConfig() {
       name: record.name,
       interface_type: record.interface_type || 'crawler',
       request_url: record.request_url || '',
+      min_sync_date: dayjs(record.min_sync_date || '2026-01-01'),
       cron_expression: record.cron_expression || '',
       status: record.status || 'active',
       is_active: record.is_active === 1 || record.is_active === true,
@@ -128,6 +139,7 @@ export default function ListingDataConfig() {
       const v = await form.validate()
       const payload = {
         ...v,
+        min_sync_date: v.min_sync_date ? dayjs(v.min_sync_date).format('YYYY-MM-DD') : '2026-01-01',
         is_active: v.is_active ? 1 : 0,
         skip_holiday: v.skip_holiday ? 1 : 0,
         ifind_enabled: v.ifind_enabled ? 1 : 0,
@@ -159,6 +171,9 @@ export default function ListingDataConfig() {
 
   const openSync = (record) => {
     setSyncRow(record)
+    setSyncLiveLog('')
+    setSyncLiveStatus('')
+    setSyncLiveStartedAt('')
     if (record.news_interface_type === 'new_share') {
       setSyncSingleDate(dayjs())
     } else {
@@ -166,6 +181,42 @@ export default function ListingDataConfig() {
     }
     setSyncOpen(true)
   }
+
+  const stopSyncPolling = useCallback(() => {
+    if (syncPollTimerRef.current) {
+      clearInterval(syncPollTimerRef.current)
+      syncPollTimerRef.current = null
+    }
+  }, [])
+
+  const pollLatestSyncLog = useCallback(async (configId) => {
+    if (!configId) return
+    try {
+      const res = await fetchListingSyncExecutionLog({
+        configId,
+        page: 1,
+        pageSize: 1,
+      })
+      const row = res.data?.data?.list?.[0]
+      if (!row) return
+      setSyncLiveStatus(row.status || '')
+      setSyncLiveStartedAt(row.started_at || '')
+      setSyncLiveLog(row.progress_log || row.error_message || '')
+      if (row.status && row.status !== 'running') {
+        stopSyncPolling()
+      }
+    } catch (_) {
+      // ignore polling errors to avoid interrupting manual sync
+    }
+  }, [stopSyncPolling])
+
+  const startSyncPolling = useCallback((configId) => {
+    stopSyncPolling()
+    pollLatestSyncLog(configId)
+    syncPollTimerRef.current = setInterval(() => {
+      pollLatestSyncLog(configId)
+    }, 2000)
+  }, [pollLatestSyncLog, stopSyncPolling])
 
   const runSync = async () => {
     if (!syncRow?.id) return
@@ -194,8 +245,12 @@ export default function ListingDataConfig() {
       payload = { startDate, endDate }
     }
     setSyncing(true)
+    setSyncLiveLog('正在触发同步任务...')
+    setSyncLiveStatus('running')
+    startSyncPolling(syncRow.id)
     try {
       const res = await postListingConfigSync(syncRow.id, payload)
+      await pollLatestSyncLog(syncRow.id)
       if (res.data?.success) {
         Message.success(res.data.message || '同步完成')
         setSyncOpen(false)
@@ -207,9 +262,12 @@ export default function ListingDataConfig() {
       const msg = e.response?.data?.message || e.message || '同步失败'
       Message.error(msg)
     } finally {
+      stopSyncPolling()
       setSyncing(false)
     }
   }
+
+  useEffect(() => () => stopSyncPolling(), [stopSyncPolling])
 
   const handleCopy = async (record) => {
     try {
@@ -281,6 +339,7 @@ export default function ListingDataConfig() {
           : '未启用',
     },
     { title: '请求地址', dataIndex: 'request_url', ellipsis: true },
+    { title: '最早同步日期', dataIndex: 'min_sync_date', width: 130, render: (t) => t || '2026-01-01' },
     { title: 'Cron', dataIndex: 'cron_expression', width: 140 },
     {
       title: '跳过节假日',
@@ -376,6 +435,14 @@ export default function ListingDataConfig() {
                   : '当前子类型可留空'
               }
             />
+          </FormItem>
+          <FormItem
+            label="最早同步日期"
+            field="min_sync_date"
+            rules={[{ required: true, message: '请选择最早同步日期' }]}
+            extra="该日期之前的数据将不会同步；建议所有上市接口统一设置。"
+          >
+            <DatePicker style={{ width: '100%' }} />
           </FormItem>
           {watchNewsSubType ? (
             <div style={{ marginTop: -4, marginBottom: 12, color: 'var(--color-text-2)', fontSize: 12 }}>
@@ -485,9 +552,12 @@ export default function ListingDataConfig() {
         title="上市数据同步 — 时间范围"
         visible={syncOpen}
         onOk={runSync}
-        onCancel={() => setSyncOpen(false)}
+        onCancel={() => {
+          stopSyncPolling()
+          setSyncOpen(false)
+        }}
         confirmLoading={syncing}
-        style={{ width: 480 }}
+        style={{ width: 700 }}
       >
         <p style={{ marginBottom: 12, color: 'var(--color-text-2)' }}>
           {syncRow?.news_interface_type === 'new_share'
@@ -515,6 +585,17 @@ export default function ListingDataConfig() {
             allowClear={false}
           />
         )}
+        <div style={{ marginTop: 12 }}>
+          <div style={{ marginBottom: 6, color: 'var(--color-text-2)', fontSize: 12 }}>
+            {syncLiveStartedAt ? `任务开始：${String(syncLiveStartedAt).replace('T', ' ').slice(0, 19)}；` : ''}
+            {syncLiveStatus ? `状态：${syncLiveStatus}` : ''}
+          </div>
+          <Input.TextArea
+            value={syncLiveLog || (syncing ? '正在获取执行日志...' : '点击“同步”后将显示实时执行日志')}
+            readOnly
+            autoSize={{ minRows: 10, maxRows: 16 }}
+          />
+        </div>
       </Modal>
 
       <Modal

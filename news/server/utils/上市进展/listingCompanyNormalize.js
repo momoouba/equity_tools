@@ -7,6 +7,60 @@ function normalizeCompanyNameForMatch(input) {
   return String(input).replace(/[()（）]/g, '');
 }
 
+function normalizeFuzzyText(input) {
+  if (input == null || input === '') return '';
+  return String(input)
+    .toLowerCase()
+    .replace(/[()（）]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[·•,.，。;；:：'"‘’“”\-_/\\|]/g, '')
+    .trim();
+}
+
+function buildBigrams(text) {
+  const s = String(text || '');
+  if (!s) return [];
+  if (s.length === 1) return [s];
+  const grams = [];
+  for (let i = 0; i < s.length - 1; i += 1) {
+    grams.push(s.slice(i, i + 2));
+  }
+  return grams;
+}
+
+function diceSimilarity(a, b) {
+  const aa = normalizeFuzzyText(a);
+  const bb = normalizeFuzzyText(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  const ga = buildBigrams(aa);
+  const gb = buildBigrams(bb);
+  if (!ga.length || !gb.length) return 0;
+  const bucket = new Map();
+  ga.forEach((g) => bucket.set(g, (bucket.get(g) || 0) + 1));
+  let overlap = 0;
+  gb.forEach((g) => {
+    const c = bucket.get(g) || 0;
+    if (c > 0) {
+      overlap += 1;
+      bucket.set(g, c - 1);
+    }
+  });
+  return (2 * overlap) / (ga.length + gb.length);
+}
+
+function fuzzySimilarity(a, b) {
+  const aa = normalizeFuzzyText(a);
+  const bb = normalizeFuzzyText(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  const shortLen = Math.min(aa.length, bb.length);
+  const longLen = Math.max(aa.length, bb.length);
+  const containScore = (aa.includes(bb) || bb.includes(aa)) && longLen > 0 ? shortLen / longLen : 0;
+  const diceScore = diceSimilarity(aa, bb);
+  return Math.max(containScore, diceScore);
+}
+
 /** 证监会辅导公示/报告标题 → 仅保留公司全称（去掉「关于…报告」等套话） */
 const GUIDANCE_TITLE_SUFFIXES = [
   '首次公开发行股票并上市辅导备案报告',
@@ -47,4 +101,4 @@ function extractCsrcGuidanceCompanyName(input) {
   return s.trim();
 }
 
-module.exports = { normalizeCompanyNameForMatch, extractCsrcGuidanceCompanyName };
+module.exports = { normalizeCompanyNameForMatch, extractCsrcGuidanceCompanyName, fuzzySimilarity };

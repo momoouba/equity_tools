@@ -373,27 +373,29 @@ async function executeListingEmailDigest(recipient, options = {}) {
     `<h3 style="margin:16px 0 10px;padding-left:10px;border-left:4px solid ${color};color:${color};">${sectionNo[sectionIndex++]}、${title}</h3>`;
   let listingSectionHtml = '';
   if (includeListingProjectProgress) {
-    listingSectionHtml += `${renderSectionTitle('底层项目上市进展（昨日更新）', '#1677ff')}${part1Project}`;
+    listingSectionHtml += `${renderSectionTitle('底层项目上市进展（昨日）', '#1677ff')}${part1Project}`;
+  }
+  if (includeNewShare) {
+    // 二、昨日上市：展示与「打新日历 -> 上市首日表现（上市日期=昨日）」相同数据
+    listingSectionHtml += `${renderSectionTitle('IPO上市（昨日）', '#f53f3f')}${newSharePart3}`;
   }
   if (includeListingProgress) {
-    listingSectionHtml += `${renderSectionTitle('上市进展（各交易所 IPO 审核进度，昨日更新）', '#00b42a')}${part2Exchange}`;
+    listingSectionHtml += `${renderSectionTitle('IPO审核（昨日）', '#00b42a')}${part2Exchange}`;
   }
   if (includeListingGuidance) {
-    listingSectionHtml += `${renderSectionTitle('上市辅导（证监会辅导备案，昨日更新）', '#ff7d00')}${part2Guidance}`;
+    listingSectionHtml += `${renderSectionTitle('证监会辅导备案（昨日）', '#ff7d00')}${part2Guidance}`;
   }
   if (includeOverseasFiling && today.getDay() === 1) {
-    listingSectionHtml += `${renderSectionTitle('境内企业境外上市备案（上周新增）', '#f7ba1e')}${part2OverseasMonday}`;
+    listingSectionHtml += `${renderSectionTitle('境内企业境外上市备案（上周）', '#f7ba1e')}${part2OverseasMonday}`;
   }
 
   const newShareSectionHtml = includeNewShare
     ? `
-      ${renderSectionTitle('打新日历', '#f53f3f')}
+      ${renderSectionTitle('其他-打新日历', '#003a8c')}
       <h4 style="margin:10px 0 8px;color:#1d2129;">打新申购（本周）</h4>
       ${newSharePart1}
       <h4 style="margin:10px 0 8px;color:#1d2129;">上市日历（未来5天上市股票）</h4>
       ${newSharePart2}
-      <h4 style="margin:10px 0 8px;color:#1d2129;">上市首日表现（上市日期 = 昨日）</h4>
-      ${newSharePart3}
     `
     : '';
 
@@ -407,13 +409,45 @@ async function executeListingEmailDigest(recipient, options = {}) {
 
   const subject = (recipient.email_subject && String(recipient.email_subject).trim()) || `上市进展日报 ${reportDay}`;
 
-  await sendMailWithConfig({
-    emailConfigId,
+  const mailLogMeta = {
+    recipientId: recipient.id,
+    userId: recipient.user_id,
     toEmail: recipient.recipient_email,
     subject,
-    html,
-    userId: recipient.user_id,
-  });
+    reportDay,
+    selectedTypes,
+    stats: {
+      listingProjectProgressCount: ipp.length,
+      listingProgressCount: ipoExchangeYesterday.length,
+      listingGuidanceCount: ipoGuidanceYesterday.length,
+      overseasFilingCount: ipoOverseasMonday.length,
+      newShareApplyCount: nsApplyRows.length,
+      newShareUpcomingCount: nsUpcomingListRows.length,
+      newShareFirstDayCount: nsFirstDayRows.length,
+    },
+  };
+  console.log('[上市进展邮件] 开始发送日报:', mailLogMeta);
+  try {
+    await sendMailWithConfig({
+      emailConfigId,
+      toEmail: recipient.recipient_email,
+      subject,
+      html,
+      userId: recipient.user_id,
+    });
+    console.log('[上市进展邮件] 日报发送成功:', {
+      recipientId: recipient.id,
+      toEmail: recipient.recipient_email,
+      subject,
+      reportDay,
+    });
+  } catch (error) {
+    console.error('[上市进展邮件] 日报发送失败:', {
+      ...mailLogMeta,
+      error: error.message,
+    });
+    throw error;
+  }
 }
 
 module.exports = { executeListingEmailDigest };

@@ -8,8 +8,10 @@ import {
   Modal,
   Form,
   Input,
+  InputNumber,
   Switch,
   Select,
+  DatePicker,
 } from '@arco-design/web-react'
 import './ListingProjectProgressPage.css'
 import {
@@ -31,6 +33,7 @@ import CronGenerator from '../../components/CronGenerator'
 
 const TabPane = Tabs.TabPane
 const FormItem = Form.Item
+const RangePicker = DatePicker.RangePicker
 
 const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
 
@@ -325,6 +328,8 @@ export default function ListingProjectProgressPage() {
   const [logRows, setLogRows] = useState([])
   const [logLoading, setLogLoading] = useState(false)
   const [matching, setMatching] = useState(false)
+  const [matchModalOpen, setMatchModalOpen] = useState(false)
+  const [matchForm] = Form.useForm()
   const [tableScrollY, setTableScrollY] = useState(520)
   const [shareOpen, setShareOpen] = useState(false)
   const [shareLoading, setShareLoading] = useState(false)
@@ -382,13 +387,16 @@ export default function ListingProjectProgressPage() {
     }
   }
 
-  const handleMatchAll = async () => {
+  const handleMatchAll = async (payload = {}) => {
     setMatching(true)
     try {
-      const res = await postListingMatch({})
+      const res = await postListingMatch(payload)
       if (res.data?.success) {
         const d = res.data.data || {}
-        Message.success(`匹配完成：上市信息 ${d.progressCount ?? 0} 条，底层项目 ${d.projectCount ?? 0} 条，新增 ${d.inserted ?? 0} 条`)
+        Message.success(
+          `匹配完成：上市信息${d.progressCount ?? 0}条，底层项目${d.projectCount ?? 0}条，新增${d.inserted ?? 0}条；` +
+          `昨日上市状态补齐${d.yesterdayStatusBackfilled ?? 0}条，来源补齐${d.yesterdaySourceBackfilled ?? 0}条`
+        )
         setPage(1)
         load()
       } else {
@@ -398,6 +406,43 @@ export default function ListingProjectProgressPage() {
       Message.error(e.response?.data?.message || e.message || '匹配失败')
     } finally {
       setMatching(false)
+    }
+  }
+
+  const openMatchModal = () => {
+    setMatchModalOpen(true)
+    matchForm.setFieldsValue({
+      newShareMode: 'yesterday',
+      lookbackDays: 7,
+      dateRange: [],
+    })
+  }
+
+  const submitMatchModal = async () => {
+    try {
+      const v = matchForm.getFieldsValue()
+      const mode = v.newShareMode || 'yesterday'
+      const payload = {}
+      if (mode === 'lookback') {
+        const days = Number(v.lookbackDays || 0)
+        if (!Number.isFinite(days) || days < 1 || days > 60) {
+          Message.warning('最近N天请输入 1~60 的整数')
+          return
+        }
+        payload.newShareLookbackDays = Math.floor(days)
+      } else if (mode === 'range') {
+        const r = Array.isArray(v.dateRange) ? v.dateRange : []
+        if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
+          Message.warning('请选择上市日期区间')
+          return
+        }
+        payload.newShareStartDate = r[0].format('YYYY-MM-DD')
+        payload.newShareEndDate = r[1].format('YYYY-MM-DD')
+      }
+      await handleMatchAll(payload)
+      setMatchModalOpen(false)
+    } catch (e) {
+      Message.error(e.message || '匹配参数校验失败')
     }
   }
 
@@ -614,7 +659,7 @@ export default function ListingProjectProgressPage() {
               <Button type="primary" status="danger" onClick={openShareModal}>
                 发布
               </Button>
-              <Button type="outline" status="success" onClick={handleMatchAll} loading={matching}>
+              <Button type="outline" status="success" onClick={openMatchModal} loading={matching}>
                 匹配数据
               </Button>
               <span>时间范围：</span>
@@ -786,6 +831,43 @@ export default function ListingProjectProgressPage() {
             </div>
           </>
         )}
+      </Modal>
+
+      <Modal
+        title="匹配数据"
+        visible={matchModalOpen}
+        onOk={submitMatchModal}
+        onCancel={() => setMatchModalOpen(false)}
+        confirmLoading={matching}
+        style={{ width: 520 }}
+      >
+        <Form form={matchForm} layout="vertical">
+          <FormItem label="打新上市匹配范围" field="newShareMode" initialValue="yesterday">
+            <Select>
+              <Select.Option value="yesterday">默认：仅匹配昨日上市</Select.Option>
+              <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
+              <Select.Option value="range">补跑：指定上市日期区间</Select.Option>
+            </Select>
+          </FormItem>
+          <FormItem shouldUpdate noStyle>
+            {() =>
+              matchForm.getFieldValue('newShareMode') === 'lookback' ? (
+                <FormItem label="最近N天" field="lookbackDays">
+                  <InputNumber min={1} max={60} style={{ width: 180 }} />
+                </FormItem>
+              ) : null
+            }
+          </FormItem>
+          <FormItem shouldUpdate noStyle>
+            {() =>
+              matchForm.getFieldValue('newShareMode') === 'range' ? (
+                <FormItem label="上市日期区间" field="dateRange">
+                  <RangePicker style={{ width: 320 }} />
+                </FormItem>
+              ) : null
+            }
+          </FormItem>
+        </Form>
       </Modal>
 
       <Modal
