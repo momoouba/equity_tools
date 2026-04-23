@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import List, Optional
 
 import pandas as pd
@@ -29,6 +30,10 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.
 # 繁体/英文均可；表格结构一致
 URL_MAIN = "https://www2.hkexnews.hk/New-Listings/New-Listing-Information/Main-Board?sc_lang=zh-HK"
 URL_GEM = "https://www2.hkexnews.hk/New-Listings/New-Listing-Information/GEM?sc_lang=zh-HK"
+URL_SEHK_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/sehkconsolidatedindex.xlsx"
+URL_GEM_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex.xlsx"
+URL_SEHK_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/sehkconsolidatedindex_c.xlsx"
+URL_GEM_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex_c.xlsx"
 
 
 def _date_from_hkexnews_pdf_url(url: str) -> str:
@@ -62,6 +67,24 @@ def _fetch_table(url: str) -> str:
     r = requests.get(url, timeout=45, headers={"User-Agent": UA, "Accept-Language": "zh-HK,zh;q=0.9,en;q=0.8"})
     r.raise_for_status()
     return r.text
+
+
+def _norm_ymd(v) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    s = s.replace(".", "/").replace("-", "/")
+    for fmt in ("%d/%m/%Y", "%Y/%m/%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s[:10], fmt).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    # 保底：如果本身就是 YYYY-MM-DD
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", str(v).strip()[:10]):
+        return str(v).strip()[:10]
+    return ""
 
 
 def _parse_nli_html(html: str, board_label: str) -> List[dict]:
@@ -143,6 +166,101 @@ def fetch_hkex_nli_dataframe() -> pd.DataFrame:
     df = pd.DataFrame(parts)
     if len(df) > 1 and "股票代码" in df.columns:
         df = df.drop_duplicates(subset=["股票代码"], keep="first")
+    return df
+
+
+def _fetch_consolidated_index(url: str, board_label: str) -> pd.DataFrame:
+    """
+    抓取港交所 consolidated index（首次披露索引）并映射为 hk_ipo_sync 兼容列。
+    该来源可稳定补充「递交A1」口径。
+    """
+    try:
+        raw = pd.read_excel(url)
+    except Exception:
+        return pd.DataFrame()
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    # 英文列名优先；中文列名在控制台可能乱码，不做强匹配，改用位置兜底
+    cols = list(raw.columns)
+    c_date = "Date of First Posting" if "Date of First Posting" in cols else (cols[0] if len(cols) > 0 else None)
+    c_applicant = "Applicant" if "Applicant" in cols else (cols[1] if len(cols) > 1 else None)
+    c_status = "Status" if "Status" in cols else (cols[2] if len(cols) > 2 else None)
+    if not c_date or not c_applicant:
+        return pd.DataFrame()
+
+    out = []
+    for _, row in raw.iterrows():
+        d = _norm_ymd(row.get(c_date))
+        company = str(row.get(c_applicant) or "").strip()
+        if not d or not company:
+            continue
+        st_raw = str(row.get(c_status) or "").strip().lower() if c_status else ""
+        status = "失效" if st_raw == "inactive" else "递交A1"
+        out.append(
+            {
+                "申请日期": d,
+                "通过聆讯日期": "",
+                "上市日期": "",
+                "申请状态更新日期": d,
+                "申请状态": status,
+                "公司全称": company,
+                "股票简称": company,
+                "股票代码": "",
+                "板块": board_label,
+                "注册地": "",
+            }
+        )
+
+    return pd.DataFrame(out)
+
+
+def fetch_hkex_web_combined_dataframe() -> pd.DataFrame:
+    """
+    组合港交所公开网页数据：
+    - 新上市信息（补新上市/上市）
+    - consolidated index（补递交A1/失效）
+    """
+    frames: List[pd.DataFrame] = []
+    nli = fetch_hkex_nli_dataframe()
+    if nli is not None and not nli.empty:
+        frames.append(nli)
+
+    # 优先中文索引（与页面列表显示一致），失败时回退英文索引
+    sehk_idx = _fetch_consolidated_index(URL_SEHK_CONSOLIDATED_CN, "主板")
+    if sehk_idx is None or sehk_idx.empty:
+        sehk_idx = _fetch_consolidated_index(URL_SEHK_CONSOLIDATED, "主板")
+    if sehk_idx is not None and not sehk_idx.empty:
+        frames.append(sehk_idx)
+
+    gem_idx = _fetch_consolidated_index(URL_GEM_CONSOLIDATED_CN, "GEM")
+    if gem_idx is None or gem_idx.empty:
+        gem_idx = _fetch_consolidated_index(URL_GEM_CONSOLIDATED, "GEM")
+    if gem_idx is not None and not gem_idx.empty:
+        frames.append(gem_idx)
+
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                "申请日期",
+                "通过聆讯日期",
+                "上市日期",
+                "申请状态更新日期",
+                "申请状态",
+                "公司全称",
+                "股票简称",
+                "股票代码",
+                "板块",
+                "注册地",
+            ]
+        )
+
+    df = pd.concat(frames, ignore_index=True)
+    # 以「公司+申请状态+板块+申请日期」做轻量去重
+    key_cols = [c for c in ["公司全称", "申请状态", "板块", "申请日期"] if c in df.columns]
+    if key_cols:
+        df = df.drop_duplicates(subset=key_cols, keep="first")
     return df
 
 

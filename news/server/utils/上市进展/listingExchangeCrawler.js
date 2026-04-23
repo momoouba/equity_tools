@@ -686,6 +686,7 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
   let ifindIpo = null;
   let hkexIpo = null;
   let mergedAll = merged;
+  let hkexFetchedRows = 0;
   const cfg = config || {};
   const ifindEnabled = cfg.ifind_enabled === 1 || cfg.ifind_enabled === true;
   if (ifindEnabled) {
@@ -708,6 +709,7 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
     });
     if (ifindIpo.ok && Array.isArray(ifindIpo.rows) && ifindIpo.rows.length > 0) {
       mergedAll = [...merged, ...ifindIpo.rows];
+      hkexFetchedRows = ifindIpo.rows.length;
       console.log(`${logTag}[港交所iFinD] 合并后总记录=${mergedAll.length}`);
     }
   }
@@ -720,6 +722,7 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
       endDate: endYmd,
       logTag: `${logTag}[港交所]`,
     });
+    hkexFetchedRows = Number(hkexIpo?.summary?.builtRows || 0);
   }
 
   const result = await insertRows(mergedAll, adminId, logTag);
@@ -751,8 +754,22 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
       szse: parts[0].length,
       sse: parts[1].length,
       bse: parts[2].length,
-      hkex: Array.isArray(ifindIpo?.rows) ? ifindIpo.rows.length : 0,
+      hkex: hkexFetchedRows,
       total: merged.length,
+    },
+    hkexSourceMeta: {
+      ifindEnabled,
+      ifindOk: !!ifindIpo?.ok,
+      ifindRows: Array.isArray(ifindIpo?.rows) ? ifindIpo.rows.length : 0,
+      ifindError: ifindIpo?.stderr || '',
+      fallbackTriggered: !!shouldRunHkexFallback,
+      fallbackOk: !!hkexIpo?.ok,
+      fallbackSkipped: !!hkexIpo?.skipped,
+      fallbackExitCode: hkexIpo?.exitCode ?? null,
+      fallbackSource: hkexIpo?.summary?.resolvedSource || '',
+      fallbackSourceRows: Number(hkexIpo?.summary?.sourceRows || 0),
+      fallbackBuiltRows: Number(hkexIpo?.summary?.builtRows || 0),
+      fallbackError: hkexIpo?.stderr || '',
     },
     exchangeErrors,
     ifindIpo,

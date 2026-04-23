@@ -541,6 +541,7 @@ async function syncListingConfig(req, res) {
       );
 
       const result = wrapped.result || {};
+      const hkexMeta = result.hkexSourceMeta || null;
       const rangeEndStored =
         sourceType === 'new_share' ? formatDateOnly(createShanghaiDate()) : endDateFinal;
       await db.execute(
@@ -555,6 +556,18 @@ async function syncListingConfig(req, res) {
         skippedCount: Number(result.skipped || 0),
         dedupHits: Number(result.skipped || 0),
       });
+      if (hkexMeta && sourceType === 'exchange_crawler') {
+        await appendExecutionLogProgress(
+          logId,
+          `港交所来源：ifindEnabled=${hkexMeta.ifindEnabled} ifindOk=${hkexMeta.ifindOk} ifindRows=${hkexMeta.ifindRows} fallbackTriggered=${hkexMeta.fallbackTriggered} fallbackOk=${hkexMeta.fallbackOk} fallbackSource=${hkexMeta.fallbackSource || '-'} fallbackBuiltRows=${hkexMeta.fallbackBuiltRows} fallbackSourceRows=${hkexMeta.fallbackSourceRows} fallbackExitCode=${hkexMeta.fallbackExitCode ?? '-'}`
+        );
+        if (hkexMeta.ifindError) {
+          await appendExecutionLogProgress(logId, `港交所 iFinD 错误：${hkexMeta.ifindError}`);
+        }
+        if (hkexMeta.fallbackError) {
+          await appendExecutionLogProgress(logId, `港交所回退错误：${hkexMeta.fallbackError}`);
+        }
+      }
       return res.json({
         success: true,
         message: `同步完成（source=${sourceType}）：新增 ${result.inserted || 0}，更新 ${result.updated || result.updatedEarlier || 0}，跳过 ${result.skipped || 0}`,

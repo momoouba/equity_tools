@@ -61,7 +61,14 @@ def _norm_ymd(v: Any) -> str:
     t = str(v).strip()
     if not t:
         return ""
-    return t[:10]
+    t = t.replace(".", "/").replace("-", "/")
+    for fmt in ("%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(t[:10], fmt).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    s = str(v).strip()[:10]
+    return s if len(s) == 10 and s[4:5] == "-" and s[7:8] == "-" else ""
 
 
 def _board_zh(v: Any) -> str:
@@ -100,9 +107,9 @@ def load_hk_ipo_dataframe(csv_path: Optional[str], source: str) -> Tuple[pd.Data
 
     src = (source or "akshare").strip().lower()
     if src in ("hkex-web", "hkex", "web"):
-        from hkex_ipo_scraper import fetch_hkex_nli_dataframe  # noqa: PLC0415
+        from hkex_ipo_scraper import fetch_hkex_web_combined_dataframe  # noqa: PLC0415
 
-        return fetch_hkex_nli_dataframe(), "hkex-web"
+        return fetch_hkex_web_combined_dataframe(), "hkex-web"
 
     import akshare as ak  # noqa: PLC0415
 
@@ -114,13 +121,13 @@ def load_hk_ipo_dataframe(csv_path: Optional[str], source: str) -> Tuple[pd.Data
                 "当前 akshare 未提供 hk_ipo_application()，且已禁用港交所回退（HK_IPO_DISABLE_HKEX_FALLBACK）。"
                 "可升级 akshare、设置 HK_IPO_SOURCE=hkex-web，或使用 --csv / HK_IPO_CSV_PATH。"
             )
-        from hkex_ipo_scraper import fetch_hkex_nli_dataframe  # noqa: PLC0415
+        from hkex_ipo_scraper import fetch_hkex_web_combined_dataframe  # noqa: PLC0415
 
         print(
             "[hk_ipo_sync] akshare has no hk_ipo_application; fallback to HKEX new-listing HTML.",
             file=sys.stderr,
         )
-        return fetch_hkex_nli_dataframe(), "hkex-web-fallback"
+        return fetch_hkex_web_combined_dataframe(), "hkex-web-fallback"
     return fn(), "akshare"
 
 
