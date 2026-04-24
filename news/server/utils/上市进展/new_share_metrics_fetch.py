@@ -317,6 +317,14 @@ def _fetch_hk_metrics_from_etnet(stock_code, list_date):
     return None
 
 
+def _first_row_complete(row):
+    if not isinstance(row, dict):
+        return False
+    close = _to_float(row.get("close"))
+    chg = _to_float(row.get("chg_pct"))
+    return close is not None and chg is not None
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--stock-code", required=True)
@@ -392,11 +400,13 @@ def main():
 
         win_rate = None
         issue_price = None
-        if first is None:
+        if first is None or not _first_row_complete(first):
             extra = _fetch_hk_metrics_from_etnet(stock_code, list_date) if market == "hk" else _fetch_metrics_from_ipoapply(stock_code, list_date)
             if extra:
                 source = extra.get("source") or source
-                first = extra.get("firstRow")
+                extra_first = extra.get("firstRow")
+                if first is None or _first_row_complete(extra_first):
+                    first = extra_first
                 if total_shares is None:
                     total_shares = extra.get("totalShares")
                 win_rate = extra.get("winRate")

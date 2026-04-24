@@ -36,6 +36,13 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+function hasUsableFirstRow(firstRow) {
+  if (!firstRow || typeof firstRow !== 'object') return false;
+  const close = toNum(firstRow.close);
+  const chgPct = toNum(firstRow.chg_pct);
+  return close != null && chgPct != null;
+}
+
 async function fetchIpoApplySnapshot(force = false) {
   const now = Date.now();
   if (!force && ipoApplyCache.expireAt > now && ipoApplyCache.byCode.size > 0) {
@@ -219,7 +226,7 @@ async function runNewShareMetricsSyncWithFallback(opts) {
       listDate: opts.listDate,
       market,
     });
-    if (firstRow) {
+    if (hasUsableFirstRow(firstRow)) {
       return {
         ok: true,
         source: 'eastmoney.push2his.js-fallback',
@@ -229,11 +236,24 @@ async function runNewShareMetricsSyncWithFallback(opts) {
         issuePrice: null,
       };
     }
-    const allowPythonForHk = process.env.NEW_SHARE_METRICS_HK_ALLOW_PY === '1';
+    // 默认启用 Python 兜底（含经济通 etnet），仅在显式置 0 时关闭。
+    const allowPythonForHk = String(process.env.NEW_SHARE_METRICS_HK_ALLOW_PY || '1') !== '0';
     if (!allowPythonForHk) {
-      return { ok: false, stderr: 'hk first row missing (js fallback)' };
+      return { ok: false, stderr: 'hk first row missing/incomplete (js fallback)' };
     }
-    return runNewShareMetricsSync(opts);
+    const pyResult = runNewShareMetricsSync(opts);
+    if (pyResult.ok && hasUsableFirstRow(pyResult.firstRow)) return pyResult;
+    if (firstRow) {
+      return {
+        ok: true,
+        source: 'eastmoney.push2his.js-fallback.incomplete',
+        firstRow,
+        totalShares: pyResult.ok ? pyResult.totalShares ?? null : null,
+        winRate: pyResult.ok ? pyResult.winRate ?? null : null,
+        issuePrice: pyResult.ok ? pyResult.issuePrice ?? null : null,
+      };
+    }
+    return pyResult;
   }
   if (market !== 'hk') {
     try {
