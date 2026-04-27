@@ -5,6 +5,7 @@ const { runOverseasFilingSync } = require('./overseasFilingSync');
 const { runOverseasFilingNoticeSync } = require('./overseasFilingNoticeSync');
 
 const OVERSEAS_BOARD = '境外发行备案';
+const DEFAULT_CSRC_PORTAL_URL = 'http://www.csrc.gov.cn/csrc/c100035/zfxxgk_zdgk.shtml';
 
 /** 企业名称匹配：规范化后全等（与需求 2026-04-20 一致） */
 function normalizeOverseasNameKey(name) {
@@ -262,18 +263,23 @@ async function syncOverseasFiling(options = {}) {
   ) {
     const disc = runOverseasFilingDiscoverSync({ logTag });
     if (!disc.ok) {
-      throw new Error(
-        disc.stderr ||
-          '自动发现证监会备案表失败：请在「上市数据配置」填写 request_url，或检查网络后重试'
+      // getSearch 偶发 5xx/502 时，直接回退到政府信息公开门户地址，
+      // 由 overseas_filing_fetch.py 继续执行 discover/playwright 兜底，避免整次任务提前失败。
+      sourceUrl = process.env.CSRC_ZFXXGK_PAGE_URL || DEFAULT_CSRC_PORTAL_URL;
+      console.warn(
+        `${logTag} 自动解析 Excel 失败，回退门户抓取 sourceUrl=${sourceUrl} err=${
+          disc.stderr || 'unknown'
+        }`
       );
+    } else {
+      sourceUrl = disc.excelUrl;
+      csrcDiscover = {
+        detailUrl: disc.detailUrl,
+        tableTitle: disc.title,
+        excelUrl: disc.excelUrl,
+      };
+      console.log(`${logTag} 已自动解析 Excel`, csrcDiscover);
     }
-    sourceUrl = disc.excelUrl;
-    csrcDiscover = {
-      detailUrl: disc.detailUrl,
-      tableTitle: disc.title,
-      excelUrl: disc.excelUrl,
-    };
-    console.log(`${logTag} 已自动解析 Excel`, csrcDiscover);
   }
   const fetched = runOverseasFilingSync({
     startDate: from,
