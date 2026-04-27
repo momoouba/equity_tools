@@ -1,24 +1,15 @@
 const db = require('../../db');
 const { generateId } = require('../../utils/idGenerator');
-const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
+const {
+  getUserFromHeader,
+  isAdminAccount,
+  hasListingFeature,
+  LISTING_FEATURE,
+  getListingMembershipLevelName,
+  normalizeListingMailTypesByLevel,
+} = require('../../utils/上市进展/listingAuth');
 const { executeListingEmailDigest } = require('../../utils/上市进展/listingEmailDigest');
 const { updateScheduledTasks } = require('../../utils/scheduledEmailTasks');
-
-function normalizeListingMailTypes(raw) {
-  const allowed = new Set(['listing_project_progress', 'listing_progress', 'listing_guidance', 'overseas_filing', 'new_share']);
-  let arr = raw;
-  if (arr == null || arr === '') return ['listing_project_progress', 'listing_progress'];
-  if (typeof arr === 'string') {
-    try {
-      arr = JSON.parse(arr);
-    } catch {
-      arr = [arr];
-    }
-  }
-  if (!Array.isArray(arr)) arr = [arr];
-  const out = Array.from(new Set(arr.map((v) => String(v || '').trim()).filter((v) => allowed.has(v))));
-  return out.length ? out : ['listing_project_progress', 'listing_progress'];
-}
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -52,15 +43,17 @@ async function getContext(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
 
     const listingAppId = await getListingAppId();
     const ec = await getListingEmailConfigRow();
+    const listingLevelName = await getListingMembershipLevelName(user.id);
     return res.json({
       success: true,
       data: {
         listingAppId,
         emailConfigId: ec ? ec.id : null,
+        listingLevelName,
       },
     });
   } catch (e) {
@@ -74,7 +67,7 @@ async function listRecipients(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
 
     const listingAppId = await getListingAppId();
     if (!listingAppId) {
@@ -130,6 +123,11 @@ async function createRecipient(req, res) {
 
     const finalCron = cron_expression || '0 0 9 * * ? *';
     const recipientId = await generateId('recipient_management');
+    const listingLevelName = await getListingMembershipLevelName(user.id);
+    const normalizedMailTypes = normalizeListingMailTypesByLevel(listing_mail_types, listingLevelName);
+    if (!normalizedMailTypes.length) {
+      return res.status(403).json({ success: false, message: '当前应用会员等级无可发送的数据权限' });
+    }
 
     await db.execute(
       `INSERT INTO recipient_management (
@@ -144,7 +142,7 @@ async function createRecipient(req, res) {
         email_subject || '上市进展通知',
         finalCron,
         is_active !== undefined ? (is_active ? 1 : 0) : 1,
-        JSON.stringify(normalizeListingMailTypes(listing_mail_types)),
+        JSON.stringify(normalizedMailTypes),
       ]
     );
 
@@ -166,7 +164,7 @@ async function updateRecipient(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
 
     const listingAppId = await getListingAppId();
     const id = req.params.id;
@@ -183,9 +181,14 @@ async function updateRecipient(req, res) {
     }
 
     const body = req.body || {};
+    const targetUserId = isAdminAccount(user.account) ? existing[0].user_id : user.id;
+    const listingLevelName = await getListingMembershipLevelName(targetUserId);
     const nextMailTypes = Object.prototype.hasOwnProperty.call(body, 'listing_mail_types')
-      ? normalizeListingMailTypes(body.listing_mail_types)
-      : normalizeListingMailTypes(existing[0].listing_mail_types);
+      ? normalizeListingMailTypesByLevel(body.listing_mail_types, listingLevelName)
+      : normalizeListingMailTypesByLevel(existing[0].listing_mail_types, listingLevelName);
+    if (!nextMailTypes.length) {
+      return res.status(403).json({ success: false, message: '当前应用会员等级无可发送的数据权限' });
+    }
     await db.execute(
       `UPDATE recipient_management SET
         recipient_email = ?, email_subject = ?, cron_expression = ?, is_active = ?, listing_mail_types = ?
@@ -218,7 +221,7 @@ async function deleteRecipient(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
 
     const listingAppId = await getListingAppId();
     const id = req.params.id;
@@ -255,7 +258,7 @@ async function sendTest(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
 
     const listingAppId = await getListingAppId();
     const ec = await getListingEmailConfigRow();

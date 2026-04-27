@@ -19,18 +19,18 @@ async function normalizeIndustryTagCode(raw) {
     return { ok: true, value: null };
   }
   const rows = await db.query(
-    `SELECT c.item_code
+    `SELECT c.item_code, c.item_name
      FROM base_dictionary p
      INNER JOIN base_dictionary c ON c.parent_id = p.id AND c.delete_mark = 0
      WHERE p.delete_mark = 0 AND p.parent_id IS NULL AND p.dict_code = ?
-       AND c.item_code = ? AND p.is_enabled = 1 AND c.is_enabled = 1
+       AND (c.item_code = ? OR c.item_name = ?) AND p.is_enabled = 1 AND c.is_enabled = 1
      LIMIT 1`,
-    [INDUSTRY_DICT_CODE, s]
+    [INDUSTRY_DICT_CODE, s, s]
   );
   if (!rows.length) {
     return {
       ok: false,
-      message: '行业标签无效或已停用，请填写数据字典「行业」下已启用的选项编码'
+      message: '行业标签无效或已停用，请填写数据字典「行业」下已启用的标签名称或选项编码'
     };
   }
   return { ok: true, value: rows[0].item_code };
@@ -81,11 +81,10 @@ const checkAuth = async (req, res, next) => {
 async function getUserAdditionalAccountLimit(userId) {
   if (!userId) return 0;
 
-  // 查询用户角色及主会员等级名称
+  // 查询用户角色及应用会员配置（按「新闻舆情」应用会员等级判断）
   const rows = await db.query(
-    `SELECT u.account, u.role, u.membership_level_id, ml.level_name
+    `SELECT u.account, u.role, u.app_permissions
      FROM users u
-     LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
      WHERE u.id = ?`,
     [userId]
   );
@@ -96,15 +95,42 @@ async function getUserAdditionalAccountLimit(userId) {
 
   const role = rows[0].role || 'user';
   const account = rows[0].account || '';
-  const levelName = rows[0].level_name || '';
 
   // 管理员账号不受数量限制
   if (role === 'admin' || account === 'admin') return Number.MAX_SAFE_INTEGER;
 
-  // 根据新闻舆情会员等级名称控制额度
-  if (levelName === '普通会员') return 5;
-  if (levelName === '高级会员') return 10;
-  if (levelName === 'VIP会员') return 15;
+  // 从 app_permissions 中解析「新闻舆情」应用会员等级
+  let newsMembershipLevelName = '';
+  const appPermissionsText = rows[0].app_permissions;
+  if (appPermissionsText) {
+    try {
+      const appPermissions = JSON.parse(appPermissionsText);
+      if (Array.isArray(appPermissions)) {
+        const levelIds = appPermissions
+          .map((p) => p?.membership_level_id)
+          .filter(Boolean);
+
+        if (levelIds.length > 0) {
+          const levelRows = await db.query(
+            `SELECT ml.id, ml.level_name, a.app_name
+             FROM membership_levels ml
+             INNER JOIN applications a ON a.id = ml.app_id
+             WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+            levelIds
+          );
+          const newsLevel = levelRows.find((item) => item.app_name === '新闻舆情');
+          newsMembershipLevelName = newsLevel?.level_name || '';
+        }
+      }
+    } catch (error) {
+      console.warn('解析 app_permissions 失败：', error.message);
+    }
+  }
+
+  // 根据新闻舆情应用会员等级名称控制额度
+  if (newsMembershipLevelName === '普通会员') return 10;
+  if (newsMembershipLevelName === '高级会员') return 20;
+  if (newsMembershipLevelName === 'VIP会员') return 30;
 
   // 其他未知等级暂不允许创建
   return 0;
@@ -489,11 +515,35 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
     let successCount = 0;
     let skipCount = 0;
     const errors = [];
+    const MAX_RETURN_ERRORS = 1000;
+
+    const pushImportError = (rowNum, message, row = {}) => {
+      const item = {
+        rowNum,
+        message: String(message || '未知错误'),
+        account_name: row['公众号名称'] || row['account_name'] || '',
+        wechat_account_id: row['账号ID'] || row['wechat_account_id'] || '',
+        industry_tag_code: row['行业标签'] || row['industry_tag_code'] || ''
+      };
+      errors.push(item);
+      // 写入服务端日志，便于生产环境排查
+      console.error('[additional-accounts][batch-import][row-error]', {
+        userId: req.currentUserId,
+        rowNum,
+        message: item.message,
+        account_name: item.account_name,
+        wechat_account_id: item.wechat_account_id,
+        industry_tag_code: item.industry_tag_code
+      });
+    };
 
     for (let i = 0; i < data.length; i++) {
       // 若达到本次导入可用额度，则停止后续导入
       if (successCount >= remainingQuota) {
-        errors.push(`已成功导入 ${successCount} 条记录，达到当前会员等级允许的最大新增数量（本次最多可新增 ${remainingQuota} 条），其余记录未导入`);
+        pushImportError(
+          i + 2,
+          `已成功导入 ${successCount} 条记录，达到当前会员等级允许的最大新增数量（本次最多可新增 ${remainingQuota} 条），其余记录未导入`
+        );
         break;
       }
 
@@ -506,13 +556,13 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
         const rawIndustryTag = row['行业标签'] || row['industry_tag_code'];
 
         if (!account_name || !wechat_account_id) {
-          errors.push(`第${rowNum}行：公众号名称和账号ID不能为空`);
+          pushImportError(rowNum, '公众号名称和账号ID不能为空', row);
           continue;
         }
 
         const tagNorm = await normalizeIndustryTagCode(rawIndustryTag);
         if (!tagNorm.ok) {
-          errors.push(`第${rowNum}行：${tagNorm.message}`);
+          pushImportError(rowNum, tagNorm.message, row);
           continue;
         }
 
@@ -538,8 +588,18 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
 
         successCount++;
       } catch (error) {
-        errors.push(`第${rowNum}行：${error.message}`);
+        pushImportError(rowNum, error.message, row);
       }
+    }
+
+    if (errors.length > 0) {
+      console.error('[additional-accounts][batch-import][summary]', {
+        userId: req.currentUserId,
+        totalRows: data.length,
+        successCount,
+        skipCount,
+        errorCount: errors.length
+      });
     }
 
     res.json({
@@ -549,7 +609,9 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
         successCount,
         skipCount,
         errorCount: errors.length,
-        errors: errors.slice(0, 10) // 最多返回10个错误
+        errors: errors.slice(0, MAX_RETURN_ERRORS),
+        returnedErrorCount: Math.min(errors.length, MAX_RETURN_ERRORS),
+        hasMoreErrors: errors.length > MAX_RETURN_ERRORS
       }
     });
   } catch (error) {
@@ -559,31 +621,61 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
 });
 
 // 下载导入模板（所有用户都可以下载）
-router.get('/download-template', checkAuth, (req, res) => {
+router.get('/download-template', checkAuth, async (req, res) => {
   try {
+    const industryRows = await db.query(
+      `SELECT c.item_code, c.item_name, c.sort_order
+       FROM base_dictionary p
+       INNER JOIN base_dictionary c ON c.parent_id = p.id AND c.delete_mark = 0
+       WHERE p.delete_mark = 0
+         AND p.parent_id IS NULL
+         AND p.dict_code = ?
+         AND p.is_enabled = 1
+         AND c.is_enabled = 1
+       ORDER BY c.sort_order ASC, c.created_at DESC`,
+      [INDUSTRY_DICT_CODE]
+    );
+    const firstIndustryName = industryRows[0]?.item_name || '人工智能';
+
     // 创建模板数据
     const templateData = [
       {
         '公众号名称': '示例公众号',
         '账号ID': 'example_account',
-        '行业标签': ''
+        '行业标签': firstIndustryName
       },
       {
         '公众号名称': '测试公众号',
         '账号ID': 'test_account',
-        '行业标签': 'semiconductor'
+        '行业标签': firstIndustryName
       }
     ];
+
+    const industryExampleData = (industryRows || []).map((item, index) => ({
+      '序号': index + 1,
+      '标签中文名称': item.item_name,
+      '标签编码': item.item_code
+    }));
 
     // 创建工作簿
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(templateData);
+    const wsIndustry = XLSX.utils.json_to_sheet(
+      industryExampleData.length > 0
+        ? industryExampleData
+        : [{ '序号': 1, '标签中文名称': '暂无可用行业标签，请先在数据字典维护后再导入', '标签编码': '' }]
+    );
 
     // 设置列宽
     ws['!cols'] = [
       { wch: 20 }, // 公众号名称
       { wch: 20 }, // 账号ID
-      { wch: 18 } // 行业标签：填数据字典 industry 下选项编码，可留空
+      { wch: 24 } // 行业标签：优先填写数据字典「行业」中的中文标签名，也可填编码
+    ];
+    wsIndustry['!cols'] = [
+      { wch: 10 },
+      { wch: 28 },
+      { wch: 24 }
     ];
 
     // 设置表头样式
@@ -600,6 +692,7 @@ router.get('/download-template', checkAuth, (req, res) => {
     }
 
     XLSX.utils.book_append_sheet(wb, ws, '公众号导入模板');
+    XLSX.utils.book_append_sheet(wb, wsIndustry, '行业标签示例');
 
     // 生成Excel文件
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
@@ -612,6 +705,82 @@ router.get('/download-template', checkAuth, (req, res) => {
   } catch (error) {
     console.error('下载模板失败：', error);
     res.status(500).json({ success: false, message: '下载失败：' + error.message });
+  }
+});
+
+// 导出额外公众号（按筛选条件导出）
+router.get('/export', checkAuth, async (req, res) => {
+  try {
+    const { search, status, userId } = req.query;
+    const isAdmin = req.isAdmin === true;
+
+    let condition = 'WHERE a.delete_mark = 0';
+    const params = [];
+
+    // 权限控制：普通用户仅导出自己创建的数据；管理员可按用户筛选导出
+    if (isAdmin && userId) {
+      condition += ' AND a.creator_user_id = ?';
+      params.push(userId);
+    } else if (!isAdmin) {
+      condition += ' AND a.creator_user_id = ?';
+      params.push(req.currentUserId);
+    }
+
+    if (search) {
+      condition += ' AND (a.account_name LIKE ? OR a.wechat_account_id LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+
+    if (status) {
+      condition += ' AND a.status = ?';
+      params.push(status);
+    }
+
+    const rows = await db.query(
+      `SELECT 
+        a.account_name,
+        a.wechat_account_id,
+        a.industry_tag_code,
+        tag.item_name AS industry_tag_name,
+        a.status
+       FROM additional_wechat_accounts a
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.delete_mark = 0
+         AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
+       LEFT JOIN base_dictionary tag ON tag.delete_mark = 0
+         AND tag.parent_id = ind_parent.id AND tag.item_code = a.industry_tag_code
+       ${condition}
+       ORDER BY a.created_at DESC`,
+      [INDUSTRY_DICT_CODE, ...params]
+    );
+
+    const exportData = (rows || []).map((item) => ({
+      '公众号名称': item.account_name || '',
+      '账号ID': item.wechat_account_id || '',
+      '标签': item.industry_tag_name || item.industry_tag_code || '',
+      '状态': item.status === 'active' ? '生效' : '失效'
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    ws['!cols'] = [
+      { wch: 28 },
+      { wch: 28 },
+      { wch: 20 },
+      { wch: 12 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, '第三方公众号');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const dateText = new Date().toISOString().slice(0, 10);
+    const fileName = `第三方公众号导出_${dateText}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出额外公众号失败：', error);
+    res.status(500).json({ success: false, message: '导出失败：' + error.message });
   }
 });
 

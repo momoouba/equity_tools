@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const db = require('../db');
 const newsAnalysis = require('./newsAnalysis');
+const aiAnalysisCache = require('./aiAnalysisCache');
 
 // 存储定时任务
 let scheduledTask = null;
@@ -208,6 +209,8 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
 
           if (updatedNews.length > 0 && updatedNews[0].news_abstract) {
             console.log(`[空摘要重新分析定时任务] ✓ 新闻 ${news.id} 分析成功，已生成摘要`);
+            // 与邮件发送前重分析共用去重缓存，避免2小时内重复分析同一条新闻
+            await aiAnalysisCache.recordAnalysis(news.id);
             successCount++;
             processedNews.push({
               id: news.id,

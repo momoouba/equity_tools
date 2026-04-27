@@ -29,8 +29,7 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
         form.setFieldsValue({
           account: profile.account || '',
           phone: profile.phone || '',
-          email: profile.email || '',
-          main_membership_level: profile.main_membership_level || '—'
+          email: profile.email || ''
         })
       }
     } catch (error) {
@@ -108,13 +107,6 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
           <FormItem
             label="用户名"
             field="account"
-          >
-            <Input disabled />
-          </FormItem>
-
-          <FormItem
-            label="主会员等级"
-            field="main_membership_level"
           >
             <Input disabled />
           </FormItem>

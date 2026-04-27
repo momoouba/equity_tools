@@ -7,28 +7,53 @@ const {
   initializeExternalDatabases,
   closeExternalPool
 } = require('../utils/externalDb');
+const {
+  LISTING_LEVEL,
+  getUserFromHeader,
+  getListingMembershipLevelName,
+} = require('../utils/上市进展/listingAuth');
 
 const router = express.Router();
 
-// 权限检查中间件
-const checkAdminPermission = (req, res, next) => {
+async function resolveDbConfigAccess(req) {
+  const user = await getUserFromHeader(req);
+  if (!user) return { ok: false, status: 401, message: '未登录' };
   const userRole = req.headers['x-user-role'] || 'user';
-  const userId = req.headers['x-user-id'] || null;
-
-  if (!userId) {
-    return res.status(401).json({ success: false, message: '未登录' });
+  if (userRole === 'admin' || user.account === 'admin') {
+    return { ok: true, userId: user.id, scope: 'admin' };
   }
-
-  if (userRole !== 'admin') {
-    return res.status(403).json({ success: false, message: '权限不足，只有管理员可以管理外部数据库配置' });
+  const listingLevelName = await getListingMembershipLevelName(user.id);
+  if (listingLevelName === LISTING_LEVEL.VIP) {
+    return { ok: true, userId: user.id, scope: 'vip' };
   }
+  if (listingLevelName === LISTING_LEVEL.ADVANCED) {
+    return { ok: true, userId: user.id, scope: 'advanced' };
+  }
+  return { ok: false, status: 403, message: '权限不足：仅上市进展高级会员/VIP会员或管理员可访问数据库连接配置' };
+}
 
-  req.currentUserId = userId;
-  next();
-};
+function checkDatabaseConfigPermission(mode = 'read') {
+  return async (req, res, next) => {
+    try {
+      const access = await resolveDbConfigAccess(req);
+      if (!access.ok) {
+        return res.status(access.status || 403).json({ success: false, message: access.message || '无权限' });
+      }
+      if (mode === 'write' && access.scope === 'advanced') {
+        return res.status(403).json({ success: false, message: '权限不足：仅上市进展VIP会员或管理员可修改数据库连接配置' });
+      }
+      req.currentUserId = access.userId;
+      req.dbConfigAccessScope = access.scope;
+      next();
+    } catch (error) {
+      console.error('数据库配置权限校验失败：', error);
+      return res.status(500).json({ success: false, message: '权限校验失败' });
+    }
+  };
+}
 
 // 获取所有外部数据库配置
-router.get('/', checkAdminPermission, async (req, res) => {
+router.get('/', checkDatabaseConfigPermission('read'), async (req, res) => {
   try {
     const { page = 1, pageSize = 10 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(pageSize);
@@ -66,7 +91,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
 });
 
 // 获取单个外部数据库配置
-router.get('/:id', checkAdminPermission, async (req, res) => {
+router.get('/:id', checkDatabaseConfigPermission('read'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -95,7 +120,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
 
 // 新增外部数据库配置
 router.post('/', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('name').notEmpty().withMessage('配置名称不能为空'),
   body('db_type').isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').notEmpty().withMessage('数据库主机不能为空'),
@@ -152,7 +177,7 @@ router.post('/', [
 
 // 更新外部数据库配置
 router.put('/:id', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('name').optional().notEmpty().withMessage('配置名称不能为空'),
   body('db_type').optional().isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').optional().notEmpty().withMessage('数据库主机不能为空'),
@@ -256,7 +281,7 @@ router.put('/:id', [
 });
 
 // 删除外部数据库配置（软删除）
-router.delete('/:id', checkAdminPermission, async (req, res) => {
+router.delete('/:id', checkDatabaseConfigPermission('write'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -288,7 +313,7 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 });
 
 // 测试外部数据库连接
-router.post('/:id/test', checkAdminPermission, async (req, res) => {
+router.post('/:id/test', checkDatabaseConfigPermission('write'), async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -316,7 +341,7 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
 
 // 测试新配置的连接（不保存）
 router.post('/test', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('db_type').isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').notEmpty().withMessage('数据库主机不能为空'),
   body('port').isInt({ min: 1, max: 65535 }).withMessage('端口号必须在1-65535之间'),
@@ -345,7 +370,7 @@ router.post('/test', [
 
 // 查询外部数据库（通用查询接口）
 router.post('/:id/query', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('sql').notEmpty().withMessage('SQL语句不能为空')
 ], async (req, res) => {
   try {

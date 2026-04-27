@@ -3,7 +3,13 @@ const multer = require('multer');
 const db = require('../../db');
 const { generateIpoProjectNo } = require('../../utils/上市进展/ipoProjectNumber');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../../utils/上市进展/listingCsv');
-const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
+const {
+  getUserFromHeader,
+  isAdminAccount,
+  canAccessListing,
+  hasListingFeature,
+  LISTING_FEATURE,
+} = require('../../utils/上市进展/listingAuth');
 const {
   IPO_BATCH_IMPORT_TEMPLATE_HEADERS_CN,
   IPO_BATCH_IMPORT_TEMPLATE_EXAMPLE,
@@ -54,7 +60,7 @@ async function listIpoProjects(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT))) return forbidden(res);
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
@@ -92,7 +98,7 @@ async function exportIpoProjectsCsv(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT))) return forbidden(res);
 
     const { whereSql, params } = await buildIpoProjectWhere(req, user);
     const rows = await db.query(
@@ -179,7 +185,7 @@ async function batchImportIpoProjects(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT))) return forbidden(res);
 
     const body = req.body || {};
     const result = await importIpoProjectRows(body.rows, user);
@@ -197,7 +203,7 @@ async function uploadBatchImportIpoProjects(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT))) return forbidden(res);
 
     if (!req.file) {
       return res.status(400).json({ success: false, message: '请先选择 Excel 文件' });
@@ -228,7 +234,7 @@ async function downloadIpoProjectBatchImportTemplate(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT))) return forbidden(res);
 
     const workbook = xlsx.utils.book_new();
     const worksheet = xlsx.utils.aoa_to_sheet([

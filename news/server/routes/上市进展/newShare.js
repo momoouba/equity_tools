@@ -1,6 +1,11 @@
 const db = require('../../db');
 const { rowsToCsv, sendCsv } = require('../../utils/上市进展/listingCsv');
-const { getUserFromHeader, canAccessListing } = require('../../utils/上市进展/listingAuth');
+const {
+  getUserFromHeader,
+  canAccessListing,
+  hasListingFeature,
+  LISTING_FEATURE,
+} = require('../../utils/上市进展/listingAuth');
 const { syncNewShareCalendar, refreshNewShareEnterpriseFullNamesByIds } = require('../../utils/上市进展/newShareService');
 const { createExecutionLog, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
 const { buildTaskKey } = require('../../utils/上市进展/listingSourceType');
@@ -44,7 +49,7 @@ async function listNewShare(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.NEW_SHARE))) return forbidden(res);
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 15));
     const offset = (page - 1) * pageSize;
@@ -75,7 +80,7 @@ async function exportNewShare(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.NEW_SHARE))) return forbidden(res);
     const { whereSql, params } = buildWhere(req);
     const rows = await db.query(
       `SELECT stock_code, stock_name,
@@ -120,7 +125,7 @@ async function syncNewShare(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.NEW_SHARE))) return forbidden(res);
     const body = req.body || {};
     const startOrIssue = String(body.startDate || body.issueDateAfterExclusive || '').trim().slice(0, 10);
     const fromLegacy = String(body.from || '').trim().slice(0, 10) || null;
@@ -191,7 +196,7 @@ async function aiNameNewShare(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.NEW_SHARE))) return forbidden(res);
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     const normalizedIds = Array.from(
       new Set(

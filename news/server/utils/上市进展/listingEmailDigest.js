@@ -1,6 +1,7 @@
 const db = require('../../db');
 const { sendMailWithConfig } = require('../sendMailWithConfig');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+const { getListingMembershipLevelName, normalizeListingMailTypesByLevel } = require('./listingAuth');
 
 async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
@@ -144,7 +145,11 @@ async function executeListingEmailDigest(recipient, options = {}) {
   const reportDay = formatDateOnly(y);
   const today = createShanghaiDate();
   const todayYmd = formatDateOnly(today);
-  const selectedTypes = parseListingMailTypes(recipient.listing_mail_types);
+  const listingLevelName = await getListingMembershipLevelName(recipient.user_id);
+  const selectedTypes = normalizeListingMailTypesByLevel(
+    parseListingMailTypes(recipient.listing_mail_types),
+    listingLevelName
+  );
   const includeListingProjectProgress = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS);
   const includeListingProgress = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_PROGRESS);
   const includeListingGuidance = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_GUIDANCE);

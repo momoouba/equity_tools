@@ -187,16 +187,6 @@ function UserManagement() {
       render: (text) => text || '-'
     },
     {
-      title: '主会员等级',
-      width: 200,
-      render: (_, record) => {
-        if (record.membership_level_name) {
-          return `${record.membership_level_name} (${record.membership_app_name || '-'})`
-        }
-        return '-'
-      }
-    },
-    {
       title: '应用会员等级',
       width: 250,
       render: (_, record) => {
@@ -324,7 +314,6 @@ function UserManagement() {
             <div style={{ marginBottom: '24px', padding: '16px', background: '#f7f8fa', borderRadius: '4px' }}>
               <p><strong>账号：</strong>{editingUser.account}</p>
               <p><strong>邮箱：</strong>{editingUser.email || '-'}</p>
-              <p><strong>主会员等级：</strong>{editingUser.membership_level_name || '-'}</p>
             </div>
 
             <div style={{ marginBottom: '24px' }}>

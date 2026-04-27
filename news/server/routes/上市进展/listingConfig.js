@@ -1,6 +1,12 @@
 const db = require('../../db');
 const { generateId } = require('../../utils/idGenerator');
-const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
+const {
+  getUserFromHeader,
+  isAdminAccount,
+  canAccessListing,
+  hasListingFeature,
+  LISTING_FEATURE,
+} = require('../../utils/上市进展/listingAuth');
 const { runListingExchangeCrawler } = require('../../utils/上市进展/listingExchangeCrawler');
 const { runListingMatchBatch } = require('../../utils/上市进展/listingMatchRunner');
 const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
@@ -45,7 +51,7 @@ function unauthorized(res) {
 }
 
 function forbidden(res) {
-  return res.status(403).json({ success: false, message: '仅管理员可配置' });
+  return res.status(403).json({ success: false, message: '无权限' });
 }
 
 function normalizeYmd(v) {
@@ -102,8 +108,9 @@ async function assertAdminListing(req, res) {
 
 async function listConfig(req, res) {
   try {
-    const user = await assertAdminListing(req, res);
-    if (!user) return;
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.LISTING_CONFIG))) return forbidden(res);
 
     const rows = await db.query(`SELECT * FROM listing_data_config ORDER BY created_at DESC`);
     const safeRows = rows.map((r) => {

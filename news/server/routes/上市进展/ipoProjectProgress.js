@@ -1,7 +1,13 @@
 const db = require('../../db');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../../utils/上市进展/listingBeijingDate');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../../utils/上市进展/listingCsv');
-const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/上市进展/listingAuth');
+const {
+  getUserFromHeader,
+  isAdminAccount,
+  canAccessListing,
+  hasListingFeature,
+  LISTING_FEATURE,
+} = require('../../utils/上市进展/listingAuth');
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -79,7 +85,7 @@ async function listIpoProjectProgress(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT_PROGRESS))) return forbidden(res);
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 15));
@@ -133,7 +139,7 @@ async function exportIpoProjectProgressCsv(req, res) {
   try {
     const user = await getUserFromHeader(req);
     if (!user) return unauthorized(res);
-    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROJECT_PROGRESS))) return forbidden(res);
 
     const { whereSql, params } = await buildProgressWhere(req, user);
     const rows = await db.query(
