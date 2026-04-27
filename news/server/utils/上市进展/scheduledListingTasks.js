@@ -246,7 +246,7 @@ async function executeListingSyncTask(configId) {
           });
         }
         if (sourceType === 'guidance_progress') {
-          return syncGuidanceProgress({
+          const guidanceResult = await syncGuidanceProgress({
             from: startDate,
             to: endDate,
             triggerType: 'scheduled',
@@ -254,9 +254,15 @@ async function executeListingSyncTask(configId) {
             sourceUrl: String(cfg.request_url || '').trim(),
             logTag: `[上市进展定时][${cfg.name || configId}][辅导备案]`,
           });
+          const matchResult = await runListingMatchBatch({
+            startDate,
+            endDate,
+            restrictProjectUserId: null,
+          });
+          return { ...guidanceResult, matchResult };
         }
         if (sourceType === 'overseas_filing') {
-          return syncOverseasFiling({
+          const overseasResult = await syncOverseasFiling({
             from: startDate,
             to: endDate,
             triggerType: 'scheduled',
@@ -264,6 +270,12 @@ async function executeListingSyncTask(configId) {
             sourceUrl: String(cfg.request_url || '').trim(),
             logTag: `[上市进展定时][${cfg.name || configId}][境外备案审核]`,
           });
+          const matchResult = await runListingMatchBatch({
+            startDate,
+            endDate,
+            restrictProjectUserId: null,
+          });
+          return { ...overseasResult, matchResult };
         }
         if (sourceType === 'exchange_crawler') {
           const crawlLogTag = `[上市进展定时][${cfg.name || configId}][交易所爬虫]`;
