@@ -105,6 +105,40 @@ function computeScheduledSyncRange(config, baseRunDate) {
   return { startDate, endDate, reason: null };
 }
 
+/**
+ * 境外备案定时区间：
+ * - 默认滚动近 7 天（昨日回看 7 天）；
+ * - 若上次同步结束到昨日的缺口 > 7 天，则从缺口起点补到昨日。
+ */
+function computeOverseasScheduledSyncRange(config, baseRunDate) {
+  const endDateObj = addDaysCalendar(baseRunDate, -1);
+  const endDate = formatDateOnly(endDateObj);
+  const rollingStartDate = formatDateOnly(addDaysCalendar(baseRunDate, -7));
+  let startDate = rollingStartDate;
+  let reason = 'rolling_7d';
+  let gapDays = 0;
+
+  if (config.last_sync_range_end) {
+    const le = String(config.last_sync_range_end).slice(0, 10);
+    const lastNext = addDaysCalendar(new Date(`${le}T12:00:00+08:00`), 1);
+    const gapStart = formatDateOnly(lastNext);
+    if (gapStart <= endDate) {
+      const gapStartObj = new Date(`${gapStart}T12:00:00+08:00`);
+      const endObj = new Date(`${endDate}T12:00:00+08:00`);
+      gapDays = Math.floor((endObj.getTime() - gapStartObj.getTime()) / 86400000) + 1;
+      if (gapDays > 7) {
+        startDate = gapStart;
+        reason = 'catchup_gap_gt_7d';
+      }
+    }
+  }
+
+  if (startDate > endDate) {
+    startDate = endDate;
+  }
+  return { startDate, endDate, reason, gapDays };
+}
+
 async function executeListingSyncTask(configId) {
   console.log(`[上市进展定时] 开始执行 配置 id=${configId}`);
   const rows = await db.query(
@@ -144,7 +178,10 @@ async function executeListingSyncTask(configId) {
     newShareIssueAfterExclusive = todayYmd;
     newShareUpdateAfterExclusive = todayYmd;
   } else {
-    const r = computeScheduledSyncRange(cfg, baseRunDate);
+    const r =
+      sourceType === 'overseas_filing'
+        ? computeOverseasScheduledSyncRange(cfg, baseRunDate)
+        : computeScheduledSyncRange(cfg, baseRunDate);
     startDate = r.startDate;
     endDate = r.endDate;
   }
@@ -161,6 +198,8 @@ async function executeListingSyncTask(configId) {
   console.log(
     sourceType === 'new_share'
       ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：申购/上市日期 > ${newShareIssueAfterExclusive} 且 ≤ ${endDate}；A股补抓 UP_DATE > ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
+      : sourceType === 'overseas_filing'
+        ? `[上市进展定时] 配置「${cfg.name || configId}」境外备案区间 ${startDate} ~ ${endDate}（策略=近7天滚动；缺口>7天则补齐，minSyncDate=${minSyncDate}，北京时间闭区间）interface=${cfg.interface_type || '-'}`
       : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
   );
   const taskKey = buildTaskKey(cfg, startDate, endDate);
