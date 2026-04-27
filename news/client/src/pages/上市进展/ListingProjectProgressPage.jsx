@@ -412,6 +412,10 @@ export default function ListingProjectProgressPage() {
   const openMatchModal = () => {
     setMatchModalOpen(true)
     matchForm.setFieldsValue({
+      matchTypes: ['exchange_ipo', 'guidance_progress', 'overseas_filing', 'new_share'],
+      ipoRangeMode: 'yesterday',
+      ipoLookbackDays: 7,
+      ipoDateRange: [],
       newShareMode: 'yesterday',
       lookbackDays: 7,
       dateRange: [],
@@ -421,29 +425,93 @@ export default function ListingProjectProgressPage() {
   const submitMatchModal = async () => {
     try {
       const v = matchForm.getFieldsValue()
-      const mode = v.newShareMode || 'yesterday'
       const payload = {}
-      if (mode === 'lookback') {
-        const days = Number(v.lookbackDays || 0)
-        if (!Number.isFinite(days) || days < 1 || days > 60) {
-          Message.warning('最近N天请输入 1~60 的整数')
-          return
-        }
-        payload.newShareLookbackDays = Math.floor(days)
-      } else if (mode === 'range') {
-        const r = Array.isArray(v.dateRange) ? v.dateRange : []
-        if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
-          Message.warning('请选择上市日期区间')
-          return
-        }
-        payload.newShareStartDate = r[0].format('YYYY-MM-DD')
-        payload.newShareEndDate = r[1].format('YYYY-MM-DD')
+      const pickedTypes = Array.isArray(v.matchTypes)
+        ? Array.from(new Set(v.matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
+        : []
+      if (!pickedTypes.length) {
+        Message.warning('请至少选择一种匹配类型')
+        return
       }
+      payload.matchTypes = pickedTypes
+
+      const includesIpoProgress = pickedTypes.some((x) =>
+        ['exchange_ipo', 'guidance_progress', 'overseas_filing'].includes(x)
+      )
+      if (includesIpoProgress) {
+        const ipoMode = v.ipoRangeMode || 'yesterday'
+        if (ipoMode === 'lookback') {
+          const days = Number(v.ipoLookbackDays || 0)
+          if (!Number.isFinite(days) || days < 1 || days > 180) {
+            Message.warning('匹配数据范围最近N天请输入 1~180 的整数')
+            return
+          }
+          const end = new Date()
+          end.setDate(end.getDate() - 1)
+          const start = new Date(end)
+          start.setDate(start.getDate() - (Math.floor(days) - 1))
+          const fmt = (d) => {
+            const y = d.getFullYear()
+            const m = String(d.getMonth() + 1).padStart(2, '0')
+            const dd = String(d.getDate()).padStart(2, '0')
+            return `${y}-${m}-${dd}`
+          }
+          payload.startDate = fmt(start)
+          payload.endDate = fmt(end)
+        } else if (ipoMode === 'range') {
+          const r = Array.isArray(v.ipoDateRange) ? v.ipoDateRange : []
+          if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
+            Message.warning('请选择匹配数据范围')
+            return
+          }
+          payload.startDate = r[0].format('YYYY-MM-DD')
+          payload.endDate = r[1].format('YYYY-MM-DD')
+        } else {
+          const end = new Date()
+          end.setDate(end.getDate() - 1)
+          const y = end.getFullYear()
+          const m = String(end.getMonth() + 1).padStart(2, '0')
+          const dd = String(end.getDate()).padStart(2, '0')
+          payload.startDate = `${y}-${m}-${dd}`
+          payload.endDate = `${y}-${m}-${dd}`
+        }
+      }
+
+      if (pickedTypes.includes('new_share')) {
+        const mode = v.newShareMode || 'yesterday'
+        if (mode === 'lookback') {
+          const days = Number(v.lookbackDays || 0)
+          if (!Number.isFinite(days) || days < 1 || days > 60) {
+            Message.warning('打新最近N天请输入 1~60 的整数')
+            return
+          }
+          payload.newShareLookbackDays = Math.floor(days)
+        } else if (mode === 'range') {
+          const r = Array.isArray(v.dateRange) ? v.dateRange : []
+          if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
+            Message.warning('请选择打新上市日期区间')
+            return
+          }
+          payload.newShareStartDate = r[0].format('YYYY-MM-DD')
+          payload.newShareEndDate = r[1].format('YYYY-MM-DD')
+        }
+      }
+
       await handleMatchAll(payload)
       setMatchModalOpen(false)
     } catch (e) {
       Message.error(e.message || '匹配参数校验失败')
     }
+  }
+
+  const hasIpoTypeSelected = () => {
+    const picked = matchForm.getFieldValue('matchTypes') || []
+    return Array.isArray(picked) && picked.some((x) => ['exchange_ipo', 'guidance_progress', 'overseas_filing'].includes(x))
+  }
+
+  const hasNewShareSelected = () => {
+    const picked = matchForm.getFieldValue('matchTypes') || []
+    return Array.isArray(picked) && picked.includes('new_share')
   }
 
   const openShareModal = async () => {
@@ -842,28 +910,72 @@ export default function ListingProjectProgressPage() {
         style={{ width: 520 }}
       >
         <Form form={matchForm} layout="vertical">
-          <FormItem label="打新上市匹配范围" field="newShareMode" initialValue="yesterday">
-            <Select>
-              <Select.Option value="yesterday">默认：仅匹配昨日上市</Select.Option>
-              <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
-              <Select.Option value="range">补跑：指定上市日期区间</Select.Option>
-            </Select>
+          <FormItem shouldUpdate noStyle>
+            {() =>
+              (
+                <FormItem
+                  label="匹配类型"
+                  field="matchTypes"
+                  rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一种匹配类型' }]}
+                  extra="可多选：交易所IPO审核、上市辅导、境外上市备案、打新日历。"
+                >
+                  <Select mode="multiple" placeholder="请选择匹配类型">
+                    <Select.Option value="exchange_ipo">交易所IPO审核</Select.Option>
+                    <Select.Option value="guidance_progress">上市辅导</Select.Option>
+                    <Select.Option value="overseas_filing">境外上市备案</Select.Option>
+                    <Select.Option value="new_share">打新日历</Select.Option>
+                  </Select>
+                </FormItem>
+              )
+            }
           </FormItem>
           <FormItem shouldUpdate noStyle>
             {() =>
-              matchForm.getFieldValue('newShareMode') === 'lookback' ? (
-                <FormItem label="最近N天" field="lookbackDays">
-                  <InputNumber min={1} max={60} style={{ width: 180 }} />
-                </FormItem>
+              hasIpoTypeSelected() ? (
+                <>
+                  <FormItem label="匹配数据范围（上市进展）" field="ipoRangeMode" initialValue="yesterday">
+                    <Select>
+                      <Select.Option value="yesterday">默认：仅匹配昨日更新</Select.Option>
+                      <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
+                      <Select.Option value="range">补跑：指定日期区间</Select.Option>
+                    </Select>
+                  </FormItem>
+                  {matchForm.getFieldValue('ipoRangeMode') === 'lookback' ? (
+                    <FormItem label="最近N天" field="ipoLookbackDays">
+                      <InputNumber min={1} max={180} style={{ width: 180 }} />
+                    </FormItem>
+                  ) : null}
+                  {matchForm.getFieldValue('ipoRangeMode') === 'range' ? (
+                    <FormItem label="日期区间" field="ipoDateRange">
+                      <RangePicker style={{ width: 320 }} />
+                    </FormItem>
+                  ) : null}
+                </>
               ) : null
             }
           </FormItem>
           <FormItem shouldUpdate noStyle>
             {() =>
-              matchForm.getFieldValue('newShareMode') === 'range' ? (
-                <FormItem label="上市日期区间" field="dateRange">
-                  <RangePicker style={{ width: 320 }} />
-                </FormItem>
+              hasNewShareSelected() ? (
+                <>
+                  <FormItem label="打新上市匹配范围" field="newShareMode" initialValue="yesterday">
+                    <Select>
+                      <Select.Option value="yesterday">默认：仅匹配昨日上市</Select.Option>
+                      <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
+                      <Select.Option value="range">补跑：指定上市日期区间</Select.Option>
+                    </Select>
+                  </FormItem>
+                  {matchForm.getFieldValue('newShareMode') === 'lookback' ? (
+                    <FormItem label="打新最近N天" field="lookbackDays">
+                      <InputNumber min={1} max={60} style={{ width: 180 }} />
+                    </FormItem>
+                  ) : null}
+                  {matchForm.getFieldValue('newShareMode') === 'range' ? (
+                    <FormItem label="打新上市日期区间" field="dateRange">
+                      <RangePicker style={{ width: 320 }} />
+                    </FormItem>
+                  ) : null}
+                </>
               ) : null
             }
           </FormItem>

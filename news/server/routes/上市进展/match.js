@@ -21,7 +21,7 @@ async function runMatch(req, res) {
     if (!user) return unauthorized(res);
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
 
-    let { startDate, endDate, newShareStartDate, newShareEndDate, newShareLookbackDays } = req.body || {};
+    let { startDate, endDate, newShareStartDate, newShareEndDate, newShareLookbackDays, matchTypes } = req.body || {};
     const norm = (v) => {
       const s = String(v || '').trim().slice(0, 10);
       return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
@@ -30,7 +30,16 @@ async function runMatch(req, res) {
     newShareEndDate = norm(newShareEndDate);
     const lookback = Number(newShareLookbackDays || 0);
     newShareLookbackDays = Number.isFinite(lookback) && lookback > 0 ? Math.floor(lookback) : 0;
-    if (!startDate || !endDate) {
+    const selectedTypes = Array.isArray(matchTypes)
+      ? Array.from(new Set(matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
+      : [];
+    const selectedIpoTypes = selectedTypes.filter((x) =>
+      ['exchange_ipo', 'guidance_progress', 'overseas_filing'].includes(x)
+    );
+    const effectiveMatchTypes =
+      selectedTypes.length > 0 ? selectedTypes : ['exchange_ipo', 'guidance_progress', 'overseas_filing', 'new_share'];
+
+    if (selectedIpoTypes.length > 0 && (!startDate || !endDate)) {
       const rows = await db.query(
         `SELECT
            DATE_FORMAT(MIN(f_update_time), '%Y-%m-%d') AS min_date,
@@ -55,6 +64,7 @@ async function runMatch(req, res) {
       newShareStartDate,
       newShareEndDate,
       newShareLookbackDays,
+      matchTypes: effectiveMatchTypes,
     });
 
     return res.json({

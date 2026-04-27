@@ -210,17 +210,39 @@ async function runListingMatchBatch({
   newShareStartDate = '',
   newShareEndDate = '',
   newShareLookbackDays = 0,
+  matchTypes = [],
 }) {
   const backfillResult = await backfillYesterdayListedStatus({ restrictProjectUserId });
-
-  const progressRows = await db.query(
-    `SELECT * FROM ipo_progress
-     WHERE F_DeleteMark = 0
-       AND DATE(f_update_time) >= ?
-       AND DATE(f_update_time) <= ?
-     ORDER BY f_id`,
-    [startDate, endDate]
+  const selectedTypes = Array.isArray(matchTypes)
+    ? Array.from(new Set(matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
+    : [];
+  const selectedIpoTypes = selectedTypes.filter((x) =>
+    ['exchange_ipo', 'guidance_progress', 'overseas_filing'].includes(x)
   );
+  const includeIpoProgress = selectedIpoTypes.length > 0;
+  const includeNewShare = selectedTypes.length === 0 || selectedTypes.includes('new_share');
+
+  const ipoWhere = [];
+  if (selectedIpoTypes.includes('exchange_ipo')) {
+    ipoWhere.push(`(COALESCE(exchange, '') <> '证监会辅导备案' AND COALESCE(exchange, '') <> '境外发行备案' AND COALESCE(board, '') <> '境外发行备案')`);
+  }
+  if (selectedIpoTypes.includes('guidance_progress')) {
+    ipoWhere.push(`(exchange = '证监会辅导备案')`);
+  }
+  if (selectedIpoTypes.includes('overseas_filing')) {
+    ipoWhere.push(`(exchange = '境外发行备案' OR board = '境外发行备案')`);
+  }
+
+  let progressRows = [];
+  if (includeIpoProgress && startDate && endDate) {
+    const sql = `SELECT * FROM ipo_progress
+      WHERE F_DeleteMark = 0
+        AND DATE(f_update_time) >= ?
+        AND DATE(f_update_time) <= ?
+        AND (${ipoWhere.join(' OR ')})
+      ORDER BY f_id`;
+    progressRows = await db.query(sql, [startDate, endDate]);
+  }
 
   let projectSql = `SELECT * FROM ipo_project WHERE F_DeleteMark = 0`;
   const projectParams = [];
@@ -281,12 +303,21 @@ async function runListingMatchBatch({
     }
   }
 
-  const newShareResult = await runNewShareMatchBatch({
-    restrictProjectUserId,
-    newShareStartDate,
-    newShareEndDate,
-    newShareLookbackDays,
-  });
+  const newShareResult = includeNewShare
+    ? await runNewShareMatchBatch({
+        restrictProjectUserId,
+        newShareStartDate,
+        newShareEndDate,
+        newShareLookbackDays,
+      })
+    : {
+        newShareCount: 0,
+        projectCount: projectRows.length,
+        matchedPairs: 0,
+        inserted: 0,
+        skipped: 0,
+        publicDate: null,
+      };
 
   return {
     progressCount: progressRows.length,
