@@ -95,7 +95,20 @@ def _parse_nli_html(html: str, board_label: str) -> List[dict]:
 
     rows_out: List[dict] = []
     tbody = table.find("tbody") or table
+    # 港交所「新上市信息」页面通常按分区展示（如：招股中、即将上市等）
+    # 需要把“招股中”区块映射为业务状态“开启招股”。
+    current_section = ""
     for tr in tbody.find_all("tr"):
+        row_text = tr.get_text(" ", strip=True)
+        if row_text:
+            compact = row_text.replace(" ", "")
+            if "招股中" in compact:
+                current_section = "招股中"
+            elif "即将上市" in compact:
+                current_section = "即将上市"
+            elif "新股上市" in compact or "新上市" in compact:
+                current_section = "新上市"
+
         tds = tr.find_all("td")
         if len(tds) < 3:
             continue
@@ -123,6 +136,7 @@ def _parse_nli_html(html: str, board_label: str) -> List[dict]:
                     pdf_urls.append(h)
 
         list_date = _max_date_from_pdf_urls(pdf_urls)
+        row_status = "开启招股" if current_section == "招股中" else "新上市"
 
         rows_out.append(
             {
@@ -130,7 +144,7 @@ def _parse_nli_html(html: str, board_label: str) -> List[dict]:
                 "通过聆讯日期": "",
                 "上市日期": list_date,
                 "申请状态更新日期": list_date,
-                "申请状态": "新上市",
+                "申请状态": row_status,
                 "公司全称": company or "",
                 "股票简称": (company.split()[0] if company else "") or "",
                 "股票代码": code,

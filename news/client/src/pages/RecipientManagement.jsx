@@ -451,16 +451,6 @@ function RecipientManagement() {
     }
   }
 
-  // 格式化 Cron 表达式显示
-  const formatCronExpression = (cron) => {
-    if (!cron) return '-'
-    // 简化显示：如果是常见的表达式，显示友好文本
-    if (cron === '0 0 9 * * ? *') return '每天 09:00:00'
-    if (cron === '0 0 9 ? * 2 *') return '每周一 09:00:00'
-    if (cron === '0 0 9 1 * ? *') return '每月1号 09:00:00'
-    return cron
-  }
-
   const columns = [
     ...(isAdmin ? [{
       title: '用户名称',
@@ -500,7 +490,8 @@ function RecipientManagement() {
           const typeMap = { 'daily': '每天', 'weekly': '每周', 'monthly': '每月' }
           return `${typeMap[record.send_frequency] || record.send_frequency} - ${formatTime(record.send_time || '')}`
         }
-        return formatCronExpression(text)
+        // 与后端配置保持一致：直接展示后端返回的 Quartz Cron
+        return text || '-'
       }
     },
     {

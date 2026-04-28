@@ -18,18 +18,32 @@ const LISTING_FEATURE = {
 async function getUserFromHeader(req) {
   const userId = req.headers['x-user-id'] || null;
   if (!userId) return null;
-  const rows = await db.query('SELECT id, account FROM users WHERE id = ? LIMIT 1', [userId]);
+  const rows = await db.query('SELECT id, account, role FROM users WHERE id = ? LIMIT 1', [userId]);
   return rows.length ? rows[0] : null;
 }
 
 function isAdminAccount(account) {
-  return account === 'admin';
+  return String(account || '').trim().toLowerCase() === 'admin';
+}
+
+/** 邮件/会员档位：管理员视为最高档（与 VIP 可发内容一致），避免无 membership_level_id 时被降级截断 */
+function isListingMailUnrestrictedUser(userRow) {
+  if (!userRow) return false;
+  if (isAdminAccount(userRow.account)) return true;
+  return String(userRow.role || '').trim().toLowerCase() === 'admin';
 }
 
 async function getListingMembershipLevelName(userId) {
   if (!userId) return '';
-  const rows = await db.query('SELECT app_permissions FROM users WHERE id = ? LIMIT 1', [userId]);
-  if (!rows.length || !rows[0].app_permissions) return '';
+  const rows = await db.query(
+    'SELECT app_permissions, account, role FROM users WHERE id = ? LIMIT 1',
+    [userId]
+  );
+  if (!rows.length) return '';
+  if (isListingMailUnrestrictedUser(rows[0])) {
+    return LISTING_LEVEL.VIP;
+  }
+  if (!rows[0].app_permissions) return '';
   let appPermissions = [];
   try {
     appPermissions = JSON.parse(rows[0].app_permissions);

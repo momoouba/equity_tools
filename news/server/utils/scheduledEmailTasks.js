@@ -2447,7 +2447,7 @@ async function executeEmailTask(recipientId) {
     
     // 获取收件管理配置，包括企查查类别编码
     const recipients = await db.query(
-      `SELECT rm.*, u.account as user_account
+      `SELECT rm.*, u.account as user_account, u.role as user_role
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
        WHERE rm.id = ? 

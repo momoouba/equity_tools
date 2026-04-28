@@ -1,7 +1,12 @@
 const db = require('../../db');
 const { sendMailWithConfig } = require('../sendMailWithConfig');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
-const { getListingMembershipLevelName, normalizeListingMailTypesByLevel } = require('./listingAuth');
+const {
+  getListingMembershipLevelName,
+  normalizeListingMailTypesByLevel,
+  isAdminAccount,
+  LISTING_LEVEL,
+} = require('./listingAuth');
 
 async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
@@ -145,7 +150,17 @@ async function executeListingEmailDigest(recipient, options = {}) {
   const reportDay = formatDateOnly(y);
   const today = createShanghaiDate();
   const todayYmd = formatDateOnly(today);
-  const listingLevelName = await getListingMembershipLevelName(recipient.user_id);
+  const forceAdminByOperator =
+    options.currentUser &&
+    (isAdminAccount(options.currentUser.account) ||
+      String(options.currentUser.role || '').trim().toLowerCase() === 'admin');
+  const isRecipientAdmin =
+    isAdminAccount(recipient.user_account) ||
+    String(recipient.user_role || '').trim().toLowerCase() === 'admin';
+  const listingLevelName =
+    forceAdminByOperator || isRecipientAdmin
+      ? LISTING_LEVEL.VIP
+      : await getListingMembershipLevelName(recipient.user_id);
   const selectedTypes = normalizeListingMailTypesByLevel(
     parseListingMailTypes(recipient.listing_mail_types),
     listingLevelName
@@ -242,8 +257,8 @@ async function executeListingEmailDigest(recipient, options = {}) {
               DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date, exchange, issue_price
        FROM ipo_new_share
        WHERE public_date IS NOT NULL
-         AND DATE(public_date) > ?
-         AND DATE(public_date) <= DATE_ADD(?, INTERVAL 5 DAY)
+         AND DATE(public_date) >= ?
+         AND DATE(public_date) < DATE_ADD(?, INTERVAL 5 DAY)
        ORDER BY public_date ASC, stock_code ASC
        LIMIT 500`,
       [todayYmd, todayYmd]

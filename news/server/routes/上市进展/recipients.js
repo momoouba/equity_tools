@@ -3,8 +3,10 @@ const { generateId } = require('../../utils/idGenerator');
 const {
   getUserFromHeader,
   isAdminAccount,
+  canAccessListing,
   hasListingFeature,
   LISTING_FEATURE,
+  LISTING_LEVEL,
   getListingMembershipLevelName,
   normalizeListingMailTypesByLevel,
 } = require('../../utils/上市进展/listingAuth');
@@ -182,7 +184,9 @@ async function updateRecipient(req, res) {
 
     const body = req.body || {};
     const targetUserId = isAdminAccount(user.account) ? existing[0].user_id : user.id;
-    const listingLevelName = await getListingMembershipLevelName(targetUserId);
+    const listingLevelName = isAdminAccount(user.account)
+      ? LISTING_LEVEL.VIP
+      : await getListingMembershipLevelName(targetUserId);
     const nextMailTypes = Object.prototype.hasOwnProperty.call(body, 'listing_mail_types')
       ? normalizeListingMailTypesByLevel(body.listing_mail_types, listingLevelName)
       : normalizeListingMailTypesByLevel(existing[0].listing_mail_types, listingLevelName);
@@ -283,7 +287,10 @@ async function sendTest(req, res) {
       return res.status(400).json({ success: false, message: '收件人邮箱无效' });
     }
     // 与定时任务保持一致：按收件配置所选发件内容发送对应摘要分段
-    await executeListingEmailDigest(existing[0], { skipHolidayCheck: false });
+    await executeListingEmailDigest(existing[0], {
+      skipHolidayCheck: false,
+      currentUser: user,
+    });
     return res.json({ success: true, message: '邮件已发送（按发件内容配置生成）' });
   } catch (e) {
     console.error('sendTest', e);

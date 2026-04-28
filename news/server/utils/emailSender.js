@@ -174,6 +174,22 @@ function formatPublicTime(timeStr) {
 }
 
 /**
+ * 格式化「日报日期」（仅保留年月日）
+ */
+function formatReportDate(timeStr) {
+  if (!timeStr) return '未知日期';
+  try {
+    const date = new Date(timeStr);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  } catch (e) {
+    return String(timeStr).slice(0, 10) || String(timeStr);
+  }
+}
+
+/**
  * HTML转义函数，防止XSS攻击
  * @param {string} text - 需要转义的文本
  * @returns {string} 转义后的文本
@@ -277,7 +293,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
           【企业新闻】未获取到企业相关信息
         </h2>
         <p style="color: #666; margin-bottom: 30px;">
-          日期：${formatPublicTime(dateStr)}
+          日期：${formatReportDate(dateStr)}
         </p>
         <p style="color: #555; font-size: 16px; padding: 20px; background-color: #f9f9f9; border-radius: 5px;">
           昨日未获取到企业相关信息
@@ -296,7 +312,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
   let html = `
     <div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
       <p style="color: #666; margin-bottom: 30px;">
-        日期：${formatPublicTime(dateStr)}
+        日期：${formatReportDate(dateStr)}
       </p>
   `;
   
@@ -504,13 +520,13 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
   );
   
   if (!hasData) {
-    return `【企业新闻】未获取到企业相关信息\n\n日期：${formatPublicTime(dateStr)}\n\n未获取到企业相关信息\n`;
+    return `【企业新闻】未获取到企业相关信息\n\n日期：${formatReportDate(dateStr)}\n\n未获取到企业相关信息\n`;
   }
   
   // 显示顺序：先企业端（被投企业、基金、子基金等），最后第三方公众号
   const entityTypeOrder = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他', '企业新闻', '第三方公众号'];
   
-  let text = `日期：${formatPublicTime(dateStr)}\n\n`;
+  let text = `日期：${formatReportDate(dateStr)}\n\n`;
   
   // 按企业类型分组显示
   for (const entityType of entityTypeOrder) {
@@ -639,7 +655,7 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
     
     // 邮件主题
     const subject = recipientConfig.email_subject || 
-                   `舆情信息日报 - ${formatPublicTime(timeRange.from)}`;
+                   `舆情信息日报 - ${formatReportDate(timeRange.from)}`;
     
     // 解析收件人邮箱（支持多个，用逗号、分号或换行分隔）
     const recipientEmails = recipientConfig.recipient_email
