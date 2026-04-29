@@ -426,6 +426,16 @@ export default function ListingProjectProgressPage() {
     try {
       const v = matchForm.getFieldsValue()
       const payload = {}
+      const toYmd = (d) => {
+        if (d == null || d === '') return ''
+        if (typeof d?.format === 'function') return d.format('YYYY-MM-DD')
+        const x = new Date(d)
+        if (Number.isNaN(x.getTime())) return ''
+        const y = x.getFullYear()
+        const m = String(x.getMonth() + 1).padStart(2, '0')
+        const dd = String(x.getDate()).padStart(2, '0')
+        return `${y}-${m}-${dd}`
+      }
       const pickedTypes = Array.isArray(v.matchTypes)
         ? Array.from(new Set(v.matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
         : []
@@ -460,12 +470,14 @@ export default function ListingProjectProgressPage() {
           payload.endDate = fmt(end)
         } else if (ipoMode === 'range') {
           const r = Array.isArray(v.ipoDateRange) ? v.ipoDateRange : []
-          if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
+          const startDate = toYmd(r[0])
+          const endDate = toYmd(r[1])
+          if (r.length !== 2 || !startDate || !endDate) {
             Message.warning('请选择匹配数据范围')
             return
           }
-          payload.startDate = r[0].format('YYYY-MM-DD')
-          payload.endDate = r[1].format('YYYY-MM-DD')
+          payload.startDate = startDate
+          payload.endDate = endDate
         } else {
           const end = new Date()
           end.setDate(end.getDate() - 1)
@@ -488,12 +500,14 @@ export default function ListingProjectProgressPage() {
           payload.newShareLookbackDays = Math.floor(days)
         } else if (mode === 'range') {
           const r = Array.isArray(v.dateRange) ? v.dateRange : []
-          if (r.length !== 2 || !r[0] || !r[1] || typeof r[0].format !== 'function' || typeof r[1].format !== 'function') {
+          const startDate = toYmd(r[0])
+          const endDate = toYmd(r[1])
+          if (r.length !== 2 || !startDate || !endDate) {
             Message.warning('请选择打新上市日期区间')
             return
           }
-          payload.newShareStartDate = r[0].format('YYYY-MM-DD')
-          payload.newShareEndDate = r[1].format('YYYY-MM-DD')
+          payload.newShareStartDate = startDate
+          payload.newShareEndDate = endDate
         }
       }
 

@@ -89,7 +89,13 @@ async function listSyncExecutionLog(req, res) {
       params
     );
     const rows = await db.query(
-      `SELECT *
+      `SELECT
+         id, config_id, config_name, source_type, trigger_type, window_start, window_end, task_key, status,
+         DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at,
+         DATE_FORMAT(finished_at, '%Y-%m-%d %H:%i:%s') AS ended_at,
+         retry_count, inserted_count, updated_count, skipped_count, dedup_hits, error_message, progress_log,
+         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+         DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
        FROM listing_sync_execution_log
        ${whereSql}
        ORDER BY started_at DESC

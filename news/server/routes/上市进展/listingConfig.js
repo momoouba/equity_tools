@@ -112,7 +112,16 @@ async function listConfig(req, res) {
     if (!user) return unauthorized(res);
     if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.LISTING_CONFIG))) return forbidden(res);
 
-    const rows = await db.query(`SELECT * FROM listing_data_config ORDER BY created_at DESC`);
+    const rows = await db.query(`
+      SELECT
+        id, name, interface_type, request_url, min_sync_date, cron_expression,
+        DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
+        last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+        ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
+        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+      FROM listing_data_config
+      ORDER BY created_at DESC
+    `);
     const safeRows = rows.map((r) => {
       const row = { ...r };
       // 保存原始值用于判断是否已配置
@@ -172,7 +181,17 @@ async function createConfig(req, res) {
           : 0,
       ]
     );
-    const row = await db.query(`SELECT * FROM listing_data_config WHERE id = ?`, [id]);
+    const row = await db.query(
+      `SELECT
+         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
+         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
+         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+       FROM listing_data_config
+       WHERE id = ?`,
+      [id]
+    );
     if (row[0]) {
       row[0].ifind_username_configured = !!row[0].ifind_username;
       row[0].ifind_password_configured = !!row[0].ifind_password;
@@ -326,7 +345,17 @@ async function updateConfig(req, res) {
         id,
       ]
     );
-    const row = await db.query(`SELECT * FROM listing_data_config WHERE id = ?`, [id]);
+    const row = await db.query(
+      `SELECT
+         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
+         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
+         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+       FROM listing_data_config
+       WHERE id = ?`,
+      [id]
+    );
     if (row[0]) {
       row[0].ifind_username_configured = !!row[0].ifind_username;
       row[0].ifind_password_configured = !!row[0].ifind_password;
@@ -396,7 +425,17 @@ async function copyListingConfig(req, res) {
         src.ifind_fallback_to_hkex || 0,
       ]
     );
-    const row = await db.query(`SELECT * FROM listing_data_config WHERE id = ?`, [newId]);
+    const row = await db.query(
+      `SELECT
+         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
+         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
+         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+       FROM listing_data_config
+       WHERE id = ?`,
+      [newId]
+    );
     if (row[0]) {
       row[0].ifind_username_configured = !!row[0].ifind_username;
       row[0].ifind_password_configured = !!row[0].ifind_password;
@@ -438,9 +477,9 @@ async function syncListingConfig(req, res) {
     if (sourceType !== 'new_share' && !endDateFinal) {
       return res.status(400).json({ success: false, message: '请提供 startDate、endDate（YYYY-MM-DD）' });
     }
-    const minSyncDate = normalizeYmd(cfg.min_sync_date) || DEFAULT_MIN_SYNC_DATE;
-    const effectiveStart = maxYmd(startDate, minSyncDate);
-    if (effectiveStart > endDateFinal) {
+    const minSyncDate = normalizeYmd(cfg.min_sync_date);
+    const effectiveStart = minSyncDate ? maxYmd(startDate, minSyncDate) : normalizeYmd(startDate) || String(startDate || '').trim().slice(0, 10);
+    if (minSyncDate && effectiveStart > endDateFinal) {
       return res.status(400).json({
         success: false,
         message: `开始日期早于配置最早同步日期，且裁剪后区间无效（min_sync_date=${minSyncDate}）`,
@@ -475,7 +514,7 @@ async function syncListingConfig(req, res) {
       const wrapped = await executeWithRetry(
         async (attempt) => {
           console.log(
-            `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${effectiveStart}~${endDateFinal} minSyncDate=${minSyncDate} operator=${user.account || user.id}`
+            `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${effectiveStart}~${endDateFinal} minSyncDate=${minSyncDate || '-'} operator=${user.account || user.id}`
           );
           if (sourceType === 'new_share') {
             return syncNewShareCalendar({
@@ -483,7 +522,7 @@ async function syncListingConfig(req, res) {
               to: endDateFinal,
               issueDateAfterExclusive: effectiveStart,
               updateDateAfterExclusive: effectiveStart,
-              minSyncDate,
+              minSyncDate: minSyncDate || null,
               triggerType: 'manual',
               operatorUserId: user.id,
               logTag: `[上市进展手动同步][${cfg.name || cfg.id}][打新日历]`,

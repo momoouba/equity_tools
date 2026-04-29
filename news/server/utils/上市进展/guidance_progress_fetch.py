@@ -25,6 +25,7 @@ RE_ONCLICK_DATE = re.compile(r"'(\d{4}-\d{2}-\d{2})'")
 # 单元格内常见 2026-04-14 或 2026/04/14
 RE_CELL_YMD = re.compile(r"(\d{4}[-/]\d{1,2}[-/]\d{1,2})")
 TZ_SH = ZoneInfo("Asia/Shanghai")
+PW_PAGE_BREAK = "\n<!--CSRC_GUIDANCE_PAGE_BREAK-->\n"
 
 
 def _parse_iso_date(s):
@@ -248,6 +249,85 @@ def _fetch_html_playwright(page_url):
         }"""
         )
 
+    def first_row_signature(page):
+        return page.evaluate(
+            """() => {
+          const pickRows = () => {
+            const seen = new Set();
+            const trs = [];
+            const add = (tr) => {
+              if (!tr || seen.has(tr)) return;
+              seen.add(tr);
+              const st = tr.getAttribute('style') || '';
+              if (/display\\s*:\\s*none/i.test(st)) return;
+              trs.push(tr);
+            };
+            document.querySelectorAll('tr[onclick*="downloadPdf1"]').forEach(add);
+            document.querySelectorAll('td[onclick*="downloadPdf1"]').forEach((td) => add(td.closest('tr')));
+            return trs;
+          };
+          const trs = pickRows();
+          if (!trs.length) return '';
+          const t = (trs[0].innerText || trs[0].textContent || '').replace(/\\s+/g, ' ').trim();
+          return t.slice(0, 160);
+        }"""
+        )
+
+    def goto_next_page(page):
+        """尝试翻到下一页，成功返回 True。"""
+        next_candidates = [
+            'a:has-text("下一页")',
+            'a:has-text("下页")',
+            'a[title*="下一页"]',
+            '.pagination a.next',
+            '.page a.next',
+            'a.next',
+        ]
+        for sel in next_candidates:
+            try:
+                loc = page.locator(sel).first
+                if loc.count() == 0:
+                    continue
+                cls = (loc.get_attribute("class") or "").lower()
+                if "disabled" in cls:
+                    continue
+                text = (loc.inner_text(timeout=1200) or "").strip()
+                if text and ("下一页" not in text and "下页" not in text and ">" not in text):
+                    continue
+                loc.click(timeout=4000)
+                page.wait_for_timeout(int(os.environ.get("CSRC_GUIDANCE_AFTER_PAGE_MS", "1400")))
+                return True
+            except Exception:
+                continue
+        # 兜底：匹配 href/javascript 中含 next 的翻页控件
+        try:
+            js_hit = page.evaluate(
+                """() => {
+              const nodes = Array.from(document.querySelectorAll('a[onclick],a[href]'));
+              for (const a of nodes) {
+                const cls = (a.className || '').toLowerCase();
+                if (cls.includes('disabled')) continue;
+                const txt = (a.textContent || '').trim();
+                const oc = (a.getAttribute('onclick') || '').toLowerCase();
+                const href = (a.getAttribute('href') || '').toLowerCase();
+                if (
+                  txt.includes('下一页') || txt.includes('下页') ||
+                  oc.includes('next') || href.includes('next')
+                ) {
+                  a.click();
+                  return true;
+                }
+              }
+              return false;
+            }"""
+            )
+            if js_hit:
+                page.wait_for_timeout(int(os.environ.get("CSRC_GUIDANCE_AFTER_PAGE_MS", "1400")))
+                return True
+        except Exception:
+            pass
+        return False
+
     def apply_sort_logic(page):
         """点击「备案时间」表头：保证降序；再校验首条日期须在本月或上月，否则继续点击并重校降序。"""
         today = datetime.now(TZ_SH).date()
@@ -351,7 +431,32 @@ def _fetch_html_playwright(page_url):
                 n1 = count_visible_rows(page)
                 if n1 == 0 and reload_pass == 0:
                     continue
-                html_holder["html"] = page.content()
+                page_htmls = [page.content()]
+                paginate_enabled = _bool_env("CSRC_GUIDANCE_PAGINATE", default=True)
+                max_pages = max(
+                    1,
+                    int(os.environ.get("CSRC_GUIDANCE_MAX_PAGES", "30")),
+                )
+                if paginate_enabled and max_pages > 1:
+                    last_sig = first_row_signature(page)
+                    for _ in range(max_pages - 1):
+                        moved = goto_next_page(page)
+                        if not moved:
+                            break
+                        try:
+                            page.wait_for_selector(
+                                'td[onclick*="downloadPdf1"], tr[onclick*="downloadPdf1"]',
+                                timeout=12000,
+                                state="attached",
+                            )
+                        except Exception:
+                            break
+                        cur_sig = first_row_signature(page)
+                        if cur_sig and cur_sig == last_sig:
+                            break
+                        last_sig = cur_sig or last_sig
+                        page_htmls.append(page.content())
+                html_holder["html"] = PW_PAGE_BREAK.join(page_htmls)
                 break
             if not html_holder["html"]:
                 html_holder["html"] = page.content()
@@ -811,7 +916,25 @@ def main():
             rows = _build_rows(df, start_date, end_date)
         # 辅导公示 DOM 解析更可靠：只要页面含列表脚本，优先采用 DOM 结果（覆盖 pandas 列名错位）
         if html_snap and "downloadpdf1" in html_snap.lower():
-            dom_rows = _rows_from_csrcfd_dom(html_snap, start_date, end_date)
+            html_parts = (
+                [x for x in html_snap.split(PW_PAGE_BREAK) if x.strip()]
+                if PW_PAGE_BREAK in html_snap
+                else [html_snap]
+            )
+            dom_rows = []
+            seen = set()
+            for part in html_parts:
+                chunk_rows = _rows_from_csrcfd_dom(part, start_date, end_date)
+                for r in chunk_rows:
+                    key = (
+                        str(r.get("company", "")).strip(),
+                        str(r.get("record_date", "")).strip(),
+                        str(r.get("status", "")).strip(),
+                    )
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    dom_rows.append(r)
             if dom_rows:
                 rows = dom_rows
                 parser_note = f"{source_name}-dom"

@@ -33,7 +33,7 @@ async function createExecutionLog(payload = {}) {
 
 async function appendExecutionLogProgress(logId, message, options = {}) {
   if (!logId || !message) return;
-  const line = `[${new Date().toLocaleString('zh-CN', { hour12: false })}] ${String(message)}`;
+  const line = `[${new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}] ${String(message)}`;
   const maxBytes = Math.max(4000, Math.min(200000, Number(options.maxBytes || 120000)));
   const rows = await db.query(`SELECT progress_log FROM listing_sync_execution_log WHERE id = ? LIMIT 1`, [logId]);
   const oldLog = String(rows[0]?.progress_log || '');

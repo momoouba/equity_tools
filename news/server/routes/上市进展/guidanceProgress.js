@@ -50,7 +50,10 @@ async function listGuidanceProgress(req, res) {
     const { whereSql, params } = buildWhere(req);
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_progress ${whereSql}`, params);
     const list = await db.query(
-      `SELECT f_id, f_update_time, company, project_name, status, exchange, board, register_address, code, receive_date
+      `SELECT
+         f_id,
+         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         company, project_name, status, exchange, board, register_address, code, receive_date
        FROM ipo_progress ${whereSql}
        ORDER BY f_update_time DESC
        LIMIT ? OFFSET ?`,

@@ -193,7 +193,7 @@ def build_rows_for_day(df: pd.DataFrame, today: str) -> List[Dict[str, Any]]:
         code = str(row.get(c_code) or "").strip() if c_code else ""
         board = _board_zh(row.get(c_board)) if c_board else "主板"
         reg = str(row.get(c_reg) or "").strip() if c_reg else ""
-        receive = apply_d or None
+        receive = None
 
         for ek in kinds:
             status = st_raw
@@ -206,6 +206,7 @@ def build_rows_for_day(df: pd.DataFrame, today: str) -> List[Dict[str, Any]]:
             seen_key.add(key)
 
             f_update = f"{today} 00:00:00"
+            receive = today
             rows_out.append(
                 {
                     "exchange": EXCHANGE_HK,

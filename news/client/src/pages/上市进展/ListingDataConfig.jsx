@@ -58,6 +58,16 @@ const emptyForm = {
   ifind_fallback_to_hkex: false,
 }
 
+const formatYmd = (value, fallback = '-') => {
+  if (value == null || value === '') return fallback
+  const text = String(value)
+  const parsed = dayjs(text)
+  if (parsed.isValid()) return parsed.format('YYYY-MM-DD')
+  const s = text.replace('T', ' ')
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+  return fallback
+}
+
 export default function ListingDataConfig() {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState([])
@@ -228,19 +238,53 @@ export default function ListingDataConfig() {
     }
     const isNewShare = syncRow?.news_interface_type === 'new_share'
     let payload
+    const confirmAutoAdjustStartDate = (fromDate, minDate) =>
+      new Promise((resolve) => {
+        Modal.confirm({
+          title: '同步区间将按配置自动调整',
+          content: `你选择的开始日期 ${fromDate} 早于配置最早同步日期 ${minDate}。确认后将自动按 ${minDate} 继续同步。`,
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        })
+      })
+    let latestMinSyncDate = String(syncRow?.min_sync_date || '').slice(0, 10)
+    try {
+      // 同步前拉一次最新配置，避免使用到表格中的旧缓存
+      const cfgRes = await axios.get('/api/listing/listing-config')
+      const latestList = cfgRes?.data?.data || []
+      const latestRow = latestList.find((x) => String(x.id) === String(syncRow.id))
+      if (latestRow?.min_sync_date) latestMinSyncDate = String(latestRow.min_sync_date).slice(0, 10)
+      if (latestRow) setSyncRow((prev) => ({ ...(prev || {}), ...latestRow }))
+    } catch (_) {
+      // 拉取失败时走现有 syncRow，避免阻断用户手动同步
+    }
     if (isNewShare) {
-      const startDate = toYmd(syncSingleDate)
+      let startDate = toYmd(syncSingleDate)
       if (!startDate) {
         Message.warning('请选择开始日期')
         return
       }
+      if (latestMinSyncDate && startDate < latestMinSyncDate) {
+        const ok = await confirmAutoAdjustStartDate(startDate, latestMinSyncDate)
+        if (!ok) return
+        startDate = latestMinSyncDate
+      }
       payload = { startDate }
     } else {
-      const startDate = toYmd(syncRange[0])
+      let startDate = toYmd(syncRange[0])
       const endDate = toYmd(syncRange[1])
       if (!startDate || !endDate) {
         Message.warning('请选择开始与结束日期')
         return
+      }
+      if (latestMinSyncDate && endDate < latestMinSyncDate) {
+        Message.warning(`结束日期早于当前配置最早同步日期（${latestMinSyncDate}），请调整区间`)
+        return
+      }
+      if (latestMinSyncDate && startDate < latestMinSyncDate) {
+        const ok = await confirmAutoAdjustStartDate(startDate, latestMinSyncDate)
+        if (!ok) return
+        startDate = latestMinSyncDate
       }
       payload = { startDate, endDate }
     }
@@ -339,7 +383,12 @@ export default function ListingDataConfig() {
           : '未启用',
     },
     { title: '请求地址', dataIndex: 'request_url', ellipsis: true },
-    { title: '最早同步日期', dataIndex: 'min_sync_date', width: 130, render: (t) => t || '2026-01-01' },
+    {
+      title: '最早同步日期',
+      dataIndex: 'min_sync_date',
+      width: 140,
+      render: (t) => formatYmd(t, '2026-01-01'),
+    },
     { title: 'Cron', dataIndex: 'cron_expression', width: 140 },
     {
       title: '跳过节假日',
@@ -348,7 +397,7 @@ export default function ListingDataConfig() {
       render: (v) => (v === 1 || v === true ? '是' : '否'),
     },
     {
-      title: '最后同步',
+      title: '最后同步时间',
       dataIndex: 'last_sync_time',
       width: 170,
       render: (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '-'),
@@ -563,6 +612,9 @@ export default function ListingDataConfig() {
           {syncRow?.news_interface_type === 'new_share'
             ? '打新日历：只需选择「开始日期」。将同步「申购日期（A 股）/ 上市日期（港股）」严格大于该日的数据；已入库记录按字段比对更新。未传结束日时服务端上界为远期。'
             : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。'}
+        </p>
+        <p style={{ marginBottom: 10, color: 'var(--color-text-2)', fontSize: 12 }}>
+          当前配置最早同步日期：{formatYmd(syncRow?.min_sync_date, '2026-01-01')}
         </p>
         {syncRow?.news_interface_type === 'new_share' ? (
           <DatePicker

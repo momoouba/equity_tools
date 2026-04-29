@@ -338,7 +338,8 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
         status_upd_date = _norm_ymd(_pick_first(row, ("p04920_f005", "申请状态更新日期", "状态更新日期")))  # 申请状态更新日期
         
         # 其他字段
-        receive_date = first_apply_date  # 受理日期用首次申请日期
+        # ipo_progress.receive_date 统一取更新日期
+        receive_date = None
         board = _pick_first(row, ("板块", "拟上市板块")) or "主板"
         company = _pick_first(row, ("p04920_f021", "企业名称", "公司全称"))
         if not company:
@@ -384,6 +385,7 @@ def build_rows(df: pd.DataFrame, start_date: str, end_date: str) -> List[Dict[st
 
         if not matched:
             continue
+        receive_date = update_ymd or None
 
         out.append(
             {

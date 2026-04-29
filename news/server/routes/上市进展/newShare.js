@@ -63,7 +63,8 @@ async function listNewShare(req, res) {
               issue_weekday, issue_price, offer_pe, limit_shares,
               exchange, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
               win_rate, total_issued_shares, first_day_close, first_day_chg_pct, first_day_market_cap,
-              created_at, updated_at
+              DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
+              DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
        FROM ipo_new_share ${whereSql}
        ORDER BY issue_date DESC, stock_code ASC
        LIMIT ? OFFSET ?`,
