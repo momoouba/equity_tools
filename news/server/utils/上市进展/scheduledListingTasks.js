@@ -220,6 +220,11 @@ async function executeListingSyncTask(configId) {
   }
   runningTaskKeys.add(taskKey);
   let logId = null;
+  let syncResult = null;
+  let syncError = null;
+  let matchResult = null;
+  let matchError = null;
+
   try {
     logId = await createExecutionLog({
       configId: cfg.id,
@@ -231,92 +236,100 @@ async function executeListingSyncTask(configId) {
       taskKey,
     });
 
-    const retryWrap = await executeWithRetry(
-      async (attempt) => {
-        console.log(`[上市进展定时] 执行 attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id}`);
-        if (sourceType === 'new_share') {
-          return syncNewShareCalendar({
-            from: startDate,
-            to: endDate,
-            issueDateAfterExclusive: newShareIssueAfterExclusive,
-            updateDateAfterExclusive: newShareUpdateAfterExclusive,
-            minSyncDate,
-            triggerType: 'scheduled',
-            logTag: `[上市进展定时][${cfg.name || configId}][打新日历]`,
-          });
-        }
-        if (sourceType === 'guidance_progress') {
-          const guidanceResult = await syncGuidanceProgress({
-            from: startDate,
-            to: endDate,
-            triggerType: 'scheduled',
-            source: 'html',
-            sourceUrl: String(cfg.request_url || '').trim(),
-            logTag: `[上市进展定时][${cfg.name || configId}][辅导备案]`,
-          });
-          const matchResult = await runListingMatchBatch({
-            startDate,
-            endDate,
-            restrictProjectUserId: null,
-          });
-          return { ...guidanceResult, matchResult };
-        }
-        if (sourceType === 'overseas_filing') {
-          const overseasResult = await syncOverseasFiling({
-            from: startDate,
-            to: endDate,
-            triggerType: 'scheduled',
-            source: 'url',
-            sourceUrl: String(cfg.request_url || '').trim(),
-            logTag: `[上市进展定时][${cfg.name || configId}][境外备案审核]`,
-          });
-          const matchResult = await runListingMatchBatch({
-            startDate,
-            endDate,
-            restrictProjectUserId: null,
-          });
-          return { ...overseasResult, matchResult };
-        }
-        if (sourceType === 'exchange_crawler') {
-          const crawlLogTag = `[上市进展定时][${cfg.name || configId}][交易所爬虫]`;
-          const crawlerResult = await runListingExchangeCrawler({
-            startDate,
-            endDate,
-            logTag: crawlLogTag,
-            config: cfg,
-          });
-          await runListingMatchBatch({
-            startDate,
-            endDate,
-            restrictProjectUserId: null,
-          });
-          return crawlerResult;
-        }
+    // 数据入库阶段（独立处理，异常不影响后续项目匹配）
+    console.log(`[上市进展定时] 开始数据入库 sourceType=${sourceType} cfg=${cfg.id}`);
+    try {
+      if (sourceType === 'new_share') {
+        syncResult = await syncNewShareCalendar({
+          from: startDate,
+          to: endDate,
+          issueDateAfterExclusive: newShareIssueAfterExclusive,
+          updateDateAfterExclusive: newShareUpdateAfterExclusive,
+          minSyncDate,
+          triggerType: 'scheduled',
+          logTag: `[上市进展定时][${cfg.name || configId}][打新日历]`,
+        });
+      } else if (sourceType === 'guidance_progress') {
+        syncResult = await syncGuidanceProgress({
+          from: startDate,
+          to: endDate,
+          triggerType: 'scheduled',
+          source: 'html',
+          sourceUrl: String(cfg.request_url || '').trim(),
+          logTag: `[上市进展定时][${cfg.name || configId}][辅导备案]`,
+        });
+      } else if (sourceType === 'overseas_filing') {
+        syncResult = await syncOverseasFiling({
+          from: startDate,
+          to: endDate,
+          triggerType: 'scheduled',
+          source: 'url',
+          sourceUrl: String(cfg.request_url || '').trim(),
+          logTag: `[上市进展定时][${cfg.name || configId}][境外备案审核]`,
+        });
+      } else if (sourceType === 'exchange_crawler') {
+        syncResult = await runListingExchangeCrawler({
+          startDate,
+          endDate,
+          logTag: `[上市进展定时][${cfg.name || configId}][交易所爬虫]`,
+          config: cfg,
+        });
+      } else {
         throw new Error(`未识别来源类型: ${sourceType}`);
-      },
-      {
-        maxAttempts: 5,
-        baseDelayMs: 1000,
-        factor: 2,
-        onRetry: ({ attempt, delay, error }) => {
-          console.warn(`[上市进展定时] 重试 attempt=${attempt + 1} delay=${delay}ms error=${error.message}`);
-        },
       }
-    );
-    const result = retryWrap.result || {};
+      console.log(`[上市进展定时] 数据入库完成 sourceType=${sourceType}`, syncResult);
+    } catch (e) {
+      syncError = e;
+      console.error(`[上市进展定时] 数据入库异常 sourceType=${sourceType}:`, e.message);
+    }
+
+    // 项目匹配阶段（独立处理，交易所爬虫/境外备案/辅导备案都执行）
+    // 即使数据入库有异常，也执行项目匹配（已入库的数据需要匹配）
+    const needMatch = ['guidance_progress', 'overseas_filing', 'exchange_crawler'].includes(sourceType);
+    if (needMatch) {
+      console.log(`[上市进展定时] 开始底层项目匹配 sourceType=${sourceType}`);
+      try {
+        matchResult = await runListingMatchBatch({
+          startDate,
+          endDate,
+          restrictProjectUserId: null,
+        });
+        console.log(`[上市进展定时] 底层项目匹配完成`, matchResult);
+      } catch (e) {
+        matchError = e;
+        console.error(`[上市进展定时] 底层项目匹配异常:`, e.message);
+      }
+    }
+
+    // 合并结果
+    const result = { ...syncResult, matchResult };
     const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
     await db.execute(
       `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
       [rangeEndStored, cfg.id]
     );
+
+    // 判断整体状态：如果数据入库或项目匹配有异常，记录为 partial_success 或 failed
+    const hasSyncError = syncError !== null;
+    const hasMatchError = matchError !== null;
+    const overallStatus = (hasSyncError || hasMatchError)
+      ? (syncResult ? 'partial_success' : 'failed')
+      : 'success';
+
     await finishExecutionLog(logId, {
-      retryCount: Number(retryWrap.attemptCount || 1) - 1,
-      insertedCount: Number(result.inserted || 0),
-      updatedCount: Number(result.updated || result.updatedEarlier || 0),
-      skippedCount: Number(result.skipped || 0),
-      dedupHits: Number(result.skipped || 0),
-      status: 'success',
+      insertedCount: Number(syncResult?.inserted || 0),
+      updatedCount: Number(syncResult?.updated || syncResult?.updatedEarlier || 0),
+      skippedCount: Number(syncResult?.skipped || 0),
+      dedupHits: Number(syncResult?.skipped || 0),
+      matchedCount: Number(matchResult?.matched || 0),
+      status: overallStatus,
+      errorMessage: hasSyncError ? `入库异常: ${syncError.message}` : (hasMatchError ? `匹配异常: ${matchError.message}` : null),
     });
+
+    // 如果数据入库有严重错误（无任何数据入库），抛出异常触发告警
+    if (hasSyncError && !syncResult) {
+      throw syncError;
+    }
   } catch (e) {
     console.error(`[上市进展定时] 执行失败:`, e);
     if (logId) {

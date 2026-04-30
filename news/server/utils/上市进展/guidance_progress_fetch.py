@@ -482,10 +482,17 @@ def _norm_date(v):
 
 
 def _extract_csrc_guidance_company_name(s):
-    """报告标题/混写文案 → 仅保留公司全称（与 Node extractCsrcGuidanceCompanyName 对齐）。"""
+    """报告标题/混写文案 → 仅保留公司全称（与 Node extractCsrcGuidanceCompanyName 对齐）。
+    注意：如果输入已经是公司名称（如从辅导对象列获取），直接返回，不做额外提取。
+    """
     t = str(s or "").strip()
     if not t:
         return ""
+    # 如果输入不包含"报告"、"辅导"等关键字，说明已经是公司名称，直接返回
+    report_keywords = ("报告", "辅导备案", "辅导工作", "首次公开发行", "公开发行")
+    if not any(kw in t for kw in report_keywords):
+        return t
+    # 从报告标题中提取公司名称
     if t.startswith("关于"):
         t = t[2:].strip()
     suffixes = (
@@ -532,8 +539,9 @@ def _build_rows(df, start_date, end_date):
     rows = []
     for _, r in df.iterrows():
         d = r.to_dict()
+        # 优先从辅导对象列获取公司名称（第一列），其次是企业名称、公司名称等
         company = _extract_csrc_guidance_company_name(
-            str(_pick(d, ["公司名称", "企业名称", "辅导对象", "公司", "发行人", "名称"]) or "").strip()
+            str(_pick(d, ["辅导对象", "企业名称", "公司名称", "公司", "发行人", "名称"]) or "").strip()
         )
         if not company:
             continue
@@ -587,7 +595,8 @@ def _parse_csrcfd_table_header(table):
             continue
         idx = {}
         for i, lab in enumerate(labels):
-            if "辅导对象" in lab:
+            # 辅导对象列（第一列），可能命名为"辅导对象"、"企业名称"、"公司名称"等
+            if "辅导对象" in lab or "企业名称" in lab or "公司名称" in lab or "公司" in lab:
                 idx["company"] = i
             if "备案时间" in lab:
                 idx["date"] = i
@@ -597,7 +606,11 @@ def _parse_csrcfd_table_header(table):
                 idx["dispatch"] = i
             if "报告类型" in lab:
                 idx["board"] = i
-        if "date" in idx and "company" in idx:
+        # 必须找到日期列，公司列尽量找（如果没有则使用第一列作为fallback）
+        if "date" in idx:
+            if "company" not in idx:
+                # fallback: 使用第一列作为公司名称列
+                idx["company"] = 0
             return idx, len(cells)
     return None, 0
 

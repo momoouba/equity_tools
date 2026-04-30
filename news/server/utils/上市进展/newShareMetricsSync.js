@@ -4,6 +4,8 @@ const path = require('path');
 const IPOAPPLY_CACHE_TTL_MS = Math.max(30_000, Number(process.env.NEW_SHARE_METRICS_IPOAPPLY_CACHE_TTL_MS || 300_000));
 const FETCH_TIMEOUT_MS = Math.max(5000, Number(process.env.NEW_SHARE_METRICS_FETCH_TIMEOUT_MS || 20000));
 const PY_TIMEOUT_MS = Math.max(10000, Number(process.env.NEW_SHARE_METRICS_PY_TIMEOUT_MS || 45000));
+// 港股专用超时配置（更长，因为港股数据源较慢）
+const PY_TIMEOUT_MS_HK = Math.max(30000, Number(process.env.NEW_SHARE_METRICS_PY_TIMEOUT_MS_HK || 90000));
 let ipoApplyCache = { expireAt: 0, byCode: new Map() };
 
 function sleep(ms) {
@@ -180,6 +182,8 @@ function runNewShareMetricsSync(opts) {
   const script = path.join(__dirname, 'new_share_metrics_fetch.py');
   const py = process.env.PYTHON || 'python';
   const args = [script, '--stock-code', stockCode, '--list-date', listDate, '--market', market];
+  // 港股使用更长的超时时间
+  const pyTimeoutMs = market === 'hk' ? PY_TIMEOUT_MS_HK : PY_TIMEOUT_MS;
   const parsePayload = (text) => {
     try {
       const line = String(text || '').trim().split('\n').filter(Boolean).pop();
@@ -193,7 +197,7 @@ function runNewShareMetricsSync(opts) {
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 20 * 1024 * 1024,
-    timeout: PY_TIMEOUT_MS,
+    timeout: pyTimeoutMs,
     killSignal: 'SIGTERM',
   });
   if (r.error) return { ok: false, stderr: String(r.error.message || 'spawn error') };

@@ -61,7 +61,9 @@ function fuzzySimilarity(a, b) {
   return Math.max(containScore, diceScore);
 }
 
-/** 证监会辅导公示/报告标题 → 仅保留公司全称（去掉「关于…报告」等套话） */
+/** 证监会辅导公示/报告标题 → 仅保留公司全称（去掉「关于…报告」等套话）
+ * 注意：如果输入已经是公司名称（如从辅导对象列获取），直接返回，不做额外提取。
+ */
 const GUIDANCE_TITLE_SUFFIXES = [
   '首次公开发行股票并上市辅导备案报告',
   '首次公开发行股票并在科创板上市辅导备案报告',
@@ -77,6 +79,12 @@ const GUIDANCE_TITLE_SUFFIXES = [
 function extractCsrcGuidanceCompanyName(input) {
   let s = String(input || '').trim();
   if (!s) return '';
+  // 如果输入不包含"报告"、"辅导"等关键字，说明已经是公司名称，直接返回
+  const reportKeywords = ['报告', '辅导备案', '辅导工作', '首次公开发行', '公开发行'];
+  if (!reportKeywords.some(kw => s.includes(kw))) {
+    return s;
+  }
+  // 从报告标题中提取公司名称
   if (s.startsWith('关于')) {
     s = s.slice(2).trim();
   }

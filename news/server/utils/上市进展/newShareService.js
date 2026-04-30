@@ -452,16 +452,28 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
   let skippedNoListDate = 0;
   const failedItems = [];
   const refreshedItems = [];
-  const metricsConcurrency = Math.max(1, Math.min(32, Number(process.env.NEW_SHARE_METRICS_CONCURRENCY || 8)));
-  const metricsItemTimeoutMs = Math.max(10000, Number(process.env.NEW_SHARE_METRICS_ITEM_TIMEOUT_MS || 70000));
-  const taskResults = await runWithConcurrency(candidates, metricsConcurrency, async (row) => {
+  // A股和港股分开处理，使用不同的并发和超时配置
+  const metricsConcurrencyA = Math.max(1, Math.min(32, Number(process.env.NEW_SHARE_METRICS_CONCURRENCY || 8)));
+  const metricsConcurrencyHk = Math.max(1, Math.min(16, Number(process.env.NEW_SHARE_METRICS_HK_CONCURRENCY || 3)));
+  const metricsItemTimeoutMsA = Math.max(10000, Number(process.env.NEW_SHARE_METRICS_ITEM_TIMEOUT_MS || 70000));
+  const metricsItemTimeoutMsHk = Math.max(30000, Number(process.env.NEW_SHARE_METRICS_ITEM_TIMEOUT_MS_HK || 120000));
+
+  // 分离港股和A股候选
+  const hkCandidates = candidates.filter(r => r.exchange === '港交所');
+  const aCandidates = candidates.filter(r => r.exchange !== '港交所');
+
+  console.log(`${logTag} 首日指标候选分离: A股=${aCandidates.length} 港股=${hkCandidates.length}`);
+  console.log(`${logTag} A股配置: concurrency=${metricsConcurrencyA} timeout=${metricsItemTimeoutMsA}ms`);
+  console.log(`${logTag} 港股配置: concurrency=${metricsConcurrencyHk} timeout=${metricsItemTimeoutMsHk}ms`);
+
+  // 处理单个股票的通用函数
+  const processMetricsRow = async (row, market, timeoutMs) => {
     const listDate = String(row.public_date || '').slice(0, 10);
     if (!isYmd(listDate) || listDate > todayYmd) {
       return { status: 'skipped', row, listDate };
     }
-    const market = row.exchange === '港交所' ? 'hk' : 'a';
     console.log(
-      `${logTag} 首日指标开始 stock=${row.stock_code} exchange=${row.exchange || ''} listDate=${listDate} timeoutMs=${metricsItemTimeoutMs}`
+      `${logTag} 首日指标开始 stock=${row.stock_code} exchange=${row.exchange || ''} listDate=${listDate} timeoutMs=${timeoutMs}`
     );
     let fetched;
     try {
@@ -472,8 +484,8 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
           market,
           logTag: `${logTag}[${row.stock_code}][首日指标]`,
         }),
-        metricsItemTimeoutMs,
-        `首日指标超时(${metricsItemTimeoutMs}ms)`
+        timeoutMs,
+        `首日指标超时(${timeoutMs}ms)`
       );
     } catch (timeoutErr) {
       const failMsg = String(timeoutErr?.message || timeoutErr || 'metrics timeout').slice(0, 500);
@@ -527,7 +539,7 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
           : fetchedWinRate,
       total_issued_shares: normalizePositiveOrNull(totalIssuedShares ?? row.total_issued_shares ?? null),
       first_day_close: normalizePositiveOrNull(close),
-      first_day_chg_pct: chgPct,
+      first_day_chg_pct: normalizePositiveOrNull(chgPct),
       first_day_market_cap: normalizePositiveOrNull(marketCap),
     });
     const refreshedItem = {
@@ -550,7 +562,28 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
       } issuePrice=${fetchedIssuePrice ?? 'null'} winRate=${fetchedWinRate ?? 'null'} source=${fetched.source || '-'} state=${result}`
     );
     return { status: 'refreshed', result, refreshedItem };
-  });
+  };
+
+  // 先处理A股（并发高，超时短）
+  let aTaskResults = [];
+  if (aCandidates.length > 0) {
+    console.log(`${logTag} 开始处理A股首日指标 count=${aCandidates.length}`);
+    aTaskResults = await runWithConcurrency(aCandidates, metricsConcurrencyA, async (row) => {
+      return processMetricsRow(row, 'a', metricsItemTimeoutMsA);
+    });
+  }
+
+  // 再处理港股（并发低，超时长）
+  let hkTaskResults = [];
+  if (hkCandidates.length > 0) {
+    console.log(`${logTag} 开始处理港股首日指标 count=${hkCandidates.length}`);
+    hkTaskResults = await runWithConcurrency(hkCandidates, metricsConcurrencyHk, async (row) => {
+      return processMetricsRow(row, 'hk', metricsItemTimeoutMsHk);
+    });
+  }
+
+  // 合并结果
+  const taskResults = [...aTaskResults, ...hkTaskResults];
 
   for (const tr of taskResults) {
     if (!tr) continue;
