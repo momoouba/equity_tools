@@ -6065,10 +6065,36 @@ ${enterpriseList}
       logWithTag('[processNewsWithEnterprise]', `接口类型: ${interfaceType}`);
       
       try {
-        // 对于企查查接口的数据，需要进行二次校验；上海国际集团企业名称来自接口，不做关联性判断
+        // 对于企查查接口的数据，需要进行二次校验
+        // 对于上海国际集团接口的数据，企业名称来自接口参数，但仍需验证内容与企业的关联度（避免关联度低的新闻出现）
         if (interfaceType === '企查查' || interfaceType === 'qichacha') {
           logWithTag('[processNewsWithEnterprise]', '企查查接口数据，需要进行二次校验关联性');
           shouldValidate = true;
+        } else if (interfaceType === '上海国际集团' || interfaceType === '上海国际') {
+          // 上海国际集团接口：企业名称来自接口参数，但仍需验证内容与企业的关联度
+          // 检查企业是否在invested_enterprises表中，获取简称和entity_type，但保持shouldValidate=true
+          logWithTag('[processNewsWithEnterprise]', '上海国际集团接口数据，需要验证内容与企业的关联度');
+          shouldValidate = true;
+          
+          // 查询企业信息（获取简称和entity_type）
+          const enterpriseCheck = await db.query(
+            `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
+             FROM invested_enterprises 
+             WHERE enterprise_full_name = ?
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+             AND delete_mark = 0 
+             LIMIT 1`,
+            [newsItem.enterprise_full_name]
+          );
+          
+          if (enterpriseCheck.length > 0) {
+            finalEnterpriseName = enterpriseCheck[0].enterprise_full_name;
+            enterpriseAbbreviation = enterpriseCheck[0].project_abbreviation || null;
+            entityTypeFromEnterpriseCheck = enterpriseCheck[0].entity_type || null;
+            logWithTag('[processNewsWithEnterprise]', `上海国际集团企业来自invested_enterprises表，获取简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityTypeFromEnterpriseCheck || 'NULL'}，但仍需AI验证关联度`);
+          } else {
+            logWithTag('[processNewsWithEnterprise]', `上海国际集团企业不在invested_enterprises表中，需要AI验证关联性`);
+          }
         } else {
           // 对于新榜接口的数据，检查企业是否在invested_enterprises表中
           // 如果enterprise_full_name是"简称【全称】"格式，需要拆成简称和全称分别进行匹配

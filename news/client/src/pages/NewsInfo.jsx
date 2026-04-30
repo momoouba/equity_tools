@@ -281,20 +281,17 @@ function NewsInfo() {
           })
           if (response.data.success) {
             const result = response.data.data
-            let resultMessage = `清理完成！\n\n` +
-              `检查了 ${result.totalChecked} 条新闻\n` +
-              `清理了 ${result.cleanedCount} 个无效企业关联\n\n`
-            
-            if (result.invalidEnterprises.length > 0) {
-              resultMessage += `清理的无效企业示例：\n`
-              result.invalidEnterprises.slice(0, 5).forEach(item => {
-                resultMessage += `• ${item.invalidEnterprise}\n`
+            let resultMessage = `清理完成！检查了 ${result.totalChecked} 条新闻，清理了 ${result.cleanedCount} 个无效企业关联`
+
+            if (result.cleanedNews && result.cleanedNews.length > 0) {
+              resultMessage += `。清理示例：`
+              result.cleanedNews.slice(0, 3).forEach(item => {
+                if (item.enterprise && item.enterprise !== '(无)') {
+                  resultMessage += `【${item.enterprise}】`
+                }
               })
-              if (result.invalidEnterprises.length > 5) {
-                resultMessage += `... 还有 ${result.invalidEnterprises.length - 5} 个\n`
-              }
             }
-            Message.success(resultMessage.replace(/\n/g, ' '))
+            Message.success(resultMessage)
             setSelectedNewsIds([])
             setSelectAll(false)
             fetchNews()
