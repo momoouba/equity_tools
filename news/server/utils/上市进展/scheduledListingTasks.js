@@ -11,6 +11,7 @@ const { syncOverseasFiling } = require('./overseasFilingService');
 const { normalizeSourceType, buildTaskKey } = require('./listingSourceType');
 const { executeWithRetry } = require('./listingRetry');
 const { createExecutionLog, finishExecutionLog } = require('./listingSyncExecutionLog');
+const { cleanupIpoProgress, cleanupIpoNewShare } = require('./cleanupTraditionalDuplicates');
 
 const scheduledTasks = new Map();
 const sqlSyncScheduledTasks = new Map();
@@ -278,6 +279,21 @@ async function executeListingSyncTask(configId) {
         throw new Error(`未识别来源类型: ${sourceType}`);
       }
       console.log(`[上市进展定时] 数据入库完成 sourceType=${sourceType}`, syncResult);
+
+      // 港股繁简体重复数据清理（入库后处理）
+      // 业务逻辑：只有繁体保留繁体；有繁体+简体保留简体删除繁体
+      if (sourceType === 'new_share' || sourceType === 'exchange_crawler') {
+        console.log(`[上市进展定时] 开始港股繁简体重复数据清理 sourceType=${sourceType}`);
+        try {
+          const cleanupProgress = await cleanupIpoProgress(false);
+          const cleanupNewShare = await cleanupIpoNewShare(false);
+          console.log(
+            `[上市进展定时] 港股繁简体清理完成: ipo_progress删除=${cleanupProgress.cleaned}, ipo_new_share删除=${cleanupNewShare.cleaned}`
+          );
+        } catch (cleanupErr) {
+          console.warn(`[上市进展定时] 港股繁简体清理异常（不影响主流程）:`, cleanupErr.message);
+        }
+      }
     } catch (e) {
       syncError = e;
       console.error(`[上市进展定时] 数据入库异常 sourceType=${sourceType}:`, e.message);
