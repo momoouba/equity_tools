@@ -17,8 +17,12 @@
 
 from __future__ import annotations
 
+import os
 import re
+import sys
+import time
 from datetime import datetime
+from io import BytesIO
 from typing import List, Optional
 
 import pandas as pd
@@ -34,6 +38,40 @@ URL_SEHK_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/sehkconsolidated
 URL_GEM_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex.xlsx"
 URL_SEHK_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/sehkconsolidatedindex_c.xlsx"
 URL_GEM_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex_c.xlsx"
+
+
+def _read_consolidated_xlsx_from_url(url: str, label: str) -> pd.DataFrame:
+    """
+    先 HTTP 下载再 read_excel(BytesIO)。主板索引 xlsx 体积大，pd.read_excel(url) 在部分容器/弱网
+    下易失败且无提示，会导致仅合并 GEM+新上市信息（约 777 行）、递表日 builtRows 极少。
+    """
+    timeout = int(os.environ.get("HKEX_CONSOLIDATED_DOWNLOAD_TIMEOUT", "120") or "120")
+    retries = int(os.environ.get("HKEX_CONSOLIDATED_DOWNLOAD_RETRIES", "3") or "3")
+    last_err: Optional[BaseException] = None
+    for attempt in range(1, max(1, retries) + 1):
+        try:
+            resp = requests.get(
+                url,
+                timeout=max(30, timeout),
+                headers={
+                    "User-Agent": UA,
+                    "Accept": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*",
+                },
+            )
+            resp.raise_for_status()
+            n = len(resp.content or b"")
+            if n < 800:
+                raise ValueError(f"响应过小 {n}B，可能为拦截页")
+            return pd.read_excel(BytesIO(resp.content), engine="openpyxl")
+        except Exception as e:
+            last_err = e
+            if attempt < max(1, retries):
+                time.sleep(min(10.0, 2.0**attempt))
+    print(
+        f"[hkex_ipo_scraper] consolidated xlsx 下载失败 label={label} url={url} attempts={retries} last_err={last_err}",
+        file=sys.stderr,
+    )
+    return pd.DataFrame()
 
 
 def _date_from_hkexnews_pdf_url(url: str) -> str:
@@ -188,19 +226,23 @@ def _fetch_consolidated_index(url: str, board_label: str) -> pd.DataFrame:
     抓取港交所 consolidated index（首次披露索引）并映射为 hk_ipo_sync 兼容列。
     该来源可稳定补充「递交A1」口径。
     """
-    try:
-        raw = pd.read_excel(url)
-    except Exception:
-        return pd.DataFrame()
-
+    raw = _read_consolidated_xlsx_from_url(url, board_label)
     if raw.empty:
         return pd.DataFrame()
 
-    # 英文列名优先；中文列名在控制台可能乱码，不做强匹配，改用位置兜底
+    # 英文 / 简繁中文列名；再按位置兜底（避免控制台乱码时误用列）
     cols = list(raw.columns)
-    c_date = "Date of First Posting" if "Date of First Posting" in cols else (cols[0] if len(cols) > 0 else None)
-    c_applicant = "Applicant" if "Applicant" in cols else (cols[1] if len(cols) > 1 else None)
-    c_status = "Status" if "Status" in cols else (cols[2] if len(cols) > 2 else None)
+    date_candidates = (
+        "Date of First Posting",
+        "Date of First Submission",
+        "首次登载日期",
+        "首次登載日期",
+    )
+    applicant_candidates = ("Applicant", "申请人", "申請人", "Applicant's Name")
+    status_candidates = ("Status", "状态", "狀態")
+    c_date = next((c for c in date_candidates if c in cols), None) or (cols[0] if len(cols) > 0 else None)
+    c_applicant = next((c for c in applicant_candidates if c in cols), None) or (cols[1] if len(cols) > 1 else None)
+    c_status = next((c for c in status_candidates if c in cols), None) or (cols[2] if len(cols) > 2 else None)
     if not c_date or not c_applicant:
         return pd.DataFrame()
 
@@ -245,6 +287,12 @@ def fetch_hkex_web_combined_dataframe() -> pd.DataFrame:
     sehk_idx = _fetch_consolidated_index(URL_SEHK_CONSOLIDATED_CN, "主板")
     if sehk_idx is None or sehk_idx.empty:
         sehk_idx = _fetch_consolidated_index(URL_SEHK_CONSOLIDATED, "主板")
+    if sehk_idx is None or sehk_idx.empty:
+        print(
+            "[hkex_ipo_scraper] 警告：主板 consolidated index（中/英）均未拉取到。"
+            "递表(A1)将仅剩 GEM；合并行数常≈777、区间内 builtRows 极少。请检查出网与 HKEX_CONSOLIDATED_DOWNLOAD_TIMEOUT。",
+            file=sys.stderr,
+        )
     if sehk_idx is not None and not sehk_idx.empty:
         frames.append(sehk_idx)
 

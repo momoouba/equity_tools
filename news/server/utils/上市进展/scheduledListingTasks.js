@@ -10,7 +10,7 @@ const { syncGuidanceProgress } = require('./guidanceProgressService');
 const { syncOverseasFiling } = require('./overseasFilingService');
 const { normalizeSourceType, buildTaskKey } = require('./listingSourceType');
 const { executeWithRetry } = require('./listingRetry');
-const { createExecutionLog, finishExecutionLog } = require('./listingSyncExecutionLog');
+const { createExecutionLog, finishExecutionLog, appendExecutionLogProgress } = require('./listingSyncExecutionLog');
 const { cleanupIpoProgress, cleanupIpoNewShare } = require('./cleanupTraditionalDuplicates');
 
 const scheduledTasks = new Map();
@@ -269,11 +269,18 @@ async function executeListingSyncTask(configId) {
           logTag: `[上市进展定时][${cfg.name || configId}][境外备案审核]`,
         });
       } else if (sourceType === 'exchange_crawler') {
+        await appendExecutionLogProgress(
+          logId,
+          '交易所爬虫（定时）：阶段日志写入本执行记录；Python 全量明细见 Node 服务终端。'
+        );
         syncResult = await runListingExchangeCrawler({
           startDate,
           endDate,
           logTag: `[上市进展定时][${cfg.name || configId}][交易所爬虫]`,
           config: cfg,
+          progressReporter: async (msg) => {
+            await appendExecutionLogProgress(logId, msg);
+          },
         });
       } else {
         throw new Error(`未识别来源类型: ${sourceType}`);
@@ -477,7 +484,7 @@ async function updateListingScheduledTasks() {
             });
             console.log(
               `[底层项目同步] 执行完成 配置=${cfg.id} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
-                `新增=${result.inserted ?? 0} 更新=${result.updated ?? 0} 跳过=${result.skipped ?? 0}`
+                `清空旧行=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0}（全量替换，无增量更新）`
             );
           } catch (err) {
             console.error(`[底层项目同步] 执行失败 配置=${cfg.id}:`, err.message || err);

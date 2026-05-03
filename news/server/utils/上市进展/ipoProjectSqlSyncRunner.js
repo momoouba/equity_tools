@@ -61,11 +61,6 @@ function mapRowToIpo(row) {
   return out;
 }
 
-function normalizeDedupSub(sub) {
-  if (sub == null || sub === '') return '';
-  return String(sub).trim();
-}
-
 function formatExternalSqlError(error) {
   if (!error) return 'SQL 执行失败';
   if (error.code === 'ECONNRESET') {
@@ -119,19 +114,14 @@ async function runIpoProjectSqlSyncForUser({ userId, external_db_config_id, sql_
       throw error;
     }
   }
-  if (!Array.isArray(externalRows) || externalRows.length === 0) {
-    return { inserted: 0, updated: 0, skipped: 0, total: 0, message: '查询成功，无数据可同步' };
+  if (!Array.isArray(externalRows)) {
+    externalRows = [];
   }
-
-  let inserted = 0;
-  let updated = 0;
-  let skipped = 0;
-  const now = new Date();
-
+  /** @type {{ project_name: string, company: string, inv_amount: any, residual_amount: any, ratio: any, ct_amount: any, ct_residual: any, fund: string, sub?: string|null }[]} */
+  const prepared = [];
   for (const raw of externalRows) {
     const m = mapRowToIpo(raw);
     if (!m.company || !m.fund) {
-      skipped += 1;
       continue;
     }
     const need = ['project_name', 'inv_amount', 'residual_amount', 'ratio', 'ct_amount', 'ct_residual'];
@@ -142,66 +132,52 @@ async function runIpoProjectSqlSyncForUser({ userId, external_db_config_id, sql_
         break;
       }
     }
-    if (!ok) {
-      skipped += 1;
-      continue;
+    if (!ok) continue;
+    prepared.push(m);
+  }
+
+  if (Array.isArray(externalRows) && externalRows.length > 0 && prepared.length === 0) {
+    throw new Error(
+      '外部查询有结果，但没有任何一行满足必填字段（company、fund、project_name、各项金额等），已中止同步以免清空现有底层项目'
+    );
+  }
+
+  const skipped = externalRows.length - prepared.length;
+
+  /**
+   * 全量替换：按用户清空 ipo_project（含软删历史）及关联 ipo_project_progress，再以本次 SQL 结果唯一写入。
+   * 说明：同一 F_CreatorUserId 下手工录入、导入与历史软删行一并删除，以外部查询结果为唯一快照。
+   */
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [idRows] = await conn.query(`SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ?`, [userId]);
+    const prevIds = Array.isArray(idRows) ? idRows.map((r) => r.f_id).filter((id) => id != null) : [];
+    if (prevIds.length) {
+      const ph = prevIds.map(() => '?').join(',');
+      await conn.query(`DELETE FROM ipo_project_progress WHERE ipo_project_f_id IN (${ph})`, prevIds);
+    }
+    await conn.query(`DELETE FROM ipo_project WHERE F_CreatorUserId = ?`, [userId]);
+
+    if (!prepared.length) {
+      await conn.commit();
+      return {
+        inserted: 0,
+        updated: 0,
+        skipped,
+        deletedPrevious: prevIds.length,
+        total: externalRows.length,
+        message: '查询成功，已清空该用户底层项目（本次无有效行可写入）',
+      };
     }
 
-    const subNorm = normalizeDedupSub(m.sub);
-    const existing = await db.query(
-      `SELECT f_id, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub
-       FROM ipo_project
-       WHERE F_DeleteMark = 0 AND F_CreatorUserId = ?
-         AND fund = ? AND IFNULL(TRIM(sub), '') = ? AND company = ?
-       LIMIT 1`,
-      [userId, m.fund, subNorm, m.company]
-    );
+    let inserted = 0;
+    const now = new Date();
 
-    if (existing.length) {
-      const ex = existing[0];
-      const n = (v) => (v == null || v === '' ? null : Number(v));
-      const same =
-        String(ex.project_name || '') === String(m.project_name || '') &&
-        String(ex.company || '') === String(m.company || '') &&
-        n(ex.inv_amount) === n(m.inv_amount) &&
-        n(ex.residual_amount) === n(m.residual_amount) &&
-        n(ex.ratio) === n(m.ratio) &&
-        n(ex.ct_amount) === n(m.ct_amount) &&
-        n(ex.ct_residual) === n(m.ct_residual) &&
-        String(ex.fund || '') === String(m.fund || '') &&
-        normalizeDedupSub(ex.sub) === subNorm;
-
-      if (same) {
-        skipped += 1;
-        continue;
-      }
-
-      await db.execute(
-        `UPDATE ipo_project SET
-          project_name = ?, company = ?, inv_amount = ?, residual_amount = ?, ratio = ?,
-          ct_amount = ?, ct_residual = ?, fund = ?, sub = ?,
-          biz_update_time = ?, F_LastModifyUserId = ?, F_LastModifyTime = ?
-         WHERE f_id = ?`,
-        [
-          m.project_name,
-          m.company,
-          m.inv_amount,
-          m.residual_amount,
-          m.ratio,
-          m.ct_amount,
-          m.ct_residual,
-          m.fund,
-          m.sub ?? null,
-          now,
-          userId,
-          now,
-          ex.f_id,
-        ]
-      );
-      updated += 1;
-    } else {
+    for (const m of prepared) {
       const project_no = await generateIpoProjectNo();
-      await db.execute(
+      await conn.execute(
         `INSERT INTO ipo_project (
           project_no, biz_update_time, F_CreatorTime, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
           project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub
@@ -226,9 +202,21 @@ async function runIpoProjectSqlSyncForUser({ userId, external_db_config_id, sql_
       );
       inserted += 1;
     }
-  }
 
-  return { inserted, updated, skipped, total: externalRows.length };
+    await conn.commit();
+    return {
+      inserted,
+      updated: 0,
+      skipped,
+      deletedPrevious: prevIds.length,
+      total: externalRows.length,
+    };
+  } catch (e) {
+    await conn.rollback();
+    throw e;
+  } finally {
+    conn.release();
+  }
 }
 
 module.exports = {

@@ -195,6 +195,11 @@ async function backfillYesterdayListedStatus({ restrictProjectUserId = null }) {
   };
 }
 
+function isListingMatchSkipNewShareEnvOn() {
+  const v = String(process.env.LISTING_MATCH_SKIP_NEW_SHARE || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
 /**
  * Match ipo_progress with ipo_project and write ipo_project_progress.
  * Also appends "new-share listed yesterday" fuzzy-matching records.
@@ -212,15 +217,34 @@ async function runListingMatchBatch({
   newShareLookbackDays = 0,
   matchTypes = [],
 }) {
-  const backfillResult = await backfillYesterdayListedStatus({ restrictProjectUserId });
+  const skipNewShareByEnv = isListingMatchSkipNewShareEnvOn();
+  const backfillResult = skipNewShareByEnv
+    ? { statusBackfilled: 0, sourceBackfilled: 0 }
+    : await backfillYesterdayListedStatus({ restrictProjectUserId });
+
   const selectedTypes = Array.isArray(matchTypes)
     ? Array.from(new Set(matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
     : [];
-  const selectedIpoTypes = selectedTypes.filter((x) =>
+  // 与 POST /api/listing/match 一致：未指定 matchTypes 时默认四类全跑（定时任务此前未传参会导致不写 exchange_ipo 匹配）
+  const effectiveTypes =
+    selectedTypes.length > 0
+      ? selectedTypes
+      : ['exchange_ipo', 'guidance_progress', 'overseas_filing', 'new_share'];
+  const effectiveWithoutNewShare = skipNewShareByEnv
+    ? effectiveTypes.filter((t) => t !== 'new_share')
+    : effectiveTypes;
+
+  if (skipNewShareByEnv && effectiveTypes.includes('new_share')) {
+    console.log(
+      '[listing-match] 已设置 LISTING_MATCH_SKIP_NEW_SHARE，跳过打新日历「昨日上市」模糊匹配及相关状态回填（IPO 进展匹配仍执行）'
+    );
+  }
+
+  const selectedIpoTypes = effectiveWithoutNewShare.filter((x) =>
     ['exchange_ipo', 'guidance_progress', 'overseas_filing'].includes(x)
   );
   const includeIpoProgress = selectedIpoTypes.length > 0;
-  const includeNewShare = selectedTypes.length === 0 || selectedTypes.includes('new_share');
+  const includeNewShare = !skipNewShareByEnv && effectiveWithoutNewShare.includes('new_share');
 
   const ipoWhere = [];
   if (selectedIpoTypes.includes('exchange_ipo')) {

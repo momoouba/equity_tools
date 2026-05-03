@@ -567,17 +567,29 @@ async function syncListingConfig(req, res) {
           }
           if (sourceType === 'exchange_crawler') {
             const crawlLogTag = `[上市进展手动同步][${cfg.name || cfg.id}][交易所爬虫]`;
+            await appendExecutionLogProgress(
+              logId,
+              '交易所爬虫：阶段日志写入本执行记录；Python 子进程打印的「待写/逐条」全量仅在启动 Node API 的终端可见（单独开的 CMD 不会显示）。'
+            );
             const crawlerResult = await runListingExchangeCrawler({
               startDate: effectiveStart,
               endDate: endDateFinal,
               logTag: crawlLogTag,
               config: cfg,
+              progressReporter: async (msg) => {
+                await appendExecutionLogProgress(logId, msg);
+              },
             });
+            await appendExecutionLogProgress(logId, '[listing-match] 开始底层项目匹配…');
             const matchResult = await runListingMatchBatch({
               startDate: effectiveStart,
               endDate: endDateFinal,
               restrictProjectUserId: null,
             });
+            await appendExecutionLogProgress(
+              logId,
+              `[listing-match] 完成 ipo_progress关联=${matchResult.insertedFromIpoProgress ?? '-'} 打新关联=${matchResult.insertedFromNewShare ?? '-'} 合计写入=${matchResult.inserted ?? '-'}`
+            );
             return { ...crawlerResult, matchResult };
           }
           throw new Error(`未识别来源类型: ${sourceType}`);

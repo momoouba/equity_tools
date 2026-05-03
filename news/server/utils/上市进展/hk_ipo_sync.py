@@ -3,17 +3,17 @@
 """
 港交所 IPO 申请数据 → 上市库 ipo_progress
 
-数据来源（按优先级）：
-1) akshare.hk_ipo_application() — 若当前已安装的 akshare 提供该接口则直接使用；
-2) 环境变量 HK_IPO_CSV_PATH 或命令行 --csv 指向 UTF-8 CSV（列名需与业务约定一致，见下方 COL_*）。
+数据来源（按配置）：
+1) 默认 hkex-web：港交所官网 consolidated index xlsx +「新上市信息」HTML；
+2) --source akshare：AkShare hk_ipo_application()（若不存在则回退 hkex-web，除非 HK_IPO_DISABLE_HKEX_FALLBACK=1）；
+3) 环境变量 HK_IPO_CSV_PATH 或命令行 --csv：手工 UTF-8 CSV（优先级最高）。
 
 与 news/server/utils/上市进展/listingExchangeCrawler.js 中 insertRows 规则对齐：
-业务唯一键 exchange + company + status + board；仅当新快照的 f_update_time 早于库中同键记录时才整行更新。
+业务唯一键 exchange + company + status + board + 更新日历日（DATE(f_update_time)）；同一递表可在不同日期多条。
 
 环境变量（与 Node db.js 一致）：DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
-数据源（--source）：akshare=hk_ipo_application（若存在；不存在则默认回退 hkex-web，除非 HK_IPO_DISABLE_HKEX_FALLBACK=1）；
-hkex-web=仅抓取港交所「新上市信息」静态表。未传 --csv 时可设 HK_IPO_SOURCE=hkex-web（Node 透传）。
+HK_IPO_SOURCE / --source：默认 hkex-web；设为 akshare 时用 AkShare（失败再回退官网）。CSV 见 HK_IPO_CSV_PATH。
 """
 
 from __future__ import annotations
@@ -98,14 +98,14 @@ def _parse_dt_ms(s: str) -> Optional[int]:
 
 
 def load_hk_ipo_dataframe(csv_path: Optional[str], source: str) -> Tuple[pd.DataFrame, str]:
-    """返回 (DataFrame, 实际数据源标签)。akshare 无 hk_ipo_application 时默认回退港交所网页，除非 HK_IPO_DISABLE_HKEX_FALLBACK=1。"""
+    """返回 (DataFrame, 实际数据源标签)。默认官网；source=akshare 时用 AkShare，无 hk_ipo_application 则回退官网（除非禁用回退）。"""
     if csv_path:
         path = os.path.abspath(csv_path)
         if not os.path.isfile(path):
             raise FileNotFoundError(f"CSV 不存在: {path}")
         return pd.read_csv(path, encoding="utf-8-sig"), "csv"
 
-    src = (source or "akshare").strip().lower()
+    src = (source or "hkex-web").strip().lower()
     if src in ("hkex-web", "hkex", "web"):
         from hkex_ipo_scraper import fetch_hkex_web_combined_dataframe  # noqa: PLC0415
 
@@ -266,6 +266,33 @@ def fetch_admin_id(conn: pymysql.connections.Connection) -> str:
         return str(r[0])
 
 
+def _recv_ymd(v: Any) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return ""
+    if hasattr(v, "strftime"):
+        try:
+            return v.strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+    return str(v).strip()[:10]
+
+
+def _hk_row_log_payload(r: Dict[str, Any]) -> Dict[str, str]:
+    """供日志 / JSON 输出的港股同行字段（截断避免单行过长）。"""
+    return {
+        "exchange": str(r.get("exchange") or EXCHANGE_HK),
+        "board": str(r.get("board") or ""),
+        "status": str(r.get("status") or ""),
+        "company": str(r.get("company") or "")[:400],
+        "project_name": str(r.get("project_name") or "")[:200],
+        "f_update_time": str(r.get("f_update_time") or "")[:19],
+        "receive_date": _recv_ymd(r.get("receive_date")),
+        "code": str(r.get("code") or ""),
+        "register_address": str(r.get("register_address") or "")[:200],
+        "event_kind": str(r.get("_event_kind") or ""),
+    }
+
+
 def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) -> Dict[str, Any]:
     inserted = 0
     updated_earlier = 0
@@ -273,6 +300,8 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
     skipped_no_company = 0
     skipped_no_date = 0
     skipped_dup = 0
+
+    row_outcomes: List[Dict[str, Any]] = []
 
     if dry_run:
         return {
@@ -285,6 +314,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                 "skippedDupSameOrLater": 0,
             },
             "dryRun": True,
+            "writeRowOutcomes": [],
         }
 
     if not rows:
@@ -298,6 +328,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                 "skippedDupSameOrLater": 0,
             },
             "dryRun": False,
+            "writeRowOutcomes": [],
         }
 
     conf = get_db_conf()
@@ -309,11 +340,13 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             if not company:
                 skipped_no_company += 1
                 skipped += 1
+                row_outcomes.append({"action": "skipped_no_company", "row": _hk_row_log_payload(r)})
                 continue
             date_str = str(r.get("f_update_time") or "")[:10]
             if not date_str:
                 skipped_no_date += 1
                 skipped += 1
+                row_outcomes.append({"action": "skipped_no_date", "row": _hk_row_log_payload(r)})
                 continue
             exchange = str(r.get("exchange") or "").strip()
             status = str(r.get("status") or "-").strip() or "-"
@@ -322,47 +355,66 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             if new_ts is None:
                 skipped_no_date += 1
                 skipped += 1
+                row_outcomes.append({"action": "skipped_bad_timestamp", "row": _hk_row_log_payload(r)})
                 continue
 
+            # 与 listingExchangeCrawler.insertRows 一致：业务键含「更新日历日」，同一公司同状态可在不同日期多条。
+            # 旧逻辑按 exchange+company+status+board 只取最早一行比对 new_ts，会把「更早日期已有递表」误判为已覆盖，
+            # 从而跳过本次应新增的日历日（日志里常表现为 builtRows 较大但 inserted 很少）。
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT f_id, f_update_time FROM ipo_progress
+                    """SELECT f_id, f_update_time, code, project_name, register_address, receive_date
+                       FROM ipo_progress
                        WHERE F_DeleteMark = 0 AND exchange = %s AND company = %s AND status = %s AND board = %s
-                       ORDER BY f_update_time ASC LIMIT 1""",
-                    (exchange, company, status, board),
+                         AND DATE(f_update_time) = %s
+                       ORDER BY f_id ASC LIMIT 1""",
+                    (exchange, company, status, board, date_str),
                 )
-                existing = cur.fetchall()
+                existing_same_day = cur.fetchall()
 
-            if existing:
-                old_ts = _parse_dt_ms(str(existing[0][1]))
-                if old_ts is not None and new_ts >= old_ts:
-                    skipped_dup += 1
-                    skipped += 1
-                    continue
-                cur2 = conn.cursor()
-                cur2.execute(
-                    """UPDATE ipo_progress SET
-                         f_create_date = %s, f_update_time = %s, code = %s, project_name = %s, status = %s,
-                         register_address = %s, receive_date = %s, company = %s, board = %s, exchange = %s,
-                         F_LastModifyUserId = %s, F_LastModifyTime = NOW()
-                       WHERE f_id = %s AND F_DeleteMark = 0""",
-                    (
-                        date_str,
-                        r.get("f_update_time") or f"{date_str} 00:00:00",
-                        r.get("code") or "",
-                        r.get("project_name") or company,
-                        status,
-                        r.get("register_address") or "",
-                        r.get("receive_date"),
-                        company,
-                        board,
-                        exchange,
-                        admin,
-                        existing[0][0],
-                    ),
+            if existing_same_day:
+                row_ex = existing_same_day[0]
+                fid = row_ex[0]
+                old_code_s = str(row_ex[2] or "").strip()
+                old_pn_s = str(row_ex[3] or "").strip()
+                old_reg_s = str(row_ex[4] or "").strip()
+                old_recv_s = _recv_ymd(row_ex[5])
+                new_code = str(r.get("code") or "").strip()
+                new_pn = str(r.get("project_name") or company).strip()
+                new_reg = str(r.get("register_address") or "").strip()
+                new_recv_s = _recv_ymd(r.get("receive_date"))
+                need_refresh = (
+                    (old_recv_s != new_recv_s and new_recv_s)
+                    or (not old_code_s and new_code)
+                    or (not old_pn_s and new_pn)
+                    or (not old_reg_s and new_reg)
                 )
-                conn.commit()
-                updated_earlier += 1
+                if need_refresh:
+                    recv_out = row_ex[5]
+                    if old_recv_s != new_recv_s and new_recv_s:
+                        recv_out = r.get("receive_date")
+                    cur_rf = conn.cursor()
+                    cur_rf.execute(
+                        """UPDATE ipo_progress SET
+                             code = %s, project_name = %s, register_address = %s, receive_date = %s,
+                             F_LastModifyUserId = %s, F_LastModifyTime = NOW()
+                           WHERE f_id = %s AND F_DeleteMark = 0""",
+                        (
+                            new_code or old_code_s,
+                            new_pn or old_pn_s,
+                            new_reg or old_reg_s,
+                            recv_out,
+                            admin,
+                            fid,
+                        ),
+                    )
+                    conn.commit()
+                    updated_earlier += 1
+                    row_outcomes.append({"action": "refreshed_same_day", "row": _hk_row_log_payload(r)})
+                else:
+                    row_outcomes.append({"action": "skipped_same_day_exists", "row": _hk_row_log_payload(r)})
+                skipped_dup += 1
+                skipped += 1
                 continue
 
             cur3 = conn.cursor()
@@ -388,6 +440,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             )
             conn.commit()
             inserted += 1
+            row_outcomes.append({"action": "inserted", "row": _hk_row_log_payload(r)})
     finally:
         conn.close()
 
@@ -400,6 +453,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             "skippedNoDate": skipped_no_date,
             "skippedDupSameOrLater": skipped_dup,
         },
+        "writeRowOutcomes": row_outcomes,
     }
 
 
@@ -410,9 +464,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--csv", default=None, help="覆盖环境变量 HK_IPO_CSV_PATH")
     p.add_argument(
         "--source",
-        default=os.environ.get("HK_IPO_SOURCE", "akshare"),
+        default=os.environ.get("HK_IPO_SOURCE", "hkex-web"),
         choices=("akshare", "hkex-web"),
-        help="akshare=hk_ipo_application（若存在）；hkex-web=抓取港交所「新上市信息」静态表（仅含近期新上市，日期来自公告 PDF 链接路径）",
+        help="hkex-web=默认，港交所官网 xlsx+网页；akshare=hk_ipo_application（若存在，否则可回退官网）",
     )
     p.add_argument("--dry-run", action="store_true", help="只解析并打印条数，不写库")
     args = p.parse_args(argv)
@@ -448,16 +502,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     summary = insert_rows_mysql(all_rows, admin_id, args.dry_run)
 
+    built_detail = [_hk_row_log_payload(r) for r in all_rows]
+
     out = {
         "startDate": args.start_date[:10],
         "endDate": args.end_date[:10],
         "resolvedSource": resolved_source,
         "sourceRows": int(len(df)),
         "builtRows": len(all_rows),
+        "builtRowsDetail": built_detail,
         "inserted": summary.get("inserted", 0),
         "updatedEarlier": summary.get("updatedEarlier", 0),
         "skipped": summary.get("skipped", 0),
         "skipBreakdown": summary.get("skipBreakdown"),
+        "writeRowOutcomes": summary.get("writeRowOutcomes") or [],
         "dryRun": summary.get("dryRun"),
         "exchange": EXCHANGE_HK,
         "noMatchSample": no_match_sample,
@@ -467,7 +525,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sys.stdout.reconfigure(encoding="utf-8")
         except Exception:
             pass
-    print(json.dumps(out, ensure_ascii=False))
+    print(json.dumps(out, ensure_ascii=False, default=str))
     return 0
 
 

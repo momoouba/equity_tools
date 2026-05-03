@@ -992,10 +992,19 @@ function stringifyFetchedSampleRow(row, idx) {
   return `  [${idx + 1}] ${exchange} | ${board} | ${company} | 项目=${projectName} | 状态=${status} | 更新=${fUpdateTime} | 受理=${receiveDate} | 代码=${code}`;
 }
 
-function logFetchedDetails(logTag, rows) {
+async function logFetchedDetails(logTag, rows, emitLine) {
   const list = Array.isArray(rows) ? rows : [];
+  const push = async (s) => {
+    if (typeof emitLine === 'function') {
+      try {
+        await emitLine(s);
+      } catch (_) {}
+    } else {
+      console.log(s);
+    }
+  };
   if (!list.length) {
-    console.log(`${logTag} 抓取明细：本次区间内未返回任何记录`);
+    await push(`${logTag} 抓取明细：本次区间内未返回任何记录`);
     return;
   }
 
@@ -1019,16 +1028,14 @@ function logFetchedDetails(logTag, rows) {
     .sort()
     .map((ex) => `${ex}=${exchangeCounter[ex]}(公司${exchangeCompanySet[ex]?.size || 0})`)
     .join(' / ');
-  console.log(
+  await push(
     `${logTag} 抓取明细汇总：总记录=${list.length}；按交易所=${exchangeSummary || '-'}；更新时间范围=${minUpdate || '-'} ~ ${maxUpdate || '-'}`
   );
 
   const sampleLimit = 20;
   const sampleRows = list.slice(0, sampleLimit);
   const lines = sampleRows.map((r, i) => stringifyFetchedSampleRow(r, i));
-  console.log(
-    `${logTag} 抓取明细样例（原始抓取，最多${sampleLimit}条）:\n${lines.join('\n')}`
-  );
+  await push(`${logTag} 抓取明细样例（原始抓取，最多${sampleLimit}条）:\n${lines.join('\n')}`);
 }
 
 const EXCHANGES_IPO_PROGRESS_DEDUPE = ['深交所', '上交所', '北交所', '港交所'];
@@ -1244,9 +1251,16 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
 }
 
 /**
+ * @param {{ startDate: string, endDate: string, logTag?: string, config?: object|null, progressReporter?: (line: string) => Promise<void>|void }} opts
  * @returns {Promise<object>}
  */
-async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市进展爬虫]', config = null } = {}) {
+async function runListingExchangeCrawler({
+  startDate,
+  endDate,
+  logTag = '[上市进展爬虫]',
+  config = null,
+  progressReporter = null,
+} = {}) {
   const adminRows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
   const adminId = adminRows[0]?.id;
   if (!adminId) throw new Error('未找到 account=admin 用户，无法写入上市进展数据');
@@ -1259,7 +1273,17 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
     throw new Error('上市进展爬虫：日期区间无效');
   }
 
-  console.log(`${logTag} 开始拉取 日期闭区间=${startYmd}~${endYmd}（按各所「更新日期」筛选落在此区间内）`);
+  const emit = async (line, err = false) => {
+    if (err) console.error(line);
+    else console.log(line);
+    if (typeof progressReporter === 'function') {
+      try {
+        await progressReporter(err ? `[stderr] ${line}` : line);
+      } catch (_) {}
+    }
+  };
+
+  await emit(`${logTag} 开始拉取 日期闭区间=${startYmd}~${endYmd}（按各所「更新日期」筛选落在此区间内）`);
 
   const settled = await Promise.allSettled([
     fetchSzseIpoInRange(startYmd, endYmd),
@@ -1270,24 +1294,25 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
   const parts = [[], [], []];
   /** @type {{ exchange: string, message: string }[]} */
   const exchangeErrors = [];
-  settled.forEach((s, i) => {
+  for (let i = 0; i < settled.length; i++) {
+    const s = settled[i];
     if (s.status === 'fulfilled') {
       parts[i] = s.value;
-      console.log(`${logTag} ${labels[i]} 接口返回 ${parts[i].length} 条（区间内）`);
+      await emit(`${logTag} ${labels[i]} 接口返回 ${parts[i].length} 条（区间内）`);
     } else {
       const msg = s.reason?.message || String(s.reason);
       exchangeErrors.push({ exchange: labels[i], message: msg });
-      console.error(`${logTag} ${labels[i]} 拉取失败:`, msg);
+      await emit(`${logTag} ${labels[i]} 拉取失败: ${msg}`, true);
     }
-  });
+  }
   const merged = [...parts[0], ...parts[1], ...parts[2]];
   await enrichSzseStatusDate(merged, logTag);
   await enrichSseStatusDate(merged, logTag);
   await enrichBseStatusDate(merged, logTag);
   await pruneMismatchedTimelineRows(merged, adminId, logTag);
   const mergedExpanded = expandRowsWithTimeline(merged, logTag);
-  console.log(`${logTag} 三家合并共 ${mergedExpanded.length} 条，开始去重入库 ipo_progress`);
-  logFetchedDetails(logTag, mergedExpanded);
+  await emit(`${logTag} 三家合并共 ${mergedExpanded.length} 条，开始去重入库 ipo_progress`);
+  await logFetchedDetails(logTag, mergedExpanded, (line) => emit(line));
 
   let ifindIpo = null;
   let hkexIpo = null;
@@ -1295,6 +1320,9 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
   let hkexFetchedRows = 0;
   const cfg = config || {};
   const ifindEnabled = cfg.ifind_enabled === 1 || cfg.ifind_enabled === true;
+  await emit(
+    `${logTag} 港股阶段开始：iFinD=${ifindEnabled ? '已启用' : '未启用'}；随后执行港交所 hk_ipo_sync.py；最后 insertRows 写沪深北+iFinD 合并结果`
+  );
   if (ifindEnabled) {
     const username = decryptText(cfg.ifind_username || '');
     const password = decryptText(cfg.ifind_password || '');
@@ -1315,20 +1343,36 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
     });
     if (ifindIpo.ok && Array.isArray(ifindIpo.rows) && ifindIpo.rows.length > 0) {
       mergedAll = [...mergedExpanded, ...ifindIpo.rows];
-      hkexFetchedRows = ifindIpo.rows.length;
-      console.log(`${logTag}[港交所iFinD] 合并后总记录=${mergedAll.length}`);
+      await emit(`${logTag}[港交所iFinD] 合并后总记录=${mergedAll.length}`);
     }
+    await emit(
+      `${logTag}[港交所iFinD] 阶段结束 ok=${!!ifindIpo?.ok} rows=${Array.isArray(ifindIpo?.rows) ? ifindIpo.rows.length : 0}`
+    );
   }
 
-  const fallbackToHkex = cfg.ifind_fallback_to_hkex === 1 || cfg.ifind_fallback_to_hkex === true;
-  const shouldRunHkexFallback = !ifindEnabled || !ifindIpo?.ok || (ifindIpo?.rows || []).length === 0 || fallbackToHkex;
-  if (shouldRunHkexFallback) {
-    hkexIpo = runHkexAkshareIpoSync({
-      startDate: startYmd,
-      endDate: endYmd,
-      logTag: `${logTag}[港交所]`,
-    });
-    hkexFetchedRows = Number(hkexIpo?.summary?.builtRows || 0);
+  // 始终跑港交所官方脚本（consolidated index xlsx + 新上市信息页），再与 iFinD 行一起由 insertRows 去重。
+  // 若仅在「iFinD 有数据且未开回退」时跳过脚本，会出现网站披露条数多于 iFinD 的漏抓。
+  hkexIpo = runHkexAkshareIpoSync({
+    startDate: startYmd,
+    endDate: endYmd,
+    logTag: `${logTag}[港交所]`,
+  });
+  const officialBuilt = Number(hkexIpo?.summary?.builtRows || 0);
+  const ifindN = ifindIpo?.ok && Array.isArray(ifindIpo.rows) ? ifindIpo.rows.length : 0;
+  hkexFetchedRows = officialBuilt > 0 ? officialBuilt : ifindN;
+  await emit(
+    `${logTag}[港交所] 阶段结束 ok=${!!hkexIpo?.ok} skipped=${!!hkexIpo?.skipped} builtRows=${officialBuilt}；开始 insertRows（${mergedAll.length} 条候选）`
+  );
+
+  const hkSummary = hkexIpo?.summary;
+  if (hkSummary && typeof hkSummary === 'object') {
+    await emit(
+      `${logTag}[港交所] Python摘要 数据源=${hkSummary.resolvedSource ?? '-'} 生成待写=${hkSummary.builtRows ?? '-'} 新增=${hkSummary.inserted ?? '-'} 跳过=${hkSummary.skipped ?? '-'}`
+    );
+    const det = hkSummary.builtRowsDetail;
+    if (Array.isArray(det) && det.length > 0) {
+      await emit(`${logTag}[港交所] 待写入明细共 ${det.length} 条（完整清单见运行 API 的终端日志）`);
+    }
   }
 
   const result = await insertRows(mergedAll, adminId, logTag);
@@ -1338,21 +1382,19 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
   const dsd = result.dedupeSoftDeleted ?? 0;
   const uex = result.updatedExisting ?? 0;
   const rev = result.revivedExisting ?? 0;
-  console.log(
+  await emit(
     `${logTag} 入库完成 同步前合并软删重复=${dsd} 新增=${result.inserted} 同键刷新=${uex} 恢复软删=${rev} 跳过=${result.skipped}（无公司名=${sb.skippedNoCompany ?? 0} 无更新日=${sb.skippedNoDate ?? 0} ` +
       `同键同更新日期已存在=${sb.skippedDupSameOrLater ?? 0}） ` +
-      `分所写入(新增): 深交所=${ins['深交所'] ?? 0} 上交所=${ins['上交所'] ?? 0} 北交所=${ins['北交所'] ?? 0}`
+      `分所写入(新增): 深交所=${ins['深交所'] ?? 0} 上交所=${ins['上交所'] ?? 0} 北交所=${ins['北交所'] ?? 0} 港交所=${ins['港交所'] ?? 0}`
   );
   if (result.insertedSamples && result.insertedSamples.length > 0) {
     const lines = result.insertedSamples.map(
       (s, idx) =>
         `  [${idx + 1}] ${s.exchange} | ${s.company} | ${s.project_name} | 状态=${s.status} | 更新=${s.f_update_time}`
     );
-    console.log(`${logTag} 本次写入样例（新插入或更正，最多10条）:\n${lines.join('\n')}`);
+    await emit(`${logTag} 本次写入样例（新插入或更正，最多10条）:\n${lines.join('\n')}`);
   } else if (result.inserted === 0 && mergedExpanded.length > 0) {
-    console.log(
-      `${logTag} 本次无写入（同交易所+公司+状态+板块+更新日期已存在）`
-    );
+    await emit(`${logTag} 本次无写入（同交易所+公司+状态+板块+更新日期已存在）`);
   }
 
   return {
@@ -1369,7 +1411,8 @@ async function runListingExchangeCrawler({ startDate, endDate, logTag = '[上市
       ifindOk: !!ifindIpo?.ok,
       ifindRows: Array.isArray(ifindIpo?.rows) ? ifindIpo.rows.length : 0,
       ifindError: ifindIpo?.stderr || '',
-      fallbackTriggered: !!shouldRunHkexFallback,
+      officialHkPythonRan: true,
+      fallbackTriggered: !!(hkexIpo && !hkexIpo.skipped),
       fallbackOk: !!hkexIpo?.ok,
       fallbackSkipped: !!hkexIpo?.skipped,
       fallbackExitCode: hkexIpo?.exitCode ?? null,

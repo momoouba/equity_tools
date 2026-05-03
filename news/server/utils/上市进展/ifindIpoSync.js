@@ -1,6 +1,11 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 
+function ifindIpoSpawnTimeoutMs() {
+  const n = parseInt(process.env.IFIND_IPO_SYNC_TIMEOUT_MS || '600000', 10);
+  return Number.isFinite(n) && n >= 5000 ? n : 600000;
+}
+
 /**
  * 调用 ifind_ipo_fetch.py：THS_iFinD 抓取港股上市申请并返回标准化 rows（不直接写库）。
  * 支持两种认证方式：
@@ -64,14 +69,26 @@ function runIfindIpoSync(opts) {
     String(opts.format || 'json').trim() || 'json',
   ];
 
+  const timeoutMs = ifindIpoSpawnTimeoutMs();
+  console.log(
+    `${logTag} 启动 ifind_ipo_fetch.py 区间=${startDate}~${endDate}（spawn 最长 ${timeoutMs}ms，可调 IFIND_IPO_SYNC_TIMEOUT_MS）`
+  );
   const r = spawnSync(py, args, {
     env: { ...process.env },
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 20 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: 'SIGTERM',
   });
 
   if (r.error) {
+    if (r.error.code === 'ETIMEDOUT') {
+      console.error(
+        `${logTag} 子进程超时 ${timeoutMs}ms（iFinD 客户端无响应或 THS 过慢；可调 IFIND_IPO_SYNC_TIMEOUT_MS 或暂时关闭 ifind_enabled）`
+      );
+      return { ok: false, stderr: `ETIMEDOUT ${timeoutMs}ms` };
+    }
     return { ok: false, stderr: String(r.error.message || 'spawn error') };
   }
   const stderr = (r.stderr || '').trim();
