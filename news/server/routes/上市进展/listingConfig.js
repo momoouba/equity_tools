@@ -16,8 +16,8 @@ const { executeWithRetry } = require('../../utils/上市进展/listingRetry');
 const { createExecutionLog, appendExecutionLogProgress, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
 const { syncNewShareCalendar } = require('../../utils/上市进展/newShareService');
 const { syncGuidanceProgress } = require('../../utils/上市进展/guidanceProgressService');
-const { syncOverseasFiling } = require('../../utils/上市进展/overseasFilingService');
-const { createShanghaiDate, formatDateOnly } = require('../../utils/上市进展/listingBeijingDate');
+const { syncOverseasFiling, DEFAULT_CSRC_PORTAL_URL } = require('../../utils/上市进展/overseasFilingService');
+const { createShanghaiDate, formatDateOnly, subtractOneBeijingCalendarDay } = require('../../utils/上市进展/listingBeijingDate');
 
 const runningManualTaskKeys = new Set();
 const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
@@ -34,7 +34,7 @@ const LISTING_DEFAULT_CONFIG_TEMPLATES = [
     name: '境外上市备案审核',
     interface_type: 'api',
     news_interface_type: 'overseas_filing',
-    request_url: process.env.OVERSEAS_FILING_FILE_URL || null,
+    request_url: (process.env.CSRC_ZFXXGK_PAGE_URL || '').trim() || DEFAULT_CSRC_PORTAL_URL,
   },
 ];
 
@@ -452,7 +452,7 @@ async function copyListingConfig(req, res) {
 
 /**
  * POST /listing-config/:id/sync
- * body: { startDate, endDate? } — 打新日历仅需 startDate（取「申购/上市日期」> startDate）；其余类型仍为闭区间
+ * body: { startDate, endDate? } — 打新日历仅需 startDate（**含当日**：内部对 A 股申购日 / 港股上市日 使用「> 前一北京日历日」作增量下界）；其余类型仍为闭区间
  */
 async function syncListingConfig(req, res) {
   try {
@@ -517,11 +517,12 @@ async function syncListingConfig(req, res) {
             `[上市进展手动同步] attempt=${attempt} sourceType=${sourceType} cfg=${cfg.id} range=${effectiveStart}~${endDateFinal} minSyncDate=${minSyncDate || '-'} operator=${user.account || user.id}`
           );
           if (sourceType === 'new_share') {
+            const exclusiveCutoff = subtractOneBeijingCalendarDay(effectiveStart);
             return syncNewShareCalendar({
               from: effectiveStart,
               to: endDateFinal,
-              issueDateAfterExclusive: effectiveStart,
-              updateDateAfterExclusive: effectiveStart,
+              issueDateAfterExclusive: exclusiveCutoff || effectiveStart,
+              updateDateAfterExclusive: exclusiveCutoff || effectiveStart,
               minSyncDate: minSyncDate || null,
               triggerType: 'manual',
               operatorUserId: user.id,

@@ -9,7 +9,12 @@ const {
 const { syncNewShareCalendar, refreshNewShareEnterpriseFullNamesByIds } = require('../../utils/上市进展/newShareService');
 const { createExecutionLog, finishExecutionLog } = require('../../utils/上市进展/listingSyncExecutionLog');
 const { buildTaskKey } = require('../../utils/上市进展/listingSourceType');
-const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../../utils/上市进展/listingBeijingDate');
+const {
+  createShanghaiDate,
+  formatDateOnly,
+  addDaysCalendar,
+  subtractOneBeijingCalendarDay,
+} = require('../../utils/上市进展/listingBeijingDate');
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -128,7 +133,8 @@ async function syncNewShare(req, res) {
     if (!user) return unauthorized(res);
     if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.NEW_SHARE))) return forbidden(res);
     const body = req.body || {};
-    const startOrIssue = String(body.startDate || body.issueDateAfterExclusive || '').trim().slice(0, 10);
+    const startDateBody = String(body.startDate || '').trim().slice(0, 10);
+    const exclusiveBody = String(body.issueDateAfterExclusive || '').trim().slice(0, 10);
     const fromLegacy = String(body.from || '').trim().slice(0, 10) || null;
     const toLegacy = String(body.to || '').trim().slice(0, 10) || null;
     const now = createShanghaiDate();
@@ -136,19 +142,32 @@ async function syncNewShare(req, res) {
     let from;
     let to;
     let issueDateAfterExclusive = null;
-    if (startOrIssue && /^\d{4}-\d{2}-\d{2}$/.test(startOrIssue)) {
-      issueDateAfterExclusive = startOrIssue;
-      from = fromLegacy || startOrIssue;
-      if (toLegacy && /^\d{4}-\d{2}-\d{2}$/.test(toLegacy)) {
+    const ymdOk = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+    if (startDateBody && ymdOk(startDateBody)) {
+      // 配置页同款：startDate 表示「含当日」的起算日
+      issueDateAfterExclusive = subtractOneBeijingCalendarDay(startDateBody) || startDateBody;
+      from = fromLegacy || startDateBody;
+      if (toLegacy && ymdOk(toLegacy)) {
         to = toLegacy;
       } else {
-        to = formatDateOnly(addDaysCalendar(new Date(`${startOrIssue}T12:00:00+08:00`), 730));
+        const anchor = createShanghaiDate(new Date(`${startDateBody}T12:00:00+08:00`));
+        to = formatDateOnly(addDaysCalendar(anchor, 730));
       }
-    } else if (fromLegacy && toLegacy && /^\d{4}-\d{2}-\d{2}$/.test(fromLegacy) && /^\d{4}-\d{2}-\d{2}$/.test(toLegacy)) {
+    } else if (exclusiveBody && ymdOk(exclusiveBody)) {
+      // 仅传 issueDateAfterExclusive 时保持字面「严格大于」语义（兼容旧调用）
+      issueDateAfterExclusive = exclusiveBody;
+      from = fromLegacy || exclusiveBody;
+      if (toLegacy && ymdOk(toLegacy)) {
+        to = toLegacy;
+      } else {
+        const anchor = createShanghaiDate(new Date(`${exclusiveBody}T12:00:00+08:00`));
+        to = formatDateOnly(addDaysCalendar(anchor, 730));
+      }
+    } else if (fromLegacy && toLegacy && ymdOk(fromLegacy) && ymdOk(toLegacy)) {
       from = fromLegacy;
       to = toLegacy;
     } else {
-      issueDateAfterExclusive = todayYmd;
+      issueDateAfterExclusive = subtractOneBeijingCalendarDay(todayYmd) || todayYmd;
       from = todayYmd;
       to = formatDateOnly(addDaysCalendar(now, 730));
     }

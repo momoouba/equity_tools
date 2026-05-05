@@ -4922,7 +4922,9 @@ async function initializeTables(dbPool) {
         name: '境外上市备案审核',
         interface_type: 'api',
         news_interface_type: 'overseas_filing',
-        request_url: process.env.OVERSEAS_FILING_FILE_URL || null,
+        request_url:
+          (process.env.CSRC_ZFXXGK_PAGE_URL || '').trim() ||
+          'http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede',
       },
     ];
 

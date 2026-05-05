@@ -13,17 +13,22 @@
 - **申请/聆讯**等字段仍留空；若路径日期均早于区间，则仍不会生成待写行（与沪深北「更新日落在区间内」一致）。
 
 若需递表/聆讯级数据，需：手工导出 CSV、或对接商业数据、或对披露搜索（JSF 表单）用 Playwright 自动化。
+
+补充（hk_ipo_sync 合并）：
+- `fetch_hkex_listing_application_disclosures` 调用披露易 `titleSearchServlet.do`，标题类别 t1code=91000（申請版本、整體協調人公告及聆訊後資料集），
+  `category` 须为 0（全部证券）；用于捕捉 consolidated index 仅有首次登载日时、后续「处理中」发文日落同步区间的情况。
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
@@ -38,6 +43,174 @@ URL_SEHK_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/sehkconsolidated
 URL_GEM_CONSOLIDATED = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex.xlsx"
 URL_SEHK_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/sehkconsolidatedindex_c.xlsx"
 URL_GEM_CONSOLIDATED_CN = "https://www1.hkexnews.hk/app/documents/gemconsolidatedindex_c.xlsx"
+
+# 披露易标题类别：申請版本、整體協調人公告及聆訊後資料集（见 /ncms/script/eds/tierone_c.json code 91000）
+HKEX_TIER1_LISTING_APPLICATION_MATERIAL = "91000"
+HKEX_TIER2_POST_HEARING = "91100"
+HKEX_TIER2_APPLICATION_PROOF = "91200"
+HKEX_TIER2_COORDINATOR = "91300"
+HKEX_TITLE_SEARCH_SERVLET = "https://www1.hkexnews.hk/search/titleSearchServlet.do"
+
+
+def _hkex_disclosure_session():
+    """披露标题检索接口需 Session + Referer；category 须为 0（全部），category=A 且无 stockId 时常返回空。"""
+    sess = requests.Session()
+    sess.headers.update(
+        {
+            "User-Agent": UA,
+            "Referer": "https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=zh",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+    )
+    sess.get("https://www1.hkexnews.hk/search/titlesearch.xhtml?lang=zh", timeout=45)
+    return sess
+
+
+def _parse_listing_disclosure_date(date_time: str) -> str:
+    """DATE_TIME 形如 09/12/2024 19:52 → YYYY-MM-DD"""
+    s = (date_time or "").strip()
+    if not s:
+        return ""
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return _norm_ymd(s.split()[0]) if s else ""
+
+
+def _looks_like_company_name(s: str) -> bool:
+    """排除「整體協調人公告－委任」类标题里 '-' 左侧实为文书类别而非发行人名称。"""
+    x = (s or "").strip()
+    if len(x) < 5:
+        return False
+    if any(k in x for k in ("有限公司", "股份", "控股", "集团", "集團", "Inc", "Limited", "Liability", "Ltd", "Corp")):
+        return True
+    return len(x) >= 14
+
+
+def _company_from_listing_disclosure(title: str, stock_name: str) -> str:
+    """标题里常含法定全称（「XXX股份有限公司 - …」）；否则退回股份简称列。"""
+    t = (title or "").strip()
+    for sep in (" - ", "－", " — ", "—"):
+        if sep in t:
+            left = t.split(sep, 1)[0].strip()
+            if _looks_like_company_name(left):
+                return left
+    return (stock_name or "").strip()
+
+
+def _fetch_tier91000_tier2_block(
+    sess: requests.Session,
+    fd_yyyymmdd: str,
+    td_yyyymmdd: str,
+    t2code: str,
+    row_range: int,
+) -> List[Dict[str, Any]]:
+    params = {
+        "sortDir": "0",
+        "sortByOptions": "DateTime",
+        "category": "0",
+        "market": "SEHK",
+        "stockId": "",
+        "documentType": "",
+        "fromDate": fd_yyyymmdd,
+        "toDate": td_yyyymmdd,
+        "title": "",
+        "searchType": "1",
+        "t1code": HKEX_TIER1_LISTING_APPLICATION_MATERIAL,
+        "t2Gcode": "-2",
+        "t2code": t2code,
+        "rowRange": str(row_range),
+        "lang": "zh",
+    }
+    r = sess.get(HKEX_TITLE_SEARCH_SERVLET, params=params, timeout=90)
+    r.raise_for_status()
+    outer = r.json()
+    raw = outer.get("result")
+    if raw in (None, "", "null"):
+        return []
+    return json.loads(raw)
+
+
+def fetch_hkex_listing_application_disclosures(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    拉取「申請版本 / 整體協調人公告 / 聆訊後資料集」在区间内的披露记录，映射为 hk_ipo_sync 宽表增量行。
+    用于处理 consolidated index 仅有「首次登载日」、后续发文日不落区间的问题（如处理中之当日公告）。
+    同一申请人同一日历日多份文件时保留优先级较高的一类（整体协调人 > 申请版本 > 聆讯后数据集）。
+    """
+    d0 = date.fromisoformat(start_date[:10])
+    d1 = date.fromisoformat(end_date[:10])
+    fd = d0.strftime("%Y%m%d")
+    td = d1.strftime("%Y%m%d")
+
+    tier2_prio = {
+        HKEX_TIER2_COORDINATOR: 3,
+        HKEX_TIER2_APPLICATION_PROOF: 2,
+        HKEX_TIER2_POST_HEARING: 1,
+    }
+    row_range = int(os.environ.get("HK_IPO_DISCLOSURE_ROW_RANGE", "1000") or "1000")
+
+    sess = _hkex_disclosure_session()
+    by_key: Dict[Tuple[str, str], Tuple[int, str, Dict[str, Any]]] = {}
+
+    for t2, prio in sorted(tier2_prio.items(), key=lambda x: -x[1]):
+        try:
+            rows = _fetch_tier91000_tier2_block(sess, fd, td, t2, row_range)
+        except Exception as e:
+            print(f"[hkex_ipo_scraper] tier91000 t2={t2} 拉取失败: {e}", file=sys.stderr)
+            continue
+        for row in rows:
+            news_id = str(row.get("NEWS_ID") or "").strip()
+            title = str(row.get("TITLE") or "").strip()
+            stock_name = str(row.get("STOCK_NAME") or "").strip()
+            stock_code = str(row.get("STOCK_CODE") or "").strip()
+            upd = _parse_listing_disclosure_date(str(row.get("DATE_TIME") or ""))
+            company = _company_from_listing_disclosure(title, stock_name)
+            if not company or not upd:
+                continue
+            key = (company, upd)
+            prev = by_key.get(key)
+            if prev is not None and prev[0] > prio:
+                continue
+            by_key[key] = (prio, news_id, {"title": title, "stock_code": stock_code, "stock_name": stock_name})
+
+    out_rows: List[dict] = []
+    for (company, upd), (_prio, _nid, meta) in by_key.items():
+        code = meta["stock_code"]
+        short = meta["stock_name"] or (company.split()[0] if company else "")
+        out_rows.append(
+            {
+                "申请日期": "",
+                "通过聆讯日期": "",
+                "上市日期": "",
+                "申请状态更新日期": upd,
+                "申请状态": "處理中",
+                "公司全称": company,
+                "股票简称": short,
+                "股票代码": code,
+                "板块": "主板",
+                "注册地": "",
+            }
+        )
+
+    if not out_rows:
+        return pd.DataFrame(
+            columns=[
+                "申请日期",
+                "通过聆讯日期",
+                "上市日期",
+                "申请状态更新日期",
+                "申请状态",
+                "公司全称",
+                "股票简称",
+                "股票代码",
+                "板块",
+                "注册地",
+            ]
+        )
+    return pd.DataFrame(out_rows)
 
 
 def _read_consolidated_xlsx_from_url(url: str, label: str) -> pd.DataFrame:

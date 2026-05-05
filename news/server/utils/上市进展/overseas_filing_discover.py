@@ -20,7 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 DEFAULT_PAGE = os.environ.get(
     "CSRC_ZFXXGK_PAGE_URL",
-    "http://www.csrc.gov.cn/csrc/c100035/zfxxgk_zdgk.shtml",
+    "http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede",
 )
 DEFAULT_KEYWORD = os.environ.get(
     "OVERSEAS_FILING_SEARCH_KEYWORD",

@@ -14,6 +14,9 @@
 环境变量（与 Node db.js 一致）：DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
 HK_IPO_SOURCE / --source：默认 hkex-web；设为 akshare 时用 AkShare（失败再回退官网）。CSV 见 HK_IPO_CSV_PATH。
+
+HK_IPO_DISABLE_LISTING_DISCLOSURE_MERGE：设为 1/true 时不合并披露易 91000 类（申请版本/整体协调人/聆讯后数据集）增量行。
+HK_IPO_DISCLOSURE_ROW_RANGE：单次 titleSearchServlet 拉取条数上限，默认 1000。
 """
 
 from __future__ import annotations
@@ -183,6 +186,8 @@ def build_rows_for_day(df: pd.DataFrame, today: str) -> List[Dict[str, Any]]:
             kinds.append("上市")
         if sud_d == today and st_raw in STATUS_END_SET:
             kinds.append("状态变更")
+        if sud_d == today and st_raw == "處理中":
+            kinds.append("披露更新")
         if not kinds:
             continue
 
@@ -481,6 +486,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except Exception as e:
         print(f"加载数据失败: {e}", file=sys.stderr)
         return 1
+
+    disc_off = os.environ.get("HK_IPO_DISABLE_LISTING_DISCLOSURE_MERGE", "").strip().lower()
+    if not csv_path and disc_off not in ("1", "true", "yes"):
+        from hkex_ipo_scraper import fetch_hkex_listing_application_disclosures  # noqa: PLC0415
+
+        try:
+            extra = fetch_hkex_listing_application_disclosures(args.start_date[:10], args.end_date[:10])
+            if extra is not None and not extra.empty:
+                df = pd.concat([df, extra], ignore_index=True)
+                dedupe_cols = [c for c in ["公司全称", "申请状态", "板块", "申请状态更新日期"] if c in df.columns]
+                if dedupe_cols:
+                    df = df.drop_duplicates(subset=dedupe_cols, keep="first")
+        except Exception as e:
+            print(f"[hk_ipo_sync] 合并披露易91000增量失败（已忽略）: {e}", file=sys.stderr)
 
     days = daterange_inclusive(args.start_date, args.end_date)
     all_rows: List[Dict[str, Any]] = []

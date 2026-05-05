@@ -5,7 +5,9 @@ const { runOverseasFilingSync } = require('./overseasFilingSync');
 const { runOverseasFilingNoticeSync } = require('./overseasFilingNoticeSync');
 
 const OVERSEAS_BOARD = '境外发行备案';
-const DEFAULT_CSRC_PORTAL_URL = 'http://www.csrc.gov.cn/csrc/c100035/zfxxgk_zdgk.shtml';
+/** 证监会政府信息公开 · 境外证券发行（含 channelid，与需求文档列表入口一致） */
+const DEFAULT_CSRC_PORTAL_URL =
+  'http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede';
 
 /** 企业名称匹配：规范化后全等（与需求 2026-04-20 一致） */
 function normalizeOverseasNameKey(name) {
@@ -281,6 +283,10 @@ async function syncOverseasFiling(options = {}) {
       console.log(`${logTag} 已自动解析 Excel`, csrcDiscover);
     }
   }
+  if (source === 'url' && !explicitFile && !sourceUrl) {
+    sourceUrl = (process.env.CSRC_ZFXXGK_PAGE_URL || '').trim() || DEFAULT_CSRC_PORTAL_URL;
+    console.log(`${logTag} request_url 未配置，使用默认证监会信息公开入口`);
+  }
   const fetched = runOverseasFilingSync({
     startDate: from,
     endDate: to,
@@ -362,4 +368,5 @@ async function syncOverseasFiling(options = {}) {
 module.exports = {
   syncOverseasFiling,
   assertManualOverseasDateRange,
+  DEFAULT_CSRC_PORTAL_URL,
 };

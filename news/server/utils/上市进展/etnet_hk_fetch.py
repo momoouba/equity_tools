@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 经济通 etnet.com.hk 港股新股数据（简体站 stocks.etnetchina.cn 内嵌 iframe 同源页）：
-- ci_ipo.php 内嵌 var listing.listingipos → 打新日历（招股中 / 即将上市等合并列表）
-- ci_ipo_info.php 表格「新股信息」→ 一手中签率、首日开市价、按盘价、累积升跌（分页）
+- ci_ipo.php 内嵌 var listing.listingipos → 仅少量「预告」新股；打新日历须与 ci_ipo_info 新股信息全表合并，否则会漏掉已上市但未进 listingipos 的股票
+- ci_ipo_info.php 表格「新股信息」→ 打新日历主列表 + 一手中签率、首日开市价、按盘价、累积升跌（分页）
 
 环境变量：
 - HK_NEW_SHARE_SOURCE=etnet（默认）| hkex  —— 由 new_share_fetch 读取
@@ -121,67 +121,171 @@ def fetch_listing_ipos() -> List[dict]:
     return [x for x in raw if isinstance(x, dict)]
 
 
-def hk_calendar_rows_from_etnet(
-    start_date: str, end_date: str, issue_date_after_exclusive: Optional[str] = None
-) -> List[dict]:
-    """输出与 new_share_fetch._extract_hk_rows 一致结构的 dict 列表。"""
-    start = start_date.strip()[:10]
-    end = end_date.strip()[:10]
-    after = (issue_date_after_exclusive or "").strip()[:10] or None
-    ipos = fetch_listing_ipos()
-    rows: List[dict] = []
+def _hk_listing_in_window(public_date: str, start: str, end: str, after: Optional[str]) -> bool:
+    """港股增量/区间均以上市日 listdate 为准（与上市进展定时任务注释一致）。"""
+    if not public_date:
+        return False
+    if after:
+        return public_date > after and public_date <= end
+    return start <= public_date <= end
+
+
+def _listingipo_meta_by_code(ipos: List[dict]) -> Dict[str, dict]:
+    out: Dict[str, dict] = {}
     for item in ipos:
-        lm = str(item.get("listmethod") or "").strip()
+        c = str(item.get("stockcode") or "").strip().zfill(5)
+        if c and c != "00000":
+            out[c] = item
+    return out
+
+
+def _calendar_row_from_listing_item(item: dict) -> Optional[dict]:
+    lm = str(item.get("listmethod") or "").strip()
+    if lm in ("3", "4"):
+        return None
+    code = str(item.get("stockcode") or "").strip().zfill(5)
+    if not code or code == "00000":
+        return None
+    name = str(item.get("namechisc") or item.get("namechitc") or "").strip()
+    if not name:
+        return None
+    public_date = _norm_ymd(item.get("listdate") or "")
+    if not public_date:
+        return None
+    issue_date = _norm_ymd(item.get("applicationstart") or "")
+    if not issue_date:
+        issue_date = public_date
+
+    lp = _parse_price(item.get("listprice"))
+    op_to = _parse_price(item.get("offerpriceto"))
+    op_from = _parse_price(item.get("offerpricefrom"))
+    issue_price = lp if lp is not None else op_to
+    if issue_price is None:
+        issue_price = op_from
+
+    shares_per_lot = _parse_lot_metric(item.get("boardlot"))
+    max_lots = _parse_lot_metric(item.get("maxlotsize"))
+    limit_shares = None
+    if shares_per_lot is not None and max_lots is not None and shares_per_lot > 0 and max_lots > 0:
+        limit_shares = shares_per_lot * max_lots
+
+    wr = _parse_pct_cell(str(item.get("onelotsuccessrate") or ""))
+
+    return {
+        "stock_code": code,
+        "stock_name": name,
+        "issue_date": issue_date,
+        "issue_weekday": None,
+        "issue_price": issue_price,
+        "offer_pe": None,
+        "limit_shares": limit_shares,
+        "exchange": "港交所",
+        "public_date": public_date,
+        "win_rate": wr,
+    }
+
+
+def _calendar_row_from_ipo_info(ir: dict, meta: Optional[dict]) -> Optional[dict]:
+    """ci_ipo_info 表行 + 可选 listingipos 同源字段合并。"""
+    code = str(ir.get("stock_code") or "").strip().zfill(5)
+    public_date = str(ir.get("list_date") or "").strip()[:10]
+    if not code or code == "00000" or not public_date:
+        return None
+
+    if meta:
+        lm = str(meta.get("listmethod") or "").strip()
         if lm in ("3", "4"):
-            continue
-        code = str(item.get("stockcode") or "").strip().zfill(5)
-        if not code or code == "00000":
-            continue
-        name = str(item.get("namechisc") or item.get("namechitc") or "").strip()
-        if not name:
-            continue
-        public_date = _norm_ymd(item.get("listdate") or "")
-        if not public_date:
-            continue
-        issue_date = _norm_ymd(item.get("applicationstart") or "")
+            meta = None
+
+    if meta:
+        issue_date = _norm_ymd(meta.get("applicationstart") or "")
         if not issue_date:
             issue_date = public_date
-        if after:
-            if issue_date <= after or issue_date > end:
-                continue
-        elif issue_date < start or issue_date > end:
-            continue
-
-        lp = _parse_price(item.get("listprice"))
-        op_to = _parse_price(item.get("offerpriceto"))
-        op_from = _parse_price(item.get("offerpricefrom"))
+        lp = _parse_price(meta.get("listprice"))
+        op_to = _parse_price(meta.get("offerpriceto"))
+        op_from = _parse_price(meta.get("offerpricefrom"))
         issue_price = lp if lp is not None else op_to
         if issue_price is None:
             issue_price = op_from
+        if issue_price is None:
+            issue_price = ir.get("issue_price")
 
-        # 申购上限（股）= 顶头槌手数 maxlotsize × 每手股数 boardlot（原误将 boardlot 当作上限）
-        shares_per_lot = _parse_lot_metric(item.get("boardlot"))
-        max_lots = _parse_lot_metric(item.get("maxlotsize"))
+        shares_per_lot = _parse_lot_metric(meta.get("boardlot"))
+        max_lots = _parse_lot_metric(meta.get("maxlotsize"))
         limit_shares = None
         if shares_per_lot is not None and max_lots is not None and shares_per_lot > 0 and max_lots > 0:
             limit_shares = shares_per_lot * max_lots
 
-        wr = _parse_pct_cell(str(item.get("onelotsuccessrate") or ""))
+        wr = _parse_pct_cell(str(meta.get("onelotsuccessrate") or ""))
+        if wr is None:
+            wr = ir.get("win_rate")
 
-        rows.append(
-            {
-                "stock_code": code,
-                "stock_name": name,
-                "issue_date": issue_date,
-                "issue_weekday": None,
-                "issue_price": issue_price,
-                "offer_pe": None,
-                "limit_shares": limit_shares,
-                "exchange": "港交所",
-                "public_date": public_date,
-                "win_rate": wr,
-            }
-        )
+        name = str(meta.get("namechisc") or meta.get("namechitc") or "").strip() or str(ir.get("stock_name") or "").strip()
+    else:
+        issue_date = public_date
+        issue_price = ir.get("issue_price")
+        limit_shares = None
+        wr = ir.get("win_rate")
+        name = str(ir.get("stock_name") or "").strip()
+
+    if not name:
+        return None
+
+    return {
+        "stock_code": code,
+        "stock_name": name,
+        "issue_date": issue_date,
+        "issue_weekday": None,
+        "issue_price": issue_price,
+        "offer_pe": None,
+        "limit_shares": limit_shares,
+        "exchange": "港交所",
+        "public_date": public_date,
+        "win_rate": wr,
+    }
+
+
+def hk_calendar_rows_from_etnet(
+    start_date: str, end_date: str, issue_date_after_exclusive: Optional[str] = None
+) -> List[dict]:
+    """输出与 new_share_fetch._extract_hk_rows 一致结构的 dict 列表。
+
+    listingipos（ci_ipo.php）通常只有少量「预告」新股；完整列表以 ci_ipo_info.php 分页表为准，
+    二者合并并按上市日做区间/增量筛选，避免仅依赖 listingipos 漏抓当日已上市新股。
+    """
+    start = start_date.strip()[:10]
+    end = end_date.strip()[:10]
+    after = (issue_date_after_exclusive or "").strip()[:10] or None
+    ipos = fetch_listing_ipos()
+    meta_by_code = _listingipo_meta_by_code(ipos)
+
+    rows: List[dict] = []
+    covered: set[str] = set()
+
+    for ir in fetch_ipo_info_all_pages():
+        public_date = str(ir.get("list_date") or "").strip()[:10]
+        if not _hk_listing_in_window(public_date, start, end, after):
+            continue
+        code = str(ir.get("stock_code") or "").strip().zfill(5)
+        meta = meta_by_code.get(code)
+        built = _calendar_row_from_ipo_info(ir, meta)
+        if not built:
+            continue
+        rows.append(built)
+        covered.add(code)
+
+    for item in ipos:
+        row = _calendar_row_from_listing_item(item)
+        if not row:
+            continue
+        code = row["stock_code"]
+        if code in covered:
+            continue
+        public_date = row["public_date"]
+        if not _hk_listing_in_window(public_date, start, end, after):
+            continue
+        rows.append(row)
+
     return rows
 
 

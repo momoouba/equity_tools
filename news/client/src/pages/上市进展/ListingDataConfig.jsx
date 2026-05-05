@@ -610,7 +610,7 @@ export default function ListingDataConfig() {
       >
         <p style={{ marginBottom: 12, color: 'var(--color-text-2)' }}>
           {syncRow?.news_interface_type === 'new_share'
-            ? '打新日历：只需选择「开始日期」。将同步「申购日期（A 股）/ 上市日期（港股）」严格大于该日的数据；已入库记录按字段比对更新。未传结束日时服务端上界为远期。'
+            ? '打新日历：只需选择「开始日期」（含当日）。将同步 A 股申购日 / 港股上市日从该日起的数据；已入库记录按字段比对更新。未传结束日时服务端上界为远期。'
             : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。'}
         </p>
         <p style={{ marginBottom: 10, color: 'var(--color-text-2)', fontSize: 12 }}>
