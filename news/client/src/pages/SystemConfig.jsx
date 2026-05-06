@@ -9,6 +9,7 @@ import NewsConfig from './NewsConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './上市进展/ListingDataConfig'
+import FinancingSourceConfig from './项目挖掘/FinancingSourceConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 
@@ -95,6 +96,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="listing-data" title="上市数据配置">
             <div className="config-content">
               <ListingDataConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="financing-source" title="融资信息源配置">
+            <div className="config-content">
+              <FinancingSourceConfig />
             </div>
           </TabPane>
         </Tabs>

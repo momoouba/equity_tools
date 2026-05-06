@@ -8,6 +8,7 @@ const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
 const xlsx = require('xlsx');
 const multer = require('multer');
 const { logWithTag, errorWithTag, warnWithTag } = require('../utils/logUtils');
+const psNewsIf = require('./项目挖掘/newsInterfaceConfigHelpers');
 
 // 配置multer用于Excel文件上传
 const excelUpload = multer({
@@ -118,19 +119,26 @@ router.get('/news-configs', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
+    const appId = req.query.app_id ? String(req.query.app_id).trim() : '';
 
-    // 获取总数
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM news_interface_config');
+    const whereSql = appId ? 'WHERE nic.app_id = ?' : '';
+    const countParams = appId ? [appId] : [];
+    const listParams = appId ? [appId, pageSize, offset] : [pageSize, offset];
+
+    const totalResult = await db.query(
+      `SELECT COUNT(*) as total FROM news_interface_config nic ${whereSql}`,
+      countParams
+    );
     const total = totalResult[0].total;
 
-    // 获取分页数据（包括所有接口类型：新榜、企查查等）
     const configs = await db.query(`
       SELECT nic.id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.skip_holiday, nic.last_sync_time, nic.is_active, nic.created_at, nic.updated_at, nic.entity_type
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
+      ${whereSql}
       ORDER BY nic.created_at DESC
       LIMIT ? OFFSET ?
-    `, [pageSize, offset]);
+    `, listParams);
     
     // 处理 entity_type 字段（JSON格式转换为数组）
     configs.forEach(config => {
@@ -198,15 +206,12 @@ router.get('/news-type-options', async (req, res) => {
   try {
     const { interface_type } = req.query;
     const interfaceType = interface_type || '新榜';
+    const orderSql = psNewsIf.getNewsTypeOptionsOrderSql(interfaceType);
     const rows = await db.query(
-      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ORDER BY FIELD(news_type, "新闻舆情", "行政处罚", "被执行人", "失信被执行人", "限制高消费", "终本案件", "破产重组", "破产重整", "裁判文书", "法院公告", "开庭公告", "送达公告", "立案信息", "同花顺订阅")',
+      `SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ${orderSql}`,
       [interfaceType]
     );
-    // 上海国际集团、企查查接口不返回「破产重组」选项（已删除该类型）
-    let filteredRows = rows;
-    if (interfaceType === '上海国际集团' || interfaceType === '企查查') {
-      filteredRows = rows.filter(r => r.news_type !== '破产重组');
-    }
+    let filteredRows = psNewsIf.filterBankruptcyNewsTypes(interfaceType, rows);
     let options;
     if (interfaceType === '新榜') {
       options = filteredRows.filter(r => r.is_enabled === 1).map(r => ({ value: r.news_type, label: r.news_type, disabled: false }));
@@ -344,15 +349,19 @@ router.post('/news-config', [
       if (sigConfigs.length === 0) {
         return res.status(400).json({ success: false, message: '请先配置上海国际集团接口的X-App-Id、APIkey等凭证' });
       }
+    } else if (interfaceType === psNewsIf.INTERFACE_TYPE_FINANCING) {
+      const finSig = await psNewsIf.validateFinancingSigByApp(db, app_id);
+      if (!finSig.ok) {
+        return res.status(400).json({ success: false, message: finSig.message });
+      }
     } else if (!api_key) {
       return res.status(400).json({ success: false, message: 'Key不能为空' });
     }
 
     const configId = await generateId('news_interface_config');
-    // 企查查、上海国际集团接口不需要content_type，其他接口使用默认值
-    const finalContentType = (interfaceType === '企查查' || interfaceType === '上海国际集团')
+    const finalContentType = psNewsIf.isNewsInterfaceUsingNullContentType(interfaceType)
       ? null
-      : (content_type || 'application/x-www-form-urlencoded;charset=utf-8');
+      : content_type || 'application/x-www-form-urlencoded;charset=utf-8';
     
     // 如果没有提供send_frequency，根据frequency_type设置默认值
     if (!finalSendFrequency) {
@@ -387,8 +396,7 @@ router.post('/news-config', [
         entityTypes = [entityTypes];
       }
       
-      // 如果是企查查或上海国际集团接口，过滤掉"额外公众号"选项
-      if (interfaceType === '企查查' || interfaceType === '上海国际集团') {
+      if (psNewsIf.shouldRestrictEntityExtraWechat(interfaceType)) {
         entityTypes = entityTypes.filter(type => type !== '额外公众号');
         if (entityTypes.length === 0) {
           entityTypes = []; // 如果过滤后为空，设置为空数组
@@ -401,9 +409,7 @@ router.post('/news-config', [
         return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
       }
       
-      // 如果是新榜接口，验证"额外公众号"是否与其他类型同时存在（允许同时存在）
-      // 如果是企查查或上海国际集团接口，确保不包含"额外公众号"
-      if ((interfaceType === '企查查' || interfaceType === '上海国际集团') && entityTypes.includes('额外公众号')) {
+      if (psNewsIf.shouldRestrictEntityExtraWechat(interfaceType) && entityTypes.includes('额外公众号')) {
         return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
       }
       
@@ -570,9 +576,8 @@ router.put('/news-config/:id', [
       updateFields.push('frequency_type = ?');
       updateValues.push(frequency_type);
       
-      // 如果是企查查接口，根据frequency_type自动更新send_frequency，同步到定时任务
       const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
-      if (currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') {
+      if (psNewsIf.shouldSyncSendFrequencyFromFrequencyType(currentInterfaceType)) {
         let sendFrequency = 'daily';
         if (frequency_type === 'week') {
           sendFrequency = 'weekly';
@@ -651,8 +656,7 @@ router.put('/news-config/:id', [
           entityTypes = [entityTypes];
         }
         
-        // 如果是企查查或上海国际集团接口，过滤掉"额外公众号"选项
-        if (currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') {
+        if (psNewsIf.shouldRestrictEntityExtraWechat(currentInterfaceType)) {
           entityTypes = entityTypes.filter(type => type !== '额外公众号');
           if (entityTypes.length === 0) {
             entityTypes = []; // 如果过滤后为空，设置为空数组
@@ -665,8 +669,7 @@ router.put('/news-config/:id', [
           return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
         }
         
-        // 如果是企查查或上海国际集团接口，确保不包含"额外公众号"
-        if ((currentInterfaceType === '企查查' || currentInterfaceType === '上海国际集团') && entityTypes.includes('额外公众号')) {
+        if (psNewsIf.shouldRestrictEntityExtraWechat(currentInterfaceType) && entityTypes.includes('额外公众号')) {
           return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
         }
         

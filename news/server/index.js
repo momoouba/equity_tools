@@ -31,6 +31,7 @@ const newsDetailRoutes = require('./routes/newsDetail');
 const performanceRoutes = require('./routes/业绩看板应用');
 const listingRoutes = require('./routes/上市进展');
 const listingShareRoutes = require('./routes/listingShare');
+const projectSourcingRoutes = require('./routes/项目挖掘');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
@@ -200,6 +201,7 @@ app.use('/api/news-detail', newsDetailRoutes);
 app.use('/api/performance', performanceRoutes);
 app.use('/api/listing', listingRoutes);
 app.use('/api/listing-share', listingShareRoutes);
+app.use('/api/project-sourcing', projectSourcingRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作

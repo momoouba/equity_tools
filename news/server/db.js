@@ -1593,6 +1593,8 @@ async function initializeTables(dbPool) {
       );
       console.log('已为上海国际集团启用「同花顺订阅」新闻类型');
     }
+    const { seedInterfaceNewsTypeFinancing } = require('./utils/项目挖掘/dbSeedFinancing');
+    await seedInterfaceNewsTypeFinancing(dbPool);
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
   }
@@ -3785,10 +3787,16 @@ async function initializeTables(dbPool) {
   console.log('  开始初始化基础数据...');
   try {
     const { generateId } = require('./utils/idGenerator');
+    const PS_C = require('./utils/项目挖掘/constants');
     const APPS = {
       performance: { id: '2026031616180010001', name: '业绩看板', created_at: '2026-03-16 16:18:00' },
       news: { id: '2025112019132600001', name: '新闻舆情', created_at: '2025-11-20 19:13:31' },
       listing: { id: '2026033000000000001', name: '上市进展', created_at: '2026-03-30 18:00:00' },
+      projectSourcing: {
+        id: PS_C.PROJECT_SOURCING_APP_ID,
+        name: PS_C.APP_NAME_PROJECT_SOURCING,
+        created_at: PS_C.PROJECT_SOURCING_CREATED_AT,
+      },
     };
 
     async function remapMembershipLevelReferences(fromLevelId, toLevelId) {
@@ -3877,6 +3885,13 @@ async function initializeTables(dbPool) {
 
       await dbPool.execute('UPDATE news_interface_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
       await dbPool.execute('UPDATE recipient_management SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+
+      const [toSig] = await dbPool.query('SELECT id FROM shanghai_international_group_config WHERE app_id = ? LIMIT 1', [toId]);
+      if (toSig.length > 0) {
+        await dbPool.execute('DELETE FROM shanghai_international_group_config WHERE app_id = ?', [fromId]);
+      } else {
+        await dbPool.execute('UPDATE shanghai_international_group_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
+      }
     }
 
     async function ensureCanonicalApp(app) {
@@ -3924,6 +3939,7 @@ async function initializeTables(dbPool) {
     await ensureCanonicalApp(APPS.performance);
     await ensureCanonicalApp(APPS.news);
     await ensureCanonicalApp(APPS.listing);
+    await ensureCanonicalApp(APPS.projectSourcing);
 
     // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
     const [legacyPerfApps] = await dbPool.query(
@@ -4044,6 +4060,7 @@ async function initializeTables(dbPool) {
     await ensureAppMembershipLevels(APPS.news.id, APPS.news.name);
     await ensureAppMembershipLevels(APPS.performance.id, APPS.performance.name);
     await ensureAppMembershipLevels(APPS.listing.id, APPS.listing.name);
+    await ensureAppMembershipLevels(APPS.projectSourcing.id, APPS.projectSourcing.name);
 
     // 防止后续重复写入：同应用下等级名称唯一
     const [lvlUniqIdx] = await dbPool.query(
@@ -5055,6 +5072,106 @@ async function initializeTables(dbPool) {
     console.warn('迁移 listing_sync_execution_log.heartbeat_at 时出现警告:', err.message);
   }
 
+  // ——— 项目挖掘：投融资明细层 + 标准层 ———
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_financing_event_w_infer (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        request_id VARCHAR(64) NULL COMMENT '本次接口请求流水号（RequestId）',
+        query_type VARCHAR(32) NOT NULL COMMENT '查询方式：queryByCode/queryByDate/fuzzyQuery',
+        proj_cd_xn VARCHAR(100) NULL COMMENT '项目烯牛编码',
+        proj_id_xn BIGINT NULL COMMENT '项目烯牛ID',
+        instn_id_xn BIGINT NULL COMMENT '被投机构烯牛ID',
+        instn_idtfn_cd VARCHAR(64) NULL COMMENT '被投机构唯一识别码',
+        instn_nm VARCHAR(255) NULL COMMENT '被投机构名称',
+        reg_rgn VARCHAR(100) NULL COMMENT '被投机构所在国家或地区',
+        reg_prov VARCHAR(100) NULL COMMENT '被投机构所在省',
+        reg_city VARCHAR(100) NULL COMMENT '被投机构所在市',
+        reg_cnty VARCHAR(100) NULL COMMENT '被投机构所在区',
+        proj_nm VARCHAR(255) NULL COMMENT '项目名称',
+        proj_desc TEXT NULL COMMENT '项目简介',
+        cp_round VARCHAR(100) NULL COMMENT '项目最新融资轮次',
+        xn_ic_lv1 VARCHAR(100) NULL COMMENT '一级行业标签（烯牛）',
+        xn_ic_lv2 VARCHAR(100) NULL COMMENT '二级行业标签（烯牛）',
+        funding_id VARCHAR(64) NOT NULL COMMENT '融资事件ID',
+        funding_dt DATETIME NULL COMMENT '融资日期时间（Asia/Shanghai）',
+        round VARCHAR(100) NULL COMMENT '融资轮次（烯牛推测）',
+        funding_amt VARCHAR(100) NULL COMMENT '获投金额（原始文本）',
+        estmt_funding_amt VARCHAR(100) NULL COMMENT '预估融资金额（原始文本）',
+        post_valuation VARCHAR(100) NULL COMMENT '投后估值（原始文本）',
+        funding_sts VARCHAR(100) NULL COMMENT '事件状态',
+        inv_info_json LONGTEXT NULL COMMENT '投资方信息JSON数组（inv_info），来自国际集团接口 Data.deal_info_w_infer',
+        create_time DATETIME NULL COMMENT '源端创建时间（Asia/Shanghai）',
+        update_time DATETIME NULL COMMENT '源端更新时间（Asia/Shanghai）',
+        ingested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '本地入库时间（Asia/Shanghai）',
+        record_hash VARCHAR(64) NOT NULL COMMENT '明细记录哈希（幂等去重）',
+        UNIQUE KEY uk_sourcing_w_infer_hash (record_hash),
+        KEY idx_sourcing_w_infer_funding_dt (funding_dt),
+        KEY idx_sourcing_w_infer_instn (instn_idtfn_cd),
+        KEY idx_sourcing_w_infer_funding_id (funding_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-融资事件明细（含推测轮次）';
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_financing_event (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        source_record_id BIGINT NULL COMMENT '来源明细ID，关联 sourcing_financing_event_w_infer.id',
+        event_id VARCHAR(64) NOT NULL COMMENT '融资事件ID（funding_id）',
+        event_date DATE NULL COMMENT '融资日期（Asia/Shanghai）',
+        company_name VARCHAR(255) NULL COMMENT '被投机构名称',
+        company_credit_code VARCHAR(64) NULL COMMENT '被投机构唯一识别码',
+        project_name VARCHAR(255) NULL COMMENT '项目名称',
+        project_desc TEXT NULL COMMENT '项目简介',
+        latest_round VARCHAR(100) NULL COMMENT '项目最新融资轮次（cp_round）',
+        round VARCHAR(100) NULL COMMENT '融资轮次（w_infer推测口径）',
+        funding_amt_raw VARCHAR(100) NULL COMMENT '原始融资金额字符串',
+        estimated_amt_raw VARCHAR(100) NULL COMMENT '原始预估融资金额字符串',
+        post_valuation_raw VARCHAR(100) NULL COMMENT '原始投后估值字符串',
+        amount DECIMAL(20,2) NULL COMMENT '解析后的金额数值（原币种）',
+        amount_currency VARCHAR(20) NULL COMMENT '金额币种',
+        amount_cny DECIMAL(20,2) NULL COMMENT '折算人民币金额',
+        amount_parse_status VARCHAR(20) NULL COMMENT '金额解析状态：parsed/estimated/unparsed',
+        amount_parse_confidence DECIMAL(5,2) NULL COMMENT '金额解析置信度（0-1）',
+        industry_source_lv1 VARCHAR(100) NULL COMMENT '来源一级行业标签（接口原始：xn_ic_lv1）',
+        industry_source_lv2 VARCHAR(100) NULL COMMENT '来源二级行业标签（接口原始：xn_ic_lv2）',
+        industry_std_lv1 VARCHAR(100) NULL COMMENT '标准一级行业（内部行业字典映射后）',
+        industry_std_lv2 VARCHAR(100) NULL COMMENT '标准二级行业（内部行业字典映射后）',
+        track_primary VARCHAR(100) NULL COMMENT '主赛道（业务分析口径）',
+        track_secondary VARCHAR(100) NULL COMMENT '子赛道（业务分析口径）',
+        track_keywords VARCHAR(500) NULL COMMENT '赛道关键词（逗号分隔）',
+        business_tags VARCHAR(500) NULL COMMENT '业务标签（如AI、机器人、半导体等）',
+        scenario_tags VARCHAR(500) NULL COMMENT '应用场景标签（如金融、医疗、制造等）',
+        competition_bucket VARCHAR(100) NULL COMMENT '竞争分层（头部/腰部/长尾/新进入）',
+        competitor_companies TEXT NULL COMMENT '主要竞争对手企业列表（JSON字符串）',
+        competitor_count INT NULL COMMENT '识别出的竞争对手数量',
+        market_heat_score DECIMAL(10,4) NULL COMMENT '赛道热度评分（0-100）',
+        industry_match_confidence DECIMAL(5,2) NULL COMMENT '行业赛道分类置信度（0-1）',
+        classification_version VARCHAR(50) NULL COMMENT '分类规则/模型版本号',
+        classification_source VARCHAR(20) NULL COMMENT '分类来源：rule/llm/hybrid',
+        classification_status VARCHAR(20) NOT NULL DEFAULT 'verified' COMMENT '分类状态：pending/filling/checking/verified/failed',
+        classification_retry_count INT NOT NULL DEFAULT 0 COMMENT '分类重试次数（最大3次）',
+        investor_names TEXT NULL COMMENT '投资主体列表（JSON字符串）',
+        lead_investor VARCHAR(255) NULL COMMENT '领投方（可空）',
+        region_country VARCHAR(100) NULL COMMENT '国家/地区（reg_rgn）',
+        region_province VARCHAR(100) NULL COMMENT '省（reg_prov）',
+        region_city VARCHAR(100) NULL COMMENT '市（reg_city）',
+        region_county VARCHAR(100) NULL COMMENT '区县（reg_cnty）',
+        funding_status VARCHAR(100) NULL COMMENT '融资状态',
+        source_create_time DATETIME NULL COMMENT '源端创建时间（Asia/Shanghai）',
+        source_update_time DATETIME NULL COMMENT '源端更新时间（Asia/Shanghai）',
+        is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0未删除，1已删除',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（Asia/Shanghai）',
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间（Asia/Shanghai）',
+        UNIQUE KEY uk_sourcing_event_natural (event_id, company_credit_code, event_date),
+        KEY idx_sourcing_event_date (event_date),
+        KEY idx_sourcing_event_track (track_primary, track_secondary),
+        KEY idx_sourcing_event_company (company_name)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-融资事件标准表（统一分析口径）';
+    `);
+    console.log('✓ sourcing_financing_event_w_infer / sourcing_financing_event 表已就绪');
+  } catch (err) {
+    console.warn('创建项目挖掘融资事件表时出现警告:', err.message);
+  }
+
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project_sql_sync_setting (
@@ -5235,6 +5352,9 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('上市进展会员等级或邮件配置初始化时出现警告:', err.message);
   }
+
+  const { seedApplicationsAndEmailFallback } = require('./utils/项目挖掘/dbSeedFinancing');
+  await seedApplicationsAndEmailFallback(dbPool);
 
   console.log('✓ 所有数据库表结构初始化完成');
   

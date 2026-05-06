@@ -3,6 +3,25 @@ import { Modal, Table, Pagination, Spin, Message } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './TaskLogModal.css'
 
+/** 构造定时任务「新闻同步」日志列表中的过程说明（含投融资按日落库明细） */
+function formatNewsSyncLogMessage(log) {
+  const d = log.execution_details
+  if (d && typeof d === 'object' && d.financing_sync && Array.isArray(d.progress_lines) && d.progress_lines.length > 0) {
+    return d.progress_lines.join('\n')
+  }
+  if (d && typeof d === 'object' && d.summary && typeof d.summary === 'object') {
+    try {
+      return JSON.stringify(d.summary)
+    } catch {
+      return '-'
+    }
+  }
+  if (log.synced_count != null && log.synced_count !== '') {
+    return `同步 ${log.synced_count} 条`
+  }
+  return '-'
+}
+
 function TaskLogModal({ taskId, taskType, onClose }) {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(false)
@@ -28,7 +47,18 @@ function TaskLogModal({ taskId, taskType, onClose }) {
         }
       })
       if (response.data.success) {
-        setLogs(response.data.data || [])
+        const raw = response.data.data || []
+        if (taskType === 'news_sync') {
+          setLogs(
+            raw.map((log) => ({
+              ...log,
+              execution_time: log.start_time || log.execution_time,
+              message: formatNewsSyncLogMessage(log),
+            }))
+          )
+        } else {
+          setLogs(raw)
+        }
         setTotal(response.data.total || 0)
       }
     } catch (error) {

@@ -82,9 +82,12 @@ async function checkListingPermission(userId) {
   return checkUserAppPermission(userId, '上市进展');
 }
 
+const { checkProjectSourcingPermission } = require('./项目挖掘/projectSourcingPermission');
+
 module.exports = {
   checkUserAppPermission,
   checkNewsPermission,
   checkListingPermission,
+  checkProjectSourcingPermission,
 };
 

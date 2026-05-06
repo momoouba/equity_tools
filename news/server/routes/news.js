@@ -252,6 +252,26 @@ async function updateSyncLog(logId, params) {
 }
 
 /**
+ * 执行中更新同步日志（不写 end_time / status，用于投融资等长任务逐步写入进度）
+ */
+async function patchRunningSyncLog(logId, { executionDetails, syncedCount } = {}) {
+  if (!logId) return;
+  const fields = [];
+  const values = [];
+  if (executionDetails !== undefined && executionDetails !== null) {
+    fields.push('execution_details = ?');
+    values.push(typeof executionDetails === 'string' ? executionDetails : JSON.stringify(executionDetails));
+  }
+  if (syncedCount !== undefined && syncedCount !== null) {
+    fields.push('synced_count = ?');
+    values.push(syncedCount);
+  }
+  if (!fields.length) return;
+  values.push(logId);
+  await db.execute(`UPDATE news_sync_execution_log SET ${fields.join(', ')} WHERE id = ?`, values);
+}
+
+/**
  * 格式化日期为 yyyy-MM-dd HH:mm:ss
  */
 function formatDate(date) {
@@ -9287,4 +9307,5 @@ router.syncShanghaiInternationalGroupExecPersData = syncShanghaiInternationalGro
 router.syncShanghaiInternationalGroupThsSubscriptionData = syncShanghaiInternationalGroupThsSubscriptionData;
 router.createSyncLog = createSyncLog;
 router.updateSyncLog = updateSyncLog;
+router.patchRunningSyncLog = patchRunningSyncLog;
 

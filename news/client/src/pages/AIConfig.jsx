@@ -51,6 +51,8 @@ function AIConfig() {
 
   const applicationTypes = [
     { value: 'news_analysis', label: '新闻分析' },
+    { value: 'project_sourcing_analysis', label: '项目挖掘分析' },
+    { value: 'listing_progress_analysis', label: '上市进展分析' },
     { value: 'general', label: '通用' }
   ]
 

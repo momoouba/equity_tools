@@ -1,0 +1,8 @@
+.financing-events-page .arco-table .arco-table-th,
+.financing-events-page .arco-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+.financing-events-page .arco-table .arco-table-th:last-child,
+.financing-events-page .arco-table .arco-table-td:last-child {
+  border-right: none !important;
+}

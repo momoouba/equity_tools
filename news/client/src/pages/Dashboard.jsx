@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate, Routes, Route, useLocation } from 'react-router-dom'
 import { Layout, Button, Spin, Message } from '@arco-design/web-react'
-import { IconCommon, IconApps, IconSettings, IconFolder } from '@arco-design/web-react/icon'
+import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
 import EnterpriseManagement from './EnterpriseManagement'
 import CompanyManagement from './CompanyManagement'
@@ -16,6 +16,8 @@ import ListingProjectProgressPage from './上市进展/ListingProjectProgressPag
 import ListingIpoProjectPage from './上市进展/ListingIpoProjectPage'
 import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import ListingNewSharePage from './上市进展/ListingNewSharePage'
+import ProjectSourcingPage from './项目挖掘/ProjectSourcingPage'
+import FinancingEventsPage from './项目挖掘/FinancingEventsPage'
 import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
@@ -28,6 +30,7 @@ function Dashboard() {
   const [hasNewsPermission, setHasNewsPermission] = useState(false)
   const [hasPerformancePermission, setHasPerformancePermission] = useState(false)
   const [hasListingPermission, setHasListingPermission] = useState(false)
+  const [hasProjectSourcingPermission, setHasProjectSourcingPermission] = useState(false)
   const [systemConfig, setSystemConfig] = useState({
     system_name: '',
     logo: ''
@@ -60,17 +63,25 @@ function Dashboard() {
     const hasListingPerm = appPermissions.some(
       (perm) => perm.app_name === '上市进展' && perm.membership_level_id
     )
+
+    const hasPsPerm = appPermissions.some(
+      (perm) => perm.app_name === '项目挖掘' && perm.membership_level_id
+    )
     
     const newsEnabled = hasNewsPerm || isAdminUser
     const perfEnabled = hasPerfPerm || isAdminUser
     const listingEnabled = hasListingPerm || isAdminUser
+    const projectSourcingEnabled = hasPsPerm || isAdminUser
     setHasNewsPermission(newsEnabled)
     setHasPerformancePermission(perfEnabled)
     setHasListingPermission(listingEnabled)
+    setHasProjectSourcingPermission(projectSourcingEnabled)
 
     // 优先保持与当前路由一致，避免刷新用户信息后顶栏高亮跳回新闻舆情
     const p = location.pathname
-    if (
+    if (p.includes('project-sourcing')) {
+      setActiveAppKey('project-sourcing-app')
+    } else if (
       p.includes('listing-project-progress') ||
       p.includes('listing-ipo-project') ||
       p.includes('listing-ipo-progress') ||
@@ -93,6 +104,8 @@ function Dashboard() {
       setActiveAppKey('performance-app')
     } else if (listingEnabled) {
       setActiveAppKey('listing-app')
+    } else if (projectSourcingEnabled) {
+      setActiveAppKey('project-sourcing-app')
     } else if (isAdminUser) {
       setActiveAppKey('admin')
     }
@@ -157,6 +170,12 @@ function Dashboard() {
     } else if (location.pathname.includes('listing-new-share')) {
       setSelectedKeys(['listing-new-share'])
       setActiveAppKey('listing-app')
+    } else if (location.pathname.includes('project-sourcing-financing-events')) {
+      setSelectedKeys(['project-sourcing-financing-events'])
+      setActiveAppKey('project-sourcing-app')
+    } else if (location.pathname.includes('project-sourcing')) {
+      setSelectedKeys(['project-sourcing'])
+      setActiveAppKey('project-sourcing-app')
     } else if (location.pathname.includes('companies')) {
       setSelectedKeys(['companies'])
       setActiveAppKey('admin')
@@ -277,6 +296,17 @@ function Dashboard() {
         { key: 'listing-ipo-project', title: '底层项目表' },
         { key: 'listing-ipo-progress', title: '上市信息表' },
         { key: 'listing-new-share', title: '打新日历' },
+        { key: 'system-db', title: '数据库连接配置' }
+      ]
+    },
+    {
+      key: 'project-sourcing-app',
+      title: '项目挖掘',
+      icon: <IconBulb />,
+      visible: isAdmin || hasProjectSourcingPermission,
+      children: [
+        { key: 'project-sourcing', title: '融资与市场概览' },
+        { key: 'project-sourcing-financing-events', title: '融资事件列表' },
         { key: 'system-db', title: '数据库连接配置' }
       ]
     },
@@ -437,6 +467,22 @@ function Dashboard() {
               element={
                 (isAdmin || hasListingPermission)
                   ? <ListingNewSharePage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <ProjectSourcingPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing-financing-events"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <FinancingEventsPage />
                   : <div>您没有访问权限</div>
               }
             />
