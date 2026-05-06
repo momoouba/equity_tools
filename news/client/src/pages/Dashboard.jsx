@@ -18,6 +18,7 @@ import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import ListingNewSharePage from './上市进展/ListingNewSharePage'
 import ProjectSourcingPage from './项目挖掘/ProjectSourcingPage'
 import FinancingEventsPage from './项目挖掘/FinancingEventsPage'
+import TrackConfigPage from './项目挖掘/TrackConfigPage'
 import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
@@ -173,6 +174,9 @@ function Dashboard() {
     } else if (location.pathname.includes('project-sourcing-financing-events')) {
       setSelectedKeys(['project-sourcing-financing-events'])
       setActiveAppKey('project-sourcing-app')
+    } else if (location.pathname.includes('project-sourcing-track-config')) {
+      setSelectedKeys(['project-sourcing-track-config'])
+      setActiveAppKey('project-sourcing-app')
     } else if (location.pathname.includes('project-sourcing')) {
       setSelectedKeys(['project-sourcing'])
       setActiveAppKey('project-sourcing-app')
@@ -307,6 +311,7 @@ function Dashboard() {
       children: [
         { key: 'project-sourcing', title: '融资与市场概览' },
         { key: 'project-sourcing-financing-events', title: '融资事件列表' },
+        { key: 'project-sourcing-track-config', title: '赛道配置' },
         { key: 'system-db', title: '数据库连接配置' }
       ]
     },
@@ -483,6 +488,14 @@ function Dashboard() {
               element={
                 (isAdmin || hasProjectSourcingPermission)
                   ? <FinancingEventsPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing-track-config"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <TrackConfigPage />
                   : <div>您没有访问权限</div>
               }
             />

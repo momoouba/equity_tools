@@ -38,16 +38,44 @@ function registerFinancingRoutes(router) {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 100));
       const offset = (page - 1) * pageSize;
-      const keyword = req.query.keyword ? String(req.query.keyword).trim() : '';
+      let keyword = req.query.keyword ? String(req.query.keyword).trim() : '';
+      if (keyword.length > 200) {
+        keyword = keyword.slice(0, 200);
+      }
       const dateFrom = req.query.date_from ? String(req.query.date_from).slice(0, 10) : '';
       const dateTo = req.query.date_to ? String(req.query.date_to).slice(0, 10) : '';
 
       const where = ['is_deleted = 0'];
       const params = [];
       if (keyword) {
-        where.push('(company_name LIKE ? OR project_name LIKE ? OR company_credit_code LIKE ?)');
         const k = `%${keyword}%`;
-        params.push(k, k, k);
+        const textCols = [
+          'company_name',
+          'project_name',
+          'project_desc',
+          'company_credit_code',
+          'latest_round',
+          'round',
+          'funding_amt_raw',
+          'estimated_amt_raw',
+          'post_valuation_raw',
+          'industry_source_lv1',
+          'industry_source_lv2',
+          'track_primary',
+          'track_secondary',
+          'track_keywords',
+          'investor_names',
+          'lead_investor',
+          'funding_status',
+          'event_id',
+        ];
+        const parts = textCols.map((c) => `COALESCE(${c},'') LIKE ?`);
+        parts.push(`COALESCE(DATE_FORMAT(event_date, '%Y-%m-%d'),'') LIKE ?`);
+        where.push(`(${parts.join(' OR ')})`);
+        for (let i = 0; i < textCols.length; i++) {
+          params.push(k);
+        }
+        params.push(k);
       }
       if (dateFrom) {
         where.push('event_date >= ?');
@@ -67,6 +95,7 @@ function registerFinancingRoutes(router) {
                 project_name, project_desc, latest_round, round,
                 funding_amt_raw, estimated_amt_raw, post_valuation_raw,
                 industry_source_lv1, industry_source_lv2,
+                track_primary, track_secondary, track_keywords,
                 investor_names, lead_investor, funding_status,
                 classification_status, created_at, updated_at
          FROM sourcing_financing_event

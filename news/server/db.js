@@ -2437,7 +2437,7 @@ async function initializeTables(dbPool) {
       top_p DECIMAL(3,2) DEFAULT 1.0 COMMENT 'Top P参数：0.0-1.0',
       is_active TINYINT DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       application_type ENUM('news_analysis', 'general') DEFAULT 'news_analysis' COMMENT '应用类型',
-      usage_type ENUM('content_analysis', 'image_recognition') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别',
+      usage_type ENUM('content_analysis', 'image_recognition', 'project_mining') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updater_user_id VARCHAR(19) COMMENT '更新用户ID',
@@ -4345,13 +4345,37 @@ async function initializeTables(dbPool) {
     if (usageTypeCols.length === 0) {
       await dbPool.query(`
         ALTER TABLE ai_model_config 
-        ADD COLUMN usage_type ENUM('content_analysis', 'image_recognition') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别'
+        ADD COLUMN usage_type ENUM('content_analysis', 'image_recognition', 'project_mining') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘'
         AFTER application_type
       `);
       console.log('✓ 已为 ai_model_config 表添加 usage_type 字段');
     }
   } catch (err) {
     console.warn('迁移ai_model_config表usage_type字段时出现警告:', err.message);
+  }
+
+  // 扩展 ai_model_config.usage_type：项目挖掘大模型
+  try {
+    const [ut] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'usage_type'
+      LIMIT 1
+    `);
+    const ct = ut.length ? String(ut[0].COLUMN_TYPE || '') : '';
+    if (ct && !ct.includes('project_mining')) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN usage_type ENUM('content_analysis','image_recognition','project_mining')
+        DEFAULT 'content_analysis'
+        COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘'
+      `);
+      console.log('✓ ai_model_config.usage_type 已扩展 project_mining');
+    }
+  } catch (err) {
+    console.warn('迁移 ai_model_config.usage_type 扩展 project_mining 时出现警告:', err.message);
   }
   
   // 创建舆情信息分享链接表
@@ -5149,7 +5173,7 @@ async function initializeTables(dbPool) {
         classification_source VARCHAR(20) NULL COMMENT '分类来源：rule/llm/hybrid',
         classification_status VARCHAR(20) NOT NULL DEFAULT 'verified' COMMENT '分类状态：pending/filling/checking/verified/failed',
         classification_retry_count INT NOT NULL DEFAULT 0 COMMENT '分类重试次数（最大3次）',
-        investor_names TEXT NULL COMMENT '投资主体列表（JSON字符串）',
+        investor_names TEXT NULL COMMENT '投资主体名称列表（顿号拼接，原始 JSON 见明细表 inv_info_json）',
         lead_investor VARCHAR(255) NULL COMMENT '领投方（可空）',
         region_country VARCHAR(100) NULL COMMENT '国家/地区（reg_rgn）',
         region_province VARCHAR(100) NULL COMMENT '省（reg_prov）',
@@ -5170,6 +5194,114 @@ async function initializeTables(dbPool) {
     console.log('✓ sourcing_financing_event_w_infer / sourcing_financing_event 表已就绪');
   } catch (err) {
     console.warn('创建项目挖掘融资事件表时出现警告:', err.message);
+  }
+
+  // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_track (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '赛道ID',
+        name VARCHAR(100) NOT NULL COMMENT '赛道名称',
+        sort_order INT NOT NULL DEFAULT 0 COMMENT '排序（小在前）',
+        is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '0正常 1删除',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_sort (is_deleted, sort_order, id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道';
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_track_lv1 (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '一级分类ID',
+        track_id BIGINT NOT NULL COMMENT '赛道ID',
+        name VARCHAR(100) NOT NULL COMMENT '一级分类名称',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_deleted TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv1_track (track_id, is_deleted, sort_order),
+        CONSTRAINT fk_sourcing_track_lv1_track
+          FOREIGN KEY (track_id) REFERENCES sourcing_track(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道下一级分类';
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_track_lv2 (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '二级分类ID（分组节点）',
+        lv1_id BIGINT NOT NULL COMMENT '一级分类ID',
+        name VARCHAR(100) NOT NULL COMMENT '二级分类名称',
+        sort_order INT NOT NULL DEFAULT 0,
+        is_deleted TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv2_lv1 (lv1_id, is_deleted, sort_order),
+        CONSTRAINT fk_sourcing_track_lv2_lv1
+          FOREIGN KEY (lv1_id) REFERENCES sourcing_track_lv1(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-二级分类（分组）';
+    `);
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_track_lv3 (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '三级节点ID（匹配叶子）',
+        lv2_id BIGINT NOT NULL COMMENT '二级分类ID',
+        name VARCHAR(100) NOT NULL COMMENT '三级名称',
+        sort_order INT NOT NULL DEFAULT 0,
+        match_industry_lv1 VARCHAR(100) NULL COMMENT '匹配用来源/标准一级行业（精确，可空）',
+        match_industry_lv2 VARCHAR(100) NULL COMMENT '匹配用来源/标准二级行业（精确，可空）',
+        match_keywords VARCHAR(500) NULL COMMENT '关键词（逗号/分号分隔，任一命中）',
+        match_priority INT NOT NULL DEFAULT 0 COMMENT '优先级，越大越先匹配',
+        is_deleted TINYINT NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv3_lv2 (lv2_id, is_deleted, match_priority),
+        CONSTRAINT fk_sourcing_track_lv3_lv2
+          FOREIGN KEY (lv2_id) REFERENCES sourcing_track_lv2(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-三级分类（匹配规则）';
+    `);
+    console.log('✓ sourcing_track / lv1 / lv2 / lv3 表已就绪');
+  } catch (err) {
+    console.warn('创建项目挖掘赛道表时出现警告:', err.message);
+  }
+
+  // 赛道：将二级上的匹配字段迁移到三级（旧库一次性迁移）
+  try {
+    const [tblRow] = await dbPool.query(`
+      SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_track_lv3'
+    `);
+    if (tblRow.length && Number(tblRow[0].c) > 0) {
+      const [mCol] = await dbPool.query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_track_lv2' AND COLUMN_NAME = 'match_industry_lv1'
+      `);
+      const [lv3Cnt] = await dbPool.query(`SELECT COUNT(*) AS c FROM sourcing_track_lv3`);
+      if (mCol.length && Number(lv3Cnt[0].c || 0) === 0) {
+        await dbPool.query(`
+          INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, is_deleted)
+          SELECT id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, is_deleted
+          FROM sourcing_track_lv2 WHERE is_deleted = 0
+        `);
+        console.log('✓ 已将旧版 sourcing_track_lv2 匹配规则迁移至 sourcing_track_lv3');
+      }
+      const dropMatchCols = ['match_industry_lv1', 'match_industry_lv2', 'match_keywords', 'match_priority'];
+      for (let di = 0; di < dropMatchCols.length; di++) {
+        const cn = dropMatchCols[di];
+        const [hasCol] = await dbPool.query(`
+          SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_track_lv2' AND COLUMN_NAME = ?
+        `, [cn]);
+        if (hasCol.length) {
+          await dbPool.query('ALTER TABLE sourcing_track_lv2 DROP COLUMN `' + cn + '`');
+          console.log('✓ sourcing_track_lv2 已移除列 ' + cn);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('迁移赛道 lv2→lv3 匹配字段时出现警告:', err.message);
+  }
+
+  try {
+    const { seedDefaultSourcingTracks } = require('./utils/项目挖掘/dbSeedTrackDefaults');
+    await seedDefaultSourcingTracks(dbPool);
+  } catch (err) {
+    console.warn('写入默认赛道种子（人工智能/生物医药/半导体）时出现警告:', err.message);
   }
 
   try {

@@ -3,6 +3,10 @@ const crypto = require('crypto');
 const db = require('../../db');
 const C = require('./constants');
 const newsRoutes = require('../../routes/news');
+const { parseFundingAmountFields } = require('./financingAmountParse');
+const { mapIndustryToStd } = require('./financingIndustryMap');
+
+const RULE_ENRICH_VERSION = 'rule_enrich_v1';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -93,9 +97,35 @@ async function fetchSigForApp(appId) {
   return rows[0] || null;
 }
 
+function normalizeInvInfoArray(invInfo) {
+  if (!invInfo) return [];
+  if (Array.isArray(invInfo)) return invInfo;
+  if (typeof invInfo === 'string') {
+    try {
+      const p = JSON.parse(invInfo);
+      return Array.isArray(p) ? p : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/** 标准表 investor_names：仅投资人名称，顿号拼接（完整 JSON 仍在 w_infer.inv_info_json） */
+function investorNamesFromInvInfo(invInfo) {
+  const arr = normalizeInvInfoArray(invInfo);
+  if (!arr.length) return null;
+  const names = arr
+    .map((x) => (x && x.inv_nm != null ? String(x.inv_nm).trim() : ''))
+    .filter(Boolean);
+  if (!names.length) return null;
+  return names.join('、');
+}
+
 function leadInvestorFromInv(invInfo) {
-  if (!Array.isArray(invInfo) || invInfo.length === 0) return null;
-  const first = invInfo[0];
+  const arr = normalizeInvInfoArray(invInfo);
+  if (!arr.length) return null;
+  const first = arr[0];
   return first && first.inv_nm ? String(first.inv_nm) : null;
 }
 
@@ -105,8 +135,9 @@ function leadInvestorFromInv(invInfo) {
  */
 async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
   const recordHash = computeRecordHash(deal);
-  const invArr = deal.inv_info || [];
+  const invArr = normalizeInvInfoArray(deal.inv_info);
   const invJson = JSON.stringify(invArr);
+  const investorNamesStr = investorNamesFromInvInfo(invArr);
   const fundingDt = normalizeFundingDatetime(deal.funding_dt);
   const eventDate = fundingDateOnlyFromDeal(deal) || fundingDtYmd || null;
   const fundingId = String(deal.funding_id ?? '');
@@ -187,18 +218,25 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
   const wInferId = idRows[0].id;
   const leadInv = leadInvestorFromInv(invArr);
 
+  const fundingRaw = deal.funding_amt ?? null;
+  const estimatedRaw = deal.estmt_funding_amt ?? null;
+  const amt = parseFundingAmountFields(fundingRaw, estimatedRaw);
+  const ind = mapIndustryToStd(deal.xn_ic_lv1, deal.xn_ic_lv2);
+
   await db.execute(
     `INSERT INTO sourcing_financing_event (
       source_record_id, event_id, event_date, company_name, company_credit_code,
       project_name, project_desc, latest_round, round,
       funding_amt_raw, estimated_amt_raw, post_valuation_raw,
+      amount, amount_currency, amount_cny, amount_parse_status, amount_parse_confidence,
       industry_source_lv1, industry_source_lv2,
+      industry_std_lv1, industry_std_lv2, industry_match_confidence,
       investor_names, lead_investor,
       region_country, region_province, region_city, region_county,
       funding_status, source_create_time, source_update_time,
-      classification_status, classification_source, classification_version,
+      classification_status, classification_source, classification_version, classification_retry_count,
       is_deleted
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
     ON DUPLICATE KEY UPDATE
       source_record_id = VALUES(source_record_id),
       company_name = VALUES(company_name),
@@ -209,8 +247,16 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       funding_amt_raw = VALUES(funding_amt_raw),
       estimated_amt_raw = VALUES(estimated_amt_raw),
       post_valuation_raw = VALUES(post_valuation_raw),
+      amount = VALUES(amount),
+      amount_currency = VALUES(amount_currency),
+      amount_cny = VALUES(amount_cny),
+      amount_parse_status = VALUES(amount_parse_status),
+      amount_parse_confidence = VALUES(amount_parse_confidence),
       industry_source_lv1 = VALUES(industry_source_lv1),
       industry_source_lv2 = VALUES(industry_source_lv2),
+      industry_std_lv1 = VALUES(industry_std_lv1),
+      industry_std_lv2 = VALUES(industry_std_lv2),
+      industry_match_confidence = VALUES(industry_match_confidence),
       investor_names = VALUES(investor_names),
       lead_investor = VALUES(lead_investor),
       region_country = VALUES(region_country),
@@ -220,6 +266,10 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       funding_status = VALUES(funding_status),
       source_create_time = VALUES(source_create_time),
       source_update_time = VALUES(source_update_time),
+      classification_status = VALUES(classification_status),
+      classification_source = VALUES(classification_source),
+      classification_version = VALUES(classification_version),
+      classification_retry_count = VALUES(classification_retry_count),
       updated_at = CURRENT_TIMESTAMP`,
     [
       wInferId,
@@ -231,12 +281,20 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       deal.proj_desc ?? null,
       deal.cp_round ?? null,
       deal.round ?? null,
-      deal.funding_amt ?? null,
-      deal.estmt_funding_amt ?? null,
+      fundingRaw,
+      estimatedRaw,
       deal.post_valuation ?? null,
+      amt.amount,
+      amt.amount_currency,
+      amt.amount_cny,
+      amt.amount_parse_status,
+      amt.amount_parse_confidence,
       deal.xn_ic_lv1 ?? null,
       deal.xn_ic_lv2 ?? null,
-      invJson,
+      ind.industry_std_lv1,
+      ind.industry_std_lv2,
+      ind.industry_match_confidence,
+      investorNamesStr,
       leadInv,
       deal.reg_rgn ?? null,
       deal.reg_prov ?? null,
@@ -247,9 +305,24 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       normalizeSourceDatetime(deal.update_time),
       'verified',
       'rule',
-      'ingest_v1',
+      RULE_ENRICH_VERSION,
+      0,
     ]
   );
+
+  try {
+    const evRows = await db.query(
+      `SELECT id FROM sourcing_financing_event WHERE event_id = ? AND company_credit_code = ? AND event_date = ? LIMIT 1`,
+      [fundingId, credit || '', eventDate]
+    );
+    if (evRows.length) {
+      const { applyTrackMatchForEvents } = require('./financingTrackMatch');
+      await applyTrackMatchForEvents({ eventIds: [evRows[0].id], mode: 'all' });
+    }
+  } catch (trackErr) {
+    console.warn('[financingIngest] applyTrackMatchForEvents:', trackErr.message);
+  }
+
   return true;
 }
 

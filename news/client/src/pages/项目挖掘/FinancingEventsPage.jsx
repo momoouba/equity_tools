@@ -31,15 +31,22 @@ function parseUserAdmin() {
   }
 }
 
-function formatInvestors(jsonStr) {
-  if (!jsonStr || typeof jsonStr !== 'string') return '-'
-  try {
-    const arr = JSON.parse(jsonStr)
-    if (!Array.isArray(arr)) return jsonStr
-    return arr.map((x) => x.inv_nm).filter(Boolean).join('、') || '-'
-  } catch {
-    return jsonStr.slice(0, 80)
+function formatInvestors(raw) {
+  if (raw == null || raw === '') return '-'
+  if (typeof raw !== 'string') return String(raw)
+  const trimmed = raw.trim()
+  if (!trimmed) return '-'
+  if (trimmed.startsWith('[')) {
+    try {
+      const arr = JSON.parse(trimmed)
+      if (Array.isArray(arr)) {
+        return arr.map((x) => x && x.inv_nm).filter(Boolean).join('、') || '-'
+      }
+    } catch {
+      /* 非合法 JSON 时按纯文本展示 */
+    }
   }
+  return trimmed
 }
 
 /** 列表展示：融资日期仅 yyyy-MM-dd（兼容接口返回 DATE / ISO 字符串） */
@@ -160,6 +167,13 @@ export default function FinancingEventsPage() {
       render: (v) => formatEventDate(v),
     },
     { title: '项目名称', dataIndex: 'project_name', width: 160, ellipsis: true },
+    {
+      title: '项目简介',
+      dataIndex: 'project_desc',
+      width: 220,
+      ellipsis: true,
+      render: (v) => (v == null || String(v).trim() === '' ? '-' : String(v)),
+    },
     { title: '企业名称', dataIndex: 'company_name', width: 200, ellipsis: true },
     { title: '统一社会信用代码', dataIndex: 'company_credit_code', width: 190 },
     { title: '最新轮次', dataIndex: 'latest_round', width: 100 },
@@ -168,6 +182,8 @@ export default function FinancingEventsPage() {
     { title: '预估金额', dataIndex: 'estimated_amt_raw', width: 120 },
     { title: '行业(L1)', dataIndex: 'industry_source_lv1', width: 110 },
     { title: '行业(L2)', dataIndex: 'industry_source_lv2', width: 110 },
+    { title: '赛道', dataIndex: 'track_primary', width: 110, ellipsis: true },
+    { title: '子赛道', dataIndex: 'track_secondary', width: 160, ellipsis: true },
     {
       title: '投资方',
       dataIndex: 'investor_names',
@@ -239,8 +255,8 @@ export default function FinancingEventsPage() {
     <div className="financing-events-page" style={{ padding: '16px 24px' }}>
       <Space style={{ marginBottom: 8 }} wrap>
         <Input
-          placeholder="企业 / 项目名称 / 信用代码"
-          style={{ width: 220 }}
+          placeholder="模糊搜索：日期、企业、项目、简介、信用代码、轮次、金额、行业、赛道、投资方、事件ID等"
+          style={{ width: 420 }}
           value={keyword}
           onChange={setKeyword}
           allowClear

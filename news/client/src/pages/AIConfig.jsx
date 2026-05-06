@@ -58,7 +58,8 @@ function AIConfig() {
 
   const usageTypes = [
     { value: 'content_analysis', label: '情绪分析' },
-    { value: 'image_recognition', label: '图片识别' }
+    { value: 'image_recognition', label: '图片识别' },
+    { value: 'project_mining', label: '项目挖掘' }
   ]
 
   useEffect(() => {

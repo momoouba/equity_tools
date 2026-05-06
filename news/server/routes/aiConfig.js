@@ -5,6 +5,8 @@ const axios = require('axios');
 
 const router = express.Router();
 
+const VALID_USAGE_TYPES = ['content_analysis', 'image_recognition', 'project_mining'];
+
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
   const userRole = req.headers['x-user-role'] || 'user';
@@ -163,6 +165,10 @@ router.post('/', checkAdminPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '最大Token数必须在1-32000之间' });
     }
 
+    if (!VALID_USAGE_TYPES.includes(usage_type)) {
+      return res.status(400).json({ success: false, message: '无效的用途类型' });
+    }
+
     const configId = await generateId('ai_model_config');
     await db.execute(
       `INSERT INTO ai_model_config 
@@ -226,6 +232,10 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
     if (max_tokens !== undefined && (max_tokens < 1 || max_tokens > 32000)) {
       return res.status(400).json({ success: false, message: '最大Token数必须在1-32000之间' });
+    }
+
+    if (usage_type !== undefined && !VALID_USAGE_TYPES.includes(usage_type)) {
+      return res.status(400).json({ success: false, message: '无效的用途类型' });
     }
 
     await db.execute(

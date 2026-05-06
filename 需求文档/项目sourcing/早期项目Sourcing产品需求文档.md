@@ -451,7 +451,7 @@ WHERE NOT EXISTS (
 
 4. 基于业务唯一键进行幂等更新（建议：`funding_id + company + funding_dt` 标准化后）。  
 
-5. 写入同步执行日志 `listing_sync_execution_log`（复用系统已有表，与上市数据配置共用）。  
+5. 写入同步执行日志：**当前实现**为 `news_sync_execution_log`（挂载 `news_interface_config`，与定时任务「新闻同步」日志同源）；文档其他处提到的 `listing_sync_execution_log` 为上市进展侧共用方案，投融资排查请以 **`news_sync_execution_log`** 为准（详见 §十二点五-A）。
 
 ### 7.2 字段映射模板（按国际集团接口）
 
@@ -696,6 +696,62 @@ WHERE NOT EXISTS (
 11. onepage、API、日报/周报/月报使用统一过滤口径：`classification_status in ('verified','failed') AND is_deleted=0`。  
 
 12. 金额解析样本库不少于 200 条，并满足阈值：币种识别准确率 >=95%、可解析金额命中率 >=90%、单位换算正确率 >=90%。  
+
+---
+十二点一、补充约定（数据加工层 / 与实现对齐）
+
+以下条目补全前文未写清或与当前代码落地存在差异的口径，作为第二步开发与验收依据。
+
+### A. 同步执行日志落库位置
+
+- **事实实现**：投融资同步任务绑定 `news_interface_config.id`，执行过程写入 **`news_sync_execution_log`**（与「管理员设置 → 定时任务 → 新闻同步 → 日志」同源，`execution_details.progress_lines` 承载抓取过程）。
+- **文档中曾写** `listing_sync_execution_log`：与上市进展配置共用该表的设计保留作后续统一审计方案；**当前查询投融资同步明细请以 `news_sync_execution_log` 为准**。
+- **后续**：若产品要求统一到 `listing_sync_execution_log`，再做单次迁移与双写策略（不在本步范围）。
+
+### B. 标准表 `sourcing_financing_event` 写入阶段划分
+
+| 阶段 | 内容 | `classification_status`（建议） |
+|------|------|----------------------------------|
+| A | 接口字段映射入标准表（原文保留在 `*_raw`） | `pending`（若尚未跑规则层） |
+| B | 规则层：金额文本解析 + 烯牛→内部行业字典映射 | `filling`→完成后 **`verified`**，`classification_source='rule'` |
+| C | 赛道/竞品/标签等大模型或高级规则 | `checking`→**`verified`/`failed`**，`rule`/`llm`/`hybrid` |
+
+- **本步开发**：在入库管线内**同步执行阶段 B**（与阶段 A 同一事务写入），使新入库记录直达 **`verified` + `rule`**（版本号见实现常量）；阶段 C 仍为后续迭代。
+- **历史数据**：已以 `ingest_v1` 写入的可通过「批量回填任务」重跑阶段 B（脚本或管理接口，可选）。
+
+### C. 金额解析首期降级
+
+- **汇率**：在尚未接入「系统配置 → 汇率」前，使用环境变量 **`FINANCING_USD_CNY_RATE`**（默认 `7.2`）将 USD 折算为 `amount_cny`；接入配置表后替换实现并保留降级日志。
+- **主字段**：优先解析 **`funding_amt_raw`**；若为 `unparsed`，再尝试 **`estimated_amt_raw`**（与业务确认一致：展示「获投金额」优先，预估为辅）。
+- **投后估值**：仍只存 `post_valuation_raw`；结构化数值列待 DDL 扩展后再解析（见 §4.2 字段说明）。
+
+### D. 行业映射首期策略
+
+- 维护 **烯牛 `(xn_ic_lv1, xn_ic_lv2)` → `(industry_std_lv1, industry_std_lv2)`** 映射表（首期可为代码内种子 + 可扩展配置文件/DB 表）。
+- **未命中映射**：`industry_std_*` 置空，`industry_match_confidence=0`，不伪造标准行业；后续由产品补字典。
+- **禁止**：仅在查询时临时计算标准行业而不回写表 2（与 §4.2.1 强制条款一致）。
+
+### E. 投资方 JSON 与展示
+
+- `investor_names` **长期保留接口原始 JSON**（与 §7.2 一致）。
+- 列表/卡片如需可读字符串：**前端拼接**或查询视图拼接均可；**不强制**新增物理列（若后续报表强依赖再增加 `investor_names_display`）。
+
+### F. 接口字段别名
+
+- 若线上响应键名与 `国际集团投融资接口.MD` 不一致，在 **`financingIngestService` 入口做统一别名归一**（登记在接口变更说明中），避免标准表长期为空。
+
+---
+
+## 十二点二、第二步任务拆解（数据加工 — 执行清单）
+
+| 序号 | 任务 | 产出 | 状态 |
+|------|------|------|------|
+| T1 | 金额文本解析模块 | `parseFinancingMoneyText` + 环境变量汇率；覆盖万/亿/美元/未披露/模糊词 | **已完成** |
+| T2 | 行业字典映射模块 | `mapIndustryToStd` + 种子映射（可扩展） | **已完成** |
+| T3 | 入库管线接入规则层 | `ingestOneDeal` 写入 amount_*、industry_std_*、classification_* | **已完成** |
+| T4 | （可选）历史回填脚本 | `npm run backfill:financing-enrich`（见 `news/server/scripts/backfillFinancingRuleEnrich.js`）；默认仅 `ingest_v1`/NULL 版本，`--force` 重算 rule 链路（跳过 llm/hybrid） | **已完成** |
+| T5 | 文档修正 | §7.1 增加「当前使用 news_sync_execution_log」脚注或替换表述 | **已完成** |
+| T6 | 样本库与回归 | 沉淀 ≥200 条标注样本后接 §4.2 阈值验收 | 后续 |
 
 ---
 
