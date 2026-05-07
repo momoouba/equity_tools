@@ -170,6 +170,16 @@ function isHolidayMarketingNews(news) {
   return hasHoliday && hasMarketing;
 }
 
+/**
+ * 新闻 keywords 中含「节假日」主题标签（与 newsAnalysis 中节假日类内容一致）时，不进入舆情邮件。
+ * 此类内容常为企业节日推文，非投资舆情；与仅拦截「放假通知」类文案的 isHolidayMarketingNews 互补。
+ * @param {object} news
+ * @returns {boolean}
+ */
+function isHolidayContentTaggedNews(news) {
+  return parseNewsKeywords(news?.keywords).includes('节假日');
+}
+
 // 存储所有定时任务的Map
 const scheduledTasks = new Map();
 
@@ -2186,6 +2196,11 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         return false;
       }
 
+      if (isHolidayContentTaggedNews(news)) {
+        console.log(`[邮件发送] 过滤「节假日」主题标签新闻: ${news.title} (标签: ${keywords.join('、')})`);
+        return false;
+      }
+
       // 兜底：新榜新闻若命中节假日官方营销文案，也过滤掉（防止关键词字段异常导致漏拦截）
       const isXinbang = news.APItype === '新榜' || news.APItype === '新榜接口' || !news.APItype;
       if (isXinbang && isHolidayMarketingNews(news)) {
@@ -3105,7 +3120,8 @@ module.exports = {
   findPreviousWorkday,
   isWorkdayDate,
   filterNewsByCategory,
-  deduplicateNewsBySemanticSimilarity
+  deduplicateNewsBySemanticSimilarity,
+  isHolidayContentTaggedNews
 };
 
 

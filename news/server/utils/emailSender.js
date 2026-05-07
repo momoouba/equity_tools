@@ -888,8 +888,9 @@ async function sendNewsEmailToRecipient(recipientId) {
     }
     
     // 获取用户可见的昨日舆情信息（传入收件管理配置，用于企业类型和企查查类别过滤）
-    const { getUserVisibleYesterdayNews } = require('./scheduledEmailTasks');
-    const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    const { getUserVisibleYesterdayNews, isHolidayContentTaggedNews } = require('./scheduledEmailTasks');
+    const rawList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+    const newsList = rawList.filter((n) => !isHolidayContentTaggedNews(n));
     
     const newsByEntityTypeAndEnterprise = await buildNewsByEntityTypeAndEnterprise(newsList, recipient);
 
@@ -943,7 +944,7 @@ async function sendNewsEmailsToAllRecipients() {
     console.log(`找到 ${recipients.length} 个启用的收件管理配置`);
     
     // 为每个收件人获取对应的新闻（根据各自的entity_type配置）
-    const { getUserVisibleYesterdayNews } = require('./scheduledEmailTasks');
+    const { getUserVisibleYesterdayNews, isHolidayContentTaggedNews } = require('./scheduledEmailTasks');
     
     if (recipients.length === 0) {
       console.log('今天没有获取到相关企业的新闻，将发送空数据通知邮件');
@@ -975,7 +976,8 @@ async function sendNewsEmailsToAllRecipients() {
         );
 
         // 获取该收件人可见的昨日舆情信息（根据entity_type过滤）
-        const newsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+        const rawNewsList = await getUserVisibleYesterdayNews(recipient.user_id, recipient);
+        const newsList = rawNewsList.filter((n) => !isHolidayContentTaggedNews(n));
         
         const newsByEntityTypeAndEnterprise = await buildNewsByEntityTypeAndEnterprise(newsList, recipient);
         
