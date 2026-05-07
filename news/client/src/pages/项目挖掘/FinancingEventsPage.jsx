@@ -11,6 +11,8 @@ import {
   DatePicker,
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
+import * as XLSX from 'xlsx'
+import { saveAs } from 'file-saver'
 import axios from '../../utils/axios'
 import { fetchFinancingEvents, postFinancingSync } from '../../api/项目挖掘'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
@@ -59,6 +61,33 @@ function formatEventDate(val) {
   return d.isValid() ? d.format('YYYY-MM-DD') : s
 }
 
+/** 与列表列一致的导出行（Excel） */
+function buildFinancingExportRows(list) {
+  return list.map((row) => ({
+    融资日期: formatEventDate(row.event_date),
+    项目名称: row.project_name ?? '',
+    项目简介:
+      row.project_desc == null || String(row.project_desc).trim() === ''
+        ? '-'
+        : String(row.project_desc),
+    企业名称: row.company_name ?? '',
+    统一社会信用代码: row.company_credit_code ?? '',
+    最新轮次: row.latest_round ?? '',
+    推测轮次: row.round ?? '',
+    获投金额: row.funding_amt_raw ?? '',
+    预估金额: row.estimated_amt_raw ?? '',
+    '行业(L1)': row.industry_source_lv1 ?? '',
+    '行业(L2)': row.industry_source_lv2 ?? '',
+    赛道: row.track_primary ?? '',
+    子赛道: row.track_secondary ?? '',
+    投资方: formatInvestors(row.investor_names),
+    事件ID: row.event_id ?? '',
+  }))
+}
+
+/** 与后端 GET /events 单页上限一致 */
+const FINANCING_EXPORT_PAGE_SIZE = 200
+
 export default function FinancingEventsPage() {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState([])
@@ -76,6 +105,7 @@ export default function FinancingEventsPage() {
   const [syncForm] = Form.useForm()
   const [financingConfigs, setFinancingConfigs] = useState([])
   const [configsLoading, setConfigsLoading] = useState(false)
+  const [exportingAll, setExportingAll] = useState(false)
 
   const isAdmin = useMemo(() => parseUserAdmin(), [])
 
@@ -220,6 +250,82 @@ export default function FinancingEventsPage() {
     },
   ]
 
+  const handleExportCurrentPage = useCallback(() => {
+    if (!data.length) {
+      Message.warning('当前列表无数据可导出')
+      return
+    }
+    const rows = buildFinancingExportRows(data)
+    const sheet = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, sheet, '融资时间')
+    const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+    const name = `融资时间列表_第${page}页_${dayjs().format('YYYY-MM-DD_HHmmss')}.xlsx`
+    saveAs(new Blob([buf], { type: 'application/octet-stream' }), name)
+    Message.success(`已导出 ${rows.length} 条`)
+  }, [data, page])
+
+  const fetchAllAndExport = useCallback(async () => {
+    setExportingAll(true)
+    try {
+      const paramsBase = {
+        pageSize: FINANCING_EXPORT_PAGE_SIZE,
+        keyword: kwSearch || undefined,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+      }
+      const first = await fetchFinancingEvents({ page: 1, ...paramsBase })
+      if (!first.data?.success) {
+        Message.error(first.data?.message || '获取数据失败')
+        return
+      }
+      const d0 = first.data.data || {}
+      const totalCount = Number(d0.total || 0)
+      if (totalCount === 0) {
+        Message.warning('当前筛选条件下无数据可导出')
+        return
+      }
+      const merged = [...(d0.list || [])]
+      const pages = Math.ceil(totalCount / FINANCING_EXPORT_PAGE_SIZE)
+      for (let p = 2; p <= pages; p++) {
+        const res = await fetchFinancingEvents({ page: p, ...paramsBase })
+        if (!res.data?.success) {
+          Message.error(res.data?.message || `第 ${p} 页获取失败`)
+          return
+        }
+        merged.push(...(res.data.data.list || []))
+      }
+      const rows = buildFinancingExportRows(merged)
+      const sheet = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, sheet, '融资时间')
+      const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
+      const name = `融资时间列表_全部${rows.length}条_${dayjs().format('YYYY-MM-DD_HHmmss')}.xlsx`
+      saveAs(new Blob([buf], { type: 'application/octet-stream' }), name)
+      Message.success(`已导出 ${rows.length} 条`)
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '导出失败')
+    } finally {
+      setExportingAll(false)
+    }
+  }, [kwSearch, dateFrom, dateTo])
+
+  const handleExportAllClick = useCallback(() => {
+    Modal.confirm({
+      title: '导出全部',
+      content: (
+        <div>
+          <p>将按当前筛选条件（关键词、日期范围）分页拉取全部数据并导出为 Excel，与点击「查询」后的列表范围一致。</p>
+          {total > 0 ? (
+            <p style={{ marginTop: 8, color: 'var(--color-text-2)' }}>最近一次加载的合计：{total} 条（若刚改条件请先点「查询」）。</p>
+          ) : null}
+          <p style={{ marginTop: 8, color: 'var(--color-text-3)', fontSize: 12 }}>数据量大时会多次请求接口，请稍候。</p>
+        </div>
+      ),
+      onOk: fetchAllAndExport,
+    })
+  }, [total, fetchAllAndExport])
+
   const handleSyncOk = async () => {
     try {
       const v = await syncForm.validate()
@@ -297,6 +403,17 @@ export default function FinancingEventsPage() {
         </Button>
         <Button loading={loading} onClick={load}>
           刷新
+        </Button>
+        <Button type="outline" onClick={handleExportCurrentPage} disabled={loading || exportingAll || !data.length}>
+          导出当前页
+        </Button>
+        <Button
+          type="outline"
+          loading={exportingAll}
+          onClick={handleExportAllClick}
+          disabled={loading || exportingAll}
+        >
+          导出全部
         </Button>
         {isAdmin && (
           <Button
