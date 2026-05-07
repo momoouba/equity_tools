@@ -96,6 +96,8 @@ export default function FinancingEventsPage() {
   const [pageSize, setPageSize] = useState(100)
   const [keyword, setKeyword] = useState('')
   const [kwSearch, setKwSearch] = useState('')
+  /** 查询栏展示的融资日期范围（点「查询」后才写入 dateFrom/dateTo 参与接口） */
+  const [financingDateRange, setFinancingDateRange] = useState(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [tableScrollY, setTableScrollY] = useState(520)
@@ -315,7 +317,7 @@ export default function FinancingEventsPage() {
       title: '导出全部',
       content: (
         <div>
-          <p>将按当前筛选条件（关键词、日期范围）分页拉取全部数据并导出为 Excel，与点击「查询」后的列表范围一致。</p>
+          <p>将按当前筛选条件（模糊关键词、融资日期起止）分页拉取全部数据并导出为 Excel；日期按融资日期过滤且包含首尾两天，与点击「查询」后的列表一致。</p>
           {total > 0 ? (
             <p style={{ marginTop: 8, color: 'var(--color-text-2)' }}>最近一次加载的合计：{total} 条（若刚改条件请先点「查询」）。</p>
           ) : null}
@@ -367,25 +369,28 @@ export default function FinancingEventsPage() {
           onChange={setKeyword}
           allowClear
         />
-        <Input
-          placeholder="开始日期 yyyy-MM-dd"
-          style={{ width: 140 }}
-          value={dateFrom}
-          onChange={setDateFrom}
+        <span style={{ color: 'var(--color-text-2)', whiteSpace: 'nowrap' }}>
+          融资日期
+        </span>
+        <DatePicker.RangePicker
+          style={{ width: 280 }}
           allowClear
-        />
-        <Input
-          placeholder="结束日期 yyyy-MM-dd"
-          style={{ width: 140 }}
-          value={dateTo}
-          onChange={setDateTo}
-          allowClear
+          placeholder={['开始日期', '结束日期']}
+          value={financingDateRange}
+          onChange={setFinancingDateRange}
         />
         <Button
           type="primary"
           onClick={() => {
             setPage(1)
             setKwSearch(keyword.trim())
+            if (financingDateRange?.[0] && financingDateRange?.[1]) {
+              setDateFrom(dayjs(financingDateRange[0]).format('YYYY-MM-DD'))
+              setDateTo(dayjs(financingDateRange[1]).format('YYYY-MM-DD'))
+            } else {
+              setDateFrom('')
+              setDateTo('')
+            }
           }}
         >
           查询
@@ -394,6 +399,7 @@ export default function FinancingEventsPage() {
           onClick={() => {
             setKeyword('')
             setKwSearch('')
+            setFinancingDateRange(null)
             setDateFrom('')
             setDateTo('')
             setPage(1)
