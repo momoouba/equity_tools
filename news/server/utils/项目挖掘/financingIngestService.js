@@ -235,7 +235,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       region_country, region_province, region_city, region_county,
       funding_status, source_create_time, source_update_time,
       classification_status, classification_source, classification_version, classification_retry_count,
-      is_deleted
+      delete_mark
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
     ON DUPLICATE KEY UPDATE
       source_record_id = VALUES(source_record_id),
@@ -351,7 +351,7 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
   let logId = null;
 
   const configs = await db.query(
-    `SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1 AND (is_deleted = 0 OR is_deleted IS NULL)`,
+    `SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1 AND (delete_mark = 0 OR delete_mark IS NULL)`,
     [configId, C.INTERFACE_TYPE_SHANGHAI_INTERNATIONAL_FINANCING]
   );
   if (configs.length === 0) {

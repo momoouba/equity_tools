@@ -234,7 +234,7 @@ async function isWorkdayDate(date) {
   try {
     const db = require('../db');
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -2430,7 +2430,7 @@ async function isWorkdayForEmail(date) {
     // 使用北京时区格式化日期，确保与节假日表中的日期（北京时区）一致
     const dateStr = formatDateOnly(date);
     const holidays = await db.query(
-      'SELECT is_workday, workday_type FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
+      'SELECT is_workday, workday_type FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
       [dateStr]
     );
     
@@ -2466,7 +2466,7 @@ async function executeEmailTask(recipientId) {
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
        WHERE rm.id = ? 
-       AND rm.is_deleted = 0
+       AND rm.delete_mark = 0
        AND rm.is_active = 1`,
       [recipientId]
     );
@@ -3027,7 +3027,7 @@ async function updateScheduledTasks() {
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
        WHERE rm.is_active = 1 
-       AND rm.is_deleted = 0`,
+       AND rm.delete_mark = 0`,
       []
     );
     

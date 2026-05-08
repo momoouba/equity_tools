@@ -410,7 +410,7 @@ async function isWorkdayDate(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -1331,7 +1331,7 @@ async function scheduleRetryIfNeeded(config, range, options = {}) {
       
       // 重新获取配置（可能已被更新）
       const updatedConfigs = await db.query(
-        'SELECT nic.*, a.app_name FROM news_interface_config nic LEFT JOIN applications a ON nic.app_id = a.id WHERE nic.id = ? AND nic.is_active = 1 AND nic.is_deleted = 0',
+        'SELECT nic.*, a.app_name FROM news_interface_config nic LEFT JOIN applications a ON nic.app_id = a.id WHERE nic.id = ? AND nic.is_active = 1 AND nic.delete_mark = 0',
         [config.id]
       );
       
@@ -1648,7 +1648,7 @@ async function syncNewsData(options = {}) {
       SELECT nic.*, a.app_name
       FROM news_interface_config nic
       LEFT JOIN applications a ON nic.app_id = a.id
-      WHERE nic.is_active = 1 AND nic.is_deleted = 0
+      WHERE nic.is_active = 1 AND nic.delete_mark = 0
     `;
     if (configId) {
       sql += ' AND nic.id = ?';
@@ -3215,28 +3215,28 @@ router.get('/recipients', async (req, res) => {
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
+               rm.delete_mark, rm.delete_time, rm.delete_user_id, u2.account as delete_user_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
-        LEFT JOIN users u2 ON rm.deleted_by = u2.id
-        WHERE rm.is_deleted = 0 AND rm.app_id = ?
+        LEFT JOIN users u2 ON rm.delete_user_id = u2.id
+        WHERE rm.delete_mark = 0 AND rm.app_id = ?
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE is_deleted = 0 AND app_id = ?';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE delete_mark = 0 AND app_id = ?';
       queryParams = [newsAppId, pageSize, offset];
     } else {
       // 用户只查看自己的（排除已删除的记录）
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.is_deleted, rm.deleted_at, rm.deleted_by
+               rm.delete_mark, rm.delete_time, rm.delete_user_id
         FROM recipient_management rm
-        WHERE rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
+        WHERE rm.user_id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
         ORDER BY rm.created_at DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND is_deleted = 0 AND app_id = ?';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND delete_mark = 0 AND app_id = ?';
       queryParams = [userId, newsAppId, pageSize, offset];
     }
 
@@ -3321,19 +3321,19 @@ router.get('/recipients/:id', async (req, res) => {
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.is_deleted, rm.deleted_at, rm.deleted_by, u2.account as deleted_by_account
+               rm.delete_mark, rm.delete_time, rm.delete_user_id, u2.account as delete_user_account
         FROM recipient_management rm
         LEFT JOIN users u ON rm.user_id = u.id
-        LEFT JOIN users u2 ON rm.deleted_by = u2.id
-        WHERE rm.id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
+        LEFT JOIN users u2 ON rm.delete_user_id = u2.id
+        WHERE rm.id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
       `;
     } else {
       query = `
         SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
                rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.is_deleted, rm.deleted_at, rm.deleted_by
+               rm.delete_mark, rm.delete_time, rm.delete_user_id
         FROM recipient_management rm
-        WHERE rm.id = ? AND rm.user_id = ? AND rm.is_deleted = 0 AND rm.app_id = ?
+        WHERE rm.id = ? AND rm.user_id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
       `;
     }
 
@@ -3713,7 +3713,7 @@ router.put('/recipients/:id', [
     }
 
     // 检查记录是否存在（排除已删除的记录）
-    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND is_deleted = 0', [id]);
+    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
@@ -3882,7 +3882,7 @@ router.put('/recipients/:id', [
       updateFields.push('updated_at = CURRENT_TIMESTAMP');
       updateValues.push(id);
       await db.execute(
-        `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
         updateValues
       );
 
@@ -3932,7 +3932,7 @@ router.delete('/recipients/:id', async (req, res) => {
     const userRole = req.headers['x-user-role'];
 
     // 检查记录是否存在（排除已删除的记录）
-    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND is_deleted = 0', [id]);
+    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
@@ -3955,23 +3955,23 @@ router.delete('/recipients/:id', async (req, res) => {
       send_frequency: existing[0].send_frequency,
       send_time: existing[0].send_time || '',
       is_active: existing[0].is_active,
-      is_deleted: existing[0].is_deleted || 0,
-      deleted_at: existing[0].deleted_at || null,
-      deleted_by: existing[0].deleted_by || null
+      delete_mark: existing[0].delete_mark || 0,
+      delete_time: existing[0].delete_time || null,
+      delete_user_id: existing[0].delete_user_id || null
     };
 
-    // 软删除：更新 is_deleted、deleted_at 和 deleted_by 字段
+    // 软删除：更新 delete_mark、delete_time、delete_user_id
     await db.execute(
-      'UPDATE recipient_management SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?',
+      'UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
       [userId, id]
     );
 
     // 构建新数据用于日志（标记为已删除）
     const newData = {
       ...oldData,
-      is_deleted: 1,
-      deleted_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
-      deleted_by: userId
+      delete_mark: 1,
+      delete_time: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      delete_user_id: userId
     };
 
     // 记录删除日志
@@ -4065,7 +4065,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     
     // 检查收件管理配置是否存在，以及用户是否有权限
     const existing = await db.query(
-      'SELECT * FROM recipient_management WHERE id = ? AND is_deleted = 0',
+      'SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0',
       [id]
     );
     

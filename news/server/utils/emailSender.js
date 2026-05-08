@@ -873,7 +873,7 @@ async function sendNewsEmailToRecipient(recipientId) {
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
        WHERE rm.id = ? 
-       AND rm.is_deleted = 0`,
+       AND rm.delete_mark = 0`,
       [recipientId]
     );
     
@@ -925,7 +925,7 @@ async function sendNewsEmailsToAllRecipients() {
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
        WHERE rm.is_active = 1 
-       AND rm.is_deleted = 0
+       AND rm.delete_mark = 0
        AND rm.send_frequency = 'daily'`,
       []
     );

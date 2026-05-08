@@ -96,7 +96,7 @@ async function initializeExternalDatabases(configs) {
 
     // 创建新连接
     for (const config of configs) {
-      if (config.is_active === 1 && !config.is_deleted) {
+      if (config.is_active === 1 && !config.delete_mark) {
         try {
           const pool = await createExternalPool(config);
           externalPools.set(config.id, pool);

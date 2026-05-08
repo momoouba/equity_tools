@@ -65,7 +65,7 @@ async function initializeEnterpriseSyncTasks() {
       `SELECT est.*, edc.name as db_name, edc.host, edc.port, edc.\`database\`
        FROM enterprise_sync_task est
        INNER JOIN external_db_config edc ON est.db_config_id = edc.id
-       WHERE est.is_active = 1 AND edc.is_deleted = 0 AND edc.is_active = 1`
+       WHERE est.is_active = 1 AND edc.delete_mark = 0 AND edc.is_active = 1`
     );
 
     if (tasks.length === 0) {

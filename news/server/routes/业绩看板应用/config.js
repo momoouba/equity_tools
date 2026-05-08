@@ -620,7 +620,7 @@ router.post('/sql/:id/test', async (req, res) => {
       if (config.external_db_config_id) {
         const { queryExternal, executeExternal, getExternalPool, createExternalPool } = require('../../utils/externalDb');
         if (!getExternalPool(config.external_db_config_id)) {
-          const cfgRows = await db.query('SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1', [config.external_db_config_id]);
+          const cfgRows = await db.query('SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1', [config.external_db_config_id]);
           if (cfgRows && cfgRows.length > 0) {
             await createExternalPool(cfgRows[0]);
           }
@@ -683,7 +683,7 @@ router.get('/databases', async (req, res) => {
     const rows = await db.query(
       `SELECT id, name, db_type, host, port, \`database\` AS database_name, is_active
        FROM external_db_config
-       WHERE is_deleted = 0 AND is_active = 1`
+       WHERE delete_mark = 0 AND is_active = 1`
     );
     
     res.json({ success: true, data: { list: rows } });

@@ -87,9 +87,9 @@ async function logDataChange(tableName, recordId, oldData, newData, userId) {
         'send_frequency',
         'send_time',
         'is_active',
-        'is_deleted',
-        'deleted_at',
-        'deleted_by'
+        'delete_mark',
+        'delete_time',
+        'delete_user_id'
       ];
     } else {
       console.warn(`未知的表名: ${tableName}`);

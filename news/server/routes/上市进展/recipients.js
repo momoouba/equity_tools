@@ -80,7 +80,7 @@ async function listRecipients(req, res) {
       SELECT rm.*, u.account AS user_account
       FROM recipient_management rm
       INNER JOIN users u ON rm.user_id = u.id
-      WHERE rm.app_id = ? AND (rm.is_deleted IS NULL OR rm.is_deleted = 0)
+      WHERE rm.app_id = ? AND rm.delete_mark = 0
     `;
     const params = [listingAppId];
 
@@ -172,7 +172,7 @@ async function updateRecipient(req, res) {
     const id = req.params.id;
 
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND (is_deleted IS NULL OR is_deleted = 0)`,
+      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {
@@ -231,7 +231,7 @@ async function deleteRecipient(req, res) {
     const id = req.params.id;
 
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND (is_deleted IS NULL OR is_deleted = 0)`,
+      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {
@@ -242,7 +242,7 @@ async function deleteRecipient(req, res) {
     }
 
     await db.execute(
-      `UPDATE recipient_management SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?`,
+      `UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0`,
       [user.id, id]
     );
     try {
@@ -272,7 +272,7 @@ async function sendTest(req, res) {
 
     const id = req.params.id;
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND (is_deleted IS NULL OR is_deleted = 0)`,
+      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {

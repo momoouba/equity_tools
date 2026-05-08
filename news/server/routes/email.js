@@ -29,7 +29,7 @@ router.get('/records', async (req, res) => {
       const recipientConfigs = await db.query(
         `SELECT recipient_email 
          FROM recipient_management 
-         WHERE user_id = ? AND is_deleted = 0 AND is_active = 1`,
+         WHERE user_id = ? AND delete_mark = 0 AND is_active = 1`,
         [userId]
       );
       
@@ -123,7 +123,7 @@ router.get('/logs', async (req, res) => {
       const recipientConfigs = await db.query(
         `SELECT recipient_email 
          FROM recipient_management 
-         WHERE user_id = ? AND is_deleted = 0 AND is_active = 1`,
+         WHERE user_id = ? AND delete_mark = 0 AND is_active = 1`,
         [userId]
       );
       

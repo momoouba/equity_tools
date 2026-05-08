@@ -424,19 +424,19 @@ router.get('/', checkAdminPermission, async (req, res) => {
         `SELECT rm.*, u.account as user_account, u.email as user_email
          FROM recipient_management rm
          LEFT JOIN users u ON rm.user_id = u.id
-         WHERE rm.is_deleted = 0
+         WHERE rm.delete_mark = 0
          ORDER BY rm.created_at DESC
          LIMIT ? OFFSET ?`,
         [parseInt(pageSize), offset]
       );
 
       // 获取总数
-      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM recipient_management WHERE is_deleted = 0');
+      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM recipient_management WHERE delete_mark = 0');
       const total = totalResult.total || 0;
 
       // 为每个配置添加定时任务信息
       const tasks = recipients.map(recipient => {
-        const isActive = recipient.is_active === 1 && recipient.is_deleted === 0;
+        const isActive = recipient.is_active === 1 && recipient.delete_mark === 0;
         
         // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
         let nextExecution = null;
@@ -466,7 +466,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
           cronExpression: recipient.cron_expression,
           skipHoliday: recipient.skip_holiday === 1,
           isActive: isActive,
-          isDeleted: recipient.is_deleted === 1,
+          isDeleted: recipient.delete_mark === 1,
           nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
           createdAt: recipient.created_at,
           updatedAt: recipient.updated_at
@@ -486,14 +486,14 @@ router.get('/', checkAdminPermission, async (req, res) => {
         `SELECT nic.*, a.app_name
          FROM news_interface_config nic
          LEFT JOIN applications a ON nic.app_id = a.id
-         WHERE nic.is_deleted = 0
+         WHERE nic.delete_mark = 0
          ORDER BY nic.created_at DESC
          LIMIT ? OFFSET ?`,
         [parseInt(pageSize), offset]
       );
 
       // 获取总数
-      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM news_interface_config WHERE is_deleted = 0');
+      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM news_interface_config WHERE delete_mark = 0');
       const total = totalResult.total || 0;
 
       // 为每个配置添加定时任务信息
@@ -616,7 +616,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       `SELECT rm.*, u.account as user_account, u.email as user_email
        FROM recipient_management rm
        LEFT JOIN users u ON rm.user_id = u.id
-       WHERE rm.id = ?`,
+       WHERE rm.id = ? AND rm.delete_mark = 0`,
       [id]
     );
 
@@ -625,7 +625,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const recipient = recipients[0];
-    const isActive = recipient.is_active === 1 && recipient.is_deleted === 0;
+    const isActive = recipient.is_active === 1 && recipient.delete_mark === 0;
     
     // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
     let nextExecution = null;
@@ -655,7 +655,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       cronExpression: recipient.cron_expression,
       skipHoliday: recipient.skip_holiday === 1,
       isActive: isActive,
-      isDeleted: recipient.is_deleted === 1,
+      isDeleted: recipient.delete_mark === 1,
       nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
       createdAt: recipient.created_at,
       updatedAt: recipient.updated_at
@@ -952,7 +952,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     if (task_type === 'email') {
       // 检查收件管理配置是否存在
       const existing = await db.query(
-        'SELECT * FROM recipient_management WHERE id = ?',
+        'SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0',
         [id]
       );
 
@@ -983,7 +983,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (updateFields.length > 0) {
         updateValues.push(id);
         await db.execute(
-          `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ?`,
+          `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
           updateValues
         );
 
@@ -993,7 +993,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     } else if (task_type === 'news_sync') {
       // 检查新闻接口配置是否存在
       const existing = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ?',
+        'SELECT * FROM news_interface_config WHERE id = ? AND delete_mark = 0',
         [id]
       );
 
@@ -1068,7 +1068,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (updateFields.length > 0) {
         updateValues.push(id);
         await db.execute(
-          `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE id = ?`,
+          `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
           updateValues
         );
 
@@ -1098,14 +1098,14 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     if (task_type === 'email') {
       const existing = await db.query(
-        'SELECT id FROM recipient_management WHERE id = ? AND is_deleted = 0',
+        'SELECT id FROM recipient_management WHERE id = ? AND delete_mark = 0',
         [id]
       );
       if (existing.length === 0) {
         return res.status(404).json({ success: false, message: '定时任务不存在' });
       }
       const result = await db.execute(
-        'UPDATE recipient_management SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?',
+        'UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
         [req.currentUserId || null, id]
       );
       if (result.affectedRows === 0) {
@@ -1114,14 +1114,14 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
       await updateScheduledTasks();
     } else if (task_type === 'news_sync') {
       const existing = await db.query(
-        'SELECT id FROM news_interface_config WHERE id = ? AND is_deleted = 0',
+        'SELECT id FROM news_interface_config WHERE id = ? AND delete_mark = 0',
         [id]
       );
       if (existing.length === 0) {
         return res.status(404).json({ success: false, message: '定时任务不存在' });
       }
       const result = await db.execute(
-        'UPDATE news_interface_config SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?',
+        'UPDATE news_interface_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
         [req.currentUserId || null, id]
       );
       if (result.affectedRows === 0) {

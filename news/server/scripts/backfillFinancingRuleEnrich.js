@@ -7,7 +7,7 @@
  *   node server/scripts/backfillFinancingRuleEnrich.js --force --batch=300
  *   node server/scripts/backfillFinancingRuleEnrich.js --limit=5000
  *
- * 默认仅处理：is_deleted=0 且 (classification_version IS NULL OR classification_version='ingest_v1')
+ * 默认仅处理：delete_mark=0 且 (classification_version IS NULL OR classification_version='ingest_v1')
  * --force：额外包含 classification_source 为空或 rule、且非 llm/hybrid 的记录（仍会跳过 classification_source 为 llm/hybrid）
  */
 
@@ -31,10 +31,10 @@ function parseArgs() {
 
 function whereClause(force) {
   if (force) {
-    return `is_deleted = 0
+    return `delete_mark = 0
       AND COALESCE(classification_source, '') NOT IN ('llm', 'hybrid')`;
   }
-  return `is_deleted = 0
+  return `delete_mark = 0
       AND (classification_version IS NULL OR classification_version = 'ingest_v1')`;
 }
 

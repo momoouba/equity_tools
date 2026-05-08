@@ -85,6 +85,9 @@ function LogModal({ type, id, onClose }) {
       email_subject: '邮件主题',
       send_frequency: '发送频率',
       send_time: '发送时间',
+      delete_mark: '删除标志',
+      delete_time: '删除时间',
+      delete_user_id: '删除人',
       is_deleted: '删除标志',
       deleted_at: '删除时间',
       deleted_by: '删除人'

@@ -40,7 +40,7 @@ router.get('/qichacha-configs', async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     // 获取总数
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM qichacha_config');
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM qichacha_config WHERE delete_mark = 0');
     const total = totalResult[0].total;
 
     // 获取分页数据
@@ -48,6 +48,7 @@ router.get('/qichacha-configs', async (req, res) => {
       SELECT qc.id, qc.app_id, a.app_name, qc.qichacha_app_key, qc.qichacha_daily_limit, qc.interface_type, qc.is_active, qc.created_at, qc.updated_at
       FROM qichacha_config qc
       LEFT JOIN applications a ON qc.app_id = a.id
+      WHERE qc.delete_mark = 0
       ORDER BY qc.created_at DESC
       LIMIT ? OFFSET ?
     `, [pageSize, offset]);
@@ -73,7 +74,7 @@ router.get('/qichacha-config/:id', async (req, res) => {
       SELECT qc.id, qc.app_id, a.app_name, qc.qichacha_app_key, qc.qichacha_daily_limit, qc.interface_type, qc.is_active, qc.created_at, qc.updated_at
       FROM qichacha_config qc
       LEFT JOIN applications a ON qc.app_id = a.id
-      WHERE qc.id = ?
+      WHERE qc.id = ? AND qc.delete_mark = 0
     `, [id]);
     if (configs.length > 0) {
       res.json({ success: true, data: configs[0] });
@@ -89,7 +90,7 @@ router.get('/qichacha-config/:id', async (req, res) => {
 // 获取系统配置（兼容旧接口，返回企查查配置）
 router.get('/config', async (req, res) => {
   try {
-    const configs = await db.query('SELECT * FROM qichacha_config ORDER BY id DESC LIMIT 1');
+    const configs = await db.query('SELECT * FROM qichacha_config WHERE delete_mark = 0 ORDER BY id DESC LIMIT 1');
     const configMap = {
       qichacha_app_key: '',
       qichacha_secret_key: '',
@@ -337,14 +338,14 @@ router.post('/news-config', [
     // 企查查接口不需要api_key，但需要验证是否配置了企查查应用凭证
     if (interfaceType === '企查查') {
       const qichachaConfigs = await db.query(
-        `SELECT id FROM qichacha_config WHERE interface_type = '新闻舆情' AND is_active = 1 LIMIT 1`
+        `SELECT id FROM qichacha_config WHERE interface_type = '新闻舆情' AND is_active = 1 AND delete_mark = 0 LIMIT 1`
       );
       if (qichachaConfigs.length === 0) {
         return res.status(400).json({ success: false, message: '请先配置企查查新闻舆情接口的应用凭证和秘钥' });
       }
     } else if (interfaceType === '上海国际集团') {
       const sigConfigs = await db.query(
-        `SELECT id FROM shanghai_international_group_config WHERE is_active = 1 LIMIT 1`
+        `SELECT id FROM shanghai_international_group_config WHERE is_active = 1 AND delete_mark = 0 LIMIT 1`
       );
       if (sigConfigs.length === 0) {
         return res.status(400).json({ success: false, message: '请先配置上海国际集团接口的X-App-Id、APIkey等凭证' });
@@ -771,16 +772,20 @@ router.get('/news-config/:id/logs', async (req, res) => {
   }
 });
 
-// 删除新闻接口配置
+// 删除新闻接口配置（逻辑删除）
 router.delete('/news-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM news_interface_config WHERE id = ?', [id]);
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT id FROM news_interface_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
 
-    await db.execute('DELETE FROM news_interface_config WHERE id = ?', [id]);
+    await db.execute(
+      'UPDATE news_interface_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      [userId, id]
+    );
     res.json({ success: true, message: '新闻接口配置删除成功' });
   } catch (error) {
     errorWithTag('[系统配置]', '删除新闻接口配置失败：', error);
@@ -813,7 +818,7 @@ router.post('/qichacha-config', [
     // 检查该应用是否已有相同接口类型的配置
     const interfaceType = req.body.interface_type || '企业信息';
     const existing = await db.query(
-      'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ?', 
+      'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? AND delete_mark = 0',
       [app_id, interfaceType]
     );
     if (existing.length > 0) {
@@ -879,7 +884,7 @@ router.put('/qichacha-config/:id', [
     const { app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type, is_active } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
-    const existingConfigs = await db.query('SELECT * FROM qichacha_config WHERE id = ?', [id]);
+    const existingConfigs = await db.query('SELECT * FROM qichacha_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existingConfigs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -895,7 +900,7 @@ router.put('/qichacha-config/:id', [
       // 如果更新了接口类型，检查新接口类型是否已存在
       if (interface_type !== undefined) {
         const duplicate = await db.query(
-          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? AND id != ?', 
+          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? AND id != ? AND delete_mark = 0',
           [app_id, interface_type, id]
         );
         if (duplicate.length > 0) {
@@ -939,7 +944,7 @@ router.put('/qichacha-config/:id', [
     if (updateFields.length > 0) {
       updateValues.push(id);
       await db.execute(
-        `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
         updateValues
       );
 
@@ -947,7 +952,7 @@ router.put('/qichacha-config/:id', [
       const userId = req.headers['x-user-id'] || null;
       if (userId) {
         // 获取更新后的数据
-        const updatedConfigs = await db.query('SELECT * FROM qichacha_config WHERE id = ?', [id]);
+        const updatedConfigs = await db.query('SELECT * FROM qichacha_config WHERE id = ? AND delete_mark = 0', [id]);
         const newConfig = updatedConfigs[0];
         
         // 构建新旧数据对比（只记录变更的字段）
@@ -997,16 +1002,20 @@ router.get('/qichacha-config/:id/logs', async (req, res) => {
   }
 });
 
-// 删除企查查配置
+// 删除企查查配置（逻辑删除）
 router.delete('/qichacha-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM qichacha_config WHERE id = ?', [id]);
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT id FROM qichacha_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
 
-    await db.execute('DELETE FROM qichacha_config WHERE id = ?', [id]);
+    await db.execute(
+      'UPDATE qichacha_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      [userId, id]
+    );
     res.json({ success: true, message: '企查查配置删除成功' });
   } catch (error) {
     console.error('删除企查查配置失败：', error);
@@ -1018,7 +1027,7 @@ router.delete('/qichacha-config/:id', async (req, res) => {
 router.post('/qichacha-config/:id/test', async (req, res) => {
   try {
     const { id } = req.params;
-    const configs = await db.query('SELECT * FROM qichacha_config WHERE id = ?', [id]);
+    const configs = await db.query('SELECT * FROM qichacha_config WHERE id = ? AND delete_mark = 0', [id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -1087,13 +1096,14 @@ router.get('/shanghai-international-group-configs', async (req, res) => {
     const pageSize = parseInt(req.query.pageSize) || 10;
     const offset = (page - 1) * pageSize;
 
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM shanghai_international_group_config');
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM shanghai_international_group_config WHERE delete_mark = 0');
     const total = totalResult[0].total;
 
     const configs = await db.query(`
       SELECT sigc.id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.daily_limit, sigc.is_active, sigc.created_at, sigc.updated_at
       FROM shanghai_international_group_config sigc
       LEFT JOIN applications a ON sigc.app_id = a.id
+      WHERE sigc.delete_mark = 0
       ORDER BY sigc.created_at DESC
       LIMIT ? OFFSET ?
     `, [pageSize, offset]);
@@ -1119,7 +1129,7 @@ router.get('/shanghai-international-group-config/:id', async (req, res) => {
       SELECT sigc.id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.api_key, sigc.daily_limit, sigc.is_active, sigc.created_at, sigc.updated_at
       FROM shanghai_international_group_config sigc
       LEFT JOIN applications a ON sigc.app_id = a.id
-      WHERE sigc.id = ?
+      WHERE sigc.id = ? AND sigc.delete_mark = 0
     `, [id]);
     if (configs.length > 0) {
       res.json({ success: true, data: configs[0] });
@@ -1152,7 +1162,7 @@ router.post('/shanghai-international-group-config', [
       return res.status(400).json({ success: false, message: '应用不存在' });
     }
 
-    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE app_id = ?', [app_id]);
+    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE app_id = ? AND delete_mark = 0', [app_id]);
     if (existing.length > 0) {
       return res.status(400).json({ success: false, message: '该应用已存在上海国际集团配置' });
     }
@@ -1202,7 +1212,7 @@ router.put('/shanghai-international-group-config/:id', [
     const { id } = req.params;
     const { app_id, x_app_id, api_key, daily_limit, is_active } = req.body;
 
-    const existingConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+    const existingConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existingConfigs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -1214,7 +1224,7 @@ router.put('/shanghai-international-group-config/:id', [
         return res.status(400).json({ success: false, message: '应用不存在' });
       }
       const duplicate = await db.query(
-        'SELECT id FROM shanghai_international_group_config WHERE app_id = ? AND id != ?',
+        'SELECT id FROM shanghai_international_group_config WHERE app_id = ? AND id != ? AND delete_mark = 0',
         [app_id, id]
       );
       if (duplicate.length > 0) {
@@ -1249,13 +1259,13 @@ router.put('/shanghai-international-group-config/:id', [
     if (updateFields.length > 0) {
       updateValues.push(id);
       await db.execute(
-        `UPDATE shanghai_international_group_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE shanghai_international_group_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
         updateValues
       );
 
       const userId = req.headers['x-user-id'] || null;
       if (userId) {
-        const updatedConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+        const updatedConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ? AND delete_mark = 0', [id]);
         const newConfig = updatedConfigs[0];
         const oldData = {
           app_id: oldConfig.app_id || '',
@@ -1299,15 +1309,19 @@ router.get('/shanghai-international-group-config/:id/logs', async (req, res) => 
   }
 });
 
-// 删除上海国际集团配置
+// 删除上海国际集团配置（逻辑删除）
 router.delete('/shanghai-international-group-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE id = ?', [id]);
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT id FROM shanghai_international_group_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
-    await db.execute('DELETE FROM shanghai_international_group_config WHERE id = ?', [id]);
+    await db.execute(
+      'UPDATE shanghai_international_group_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      [userId, id]
+    );
     res.json({ success: true, message: '上海国际集团配置删除成功' });
   } catch (error) {
     errorWithTag('[系统配置]', '删除上海国际集团配置失败：', error);
@@ -1320,7 +1334,7 @@ router.post('/shanghai-international-group-config/:id/test', async (req, res) =>
   try {
     const { id } = req.params;
     const { request_url } = req.body || {};
-    const configs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ?', [id]);
+    const configs = await db.query('SELECT * FROM shanghai_international_group_config WHERE id = ? AND delete_mark = 0', [id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -1376,8 +1390,8 @@ router.get('/qichacha-news-categories', async (req, res) => {
     const { page = 1, pageSize = 1000, search } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(pageSize);
     
-    let query = 'SELECT * FROM qichacha_news_categories WHERE 1=1';
-    let countQuery = 'SELECT COUNT(*) as total FROM qichacha_news_categories WHERE 1=1';
+    let query = 'SELECT * FROM qichacha_news_categories WHERE delete_mark = 0';
+    let countQuery = 'SELECT COUNT(*) as total FROM qichacha_news_categories WHERE delete_mark = 0';
     const params = [];
     
     if (search) {
@@ -1411,7 +1425,7 @@ router.get('/qichacha-news-categories', async (req, res) => {
 router.get('/qichacha-news-category/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const categories = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ?', [id]);
+    const categories = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ? AND delete_mark = 0', [id]);
     if (categories.length === 0) {
       return res.status(404).json({ success: false, message: '类别不存在' });
     }
@@ -1437,7 +1451,7 @@ router.post('/qichacha-news-category', [
 
     // 检查类别编码是否已存在
     const existing = await db.query(
-      'SELECT id FROM qichacha_news_categories WHERE category_code = ?',
+      'SELECT id FROM qichacha_news_categories WHERE category_code = ? AND delete_mark = 0',
       [category_code]
     );
     if (existing.length > 0) {
@@ -1478,7 +1492,7 @@ router.put('/qichacha-news-category/:id', [
     const { category_code, category_name } = req.body;
 
     // 检查类别是否存在
-    const existing = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ?', [id]);
+    const existing = await db.query('SELECT * FROM qichacha_news_categories WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '类别不存在' });
     }
@@ -1486,7 +1500,7 @@ router.put('/qichacha-news-category/:id', [
     // 如果更新类别编码，检查是否与其他记录重复
     if (category_code && category_code !== existing[0].category_code) {
       const duplicate = await db.query(
-        'SELECT id FROM qichacha_news_categories WHERE category_code = ? AND id != ?',
+        'SELECT id FROM qichacha_news_categories WHERE category_code = ? AND id != ? AND delete_mark = 0',
         [category_code, id]
       );
       if (duplicate.length > 0) {
@@ -1515,7 +1529,7 @@ router.put('/qichacha-news-category/:id', [
     
     updateValues.push(id);
     await db.execute(
-      `UPDATE qichacha_news_categories SET ${updateFields.join(', ')} WHERE id = ?`,
+      `UPDATE qichacha_news_categories SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
       updateValues
     );
 
@@ -1529,16 +1543,20 @@ router.put('/qichacha-news-category/:id', [
   }
 });
 
-// 删除企查查新闻类别
+// 删除企查查新闻类别（逻辑删除）
 router.delete('/qichacha-news-category/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM qichacha_news_categories WHERE id = ?', [id]);
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT id FROM qichacha_news_categories WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '类别不存在' });
     }
 
-    await db.execute('DELETE FROM qichacha_news_categories WHERE id = ?', [id]);
+    await db.execute(
+      'UPDATE qichacha_news_categories SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      [userId, id]
+    );
     
     // 清除类别映射缓存
     clearCategoryMapCache();
@@ -1714,7 +1732,7 @@ router.put('/config', [
     const { qichacha_app_key, qichacha_secret_key, qichacha_daily_limit } = req.body;
 
     // 检查是否已存在配置
-    const existing = await db.query('SELECT id FROM qichacha_config ORDER BY id DESC LIMIT 1');
+    const existing = await db.query('SELECT id FROM qichacha_config WHERE delete_mark = 0 ORDER BY id DESC LIMIT 1');
     
     if (existing.length > 0) {
       // 更新现有配置
@@ -1739,7 +1757,7 @@ router.put('/config', [
       if (updateFields.length > 0) {
         updateValues.push(existing[0].id);
         await db.execute(
-          `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE id = ?`,
+          `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
           updateValues
         );
       }
@@ -1775,7 +1793,7 @@ router.get('/email-configs', async (req, res) => {
     const offset = (page - 1) * pageSize;
 
     // 获取总数
-    const totalResult = await db.query('SELECT COUNT(*) as total FROM email_config');
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM email_config WHERE delete_mark = 0');
     const total = totalResult[0].total;
 
     // 获取分页数据
@@ -1783,6 +1801,7 @@ router.get('/email-configs', async (req, res) => {
       SELECT ec.id, ec.app_id, a.app_name, ec.smtp_host, ec.pop_host, ec.from_email, ec.from_name, ec.pop_user, ec.is_active, ec.created_at, ec.updated_at 
       FROM email_config ec
       LEFT JOIN applications a ON ec.app_id = a.id
+      WHERE ec.delete_mark = 0
       ORDER BY ec.created_at DESC
       LIMIT ? OFFSET ?
     `, [pageSize, offset]);
@@ -1823,7 +1842,7 @@ router.get('/email-config/:id', async (req, res) => {
        ec.pop_host, ec.pop_port, ec.pop_secure, ec.pop_user, ec.is_active 
        FROM email_config ec
        LEFT JOIN applications a ON ec.app_id = a.id
-       WHERE ec.id = ?`,
+       WHERE ec.id = ? AND ec.delete_mark = 0`,
       [id]
     );
     if (configs.length > 0) {
@@ -1872,7 +1891,7 @@ router.post('/email-config', [
     }
 
     // 检查该应用是否已有邮件配置
-    const existing = await db.query('SELECT id FROM email_config WHERE app_id = ?', [app_id]);
+    const existing = await db.query('SELECT id FROM email_config WHERE app_id = ? AND delete_mark = 0', [app_id]);
     if (existing.length > 0) {
       return res.status(400).json({ success: false, message: '该应用已存在邮件配置' });
     }
@@ -1954,7 +1973,7 @@ router.put('/email-config/:id', [
             pop_host, pop_port, pop_secure, pop_user, pop_password } = req.body;
 
     // 检查配置是否存在，并获取旧数据用于日志记录
-    const existingConfigs = await db.query('SELECT * FROM email_config WHERE id = ?', [id]);
+    const existingConfigs = await db.query('SELECT * FROM email_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existingConfigs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -1967,7 +1986,7 @@ router.put('/email-config/:id', [
         return res.status(400).json({ success: false, message: '应用不存在' });
       }
       
-      const duplicate = await db.query('SELECT id FROM email_config WHERE app_id = ? AND id != ?', [app_id, id]);
+      const duplicate = await db.query('SELECT id FROM email_config WHERE app_id = ? AND id != ? AND delete_mark = 0', [app_id, id]);
       if (duplicate.length > 0) {
         return res.status(400).json({ success: false, message: '该应用已存在邮件配置' });
       }
@@ -2034,7 +2053,7 @@ router.put('/email-config/:id', [
     if (updateFields.length > 0) {
       updateValues.push(id);
       await db.execute(
-        `UPDATE email_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE email_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
         updateValues
       );
 
@@ -2042,7 +2061,7 @@ router.put('/email-config/:id', [
       const userId = req.headers['x-user-id'] || null;
       if (userId) {
         // 获取更新后的数据
-        const updatedConfigs = await db.query('SELECT * FROM email_config WHERE id = ?', [id]);
+        const updatedConfigs = await db.query('SELECT * FROM email_config WHERE id = ? AND delete_mark = 0', [id]);
         const newConfig = updatedConfigs[0];
         
         // 构建新旧数据对比（只记录变更的字段）
@@ -2087,16 +2106,20 @@ router.put('/email-config/:id', [
   }
 });
 
-// 删除邮件配置
+// 删除邮件配置（逻辑删除）
 router.delete('/email-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await db.query('SELECT id FROM email_config WHERE id = ?', [id]);
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT id FROM email_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
 
-    await db.execute('DELETE FROM email_config WHERE id = ?', [id]);
+    await db.execute(
+      'UPDATE email_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      [userId, id]
+    );
     res.json({ success: true, message: '邮件配置删除成功' });
   } catch (error) {
     console.error('删除邮件配置失败：', error);
@@ -2420,7 +2443,7 @@ const normalizeHolidayType = (value, isWorkday) => {
 
 const upsertHolidayRecord = async ({ holidayDate, isWorkday, workdayType, holidayName, userId }) => {
   const existing = await db.query(
-    'SELECT id, is_deleted FROM holiday_calendar WHERE holiday_date = ?',
+    'SELECT id, delete_mark FROM holiday_calendar WHERE holiday_date = ?',
     [holidayDate]
   );
 
@@ -2438,9 +2461,9 @@ const upsertHolidayRecord = async ({ holidayDate, isWorkday, workdayType, holida
   const record = existing[0];
   await db.execute(
     `UPDATE holiday_calendar
-     SET is_deleted = 0,
-         deleted_at = NULL,
-         deleted_by = NULL,
+     SET delete_mark = 0,
+         delete_time = NULL,
+         delete_user_id = NULL,
          is_workday = ?,
          workday_type = ?,
          holiday_name = ?,
@@ -2870,7 +2893,7 @@ router.get('/holidays', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const { year, month, keyword, workdayType, isWorkday } = req.query;
 
-    const conditions = ['hc.is_deleted = 0'];
+    const conditions = ['hc.delete_mark = 0'];
     const params = [];
 
     if (year) {
@@ -2907,11 +2930,11 @@ router.get('/holidays', async (req, res) => {
               DATE_FORMAT(hc.holiday_date, '%Y-%m-%d') as holiday_date_text,
               u1.account AS created_by_account,
               u2.account AS updated_by_account,
-              u3.account AS deleted_by_account
+              u3.account AS delete_user_account
        FROM holiday_calendar hc
        LEFT JOIN users u1 ON hc.created_by = u1.id
        LEFT JOIN users u2 ON hc.updated_by = u2.id
-       LEFT JOIN users u3 ON hc.deleted_by = u3.id
+       LEFT JOIN users u3 ON hc.delete_user_id = u3.id
        ${whereClause}
        ORDER BY hc.holiday_date ASC
        LIMIT ? OFFSET ?`,
@@ -2939,7 +2962,7 @@ router.get('/holidays/years', async (req, res) => {
     const rows = await db.query(
       `SELECT DISTINCT YEAR(holiday_date) as year
        FROM holiday_calendar
-       WHERE is_deleted = 0
+       WHERE delete_mark = 0
        ORDER BY year DESC`
     );
     const years = rows
@@ -2979,20 +3002,20 @@ router.post('/holidays', [
     const userId = req.headers['x-user-id'] || req.body.userId || null;
 
     const existing = await db.query(
-      'SELECT id, is_deleted FROM holiday_calendar WHERE holiday_date = ?',
+      'SELECT id, delete_mark FROM holiday_calendar WHERE holiday_date = ?',
       [holidayDate]
     );
 
-    if (existing.length > 0 && !existing[0].is_deleted) {
+    if (existing.length > 0 && !existing[0].delete_mark) {
       return res.status(400).json({ success: false, message: '该日期已存在节假日配置' });
     }
 
-    if (existing.length > 0 && existing[0].is_deleted) {
+    if (existing.length > 0 && existing[0].delete_mark) {
       await db.execute(
         `UPDATE holiday_calendar
-         SET is_deleted = 0,
-             deleted_by = NULL,
-             deleted_at = NULL,
+         SET delete_mark = 0,
+             delete_user_id = NULL,
+             delete_time = NULL,
              is_workday = ?,
              workday_type = ?,
              holiday_name = ?,
@@ -3039,7 +3062,7 @@ router.put('/holidays/:id', [
     const { id } = req.params;
     const existingRows = await db.query(
       `SELECT *, DATE_FORMAT(holiday_date, '%Y-%m-%d') as holiday_date_text
-       FROM holiday_calendar WHERE id = ? AND is_deleted = 0`,
+       FROM holiday_calendar WHERE id = ? AND delete_mark = 0`,
       [id]
     );
 
@@ -3059,7 +3082,7 @@ router.put('/holidays/:id', [
       }
       if (newDate !== existing.holiday_date) {
         const duplicate = await db.query(
-          'SELECT id FROM holiday_calendar WHERE holiday_date = ? AND id != ? AND is_deleted = 0',
+          'SELECT id FROM holiday_calendar WHERE holiday_date = ? AND id != ? AND delete_mark = 0',
           [newDate, id]
         );
         if (duplicate.length > 0) {
@@ -3104,7 +3127,7 @@ router.put('/holidays/:id', [
     updateValues.push(id);
 
     await db.execute(
-      `UPDATE holiday_calendar SET ${updateFields.join(', ')} WHERE id = ? AND is_deleted = 0`,
+      `UPDATE holiday_calendar SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
       updateValues
     );
 
@@ -3142,10 +3165,10 @@ router.delete('/holidays/:id', async (req, res) => {
     const userId = req.headers['x-user-id'] || req.body.userId || null;
     const result = await db.execute(
       `UPDATE holiday_calendar
-       SET is_deleted = 1,
-           deleted_by = ?,
-           deleted_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND is_deleted = 0`,
+       SET delete_mark = 1,
+           delete_user_id = ?,
+           delete_time = CURRENT_TIMESTAMP
+       WHERE id = ? AND delete_mark = 0`,
       [userId, id]
     );
 
@@ -3284,7 +3307,7 @@ router.post('/holidays/generate', [
     const startDate = new Date(Date.UTC(year, 0, 1));
     const endDate = new Date(Date.UTC(year + 1, 0, 1));
     const existingRows = await db.query(
-      `SELECT holiday_date, is_deleted FROM holiday_calendar 
+      `SELECT holiday_date, delete_mark FROM holiday_calendar 
        WHERE holiday_date >= ? AND holiday_date < ?`,
       [formatDateToYMD(startDate), formatDateToYMD(endDate)]
     );
@@ -3292,7 +3315,7 @@ router.post('/holidays/generate', [
     const existingMap = new Map();
     existingRows.forEach((row) => {
       const key = formatDateToYMD(new Date(row.holiday_date));
-      existingMap.set(key, row.is_deleted === 0);
+      existingMap.set(key, row.delete_mark === 0);
     });
 
     let created = 0;
@@ -3376,8 +3399,8 @@ router.get('/database-configs', async (req, res) => {
 
     const isAdmin = userRole === 'admin';
     const whereClause = isAdmin
-      ? 'WHERE is_deleted = 0'
-      : 'WHERE is_deleted = 0 AND created_by = ?';
+      ? 'WHERE delete_mark = 0'
+      : 'WHERE delete_mark = 0 AND created_by = ?';
     const countParams = isAdmin ? [] : [userId];
     const listParams = isAdmin ? [pageSize, offset] : [userId, pageSize, offset];
 
@@ -3420,7 +3443,7 @@ router.get('/database-config/:id', async (req, res) => {
     const configs = await db.query(
       `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
        FROM external_db_config
-       WHERE id = ? AND is_deleted = 0 ${isAdmin ? '' : 'AND created_by = ?'}`,
+       WHERE id = ? AND delete_mark = 0 ${isAdmin ? '' : 'AND created_by = ?'}`,
       isAdmin ? [id] : [id, userId]
     );
     if (configs.length > 0) {
@@ -3455,7 +3478,7 @@ router.post('/database-config', [
 
     // 检查配置名称是否已存在
     const existing = await db.query(
-      'SELECT id FROM external_db_config WHERE name = ? AND is_deleted = 0',
+      'SELECT id FROM external_db_config WHERE name = ? AND delete_mark = 0',
       [name]
     );
     if (existing.length > 0) {
@@ -3514,7 +3537,7 @@ router.put('/database-config/:id', [
     const userId = req.headers['x-user-id'] || null;
     const isAdmin = userRole === 'admin';
 
-    const existingConfigs = await db.query('SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
+    const existingConfigs = await db.query('SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existingConfigs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -3525,7 +3548,7 @@ router.put('/database-config/:id', [
     // 如果更新配置名称，检查是否重复
     if (name) {
       const duplicate = await db.query(
-        'SELECT id FROM external_db_config WHERE name = ? AND id != ? AND is_deleted = 0',
+        'SELECT id FROM external_db_config WHERE name = ? AND id != ? AND delete_mark = 0',
         [name, id]
       );
       if (duplicate.length > 0) {
@@ -3591,7 +3614,7 @@ router.delete('/database-config/:id', async (req, res) => {
     const userId = req.headers['x-user-id'] || null;
     const isAdmin = userRole === 'admin';
 
-    const existing = await db.query('SELECT id, created_by FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
+    const existing = await db.query('SELECT id, created_by FROM external_db_config WHERE id = ? AND delete_mark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -3601,7 +3624,7 @@ router.delete('/database-config/:id', async (req, res) => {
 
     await db.execute(
       `UPDATE external_db_config 
-       SET is_deleted = 1, deleted_by = ?, deleted_at = CURRENT_TIMESTAMP 
+       SET delete_mark = 1, delete_user_id = ?, delete_time = CURRENT_TIMESTAMP 
        WHERE id = ?`,
       [userId, id]
     );
@@ -3668,7 +3691,7 @@ router.post('/database-config/test', async (req, res) => {
 router.post('/database-config/:id/test', async (req, res) => {
   try {
     const { id } = req.params;
-    const configs = await db.query('SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0', [id]);
+    const configs = await db.query('SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0', [id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }

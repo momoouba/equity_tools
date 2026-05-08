@@ -304,7 +304,7 @@ function normKw(s) {
  * @param {import('mysql2/promise').Pool} dbPool
  */
 async function seedDefaultSourcingTracks(dbPool) {
-  const [cntRows] = await dbPool.query(`SELECT COUNT(*) AS c FROM sourcing_track WHERE is_deleted = 0`);
+  const [cntRows] = await dbPool.query(`SELECT COUNT(*) AS c FROM sourcing_track WHERE delete_mark = 0`);
   if (Number(cntRows[0].c || 0) > 0) {
     return;
   }
@@ -337,7 +337,7 @@ async function seedDefaultSourcingTracks(dbPool) {
         for (let lk = 0; lk < l2.lv3.length; lk++) {
           const leaf = l2.lv3[lk];
           await dbPool.execute(
-            `INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, is_deleted)
+            `INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, delete_mark)
              VALUES (?,?,?,?,?,?,?,0)`,
             [
               lv2Id,

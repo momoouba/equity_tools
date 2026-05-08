@@ -994,7 +994,7 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
       if (!pool) {
         // 如果连接池不存在，从数据库获取配置并创建
         const configs = await db.query(
-          'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+          'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
           [dbConfigId]
         );
         if (configs.length === 0) {
@@ -1490,7 +1490,7 @@ router.post('/sync-task', [
 
     // 检查数据库配置是否存在且当前用户有权限（本人创建的或管理员）
     const dbConfigs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+      'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
       [db_config_id]
     );
     if (dbConfigs.length === 0) {
@@ -1555,7 +1555,7 @@ router.post('/sync-task/execute', [
 
     // 校验是否有权使用该数据库配置
     const dbConfigs = await db.query(
-      'SELECT id, created_by FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+      'SELECT id, created_by FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
       [db_config_id]
     );
     if (dbConfigs.length === 0) {

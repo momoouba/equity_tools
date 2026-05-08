@@ -51,10 +51,10 @@ async function loadActiveRules() {
       lv1.name AS lv1_name,
       t.name AS track_name
     FROM sourcing_track_lv3 lv3
-    INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.is_deleted = 0
-    INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.is_deleted = 0
-    INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.is_deleted = 0
-    WHERE lv3.is_deleted = 0
+    INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.delete_mark = 0
+    INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.delete_mark = 0
+    INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.delete_mark = 0
+    WHERE lv3.delete_mark = 0
     ORDER BY lv3.match_priority DESC, lv3.id ASC
   `);
   return rows || [];
@@ -133,7 +133,7 @@ async function applyTrackMatchForEvents({ limit = 5000, offset = 0, mode = 'fill
            industry_source_lv1, industry_source_lv2, industry_std_lv1, industry_std_lv2,
            track_primary, track_secondary
     FROM sourcing_financing_event
-    WHERE is_deleted = 0
+    WHERE delete_mark = 0
   `;
   const params = [];
 

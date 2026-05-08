@@ -293,7 +293,7 @@ router.post('/', async (req, res) => {
           const ensureExternalPool = async () => {
             if (!getExternalPool(externalId)) {
               const cfgRows = await db.query(
-                'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+                'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
                 [externalId]
               );
               if (!cfgRows || cfgRows.length === 0) {

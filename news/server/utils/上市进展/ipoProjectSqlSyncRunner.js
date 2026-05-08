@@ -78,7 +78,7 @@ async function ensureExternalPool(configId) {
   const pool = getExternalPool(configId);
   if (pool) return;
   const configs = await db.query(
-    'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0 AND is_active = 1',
+    'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
     [configId]
   );
   if (!configs.length) throw new Error('数据库配置不存在或未启用');

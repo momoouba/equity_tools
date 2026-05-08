@@ -67,7 +67,7 @@ async function isWorkdayBeijing(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -465,7 +465,7 @@ async function updateListingScheduledTasks() {
             let dbLabel = String(cfg.external_db_config_id || '');
             try {
               const dbRows = await db.query(
-                'SELECT name, host FROM external_db_config WHERE id = ? AND is_deleted = 0 LIMIT 1',
+                'SELECT name, host FROM external_db_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
                 [cfg.external_db_config_id]
               );
               if (dbRows[0]) {

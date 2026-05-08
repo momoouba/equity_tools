@@ -441,6 +441,121 @@ async function migrateTableIdField(dbPool, tableName) {
   }
 }
 
+/**
+ * 统一软删除字段：delete_mark / delete_time / delete_user_id；
+ * 兼容旧库 is_deleted / deleted_at / deleted_by；
+ * 项目挖掘赛道表与 sourcing_financing_event：is_deleted 列更名为 delete_mark。
+ */
+async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
+  async function tableCols(table) {
+    const [r] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+      [table]
+    );
+    return (r || []).map((x) => x.COLUMN_NAME);
+  }
+  async function dropFkForColumn(table, column) {
+    const [r] = await dbPool.query(
+      `SELECT CONSTRAINT_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+       AND REFERENCED_TABLE_NAME IS NOT NULL`,
+      [table, column]
+    );
+    for (const row of r || []) {
+      try {
+        await dbPool.query(`ALTER TABLE \`${table}\` DROP FOREIGN KEY \`${row.CONSTRAINT_NAME}\``);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+  }
+  async function addFkDeleteUser(table) {
+    try {
+      await dbPool.query(
+        `ALTER TABLE \`${table}\` ADD CONSTRAINT \`${table}_fk_del_user\` FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL`
+      );
+    } catch (e) {
+      /* ignore duplicate */
+    }
+  }
+
+  const tripleTables = ['holiday_calendar', 'external_db_config', 'news_interface_config', 'recipient_management'];
+  for (const t of tripleTables) {
+    try {
+      let cols = await tableCols(t);
+      if (!cols.length) continue;
+
+      if (cols.includes('is_deleted')) {
+        if (!cols.includes('delete_mark')) {
+          await dbPool.query(
+            `ALTER TABLE \`${t}\` ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'`
+          );
+        }
+        if (!cols.includes('delete_time')) {
+          await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间'`);
+        }
+        if (!cols.includes('delete_user_id')) {
+          await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'`);
+        }
+        await dbPool.query(
+          `UPDATE \`${t}\` SET delete_mark = IFNULL(is_deleted,0), delete_time = deleted_at, delete_user_id = deleted_by`
+        );
+        await dropFkForColumn(t, 'deleted_by');
+        for (const c of ['is_deleted', 'deleted_at', 'deleted_by']) {
+          if (cols.includes(c)) {
+            try {
+              await dbPool.query(`ALTER TABLE \`${t}\` DROP COLUMN \`${c}\``);
+            } catch (e) {
+              /* ignore */
+            }
+          }
+        }
+        cols = await tableCols(t);
+      }
+
+      if (!cols.includes('delete_mark')) {
+        await dbPool.query(
+          `ALTER TABLE \`${t}\` ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'`
+        );
+      }
+      if (!cols.includes('delete_time')) {
+        await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间'`);
+      }
+      if (!cols.includes('delete_user_id')) {
+        await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'`);
+      }
+      addFkDeleteUser(t);
+    } catch (err) {
+      console.warn(`迁移 ${t} delete_mark 字段时出现警告:`, err.message);
+    }
+  }
+
+  const renameTrackTables = ['sourcing_track', 'sourcing_track_lv1', 'sourcing_track_lv2', 'sourcing_track_lv3'];
+  for (const t of renameTrackTables) {
+    try {
+      const cols = await tableCols(t);
+      if (cols.includes('is_deleted') && !cols.includes('delete_mark')) {
+        await dbPool.query(
+          `ALTER TABLE \`${t}\` CHANGE COLUMN is_deleted delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除'`
+        );
+      }
+    } catch (err) {
+      console.warn(`重命名 ${t}.is_deleted 时出现警告:`, err.message);
+    }
+  }
+
+  try {
+    const cols = await tableCols('sourcing_financing_event');
+    if (cols.includes('is_deleted') && !cols.includes('delete_mark')) {
+      await dbPool.query(
+        `ALTER TABLE sourcing_financing_event CHANGE COLUMN is_deleted delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0未删除，1已删除'`
+      );
+    }
+  } catch (err) {
+    console.warn('重命名 sourcing_financing_event.is_deleted 时出现警告:', err.message);
+  }
+}
+
 async function initializeTables(dbPool) {
   try {
     console.log('  → 正在校验并创建数据表（步骤很多，首次或迁移时可能需 1～3 分钟，请耐心等待）…');
@@ -606,7 +721,11 @@ async function initializeTables(dbPool) {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       UNIQUE KEY uk_credit_code (unified_credit_code),
       FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
+      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -633,6 +752,22 @@ async function initializeTables(dbPool) {
       `);
       // 已为 company 表添加用户相关字段
     }
+    if (!columnNames.includes('delete_mark')) {
+      await dbPool.query(`
+        ALTER TABLE company
+        ADD COLUMN delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updater_user_id,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE company
+          ADD CONSTRAINT company_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
   } catch (err) {
     console.warn('检查/添加 company 表字段时出现警告:', err.message);
   }
@@ -649,10 +784,39 @@ async function initializeTables(dbPool) {
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_interface (app_id, interface_type),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [qcDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qichacha_config' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (qcDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE qichacha_config
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE qichacha_config
+          ADD CONSTRAINT qichacha_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 qichacha_config 删除字段时出现警告:', err.message);
+  }
   
   // 迁移qichacha_config表，添加app_id字段
   try {
@@ -809,10 +973,39 @@ async function initializeTables(dbPool) {
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_id (app_id),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [sigDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shanghai_international_group_config' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (sigDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE shanghai_international_group_config
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE shanghai_international_group_config
+          ADD CONSTRAINT shanghai_sig_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 shanghai_international_group_config 删除字段时出现警告:', err.message);
+  }
 
   // qichacha_news_categories 表：企查查新闻类别列表
   await dbPool.query(`
@@ -822,9 +1015,38 @@ async function initializeTables(dbPool) {
       category_name VARCHAR(255) NOT NULL COMMENT '类别描述',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      INDEX idx_category_code (category_code)
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      INDEX idx_category_code (category_code),
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [qncDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'qichacha_news_categories' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (qncDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE qichacha_news_categories
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE qichacha_news_categories
+          ADD CONSTRAINT qichacha_news_cat_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 qichacha_news_categories 删除字段时出现警告:', err.message);
+  }
 
   // 检查并初始化默认类别数据（如果表为空）
   try {
@@ -1212,12 +1434,13 @@ async function initializeTables(dbPool) {
       last_sync_time DATETIME NULL COMMENT '最后同步时间',
       last_sync_date DATE NULL COMMENT '最后同步日期',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      is_deleted TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      deleted_at DATETIME NULL COMMENT '删除时间',
-      deleted_by VARCHAR(19) NULL COMMENT '删除人ID',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
   
@@ -1291,32 +1514,6 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移news_interface_config表时出现警告:', err.message);
-  }
-
-  try {
-    const [columns] = await dbPool.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'news_interface_config'
-      AND COLUMN_NAME = 'is_deleted'
-    `);
-    if (columns.length === 0) {
-      await dbPool.query(`
-        ALTER TABLE news_interface_config
-        ADD COLUMN is_deleted TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'
-      `);
-      await dbPool.query(`
-        ALTER TABLE news_interface_config
-        ADD COLUMN deleted_at DATETIME NULL COMMENT '删除时间'
-      `);
-      await dbPool.query(`
-        ALTER TABLE news_interface_config
-        ADD COLUMN deleted_by VARCHAR(19) NULL COMMENT '删除人ID'
-      `);
-    }
-  } catch (err) {
-    console.warn('为 news_interface_config 添加删除字段时出现警告:', err.message);
   }
 
   try {
@@ -1818,10 +2015,39 @@ async function initializeTables(dbPool) {
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_id (app_id),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [ecDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'email_config' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (ecDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE email_config
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE email_config
+          ADD CONSTRAINT email_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 email_config 删除字段时出现警告:', err.message);
+  }
 
   // 迁移 email_config 表：如果表已存在但没有 app_id 字段，则添加
   try {
@@ -2085,44 +2311,7 @@ async function initializeTables(dbPool) {
     console.warn('迁移 recipient_management 表时出现警告:', err.message);
   }
 
-  // 迁移 recipient_management 表，添加删除相关字段
-  try {
-    const [columns] = await dbPool.query(`
-      SELECT COLUMN_NAME
-      FROM INFORMATION_SCHEMA.COLUMNS 
-      WHERE TABLE_SCHEMA = DATABASE() 
-      AND TABLE_NAME = 'recipient_management' 
-      AND COLUMN_NAME IN ('deleted_at', 'deleted_by', 'is_deleted')
-    `);
-    const existingColumns = columns.map(col => col.COLUMN_NAME);
-    
-    if (!existingColumns.includes('deleted_at')) {
-      await dbPool.query(`
-        ALTER TABLE recipient_management 
-        ADD COLUMN deleted_at TIMESTAMP NULL COMMENT '删除时间'
-      `);
-      // 已添加 recipient_management 表的 deleted_at 字段
-    }
-    
-    if (!existingColumns.includes('deleted_by')) {
-      await dbPool.query(`
-        ALTER TABLE recipient_management 
-        ADD COLUMN deleted_by VARCHAR(19) NULL COMMENT '删除人ID',
-        ADD FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL
-      `);
-      // 已添加 recipient_management 表的 deleted_by 字段
-    }
-    
-    if (!existingColumns.includes('is_deleted')) {
-      await dbPool.query(`
-        ALTER TABLE recipient_management 
-        ADD COLUMN is_deleted TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'
-      `);
-      // 已添加 recipient_management 表的 is_deleted 字段
-    }
-  } catch (err) {
-    console.warn('迁移 recipient_management 表删除字段时出现警告:', err.message);
-  }
+  // recipient_management 删除字段由 migrateSoftDeleteToDeleteMarkConvention 统一补齐/迁移
 
   // 检查并添加 entity_type 字段（如果不存在）
   try {
@@ -2466,15 +2655,15 @@ async function initializeTables(dbPool) {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_by VARCHAR(19) COMMENT '修改人ID',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      deleted_by VARCHAR(19) COMMENT '删除人ID',
-      deleted_at DATETIME NULL COMMENT '删除时间',
-      is_deleted TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_holiday_date (holiday_date),
       INDEX idx_is_workday (is_workday),
       INDEX idx_workday_type (workday_type),
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2663,18 +2852,18 @@ async function initializeTables(dbPool) {
       password VARCHAR(255) NOT NULL COMMENT '数据库密码',
       \`database\` VARCHAR(255) NOT NULL COMMENT '数据库名称',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      is_deleted TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
       created_by VARCHAR(19) COMMENT '创建人ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_by VARCHAR(19) COMMENT '修改人ID',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      deleted_by VARCHAR(19) COMMENT '删除人ID',
-      deleted_at DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      delete_time DATETIME NULL COMMENT '删除时间',
       INDEX idx_is_active (is_active),
-      INDEX idx_is_deleted (is_deleted),
+      INDEX idx_delete_mark (delete_mark),
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
       FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -3506,14 +3695,43 @@ async function initializeTables(dbPool) {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_by VARCHAR(19) COMMENT '修改人ID',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_db_config_id (db_config_id),
       INDEX idx_is_active (is_active),
       INDEX idx_last_execution_time (last_execution_time),
       FOREIGN KEY (db_config_id) REFERENCES external_db_config(id) ON DELETE CASCADE,
       FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [estDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'enterprise_sync_task' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (estDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE enterprise_sync_task
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE enterprise_sync_task
+          ADD CONSTRAINT enterprise_sync_task_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 enterprise_sync_task 删除字段时出现警告:', err.message);
+  }
 
   // performance_scheduled 表：业绩看板定时任务配置
   await dbPool.query(`
@@ -3532,9 +3750,29 @@ async function initializeTables(dbPool) {
       remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       PRIMARY KEY (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-定时任务配置';
   `);
+
+  try {
+    const [psDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'performance_scheduled' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (psDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE performance_scheduled
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+    }
+  } catch (err) {
+    console.warn('迁移 performance_scheduled 删除字段时出现警告:', err.message);
+  }
 
   // 为已存在的 news_detail 表添加 enterprise_full_name 字段（如果不存在）
   try {
@@ -4391,12 +4629,41 @@ async function initializeTables(dbPool) {
       password_hash VARCHAR(255) NULL COMMENT '密码哈希值',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      delete_time DATETIME NULL COMMENT '删除时间',
+      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_user_id (user_id),
       INDEX idx_share_token (share_token),
       INDEX idx_status (status),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
+
+  try {
+    const [nslDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_share_links' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (nslDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_share_links
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+      try {
+        await dbPool.query(`
+          ALTER TABLE news_share_links
+          ADD CONSTRAINT news_share_links_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        `);
+      } catch (fkErr) {
+        /* ignore */
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 news_share_links 删除字段时出现警告:', err.message);
+  }
 
   // 业绩看板分享：为 news_share_links 表添加 link_type、performance_version、can_export 字段（若不存在）
   try {
@@ -4523,13 +4790,36 @@ async function initializeTables(dbPool) {
         board VARCHAR(20) NOT NULL COMMENT '板块',
         exchange VARCHAR(20) NOT NULL COMMENT '交易所',
         f_update_time DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.f_update_time）',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
         KEY idx_ipp_creator (F_CreatorUserId),
-        KEY idx_ipp_update (f_update_time)
+        KEY idx_ipp_update (f_update_time),
+        KEY idx_ipp_delete_mark (delete_mark)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目与上市进展匹配结果';
     `);
     console.log('✓ ipo_project_progress 表已就绪');
   } catch (err) {
     console.warn('创建 ipo_project_progress 表时出现警告:', err.message);
+  }
+
+  try {
+    const [ippDel] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (ippDel.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_progress
+        ADD COLUMN delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除' AFTER f_update_time,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除人ID' AFTER delete_time,
+        ADD KEY idx_ipp_delete_mark (delete_mark)
+      `);
+      console.log('✓ ipo_project_progress 已添加 delete_mark/delete_time/delete_user_id');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress 删除字段时出现警告:', err.message);
   }
 
   try {
@@ -4868,12 +5158,32 @@ async function initializeTables(dbPool) {
         is_active TINYINT(1) NOT NULL DEFAULT 1,
         news_interface_type VARCHAR(50) NULL COMMENT '上海国际集团|企查查|其他',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置-上市数据配置';
     `);
     console.log('✓ listing_data_config 表已就绪');
   } catch (err) {
     console.warn('创建 listing_data_config 表时出现警告:', err.message);
+  }
+
+  try {
+    const [ldcDm] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = 'delete_mark'
+    `);
+    if (ldcDm.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE listing_data_config
+        ADD COLUMN delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+      `);
+    }
+  } catch (err) {
+    console.warn('迁移 listing_data_config 删除字段时出现警告:', err.message);
   }
 
   try {
@@ -5182,7 +5492,7 @@ async function initializeTables(dbPool) {
         funding_status VARCHAR(100) NULL COMMENT '融资状态',
         source_create_time DATETIME NULL COMMENT '源端创建时间（Asia/Shanghai）',
         source_update_time DATETIME NULL COMMENT '源端更新时间（Asia/Shanghai）',
-        is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0未删除，1已删除',
+        delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0未删除，1已删除',
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（Asia/Shanghai）',
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间（Asia/Shanghai）',
         UNIQUE KEY uk_sourcing_event_natural (event_id, company_credit_code, event_date),
@@ -5203,10 +5513,10 @@ async function initializeTables(dbPool) {
         id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '赛道ID',
         name VARCHAR(100) NOT NULL COMMENT '赛道名称',
         sort_order INT NOT NULL DEFAULT 0 COMMENT '排序（小在前）',
-        is_deleted TINYINT NOT NULL DEFAULT 0 COMMENT '0正常 1删除',
+        delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '0正常 1删除',
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_sort (is_deleted, sort_order, id)
+        KEY idx_sourcing_track_sort (delete_mark, sort_order, id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道';
     `);
     await dbPool.query(`
@@ -5215,10 +5525,10 @@ async function initializeTables(dbPool) {
         track_id BIGINT NOT NULL COMMENT '赛道ID',
         name VARCHAR(100) NOT NULL COMMENT '一级分类名称',
         sort_order INT NOT NULL DEFAULT 0,
-        is_deleted TINYINT NOT NULL DEFAULT 0,
+        delete_mark TINYINT NOT NULL DEFAULT 0,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv1_track (track_id, is_deleted, sort_order),
+        KEY idx_sourcing_track_lv1_track (track_id, delete_mark, sort_order),
         CONSTRAINT fk_sourcing_track_lv1_track
           FOREIGN KEY (track_id) REFERENCES sourcing_track(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道下一级分类';
@@ -5229,10 +5539,10 @@ async function initializeTables(dbPool) {
         lv1_id BIGINT NOT NULL COMMENT '一级分类ID',
         name VARCHAR(100) NOT NULL COMMENT '二级分类名称',
         sort_order INT NOT NULL DEFAULT 0,
-        is_deleted TINYINT NOT NULL DEFAULT 0,
+        delete_mark TINYINT NOT NULL DEFAULT 0,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv2_lv1 (lv1_id, is_deleted, sort_order),
+        KEY idx_sourcing_track_lv2_lv1 (lv1_id, delete_mark, sort_order),
         CONSTRAINT fk_sourcing_track_lv2_lv1
           FOREIGN KEY (lv1_id) REFERENCES sourcing_track_lv1(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-二级分类（分组）';
@@ -5247,10 +5557,10 @@ async function initializeTables(dbPool) {
         match_industry_lv2 VARCHAR(100) NULL COMMENT '匹配用来源/标准二级行业（精确，可空）',
         match_keywords VARCHAR(500) NULL COMMENT '关键词（逗号/分号分隔，任一命中）',
         match_priority INT NOT NULL DEFAULT 0 COMMENT '优先级，越大越先匹配',
-        is_deleted TINYINT NOT NULL DEFAULT 0,
+        delete_mark TINYINT NOT NULL DEFAULT 0,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv3_lv2 (lv2_id, is_deleted, match_priority),
+        KEY idx_sourcing_track_lv3_lv2 (lv2_id, delete_mark, match_priority),
         CONSTRAINT fk_sourcing_track_lv3_lv2
           FOREIGN KEY (lv2_id) REFERENCES sourcing_track_lv2(id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-三级分类（匹配规则）';
@@ -5259,6 +5569,8 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('创建项目挖掘赛道表时出现警告:', err.message);
   }
+
+  await migrateSoftDeleteToDeleteMarkConvention(dbPool);
 
   // 赛道：将二级上的匹配字段迁移到三级（旧库一次性迁移）
   try {
@@ -5274,9 +5586,9 @@ async function initializeTables(dbPool) {
       const [lv3Cnt] = await dbPool.query(`SELECT COUNT(*) AS c FROM sourcing_track_lv3`);
       if (mCol.length && Number(lv3Cnt[0].c || 0) === 0) {
         await dbPool.query(`
-          INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, is_deleted)
-          SELECT id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, is_deleted
-          FROM sourcing_track_lv2 WHERE is_deleted = 0
+          INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, delete_mark)
+          SELECT id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, delete_mark
+          FROM sourcing_track_lv2 WHERE delete_mark = 0
         `);
         console.log('✓ 已将旧版 sourcing_track_lv2 匹配规则迁移至 sourcing_track_lv3');
       }

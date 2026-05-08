@@ -18,7 +18,7 @@ function trimCell(v) {
 }
 
 async function ensureTrack(name, sortOrder) {
-  const rows = await db.query(`SELECT id FROM sourcing_track WHERE name = ? AND is_deleted = 0 LIMIT 1`, [name]);
+  const rows = await db.query(`SELECT id FROM sourcing_track WHERE name = ? AND delete_mark = 0 LIMIT 1`, [name]);
   if (rows.length) return rows[0].id;
   const r = await db.execute(`INSERT INTO sourcing_track (name, sort_order) VALUES (?,?)`, [name, sortOrder]);
   return r.insertId;
@@ -26,7 +26,7 @@ async function ensureTrack(name, sortOrder) {
 
 async function ensureLv1(trackId, name, sortOrder) {
   const rows = await db.query(
-    `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND is_deleted = 0 LIMIT 1`,
+    `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
     [trackId, name]
   );
   if (rows.length) return rows[0].id;
@@ -40,7 +40,7 @@ async function ensureLv1(trackId, name, sortOrder) {
 
 async function ensureLv2(lv1Id, name, sortOrder) {
   const rows = await db.query(
-    `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND is_deleted = 0 LIMIT 1`,
+    `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
     [lv1Id, name]
   );
   if (rows.length) return rows[0].id;
@@ -54,7 +54,7 @@ async function ensureLv2(lv1Id, name, sortOrder) {
 
 async function upsertLv3(lv2Id, name, sortOrder, m1, m2, kw, pri) {
   const rows = await db.query(
-    `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND is_deleted = 0 LIMIT 1`,
+    `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
     [lv2Id, name]
   );
   if (rows.length) {
@@ -171,10 +171,10 @@ async function fetchFlatTrackRowsForExport() {
        lv3.match_keywords,
        lv3.match_priority
      FROM sourcing_track_lv3 lv3
-     INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.is_deleted = 0
-     INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.is_deleted = 0
-     INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.is_deleted = 0
-     WHERE lv3.is_deleted = 0
+     INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.delete_mark = 0
+     INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.delete_mark = 0
+     INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.delete_mark = 0
+     WHERE lv3.delete_mark = 0
      ORDER BY t.sort_order ASC, t.id ASC,
               lv1.sort_order ASC, lv1.id ASC,
               lv2.sort_order ASC, lv2.id ASC,

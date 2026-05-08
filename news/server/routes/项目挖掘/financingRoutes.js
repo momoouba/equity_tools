@@ -45,7 +45,7 @@ function registerFinancingRoutes(router) {
       const dateFrom = req.query.date_from ? String(req.query.date_from).slice(0, 10) : '';
       const dateTo = req.query.date_to ? String(req.query.date_to).slice(0, 10) : '';
 
-      const where = ['is_deleted = 0'];
+      const where = ['delete_mark = 0'];
       const params = [];
       if (keyword) {
         const k = `%${keyword}%`;

@@ -12,7 +12,7 @@ async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND is_deleted = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
