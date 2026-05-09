@@ -57,8 +57,8 @@ export default defineConfig(({ mode }) => {
   envDir: newsRoot,
   plugins: [react()],
   build: {
-    // 优化构建配置，减少内存占用
-    chunkSizeWarningLimit: 1000,
+    // 单入口 SPA 压缩后主包常超过 500k；拆分 vendor 后通常低于阈值；仍偏大时再调高避免误报
+    chunkSizeWarningLimit: 1600,
     // 限制构建时的并发数，减少CPU和内存占用
     rollupOptions: {
       // 限制并发处理，避免一次性处理太多文件（降低到1，进一步减少内存占用）
@@ -70,13 +70,17 @@ export default defineConfig(({ mode }) => {
         moduleSideEffects: 'no-external'
       },
       output: {
-        // 移除手动分包，让 Vite 自动处理 chunk 分离
-        // 这样可以确保正确的依赖顺序，避免循环依赖和加载顺序问题
-        // 减少内联资源，降低内存占用
         inlineDynamicImports: false,
-        // 优化输出格式
-        format: 'es'
-      }
+        format: 'es',
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@arco-design')) return 'arco-vendor';
+          if (id.includes('react-router')) return 'react-router-vendor';
+          if (id.includes('react-dom') || id.includes('scheduler')) return 'react-dom-vendor';
+          if (/[/\\]node_modules[/\\]react[/\\]/.test(id)) return 'react-vendor';
+          return 'vendor';
+        },
+      },
     },
     // 使用 esbuild 压缩（默认，更快，内存占用更少）
     // 如果需要更小的文件大小，可以安装 terser 并使用 minify: 'terser'

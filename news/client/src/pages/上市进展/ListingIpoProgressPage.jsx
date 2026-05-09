@@ -3,8 +3,10 @@ import { Table, Button, Message, Space, Input, Modal, Form, Select } from '@arco
 import './ListingIpoProgressPage.css'
 import {
   fetchIpoProgressList,
+  fetchIpoProgressFilterOptions,
   fetchIpoProgressStats,
   downloadIpoProgressExport,
+  createIpoProgress,
   updateIpoProgress,
   deleteIpoProgress,
   fetchListingDataChangeLog,
@@ -22,6 +24,12 @@ function readIsAdmin() {
   } catch {
     return false
   }
+}
+
+function formatLocalDateTimeForInput() {
+  const d = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 function saveBlobAsCsv(res) {
@@ -65,6 +73,7 @@ export default function ListingIpoProgressPage() {
       港交所: { yesterday: 0, year: 0 },
     },
   })
+  const [filterOptions, setFilterOptions] = useState({ exchanges: [], boards: [], statuses: [] })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -113,6 +122,29 @@ export default function ListingIpoProgressPage() {
   }, [loadStats])
 
   useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetchIpoProgressFilterOptions()
+        if (cancelled || !res.data?.success) return
+        const d = res.data.data || {}
+        const exchanges = Array.isArray(d.exchanges) ? d.exchanges : []
+        const boards = Array.isArray(d.boards) ? d.boards : []
+        const statuses = Array.isArray(d.statuses) ? d.statuses : []
+        setFilterOptions({ exchanges, boards, statuses })
+        setExchange((prev) => (prev && !exchanges.includes(prev) ? '' : prev))
+        setBoard((prev) => (prev && !boards.includes(prev) ? '' : prev))
+        setStatus((prev) => (prev && !statuses.includes(prev) ? '' : prev))
+      } catch {
+        /* 下拉失败不阻断列表；选项为空时仍可关键词检索 */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
     const updateTableHeight = () => {
       // 仅让“表头以下数据区”滚动，顶部标题/筛选区保持不动
       const h = Math.max(340, window.innerHeight - 300)
@@ -147,6 +179,23 @@ export default function ListingIpoProgressPage() {
     }
   }
 
+  const openCreate = () => {
+    setEditing(null)
+    form.resetFields()
+    form.setFieldsValue({
+      code: '',
+      project_name: '',
+      status: '',
+      register_address: '',
+      receive_date: '',
+      company: '',
+      board: '',
+      exchange: '',
+      f_update_time: formatLocalDateTimeForInput(),
+    })
+    setEditOpen(true)
+  }
+
   const openEdit = (record) => {
     setEditing(record)
     form.setFieldsValue({
@@ -163,19 +212,25 @@ export default function ListingIpoProgressPage() {
     setEditOpen(true)
   }
 
-  const submitEdit = async () => {
+  const submitSave = async () => {
     const v = await form.validate()
+    const payload = {
+      ...v,
+      receive_date: v.receive_date || null,
+    }
     try {
-      await updateIpoProgress(editing.f_id, {
-        ...v,
-        receive_date: v.receive_date || null,
-      })
-      Message.success('已保存')
+      if (editing) {
+        await updateIpoProgress(editing.f_id, payload)
+        Message.success('已保存')
+      } else {
+        await createIpoProgress(payload)
+        Message.success('已新增')
+      }
       setEditOpen(false)
       load()
       loadStats()
     } catch (e) {
-      Message.error(e.response?.data?.message || e.message || '保存失败')
+      Message.error(e.response?.data?.message || e.message || (editing ? '保存失败' : '新增失败'))
     }
   }
 
@@ -291,33 +346,72 @@ export default function ListingIpoProgressPage() {
               <Option value="guidance_record">证监会辅导备案</Option>
               <Option value="overseas_filing">境外上市备案</Option>
             </Select>
-            <Input
-              style={{ width: 140 }}
-              placeholder="交易所"
-              value={exchange}
-              onChange={(v) => {
-                setPage(1)
-                setExchange(v.trim())
-              }}
-            />
-            <Input
-              style={{ width: 140 }}
-              placeholder="板块"
-              value={board}
-              onChange={(v) => {
-                setPage(1)
-                setBoard(v.trim())
-              }}
-            />
-            <Input
+            <Select
               style={{ width: 160 }}
-              placeholder="审核状态"
-              value={status}
+              allowClear
+              showSearch
+              placeholder="交易所"
+              filterOption={(input, option) =>
+                String(option.props.children || '')
+                  .toLowerCase()
+                  .includes(String(input || '').trim().toLowerCase())
+              }
+              value={exchange || undefined}
               onChange={(v) => {
                 setPage(1)
-                setStatus(v.trim())
+                setExchange(v || '')
               }}
-            />
+            >
+              {filterOptions.exchanges.map((x) => (
+                <Option key={x} value={x}>
+                  {x}
+                </Option>
+              ))}
+            </Select>
+            <Select
+              style={{ width: 160 }}
+              allowClear
+              showSearch
+              placeholder="板块"
+              filterOption={(input, option) =>
+                String(option.props.children || '')
+                  .toLowerCase()
+                  .includes(String(input || '').trim().toLowerCase())
+              }
+              value={board || undefined}
+              onChange={(v) => {
+                setPage(1)
+                setBoard(v || '')
+              }}
+            >
+              {filterOptions.boards.map((x) => (
+                <Option key={x} value={x}>
+                  {x}
+                </Option>
+              ))}
+            </Select>
+            <Select
+              style={{ width: 200 }}
+              allowClear
+              showSearch
+              placeholder="审核状态"
+              filterOption={(input, option) =>
+                String(option.props.children || '')
+                  .toLowerCase()
+                  .includes(String(input || '').trim().toLowerCase())
+              }
+              value={status || undefined}
+              onChange={(v) => {
+                setPage(1)
+                setStatus(v || '')
+              }}
+            >
+              {filterOptions.statuses.map((x) => (
+                <Option key={x} value={x}>
+                  {x}
+                </Option>
+              ))}
+            </Select>
             <Button
               type="primary"
               onClick={() => {
@@ -332,6 +426,11 @@ export default function ListingIpoProgressPage() {
               刷新
             </Button>
             <Button onClick={handleExport}>导出 CSV</Button>
+            {isAdmin ? (
+              <Button type="primary" onClick={openCreate}>
+                新增
+              </Button>
+            ) : null}
           </Space>
         </div>
         <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
@@ -399,9 +498,9 @@ export default function ListingIpoProgressPage() {
       />
       
       <Modal
-        title="编辑上市信息"
+        title={editing ? '编辑上市信息' : '新增上市信息'}
         visible={editOpen}
-        onOk={submitEdit}
+        onOk={submitSave}
         onCancel={() => setEditOpen(false)}
         style={{ width: 560 }}
       >
@@ -424,8 +523,8 @@ export default function ListingIpoProgressPage() {
           <FormItem label="公司全称" field="company" rules={[{ required: true }]}>
             <Input.TextArea />
           </FormItem>
-          <FormItem label="板块" field="board" rules={[{ required: true }]}>
-            <Input />
+          <FormItem label="板块" field="board">
+            <Input placeholder="选填" />
           </FormItem>
           <FormItem label="交易所" field="exchange" rules={[{ required: true }]}>
             <Input />

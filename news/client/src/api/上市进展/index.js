@@ -14,6 +14,10 @@ export function fetchIpoProgressStats() {
   return axios.get(`${base}/ipo-progress/stats`)
 }
 
+export function fetchIpoProgressFilterOptions() {
+  return axios.get(`${base}/ipo-progress/filter-options`)
+}
+
 export function fetchIpoProjectProgressList(params) {
   return axios.get(`${base}/ipo-project-progress`, { params })
 }
@@ -173,6 +177,10 @@ export function updateIpoProject(fId, body) {
 
 export function deleteIpoProject(fId) {
   return axios.delete(`${base}/ipo-project/${fId}`)
+}
+
+export function createIpoProgress(body) {
+  return axios.post(`${base}/ipo-progress`, body)
 }
 
 export function updateIpoProgress(fId, body) {

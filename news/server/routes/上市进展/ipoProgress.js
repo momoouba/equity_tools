@@ -8,6 +8,11 @@ const {
   LISTING_FEATURE,
 } = require('../../utils/上市进展/listingAuth');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../../utils/上市进展/listingBeijingDate');
+const {
+  sortIpoProgressStatuses,
+  sortIpoProgressExchanges,
+  sortIpoProgressBoards,
+} = require('../../utils/上市进展/ipoProgressFilterOptions');
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -15,6 +20,23 @@ function unauthorized(res) {
 
 function forbidden(res) {
   return res.status(403).json({ success: false, message: '无权限' });
+}
+
+/** 北京时间当前日期时间，供手工新增默认 f_update_time */
+function formatNowShanghaiDateTime() {
+  const d = new Date();
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(d);
+  const get = (t) => parts.find((p) => p.type === t)?.value || '00';
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`;
 }
 
 async function buildIpoProgressWhere(req) {
@@ -96,6 +118,33 @@ async function listIpoProgress(req, res) {
     return res.json({ success: true, data: { list: rows, total, page, pageSize } });
   } catch (e) {
     console.error('listIpoProgress', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
+async function listIpoProgressFilterOptions(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
+
+    const [exRows, boardRows, statusRows] = await Promise.all([
+      db.query(
+        `SELECT DISTINCT TRIM(exchange) AS v FROM ipo_progress WHERE F_DeleteMark = 0 AND LENGTH(TRIM(exchange)) > 0`
+      ),
+      db.query(`SELECT DISTINCT TRIM(board) AS v FROM ipo_progress WHERE F_DeleteMark = 0 AND LENGTH(TRIM(board)) > 0`),
+      db.query(
+        `SELECT DISTINCT TRIM(status) AS v FROM ipo_progress WHERE F_DeleteMark = 0 AND LENGTH(TRIM(status)) > 0`
+      ),
+    ]);
+
+    const exchanges = sortIpoProgressExchanges(exRows.map((r) => r.v));
+    const boards = sortIpoProgressBoards(boardRows.map((r) => r.v));
+    const statuses = sortIpoProgressStatuses(statusRows.map((r) => r.v));
+
+    return res.json({ success: true, data: { exchanges, boards, statuses } });
+  } catch (e) {
+    console.error('listIpoProgressFilterOptions', e);
     return res.status(500).json({ success: false, message: e.message || '服务器错误' });
   }
 }
@@ -184,6 +233,90 @@ async function fetchIpoProgressStats(req, res) {
   }
 }
 
+async function createIpoProgress(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!isAdminAccount(user.account)) return forbidden(res);
+    if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
+
+    const body = req.body || {};
+    const project_name = String(body.project_name ?? '').trim();
+    const status = String(body.status ?? '').trim();
+    const company = String(body.company ?? '').trim();
+    const board = String(body.board ?? '').trim();
+    const exchange = String(body.exchange ?? '').trim();
+    if (!project_name || !status || !company || !exchange) {
+      return res.status(400).json({
+        success: false,
+        message: '项目简称、审核状态、公司全称、交易所为必填',
+      });
+    }
+
+    const code = body.code != null ? String(body.code).trim() : '';
+    const register_address = body.register_address != null ? String(body.register_address).trim() : '';
+    const receiveRaw = body.receive_date;
+    const receive_date =
+      receiveRaw != null && String(receiveRaw).trim() !== '' ? String(receiveRaw).trim().slice(0, 10) : null;
+
+    const now = new Date();
+    const todayBj = createShanghaiDate();
+    const f_create_date = formatDateOnly(todayBj);
+    let f_update_time = body.f_update_time != null ? String(body.f_update_time).trim() : '';
+    if (!f_update_time) {
+      f_update_time = formatNowShanghaiDateTime();
+    }
+
+    const result = await db.execute(
+      `INSERT INTO ipo_progress (
+        f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+        company, board, exchange,
+        F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
+        F_DeleteMark
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      [
+        f_create_date,
+        f_update_time,
+        code,
+        project_name,
+        status,
+        register_address,
+        receive_date,
+        company,
+        board,
+        exchange,
+        user.id,
+        user.id,
+        now,
+      ]
+    );
+    const insertId = result.insertId;
+    const rows = await db.query(
+      `SELECT
+         f_id,
+         f_create_date,
+         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         code,
+         project_name,
+         status,
+         register_address,
+         DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date,
+         company,
+         board,
+         exchange,
+         F_CreatorUserId,
+         F_LastModifyUserId,
+         DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS F_LastModifyTime
+       FROM ipo_progress WHERE f_id = ? LIMIT 1`,
+      [insertId]
+    );
+    return res.json({ success: true, data: rows[0] });
+  } catch (e) {
+    console.error('createIpoProgress', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
 async function updateIpoProgress(req, res) {
   try {
     const user = await getUserFromHeader(req);
@@ -197,6 +330,7 @@ async function updateIpoProgress(req, res) {
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
     const now = new Date();
+    const board = String(body.board ?? rows[0].board ?? '').trim();
     await db.execute(
       `UPDATE ipo_progress SET
         code = ?, project_name = ?, status = ?, register_address = ?, receive_date = ?,
@@ -210,7 +344,7 @@ async function updateIpoProgress(req, res) {
         body.register_address,
         body.receive_date || null,
         body.company,
-        body.board,
+        board,
         body.exchange,
         body.f_update_time || rows[0].f_update_time,
         user.id,
@@ -251,8 +385,10 @@ async function softDeleteIpoProgress(req, res) {
 
 function registerIpoProgressRoutes(router) {
   router.get('/ipo-progress', listIpoProgress);
+  router.get('/ipo-progress/filter-options', listIpoProgressFilterOptions);
   router.get('/ipo-progress/stats', fetchIpoProgressStats);
   router.get('/ipo-progress/export', exportIpoProgressCsv);
+  router.post('/ipo-progress', createIpoProgress);
   router.put('/ipo-progress/:fId', updateIpoProgress);
   router.delete('/ipo-progress/:fId', softDeleteIpoProgress);
 }
