@@ -288,8 +288,7 @@ async function executeListingSyncTask(configId) {
       }
       console.log(`[上市进展定时] 数据入库完成 sourceType=${sourceType}`, syncResult);
 
-      // 港股繁简体重复数据清理（入库后处理）
-      // 业务逻辑：只有繁体保留繁体；有繁体+简体保留简体删除繁体
+      // 港股繁简体清理（入库后）：ipo_progress 繁简双写并存；仅合并「同书写」重复行，不再删「繁体+简体」配对
       if (sourceType === 'new_share' || sourceType === 'exchange_crawler') {
         console.log(`[上市进展定时] 开始港股繁简体重复数据清理 sourceType=${sourceType}`);
         try {

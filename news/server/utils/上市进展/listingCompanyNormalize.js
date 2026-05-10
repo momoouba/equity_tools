@@ -1,3 +1,8 @@
+const { normalizeCompanyName, containsTraditional } = require('./zhconvUtils');
+
+/** 港股 IPO 进展 exchange 枚举（与 ipo_progress.exchange 一致） */
+const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
+
 /**
  * 上市进展匹配用：去掉全角/半角括号字符，括号内文字保留拼接（与需求文档示例一致）
  * 例：华太电子（深圳）有限公司 → 华太电子深圳有限公司
@@ -12,6 +17,27 @@ function normalizeCompanyNameForMatch(input) {
   s = s.replace(/\s*[-－]\s*[BWＢＷ]\s*$/i, '').trim();
   s = s.replace(/[-－][BWＢＷ]\s*$/i, '').trim();
   return s;
+}
+
+/**
+ * 匹配用 canonical：港股含中文公司名时繁简统一到 zhconvUtils.normalizeCompanyName，避免同一公司繁简两行与底层项目无法对齐。
+ * 纯英文港股名不做 strip 式繁简处理，避免破坏英文字符匹配。
+ *
+ * @param {string} name 公司全称
+ * @param {string} [ipoExchange] 当前正在匹配的 ipo_progress.exchange（底层项目无交易所时传对手方 IPO 行的 exchange）
+ */
+function canonicalCompanyForMatchCross(name, ipoExchange) {
+  const base = normalizeCompanyNameForMatch(name);
+  if (!base) return '';
+  const ex = String(ipoExchange || '').trim();
+  const hk = HK_IPO_PROGRESS_EXCHANGES.has(ex);
+  if (hk && /[\u4e00-\u9fff]/.test(base)) {
+    return normalizeCompanyName(base);
+  }
+  if (!hk && containsTraditional(base)) {
+    return normalizeCompanyName(base);
+  }
+  return base;
 }
 
 function normalizeFuzzyText(input) {
@@ -116,4 +142,10 @@ function extractCsrcGuidanceCompanyName(input) {
   return s.trim();
 }
 
-module.exports = { normalizeCompanyNameForMatch, extractCsrcGuidanceCompanyName, fuzzySimilarity };
+module.exports = {
+  normalizeCompanyNameForMatch,
+  canonicalCompanyForMatchCross,
+  HK_IPO_PROGRESS_EXCHANGES,
+  extractCsrcGuidanceCompanyName,
+  fuzzySimilarity,
+};

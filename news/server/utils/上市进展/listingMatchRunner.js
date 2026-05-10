@@ -1,6 +1,23 @@
 const db = require('../../db');
-const { normalizeCompanyNameForMatch, fuzzySimilarity } = require('./listingCompanyNormalize');
+const {
+  normalizeCompanyNameForMatch,
+  fuzzySimilarity,
+  canonicalCompanyForMatchCross,
+} = require('./listingCompanyNormalize');
+const { containsTraditional } = require('./zhconvUtils');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+
+/** 同一底层项目 + 同一港股事件繁简双行时，优先保留与底层项目中英文全称书写一致的那条 IPO 进展行 */
+function pickPreferredIpoProgressForProject(projectRow, ipRows) {
+  if (!ipRows.length) return null;
+  const projTrad = containsTraditional(String(projectRow.company || ''));
+  if (projTrad) {
+    const tradIps = ipRows.filter((ip) => containsTraditional(String(ip.company || '')));
+    return tradIps[0] || ipRows[0];
+  }
+  const simpIps = ipRows.filter((ip) => !containsTraditional(String(ip.company || '')));
+  return simpIps[0] || ipRows[0];
+}
 
 function deriveBoardFromNewShare(row) {
   const code = String(row.stock_code || '').trim();
@@ -286,45 +303,67 @@ async function runListingMatchBatch({
   const now = new Date();
   let inserted = 0;
 
+  /** @type {Map<string, { ip: object, p: object }[]>} */
+  const matchBuckets = new Map();
   for (const ip of progressRows) {
-    const nip = normalizeCompanyNameForMatch(ip.company);
+    const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
+    if (!nip) continue;
     for (const p of projectRows) {
-      const np = normalizeCompanyNameForMatch(p.company);
-      if (!nip || nip !== np) continue;
-
-      await db.execute(
-        `INSERT INTO ipo_project_progress (
-          f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
-          new_share_row_id, match_source, match_score,
-          fund, sub, project_name, company,
-          inv_amount, residual_amount, ratio, ct_amount, ct_residual,
-          status, board, exchange, f_update_time
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          now,
-          p.F_CreatorUserId,
-          p.f_id,
-          ip.f_id,
-          null,
-          'ipo_progress',
-          null,
-          p.fund,
-          p.sub,
-          p.project_name,
-          p.company,
-          p.inv_amount,
-          p.residual_amount,
-          p.ratio,
-          p.ct_amount,
-          p.ct_residual,
-          ip.status,
-          ip.board,
-          ip.exchange,
-          ip.f_update_time,
-        ]
-      );
-      inserted += 1;
+      const np = canonicalCompanyForMatchCross(p.company, ip.exchange);
+      if (!np || nip !== np) continue;
+      const dateStr = String(ip.f_update_time || '').slice(0, 10);
+      const bucketKey = [
+        p.f_id,
+        dateStr,
+        String(ip.status || '').trim(),
+        String(ip.board || '').trim(),
+        String(ip.exchange || '').trim(),
+        nip,
+      ].join('|');
+      if (!matchBuckets.has(bucketKey)) matchBuckets.set(bucketKey, []);
+      matchBuckets.get(bucketKey).push({ ip, p });
     }
+  }
+
+  for (const [, pairs] of matchBuckets) {
+    if (!pairs.length) continue;
+    const p = pairs[0].p;
+    const ips = pairs.map((x) => x.ip);
+    const ip = pickPreferredIpoProgressForProject(p, ips);
+    if (!ip) continue;
+
+    await db.execute(
+      `INSERT INTO ipo_project_progress (
+        f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+        new_share_row_id, match_source, match_score,
+        fund, sub, project_name, company,
+        inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+        status, board, exchange, f_update_time
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        now,
+        p.F_CreatorUserId,
+        p.f_id,
+        ip.f_id,
+        null,
+        'ipo_progress',
+        null,
+        p.fund,
+        p.sub,
+        p.project_name,
+        p.company,
+        p.inv_amount,
+        p.residual_amount,
+        p.ratio,
+        p.ct_amount,
+        p.ct_residual,
+        ip.status,
+        ip.board,
+        ip.exchange,
+        ip.f_update_time,
+      ]
+    );
+    inserted += 1;
   }
 
   const newShareResult = includeNewShare

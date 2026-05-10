@@ -583,6 +583,17 @@ def _td_cell_text(td):
     return (td.get_text() or "").strip()
 
 
+def _td_cell_text_counseling_target(td):
+    """辅导对象列：官网常见重复 title（先全文报告名、后公司名），解析器只保留首个 title。
+    优先取单元格可见文本；仅当正文为空时再退回 title（兼容折叠行仅 title 有值）。"""
+    if not td:
+        return ""
+    text = (td.get_text() or "").strip()
+    if text:
+        return text
+    return (td.get("title") or "").strip()
+
+
 def _parse_csrcfd_table_header(table):
     """从含「备案时间」的表头行解析列下标（与公开发行辅导公示等页面一致）。"""
     for tr in table.find_all("tr", limit=40):
@@ -658,7 +669,7 @@ def _row_onclick_pdf(tr):
 
 def _company_from_tds_backward(tds, before_idx):
     for j in range(min(before_idx, len(tds)) - 1, -1, -1):
-        c = _td_cell_text(tds[j])
+        c = _td_cell_text_counseling_target(tds[j])
         if not c or len(c) < 2:
             continue
         if "报告" in c or "进展" in c:
@@ -704,7 +715,7 @@ def _rows_from_csrcfd_dom(html, start_date, end_date):
             ci = prefix + hidx["company"]
             di = prefix + hidx["date"]
             if ci < len(tds):
-                company = _td_cell_text(tds[ci])
+                company = _td_cell_text_counseling_target(tds[ci])
             if di < len(tds):
                 m = RE_CELL_YMD.search(_td_cell_text(tds[di]))
                 if m:
@@ -736,9 +747,9 @@ def _rows_from_csrcfd_dom(html, start_date, end_date):
             company = _company_from_tds_backward(tds, date_col_idx)
         if not company:
             for td in tds:
-                ti = (td.get("title") or "").strip()
-                if ti and len(ti) >= 4 and "报告" not in ti and "进展" not in ti:
-                    company = ti
+                raw = _td_cell_text_counseling_target(td)
+                if raw and len(raw) >= 4 and "报告" not in raw and "进展" not in raw:
+                    company = raw
                     break
         if not company:
             continue

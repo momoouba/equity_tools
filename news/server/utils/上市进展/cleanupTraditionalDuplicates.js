@@ -1,11 +1,9 @@
 /**
  * 清理港股繁简体重复数据脚本
  *
- * 业务逻辑：
- * 1. 数据先入库（保持原样，不预先转换）
- * 2. 入库后判断处理：
- *    - 只有繁体的：保留繁体（不转换）
- *    - 有繁体+简体的：保留简体，删除繁体
+ * 业务逻辑（ipo_progress）：
+ * 1. 港股繁体公司名会**故意**写入繁体 + 简体两行；「有繁体+简体」时**不再删繁体**。
+ * 2. 仍清理：同书写重复（多条全繁体或多条全简体，归一化键相同）时只保留最早一条。
  *
  * 使用方法：
  * - 容器内（推荐）：与应用进程同一网络，且 MySQL 账号通常为 Docker 网段授权，避免 host 不匹配：
@@ -96,16 +94,15 @@ function isPureSimplified(text) {
  *
  * 业务逻辑：
  * - 按业务键分组（exchange + 简化后的company + status + board + 日期）
- * - 检查每组中繁简体情况：
- *   - 只有繁体：保留繁体（不转换）
- *   - 有繁体+简体：保留简体，删除繁体
+ * - 有繁体+简体：两行均保留
+ * - 多条同书写（仅繁或仅简）：保留最早一条
  *
  * @param {boolean} dryRun 是否仅模拟运行
  * @returns {Promise<{cleaned: number, keptTraditional: number, keptSimplified: number, samples: Array}>}
  */
 async function cleanupIpoProgress(dryRun = DRY_RUN) {
   console.log('\n[ipo_progress] 开始检测港交所繁简体重复数据...');
-  console.log('[ipo_progress] 业务逻辑：只有繁体保留繁体；有繁体+简体保留简体删除繁体');
+  console.log('[ipo_progress] 业务逻辑：繁体+简体各保留一条；仅合并「同书写」重复记录');
 
   // 查询港交所所有未删除的记录
   const rows = await db.query(`
@@ -203,34 +200,17 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
       }
       keptTraditional += 1;
     }
-    // 情况2：有简体也有繁体
+    // 情况2：有简体也有繁体 —— 双写策略，不删除
     else if (simplifiedRecords.length > 0 && traditionalRecords.length > 0) {
-      // 保留简体，删除繁体
-      const keepSimplifiedRecords = simplifiedRecords;
-      const deleteTraditionalRecords = traditionalRecords;
-
-      console.log(`[ipo_progress] 组 "${key}" 有简体也有繁体，保留简体删除繁体`);
+      console.log(`[ipo_progress] 组 "${key}" 同时存在繁体与简体行，均保留（不清理）`);
       samples.push({
         key,
-        action: 'keep_simplified_delete_traditional',
-        kept: keepSimplifiedRecords.map(r => r.company).join('; '),
-        deleted: deleteTraditionalRecords.map(r => r.company).join('; '),
+        action: 'keep_both_traditional_and_simplified',
+        kept: [...traditionalRecords, ...simplifiedRecords].map((r) => r.company).join('; '),
+        deleted: [],
       });
-
-      if (!dryRun) {
-        // 删除所有繁体记录
-        for (const delRecord of deleteTraditionalRecords) {
-          await db.execute(
-            `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system'
-             WHERE f_id = ? AND F_DeleteMark = 0`,
-            [delRecord.f_id]
-          );
-          cleaned += 1;
-        }
-      } else {
-        cleaned += deleteTraditionalRecords.length;
-      }
-      keptSimplified += keepSimplifiedRecords.length;
+      keptSimplified += simplifiedRecords.length;
+      keptTraditional += traditionalRecords.length;
     }
     // 情况3：多条简体记录（无繁体）
     else if (simplifiedRecords.length >= 2 && traditionalRecords.length === 0) {

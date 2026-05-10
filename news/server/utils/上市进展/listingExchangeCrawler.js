@@ -10,6 +10,36 @@ const db = require('../../db');
 const { runHkexAkshareIpoSync } = require('./hkexAkshareIpoSync');
 const { runIfindIpoSync } = require('./ifindIpoSync');
 const { decryptText } = require('./listingSecret');
+const { containsTraditional, normalizeCompanyName } = require('./zhconvUtils');
+
+const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
+
+/**
+ * 港股抓取若为公司名繁体：除保留原文一行外，再追加一行简体（company/project_name 转简体），便于邮件与匹配统一使用简体键。
+ */
+function expandHkIpoProgressTradSimpRows(rows) {
+  const out = [];
+  for (const r of rows) {
+    const ex = String(r.exchange || '').trim();
+    out.push(r);
+    if (!HK_IPO_PROGRESS_EXCHANGES.has(ex)) continue;
+    const company = String(r.company || '').trim();
+    if (!company) continue;
+    const projRaw = String(r.project_name || '').trim();
+    const companyTrad = company && containsTraditional(company);
+    const projTrad = projRaw && containsTraditional(projRaw);
+    if (!companyTrad && !projTrad) continue;
+    const simpCo = companyTrad ? normalizeCompanyName(company) : company;
+    const simpPn = projTrad ? normalizeCompanyName(projRaw) : projRaw || simpCo;
+    if (simpCo === company && simpPn === (projRaw || company)) continue;
+    out.push({
+      ...r,
+      company: simpCo,
+      project_name: simpPn || simpCo,
+    });
+  }
+  return out;
+}
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -1375,6 +1405,7 @@ async function runListingExchangeCrawler({
     }
   }
 
+  mergedAll = expandHkIpoProgressTradSimpRows(mergedAll);
   const result = await insertRows(mergedAll, adminId, logTag);
 
   const ins = result.insertedByExchange || {};

@@ -1,6 +1,7 @@
 const db = require('../../db');
 const { sendMailWithConfig } = require('../sendMailWithConfig');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+const { toSimplified, containsTraditional, normalizeCompanyName } = require('./zhconvUtils');
 const {
   getListingMembershipLevelName,
   normalizeListingMailTypesByLevel,
@@ -22,6 +23,50 @@ async function isWorkdayForListingEmail(date) {
     console.warn('[上市进展邮件] 节假日查询失败:', e.message);
   }
   return true;
+}
+
+const HK_IPO_MAIL_EXCHANGES = new Set(['港交所', '香港联交所']);
+
+/** IPO 审核邮件段落：港股繁简双行仅保留一条（默认简体行），避免重复列表 */
+function dedupeHkIpoRowsForListingMail(rows) {
+  const byKey = new Map();
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const ex = String(r.exchange || '').trim();
+    if (!HK_IPO_MAIL_EXCHANGES.has(ex)) continue;
+    const dateStr = String(r.f_update_time || '').slice(0, 10);
+    const key = `${normalizeCompanyName(String(r.company || '').trim())}|${String(r.status || '').trim()}|${String(r.board || '').trim()}|${dateStr}|${ex}`;
+    const prevIdx = byKey.get(key);
+    if (prevIdx === undefined) {
+      byKey.set(key, i);
+      continue;
+    }
+    const prevRow = rows[prevIdx];
+    const prevTrad = containsTraditional(String(prevRow.company || ''));
+    const currTrad = containsTraditional(String(r.company || ''));
+    let keepIdx = prevIdx;
+    if (prevTrad && !currTrad) keepIdx = i;
+    else if (!prevTrad && currTrad) keepIdx = prevIdx;
+    else keepIdx = Math.min(prevIdx, i);
+    byKey.set(key, keepIdx);
+  }
+  const hkChosen = new Set(byKey.values());
+  return rows.filter((r, i) => {
+    const ex = String(r.exchange || '').trim();
+    if (!HK_IPO_MAIL_EXCHANGES.has(ex)) return true;
+    return hkChosen.has(i);
+  });
+}
+
+function listingMailForceSimplifiedField(val) {
+  return toSimplified(String(val == null ? '' : val));
+}
+
+/** 底层项目进展：底层项目企业全称为繁体时保持库内原文，否则统一转为简体展示 */
+function listingMailProjectProgressField(val, enterpriseUsesTraditional) {
+  const s = String(val == null ? '' : val);
+  if (enterpriseUsesTraditional) return s;
+  return toSimplified(s);
 }
 
 function escapeHtml(s) {
@@ -187,7 +232,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
   }
   if (includeListingProgress) {
     ipoExchangeYesterday = await db.query(
-      `SELECT company, status, exchange, board, f_update_time, project_name
+      `SELECT f_id, company, status, exchange, board, f_update_time, project_name
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND DATE(f_update_time) = ?
@@ -196,6 +241,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
        LIMIT 300`,
       [reportDay]
     );
+    ipoExchangeYesterday = dedupeHkIpoRowsForListingMail(ipoExchangeYesterday);
   }
   if (includeListingGuidance) {
     ipoGuidanceYesterday = await db.query(
@@ -290,10 +336,10 @@ async function executeListingEmailDigest(recipient, options = {}) {
             <th style="${thStyle}">基金</th><th style="${thStyle}">子基金</th><th style="${thStyle}">项目简称</th><th style="${thStyle}">企业全称</th><th style="${thStyle}">审核状态</th><th style="${thStyle}">交易所</th><th style="${thStyle}">板块</th><th style="${thStyle}">投资成本</th><th style="${thStyle}">剩余成本</th><th style="${thStyle}">穿透权益占比</th><th style="${thStyle}">穿透投资成本</th><th style="${thStyle}">穿透剩余成本</th>
           </tr>
           ${ipp
-            .map(
-              (r, i) =>
-                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.fund)}</td><td style="${tdStyle}">${escapeHtml(r.sub)}</td><td style="${tdStyle}">${escapeHtml(r.project_name)}</td><td style="${tdStyle}">${escapeHtml(r.company)}</td><td style="${tdStyle}">${escapeHtml(r.status)}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdStyle}">${escapeHtml(r.board)}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.inv_amount))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.residual_amount))}</td><td style="${tdStyle}">${escapeHtml(formatPercentForEmail(r.ratio))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.ct_amount))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.ct_residual))}</td></tr>`
-            )
+            .map((r, i) => {
+              const tradProj = containsTraditional(String(r.company || ''));
+              return `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.fund, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.sub, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.project_name, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.company, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.status, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.exchange, tradProj))}</td><td style="${tdStyle}">${escapeHtml(listingMailProjectProgressField(r.board, tradProj))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.inv_amount))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.residual_amount))}</td><td style="${tdStyle}">${escapeHtml(formatPercentForEmail(r.ratio))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.ct_amount))}</td><td style="${tdStyle}">${escapeHtml(formatAmountForEmail(r.ct_residual))}</td></tr>`;
+            })
             .join('')}
         </table>`;
 
@@ -307,7 +353,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
           ${ipoExchangeYesterday
             .map(
               (r, i) =>
-                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.company)}</td><td style="${tdStyle}">${escapeHtml(r.project_name)}</td><td style="${tdStyle}">${escapeHtml(r.status)}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdStyle}">${escapeHtml(r.board)}</td></tr>`
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(listingMailForceSimplifiedField(r.company))}</td><td style="${tdStyle}">${escapeHtml(listingMailForceSimplifiedField(r.project_name))}</td><td style="${tdStyle}">${escapeHtml(listingMailForceSimplifiedField(r.status))}</td><td style="${tdStyle}">${escapeHtml(listingMailForceSimplifiedField(r.exchange))}</td><td style="${tdStyle}">${escapeHtml(listingMailForceSimplifiedField(r.board))}</td></tr>`
             )
             .join('')}
         </table>`;
