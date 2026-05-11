@@ -159,10 +159,16 @@ function isHolidayMarketingNews(news) {
   const text = `${title} ${summary} ${content}`.toLowerCase();
 
   const holidayKeywords = [
-    '春节', '元旦', '中秋', '国庆', '端午', '清明', '劳动节', '节日', '节假日', '假期'
+    '春节', '元旦', '中秋', '国庆', '端午', '清明', '劳动节', '节日', '节假日', '假期',
+    // 国际/公历及常见商业节日（与中国传统节日一并按「节日营销」兜底过滤）
+    '母亲节', '父亲节', '情人节', '七夕', '妇女节', '三八', '女神节', '女王节',
+    '圣诞', '感恩节', '万圣节', '愚人节', '护士节', '教师节', '儿童节', '六一'
   ];
   const marketingKeywords = [
-    '放假', '放假安排', '节日祝福', '祝大家', '温馨提示', '值班安排', '放假通知', 'happy new year'
+    '放假', '放假安排', '节日祝福', '祝大家', '温馨提示', '值班安排', '放假通知', 'happy new year',
+    '母亲节快乐', '父亲节快乐', '情人节快乐', '七夕快乐', '妇女节快乐', '女神节快乐', '圣诞快乐',
+    'merry christmas', '感恩节快乐', '万圣节快乐', '护士节快乐', '教师节快乐', '儿童节快乐', '六一快乐',
+    '节日快乐', '感恩母亲', "happy mother's day", 'happy fathers day', 'happy valentine'
   ];
 
   const hasHoliday = holidayKeywords.some(k => text.includes(k.toLowerCase()));
@@ -2168,7 +2174,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
     }
 
-    // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，如春节/元旦/中秋等）；
+    // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，含春节/中秋及母亲节/圣诞等）；
     // 企业推介自家产品、服务、品牌的发展类内容不打此类标签，故不会被过滤（股权投资关注企业发展）
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
