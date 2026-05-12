@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import axios from '../utils/axios'
 import './BatchImportModal.css'
 
-function BatchImportModal({ onClose, onSuccess }) {
+function BatchImportModal({ onClose, onSuccess, dataAppName = '新闻舆情' }) {
   const [selectedFile, setSelectedFile] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState('')
@@ -76,11 +76,15 @@ function BatchImportModal({ onClose, onSuccess }) {
     setErrors([])
 
     try {
-      const response = await axios.post('/api/enterprises/batch-import/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
+      const response = await axios.post(
+        `/api/enterprises/batch-import/upload?data_app_name=${encodeURIComponent(dataAppName)}`,
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
         }
-      })
+      )
 
       setMessage(response.data.message)
       setErrors(response.data.errors || [])

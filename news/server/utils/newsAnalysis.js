@@ -5401,7 +5401,7 @@ ${enterpriseList}
     if (abbreviation && fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
            -- 精确匹配project_abbreviation（简称）
            project_abbreviation = ?
            OR
@@ -5428,7 +5428,7 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && abbreviation && fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
            enterprise_full_name LIKE ? 
            OR enterprise_full_name LIKE ?
            OR project_abbreviation LIKE ?
@@ -5445,7 +5445,7 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && enterpriseFullName && !fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
            enterprise_full_name = ?
            OR
            -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
@@ -5459,7 +5459,7 @@ ${enterpriseList}
         // 如果精确匹配失败，尝试模糊匹配
         enterpriseExists = await db.query(
           `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-           WHERE enterprise_full_name LIKE ? AND delete_mark = 0
+           WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name LIKE ? AND delete_mark = 0
            LIMIT 1`,
           [`%${enterpriseFullName}%`]
         );
@@ -5470,7 +5470,7 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && projectAbbreviation) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
            project_abbreviation = ?
            OR enterprise_full_name = ?
            OR
@@ -5485,7 +5485,7 @@ ${enterpriseList}
         // 如果精确匹配失败，尝试模糊匹配
         enterpriseExists = await db.query(
           `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-           WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) AND delete_mark = 0
+           WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) AND delete_mark = 0
            LIMIT 1`,
           [`%${projectAbbreviation}%`, `%${projectAbbreviation}%`]
         );
@@ -5496,7 +5496,7 @@ ${enterpriseList}
     if (enterpriseExists.length === 0) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
            enterprise_full_name LIKE ? 
            OR project_abbreviation LIKE ?
            OR
@@ -6080,7 +6080,7 @@ ${enterpriseList}
           const enterpriseCheck = await db.query(
             `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
              FROM invested_enterprises 
-             WHERE enterprise_full_name = ?
+             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0 
              LIMIT 1`,
@@ -6121,7 +6121,7 @@ ${enterpriseList}
             enterpriseCheck = await db.query(
               `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
-               WHERE (
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
                  -- 匹配project_abbreviation（简称）
                  project_abbreviation = ?
                  OR
@@ -6160,7 +6160,7 @@ ${enterpriseList}
             enterpriseCheck = await db.query(
               `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
-               WHERE (
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (
                  -- 精确匹配enterprise_full_name
                  enterprise_full_name = ?
                  OR
@@ -6184,7 +6184,7 @@ ${enterpriseList}
             enterpriseCheck = await db.query(
               `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
                FROM invested_enterprises 
-               WHERE enterprise_full_name = ?
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                AND delete_mark = 0 
                LIMIT 1`,
@@ -6210,7 +6210,7 @@ ${enterpriseList}
             const allResults = await db.query(
               `SELECT enterprise_full_name, exit_status, delete_mark
                FROM invested_enterprises 
-               WHERE enterprise_full_name = ?`,
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?`,
               [newsItem.enterprise_full_name]
             );
             logWithTag('[processNewsWithEnterprise]', '所有相关记录（不限制状态）:', allResults);
@@ -6362,7 +6362,7 @@ ${enterpriseList}
         try {
           const fromEnterpriseAccount = await db.query(
             `SELECT 1 FROM invested_enterprises 
-             WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
             [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
           );
@@ -6406,7 +6406,7 @@ ${enterpriseList}
           enterpriseInfo = await db.query(
             `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
              FROM invested_enterprises
-             WHERE enterprise_full_name = ?
+             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
              AND delete_mark = 0
              LIMIT 1`,
             [finalEnterpriseName]
@@ -6417,7 +6417,7 @@ ${enterpriseList}
             enterpriseInfo = await db.query(
               `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
                FROM invested_enterprises
-               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?)
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?)
                AND delete_mark = 0
                LIMIT 1`,
               [`%${finalEnterpriseName}%`, finalEnterpriseName]
@@ -6432,7 +6432,7 @@ ${enterpriseList}
               enterpriseInfo = await db.query(
                 `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
                  FROM invested_enterprises
-                 WHERE enterprise_full_name = ?
+                 WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
                  AND delete_mark = 0
                  LIMIT 1`,
                 [extractedFullName]
@@ -6525,7 +6525,7 @@ ${enterpriseList}
       const enterprises = await db.query(
         `SELECT enterprise_full_name, project_abbreviation 
          FROM invested_enterprises 
-         WHERE delete_mark = 0 
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 
          AND exit_status NOT IN ('完全退出', '已上市')`
       );
 
@@ -6684,7 +6684,7 @@ ${enterpriseList}
           try {
             const fromEnterpriseAccount = await db.query(
               `SELECT 1 FROM invested_enterprises 
-               WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
               [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
             );
@@ -6748,7 +6748,7 @@ ${enterpriseList}
           if (itemFullName) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
                AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${itemFullName}%`, itemAbbreviation ? `%${itemAbbreviation}%` : `%${itemFullName}%`]
@@ -6759,7 +6759,7 @@ ${enterpriseList}
           if (existsInDB.length === 0 && itemAbbreviation) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
                AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${itemAbbreviation}%`, `%${itemAbbreviation}%`]
@@ -6770,7 +6770,7 @@ ${enterpriseList}
           if (existsInDB.length === 0) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
                AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${enterprise.enterprise_name}%`, `%${enterprise.enterprise_name}%`]
@@ -6781,7 +6781,7 @@ ${enterpriseList}
           if (existsInDB.length === 0) {
             const allEnterprises = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
             );
             
             // 使用大小写不敏感匹配，支持"简称【全称】"格式
@@ -6845,7 +6845,7 @@ ${enterpriseList}
             try {
               const fromEnterpriseAccount = await db.query(
                 `SELECT 1 FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
                  AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
                 [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
               );
@@ -6894,7 +6894,7 @@ ${enterpriseList}
             try {
               const fromEnterpriseAccount = await db.query(
                 `SELECT 1 FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
                  AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
                 [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
               );
@@ -6943,7 +6943,7 @@ ${enterpriseList}
                 // 直接使用enterprise_full_name进行匹配（不再解析"简称【全称】"格式）
                 let enterpriseInfo = await db.query(
                   `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                   [enterpriseFullName]
                 );
                 console.log(`[processNewsWithoutEnterprise] 精确匹配结果: ${enterpriseInfo.length} 条记录`);
@@ -6952,7 +6952,7 @@ ${enterpriseList}
                 if (enterpriseInfo.length === 0) {
                   enterpriseInfo = await db.query(
                     `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
                     [`%${enterpriseFullName}%`]
                   );
                   console.log(`[processNewsWithoutEnterprise] 模糊匹配结果: ${enterpriseInfo.length} 条记录`);
@@ -6965,7 +6965,7 @@ ${enterpriseList}
                     const extractedFullName = formatMatch[2].trim();
                     enterpriseInfo = await db.query(
                       `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE (CASE 
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (CASE 
                          WHEN enterprise_full_name LIKE '%【%】%' THEN 
                            TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
                          ELSE 
@@ -7040,7 +7040,7 @@ ${enterpriseList}
                 // 直接使用enterprise_full_name进行匹配
                 let enterpriseInfo = await db.query(
                   `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                   [enterpriseFullName]
                 );
                 
@@ -7048,7 +7048,7 @@ ${enterpriseList}
                 if (enterpriseInfo.length === 0) {
                   enterpriseInfo = await db.query(
                     `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
                     [`%${enterpriseFullName}%`]
                   );
                 }
@@ -7060,7 +7060,7 @@ ${enterpriseList}
                     const extractedFullName = formatMatch[2].trim();
                     enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE (CASE 
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (CASE 
                          WHEN enterprise_full_name LIKE '%【%】%' THEN 
                            TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
                          ELSE 
@@ -7277,7 +7277,7 @@ ${enterpriseList}
               const enterprises = await db.query(
                 `SELECT enterprise_full_name, project_abbreviation 
                  FROM invested_enterprises 
-                 WHERE delete_mark = 0 
+                 WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 
                  AND exit_status NOT IN ('完全退出', '已上市')`
               );
 
@@ -7314,7 +7314,7 @@ ${enterpriseList}
                     try {
                       const enterpriseInfo = await db.query(
                         `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                         [enterpriseFullName]
                       );
                       if (enterpriseInfo.length > 0) {
@@ -7344,7 +7344,7 @@ ${enterpriseList}
                     try {
                       const enterpriseInfo = await db.query(
                         `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                         [firstEnterprise.enterprise_name]
                       );
                       if (enterpriseInfo.length > 0) {
@@ -7623,7 +7623,7 @@ ${enterpriseList}
             let enterpriseInfo = await db.query(
               `SELECT entity_type, enterprise_full_name
                FROM invested_enterprises 
-               WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
                AND delete_mark = 0 
                LIMIT 1`,
               [newsItem.enterprise_full_name, `%【${newsItem.enterprise_full_name}】`]
@@ -7637,7 +7637,7 @@ ${enterpriseList}
                 enterpriseInfo = await db.query(
                   `SELECT entity_type, enterprise_full_name
                    FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? 
+                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? 
                    AND delete_mark = 0 
                    LIMIT 1`,
                   [extractedFullName]
@@ -7684,7 +7684,7 @@ ${enterpriseList}
             const enterprises = await db.query(
               `SELECT enterprise_full_name, project_abbreviation 
                FROM invested_enterprises 
-               WHERE delete_mark = 0 
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 
                AND exit_status NOT IN ('完全退出', '已上市')`
             );
 
@@ -7721,7 +7721,7 @@ ${enterpriseList}
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [enterpriseFullName]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -7751,7 +7751,7 @@ ${enterpriseList}
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [firstEnterprise.enterprise_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -7831,7 +7831,7 @@ ${enterpriseList}
                 // 支持逗号分隔的多个公众号ID
                 `SELECT enterprise_full_name, project_abbreviation 
                  FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? 
+                 WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
                    OR wechat_official_account_id LIKE ?
                    OR wechat_official_account_id LIKE ?
                    OR wechat_official_account_id LIKE ?)
@@ -7859,7 +7859,7 @@ ${enterpriseList}
                 try {
                   const enterpriseInfo = await db.query(
                     `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                     [enterpriseResult[0].enterprise_full_name]
                   );
                   if (enterpriseInfo.length > 0) {

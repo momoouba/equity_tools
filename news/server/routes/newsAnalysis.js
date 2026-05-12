@@ -170,14 +170,14 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
         // 优先使用wechat_account匹配（这是最准确的匹配方式）
         if (newsItem.wechat_account) {
           console.log(`\n尝试方式1: 使用wechat_account匹配`);
-          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE wechat_official_account_id = '${newsItem.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = '${newsItem.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
           
           // 支持逗号分隔的多个公众号ID
           // 一次性查询企业全称、简称、entity_type、fund、sub_fund，避免二次查询失败导致 entity_type 为空但简称不为空的不一致
           const enterpriseResult = await db.query(
             `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, delete_mark
              FROM invested_enterprises 
-             WHERE (wechat_official_account_id = ? 
+             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?)
@@ -228,7 +228,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             const allResults = await db.query(
               `SELECT enterprise_full_name, wechat_official_account_id, exit_status, delete_mark
                FROM invested_enterprises 
-               WHERE (wechat_official_account_id = ? 
+               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
                  OR wechat_official_account_id LIKE ?
                  OR wechat_official_account_id LIKE ?
                  OR wechat_official_account_id LIKE ?)`,
@@ -248,13 +248,13 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
         // 如果wechat_account匹配失败，尝试使用account_name匹配
         if (!newsItem.enterprise_full_name && newsItem.account_name) {
           console.log(`\n尝试方式2: 使用account_name匹配`);
-          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE wechat_official_account_id = '${newsItem.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = '${newsItem.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
           
           // 一次性查询企业全称、简称、entity_type、fund、sub_fund，避免二次查询失败导致 entity_type 为空但简称不为空的不一致
           const enterpriseResultByName = await db.query(
             `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, delete_mark
              FROM invested_enterprises 
-             WHERE wechat_official_account_id = ? 
+             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = ? 
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0 
              LIMIT 1`,
@@ -682,13 +682,13 @@ router.post('/batch-analyze-selected', async (req, res) => {
               // 优先使用wechat_account匹配（这是最准确的匹配方式）
               if (news.wechat_account) {
                 console.log(`\n尝试方式1: 使用wechat_account匹配`);
-                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE wechat_official_account_id = '${news.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = '${news.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
                 
                 // 支持逗号分隔的多个公众号ID
                 const enterpriseResult = await db.query(
                   `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
                    FROM invested_enterprises 
-                   WHERE (wechat_official_account_id = ? 
+                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?)
@@ -719,7 +719,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [enterpriseResult[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -761,7 +761,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   const allResults = await db.query(
                     `SELECT enterprise_full_name, wechat_official_account_id, exit_status, delete_mark
                      FROM invested_enterprises 
-                     WHERE (wechat_official_account_id = ? 
+                     WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
                        OR wechat_official_account_id LIKE ?
                        OR wechat_official_account_id LIKE ?
                        OR wechat_official_account_id LIKE ?)`,
@@ -781,12 +781,12 @@ router.post('/batch-analyze-selected', async (req, res) => {
               // 如果wechat_account匹配失败，尝试使用account_name匹配
               if (!news.enterprise_full_name && news.account_name) {
                 console.log(`\n尝试方式2: 使用account_name匹配`);
-                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE wechat_official_account_id = '${news.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = '${news.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
                 
                 const enterpriseResultByName = await db.query(
                   `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
                    FROM invested_enterprises 
-                   WHERE wechat_official_account_id = ? 
+                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  wechat_official_account_id = ? 
                    AND exit_status NOT IN ('完全退出', '已上市')
                    AND delete_mark = 0 
                    LIMIT 1`,
@@ -809,7 +809,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
                       [enterpriseResultByName[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -1059,7 +1059,7 @@ router.post('/clean-invalid-associations', async (req, res) => {
       // 检查企业是否在被投企业表中存在
       const existsInDB = await db.query(
         `SELECT enterprise_full_name FROM invested_enterprises 
-         WHERE enterprise_full_name = ? AND delete_mark = 0`,
+         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0`,
         [news.enterprise_full_name]
       );
 
@@ -1325,7 +1325,7 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
     const enterpriseExists = await db.query(
       `SELECT enterprise_full_name, project_abbreviation, exit_status 
        FROM invested_enterprises 
-       WHERE enterprise_full_name = ? AND delete_mark = 0`,
+       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? AND delete_mark = 0`,
       [enterpriseName]
     );
 
@@ -1333,7 +1333,7 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
     const similarEnterprises = await db.query(
       `SELECT enterprise_full_name, project_abbreviation, exit_status 
        FROM invested_enterprises 
-       WHERE enterprise_full_name LIKE ? AND delete_mark = 0 
+       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name LIKE ? AND delete_mark = 0 
        LIMIT 10`,
       [`%${enterpriseName}%`]
     );

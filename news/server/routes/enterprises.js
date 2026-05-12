@@ -5,12 +5,51 @@ const xlsx = require('xlsx');
 const db = require('../db');
 const { logEnterpriseChange } = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
-const { checkNewsPermission } = require('../utils/permissionChecker');
+const { checkNewsPermission, checkProjectSourcingPermission } = require('../utils/permissionChecker');
+const {
+  DATA_APP_NEWS_SENTIMENT,
+  DATA_APP_PROJECT_SOURCING,
+  normalizeDataAppName,
+} = require('../utils/enterpriseDataApp');
 const { queryExternal, getExternalPool, createExternalPool } = require('../utils/externalDb');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
 const TEMPLATE_HEADERS = ['项目简称', '被投企业全称', '统一信用代码', '企业公众号id', '企业官网', '企业类型（被投企业/基金/子基金/子基金管理人/子基金GP）', '退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）'];
+
+async function assertEnterpriseDataAppPermission(userId, userRole, dataAppName) {
+  if (userRole === 'admin') return;
+  if (!userId) {
+    const err = new Error('FORBIDDEN');
+    err.statusCode = 403;
+    throw err;
+  }
+  if (dataAppName === DATA_APP_NEWS_SENTIMENT) {
+    const ok = await checkNewsPermission(userId);
+    if (!ok) {
+      const err = new Error('FORBIDDEN');
+      err.statusCode = 403;
+      throw err;
+    }
+    return;
+  }
+  if (dataAppName === DATA_APP_PROJECT_SOURCING) {
+    const ok = await checkProjectSourcingPermission(userId);
+    if (!ok) {
+      const err = new Error('FORBIDDEN');
+      err.statusCode = 403;
+      throw err;
+    }
+    return;
+  }
+  const err = new Error('BAD_APP');
+  err.statusCode = 400;
+  throw err;
+}
+
+function parseDataAppNameFromQuery(req) {
+  return normalizeDataAppName(req.query.data_app_name);
+}
 
 /**
  * 合并微信公众号ID
@@ -60,6 +99,57 @@ function mergeWechatOfficialAccountIds(oldIds, newIds) {
   return mergedArray.join(',');
 }
 
+function parseOptionalDecimal(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(String(value).replace(/,/g, '').trim());
+  return Number.isFinite(n) ? n : null;
+}
+
+const COST_ROW_FIELDS = ['investment_cost', 'exited_cost', 'remaining_cost', 'residual_value'];
+
+/**
+ * 同步前硬删除：指定用户 + 应用下 invested_enterprises 全量物理删除（含变更日志），再全量重写入。
+ * 与「先清空再导入」一致，避免旧行残留、UPDATE 未覆盖字段导致空值。
+ */
+async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppName) {
+  if (!creatorUserId) return 0;
+  const rows = await db.query(
+    'SELECT id FROM invested_enterprises WHERE creator_user_id = ? AND data_app_name = ?',
+    [creatorUserId, dataAppName]
+  );
+  if (!rows.length) return 0;
+  const ids = rows.map((r) => r.id);
+  const chunkSize = 200;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const ph = chunk.map(() => '?').join(',');
+    await db.execute(
+      `DELETE FROM data_change_log WHERE table_name = 'invested_enterprises' AND record_id IN (${ph})`,
+      chunk
+    );
+  }
+  const del = await db.execute(
+    'DELETE FROM invested_enterprises WHERE creator_user_id = ? AND data_app_name = ?',
+    [creatorUserId, dataAppName]
+  );
+  return del.affectedRows || 0;
+}
+
+/** 将查询行转为可序列化对象，并把 DECIMAL 规范为 number（避免 RowDataPacket/字符串千分位等导致前端取不到或解析失败） */
+function serializeEnterpriseRows(rows) {
+  if (!rows || rows.length === 0) return rows;
+  return rows.map((row) => {
+    const plain = { ...row };
+    for (const key of COST_ROW_FIELDS) {
+      const v = plain[key];
+      if (v == null || v === '') continue;
+      const n = Number(String(v).replace(/,/g, '').trim());
+      if (Number.isFinite(n)) plain[key] = n;
+    }
+    return plain;
+  });
+}
+
 async function generateProjectNumber() {
   const date = new Date();
   const year = date.getFullYear();
@@ -95,7 +185,8 @@ async function checkDuplicateData({
   unified_credit_code,
   wechat_official_account_id,
   official_website,
-  exit_status
+  exit_status,
+  data_app_name = DATA_APP_NEWS_SENTIMENT,
 }) {
   // 如果没有统一社会信用代码，无法进行去重校验
   if (!unified_credit_code || unified_credit_code.trim() === '') {
@@ -105,8 +196,8 @@ async function checkDuplicateData({
   // 查询是否存在相同的统一社会信用代码
   const existing = await db.query(
     `SELECT * FROM invested_enterprises 
-     WHERE unified_credit_code = ? AND delete_mark = 0`,
-    [unified_credit_code]
+     WHERE unified_credit_code = ? AND delete_mark = 0 AND data_app_name = ?`,
+    [unified_credit_code, data_app_name]
   );
 
   if (existing.length === 0) {
@@ -138,7 +229,12 @@ async function insertEnterpriseRow({
   official_website,
   entity_type = null,
   exit_status = '未退出',
-  userId = null
+  userId = null,
+  data_app_name = DATA_APP_NEWS_SENTIMENT,
+  investment_cost = null,
+  exited_cost = null,
+  remaining_cost = null,
+  residual_value = null,
 }) {
   const project_number = await generateProjectNumber();
   const enterpriseId = await generateId('invested_enterprises');
@@ -147,8 +243,9 @@ async function insertEnterpriseRow({
   await db.execute(
     `INSERT INTO invested_enterprises 
      (id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
-      wechat_official_account_id, official_website, entity_type, exit_status, creator_user_id) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      wechat_official_account_id, official_website, entity_type, exit_status, data_app_name,
+      investment_cost, exited_cost, remaining_cost, residual_value, creator_user_id) 
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       enterpriseId,
       project_number,
@@ -159,6 +256,11 @@ async function insertEnterpriseRow({
       official_website || '',
       entity_type || null,
       exit_status || '未退出',
+      data_app_name,
+      investment_cost,
+      exited_cost,
+      remaining_cost,
+      residual_value,
       userId
     ]
   );
@@ -269,15 +371,25 @@ router.get('/', async (req, res) => {
     const userId = req.headers['x-user-id'] || null;
     const userRole = req.headers['x-user-role'] || 'user';
 
-    // 检查用户是否有"新闻舆情"应用权限
-    if (userRole !== 'admin' && userId) {
-      const hasPermission = await checkNewsPermission(userId);
-      if (!hasPermission) {
+    const dataAppName = parseDataAppNameFromQuery(req);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '无效的 data_app_name 参数' });
+    }
+
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
         return res.status(403).json({
           success: false,
-          message: '您没有访问被投企业管理的权限'
+          message: '您没有访问该应用下被投企业数据的权限',
         });
       }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的 data_app_name 参数' });
+      }
+      throw e;
     }
 
     const page = parseInt(req.query.page, 10) || 1;
@@ -287,8 +399,8 @@ router.get('/', async (req, res) => {
     const entityType = req.query.entity_type || ''; // 企业类型筛选
     const offset = (page - 1) * pageSize;
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0';
-    const params = [];
+    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_name = ?';
+    const params = [dataAppName];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {
@@ -319,6 +431,11 @@ router.get('/', async (req, res) => {
         // 子基金管理人及GP：包含子基金管理人或子基金GP
         condition += ' AND (entity_type = ? OR entity_type = ?)';
         params.push('子基金管理人', '子基金GP');
+      } else if (dataAppName === DATA_APP_PROJECT_SOURCING && entityType === '被投企业') {
+        // 项目挖掘被投企业页固定筛「被投企业」；同步 SQL 常不写 entity_type（为 NULL），须与列表一致
+        condition +=
+          ' AND (TRIM(COALESCE(entity_type, \'\')) = ? OR TRIM(COALESCE(entity_type, \'\')) = \'\')';
+        params.push(entityType);
       } else {
         // 其他类型：直接匹配
         condition += ' AND entity_type = ?';
@@ -340,10 +457,11 @@ router.get('/', async (req, res) => {
       params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
     }
 
-    const data = await db.query(
+    const rawRows = await db.query(
       `SELECT * ${condition} ORDER BY project_number DESC, id DESC LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
+    const data = serializeEnterpriseRows(rawRows);
     const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
 
     res.json({
@@ -366,22 +484,32 @@ router.get('/export', async (req, res) => {
     const userId = req.headers['x-user-id'] || null;
     const userRole = req.headers['x-user-role'] || 'user';
 
-    // 检查用户是否有"新闻舆情"应用权限
-    if (userRole !== 'admin' && userId) {
-      const hasPermission = await checkNewsPermission(userId);
-      if (!hasPermission) {
+    const dataAppName = parseDataAppNameFromQuery(req);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '无效的 data_app_name 参数' });
+    }
+
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
         return res.status(403).json({
           success: false,
-          message: '您没有访问被投企业管理的权限'
+          message: '您没有访问该应用下被投企业数据的权限',
         });
       }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的 data_app_name 参数' });
+      }
+      throw e;
     }
 
     const search = req.query.search || '';
     const filterUserId = req.query.filter_user_id || ''; // 用户筛选（仅admin使用）
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0';
-    const params = [];
+    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_name = ?';
+    const params = [dataAppName];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {
@@ -418,10 +546,11 @@ router.get('/export', async (req, res) => {
     }
 
     // 查询所有符合条件的数据（不分页）
-    const data = await db.query(
+    const rawExportRows = await db.query(
       `SELECT * ${condition} ORDER BY project_number DESC, id DESC`,
       params
     );
+    const data = serializeEnterpriseRows(rawExportRows);
 
     if (data.length === 0) {
       return res.status(400).json({
@@ -430,38 +559,73 @@ router.get('/export', async (req, res) => {
       });
     }
 
-    // 格式化数据为Excel格式
-    const excelData = data.map((item, index) => ({
-      '序号': index + 1,
-      '项目编号': item.project_number || '',
-      '项目简称': item.project_abbreviation || '',
-      '被投企业全称': item.enterprise_full_name || '',
-      '统一信用代码': item.unified_credit_code || '',
-      '企业公众号id': item.wechat_official_account_id || '',
-      '企业官网': item.official_website || '',
-      '退出状态': item.exit_status || '未退出',
-      '创建时间': item.created_at ? new Date(item.created_at) : null,
-      '更新时间': item.updated_at ? new Date(item.updated_at) : null
-    }));
+    const isProjectSourcing = dataAppName === DATA_APP_PROJECT_SOURCING;
+
+    function formatExportMoney(v) {
+      if (v == null || v === '') return '';
+      const n = Number(v);
+      return Number.isFinite(n) ? n : '';
+    }
+
+    // 格式化数据为Excel格式（项目挖掘与新闻舆情列集合与列表策略一致）
+    const excelData = data.map((item, index) => {
+      const seq = index + 1;
+      if (isProjectSourcing) {
+        return {
+          序号: seq,
+          项目编号: item.project_number || '',
+          企业类型: item.entity_type || '',
+          项目简称: item.project_abbreviation || '',
+          关联基金: item.fund || '',
+          被投企业全称: item.enterprise_full_name || '',
+          投资成本: formatExportMoney(item.investment_cost),
+          已退出成本: formatExportMoney(item.exited_cost),
+          剩余成本: formatExportMoney(item.remaining_cost),
+          剩余价值: formatExportMoney(item.residual_value),
+          退出状态: item.exit_status || '未退出',
+          创建时间: item.created_at ? new Date(item.created_at) : null,
+          更新时间: item.updated_at ? new Date(item.updated_at) : null,
+        };
+      }
+      return {
+        序号: seq,
+        项目编号: item.project_number || '',
+        项目简称: item.project_abbreviation || '',
+        被投企业全称: item.enterprise_full_name || '',
+        统一信用代码: item.unified_credit_code || '',
+        企业公众号id: item.wechat_official_account_id || '',
+        企业官网: item.official_website || '',
+        退出状态: item.exit_status || '未退出',
+        创建时间: item.created_at ? new Date(item.created_at) : null,
+        更新时间: item.updated_at ? new Date(item.updated_at) : null,
+      };
+    });
+
+    const headerOrder = Object.keys(excelData[0] || {});
+    const defaultWch = {
+      序号: 8,
+      项目编号: 18,
+      企业类型: 14,
+      项目简称: 15,
+      关联基金: 22,
+      被投企业全称: 30,
+      投资成本: 14,
+      已退出成本: 14,
+      剩余成本: 14,
+      剩余价值: 14,
+      统一信用代码: 20,
+      企业公众号id: 25,
+      企业官网: 40,
+      退出状态: 12,
+      创建时间: 20,
+      更新时间: 20,
+    };
 
     // 创建工作簿
     const wb = xlsx.utils.book_new();
     const ws = xlsx.utils.json_to_sheet(excelData);
 
-    // 设置列宽
-    const colWidths = [
-      { wch: 8 },  // 序号
-      { wch: 18 }, // 项目编号
-      { wch: 15 }, // 项目简称
-      { wch: 30 }, // 被投企业全称
-      { wch: 20 }, // 统一信用代码
-      { wch: 25 }, // 企业公众号id
-      { wch: 40 }, // 企业官网
-      { wch: 12 }, // 退出状态
-      { wch: 20 }, // 创建时间
-      { wch: 20 }  // 更新时间
-    ];
-    ws['!cols'] = colWidths;
+    ws['!cols'] = headerOrder.map((h) => ({ wch: defaultWch[h] || 14 }));
 
     // 设置单元格格式
     const range = xlsx.utils.decode_range(ws['!ref']);
@@ -507,29 +671,35 @@ router.get('/export', async (req, res) => {
         }
       }
 
-      // 创建时间列 (I列，索引8)
-      const createTimeCell = xlsx.utils.encode_cell({ r: rowNum, c: 8 });
-      if (ws[createTimeCell] && ws[createTimeCell].v) {
-        ws[createTimeCell].t = 'd'; // 设置为日期类型
-        ws[createTimeCell].z = 'yyyy-mm-dd hh:mm:ss'; // 设置日期格式
-        ws[createTimeCell].s.alignment = { horizontal: "center", vertical: "center" };
+      const cCreated = headerOrder.indexOf('创建时间');
+      if (cCreated >= 0) {
+        const createTimeCell = xlsx.utils.encode_cell({ r: rowNum, c: cCreated });
+        if (ws[createTimeCell] && ws[createTimeCell].v) {
+          ws[createTimeCell].t = 'd';
+          ws[createTimeCell].z = 'yyyy-mm-dd hh:mm:ss';
+          ws[createTimeCell].s.alignment = { horizontal: 'center', vertical: 'center' };
+        }
       }
 
-      // 更新时间列 (J列，索引9)
-      const updateTimeCell = xlsx.utils.encode_cell({ r: rowNum, c: 9 });
-      if (ws[updateTimeCell] && ws[updateTimeCell].v) {
-        ws[updateTimeCell].t = 'd'; // 设置为日期类型
-        ws[updateTimeCell].z = 'yyyy-mm-dd hh:mm:ss'; // 设置日期格式
-        ws[updateTimeCell].s.alignment = { horizontal: "center", vertical: "center" };
+      const cUpdated = headerOrder.indexOf('更新时间');
+      if (cUpdated >= 0) {
+        const updateTimeCell = xlsx.utils.encode_cell({ r: rowNum, c: cUpdated });
+        if (ws[updateTimeCell] && ws[updateTimeCell].v) {
+          ws[updateTimeCell].t = 'd';
+          ws[updateTimeCell].z = 'yyyy-mm-dd hh:mm:ss';
+          ws[updateTimeCell].s.alignment = { horizontal: 'center', vertical: 'center' };
+        }
       }
 
-      // 企业官网列 (G列，索引6) - 设置超链接
-      const websiteCell = xlsx.utils.encode_cell({ r: rowNum, c: 6 });
-      if (ws[websiteCell] && ws[websiteCell].v && typeof ws[websiteCell].v === 'string' && ws[websiteCell].v.startsWith('http')) {
-        ws[websiteCell].l = { Target: ws[websiteCell].v, Tooltip: '点击打开链接' }; // 设置超链接
-        if (!ws[websiteCell].s) ws[websiteCell].s = {};
-        ws[websiteCell].s.font = { color: { rgb: "0000FF" }, underline: true }; // 蓝色下划线样式
-        ws[websiteCell].s.alignment = { horizontal: "left", vertical: "center" };
+      const cWebsite = headerOrder.indexOf('企业官网');
+      if (cWebsite >= 0) {
+        const websiteCell = xlsx.utils.encode_cell({ r: rowNum, c: cWebsite });
+        if (ws[websiteCell] && ws[websiteCell].v && typeof ws[websiteCell].v === 'string' && ws[websiteCell].v.startsWith('http')) {
+          ws[websiteCell].l = { Target: ws[websiteCell].v, Tooltip: '点击打开链接' };
+          if (!ws[websiteCell].s) ws[websiteCell].s = {};
+          ws[websiteCell].s.font = { color: { rgb: '0000FF' }, underline: true };
+          ws[websiteCell].s.alignment = { horizontal: 'left', vertical: 'center' };
+        }
       }
     }
 
@@ -588,6 +758,11 @@ router.post('/', [
   body('official_website').optional(),
   body('entity_type').optional(),
   body('exit_status').optional(),
+  body('data_app_name').optional(),
+  body('investment_cost').optional(),
+  body('exited_cost').optional(),
+  body('remaining_cost').optional(),
+  body('residual_value').optional(),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -602,11 +777,36 @@ router.post('/', [
       wechat_official_account_id,
       official_website,
       entity_type,
-      exit_status = '未退出'
+      exit_status = '未退出',
+      investment_cost,
+      exited_cost,
+      remaining_cost,
+      residual_value,
     } = req.body;
 
     // 从请求头或请求体中获取用户ID
     const userId = req.headers['x-user-id'] || req.body.userId || null;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const dataAppName = normalizeDataAppName(req.body.data_app_name);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '无效的 data_app_name' });
+    }
+
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({
+          success: false,
+          message: '您没有在该应用下创建被投企业数据的权限',
+        });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的 data_app_name' });
+      }
+      throw e;
+    }
 
     const result = await insertEnterpriseRow({
       project_abbreviation,
@@ -616,7 +816,12 @@ router.post('/', [
       official_website,
       entity_type: entity_type || null,
       exit_status,
-      userId: userId
+      userId: userId,
+      data_app_name: dataAppName,
+      investment_cost: parseOptionalDecimal(investment_cost),
+      exited_cost: parseOptionalDecimal(exited_cost),
+      remaining_cost: parseOptionalDecimal(remaining_cost),
+      residual_value: parseOptionalDecimal(residual_value),
     });
 
     res.json({
@@ -656,6 +861,10 @@ router.put('/:id', [
   body('official_website').optional(),
   body('entity_type').optional(),
   body('exit_status').optional(),
+  body('investment_cost').optional(),
+  body('exited_cost').optional(),
+  body('remaining_cost').optional(),
+  body('residual_value').optional(),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -671,7 +880,11 @@ router.put('/:id', [
       wechat_official_account_id,
       official_website,
       entity_type,
-      exit_status
+      exit_status,
+      investment_cost,
+      exited_cost,
+      remaining_cost,
+      residual_value,
     } = req.body;
 
     // 从请求头或请求体中获取用户ID
@@ -688,6 +901,24 @@ router.put('/:id', [
     }
 
     const oldData = oldDataRows[0];
+    const userRole = req.headers['x-user-role'] || 'user';
+    const rowApp = normalizeDataAppName(oldData.data_app_name) || DATA_APP_NEWS_SENTIMENT;
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, rowApp);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有修改该企业数据的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
+    if (userRole !== 'admin' && oldData.creator_user_id && oldData.creator_user_id !== userId) {
+      return res.status(403).json({ success: false, message: '无权修改该企业数据' });
+    }
+
     const newData = {
       project_abbreviation: project_abbreviation || '',
       enterprise_full_name,
@@ -695,13 +926,22 @@ router.put('/:id', [
       wechat_official_account_id: wechat_official_account_id || '',
       official_website: official_website || '',
       entity_type: entity_type || null,
-      exit_status: exit_status || '未退出'
+      exit_status: exit_status || '未退出',
     };
+    const costKeys = ['investment_cost', 'exited_cost', 'remaining_cost', 'residual_value'];
+    for (const k of costKeys) {
+      if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+        newData[k] = parseOptionalDecimal(req.body[k]);
+      } else {
+        newData[k] = oldData[k];
+      }
+    }
 
     const result = await db.execute(
       `UPDATE invested_enterprises 
        SET project_abbreviation = ?, enterprise_full_name = ?, unified_credit_code = ?,
            wechat_official_account_id = ?, official_website = ?, entity_type = ?, exit_status = ?,
+           investment_cost = ?, exited_cost = ?, remaining_cost = ?, residual_value = ?,
            modifier_user_id = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND delete_mark = 0`,
       [
@@ -712,6 +952,10 @@ router.put('/:id', [
         newData.official_website,
         newData.entity_type,
         newData.exit_status,
+        newData.investment_cost,
+        newData.exited_cost,
+        newData.remaining_cost,
+        newData.residual_value,
         userId,
         id
       ]
@@ -820,6 +1064,32 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     // 从请求头或请求体中获取用户ID
     const userId = req.headers['x-user-id'] || req.body.userId || null;
+    const userRole = req.headers['x-user-role'] || 'user';
+
+    const rows = await db.query(
+      'SELECT * FROM invested_enterprises WHERE id = ? AND delete_mark = 0',
+      [id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: '企业不存在或已被删除' });
+    }
+    const row = rows[0];
+    const rowApp = normalizeDataAppName(row.data_app_name) || DATA_APP_NEWS_SENTIMENT;
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, rowApp);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有删除该企业数据的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
+    if (userRole !== 'admin' && row.creator_user_id && row.creator_user_id !== userId) {
+      return res.status(403).json({ success: false, message: '无权删除该企业数据' });
+    }
 
     const result = await db.execute(
       `UPDATE invested_enterprises 
@@ -868,6 +1138,25 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ success: false, message: '未检测到可导入的数据' });
     }
 
+    const batchUserId = req.headers['x-user-id'] || req.body?.userId || null;
+    const batchUserRole = req.headers['x-user-role'] || 'user';
+    const dataAppName = normalizeDataAppName(req.query.data_app_name || req.body?.data_app_name);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '缺少或无效的 data_app_name 参数' });
+    }
+    try {
+      await assertEnterpriseDataAppPermission(batchUserId, batchUserRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有在该应用下批量导入被投企业的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
+
     const errors = [];
     let successCount = 0;
 
@@ -890,7 +1179,7 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
 
       try {
         // 从请求头或请求体中获取用户ID
-        const userId = req.headers['x-user-id'] || req.body.userId || null;
+        const userId = batchUserId;
         
         // 检查是否完全重复（以统一社会信用代码为准）
         const duplicateRecord = await checkDuplicateData({
@@ -899,7 +1188,8 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
           unified_credit_code,
           wechat_official_account_id,
           official_website,
-          exit_status
+          exit_status,
+          data_app_name: dataAppName,
         });
 
         if (duplicateRecord) {
@@ -920,7 +1210,8 @@ router.post('/batch-import/upload', upload.single('file'), async (req, res) => {
           official_website,
           entity_type: entity_type || null,
           exit_status,
-          userId: userId
+          userId: userId,
+          data_app_name: dataAppName,
         });
         successCount += 1;
       } catch (err) {
@@ -964,6 +1255,8 @@ router.get('/:id/logs', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    const userId = req.headers['x-user-id'] || null;
+    const userRole = req.headers['x-user-role'] || 'user';
     const rows = await db.query(
       'SELECT * FROM invested_enterprises WHERE id = ? AND delete_mark = 0',
       [id]
@@ -973,7 +1266,26 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: '企业不存在' });
     }
 
-    res.json({ success: true, data: rows[0] });
+    const row = serializeEnterpriseRows(rows)[0];
+
+    const rowApp = normalizeDataAppName(row.data_app_name) || DATA_APP_NEWS_SENTIMENT;
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, rowApp);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有查看该企业数据的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
+    if (userRole !== 'admin' && row.creator_user_id && row.creator_user_id !== userId) {
+      return res.status(403).json({ success: false, message: '无权查看该企业数据' });
+    }
+
+    res.json({ success: true, data: row });
   } catch (error) {
     console.error('获取被投企业失败：', error);
     res.status(500).json({ success: false, message: '查询失败' });
@@ -981,7 +1293,13 @@ router.get('/:id', async (req, res) => {
 });
 
 // 执行SQL查询并同步数据到被投企业表
-async function executeSyncTask(dbConfigId, sqlQuery) {
+// syncOwnerUserId：任务所属用户；传入时先硬删除该用户+本应用下 invested_enterprises，再全量重写入（与新闻侧「清空再导入」一致）
+async function executeSyncTask(
+  dbConfigId,
+  sqlQuery,
+  targetDataAppName = DATA_APP_NEWS_SENTIMENT,
+  syncOwnerUserId = null
+) {
   const { getExternalPool, createExternalPool, closeExternalPool } = require('../utils/externalDb');
   let retryCount = 0;
   const maxRetries = 3;
@@ -1066,19 +1384,36 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     }
   }
   
-  // 检查查询结果
+  // 检查查询结果：无数据时若需全量替换，仍执行硬删除（清空该用户本应用监控对象）
   if (!externalData || externalData.length === 0) {
+    let deleted = 0;
+    if (syncOwnerUserId) {
+      deleted = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
+      console.log(`[企业同步任务] 外部无数据，已硬删除本用户本应用下 ${deleted} 条`);
+    }
     return {
       success: true,
-      message: '查询成功，但没有数据需要同步',
+      message:
+        deleted > 0
+          ? `查询成功，外部无返回行；已清空本应用下共 ${deleted} 条本地数据`
+          : '查询成功，但没有数据需要同步',
       synced: 0,
       updated: 0,
-      inserted: 0
+      inserted: 0,
+      deleted,
     };
   }
 
+  let deletedBeforeSync = 0;
+  if (syncOwnerUserId) {
+    deletedBeforeSync = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
+    console.log(
+      `[企业同步任务] 硬删除本用户本应用旧数据 ${deletedBeforeSync} 条（creator_user_id=${syncOwnerUserId}, data_app_name=${targetDataAppName}）`
+    );
+  }
+
   // 获取invested_enterprises表的所有字段（排除系统字段）
-  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id'];
+  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name'];
   const tableColumns = await db.query(`
     SELECT COLUMN_NAME 
     FROM INFORMATION_SCHEMA.COLUMNS 
@@ -1162,6 +1497,20 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     if (enterpriseData.exit_status === undefined) {
       enterpriseData.exit_status = row.exit_status || row.exitStatus || '未退出';
     }
+    if (
+      targetDataAppName === DATA_APP_PROJECT_SOURCING &&
+      (enterpriseData.entity_type === undefined ||
+        enterpriseData.entity_type === null ||
+        String(enterpriseData.entity_type).trim() === '')
+    ) {
+      enterpriseData.entity_type = '被投企业';
+    }
+
+    for (const k of COST_ROW_FIELDS) {
+      if (enterpriseData[k] !== undefined) {
+        enterpriseData[k] = parseOptionalDecimal(enterpriseData[k]);
+      }
+    }
 
     // 必填字段检查
     if (!enterpriseData.enterprise_full_name) {
@@ -1172,14 +1521,18 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
     // 根据统一社会信用代码判断是否已存在
     let existing = null;
     if (enterpriseData.unified_credit_code && enterpriseData.unified_credit_code.trim() !== '') {
-      // 如果有统一信用代码，根据统一信用代码查找（同时查询退出状态）
-      const existingRecords = await db.query(
-        `SELECT id, project_number, exit_status FROM invested_enterprises 
+      // 如果有统一信用代码，根据统一信用代码查找（同应用、同创建人，避免误更新他人数据）
+      const matchParams = [enterpriseData.unified_credit_code, targetDataAppName];
+      let matchSql = `SELECT id, project_number, exit_status FROM invested_enterprises 
          WHERE unified_credit_code = ? 
          AND delete_mark = 0
-         LIMIT 1`,
-        [enterpriseData.unified_credit_code]
-      );
+         AND data_app_name = ?`;
+      if (syncOwnerUserId) {
+        matchSql += ' AND creator_user_id = ?';
+        matchParams.push(syncOwnerUserId);
+      }
+      matchSql += ' LIMIT 1';
+      const existingRecords = await db.query(matchSql, matchParams);
       if (existingRecords.length > 0) {
         existing = existingRecords[0];
       }
@@ -1209,11 +1562,15 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
       if (updateFields.length > 0) {
         updateFields.push('updated_at = CURRENT_TIMESTAMP');
         updateValues.push(existing.id);
-        
+        let whereSql = 'WHERE id = ?';
+        if (syncOwnerUserId) {
+          whereSql += ' AND creator_user_id = ?';
+          updateValues.push(syncOwnerUserId);
+        }
         await db.execute(
           `UPDATE invested_enterprises 
            SET ${updateFields.join(', ')}
-           WHERE id = ?`,
+           ${whereSql}`,
           updateValues
         );
         updated++;
@@ -1302,6 +1659,7 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
       }
     } else {
       // 统一信用代码不一致或不存在，新增数据
+      enterpriseData.data_app_name = targetDataAppName;
       // 自动生成项目编号
       const projectNumber = await generateProjectNumber();
       const enterpriseId = await generateId('invested_enterprises');
@@ -1319,7 +1677,15 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
           insertValues.push(value === '' ? null : value);
         }
       }
-      
+      if (!insertFields.includes('data_app_name')) {
+        insertFields.push('data_app_name');
+        insertValues.push(targetDataAppName);
+      }
+      if (syncOwnerUserId && !insertFields.includes('creator_user_id')) {
+        insertFields.push('creator_user_id');
+        insertValues.push(syncOwnerUserId);
+      }
+
       if (insertFields.length > 2) {
         const placeholders = insertFields.map(() => '?').join(', ');
         await db.execute(
@@ -1425,31 +1791,51 @@ async function executeSyncTask(dbConfigId, sqlQuery) {
 
   return {
     success: true,
-    message: `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条`,
+    message:
+      deletedBeforeSync > 0
+        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条`
+        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条`,
     synced,
     updated,
-    inserted
+    inserted,
+    deleted: deletedBeforeSync,
   };
 }
 
-// 根据数据库配置ID获取当前用户的定时任务（管理员可查任意，普通用户仅本人）
+// 根据数据库配置ID获取当前用户的定时任务（管理员可查任意，普通用户仅本人）；按 data_app_name 分应用存储
 router.get('/sync-task/by-db/:db_config_id', async (req, res) => {
   try {
     const { db_config_id } = req.params;
     const userRole = req.headers['x-user-role'] || 'user';
     const userId = req.headers['x-user-id'] || null;
     const isAdmin = userRole === 'admin';
+    const dataAppName = normalizeDataAppName(req.query.data_app_name);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '缺少或无效的 data_app_name 参数' });
+    }
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有访问该应用下同步配置的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
 
     const tasks = await db.query(
-      `SELECT id, db_config_id, sql_query, cron_expression, description, is_active, 
+      `SELECT id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active, 
               last_execution_time, last_execution_status, last_execution_message, execution_count,
               created_at, updated_at
        FROM enterprise_sync_task 
-       WHERE db_config_id = ? AND is_active = 1
+       WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1
          ${isAdmin ? '' : 'AND created_by = ?'}
        ORDER BY created_at DESC 
        LIMIT 1`,
-      isAdmin ? [db_config_id] : [db_config_id, userId]
+      isAdmin ? [db_config_id, dataAppName] : [db_config_id, dataAppName, userId]
     );
 
     if (tasks.length > 0) {
@@ -1463,12 +1849,13 @@ router.get('/sync-task/by-db/:db_config_id', async (req, res) => {
   }
 });
 
-// 创建定时同步任务
+// 创建定时同步任务（同一数据库配置下，按应用 data_app_name 各存一条 SQL）
 router.post('/sync-task', [
   body('db_config_id').notEmpty().withMessage('数据库配置ID不能为空'),
   body('sql_query').notEmpty().withMessage('SQL查询语句不能为空'),
   body('cron_expression').notEmpty().withMessage('Cron表达式不能为空'),
   body('description').optional(),
+  body('data_app_name').optional(),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -1477,6 +1864,10 @@ router.post('/sync-task', [
     }
 
     const { db_config_id, sql_query, cron_expression, description } = req.body;
+    const dataAppName = normalizeDataAppName(req.body.data_app_name);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '无效的 data_app_name' });
+    }
 
     // 验证SQL语句（支持WITH语句和SELECT语句）
     const sql = sql_query.trim().toUpperCase();
@@ -1487,6 +1878,19 @@ router.post('/sync-task', [
     const userRole = req.headers['x-user-role'] || 'user';
     const userId = req.headers['x-user-id'] || null;
     const isAdmin = userRole === 'admin';
+
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有在该应用下配置同步任务的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
 
     // 检查数据库配置是否存在且当前用户有权限（本人创建的或管理员）
     const dbConfigs = await db.query(
@@ -1500,10 +1904,10 @@ router.post('/sync-task', [
       return res.status(403).json({ success: false, message: '只能选择自己创建的数据库配置' });
     }
 
-    // 检查是否已存在该用户在此数据库下的任务（按用户维度一个库一条）
+    // 同一用户、同一库、同一应用一条任务
     const existing = await db.query(
-      'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?',
-      [db_config_id, userId]
+      'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0',
+      [db_config_id, userId, dataAppName]
     );
 
     const taskId = existing.length > 0 ? existing[0].id : await generateId('enterprise_sync_task');
@@ -1520,10 +1924,17 @@ router.post('/sync-task', [
       // 创建新任务
       await db.execute(
         `INSERT INTO enterprise_sync_task 
-         (id, db_config_id, sql_query, cron_expression, description, created_by, updated_by) 
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [taskId, db_config_id, sql_query, cron_expression, description || '', userId, userId]
+         (id, db_config_id, data_app_name, sql_query, cron_expression, description, created_by, updated_by) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [taskId, db_config_id, dataAppName, sql_query, cron_expression, description || '', userId, userId]
       );
+    }
+
+    try {
+      const { reloadTasks } = require('../utils/enterpriseSyncTasks');
+      await reloadTasks();
+    } catch (reloadErr) {
+      console.warn('重新加载企业同步定时任务失败:', reloadErr.message);
     }
 
     res.json({ 
@@ -1541,6 +1952,7 @@ router.post('/sync-task', [
 router.post('/sync-task/execute', [
   body('db_config_id').notEmpty().withMessage('数据库配置ID不能为空'),
   body('sql_query').optional(), // SQL查询语句改为可选，如果未提供则从数据库读取
+  body('data_app_name').optional(),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -1549,9 +1961,26 @@ router.post('/sync-task/execute', [
     }
 
     const { db_config_id, sql_query } = req.body;
+    const dataAppName = normalizeDataAppName(req.body.data_app_name);
+    if (!dataAppName) {
+      return res.status(400).json({ success: false, message: '无效的 data_app_name' });
+    }
     const userRole = req.headers['x-user-role'] || 'user';
     const userId = req.headers['x-user-id'] || null;
     const isAdmin = userRole === 'admin';
+
+    try {
+      await assertEnterpriseDataAppPermission(userId, userRole, dataAppName);
+    } catch (e) {
+      const code = e.statusCode || 500;
+      if (code === 403) {
+        return res.status(403).json({ success: false, message: '您没有在该应用下执行同步的权限' });
+      }
+      if (code === 400) {
+        return res.status(400).json({ success: false, message: '无效的应用标识' });
+      }
+      throw e;
+    }
 
     // 校验是否有权使用该数据库配置
     const dbConfigs = await db.query(
@@ -1565,17 +1994,17 @@ router.post('/sync-task/execute', [
       return res.status(403).json({ success: false, message: '只能执行自己创建的数据库配置下的任务' });
     }
 
-    // 如果未提供SQL查询语句，从当前用户已保存的任务中读取
+    // 如果未提供SQL查询语句，从当前用户已保存的任务中读取（按应用）
     let finalSqlQuery = sql_query;
     if (!finalSqlQuery || finalSqlQuery.trim() === '') {
       const tasks = await db.query(
-        `SELECT sql_query FROM enterprise_sync_task WHERE db_config_id = ? AND is_active = 1 ${isAdmin ? '' : 'AND created_by = ?'}`,
-        isAdmin ? [db_config_id] : [db_config_id, userId]
+        `SELECT sql_query FROM enterprise_sync_task WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1 ${isAdmin ? '' : 'AND created_by = ?'}`,
+        isAdmin ? [db_config_id, dataAppName] : [db_config_id, dataAppName, userId]
       );
       if (tasks.length === 0) {
         return res.status(400).json({
           success: false,
-          message: '该数据库配置没有已保存的定时任务，请先保存任务或提供SQL查询语句'
+          message: '该数据库配置下没有已保存的定时任务（当前应用），请先保存任务或提供SQL查询语句'
         });
       }
       finalSqlQuery = tasks[0].sql_query;
@@ -1593,14 +2022,14 @@ router.post('/sync-task/execute', [
       return res.status(400).json({ success: false, message: 'SQL语句必须以SELECT或WITH开头' });
     }
 
-    // 执行同步任务
-    const result = await executeSyncTask(db_config_id, finalSqlQuery);
+    // 执行同步任务（写入对应应用的 invested_enterprises；按任务用户硬删除后全量重写）
+    const result = await executeSyncTask(db_config_id, finalSqlQuery, dataAppName, userId);
 
-    // 更新当前用户该库下的任务执行记录（如果存在）
+    // 更新当前用户该库、该应用下任务的执行记录（如果存在）
     try {
       const tasks = await db.query(
-        `SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?`,
-        [db_config_id, userId]
+        `SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0`,
+        [db_config_id, userId, dataAppName]
       );
       if (tasks.length > 0) {
         await db.execute(
@@ -1621,11 +2050,12 @@ router.post('/sync-task/execute', [
   } catch (error) {
     console.error('执行同步任务失败：', error);
     const failedUserId = req.headers['x-user-id'] || null;
-    // 尝试更新当前用户该库下的任务执行记录为失败
+    const failedDataApp = normalizeDataAppName(req.body.data_app_name) || DATA_APP_NEWS_SENTIMENT;
+    // 尝试更新当前用户该库、该应用下任务的执行记录为失败
     try {
       const tasks = await db.query(
-        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ?',
-        [req.body.db_config_id, failedUserId]
+        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0',
+        [req.body.db_config_id, failedUserId, failedDataApp]
       );
       if (tasks.length > 0) {
         await db.execute(

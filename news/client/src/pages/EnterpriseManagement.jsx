@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input, Tabs } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import EnterpriseForm from './EnterpriseForm'
@@ -12,7 +12,36 @@ const InputSearch = Input.Search
 const CollapseItem = Collapse.Item
 const TabPane = Tabs.TabPane
 
-function EnterpriseManagement() {
+const DATA_APP_NEWS = '新闻舆情'
+const DATA_APP_PROJECT = '项目挖掘'
+
+/** 从行数据取金额（兼容 snake_case / camelCase；避免仅依赖 Table render 的第一个参数） */
+function pickAmountField(record, snakeKey) {
+  if (!record) return undefined
+  const camelKey = snakeKey.replace(/_([a-z])/g, (_, ch) => ch.toUpperCase())
+  const v = record[snakeKey] ?? record[camelKey]
+  return v
+}
+
+function formatTableAmount(value) {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'bigint') {
+    const bn = Number(value)
+    if (!Number.isFinite(bn)) return '-'
+    return bn.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  }
+  const cleaned = String(value).replace(/,/g, '').replace(/\s/g, '').trim()
+  if (cleaned === '') return '-'
+  const n = Number(cleaned)
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function EnterpriseManagement({
+  dataAppName = DATA_APP_NEWS,
+  pageTitle = '舆情监控对象',
+  hideEntityTabs = false,
+}) {
   const [enterprises, setEnterprises] = useState([])
   const [loading, setLoading] = useState(false)
   const [showForm, setShowForm] = useState(false)
@@ -34,6 +63,12 @@ function EnterpriseManagement() {
   const [allTotal, setAllTotal] = useState(0)
 
   useEffect(() => {
+    if (hideEntityTabs) {
+      setActiveTab('invested')
+    }
+  }, [hideEntityTabs])
+
+  useEffect(() => {
     const userData = localStorage.getItem('user')
     if (userData) {
       try {
@@ -50,7 +85,7 @@ function EnterpriseManagement() {
 
   useEffect(() => {
     fetchEnterprises()
-  }, [currentPage, selectedUserId, isAdmin, searchKeyword, pageSize, activeTab])
+  }, [currentPage, selectedUserId, isAdmin, searchKeyword, pageSize, activeTab, dataAppName])
 
   const fetchUsers = async () => {
     try {
@@ -79,7 +114,8 @@ function EnterpriseManagement() {
 
       const params = {
         page: currentPage,
-        pageSize
+        pageSize,
+        data_app_name: dataAppName,
       }
       if (currentIsAdmin && selectedUserId) {
         params.filter_user_id = selectedUserId
@@ -87,8 +123,10 @@ function EnterpriseManagement() {
       if (searchKeyword && searchKeyword.trim()) {
         params.search = searchKeyword.trim()
       }
-      // 根据选中的tab添加企业类型筛选参数
-      if (activeTab === 'invested') {
+      // 根据选中的tab添加企业类型筛选参数（项目挖掘被投企业页固定为被投企业）
+      if (hideEntityTabs) {
+        params.entity_type = '被投企业'
+      } else if (activeTab === 'invested') {
         // 被投企业
         params.entity_type = '被投企业'
       } else if (activeTab === 'main_fund') {
@@ -159,7 +197,7 @@ function EnterpriseManagement() {
 
   const handleExport = async () => {
     try {
-      const params = {}
+      const params = { data_app_name: dataAppName }
       if (isAdmin && selectedUserId) {
         params.filter_user_id = selectedUserId
       }
@@ -233,86 +271,14 @@ function EnterpriseManagement() {
     setCurrentPage(1) // 切换tab时重置到第一页
   }
 
-  const columns = [
-    {
+  const columns = useMemo(() => {
+    const indexCol = {
       title: '序号',
       width: 80,
       align: 'center',
       render: (_, record, index) => (currentPage - 1) * pageSize + index + 1
-    },
-    {
-      title: '项目编号',
-      dataIndex: 'project_number',
-      ellipsis: true,
-      tooltip: true
-    },
-    {
-      title: '企业类型',
-      dataIndex: 'entity_type',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '项目简称',
-      dataIndex: 'project_abbreviation',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '关联基金',
-      dataIndex: 'fund',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '关联子基金',
-      dataIndex: 'sub_fund',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '被投企业全称',
-      dataIndex: 'enterprise_full_name',
-      ellipsis: true,
-      tooltip: true
-    },
-    {
-      title: '统一信用代码',
-      dataIndex: 'unified_credit_code',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '企业公众号id',
-      dataIndex: 'wechat_official_account_id',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
-      title: '企业官网',
-      dataIndex: 'official_website',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text ? (
-        <a href={text} target="_blank" rel="noopener noreferrer">
-          {text}
-        </a>
-      ) : '-'
-    },
-    {
-      title: '退出状态',
-      dataIndex: 'exit_status',
-      ellipsis: true,
-      tooltip: true,
-      render: (text) => text || '-'
-    },
-    {
+    }
+    const actionCol = {
       title: '操作',
       width: 220,
       align: 'left',
@@ -347,13 +313,165 @@ function EnterpriseManagement() {
         </Space>
       )
     }
-  ]
+
+    if (dataAppName === DATA_APP_PROJECT) {
+      return [
+        indexCol,
+        {
+          title: '项目编号',
+          dataIndex: 'project_number',
+          ellipsis: true,
+          tooltip: true
+        },
+        {
+          title: '企业类型',
+          dataIndex: 'entity_type',
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        },
+        {
+          title: '项目简称',
+          dataIndex: 'project_abbreviation',
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        },
+        {
+          title: '关联基金',
+          dataIndex: 'fund',
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        },
+        {
+          title: '被投企业全称',
+          dataIndex: 'enterprise_full_name',
+          ellipsis: true,
+          tooltip: true
+        },
+        {
+          title: '投资成本',
+          dataIndex: 'investment_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'investment_cost'))
+        },
+        {
+          title: '已退出成本',
+          dataIndex: 'exited_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'exited_cost'))
+        },
+        {
+          title: '剩余成本',
+          dataIndex: 'remaining_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'remaining_cost'))
+        },
+        {
+          title: '剩余价值',
+          dataIndex: 'residual_value',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'residual_value'))
+        },
+        {
+          title: '退出状态',
+          dataIndex: 'exit_status',
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        },
+        actionCol
+      ]
+    }
+
+    return [
+      indexCol,
+      {
+        title: '项目编号',
+        dataIndex: 'project_number',
+        ellipsis: true,
+        tooltip: true
+      },
+      {
+        title: '企业类型',
+        dataIndex: 'entity_type',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '项目简称',
+        dataIndex: 'project_abbreviation',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '关联基金',
+        dataIndex: 'fund',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '关联子基金',
+        dataIndex: 'sub_fund',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '被投企业全称',
+        dataIndex: 'enterprise_full_name',
+        ellipsis: true,
+        tooltip: true
+      },
+      {
+        title: '统一信用代码',
+        dataIndex: 'unified_credit_code',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '企业公众号id',
+        dataIndex: 'wechat_official_account_id',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      {
+        title: '企业官网',
+        dataIndex: 'official_website',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text ? (
+          <a href={text} target="_blank" rel="noopener noreferrer">
+            {text}
+          </a>
+        ) : '-'
+      },
+      {
+        title: '退出状态',
+        dataIndex: 'exit_status',
+        ellipsis: true,
+        tooltip: true,
+        render: (text) => text || '-'
+      },
+      actionCol
+    ]
+  }, [dataAppName, currentPage, pageSize])
 
   return (
     <div className="enterprise-management">
       <Card className="management-card" bordered={false}>
         <div className="management-header">
-          <h2 className="management-title">舆情监控对象</h2>
+          <h2 className="management-title">{pageTitle}</h2>
           <Space>
             <Button
               onClick={fetchEnterprises}
@@ -388,7 +506,8 @@ function EnterpriseManagement() {
           </Space>
         </div>
 
-        {/* Tab页签 */}
+        {/* Tab页签（项目挖掘被投企业页不展示多类型 Tab，仅被投企业） */}
+        {!hideEntityTabs && (
         <Tabs
           activeTab={activeTab}
           onChange={handleTabChange}
@@ -402,6 +521,7 @@ function EnterpriseManagement() {
           <TabPane key="fund" title="子基金" />
           <TabPane key="manager" title="子基金管理人及GP" />
         </Tabs>
+        )}
 
         <Collapse
           activeKey={filterCollapsed ? [] : ['filters']}
@@ -416,7 +536,7 @@ function EnterpriseManagement() {
                   <InputSearch
                     value={searchKeyword}
                     onChange={(value) => setSearchKeyword(value)}
-                    placeholder="搜索项目编号、简称、企业全称、统一信用代码、公众号ID、官网、退出状态..."
+                    placeholder={dataAppName === DATA_APP_PROJECT ? '搜索项目编号、简称、企业全称、退出状态…' : '搜索项目编号、简称、企业全称、统一信用代码、公众号ID、官网、退出状态…'}
                     style={{ width: 400 }}
                     allowClear
                     onSearch={handleSearch}
@@ -514,6 +634,7 @@ function EnterpriseManagement() {
       {showForm && (
         <EnterpriseForm
           enterprise={editingEnterprise}
+          dataAppName={dataAppName}
           onClose={handleFormClose}
           onSubmit={handleFormSubmit}
         />
@@ -521,6 +642,7 @@ function EnterpriseManagement() {
 
       {showBatchModal && (
         <BatchImportModal
+          dataAppName={dataAppName}
           onClose={() => setShowBatchModal(false)}
           onSuccess={() => {
             fetchEnterprises()
@@ -542,6 +664,7 @@ function EnterpriseManagement() {
 
       {showSyncModal && (
         <EnterpriseSyncModal
+          dataAppName={dataAppName}
           onClose={() => setShowSyncModal(false)}
           onSuccess={() => {
             fetchEnterprises()

@@ -646,7 +646,7 @@ router.get('/news/:token', async (req, res) => {
     if (!isAdmin) {
       whereConditions.push(`EXISTS (
         SELECT 1 FROM invested_enterprises ie
-        WHERE ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
+        WHERE (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情') AND  ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
       )`);
       queryParams.push(userId);
     }

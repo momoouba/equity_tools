@@ -2,7 +2,15 @@ import React, { useState, useEffect, useRef } from 'react'
 import axios from '../utils/axios'
 import './EnterpriseForm.css'
 
-function EnterpriseForm({ enterprise, onClose, onSubmit }) {
+const DATA_APP_PROJECT = '项目挖掘'
+
+function decimalFieldToString(v) {
+  if (v == null || v === '') return ''
+  const n = Number(v)
+  return Number.isFinite(n) ? String(n) : ''
+}
+
+function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻舆情' }) {
   const [formData, setFormData] = useState({
     project_abbreviation: '',
     enterprise_full_name: '',
@@ -10,7 +18,11 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
     wechat_official_account_id: '',
     official_website: '',
     entity_type: '',
-    exit_status: '未退出'
+    exit_status: '未退出',
+    investment_cost: '',
+    exited_cost: '',
+    remaining_cost: '',
+    residual_value: '',
   })
   const [projectNumber, setProjectNumber] = useState('')
   const [loading, setLoading] = useState(false)
@@ -32,7 +44,11 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
         wechat_official_account_id: enterprise.wechat_official_account_id || '',
         official_website: enterprise.official_website || '',
         entity_type: enterprise.entity_type || '',
-        exit_status: enterprise.exit_status !== undefined && enterprise.exit_status !== null ? enterprise.exit_status : '未退出'
+        exit_status: enterprise.exit_status !== undefined && enterprise.exit_status !== null ? enterprise.exit_status : '未退出',
+        investment_cost: decimalFieldToString(enterprise.investment_cost),
+        exited_cost: decimalFieldToString(enterprise.exited_cost),
+        remaining_cost: decimalFieldToString(enterprise.remaining_cost),
+        residual_value: decimalFieldToString(enterprise.residual_value),
       })
       setProjectNumber(enterprise.project_number)
     } else {
@@ -156,16 +172,33 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
     setLoading(true)
 
     try {
+      const basePayload = {
+        project_abbreviation: formData.project_abbreviation,
+        enterprise_full_name: formData.enterprise_full_name,
+        unified_credit_code: formData.unified_credit_code,
+        wechat_official_account_id: formData.wechat_official_account_id,
+        official_website: formData.official_website,
+        entity_type: formData.entity_type,
+        exit_status: formData.exit_status,
+        data_app_name: dataAppName,
+      }
+      if (dataAppName === DATA_APP_PROJECT) {
+        basePayload.investment_cost = formData.investment_cost
+        basePayload.exited_cost = formData.exited_cost
+        basePayload.remaining_cost = formData.remaining_cost
+        basePayload.residual_value = formData.residual_value
+      }
+
       if (enterprise) {
         // 更新
-        const response = await axios.put(`/api/enterprises/${enterprise.id}`, formData)
+        const response = await axios.put(`/api/enterprises/${enterprise.id}`, basePayload)
         if (response.data.success) {
           alert('更新成功')
           onSubmit()
         }
       } else {
         // 新增
-        const response = await axios.post('/api/enterprises', formData)
+        const response = await axios.post('/api/enterprises', basePayload)
         if (response.data.success) {
           alert('创建成功')
           onSubmit()
@@ -272,6 +305,8 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
             />
           </div>
 
+          {dataAppName !== DATA_APP_PROJECT && (
+          <>
           <div className="form-group">
             <label>统一信用代码</label>
             <input
@@ -304,6 +339,61 @@ function EnterpriseForm({ enterprise, onClose, onSubmit }) {
               placeholder="请输入官网地址"
             />
           </div>
+          </>
+          )}
+
+          {dataAppName === DATA_APP_PROJECT && (
+            <>
+              <div className="form-group">
+                <label>投资成本</label>
+                <input
+                  type="number"
+                  name="investment_cost"
+                  value={formData.investment_cost}
+                  onChange={handleChange}
+                  step="0.01"
+                  min="0"
+                  placeholder="可选，数字"
+                />
+              </div>
+              <div className="form-group">
+                <label>已退出成本</label>
+                <input
+                  type="number"
+                  name="exited_cost"
+                  value={formData.exited_cost}
+                  onChange={handleChange}
+                  step="0.01"
+                  min="0"
+                  placeholder="可选，数字"
+                />
+              </div>
+              <div className="form-group">
+                <label>剩余成本</label>
+                <input
+                  type="number"
+                  name="remaining_cost"
+                  value={formData.remaining_cost}
+                  onChange={handleChange}
+                  step="0.01"
+                  min="0"
+                  placeholder="可选，数字"
+                />
+              </div>
+              <div className="form-group">
+                <label>剩余价值</label>
+                <input
+                  type="number"
+                  name="residual_value"
+                  value={formData.residual_value}
+                  onChange={handleChange}
+                  step="0.01"
+                  min="0"
+                  placeholder="可选，数字"
+                />
+              </div>
+            </>
+          )}
 
           <div className="form-group">
             <label>企业类型</label>

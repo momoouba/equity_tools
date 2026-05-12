@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const db = require('../db');
 const { queryExternal, getExternalPool, createExternalPool } = require('./externalDb');
+const { DATA_APP_NEWS_SENTIMENT } = require('./enterpriseDataApp');
 const enterpriseRoutes = require('../routes/enterprises');
 const executeSyncTask = enterpriseRoutes.executeSyncTask;
 
@@ -15,7 +16,12 @@ async function executeEnterpriseSyncTask(task) {
   try {
     console.log(`[企业同步任务] 开始执行任务: ${task.id} (${task.description || '无描述'})`);
     
-    const result = await executeSyncTask(task.db_config_id, task.sql_query);
+    const result = await executeSyncTask(
+      task.db_config_id,
+      task.sql_query,
+      task.data_app_name || DATA_APP_NEWS_SENTIMENT,
+      task.created_by || null
+    );
     
     // 更新任务执行记录
     await db.execute(

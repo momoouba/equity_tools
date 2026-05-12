@@ -10,7 +10,7 @@ const AI_ENRICH_VERSION = 'financing_web_enrich_v1';
 /** 批量队列每条任务完成后间隔（毫秒），减轻大模型接口并发压力；可通过环境变量 FINANCING_AI_BATCH_GAP_MS 调整 */
 const BATCH_AI_GAP_MS = Math.max(
   500,
-  Math.min(60000, parseInt(process.env.FINANCING_AI_BATCH_GAP_MS || '4500', 10) || 4500)
+  Math.min(60000, parseInt(process.env.FINANCING_AI_BATCH_GAP_MS || '500', 10) || 500)
 );
 
 const financingAiBatchQueue = [];

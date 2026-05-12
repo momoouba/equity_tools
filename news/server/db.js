@@ -662,6 +662,11 @@ async function initializeTables(dbPool) {
       wechat_official_account_id VARCHAR(100),
       official_website VARCHAR(255),
       exit_status VARCHAR(50) DEFAULT '未退出',
+      data_app_name VARCHAR(64) NOT NULL DEFAULT '新闻舆情' COMMENT '所属应用：新闻舆情、项目挖掘',
+      investment_cost DECIMAL(20,2) NULL COMMENT '投资成本',
+      exited_cost DECIMAL(20,2) NULL COMMENT '已退出成本',
+      remaining_cost DECIMAL(20,2) NULL COMMENT '剩余成本',
+      residual_value DECIMAL(20,2) NULL COMMENT '剩余价值',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       modifier_user_id VARCHAR(19) COMMENT '修改用户ID',
@@ -3683,6 +3688,7 @@ async function initializeTables(dbPool) {
     CREATE TABLE IF NOT EXISTS enterprise_sync_task (
       id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       db_config_id VARCHAR(19) NOT NULL COMMENT '外部数据库配置ID',
+      data_app_name VARCHAR(64) NOT NULL DEFAULT '新闻舆情' COMMENT '同步目标应用：新闻舆情、项目挖掘（与 invested_enterprises.data_app_name 一致）',
       sql_query TEXT NOT NULL COMMENT 'SQL查询语句',
       cron_expression VARCHAR(100) NOT NULL COMMENT 'Cron表达式，如：0 0 * * *',
       description VARCHAR(500) COMMENT '任务描述',
@@ -3699,6 +3705,7 @@ async function initializeTables(dbPool) {
       delete_time DATETIME NULL COMMENT '删除时间',
       delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_db_config_id (db_config_id),
+      INDEX idx_est_db_app (db_config_id, data_app_name),
       INDEX idx_is_active (is_active),
       INDEX idx_last_execution_time (last_execution_time),
       FOREIGN KEY (db_config_id) REFERENCES external_db_config(id) ON DELETE CASCADE,
@@ -3731,6 +3738,26 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 enterprise_sync_task 删除字段时出现警告:', err.message);
+  }
+
+  try {
+    const [estAppCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'enterprise_sync_task' AND COLUMN_NAME = 'data_app_name'
+    `);
+    if (estAppCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE enterprise_sync_task
+        ADD COLUMN data_app_name VARCHAR(64) NOT NULL DEFAULT '新闻舆情' COMMENT '同步目标应用：新闻舆情、项目挖掘' AFTER db_config_id
+      `);
+      await dbPool.query(`
+        ALTER TABLE enterprise_sync_task
+        ADD INDEX idx_est_db_app (db_config_id, data_app_name)
+      `).catch(() => {});
+      console.log('  ✓ 已为 enterprise_sync_task 表添加 data_app_name 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 enterprise_sync_task.data_app_name 时出现警告:', err.message);
   }
 
   // performance_scheduled 表：业绩看板定时任务配置
@@ -3942,6 +3969,63 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('检查/添加 invested_enterprises.entity_type 时出现警告:', err.message);
+  }
+
+  // invested_enterprises.data_app_name：隔离新闻舆情与项目挖掘的监控对象数据
+  try {
+    const [ieAppCols] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'invested_enterprises' 
+      AND COLUMN_NAME = 'data_app_name'
+    `);
+
+    if (ieAppCols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE invested_enterprises 
+        ADD COLUMN data_app_name VARCHAR(64) NOT NULL DEFAULT '新闻舆情' COMMENT '所属应用：新闻舆情、项目挖掘' AFTER exit_status
+      `);
+      console.log('  ✓ 已为 invested_enterprises 表添加 data_app_name 字段');
+    }
+  } catch (err) {
+    console.warn('检查/添加 invested_enterprises.data_app_name 时出现警告:', err.message);
+  }
+
+  // invested_enterprises 成本类字段（项目挖掘等场景）
+  for (const { name, ddl } of [
+    {
+      name: 'investment_cost',
+      ddl: `ADD COLUMN investment_cost DECIMAL(20,2) NULL COMMENT '投资成本' AFTER data_app_name`,
+    },
+    {
+      name: 'exited_cost',
+      ddl: `ADD COLUMN exited_cost DECIMAL(20,2) NULL COMMENT '已退出成本' AFTER investment_cost`,
+    },
+    {
+      name: 'remaining_cost',
+      ddl: `ADD COLUMN remaining_cost DECIMAL(20,2) NULL COMMENT '剩余成本' AFTER exited_cost`,
+    },
+    {
+      name: 'residual_value',
+      ddl: `ADD COLUMN residual_value DECIMAL(20,2) NULL COMMENT '剩余价值' AFTER remaining_cost`,
+    },
+  ]) {
+    try {
+      const [cols] = await dbPool.query(
+        `
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprises' AND COLUMN_NAME = ?
+      `,
+        [name]
+      );
+      if (cols.length === 0) {
+        await dbPool.query(`ALTER TABLE invested_enterprises ${ddl}`);
+        console.log(`  ✓ 已为 invested_enterprises 表添加 ${name} 字段`);
+      }
+    } catch (err) {
+      console.warn(`检查/添加 invested_enterprises.${name} 时出现警告:`, err.message);
+    }
   }
 
   // 检查并添加 enterprise_abbreviation 字段（企业简称）

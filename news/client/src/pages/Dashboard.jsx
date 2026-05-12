@@ -17,6 +17,7 @@ import ListingIpoProjectPage from './上市进展/ListingIpoProjectPage'
 import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import ListingNewSharePage from './上市进展/ListingNewSharePage'
 import ProjectSourcingPage from './项目挖掘/ProjectSourcingPage'
+import ProjectSourcingInvestedEnterprisesPage from './项目挖掘/ProjectSourcingInvestedEnterprisesPage'
 import FinancingEventsPage from './项目挖掘/FinancingEventsPage'
 import TrackConfigPage from './项目挖掘/TrackConfigPage'
 import UserProfileModal from '../components/UserProfileModal'
@@ -171,6 +172,9 @@ function Dashboard() {
     } else if (location.pathname.includes('listing-new-share')) {
       setSelectedKeys(['listing-new-share'])
       setActiveAppKey('listing-app')
+    } else if (location.pathname.includes('project-sourcing-invested-enterprises')) {
+      setSelectedKeys(['project-sourcing-invested-enterprises'])
+      setActiveAppKey('project-sourcing-app')
     } else if (location.pathname.includes('project-sourcing-financing-events')) {
       setSelectedKeys(['project-sourcing-financing-events'])
       setActiveAppKey('project-sourcing-app')
@@ -310,6 +314,7 @@ function Dashboard() {
       visible: isAdmin || hasProjectSourcingPermission,
       children: [
         { key: 'project-sourcing', title: '融资与市场概览' },
+        { key: 'project-sourcing-invested-enterprises', title: '被投企业' },
         { key: 'project-sourcing-financing-events', title: '融资事件列表' },
         { key: 'project-sourcing-track-config', title: '赛道配置' },
         { key: 'system-db', title: '数据库连接配置' }
@@ -472,6 +477,14 @@ function Dashboard() {
               element={
                 (isAdmin || hasListingPermission)
                   ? <ListingNewSharePage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing-invested-enterprises"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <ProjectSourcingInvestedEnterprisesPage />
                   : <div>您没有访问权限</div>
               }
             />
