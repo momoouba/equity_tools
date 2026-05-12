@@ -787,10 +787,14 @@ export default function FinancingEventsPage() {
           </FormItem>
         </Form>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在区间内<strong>去重</strong>后再入队，每条仅调用一次模型；写入结果按信用代码（无代码则按企业全称）<strong>批量同步</strong>到该企业全部融资记录。服务端<strong>单队列顺序</strong>执行，条目间有间隔以防接口拥堵；同一主体进行中时会拒绝重复任务。
+          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在区间内<strong>去重</strong>，每个主体在当次任务里<strong>最多调用一次模型</strong>；若库内已有可复用的 AI 简介/标签则会直接复用，不重复请求。写入成功后，会按信用代码（无代码则按企业全称）<strong>扇出同步</strong>到该企业在本库内的多条融资记录。同一主体在短时间窗口内若已有进行中的 AI 任务，会<strong>拒绝重复提交</strong>。
         </p>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
-          默认间隔约 4.5s，可由服务端环境变量 FINANCING_AI_BATCH_GAP_MS（毫秒）调整。
+          <strong>服务端执行方式</strong>（与去重后的企业数有关，默认阈值 100，可由环境变量
+          FINANCING_AI_BATCH_FILE_THRESHOLD 调整）：超过阈值时走<strong>百炼 Batch File</strong>——接口会先完成上传与创建
+          Batch，HTTP 202 响应里会带上 <code>dashscope_batch_id</code>，随后在后台轮询结果并写库；不超过阈值时走<strong>并发
+          chat 请求</strong>（并发度 FINANCING_AI_CONCURRENCY，默认 4），波次之间间隔 FINANCING_AI_BATCH_GAP_MS（默认
+          500ms，下限 500ms）。手动单条「AI 取数」与上述并发共用同一并发上限。
         </p>
       </Modal>
 

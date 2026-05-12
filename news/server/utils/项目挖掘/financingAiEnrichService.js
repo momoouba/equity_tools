@@ -1,4 +1,5 @@
 const axios = require('axios');
+const FormDataMultipart = require('form-data');
 const crypto = require('crypto');
 const db = require('../../db');
 const newsAnalysis = require('../newsAnalysis');
@@ -13,12 +14,102 @@ const BATCH_AI_GAP_MS = Math.max(
   Math.min(60000, parseInt(process.env.FINANCING_AI_BATCH_GAP_MS || '500', 10) || 500)
 );
 
+/** 手动与小批量（≤阈值）共用：同时进行的 DashScope 请求上限 */
+const FINANCING_AI_CONCURRENCY_N = Math.max(
+  1,
+  Math.min(32, parseInt(process.env.FINANCING_AI_CONCURRENCY || '4', 10) || 4)
+);
+
+/** 去重后的代表企业数大于该值时走百炼 Batch File 异步；否则走并发多条 chat/completions */
+const BATCH_FILE_THRESHOLD = Math.max(
+  1,
+  Math.min(50000, parseInt(process.env.FINANCING_AI_BATCH_FILE_THRESHOLD || '100', 10) || 100)
+);
+
+/** 任务日志：扫描进度每隔 N 条输出摘要（FINANCING_AI_JOB_LOG_PROGRESS_EVERY） */
+const FINANCING_AI_JOB_LOG_PROGRESS_EVERY = Math.max(
+  1,
+  Math.min(500, parseInt(process.env.FINANCING_AI_JOB_LOG_PROGRESS_EVERY || '25', 10) || 25)
+);
+/** Batch 轮询：每 N 次请求打一行远程状态 */
+const FINANCING_AI_JOB_LOG_POLL_EVERY = Math.max(
+  1,
+  Math.min(120, parseInt(process.env.FINANCING_AI_JOB_LOG_POLL_EVERY || '6', 10) || 6)
+);
+/** Batch 回写：每成功解析 N 条打一行进度 */
+const FINANCING_AI_JOB_LOG_APPLY_EVERY = Math.max(
+  1,
+  Math.min(500, parseInt(process.env.FINANCING_AI_JOB_LOG_APPLY_EVERY || '50', 10) || 50)
+);
+
 const financingAiBatchQueue = [];
 /** @type {Promise<void>|null} */
 let financingAiBatchPumpPromise = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** @type {Array<() => void>} */
+const financingAiConcurrencyWaiters = [];
+let financingAiConcurrencyActive = 0;
+
+function acquireFinancingAiConcurrencySlot() {
+  if (financingAiConcurrencyActive < FINANCING_AI_CONCURRENCY_N) {
+    financingAiConcurrencyActive += 1;
+    return Promise.resolve(releaseFinancingAiConcurrencySlot);
+  }
+  return new Promise((resolve) => {
+    financingAiConcurrencyWaiters.push(() => {
+      financingAiConcurrencyActive += 1;
+      resolve(releaseFinancingAiConcurrencySlot);
+    });
+  });
+}
+
+function releaseFinancingAiConcurrencySlot() {
+  financingAiConcurrencyActive -= 1;
+  const next = financingAiConcurrencyWaiters.shift();
+  if (next) next();
+}
+
+/**
+ * 限制融资 AI 的 DashScope 同步并发（手动单条 + 小批量批量共用）。
+ * @template T
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function withFinancingAiConcurrency(fn) {
+  const release = await acquireFinancingAiConcurrencySlot();
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+/**
+ * 按「批量任务 batch_id」输出阶段日志，便于 Docker/运维对齐一次操作在跑哪一步。
+ * @param {string} batchId
+ * @param {'batch_file'|'concurrent_chat'} mode
+ * @param {string} phase 短英文阶段名，如 prepare_progress / upload_start / poll_status
+ * @param {string} message
+ * @param {Record<string, unknown>|null} [meta]
+ */
+function financingAiJobLog(batchId, mode, phase, message, meta = null) {
+  const head = `[financingAiEnrich][job=${batchId}][${mode}][${phase}] ${message}`;
+  if (meta != null && typeof meta === 'object') {
+    let s = '';
+    try {
+      s = JSON.stringify(meta);
+      if (s.length > 1200) s = s.slice(0, 1200) + '…';
+    } catch {
+      s = '';
+    }
+    console.log(s ? `${head} | ${s}` : head);
+  } else {
+    console.log(head);
+  }
 }
 
 function normalizeCompanyName(name) {
@@ -214,6 +305,152 @@ async function markFinancingAiEnrichLogSuccess({
       logId,
     ]
   );
+}
+
+async function markFinancingAiEnrichFailed({
+  financingEventId,
+  logId,
+  row,
+  started,
+  llmModelConfigId,
+  promptMeta,
+  err,
+}) {
+  const msg = (err && err.message) || String(err);
+  const short = msg.length > 500 ? msg.slice(0, 497) + '...' : msg;
+  const duration = Date.now() - started;
+  try {
+    const fanFail = row
+      ? buildEnterpriseFanOutWhere(row, financingEventId)
+      : { clause: 'delete_mark = 0 AND id = ?', params: [financingEventId] };
+    await db.execute(
+      `UPDATE sourcing_financing_event SET
+           ai_enrich_status = 'failed',
+           ai_enrich_error = ?,
+           updated_at = NOW()
+         WHERE ${fanFail.clause}`,
+      [short, ...fanFail.params]
+    );
+  } catch (e2) {
+    console.error('[financingAiEnrich] rollback event status failed', e2);
+  }
+  try {
+    await db.execute(
+      `UPDATE sourcing_financing_ai_enrich_log SET
+           execution_status = 'failed',
+           finished_at = NOW(),
+           duration_ms = ?,
+           llm_model_config_id = ?,
+           prompt_type = ?,
+           prompt_version = ?,
+           ai_enrich_version = ?,
+           error_message = ?,
+           updated_at = NOW()
+         WHERE id = ?`,
+      [
+        duration,
+        llmModelConfigId,
+        PROMPT_TYPE,
+        promptMeta?.id != null ? String(promptMeta.id) : null,
+        AI_ENRICH_VERSION,
+        short,
+        logId,
+      ]
+    );
+  } catch (e3) {
+    console.error('[financingAiEnrich] log failed update', e3);
+  }
+  console.error('[financingAiEnrich] task failed', { financingEventId, logId, err: msg });
+}
+
+/**
+ * 将单条 chat 返回正文解析并扇出写入事件表 + 成功日志（与 runFinancingAiEnrichTask 中 LLM 成功路径一致）。
+ */
+async function persistFinancingAiLlmSuccess({
+  row,
+  financingEventId,
+  logId,
+  raw,
+  config,
+  promptConfigId,
+  llmModelConfigId,
+  started,
+  taskLog = null,
+}) {
+  const parsed = extractJsonObject(raw);
+  const norm = normalizeAiPayload(parsed);
+  if (!norm) {
+    throw new Error('模型返回无法解析为 JSON');
+  }
+
+  const productIntroStored = stripProductIntroMetaAttribution(
+    stripRedundantIdentifiersFromProductIntro(norm.product_intro, row)
+  );
+  const tagsJson = JSON.stringify(norm.tags);
+  const display = norm.tags.join('、');
+
+  const fan = buildEnterpriseFanOutWhere(row, financingEventId);
+  const updHdr = await db.execute(
+    `UPDATE sourcing_financing_event SET
+         ai_product_intro = ?,
+         ai_company_tags_display = ?,
+         ai_company_tags_json = ?,
+         ai_enrich_status = 'success',
+         ai_enrich_at = NOW(),
+         ai_enrich_model = ?,
+         ai_enrich_version = ?,
+         ai_enrich_error = NULL,
+         updated_at = NOW()
+       WHERE ${fan.clause}`,
+    [
+      productIntroStored || null,
+      display || null,
+      tagsJson,
+      String(config.model_name || ''),
+      AI_ENRICH_VERSION,
+      ...fan.params,
+    ]
+  );
+
+  const duration = Date.now() - started;
+  await db.execute(
+    `UPDATE sourcing_financing_ai_enrich_log SET
+         execution_status = 'success',
+         finished_at = NOW(),
+         duration_ms = ?,
+         llm_model_config_id = ?,
+         prompt_type = ?,
+         prompt_version = ?,
+         ai_enrich_version = ?,
+         error_message = NULL,
+         result_product_intro = ?,
+         result_company_tags_display = ?,
+         updated_at = NOW()
+       WHERE id = ?`,
+    [
+      duration,
+      llmModelConfigId,
+      PROMPT_TYPE,
+      promptConfigId ? String(promptConfigId) : null,
+      AI_ENRICH_VERSION,
+      productIntroStored || null,
+      display || null,
+      logId,
+    ]
+  );
+
+  const affected = updHdr && typeof updHdr.affectedRows === 'number' ? updHdr.affectedRows : null;
+  const baseOk = `[financingAiEnrich] success event_id=${financingEventId} log_id=${logId} duration_ms=${duration} model=${config.model_name}` +
+    (affected != null ? ` rows_updated=${affected}` : '');
+  if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
+    financingAiJobLog(taskLog.batchId, taskLog.mode || 'batch_file', 'persist_llm_ok', baseOk.replace(/^\[financingAiEnrich\] /, ''));
+  } else {
+    console.log(
+      baseOk +
+        `\n  product_intro(AI): ${productIntroStored || '(空)'}\n` +
+        `  tags(AI): ${display || '(空)'}`
+    );
+  }
 }
 
 /**
@@ -627,6 +864,636 @@ function normalizeDashScopeChatEndpoint(raw) {
   return DEFAULT_CN;
 }
 
+/** OpenAI 兼容 Batch/File API 使用的基址（…/compatible-mode/v1），不含 /chat/completions */
+function compatibleModeV1BaseUrlFromEndpoint(apiEndpoint) {
+  const ep = normalizeDashScopeChatEndpoint(apiEndpoint);
+  return ep.replace(/\/chat\/completions\/?$/i, '');
+}
+
+function financingAiChatParamsFromConfig(config) {
+  const temperature =
+    typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.3;
+  const maxTokensRaw =
+    typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const max_tokens = Number.isFinite(maxTokensRaw) ? Math.min(8000, Math.max(512, maxTokensRaw)) : 4096;
+  const top_p =
+    typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p ?? 0.9;
+  return { temperature, max_tokens, top_p };
+}
+
+async function dashScopeCompatibleFetchJson(url, apiKey, init = {}) {
+  const headers = { Authorization: `Bearer ${apiKey}`, ...(init.headers || {}) };
+  const r = await fetch(url, { ...init, headers });
+  const text = await r.text();
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { _raw: text };
+  }
+  if (!r.ok) {
+    const detail =
+      (data &&
+        typeof data === 'object' &&
+        (data.error?.message ||
+          data.message ||
+          (typeof data.error === 'string' ? data.error : '') ||
+          '')) ||
+      text ||
+      r.statusText;
+    throw new Error(`HTTP ${r.status}: ${detail}`);
+  }
+  return data;
+}
+
+async function dashScopeUploadBatchInputJsonl(baseUrl, apiKey, jsonlUtf8, logCtx = null) {
+  const buf = Buffer.from(jsonlUtf8, 'utf8');
+  const form = new FormDataMultipart();
+  form.append('purpose', 'batch');
+  form.append('file', buf, {
+    filename: 'financing-ai-batch.jsonl',
+    contentType: 'application/octet-stream',
+  });
+  const url = `${baseUrl}/files`;
+  if (logCtx && logCtx.batchId) {
+    financingAiJobLog(logCtx.batchId, 'batch_file', 'upload_http_post', `POST ${url}`, {
+      bytes: buf.length,
+      lines_hint: (jsonlUtf8.match(/\n/g) || []).length + 1,
+    });
+  }
+  let response;
+  try {
+    response = await axios.post(url, form, {
+      headers: {
+        ...form.getHeaders(),
+        Authorization: `Bearer ${apiKey}`,
+      },
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 300000,
+    });
+  } catch (err) {
+    throw new Error(`上传 batch 输入文件失败：${formatDashScopeHttpError(err)}`);
+  }
+  const data = response.data;
+  const id = data && (data.id || data.file_id);
+  if (!id) throw new Error('上传 batch 输入文件成功但未返回 file id');
+  return String(id);
+}
+
+/**
+ * 去重后大批量：同步完成 JSONL 上传 + 创建 Batch，返回 dashscope_batch_id；不含 enable_search。
+ * @returns {Promise<{ kind: 'noop' } | { kind: 'submitted', dashscopeBatchId: string, llmJobs: { logId:number, financingEventId:number, row: object }[], config: object, promptConfigId: string|null, llmModelConfigId: number|null, promptMeta: object|null, baseUrl: string }>}
+ */
+async function submitLargeBatchFileFinancingAiEnrich({
+  batchId,
+  representativeIds,
+  triggeredByUserId,
+  clientIp,
+  df,
+  dt,
+  totalInRange,
+}) {
+  /** @type {{ logId:number, financingEventId:number, row: object }[]} */
+  const llmJobs = [];
+
+  try {
+    const totalRep = representativeIds.length;
+    let skipPrepare = 0;
+    let skipGone = 0;
+    let cntDonor = 0;
+    let cntReuseLocal = 0;
+    const batchTaskLog = { batchId, mode: 'batch_file', suppressSuccessConsole: true };
+
+    financingAiJobLog(batchId, 'batch_file', 'submit_start', `event_date=${df}..${dt} rows_in_range=${totalInRange} dedup_representatives=${totalRep}`);
+
+    for (let ii = 0; ii < totalRep; ii++) {
+      const financingEventId = representativeIds[ii];
+      const prep = await prepareFinancingAiEnrichJob({
+        eventId: financingEventId,
+        triggerType: 'batch_date_range',
+        triggeredByUserId,
+        clientIp,
+      });
+      if (!prep.ok) {
+        skipPrepare += 1;
+        financingAiJobLog(
+          batchId,
+          'batch_file',
+          'prepare_skip',
+          `index=${ii + 1}/${totalRep} event_id=${financingEventId}`,
+          { reason: prep.message }
+        );
+        continue;
+      }
+
+      const events = await db.query(
+        `SELECT id, event_id, company_name, company_credit_code, project_name, delete_mark,
+                ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
+         FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+        [prep.idNum]
+      );
+      if (!events.length || Number(events[0].delete_mark) !== 0) {
+        skipGone += 1;
+        await markFinancingAiEnrichFailed({
+          financingEventId: prep.idNum,
+          logId: prep.logId,
+          row: null,
+          started: Date.now(),
+          llmModelConfigId: null,
+          promptMeta: null,
+          err: new Error('融资事件不存在或已删除'),
+        });
+        continue;
+      }
+      const row = events[0];
+
+      const donorRow = await findFinancingAiDonorRow({
+        credit: row.company_credit_code,
+        name: row.company_name,
+        excludeId: prep.idNum,
+      });
+      if (donorRow) {
+        try {
+          await runFinancingAiEnrichTask({
+            financingEventId: prep.idNum,
+            logId: prep.logId,
+            triggerType: 'batch_date_range',
+            triggeredByUserId,
+            clientIp,
+            taskLog: batchTaskLog,
+          });
+          cntDonor += 1;
+        } catch (e) {
+          financingAiJobLog(batchId, 'batch_file', 'prepare_donor_error', `event_id=${prep.idNum}`, {
+            err: (e && e.message) || String(e),
+          });
+        }
+        const atEnd = ii === totalRep - 1;
+        const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
+        if (atTick || atEnd) {
+          financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
+            skip_prepare: skipPrepare,
+            skip_gone: skipGone,
+            reuse_donor: cntDonor,
+            reuse_local: cntReuseLocal,
+            queued_llm: llmJobs.length,
+          });
+        }
+        continue;
+      }
+      if (eventHasCompleteAiContent(row)) {
+        try {
+          await runFinancingAiEnrichTask({
+            financingEventId: prep.idNum,
+            logId: prep.logId,
+            triggerType: 'batch_date_range',
+            triggeredByUserId,
+            clientIp,
+            taskLog: batchTaskLog,
+          });
+          cntReuseLocal += 1;
+        } catch (e) {
+          financingAiJobLog(batchId, 'batch_file', 'prepare_reuse_local_error', `event_id=${prep.idNum}`, {
+            err: (e && e.message) || String(e),
+          });
+        }
+        const atEnd = ii === totalRep - 1;
+        const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
+        if (atTick || atEnd) {
+          financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
+            skip_prepare: skipPrepare,
+            skip_gone: skipGone,
+            reuse_donor: cntDonor,
+            reuse_local: cntReuseLocal,
+            queued_llm: llmJobs.length,
+          });
+        }
+        continue;
+      }
+
+      llmJobs.push({ logId: prep.logId, financingEventId: prep.idNum, row });
+
+      const atEnd = ii === totalRep - 1;
+      const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
+      if (atTick || atEnd) {
+        financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
+          skip_prepare: skipPrepare,
+          skip_gone: skipGone,
+          reuse_donor: cntDonor,
+          reuse_local: cntReuseLocal,
+          queued_llm: llmJobs.length,
+        });
+      }
+    }
+
+    if (!llmJobs.length) {
+      financingAiJobLog(batchId, 'batch_file', 'prepare_done_no_llm', `no DashScope batch; all rows reused or skipped`, {
+        skip_prepare: skipPrepare,
+        skip_gone: skipGone,
+        reuse_donor: cntDonor,
+        reuse_local: cntReuseLocal,
+      });
+      return { kind: 'noop' };
+    }
+
+    financingAiJobLog(batchId, 'batch_file', 'prepare_done', `building JSONL for llm_jobs=${llmJobs.length}`, {
+      skip_prepare: skipPrepare,
+      skip_gone: skipGone,
+      reuse_donor: cntDonor,
+      reuse_local: cntReuseLocal,
+    });
+    const promptMeta = await loadActivePromptMeta();
+    const promptConfigId = promptMeta?.id || null;
+    financingAiJobLog(batchId, 'batch_file', 'resolve_prompt', 'loadActivePromptMeta + getPrompt + resolveLlmConfig');
+    const promptBundle = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
+    const storedRaw =
+      promptBundle && promptBundle.prompt_content != null
+        ? String(promptBundle.prompt_content)
+        : '';
+    const { system: systemContent, userTemplate } = resolveFinancingAiPromptSections(storedRaw);
+    const { llm_model_config_id: llmModelConfigId, config } = await resolveLlmConfig(promptBundle, promptMeta);
+    if (!config) {
+      const err = new Error(
+        '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型'
+      );
+      for (const j of llmJobs) {
+        await markFinancingAiEnrichFailed({
+          financingEventId: j.financingEventId,
+          logId: j.logId,
+          row: j.row,
+          started: Date.now(),
+          llmModelConfigId,
+          promptMeta,
+          err,
+        });
+      }
+      financingAiJobLog(batchId, 'batch_file', 'abort_no_model_config', (err && err.message) || String(err));
+      return { kind: 'noop' };
+    }
+
+    const baseUrl = compatibleModeV1BaseUrlFromEndpoint(config.api_endpoint);
+    const sys = String(systemContent || '').trim() || BUILTIN_SYSTEM_PROMPT;
+    const { temperature, max_tokens, top_p } = financingAiChatParamsFromConfig(config);
+
+    const lines = llmJobs.map((j) => {
+      const usr = String(fillTemplate(userTemplate, j.row) || '').trim();
+      if (!usr) {
+        return null;
+      }
+      const body = {
+        model: config.model_name,
+        messages: [
+          { role: 'system', content: sys },
+          { role: 'user', content: usr },
+        ],
+        temperature,
+        max_tokens,
+        top_p,
+      };
+      return JSON.stringify({
+        custom_id: `l${j.logId}`,
+        method: 'POST',
+        url: '/v1/chat/completions',
+        body,
+      });
+    });
+    const badIdx = lines.findIndex((x) => x == null);
+    if (badIdx !== -1) {
+      const err = new Error('用户侧提示词为空，请检查 ---USER--- 段或占位符替换结果');
+      for (const j of llmJobs) {
+        await markFinancingAiEnrichFailed({
+          financingEventId: j.financingEventId,
+          logId: j.logId,
+          row: j.row,
+          started: Date.now(),
+          llmModelConfigId,
+          promptMeta,
+          err,
+        });
+      }
+      financingAiJobLog(batchId, 'batch_file', 'abort_empty_user_prompt', (err && err.message) || String(err));
+      return { kind: 'noop' };
+    }
+
+    const jsonl = lines.join('\n') + '\n';
+    financingAiJobLog(batchId, 'batch_file', 'jsonl_ready', `requests=${llmJobs.length}`, {
+      jsonl_bytes: Buffer.byteLength(jsonl, 'utf8'),
+    });
+
+    const inputFileId = await dashScopeUploadBatchInputJsonl(baseUrl, config.api_key, jsonl, { batchId });
+    financingAiJobLog(batchId, 'batch_file', 'upload_done', `input_file_id=${inputFileId}`);
+
+    financingAiJobLog(batchId, 'batch_file', 'create_batch_post', 'POST /batches', {
+      endpoint: '/v1/chat/completions',
+      completion_window: '24h',
+    });
+    const batchCreate = await dashScopeCompatibleFetchJson(`${baseUrl}/batches`, config.api_key, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input_file_id: inputFileId,
+        endpoint: '/v1/chat/completions',
+        completion_window: '24h',
+      }),
+    });
+    const dashscopeBatchIdRaw =
+      batchCreate.id || batchCreate.batch_id || batchCreate.batch?.id || batchCreate.data?.id;
+    if (!dashscopeBatchIdRaw) {
+      throw new Error(`创建 Batch 任务未返回 id: ${JSON.stringify(batchCreate).slice(0, 500)}`);
+    }
+    const dashscopeBatchId = String(dashscopeBatchIdRaw);
+
+    const logIds = llmJobs.map((j) => j.logId);
+    const ph = logIds.map(() => '?').join(',');
+    await db.execute(
+      `UPDATE sourcing_financing_ai_enrich_log SET execution_status = 'running', started_at = NOW(), updated_at = NOW() WHERE id IN (${ph})`,
+      logIds
+    );
+
+    financingAiJobLog(batchId, 'batch_file', 'submit_done', `dashscope_batch_id=${dashscopeBatchId} llm_jobs=${llmJobs.length} date=${df}..${dt}`, {
+      input_file_id: inputFileId,
+    });
+
+    return {
+      kind: 'submitted',
+      dashscopeBatchId,
+      llmJobs,
+      config,
+      promptConfigId,
+      llmModelConfigId,
+      promptMeta,
+      baseUrl,
+    };
+  } catch (e) {
+    console.error(`[financingAiEnrich batch_file ${batchId}] submit fatal`, e);
+    financingAiJobLog(batchId, 'batch_file', 'submit_fatal', (e && e.message) || String(e));
+    for (const j of llmJobs) {
+      try {
+        const rows = await db.query(
+          `SELECT id, company_name, company_credit_code, project_name, delete_mark,
+                  ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
+           FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+          [j.financingEventId]
+        );
+        const row = rows[0] || j.row;
+        await markFinancingAiEnrichFailed({
+          financingEventId: j.financingEventId,
+          logId: j.logId,
+          row,
+          started: Date.now(),
+          llmModelConfigId: null,
+          promptMeta: null,
+          err: e,
+        });
+      } catch (e2) {
+        console.error(`[financingAiEnrich batch_file ${batchId}] submit cleanup failed log_id=${j.logId}`, e2);
+      }
+    }
+    throw e;
+  }
+}
+
+/**
+ * Batch 已创建后：后台轮询、下载输出并写库。
+ */
+async function pollAndApplyLargeBatchFileFinancingAiEnrich({
+  batchId,
+  dashscopeBatchId,
+  llmJobs,
+  config,
+  promptConfigId,
+  llmModelConfigId,
+  promptMeta,
+  baseUrl,
+}) {
+  const pollMs = Math.max(
+    3000,
+    Math.min(120000, parseInt(process.env.FINANCING_AI_BATCH_FILE_POLL_MS || '10000', 10) || 10000)
+  );
+  const pollMaxMs = Math.max(
+    pollMs * 2,
+    parseInt(process.env.FINANCING_AI_BATCH_FILE_POLL_MAX_MS || String(4 * 3600 * 1000), 10) ||
+      4 * 3600 * 1000
+  );
+  const applyTaskLog = { batchId, mode: 'batch_file', suppressSuccessConsole: true };
+
+  try {
+    financingAiJobLog(batchId, 'batch_file', 'poll_start', `dashscope_batch_id=${dashscopeBatchId} llm_jobs=${llmJobs.length}`, {
+      poll_ms: pollMs,
+      poll_max_ms: pollMaxMs,
+    });
+
+    let waited = 0;
+    /** @type {any} */
+    let st = null;
+    let pollRound = 0;
+    while (waited < pollMaxMs) {
+      await sleep(pollMs);
+      waited += pollMs;
+      pollRound += 1;
+      st = await dashScopeCompatibleFetchJson(`${baseUrl}/batches/${dashscopeBatchId}`, config.api_key, {
+        method: 'GET',
+      });
+      const status = String(st.status || st.batch_status || st.state || '').toLowerCase();
+      if (
+        pollRound <= 3 ||
+        pollRound % FINANCING_AI_JOB_LOG_POLL_EVERY === 0 ||
+        status === 'completed' ||
+        status === 'complete'
+      ) {
+        financingAiJobLog(batchId, 'batch_file', 'poll_status', `round=${pollRound} elapsed_ms=${waited}`, {
+          remote_status: status || 'unknown',
+        });
+      }
+      if (status === 'completed' || status === 'complete') break;
+      if (
+        status === 'failed' ||
+        status === 'expired' ||
+        status === 'cancelled' ||
+        status === 'canceled' ||
+        status === 'error'
+      ) {
+        throw new Error(`Batch 任务结束状态异常: ${status} ${JSON.stringify(st).slice(0, 800)}`);
+      }
+    }
+    const finalStatus = String(st?.status || st?.batch_status || st?.state || '').toLowerCase();
+    if (finalStatus !== 'completed' && finalStatus !== 'complete') {
+      throw new Error(`Batch 任务轮询超时（${pollMaxMs}ms）最后状态: ${JSON.stringify(st).slice(0, 800)}`);
+    }
+
+    financingAiJobLog(batchId, 'batch_file', 'poll_remote_complete', `rounds=${pollRound} elapsed_ms=${waited}`);
+
+    const outputFileId =
+      st.output_file_id || st.result?.output_file_id || st.output_file?.id || st.response?.output_file_id;
+    if (!outputFileId) {
+      throw new Error(`Batch 完成但未返回 output_file_id: ${JSON.stringify(st).slice(0, 800)}`);
+    }
+
+    const contentUrl = `${baseUrl}/files/${outputFileId}/content`;
+    financingAiJobLog(batchId, 'batch_file', 'download_start', `GET files/.../content output_file_id=${outputFileId}`);
+    const outResp = await fetch(contentUrl, { headers: { Authorization: `Bearer ${config.api_key}` } });
+    const outText = await outResp.text();
+    if (!outResp.ok) {
+      throw new Error(`下载 Batch 输出失败 HTTP ${outResp.status}: ${outText.slice(0, 500)}`);
+    }
+
+    const doneLogIds = new Set();
+    const linesOut = outText.split(/\r?\n/).filter((x) => x.trim());
+    financingAiJobLog(batchId, 'batch_file', 'download_done', `non_empty_lines=${linesOut.length} response_bytes=${outText.length}`);
+
+    let applyHandled = 0;
+    for (const line of linesOut) {
+      let obj;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const cid = obj.custom_id != null ? String(obj.custom_id) : '';
+      const m = /^l(\d+)$/.exec(cid);
+      if (!m) continue;
+      const logId = parseInt(m[1], 10);
+      const job = llmJobs.find((x) => x.logId === logId);
+      if (!job) continue;
+      const startedLine = Date.now();
+
+      const errObj = obj.error || obj.response?.body?.error;
+      if (errObj) {
+        const em =
+          typeof errObj === 'string'
+            ? errObj
+            : errObj.message || errObj.code || JSON.stringify(errObj).slice(0, 400);
+        await markFinancingAiEnrichFailed({
+          financingEventId: job.financingEventId,
+          logId: job.logId,
+          row: job.row,
+          started: startedLine,
+          llmModelConfigId,
+          promptMeta,
+          err: new Error(String(em || 'Batch 行错误')),
+        });
+        doneLogIds.add(logId);
+        applyHandled += 1;
+        financingAiJobLog(batchId, 'batch_file', 'apply_row_fail', `log_id=${logId} event_id=${job.financingEventId}`, {
+          err: String(em || '').slice(0, 400),
+        });
+        if (applyHandled % FINANCING_AI_JOB_LOG_APPLY_EVERY === 0) {
+          financingAiJobLog(batchId, 'batch_file', 'apply_progress', `handled_output_rows=${applyHandled} done_jobs=${doneLogIds.size}/${llmJobs.length}`);
+        }
+        continue;
+      }
+
+      const body = obj.response?.body;
+      const raw =
+        body?.choices?.[0]?.message?.content ??
+        obj.response?.choices?.[0]?.message?.content ??
+        null;
+      if (raw == null || raw === '') {
+        await markFinancingAiEnrichFailed({
+          financingEventId: job.financingEventId,
+          logId: job.logId,
+          row: job.row,
+          started: startedLine,
+          llmModelConfigId,
+          promptMeta,
+          err: new Error('Batch 输出缺少 choices[0].message.content'),
+        });
+        doneLogIds.add(logId);
+        applyHandled += 1;
+        financingAiJobLog(batchId, 'batch_file', 'apply_row_fail', `log_id=${logId} event_id=${job.financingEventId}`, {
+          err: 'empty_content',
+        });
+        if (applyHandled % FINANCING_AI_JOB_LOG_APPLY_EVERY === 0) {
+          financingAiJobLog(batchId, 'batch_file', 'apply_progress', `handled_output_rows=${applyHandled} done_jobs=${doneLogIds.size}/${llmJobs.length}`);
+        }
+        continue;
+      }
+
+      try {
+        await persistFinancingAiLlmSuccess({
+          row: job.row,
+          financingEventId: job.financingEventId,
+          logId: job.logId,
+          raw,
+          config,
+          promptConfigId,
+          llmModelConfigId,
+          started: startedLine,
+          taskLog: applyTaskLog,
+        });
+        doneLogIds.add(logId);
+        applyHandled += 1;
+        if (applyHandled % FINANCING_AI_JOB_LOG_APPLY_EVERY === 0) {
+          financingAiJobLog(batchId, 'batch_file', 'apply_progress', `handled_output_rows=${applyHandled} done_jobs=${doneLogIds.size}/${llmJobs.length}`);
+        }
+      } catch (e) {
+        await markFinancingAiEnrichFailed({
+          financingEventId: job.financingEventId,
+          logId: job.logId,
+          row: job.row,
+          started: startedLine,
+          llmModelConfigId,
+          promptMeta,
+          err: e,
+        });
+        doneLogIds.add(logId);
+        applyHandled += 1;
+        financingAiJobLog(batchId, 'batch_file', 'apply_row_fail', `log_id=${logId} event_id=${job.financingEventId}`, {
+          err: (e && e.message) || String(e),
+        });
+        if (applyHandled % FINANCING_AI_JOB_LOG_APPLY_EVERY === 0) {
+          financingAiJobLog(batchId, 'batch_file', 'apply_progress', `handled_output_rows=${applyHandled} done_jobs=${doneLogIds.size}/${llmJobs.length}`);
+        }
+      }
+    }
+
+    for (const j of llmJobs) {
+      if (doneLogIds.has(j.logId)) continue;
+      await markFinancingAiEnrichFailed({
+        financingEventId: j.financingEventId,
+        logId: j.logId,
+        row: j.row,
+        started: Date.now(),
+        llmModelConfigId,
+        promptMeta,
+        err: new Error('Batch 输出中未找到该 custom_id 或解析失败'),
+      });
+      financingAiJobLog(batchId, 'batch_file', 'apply_missing_output', `log_id=${j.logId} event_id=${j.financingEventId}`);
+    }
+
+    financingAiJobLog(batchId, 'batch_file', 'poll_apply_done', `dashscope_batch_id=${dashscopeBatchId} llm_jobs=${llmJobs.length}`, {
+      output_lines: linesOut.length,
+      jobs_marked_done: doneLogIds.size,
+    });
+  } catch (e) {
+    console.error(`[financingAiEnrich batch_file ${batchId}] poll_apply fatal`, e);
+    financingAiJobLog(batchId, 'batch_file', 'poll_apply_fatal', (e && e.message) || String(e));
+    for (const j of llmJobs) {
+      try {
+        const rows = await db.query(
+          `SELECT id, company_name, company_credit_code, project_name, delete_mark,
+                  ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
+           FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+          [j.financingEventId]
+        );
+        const row = rows[0] || j.row;
+        await markFinancingAiEnrichFailed({
+          financingEventId: j.financingEventId,
+          logId: j.logId,
+          row,
+          started: Date.now(),
+          llmModelConfigId: null,
+          promptMeta: null,
+          err: e,
+        });
+      } catch (e2) {
+        console.error(`[financingAiEnrich batch_file ${batchId}] poll cleanup failed log_id=${j.logId}`, e2);
+      }
+    }
+  }
+}
+
 /** 解析 DashScope / OpenAI 兼容错误体，便于日志与前端可见摘要 */
 function formatDashScopeHttpError(err) {
   const status = err.response?.status;
@@ -742,6 +1609,7 @@ async function runFinancingAiEnrichTask({
   triggerType,
   triggeredByUserId,
   clientIp,
+  taskLog = null,
 }) {
   const started = Date.now();
   let promptMeta = null;
@@ -788,9 +1656,18 @@ async function runFinancingAiEnrichTask({
         display: dispLog,
       });
       const duration = Date.now() - started;
-      console.log(
-        `[financingAiEnrich] reused_from_db donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-      );
+      if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
+        financingAiJobLog(
+          taskLog.batchId,
+          taskLog.mode || 'batch',
+          'reuse_from_db',
+          `donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+        );
+      } else {
+        console.log(
+          `[financingAiEnrich] reused_from_db donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+        );
+      }
       return;
     }
 
@@ -807,9 +1684,18 @@ async function runFinancingAiEnrichTask({
         display: dispLog,
       });
       const duration = Date.now() - started;
-      console.log(
-        `[financingAiEnrich] reused_existing_row_content event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-      );
+      if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
+        financingAiJobLog(
+          taskLog.batchId,
+          taskLog.mode || 'batch',
+          'reuse_existing_row',
+          `event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+        );
+      } else {
+        console.log(
+          `[financingAiEnrich] reused_existing_row_content event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+        );
+      }
       return;
     }
 
@@ -831,121 +1717,27 @@ async function runFinancingAiEnrichTask({
     }
 
     const raw = await callDashScopeOpenAIChat(systemContent, userContent, config);
-    const parsed = extractJsonObject(raw);
-    const norm = normalizeAiPayload(parsed);
-    if (!norm) {
-      throw new Error('模型返回无法解析为 JSON');
-    }
-
-    const productIntroStored = stripProductIntroMetaAttribution(
-      stripRedundantIdentifiersFromProductIntro(norm.product_intro, row)
-    );
-    const tagsJson = JSON.stringify(norm.tags);
-    const display = norm.tags.join('、');
-
-    const fan = buildEnterpriseFanOutWhere(row, financingEventId);
-    const updHdr = await db.execute(
-      `UPDATE sourcing_financing_event SET
-         ai_product_intro = ?,
-         ai_company_tags_display = ?,
-         ai_company_tags_json = ?,
-         ai_enrich_status = 'success',
-         ai_enrich_at = NOW(),
-         ai_enrich_model = ?,
-         ai_enrich_version = ?,
-         ai_enrich_error = NULL,
-         updated_at = NOW()
-       WHERE ${fan.clause}`,
-      [
-        productIntroStored || null,
-        display || null,
-        tagsJson,
-        String(config.model_name || ''),
-        AI_ENRICH_VERSION,
-        ...fan.params,
-      ]
-    );
-
-    const duration = Date.now() - started;
-    await db.execute(
-      `UPDATE sourcing_financing_ai_enrich_log SET
-         execution_status = 'success',
-         finished_at = NOW(),
-         duration_ms = ?,
-         llm_model_config_id = ?,
-         prompt_type = ?,
-         prompt_version = ?,
-         ai_enrich_version = ?,
-         error_message = NULL,
-         result_product_intro = ?,
-         result_company_tags_display = ?,
-         updated_at = NOW()
-       WHERE id = ?`,
-      [
-        duration,
-        llmModelConfigId,
-        PROMPT_TYPE,
-        promptConfigId ? String(promptConfigId) : null,
-        AI_ENRICH_VERSION,
-        productIntroStored || null,
-        display || null,
-        logId,
-      ]
-    );
-
-    const affected = updHdr && typeof updHdr.affectedRows === 'number' ? updHdr.affectedRows : null;
-    console.log(
-      `[financingAiEnrich] success event_id=${financingEventId} log_id=${logId} duration_ms=${duration} model=${config.model_name}` +
-        (affected != null ? ` rows_updated=${affected}` : '') +
-        `\n  product_intro(AI): ${productIntroStored || '(空)'}\n` +
-        `  tags(AI): ${display || '(空)'}`
-    );
+    await persistFinancingAiLlmSuccess({
+      row,
+      financingEventId,
+      logId,
+      raw,
+      config,
+      promptConfigId,
+      llmModelConfigId,
+      started,
+      taskLog,
+    });
   } catch (err) {
-    const msg = (err && err.message) || String(err);
-    const short = msg.length > 500 ? msg.slice(0, 497) + '...' : msg;
-    const duration = Date.now() - started;
-    try {
-      const fanFail = row
-        ? buildEnterpriseFanOutWhere(row, financingEventId)
-        : { clause: 'delete_mark = 0 AND id = ?', params: [financingEventId] };
-      await db.execute(
-        `UPDATE sourcing_financing_event SET
-           ai_enrich_status = 'failed',
-           ai_enrich_error = ?,
-           updated_at = NOW()
-         WHERE ${fanFail.clause}`,
-        [short, ...fanFail.params]
-      );
-    } catch (e2) {
-      console.error('[financingAiEnrich] rollback event status failed', e2);
-    }
-    try {
-      await db.execute(
-        `UPDATE sourcing_financing_ai_enrich_log SET
-           execution_status = 'failed',
-           finished_at = NOW(),
-           duration_ms = ?,
-           llm_model_config_id = ?,
-           prompt_type = ?,
-           prompt_version = ?,
-           ai_enrich_version = ?,
-           error_message = ?,
-           updated_at = NOW()
-         WHERE id = ?`,
-        [
-          duration,
-          llmModelConfigId,
-          PROMPT_TYPE,
-          promptMeta?.id != null ? String(promptMeta.id) : null,
-          AI_ENRICH_VERSION,
-          short,
-          logId,
-        ]
-      );
-    } catch (e3) {
-      console.error('[financingAiEnrich] log failed update', e3);
-    }
-    console.error('[financingAiEnrich] task failed', { financingEventId, logId, err: msg });
+    await markFinancingAiEnrichFailed({
+      financingEventId,
+      logId,
+      row,
+      started,
+      llmModelConfigId,
+      promptMeta,
+      err,
+    });
   }
 }
 
@@ -1065,13 +1857,15 @@ async function enqueueManualFinancingAiEnrich({ eventId, triggeredByUserId, clie
   }
 
   setImmediate(() => {
-    runFinancingAiEnrichTask({
-      financingEventId: prep.idNum,
-      logId: prep.logId,
-      triggerType: 'manual_api',
-      triggeredByUserId,
-      clientIp,
-    });
+    withFinancingAiConcurrency(() =>
+      runFinancingAiEnrichTask({
+        financingEventId: prep.idNum,
+        logId: prep.logId,
+        triggerType: 'manual_api',
+        triggeredByUserId,
+        clientIp,
+      })
+    ).catch((e) => console.error('[financingAiEnrich manual]', e));
   });
 
   return {
@@ -1085,37 +1879,63 @@ async function enqueueManualFinancingAiEnrich({ eventId, triggeredByUserId, clie
   };
 }
 
-async function pumpFinancingAiBatchQueue() {
-  while (financingAiBatchQueue.length) {
-    const job = financingAiBatchQueue.shift();
-    if (!job) break;
-    try {
-      const prep = await prepareFinancingAiEnrichJob({
-        eventId: job.financingEventId,
+async function processOneFinancingAiBatchQueueJob(job) {
+  try {
+    const prep = await prepareFinancingAiEnrichJob({
+      eventId: job.financingEventId,
+      triggerType: 'batch_date_range',
+      triggeredByUserId: job.triggeredByUserId,
+      clientIp: job.clientIp,
+    });
+    if (!prep.ok) {
+      financingAiJobLog(
+        job.batchId,
+        'concurrent_chat',
+        'prepare_skip',
+        `financing_event_id=${job.financingEventId}`,
+        { reason: prep.message }
+      );
+      return;
+    }
+    await withFinancingAiConcurrency(() =>
+      runFinancingAiEnrichTask({
+        financingEventId: prep.idNum,
+        logId: prep.logId,
         triggerType: 'batch_date_range',
         triggeredByUserId: job.triggeredByUserId,
         clientIp: job.clientIp,
-      });
-      if (!prep.ok) {
-        console.warn(
-          `[financingAiEnrich batch ${job.batchId}] skip financing_event_id=${job.financingEventId}: ${prep.message}`
-        );
-      } else {
-        await runFinancingAiEnrichTask({
-          financingEventId: prep.idNum,
-          logId: prep.logId,
-          triggerType: 'batch_date_range',
-          triggeredByUserId: job.triggeredByUserId,
-          clientIp: job.clientIp,
-        });
-      }
-    } catch (e) {
-      console.error(`[financingAiEnrich batch ${job.batchId}] job error`, e);
-    }
-    if (financingAiBatchQueue.length) {
+        taskLog: { batchId: job.batchId, mode: 'concurrent_chat', suppressSuccessConsole: true },
+      })
+    );
+  } catch (e) {
+    console.error(`[financingAiEnrich batch ${job.batchId}] job error`, e);
+  }
+}
+
+async function pumpFinancingAiBatchQueue() {
+  const jobs = [];
+  while (financingAiBatchQueue.length) {
+    const job = financingAiBatchQueue.shift();
+    if (job) jobs.push(job);
+  }
+  const batchId = jobs[0]?.batchId || 'unknown';
+  financingAiJobLog(batchId, 'concurrent_chat', 'pump_start', `total_queue_jobs=${jobs.length}`);
+  for (let i = 0, wave = 0; i < jobs.length; i += FINANCING_AI_CONCURRENCY_N, wave++) {
+    const chunk = jobs.slice(i, i + FINANCING_AI_CONCURRENCY_N);
+    const wid = chunk[0]?.batchId || batchId;
+    financingAiJobLog(
+      wid,
+      'concurrent_chat',
+      'wave_start',
+      `wave=${wave + 1} range=${i + 1}-${Math.min(i + chunk.length, jobs.length)}/${jobs.length} parallel=${chunk.length}`
+    );
+    await Promise.all(chunk.map((job) => processOneFinancingAiBatchQueueJob(job)));
+    if (i + FINANCING_AI_CONCURRENCY_N < jobs.length && BATCH_AI_GAP_MS > 0) {
+      financingAiJobLog(wid, 'concurrent_chat', 'wave_gap', `sleep_ms=${BATCH_AI_GAP_MS}`);
       await sleep(BATCH_AI_GAP_MS);
     }
   }
+  financingAiJobLog(batchId, 'concurrent_chat', 'pump_done', `processed_jobs=${jobs.length}`);
 }
 
 function scheduleFinancingAiBatchPump() {
@@ -1129,7 +1949,8 @@ function scheduleFinancingAiBatchPump() {
 }
 
 /**
- * 按融资日期区间批量入队；服务端单队列顺序执行，条目间间隔 BATCH_AI_GAP_MS，避免接口拥堵。
+ * 按融资日期区间批量：去重后条数大于 {@link BATCH_FILE_THRESHOLD} 时走百炼 Batch File 异步；
+ * 否则服务端并发池（{@link FINANCING_AI_CONCURRENCY_N}）执行多条 chat/completions，波次间间隔 {@link BATCH_AI_GAP_MS}。
  */
 async function enqueueBatchFinancingAiEnrichByDateRange({
   dateFrom,
@@ -1175,6 +1996,108 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   }
 
   const batchId = crypto.randomUUID();
+  const queuedJobs = representativeIds.length;
+
+  if (queuedJobs > BATCH_FILE_THRESHOLD) {
+    financingAiJobLog(batchId, 'batch_file', 'enqueue', `date=${df}..${dt} dedup_jobs=${queuedJobs} threshold=${BATCH_FILE_THRESHOLD}`, {
+      rows_in_range: totalInRange,
+    });
+    let submitResult;
+    try {
+      submitResult = await submitLargeBatchFileFinancingAiEnrich({
+        batchId,
+        representativeIds,
+        triggeredByUserId,
+        clientIp,
+        df,
+        dt,
+        totalInRange,
+      });
+    } catch (e) {
+      const msg = (e && e.message) || String(e);
+      console.error(`[financingAiEnrich batch_file] submit failed batch_id=${batchId}`, e);
+      financingAiJobLog(batchId, 'batch_file', 'submit_http_error', msg);
+      return { ok: false, code: 502, message: `百炼 Batch 提交失败：${msg}` };
+    }
+
+    if (submitResult.kind === 'noop') {
+      financingAiJobLog(
+        batchId,
+        'batch_file',
+        'submit_noop',
+        `no DashScope batch created date=${df}..${dt}`,
+        {
+          rows_in_range: totalInRange,
+          dedup_jobs: queuedJobs,
+          threshold: BATCH_FILE_THRESHOLD,
+        }
+      );
+      return {
+        ok: true,
+        code: 202,
+        data: {
+          batch_id: batchId,
+          mode: 'dashscope_batch_file',
+          batch_file_phase: 'noop',
+          batch_file_threshold: BATCH_FILE_THRESHOLD,
+          total_in_range: totalInRange,
+          queued_jobs: queuedJobs,
+          total: queuedJobs,
+          date_from: df,
+          date_to: dt,
+          gap_ms: BATCH_AI_GAP_MS,
+          concurrency: FINANCING_AI_CONCURRENCY_N,
+          dashscope_batch_id: null,
+          llm_jobs_submitted: 0,
+        },
+      };
+    }
+
+    const { dashscopeBatchId, llmJobs, config, promptConfigId, llmModelConfigId, promptMeta, baseUrl } =
+      submitResult;
+
+    financingAiJobLog(batchId, 'batch_file', 'http202_poll_scheduled', `returning 202; background poll+apply`, {
+      dashscope_batch_id: dashscopeBatchId,
+      llm_jobs: llmJobs.length,
+    });
+
+    setImmediate(() => {
+      pollAndApplyLargeBatchFileFinancingAiEnrich({
+        batchId,
+        dashscopeBatchId,
+        llmJobs,
+        config,
+        promptConfigId,
+        llmModelConfigId,
+        promptMeta,
+        baseUrl,
+      }).catch((e) => {
+        console.error(`[financingAiEnrich batch_file][poll] ${batchId}`, e);
+        financingAiJobLog(batchId, 'batch_file', 'poll_async_error', (e && e.message) || String(e));
+      });
+    });
+
+    return {
+      ok: true,
+      code: 202,
+      data: {
+        batch_id: batchId,
+        mode: 'dashscope_batch_file',
+        batch_file_phase: 'submitted',
+        batch_file_threshold: BATCH_FILE_THRESHOLD,
+        total_in_range: totalInRange,
+        queued_jobs: queuedJobs,
+        total: queuedJobs,
+        date_from: df,
+        date_to: dt,
+        gap_ms: BATCH_AI_GAP_MS,
+        concurrency: FINANCING_AI_CONCURRENCY_N,
+        dashscope_batch_id: dashscopeBatchId,
+        llm_jobs_submitted: llmJobs.length,
+      },
+    };
+  }
+
   for (const financingEventId of representativeIds) {
     financingAiBatchQueue.push({
       batchId,
@@ -1184,9 +2107,10 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
     });
   }
 
-  console.log(
-    `[financingAiEnrich batch] queued batch_id=${batchId} rows_in_range=${totalInRange} unique_enterprises=${representativeIds.length} date=${df}..${dt} gap_ms=${BATCH_AI_GAP_MS}`
-  );
+  financingAiJobLog(batchId, 'concurrent_chat', 'queue_ready', `dedup_jobs=${queuedJobs} date=${df}..${dt}`, {
+    concurrency: FINANCING_AI_CONCURRENCY_N,
+    wave_gap_ms: BATCH_AI_GAP_MS,
+  });
   scheduleFinancingAiBatchPump();
 
   return {
@@ -1194,15 +2118,18 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
     code: 202,
     data: {
       batch_id: batchId,
+      mode: 'concurrent_chat',
+      batch_file_threshold: BATCH_FILE_THRESHOLD,
       /** 区间内融资事件条数 */
       total_in_range: totalInRange,
       /** 去重后的 AI 任务数（有代码按代码，无代码按企业全称） */
-      queued_jobs: representativeIds.length,
+      queued_jobs: queuedJobs,
       /** 兼容旧字段：与 queued_jobs 相同 */
-      total: representativeIds.length,
+      total: queuedJobs,
       date_from: df,
       date_to: dt,
       gap_ms: BATCH_AI_GAP_MS,
+      concurrency: FINANCING_AI_CONCURRENCY_N,
     },
   };
 }

@@ -183,7 +183,7 @@ function registerFinancingRoutes(router) {
     }
   });
 
-  /** 管理员：按融资日期区间批量 AI 取数（服务端队列顺序执行，避免拥堵） */
+  /** 管理员：按融资日期区间批量 AI 取数（去重后条数多则百炼 Batch File，否则并发 chat） */
   router.post('/batch-ai-enrich', requireAdmin, async (req, res) => {
     try {
       const { start_date, end_date } = req.body || {};
@@ -198,13 +198,30 @@ function registerFinancingRoutes(router) {
         return res.status(r.code).json({ success: false, message: r.message });
       }
       const d = r.data;
-      const detail =
-        d.total_in_range != null && d.queued_jobs != null
-          ? `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`
-          : `已加入队列 ${d.total} 条`;
+      let detail = '';
+      let suffix = '';
+      if (d.total_in_range != null && d.queued_jobs != null) {
+        detail = `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`;
+      } else {
+        detail = `已加入队列 ${d.total} 条`;
+      }
+      if (d.mode === 'dashscope_batch_file') {
+        if (d.batch_file_phase === 'noop') {
+          suffix =
+            `。去重后超过 ${d.batch_file_threshold ?? 100} 条走 Batch 路径，但本次无需提交百炼任务（均已复用库内 AI 或准备阶段跳过）；无 dashscope_batch_id`;
+        } else if (d.dashscope_batch_id) {
+          suffix = `。已向百炼创建异步 Batch（dashscope_batch_id=${d.dashscope_batch_id}，本次提交模型任务 ${d.llm_jobs_submitted ?? ''} 条）；结果在服务端后台轮询写库，请勿重复点击`;
+        } else {
+          suffix = `。去重后超过 ${d.batch_file_threshold ?? 100} 条，百炼 Batch File 处理中，请勿重复点击`;
+        }
+      } else if (d.mode === 'concurrent_chat') {
+        suffix = `。并发度 ${d.concurrency ?? ''}，波次间隔约 ${d.gap_ms}ms，请稍后刷新列表`;
+      } else {
+        suffix = `。将按顺序执行（条目间隔约 ${d.gap_ms}ms），请稍后刷新列表`;
+      }
       return res.status(202).json({
         success: true,
-        message: `${detail}。将按顺序执行（条目间隔约 ${d.gap_ms}ms），请稍后刷新列表`,
+        message: `${detail}${suffix}`,
         data: r.data,
       });
     } catch (e) {

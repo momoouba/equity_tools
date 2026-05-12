@@ -34,14 +34,16 @@ ARG NO_PROXY
 ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY} NO_PROXY=${NO_PROXY}
 
 # 安装系统依赖（MySQL客户端、Python3、pip等）
-# 使用Debian包管理器（配置国内镜像源加速）
-RUN { \
-        echo "deb http://mirrors.aliyun.com/debian bookworm main"; \
-        echo "deb http://mirrors.aliyun.com/debian bookworm-updates main"; \
-        echo "deb http://mirrors.aliyun.com/debian-security bookworm-security main"; \
-        echo "deb http://mirrors.aliyun.com/debian bullseye main"; \
-    } > /etc/apt/sources.list \
-    && apt-get update && \
+# Bookworm 基础镜像自带 /etc/apt/sources.list.d/debian.sources（指向 deb.debian.org），
+# 仅覆盖 /etc/apt/sources.list 时 apt 仍会合并官方源，内网/国内易超时；须先移除 .sources 再写镜像。
+RUN rm -f /etc/apt/sources.list.d/debian.sources \
+    && find /etc/apt/sources.list.d -maxdepth 1 -name '*.sources' -type f -delete 2>/dev/null || true \
+    && printf '%s\n' \
+        'deb http://mirrors.aliyun.com/debian bookworm main contrib non-free non-free-firmware' \
+        'deb http://mirrors.aliyun.com/debian bookworm-updates main contrib non-free non-free-firmware' \
+        'deb http://mirrors.aliyun.com/debian-security bookworm-security main contrib non-free non-free-firmware' \
+        > /etc/apt/sources.list \
+    && apt-get -o Acquire::Retries=5 update && \
     apt-get install -y --no-install-recommends \
     default-mysql-client \
     python3 \
@@ -64,16 +66,32 @@ RUN { \
     libpangocairo-1.0-0 \
     libgtk-3-0 \
     libxshmfence1 \
-    # iFinD SDK 需要的依赖
+    # iFinD SDK：其余依赖见下方；libidn 需 libidn.so.11，从 bullseye 单独安装
     libstdc++6 \
     zlib1g \
-    libidn11 \
     libgssapi-krb5-2 \
     libldap-2.5-0 \
     && rm -rf /var/lib/apt/lists/* \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone \
     && ln -sf /usr/bin/python3 /usr/bin/python
+
+# iFinD 预编译库硬链接 libidn.so.11；Bookworm 仅有 libidn12（.so.12）。从 bullseye 仅安装 libidn11，并用 Pinning 避免其余包被拉到老版本。
+RUN echo 'deb http://mirrors.aliyun.com/debian bullseye main' > /etc/apt/sources.list.d/bullseye.list \
+    && printf '%s\n' \
+        'Package: *' \
+        'Pin: release n=bookworm' \
+        'Pin-Priority: 900' \
+        '' \
+        'Package: libidn11' \
+        'Pin: release n=bullseye' \
+        'Pin-Priority: 991' \
+        > /etc/apt/preferences.d/99libidn11-bullseye.pref \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get install -y --no-install-recommends libidn11 \
+    && rm -f /etc/apt/sources.list.d/bullseye.list /etc/apt/preferences.d/99libidn11-bullseye.pref \
+    && apt-get -o Acquire::Retries=3 update \
+    && rm -rf /var/lib/apt/lists/*
 
 # 复制后端依赖文件
 COPY package*.json ./
@@ -91,11 +109,11 @@ RUN npm config set registry https://registry.npmmirror.com \
 COPY server/utils/requirements.txt ./server/utils/
 
 # Playwright 浏览器：与 Python playwright 包版本严格匹配，勿用系统 apt chromium（易 crashpad 不兼容）
-# 默认走官方 CDN（npmmirror 常滞后，新版 Chromium 易 404）。
-# 国内可尝试加速：docker compose build --build-arg PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright app
-# 若镜像无该版本，下方脚本会自动去掉镜像改走官方。
+# 未设置 PLAYWRIGHT_DOWNLOAD_HOST 时会走官方 cdn.playwright.dev，国内构建常极慢。
+# 默认改用 npmmirror 的 playwright 二进制镜像；若某 Chromium 版本尚未同步导致 404，下方脚本会去掉镜像重试官方。
+# 强制全程官方：docker compose build --build-arg PLAYWRIGHT_DOWNLOAD_HOST=
 # 构建机 HTTP 代理：--build-arg HTTP_PROXY=http://host:port
-ARG PLAYWRIGHT_DOWNLOAD_HOST=
+ARG PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
 ENV PLAYWRIGHT_DOWNLOAD_HOST=${PLAYWRIGHT_DOWNLOAD_HOST}
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=600000
