@@ -365,6 +365,25 @@ def main():
             )
             return
 
+        extra_et = _fetch_hk_metrics_from_etnet(stock_code, list_date)
+        if extra_et and _first_row_complete(extra_et.get("firstRow") or {}):
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "source": extra_et.get("source") or "etnet.ci_ipo_info",
+                        "stockCode": stock_code,
+                        "listDate": list_date,
+                        "firstRow": extra_et.get("firstRow"),
+                        "totalShares": extra_et.get("totalShares"),
+                        "winRate": extra_et.get("winRate"),
+                        "issuePrice": extra_et.get("issuePrice"),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
         import akshare as ak  # noqa: PLC0415
 
         source = "akshare.hist"
@@ -377,11 +396,6 @@ def main():
             except Exception:
                 df = None
         total_shares = None
-        if market != "hk":
-            for sym in _a_code_candidates(stock_code):
-                total_shares = _fetch_total_shares_a(ak, sym)
-                if total_shares:
-                    break
 
         first = None
         if df is not None:
@@ -401,7 +415,7 @@ def main():
         win_rate = None
         issue_price = None
         if first is None or not _first_row_complete(first):
-            extra = _fetch_hk_metrics_from_etnet(stock_code, list_date) if market == "hk" else _fetch_metrics_from_ipoapply(stock_code, list_date)
+            extra = _fetch_metrics_from_ipoapply(stock_code, list_date)
             if extra:
                 source = extra.get("source") or source
                 extra_first = extra.get("firstRow")

@@ -221,13 +221,26 @@ async function executeListingEmailDigest(recipient, options = {}) {
   let ipoGuidanceYesterday = [];
   let ipoOverseasMonday = [];
   if (includeListingProjectProgress) {
+    /** 报告日 reportDay = 发信日的前一自然日（北京）。原仅按 f_update_time=reportDay，若匹配/同步在次日才写入则「昨日上市」会漏进邮件。补充：打新日历上市日=reportDay 且已关联 new_share 的行一并纳入。 */
     ipp = await db.query(
-      `SELECT fund, sub, project_name, company, status, exchange, board, f_update_time,
-              inv_amount, residual_amount, ratio, ct_amount, ct_residual
-       FROM ipo_project_progress
-       WHERE F_CreatorUserId = ?
-         AND DATE(f_update_time) = ?`,
-      [recipient.user_id, reportDay]
+      `SELECT ipp.fund, ipp.sub, ipp.project_name, ipp.company, ipp.status, ipp.exchange, ipp.board, ipp.f_update_time,
+              ipp.inv_amount, ipp.residual_amount, ipp.ratio, ipp.ct_amount, ipp.ct_residual
+       FROM ipo_project_progress ipp
+       WHERE ipp.F_CreatorUserId = ?
+         AND (
+           DATE(ipp.f_update_time) = ?
+           OR (
+             ipp.new_share_row_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1 FROM ipo_new_share ns
+               WHERE ns.id = ipp.new_share_row_id
+                 AND ns.public_date IS NOT NULL
+                 AND DATE(ns.public_date) = ?
+             )
+           )
+         )
+       ORDER BY ipp.f_update_time DESC`,
+      [recipient.user_id, reportDay, reportDay]
     );
   }
   if (includeListingProgress) {

@@ -1,9 +1,23 @@
 const db = require('../../db');
 const { syncFinancingDateRange } = require('../../utils/项目挖掘/financingIngestService');
 const {
+  enqueueManualFinancingAiEnrich,
+  enqueueBatchFinancingAiEnrichByDateRange,
+} = require('../../utils/项目挖掘/financingAiEnrichService');
+const {
   requireProjectSourcingAccess,
   requireAdmin,
 } = require('../../utils/项目挖掘/projectSourcingRouteAuth');
+
+function clientIpFromReq(req) {
+  const xf = req.headers['x-forwarded-for'];
+  if (xf && typeof xf === 'string') {
+    const first = xf.split(',')[0].trim();
+    if (first) return first.slice(0, 64);
+  }
+  if (req.ip) return String(req.ip).slice(0, 64);
+  return null;
+}
 
 function registerFinancingRoutes(router) {
   router.post('/sync', requireAdmin, async (req, res) => {
@@ -68,6 +82,8 @@ function registerFinancingRoutes(router) {
           'lead_investor',
           'funding_status',
           'event_id',
+          'ai_product_intro',
+          'ai_company_tags_display',
         ];
         const parts = textCols.map((c) => `COALESCE(${c},'') LIKE ?`);
         parts.push(`COALESCE(DATE_FORMAT(event_date, '%Y-%m-%d'),'') LIKE ?`);
@@ -97,7 +113,10 @@ function registerFinancingRoutes(router) {
                 industry_source_lv1, industry_source_lv2,
                 track_primary, track_secondary, track_keywords,
                 investor_names, lead_investor, funding_status,
-                classification_status, created_at, updated_at
+                classification_status,
+                ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+                ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version, ai_enrich_error,
+                created_at, updated_at
          FROM sourcing_financing_event
          ${sqlWhere}
          ORDER BY event_date DESC, id DESC
@@ -118,6 +137,102 @@ function registerFinancingRoutes(router) {
     } catch (e) {
       console.error('[project-sourcing/events]', e);
       res.status(500).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 管理员：某条融资事件的 AI 增强执行日志（含成功时写入的简介/标签快照） */
+  router.get('/ai-enrich-logs', requireAdmin, async (req, res) => {
+    try {
+      const feId = parseInt(String(req.query.financing_event_id || '').trim(), 10);
+      if (!Number.isFinite(feId) || feId <= 0) {
+        return res.status(400).json({ success: false, message: '缺少或无效的 financing_event_id' });
+      }
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+      const offset = (page - 1) * pageSize;
+
+      const countRows = await db.query(
+        `SELECT COUNT(*) AS total FROM sourcing_financing_ai_enrich_log WHERE financing_event_id = ?`,
+        [feId]
+      );
+      const total = Number(countRows[0].total || 0);
+
+      const list = await db.query(
+        `SELECT id, financing_event_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
+                duration_ms, error_message, result_product_intro, result_company_tags_display, job_trace_id
+         FROM sourcing_financing_ai_enrich_log
+         WHERE financing_event_id = ?
+         ORDER BY id DESC
+         LIMIT ? OFFSET ?`,
+        [feId, pageSize, offset]
+      );
+
+      const rows = list.map((r) => ({
+        ...r,
+        id: r.id != null ? String(r.id) : r.id,
+        financing_event_id: r.financing_event_id != null ? String(r.financing_event_id) : r.financing_event_id,
+      }));
+
+      res.json({
+        success: true,
+        data: { list: rows, total, page, pageSize },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/ai-enrich-logs]', e);
+      res.status(500).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 管理员：按融资日期区间批量 AI 取数（服务端队列顺序执行，避免拥堵） */
+  router.post('/batch-ai-enrich', requireAdmin, async (req, res) => {
+    try {
+      const { start_date, end_date } = req.body || {};
+      const userId = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+      const r = await enqueueBatchFinancingAiEnrichByDateRange({
+        dateFrom: start_date,
+        dateTo: end_date,
+        triggeredByUserId: userId,
+        clientIp: clientIpFromReq(req),
+      });
+      if (!r.ok) {
+        return res.status(r.code).json({ success: false, message: r.message });
+      }
+      const d = r.data;
+      const detail =
+        d.total_in_range != null && d.queued_jobs != null
+          ? `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`
+          : `已加入队列 ${d.total} 条`;
+      return res.status(202).json({
+        success: true,
+        message: `${detail}。将按顺序执行（条目间隔约 ${d.gap_ms}ms），请稍后刷新列表`,
+        data: r.data,
+      });
+    } catch (e) {
+      console.error('[project-sourcing/batch-ai-enrich]', e);
+      res.status(500).json({ success: false, message: e.message || '受理失败' });
+    }
+  });
+
+  router.post('/events/:id/ai-enrich', requireAdmin, async (req, res) => {
+    try {
+      const id = req.params.id;
+      const userId = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+      const r = await enqueueManualFinancingAiEnrich({
+        eventId: id,
+        triggeredByUserId: userId,
+        clientIp: clientIpFromReq(req),
+      });
+      if (!r.ok) {
+        return res.status(r.code).json({ success: false, message: r.message });
+      }
+      return res.status(202).json({
+        success: true,
+        message: '已受理 AI 取数任务，请稍后刷新列表查看结果',
+        data: r.data,
+      });
+    } catch (e) {
+      console.error('[project-sourcing/events/ai-enrich]', e);
+      res.status(500).json({ success: false, message: e.message || '受理失败' });
     }
   });
 }

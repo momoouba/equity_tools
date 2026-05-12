@@ -5,7 +5,7 @@ const axios = require('axios');
 
 const router = express.Router();
 
-const VALID_USAGE_TYPES = ['content_analysis', 'image_recognition', 'project_mining'];
+const VALID_USAGE_TYPES = ['content_analysis', 'image_recognition', 'project_mining', 'listing_data'];
 
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
@@ -82,7 +82,7 @@ router.get('/active', checkAdminPermission, async (req, res) => {
     const data = await db.query(
       `SELECT 
         id, config_name, provider, model_name, api_type, 
-        application_type
+        application_type, usage_type
        FROM ai_model_config 
        WHERE delete_mark = 0 AND is_active = 1
        ORDER BY created_at DESC`

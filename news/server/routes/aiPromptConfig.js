@@ -152,21 +152,27 @@ router.post('/', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口）
-    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口'];
+    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
     if (!validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"或\"打新接口\"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
       });
     }
 
     // 验证提示词类型
-    const validPromptTypes = ['sentiment_analysis', 'enterprise_relevance', 'validation', 'enterprise_full_name'];
+    const validPromptTypes = [
+      'sentiment_analysis',
+      'enterprise_relevance',
+      'validation',
+      'enterprise_full_name',
+      'project_sourcing_financing_web_enrich',
+    ];
     if (!validPromptTypes.includes(prompt_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation 或 enterprise_full_name' 
+        message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
       });
     }
 
@@ -234,22 +240,28 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       is_active: existing[0].is_active
     };
 
-    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口）
-    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口'];
+    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
     if (interface_type && !validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"或\"打新接口\"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
       });
     }
 
     // 验证提示词类型
     if (prompt_type) {
-      const validPromptTypes = ['sentiment_analysis', 'enterprise_relevance', 'validation', 'enterprise_full_name'];
+      const validPromptTypes = [
+        'sentiment_analysis',
+        'enterprise_relevance',
+        'validation',
+        'enterprise_full_name',
+        'project_sourcing_financing_web_enrich',
+      ];
       if (!validPromptTypes.includes(prompt_type)) {
         return res.status(400).json({ 
           success: false, 
-          message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation 或 enterprise_full_name' 
+          message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
         });
       }
     }

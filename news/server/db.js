@@ -2625,8 +2625,8 @@ async function initializeTables(dbPool) {
       max_tokens INT DEFAULT 2000 COMMENT '最大Token数',
       top_p DECIMAL(3,2) DEFAULT 1.0 COMMENT 'Top P参数：0.0-1.0',
       is_active TINYINT DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      application_type ENUM('news_analysis', 'general') DEFAULT 'news_analysis' COMMENT '应用类型',
-      usage_type ENUM('content_analysis', 'image_recognition', 'project_mining') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘',
+      application_type ENUM('news_analysis', 'general', 'project_sourcing_analysis', 'listing_progress_analysis') DEFAULT 'news_analysis' COMMENT '应用类型：新闻分析/通用/项目挖掘分析/上市进展分析',
+      usage_type ENUM('content_analysis', 'image_recognition', 'project_mining', 'listing_data') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘，listing_data-上市数据',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updater_user_id VARCHAR(19) COMMENT '更新用户ID',
@@ -4615,6 +4615,59 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('迁移 ai_model_config.usage_type 扩展 project_mining 时出现警告:', err.message);
   }
+
+  // 扩展 ai_model_config.usage_type：上市数据（打新日历企业全称等）
+  try {
+    const [utListing] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'usage_type'
+      LIMIT 1
+    `);
+    const ctListing = utListing.length ? String(utListing[0].COLUMN_TYPE || '') : '';
+    if (ctListing && !ctListing.includes('listing_data')) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN usage_type ENUM('content_analysis','image_recognition','project_mining','listing_data')
+        DEFAULT 'content_analysis'
+        COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘，listing_data-上市数据'
+      `);
+      console.log('✓ ai_model_config.usage_type 已扩展 listing_data（上市数据）');
+    }
+  } catch (err) {
+    console.warn('迁移 ai_model_config.usage_type 扩展 listing_data 时出现警告:', err.message);
+  }
+
+  // 扩展 ai_model_config.application_type：与前端 AI 模型配置「应用类型」一致（原仅 news_analysis/general，选上市进展分析会写入失败）
+  try {
+    const [atCol] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'application_type'
+      LIMIT 1
+    `);
+    const atType = atCol.length ? String(atCol[0].COLUMN_TYPE || '') : '';
+    if (atType && !atType.includes('listing_progress_analysis')) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN application_type ENUM(
+          'news_analysis',
+          'general',
+          'project_sourcing_analysis',
+          'listing_progress_analysis'
+        )
+        DEFAULT 'news_analysis'
+        COMMENT '应用类型：新闻分析/通用/项目挖掘分析/上市进展分析'
+      `);
+      console.log('✓ ai_model_config.application_type 已扩展 project_sourcing_analysis、listing_progress_analysis');
+    }
+  } catch (err) {
+    console.warn('迁移 ai_model_config.application_type 扩展时出现警告:', err.message);
+  }
   
   // 创建舆情信息分享链接表
   await dbPool.query(`
@@ -5505,6 +5558,128 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('创建项目挖掘融资事件表时出现警告:', err.message);
   }
+
+  // 项目挖掘：融资事件标准表 — AI 增强字段（阶段 A）
+  const addSfeCol = async (colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_financing_event' AND COLUMN_NAME = ?`,
+        [colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE sourcing_financing_event ${ddl}`);
+        console.log(`✓ sourcing_financing_event 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 sourcing_financing_event.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await addSfeCol(
+    'ai_product_intro',
+    `ADD COLUMN ai_product_intro TEXT NULL COMMENT '产品简介(AI)，联网归纳，不覆盖 project_desc' AFTER updated_at`
+  );
+  await addSfeCol(
+    'ai_company_tags_display',
+    `ADD COLUMN ai_company_tags_display VARCHAR(2000) NULL COMMENT '企业标签(AI)展示，顿号分隔' AFTER ai_product_intro`
+  );
+  await addSfeCol(
+    'ai_company_tags_json',
+    `ADD COLUMN ai_company_tags_json JSON NULL COMMENT '企业标签(AI)结构化 JSON' AFTER ai_company_tags_display`
+  );
+  await addSfeCol(
+    'ai_enrich_status',
+    `ADD COLUMN ai_enrich_status VARCHAR(20) NULL DEFAULT 'pending' COMMENT 'AI增强：pending/running/success/failed/skipped' AFTER ai_company_tags_json`
+  );
+  await addSfeCol(
+    'ai_enrich_at',
+    `ADD COLUMN ai_enrich_at DATETIME NULL COMMENT 'AI增强完成时间' AFTER ai_enrich_status`
+  );
+  await addSfeCol(
+    'ai_enrich_model',
+    `ADD COLUMN ai_enrich_model VARCHAR(100) NULL COMMENT 'AI增强所用模型快照' AFTER ai_enrich_at`
+  );
+  await addSfeCol(
+    'ai_enrich_version',
+    `ADD COLUMN ai_enrich_version VARCHAR(50) NULL COMMENT '提示词/管线版本' AFTER ai_enrich_model`
+  );
+  await addSfeCol(
+    'ai_enrich_error',
+    `ADD COLUMN ai_enrich_error VARCHAR(500) NULL COMMENT 'AI增强失败摘要' AFTER ai_enrich_version`
+  );
+  try {
+    const [ix] = await dbPool.query(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_financing_event' AND INDEX_NAME = 'idx_sourcing_event_ai_enrich'`
+    );
+    if (ix.length === 0) {
+      await dbPool.query(
+        `ALTER TABLE sourcing_financing_event ADD KEY idx_sourcing_event_ai_enrich (ai_enrich_status, id)`
+      );
+      console.log('✓ sourcing_financing_event 已添加 idx_sourcing_event_ai_enrich');
+    }
+  } catch (err) {
+    console.warn('迁移 sourcing_financing_event AI 索引时出现警告:', err.message);
+  }
+
+  // 项目挖掘：融资信息 AI 增强执行日志（追加型）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_financing_ai_enrich_log (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+        financing_event_id BIGINT NOT NULL COMMENT '标准表 sourcing_financing_event.id',
+        event_id VARCHAR(64) NULL COMMENT '融资事件业务键快照',
+        company_name VARCHAR(255) NULL COMMENT '企业名称快照',
+        trigger_type VARCHAR(32) NOT NULL COMMENT 'manual_api/auto_enqueue/batch_replay/system_retry',
+        triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人 users.id',
+        triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '触发受理时间',
+        client_ip VARCHAR(64) NULL COMMENT '客户端 IP',
+        job_trace_id VARCHAR(64) NULL COMMENT '链路/幂等追踪 UUID',
+        execution_status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/running/success/failed/skipped',
+        started_at DATETIME NULL COMMENT '开始调用模型时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        duration_ms INT NULL COMMENT '耗时毫秒',
+        llm_model_config_id VARCHAR(19) NULL COMMENT 'ai_model_config.id',
+        prompt_type VARCHAR(80) NULL COMMENT '提示词类型',
+        prompt_version VARCHAR(80) NULL COMMENT '提示词版本',
+        ai_enrich_version VARCHAR(50) NULL COMMENT '与标准表写入版本对齐',
+        error_message VARCHAR(500) NULL COMMENT '失败摘要',
+        retry_index INT NOT NULL DEFAULT 0 COMMENT '重试序号从0起',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        KEY idx_sf_ai_log_event_time (financing_event_id, triggered_at),
+        KEY idx_sf_ai_log_type_time (trigger_type, triggered_at),
+        KEY idx_sf_ai_log_status_time (execution_status, triggered_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-融资信息AI增强触发与执行日志';
+    `);
+    console.log('✓ sourcing_financing_ai_enrich_log 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_financing_ai_enrich_log 时出现警告:', err.message);
+  }
+
+  const addSfAiLogCol = async (colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_financing_ai_enrich_log' AND COLUMN_NAME = ?`,
+        [colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE sourcing_financing_ai_enrich_log ${ddl}`);
+        console.log(`✓ sourcing_financing_ai_enrich_log 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 sourcing_financing_ai_enrich_log.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await addSfAiLogCol(
+    'result_product_intro',
+    `ADD COLUMN result_product_intro LONGTEXT NULL COMMENT '成功时写入的产品简介(AI)全文快照' AFTER error_message`
+  );
+  await addSfAiLogCol(
+    'result_company_tags_display',
+    `ADD COLUMN result_company_tags_display VARCHAR(2000) NULL COMMENT '成功时写入的企业标签(AI)展示快照' AFTER result_product_intro`
+  );
 
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）
   try {

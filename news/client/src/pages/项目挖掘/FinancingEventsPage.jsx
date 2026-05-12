@@ -9,12 +9,24 @@ import {
   Form,
   Select,
   DatePicker,
+  Popover,
 } from '@arco-design/web-react'
-import dayjs from 'dayjs'
+import {
+  formatFinancingYmd,
+  financingNow,
+  formatFinancingDateTime,
+  formatFinancingEventDate,
+} from './financingDateUtils'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import axios from '../../utils/axios'
-import { fetchFinancingEvents, postFinancingSync } from '../../api/项目挖掘'
+import {
+  fetchFinancingEvents,
+  postFinancingSync,
+  postFinancingEventAiEnrich,
+  postFinancingBatchAiEnrich,
+  fetchFinancingAiEnrichLogs,
+} from '../../api/项目挖掘'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
 import './FinancingEventsPage.css'
 
@@ -51,25 +63,109 @@ function formatInvestors(raw) {
   return trimmed
 }
 
-/** 列表展示：融资日期仅 yyyy-MM-dd（兼容接口返回 DATE / ISO 字符串） */
-function formatEventDate(val) {
-  if (val == null || val === '') return '-'
-  const s = String(val).trim()
-  const head = s.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (head) return head[1]
-  const d = dayjs(s)
-  return d.isValid() ? d.format('YYYY-MM-DD') : s
+async function copyTextToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    Message.success('已复制到剪贴板')
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      Message.success('已复制到剪贴板')
+    } catch {
+      Message.error('复制失败，请在弹出层内手动选中复制')
+    }
+  }
+}
+
+/**
+ * 表格内单行省略；点击后在 Popover 内展示全文，支持鼠标划选与「复制全文」（避免 ellipsis 自带 Tooltip 无法选中）
+ */
+function IntroPopoverCell({ columnTitle, raw }) {
+  const empty = raw == null || String(raw).trim() === ''
+  const text = empty ? '' : String(raw)
+  if (empty) {
+    return <span>-</span>
+  }
+  const popoverContent = (
+    <div className="financing-events-intro-popover-inner">
+      <div style={{ marginBottom: 8 }}>
+        <Button type="outline" size="mini" onClick={() => copyTextToClipboard(text)}>
+          复制全文
+        </Button>
+        <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
+          下方文本可选中复制
+        </span>
+      </div>
+      <div
+        className="financing-events-intro-selectable"
+        style={{
+          maxWidth: 520,
+          maxHeight: 360,
+          overflow: 'auto',
+          userSelect: 'text',
+          WebkitUserSelect: 'text',
+          cursor: 'text',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          fontSize: 13,
+          lineHeight: 1.55,
+          padding: '4px 0',
+        }}
+      >
+        {text}
+      </div>
+    </div>
+  )
+  return (
+    <Popover
+      title={columnTitle}
+      trigger="click"
+      position="top"
+      popupClassName="financing-events-intro-popover"
+      content={popoverContent}
+    >
+      <span
+        style={{
+          display: 'block',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          cursor: 'pointer',
+          color: 'rgb(var(--primary-6))',
+        }}
+        title="点击查看全文，可选中或复制"
+      >
+        {text}
+      </span>
+    </Popover>
+  )
 }
 
 /** 与列表列一致的导出行（Excel） */
 function buildFinancingExportRows(list) {
   return list.map((row) => ({
-    融资日期: formatEventDate(row.event_date),
+    融资日期: formatFinancingEventDate(row.event_date),
     项目名称: row.project_name ?? '',
     项目简介:
       row.project_desc == null || String(row.project_desc).trim() === ''
         ? '-'
         : String(row.project_desc),
+    '产品简介(AI)':
+      row.ai_product_intro == null || String(row.ai_product_intro).trim() === ''
+        ? '-'
+        : String(row.ai_product_intro),
+    '企业标签(AI)':
+      row.ai_company_tags_display == null || String(row.ai_company_tags_display).trim() === ''
+        ? '-'
+        : String(row.ai_company_tags_display),
+    AI状态: row.ai_enrich_status ?? '',
     企业名称: row.company_name ?? '',
     统一社会信用代码: row.company_credit_code ?? '',
     最新轮次: row.latest_round ?? '',
@@ -108,6 +204,15 @@ export default function FinancingEventsPage() {
   const [financingConfigs, setFinancingConfigs] = useState([])
   const [configsLoading, setConfigsLoading] = useState(false)
   const [exportingAll, setExportingAll] = useState(false)
+  const [selectedRowKeys, setSelectedRowKeys] = useState([])
+  const [aiEnrichSubmitting, setAiEnrichSubmitting] = useState(false)
+  const [aiLogVisible, setAiLogVisible] = useState(false)
+  const [aiLogLoading, setAiLogLoading] = useState(false)
+  const [aiLogRows, setAiLogRows] = useState([])
+  const [aiLogFinancingId, setAiLogFinancingId] = useState('')
+  const [batchAiVisible, setBatchAiVisible] = useState(false)
+  const [batchAiSubmitting, setBatchAiSubmitting] = useState(false)
+  const [batchAiForm] = Form.useForm()
 
   const isAdmin = useMemo(() => parseUserAdmin(), [])
 
@@ -196,14 +301,33 @@ export default function FinancingEventsPage() {
       title: '融资日期',
       dataIndex: 'event_date',
       width: 120,
-      render: (v) => formatEventDate(v),
+      render: (v) => formatFinancingEventDate(v),
     },
     { title: '项目名称', dataIndex: 'project_name', width: 160, ellipsis: true },
     {
       title: '项目简介',
       dataIndex: 'project_desc',
       width: 220,
-      ellipsis: true,
+      render: (_, row) => <IntroPopoverCell columnTitle="项目简介" raw={row.project_desc} />,
+    },
+    {
+      title: '产品简介(AI)',
+      dataIndex: 'ai_product_intro',
+      width: 200,
+      render: (_, row) => <IntroPopoverCell columnTitle="产品简介(AI)" raw={row.ai_product_intro} />,
+    },
+    {
+      title: '企业标签(AI)',
+      dataIndex: 'ai_company_tags_display',
+      width: 160,
+      render: (_, row) => (
+        <IntroPopoverCell columnTitle="企业标签(AI)" raw={row.ai_company_tags_display} />
+      ),
+    },
+    {
+      title: 'AI状态',
+      dataIndex: 'ai_enrich_status',
+      width: 96,
       render: (v) => (v == null || String(v).trim() === '' ? '-' : String(v)),
     },
     { title: '企业名称', dataIndex: 'company_name', width: 200, ellipsis: true },
@@ -262,7 +386,7 @@ export default function FinancingEventsPage() {
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, sheet, '融资时间')
     const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    const name = `融资时间列表_第${page}页_${dayjs().format('YYYY-MM-DD_HHmmss')}.xlsx`
+    const name = `融资时间列表_第${page}页_${financingNow().format('YYYY-MM-DD_HHmmss')}.xlsx`
     saveAs(new Blob([buf], { type: 'application/octet-stream' }), name)
     Message.success(`已导出 ${rows.length} 条`)
   }, [data, page])
@@ -302,7 +426,7 @@ export default function FinancingEventsPage() {
       const wb = XLSX.utils.book_new()
       XLSX.utils.book_append_sheet(wb, sheet, '融资时间')
       const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-      const name = `融资时间列表_全部${rows.length}条_${dayjs().format('YYYY-MM-DD_HHmmss')}.xlsx`
+      const name = `融资时间列表_全部${rows.length}条_${financingNow().format('YYYY-MM-DD_HHmmss')}.xlsx`
       saveAs(new Blob([buf], { type: 'application/octet-stream' }), name)
       Message.success(`已导出 ${rows.length} 条`)
     } catch (e) {
@@ -328,6 +452,37 @@ export default function FinancingEventsPage() {
     })
   }, [total, fetchAllAndExport])
 
+  const handleBatchAiOk = async () => {
+    try {
+      const v = await batchAiForm.validate()
+      const range = v.date_range
+      if (!range || range.length !== 2 || !range[0] || !range[1]) {
+        Message.warning('请选择融资日期范围')
+        return
+      }
+      const start = formatFinancingYmd(range[0])
+      const end = formatFinancingYmd(range[1])
+      setBatchAiSubmitting(true)
+      const res = await postFinancingBatchAiEnrich({ start_date: start, end_date: end })
+      if (res.status === 202 && res.data?.success) {
+        Message.success(res.data.message || '已加入队列')
+        setBatchAiVisible(false)
+        load()
+      } else if (res.data?.success) {
+        Message.success(res.data.message || '已受理')
+        setBatchAiVisible(false)
+        load()
+      } else {
+        Message.error(res.data?.message || '受理失败')
+      }
+    } catch (e) {
+      if (e?.errors) return
+      Message.error(e.response?.data?.message || e.message || '受理失败')
+    } finally {
+      setBatchAiSubmitting(false)
+    }
+  }
+
   const handleSyncOk = async () => {
     try {
       const v = await syncForm.validate()
@@ -336,8 +491,8 @@ export default function FinancingEventsPage() {
         Message.warning('请选择同步日期范围')
         return
       }
-      const start = dayjs(range[0]).format('YYYY-MM-DD')
-      const end = dayjs(range[1]).format('YYYY-MM-DD')
+      const start = formatFinancingYmd(range[0])
+      const end = formatFinancingYmd(range[1])
       setSyncSubmitting(true)
       const res = await postFinancingSync({
         config_id: v.config_id,
@@ -385,8 +540,8 @@ export default function FinancingEventsPage() {
             setPage(1)
             setKwSearch(keyword.trim())
             if (financingDateRange?.[0] && financingDateRange?.[1]) {
-              setDateFrom(dayjs(financingDateRange[0]).format('YYYY-MM-DD'))
-              setDateTo(dayjs(financingDateRange[1]).format('YYYY-MM-DD'))
+              setDateFrom(formatFinancingYmd(financingDateRange[0]))
+              setDateTo(formatFinancingYmd(financingDateRange[1]))
             } else {
               setDateFrom('')
               setDateTo('')
@@ -427,12 +582,99 @@ export default function FinancingEventsPage() {
             status="warning"
             onClick={() => {
               syncForm.setFieldsValue({
-                date_range: [dayjs().subtract(1, 'day'), dayjs()],
+                date_range: [financingNow().subtract(1, 'day'), financingNow()],
               })
               setSyncVisible(true)
             }}
           >
             手动同步
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            type="outline"
+            loading={aiEnrichSubmitting}
+            disabled={!selectedRowKeys.length}
+            onClick={async () => {
+              const id = selectedRowKeys[0]
+              if (!id) {
+                Message.warning('请先勾选一行融资记录')
+                return
+              }
+              setAiEnrichSubmitting(true)
+              try {
+                const res = await postFinancingEventAiEnrich(id)
+                if (res.status === 202 && res.data?.success) {
+                  Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
+                  load()
+                } else if (res.data?.success) {
+                  Message.success(res.data.message || '已受理')
+                  load()
+                } else {
+                  Message.error(res.data?.message || '受理失败')
+                }
+              } catch (e) {
+                Message.error(e.response?.data?.message || e.message || '受理失败')
+              } finally {
+                setAiEnrichSubmitting(false)
+              }
+            }}
+          >
+            手动AI取数
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            type="outline"
+            disabled={!selectedRowKeys.length}
+            loading={aiLogLoading}
+            onClick={async () => {
+              const id = selectedRowKeys[0]
+              if (!id) {
+                Message.warning('请先勾选一行融资记录')
+                return
+              }
+              setAiLogFinancingId(String(id))
+              setAiLogVisible(true)
+              setAiLogLoading(true)
+              try {
+                const res = await fetchFinancingAiEnrichLogs({
+                  financing_event_id: id,
+                  page: 1,
+                  pageSize: 50,
+                })
+                if (res.data?.success) {
+                  setAiLogRows(res.data.data?.list || [])
+                } else {
+                  setAiLogRows([])
+                  Message.error(res.data?.message || '加载日志失败')
+                }
+              } catch (e) {
+                setAiLogRows([])
+                Message.error(e.response?.data?.message || e.message || '加载日志失败')
+              } finally {
+                setAiLogLoading(false)
+              }
+            }}
+          >
+            AI执行日志
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            type="outline"
+            status="success"
+            onClick={() => {
+              batchAiForm.setFieldsValue({
+                date_range:
+                  financingDateRange?.[0] && financingDateRange?.[1]
+                    ? financingDateRange
+                    : [financingNow().subtract(7, 'day'), financingNow()],
+              })
+              setBatchAiVisible(true)
+            }}
+          >
+            批量AI取数
           </Button>
         )}
       </Space>
@@ -444,7 +686,16 @@ export default function FinancingEventsPage() {
         data={data}
         stripe
         border
-        scroll={{ x: 2000, y: tableScrollY }}
+        rowSelection={
+          isAdmin
+            ? {
+                type: 'radio',
+                selectedRowKeys,
+                onChange: (keys) => setSelectedRowKeys(keys),
+              }
+            : undefined
+        }
+        scroll={{ x: 2480, y: tableScrollY }}
         pagination={{
           current: page,
           pageSize,
@@ -464,6 +715,84 @@ export default function FinancingEventsPage() {
           },
         }}
       />
+
+      <Modal
+        title={`AI 增强执行日志（融资事件 id=${aiLogFinancingId || '—'}）`}
+        visible={aiLogVisible}
+        footer={null}
+        onCancel={() => setAiLogVisible(false)}
+        style={{ width: 960 }}
+        unmountOnExit
+      >
+        <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
+          成功任务会在下列表中展示「产品简介」「企业标签」快照，与服务端控制台 success 日志一致；失败任务仅显示错误摘要。
+        </p>
+        <Table
+          rowKey="id"
+          loading={aiLogLoading}
+          data={aiLogRows}
+          stripe
+          border
+          scroll={{ x: 880, y: 420 }}
+          columns={[
+            { title: '触发时间', dataIndex: 'triggered_at', width: 168, render: formatFinancingDateTime },
+            { title: '状态', dataIndex: 'execution_status', width: 88 },
+            { title: '耗时(ms)', dataIndex: 'duration_ms', width: 88 },
+            {
+              title: '产品简介(结果)',
+              dataIndex: 'result_product_intro',
+              width: 220,
+              render: (v) => <IntroPopoverCell columnTitle="产品简介(AI)（日志快照）" raw={v} />,
+            },
+            {
+              title: '企业标签(结果)',
+              dataIndex: 'result_company_tags_display',
+              width: 160,
+              render: (v) => <IntroPopoverCell columnTitle="企业标签(AI)（日志快照）" raw={v} />,
+            },
+            {
+              title: '失败原因',
+              dataIndex: 'error_message',
+              width: 180,
+              ellipsis: true,
+              render: (v) =>
+                v == null || String(v).trim() === '' ? (
+                  '-'
+                ) : (
+                  <IntroPopoverCell columnTitle="失败原因" raw={v} />
+                ),
+            },
+            { title: '触发方式', dataIndex: 'trigger_type', width: 100 },
+          ]}
+          pagination={false}
+        />
+      </Modal>
+
+      <Modal
+        title="批量 AI 取数（按融资日期）"
+        visible={batchAiVisible}
+        onOk={handleBatchAiOk}
+        confirmLoading={batchAiSubmitting}
+        onCancel={() => setBatchAiVisible(false)}
+        style={{ width: 520 }}
+        okText="加入队列"
+      >
+        <Form form={batchAiForm} layout="vertical">
+          <FormItem
+            label="融资日期范围（含首尾两天，筛选 sourcing_financing_event.event_date）"
+            field="date_range"
+            rules={[{ required: true, message: '请选择日期范围' }]}
+          >
+            <DatePicker.RangePicker style={{ width: '100%' }} />
+          </FormItem>
+        </Form>
+        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在区间内<strong>去重</strong>后再入队，每条仅调用一次模型；写入结果按信用代码（无代码则按企业全称）<strong>批量同步</strong>到该企业全部融资记录。服务端<strong>单队列顺序</strong>执行，条目间有间隔以防接口拥堵；同一主体进行中时会拒绝重复任务。
+        </p>
+        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
+          默认间隔约 4.5s，可由服务端环境变量 FINANCING_AI_BATCH_GAP_MS（毫秒）调整。
+        </p>
+      </Modal>
 
       <Modal
         title="投融资数据同步（queryByDate）"

@@ -7,6 +7,7 @@ const { generateId } = require('./idGenerator');
 async function initPrompts() {
   try {
     console.log('开始初始化提示词配置...');
+    const { buildBuiltinPromptContentForDb } = require('./项目挖掘/financingAiEnrichService');
 
     // 获取默认的AI模型配置（优先选择 news_analysis 类型且启用的配置）
     let defaultAiModelConfigId = null;
@@ -59,6 +60,40 @@ async function initPrompts() {
       if (error.sqlMessage) {
         console.warn('  SQL错误:', error.sqlMessage);
       }
+    }
+
+    /** 项目挖掘-融资 AI 增强：优先绑定 application_type = project_sourcing_analysis 的模型 */
+    let projectSourcingAnalysisModelId = null;
+    try {
+      const psaRows = await db.query(
+        `SELECT id FROM ai_model_config
+         WHERE application_type = 'project_sourcing_analysis'
+           AND is_active = 1 AND delete_mark = 0
+         ORDER BY created_at DESC LIMIT 1`
+      );
+      if (psaRows.length > 0) {
+        projectSourcingAnalysisModelId = psaRows[0].id;
+        console.log(`  ✓ 项目挖掘融资 AI 默认模型（project_sourcing_analysis）: ${projectSourcingAnalysisModelId}`);
+      }
+    } catch (e) {
+      console.warn('  读取 project_sourcing_analysis 模型时出现警告:', e.message);
+    }
+
+    /** 打新日历企业全称：优先绑定 usage_type = listing_data 的模型 */
+    let newShareListingDataModelId = null;
+    try {
+      const lsRows = await db.query(
+        `SELECT id FROM ai_model_config
+         WHERE usage_type = 'listing_data'
+           AND is_active = 1 AND delete_mark = 0
+         ORDER BY created_at DESC LIMIT 1`
+      );
+      if (lsRows.length > 0) {
+        newShareListingDataModelId = lsRows[0].id;
+        console.log(`  ✓ 打新日历企业全称默认模型（usage_type=listing_data）: ${newShareListingDataModelId}`);
+      }
+    } catch (e) {
+      console.warn('  读取 listing_data 模型时出现警告:', e.message);
     }
 
     // 检查每个必需的提示词是否存在，如果不存在则创建
@@ -290,6 +325,8 @@ async function initPrompts() {
     const sigEnterpriseRelevancePrompt = qichachaEnterpriseRelevancePrompt;
     const sigValidationPrompt = qichachaValidationPrompt;
 
+    const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./上市进展/newShareEnterpriseFullNamePrompt');
+
     const prompts = [
       {
         prompt_name: '新榜-情绪分析',
@@ -349,26 +386,15 @@ async function initPrompts() {
         prompt_name: '打新接口-企业全称补齐',
         interface_type: '打新接口',
         prompt_type: 'enterprise_full_name',
-        prompt_content: `你是上市公司主体识别助手。
-
-输入会提供：
-- 股票代码
-- 股票简称
-
-请识别并返回该股票对应公司的全称信息，严格输出 JSON：
-{
-  "cn": "中文主体全称",
-  "en": "英文主体全称"
-}
-
-规则：
-1. 只输出 JSON，不要输出任何解释、前后缀、markdown。
-2. 必须基于联网检索到的权威信息（交易所公告、公司官网、监管披露、主流财经数据库）填写全称，不允许凭简称自行翻译、音译或臆测。
-3. 国内上市公司优先返回中文备案全称（cn）。
-4. 若主体仅有英文全称，则仅填写 en，cn 置空字符串。
-5. 港股公司优先返回中文全称；若没有中文全称，则返回英文全称。
-6. 如果仅能推测而无法通过网络检索确认，请返回 {"cn":"","en":""}。`
-      }
+        prompt_content: NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY,
+      },
+      {
+        prompt_name: '项目挖掘-融资联网AI增强',
+        interface_type: '项目挖掘',
+        prompt_type: 'project_sourcing_financing_web_enrich',
+        /** 含 ---SYSTEM--- / ---USER--- 全量内置，与 financingAiEnrichService 解析约定一致 */
+        prompt_content: buildBuiltinPromptContentForDb(),
+      },
     ];
 
     // 获取系统用户ID（admin用户）
@@ -380,6 +406,17 @@ async function initPrompts() {
 
     for (const prompt of prompts) {
       try {
+        const resolvedModelId =
+          prompt.interface_type === '项目挖掘' &&
+          prompt.prompt_type === 'project_sourcing_financing_web_enrich' &&
+          projectSourcingAnalysisModelId
+            ? projectSourcingAnalysisModelId
+            : prompt.interface_type === '打新接口' &&
+                prompt.prompt_type === 'enterprise_full_name' &&
+                newShareListingDataModelId
+              ? newShareListingDataModelId
+              : defaultAiModelConfigId;
+
         // 检查该提示词是否已存在（按 interface_type 和 prompt_type 组合）
         const existing = await db.query(
           `SELECT id, ai_model_config_id, prompt_content FROM ai_prompt_config 
@@ -398,9 +435,9 @@ async function initPrompts() {
           let updateValues = [];
 
           // 如果缺少AI模型配置，添加它
-          if (!existingPrompt.ai_model_config_id && defaultAiModelConfigId) {
+          if (!existingPrompt.ai_model_config_id && resolvedModelId) {
             updateFields.push('ai_model_config_id = ?');
-            updateValues.push(defaultAiModelConfigId);
+            updateValues.push(resolvedModelId);
             needsUpdate = true;
           }
 
@@ -435,7 +472,7 @@ async function initPrompts() {
               prompt.interface_type,
               prompt.prompt_type,
               prompt.prompt_content,
-              defaultAiModelConfigId, // 关联默认的AI模型配置
+              resolvedModelId, // 关联默认的AI模型配置（项目挖掘优先 project_sourcing_analysis）
               1, // 默认启用
               adminUserId
             ]
@@ -448,7 +485,7 @@ async function initPrompts() {
             const logId = await generateId('ai_prompt_change_log');
             const logData = {
               ...prompt,
-              ai_model_config_id: defaultAiModelConfigId
+              ai_model_config_id: resolvedModelId
             };
             await db.execute(
               `INSERT INTO ai_prompt_change_log 

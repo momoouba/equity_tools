@@ -1,8 +1,11 @@
 const db = require('../../db');
 const axios = require('axios');
+const { normalizeDashScopeChatEndpoint, formatDashScopeHttpError } = require('../dashScopeOpenAICompat');
 const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
 const { runNewShareAkSync } = require('./newShareAkSync');
 const { runNewShareMetricsSyncWithFallback } = require('./newShareMetricsSync');
+const { warmEtnetHkIpoInfoCache } = require('./etnetHkIpoInfoMetrics');
+const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./newShareEnterpriseFullNamePrompt');
 
 const NEW_SHARE_MIN_SYNC_DATE = '2026-01-01';
 
@@ -238,28 +241,34 @@ function parseNamePairFromModelOutput(outputText) {
   return normalizeFullNamePair('', text);
 }
 
-function buildNewShareFullNameFallbackPrompt(stockCode, stockName) {
-  return `你是上市公司主体识别助手。
-
-输入：
-股票代码：${stockCode}
-股票简称：${stockName}
-
-请识别并返回该股票对应公司的全称信息，严格输出 JSON：
-{
-  "cn": "中文主体全称",
-  "en": "英文主体全称"
+function buildNewShareFullNameAppendix(stockCode, stockName, exchange) {
+  const code = String(stockCode || '').trim();
+  const name = String(stockName || '').trim();
+  const ex = String(exchange || '').trim();
+  const lines = [`股票代码：${code}`, `股票简称：${name}`];
+  if (ex) {
+    lines.push(`交易所：${ex}`);
+  }
+  if (ex === '港交所' || /港交所|香港联合|HKEX/i.test(ex)) {
+    lines.push(
+      '【执行提示】本证券在港交所上市：请用联网检索披露易（HKEXnews）上与该代码对应的招股章程、聆讯后资料集或全球发售文件及「公司资料」页，摘录法定中文全称与官方英文全称填入 cn、en。请勿在本 JSON 中输出或改写「股票简称」（简称仍以交易所/系统数据为准）。'
+    );
+  }
+  return lines.join('\n');
 }
 
-规则：
-1. 只输出 JSON，不要输出任何解释、前后缀、markdown。
-2. 必须基于联网检索到的权威信息（交易所公告、公司官网、监管披露、主流财经数据库）填写全称，不允许凭简称自行翻译、音译或臆测。
-3. 国内上市公司优先返回中文备案全称（cn）。
-4. en 字段只能填写“已公开披露且可核验”的官方英文全称，严禁把中文名直接翻译成英文。
-5. 若无法确认官方英文全称，en 必须返回空字符串 ""。
-6. 若主体仅有英文全称，则仅填写 en，cn 置空字符串。
-7. 港股公司优先返回中文全称；若没有中文全称，则返回英文全称。
-8. 如果仅能推测而无法通过网络检索确认，请返回 {"cn":"","en":""}。`;
+function buildNewShareFullNameFallbackPrompt(stockCode, stockName, exchange = '') {
+  return `${NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY}
+
+输入：
+${buildNewShareFullNameAppendix(stockCode, stockName, exchange)}`;
+}
+
+function composeNewShareFullNamePrompt(promptTemplate, stockCode, stockName, exchange = '') {
+  const base = String(promptTemplate || '').trim();
+  const appendix = buildNewShareFullNameAppendix(stockCode, stockName, exchange);
+  if (base) return `${base}\n\n${appendix}`;
+  return buildNewShareFullNameFallbackPrompt(stockCode, stockName, exchange);
 }
 
 function applyNewShareNameOverrides(stockCode, normalizedPair) {
@@ -274,12 +283,51 @@ function applyNewShareNameOverrides(stockCode, normalizedPair) {
   return pair;
 }
 
+function truncateForLog(text, maxLen = 500) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, maxLen)}…`;
+}
+
+function mapAiModelConfigRow(row) {
+  if (!row || !row.id) return null;
+  return {
+    id: row.id,
+    config_name: row.config_name,
+    provider: row.provider,
+    model_name: row.model_name,
+    api_type: row.api_type,
+    api_key: row.api_key,
+    api_endpoint: row.api_endpoint,
+    temperature: row.temperature,
+    max_tokens: row.max_tokens,
+    top_p: row.top_p,
+    application_type: row.application_type,
+    usage_type: row.usage_type,
+  };
+}
+
+async function fetchActiveAiModelRow(whereSql, params = []) {
+  const rows = await db.query(
+    `SELECT id, config_name, provider, model_name, api_type, api_key, api_endpoint,
+            temperature, max_tokens, top_p, application_type, usage_type
+     FROM ai_model_config
+     WHERE is_active = 1 AND delete_mark = 0 ${whereSql}
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    params
+  );
+  return rows.length ? rows[0] : null;
+}
+
 async function getPromptAndModelConfigForNewShareName() {
   const prompts = await db.query(
     `SELECT
        p.prompt_content,
+       p.ai_model_config_id,
        m.id as model_id, m.config_name, m.provider, m.model_name, m.api_type,
-       m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p
+       m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p,
+       m.application_type as bound_application_type, m.usage_type as bound_usage_type
      FROM ai_prompt_config p
      LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.is_active = 1 AND m.delete_mark = 0
      WHERE p.interface_type = '打新接口'
@@ -289,11 +337,16 @@ async function getPromptAndModelConfigForNewShareName() {
      ORDER BY p.created_at DESC
      LIMIT 1`
   );
+
+  let promptTemplate = '';
+  let model = null;
+  let modelSource = 'none';
+
   if (prompts.length > 0) {
     const p = prompts[0];
-    return {
-      promptTemplate: String(p.prompt_content || '').trim(),
-      model: p.model_id ? {
+    promptTemplate = String(p.prompt_content || '').trim();
+    if (p.model_id) {
+      model = mapAiModelConfigRow({
         id: p.model_id,
         config_name: p.config_name,
         provider: p.provider,
@@ -304,23 +357,36 @@ async function getPromptAndModelConfigForNewShareName() {
         temperature: p.temperature,
         max_tokens: p.max_tokens,
         top_p: p.top_p,
-      } : null,
-    };
+        application_type: p.bound_application_type,
+        usage_type: p.bound_usage_type,
+      });
+      if (model) modelSource = 'prompt_bind';
+    } else if (p.ai_model_config_id) {
+      const rebound = await fetchActiveAiModelRow('AND id = ?', [p.ai_model_config_id]);
+      if (rebound) {
+        model = mapAiModelConfigRow(rebound);
+        modelSource = 'prompt_bind';
+      }
+    }
   }
 
-  const modelRows = await db.query(
-    `SELECT id, config_name, provider, model_name, api_type, api_key, api_endpoint, temperature, max_tokens, top_p
-     FROM ai_model_config
-     WHERE is_active = 1
-       AND delete_mark = 0
-       AND application_type IN ('general', 'news_analysis')
-     ORDER BY CASE WHEN application_type = 'general' THEN 0 ELSE 1 END, created_at DESC
-     LIMIT 1`
-  );
-  return {
-    promptTemplate: '',
-    model: modelRows.length > 0 ? modelRows[0] : null,
-  };
+  if (!model) {
+    const listingRow = await fetchActiveAiModelRow(`AND usage_type = 'listing_data'`);
+    if (listingRow) {
+      model = mapAiModelConfigRow(listingRow);
+      modelSource = 'listing_data';
+    }
+  }
+
+  if (!model) {
+    const legacyRow = await fetchActiveAiModelRow(`AND application_type IN ('general', 'news_analysis')`);
+    if (legacyRow) {
+      model = mapAiModelConfigRow(legacyRow);
+      modelSource = 'legacy_news_general';
+    }
+  }
+
+  return { promptTemplate, model, modelSource };
 }
 
 async function callAiModelForFullName(prompt, modelConfig) {
@@ -328,27 +394,74 @@ async function callAiModelForFullName(prompt, modelConfig) {
     throw new Error('AI模型配置不完整');
   }
   const provider = String(modelConfig.provider || '').toLowerCase();
-  const isOpenAIStyleAlibaba =
+  const rawEndpoint = String(modelConfig.api_endpoint || '').trim();
+  const apiTypeLc = String(modelConfig.api_type || '').toLowerCase();
+  /** 与 DashScope OpenAI 兼容 /chat/completions 契约一致 */
+  const isAlibabaCompatibleUrl =
     provider === 'alibaba' &&
-    (String(modelConfig.api_endpoint).includes('/compatible-mode/v1') || String(modelConfig.api_endpoint).includes('/v1/chat/completions'));
+    (rawEndpoint.includes('/compatible-mode/v1') || rawEndpoint.includes('/v1/chat/completions'));
+  /**
+   * 使用顶层 messages 的 OpenAI 兼容请求体。
+   * 注意：若 API 类型选「Chat Completion」但端点填的是原生 …/text-generation/generation，
+   * 必须把 URL 规范到 compatible-mode，否则会 400（原生接口要 input.messages，不接受顶层 messages）。
+   */
+  const useOpenAiChatCompletionsBody =
+    provider === 'openai' ||
+    isAlibabaCompatibleUrl ||
+    (provider === 'alibaba' && apiTypeLc === 'chat_completion');
 
   const temperature = typeof modelConfig.temperature === 'string' ? parseFloat(modelConfig.temperature) : Number(modelConfig.temperature);
-  const topP = typeof modelConfig.top_p === 'string' ? parseFloat(modelConfig.top_p) : Number(modelConfig.top_p);
+  let topP = typeof modelConfig.top_p === 'string' ? parseFloat(modelConfig.top_p) : Number(modelConfig.top_p);
   const maxTokens = typeof modelConfig.max_tokens === 'string' ? parseInt(modelConfig.max_tokens, 10) : Number(modelConfig.max_tokens);
 
-  if (provider === 'openai' || isOpenAIStyleAlibaba || String(modelConfig.api_type || '') === 'chat_completion') {
+  if (useOpenAiChatCompletionsBody) {
+    const endpoint =
+      provider === 'alibaba' ? normalizeDashScopeChatEndpoint(modelConfig.api_endpoint) : rawEndpoint;
+    if (!endpoint) {
+      throw new Error('API端点为空');
+    }
+    let requestTopP = Number.isFinite(topP) ? topP : 1;
+    if (provider === 'alibaba' && (!Number.isFinite(topP) || topP > 0.999)) {
+      requestTopP = 0.95;
+    }
     const requestData = {
       model: modelConfig.model_name,
       messages: [{ role: 'user', content: prompt }],
       temperature: Number.isFinite(temperature) ? temperature : 0.2,
-      max_tokens: Number.isFinite(maxTokens) ? Math.min(maxTokens, 500) : 300,
-      top_p: Number.isFinite(topP) ? topP : 1,
+      max_tokens: Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 64), 2000) : 800,
+      top_p: requestTopP,
     };
-    const resp = await axios.post(modelConfig.api_endpoint, requestData, {
-      headers: { Authorization: `Bearer ${modelConfig.api_key}`, 'Content-Type': 'application/json' },
-      timeout: 60000,
-    });
-    return resp.data?.choices?.[0]?.message?.content || '';
+    const postCompat = (body) =>
+      axios.post(endpoint, body, {
+        headers: { Authorization: `Bearer ${modelConfig.api_key}`, 'Content-Type': 'application/json' },
+        timeout: 90000,
+      });
+    try {
+      const useDashSearch =
+        provider === 'alibaba' &&
+        /dashscope/i.test(endpoint) &&
+        String(process.env.NEW_SHARE_FULLNAME_ENABLE_SEARCH || '1') !== '0';
+      if (useDashSearch) {
+        try {
+          const resp = await postCompat({ ...requestData, enable_search: true });
+          return resp.data?.choices?.[0]?.message?.content || '';
+        } catch (e1) {
+          const st = e1.response?.status;
+          if (st === 400) {
+            console.warn(
+              `[打新日历AI] DashScope enable_search 被拒(400)，将不带联网参数重试: ${formatDashScopeHttpError(e1)}`
+            );
+            const resp2 = await postCompat({ ...requestData });
+            return resp2.data?.choices?.[0]?.message?.content || '';
+          }
+          throw e1;
+        }
+      }
+      const resp = await postCompat(requestData);
+      return resp.data?.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      throw new Error(formatDashScopeHttpError(e));
+    }
   }
 
   if (provider === 'alibaba') {
@@ -357,15 +470,19 @@ async function callAiModelForFullName(prompt, modelConfig) {
       input: { messages: [{ role: 'user', content: prompt }] },
       parameters: {
         temperature: Number.isFinite(temperature) ? temperature : 0.2,
-        max_tokens: Number.isFinite(maxTokens) ? Math.min(maxTokens, 500) : 300,
-        top_p: Number.isFinite(topP) ? topP : 1,
+        max_tokens: Number.isFinite(maxTokens) ? Math.min(Math.max(maxTokens, 64), 2000) : 800,
+        top_p: Number.isFinite(topP) && topP <= 0.999 ? topP : 0.95,
       },
     };
-    const resp = await axios.post(modelConfig.api_endpoint, requestData, {
-      headers: { Authorization: `Bearer ${modelConfig.api_key}`, 'Content-Type': 'application/json' },
-      timeout: 60000,
-    });
-    return resp.data?.output?.text || resp.data?.output?.choices?.[0]?.message?.content || '';
+    try {
+      const resp = await axios.post(rawEndpoint || modelConfig.api_endpoint, requestData, {
+        headers: { Authorization: `Bearer ${modelConfig.api_key}`, 'Content-Type': 'application/json' },
+        timeout: 60000,
+      });
+      return resp.data?.output?.text || resp.data?.output?.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      throw new Error(formatDashScopeHttpError(e));
+    }
   }
 
   throw new Error(`不支持的AI提供商: ${modelConfig.provider}`);
@@ -577,6 +694,13 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
   let hkTaskResults = [];
   if (hkCandidates.length > 0) {
     console.log(`${logTag} 开始处理港股首日指标 count=${hkCandidates.length}`);
+    if (String(process.env.NEW_SHARE_METRICS_HK_ETNET_FIRST || '1') !== '0') {
+      try {
+        await warmEtnetHkIpoInfoCache({ logTag });
+      } catch (warmErr) {
+        console.warn(`${logTag} 经济通新股信息预热失败（将按股拉取或走回退）: ${String(warmErr?.message || warmErr)}`);
+      }
+    }
     hkTaskResults = await runWithConcurrency(hkCandidates, metricsConcurrencyHk, async (row) => {
       return processMetricsRow(row, 'hk', metricsItemTimeoutMsHk);
     });
@@ -645,6 +769,10 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
     return { total: candidates.length, updated: 0, failed: candidates.length, skipped: 0 };
   }
 
+  console.log(
+    `${logTag} 选用模型 source=${cfg.modelSource || '-'} id=${cfg.model.id} name=${cfg.model.config_name || '-'} application_type=${cfg.model.application_type || '-'} usage_type=${cfg.model.usage_type || '-'}`
+  );
+
   let updated = 0;
   let failed = 0;
   let skipped = 0;
@@ -657,14 +785,18 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
     const stockCode = String(row.stock_code || '').trim();
     const stockName = String(row.stock_name || '').trim();
     try {
-      const promptBase = String(cfg.promptTemplate || '').trim();
-      const prompt = promptBase
-        ? `${promptBase}\n\n股票代码：${stockCode}\n股票简称：${stockName}`
-        : buildNewShareFullNameFallbackPrompt(stockCode, stockName);
+      const prompt = composeNewShareFullNamePrompt(cfg.promptTemplate, stockCode, stockName, row.exchange);
       const modelOut = await callAiModelForFullName(prompt, cfg.model);
+      console.log(
+        `${logTag} 模型已调用并返回 stock=${stockCode} outputChars=${String(modelOut ?? '').length}`
+      );
+      const rawLog = truncateForLog(stripCodeFence(modelOut), 600);
       const parsed = applyNewShareNameOverrides(stockCode, parseNamePairFromModelOutput(modelOut));
       if (!parsed.display) {
         skipped += 1;
+        console.log(
+          `${logTag} 企业全称补齐跳过(解析为空) stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
+        );
         return;
       }
 
@@ -675,6 +807,9 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
         String(row.enterprise_full_name_display || '').trim() === parsed.display;
       if (noChange) {
         skipped += 1;
+        console.log(
+          `${logTag} 企业全称补齐跳过(无变化) stock=${stockCode} name=${stockName} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
+        );
         return;
       }
 
@@ -686,7 +821,7 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
       );
       updated += 1;
       console.log(
-        `${logTag} 企业全称补齐成功 stock=${stockCode} name=${stockName} cn=${parsed.cn ? 'Y' : 'N'} en=${parsed.en ? 'Y' : 'N'}`
+        `${logTag} 企业全称补齐成功 stock=${stockCode} name=${stockName} source=${cfg.modelSource} model=${cfg.model.config_name || cfg.model.id} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
       );
     } catch (err) {
       failed += 1;
@@ -741,6 +876,10 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
     throw new Error('未找到可用AI模型配置');
   }
 
+  console.log(
+    `${logTag} 选用模型 source=${cfg.modelSource || '-'} id=${cfg.model.id} name=${cfg.model.config_name || '-'} application_type=${cfg.model.application_type || '-'} usage_type=${cfg.model.usage_type || '-'}`
+  );
+
   let updated = 0;
   let skipped = 0;
   let failed = 0;
@@ -754,14 +893,36 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
       return;
     }
     try {
-      const promptBase = String(cfg.promptTemplate || '').trim();
-      const prompt = promptBase
-        ? `${promptBase}\n\n股票代码：${stockCode}\n股票简称：${stockName}`
-        : buildNewShareFullNameFallbackPrompt(stockCode, stockName);
+      const prompt = composeNewShareFullNamePrompt(cfg.promptTemplate, stockCode, stockName, row.exchange);
       const modelOut = await callAiModelForFullName(prompt, cfg.model);
+      console.log(
+        `${logTag} 模型已调用并返回 id=${row.id} stock=${stockCode} outputChars=${String(modelOut ?? '').length}`
+      );
+      const rawLog = truncateForLog(stripCodeFence(modelOut), 600);
       const parsed = applyNewShareNameOverrides(stockCode, parseNamePairFromModelOutput(modelOut));
       if (!parsed.display) {
+        const hadStale =
+          String(row.enterprise_full_name_display || '').trim() ||
+          String(row.enterprise_full_name_cn || '').trim() ||
+          String(row.enterprise_full_name_en || '').trim();
+        const clearStale = String(process.env.NEW_SHARE_AI_NAME_CLEAR_STALE_ON_EMPTY || '1') !== '0';
+        if (clearStale && hadStale) {
+          await db.execute(
+            `UPDATE ipo_new_share
+             SET enterprise_full_name_cn = NULL, enterprise_full_name_en = NULL, enterprise_full_name_display = NULL
+             WHERE id = ?`,
+            [row.id]
+          );
+          updated += 1;
+          console.log(
+            `${logTag} 查名已清空旧全称(模型未给出可核验全称) id=${row.id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
+          );
+          return;
+        }
         skipped += 1;
+        console.log(
+          `${logTag} 查名跳过(解析为空) id=${row.id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
+        );
         return;
       }
       const before = normalizeFullNamePair(row.enterprise_full_name_cn, row.enterprise_full_name_en);
@@ -771,6 +932,9 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
         String(row.enterprise_full_name_display || '').trim() === parsed.display;
       if (noChange) {
         skipped += 1;
+        console.log(
+          `${logTag} 查名跳过(无变化) id=${row.id} stock=${stockCode} name=${stockName} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
+        );
         return;
       }
       await db.execute(
@@ -781,7 +945,7 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
       );
       updated += 1;
       console.log(
-        `${logTag} 查名成功 id=${row.id} stock=${stockCode} name=${stockName} cn=${parsed.cn ? 'Y' : 'N'} en=${parsed.en ? 'Y' : 'N'}`
+        `${logTag} 查名成功 id=${row.id} stock=${stockCode} name=${stockName} source=${cfg.modelSource} model=${cfg.model.config_name || cfg.model.id} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
       );
     } catch (err) {
       failed += 1;

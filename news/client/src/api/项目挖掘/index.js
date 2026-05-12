@@ -8,6 +8,21 @@ export function postFinancingSync(body) {
   return axios.post('/api/project-sourcing/sync', body)
 }
 
+/** 管理员：单条融资事件手动触发联网 AI 取数（异步，HTTP 202） */
+export function postFinancingEventAiEnrich(eventId) {
+  return axios.post(`/api/project-sourcing/events/${eventId}/ai-enrich`)
+}
+
+/** 管理员：按融资日期区间批量 AI 取数（服务端队列，HTTP 202） */
+export function postFinancingBatchAiEnrich(body) {
+  return axios.post('/api/project-sourcing/batch-ai-enrich', body)
+}
+
+/** 管理员：融资事件 AI 增强日志列表 */
+export function fetchFinancingAiEnrichLogs(params) {
+  return axios.get('/api/project-sourcing/ai-enrich-logs', { params })
+}
+
 export function fetchTrackTree() {
   return axios.get('/api/project-sourcing/tracks/tree')
 }

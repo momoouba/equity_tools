@@ -7,6 +7,26 @@ const Option = Select.Option
 const TextArea = Input.TextArea
 const FormItem = Form.Item
 
+const APPLICATION_TYPE_LABELS = {
+  news_analysis: '新闻分析',
+  project_sourcing_analysis: '项目挖掘分析',
+  listing_progress_analysis: '上市进展分析',
+  general: '通用',
+}
+
+const USAGE_TYPE_LABELS = {
+  content_analysis: '情绪分析',
+  image_recognition: '图片识别',
+  project_mining: '项目挖掘',
+  listing_data: '上市数据',
+}
+
+function formatAiModelOptionLabel(config) {
+  const app = APPLICATION_TYPE_LABELS[config.application_type] || config.application_type || '-'
+  const usage = USAGE_TYPE_LABELS[config.usage_type] || config.usage_type || '-'
+  return `${config.config_name || config.id}（${app}·${usage}）`
+}
+
 function PromptConfig() {
   const [prompts, setPrompts] = useState([])
   const [loading, setLoading] = useState(false)
@@ -370,7 +390,7 @@ function PromptConfig() {
             >
               {aiModelConfigs.map(config => (
                 <Option key={config.id} value={config.id}>
-                  {config.config_name}
+                  {formatAiModelOptionLabel(config)}
                 </Option>
               ))}
             </Select>

@@ -5,6 +5,7 @@ const C = require('./constants');
 const newsRoutes = require('../../routes/news');
 const { parseFundingAmountFields } = require('./financingAmountParse');
 const { mapIndustryToStd } = require('./financingIndustryMap');
+const { reuseFinancingAiForEventId } = require('./financingAiEnrichService');
 
 const RULE_ENRICH_VERSION = 'rule_enrich_v1';
 
@@ -316,8 +317,14 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       [fundingId, credit || '', eventDate]
     );
     if (evRows.length) {
+      const eventPk = evRows[0].id;
+      try {
+        await reuseFinancingAiForEventId(eventPk);
+      } catch (reuseErr) {
+        console.warn('[financingIngest] reuseFinancingAiForEventId:', reuseErr.message);
+      }
       const { applyTrackMatchForEvents } = require('./financingTrackMatch');
-      await applyTrackMatchForEvents({ eventIds: [evRows[0].id], mode: 'all' });
+      await applyTrackMatchForEvents({ eventIds: [eventPk], mode: 'all' });
     }
   } catch (trackErr) {
     console.warn('[financingIngest] applyTrackMatchForEvents:', trackErr.message);

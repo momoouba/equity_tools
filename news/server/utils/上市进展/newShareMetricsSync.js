@@ -1,5 +1,6 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
+const { fetchHkFirstDayBundleFromEtnet } = require('./etnetHkIpoInfoMetrics');
 
 const IPOAPPLY_CACHE_TTL_MS = Math.max(30_000, Number(process.env.NEW_SHARE_METRICS_IPOAPPLY_CACHE_TTL_MS || 300_000));
 const FETCH_TIMEOUT_MS = Math.max(5000, Number(process.env.NEW_SHARE_METRICS_FETCH_TIMEOUT_MS || 20000));
@@ -225,6 +226,28 @@ function runNewShareMetricsSync(opts) {
 async function runNewShareMetricsSyncWithFallback(opts) {
   const market = String(opts.market || 'a').trim().toLowerCase();
   if (market === 'hk') {
+    const hkEtnetFirst = String(process.env.NEW_SHARE_METRICS_HK_ETNET_FIRST || '1') !== '0';
+    if (hkEtnetFirst) {
+      try {
+        const et = await fetchHkFirstDayBundleFromEtnet({
+          stockCode: opts.stockCode,
+          listDate: opts.listDate,
+          logTag: opts.logTag,
+        });
+        if (et && hasUsableFirstRow(et.firstRow)) {
+          return {
+            ok: true,
+            source: et.source || 'etnet.ci_ipo_info.js-cache',
+            firstRow: et.firstRow,
+            totalShares: null,
+            winRate: et.win_rate != null && Number.isFinite(Number(et.win_rate)) ? Number(et.win_rate) : null,
+            issuePrice: et.issue_price != null && Number.isFinite(Number(et.issue_price)) ? Number(et.issue_price) : null,
+          };
+        }
+      } catch (_) {
+        // 经济通失败则回退东财 / Python
+      }
+    }
     const firstRow = await fetchEastmoneyFirstRow({
       stockCode: opts.stockCode,
       listDate: opts.listDate,
