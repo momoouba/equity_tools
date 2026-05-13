@@ -38,6 +38,16 @@ export function fetchInvestedEnterpriseAiEnrichLogs(params) {
   return axios.get('/api/project-sourcing/invested-enterprises/ai-enrich-logs', { params })
 }
 
+/** 管理员：单条被投企业企查查企业简介写库（同步，可能较慢） */
+export function postInvestedEnterpriseQccCompanyBrief(enterpriseId) {
+  return axios.post(`/api/project-sourcing/invested-enterprises/${enterpriseId}/qcc-company-brief`)
+}
+
+/** 管理员：批量企查查企业简介；body.enterprise_ids 为 id 数组，可选 gap_ms */
+export function postInvestedEnterpriseBatchQccCompanyBrief(body) {
+  return axios.post('/api/project-sourcing/invested-enterprises/batch-qcc-company-brief', body)
+}
+
 export function fetchTrackTree() {
   return axios.get('/api/project-sourcing/tracks/tree')
 }

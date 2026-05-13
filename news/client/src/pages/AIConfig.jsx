@@ -410,9 +410,13 @@ function AIConfig() {
                   }}
                   placeholder="请选择模型"
                 >
-                  {availableModels[formData.provider]?.map(model => (
-                    <Option key={model} value={model}>{model}</Option>
-                  ))}
+                  {(availableModels[formData.provider] || []).map((model) => {
+                    const value = typeof model === 'string' ? model : model.value
+                    const label = typeof model === 'string' ? model : (model.label || model.value)
+                    return (
+                      <Option key={value} value={value}>{label}</Option>
+                    )
+                  })}
                 </Select>
               </div>
 

@@ -1367,6 +1367,92 @@ async function initializeTables(dbPool) {
     console.warn('初始化 base_dictionary 默认行业数据时出现警告:', err.message);
   }
 
+  // base_dictionary：各提供商可选 AI 模型（item_code 写入 ai_model_config.model_name，与接口 model 字段一致）
+  try {
+    const opId = '2025112019135100001';
+    const nowType = '2026-05-13 12:00:00';
+    const aiModelDictTypes = [
+      { id: '2026051315000000001', dict_code: 'ai_model_alibaba', dict_name: 'AI模型（阿里云千问）', sort_order: 0 },
+      { id: '2026051315000100001', dict_code: 'ai_model_openai', dict_name: 'AI模型（OpenAI）', sort_order: 1 },
+      { id: '2026051315000200001', dict_code: 'ai_model_baidu', dict_name: 'AI模型（百度文心）', sort_order: 2 },
+      { id: '2026051315000300001', dict_code: 'ai_model_tencent', dict_name: 'AI模型（腾讯混元）', sort_order: 3 },
+    ];
+    const aiModelItemsByCode = {
+      ai_model_alibaba: [
+        { id: '2026051315001000001', item_code: 'qwen-turbo', item_name: 'qwen-turbo', sort_order: 0 },
+        { id: '2026051315001000002', item_code: 'qwen-plus', item_name: 'qwen-plus', sort_order: 1 },
+        { id: '2026051315001000003', item_code: 'qwen3-max', item_name: 'qwen3-max', sort_order: 2 },
+        { id: '2026051315001000004', item_code: 'qwen-long', item_name: 'qwen-long', sort_order: 3 },
+        { id: '2026051315001000005', item_code: 'qwen3-vl-plus', item_name: 'qwen3-vl-plus', sort_order: 4 },
+      ],
+      ai_model_openai: [
+        { id: '2026051315001100001', item_code: 'gpt-3.5-turbo', item_name: 'gpt-3.5-turbo', sort_order: 0 },
+        { id: '2026051315001100002', item_code: 'gpt-4', item_name: 'gpt-4', sort_order: 1 },
+        { id: '2026051315001100003', item_code: 'gpt-4-turbo', item_name: 'gpt-4-turbo', sort_order: 2 },
+        { id: '2026051315001100004', item_code: 'gpt-4o', item_name: 'gpt-4o', sort_order: 3 },
+      ],
+      ai_model_baidu: [
+        { id: '2026051315001200001', item_code: 'ernie-bot', item_name: 'ernie-bot', sort_order: 0 },
+        { id: '2026051315001200002', item_code: 'ernie-bot-turbo', item_name: 'ernie-bot-turbo', sort_order: 1 },
+        { id: '2026051315001200003', item_code: 'ernie-bot-4', item_name: 'ernie-bot-4', sort_order: 2 },
+      ],
+      ai_model_tencent: [
+        { id: '2026051315001300001', item_code: 'hunyuan-lite', item_name: 'hunyuan-lite', sort_order: 0 },
+        { id: '2026051315001300002', item_code: 'hunyuan-standard', item_name: 'hunyuan-standard', sort_order: 1 },
+        { id: '2026051315001300003', item_code: 'hunyuan-pro', item_name: 'hunyuan-pro', sort_order: 2 },
+      ],
+    };
+
+    for (const t of aiModelDictTypes) {
+      const [typeRows] = await dbPool.query(
+        `SELECT id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0 ORDER BY created_at ASC LIMIT 1`,
+        [t.dict_code]
+      );
+      let parentId = t.id;
+      if (typeRows && typeRows.length > 0) {
+        parentId = typeRows[0].id;
+      } else {
+        await dbPool.execute(
+          `INSERT INTO base_dictionary
+           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, NULL, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+          [t.id, t.dict_code, t.dict_name, t.sort_order, opId, opId, nowType, nowType]
+        );
+        parentId = t.id;
+      }
+
+      const items = aiModelItemsByCode[t.dict_code] || [];
+      for (const it of items) {
+        const [exItem] = await dbPool.query(
+          `SELECT id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND delete_mark = 0 LIMIT 1`,
+          [parentId, t.dict_code, it.item_code]
+        );
+        if (exItem && exItem.length > 0) continue;
+        await dbPool.execute(
+          `INSERT INTO base_dictionary
+           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+          [
+            it.id,
+            parentId,
+            t.dict_code,
+            t.dict_name,
+            it.item_code,
+            it.item_name,
+            it.sort_order,
+            opId,
+            opId,
+            nowType,
+            nowType,
+          ]
+        );
+      }
+    }
+    console.log('✓ base_dictionary 已初始化 AI 模型名称字典（ai_model_*）');
+  } catch (err) {
+    console.warn('初始化 base_dictionary AI 模型名称时出现警告:', err.message);
+  }
+
   // data_change_log 表：统一的数据变更日志表
   // 先创建表（不包含外键约束，稍后添加）
   await dbPool.query(`
@@ -5813,6 +5899,18 @@ async function initializeTables(dbPool) {
     'ai_enrich_error',
     `ADD COLUMN ai_enrich_error VARCHAR(500) NULL COMMENT 'AI 失败摘要' AFTER ai_enrich_version`
   );
+  await addIeEnterpriseAiCol(
+    'qcc_company_intro',
+    `ADD COLUMN qcc_company_intro LONGTEXT NULL COMMENT '企业介绍（企查查 CompanyBrief/GetInfo Data.Desc）' AFTER ai_enrich_error`
+  );
+  await addIeEnterpriseAiCol(
+    'qcc_sync_at',
+    `ADD COLUMN qcc_sync_at DATETIME NULL COMMENT '最近一次企查查企业简介同步时间' AFTER qcc_company_intro`
+  );
+  await addIeEnterpriseAiCol(
+    'qcc_sync_error',
+    `ADD COLUMN qcc_sync_error VARCHAR(500) NULL COMMENT '最近一次企查查同步失败摘要' AFTER qcc_sync_at`
+  );
 
   try {
     await dbPool.query(`
@@ -5863,6 +5961,7 @@ async function initializeTables(dbPool) {
         ai_enrich_at DATETIME NULL COMMENT '同步前 AI 成功时间',
         ai_enrich_model VARCHAR(128) NULL COMMENT '同步前模型名',
         ai_enrich_version VARCHAR(64) NULL COMMENT '同步前管线版本',
+        qcc_company_intro LONGTEXT NULL COMMENT '同步前企业介绍（企查查）',
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
         KEY idx_ie_ai_snap_batch (batch_id),
         KEY idx_ie_ai_snap_batch_credit (batch_id, unified_credit_code),
@@ -5872,6 +5971,23 @@ async function initializeTables(dbPool) {
     console.log('✓ invested_enterprise_ai_sync_snapshot 表已就绪');
   } catch (err) {
     console.warn('创建 invested_enterprise_ai_sync_snapshot 时出现警告:', err.message);
+  }
+
+  // 快照表扩展：企查查企业介绍（与硬删前回填一致）
+  try {
+    const [snapCol] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprise_ai_sync_snapshot' AND COLUMN_NAME = 'qcc_company_intro'`
+    );
+    if (!snapCol.length) {
+      await dbPool.query(`
+        ALTER TABLE invested_enterprise_ai_sync_snapshot
+        ADD COLUMN qcc_company_intro LONGTEXT NULL COMMENT '同步前企业介绍（企查查）' AFTER ai_enrich_version
+      `);
+      console.log('  ✓ invested_enterprise_ai_sync_snapshot 已添加列 qcc_company_intro');
+    }
+  } catch (err) {
+    console.warn('迁移 invested_enterprise_ai_sync_snapshot.qcc_company_intro 时出现警告:', err.message);
   }
 
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）

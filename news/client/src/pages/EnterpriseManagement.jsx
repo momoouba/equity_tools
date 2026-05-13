@@ -27,6 +27,8 @@ import {
   postInvestedEnterpriseAiEnrich,
   postInvestedEnterpriseBatchAiEnrich,
   fetchInvestedEnterpriseAiEnrichLogs,
+  postInvestedEnterpriseQccCompanyBrief,
+  postInvestedEnterpriseBatchQccCompanyBrief,
 } from '../api/项目挖掘'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './项目挖掘/financingConstants'
 import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './项目挖掘/financingDateUtils'
@@ -87,6 +89,7 @@ function buildInvestedEnterpriseExportRows(list, startSeq = 0) {
     '产品简介(AI)': row.ai_product_intro ?? '',
     '企业标签(AI)': row.ai_industry_tags_display ?? '',
     AI状态: row.ai_enrich_status ?? '',
+    '企业介绍（企查查）': row.qcc_company_intro ?? '',
     创建时间: row.created_at ? new Date(row.created_at) : null,
     更新时间: row.updated_at ? new Date(row.updated_at) : null,
   }))
@@ -132,6 +135,8 @@ function EnterpriseManagement({
   const [batchIeAiSubmitting, setBatchIeAiSubmitting] = useState(false)
   const [retryFailedIeAiVisible, setRetryFailedIeAiVisible] = useState(false)
   const [retryFailedIeAiSubmitting, setRetryFailedIeAiSubmitting] = useState(false)
+  const [qccBriefSubmitting, setQccBriefSubmitting] = useState(false)
+  const [qccBriefPageSubmitting, setQccBriefPageSubmitting] = useState(false)
   const [financingSyncVisible, setFinancingSyncVisible] = useState(false)
   const [financingSyncSubmitting, setFinancingSyncSubmitting] = useState(false)
   const [financingConfigs, setFinancingConfigs] = useState([])
@@ -725,6 +730,18 @@ function EnterpriseManagement({
             ),
           },
           {
+            title: '企业介绍（企查查）',
+            dataIndex: 'qcc_company_intro',
+            width: 200,
+            render: (_, row) => (
+              <IntroPopoverCell
+                columnTitle="企业介绍（企查查）"
+                raw={row.qcc_company_intro}
+                triggerMaxWidth={200}
+              />
+            ),
+          },
+          {
             title: 'AI状态',
             dataIndex: 'ai_enrich_status',
             width: 96,
@@ -896,6 +913,81 @@ function EnterpriseManagement({
                 {isAdmin && (
                   <Button
                     type="outline"
+                    loading={qccBriefSubmitting}
+                    disabled={!selectedRowKeys.length}
+                    onClick={async () => {
+                      const id = selectedRowKeys[0]
+                      if (!id) {
+                        Message.warning('请先勾选一行被投企业')
+                        return
+                      }
+                      setQccBriefSubmitting(true)
+                      try {
+                        const res = await postInvestedEnterpriseQccCompanyBrief(id)
+                        if (res.data?.success) {
+                          Message.success(res.data.message || '企查查同步完成')
+                          fetchEnterprises()
+                        } else {
+                          Message.error(res.data?.message || '同步失败')
+                        }
+                      } catch (e) {
+                        Message.error(e.response?.data?.message || e.message || '同步失败')
+                      } finally {
+                        setQccBriefSubmitting(false)
+                      }
+                    }}
+                  >
+                    企查查同步
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button
+                    type="outline"
+                    loading={qccBriefPageSubmitting}
+                    disabled={!enterprises.length}
+                    onClick={() => {
+                      Modal.confirm({
+                        title: '企查查同步当前页',
+                        content: (
+                          <div>
+                            <p>
+                              将对当前页最多 {Math.min(enterprises.length, 80)} 条被投企业顺序调用企查查「企业简介」接口并写库，每条间隔约
+                              400ms，整页可能需数十秒～数分钟；请确认已配置企查查「企业信息」接口且账号有剩余额度。
+                            </p>
+                          </div>
+                        ),
+                        onOk: async () => {
+                          const ids = enterprises.map((r) => r.id).filter(Boolean).slice(0, 80)
+                          setQccBriefPageSubmitting(true)
+                          try {
+                            const res = await postInvestedEnterpriseBatchQccCompanyBrief({
+                              enterprise_ids: ids,
+                            })
+                            if (res.data?.success) {
+                              const d = res.data.data || {}
+                              Message.success(
+                                res.data.message ||
+                                  `完成：成功 ${d.success ?? 0}，失败 ${d.failed ?? 0}`
+                              )
+                              fetchEnterprises()
+                            } else {
+                              Message.error(res.data?.message || '批量同步失败')
+                            }
+                          } catch (e) {
+                            Message.error(e.response?.data?.message || e.message || '批量同步失败')
+                          } finally {
+                            setQccBriefPageSubmitting(false)
+                          }
+                        },
+                      })
+                    }}
+                  >
+                    企查查同步当前页
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button
+                    type="outline"
                     disabled={!selectedRowKeys.length}
                     loading={ieAiLogLoading}
                     onClick={async () => {
@@ -1003,7 +1095,7 @@ function EnterpriseManagement({
                     onChange={(value) => setSearchKeyword(value)}
                     placeholder={
                       showInvestedEnterpriseAi
-                        ? '搜索项目编号、简称、企业全称、退出状态、产品简介(AI)、企业标签(AI)…'
+                        ? '搜索项目编号、简称、企业全称、退出状态、产品简介(AI)、企业标签(AI)、企查查企业介绍…'
                         : dataAppName === DATA_APP_PROJECT
                           ? '搜索项目编号、简称、企业全称、退出状态…'
                           : '搜索项目编号、简称、企业全称、统一信用代码、公众号ID、官网、退出状态…'
@@ -1076,7 +1168,7 @@ function EnterpriseManagement({
               }}
               stripe
               scroll={{
-                x: showInvestedEnterpriseAi ? 2200 : 'max-content'
+                x: showInvestedEnterpriseAi ? 2480 : 'max-content'
               }}
             />
           )}

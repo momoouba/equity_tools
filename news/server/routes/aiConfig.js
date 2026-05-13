@@ -7,6 +7,76 @@ const router = express.Router();
 
 const VALID_USAGE_TYPES = ['content_analysis', 'image_recognition', 'project_mining', 'listing_data'];
 
+/** 与 base_dictionary 中字典类型 dict_code 对应（选项 parent_id 指向该类型行） */
+const AI_MODEL_PROVIDER_DICT_CODE = {
+  alibaba: 'ai_model_alibaba',
+  openai: 'ai_model_openai',
+  baidu: 'ai_model_baidu',
+  tencent: 'ai_model_tencent',
+};
+
+/** 数据字典无数据时的兜底（与历史硬编码一致） */
+const FALLBACK_AI_MODELS = {
+  alibaba: ['qwen-turbo', 'qwen-plus', 'qwen3-max', 'qwen-long', 'qwen3-vl-plus'],
+  openai: ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o'],
+  baidu: ['ernie-bot', 'ernie-bot-turbo', 'ernie-bot-4'],
+  tencent: ['hunyuan-lite', 'hunyuan-standard', 'hunyuan-pro'],
+};
+
+/**
+ * 从数据字典加载各提供商可选模型：value=item_code（写入 ai_model_config.model_name），label=item_name。
+ */
+async function loadAiModelOptionsFromDictionary() {
+  const out = { alibaba: [], openai: [], baidu: [], tencent: [] };
+  for (const [provider, dictCode] of Object.entries(AI_MODEL_PROVIDER_DICT_CODE)) {
+    const parents = await db.query(
+      `SELECT id FROM base_dictionary
+       WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [dictCode]
+    );
+    if (!parents.length) {
+      out[provider] = FALLBACK_AI_MODELS[provider].map((code) => ({ value: code, label: code }));
+      continue;
+    }
+    const rows = await db.query(
+      `SELECT item_code, item_name, sort_order
+       FROM base_dictionary
+       WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
+         AND item_code IS NOT NULL AND TRIM(item_code) != ''
+       ORDER BY sort_order ASC, id ASC`,
+      [parents[0].id]
+    );
+    if (!rows.length) {
+      out[provider] = FALLBACK_AI_MODELS[provider].map((code) => ({ value: code, label: code }));
+      continue;
+    }
+    out[provider] = rows.map((r) => {
+      const code = String(r.item_code || '').trim();
+      const name = String(r.item_name || '').trim() || code;
+      return { value: code, label: name };
+    });
+  }
+  return out;
+}
+
+async function assertModelNameAllowedForProvider(provider, modelName) {
+  const mn = String(modelName || '').trim();
+  if (!mn) return;
+  const opts = await loadAiModelOptionsFromDictionary();
+  const list = opts[provider] || [];
+  if (!list.length) return;
+  const codes = new Set(list.map((o) => o.value));
+  if (!codes.has(mn)) {
+    const err = new Error(
+      '模型名称须为当前提供商在数据字典中已启用的选项编码（item_code），请在「管理员设置 → 数据字典」维护对应字典类型'
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+}
+
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
   const userRole = req.headers['x-user-role'] || 'user';
@@ -169,6 +239,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '无效的用途类型' });
     }
 
+    await assertModelNameAllowedForProvider(provider, model_name);
+
     const configId = await generateId('ai_model_config');
     await db.execute(
       `INSERT INTO ai_model_config 
@@ -188,7 +260,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
     });
   } catch (error) {
     console.error('新增AI模型配置失败：', error);
-    res.status(500).json({ success: false, message: '添加失败：' + error.message });
+    const code = error.statusCode === 400 ? 400 : 500;
+    res.status(code).json({ success: false, message: '添加失败：' + error.message });
   }
 });
 
@@ -238,6 +311,14 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '无效的用途类型' });
     }
 
+    const rowFull = await db.query(
+      'SELECT provider, model_name FROM ai_model_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
+      [id]
+    );
+    const effProvider = provider !== undefined ? provider : rowFull[0]?.provider;
+    const effModel = model_name !== undefined ? model_name : rowFull[0]?.model_name;
+    await assertModelNameAllowedForProvider(effProvider, effModel);
+
     await db.execute(
       `UPDATE ai_model_config 
        SET config_name = ?, provider = ?, model_name = ?, api_type = ?, 
@@ -256,7 +337,8 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     });
   } catch (error) {
     console.error('更新AI模型配置失败：', error);
-    res.status(500).json({ success: false, message: '更新失败：' + error.message });
+    const code = error.statusCode === 400 ? 400 : 500;
+    res.status(code).json({ success: false, message: '更新失败：' + error.message });
   }
 });
 
@@ -533,38 +615,15 @@ async function testOpenAIModel(config) {
   };
 }
 
-// 获取可用的模型列表（用于前端选择）
-router.get('/models/available', checkAdminPermission, (req, res) => {
-  const availableModels = {
-    alibaba: [
-      'qwen-turbo',
-      'qwen-plus',
-      'qwen3-max',
-      'qwen-long',
-      'qwen3-vl-plus'
-    ],
-    openai: [
-      'gpt-3.5-turbo',
-      'gpt-4',
-      'gpt-4-turbo',
-      'gpt-4o'
-    ],
-    baidu: [
-      'ernie-bot',
-      'ernie-bot-turbo',
-      'ernie-bot-4'
-    ],
-    tencent: [
-      'hunyuan-lite',
-      'hunyuan-standard',
-      'hunyuan-pro'
-    ]
-  };
-
-  res.json({
-    success: true,
-    data: availableModels
-  });
+// 获取可用的模型列表（用于前端选择；来源为数据字典 item_code / item_name）
+router.get('/models/available', checkAdminPermission, async (req, res) => {
+  try {
+    const data = await loadAiModelOptionsFromDictionary();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('获取可用模型字典失败：', error);
+    res.status(500).json({ success: false, message: error.message || '获取失败' });
+  }
 });
 
 module.exports = router;

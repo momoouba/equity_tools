@@ -3,6 +3,10 @@ const {
   enqueueManualInvestedEnterpriseAiEnrich,
   enqueueBatchInvestedEnterpriseAiEnrich,
 } = require('../../utils/项目挖掘/investedEnterpriseAiEnrichService');
+const {
+  syncInvestedEnterpriseQccCompanyBrief,
+  batchSyncInvestedEnterpriseQccCompanyBrief,
+} = require('../../utils/项目挖掘/investedEnterpriseQccBriefService');
 const { requireAdmin } = require('../../utils/项目挖掘/projectSourcingRouteAuth');
 
 function clientIpFromReq(req) {
@@ -94,6 +98,30 @@ function registerInvestedEnterpriseAiRoutes(router) {
     }
   });
 
+  /** 管理员：批量企查查企业简介（须注册在 :id 路由之前，避免被误匹配） */
+  router.post('/invested-enterprises/batch-qcc-company-brief', requireAdmin, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const raw = body.enterprise_ids ?? body.ids ?? [];
+      const ids = Array.isArray(raw) ? raw : [];
+      const r = await batchSyncInvestedEnterpriseQccCompanyBrief(ids, {
+        gapMs: body.gap_ms != null ? Number(body.gap_ms) : undefined,
+      });
+      if (!r.ok) {
+        return res.status(r.code).json({ success: false, message: r.message });
+      }
+      const d = r.data;
+      res.json({
+        success: true,
+        message: `企查查批量同步完成：成功 ${d.success} 条，失败 ${d.failed} 条`,
+        data: d,
+      });
+    } catch (e) {
+      console.error('[project-sourcing/invested-enterprises/batch-qcc-company-brief]', e);
+      res.status(500).json({ success: false, message: e.message || '批量同步失败' });
+    }
+  });
+
   router.post('/invested-enterprises/:id/ai-enrich', requireAdmin, async (req, res) => {
     try {
       const id = String(req.params.id || '').trim();
@@ -114,6 +142,26 @@ function registerInvestedEnterpriseAiRoutes(router) {
     } catch (e) {
       console.error('[project-sourcing/invested-enterprises/ai-enrich]', e);
       res.status(500).json({ success: false, message: e.message || '受理失败' });
+    }
+  });
+
+  /** 管理员：单条企查查企业简介写库（同步 HTTP，可能数秒～二十秒） */
+  router.post('/invested-enterprises/:id/qcc-company-brief', requireAdmin, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      const r = await syncInvestedEnterpriseQccCompanyBrief(id);
+      res.json({
+        success: true,
+        message:
+          r.desc_len > 0
+            ? `已写入企查查企业简介，共 ${r.desc_len} 字`
+            : '企查查返回无简介正文（可能无结果或 VerifyResult=0），已清空本地简介字段',
+        data: r,
+      });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 404 ? e.code : 500;
+      console.error('[project-sourcing/invested-enterprises/qcc-company-brief]', e);
+      res.status(code).json({ success: false, message: e.message || '同步失败' });
     }
   });
 }

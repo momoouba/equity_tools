@@ -157,10 +157,12 @@ async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId,
     `INSERT INTO invested_enterprise_ai_sync_snapshot
      (batch_id, creator_user_id, data_app_name, unified_credit_code,
       ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
-      ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version)
+      ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version,
+      qcc_company_intro)
      SELECT ?, e.creator_user_id, e.data_app_name, ${normE},
             e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
-            e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version
+            e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version,
+            e.qcc_company_intro
      FROM invested_enterprises e
      INNER JOIN (
        SELECT creator_user_id, data_app_name, ${normBare} AS ucc, MAX(id) AS mid
@@ -203,6 +205,7 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
          t.ai_enrich_model = s.ai_enrich_model,
          t.ai_enrich_version = s.ai_enrich_version,
          t.ai_enrich_error = NULL,
+         t.qcc_company_intro = s.qcc_company_intro,
          t.updated_at = CURRENT_TIMESTAMP
      WHERE t.creator_user_id = ? AND t.data_app_name = ?`,
     [batchId, creatorUserId, dataAppName]
@@ -547,9 +550,11 @@ router.get('/', async (req, res) => {
         official_website LIKE ? OR 
         exit_status LIKE ? OR
         COALESCE(ai_product_intro,'') LIKE ? OR
-        COALESCE(ai_industry_tags_display,'') LIKE ?
+        COALESCE(ai_industry_tags_display,'') LIKE ? OR
+        COALESCE(qcc_company_intro,'') LIKE ?
       )`;
         params.push(
+          searchTerm,
           searchTerm,
           searchTerm,
           searchTerm,
@@ -660,9 +665,11 @@ router.get('/export', async (req, res) => {
         official_website LIKE ? OR 
         exit_status LIKE ? OR
         COALESCE(ai_product_intro,'') LIKE ? OR
-        COALESCE(ai_industry_tags_display,'') LIKE ?
+        COALESCE(ai_industry_tags_display,'') LIKE ? OR
+        COALESCE(qcc_company_intro,'') LIKE ?
       )`;
         params.push(
+          searchTerm,
           searchTerm,
           searchTerm,
           searchTerm,
@@ -728,6 +735,7 @@ router.get('/export', async (req, res) => {
           '产品简介(AI)': item.ai_product_intro || '',
           '企业标签(AI)': item.ai_industry_tags_display || '',
           AI状态: item.ai_enrich_status || '',
+          '企业介绍（企查查）': item.qcc_company_intro || '',
           创建时间: item.created_at ? new Date(item.created_at) : null,
           更新时间: item.updated_at ? new Date(item.updated_at) : null,
         };
@@ -761,6 +769,7 @@ router.get('/export', async (req, res) => {
       '产品简介(AI)': 36,
       '企业标签(AI)': 28,
       AI状态: 12,
+      '企业介绍（企查查）': 36,
       统一信用代码: 20,
       企业公众号id: 25,
       企业官网: 40,
