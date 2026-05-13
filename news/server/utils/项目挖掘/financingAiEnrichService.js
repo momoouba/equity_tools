@@ -380,7 +380,7 @@ async function persistFinancingAiLlmSuccess({
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);
   if (!norm) {
-    throw new Error('模型返回无法解析为 JSON');
+    logAndThrowUnparseableModelJson(raw, 'persist_financing');
   }
 
   const productIntroStored = stripProductIntroMetaAttribution(
@@ -577,6 +577,30 @@ function fillTemplate(template, row) {
     .replace(/\{\{PROJECT_NAME\}\}/g, project);
 }
 
+/** 模型正文无法解析为 JSON 时，Docker 日志里打印的原文上限（可用环境变量 AI_PARSE_FAIL_LOG_RAW_MAX 调整） */
+const AI_PARSE_FAIL_LOG_RAW_MAX = Math.max(
+  800,
+  Math.min(50000, parseInt(process.env.AI_PARSE_FAIL_LOG_RAW_MAX || '8000', 10) || 8000)
+);
+
+/**
+ * 打完整/截断原文到 stderr，再抛出带长度与开头的 Error（便于 invested_enterprise / 融资表 VARCHAR 摘要仍可读）。
+ * @param {unknown} raw 模型 assistant 正文（与 extractJsonObject 入参一致）
+ * @param {string} tag 区分调用点，如 financing_style_llm / persist_financing
+ */
+function logAndThrowUnparseableModelJson(raw, tag) {
+  const s = raw == null ? '' : String(raw);
+  const len = s.length;
+  const logged =
+    len > AI_PARSE_FAIL_LOG_RAW_MAX
+      ? `${s.slice(0, AI_PARSE_FAIL_LOG_RAW_MAX)}\n…(truncated, total_len=${len})`
+      : s;
+  console.error(`[financingAiEnrich] model_return_not_json tag=${tag} len=${len}\n${logged}`);
+  const head = s.slice(0, 220).replace(/\s+/g, ' ');
+  const more = len > 220 ? '…' : '';
+  throw new Error(`模型返回无法解析为 JSON（tag=${tag} len=${len} head=${head}${more}）`);
+}
+
 function extractJsonObject(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -745,10 +769,36 @@ async function loadActivePromptMeta() {
   return rows[0] || null;
 }
 
+/** 日志用：不输出完整 Key，仅尾部若干字符便于与控制台/账单侧核对 */
+function maskApiKeyForLog(apiKey) {
+  const s = apiKey != null ? String(apiKey).trim() : '';
+  if (!s) return '(empty)';
+  if (s.length <= 6) return `len=${s.length}`;
+  return `…${s.slice(-4)}(len=${s.length})`;
+}
+
+function logFinancingLlmConfigResolved(source, llmModelConfigId, config) {
+  if (!config) {
+    console.warn(
+      `[financingAiEnrich] resolveLlmConfig source=${source} → no usable config (check ai_prompt_config + ai_model_config)`
+    );
+    return;
+  }
+  const ep = String(config.api_endpoint || '').trim().slice(0, 120);
+  console.log(
+    `[financingAiEnrich] resolveLlmConfig source=${source} llm_model_config_id=${llmModelConfigId ?? 'null'} model=${config.model_name || ''} api_key_hint=${maskApiKeyForLog(config.api_key)} endpoint_raw=${ep || '(empty)'}`
+  );
+  if (source === 'fallback_project_sourcing_analysis') {
+    console.warn(
+      '[financingAiEnrich] resolveLlmConfig 使用了兜底：提示词未 JOIN 到有效模型或 ai_model_config_id 指向已停用/无 Key 的配置；实际计费 Key 以本行 llm_model_config_id 为准，请在「模型提示词」上绑定预期模型或清理多余 project_sourcing_analysis 配置'
+    );
+  }
+}
+
 async function resolveLlmConfig(promptBundle, promptMeta) {
   if (promptBundle?.ai_model_config?.api_key && promptBundle.ai_model_config.model_name) {
     const c = promptBundle.ai_model_config;
-    return {
+    const out = {
       llm_model_config_id: c.id || null,
       config: {
         model_name: c.model_name,
@@ -759,6 +809,8 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
         top_p: c.top_p,
       },
     };
+    logFinancingLlmConfigResolved('prompt_join', out.llm_model_config_id, out.config);
+    return out;
   }
   const idFromPrompt = promptMeta?.ai_model_config_id;
   if (idFromPrompt) {
@@ -770,7 +822,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     );
     if (rows.length && rows[0].api_key && rows[0].model_name) {
       const r = rows[0];
-      return {
+      const out = {
         llm_model_config_id: r.id,
         config: {
           model_name: r.model_name,
@@ -781,7 +833,12 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
           top_p: r.top_p,
         },
       };
+      logFinancingLlmConfigResolved('prompt_ai_model_config_id', out.llm_model_config_id, out.config);
+      return out;
     }
+    console.warn(
+      `[financingAiEnrich] resolveLlmConfig 提示词绑定的 ai_model_config_id=${idFromPrompt} 未得到可用模型（已删/停用/缺 Key），将尝试 application_type 兜底`
+    );
   }
   const fallback = await db.query(
     `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p
@@ -792,7 +849,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
   );
   if (fallback.length && fallback[0].api_key && fallback[0].model_name) {
     const r = fallback[0];
-    return {
+    const out = {
       llm_model_config_id: r.id,
       config: {
         model_name: r.model_name,
@@ -803,7 +860,10 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
         top_p: r.top_p,
       },
     };
+    logFinancingLlmConfigResolved('fallback_project_sourcing_analysis', out.llm_model_config_id, out.config);
+    return out;
   }
+  logFinancingLlmConfigResolved('none', null, null);
   return { llm_model_config_id: null, config: null };
 }
 
@@ -2194,6 +2254,47 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   };
 }
 
+/**
+ * 与融资事件同一套提示词/模型：仅执行一次 chat，返回解析后的简介与标签（不落库）。
+ * rowForTemplate 需含 financing 模板占位：company_name、company_credit_code、project_name（可空）。
+ */
+async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
+  const promptMeta = await loadActivePromptMeta();
+  const promptConfigId = promptMeta?.id || null;
+  const promptBundle = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
+  const storedRaw =
+    promptBundle && promptBundle.prompt_content != null ? String(promptBundle.prompt_content) : '';
+  const { system: systemContent, userTemplate } = resolveFinancingAiPromptSections(storedRaw);
+  const userContent = fillTemplate(userTemplate, rowForTemplate);
+  const { llm_model_config_id, config } = await resolveLlmConfig(promptBundle, promptMeta);
+  if (!config) {
+    throw new Error(
+      '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型'
+    );
+  }
+  const raw = await callDashScopeOpenAIChat(systemContent, userContent, config);
+  const parsed = extractJsonObject(raw);
+  const norm = normalizeAiPayload(parsed);
+  if (!norm) {
+    logAndThrowUnparseableModelJson(raw, 'financing_style_llm');
+  }
+  const productIntroStored = stripProductIntroMetaAttribution(
+    stripRedundantIdentifiersFromProductIntro(norm.product_intro, rowForTemplate)
+  );
+  const tagsJson = JSON.stringify(norm.tags);
+  const display = norm.tags.join('、');
+  return {
+    raw,
+    config,
+    promptConfigId,
+    llmModelConfigId: llm_model_config_id,
+    promptMeta,
+    productIntroStored,
+    display,
+    tagsJson,
+  };
+}
+
 module.exports = {
   enqueueManualFinancingAiEnrich,
   enqueueIngestFinancingAiEnrich,
@@ -2201,6 +2302,8 @@ module.exports = {
   runFinancingAiEnrichTask,
   reuseFinancingAiForEventId,
   eventHasCompleteAiContent,
+  runFinancingStyleWebEnrichLlmCall,
+  withFinancingAiConcurrency,
   PROMPT_INTERFACE,
   PROMPT_TYPE,
   AI_ENRICH_VERSION,

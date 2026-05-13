@@ -6,9 +6,3 @@
 .financing-events-page .arco-table .arco-table-td:last-child {
   border-right: none !important;
 }
-
-/* 融资列表：简介 Popover 内正文区域可选中复制 */
-.financing-events-intro-selectable {
-  user-select: text;
-  -webkit-user-select: text;
-}

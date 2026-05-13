@@ -9,7 +9,6 @@ import {
   Form,
   Select,
   DatePicker,
-  Popover,
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import {
@@ -29,6 +28,7 @@ import {
   fetchFinancingAiEnrichLogs,
 } from '../../api/项目挖掘'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
+import { IntroPopoverCell } from './introPopoverAiCell'
 import './FinancingEventsPage.css'
 
 const Option = Select.Option
@@ -64,91 +64,6 @@ function formatInvestors(raw) {
   return trimmed
 }
 
-async function copyTextToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text)
-    Message.success('已复制到剪贴板')
-  } catch {
-    try {
-      const ta = document.createElement('textarea')
-      ta.value = text
-      ta.style.position = 'fixed'
-      ta.style.left = '-9999px'
-      document.body.appendChild(ta)
-      ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
-      Message.success('已复制到剪贴板')
-    } catch {
-      Message.error('复制失败，请在弹出层内手动选中复制')
-    }
-  }
-}
-
-/**
- * 表格内单行省略；点击后在 Popover 内展示全文，支持鼠标划选与「复制全文」（避免 ellipsis 自带 Tooltip 无法选中）
- */
-function IntroPopoverCell({ columnTitle, raw }) {
-  const empty = raw == null || String(raw).trim() === ''
-  const text = empty ? '' : String(raw)
-  if (empty) {
-    return <span>-</span>
-  }
-  const popoverContent = (
-    <div className="financing-events-intro-popover-inner">
-      <div style={{ marginBottom: 8 }}>
-        <Button type="outline" size="mini" onClick={() => copyTextToClipboard(text)}>
-          复制全文
-        </Button>
-        <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
-          下方文本可选中复制
-        </span>
-      </div>
-      <div
-        className="financing-events-intro-selectable"
-        style={{
-          maxWidth: 520,
-          maxHeight: 360,
-          overflow: 'auto',
-          userSelect: 'text',
-          WebkitUserSelect: 'text',
-          cursor: 'text',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          fontSize: 13,
-          lineHeight: 1.55,
-          padding: '4px 0',
-        }}
-      >
-        {text}
-      </div>
-    </div>
-  )
-  return (
-    <Popover
-      title={columnTitle}
-      trigger="click"
-      position="top"
-      popupClassName="financing-events-intro-popover"
-      content={popoverContent}
-    >
-      <span
-        style={{
-          display: 'block',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          cursor: 'pointer',
-          color: 'rgb(var(--primary-6))',
-        }}
-        title="点击查看全文，可选中或复制"
-      >
-        {text}
-      </span>
-    </Popover>
-  )
-}
-
 /** 与列表列一致的导出行（Excel） */
 function buildFinancingExportRows(list) {
   return list.map((row) => ({
@@ -168,7 +83,6 @@ function buildFinancingExportRows(list) {
         : String(row.ai_company_tags_display),
     AI状态: row.ai_enrich_status ?? '',
     企业名称: row.company_name ?? '',
-    统一社会信用代码: row.company_credit_code ?? '',
     最新轮次: row.latest_round ?? '',
     推测轮次: row.round ?? '',
     获投金额: row.funding_amt_raw ?? '',
@@ -179,6 +93,7 @@ function buildFinancingExportRows(list) {
     子赛道: row.track_secondary ?? '',
     投资方: formatInvestors(row.investor_names),
     事件ID: row.event_id ?? '',
+    统一社会信用代码: row.company_credit_code ?? '',
   }))
 }
 
@@ -318,14 +233,24 @@ export default function FinancingEventsPage() {
       title: '产品简介(AI)',
       dataIndex: 'ai_product_intro',
       width: 200,
-      render: (_, row) => <IntroPopoverCell columnTitle="产品简介(AI)" raw={row.ai_product_intro} />,
+      render: (_, row) => (
+        <IntroPopoverCell
+          columnTitle="产品简介(AI)"
+          raw={row.ai_product_intro}
+          triggerMaxWidth={200}
+        />
+      ),
     },
     {
       title: '企业标签(AI)',
       dataIndex: 'ai_company_tags_display',
       width: 160,
       render: (_, row) => (
-        <IntroPopoverCell columnTitle="企业标签(AI)" raw={row.ai_company_tags_display} />
+        <IntroPopoverCell
+          columnTitle="企业标签(AI)"
+          raw={row.ai_company_tags_display}
+          triggerMaxWidth={160}
+        />
       ),
     },
     {
@@ -335,7 +260,6 @@ export default function FinancingEventsPage() {
       render: (v) => (v == null || String(v).trim() === '' ? '-' : String(v)),
     },
     { title: '企业名称', dataIndex: 'company_name', width: 200, ellipsis: true },
-    { title: '统一社会信用代码', dataIndex: 'company_credit_code', width: 190 },
     { title: '最新轮次', dataIndex: 'latest_round', width: 100 },
     { title: '推测轮次', dataIndex: 'round', width: 100 },
     { title: '获投金额', dataIndex: 'funding_amt_raw', width: 120 },
@@ -352,6 +276,7 @@ export default function FinancingEventsPage() {
       render: (_, row) => formatInvestors(row.investor_names),
     },
     { title: '事件ID', dataIndex: 'event_id', width: 100 },
+    { title: '统一社会信用代码', dataIndex: 'company_credit_code', width: 190, ellipsis: true },
     {
       title: '操作',
       width: 100,
@@ -555,186 +480,190 @@ export default function FinancingEventsPage() {
 
   return (
     <div className="financing-events-page" style={{ padding: '16px 24px' }}>
-      <Space style={{ marginBottom: 8 }} wrap>
-        <Input
-          placeholder="模糊搜索：日期、企业、项目、简介、信用代码、轮次、金额、行业、赛道、投资方、事件ID等"
-          style={{ width: 420 }}
-          value={keyword}
-          onChange={setKeyword}
-          allowClear
-        />
-        <span style={{ color: 'var(--color-text-2)', whiteSpace: 'nowrap' }}>
-          融资日期
-        </span>
-        <DatePicker.RangePicker
-          style={{ width: 280 }}
-          allowClear
-          placeholder={['开始日期', '结束日期']}
-          value={financingDateRange}
-          onChange={setFinancingDateRange}
-        />
-        <Button
-          type="primary"
-          onClick={() => {
-            setPage(1)
-            setKwSearch(keyword.trim())
-            if (financingDateRange?.[0] && financingDateRange?.[1]) {
-              setDateFrom(formatFinancingYmd(financingDateRange[0]))
-              setDateTo(formatFinancingYmd(financingDateRange[1]))
-            } else {
+      <Space direction="vertical" size={8} style={{ marginBottom: 8, width: '100%' }}>
+        <Space wrap>
+          <Input
+            placeholder="模糊搜索：日期、企业、项目、简介、信用代码、轮次、金额、行业、赛道、投资方、事件ID等"
+            style={{ width: 420 }}
+            value={keyword}
+            onChange={setKeyword}
+            allowClear
+          />
+          <span style={{ color: 'var(--color-text-2)', whiteSpace: 'nowrap' }}>
+            融资日期
+          </span>
+          <DatePicker.RangePicker
+            style={{ width: 280 }}
+            allowClear
+            placeholder={['开始日期', '结束日期']}
+            value={financingDateRange}
+            onChange={setFinancingDateRange}
+          />
+          <Button
+            type="primary"
+            onClick={() => {
+              setPage(1)
+              setKwSearch(keyword.trim())
+              if (financingDateRange?.[0] && financingDateRange?.[1]) {
+                setDateFrom(formatFinancingYmd(financingDateRange[0]))
+                setDateTo(formatFinancingYmd(financingDateRange[1]))
+              } else {
+                setDateFrom('')
+                setDateTo('')
+              }
+            }}
+          >
+            查询
+          </Button>
+          <Button
+            onClick={() => {
+              setKeyword('')
+              setKwSearch('')
+              setFinancingDateRange(null)
               setDateFrom('')
               setDateTo('')
-            }
-          }}
-        >
-          查询
-        </Button>
-        <Button
-          onClick={() => {
-            setKeyword('')
-            setKwSearch('')
-            setFinancingDateRange(null)
-            setDateFrom('')
-            setDateTo('')
-            setPage(1)
-          }}
-        >
-          重置
-        </Button>
-        <Button loading={loading} onClick={load}>
-          刷新
-        </Button>
-        <Button type="outline" onClick={handleExportCurrentPage} disabled={loading || exportingAll || !data.length}>
-          导出当前页
-        </Button>
-        <Button
-          type="outline"
-          loading={exportingAll}
-          onClick={handleExportAllClick}
-          disabled={loading || exportingAll}
-        >
-          导出全部
-        </Button>
-        {isAdmin && (
-          <Button
-            type="outline"
-            status="warning"
-            onClick={() => {
-              syncForm.setFieldsValue({
-                date_range: [financingNow().subtract(1, 'day'), financingNow()],
-              })
-              setSyncVisible(true)
+              setPage(1)
             }}
           >
-            手动同步
+            重置
           </Button>
-        )}
-        {isAdmin && (
+          <Button loading={loading} onClick={load}>
+            刷新
+          </Button>
+        </Space>
+        <Space wrap>
+          <Button type="outline" onClick={handleExportCurrentPage} disabled={loading || exportingAll || !data.length}>
+            导出当前页
+          </Button>
           <Button
             type="outline"
-            loading={aiEnrichSubmitting}
-            disabled={!selectedRowKeys.length}
-            onClick={async () => {
-              const id = selectedRowKeys[0]
-              if (!id) {
-                Message.warning('请先勾选一行融资记录')
-                return
-              }
-              setAiEnrichSubmitting(true)
-              try {
-                const res = await postFinancingEventAiEnrich(id)
-                if (res.status === 202 && res.data?.success) {
-                  Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
-                  load()
-                } else if (res.data?.success) {
-                  Message.success(res.data.message || '已受理')
-                  load()
-                } else {
-                  Message.error(res.data?.message || '受理失败')
-                }
-              } catch (e) {
-                Message.error(e.response?.data?.message || e.message || '受理失败')
-              } finally {
-                setAiEnrichSubmitting(false)
-              }
-            }}
+            loading={exportingAll}
+            onClick={handleExportAllClick}
+            disabled={loading || exportingAll}
           >
-            手动AI取数
+            导出全部
           </Button>
-        )}
-        {isAdmin && (
-          <Button
-            type="outline"
-            disabled={!selectedRowKeys.length}
-            loading={aiLogLoading}
-            onClick={async () => {
-              const id = selectedRowKeys[0]
-              if (!id) {
-                Message.warning('请先勾选一行融资记录')
-                return
-              }
-              setAiLogFinancingId(String(id))
-              setAiLogVisible(true)
-              setAiLogLoading(true)
-              try {
-                const res = await fetchFinancingAiEnrichLogs({
-                  financing_event_id: id,
-                  page: 1,
-                  pageSize: 50,
+          {isAdmin && (
+            <Button
+              type="outline"
+              status="warning"
+              onClick={() => {
+                syncForm.setFieldsValue({
+                  date_range: [financingNow().subtract(1, 'day'), financingNow()],
                 })
-                if (res.data?.success) {
-                  setAiLogRows(res.data.data?.list || [])
-                } else {
-                  setAiLogRows([])
-                  Message.error(res.data?.message || '加载日志失败')
+                setSyncVisible(true)
+              }}
+            >
+              手动同步
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="outline"
+              loading={aiEnrichSubmitting}
+              disabled={!selectedRowKeys.length}
+              onClick={async () => {
+                const id = selectedRowKeys[0]
+                if (!id) {
+                  Message.warning('请先勾选一行融资记录')
+                  return
                 }
-              } catch (e) {
-                setAiLogRows([])
-                Message.error(e.response?.data?.message || e.message || '加载日志失败')
-              } finally {
-                setAiLogLoading(false)
-              }
-            }}
-          >
-            AI执行日志
-          </Button>
-        )}
-        {isAdmin && (
-          <Button
-            type="outline"
-            status="success"
-            onClick={() => {
-              batchAiForm.setFieldsValue({
-                date_range:
-                  financingDateRange?.[0] && financingDateRange?.[1]
-                    ? financingDateRange
-                    : [financingNow().subtract(7, 'day'), financingNow()],
-              })
-              setBatchAiVisible(true)
-            }}
-          >
-            批量AI取数
-          </Button>
-        )}
-        {isAdmin && (
-          <Button
-            type="outline"
-            status="danger"
-            loading={retryFailedSubmitting}
-            onClick={() => {
-              const defaultRange =
-                dateFrom && dateTo
-                  ? [dayjs(dateFrom, 'YYYY-MM-DD'), dayjs(dateTo, 'YYYY-MM-DD')]
-                  : financingDateRange?.[0] && financingDateRange?.[1]
-                    ? financingDateRange
-                    : [financingNow().subtract(7, 'day'), financingNow()]
-              retryFailedForm.setFieldsValue({ date_range: defaultRange })
-              setRetryFailedVisible(true)
-            }}
-          >
-            重试失败AI
-          </Button>
-        )}
+                setAiEnrichSubmitting(true)
+                try {
+                  const res = await postFinancingEventAiEnrich(id)
+                  if (res.status === 202 && res.data?.success) {
+                    Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
+                    load()
+                  } else if (res.data?.success) {
+                    Message.success(res.data.message || '已受理')
+                    load()
+                  } else {
+                    Message.error(res.data?.message || '受理失败')
+                  }
+                } catch (e) {
+                  Message.error(e.response?.data?.message || e.message || '受理失败')
+                } finally {
+                  setAiEnrichSubmitting(false)
+                }
+              }}
+            >
+              手动AI取数
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="outline"
+              disabled={!selectedRowKeys.length}
+              loading={aiLogLoading}
+              onClick={async () => {
+                const id = selectedRowKeys[0]
+                if (!id) {
+                  Message.warning('请先勾选一行融资记录')
+                  return
+                }
+                setAiLogFinancingId(String(id))
+                setAiLogVisible(true)
+                setAiLogLoading(true)
+                try {
+                  const res = await fetchFinancingAiEnrichLogs({
+                    financing_event_id: id,
+                    page: 1,
+                    pageSize: 50,
+                  })
+                  if (res.data?.success) {
+                    setAiLogRows(res.data.data?.list || [])
+                  } else {
+                    setAiLogRows([])
+                    Message.error(res.data?.message || '加载日志失败')
+                  }
+                } catch (e) {
+                  setAiLogRows([])
+                  Message.error(e.response?.data?.message || e.message || '加载日志失败')
+                } finally {
+                  setAiLogLoading(false)
+                }
+              }}
+            >
+              AI执行日志
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="outline"
+              status="success"
+              onClick={() => {
+                batchAiForm.setFieldsValue({
+                  date_range:
+                    financingDateRange?.[0] && financingDateRange?.[1]
+                      ? financingDateRange
+                      : [financingNow().subtract(7, 'day'), financingNow()],
+                })
+                setBatchAiVisible(true)
+              }}
+            >
+              批量AI取数
+            </Button>
+          )}
+          {isAdmin && (
+            <Button
+              type="outline"
+              status="danger"
+              loading={retryFailedSubmitting}
+              onClick={() => {
+                const defaultRange =
+                  dateFrom && dateTo
+                    ? [dayjs(dateFrom, 'YYYY-MM-DD'), dayjs(dateTo, 'YYYY-MM-DD')]
+                    : financingDateRange?.[0] && financingDateRange?.[1]
+                      ? financingDateRange
+                      : [financingNow().subtract(7, 'day'), financingNow()]
+                retryFailedForm.setFieldsValue({ date_range: defaultRange })
+                setRetryFailedVisible(true)
+              }}
+            >
+              重试失败AI
+            </Button>
+          )}
+        </Space>
       </Space>
 
       <Table

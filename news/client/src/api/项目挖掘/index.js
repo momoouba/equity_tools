@@ -23,6 +23,21 @@ export function fetchFinancingAiEnrichLogs(params) {
   return axios.get('/api/project-sourcing/ai-enrich-logs', { params })
 }
 
+/** 管理员：单条被投企业（invested_enterprises）手动触发联网 AI 取数（异步，HTTP 202） */
+export function postInvestedEnterpriseAiEnrich(enterpriseId) {
+  return axios.post(`/api/project-sourcing/invested-enterprises/${enterpriseId}/ai-enrich`)
+}
+
+/** 管理员：按 invested_enterprises 创建日期区间批量 AI；body.only_failed=true 时仅重试 ai_enrich_status=failed */
+export function postInvestedEnterpriseBatchAiEnrich(body) {
+  return axios.post('/api/project-sourcing/invested-enterprises/batch-ai-enrich', body)
+}
+
+/** 管理员：被投企业 AI 增强日志列表 */
+export function fetchInvestedEnterpriseAiEnrichLogs(params) {
+  return axios.get('/api/project-sourcing/invested-enterprises/ai-enrich-logs', { params })
+}
+
 export function fetchTrackTree() {
   return axios.get('/api/project-sourcing/tracks/tree')
 }

@@ -5765,6 +5765,115 @@ async function initializeTables(dbPool) {
     `ADD COLUMN result_company_tags_display VARCHAR(2000) NULL COMMENT '成功时写入的企业标签(AI)展示快照' AFTER result_product_intro`
   );
 
+  // 项目挖掘：被投企业 invested_enterprises — 与融资事件同一套联网增强提示词产出（产品介绍 + 标签→行业标签落库）
+  const addIeEnterpriseAiCol = async (name, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprises' AND COLUMN_NAME = ?`,
+        [name]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE invested_enterprises ${ddl}`);
+        console.log(`  ✓ 已为 invested_enterprises 表添加 ${name} 字段`);
+      }
+    } catch (err) {
+      console.warn(`检查/添加 invested_enterprises.${name} 时出现警告:`, err.message);
+    }
+  };
+  await addIeEnterpriseAiCol(
+    'ai_product_intro',
+    `ADD COLUMN ai_product_intro LONGTEXT NULL COMMENT '产品介绍(AI)，与融资联网增强同一提示词' AFTER residual_value`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_industry_tags_display',
+    `ADD COLUMN ai_industry_tags_display VARCHAR(2000) NULL COMMENT '行业标签(AI)展示（顿号拼接）' AFTER ai_product_intro`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_industry_tags_json',
+    `ADD COLUMN ai_industry_tags_json JSON NULL COMMENT '行业标签(AI) JSON 数组' AFTER ai_industry_tags_display`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_enrich_status',
+    `ADD COLUMN ai_enrich_status VARCHAR(32) NULL COMMENT 'pending/running/success/failed' AFTER ai_industry_tags_json`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_enrich_at',
+    `ADD COLUMN ai_enrich_at DATETIME NULL COMMENT '最近一次 AI 成功时间' AFTER ai_enrich_status`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_enrich_model',
+    `ADD COLUMN ai_enrich_model VARCHAR(128) NULL COMMENT '模型名称快照' AFTER ai_enrich_at`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_enrich_version',
+    `ADD COLUMN ai_enrich_version VARCHAR(64) NULL COMMENT '管线版本' AFTER ai_enrich_model`
+  );
+  await addIeEnterpriseAiCol(
+    'ai_enrich_error',
+    `ADD COLUMN ai_enrich_error VARCHAR(500) NULL COMMENT 'AI 失败摘要' AFTER ai_enrich_version`
+  );
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS invested_enterprise_ai_enrich_log (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+        invested_enterprise_id VARCHAR(19) NOT NULL COMMENT 'invested_enterprises.id',
+        enterprise_full_name VARCHAR(255) NULL COMMENT '被投企业全称快照',
+        trigger_type VARCHAR(32) NOT NULL COMMENT 'manual_api/batch_date_range/batch_retry_failed 等',
+        triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人 users.id',
+        triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '触发受理时间',
+        client_ip VARCHAR(64) NULL COMMENT '客户端 IP',
+        job_trace_id VARCHAR(64) NULL COMMENT '链路追踪 UUID',
+        execution_status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/running/success/failed/skipped',
+        started_at DATETIME NULL COMMENT '开始调用模型时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        duration_ms INT NULL COMMENT '耗时毫秒',
+        llm_model_config_id VARCHAR(19) NULL COMMENT 'ai_model_config.id',
+        prompt_type VARCHAR(80) NULL COMMENT '提示词类型',
+        prompt_version VARCHAR(80) NULL COMMENT '提示词版本',
+        ai_enrich_version VARCHAR(50) NULL COMMENT '管线版本',
+        error_message VARCHAR(500) NULL COMMENT '失败摘要',
+        result_product_intro LONGTEXT NULL COMMENT '成功时产品介绍(AI)快照',
+        result_industry_tags_display VARCHAR(2000) NULL COMMENT '成功时行业标签(AI)快照',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        KEY idx_ie_ai_log_ent_time (invested_enterprise_id, triggered_at),
+        KEY idx_ie_ai_log_status_time (execution_status, triggered_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-被投企业联网AI增强日志';
+    `);
+    console.log('✓ invested_enterprise_ai_enrich_log 表已就绪');
+  } catch (err) {
+    console.warn('创建 invested_enterprise_ai_enrich_log 时出现警告:', err.message);
+  }
+
+  // 被投企业同步硬删前：按统一社会信用代码保存 AI 列快照，全量写入后回填（便于故障恢复）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS invested_enterprise_ai_sync_snapshot (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
+        creator_user_id VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.creator_user_id 一致',
+        data_app_name VARCHAR(64) NOT NULL COMMENT '应用名，与 invested_enterprises.data_app_name 一致',
+        unified_credit_code VARCHAR(64) NOT NULL COMMENT '规范化后的统一社会信用代码（用于匹配）',
+        ai_product_intro LONGTEXT NULL COMMENT '同步前产品简介(AI)',
+        ai_industry_tags_display VARCHAR(2000) NULL COMMENT '同步前企业标签(AI)展示',
+        ai_industry_tags_json JSON NULL COMMENT '同步前企业标签(AI) JSON',
+        ai_enrich_status VARCHAR(32) NULL COMMENT '同步前 AI 状态',
+        ai_enrich_at DATETIME NULL COMMENT '同步前 AI 成功时间',
+        ai_enrich_model VARCHAR(128) NULL COMMENT '同步前模型名',
+        ai_enrich_version VARCHAR(64) NULL COMMENT '同步前管线版本',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        KEY idx_ie_ai_snap_batch (batch_id),
+        KEY idx_ie_ai_snap_batch_credit (batch_id, unified_credit_code),
+        KEY idx_ie_ai_snap_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='被投企业定时同步前 AI 快照（按统一社会信用代码回填）';
+    `);
+    console.log('✓ invested_enterprise_ai_sync_snapshot 表已就绪');
+  } catch (err) {
+    console.warn('创建 invested_enterprise_ai_sync_snapshot 时出现警告:', err.message);
+  }
+
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）
   try {
     await dbPool.query(`

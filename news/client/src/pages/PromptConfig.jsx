@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Switch, Form } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './PromptConfig.css'
@@ -27,6 +27,29 @@ function formatAiModelOptionLabel(config) {
   return `${config.config_name || config.id}（${app}·${usage}）`
 }
 
+/**
+ * 大模型下拉须与「接口类型 + 提示词类型」一致，避免项目挖掘误选新闻分析模型（与后端 resolveLlmConfig 语义对齐）。
+ */
+function filterAiModelConfigsForPrompt(configs, interfaceType, promptType) {
+  const list = configs || []
+  if (
+    interfaceType === '项目挖掘' ||
+    promptType === 'project_sourcing_financing_web_enrich'
+  ) {
+    return list.filter((c) => c.application_type === 'project_sourcing_analysis')
+  }
+  if (interfaceType === '打新接口' && promptType === 'enterprise_full_name') {
+    return list.filter(
+      (c) =>
+        c.application_type === 'listing_progress_analysis' || c.usage_type === 'listing_data'
+    )
+  }
+  // 新榜 / 企查查 / 上海国际集团 / 打新其它：新闻侧为主，允许 general 兜底
+  return list.filter(
+    (c) => c.application_type === 'news_analysis' || c.application_type === 'general'
+  )
+}
+
 function PromptConfig() {
   const [prompts, setPrompts] = useState([])
   const [loading, setLoading] = useState(false)
@@ -51,20 +74,49 @@ function PromptConfig() {
     { value: '新榜', label: '新榜接口' },
     { value: '企查查', label: '企查查接口' },
     { value: '上海国际集团', label: '上海国际集团接口' },
-    { value: '打新接口', label: '打新接口' }
+    { value: '打新接口', label: '打新接口' },
+    { value: '项目挖掘', label: '项目挖掘' },
   ]
 
   const promptTypes = [
     { value: 'sentiment_analysis', label: '情绪分析' },
     { value: 'enterprise_relevance', label: '企业关联分析' },
     { value: 'validation', label: '关联验证' },
-    { value: 'enterprise_full_name', label: '企业全称补齐' }
+    { value: 'enterprise_full_name', label: '企业全称补齐' },
+    {
+      value: 'project_sourcing_financing_web_enrich',
+      label: '融资联网 AI 增强（项目挖掘）',
+    },
   ]
+
+  const filteredAiModelConfigs = useMemo(
+    () => filterAiModelConfigsForPrompt(aiModelConfigs, formData.interface_type, formData.prompt_type),
+    [aiModelConfigs, formData.interface_type, formData.prompt_type]
+  )
 
   useEffect(() => {
     fetchPrompts()
     fetchAiModelConfigs()
   }, [pagination.page, pagination.pageSize])
+
+  useEffect(() => {
+    if (showModal) {
+      fetchAiModelConfigs()
+    }
+  }, [showModal])
+
+  /** 切换接口/任务类型后，若当前已选模型不在筛选结果内则清空，避免保存了新闻模型却用于项目挖掘 */
+  useEffect(() => {
+    if (!showModal) return
+    const ok = new Set(filteredAiModelConfigs.map((c) => String(c.id)))
+    const cur =
+      formData.ai_model_config_id != null && formData.ai_model_config_id !== ''
+        ? String(formData.ai_model_config_id)
+        : ''
+    if (cur && !ok.has(cur)) {
+      setFormData((prev) => ({ ...prev, ai_model_config_id: '' }))
+    }
+  }, [showModal, filteredAiModelConfigs, formData.ai_model_config_id])
 
   const fetchAiModelConfigs = async () => {
     try {
@@ -388,12 +440,27 @@ function PromptConfig() {
               placeholder="请选择大模型配置（可选）"
               allowClear
             >
-              {aiModelConfigs.map(config => (
-                <Option key={config.id} value={config.id}>
+              {filteredAiModelConfigs.map((config) => (
+                <Option key={String(config.id)} value={String(config.id)}>
                   {formatAiModelOptionLabel(config)}
                 </Option>
               ))}
             </Select>
+            {filteredAiModelConfigs.length === 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
+                {formData.interface_type === '项目挖掘' ||
+                formData.prompt_type === 'project_sourcing_financing_web_enrich'
+                  ? '暂无「应用类型 = 项目挖掘分析」的启用模型。请先到「AI模型配置」页新增一条（与融资/被投企业联网 AI 一致），再回到此处绑定。'
+                  : formData.interface_type === '打新接口' &&
+                      formData.prompt_type === 'enterprise_full_name'
+                    ? '暂无「上市进展分析 / 上市数据」用途的启用模型，请先在「AI模型配置」中新增。'
+                    : '暂无与当前接口类型匹配的启用模型（新闻分析或通用）。'}
+              </div>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-3)' }}>
+                已按当前「接口类型 + 提示词类型」筛选可选模型，与后端任务实际使用的 application_type 一致。
+              </div>
+            )}
           </div>
 
           <div className="form-group">

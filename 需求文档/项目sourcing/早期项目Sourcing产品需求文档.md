@@ -1,6 +1,7 @@
 # 早期项目 Sourcing 产品需求文档（第一步落地版）
 
 > **修订记录**  
+> - **2026-5-13（被投企业 · AI 与导出）**：项目挖掘 **「被投企业」** 页与 **融资事件列表** 能力对齐：列表增加 **产品介绍（AI）**、**行业标签（AI）**、**AI状态**；`invested_enterprises` 落库对应 AI 字段；新增执行日志表 **`invested_enterprise_ai_enrich_log`**；工具栏提供 **导出当前页 / 导出全部**（XLSX）、**手动同步**（与融资页相同的投融资 `queryByDate`）、**手动 AI 取数 / AI 执行日志 / 批量 AI 取数 / 重试失败 AI**（管理员；单条操作须 **radio 选中一行**）；大模型 **与融资事件同一套 `project_sourcing_financing_web_enrich` 提示词与模型配置**，调用时以 **被投企业全称** 为主填入模板（并带入统一信用代码、项目简称等占位符）。详见 **§3.2**、**§3.3**、**§4.1.5**、**§8.4**、**§9.3**、**§12.8**、**§12.9**、**§12.12**。  
 > - **2026-5-12（晚）**：项目挖掘应用内新增菜单 **「被投企业」**；列表、筛选与操作按钮与新闻舆情「舆情监控对象」中被投企业 Tab 对齐；**复用表 `invested_enterprises`**，新增字段 **`data_app_name`**（`新闻舆情` / `项目挖掘`）区分应用归属；列表与 `/api/enterprises` 系列接口按 `data_app_name` 过滤；新闻入库、分析、邮件、分享等链路中涉及 `invested_enterprises` 的查询仅匹配 **`data_app_name` 为新闻舆情**（含兼容 `COALESCE`）的记录，避免项目挖掘侧数据误入舆情逻辑。详见正文 **§3.3**、**§4.1.5**。  
 > - **2026-5-11**：增补融资标准表 **AI 增强（阶段 A）** 字段与流程；提示词与模型均走 **系统管理 → AI模型配置**。（§ 与章号以 **2026-5-16** 修订为准。）  
 > - **2026-5-12**：已定稿联网方式（**模型原生联网**，如通义 **qwen-max**）、输入降级（信用代码为空时用名称/简称）、语言口径（外文名 + 中文描述）、**复用应用类型「项目挖掘分析」**；增补默认提示词（今 §12.10）；原「待澄清」条目后迁入 §12.11。后续开发以两版修订为准。  
@@ -77,16 +78,20 @@
 
 ### 3.2 权限与角色
 
-- `admin`：可配置接口、配置模型、手动同步、**手动 AI 取数（融资事件单条）**、查看全量分析日志、**查看融资信息 AI 增强触发/执行日志（建议与管理员设置中日志入口一致）**、编辑任务。
+- `admin`：可配置接口、配置模型、**投融资手动同步（queryByDate）**、**融资事件列表 — 手动 AI 取数 / AI 执行日志 / 批量 AI 取数 / 重试失败 AI**、**项目挖掘「被投企业」页 — 同上组 AI 能力与 AI 日志（见 §3.3、§8.4、§9.3）**、查看全量分析日志、**查看融资信息 AI 增强触发/执行日志（建议与管理员设置中日志入口一致）**、编辑任务。
 
 - 普通用户：可查看 onepage 与分析结果，不可修改系统配置。
 
 ### 3.3 被投企业（项目挖掘）与表 `invested_enterprises` 应用隔离
 
 - **菜单**：在「项目挖掘」应用下增加 **「被投企业」**，路由示例：`/dashboard/project-sourcing-invested-enterprises`；需具备与「项目挖掘」一致的应用权限（含 `membership_level_id` 的授权逻辑与现有子菜单一致）。
-- **交互**：页面与新闻舆情 **「舆情监控对象」→「被投企业」** Tab 对齐（表格列、筛选条件、刷新 / **定时更新** / 批量导入 / 导出 / 新增等）。**「定时更新」** 在两应用入口均展示；**外部库同步 SQL 在 `enterprise_sync_task` 中按 `data_app_name` 分应用存储**，执行时写入对应 `data_app_name` 的 `invested_enterprises` 行。
-- **数据**：表 `invested_enterprises` 增加 **`data_app_name` VARCHAR(64) NOT NULL DEFAULT '新闻舆情'**，取值与权限中的应用名一致：`新闻舆情`、`项目挖掘`。存量数据默认 **新闻舆情**。同一统一社会信用代码在不同应用下可各维护一条（去重校验按 **`unified_credit_code` + `data_app_name`**）。
-- **接口**：`/api/enterprises` 列表、导出、新增、编辑、删除、批量导入等均须携带或解析 **`data_app_name`**（列表/导出走 Query；写入可走 Body）；服务端校验当前用户对该应用的访问权限后再过滤/写入。
+- **交互（基础）**：页面与新闻舆情 **「舆情监控对象」→「被投企业」** Tab 对齐（表格主体列、筛选条件、刷新、**定时更新**（外部库 SQL 同步）、批量导入、新增、变更日志等）。**「定时更新」** 在两应用入口均展示；**外部库同步 SQL 在 `enterprise_sync_task` 中按 `data_app_name` 分应用存储**，执行时写入对应 `data_app_name` 的 `invested_enterprises` 行。
+- **交互（与融资事件列表对齐，2026-5-13）**：本页在 **`data_app_name=项目挖掘` 且仅展示被投企业** 的独立入口上，工具栏在「刷新 / 批量导入 / 定时更新 / 新增」之外，增加与融资事件页 **同一套投融资能力** 与 **同一套 AI 交互范式**：
+  - **导出当前页 / 导出全部**：客户端生成 **XLSX**，列集合与 **`GET /api/enterprises/export`** 在项目挖掘口径下一致（含金额列、**产品介绍(AI)**、**行业标签(AI)**、**AI状态**、创建/更新时间）；导出全部按当前 **关键词、筛选用户** 分页拉取 `/api/enterprises` 后合并。
+  - **手动同步**：与 **融资事件列表** 相同 — 选择「融资信息源」`news_interface_config` 一条配置 + **融资日期** 区间，调用 **`POST /api/project-sourcing/sync`**（`queryByDate`）；用于拉取投融资标准数据，**不替代**「定时更新」的外部库 SQL。
+  - **手动 AI 取数 / AI 执行日志 / 批量 AI 取数 / 重试失败 AI**：仅 **`admin`**；表格增加 **单选列（radio）**；须 **先选中一行** 再点「手动 AI 取数」「AI 执行日志」（与融资事件列表一致）。大模型 **与融资事件共用** `project_sourcing_financing_web_enrich` 的提示词与模型配置；服务端将 **`enterprise_full_name`** 映射为模板中的企业名称，**`unified_credit_code` → 信用代码占位**、**`project_abbreviation` → 项目简称占位**（与 §12.3 信用代码可为空仍执行的口径一致）。解析结果写入 **`invested_enterprises` 的 `ai_product_intro`、`ai_industry_tags_display`、`ai_industry_tags_json` 及 `ai_enrich_*`**（列展示名：**产品介绍（AI）**、**行业标签（AI）**）。**批量 / 重试失败** 按行的 **`DATE(created_at)`** 落在区间内筛选；批量对 **企业全称（规范化去空白）去重** 后排队，避免同主体短时间重复调用（细则见 §9.3.2）。
+- **数据**：表 `invested_enterprises` 增加 **`data_app_name` VARCHAR(64) NOT NULL DEFAULT '新闻舆情'**，取值与权限中的应用名一致：`新闻舆情`、`项目挖掘`。存量数据默认 **新闻舆情**。同一统一社会信用代码在不同应用下可各维护一条（去重校验按 **`unified_credit_code` + `data_app_name`**）。**AI 增强字段与日志**：见 **§4.1.5**（字段表）、**§12.12**（`invested_enterprise_ai_enrich_log`）。
+- **接口**：`/api/enterprises` 列表、导出、新增、编辑、删除、批量导入等均须携带或解析 **`data_app_name`**（列表/导出走 Query；写入可走 Body）；服务端校验当前用户对该应用的访问权限后再过滤/写入。项目挖掘下列表/导出关键词检索须覆盖 **AI 文本列**（与列表可见列一致）。**被投企业 AI 专用接口** 前缀 **`/api/project-sourcing/invested-enterprises/...`**，见 **§9.3**。
 - **舆情链路**：凡根据 `invested_enterprises` 匹配公众号、企业全称、基金/子基金等用于 **新闻舆情** 的逻辑，SQL 中须限制 **`data_app_name` 为新闻舆情**（实现上可用 `COALESCE(data_app_name,'新闻舆情')='新闻舆情'` 兼容历史），确保项目挖掘侧录入企业不参与舆情抓取与匹配。
 
 **需求评估（简要）**
@@ -95,7 +100,7 @@
 |------|------|
 | 必要性 | 避免两套物理表重复维护；与现有「应用 + 权限」模型一致，扩展成本低于新建表 + 全量同步。 |
 | 风险 | 须全面梳理 `invested_enterprises` 读路径，遗漏会导致项目挖掘数据被舆情误用；已通过服务端批量追加条件与 `enterprises` 路由参数化降低风险。 |
-| 验收 | 新闻舆情页仅见 `data_app_name=新闻舆情`；项目挖掘「被投企业」仅见 `项目挖掘`；两应用各自 CRUD/导入/导出互不串数据；管理员筛选用户仍按 `creator_user_id` 与 `data_app_name` 组合生效。 |
+| 验收 | 新闻舆情页仅见 `data_app_name=新闻舆情`；项目挖掘「被投企业」仅见 `项目挖掘`；两应用各自 CRUD/导入/导出互不串数据；管理员筛选用户仍按 `creator_user_id` 与 `data_app_name` 组合生效。**被投企业页**：管理员可完成导出当前页/全部、手动同步、手动 AI、日志查看、批量与失败重试；AI 列与 `ai_enrich_status` 与接口返回一致；普通用户无 AI 工具栏与行选。 |
 
 ---
 
@@ -188,6 +193,19 @@ WHERE NOT EXISTS (
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `data_app_name` | VARCHAR(64) NOT NULL，默认 `'新闻舆情'` | 标识该行监控对象所属应用：`新闻舆情`、`项目挖掘`。接口层与 `users.app_permissions[].app_name` 对齐。 |
+| `ai_product_intro` | TEXT，可空 | **产品介绍（AI）**：与融资事件 **产品简介(AI)** 同源管线输出之 `product_intro` 落库；**不覆盖**业务人员维护的非 AI 业务字段。 |
+| `ai_industry_tags_display` | VARCHAR(2000)，可空 | **行业标签（AI）**：与融资侧 **`ai_company_tags_display` / `company_tags_display`** 同源解析与展示规则（顿号拼接自有中文词组）。 |
+| `ai_industry_tags_json` | JSON，可空 | 与展示列同源的结构化标签，键体系与 §12.10 的 `company_tags` 一致，便于后续检索/阶段 B。 |
+| `ai_enrich_status` | VARCHAR(20)，可空 | `pending` / `running` / `success` / `failed` / `skipped`（与融资标准表语义对齐）。 |
+| `ai_enrich_at` | DATETIME，可空 | 最近一次 AI 增强完成时间（Asia/Shanghai）。 |
+| `ai_enrich_model` | VARCHAR(100)，可空 | 实际调用模型标识快照。 |
+| `ai_enrich_version` | VARCHAR(50)，可空 | 管线/提示词版本号（实现常量可与融资侧区分前缀）。 |
+| `ai_enrich_error` | VARCHAR(500)，可空 | 最近一次失败摘要（可截断）。 |
+
+**`invested_enterprise_ai_enrich_log`（被投企业 AI 触发与执行日志，追加型）**
+
+- **目的**：与 **`sourcing_financing_ai_enrich_log`** 对称，审计对 **`invested_enterprises`** 发起的每一次 AI 增强（手动、批量、失败重试等）。标准表行上 `ai_enrich_*` 表示**当前最新结果**，日志表保留**历史每次**触发与结果快照（至少含 `result_product_intro`、`result_industry_tags_display`、错误摘要等，字段细则与实现 `db.js` 对齐）。
+- **查询入口（首期）**：前端 **「AI 执行日志」** 弹窗按 **`invested_enterprise_id`** 拉取列表；接口 **`GET /api/project-sourcing/invested-enterprises/ai-enrich-logs`**（见 §9.3）。
 
 - 新闻舆情相关定时任务、外部库 **「定时更新」** 同步写入 `invested_enterprises` 时，目标行的 **`data_app_name` 与对应 `enterprise_sync_task.data_app_name` 一致**（新闻舆情任务写新闻舆情域；项目挖掘任务写项目挖掘域）。
 - 项目挖掘「被投企业」页面手工新增/导入的记录一律为 **`项目挖掘`**。
@@ -701,6 +719,13 @@ WHERE NOT EXISTS (
 
 - 页面不展示中间状态标签，用户看到的是系统最终落库结果。
 
+### 8.4 子页面：被投企业（项目挖掘，**2026-5-13**）
+
+- **入口**：见 §3.3 路由；与 **融资事件列表** 同属「项目挖掘」应用下子菜单，权限模型一致。
+- **列表列**：在 §3.3「基础」列之外，末尾展示 **产品介绍（AI）**、**行业标签（AI）**、**AI状态**；长文本列交互与融资事件列表一致（省略 + 点击展开可选中复制）。
+- **工具栏**：**刷新、批量导入、定时更新、新增** 全员可见（与舆情监控对象对齐部分）；**导出当前页、导出全部** 全员可见；**手动同步、手动 AI 取数、AI 执行日志、批量 AI 取数、重试失败 AI** 仅 **`admin`**（§3.2）。单条 AI 与日志须 **radio 选中一行** 后操作（§12.8）。
+- **与融资侧差异（须写清）**：批量/重试的日期维度为 **`invested_enterprises.created_at` 的日历日**（非融资事件的 `event_date`）；去重主键为 **企业全称**（规范化后），而非融资侧的信用代码优先策略。
+
 ---
 
 ## 九、接口与任务清单（第一步）
@@ -731,9 +756,11 @@ WHERE NOT EXISTS (
 
 - `sourcing_analysis_monthly`：月报分析（月末）
 
-### 9.3 阶段 A 补充接口（融资信息 AI 增强，**2026-5-14**）
+### 9.3 阶段 A 补充接口（融资信息 AI 增强，**2026-5-14**；被投企业 AI，**2026-5-13**）
 
 > 与当前代码路由前缀对齐时，使用 **`/api/project-sourcing/...`**（若历史文档写 `/api/sourcing/...`，以实际部署为准）。
+
+#### 9.3.1 融资事件 — 单条 AI 增强
 
 - **`POST /api/project-sourcing/events/:id/ai-enrich`（建议路径）**  
   - **作用**：对单条 `sourcing_financing_event`（路径参数 `id` 为标准表主键）触发 **产品简介(AI) / 企业标签(AI)** 生成任务，成功后更新 `ai_product_intro`、`ai_company_tags_json`、`ai_company_tags_display` 及 `ai_enrich_*` 治理字段。  
@@ -742,6 +769,18 @@ WHERE NOT EXISTS (
   - **权限**：默认与「手动同步」一致，仅 **`admin`**（见 §3.2）；若产品放宽，须新增权限键并回写本文档。  
   - **幂等**：同一 `id` 在 `running` 期间重复点击可返回「处理中」而不重复排队，或按产品选择允许覆盖排队（实现二选一，文档推荐 **去重/拒绝重复提交**）。
   - **日志（强制）**：接口 **一经合法受理**（含幂等拒绝重复排队时的受理响应），即按 §12.12 写入或更新 **触发日志**；不得在「无日志」情况下返回 200。
+
+#### 9.3.2 被投企业（`invested_enterprises`，`data_app_name=项目挖掘`）— AI 与日志
+
+- **`POST /api/project-sourcing/invested-enterprises/:id/ai-enrich`**  
+  - **作用**：对单条被投企业（路径参数 `id` 为 `invested_enterprises.id`）触发与 §9.3.1 **同一套** 联网大模型调用与 JSON 解析，结果写入 **`ai_product_intro`、`ai_industry_tags_json`、`ai_industry_tags_display`、`ai_enrich_*`**。模板入参：**`enterprise_full_name` → 企业名称**，**`unified_credit_code`、`project_abbreviation` → 占位符**（空则按 §12.3 口径仍执行）。  
+  - **响应 / 权限 / 幂等 / 日志**：同 §9.3.1 原则；日志落 **`invested_enterprise_ai_enrich_log`**（§4.1.5、§12.12.6）。
+
+- **`POST /api/project-sourcing/invested-enterprises/batch-ai-enrich`**（Body：`start_date`、`end_date` 必填；`only_failed` 可选布尔，为 `true` 时仅 **`ai_enrich_status=failed`**）  
+  - **作用**：按 **`DATE(created_at)`** 落在区间内筛选 `data_app_name=项目挖掘` 且未删除的行；对 **规范化后的企业全称** 去重后逐条排队执行 AI（实现可为服务端并发波次 + 间隔，与融资侧环境变量如并发度、间隔对齐）。**HTTP 202** 表示已受理。仅 **`admin`**。
+
+- **`GET /api/project-sourcing/invested-enterprises/ai-enrich-logs`**（Query：`invested_enterprise_id` 必填，`page`、`pageSize` 可选）  
+  - **作用**：分页返回该被投企业的 AI 执行日志列表，供前端「AI 执行日志」弹窗展示。仅 **`admin`**。
 
 ---
 
@@ -830,7 +869,7 @@ WHERE NOT EXISTS (
 | T7 | 融资信息 AI 增强 DDL | `sourcing_financing_event` 增加 §4.2 / §12.2 所列 `ai_*` 列与索引 | **待开发**（**2026-5-11**） |
 | T8 | AI 增强异步 Worker | 队列、限流、状态机、JSON 校验与 `ai_company_tags_display` 顿号拼接 | **待开发**（**2026-5-11**） |
 | T9 | 配置与提示词接入 | `ai_model_config`（`application_type=project_sourcing_analysis`）+ 模型提示词设置新增 `prompt_type=project_sourcing_financing_web_enrich`；默认文案见 §12.10 | **待开发**（**2026-5-11**，**2026-5-12** 修订口径） |
-| T10 | 前端与 API | 融资事件列表/详情/导出展示 AI 列；**列表页「手动AI取数」单条触发**（§12.8）；接口见 §9.3；管理端批量重算（建议）；**日志查询入口（建议）** | **待开发**（**2026-5-11**，**2026-5-14** 增补，**2026-5-15** 增补） |
+| T10 | 前端与 API | 融资事件列表/详情/导出展示 AI 列；**列表页「手动AI取数」单条触发**（§12.8）；接口见 **§9.3.1**；**被投企业页** 导出当前页/全部、手动同步、AI 与日志（§8.4、§9.3.2）；管理端批量重算（建议）；**日志查询入口（建议）** | **待开发**（**2026-5-11**，**2026-5-14** 增补，**2026-5-15** 增补，**2026-5-13** 被投企业页增补） |
 | T11 | AI 增强日志表 + 埋点 | 新建 `sourcing_financing_ai_enrich_log`（或等价名），触发即写、结束更新；见 §12.12 | **待开发**（**2026-5-15**） |
 
 ---
@@ -838,7 +877,7 @@ WHERE NOT EXISTS (
 ## 十二、融资信息 AI 增强（阶段 A）— 需求定稿（**2026-5-11 更新**，**2026-5-12 修订**，**2026-5-13 修订**，**2026-5-14 增补**，**2026-5-15 增补**，**2026-5-16 章号调整**）
 
 > **范围**：仅落地 **阶段 A**——在标准表 `sourcing_financing_event` 上增加 AI 生成字段与异步增强管线。**「匹配已投企业 / 同类型企业是否有融资」** 为后续阶段 B，不在本条；阶段 B 将优先消费本条中的 `ai_company_tags_json` 等结构化字段。  
-> **后续开发**：以本节与 §4.2 增补字段、§7.4、§9.3、§12.8、§12.10、§12.12 为准实现与验收。
+> **后续开发**：以本节与 §4.2 增补字段、§7.4、§9.3、§12.8、§12.10、§12.12 为准实现与验收；**被投企业（`invested_enterprises`）AI** 与 **§4.1.5**、**§9.3.2**、**§12.12.6** 对齐。
 
 ### 12.1 业务目标
 
@@ -891,7 +930,7 @@ WHERE NOT EXISTS (
   - **手动 AI 取数（§12.8）** 与自动入队 **共用同一 Worker 与限流策略**（便于成本与稳定性控制）；可选：为人工触发任务设置 **略高优先级**，避免被大批量自动任务长时间阻塞（实现非强制）。
 - **状态机建议**：`pending` → `running` → `success` | `failed`；`skipped` 仅用于 **无可检索主体**（例如 `company_name` 为空或经规则判定为无效占位符），**不因**统一社会信用代码为空而跳过（与 §12.3 一致）。
 - **重试**：失败自动重试次数上限（建议 ≤3）与退避策略写死入实现常量；超过上限写 `failed` 并填 `ai_enrich_error`。
-- **日志（强制）**：所有进入本管线的任务（自动入队、**§9.3 手动接口**、批量重算）均须按 **§12.12** 落库；**触发时刻**即产生可追溯记录，执行结束后再补齐结果字段。
+- **日志（强制）**：所有进入本管线的任务（自动入队、**§9.3.1 / §9.3.2 手动接口**、批量重算）均须按 **§12.12** 落库；**触发时刻**即产生可追溯记录，执行结束后再补齐结果字段。
 
 ### 12.8 API 与前端（阶段 A，**2026-5-13 修订**，**2026-5-14 增补**）
 
@@ -901,10 +940,16 @@ WHERE NOT EXISTS (
 - **融资事件列表 — 手动 AI 取数（已定稿，2026-5-14）**  
   - **入口**：在 **融资事件列表** 页筛选区操作栏，于「手动同步」**同一行、靠右** 增加 **`手动AI取数`** 按钮（与产品截图标注位置一致；具体像素级布局服从现有 UI 规范）。  
   - **选择**：用户须 **选中恰好一条** 记录后再点击。实现建议：表格增加 **单选列（radio）**；未选、多选时按钮 **禁用**，或点击后全局提示「请选择一条融资事件」。  
-  - **动作**：点击后调用 **§9.3** 单条触发接口；将选中行的标准表 **`id`** 提交给后端，进入与 §12.7 **相同** 的 AI 增强管线（模型与提示词仍来自系统配置）。**后端在请求被受理的瞬间**须写入 §12.12 日志（含操作人、触发类型 `manual`）。  
+  - **动作**：点击后调用 **§9.3.1** 单条触发接口；将选中行的标准表 **`id`** 提交给后端，进入与 §12.7 **相同** 的 AI 增强管线（模型与提示词仍来自系统配置）。**后端在请求被受理的瞬间**须写入 §12.12 日志（含操作人、触发类型 `manual`）。  
   - **体验**：请求 **异步受理**（推荐）：接口快速返回后，该行展示「生成中」或 `ai_enrich_status=running`，完成后用户 **刷新** 或前端 **短轮询** 拉取最新 `ai_*`；失败时展示 `ai_enrich_error` 可读摘要。  
   - **可选二次确认**：为防止误触，可在点击后弹出轻量确认框（文案如「确认为当前企业重新拉取 AI 简介与标签？」）。  
   - **权限**：默认 **仅 `admin`**，与「手动同步」一致（§3.2）；若后续对投资经理开放，须增加显式权限点并更新本文档。  
+- **项目挖掘 — 被投企业列表（2026-5-13）**  
+  - **入口**：「项目挖掘」→「被投企业」独立页（非舆情 Tab）。  
+  - **导出**：**导出当前页 / 导出全部**（XLSX），列与 **`GET /api/enterprises/export`** 在项目挖掘口径下一致；全部导出按筛选条件分页请求 **`GET /api/enterprises`** 后合并。  
+  - **手动同步**：与融资事件页相同，调用 **`POST /api/project-sourcing/sync`**（配置 + 融资日期区间），见 §3.3。  
+  - **手动 AI / 日志 / 批量 / 重试失败**：交互与融资事件列表 **同一范式**（radio 选一行、`admin`、异步 **202**）；接口见 **§9.3.2**；日志表见 **§12.12.6**。批量日期口径为 **`created_at`**，见 §8.4。  
+  - **权限**：默认 **仅 `admin`**（§3.2）。  
 - **管理端（建议）**：按筛选条件「批量重算 AI 增强」、单条重试；仅 `admin` 或项目挖掘配置权限角色可操作。
 
 ### 12.9 验收标准（阶段 A）
@@ -915,8 +960,9 @@ WHERE NOT EXISTS (
 4. 成功样例：`ai_product_intro` 非空，且以**具体产品/产品线类型**为主，无明显工商/融资史堆砌；`ai_company_tags_display` 为顿号分隔的**自有中文词组**，无股东/上市类噪音；`ai_company_tags_json` 通过 Schema 校验且与 **§12.10** 负面清单一致。  
 5. 失败样例有 `ai_enrich_error` 与任务日志可查；重试耗尽后为 `failed` 且不无限重跑。  
 6. 列表在数据未就绪时展示占位（如「-」或「生成中」），不报错。  
-7. **手动 AI 取数**：`admin` 在选中单条后可成功提交；处理完成后该行 **产品简介(AI)**、**企业标签(AI)** 更新且与 §12.10 口径一致；`running` 期间重复提交行为符合 §9.3 幂等约定。  
-8. **日志**：任意一次触发（手动接口、自动入队、批量重算）在 §12.12 表中 **可查**；至少能按 `financing_event_id`、时间窗、`trigger_type`、操作人筛选；失败记录含错误摘要。
+7. **手动 AI 取数**：`admin` 在选中单条后可成功提交；处理完成后该行 **产品简介(AI)**、**企业标签(AI)** 更新且与 §12.10 口径一致；`running` 期间重复提交行为符合 §9.3.1 幂等约定。  
+8. **日志**：任意一次触发（手动接口、自动入队、批量重算）在 §12.12 表中 **可查**；至少能按 `financing_event_id`、时间窗、`trigger_type`、操作人筛选；失败记录含错误摘要。  
+9. **被投企业（项目挖掘）**：`admin` 在「被投企业」页可完成 §8.4 所列导出与 AI 操作；非管理员无行选与 AI 工具栏。手动 AI 成功后 **`产品介绍（AI）`**、**`行业标签（AI）`** 与 `ai_enrich_status` 更新；**`GET .../invested-enterprises/ai-enrich-logs`** 可拉取对应 `invested_enterprise_id` 的日志行；批量/重试失败行为与 §9.3.2 一致。
 
 ### 12.10 默认提示词（测试稿，**2026-5-12** 首版，**2026-5-13 修订**）
 
@@ -1001,6 +1047,8 @@ WHERE NOT EXISTS (
 | `company_tags`（对象） | `ai_company_tags_json` |
 | `company_tags_display` | `ai_company_tags_display`（界面列名：企业标签(AI)；服务端可校验与 JSON 派生一致性，不一致时以 JSON 重拼顿号串并记日志） |
 
+**被投企业（`invested_enterprises`，`data_app_name=项目挖掘`）**：同一套模型 JSON 落库时，`product_intro` → **`ai_product_intro`**（列表列名 **产品介绍（AI）**）；`company_tags` / `company_tags_display` → **`ai_industry_tags_json`** / **`ai_industry_tags_display`**（列表列名 **行业标签（AI）**），与融资侧字段名区分仅为表结构历史命名。
+
 #### （4）联调检查清单（产品自测）
 
 - `product_intro` 以具体产品/系统类型为主，**无明显**工商/融资/上市段落。  
@@ -1021,12 +1069,13 @@ WHERE NOT EXISTS (
 
 ### 12.12 触发与执行日志（强制，**2026-5-15**）
 
-> **目的**：审计「谁在何时、因何种触发方式、对哪一条融资事件」发起了 AI 增强；支撑排障、幂等争议与成本复盘。与 `sourcing_financing_event.ai_enrich_*` 字段互补：**行上字段**表示当前最新结果，**日志表**保留历史每一次触发与执行过程。
+> **目的**：审计「谁在何时、因何种触发方式、对哪一条 **融资标准表** 或 **被投企业** 记录」发起了 AI 增强；支撑排障、幂等争议与成本复盘。与 **`sourcing_financing_event.ai_enrich_*`** / **`invested_enterprises.ai_enrich_*`** 字段互补：**行上字段**表示当前最新结果，**日志表**保留历史每一次触发与执行过程（融资侧见 **`sourcing_financing_ai_enrich_log`**，被投企业侧见 **`invested_enterprise_ai_enrich_log`**，§12.12.6）。
 
 #### 12.12.1 何时写日志
 
 - **触发瞬间（强制）**：以下任一入口 **成功受理** 即写入一条日志（或插入主键后再更新）：  
-  - **手动**：§9.3 `POST .../events/:id/ai-enrich`；  
+  - **手动（融资）**：§9.3.1 `POST .../events/:id/ai-enrich`；  
+  - **手动（被投企业）**：§9.3.2 `POST .../invested-enterprises/:id/ai-enrich` → **`invested_enterprise_ai_enrich_log`**（见 §12.12.6）；  
   - **自动**：标准表入库后 Worker 将任务入队时；  
   - **批量重算**：管理端批量任务对每条子任务受理时。  
 - **受理失败**（如参数非法、无权限）：可写一条 `execution_status=failed` 且 `error_message` 说明原因，**或**写应用级错误日志；**推荐仍落库**便于运营统计失败原因。  
@@ -1068,6 +1117,14 @@ WHERE NOT EXISTS (
 
 - Worker **开始**调用大模型前：可将标准表 `ai_enrich_status` 更新为 `running`（若采用），并与日志行 `execution_status` 对齐。  
 - Worker **结束**：同时更新标准表 `ai_*`、`ai_enrich_status`、`ai_enrich_at` 等与 **对应日志行** 的 `execution_status`、`finished_at`、`error_message` 等，保证 **同一 `job_trace_id` 或日志 `id` 可关联**。
+
+#### 12.12.6 被投企业侧日志表 `invested_enterprise_ai_enrich_log`（**2026-5-13**）
+
+- **关联**：`invested_enterprise_id` → `invested_enterprises.id`（`data_app_name=项目挖掘`）。  
+- **触发类型建议**：与实现对齐，如 `manual_api`、`batch_date_range`、`batch_retry_failed` 等。  
+- **结果快照**：成功任务建议写入 **`result_product_intro`、`result_industry_tags_display`**（与当次写入标准表字段一致，便于审计历史）。  
+- **索引建议**：`(invested_enterprise_id, triggered_at DESC)`。  
+- **查询**：首期由前端弹窗调用 **§9.3.2** `GET .../ai-enrich-logs`；与 §12.12.4 管理端统一日志 UI 的建议一致，可二期合并筛选维度。
 
 ---
 

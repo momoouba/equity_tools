@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const multer = require('multer');
 const xlsx = require('xlsx');
+const crypto = require('crypto');
 const db = require('../db');
 const { logEnterpriseChange } = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
@@ -133,6 +134,97 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
     [creatorUserId, dataAppName]
   );
   return del.affectedRows || 0;
+}
+
+/** MySQL：与快照表 unified_credit_code 存值一致（trim、去空格、大写） */
+function sqlNormInvestedEnterpriseUnifiedCredit(alias) {
+  const p = alias ? `${alias}.` : '';
+  return `UPPER(REPLACE(TRIM(IFNULL(${p}unified_credit_code,'')),' ',''))`;
+}
+
+/**
+ * 硬删前写入 AI 快照（仅项目挖掘应用、且信用代码非空；同一信用多行取 id 最大一条）。
+ * @returns {Promise<string|null>} batch_id 或 null
+ */
+async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId, dataAppName) {
+  if (!creatorUserId || String(dataAppName || '') !== DATA_APP_PROJECT_SOURCING) {
+    return null;
+  }
+  const batchId = crypto.randomUUID();
+  const normE = sqlNormInvestedEnterpriseUnifiedCredit('e');
+  const normBare = sqlNormInvestedEnterpriseUnifiedCredit('');
+  const ins = await db.execute(
+    `INSERT INTO invested_enterprise_ai_sync_snapshot
+     (batch_id, creator_user_id, data_app_name, unified_credit_code,
+      ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
+      ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version)
+     SELECT ?, e.creator_user_id, e.data_app_name, ${normE},
+            e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
+            e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version
+     FROM invested_enterprises e
+     INNER JOIN (
+       SELECT creator_user_id, data_app_name, ${normBare} AS ucc, MAX(id) AS mid
+       FROM invested_enterprises
+       WHERE creator_user_id = ? AND data_app_name = ?
+         AND delete_mark = 0
+         AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
+       GROUP BY creator_user_id, data_app_name, ${normBare}
+     ) t ON e.id = t.mid`,
+    [batchId, creatorUserId, dataAppName]
+  );
+  const n = ins.affectedRows != null ? ins.affectedRows : 0;
+  console.log(
+    `[企业同步任务] 项目挖掘 AI 快照已写入 batch_id=${batchId} rows=${n}（按统一社会信用代码，供硬删后回填）`
+  );
+  return batchId;
+}
+
+/**
+ * 全量插入完成后，按统一社会信用代码将快照中的 AI 列写回新行。
+ */
+async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUserId, dataAppName) {
+  if (!batchId || !creatorUserId || String(dataAppName || '') !== DATA_APP_PROJECT_SOURCING) {
+    return 0;
+  }
+  const normT = sqlNormInvestedEnterpriseUnifiedCredit('t');
+  const res = await db.execute(
+    `UPDATE invested_enterprises t
+     INNER JOIN invested_enterprise_ai_sync_snapshot s
+       ON s.batch_id = ?
+       AND s.creator_user_id = t.creator_user_id
+       AND s.data_app_name = t.data_app_name
+       AND s.unified_credit_code = ${normT}
+       AND t.delete_mark = 0
+     SET t.ai_product_intro = s.ai_product_intro,
+         t.ai_industry_tags_display = s.ai_industry_tags_display,
+         t.ai_industry_tags_json = s.ai_industry_tags_json,
+         t.ai_enrich_status = s.ai_enrich_status,
+         t.ai_enrich_at = s.ai_enrich_at,
+         t.ai_enrich_model = s.ai_enrich_model,
+         t.ai_enrich_version = s.ai_enrich_version,
+         t.ai_enrich_error = NULL,
+         t.updated_at = CURRENT_TIMESTAMP
+     WHERE t.creator_user_id = ? AND t.data_app_name = ?`,
+    [batchId, creatorUserId, dataAppName]
+  );
+  const affected = res.affectedRows != null ? res.affectedRows : 0;
+  console.log(`[企业同步任务] 项目挖掘 AI 快照回填完成 batch_id=${batchId} affected_rows=${affected}`);
+  return affected;
+}
+
+/** 清理过久快照，避免表无限增长（保留最近 180 天） */
+async function pruneOldInvestedEnterpriseAiSnapshots() {
+  try {
+    const r = await db.execute(
+      `DELETE FROM invested_enterprise_ai_sync_snapshot WHERE created_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`
+    );
+    const n = r.affectedRows != null ? r.affectedRows : 0;
+    if (n > 0) {
+      console.log(`[企业同步任务] 已清理 invested_enterprise_ai_sync_snapshot 过期行 ${n} 条（>180 天）`);
+    }
+  } catch (e) {
+    console.warn('[企业同步任务] 清理 AI 快照表失败', e.message);
+  }
 }
 
 /** 将查询行转为可序列化对象，并把 DECIMAL 规范为 number（避免 RowDataPacket/字符串千分位等导致前端取不到或解析失败） */
@@ -444,7 +536,32 @@ router.get('/', async (req, res) => {
     }
 
     if (search) {
-      condition += ` AND (
+      const searchTerm = `%${search}%`;
+      if (dataAppName === DATA_APP_PROJECT_SOURCING) {
+        condition += ` AND (
+        project_number LIKE ? OR 
+        project_abbreviation LIKE ? OR 
+        enterprise_full_name LIKE ? OR 
+        unified_credit_code LIKE ? OR 
+        wechat_official_account_id LIKE ? OR 
+        official_website LIKE ? OR 
+        exit_status LIKE ? OR
+        COALESCE(ai_product_intro,'') LIKE ? OR
+        COALESCE(ai_industry_tags_display,'') LIKE ?
+      )`;
+        params.push(
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm
+        );
+      } else {
+        condition += ` AND (
         project_number LIKE ? OR 
         project_abbreviation LIKE ? OR 
         enterprise_full_name LIKE ? OR 
@@ -453,8 +570,8 @@ router.get('/', async (req, res) => {
         official_website LIKE ? OR 
         exit_status LIKE ?
       )`;
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      }
     }
 
     const rawRows = await db.query(
@@ -532,7 +649,32 @@ router.get('/export', async (req, res) => {
     }
 
     if (search) {
-      condition += ` AND (
+      const searchTerm = `%${search}%`;
+      if (dataAppName === DATA_APP_PROJECT_SOURCING) {
+        condition += ` AND (
+        project_number LIKE ? OR 
+        project_abbreviation LIKE ? OR 
+        enterprise_full_name LIKE ? OR 
+        unified_credit_code LIKE ? OR 
+        wechat_official_account_id LIKE ? OR 
+        official_website LIKE ? OR 
+        exit_status LIKE ? OR
+        COALESCE(ai_product_intro,'') LIKE ? OR
+        COALESCE(ai_industry_tags_display,'') LIKE ?
+      )`;
+        params.push(
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm,
+          searchTerm
+        );
+      } else {
+        condition += ` AND (
         project_number LIKE ? OR 
         project_abbreviation LIKE ? OR 
         enterprise_full_name LIKE ? OR 
@@ -541,8 +683,8 @@ router.get('/export', async (req, res) => {
         official_website LIKE ? OR 
         exit_status LIKE ?
       )`;
-      const searchTerm = `%${search}%`;
-      params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+        params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
+      }
     }
 
     // 查询所有符合条件的数据（不分页）
@@ -583,6 +725,9 @@ router.get('/export', async (req, res) => {
           剩余成本: formatExportMoney(item.remaining_cost),
           剩余价值: formatExportMoney(item.residual_value),
           退出状态: item.exit_status || '未退出',
+          '产品简介(AI)': item.ai_product_intro || '',
+          '企业标签(AI)': item.ai_industry_tags_display || '',
+          AI状态: item.ai_enrich_status || '',
           创建时间: item.created_at ? new Date(item.created_at) : null,
           更新时间: item.updated_at ? new Date(item.updated_at) : null,
         };
@@ -613,6 +758,9 @@ router.get('/export', async (req, res) => {
       已退出成本: 14,
       剩余成本: 14,
       剩余价值: 14,
+      '产品简介(AI)': 36,
+      '企业标签(AI)': 28,
+      AI状态: 12,
       统一信用代码: 20,
       企业公众号id: 25,
       企业官网: 40,
@@ -1387,25 +1535,49 @@ async function executeSyncTask(
   // 检查查询结果：无数据时若需全量替换，仍执行硬删除（清空该用户本应用监控对象）
   if (!externalData || externalData.length === 0) {
     let deleted = 0;
+    let aiSnapshotBatchIdEmpty = null;
     if (syncOwnerUserId) {
+      try {
+        aiSnapshotBatchIdEmpty = await insertInvestedEnterpriseAiSnapshotBeforeHardDelete(
+          syncOwnerUserId,
+          targetDataAppName
+        );
+      } catch (e) {
+        console.error('[企业同步任务] 写入 AI 快照失败（中止清空）', e);
+        throw e;
+      }
       deleted = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
       console.log(`[企业同步任务] 外部无数据，已硬删除本用户本应用下 ${deleted} 条`);
+      await pruneOldInvestedEnterpriseAiSnapshots();
     }
     return {
       success: true,
       message:
         deleted > 0
-          ? `查询成功，外部无返回行；已清空本应用下共 ${deleted} 条本地数据`
+          ? `查询成功，外部无返回行；已清空本应用下共 ${deleted} 条本地数据${
+              aiSnapshotBatchIdEmpty ? `（AI 快照 batch_id=${aiSnapshotBatchIdEmpty}，可按统一社会信用代码从表 invested_enterprise_ai_sync_snapshot 恢复）` : ''
+            }`
           : '查询成功，但没有数据需要同步',
       synced: 0,
       updated: 0,
       inserted: 0,
       deleted,
+      ai_snapshot_batch_id: aiSnapshotBatchIdEmpty || undefined,
     };
   }
 
   let deletedBeforeSync = 0;
+  let aiSnapshotBatchId = null;
   if (syncOwnerUserId) {
+    try {
+      aiSnapshotBatchId = await insertInvestedEnterpriseAiSnapshotBeforeHardDelete(
+        syncOwnerUserId,
+        targetDataAppName
+      );
+    } catch (e) {
+      console.error('[企业同步任务] 写入 AI 快照失败（中止硬删）', e);
+      throw e;
+    }
     deletedBeforeSync = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
     console.log(
       `[企业同步任务] 硬删除本用户本应用旧数据 ${deletedBeforeSync} 条（creator_user_id=${syncOwnerUserId}, data_app_name=${targetDataAppName}）`
@@ -1789,16 +1961,40 @@ async function executeSyncTask(
     synced++;
   }
 
+  let aiSnapshotRestored = 0;
+  if (aiSnapshotBatchId && syncOwnerUserId) {
+    try {
+      aiSnapshotRestored = await applyInvestedEnterpriseAiSnapshotAfterInsert(
+        aiSnapshotBatchId,
+        syncOwnerUserId,
+        targetDataAppName
+      );
+    } catch (e) {
+      console.error(
+        '[企业同步任务] AI 快照回填失败（业务数据已写入；可按 batch_id 查表 invested_enterprise_ai_sync_snapshot 手工恢复）',
+        e
+      );
+    }
+  }
+  await pruneOldInvestedEnterpriseAiSnapshots();
+
+  const snapshotNote =
+    aiSnapshotBatchId != null
+      ? `；AI 快照 batch_id=${aiSnapshotBatchId}，已回填 ${aiSnapshotRestored} 行`
+      : '';
+
   return {
     success: true,
     message:
       deletedBeforeSync > 0
-        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条`
-        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条`,
+        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}`
+        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}`,
     synced,
     updated,
     inserted,
     deleted: deletedBeforeSync,
+    ai_snapshot_batch_id: aiSnapshotBatchId || undefined,
+    ai_snapshot_restored: aiSnapshotRestored,
   };
 }
 
