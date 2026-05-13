@@ -183,16 +183,22 @@ function registerFinancingRoutes(router) {
     }
   });
 
-  /** 管理员：按融资日期区间批量 AI 取数（去重后条数多则百炼 Batch File，否则并发 chat） */
+  /** 管理员：按融资日期区间批量 AI 取数（去重后条数多则百炼 Batch File，否则并发 chat）；only_failed 时仅重试 ai_enrich_status=failed */
   router.post('/batch-ai-enrich', requireAdmin, async (req, res) => {
     try {
-      const { start_date, end_date } = req.body || {};
+      const body = req.body || {};
+      const { start_date, end_date } = body;
+      const only_failed =
+        body.only_failed === true ||
+        body.only_failed === 1 ||
+        String(body.only_failed || '').toLowerCase() === 'true';
       const userId = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
       const r = await enqueueBatchFinancingAiEnrichByDateRange({
         dateFrom: start_date,
         dateTo: end_date,
         triggeredByUserId: userId,
         clientIp: clientIpFromReq(req),
+        onlyFailed: only_failed,
       });
       if (!r.ok) {
         return res.status(r.code).json({ success: false, message: r.message });
@@ -201,7 +207,11 @@ function registerFinancingRoutes(router) {
       let detail = '';
       let suffix = '';
       if (d.total_in_range != null && d.queued_jobs != null) {
-        detail = `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`;
+        if (d.only_failed) {
+          detail = `区间内 AI 状态为 failed 的融资记录共 ${d.total_in_range} 条，去重后 ${d.queued_jobs} 次重试任务；同一信用代码下全部融资事件将同步更新简介与标签`;
+        } else {
+          detail = `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`;
+        }
       } else {
         detail = `已加入队列 ${d.total} 条`;
       }

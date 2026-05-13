@@ -5,7 +5,12 @@ const C = require('./constants');
 const newsRoutes = require('../../routes/news');
 const { parseFundingAmountFields } = require('./financingAmountParse');
 const { mapIndustryToStd } = require('./financingIndustryMap');
-const { reuseFinancingAiForEventId } = require('./financingAiEnrichService');
+const {
+  reuseFinancingAiForEventId,
+  enqueueIngestFinancingAiEnrich,
+  eventHasCompleteAiContent,
+  enqueueBatchFinancingAiEnrichByDateRange,
+} = require('./financingAiEnrichService');
 
 const RULE_ENRICH_VERSION = 'rule_enrich_v1';
 
@@ -133,8 +138,9 @@ function leadInvestorFromInv(invInfo) {
 /**
  * 单条 deal_info_w_infer 写入明细表并 upsert 标准表
  * @param {string} [fundingDtYmd] queryByDate 当日 yyyy-MM-dd，用于补齐缺失的 event_date
+ * @param {{ userId?: string|null }} [ingestOpts] 入库后 AI 入队时写入 triggered_by（手动同步有值）
  */
-async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
+async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpts = {}) {
   const recordHash = computeRecordHash(deal);
   const invArr = normalizeInvInfoArray(deal.inv_info);
   const invJson = JSON.stringify(invArr);
@@ -323,6 +329,31 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd) {
       } catch (reuseErr) {
         console.warn('[financingIngest] reuseFinancingAiForEventId:', reuseErr.message);
       }
+      try {
+        const aiRows = await db.query(
+          `SELECT ai_product_intro, ai_company_tags_display, ai_company_tags_json
+           FROM sourcing_financing_event WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+          [eventPk]
+        );
+        if (aiRows.length && !eventHasCompleteAiContent(aiRows[0])) {
+          const enq = await enqueueIngestFinancingAiEnrich({
+            eventId: eventPk,
+            triggeredByUserId: ingestOpts.userId || null,
+            clientIp: null,
+          });
+          if (!enq.ok) {
+            if (enq.code === 409) {
+              console.log(
+                `[financingIngest] AI 入队跳过（进行中或冲突） event_id=${eventPk}: ${enq.message || ''}`
+              );
+            } else {
+              console.warn(`[financingIngest] AI 入队失败 event_id=${eventPk}: ${enq.message || enq.code}`);
+            }
+          }
+        }
+      } catch (aiEnqErr) {
+        console.warn('[financingIngest] enqueueIngestFinancingAiEnrich:', aiEnqErr.message);
+      }
       const { applyTrackMatchForEvents } = require('./financingTrackMatch');
       await applyTrackMatchForEvents({ eventIds: [eventPk], mode: 'all' });
     }
@@ -425,7 +456,7 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
           dayIngested = 0;
           for (const deal of deals) {
             if (!deal || deal.funding_id == null) continue;
-            const ingested = await ingestOneDeal(deal, requestId, 'queryByDate', fundingDt);
+            const ingested = await ingestOneDeal(deal, requestId, 'queryByDate', fundingDt, { userId });
             if (ingested) {
               dayIngested += 1;
               dealCount += 1;
@@ -503,6 +534,30 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
         errorCount: errors.length,
         errorMessage: allDaysFailed ? errors.map((x) => `${x.date}: ${x.message}`).join('; ') : null,
         executionDetails: finalDetails,
+      });
+    }
+
+    if (!allDaysFailed) {
+      setImmediate(() => {
+        enqueueBatchFinancingAiEnrichByDateRange({
+          dateFrom: startDate,
+          dateTo: endDate,
+          triggeredByUserId: userId,
+          clientIp: null,
+          onlyFailed: true,
+        })
+          .then((r) => {
+            if (r.ok) {
+              console.log(
+                `[投融资入库][AI失败兜底] 已对区间 ${startDate}~${endDate} 排队重试失败任务 queued=${
+                  r.data?.queued_jobs ?? r.data?.total ?? '-'
+                }`
+              );
+            } else {
+              console.log('[投融资入库][AI失败兜底] 未排队:', r.message || String(r.code));
+            }
+          })
+          .catch((err) => console.warn('[投融资入库][AI失败兜底] 异常:', err.message || err));
       });
     }
 

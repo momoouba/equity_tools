@@ -221,26 +221,37 @@ async function executeListingEmailDigest(recipient, options = {}) {
   let ipoGuidanceYesterday = [];
   let ipoOverseasMonday = [];
   if (includeListingProjectProgress) {
-    /** 报告日 reportDay = 发信日的前一自然日（北京）。原仅按 f_update_time=reportDay，若匹配/同步在次日才写入则「昨日上市」会漏进邮件。补充：打新日历上市日=reportDay 且已关联 new_share 的行一并纳入。 */
+    /** 报告日 reportDay = 发信日的前一自然日（北京）。
+     * - ipo_progress 匹配行：仍按 f_update_time 对齐 reportDay。
+     * - 打新「昨日上市」行：以打新 public_date 对齐 reportDay（与 listingMatchRunner 写入一致）；无 public_date 时回退 f_update_time。
+     * - 兼容历史脏数据：曾把 f_update_time 写成匹配执行日、与 public_date 不一致时，不以 f_update_time 误纳入。 */
     ipp = await db.query(
       `SELECT ipp.fund, ipp.sub, ipp.project_name, ipp.company, ipp.status, ipp.exchange, ipp.board, ipp.f_update_time,
               ipp.inv_amount, ipp.residual_amount, ipp.ratio, ipp.ct_amount, ipp.ct_residual
        FROM ipo_project_progress ipp
        WHERE ipp.F_CreatorUserId = ?
          AND (
-           DATE(ipp.f_update_time) = ?
+           (
+             ipp.new_share_row_id IS NULL
+             AND DATE(ipp.f_update_time) = ?
+           )
            OR (
              ipp.new_share_row_id IS NOT NULL
              AND EXISTS (
                SELECT 1 FROM ipo_new_share ns
                WHERE ns.id = ipp.new_share_row_id
-                 AND ns.public_date IS NOT NULL
-                 AND DATE(ns.public_date) = ?
+                 AND (
+                   (ns.public_date IS NOT NULL AND TRIM(ns.public_date) <> '' AND DATE(ns.public_date) = ?)
+                   OR (
+                     (ns.public_date IS NULL OR TRIM(ns.public_date) = '')
+                     AND DATE(ipp.f_update_time) = ?
+                   )
+                 )
              )
            )
          )
        ORDER BY ipp.f_update_time DESC`,
-      [recipient.user_id, reportDay, reportDay]
+      [recipient.user_id, reportDay, reportDay, reportDay]
     );
   }
   if (includeListingProgress) {

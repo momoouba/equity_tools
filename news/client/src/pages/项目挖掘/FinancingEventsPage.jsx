@@ -11,6 +11,7 @@ import {
   DatePicker,
   Popover,
 } from '@arco-design/web-react'
+import dayjs from 'dayjs'
 import {
   formatFinancingYmd,
   financingNow,
@@ -212,7 +213,10 @@ export default function FinancingEventsPage() {
   const [aiLogFinancingId, setAiLogFinancingId] = useState('')
   const [batchAiVisible, setBatchAiVisible] = useState(false)
   const [batchAiSubmitting, setBatchAiSubmitting] = useState(false)
+  const [retryFailedVisible, setRetryFailedVisible] = useState(false)
+  const [retryFailedSubmitting, setRetryFailedSubmitting] = useState(false)
   const [batchAiForm] = Form.useForm()
+  const [retryFailedForm] = Form.useForm()
 
   const isAdmin = useMemo(() => parseUserAdmin(), [])
 
@@ -452,6 +456,41 @@ export default function FinancingEventsPage() {
     })
   }, [total, fetchAllAndExport])
 
+  const handleRetryFailedAiOk = async () => {
+    try {
+      const v = await retryFailedForm.validate()
+      const range = v.date_range
+      if (!range || range.length !== 2 || !range[0] || !range[1]) {
+        Message.warning('请选择融资日期范围')
+        return
+      }
+      const start = formatFinancingYmd(range[0])
+      const end = formatFinancingYmd(range[1])
+      setRetryFailedSubmitting(true)
+      const res = await postFinancingBatchAiEnrich({
+        start_date: start,
+        end_date: end,
+        only_failed: true,
+      })
+      if (res.status === 202 && res.data?.success) {
+        Message.success(res.data.message || '已加入失败重试队列')
+        setRetryFailedVisible(false)
+        load()
+      } else if (res.data?.success) {
+        Message.success(res.data.message || '已受理')
+        setRetryFailedVisible(false)
+        load()
+      } else {
+        Message.error(res.data?.message || '受理失败')
+      }
+    } catch (e) {
+      if (e?.errors) return
+      Message.error(e.response?.data?.message || e.message || '受理失败')
+    } finally {
+      setRetryFailedSubmitting(false)
+    }
+  }
+
   const handleBatchAiOk = async () => {
     try {
       const v = await batchAiForm.validate()
@@ -677,6 +716,25 @@ export default function FinancingEventsPage() {
             批量AI取数
           </Button>
         )}
+        {isAdmin && (
+          <Button
+            type="outline"
+            status="danger"
+            loading={retryFailedSubmitting}
+            onClick={() => {
+              const defaultRange =
+                dateFrom && dateTo
+                  ? [dayjs(dateFrom, 'YYYY-MM-DD'), dayjs(dateTo, 'YYYY-MM-DD')]
+                  : financingDateRange?.[0] && financingDateRange?.[1]
+                    ? financingDateRange
+                    : [financingNow().subtract(7, 'day'), financingNow()]
+              retryFailedForm.setFieldsValue({ date_range: defaultRange })
+              setRetryFailedVisible(true)
+            }}
+          >
+            重试失败AI
+          </Button>
+        )}
       </Space>
 
       <Table
@@ -766,6 +824,32 @@ export default function FinancingEventsPage() {
           ]}
           pagination={false}
         />
+      </Modal>
+
+      <Modal
+        title="重试失败 AI（仅 failed）"
+        visible={retryFailedVisible}
+        onOk={handleRetryFailedAiOk}
+        confirmLoading={retryFailedSubmitting}
+        onCancel={() => setRetryFailedVisible(false)}
+        style={{ width: 520 }}
+        okText="加入重试队列"
+      >
+        <Form form={retryFailedForm} layout="vertical">
+          <FormItem
+            label="融资日期范围（含首尾两天，仅筛选 AI 状态为 failed 的 sourcing_financing_event）"
+            field="date_range"
+            rules={[{ required: true, message: '请选择日期范围' }]}
+          >
+            <DatePicker.RangePicker style={{ width: '100%' }} />
+          </FormItem>
+        </Form>
+        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+          仅对 <strong>ai_enrich_status = failed</strong> 的融资事件重新排队；去重规则与「批量AI取数」相同（按统一社会信用代码或企业全称）。定时/手动投融资同步完成后，服务端也会<strong>自动</strong>对本同步区间内的失败记录尝试排队重试（无失败则跳过）。
+        </p>
+        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
+          执行方式与批量 AI 一致（超阈值走百炼 Batch，否则并发 chat），日志中触发类型为 <code>batch_retry_failed</code>。
+        </p>
       </Modal>
 
       <Modal

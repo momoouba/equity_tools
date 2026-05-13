@@ -953,6 +953,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
   df,
   dt,
   totalInRange,
+  triggerType = 'batch_date_range',
 }) {
   /** @type {{ logId:number, financingEventId:number, row: object }[]} */
   const llmJobs = [];
@@ -965,13 +966,15 @@ async function submitLargeBatchFileFinancingAiEnrich({
     let cntReuseLocal = 0;
     const batchTaskLog = { batchId, mode: 'batch_file', suppressSuccessConsole: true };
 
-    financingAiJobLog(batchId, 'batch_file', 'submit_start', `event_date=${df}..${dt} rows_in_range=${totalInRange} dedup_representatives=${totalRep}`);
+    financingAiJobLog(batchId, 'batch_file', 'submit_start', `event_date=${df}..${dt} rows_in_range=${totalInRange} dedup_representatives=${totalRep}`, {
+      trigger_type: triggerType,
+    });
 
     for (let ii = 0; ii < totalRep; ii++) {
       const financingEventId = representativeIds[ii];
       const prep = await prepareFinancingAiEnrichJob({
         eventId: financingEventId,
-        triggerType: 'batch_date_range',
+        triggerType,
         triggeredByUserId,
         clientIp,
       });
@@ -1018,7 +1021,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
           await runFinancingAiEnrichTask({
             financingEventId: prep.idNum,
             logId: prep.logId,
-            triggerType: 'batch_date_range',
+            triggerType,
             triggeredByUserId,
             clientIp,
             taskLog: batchTaskLog,
@@ -1047,7 +1050,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
           await runFinancingAiEnrichTask({
             financingEventId: prep.idNum,
             logId: prep.logId,
-            triggerType: 'batch_date_range',
+            triggerType,
             triggeredByUserId,
             clientIp,
             taskLog: batchTaskLog,
@@ -1879,11 +1882,49 @@ async function enqueueManualFinancingAiEnrich({ eventId, triggeredByUserId, clie
   };
 }
 
+/**
+ * 投融资入库（定时/手动同步）后：同主体库内复用仍不足时，异步排队联网 AI；与 manual 共用并发与任务逻辑。
+ */
+async function enqueueIngestFinancingAiEnrich({ eventId, triggeredByUserId = null, clientIp = null }) {
+  const prep = await prepareFinancingAiEnrichJob({
+    eventId,
+    triggerType: 'ingest_sync',
+    triggeredByUserId,
+    clientIp,
+  });
+  if (!prep.ok) {
+    return { ok: false, code: prep.code, message: prep.message };
+  }
+
+  setImmediate(() => {
+    withFinancingAiConcurrency(() =>
+      runFinancingAiEnrichTask({
+        financingEventId: prep.idNum,
+        logId: prep.logId,
+        triggerType: 'ingest_sync',
+        triggeredByUserId,
+        clientIp,
+      })
+    ).catch((e) => console.error('[financingAiEnrich ingest_sync]', e));
+  });
+
+  return {
+    ok: true,
+    code: 202,
+    data: {
+      log_id: prep.logId != null ? String(prep.logId) : null,
+      job_trace_id: prep.jobTraceId,
+      financing_event_id: String(prep.idNum),
+    },
+  };
+}
+
 async function processOneFinancingAiBatchQueueJob(job) {
   try {
+    const triggerType = job.triggerType || 'batch_date_range';
     const prep = await prepareFinancingAiEnrichJob({
       eventId: job.financingEventId,
-      triggerType: 'batch_date_range',
+      triggerType,
       triggeredByUserId: job.triggeredByUserId,
       clientIp: job.clientIp,
     });
@@ -1901,7 +1942,7 @@ async function processOneFinancingAiBatchQueueJob(job) {
       runFinancingAiEnrichTask({
         financingEventId: prep.idNum,
         logId: prep.logId,
-        triggerType: 'batch_date_range',
+        triggerType,
         triggeredByUserId: job.triggeredByUserId,
         clientIp: job.clientIp,
         taskLog: { batchId: job.batchId, mode: 'concurrent_chat', suppressSuccessConsole: true },
@@ -1957,6 +1998,7 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   dateTo,
   triggeredByUserId,
   clientIp,
+  onlyFailed = false,
 }) {
   // 前端按北京时间日历日传 yyyy-MM-dd；库 event_date 为 DATE，直接字符串比较，不做时区换算
   const df = dateFrom != null ? String(dateFrom).trim().slice(0, 10) : '';
@@ -1968,16 +2010,25 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
     return { ok: false, code: 400, message: '开始日期不能晚于结束日期' };
   }
 
+  const failedClause = onlyFailed ? ` AND ai_enrich_status = 'failed' ` : '';
   const rows = await db.query(
     `SELECT id, company_name, company_credit_code FROM sourcing_financing_event
-     WHERE delete_mark = 0 AND event_date >= ? AND event_date <= ?
+     WHERE delete_mark = 0 AND event_date >= ? AND event_date <= ? ${failedClause}
      ORDER BY event_date DESC, id DESC`,
     [df, dt]
   );
   const totalInRange = rows.length;
   if (!totalInRange) {
-    return { ok: false, code: 400, message: '该融资日期范围内没有可处理的融资事件' };
+    return {
+      ok: false,
+      code: 400,
+      message: onlyFailed
+        ? '该融资日期范围内没有 AI 状态为 failed 的融资事件'
+        : '该融资日期范围内没有可处理的融资事件',
+    };
   }
+
+  const batchTriggerType = onlyFailed ? 'batch_retry_failed' : 'batch_date_range';
 
   /**
    * 去重减少无效调用：有统一社会信用代码时按代码去重（推荐）；无代码时按企业全称去重。
@@ -2001,6 +2052,8 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   if (queuedJobs > BATCH_FILE_THRESHOLD) {
     financingAiJobLog(batchId, 'batch_file', 'enqueue', `date=${df}..${dt} dedup_jobs=${queuedJobs} threshold=${BATCH_FILE_THRESHOLD}`, {
       rows_in_range: totalInRange,
+      only_failed: !!onlyFailed,
+      trigger_type: batchTriggerType,
     });
     let submitResult;
     try {
@@ -2012,6 +2065,7 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
         df,
         dt,
         totalInRange,
+        triggerType: batchTriggerType,
       });
     } catch (e) {
       const msg = (e && e.message) || String(e);
@@ -2049,6 +2103,7 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
           concurrency: FINANCING_AI_CONCURRENCY_N,
           dashscope_batch_id: null,
           llm_jobs_submitted: 0,
+          only_failed: !!onlyFailed,
         },
       };
     }
@@ -2094,6 +2149,7 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
         concurrency: FINANCING_AI_CONCURRENCY_N,
         dashscope_batch_id: dashscopeBatchId,
         llm_jobs_submitted: llmJobs.length,
+        only_failed: !!onlyFailed,
       },
     };
   }
@@ -2104,12 +2160,15 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
       financingEventId,
       triggeredByUserId,
       clientIp,
+      triggerType: batchTriggerType,
     });
   }
 
   financingAiJobLog(batchId, 'concurrent_chat', 'queue_ready', `dedup_jobs=${queuedJobs} date=${df}..${dt}`, {
     concurrency: FINANCING_AI_CONCURRENCY_N,
     wave_gap_ms: BATCH_AI_GAP_MS,
+    only_failed: !!onlyFailed,
+    trigger_type: batchTriggerType,
   });
   scheduleFinancingAiBatchPump();
 
@@ -2130,15 +2189,18 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
       date_to: dt,
       gap_ms: BATCH_AI_GAP_MS,
       concurrency: FINANCING_AI_CONCURRENCY_N,
+      only_failed: !!onlyFailed,
     },
   };
 }
 
 module.exports = {
   enqueueManualFinancingAiEnrich,
+  enqueueIngestFinancingAiEnrich,
   enqueueBatchFinancingAiEnrichByDateRange,
   runFinancingAiEnrichTask,
   reuseFinancingAiForEventId,
+  eventHasCompleteAiContent,
   PROMPT_INTERFACE,
   PROMPT_TYPE,
   AI_ENRICH_VERSION,

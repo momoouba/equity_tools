@@ -82,7 +82,8 @@ async function runNewShareMatchBatch({
   }
 
   const newShareRows = await db.query(
-    `SELECT id, stock_code, stock_name, enterprise_full_name_cn, enterprise_full_name_en, exchange
+    `SELECT id, stock_code, stock_name, enterprise_full_name_cn, enterprise_full_name_en, exchange,
+            DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date
      FROM ipo_new_share
      WHERE public_date IS NOT NULL
        AND DATE(public_date) >= ?
@@ -104,25 +105,26 @@ async function runNewShareMatchBatch({
   );
 
   const now = new Date();
-  const updateAt = new Date(`${todayYmd}T00:00:00+08:00`);
   let inserted = 0;
   let matchedPairs = 0;
   let skipped = 0;
   for (const ns of newShareRows) {
     const board = deriveBoardFromNewShare(ns);
+    const listingYmd = normYmd(ns.public_date) || todayYmd;
+    const updateAt = new Date(`${listingYmd}T00:00:00+08:00`);
     for (const p of projectRows) {
       const hitInfo = isNewShareMatch(p, ns, 0.8);
       if (!hitInfo.hit) continue;
       matchedPairs += 1;
+      // 与上市日对齐：避免「晚一天匹配」导致 f_update_time=写入日，进而在次日日报被误当作「昨日进展」
       const existing = await db.query(
         `SELECT f_id
          FROM ipo_project_progress
          WHERE match_source = 'new_share'
            AND ipo_project_f_id = ?
            AND new_share_row_id = ?
-           AND DATE(f_update_time) = ?
          LIMIT 1`,
-        [p.f_id, ns.id, todayYmd]
+        [p.f_id, ns.id]
       );
       if (existing.length) {
         skipped += 1;

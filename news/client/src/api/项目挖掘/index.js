@@ -13,7 +13,7 @@ export function postFinancingEventAiEnrich(eventId) {
   return axios.post(`/api/project-sourcing/events/${eventId}/ai-enrich`)
 }
 
-/** 管理员：按融资日期区间批量 AI 取数（服务端队列，HTTP 202） */
+/** 管理员：按融资日期区间批量 AI 取数（服务端队列，HTTP 202）；body.only_failed=true 时仅重试 ai_enrich_status=failed */
 export function postFinancingBatchAiEnrich(body) {
   return axios.post('/api/project-sourcing/batch-ai-enrich', body)
 }
