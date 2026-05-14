@@ -274,8 +274,12 @@ export default function ListingIpoProjectPage() {
       })
       if (res.data?.success) {
         const d = res.data.data || {}
+        const snap =
+          d.ai_snapshot_saved != null || d.ai_snapshot_restored != null
+            ? `；快照 ${d.ai_snapshot_saved ?? 0} 条，回填 ${d.ai_snapshot_restored ?? 0} 行`
+            : ''
         Message.success(
-          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}`
+          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}${snap}`
         )
         setSqlModalOpen(false)
         load()
@@ -735,7 +739,8 @@ export default function ListingIpoProjectPage() {
         }
       >
         <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
-          仅支持只读 SQL（SELECT / WITH）。SQL 查询结果字段名需与下列名称一致（顺序可不同）：project_name、company、fund、
+          仅支持只读 SQL（SELECT / WITH）。SQL 查询结果字段名需与下列名称一致（顺序可不同）：project_name、company、
+          unified_credit_code（可选；有值时用于同步后回填产品介绍(AI)、行业标签(AI)、企查查简介）、fund、
           sub（可选）、inv_amount、residual_amount、ratio、ct_amount、ct_residual。系统将按字段名自动匹配并写入。去重键：归属基金
           + 归属子基金 + 企业全称（当前用户范围内）。
         </p>

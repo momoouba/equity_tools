@@ -226,3 +226,12 @@
   cursor: not-allowed;
 }
 
+/* Arco Form 嵌入与「被投企业」同款弹层（如项目挖掘·底层项目） */
+.enterprise-form > .arco-form {
+  width: 100%;
+}
+
+.enterprise-form .arco-form-item {
+  margin-bottom: 18px;
+}
+

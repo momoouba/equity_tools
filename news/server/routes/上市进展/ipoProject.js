@@ -15,6 +15,7 @@ const {
   IPO_BATCH_IMPORT_TEMPLATE_EXAMPLE,
   normalizeIpoBatchImportRow,
 } = require('../../utils/上市进展/ipoBatchImportNormalize');
+const { getApplicationIdByAppName } = require('../../utils/applicationIdResolve');
 const upload = multer({ storage: multer.memoryStorage() });
 
 function forbidden(res) {
@@ -32,6 +33,12 @@ async function buildIpoProjectWhere(req, user) {
   const where = ['p.F_DeleteMark = 0'];
   const params = [];
 
+  const listingAppId = await getApplicationIdByAppName('上市进展');
+  if (listingAppId) {
+    where.push('p.data_app_id = ?');
+    params.push(listingAppId);
+  }
+
   if (!isAdminAccount(user.account)) {
     where.push('p.F_CreatorUserId = ?');
     params.push(user.id);
@@ -43,9 +50,9 @@ async function buildIpoProjectWhere(req, user) {
   if (keyword) {
     const like = `%${keyword}%`;
     where.push(
-      `(p.project_no LIKE ? OR p.fund LIKE ? OR p.sub LIKE ? OR p.project_name LIKE ? OR p.company LIKE ? OR CAST(p.inv_amount AS CHAR) LIKE ?)`
+      `(p.project_no LIKE ? OR p.fund LIKE ? OR p.sub LIKE ? OR p.project_name LIKE ? OR p.company LIKE ? OR CAST(p.inv_amount AS CHAR) LIKE ? OR IFNULL(p.unified_credit_code,'') LIKE ? OR IFNULL(p.ai_product_intro,'') LIKE ? OR IFNULL(p.ai_industry_tags_display,'') LIKE ? OR IFNULL(p.qcc_company_intro,'') LIKE ?)`
     );
-    params.push(like, like, like, like, like, like);
+    params.push(like, like, like, like, like, like, like, like, like, like);
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -113,10 +120,16 @@ async function exportIpoProjectsCsv(req, res) {
 
     const csv = rowsToCsv(rows, [
       { label: '项目编号', key: 'project_no' },
+      { label: 'data_app_id', key: 'data_app_id' },
       { label: '归属基金', key: 'fund' },
       { label: '归属子基金', key: 'sub' },
       { label: '项目简称', key: 'project_name' },
       { label: '企业全称', key: 'company' },
+      { label: '统一社会信用代码', key: 'unified_credit_code' },
+      { label: '产品介绍(AI)', key: 'ai_product_intro' },
+      { label: '行业标签(AI)', key: 'ai_industry_tags_display' },
+      { label: 'AI状态', key: 'ai_enrich_status' },
+      { label: '企业介绍(企查查)', key: 'qcc_company_intro' },
       { label: '投资金额', key: 'inv_amount' },
       { label: '剩余金额', key: 'residual_amount' },
       { label: '穿透权益占比', key: 'ratio' },
@@ -148,6 +161,7 @@ async function importIpoProjectRows(rowsIn, user) {
 
   let inserted = 0;
   const now = new Date();
+  const listingAppId = await getApplicationIdByAppName('上市进展');
   for (const raw of rowsIn) {
     const r = normalizeIpoBatchImportRow(raw);
     if (!r) continue;
@@ -155,8 +169,9 @@ async function importIpoProjectRows(rowsIn, user) {
     await db.execute(
       `INSERT INTO ipo_project (
         project_no, biz_update_time, F_CreatorTime, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
-        project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub,
+        data_app_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         project_no,
         r.biz_update_time || now,
@@ -173,6 +188,7 @@ async function importIpoProjectRows(rowsIn, user) {
         r.ct_residual,
         r.fund,
         r.sub,
+        listingAppId,
       ]
     );
     inserted += 1;
@@ -263,12 +279,14 @@ async function createIpoProject(req, res) {
     const body = req.body || {};
     const project_no = await generateIpoProjectNo();
     const now = new Date();
+    const listingAppId = await getApplicationIdByAppName('上市进展');
 
     await db.execute(
       `INSERT INTO ipo_project (
         project_no, biz_update_time, F_CreatorTime, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
-        project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub,
+        data_app_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         project_no,
         body.biz_update_time || null,
@@ -285,6 +303,7 @@ async function createIpoProject(req, res) {
         body.ct_residual,
         body.fund,
         body.sub || null,
+        listingAppId,
       ]
     );
 

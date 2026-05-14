@@ -12,6 +12,7 @@ const {
   DATA_APP_PROJECT_SOURCING,
   normalizeDataAppName,
 } = require('../utils/enterpriseDataApp');
+const { getApplicationIdByAppName } = require('../utils/applicationIdResolve');
 const { queryExternal, getExternalPool, createExternalPool } = require('../utils/externalDb');
 
 const router = express.Router();
@@ -333,14 +334,15 @@ async function insertEnterpriseRow({
 }) {
   const project_number = await generateProjectNumber();
   const enterpriseId = await generateId('invested_enterprises');
-  
+  const dataAppId = await getApplicationIdByAppName(data_app_name);
+
   // 插入到 invested_enterprises 表
   await db.execute(
     `INSERT INTO invested_enterprises 
      (id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
-      wechat_official_account_id, official_website, entity_type, exit_status, data_app_name,
+      wechat_official_account_id, official_website, entity_type, exit_status, data_app_name, data_app_id,
       investment_cost, exited_cost, remaining_cost, residual_value, creator_user_id) 
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       enterpriseId,
       project_number,
@@ -352,6 +354,7 @@ async function insertEnterpriseRow({
       entity_type || null,
       exit_status || '未退出',
       data_app_name,
+      dataAppId || null,
       investment_cost,
       exited_cost,
       remaining_cost,
@@ -1594,7 +1597,7 @@ async function executeSyncTask(
   }
 
   // 获取invested_enterprises表的所有字段（排除系统字段）
-  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name'];
+  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name', 'data_app_id'];
   const tableColumns = await db.query(`
     SELECT COLUMN_NAME 
     FROM INFORMATION_SCHEMA.COLUMNS 
@@ -1861,6 +1864,11 @@ async function executeSyncTask(
       if (!insertFields.includes('data_app_name')) {
         insertFields.push('data_app_name');
         insertValues.push(targetDataAppName);
+      }
+      if (!insertFields.includes('data_app_id')) {
+        const syncAppId = await getApplicationIdByAppName(targetDataAppName);
+        insertFields.push('data_app_id');
+        insertValues.push(syncAppId || null);
       }
       if (syncOwnerUserId && !insertFields.includes('creator_user_id')) {
         insertFields.push('creator_user_id');

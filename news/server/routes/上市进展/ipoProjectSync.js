@@ -7,6 +7,7 @@ const {
   ensureExternalPool,
   formatExternalSqlError,
   runIpoProjectSqlSyncForUser,
+  IPO_SQL_WRITE_TARGET_LISTING,
 } = require('../../utils/上市进展/ipoProjectSqlSyncRunner');
 const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
 
@@ -27,19 +28,19 @@ async function getSqlSyncSetting(req, res) {
     const configId = (req.query?.external_db_config_id || '').trim();
     const rows = configId
       ? await db.query(
-          `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression, column_map, created_at, updated_at
+          `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, column_map, created_at, updated_at
            FROM ipo_project_sql_sync_setting
-           WHERE user_id = ? AND external_db_config_id = ?
+           WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
            LIMIT 1`,
-          [user.id, configId]
+          [user.id, configId, IPO_SQL_WRITE_TARGET_LISTING]
         )
       : await db.query(
-          `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression, column_map, created_at, updated_at
+          `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, column_map, created_at, updated_at
            FROM ipo_project_sql_sync_setting
-           WHERE user_id = ?
+           WHERE user_id = ? AND write_target = ?
            ORDER BY updated_at DESC
            LIMIT 1`,
-          [user.id]
+          [user.id, IPO_SQL_WRITE_TARGET_LISTING]
         );
     if (!rows.length) {
       return res.json({
@@ -86,29 +87,46 @@ async function putSqlSyncSetting(req, res) {
     }
 
     const existing = await db.query(
-      `SELECT id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? LIMIT 1`,
-      [user.id, external_db_config_id]
+      `SELECT id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+      [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]
     );
 
     if (existing.length) {
       await db.execute(
         `UPDATE ipo_project_sql_sync_setting SET
           external_db_config_id = ?, sql_text = ?, is_enabled = ?, cron_expression = ?
-         WHERE user_id = ? AND external_db_config_id = ?`,
-        [external_db_config_id, sql_text || null, is_enabled, cron_expression || null, user.id, external_db_config_id]
+         WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?`,
+        [
+          external_db_config_id,
+          sql_text || null,
+          is_enabled,
+          cron_expression || null,
+          user.id,
+          external_db_config_id,
+          IPO_SQL_WRITE_TARGET_LISTING,
+        ]
       );
     } else {
       const id = await generateId('ipo_project_sql_sync_setting');
       await db.execute(
-        `INSERT INTO ipo_project_sql_sync_setting (id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression, column_map)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, user.id, external_db_config_id, sql_text || null, is_enabled, cron_expression || null, JSON.stringify({})]
+        `INSERT INTO ipo_project_sql_sync_setting (id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, column_map)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          id,
+          user.id,
+          IPO_SQL_WRITE_TARGET_LISTING,
+          external_db_config_id,
+          sql_text || null,
+          is_enabled,
+          cron_expression || null,
+          JSON.stringify({}),
+        ]
       );
     }
 
     const saved = await db.query(
-      `SELECT * FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? LIMIT 1`,
-      [user.id, external_db_config_id]
+      `SELECT * FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+      [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]
     );
     await updateListingScheduledTasks();
     return res.json({ success: true, data: saved[0] });
@@ -161,9 +179,9 @@ async function postSqlSyncRun(req, res) {
     if (!external_db_config_id || !sql_text || is_enabled === undefined) {
       const saved = await db.query(
         `SELECT * FROM ipo_project_sql_sync_setting
-         WHERE user_id = ? AND external_db_config_id = ?
+         WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
          LIMIT 1`,
-        [user.id, external_db_config_id]
+        [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]
       );
       if (saved.length) {
         const s = saved[0];
@@ -177,6 +195,7 @@ async function postSqlSyncRun(req, res) {
       external_db_config_id,
       sql_text,
       is_enabled,
+      writeTarget: IPO_SQL_WRITE_TARGET_LISTING,
     });
     return res.json({
       success: true,

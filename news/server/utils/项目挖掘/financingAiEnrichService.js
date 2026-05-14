@@ -1663,6 +1663,100 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
   }
 }
 
+/** 竞品补录：仅从用户文本抽取标签，不启用联网检索。 */
+async function callDashScopeOpenAiChatNoSearch(systemContent, userContent, config) {
+  const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);
+  const temperature =
+    typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.2;
+  const maxTokensRaw =
+    typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const max_tokens = Number.isFinite(maxTokensRaw) ? Math.min(4000, Math.max(256, maxTokensRaw)) : 2048;
+  const top_p = typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p ?? 0.9;
+  const sys = String(systemContent || '').trim();
+  const usr = String(userContent || '').trim();
+  if (!sys || !usr) {
+    throw new Error('系统或用户提示词为空');
+  }
+  const body = {
+    model: config.model_name,
+    messages: [
+      { role: 'system', content: sys },
+      { role: 'user', content: usr },
+    ],
+    temperature,
+    max_tokens,
+    top_p,
+  };
+  try {
+    const response = await axios.post(endpoint, body, {
+      headers: {
+        Authorization: `Bearer ${config.api_key}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: 120000,
+    });
+    return response.data?.choices?.[0]?.message?.content;
+  } catch (err) {
+    throw new Error(formatDashScopeHttpError(err));
+  }
+}
+
+const COMPETITOR_NARRATIVE_EXTRACT_SYSTEM = `你是企业业务标签抽取助手。用户提供一段关于公司产品与业务的自述（可能含中文标点）。
+只做归纳，不要做联网搜索，不要照抄工商经营范围式套话。
+输出且仅输出一个 JSON 对象，字段固定为：
+{"tags":["标签1","标签2",...],"short_summary":"一句话业务概括"}
+要求：
+- tags 为 4～16 个中文短语或常见行业英文词（如 K12、AI），贴近赛道/场景/客户类型；不要输出企业全称；不要输出过宽地名或空泛词。
+- short_summary 不超过 80 个汉字。
+- 不要输出 Markdown、不要用代码块包裹 JSON。`;
+
+/**
+ * 从用户粘贴的「企业业务/产品介绍」中抽取标签（不走联网检索）。
+ * @param {string} narrative
+ * @returns {Promise<{ tags: string[], short_summary: string, raw: string, llm_model_config_id: string|null }>}
+ */
+async function extractCompetitorSupplementTagsFromNarrative(narrative) {
+  const text0 = String(narrative || '').trim();
+  if (!text0) {
+    throw new Error('请先粘贴企业业务/产品介绍文本');
+  }
+  const text = text0.length > 2000 ? text0.slice(0, 2000) : text0;
+  const promptMeta = await loadActivePromptMeta();
+  const promptBundle = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
+  const { llm_model_config_id, config } = await resolveLlmConfig(promptBundle, promptMeta);
+  if (!config) {
+    throw new Error(
+      '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型'
+    );
+  }
+  const usr = `以下为用户提供的文本，请按要求输出 JSON：\n\n---\n${text}\n---`;
+  const raw = await callDashScopeOpenAiChatNoSearch(COMPETITOR_NARRATIVE_EXTRACT_SYSTEM, usr, config);
+  const parsed = extractJsonObject(raw);
+  if (!parsed || typeof parsed !== 'object') {
+    logAndThrowUnparseableModelJson(raw, 'competitor_narrative_extract');
+  }
+  let tags = parsed.tags;
+  if (typeof tags === 'string') {
+    tags = tags
+      .split(/[,，、]/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+  }
+  if (!Array.isArray(tags)) tags = [];
+  tags = tags.map((t) => String(t).trim()).filter(Boolean).slice(0, 20);
+  const short_summary =
+    parsed.short_summary != null ? String(parsed.short_summary).trim().slice(0, 120) : '';
+  if (tags.length < 1) {
+    throw new Error('模型未返回有效标签，请修改文案后重试');
+  }
+  return {
+    tags,
+    short_summary,
+    raw: String(raw || ''),
+    llm_model_config_id: llm_model_config_id != null ? String(llm_model_config_id) : null,
+  };
+}
+
 /**
  * 异步执行单条融资事件的联网 AI 增强（写标准表 + 日志）。
  */
@@ -2310,4 +2404,5 @@ module.exports = {
   buildBuiltinPromptContentForDb,
   PROMPT_SECTION_SYSTEM,
   PROMPT_SECTION_USER,
+  extractCompetitorSupplementTagsFromNarrative,
 };

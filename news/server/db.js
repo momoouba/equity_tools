@@ -4989,6 +4989,103 @@ async function initializeTables(dbPool) {
     console.warn('创建 ipo_project 表时出现警告:', err.message);
   }
 
+  const addIpoProjectCol = async (name, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project' AND COLUMN_NAME = ?`,
+        [name]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE ipo_project ${ddl}`);
+        console.log(`  ✓ 已为 ipo_project 表添加 ${name} 字段`);
+      }
+    } catch (err) {
+      console.warn(`检查/添加 ipo_project.${name} 时出现警告:`, err.message);
+    }
+  };
+  await addIpoProjectCol(
+    'data_app_id',
+    `ADD COLUMN data_app_id VARCHAR(19) NULL COMMENT 'applications.id' AFTER sub`
+  );
+  await addIpoProjectCol(
+    'unified_credit_code',
+    `ADD COLUMN unified_credit_code VARCHAR(64) NULL COMMENT '统一社会信用代码' AFTER company`
+  );
+  await addIpoProjectCol(
+    'ai_product_intro',
+    `ADD COLUMN ai_product_intro LONGTEXT NULL COMMENT '产品介绍(AI)' AFTER unified_credit_code`
+  );
+  await addIpoProjectCol(
+    'ai_industry_tags_display',
+    `ADD COLUMN ai_industry_tags_display VARCHAR(2000) NULL COMMENT '行业标签(AI)展示' AFTER ai_product_intro`
+  );
+  await addIpoProjectCol(
+    'ai_industry_tags_json',
+    `ADD COLUMN ai_industry_tags_json JSON NULL COMMENT '行业标签(AI) JSON' AFTER ai_industry_tags_display`
+  );
+  await addIpoProjectCol(
+    'ai_enrich_status',
+    `ADD COLUMN ai_enrich_status VARCHAR(32) NULL COMMENT 'pending/running/success/failed' AFTER ai_industry_tags_json`
+  );
+  await addIpoProjectCol(
+    'ai_enrich_at',
+    `ADD COLUMN ai_enrich_at DATETIME NULL COMMENT '最近一次 AI 成功时间' AFTER ai_enrich_status`
+  );
+  await addIpoProjectCol(
+    'ai_enrich_model',
+    `ADD COLUMN ai_enrich_model VARCHAR(128) NULL COMMENT '模型名称快照' AFTER ai_enrich_at`
+  );
+  await addIpoProjectCol(
+    'ai_enrich_version',
+    `ADD COLUMN ai_enrich_version VARCHAR(64) NULL COMMENT '管线版本' AFTER ai_enrich_model`
+  );
+  await addIpoProjectCol(
+    'ai_enrich_error',
+    `ADD COLUMN ai_enrich_error VARCHAR(500) NULL COMMENT 'AI 失败摘要' AFTER ai_enrich_version`
+  );
+  await addIpoProjectCol(
+    'qcc_company_intro',
+    `ADD COLUMN qcc_company_intro LONGTEXT NULL COMMENT '企业介绍（企查查）' AFTER ai_enrich_error`
+  );
+  await addIpoProjectCol(
+    'qcc_sync_at',
+    `ADD COLUMN qcc_sync_at DATETIME NULL COMMENT '最近一次企查查同步时间' AFTER qcc_company_intro`
+  );
+  await addIpoProjectCol(
+    'qcc_sync_error',
+    `ADD COLUMN qcc_sync_error VARCHAR(500) NULL COMMENT '最近一次企查查同步失败摘要' AFTER qcc_sync_at`
+  );
+
+  try {
+    const [listingRows] = await dbPool.query(
+      `SELECT id FROM applications
+       WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
+             CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+       LIMIT 1`,
+      ['上市进展']
+    );
+    if (listingRows.length) {
+      const lid = String(listingRows[0].id);
+      await dbPool.query(
+        `UPDATE ipo_project SET data_app_id = ? WHERE data_app_id IS NULL OR TRIM(data_app_id) = ''`,
+        [lid]
+      );
+      console.log('  ✓ ipo_project.data_app_id 已回填为「上市进展」应用 id');
+    }
+  } catch (err) {
+    console.warn('  回填 ipo_project.data_app_id 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_project MODIFY COLUMN data_app_id VARCHAR(19) NOT NULL COMMENT 'applications.id'`
+    );
+    console.log('  ✓ ipo_project.data_app_id 已设为 NOT NULL');
+  } catch (err) {
+    console.warn('  ipo_project.data_app_id 设 NOT NULL 时出现警告:', err.message);
+  }
+
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project_progress (
@@ -5911,14 +6008,38 @@ async function initializeTables(dbPool) {
     'qcc_sync_error',
     `ADD COLUMN qcc_sync_error VARCHAR(500) NULL COMMENT '最近一次企查查同步失败摘要' AFTER qcc_sync_at`
   );
+  await addIeEnterpriseAiCol(
+    'qcc_sync_via',
+    `ADD COLUMN qcc_sync_via VARCHAR(32) NULL COMMENT '最近一次企查查简介写入来源：cross_table_propagate|qcc_api|legacy_api' AFTER qcc_sync_error`
+  );
+  await addIeEnterpriseAiCol(
+    'data_app_id',
+    `ADD COLUMN data_app_id VARCHAR(19) NULL COMMENT 'applications.id，与 data_app_name 对齐；写入以 id 为准' AFTER data_app_name`
+  );
+
+  try {
+    await dbPool.query(`
+      UPDATE invested_enterprises ie
+      INNER JOIN applications a
+        ON CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
+           CAST(ie.data_app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
+      SET ie.data_app_id = a.id
+      WHERE (ie.data_app_id IS NULL OR TRIM(ie.data_app_id) = '')
+        AND ie.data_app_name IS NOT NULL AND TRIM(ie.data_app_name) <> ''
+    `);
+    console.log('  ✓ invested_enterprises.data_app_id 已按 applications.app_name 回填');
+  } catch (err) {
+    console.warn('  回填 invested_enterprises.data_app_id 时出现警告:', err.message);
+  }
 
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS invested_enterprise_ai_enrich_log (
         id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
-        invested_enterprise_id VARCHAR(19) NOT NULL COMMENT 'invested_enterprises.id',
-        enterprise_full_name VARCHAR(255) NULL COMMENT '被投企业全称快照',
-        trigger_type VARCHAR(32) NOT NULL COMMENT 'manual_api/batch_date_range/batch_retry_failed 等',
+        invested_enterprise_id VARCHAR(19) NULL COMMENT 'invested_enterprises.id；与 ipo_project_f_id 二选一',
+        ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.f_id（底层项目）',
+        enterprise_full_name VARCHAR(255) NULL COMMENT '企业全称快照（被投企业或底层项目）',
+        trigger_type VARCHAR(80) NOT NULL COMMENT 'invested_enterprises:<原值> 或 ipo_project:<原值>；无前缀的旧数据按被投企业解读',
         triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人 users.id',
         triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '触发受理时间',
         client_ip VARCHAR(64) NULL COMMENT '客户端 IP',
@@ -5937,12 +6058,76 @@ async function initializeTables(dbPool) {
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         KEY idx_ie_ai_log_ent_time (invested_enterprise_id, triggered_at),
-        KEY idx_ie_ai_log_status_time (execution_status, triggered_at)
+        KEY idx_ie_ai_log_status_time (execution_status, triggered_at),
+        KEY idx_ie_ai_log_ipo (ipo_project_f_id, triggered_at)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-被投企业联网AI增强日志';
     `);
     console.log('✓ invested_enterprise_ai_enrich_log 表已就绪');
   } catch (err) {
     console.warn('创建 invested_enterprise_ai_enrich_log 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      ALTER TABLE invested_enterprise_ai_enrich_log
+      MODIFY COLUMN trigger_type VARCHAR(80) NOT NULL COMMENT 'invested_enterprises:<原值> 或 ipo_project:<原值>；无前缀的旧数据按被投企业解读'
+    `);
+    console.log('✓ invested_enterprise_ai_enrich_log.trigger_type 已放宽至 VARCHAR(80) 并更新注释');
+  } catch (err) {
+    console.warn('迁移 invested_enterprise_ai_enrich_log.trigger_type 时出现警告:', err.message);
+  }
+
+  try {
+    const [colIpo] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprise_ai_enrich_log' AND COLUMN_NAME = 'ipo_project_f_id'`
+    );
+    if (!colIpo.length) {
+      await dbPool.query(`
+        ALTER TABLE invested_enterprise_ai_enrich_log
+          ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.f_id（底层项目）' AFTER invested_enterprise_id
+      `);
+      console.log('✓ invested_enterprise_ai_enrich_log 已添加 ipo_project_f_id');
+    }
+  } catch (err) {
+    console.warn('迁移 invested_enterprise_ai_enrich_log.ipo_project_f_id 时出现警告:', err.message);
+  }
+
+  try {
+    const [colPreInvLog] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprise_ai_enrich_log' AND COLUMN_NAME = 'pre_investment_project_id'`
+    );
+    if (!colPreInvLog.length) {
+      await dbPool.query(`
+        ALTER TABLE invested_enterprise_ai_enrich_log
+          ADD COLUMN pre_investment_project_id VARCHAR(19) NULL COMMENT 'pre_investment_project.id（投前项目）' AFTER ipo_project_f_id
+      `);
+      console.log('✓ invested_enterprise_ai_enrich_log 已添加 pre_investment_project_id');
+    }
+  } catch (err) {
+    console.warn('迁移 invested_enterprise_ai_enrich_log.pre_investment_project_id 时出现警告:', err.message);
+  }
+  try {
+    await dbPool.query(`
+      ALTER TABLE invested_enterprise_ai_enrich_log
+      ADD KEY idx_ie_ai_log_pre_inv (pre_investment_project_id, triggered_at)
+    `);
+    console.log('✓ invested_enterprise_ai_enrich_log 已添加 idx_ie_ai_log_pre_inv');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate key name')) {
+      console.warn('迁移 invested_enterprise_ai_enrich_log.idx_ie_ai_log_pre_inv 时出现警告:', err.message);
+    }
+  }
+
+  try {
+    await dbPool.query(`
+      ALTER TABLE invested_enterprise_ai_enrich_log
+      MODIFY COLUMN invested_enterprise_id VARCHAR(19) NULL COMMENT 'invested_enterprises.id；与 ipo_project_f_id / pre_investment_project_id 三选一'
+    `);
+    console.log('✓ invested_enterprise_ai_enrich_log.invested_enterprise_id 已允许 NULL');
+  } catch (err) {
+    console.warn('迁移 invested_enterprise_ai_enrich_log.invested_enterprise_id NULL 时出现警告:', err.message);
   }
 
   // 被投企业同步硬删前：按统一社会信用代码保存 AI 列快照，全量写入后回填（便于故障恢复）
@@ -5988,6 +6173,257 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 invested_enterprise_ai_sync_snapshot.qcc_company_intro 时出现警告:', err.message);
+  }
+
+  // 底层项目 SQL 同步硬删前：按统一社会信用代码保存 AI/企查查简介，全量写入后回填
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_project_ai_sync_snapshot (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '与 ipo_project.F_CreatorUserId 一致',
+        data_app_id VARCHAR(19) NOT NULL COMMENT '本次同步写入的 applications.id（与回填目标行一致）',
+        unified_credit_code VARCHAR(64) NOT NULL COMMENT '规范化后的统一社会信用代码（用于匹配）',
+        ai_product_intro LONGTEXT NULL COMMENT '同步前产品介绍(AI)',
+        ai_industry_tags_display VARCHAR(2000) NULL COMMENT '同步前行业标签(AI)展示',
+        ai_industry_tags_json JSON NULL COMMENT '同步前行业标签(AI) JSON',
+        ai_enrich_status VARCHAR(32) NULL COMMENT '同步前 AI 状态',
+        ai_enrich_at DATETIME NULL COMMENT '同步前 AI 成功时间',
+        ai_enrich_model VARCHAR(128) NULL COMMENT '同步前模型名',
+        ai_enrich_version VARCHAR(64) NULL COMMENT '同步前管线版本',
+        qcc_company_intro LONGTEXT NULL COMMENT '同步前企业介绍（企查查）',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        KEY idx_ipo_ai_snap_batch (batch_id),
+        KEY idx_ipo_ai_snap_batch_credit (batch_id, unified_credit_code),
+        KEY idx_ipo_ai_snap_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目 SQL 同步前 AI/企查查快照（按统一社会信用代码回填）';
+    `);
+    console.log('✓ ipo_project_ai_sync_snapshot 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_project_ai_sync_snapshot 表时出现警告:', err.message);
+  }
+
+  // 项目挖掘：竞品匹配 — 用户补录（标签 / 自由文本经 AI 抽标签）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS competitor_match_supplement (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        invested_enterprise_id VARCHAR(19) NOT NULL COMMENT 'invested_enterprises.id',
+        user_tags_json JSON NULL COMMENT '用户录入的业务标签 JSON 数组',
+        user_narrative_raw LONGTEXT NULL COMMENT '用户粘贴的企业业务/产品介绍原文',
+        ai_extracted_tags_json JSON NULL COMMENT '从自由文本抽取的结构化标签 JSON 数组',
+        ai_short_summary VARCHAR(500) NULL COMMENT '抽取时可选短摘要',
+        batch_id VARCHAR(64) NULL COMMENT '可选批次号',
+        created_by VARCHAR(19) NULL COMMENT '创建人 users.id',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_cms_ie_time (invested_enterprise_id, created_at),
+        KEY idx_cms_delete (delete_mark),
+        CONSTRAINT fk_cms_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
+        CONSTRAINT fk_cms_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+        CONSTRAINT fk_cms_delete_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品匹配—补充业务信息（标签/自由文本/AI抽标签）';
+    `);
+    console.log('✓ competitor_match_supplement 表已就绪');
+  } catch (err) {
+    console.warn('创建 competitor_match_supplement 时出现警告:', err.message);
+  }
+
+  // 项目挖掘：投前项目（独立表）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS pre_investment_project (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        enterprise_full_name VARCHAR(255) NOT NULL COMMENT '企业全称',
+        unified_credit_code VARCHAR(64) NULL COMMENT '统一社会信用代码',
+        project_abbreviation VARCHAR(255) NULL COMMENT '项目简称/检索用简称',
+        project_no VARCHAR(32) NULL COMMENT '投前项目编号（展示，如 P202601011234）',
+        qcc_company_intro LONGTEXT NULL COMMENT '企业介绍（企查查，可为清洗后写入）',
+        qcc_sync_at DATETIME NULL COMMENT '最近一次企查查同步时间',
+        qcc_sync_error VARCHAR(500) NULL COMMENT '最近一次企查查同步失败摘要',
+        pipeline_status VARCHAR(32) NOT NULL DEFAULT 'draft' COMMENT 'draft/qcc_done/ai_done/failed 等',
+        pipeline_error VARCHAR(500) NULL COMMENT '流水线错误摘要',
+        ai_product_intro LONGTEXT NULL COMMENT '产品介绍(AI)',
+        ai_industry_tags_display VARCHAR(2000) NULL COMMENT '行业标签(AI)展示',
+        ai_industry_tags_json JSON NULL COMMENT '行业标签(AI) JSON',
+        ai_enrich_status VARCHAR(32) NULL COMMENT 'AI 状态',
+        ai_enrich_at DATETIME NULL COMMENT '最近 AI 成功时间',
+        data_app_id VARCHAR(19) NULL COMMENT 'applications.id',
+        data_app_name VARCHAR(64) NOT NULL DEFAULT '项目挖掘' COMMENT '应用名',
+        creator_user_id VARCHAR(19) NOT NULL COMMENT '创建人',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_pip_creator (creator_user_id, delete_mark),
+        KEY idx_pip_name (enterprise_full_name(64)),
+        KEY idx_pip_delete (delete_mark),
+        CONSTRAINT fk_pip_creator FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE RESTRICT,
+        CONSTRAINT fk_pip_delete_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘—投前项目';
+    `);
+    console.log('✓ pre_investment_project 表已就绪');
+  } catch (err) {
+    console.warn('创建 pre_investment_project 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN qcc_sync_at DATETIME NULL COMMENT '最近一次企查查同步时间' AFTER qcc_company_intro`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 qcc_sync_at');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.qcc_sync_at 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN qcc_sync_error VARCHAR(500) NULL COMMENT '最近一次企查查同步失败摘要' AFTER qcc_sync_at`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 qcc_sync_error');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.qcc_sync_error 时出现警告:', err.message);
+    }
+  }
+
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN project_no VARCHAR(32) NULL COMMENT '投前项目编号（展示）' AFTER project_abbreviation`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 project_no');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.project_no 时出现警告:', err.message);
+    }
+  }
+
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN ai_enrich_model VARCHAR(128) NULL COMMENT 'AI 所用模型快照' AFTER ai_enrich_at`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 ai_enrich_model');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.ai_enrich_model 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN ai_enrich_version VARCHAR(64) NULL COMMENT 'AI 管线版本' AFTER ai_enrich_model`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 ai_enrich_version');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.ai_enrich_version 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN ai_enrich_error VARCHAR(500) NULL COMMENT 'AI 失败摘要' AFTER ai_enrich_version`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 ai_enrich_error');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.ai_enrich_error 时出现警告:', err.message);
+    }
+  }
+
+  // 项目挖掘：竞品分析任务运行记录
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_run (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        invested_enterprise_id VARCHAR(19) NOT NULL COMMENT '被投企业 id',
+        status VARCHAR(32) NOT NULL DEFAULT 'success' COMMENT 'queued/running/success/failed/stub',
+        message VARCHAR(500) NULL COMMENT '结果说明',
+        triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人',
+        started_at DATETIME NULL COMMENT '开始时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人',
+        KEY idx_scr_ie_time (invested_enterprise_id, created_at),
+        KEY idx_scr_delete (delete_mark),
+        CONSTRAINT fk_scr_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
+        CONSTRAINT fk_scr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        CONSTRAINT fk_scr_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析运行记录';
+    `);
+    console.log('✓ sourcing_competitor_run 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_run 时出现警告:', err.message);
+  }
+
+  // 项目挖掘：竞品关系（后续接 LLM 打分写入）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_relation (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        invested_enterprise_id VARCHAR(19) NOT NULL COMMENT '被投企业 id',
+        run_id VARCHAR(19) NULL COMMENT 'sourcing_competitor_run.id',
+        competitor_display_name VARCHAR(255) NULL COMMENT '竞品展示名',
+        unified_credit_code VARCHAR(64) NULL COMMENT '竞品统一社会信用代码',
+        competitor_weak_key VARCHAR(160) NULL COMMENT '无码时弱键',
+        relevance_score INT NULL COMMENT '相关性 0-100',
+        data_sources_json JSON NULL COMMENT '数据源标记数组',
+        financing_amount_text VARCHAR(128) NULL COMMENT '融资金额展示',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        KEY idx_rel_ie (invested_enterprise_id, delete_mark),
+        KEY idx_rel_run (run_id),
+        CONSTRAINT fk_rel_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
+        CONSTRAINT fk_rel_run FOREIGN KEY (run_id) REFERENCES sourcing_competitor_run(id) ON DELETE SET NULL,
+        CONSTRAINT fk_rel_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品关系明细';
+    `);
+    console.log('✓ sourcing_competitor_relation 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_relation 时出现警告:', err.message);
+  }
+
+  // 项目挖掘：投前项目竞品分析运行记录（与被投 sourcing_competitor_run 分离）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_pre_investment_competitor_run (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        pre_investment_project_id VARCHAR(19) NOT NULL COMMENT 'pre_investment_project.id',
+        status VARCHAR(32) NOT NULL DEFAULT 'stub' COMMENT 'queued/running/success/failed/stub',
+        message VARCHAR(500) NULL COMMENT '结果说明',
+        triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人',
+        started_at DATETIME NULL COMMENT '开始时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        delete_time DATETIME NULL COMMENT '删除时间',
+        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_spicr_pip_time (pre_investment_project_id, created_at),
+        KEY idx_spicr_delete (delete_mark),
+        CONSTRAINT fk_spicr_pip FOREIGN KEY (pre_investment_project_id) REFERENCES pre_investment_project(id) ON DELETE CASCADE,
+        CONSTRAINT fk_spicr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+        CONSTRAINT fk_spicr_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='投前项目竞品分析运行记录';
+    `);
+    console.log('✓ sourcing_pre_investment_competitor_run 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_pre_investment_competitor_run 时出现警告:', err.message);
   }
 
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）
@@ -6105,6 +6541,7 @@ async function initializeTables(dbPool) {
       CREATE TABLE IF NOT EXISTS ipo_project_sql_sync_setting (
         id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
         user_id VARCHAR(50) NOT NULL COMMENT '用户ID',
+        write_target VARCHAR(32) NOT NULL DEFAULT 'listing' COMMENT 'listing=上市进展写入; project_sourcing=项目挖掘写入',
         external_db_config_id VARCHAR(19) NULL COMMENT 'external_db_config.id',
         sql_text TEXT NULL COMMENT '只读查询 SQL',
         is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0禁用',
@@ -6112,8 +6549,8 @@ async function initializeTables(dbPool) {
         column_map JSON NULL COMMENT 'SQL列名 -> ipo_project 业务字段名',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        UNIQUE KEY uk_ipo_sql_sync_user_db (user_id, external_db_config_id)
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目-业务库SQL同步配置（按用户+数据库连接）';
+        UNIQUE KEY uk_ipo_sql_sync_user_db_target (user_id, external_db_config_id, write_target)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目-业务库SQL同步配置（按用户+数据库连接+写入应用）';
     `);
     console.log('✓ ipo_project_sql_sync_setting 表已就绪');
   } catch (err) {
@@ -6173,23 +6610,51 @@ async function initializeTables(dbPool) {
   }
 
   try {
-    const [idx] = await dbPool.query(`
-      SELECT INDEX_NAME
-      FROM INFORMATION_SCHEMA.STATISTICS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = 'ipo_project_sql_sync_setting'
+    const [colWt] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting' AND COLUMN_NAME = 'write_target'
+    `);
+    if (!colWt.length) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        ADD COLUMN write_target VARCHAR(32) NOT NULL DEFAULT 'listing'
+          COMMENT 'listing=上市进展写入; project_sourcing=项目挖掘写入'
+          AFTER user_id
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已添加 write_target');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_sql_sync_setting.write_target 时出现警告:', err.message);
+  }
+
+  try {
+    const [idxOld] = await dbPool.query(`
+      SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting'
         AND INDEX_NAME = 'uk_ipo_sql_sync_user_db'
       LIMIT 1
     `);
-    if (idx.length === 0) {
+    if (idxOld.length) {
+      await dbPool.query(`ALTER TABLE ipo_project_sql_sync_setting DROP INDEX uk_ipo_sql_sync_user_db`);
+      console.log(
+        '✓ ipo_project_sql_sync_setting 已移除遗留 uk_ipo_sql_sync_user_db（上市进展与项目挖掘可各一条配置）'
+      );
+    }
+    const [idxNew] = await dbPool.query(`
+      SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting'
+        AND INDEX_NAME = 'uk_ipo_sql_sync_user_db_target'
+      LIMIT 1
+    `);
+    if (!idxNew.length) {
       await dbPool.query(`
         ALTER TABLE ipo_project_sql_sync_setting
-        ADD UNIQUE KEY uk_ipo_sql_sync_user_db (user_id, external_db_config_id)
+        ADD UNIQUE KEY uk_ipo_sql_sync_user_db_target (user_id, external_db_config_id, write_target)
       `);
-      console.log('✓ ipo_project_sql_sync_setting 已添加唯一索引 uk_ipo_sql_sync_user_db');
+      console.log('✓ ipo_project_sql_sync_setting 已添加 uk_ipo_sql_sync_user_db_target');
     }
   } catch (err) {
-    console.warn('迁移 ipo_project_sql_sync_setting 复合唯一索引时出现警告:', err.message);
+    console.warn('迁移 ipo_project_sql_sync_setting 唯一索引 write_target 时出现警告:', err.message);
   }
 
   try {

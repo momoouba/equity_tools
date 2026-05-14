@@ -27,7 +27,7 @@ export async function copyTextToClipboard(text) {
 }
 
 /**
- * 表格内单行省略；点击后在 Popover 内展示全文，支持鼠标划选与「复制全文」（避免 ellipsis 自带 Tooltip 无法选中）。
+ * 表格内单行省略；点击后在 Popover 内展示全文，支持鼠标划选与「复制全文」（避免 ellipsis 自带 Tooltip 无法选中）。与被投企业「产品简介(AI)」等列交互一致。
  * 融资事件列表、被投企业列表共用。
  *
  * @param {string} columnTitle Popover 标题
@@ -47,7 +47,7 @@ export function IntroPopoverCell({ columnTitle, raw, triggerMaxWidth }) {
           复制全文
         </Button>
         <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
-          下方文本可选中复制
+          下方文本可选并复制
         </span>
       </div>
       <div

@@ -5,6 +5,7 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const db = require('../db');
+const { maskSearchKeyForLog, previewBodyForLog } = require('./qichachaApiLog');
 
 /**
  * @returns {Promise<{ appKey: string, secretKey: string, dailyLimit: number }>}
@@ -44,26 +45,57 @@ function buildQichachaAuthHeaders(appKey, secretKey) {
  * @returns {Promise<{ status: string, message: string, desc: string|null, verifyResult: number|null, orderNumber?: string }>}
  */
 async function fetchCompanyBriefGetInfo(searchKey) {
+  const t0 = Date.now();
   const key = String(searchKey || '').trim();
+  const keyHint = maskSearchKeyForLog(key);
   if (key.length < 2) {
+    console.warn(`[企查查API] CompanyBrief/GetInfo 跳过 BAD_PARAM searchKey=${keyHint}`);
     const err = new Error('企查查 searchKey 长度不能小于 2');
     err.code = 'BAD_PARAM';
     throw err;
   }
-  const { appKey, secretKey } = await getActiveQichachaEnterpriseInfoConfig();
+  let appKey;
+  let secretKey;
+  try {
+    const cfg = await getActiveQichachaEnterpriseInfoConfig();
+    appKey = cfg.appKey;
+    secretKey = cfg.secretKey;
+  } catch (e) {
+    if (e && e.code === 'NO_CONFIG') {
+      console.warn(`[企查查API] CompanyBrief/GetInfo 配置不可用 searchKey=${keyHint} message=${e.message}`);
+    }
+    throw e;
+  }
   const { timespan, token } = buildQichachaAuthHeaders(appKey, secretKey);
   const url = 'https://api.qichacha.com/CompanyBrief/GetInfo';
-  const response = await axios.get(url, {
-    params: { key: appKey, searchKey: key },
-    headers: { Token: token, Timespan: timespan },
-    timeout: 20000,
-  });
+  console.log(`[企查查API] CompanyBrief/GetInfo 请求开始 searchKey=${keyHint} timeoutMs=20000`);
+  let response;
+  try {
+    response = await axios.get(url, {
+      params: { key: appKey, searchKey: key },
+      headers: { Token: token, Timespan: timespan },
+      timeout: 20000,
+    });
+  } catch (axiosErr) {
+    const ms = Date.now() - t0;
+    const st = axiosErr.response?.status;
+    const prev = previewBodyForLog(axiosErr.response?.data);
+    console.error(
+      `[企查查API] CompanyBrief/GetInfo HTTP异常 durationMs=${ms} searchKey=${keyHint} httpStatus=${st ?? '-'} message=${axiosErr.message} bodyPreview=${prev}`
+    );
+    throw axiosErr;
+  }
   const body = response.data || {};
+  const httpStatus = response.status;
   const status = String(body.Status ?? body.status ?? '');
   const message = String(body.Message ?? body.message ?? '');
   const orderNumber = body.OrderNumber ?? body.orderNumber;
+  const ms = Date.now() - t0;
 
   if (status === '201') {
+    console.log(
+      `[企查查API] CompanyBrief/GetInfo 完成 durationMs=${ms} searchKey=${keyHint} httpStatus=${httpStatus} bizStatus=${status} descLen=0`
+    );
     return { status, message: message || '查询无结果', desc: null, verifyResult: 0, orderNumber };
   }
   if (status === '200') {
@@ -72,9 +104,15 @@ async function fetchCompanyBriefGetInfo(searchKey) {
     const data = result && (result.Data ?? result.data);
     const desc = data && (data.Desc ?? data.desc);
     const text = desc == null || String(desc).trim() === '' ? null : String(desc).trim();
+    console.log(
+      `[企查查API] CompanyBrief/GetInfo 完成 durationMs=${ms} searchKey=${keyHint} httpStatus=${httpStatus} bizStatus=${status} verifyResult=${verifyResult} descLen=${text ? text.length : 0}`
+    );
     return { status, message: message || '查询成功', desc: text, verifyResult, orderNumber };
   }
 
+  console.warn(
+    `[企查查API] CompanyBrief/GetInfo 业务失败 durationMs=${ms} searchKey=${keyHint} httpStatus=${httpStatus} bizStatus=${status} message=${message} bodyPreview=${previewBodyForLog(body)}`
+  );
   const err = new Error(message || `企查查返回状态 ${status || '(空)'}`);
   err.code = 'QCC_API';
   err.status = status;

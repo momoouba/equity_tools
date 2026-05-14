@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Table,
   Button,
@@ -14,6 +14,7 @@ import {
   Tabs,
   Form,
   DatePicker,
+  Checkbox,
 } from '@arco-design/web-react'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
@@ -23,16 +24,16 @@ import BatchImportModal from './BatchImportModal'
 import LogModal from './LogModal'
 import EnterpriseSyncModal from './EnterpriseSyncModal'
 import {
-  postFinancingSync,
   postInvestedEnterpriseAiEnrich,
   postInvestedEnterpriseBatchAiEnrich,
   fetchInvestedEnterpriseAiEnrichLogs,
-  postInvestedEnterpriseQccCompanyBrief,
   postInvestedEnterpriseBatchQccCompanyBrief,
+  fetchInvestedEnterpriseCompetitorReadiness,
+  postInvestedEnterpriseCompetitorAnalysisRun,
 } from '../api/项目挖掘'
-import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './项目挖掘/financingConstants'
 import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './项目挖掘/financingDateUtils'
 import { IntroPopoverCell } from './项目挖掘/introPopoverAiCell'
+import CompetitorMatchSupplementModal from './项目挖掘/CompetitorMatchSupplementModal'
 import './EnterpriseManagement.css'
 
 const Option = Select.Option
@@ -72,7 +73,47 @@ function formatExportMoneyPlain(v) {
   return Number.isFinite(n) ? n : ''
 }
 
-/** 与后端项目挖掘导出列一致（客户端 XLSX） */
+/** 被投企业列表：企查查简介最近一次写入来源（与 invested_enterprises.qcc_sync_via 一致） */
+function formatQccSyncViaLabel(v) {
+  const s = String(v || '').trim()
+  if (!s) return <span title="尚无同步记录或历史数据未写入该字段">-</span>
+  const map = {
+    qcc_api: '接口拉取',
+    cross_table_propagate: '跨表补全',
+    legacy_api: '接口(单条)',
+  }
+  const label = map[s] || s
+  const title =
+    s === 'qcc_api'
+      ? '最近一次写入调用了企查查 CompanyBrief/GetInfo（统一信用码≥8 时三表对齐，同一信用码一次调用写回多表）'
+      : s === 'cross_table_propagate'
+        ? '最近一次写入来自三表对齐：用其他表已有简介补全本行，本轮未单独请求企查查接口'
+        : s === 'legacy_api'
+          ? '最近一次为按企业全称或短信用码单条调用企查查接口写入'
+          : ''
+  return <span title={title}>{label}</span>
+}
+
+function summarizeInvestedEnterpriseQccBatchResults(results) {
+  if (!Array.isArray(results)) return ''
+  let api = 0
+  let prop = 0
+  let leg = 0
+  for (const r of results) {
+    if (!r || !r.success) continue
+    const src = r.sync_source
+    if (src === 'qcc_api') api += 1
+    else if (src === 'cross_table_propagate') prop += 1
+    else if (src === 'legacy_api') leg += 1
+  }
+  const parts = []
+  if (api) parts.push(`接口拉取 ${api} 条`)
+  if (prop) parts.push(`跨表补全 ${prop} 条`)
+  if (leg) parts.push(`单条接口 ${leg} 条`)
+  return parts.length ? `（${parts.join('；')}）` : ''
+}
+
+/** 与列表列顺序一致（客户端 XLSX） */
 function buildInvestedEnterpriseExportRows(list, startSeq = 0) {
   return list.map((row, i) => ({
     序号: startSeq + i + 1,
@@ -81,15 +122,17 @@ function buildInvestedEnterpriseExportRows(list, startSeq = 0) {
     项目简称: row.project_abbreviation ?? '',
     关联基金: row.fund ?? '',
     被投企业全称: row.enterprise_full_name ?? '',
+    '产品简介(AI)': row.ai_product_intro ?? '',
+    '企业标签(AI)': row.ai_industry_tags_display ?? '',
+    '企业介绍（企查查）': row.qcc_company_intro ?? '',
+    企查查来源: row.qcc_sync_via ?? '',
+    企查查同步时间: row.qcc_sync_at ?? '',
     投资成本: formatExportMoneyPlain(pickAmountField(row, 'investment_cost')),
     已退出成本: formatExportMoneyPlain(pickAmountField(row, 'exited_cost')),
     剩余成本: formatExportMoneyPlain(pickAmountField(row, 'remaining_cost')),
     剩余价值: formatExportMoneyPlain(pickAmountField(row, 'residual_value')),
     退出状态: row.exit_status || '未退出',
-    '产品简介(AI)': row.ai_product_intro ?? '',
-    '企业标签(AI)': row.ai_industry_tags_display ?? '',
     AI状态: row.ai_enrich_status ?? '',
-    '企业介绍（企查查）': row.qcc_company_intro ?? '',
     创建时间: row.created_at ? new Date(row.created_at) : null,
     更新时间: row.updated_at ? new Date(row.updated_at) : null,
   }))
@@ -101,6 +144,8 @@ function EnterpriseManagement({
   dataAppName = DATA_APP_NEWS,
   pageTitle = '舆情监控对象',
   hideEntityTabs = false,
+  /** 为 true 时：页面高度锁在视口内，仅表体纵向滚动（用于项目挖掘-被投企业） */
+  viewportBoundTable = false,
 }) {
   const [enterprises, setEnterprises] = useState([])
   const [loading, setLoading] = useState(false)
@@ -124,8 +169,26 @@ function EnterpriseManagement({
 
   const showInvestedEnterpriseAi = dataAppName === DATA_APP_PROJECT && hideEntityTabs
 
+  const tableScrollAreaRef = useRef(null)
+  const [tableScrollY, setTableScrollY] = useState(360)
+
+  useLayoutEffect(() => {
+    if (!viewportBoundTable) return undefined
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      // scroll.y 仅作用于表体；分页在表格外，此处高度已不含分页区
+      setTableScrollY(Math.max(200, Math.floor(h - 52)))
+    }
+    measure()
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [viewportBoundTable, filterCollapsed, activeTab, hideEntityTabs])
+
   const [exportingAll, setExportingAll] = useState(false)
-  const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [aiEnrichSubmitting, setAiEnrichSubmitting] = useState(false)
   const [ieAiLogVisible, setIeAiLogVisible] = useState(false)
   const [ieAiLogLoading, setIeAiLogLoading] = useState(false)
@@ -137,13 +200,16 @@ function EnterpriseManagement({
   const [retryFailedIeAiSubmitting, setRetryFailedIeAiSubmitting] = useState(false)
   const [qccBriefSubmitting, setQccBriefSubmitting] = useState(false)
   const [qccBriefPageSubmitting, setQccBriefPageSubmitting] = useState(false)
-  const [financingSyncVisible, setFinancingSyncVisible] = useState(false)
-  const [financingSyncSubmitting, setFinancingSyncSubmitting] = useState(false)
-  const [financingConfigs, setFinancingConfigs] = useState([])
-  const [configsLoading, setConfigsLoading] = useState(false)
-  const [financingSyncForm] = Form.useForm()
   const [batchIeAiForm] = Form.useForm()
   const [retryFailedIeAiForm] = Form.useForm()
+
+  const [competitorSelectedKeys, setCompetitorSelectedKeys] = useState([])
+  const [competitorSupplementModal, setCompetitorSupplementModal] = useState({
+    visible: false,
+    enterpriseId: '',
+    enterpriseName: '',
+  })
+  const [competitorRunSubmitting, setCompetitorRunSubmitting] = useState(false)
 
   useEffect(() => {
     if (hideEntityTabs) {
@@ -297,46 +363,6 @@ function EnterpriseManagement({
     [dataAppName, isAdmin, selectedUserId, searchKeyword]
   )
 
-  const loadConfigsForFinancingSync = useCallback(async () => {
-    setConfigsLoading(true)
-    try {
-      const appsRes = await axios.get('/api/system/applications')
-      if (!appsRes.data?.success) {
-        setFinancingConfigs([])
-        return
-      }
-      const apps = appsRes.data.data || []
-      const ps = apps.find((a) => a.app_name === PROJECT_SOURCING_APP_NAME)
-      if (!ps?.id) {
-        setFinancingConfigs([])
-        return
-      }
-      const cfgRes = await axios.get('/api/system/news-configs', {
-        params: { page: 1, pageSize: 100, app_id: ps.id },
-      })
-      if (!cfgRes.data?.success) {
-        setFinancingConfigs([])
-        return
-      }
-      const list = (cfgRes.data.data || []).filter((c) => c.interface_type === FINANCING_INTERFACE_TYPE)
-      setFinancingConfigs(list)
-      if (list.length === 1) {
-        financingSyncForm.setFieldsValue({ config_id: list[0].id })
-      }
-    } catch (e) {
-      console.error(e)
-      setFinancingConfigs([])
-    } finally {
-      setConfigsLoading(false)
-    }
-  }, [financingSyncForm])
-
-  useEffect(() => {
-    if (financingSyncVisible && isAdmin && showInvestedEnterpriseAi) {
-      loadConfigsForFinancingSync()
-    }
-  }, [financingSyncVisible, isAdmin, showInvestedEnterpriseAi, loadConfigsForFinancingSync])
-
   const handleExportCurrentPageIe = useCallback(() => {
     if (!enterprises.length) {
       Message.warning('当前列表无数据可导出')
@@ -414,37 +440,6 @@ function EnterpriseManagement({
       onOk: fetchAllAndExportIe,
     })
   }, [total, fetchAllAndExportIe])
-
-  const handleFinancingSyncOk = async () => {
-    try {
-      const v = await financingSyncForm.validate()
-      const range = v.date_range
-      if (!range || range.length !== 2 || !range[0] || !range[1]) {
-        Message.warning('请选择同步日期范围')
-        return
-      }
-      const start = formatFinancingYmd(range[0])
-      const end = formatFinancingYmd(range[1])
-      setFinancingSyncSubmitting(true)
-      const res = await postFinancingSync({
-        config_id: v.config_id,
-        start_date: start,
-        end_date: end,
-      })
-      if (res.data?.success) {
-        Message.success(res.data.message || '同步完成')
-        setFinancingSyncVisible(false)
-        fetchEnterprises()
-      } else {
-        Message.error(res.data?.message || '同步失败')
-      }
-    } catch (e) {
-      if (e?.errors) return
-      Message.error(e.response?.data?.message || e.message || '同步失败')
-    } finally {
-      setFinancingSyncSubmitting(false)
-    }
-  }
 
   const handleBatchIeAiOk = async () => {
     try {
@@ -588,6 +583,99 @@ function EnterpriseManagement({
     setCurrentPage(1) // 切换tab时重置到第一页
   }
 
+  const runCompetitorFlowForEnterprise = useCallback(
+    async (enterpriseId, displayName) => {
+      const res = await fetchInvestedEnterpriseCompetitorReadiness(enterpriseId)
+      if (!res.data?.success) {
+        Message.error(res.data?.message || '就绪校验失败')
+        return
+      }
+      const d = res.data.data || {}
+      if (d.needSupplement) {
+        setCompetitorSupplementModal({
+          visible: true,
+          enterpriseId,
+          enterpriseName: displayName || '',
+        })
+        return
+      }
+      return new Promise((resolve) => {
+        Modal.confirm({
+          title: '竞品分析',
+          content: `确认对「${displayName || enterpriseId}」发起竞品分析？（当前为 MVP：仅记录运行，全量召回与打分后续接入）`,
+          onOk: async () => {
+            try {
+              const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId)
+              if (r2.status === 202 && r2.data?.success) {
+                Message.success(r2.data.message || '已受理')
+              } else if (r2.data?.success) {
+                Message.success(r2.data.message || '已受理')
+              } else {
+                Message.error(r2.data?.message || '受理失败')
+              }
+            } catch (e) {
+              Message.error(e.response?.data?.message || e.message || '受理失败')
+            }
+            resolve()
+          },
+          onCancel: () => resolve(),
+        })
+      })
+    },
+    []
+  )
+
+  const handleCompetitorBatchClick = useCallback(async () => {
+    if (!competitorSelectedKeys.length) {
+      Message.warning('请先在表格左侧勾选至少一家被投企业')
+      return
+    }
+    setCompetitorRunSubmitting(true)
+    try {
+      for (const id of competitorSelectedKeys) {
+        const row = enterprises.find((e) => e.id === id)
+        const name = row?.enterprise_full_name || row?.project_abbreviation || id
+        const res = await fetchInvestedEnterpriseCompetitorReadiness(id)
+        if (!res.data?.success) {
+          Message.error(res.data?.message || `「${name}」就绪校验失败`)
+          return
+        }
+        if (res.data.data?.needSupplement) {
+          Message.warning(`「${name}」需先补充业务信息（已打开补录窗口）`)
+          setCompetitorSupplementModal({ visible: true, enterpriseId: id, enterpriseName: name })
+          return
+        }
+      }
+      await new Promise((resolve) => {
+        Modal.confirm({
+          title: '竞品分析（批量）',
+          content: `将对已勾选的 ${competitorSelectedKeys.length} 家企业依次发起竞品分析（MVP 仅记录运行）。是否继续？`,
+          onOk: async () => {
+            for (const id of competitorSelectedKeys) {
+              const row = enterprises.find((e) => e.id === id)
+              const name = row?.enterprise_full_name || id
+              try {
+                const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(id)
+                if (!r2.data?.success) {
+                  Message.error(`「${name}」：${r2.data?.message || '失败'}`)
+                  return
+                }
+              } catch (e) {
+                Message.error(`「${name}」：${e.response?.data?.message || e.message || '失败'}`)
+                return
+              }
+            }
+            Message.success('批量任务已提交')
+            resolve()
+          },
+          onCancel: () => resolve(),
+        })
+      })
+    } finally {
+      setCompetitorRunSubmitting(false)
+    }
+  }, [competitorSelectedKeys, enterprises])
+
   const columns = useMemo(() => {
     const indexCol = {
       title: '序号',
@@ -597,10 +685,24 @@ function EnterpriseManagement({
     }
     const actionCol = {
       title: '操作',
-      width: 220,
+      width: showInvestedEnterpriseAi && isAdmin ? 300 : 220,
       align: 'left',
       render: (_, record) => (
         <Space size={8}>
+          {showInvestedEnterpriseAi && isAdmin ? (
+            <Button
+              type="outline"
+              size="small"
+              onClick={() =>
+                runCompetitorFlowForEnterprise(
+                  record.id,
+                  record.enterprise_full_name || record.project_abbreviation
+                )
+              }
+            >
+              竞品
+            </Button>
+          ) : null}
           <Button
             type="outline"
             size="small"
@@ -632,7 +734,58 @@ function EnterpriseManagement({
     }
 
     if (dataAppName === DATA_APP_PROJECT) {
+      const competitorSelectCol =
+        showInvestedEnterpriseAi && isAdmin
+          ? [
+              {
+                title: (
+                  <div
+                    style={{
+                      width: '100%',
+                      display: 'flex',
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Checkbox
+                      checked={
+                        enterprises.length > 0 &&
+                        competitorSelectedKeys.length > 0 &&
+                        enterprises.every((e) => competitorSelectedKeys.includes(e.id))
+                      }
+                      indeterminate={
+                        competitorSelectedKeys.length > 0 &&
+                        enterprises.some((e) => competitorSelectedKeys.includes(e.id)) &&
+                        !enterprises.every((e) => competitorSelectedKeys.includes(e.id))
+                      }
+                      onChange={(checked) => {
+                        if (checked) setCompetitorSelectedKeys(enterprises.map((e) => e.id))
+                        else setCompetitorSelectedKeys([])
+                      }}
+                    />
+                  </div>
+                ),
+                width: 52,
+                align: 'center',
+                headerCellStyle: { textAlign: 'center' },
+                bodyCellStyle: { textAlign: 'center' },
+                render: (_, record) => (
+                  <Checkbox
+                    checked={competitorSelectedKeys.includes(record.id)}
+                    onChange={(c) => {
+                      const checked = !!c
+                      setCompetitorSelectedKeys((prev) => {
+                        if (checked) return prev.includes(record.id) ? prev : [...prev, record.id]
+                        return prev.filter((x) => x !== record.id)
+                      })
+                    }}
+                  />
+                ),
+              },
+            ]
+          : []
       const base = [
+        ...competitorSelectCol,
         indexCol,
         {
           title: '项目编号',
@@ -666,41 +819,6 @@ function EnterpriseManagement({
           dataIndex: 'enterprise_full_name',
           ellipsis: true,
           tooltip: true
-        },
-        {
-          title: '投资成本',
-          dataIndex: 'investment_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'investment_cost'))
-        },
-        {
-          title: '已退出成本',
-          dataIndex: 'exited_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'exited_cost'))
-        },
-        {
-          title: '剩余成本',
-          dataIndex: 'remaining_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'remaining_cost'))
-        },
-        {
-          title: '剩余价值',
-          dataIndex: 'residual_value',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'residual_value'))
-        },
-        {
-          title: '退出状态',
-          dataIndex: 'exit_status',
-          ellipsis: true,
-          tooltip: true,
-          render: (text) => text || '-'
         },
       ]
       if (showInvestedEnterpriseAi) {
@@ -742,12 +860,64 @@ function EnterpriseManagement({
             ),
           },
           {
-            title: 'AI状态',
-            dataIndex: 'ai_enrich_status',
-            width: 96,
+            title: '企查查来源',
+            dataIndex: 'qcc_sync_via',
+            width: 112,
+            align: 'center',
+            render: (v) => formatQccSyncViaLabel(v),
+          },
+          {
+            title: '企查查同步时间',
+            dataIndex: 'qcc_sync_at',
+            width: 172,
             render: (v) => (v == null || String(v).trim() === '' ? '-' : String(v)),
           }
         )
+      }
+      base.push(
+        {
+          title: '投资成本',
+          dataIndex: 'investment_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'investment_cost'))
+        },
+        {
+          title: '已退出成本',
+          dataIndex: 'exited_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'exited_cost'))
+        },
+        {
+          title: '剩余成本',
+          dataIndex: 'remaining_cost',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'remaining_cost'))
+        },
+        {
+          title: '剩余价值',
+          dataIndex: 'residual_value',
+          ellipsis: true,
+          tooltip: true,
+          render: (_, record) => formatTableAmount(pickAmountField(record, 'residual_value'))
+        },
+        {
+          title: '退出状态',
+          dataIndex: 'exit_status',
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        }
+      )
+      if (showInvestedEnterpriseAi) {
+        base.push({
+          title: 'AI状态',
+          dataIndex: 'ai_enrich_status',
+          width: 96,
+          render: (v) => (v == null || String(v).trim() === '' ? '-' : String(v)),
+        })
       }
       base.push(actionCol)
       return base
@@ -829,11 +999,54 @@ function EnterpriseManagement({
       },
       actionCol
     ]
-  }, [dataAppName, currentPage, pageSize, showInvestedEnterpriseAi])
+  }, [
+    dataAppName,
+    currentPage,
+    pageSize,
+    showInvestedEnterpriseAi,
+    isAdmin,
+    enterprises,
+    competitorSelectedKeys,
+    runCompetitorFlowForEnterprise,
+  ])
 
   return (
-    <div className="enterprise-management">
-      <Card className="management-card" bordered={false}>
+    <div
+      className="enterprise-management"
+      style={
+        viewportBoundTable
+          ? {
+              boxSizing: 'border-box',
+              height: 'calc(100vh - 72px)',
+              padding: '16px 24px',
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              overflow: 'hidden',
+            }
+          : undefined
+      }
+    >
+      <Card
+        className="management-card"
+        bordered={false}
+        style={
+          viewportBoundTable
+            ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }
+            : undefined
+        }
+        bodyStyle={
+          viewportBoundTable
+            ? {
+                flex: 1,
+                minHeight: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }
+            : undefined
+        }
+      >
         <div className="management-header">
           <h2 className="management-title">{pageTitle}</h2>
           <Space wrap>
@@ -866,24 +1079,14 @@ function EnterpriseManagement({
                 {isAdmin && (
                   <Button
                     type="outline"
-                    status="warning"
-                    onClick={() => {
-                      financingSyncForm.setFieldsValue({
-                        date_range: [financingNow().subtract(1, 'day'), financingNow()],
-                      })
-                      setFinancingSyncVisible(true)
-                    }}
-                  >
-                    手动同步
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button
-                    type="outline"
                     loading={aiEnrichSubmitting}
-                    disabled={!selectedRowKeys.length}
+                    disabled={!competitorSelectedKeys.length}
                     onClick={async () => {
-                      const id = selectedRowKeys[0]
+                      if (competitorSelectedKeys.length > 1) {
+                        Message.warning('请仅勾选一行被投企业')
+                        return
+                      }
+                      const id = competitorSelectedKeys[0]
                       if (!id) {
                         Message.warning('请先勾选一行被投企业')
                         return
@@ -914,30 +1117,63 @@ function EnterpriseManagement({
                   <Button
                     type="outline"
                     loading={qccBriefSubmitting}
-                    disabled={!selectedRowKeys.length}
-                    onClick={async () => {
-                      const id = selectedRowKeys[0]
-                      if (!id) {
-                        Message.warning('请先勾选一行被投企业')
+                    disabled={!competitorSelectedKeys.length}
+                    onClick={() => {
+                      if (!competitorSelectedKeys.length) {
+                        Message.warning('请先在表格左侧勾选至少一家被投企业')
                         return
                       }
-                      setQccBriefSubmitting(true)
-                      try {
-                        const res = await postInvestedEnterpriseQccCompanyBrief(id)
-                        if (res.data?.success) {
-                          Message.success(res.data.message || '企查查同步完成')
-                          fetchEnterprises()
-                        } else {
-                          Message.error(res.data?.message || '同步失败')
-                        }
-                      } catch (e) {
-                        Message.error(e.response?.data?.message || e.message || '同步失败')
-                      } finally {
-                        setQccBriefSubmitting(false)
+                      const ids = competitorSelectedKeys.map(String).filter(Boolean).slice(0, 80)
+                      if (competitorSelectedKeys.length > 80) {
+                        Message.warning('单次最多同步 80 条，已自动截取前 80 条')
                       }
+                      Modal.confirm({
+                        title: '企查查同步（已勾选）',
+                        content: (
+                          <div>
+                            <p>
+                              将对已勾选的 <strong>{ids.length}</strong> 家被投企业批量同步企查查「企业简介」并写库；统一社会信用代码有效时与底层项目、投前项目三表对齐、按代码去重调用。每条间隔约
+                              400ms，请确认已配置企查查「企业信息」接口。
+                            </p>
+                          </div>
+                        ),
+                        onOk: async () => {
+                          setQccBriefSubmitting(true)
+                          try {
+                            const res = await postInvestedEnterpriseBatchQccCompanyBrief({
+                              enterprise_ids: ids,
+                            })
+                            if (res.data?.success) {
+                              const d = res.data.data || {}
+                              const hint = summarizeInvestedEnterpriseQccBatchResults(d.results)
+                              Message.success(
+                                (res.data.message ||
+                                  `完成：成功 ${d.success ?? 0}，失败 ${d.failed ?? 0}`) + hint
+                              )
+                              fetchEnterprises()
+                            } else {
+                              Message.error(res.data?.message || '同步失败')
+                            }
+                          } catch (e) {
+                            Message.error(e.response?.data?.message || e.message || '同步失败')
+                          } finally {
+                            setQccBriefSubmitting(false)
+                          }
+                        },
+                      })
                     }}
                   >
                     企查查同步
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button
+                    type="outline"
+                    loading={competitorRunSubmitting}
+                    disabled={!competitorSelectedKeys.length}
+                    onClick={handleCompetitorBatchClick}
+                  >
+                    竞品分析（多选）
                   </Button>
                 )}
                 {isAdmin && (
@@ -965,9 +1201,10 @@ function EnterpriseManagement({
                             })
                             if (res.data?.success) {
                               const d = res.data.data || {}
+                              const hint = summarizeInvestedEnterpriseQccBatchResults(d.results)
                               Message.success(
-                                res.data.message ||
-                                  `完成：成功 ${d.success ?? 0}，失败 ${d.failed ?? 0}`
+                                (res.data.message ||
+                                  `完成：成功 ${d.success ?? 0}，失败 ${d.failed ?? 0}`) + hint
                               )
                               fetchEnterprises()
                             } else {
@@ -988,10 +1225,14 @@ function EnterpriseManagement({
                 {isAdmin && (
                   <Button
                     type="outline"
-                    disabled={!selectedRowKeys.length}
+                    disabled={!competitorSelectedKeys.length}
                     loading={ieAiLogLoading}
                     onClick={async () => {
-                      const id = selectedRowKeys[0]
+                      if (competitorSelectedKeys.length > 1) {
+                        Message.warning('请仅勾选一行被投企业')
+                        return
+                      }
+                      const id = competitorSelectedKeys[0]
                       if (!id) {
                         Message.warning('请先勾选一行被投企业')
                         return
@@ -1082,7 +1323,7 @@ function EnterpriseManagement({
 
         <Collapse
           activeKey={filterCollapsed ? [] : ['filters']}
-          onChange={(keys) => setFilterCollapsed(keys.length === 0)}
+          onChange={(_key, activeKeys) => setFilterCollapsed(activeKeys.length === 0)}
           className="filter-collapse"
         >
           <CollapseItem header="筛选条件" name="filters">
@@ -1139,7 +1380,35 @@ function EnterpriseManagement({
           </CollapseItem>
         </Collapse>
 
-        <div className="table-container">
+        <div
+          ref={viewportBoundTable ? tableScrollAreaRef : undefined}
+          style={
+            viewportBoundTable
+              ? {
+                  flex: 1,
+                  minHeight: 0,
+                  marginTop: 16,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  overflow: 'hidden',
+                }
+              : undefined
+          }
+        >
+          <div
+            className={`table-container${showInvestedEnterpriseAi ? ' invested-enterprises-horizontal-scroll' : ''}`}
+            style={
+              viewportBoundTable
+                ? {
+                    flex: 1,
+                    minHeight: 0,
+                    overflowX: showInvestedEnterpriseAi ? 'auto' : 'hidden',
+                    overflowY: 'hidden',
+                    marginBottom: 0,
+                  }
+                : undefined
+            }
+          >
           {loading && enterprises.length === 0 ? (
             <Skeleton
               loading={true}
@@ -1153,25 +1422,18 @@ function EnterpriseManagement({
               loading={loading}
               pagination={false}
               rowKey="id"
-              rowSelection={
-                showInvestedEnterpriseAi && isAdmin
-                  ? {
-                      type: 'radio',
-                      selectedRowKeys,
-                      onChange: (keys) => setSelectedRowKeys(keys),
-                    }
-                  : undefined
-              }
               border={{
                 wrapper: true,
                 cell: true
               }}
               stripe
               scroll={{
-                x: showInvestedEnterpriseAi ? 2480 : 'max-content'
+                x: showInvestedEnterpriseAi ? 2840 : 'max-content',
+                ...(viewportBoundTable ? { y: tableScrollY } : {}),
               }}
             />
           )}
+          </div>
         </div>
 
         <div className="pagination-wrapper">
@@ -1233,6 +1495,17 @@ function EnterpriseManagement({
           }}
         />
       )}
+
+      <CompetitorMatchSupplementModal
+        visible={competitorSupplementModal.visible}
+        investedEnterpriseId={competitorSupplementModal.enterpriseId}
+        enterpriseName={competitorSupplementModal.enterpriseName}
+        onClose={() => setCompetitorSupplementModal((s) => ({ ...s, visible: false }))}
+        onSaved={() => {
+          fetchEnterprises()
+          setCompetitorSupplementModal((s) => ({ ...s, visible: false }))
+        }}
+      />
 
       {showInvestedEnterpriseAi && (
         <>
@@ -1340,45 +1613,6 @@ function EnterpriseManagement({
             </Form>
             <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
               与融资事件使用同一套联网大模型提示词与模型配置；任务以<strong>被投企业全称</strong>为主键参与去重与模板填充。
-            </p>
-          </Modal>
-
-          <Modal
-            title="投融资数据同步（queryByDate）"
-            visible={financingSyncVisible}
-            onOk={handleFinancingSyncOk}
-            confirmLoading={financingSyncSubmitting}
-            onCancel={() => setFinancingSyncVisible(false)}
-            style={{ width: 520 }}
-          >
-            <Form form={financingSyncForm} layout="vertical">
-              <FormItem
-                label="接口配置"
-                field="config_id"
-                rules={[{ required: true, message: '请选择配置' }]}
-              >
-                <Select
-                  placeholder="请选择融资信息源接口配置"
-                  loading={configsLoading}
-                  allowClear={false}
-                >
-                  {financingConfigs.map((c) => (
-                    <Option key={c.id} value={c.id}>
-                      {c.id} · {c.request_url?.slice(0, 48) || '—'}…
-                    </Option>
-                  ))}
-                </Select>
-              </FormItem>
-              <FormItem
-                label="日期范围（按融资日期 queryByDate，逐日请求）"
-                field="date_range"
-                rules={[{ required: true, message: '请选择日期范围' }]}
-              >
-                <DatePicker.RangePicker style={{ width: '100%' }} />
-              </FormItem>
-            </Form>
-            <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              与「融资事件列表」手动同步一致：使用「系统配置 → 融资信息源配置」中已启用的投融资接口。
             </p>
           </Modal>
         </>

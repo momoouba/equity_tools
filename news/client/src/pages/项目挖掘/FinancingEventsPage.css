@@ -1,7 +1,25 @@
 .financing-events-page .arco-table .arco-table-th,
 .financing-events-page .arco-table .arco-table-td {
   border-right: 1px solid #e5e6eb !important;
+  vertical-align: middle;
 }
+
+/* 与 enterprise-management 列表一致：表头 flex 默认居中时与左对齐数据列错位 */
+.financing-events-page .arco-table-th {
+  text-align: left;
+}
+
+.financing-events-page .arco-table-th .arco-table-cell,
+.financing-events-page .arco-table-td .arco-table-cell {
+  text-align: left;
+}
+
+.financing-events-page .arco-table-th .arco-table-th-item,
+.financing-events-page .arco-table-th .arco-table-th-content {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .financing-events-page .arco-table .arco-table-th:last-child,
 .financing-events-page .arco-table .arco-table-td:last-child {
   border-right: none !important;

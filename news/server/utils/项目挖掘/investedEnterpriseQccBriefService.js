@@ -1,6 +1,11 @@
 const db = require('../../db');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
+const { isInvestedEnterpriseProjectSourcingApp } = require('../applicationIdResolve');
 const { fetchCompanyBriefGetInfo } = require('../qichachaCompanyBrief');
+const {
+  normalizeUnifiedCreditCode,
+  isCrossTableUnifiedCredit,
+  runUnifiedCreditQccSync,
+} = require('./projectSourcingQccCrossTableSync');
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -27,7 +32,7 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     throw e;
   }
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, unified_credit_code, data_app_name, delete_mark
+    `SELECT id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, delete_mark
      FROM invested_enterprises WHERE id = ? LIMIT 1`,
     [id]
   );
@@ -36,7 +41,7 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     e.code = 404;
     throw e;
   }
-  if (String(rows[0].data_app_name || '') !== DATA_APP_PROJECT_SOURCING) {
+  if (!(await isInvestedEnterpriseProjectSourcingApp(rows[0]))) {
     const e = new Error('仅支持项目挖掘应用下的被投企业');
     e.code = 400;
     throw e;
@@ -48,6 +53,19 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     throw e;
   }
 
+  const creditNorm = normalizeUnifiedCreditCode(rows[0].unified_credit_code);
+  if (isCrossTableUnifiedCredit(creditNorm)) {
+    const one = await runUnifiedCreditQccSync(creditNorm);
+    const hint =
+      creditNorm.length > 18 ? `${creditNorm.slice(0, 10)}…(${creditNorm.length}字)` : creditNorm;
+    return {
+      ok: true,
+      desc_len: one.desc_len,
+      search_key_hint: hint,
+      sync_source: one.source,
+    };
+  }
+
   const r = await fetchCompanyBriefGetInfo(searchKey);
   const desc = r.desc;
   const intro = desc != null && String(desc).trim() !== '' ? String(desc).trim() : null;
@@ -57,6 +75,7 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
        qcc_company_intro = ?,
        qcc_sync_at = NOW(),
        qcc_sync_error = NULL,
+       qcc_sync_via = 'legacy_api',
        updated_at = NOW()
      WHERE id = ? AND delete_mark = 0`,
     [intro, id]
@@ -68,6 +87,7 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     ok: true,
     desc_len: intro ? intro.length : 0,
     search_key_hint: hint,
+    sync_source: 'legacy_api',
   };
 }
 
@@ -85,15 +105,68 @@ async function batchSyncInvestedEnterpriseQccCompanyBrief(enterpriseIds, opts = 
   if (ids.length > 80) {
     return { ok: false, code: 400, message: '单次最多同步 80 条，请分批操作' };
   }
+  const rowMap = new Map();
+  const rows = await db.query(
+    `SELECT id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, delete_mark
+     FROM invested_enterprises WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ids
+  );
+  for (const r of rows) rowMap.set(String(r.id), r);
+
+  /** @type {Map<string, { ok: boolean, err?: string }>} */
+  const creditBatch = new Map();
   const results = [];
   let ok = 0;
   let fail = 0;
   for (let i = 0; i < ids.length; i++) {
     const eid = ids[i];
+    const row = rowMap.get(eid);
     try {
-      const one = await syncInvestedEnterpriseQccCompanyBrief(eid);
-      ok += 1;
-      results.push({ id: eid, success: true, desc_len: one.desc_len });
+      if (!row || Number(row.delete_mark) !== 0) {
+        const e = new Error('被投企业不存在或已删除');
+        e.code = 404;
+        throw e;
+      }
+      if (!(await isInvestedEnterpriseProjectSourcingApp(row))) {
+        const e = new Error('仅支持项目挖掘应用下的被投企业');
+        e.code = 400;
+        throw e;
+      }
+      const creditNorm = normalizeUnifiedCreditCode(row.unified_credit_code);
+      if (isCrossTableUnifiedCredit(creditNorm)) {
+        let st = creditBatch.get(creditNorm);
+        if (!st) {
+          try {
+            const one = await runUnifiedCreditQccSync(creditNorm);
+            st = { ok: true, desc_len: one.desc_len, sync_source: one.source };
+            creditBatch.set(creditNorm, st);
+          } catch (err) {
+            st = { ok: false, err: (err && err.message) || String(err) };
+            creditBatch.set(creditNorm, st);
+          }
+        }
+        if (st.ok) {
+          ok += 1;
+          results.push({
+            id: eid,
+            success: true,
+            desc_len: st.desc_len || 0,
+            sync_source: st.sync_source,
+          });
+        } else {
+          fail += 1;
+          results.push({ id: eid, success: false, error: st.err || 'error' });
+        }
+      } else {
+        const one = await syncInvestedEnterpriseQccCompanyBrief(eid);
+        ok += 1;
+        results.push({
+          id: eid,
+          success: true,
+          desc_len: one.desc_len,
+          sync_source: one.sync_source,
+        });
+      }
     } catch (err) {
       fail += 1;
       const msg = (err && err.message) || String(err);

@@ -118,6 +118,9 @@ async function executeNewsSyncTask(configId) {
     
     // 根据接口类型执行对应的同步函数
     if (interfaceType === '企查查') {
+      console.log(
+        `[企查查API][新闻同步定时任务] 调度触发 configId=${configId} logId=${logId ?? 'null'} interfaceType=企查查`
+      );
       // 企查查舆情接口同步
       if (newsRoutes.syncQichachaNewsData) {
         await newsRoutes.syncQichachaNewsData(configId, logId);

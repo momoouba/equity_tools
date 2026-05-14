@@ -3,7 +3,11 @@ const db = require('../../db');
 const { convertQuartzCronToNodeCron } = require('../cronQuartzToNode');
 const { runListingExchangeCrawler } = require('./listingExchangeCrawler');
 const { runListingMatchBatch } = require('./listingMatchRunner');
-const { runIpoProjectSqlSyncForUser } = require('./ipoProjectSqlSyncRunner');
+const {
+  runIpoProjectSqlSyncForUser,
+  IPO_SQL_WRITE_TARGET_LISTING,
+  IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+} = require('./ipoProjectSqlSyncRunner');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 const { syncNewShareCalendar } = require('./newShareService');
 const { syncGuidanceProgress } = require('./guidanceProgressService');
@@ -439,14 +443,16 @@ async function updateListingScheduledTasks() {
     }
 
     const sqlSettings = await db.query(
-      `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression
+      `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression,
+              COALESCE(NULLIF(TRIM(write_target), ''), ?) AS write_target
        FROM ipo_project_sql_sync_setting
        WHERE is_enabled = 1
          AND external_db_config_id IS NOT NULL
          AND sql_text IS NOT NULL
          AND TRIM(sql_text) != ''
          AND cron_expression IS NOT NULL
-         AND TRIM(cron_expression) != ''`
+         AND TRIM(cron_expression) != ''`,
+      [IPO_SQL_WRITE_TARGET_LISTING]
     );
     console.log(
       `[底层项目同步] 扫描 ipo_project_sql_sync_setting（外部库→ipo_project）符合条件的配置: ${sqlSettings.length} 条`
@@ -474,16 +480,21 @@ async function updateListingScheduledTasks() {
               /* ignore */
             }
             console.log(
-              `[底层项目同步] Cron 触发 配置=${cfg.id} 用户=${cfg.user_id} 外部库=${dbLabel}`
+              `[底层项目同步] Cron 触发 配置=${cfg.id} 用户=${cfg.user_id} 外部库=${dbLabel} write_target=${cfg.write_target || IPO_SQL_WRITE_TARGET_LISTING}`
             );
+            const wt =
+              String(cfg.write_target || '').trim() === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                : IPO_SQL_WRITE_TARGET_LISTING;
             const result = await runIpoProjectSqlSyncForUser({
               userId: cfg.user_id,
               external_db_config_id: cfg.external_db_config_id,
               sql_text: cfg.sql_text,
               is_enabled: cfg.is_enabled,
+              writeTarget: wt,
             });
             console.log(
-              `[底层项目同步] 执行完成 配置=${cfg.id} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
+              `[底层项目同步] 执行完成 配置=${cfg.id} write_target=${wt} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
                 `清空旧行=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0}（全量替换，无增量更新）`
             );
           } catch (err) {

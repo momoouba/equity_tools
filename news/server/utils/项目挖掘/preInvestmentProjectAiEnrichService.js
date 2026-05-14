@@ -1,0 +1,297 @@
+const crypto = require('crypto');
+const db = require('../../db');
+const { isAdminUser } = require('./projectSourcingRouteAuth');
+const {
+  runFinancingStyleWebEnrichLlmCall,
+  withFinancingAiConcurrency,
+  PROMPT_TYPE,
+} = require('./financingAiEnrichService');
+
+const PRE_INV_AI_VERSION = 'pre_investment_project_web_enrich_v1';
+
+function formatPreInvAiEnrichTriggerType(shortType) {
+  const s = String(shortType || 'manual_api').trim();
+  if (s.startsWith('pre_investment_project:')) return s;
+  return `pre_investment_project:${s}`;
+}
+
+async function markPreInvAiLogSuccess({
+  logId,
+  started,
+  llmModelConfigId,
+  promptConfigId,
+  productIntroStored,
+  tagsDisplay,
+}) {
+  const duration = Date.now() - started;
+  await db.execute(
+    `UPDATE invested_enterprise_ai_enrich_log SET
+       execution_status = 'success',
+       finished_at = NOW(),
+       duration_ms = ?,
+       llm_model_config_id = ?,
+       prompt_type = ?,
+       prompt_version = ?,
+       ai_enrich_version = ?,
+       error_message = NULL,
+       result_product_intro = ?,
+       result_industry_tags_display = ?,
+       updated_at = NOW()
+     WHERE id = ?`,
+    [
+      duration,
+      llmModelConfigId != null ? String(llmModelConfigId) : null,
+      PROMPT_TYPE,
+      promptConfigId != null ? String(promptConfigId) : null,
+      PRE_INV_AI_VERSION,
+      productIntroStored || null,
+      tagsDisplay || null,
+      logId,
+    ]
+  );
+}
+
+async function markPreInvAiLogFailed({ logId, started, llmModelConfigId, promptConfigId, err }) {
+  const msg = (err && err.message) || String(err);
+  const short = msg.length > 480 ? `${msg.slice(0, 480)}…` : msg;
+  const duration = Date.now() - started;
+  try {
+    await db.execute(
+      `UPDATE invested_enterprise_ai_enrich_log SET
+         execution_status = 'failed',
+         finished_at = NOW(),
+         duration_ms = ?,
+         llm_model_config_id = ?,
+         prompt_type = ?,
+         prompt_version = ?,
+         ai_enrich_version = ?,
+         error_message = ?,
+         updated_at = NOW()
+       WHERE id = ?`,
+      [
+        duration,
+        llmModelConfigId != null ? String(llmModelConfigId) : null,
+        PROMPT_TYPE,
+        promptConfigId != null ? String(promptConfigId) : null,
+        PRE_INV_AI_VERSION,
+        short,
+        logId,
+      ]
+    );
+  } catch (e2) {
+    console.error('[preInvAiEnrich] log failed update', e2);
+  }
+}
+
+/**
+ * @returns {Promise<{ok:true, logId:number, jobTraceId:string, preProjectId:string}|{ok:false, code:number, message:string}>}
+ */
+async function preparePreInvestmentProjectAiJob({
+  preProjectId,
+  triggerType,
+  triggeredByUserId,
+  clientIp,
+  psUser,
+}) {
+  const id = String(preProjectId || '').trim();
+  if (!id) {
+    return { ok: false, code: 400, message: '无效的项目 id' };
+  }
+
+  const rows = await db.query(
+    `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, creator_user_id, delete_mark
+     FROM pre_investment_project WHERE id = ? LIMIT 1`,
+    [id]
+  );
+  if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+    return { ok: false, code: 404, message: '投前项目不存在或已删除' };
+  }
+  const uid = psUser && psUser.id ? String(psUser.id) : '';
+  if (!isAdminUser(psUser) && String(rows[0].creator_user_id || '') !== uid) {
+    return { ok: false, code: 403, message: '仅创建人或管理员可发起 AI 取数' };
+  }
+
+  const dup = await db.query(
+    `SELECT id, triggered_at FROM invested_enterprise_ai_enrich_log
+     WHERE pre_investment_project_id = ? AND execution_status IN ('pending','running')
+     ORDER BY id DESC LIMIT 1`,
+    [id]
+  );
+  if (dup.length) {
+    const t = dup[0].triggered_at;
+    if (t) {
+      const ageRows = await db.query(`SELECT TIMESTAMPDIFF(MINUTE, ?, NOW()) AS m`, [t]);
+      const minutes = Number(ageRows[0]?.m ?? 0);
+      if (minutes < 10) {
+        return { ok: false, code: 409, message: '该项目已有进行中的 AI 任务，请稍后再试' };
+      }
+    }
+  }
+
+  const jobTraceId = crypto.randomUUID();
+  const name = rows[0].enterprise_full_name != null ? String(rows[0].enterprise_full_name) : null;
+  const ins = await db.execute(
+    `INSERT INTO invested_enterprise_ai_enrich_log
+     (invested_enterprise_id, ipo_project_f_id, pre_investment_project_id, enterprise_full_name, trigger_type, triggered_by_user_id, client_ip, job_trace_id, execution_status, prompt_type, ai_enrich_version)
+     VALUES (NULL, NULL, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    [
+      id,
+      name,
+      formatPreInvAiEnrichTriggerType(triggerType),
+      triggeredByUserId || null,
+      clientIp || null,
+      jobTraceId,
+      PROMPT_TYPE,
+      PRE_INV_AI_VERSION,
+    ]
+  );
+  const logId = ins.insertId;
+
+  await db.execute(
+    `UPDATE pre_investment_project SET ai_enrich_status = 'running', ai_enrich_error = NULL, pipeline_error = NULL, updated_at = NOW()
+     WHERE id = ? AND delete_mark = 0`,
+    [id]
+  );
+
+  return { ok: true, logId, jobTraceId, preProjectId: id };
+}
+
+async function runPreInvestmentProjectAiEnrichTask({
+  preProjectId,
+  logId,
+  triggerType,
+  triggeredByUserId,
+  clientIp,
+}) {
+  const started = Date.now();
+  let llmModelConfigId = null;
+  let promptConfigId = null;
+  try {
+    await db.execute(
+      `UPDATE invested_enterprise_ai_enrich_log
+       SET execution_status = 'running', started_at = NOW(), updated_at = NOW()
+       WHERE id = ?`,
+      [logId]
+    );
+
+    const ev = await db.query(
+      `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, delete_mark
+       FROM pre_investment_project WHERE id = ? LIMIT 1`,
+      [preProjectId]
+    );
+    if (!ev.length || Number(ev[0].delete_mark) !== 0) {
+      throw new Error('投前项目不存在或已删除');
+    }
+    const row = ev[0];
+
+    const rowForTemplate = {
+      company_name: String(row.enterprise_full_name || '').trim(),
+      company_credit_code: String(row.unified_credit_code || '').trim(),
+      project_name: String(row.project_abbreviation || '').trim(),
+    };
+    if (!rowForTemplate.company_name) {
+      throw new Error('企业全称为空，无法调用模型');
+    }
+
+    const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate));
+    llmModelConfigId = llm.llmModelConfigId;
+    promptConfigId = llm.promptConfigId;
+
+    await db.execute(
+      `UPDATE pre_investment_project SET
+         ai_product_intro = ?,
+         ai_industry_tags_display = ?,
+         ai_industry_tags_json = ?,
+         ai_enrich_status = 'success',
+         ai_enrich_at = NOW(),
+         ai_enrich_model = ?,
+         ai_enrich_version = ?,
+         ai_enrich_error = NULL,
+         pipeline_status = 'ai_done',
+         pipeline_error = NULL,
+         updated_at = NOW()
+       WHERE id = ? AND delete_mark = 0`,
+      [
+        llm.productIntroStored || null,
+        llm.display || null,
+        llm.tagsJson,
+        String(llm.config.model_name || ''),
+        PRE_INV_AI_VERSION,
+        preProjectId,
+      ]
+    );
+
+    await markPreInvAiLogSuccess({
+      logId,
+      started,
+      llmModelConfigId,
+      promptConfigId,
+      productIntroStored: llm.productIntroStored,
+      tagsDisplay: llm.display,
+    });
+    console.log(
+      `[preInvAiEnrich] success pre_project_id=${preProjectId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name}`
+    );
+  } catch (err) {
+    const errMsg = String((err && err.message) || err).slice(0, 480);
+    await db.execute(
+      `UPDATE pre_investment_project SET
+         ai_enrich_status = 'failed',
+         ai_enrich_error = ?,
+         pipeline_status = 'failed',
+         pipeline_error = ?,
+         updated_at = NOW()
+       WHERE id = ? AND delete_mark = 0`,
+      [errMsg, errMsg, preProjectId]
+    );
+    await markPreInvAiLogFailed({
+      logId,
+      started,
+      llmModelConfigId,
+      promptConfigId,
+      err,
+    });
+    console.error('[preInvAiEnrich] task failed', { preProjectId, logId, err: (err && err.message) || String(err) });
+  }
+}
+
+async function enqueueManualPreInvestmentProjectAiEnrich({
+  preProjectId,
+  triggeredByUserId,
+  clientIp,
+  psUser,
+}) {
+  const prep = await preparePreInvestmentProjectAiJob({
+    preProjectId,
+    triggerType: 'manual_api',
+    triggeredByUserId,
+    clientIp,
+    psUser,
+  });
+  if (!prep.ok) {
+    return { ok: false, code: prep.code, message: prep.message };
+  }
+  setImmediate(() => {
+    runPreInvestmentProjectAiEnrichTask({
+      preProjectId: prep.preProjectId,
+      logId: prep.logId,
+      triggerType: 'manual_api',
+      triggeredByUserId,
+      clientIp,
+    }).catch((e) => console.error('[preInvAiEnrich manual]', e));
+  });
+  return {
+    ok: true,
+    code: 202,
+    data: {
+      log_id: String(prep.logId),
+      job_trace_id: prep.jobTraceId,
+      pre_investment_project_id: prep.preProjectId,
+    },
+  };
+}
+
+module.exports = {
+  enqueueManualPreInvestmentProjectAiEnrich,
+  PRE_INV_AI_VERSION,
+};

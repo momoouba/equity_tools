@@ -18,6 +18,9 @@ import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import ListingNewSharePage from './上市进展/ListingNewSharePage'
 import ProjectSourcingPage from './项目挖掘/ProjectSourcingPage'
 import ProjectSourcingInvestedEnterprisesPage from './项目挖掘/ProjectSourcingInvestedEnterprisesPage'
+import ProjectSourcingIpoProjectsPage from './项目挖掘/ProjectSourcingIpoProjectsPage'
+import ProjectSourcingCompetitorAnalysisPage from './项目挖掘/ProjectSourcingCompetitorAnalysisPage'
+import ProjectSourcingPreInvestmentPage from './项目挖掘/ProjectSourcingPreInvestmentPage'
 import FinancingEventsPage from './项目挖掘/FinancingEventsPage'
 import TrackConfigPage from './项目挖掘/TrackConfigPage'
 import UserProfileModal from '../components/UserProfileModal'
@@ -175,6 +178,15 @@ function Dashboard() {
     } else if (location.pathname.includes('project-sourcing-invested-enterprises')) {
       setSelectedKeys(['project-sourcing-invested-enterprises'])
       setActiveAppKey('project-sourcing-app')
+    } else if (location.pathname.includes('project-sourcing-ipo-projects')) {
+      setSelectedKeys(['project-sourcing-ipo-projects'])
+      setActiveAppKey('project-sourcing-app')
+    } else if (location.pathname.includes('project-sourcing-competitor-analysis')) {
+      setSelectedKeys(['project-sourcing-competitor-analysis'])
+      setActiveAppKey('project-sourcing-app')
+    } else if (location.pathname.includes('project-sourcing-pre-investment')) {
+      setSelectedKeys(['project-sourcing-pre-investment'])
+      setActiveAppKey('project-sourcing-app')
     } else if (location.pathname.includes('project-sourcing-financing-events')) {
       setSelectedKeys(['project-sourcing-financing-events'])
       setActiveAppKey('project-sourcing-app')
@@ -315,6 +327,9 @@ function Dashboard() {
       children: [
         { key: 'project-sourcing', title: '融资与市场概览' },
         { key: 'project-sourcing-invested-enterprises', title: '被投企业' },
+        { key: 'project-sourcing-ipo-projects', title: '底层项目' },
+        { key: 'project-sourcing-competitor-analysis', title: '竞品分析' },
+        { key: 'project-sourcing-pre-investment', title: '投前项目' },
         { key: 'project-sourcing-financing-events', title: '融资事件列表' },
         { key: 'project-sourcing-track-config', title: '赛道配置' },
         { key: 'system-db', title: '数据库连接配置' }
@@ -489,10 +504,26 @@ function Dashboard() {
               }
             />
             <Route
-              path="/project-sourcing"
+              path="/project-sourcing-ipo-projects"
               element={
                 (isAdmin || hasProjectSourcingPermission)
-                  ? <ProjectSourcingPage />
+                  ? <ProjectSourcingIpoProjectsPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing-competitor-analysis"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <ProjectSourcingCompetitorAnalysisPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing-pre-investment"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <ProjectSourcingPreInvestmentPage />
                   : <div>您没有访问权限</div>
               }
             />
@@ -509,6 +540,14 @@ function Dashboard() {
               element={
                 (isAdmin || hasProjectSourcingPermission)
                   ? <TrackConfigPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/project-sourcing"
+              element={
+                (isAdmin || hasProjectSourcingPermission)
+                  ? <ProjectSourcingPage />
                   : <div>您没有访问权限</div>
               }
             />

@@ -40,7 +40,12 @@ async function generateId(tableName, connection) {
       'performance_scheduled',
       'listing_data_config',
       'ipo_project_sql_sync_setting',
-      'base_dictionary'
+      'base_dictionary',
+      'competitor_match_supplement',
+      'pre_investment_project',
+      'sourcing_competitor_run',
+      'sourcing_competitor_relation',
+      'sourcing_pre_investment_competitor_run',
     ];
     
     if (!validTableNames.includes(tableName)) {

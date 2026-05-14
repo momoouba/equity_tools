@@ -11,6 +11,7 @@ const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNew
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
+const { maskSearchKeyForLog, previewBodyForLog } = require('../utils/qichachaApiLog');
 
 /** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
 async function getNewsSentimentAppId() {
@@ -4775,6 +4776,20 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
       console.log(`剩余 ${uniqueCreditCodes.length - enterprisesToSync.length} 个企业将在后续同步中处理`);
     }
 
+    {
+      const baseUrlForLog = request_url || 'https://api.qichacha.com/CompanyNews/SearchNews';
+      let host = 'api.qichacha.com';
+      try {
+        host = new URL(baseUrlForLog).host;
+      } catch (_) {
+        /* ignore */
+      }
+      logWithTag(
+        '[企查查API]',
+        `CompanyNews/SearchNews 批次开始 newsConfigId=${config.id} logId=${logId ?? 'auto'} dateRange=${startDate}~${endDate} batchSize=${enterprisesToSync.length}/${uniqueCreditCodes.length} host=${host}`
+      );
+    }
+
     // 遍历每个统一信用代码，每个企业只查询一次
     for (const creditCode of enterprisesToSync) {
       // 记录每个企业的同步详情
@@ -4782,7 +4797,9 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
       let enterpriseInsertCount = 0; // 该企业成功入库的条数
       let enterpriseHasData = false; // 是否有数据返回
       let enterpriseErrorMsg = null; // 错误信息
-      
+      const qccReqT0 = Date.now();
+      const creditHint = maskSearchKeyForLog(creditCode);
+
       try {
         // 生成Token和Timespan
         const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -4807,7 +4824,10 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
         const baseUrl = request_url || 'https://api.qichacha.com/CompanyNews/SearchNews';
         const requestUrl = `${baseUrl}?${params.toString()}`;
 
-        console.log(`请求企查查舆情接口: ${creditCode}（获取所有情感类型和所有类别的数据）`);
+        logWithTag(
+          '[企查查API]',
+          `CompanyNews/SearchNews 请求开始 credit=${creditHint} newsConfigId=${config.id} dateRange=${startDate}~${endDate} timeoutMs=30000`
+        );
 
         // 调用企查查接口（每个企业只调用一次）
         const response = await axios.get(requestUrl, {
@@ -4817,6 +4837,13 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
           },
           timeout: 30000
         });
+
+        const qccHttpMs = Date.now() - qccReqT0;
+        const bizStatusHead = String(response.data?.Status ?? response.data?.status ?? '');
+        logWithTag(
+          '[企查查API]',
+          `CompanyNews/SearchNews 响应已返回 credit=${creditHint} durationMs=${qccHttpMs} httpStatus=${response.status} bizStatus=${bizStatusHead}`
+        );
 
         // 检查返回状态
         if (response.data.Status === '200' || response.data.status === '200') {
@@ -5030,7 +5057,10 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
           } else {
             const status = response.data.Status || response.data.status || 'unknown';
             const message = response.data.Message || response.data.message || '未知错误';
-            console.warn(`企查查接口返回错误状态: ${status}, ${message}`);
+            warnWithTag(
+              '[企查查API]',
+              `CompanyNews/SearchNews 业务异常 credit=${creditHint} durationMs=${Date.now() - qccReqT0} httpStatus=${response.status} bizStatus=${status} message=${message} bodyPreview=${previewBodyForLog(response.data)}`
+            );
             errors.push(`接口错误 (${creditCode}): ${status} - ${message}`);
             
             // 记录错误信息
@@ -5067,7 +5097,12 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
           // 避免请求过快，添加延迟（每个企业查询后延迟）
           await new Promise(resolve => setTimeout(resolve, 500));
       } catch (error) {
-        console.error(`同步企查查舆情数据失败 (${creditCode}):`, error.message);
+        const failMs = Date.now() - qccReqT0;
+        const prev = previewBodyForLog(error.response?.data);
+        errorWithTag(
+          '[企查查API]',
+          `CompanyNews/SearchNews 异常 credit=${creditHint} durationMs=${failMs} httpStatus=${error.response?.status ?? '-'} message=${error.message} bodyPreview=${prev}`
+        );
         
         // 检查是否是使用量不足的错误
         const errorMessage = error.message || '';

@@ -5,7 +5,7 @@ import timezone from 'dayjs/plugin/timezone'
 dayjs.extend(utc)
 dayjs.extend(timezone)
 
-/** 系统约定：融资日期筛选、批量 AI、手动同步等与库 `event_date`（DATE）对齐，口径为北京时间日历日 */
+/** 系统约定：融资日期筛选、批量 AI、手动同步（融资事件页）等与库 `event_date`（DATE）对齐，口径为北京时间日历日 */
 export const FINANCING_DATE_TZ = 'Asia/Shanghai'
 
 /**

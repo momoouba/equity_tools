@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * invested_enterprises.data_app_name 与 users.app_permissions 中 app_name 对齐，
- * 用于隔离「新闻舆情」与「项目挖掘」两套监控对象数据。
+ * invested_enterprises：历史列 data_app_name 存 applications.app_name 文案；
+ * 新增列 data_app_id 存 applications.id（写入以 id 为准，避免应用改名影响已落库行）。
+ * 列表/权限仍可与 app_name 对齐；迁移期兼容「仅有 data_app_name」的旧数据。
  */
 const DATA_APP_NEWS_SENTIMENT = '新闻舆情';
 const DATA_APP_PROJECT_SOURCING = '项目挖掘';

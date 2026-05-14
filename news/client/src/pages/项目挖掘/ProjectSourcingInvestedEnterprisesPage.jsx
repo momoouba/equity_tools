@@ -10,6 +10,7 @@ export default function ProjectSourcingInvestedEnterprisesPage() {
       dataAppName="项目挖掘"
       pageTitle="被投企业"
       hideEntityTabs
+      viewportBoundTable
     />
   )
 }
