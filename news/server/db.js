@@ -6658,6 +6658,26 @@ async function initializeTables(dbPool) {
   }
 
   try {
+    const [colQccSql] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_sql_sync_setting' AND COLUMN_NAME = 'qcc_brief_after_sync_enabled'
+    `);
+    if (!colQccSql.length) {
+      await dbPool.query(`
+        ALTER TABLE ipo_project_sql_sync_setting
+        ADD COLUMN qcc_brief_after_sync_enabled TINYINT(1) NOT NULL DEFAULT 0
+          COMMENT 'SQL全量写入后是否对有效统一社会信用代码批量拉取企查查企业简介（仅项目挖掘 data_app_id 写入时生效）'
+          AFTER cron_expression
+      `);
+      console.log('✓ ipo_project_sql_sync_setting 已添加 qcc_brief_after_sync_enabled');
+    }
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 ipo_project_sql_sync_setting.qcc_brief_after_sync_enabled 时出现警告:', err.message);
+    }
+  }
+
+  try {
     const [rcpAppId] = await dbPool.query(`
       SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'recipient_management' AND COLUMN_NAME = 'app_id'

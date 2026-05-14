@@ -15,6 +15,16 @@ function normalizeCreditKey(code) {
     .toUpperCase();
 }
 
+/**
+ * 是否为可调用企查查 CompanyBrief 的统一社会信用代码（过滤明显错误值，避免浪费配额）。
+ * 规则：规范化后恰好 18 位且为数字与大写字母（国标常见形态）。
+ */
+function isValidUnifiedCreditForQccSync(code) {
+  const c = normalizeCreditKey(code);
+  if (c.length !== 18) return false;
+  return /^[0-9A-Z]{18}$/.test(c);
+}
+
 function pickQccSearchKey(row) {
   const credit = normalizeCreditKey(row.unified_credit_code);
   if (credit.length >= 8) return credit;
@@ -291,8 +301,95 @@ async function syncAllIpoProjectQccCompanyBriefFiltered({ psUser, keyword, creat
   };
 }
 
+/**
+ * 底层项目 SQL 全量同步提交后：仅项目挖掘应用下、且统一社会信用代码通过校验的行，按代码去重调用企查查写简介。
+ * @param {{ userId: string, psAppId: string, gapMs?: number }} p
+ */
+async function runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId, gapMs = 400 } = {}) {
+  const uid = String(userId || '').trim();
+  const appId = String(psAppId || '').trim();
+  if (!uid || !appId) {
+    return { ok: false, message: '缺少 userId 或 psAppId' };
+  }
+  const g = Math.max(0, Math.min(5000, parseInt(gapMs ?? '400', 10) || 400));
+  const rows = await db.query(
+    `SELECT f_id, company, unified_credit_code, data_app_id, F_DeleteMark
+     FROM ipo_project
+     WHERE F_CreatorUserId = ? AND data_app_id <=> ? AND F_DeleteMark = 0`,
+    [uid, appId]
+  );
+  let totalRows = 0;
+  let skippedInvalidCredit = 0;
+  const creditToFids = new Map();
+  for (const r of rows) {
+    if (!(await isIpoProjectProjectSourcingApp(r))) continue;
+    totalRows += 1;
+    const fid = String(r.f_id || '').trim();
+    if (!fid) continue;
+    const credit = normalizeCreditKey(r.unified_credit_code);
+    if (!isValidUnifiedCreditForQccSync(credit)) {
+      skippedInvalidCredit += 1;
+      continue;
+    }
+    if (!creditToFids.has(credit)) creditToFids.set(credit, []);
+    creditToFids.get(credit).push(fid);
+  }
+  const groups = [...creditToFids.entries()].map(([searchKey, fIds]) => ({ searchKey, fIds }));
+  if (!groups.length) {
+    console.log(
+      `[ipoProjectSqlSync][postQcc] user=${uid} 无有效统一社会信用代码可拉取企查查（总行=${totalRows}，跳过无效码=${skippedInvalidCredit}）`
+    );
+    return {
+      ok: true,
+      unique_queries: 0,
+      success_fids: 0,
+      failed_fids: 0,
+      skipped_invalid_credit: skippedInvalidCredit,
+      total_rows: totalRows,
+    };
+  }
+  let successFids = 0;
+  let failedFids = 0;
+  for (let i = 0; i < groups.length; i++) {
+    const { searchKey, fIds } = groups[i];
+    try {
+      if (isCrossTableUnifiedCredit(searchKey)) {
+        await runUnifiedCreditQccSync(searchKey);
+        successFids += fIds.length;
+      } else {
+        const r = await fetchCompanyBriefGetInfo(searchKey);
+        const desc = r.desc;
+        const intro = desc != null && String(desc).trim() !== '' ? String(desc).trim() : null;
+        await applyQccIntroToFids(fIds, intro);
+        successFids += fIds.length;
+      }
+    } catch (err) {
+      failedFids += fIds.length;
+      const msg = (err && err.message) || String(err);
+      if (!isCrossTableUnifiedCredit(searchKey)) {
+        await markQccErrorOnFids(fIds, msg);
+      }
+      console.warn(`[ipoProjectSqlSync][postQcc] 信用码=${searchKey.slice(0, 8)}… 失败:`, msg);
+    }
+    if (i + 1 < groups.length && g > 0) await sleep(g);
+  }
+  console.log(
+    `[ipoProjectSqlSync][postQcc] user=${uid} 完成 去重查询=${groups.length} 成功行≈${successFids} 失败行≈${failedFids} 跳过无效统一码=${skippedInvalidCredit}`
+  );
+  return {
+    ok: true,
+    unique_queries: groups.length,
+    success_fids: successFids,
+    failed_fids: failedFids,
+    skipped_invalid_credit: skippedInvalidCredit,
+    total_rows: totalRows,
+  };
+}
+
 module.exports = {
   syncIpoProjectQccCompanyBrief,
   batchSyncIpoProjectQccCompanyBrief,
   syncAllIpoProjectQccCompanyBriefFiltered,
+  runPostSqlSyncQccBriefsForProjectSourcingUser,
+  isValidUnifiedCreditForQccSync,
 };

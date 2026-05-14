@@ -181,12 +181,24 @@ async function pruneOldIpoProjectAiSnapshots() {
   }
 }
 
+async function maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId }) {
+  if (!qccAfterSyncOn || !targetDataAppId) return null;
+  try {
+    const { runPostSqlSyncQccBriefsForProjectSourcingUser } = require('../项目挖掘/ipoProjectQccBriefService');
+    return await runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId: targetDataAppId });
+  } catch (e) {
+    console.error('[ipoProjectSqlSync] 同步后企查查简介失败', e);
+    return { ok: false, error: (e && e.message) || String(e) };
+  }
+}
+
 async function runIpoProjectSqlSyncForUser({
   userId,
   external_db_config_id,
   sql_text,
   is_enabled,
   writeTarget = IPO_SQL_WRITE_TARGET_LISTING,
+  qccBriefAfterSync = false,
 }) {
   const configId = external_db_config_id;
   const sqlText = (sql_text || '').trim();
@@ -195,6 +207,11 @@ async function runIpoProjectSqlSyncForUser({
     String(writeTarget || '').trim() === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
       ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
       : IPO_SQL_WRITE_TARGET_LISTING;
+  const qccAfterSyncOn =
+    (qccBriefAfterSync === true ||
+      qccBriefAfterSync === 1 ||
+      qccBriefAfterSync === '1') &&
+    wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING;
 
   if (!userId) throw new Error('缺少 userId');
   if (!configId) throw new Error('请选择业务数据库连接');
@@ -316,6 +333,7 @@ async function runIpoProjectSqlSyncForUser({
     if (!prepared.length) {
       await conn.commit();
       await pruneOldIpoProjectAiSnapshots();
+      const qcc_post_sync = await maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId });
       return {
         inserted: 0,
         updated: 0,
@@ -326,6 +344,7 @@ async function runIpoProjectSqlSyncForUser({
         ai_snapshot_batch_id: batchId,
         ai_snapshot_saved: aiSnapshotSaved,
         ai_snapshot_restored: 0,
+        qcc_post_sync,
         message:
           wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
             ? '查询成功，已清空该用户在项目挖掘下的底层项目（本次无有效行可写入）'
@@ -387,6 +406,8 @@ async function runIpoProjectSqlSyncForUser({
     await conn.commit();
     await pruneOldIpoProjectAiSnapshots();
 
+    const qcc_post_sync = await maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId });
+
     return {
       inserted,
       updated: 0,
@@ -397,6 +418,7 @@ async function runIpoProjectSqlSyncForUser({
       ai_snapshot_batch_id: batchId,
       ai_snapshot_saved: aiSnapshotSaved,
       ai_snapshot_restored: aiSnapshotRestored,
+      qcc_post_sync,
     };
   } catch (e) {
     await conn.rollback();

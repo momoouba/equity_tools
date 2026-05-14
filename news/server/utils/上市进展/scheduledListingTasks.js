@@ -444,6 +444,7 @@ async function updateListingScheduledTasks() {
 
     const sqlSettings = await db.query(
       `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression,
+              COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
               COALESCE(NULLIF(TRIM(write_target), ''), ?) AS write_target
        FROM ipo_project_sql_sync_setting
        WHERE is_enabled = 1
@@ -492,10 +493,14 @@ async function updateListingScheduledTasks() {
               sql_text: cfg.sql_text,
               is_enabled: cfg.is_enabled,
               writeTarget: wt,
+              qccBriefAfterSync: Number(cfg.qcc_brief_after_sync_enabled) === 1,
             });
             console.log(
               `[底层项目同步] 执行完成 配置=${cfg.id} write_target=${wt} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
-                `清空旧行=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0}（全量替换，无增量更新）`
+                `清空旧行=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0}（全量替换，无增量更新）` +
+                (result.qcc_post_sync
+                  ? `；同步后企查查=${JSON.stringify(result.qcc_post_sync).slice(0, 200)}`
+                  : '')
             );
           } catch (err) {
             console.error(`[底层项目同步] 执行失败 配置=${cfg.id}:`, err.message || err);

@@ -549,6 +549,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         sql_text: '',
         is_enabled: true,
         cron_expression: '',
+        qcc_brief_after_sync_enabled: false,
       })
       return
     }
@@ -560,6 +561,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         sql_text: d.sql_text || '',
         is_enabled: d.is_enabled !== 0,
         cron_expression: d.cron_expression || '',
+        qcc_brief_after_sync_enabled: Number(d.qcc_brief_after_sync_enabled) === 1,
       })
     } catch {
       sqlForm.setFieldsValue({
@@ -567,6 +569,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         sql_text: '',
         is_enabled: true,
         cron_expression: '',
+        qcc_brief_after_sync_enabled: false,
       })
     }
   }
@@ -612,6 +615,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         sql_text: (v.sql_text || '').trim(),
         is_enabled: v.is_enabled ? 1 : 0,
         cron_expression: (v.cron_expression || '').trim() || null,
+        qcc_brief_after_sync_enabled: v.qcc_brief_after_sync_enabled ? 1 : 0,
       })
       if (res.data?.success) {
         Message.success('已保存')
@@ -666,6 +670,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         external_db_config_id: v.external_db_config_id,
         sql_text: (v.sql_text || '').trim(),
         is_enabled: v.is_enabled ? 1 : 0,
+        qcc_brief_after_sync_enabled: v.qcc_brief_after_sync_enabled ? 1 : 0,
       })
       if (res.data?.success) {
         const d = res.data.data || {}
@@ -673,8 +678,14 @@ export default function ProjectSourcingIpoProjectsPage() {
           d.ai_snapshot_saved != null || d.ai_snapshot_restored != null
             ? `；快照 ${d.ai_snapshot_saved ?? 0} 条，回填 ${d.ai_snapshot_restored ?? 0} 行`
             : ''
+        const qcc =
+          d.qcc_post_sync && d.qcc_post_sync.ok !== false
+            ? `；企查查后处理 去重查询=${d.qcc_post_sync.unique_queries ?? 0} 跳过无效统一码=${d.qcc_post_sync.skipped_invalid_credit ?? 0}`
+            : d.qcc_post_sync && d.qcc_post_sync.error
+              ? `；企查查后处理失败：${d.qcc_post_sync.error}`
+              : ''
         Message.success(
-          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}${snap}（写入应用：项目挖掘）`
+          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}${snap}${qcc}（写入应用：项目挖掘）`
         )
         setSqlModalOpen(false)
         load()
@@ -1224,7 +1235,7 @@ export default function ProjectSourcingIpoProjectsPage() {
           <strong>ipo_project.data_app_id = 项目挖掘</strong>
           ，且仅清空/覆盖<strong>当前用户</strong>在该应用下的底层项目行，不影响上市进展菜单中的底层项目数据。请在 SQL 中尽量提供{' '}
           <strong>unified_credit_code</strong>
-          （统一社会信用代码），以便同步后自动回填本次清空前已存在的 AI 与企查查简介。
+          （统一社会信用代码），以便同步后自动回填本次清空前已存在的 AI 与企查查简介。若开启「同步后企查查简介」，写入完成后仅对<strong>18 位有效</strong>统一码自动拉取企查查企业简介，错误或非标准长度代码会跳过。
         </p>
         <p style={{ marginBottom: 12, color: 'var(--color-text-3)', fontSize: 12 }}>
           字段：project_name、company、unified_credit_code（可选，用于回填 AI/企查查）、fund、sub（可选）、inv_amount、residual_amount、ratio、ct_amount、ct_residual。
@@ -1258,6 +1269,14 @@ export default function ProjectSourcingIpoProjectsPage() {
           </FormItem>
           <FormItem label="是否启用" field="is_enabled" triggerPropName="checked">
             <Switch checkedText="启用" uncheckedText="禁用" />
+          </FormItem>
+          <FormItem
+            label="同步后企查查简介"
+            field="qcc_brief_after_sync_enabled"
+            triggerPropName="checked"
+            extra="每次 SQL 全量写入并提交成功后，对本用户在项目挖掘下的底层项目中「18 位有效统一社会信用代码」按码去重调用企查查 CompanyBrief 并写回简介；无效码跳过。与定时任务共用本开关。"
+          >
+            <Switch checkedText="启用" uncheckedText="关闭" />
           </FormItem>
           <FormItem
             label="底层项目同步 Cron（可选）"
