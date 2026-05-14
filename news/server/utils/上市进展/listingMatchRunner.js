@@ -1,9 +1,5 @@
 const db = require('../../db');
-const {
-  normalizeCompanyNameForMatch,
-  fuzzySimilarity,
-  canonicalCompanyForMatchCross,
-} = require('./listingCompanyNormalize');
+const { canonicalCompanyForMatchCross } = require('./listingCompanyNormalize');
 const { containsTraditional } = require('./zhconvUtils');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 
@@ -35,15 +31,31 @@ function deriveBoardFromNewShare(row) {
   return exchange || '\u5176\u4ed6';
 }
 
-function isNewShareMatch(projectRow, newShareRow, threshold = 0.8) {
-  const projectNameScore = fuzzySimilarity(projectRow.project_name, newShareRow.stock_name);
-  const companyCnScore = fuzzySimilarity(projectRow.company, newShareRow.enterprise_full_name_cn);
-  const companyEnScore = fuzzySimilarity(projectRow.company, newShareRow.enterprise_full_name_en);
-  const hit = projectNameScore >= threshold || companyCnScore >= threshold || companyEnScore >= threshold;
+/**
+ * 打新「昨日上市」入库：仅企业全称与中/英披露全称在 canonical 后完全一致（与 ipo_progress 匹配同一套规范化），
+ * 不再使用项目简称↔股票简称或模糊相似度阈值。
+ */
+function isNewShareMatch(projectRow, newShareRow) {
+  const ex = String(newShareRow.exchange || '').trim();
+  const proj = canonicalCompanyForMatchCross(projectRow.company, ex);
+  if (!proj) {
+    return {
+      hit: false,
+      score: 0,
+      projectNameScore: 0,
+      companyCnScore: 0,
+      companyEnScore: 0,
+    };
+  }
+  const cn = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_cn, ex);
+  const en = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_en, ex);
+  const companyCnScore = proj && cn && proj === cn ? 1 : 0;
+  const companyEnScore = proj && en && proj === en ? 1 : 0;
+  const hit = companyCnScore === 1 || companyEnScore === 1;
   return {
     hit,
-    score: Math.max(projectNameScore, companyCnScore, companyEnScore),
-    projectNameScore,
+    score: hit ? 1 : 0,
+    projectNameScore: 0,
     companyCnScore,
     companyEnScore,
   };
@@ -113,7 +125,7 @@ async function runNewShareMatchBatch({
     const listingYmd = normYmd(ns.public_date) || todayYmd;
     const updateAt = new Date(`${listingYmd}T00:00:00+08:00`);
     for (const p of projectRows) {
-      const hitInfo = isNewShareMatch(p, ns, 0.8);
+      const hitInfo = isNewShareMatch(p, ns);
       if (!hitInfo.hit) continue;
       matchedPairs += 1;
       // 与上市日对齐：避免「晚一天匹配」导致 f_update_time=写入日，进而在次日日报被误当作「昨日进展」
@@ -221,7 +233,8 @@ function isListingMatchSkipNewShareEnvOn() {
 
 /**
  * Match ipo_progress with ipo_project and write ipo_project_progress.
- * Also appends "new-share listed yesterday" fuzzy-matching records.
+ * Also appends "new-share listed yesterday" rows when project `company` exactly matches
+ * `enterprise_full_name_cn` or `enterprise_full_name_en` after canonical normalization (aligned with ipo_progress matching).
  * @param {object} opts
  * @param {string} opts.startDate YYYY-MM-DD
  * @param {string} opts.endDate YYYY-MM-DD
@@ -255,7 +268,7 @@ async function runListingMatchBatch({
 
   if (skipNewShareByEnv && effectiveTypes.includes('new_share')) {
     console.log(
-      '[listing-match] 已设置 LISTING_MATCH_SKIP_NEW_SHARE，跳过打新日历「昨日上市」模糊匹配及相关状态回填（IPO 进展匹配仍执行）'
+      '[listing-match] 已设置 LISTING_MATCH_SKIP_NEW_SHARE，跳过打新日历「昨日上市」全称精确匹配及相关状态回填（IPO 进展匹配仍执行）'
     );
   }
 
