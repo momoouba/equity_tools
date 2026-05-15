@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { Card, Table, Button, Message, Modal, Form, Input, Space } from '@arco-design/web-react'
 import {
   fetchPreInvestmentProjects,
+  fetchCompetitorRelations,
   postPreInvestmentProject,
   postPreInvestmentQccBrief,
   postPreInvestmentQccFuzzyLookup,
@@ -35,7 +36,25 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [tableScrollY, setTableScrollY] = useState(520)
   const [aiLoadingId, setAiLoadingId] = useState(null)
   const [competitorLoadingId, setCompetitorLoadingId] = useState(null)
+  const [expandedKeys, setExpandedKeys] = useState([])
+  const [relMap, setRelMap] = useState({})
+  const [relLoading, setRelLoading] = useState({})
   const [form] = Form.useForm()
+
+  const loadRelations = async (projectId) => {
+    if (relMap[projectId]) return
+    setRelLoading((m) => ({ ...m, [projectId]: true }))
+    try {
+      const res = await fetchCompetitorRelations({ pre_investment_project_id: projectId })
+      if (res.data?.success) {
+        setRelMap((m) => ({ ...m, [projectId]: res.data.data?.list || [] }))
+      }
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '加载竞品失败')
+    } finally {
+      setRelLoading((m) => ({ ...m, [projectId]: false }))
+    }
+  }
 
   useEffect(() => {
     const calc = () => {
@@ -204,7 +223,7 @@ export default function ProjectSourcingPreInvestmentPage() {
               const name = row.enterprise_full_name || row.project_abbreviation || row.project_no || row.id
               Modal.confirm({
                 title: '竞品分析',
-                content: `确认对「${name}」发起竞品分析？（当前为 MVP：仅记录运行任务，全量召回与 LLM 打分后续接入。）`,
+                content: `确认对「${name}」发起竞品分析？系统将异步召回融资池/底层项目候选并打分落库。`,
                 onOk: async () => {
                   setCompetitorLoadingId(row.id)
                   try {
@@ -245,7 +264,7 @@ export default function ProjectSourcingPreInvestmentPage() {
       >
         <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
           录入投前跟踪主体：企业简称旁点「查询」可调企查查模糊搜索并回填企业全称与统一社会信用代码；保存后写入列表。操作列可手动同步企查查简介、发起
-          AI 取数（异步完善产品介绍与标签）或记录竞品分析任务（MVP）；流水线亦可在后台继续补齐。
+          AI 取数（异步完善产品介绍与标签）或发起竞品分析（异步召回与打分，结果写入竞品关系表）。
         </p>
         <Table
           rowKey="id"
@@ -253,6 +272,27 @@ export default function ProjectSourcingPreInvestmentPage() {
           loading={loading}
           data={list}
           columns={columns}
+          expandedRowKeys={expandedKeys}
+          onExpandedRowsChange={(keys) => {
+            setExpandedKeys(keys)
+            keys.forEach((id) => loadRelations(id))
+          }}
+          expandedRowRender={(row) => (
+            <Table
+              rowKey="id"
+              size="small"
+              loading={!!relLoading[row.id]}
+              data={relMap[row.id] || []}
+              pagination={false}
+              border={{ wrapper: true, cell: true }}
+              columns={[
+                { title: '竞品', dataIndex: 'competitor_display_name', ellipsis: true },
+                { title: '等级', dataIndex: 'confidence_grade', width: 64 },
+                { title: '综合分', dataIndex: 'relevance_score', width: 72 },
+                { title: '融资', dataIndex: 'financing_amount_text', width: 100, ellipsis: true },
+              ]}
+            />
+          )}
           scroll={{ x: 1780, y: tableScrollY }}
           pagination={{
             current: page,

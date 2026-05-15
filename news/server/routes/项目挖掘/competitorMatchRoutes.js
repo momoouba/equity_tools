@@ -18,6 +18,20 @@ const {
   runUnifiedCreditQccSync,
 } = require('../../utils/项目挖掘/projectSourcingQccCrossTableSync');
 const { enqueueManualPreInvestmentProjectAiEnrich } = require('../../utils/项目挖掘/preInvestmentProjectAiEnrichService');
+const {
+  enqueueCompetitorAnalysisRun,
+  evaluatePreInvestmentReadiness,
+  listCompetitorRunStepLogs,
+} = require('../../utils/项目挖掘/competitorAnalysisRunner');
+const {
+  exportCompetitorRelationsToBuffer,
+  listInvestedEnterpriseYears,
+} = require('../../utils/项目挖掘/competitorMatchExport');
+const {
+  buildCompetitorAnalysisSummary,
+  dedupeRelations,
+  hydrateRelationRow,
+} = require('../../utils/项目挖掘/competitorAnalysisSummaryService');
 
 function clientIpFromReq(req) {
   const xf = req.headers['x-forwarded-for'];
@@ -161,10 +175,11 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 管理员：发起竞品分析（MVP：写运行记录；全量召回与 LLM 打分后续迭代） */
-  router.post('/invested-enterprises/:id/competitor-analysis-run', requireAdmin, async (req, res) => {
+  /** 发起竞品分析：项目挖掘权限；非 admin 仅本人创建的被投；异步跑批 */
+  router.post('/invested-enterprises/:id/competitor-analysis-run', requireProjectSourcingAccess, async (req, res) => {
     try {
       const row = await getInvestedEnterpriseRowForCompetitor(req.params.id);
+      assertInvestedEnterpriseCompetitorOwner(req, row);
       const exit = String(row.exit_status || '').trim();
       if (exit === '已退出') {
         return res.status(400).json({ success: false, message: '已退出企业不参与竞品分析' });
@@ -178,22 +193,45 @@ function registerCompetitorMatchRoutes(router) {
         });
       }
 
+      const force = req.body?.force === true || req.query.force === '1';
+      const priorRunId = String(req.body?.prior_run_id || req.query.prior_run_id || '').trim();
+      if (force && !req.body?.confirm_force) {
+        return res.status(400).json({
+          success: false,
+          message: '覆盖重跑须传 confirm_force: true',
+        });
+      }
+      if (force) {
+        await db.execute(
+          `UPDATE sourcing_competitor_relation SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
+           WHERE invested_enterprise_id = ? AND subject_type = 'invested_enterprise' AND delete_mark = 0`,
+          [req.psUser?.id || null, String(row.id)]
+        );
+      }
+
       const runId = await generateId('sourcing_competitor_run');
       const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
-      const msg =
-        'MVP：已记录竞品分析任务。融资池/底层项目召回、LLM 相关性打分（≥90 写库）等全量流水线将在后续迭代接入。';
+      const msg = '已受理竞品分析，后台召回与打分中，请稍后刷新查看结果';
       await db.execute(
         `INSERT INTO sourcing_competitor_run (
-           id, invested_enterprise_id, status, message, triggered_by_user_id, started_at, finished_at,
+           id, invested_enterprise_id, status, message, triggered_by_user_id, started_at,
            created_at, updated_at, delete_mark
-         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),NOW(),0)`,
-        [runId, String(row.id), 'stub', msg, uid]
+         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
+        [runId, String(row.id), 'queued', msg, uid]
       );
+
+      enqueueCompetitorAnalysisRun({
+        subjectType: 'invested_enterprise',
+        runId,
+        investedEnterpriseId: String(row.id),
+        userId: uid,
+        enableAutoExpand: req.body?.enable_auto_expand !== false,
+      });
 
       res.status(202).json({
         success: true,
         message: msg,
-        data: { run_id: runId, client_ip: clientIpFromReq(req) },
+        data: { run_id: runId, prior_run_id: priorRunId || null, client_ip: clientIpFromReq(req) },
       });
     } catch (e) {
       const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
@@ -202,29 +240,225 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
+  /** 竞品分析步骤日志（库表，与控制台 [competitorRunner] 双写） */
+  router.get('/competitor-analysis/runs/:runId/step-logs', requireProjectSourcingAccess, async (req, res) => {
+    try {
+      const runId = String(req.params.runId || '').trim();
+      if (!runId) {
+        return res.status(400).json({ success: false, message: '缺少 runId' });
+      }
+      const subjectType = String(req.query.subject_type || 'invested_enterprise').trim();
+      if (subjectType === 'invested_enterprise') {
+        const runs = await db.query(
+          `SELECT invested_enterprise_id FROM sourcing_competitor_run
+           WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+          [runId]
+        );
+        if (!runs.length) {
+          return res.status(404).json({ success: false, message: '运行记录不存在' });
+        }
+        const row = await getInvestedEnterpriseRowForCompetitor(runs[0].invested_enterprise_id);
+        assertInvestedEnterpriseCompetitorOwner(req, row);
+      } else {
+        const runs = await db.query(
+          `SELECT p.creator_user_id
+           FROM sourcing_pre_investment_competitor_run r
+           INNER JOIN pre_investment_project p ON p.id = r.pre_investment_project_id
+           WHERE r.id = ? AND r.delete_mark = 0 LIMIT 1`,
+          [runId]
+        );
+        if (!runs.length) {
+          return res.status(404).json({ success: false, message: '运行记录不存在' });
+        }
+        const uid = req.psUser?.id ? String(req.psUser.id) : '';
+        if (!isAdminUser(req.psUser) && String(runs[0].creator_user_id) !== uid) {
+          return res.status(403).json({ success: false, message: '仅创建人或管理员可查看' });
+        }
+      }
+      const list = await listCompetitorRunStepLogs(runId);
+      res.json({ success: true, data: { list } });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
+      console.error('[project-sourcing/competitor-analysis/step-logs]', e);
+      res.status(code).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
   /** 竞品关系列表：项目挖掘权限；非 admin 仅本人创建的被投 */
   router.get('/competitor-analysis/relations', requireProjectSourcingAccess, async (req, res) => {
     try {
       const ieId = String(req.query.invested_enterprise_id || '').trim();
-      if (!ieId) {
-        return res.status(400).json({ success: false, message: '缺少 invested_enterprise_id' });
+      const pipId = String(req.query.pre_investment_project_id || '').trim();
+      if (!ieId && !pipId) {
+        return res.status(400).json({
+          success: false,
+          message: '缺少 invested_enterprise_id 或 pre_investment_project_id',
+        });
       }
-      const row = await getInvestedEnterpriseRowForCompetitor(ieId);
-      assertInvestedEnterpriseCompetitorOwner(req, row);
-      const list = await db.query(
-        `SELECT id, invested_enterprise_id, run_id, competitor_display_name, unified_credit_code,
-                competitor_weak_key, relevance_score, data_sources_json, financing_amount_text, created_at
-         FROM sourcing_competitor_relation
-         WHERE invested_enterprise_id = ? AND delete_mark = 0
-         ORDER BY created_at DESC
-         LIMIT 200`,
-        [ieId]
-      );
-      res.json({ success: true, data: { list } });
+      if (ieId) {
+        const row = await getInvestedEnterpriseRowForCompetitor(ieId);
+        assertInvestedEnterpriseCompetitorOwner(req, row);
+      } else {
+        const rows = await db.query(
+          `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+          [pipId]
+        );
+        if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+          const e = new Error('投前项目不存在');
+          e.code = 404;
+          throw e;
+        }
+        const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : '';
+        if (!isAdminUser(req.psUser) && String(rows[0].creator_user_id) !== uid) {
+          const e = new Error('仅创建人或管理员可查看');
+          e.code = 403;
+          throw e;
+        }
+      }
+      const list = ieId
+        ? await db.query(
+            `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+                    competitor_display_name, unified_credit_code, competitor_weak_key,
+                    relevance_score, confidence_grade, score_breakdown_json,
+                    data_sources_json, financing_amount_text,
+                    competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                    created_at
+             FROM sourcing_competitor_relation
+             WHERE invested_enterprise_id = ? AND delete_mark = 0
+               AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+             ORDER BY relevance_score DESC, created_at DESC
+             LIMIT 200`,
+            [ieId]
+          )
+        : await db.query(
+            `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+                    competitor_display_name, unified_credit_code, competitor_weak_key,
+                    relevance_score, confidence_grade, score_breakdown_json,
+                    data_sources_json, financing_amount_text,
+                    competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                    created_at
+             FROM sourcing_competitor_relation
+             WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
+             ORDER BY relevance_score DESC, created_at DESC
+             LIMIT 200`,
+            [pipId]
+          );
+      const deduped = dedupeRelations(list);
+      const hydrated = [];
+      for (const row of deduped) {
+        hydrated.push(await hydrateRelationRow(row));
+      }
+      res.json({ success: true, data: { list: hydrated } });
     } catch (e) {
       const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
       console.error('[project-sourcing/competitor-analysis/relations]', e);
       res.status(code).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 竞品分析说明：流水线步骤 + 最终保留竞品及原因 */
+  router.get('/competitor-analysis/summary', requireProjectSourcingAccess, async (req, res) => {
+    try {
+      const ieId = String(req.query.invested_enterprise_id || '').trim();
+      const pipId = String(req.query.pre_investment_project_id || '').trim();
+      if (!ieId && !pipId) {
+        return res.status(400).json({
+          success: false,
+          message: '缺少 invested_enterprise_id 或 pre_investment_project_id',
+        });
+      }
+      if (ieId) {
+        const row = await getInvestedEnterpriseRowForCompetitor(ieId);
+        assertInvestedEnterpriseCompetitorOwner(req, row);
+      } else {
+        const rows = await db.query(
+          `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+          [pipId]
+        );
+        if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+          const e = new Error('投前项目不存在');
+          e.code = 404;
+          throw e;
+        }
+        const uid = req.psUser?.id ? String(req.psUser.id) : '';
+        if (!isAdminUser(req.psUser) && String(rows[0].creator_user_id) !== uid) {
+          const e = new Error('仅创建人或管理员可查看');
+          e.code = 403;
+          throw e;
+        }
+      }
+      const data = await buildCompetitorAnalysisSummary({
+        subjectType: ieId ? 'invested_enterprise' : 'pre_investment_project',
+        investedEnterpriseId: ieId || null,
+        preInvestmentProjectId: pipId || null,
+      });
+      res.json({ success: true, data });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
+      console.error('[project-sourcing/competitor-analysis/summary]', e);
+      res.status(code).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 竞品导出可选年度（项目编号前四位） */
+  router.get('/competitor-analysis/export/years', requireProjectSourcingAccess, async (req, res) => {
+    try {
+      const years = await listInvestedEnterpriseYears(req.psUser, isAdminUser(req.psUser));
+      res.json({ success: true, data: { years } });
+    } catch (e) {
+      console.error('[project-sourcing/competitor-analysis/export/years]', e);
+      res.status(500).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 竞品明细 Excel 导出：多选被投或全量；按项目简称分 Sheet */
+  router.post('/competitor-analysis/export', requireProjectSourcingAccess, async (req, res) => {
+    try {
+      const exportAll = req.body?.export_all === true || req.body?.exportAll === true;
+      const ids = Array.isArray(req.body?.invested_enterprise_ids)
+        ? req.body.invested_enterprise_ids.map((x) => String(x).trim()).filter(Boolean)
+        : [];
+      const years = Array.isArray(req.body?.years)
+        ? req.body.years.map((x) => String(x).trim()).filter((y) => /^\d{4}$/.test(y))
+        : String(req.body?.years || '')
+            .split(/[,，]/)
+            .map((x) => x.trim())
+            .filter((y) => /^\d{4}$/.test(y));
+
+      if (!exportAll && !ids.length) {
+        return res.status(400).json({ success: false, message: '请勾选被投企业或选择全量导出' });
+      }
+
+      if (!exportAll) {
+        for (const ieId of ids) {
+          const row = await getInvestedEnterpriseRowForCompetitor(ieId);
+          assertInvestedEnterpriseCompetitorOwner(req, row);
+        }
+      }
+
+      const buf = await exportCompetitorRelationsToBuffer({
+        investedEnterpriseIds: ids,
+        exportAll,
+        years,
+        psUser: req.psUser,
+        isAdmin: isAdminUser(req.psUser),
+      });
+      const filename = encodeURIComponent(
+        exportAll ? `竞品分析导出_全量_${new Date().toISOString().slice(0, 10)}.xlsx` : `竞品分析导出_${ids.length}家.xlsx`
+      );
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${filename}"; filename*=UTF-8''${filename}`
+      );
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.send(buf);
+    } catch (e) {
+      const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
+      console.error('[project-sourcing/competitor-analysis/export]', e);
+      res.status(code).json({ success: false, message: e.message || '导出失败' });
     }
   });
 
@@ -408,32 +642,66 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 投前：发起竞品分析（MVP：写运行记录；全量流水线后续接入） */
+  /** 投前：发起竞品分析（异步跑批，落库 sourcing_competitor_relation） */
   router.post('/pre-investment-projects/:id/competitor-analysis-run', requireProjectSourcingAccess, async (req, res) => {
     try {
       const id = String(req.params.id || '').trim();
       const rows = await db.query(
-        `SELECT id, enterprise_full_name, creator_user_id, delete_mark
+        `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, creator_user_id, delete_mark,
+                ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro
          FROM pre_investment_project WHERE id = ? LIMIT 1`,
         [id]
       );
       if (!rows.length || Number(rows[0].delete_mark) !== 0) {
         return res.status(404).json({ success: false, message: '记录不存在' });
       }
+      const row = rows[0];
       const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
-      if (!isAdminUser(req.psUser) && String(rows[0].creator_user_id) !== String(uid)) {
+      if (!isAdminUser(req.psUser) && String(row.creator_user_id) !== String(uid)) {
         return res.status(403).json({ success: false, message: '仅创建人或管理员可发起竞品分析' });
       }
+      const ev = await evaluatePreInvestmentReadiness(row);
+      if (!ev.ready) {
+        return res.status(400).json({
+          success: false,
+          message: '信息不足，请先完成企查查同步与 AI 取数',
+          data: { readiness: ev },
+        });
+      }
+      const force = req.body?.force === true;
+      if (force && !req.body?.confirm_force) {
+        return res.status(400).json({
+          success: false,
+          message: '覆盖重跑须传 confirm_force: true',
+        });
+      }
+      if (force) {
+        await db.execute(
+          `UPDATE sourcing_competitor_relation SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
+           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0`,
+          [uid, id]
+        );
+      }
+
       const runId = await generateId('sourcing_pre_investment_competitor_run');
-      const msg =
-        'MVP：已记录投前竞品分析任务。与被投企业竞品流程类似，融资池召回、LLM 相关性打分等全量流水线将在后续迭代接入。';
+      const msg = '已受理投前竞品分析，后台处理中，请稍后刷新查看';
       await db.execute(
         `INSERT INTO sourcing_pre_investment_competitor_run (
-           id, pre_investment_project_id, status, message, triggered_by_user_id, started_at, finished_at,
+           id, pre_investment_project_id, status, message, triggered_by_user_id, started_at,
            created_at, updated_at, delete_mark
-         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),NOW(),0)`,
-        [runId, id, 'stub', msg, uid]
+         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
+        [runId, id, 'queued', msg, uid]
       );
+
+      enqueueCompetitorAnalysisRun({
+        subjectType: 'pre_investment_project',
+        runId,
+        preInvestmentProjectId: id,
+        preInvestmentRunId: runId,
+        userId: uid,
+        enableAutoExpand: req.body?.enable_auto_expand !== false,
+      });
+
       res.status(202).json({
         success: true,
         message: msg,

@@ -49,23 +49,13 @@ function AIConfig() {
     { value: 'chat_completion', label: 'Chat Completion API' }
   ]
 
-  const applicationTypes = [
-    { value: 'news_analysis', label: '新闻分析' },
-    { value: 'project_sourcing_analysis', label: '项目挖掘分析' },
-    { value: 'listing_progress_analysis', label: '上市进展分析' },
-    { value: 'general', label: '通用' }
-  ]
-
-  const usageTypes = [
-    { value: 'content_analysis', label: '情绪分析' },
-    { value: 'image_recognition', label: '图片识别' },
-    { value: 'project_mining', label: '项目挖掘' },
-    { value: 'listing_data', label: '上市数据' },
-  ]
+  const [applicationTypes, setApplicationTypes] = useState([])
+  const [usageTypes, setUsageTypes] = useState([])
 
   useEffect(() => {
     fetchConfigs()
     fetchAvailableModels()
+    fetchMetaOptions()
   }, [pagination.page, pagination.pageSize])
 
   const fetchConfigs = async () => {
@@ -100,6 +90,19 @@ function AIConfig() {
       }
     } catch (err) {
       console.error('获取可用模型列表失败:', err)
+    }
+  }
+
+  const fetchMetaOptions = async () => {
+    try {
+      const response = await axios.get('/api/ai-config/meta/options')
+      if (response.data.success) {
+        const data = response.data.data || {}
+        setApplicationTypes(data.applicationTypes || [])
+        setUsageTypes(data.usageTypes || [])
+      }
+    } catch (err) {
+      console.error('获取应用/使用类型字典失败:', err)
     }
   }
 

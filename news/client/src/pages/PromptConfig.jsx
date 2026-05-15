@@ -7,23 +7,13 @@ const Option = Select.Option
 const TextArea = Input.TextArea
 const FormItem = Form.Item
 
-const APPLICATION_TYPE_LABELS = {
-  news_analysis: '新闻分析',
-  project_sourcing_analysis: '项目挖掘分析',
-  listing_progress_analysis: '上市进展分析',
-  general: '通用',
-}
-
-const USAGE_TYPE_LABELS = {
-  content_analysis: '情绪分析',
-  image_recognition: '图片识别',
-  project_mining: '项目挖掘',
-  listing_data: '上市数据',
-}
-
-function formatAiModelOptionLabel(config) {
-  const app = APPLICATION_TYPE_LABELS[config.application_type] || config.application_type || '-'
-  const usage = USAGE_TYPE_LABELS[config.usage_type] || config.usage_type || '-'
+function formatAiModelOptionLabel(config, applicationTypeLabels, usageTypeLabels) {
+  const app =
+    (applicationTypeLabels && applicationTypeLabels[config.application_type]) ||
+    config.application_type ||
+    '-'
+  const usage =
+    (usageTypeLabels && usageTypeLabels[config.usage_type]) || config.usage_type || '-'
   return `${config.config_name || config.id}（${app}·${usage}）`
 }
 
@@ -56,6 +46,8 @@ function PromptConfig() {
   const [showModal, setShowModal] = useState(false)
   const [currentPrompt, setCurrentPrompt] = useState(null)
   const [aiModelConfigs, setAiModelConfigs] = useState([])
+  const [applicationTypeLabels, setApplicationTypeLabels] = useState({})
+  const [usageTypeLabels, setUsageTypeLabels] = useState({})
   const [pagination, setPagination] = useState({
     page: 1,
     pageSize: 10,
@@ -94,9 +86,31 @@ function PromptConfig() {
     [aiModelConfigs, formData.interface_type, formData.prompt_type]
   )
 
+  const fetchAiMetaLabels = async () => {
+    try {
+      const response = await axios.get('/api/ai-config/meta/options')
+      if (response.data.success) {
+        const data = response.data.data || {}
+        const appMap = {}
+        const usageMap = {}
+        for (const o of data.applicationTypes || []) {
+          if (o?.value) appMap[o.value] = o.label || o.value
+        }
+        for (const o of data.usageTypes || []) {
+          if (o?.value) usageMap[o.value] = o.label || o.value
+        }
+        setApplicationTypeLabels(appMap)
+        setUsageTypeLabels(usageMap)
+      }
+    } catch (err) {
+      console.error('获取应用/使用类型字典失败:', err)
+    }
+  }
+
   useEffect(() => {
     fetchPrompts()
     fetchAiModelConfigs()
+    fetchAiMetaLabels()
   }, [pagination.page, pagination.pageSize])
 
   useEffect(() => {
@@ -442,7 +456,7 @@ function PromptConfig() {
             >
               {filteredAiModelConfigs.map((config) => (
                 <Option key={String(config.id)} value={String(config.id)}>
-                  {formatAiModelOptionLabel(config)}
+                  {formatAiModelOptionLabel(config, applicationTypeLabels, usageTypeLabels)}
                 </Option>
               ))}
             </Select>

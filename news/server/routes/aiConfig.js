@@ -5,7 +5,11 @@ const axios = require('axios');
 
 const router = express.Router();
 
-const VALID_USAGE_TYPES = ['content_analysis', 'image_recognition', 'project_mining', 'listing_data'];
+const {
+  loadAiModelMetaFromDictionary,
+  assertApplicationTypeAllowed,
+  assertUsageTypeAllowed,
+} = require('../utils/aiModelDictionary');
 
 /** 与 base_dictionary 中字典类型 dict_code 对应（选项 parent_id 指向该类型行） */
 const AI_MODEL_PROVIDER_DICT_CODE = {
@@ -173,6 +177,28 @@ router.get('/active', checkAdminPermission, async (req, res) => {
   }
 });
 
+// 获取可用的模型列表（用于前端选择；来源为数据字典 item_code / item_name）
+router.get('/models/available', checkAdminPermission, async (req, res) => {
+  try {
+    const data = await loadAiModelOptionsFromDictionary();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('获取可用模型字典失败：', error);
+    res.status(500).json({ success: false, message: error.message || '获取失败' });
+  }
+});
+
+// 应用类型 / 使用类型下拉（数据字典 ai_model_application_type、ai_model_usage_type）
+router.get('/meta/options', checkAdminPermission, async (req, res) => {
+  try {
+    const data = await loadAiModelMetaFromDictionary();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('获取 AI 模型元数据字典失败：', error);
+    res.status(500).json({ success: false, message: error.message || '获取失败' });
+  }
+});
+
 // 获取单个AI模型配置（用于编辑）
 router.get('/:id', checkAdminPermission, async (req, res) => {
   try {
@@ -235,8 +261,11 @@ router.post('/', checkAdminPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '最大Token数必须在1-32000之间' });
     }
 
-    if (!VALID_USAGE_TYPES.includes(usage_type)) {
-      return res.status(400).json({ success: false, message: '无效的用途类型' });
+    try {
+      await assertUsageTypeAllowed(usage_type);
+      await assertApplicationTypeAllowed(application_type);
+    } catch (e) {
+      return res.status(e.statusCode || 400).json({ success: false, message: e.message });
     }
 
     await assertModelNameAllowedForProvider(provider, model_name);
@@ -307,8 +336,11 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '最大Token数必须在1-32000之间' });
     }
 
-    if (usage_type !== undefined && !VALID_USAGE_TYPES.includes(usage_type)) {
-      return res.status(400).json({ success: false, message: '无效的用途类型' });
+    try {
+      if (usage_type !== undefined) await assertUsageTypeAllowed(usage_type);
+      if (application_type !== undefined) await assertApplicationTypeAllowed(application_type);
+    } catch (e) {
+      return res.status(e.statusCode || 400).json({ success: false, message: e.message });
     }
 
     const rowFull = await db.query(
@@ -614,16 +646,5 @@ async function testOpenAIModel(config) {
     token_usage: response.data.usage || null
   };
 }
-
-// 获取可用的模型列表（用于前端选择；来源为数据字典 item_code / item_name）
-router.get('/models/available', checkAdminPermission, async (req, res) => {
-  try {
-    const data = await loadAiModelOptionsFromDictionary();
-    res.json({ success: true, data });
-  } catch (error) {
-    console.error('获取可用模型字典失败：', error);
-    res.status(500).json({ success: false, message: error.message || '获取失败' });
-  }
-});
 
 module.exports = router;

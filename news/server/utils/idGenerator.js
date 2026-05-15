@@ -45,6 +45,7 @@ async function generateId(tableName, connection) {
       'pre_investment_project',
       'sourcing_competitor_run',
       'sourcing_competitor_relation',
+      'sourcing_competitor_run_step_log',
       'sourcing_pre_investment_competitor_run',
     ];
     

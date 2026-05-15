@@ -1453,6 +1453,81 @@ async function initializeTables(dbPool) {
     console.warn('初始化 base_dictionary AI 模型名称时出现警告:', err.message);
   }
 
+  // base_dictionary：AI 模型配置 — 应用类型 / 使用类型（item_code → ai_model_config 枚举字段）
+  try {
+    const opId = '2025112019135100001';
+    const nowDict = '2026-05-16 12:00:00';
+    const aiMetaDictTypes = [
+      { id: '2026051612000000001', dict_code: 'ai_model_application_type', dict_name: 'AI模型应用类型', sort_order: 10 },
+      { id: '2026051612000100001', dict_code: 'ai_model_usage_type', dict_name: 'AI模型使用类型', sort_order: 11 },
+    ];
+    const aiMetaItemsByCode = {
+      ai_model_application_type: [
+        { id: '2026051612001000001', item_code: 'news_analysis', item_name: '新闻分析', sort_order: 0 },
+        { id: '2026051612001000002', item_code: 'project_sourcing_analysis', item_name: '项目挖掘分析', sort_order: 1 },
+        { id: '2026051612001000003', item_code: 'project_sourcing_competitor', item_name: '竞品分析', sort_order: 2 },
+        { id: '2026051612001000004', item_code: 'listing_progress_analysis', item_name: '上市进展分析', sort_order: 3 },
+        { id: '2026051612001000005', item_code: 'general', item_name: '通用', sort_order: 4 },
+      ],
+      ai_model_usage_type: [
+        { id: '2026051612001100001', item_code: 'content_analysis', item_name: '情绪分析', sort_order: 0 },
+        { id: '2026051612001100002', item_code: 'image_recognition', item_name: '图片识别', sort_order: 1 },
+        { id: '2026051612001100003', item_code: 'project_mining', item_name: '项目挖掘', sort_order: 2 },
+        { id: '2026051612001100004', item_code: 'listing_data', item_name: '上市数据', sort_order: 3 },
+        { id: '2026051612001100005', item_code: 'competitor_match', item_name: '竞品匹配', sort_order: 4 },
+      ],
+    };
+
+    for (const t of aiMetaDictTypes) {
+      const [typeRows] = await dbPool.query(
+        `SELECT id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0 ORDER BY created_at ASC LIMIT 1`,
+        [t.dict_code]
+      );
+      let parentId = t.id;
+      if (typeRows && typeRows.length > 0) {
+        parentId = typeRows[0].id;
+      } else {
+        await dbPool.execute(
+          `INSERT INTO base_dictionary
+           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           VALUES (?, NULL, ?, ?, NULL, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+          [t.id, t.dict_code, t.dict_name, t.sort_order, opId, opId, nowDict, nowDict]
+        );
+        parentId = t.id;
+      }
+
+      const items = aiMetaItemsByCode[t.dict_code] || [];
+      for (const it of items) {
+        const [exItem] = await dbPool.query(
+          `SELECT id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND delete_mark = 0 LIMIT 1`,
+          [parentId, t.dict_code, it.item_code]
+        );
+        if (exItem && exItem.length > 0) continue;
+        await dbPool.execute(
+          `INSERT INTO base_dictionary
+           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+          [
+            it.id,
+            parentId,
+            t.dict_code,
+            t.dict_name,
+            it.item_code,
+            it.item_name,
+            it.sort_order,
+            opId,
+            opId,
+            nowDict,
+            nowDict,
+          ]
+        );
+      }
+    }
+    console.log('✓ base_dictionary 已初始化 AI 模型应用类型/使用类型字典');
+  } catch (err) {
+    console.warn('初始化 base_dictionary AI 模型应用/使用类型时出现警告:', err.message);
+  }
+
   // data_change_log 表：统一的数据变更日志表
   // 先创建表（不包含外键约束，稍后添加）
   await dbPool.query(`
@@ -2716,8 +2791,8 @@ async function initializeTables(dbPool) {
       max_tokens INT DEFAULT 2000 COMMENT '最大Token数',
       top_p DECIMAL(3,2) DEFAULT 1.0 COMMENT 'Top P参数：0.0-1.0',
       is_active TINYINT DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      application_type ENUM('news_analysis', 'general', 'project_sourcing_analysis', 'listing_progress_analysis') DEFAULT 'news_analysis' COMMENT '应用类型：新闻分析/通用/项目挖掘分析/上市进展分析',
-      usage_type ENUM('content_analysis', 'image_recognition', 'project_mining', 'listing_data') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘，listing_data-上市数据',
+      application_type ENUM('news_analysis', 'general', 'project_sourcing_analysis', 'listing_progress_analysis', 'project_sourcing_competitor') DEFAULT 'news_analysis' COMMENT '应用类型：新闻分析/通用/项目挖掘分析/上市进展分析/竞品分析',
+      usage_type ENUM('content_analysis', 'image_recognition', 'project_mining', 'listing_data', 'competitor_match') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘，listing_data-上市数据，competitor_match-竞品匹配',
       creator_user_id VARCHAR(19) COMMENT '创建用户ID',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updater_user_id VARCHAR(19) COMMENT '更新用户ID',
@@ -4835,8 +4910,61 @@ async function initializeTables(dbPool) {
       `);
       console.log('✓ ai_model_config.application_type 已扩展 project_sourcing_analysis、listing_progress_analysis');
     }
+    const [atCol2] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'application_type'
+      LIMIT 1
+    `);
+    const atType2 = atCol2.length ? String(atCol2[0].COLUMN_TYPE || '') : '';
+    if (atType2 && !atType2.includes('project_sourcing_competitor')) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN application_type ENUM(
+          'news_analysis',
+          'general',
+          'project_sourcing_analysis',
+          'listing_progress_analysis',
+          'project_sourcing_competitor'
+        )
+        DEFAULT 'news_analysis'
+        COMMENT '应用类型：含项目挖掘竞品分析'
+      `);
+      console.log('✓ ai_model_config.application_type 已扩展 project_sourcing_competitor');
+    }
   } catch (err) {
     console.warn('迁移 ai_model_config.application_type 扩展时出现警告:', err.message);
+  }
+
+  // 扩展 ai_model_config.usage_type：竞品匹配
+  try {
+    const [utComp] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'usage_type'
+      LIMIT 1
+    `);
+    const ctComp = utComp.length ? String(utComp[0].COLUMN_TYPE || '') : '';
+    if (ctComp && !ctComp.includes('competitor_match')) {
+      const base = ctComp.includes('listing_data')
+        ? `'content_analysis','image_recognition','project_mining','listing_data','competitor_match'`
+        : ctComp.includes('project_mining')
+          ? `'content_analysis','image_recognition','project_mining','competitor_match'`
+          : `'content_analysis','image_recognition','competitor_match'`;
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN usage_type ENUM(${base})
+        DEFAULT 'content_analysis'
+        COMMENT '用途类型（含竞品匹配 competitor_match）'
+      `);
+      console.log('✓ ai_model_config.usage_type 已扩展 competitor_match');
+    }
+  } catch (err) {
+    console.warn('迁移 ai_model_config.usage_type 扩展 competitor_match 时出现警告:', err.message);
   }
   
   // 创建舆情信息分享链接表
@@ -6424,6 +6552,105 @@ async function initializeTables(dbPool) {
     console.log('✓ sourcing_pre_investment_competitor_run 表已就绪');
   } catch (err) {
     console.warn('创建 sourcing_pre_investment_competitor_run 时出现警告:', err.message);
+  }
+
+  // 项目挖掘：竞品分析步骤日志
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_run_step_log (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        run_id VARCHAR(19) NOT NULL COMMENT '运行记录 id（被投或投前 run 表）',
+        subject_type VARCHAR(32) NOT NULL DEFAULT 'invested_enterprise' COMMENT 'invested_enterprise|pre_investment_project',
+        step_code VARCHAR(32) NOT NULL COMMENT '步骤编码 S0~S6',
+        status VARCHAR(16) NOT NULL DEFAULT 'ok' COMMENT 'ok|warn|failed',
+        message VARCHAR(500) NULL COMMENT '步骤摘要',
+        detail_json JSON NULL COMMENT '结构化明细',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        KEY idx_scrs_run (run_id, created_at),
+        KEY idx_scrs_step (step_code)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析运行步骤日志';
+    `);
+    console.log('✓ sourcing_competitor_run_step_log 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_run_step_log 时出现警告:', err.message);
+  }
+
+  const addScrCol = async (colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_competitor_relation' AND COLUMN_NAME = ?`,
+        [colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE sourcing_competitor_relation ${ddl}`);
+        console.log(`  ✓ sourcing_competitor_relation 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 sourcing_competitor_relation.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await addScrCol(
+    'subject_type',
+    `ADD COLUMN subject_type VARCHAR(32) NOT NULL DEFAULT 'invested_enterprise' COMMENT '主体类型' AFTER id`
+  );
+  await addScrCol(
+    'pre_investment_project_id',
+    `ADD COLUMN pre_investment_project_id VARCHAR(19) NULL COMMENT '投前项目 id' AFTER invested_enterprise_id`
+  );
+  await addScrCol(
+    'pre_investment_run_id',
+    `ADD COLUMN pre_investment_run_id VARCHAR(19) NULL COMMENT '投前竞品 run id' AFTER run_id`
+  );
+  await addScrCol(
+    'subject_display_name',
+    `ADD COLUMN subject_display_name VARCHAR(255) NULL COMMENT '主体展示名' AFTER pre_investment_run_id`
+  );
+  await addScrCol(
+    'confidence_grade',
+    `ADD COLUMN confidence_grade VARCHAR(4) NULL COMMENT '置信等级 S/A/B/C' AFTER relevance_score`
+  );
+  await addScrCol(
+    'score_breakdown_json',
+    `ADD COLUMN score_breakdown_json JSON NULL COMMENT '评分明细 JSON' AFTER confidence_grade`
+  );
+  await addScrCol(
+    'competitor_product_intro',
+    `ADD COLUMN competitor_product_intro TEXT NULL COMMENT '竞品产品介绍(AI)' AFTER financing_amount_text`
+  );
+  await addScrCol(
+    'competitor_tags_display',
+    `ADD COLUMN competitor_tags_display VARCHAR(2000) NULL COMMENT '竞品企业标签展示' AFTER competitor_product_intro`
+  );
+  await addScrCol(
+    'competitor_tags_json',
+    `ADD COLUMN competitor_tags_json JSON NULL COMMENT '竞品企业标签JSON' AFTER competitor_tags_display`
+  );
+  await addScrCol(
+    'sub_fund_names',
+    `ADD COLUMN sub_fund_names VARCHAR(1000) NULL COMMENT '子基金名称(顿号分隔,来自底层项目)' AFTER competitor_tags_json`
+  );
+  try {
+    const [ieCol] = await dbPool.query(
+      `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_competitor_relation' AND COLUMN_NAME = 'invested_enterprise_id'`
+    );
+    if (ieCol.length && ieCol[0].IS_NULLABLE === 'NO') {
+      await dbPool.query(
+        `ALTER TABLE sourcing_competitor_relation MODIFY COLUMN invested_enterprise_id VARCHAR(19) NULL COMMENT '被投企业 id（投前主体可空）'`
+      );
+      console.log('  ✓ sourcing_competitor_relation.invested_enterprise_id 已改为可空');
+    }
+  } catch (err) {
+    console.warn('迁移 sourcing_competitor_relation.invested_enterprise_id 可空时出现警告:', err.message);
+  }
+  try {
+    await dbPool.query(
+      `UPDATE sourcing_competitor_relation SET subject_type = 'invested_enterprise'
+       WHERE subject_type IS NULL OR TRIM(subject_type) = ''`
+    );
+  } catch (err) {
+    console.warn('回填 sourcing_competitor_relation.subject_type 时出现警告:', err.message);
   }
 
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）

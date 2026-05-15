@@ -218,6 +218,23 @@ export function fetchCompetitorRelations(params) {
   return axios.get('/api/project-sourcing/competitor-analysis/relations', { params })
 }
 
+/** 竞品导出可选年度（项目编号前四位） */
+export function fetchCompetitorExportYears() {
+  return axios.get('/api/project-sourcing/competitor-analysis/export/years')
+}
+
+/** 竞品明细 Excel 导出（多 Sheet，按项目简称） */
+export function postCompetitorAnalysisExport(body) {
+  return axios.post('/api/project-sourcing/competitor-analysis/export', body, {
+    responseType: 'blob',
+  })
+}
+
+/** 竞品分析说明（流程 + 保留原因） */
+export function fetchCompetitorAnalysisSummary(params) {
+  return axios.get('/api/project-sourcing/competitor-analysis/summary', { params })
+}
+
 /** 投前项目列表 */
 export function fetchPreInvestmentProjects(params) {
   return axios.get('/api/project-sourcing/pre-investment-projects', { params })

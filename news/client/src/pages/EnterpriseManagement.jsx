@@ -602,7 +602,7 @@ function EnterpriseManagement({
       return new Promise((resolve) => {
         Modal.confirm({
           title: '竞品分析',
-          content: `确认对「${displayName || enterpriseId}」发起竞品分析？（当前为 MVP：仅记录运行，全量召回与打分后续接入）`,
+          content: `确认对「${displayName || enterpriseId}」发起竞品分析？系统将异步从融资池/底层项目召回候选并打分落库（综合分≥60 且须命中内部源）。`,
           onOk: async () => {
             try {
               const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId)
@@ -649,7 +649,7 @@ function EnterpriseManagement({
       await new Promise((resolve) => {
         Modal.confirm({
           title: '竞品分析（批量）',
-          content: `将对已勾选的 ${competitorSelectedKeys.length} 家企业依次发起竞品分析（MVP 仅记录运行）。是否继续？`,
+          content: `将对已勾选的 ${competitorSelectedKeys.length} 家企业依次发起竞品分析（后台异步，请稍后到「竞品分析」页查看结果）。是否继续？`,
           onOk: async () => {
             for (const id of competitorSelectedKeys) {
               const row = enterprises.find((e) => e.id === id)
