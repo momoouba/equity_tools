@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
+const { IE_NEWS_APP_FILTER_SQL_IE } = require('../utils/investedEnterpriseNewsAppSql');
 
 const router = express.Router();
 const { shouldUseViteFrontendHost } = require('../utils/devHost');
@@ -646,7 +647,7 @@ router.get('/news/:token', async (req, res) => {
     if (!isAdmin) {
       whereConditions.push(`EXISTS (
         SELECT 1 FROM invested_enterprises ie
-        WHERE (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情') AND  ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
+        WHERE ${IE_NEWS_APP_FILTER_SQL_IE} AND  ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
       )`);
       queryParams.push(userId);
     }

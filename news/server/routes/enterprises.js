@@ -53,6 +53,12 @@ function parseDataAppNameFromQuery(req) {
   return normalizeDataAppName(req.query.data_app_name);
 }
 
+/** 列表/导出：按 applications.id（invested_enterprises.data_app_id）筛选 */
+async function resolveListDataAppId(dataAppName) {
+  const id = await getApplicationIdByAppName(String(dataAppName || '').trim());
+  return id ? String(id) : null;
+}
+
 /**
  * 合并微信公众号ID
  * 规则：
@@ -490,6 +496,14 @@ router.get('/', async (req, res) => {
       throw e;
     }
 
+    const dataAppId = await resolveListDataAppId(dataAppName);
+    if (!dataAppId) {
+      return res.status(400).json({
+        success: false,
+        message: 'applications 中未配置该应用，无法按应用加载被投企业列表',
+      });
+    }
+
     const page = parseInt(req.query.page, 10) || 1;
     const pageSize = parseInt(req.query.pageSize, 10) || 10;
     const search = req.query.search || '';
@@ -497,8 +511,8 @@ router.get('/', async (req, res) => {
     const entityType = req.query.entity_type || ''; // 企业类型筛选
     const offset = (page - 1) * pageSize;
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_name = ?';
-    const params = [dataAppName];
+    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_id <=> ?';
+    const params = [dataAppId];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {
@@ -630,11 +644,19 @@ router.get('/export', async (req, res) => {
       throw e;
     }
 
+    const dataAppId = await resolveListDataAppId(dataAppName);
+    if (!dataAppId) {
+      return res.status(400).json({
+        success: false,
+        message: 'applications 中未配置该应用，无法按应用导出被投企业',
+      });
+    }
+
     const search = req.query.search || '';
     const filterUserId = req.query.filter_user_id || ''; // 用户筛选（仅admin使用）
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_name = ?';
-    const params = [dataAppName];
+    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_id <=> ?';
+    const params = [dataAppId];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {

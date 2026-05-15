@@ -1,4 +1,5 @@
 const db = require('../../db');
+const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { canonicalCompanyForMatchCross } = require('./listingCompanyNormalize');
 const { containsTraditional } = require('./zhconvUtils');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
@@ -68,6 +69,7 @@ function normYmd(v) {
 
 async function runNewShareMatchBatch({
   restrictProjectUserId = null,
+  listingDataAppId = null,
   newShareStartDate = '',
   newShareEndDate = '',
   newShareLookbackDays = 0,
@@ -109,11 +111,18 @@ async function runNewShareMatchBatch({
     projectSql += ` AND F_CreatorUserId = ?`;
     projectParams.push(restrictProjectUserId);
   }
+  if (listingDataAppId) {
+    projectSql += ` AND data_app_id <=> ?`;
+    projectParams.push(listingDataAppId);
+  } else {
+    projectSql += ` AND 1 = 0`;
+  }
   projectSql += ` ORDER BY f_id`;
   const projectRows = await db.query(projectSql, projectParams);
   console.log(
     `[listing-match][new-share] public_date=${startYmd}~${endYmd} new_share=${newShareRows.length} projects=${projectRows.length}` +
-      (restrictProjectUserId ? ` user=${restrictProjectUserId}` : '')
+      (restrictProjectUserId ? ` user=${restrictProjectUserId}` : '') +
+      (listingDataAppId ? ` listing_app_id=${listingDataAppId}` : '')
   );
 
   const now = new Date();
@@ -188,36 +197,47 @@ async function runNewShareMatchBatch({
   };
 }
 
-async function backfillYesterdayListedStatus({ restrictProjectUserId = null }) {
-  const params = [];
+async function backfillYesterdayListedStatus({ restrictProjectUserId = null, listingDataAppId = null }) {
+  const listingId = listingDataAppId != null ? String(listingDataAppId).trim() : '';
+  if (!listingId) {
+    return { statusBackfilled: 0, sourceBackfilled: 0 };
+  }
+
+  const params1 = [];
+  const params2 = [];
   let whereUser = '';
   if (restrictProjectUserId) {
-    whereUser = ' AND F_CreatorUserId = ?';
-    params.push(restrictProjectUserId);
+    whereUser = ' AND ipp.F_CreatorUserId = ?';
+    params1.push(restrictProjectUserId);
+    params2.push(restrictProjectUserId);
   }
+  const joinListing = ` INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0 AND p.data_app_id <=> ? `;
+  params1.unshift(listingId);
+  params2.unshift(listingId);
+
   const result = await db.execute(
-    `UPDATE ipo_project_progress
-     SET status = '\u6628\u65e5\u4e0a\u5e02'
-     WHERE status != '\u6628\u65e5\u4e0a\u5e02'
+    `UPDATE ipo_project_progress ipp${joinListing}
+     SET ipp.status = '\u6628\u65e5\u4e0a\u5e02'
+     WHERE ipp.status != '\u6628\u65e5\u4e0a\u5e02'
        AND (
-         match_source = 'new_share'
-         OR new_share_row_id IS NOT NULL
-         OR (ipo_progress_row_id IS NULL)
+         ipp.match_source = 'new_share'
+         OR ipp.new_share_row_id IS NOT NULL
+         OR (ipp.ipo_progress_row_id IS NULL)
        )
        ${whereUser}`,
-    params
+    params1
   );
 
   const sourceFixResult = await db.execute(
-    `UPDATE ipo_project_progress
-     SET match_source = 'new_share'
-     WHERE match_source != 'new_share'
+    `UPDATE ipo_project_progress ipp${joinListing}
+     SET ipp.match_source = 'new_share'
+     WHERE ipp.match_source != 'new_share'
        AND (
-         new_share_row_id IS NOT NULL
-         OR (ipo_progress_row_id IS NULL AND status = '\u6628\u65e5\u4e0a\u5e02')
+         ipp.new_share_row_id IS NOT NULL
+         OR (ipp.ipo_progress_row_id IS NULL AND ipp.status = '\u6628\u65e5\u4e0a\u5e02')
        )
        ${whereUser}`,
-    params
+    params2
   );
 
   return {
@@ -232,7 +252,8 @@ function isListingMatchSkipNewShareEnvOn() {
 }
 
 /**
- * Match ipo_progress with ipo_project and write ipo_project_progress.
+ * Match ipo_progress / ipo_new_share with ipo_project and write ipo_project_progress.
+ * 仅 `ipo_project.data_app_id` = applications 中「上市进展」应用 id 的底层项目参与匹配，避免其它应用底层项目产生多余展示。
  * Also appends "new-share listed yesterday" rows when project `company` exactly matches
  * `enterprise_full_name_cn` or `enterprise_full_name_en` after canonical normalization (aligned with ipo_progress matching).
  * @param {object} opts
@@ -250,9 +271,6 @@ async function runListingMatchBatch({
   matchTypes = [],
 }) {
   const skipNewShareByEnv = isListingMatchSkipNewShareEnvOn();
-  const backfillResult = skipNewShareByEnv
-    ? { statusBackfilled: 0, sourceBackfilled: 0 }
-    : await backfillYesterdayListedStatus({ restrictProjectUserId });
 
   const selectedTypes = Array.isArray(matchTypes)
     ? Array.from(new Set(matchTypes.map((x) => String(x || '').trim()).filter(Boolean)))
@@ -277,6 +295,33 @@ async function runListingMatchBatch({
   );
   const includeIpoProgress = selectedIpoTypes.length > 0;
   const includeNewShare = !skipNewShareByEnv && effectiveWithoutNewShare.includes('new_share');
+
+  /** 仅「上市进展」应用下的 ipo_project 与公开表 ipo_progress / ipo_new_share 做匹配 */
+  const listingAppId = await getApplicationIdByAppName('上市进展');
+  if (!listingAppId && (includeIpoProgress || includeNewShare)) {
+    console.warn(
+      '[listing-match] 未找到 applications.app_name=上市进展：无法解析应用 id，本次不参与底层项目匹配（请检查 applications 表）'
+    );
+  }
+
+  const backfillResult = skipNewShareByEnv
+    ? { statusBackfilled: 0, sourceBackfilled: 0 }
+    : await backfillYesterdayListedStatus({
+        restrictProjectUserId,
+        listingDataAppId: listingAppId,
+      });
+
+  if (listingAppId && (includeIpoProgress || includeNewShare)) {
+    const delParams = [listingAppId];
+    let delSql = `DELETE ipp FROM ipo_project_progress ipp
+      INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
+      WHERE NOT (p.data_app_id <=> ?)`;
+    if (restrictProjectUserId) {
+      delSql += ` AND ipp.F_CreatorUserId = ?`;
+      delParams.push(restrictProjectUserId);
+    }
+    await db.execute(delSql, delParams);
+  }
 
   const ipoWhere = [];
   if (selectedIpoTypes.includes('exchange_ipo')) {
@@ -305,6 +350,12 @@ async function runListingMatchBatch({
   if (restrictProjectUserId) {
     projectSql += ` AND F_CreatorUserId = ?`;
     projectParams.push(restrictProjectUserId);
+  }
+  if (listingAppId) {
+    projectSql += ` AND data_app_id <=> ?`;
+    projectParams.push(listingAppId);
+  } else {
+    projectSql += ` AND 1 = 0`;
   }
   projectSql += ` ORDER BY f_id`;
   const projectRows = await db.query(projectSql, projectParams);
@@ -384,6 +435,7 @@ async function runListingMatchBatch({
   const newShareResult = includeNewShare
     ? await runNewShareMatchBatch({
         restrictProjectUserId,
+        listingDataAppId: listingAppId,
         newShareStartDate,
         newShareEndDate,
         newShareLookbackDays,

@@ -285,17 +285,6 @@ function Dashboard() {
 
   const menuGroups = [
     {
-      key: 'news-app',
-      title: '新闻舆情',
-      icon: <IconCommon />,
-      visible: isAdmin || hasNewsPermission,
-      children: [
-        { key: 'news',        title: '舆情信息' },
-        { key: 'enterprises', title: '舆情监控对象' },
-        { key: 'system-db',   title: '数据库连接配置' }
-      ]
-    },
-    {
       key: 'performance-app',
       title: '业绩看板',
       icon: <IconApps />,
@@ -304,6 +293,17 @@ function Dashboard() {
         { key: 'performance',          title: '业绩看板' },
         { key: 'performance-settings', title: '业绩看板设置' },
         { key: 'system-db',            title: '数据库连接配置' }
+      ]
+    },
+    {
+      key: 'news-app',
+      title: '新闻舆情',
+      icon: <IconCommon />,
+      visible: isAdmin || hasNewsPermission,
+      children: [
+        { key: 'news',        title: '舆情信息' },
+        { key: 'enterprises', title: '舆情监控对象' },
+        { key: 'system-db',   title: '数据库连接配置' }
       ]
     },
     {

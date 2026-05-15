@@ -12,6 +12,7 @@ const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
 const { maskSearchKeyForLog, previewBodyForLog } = require('../utils/qichachaApiLog');
+const { IE_NEWS_APP_FILTER_SQL, IE_NEWS_APP_FILTER_SQL_IE } = require('../utils/investedEnterpriseNewsAppSql');
 
 /** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
 async function getNewsSentimentAppId() {
@@ -50,23 +51,23 @@ async function getFundAndSubFundFromEnterprise(enterpriseFullName, unifiedCredit
       return { fund: null, sub_fund: null };
     }
 
-    let query = `SELECT fund, sub_fund FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 AND enterprise_full_name = ?`;
+    let query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND enterprise_full_name = ?`;
     const params = [enterpriseFullName];
 
     // 优先使用统一信用代码匹配
     if (unifiedCreditCode && unifiedCreditCode.trim() !== '') {
-      query = `SELECT fund, sub_fund FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 AND unified_credit_code = ?`;
+      query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND unified_credit_code = ?`;
       params[0] = unifiedCreditCode.trim();
     } else if (wechatAccountId && wechatAccountId.trim() !== '') {
       // 其次使用公众号ID匹配（支持逗号分隔的多个ID）
       const accountIds = splitAccountIds(wechatAccountId);
       if (accountIds.length > 0) {
         const placeholders = accountIds.map(() => '?').join(',');
-        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
+        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
         params[0] = `%${accountIds[0]}%`;
         // 如果只有一个ID，使用LIKE匹配；如果有多个，尝试FIND_IN_SET
         if (accountIds.length > 1) {
-          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
+          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
         }
       }
     }
@@ -642,7 +643,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
     let enterpriseQuery = `
       SELECT DISTINCT wechat_official_account_id, entity_type
       FROM invested_enterprises 
-      WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
       AND wechat_official_account_id IS NOT NULL 
       AND wechat_official_account_id != ''
       AND delete_mark = 0
@@ -861,7 +862,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 const enterpriseResult = await db.query(
                   `SELECT enterprise_full_name 
                    FROM invested_enterprises 
-                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (wechat_official_account_id = ? 
+                   WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?)
@@ -902,7 +903,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                   let enterpriseInfo = await db.query(
                     `SELECT entity_type, enterprise_full_name, project_abbreviation
                      FROM invested_enterprises 
-                     WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+                     WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
                      AND delete_mark = 0 
                      LIMIT 1`,
                     [enterpriseFullName, `%【${enterpriseFullName}】`]
@@ -916,7 +917,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                       enterpriseInfo = await db.query(
                         `SELECT entity_type, enterprise_full_name, project_abbreviation
                          FROM invested_enterprises 
-                         WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ? 
+                         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? 
                          AND delete_mark = 0 
                          LIMIT 1`,
                         [extractedFullName]
@@ -1941,7 +1942,7 @@ router.get('/user-stats', async (req, res) => {
     const totalEnterprisesQuery = `
       SELECT COUNT(*) as count
       FROM invested_enterprises 
-      WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
       AND exit_status NOT IN ('完全退出', '已上市')
       AND delete_mark = 0
     `;
@@ -1953,7 +1954,7 @@ router.get('/user-stats', async (req, res) => {
     let wechatAccountsQuery = `
       SELECT DISTINCT wechat_official_account_id 
       FROM invested_enterprises 
-      WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
       AND wechat_official_account_id IS NOT NULL 
       AND wechat_official_account_id != ''
       AND exit_status NOT IN ('完全退出', '已上市')
@@ -2166,7 +2167,7 @@ router.get('/user-news', async (req, res) => {
     let enterprisesQuery = `
       SELECT DISTINCT wechat_official_account_id, enterprise_full_name
       FROM invested_enterprises 
-      WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
       AND delete_mark = 0
     `;
     
@@ -2367,7 +2368,7 @@ router.get('/', async (req, res) => {
       let wechatAccountsQuery = `
         SELECT DISTINCT wechat_official_account_id 
         FROM invested_enterprises 
-        WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
         AND wechat_official_account_id IS NOT NULL 
         AND wechat_official_account_id != ''
         AND delete_mark = 0
@@ -2449,7 +2450,7 @@ router.get('/', async (req, res) => {
                 nd.fund, nd.sub_fund, nd.news_abstract, nd.news_sentiment,
                 COALESCE(nd.entity_type, ie.entity_type) as entity_type
          FROM news_detail nd
-         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情')
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
          ${whereCondition}
          ORDER BY nd.public_time DESC, nd.created_at DESC
          LIMIT ? OFFSET ?`,
@@ -2459,7 +2460,7 @@ router.get('/', async (req, res) => {
       const totalRows = await db.query(
         `SELECT COUNT(*) as total
          FROM news_detail nd
-         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情')
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
          ${whereCondition}`,
         params
       );
@@ -2648,7 +2649,7 @@ router.get('/', async (req, res) => {
               nd.fund, nd.sub_fund,
               COALESCE(nd.entity_type, ie.entity_type) as entity_type
        FROM news_detail nd
-       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情')
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        ${whereCondition}
        ORDER BY
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
@@ -2660,7 +2661,7 @@ router.get('/', async (req, res) => {
     const totalRows = await db.query(
       `SELECT COUNT(*) as total 
        FROM news_detail nd
-       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情')
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        ${whereCondition}`,
       params
     );
@@ -2875,7 +2876,7 @@ router.post('/export', async (req, res) => {
       const wechatAccountsQuery = `
         SELECT DISTINCT wechat_official_account_id 
         FROM invested_enterprises 
-        WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
         AND wechat_official_account_id IS NOT NULL 
         AND wechat_official_account_id != ''
         AND exit_status NOT IN ('完全退出', '已上市')
@@ -4652,7 +4653,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
        FROM invested_enterprises 
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL 
        AND unified_credit_code != ''
@@ -4929,7 +4930,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
                     const enterpriseResult = await db.query(
                       `SELECT enterprise_full_name, entity_type, fund, sub_fund, project_abbreviation 
                        FROM invested_enterprises 
-                       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  unified_credit_code = ? 
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  unified_credit_code = ? 
                        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                        AND delete_mark = 0 
                        LIMIT 1`,
@@ -5786,7 +5787,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -6053,7 +6054,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -6322,7 +6323,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -6591,7 +6592,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -6860,7 +6861,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -7130,7 +7131,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -7398,7 +7399,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -7666,7 +7667,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -7935,7 +7936,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -8204,7 +8205,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -8471,7 +8472,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type, project_abbreviation
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -8819,7 +8820,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
     const enterprises = await db.query(
       `SELECT DISTINCT unified_credit_code, enterprise_full_name, entity_type
        FROM invested_enterprises
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND exit_status IS NOT NULL
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
@@ -8910,7 +8911,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
           const enterpriseResult = await db.query(
             `SELECT enterprise_full_name, entity_type, fund, sub_fund, project_abbreviation
              FROM invested_enterprises
-             WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  unified_credit_code = ?
+             WHERE ${IE_NEWS_APP_FILTER_SQL} AND  unified_credit_code = ?
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
              AND delete_mark = 0
              LIMIT 1`,

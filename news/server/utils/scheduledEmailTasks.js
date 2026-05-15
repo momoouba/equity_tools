@@ -9,6 +9,7 @@ const {
 const XLSX = require('xlsx');
 const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
 const { convertQuartzCronToNodeCron } = require('./cronQuartzToNode');
+const { IE_NEWS_APP_FILTER_SQL, IE_NEWS_APP_FILTER_SQL_IE } = require('./investedEnterpriseNewsAppSql');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -560,7 +561,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const enterprises = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
        FROM invested_enterprises 
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
        AND delete_mark = 0
@@ -736,7 +737,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             nd.enterprise_full_name IN (
               SELECT enterprise_full_name 
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
@@ -751,7 +752,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             END) IN (
               SELECT enterprise_full_name 
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
@@ -765,7 +766,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
                   enterprise_full_name
               END
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
@@ -774,7 +775,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             nd.enterprise_abbreviation IN (
               SELECT project_abbreviation 
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               AND project_abbreviation IS NOT NULL
               AND project_abbreviation != ''
@@ -790,7 +791,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             END) IN (
               SELECT enterprise_full_name 
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
@@ -804,7 +805,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
                   enterprise_full_name
               END
               FROM invested_enterprises 
-              WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
+              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
               AND delete_mark = 0
               ${entityTypeSubqueryFilter}
             )
@@ -958,7 +959,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             const enterpriseMatch = await db.query(
               `SELECT enterprise_full_name, exit_status 
                FROM invested_enterprises 
-               WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                AND delete_mark = 0
                LIMIT 1`,
@@ -974,7 +975,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
                 const enterpriseMatch2 = await db.query(
                   `SELECT enterprise_full_name, exit_status 
                    FROM invested_enterprises 
-                   WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name = ?
+                   WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
                    AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                    AND delete_mark = 0
                    LIMIT 1`,
@@ -1221,7 +1222,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const wechatAccounts = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
        FROM invested_enterprises 
-       WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  creator_user_id = ? 
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
@@ -1289,7 +1290,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
            ELSE 
              ie.enterprise_full_name
          END)
-       ) AND ie.delete_mark = 0 AND (COALESCE(ie.data_app_name, '新闻舆情') = '新闻舆情')
+       ) AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        WHERE nd.wechat_account IN (${placeholders})
        AND nd.created_at >= ? 
        AND nd.created_at < ?
@@ -1465,7 +1466,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         const enterpriseTypes = await db.query(
           `SELECT DISTINCT enterprise_full_name, entity_type 
            FROM invested_enterprises 
-           WHERE (COALESCE(data_app_name, '新闻舆情') = '新闻舆情') AND  enterprise_full_name IN (${placeholders}) 
+           WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name IN (${placeholders}) 
            AND delete_mark = 0`,
           enterpriseNames
         );

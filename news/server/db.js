@@ -4057,7 +4057,7 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 invested_enterprises.entity_type 时出现警告:', err.message);
   }
 
-  // invested_enterprises.data_app_name：隔离新闻舆情与项目挖掘的监控对象数据
+  // invested_enterprises.data_app_name / data_app_id：隔离新闻舆情与项目挖掘；业务过滤以 data_app_id（applications.id）为准，见 investedEnterpriseNewsAppSql
   try {
     const [ieAppCols] = await dbPool.query(`
       SELECT COLUMN_NAME 

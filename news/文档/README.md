@@ -239,6 +239,7 @@ npm run dev
 系统提供了详细的功能说明文档，位于项目根目录：
 
 - `被投企业管理功能说明.md` - 被投企业管理功能详细说明
+- `数据应用隔离与业务匹配说明.md` - **applications / data_app_id**：上市进展底层匹配、新闻舆情被投企业过滤、被投企业列表与导出等规则说明
 - `大模型新闻分析功能说明.md` - AI分析功能详细说明
 - `管理员舆情功能说明.md` - 管理员舆情管理功能
 - `用户舆情统计功能说明.md` - 用户端统计功能
@@ -260,7 +261,8 @@ npm run dev
 - `POST /api/auth/login` - 用户登录
 
 ### 被投企业管理
-- `GET /api/enterprises` - 获取企业列表
+- `GET /api/enterprises` - 获取企业列表（查询参数 `data_app_name`；服务端按 **`data_app_id`** 与 `applications.id` 匹配筛选）
+- `GET /api/enterprises/export` - 导出企业（同上）
 - `POST /api/enterprises` - 新增企业
 - `PUT /api/enterprises/:id` - 更新企业
 - `DELETE /api/enterprises/:id` - 删除企业
