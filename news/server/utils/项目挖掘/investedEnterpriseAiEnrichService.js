@@ -255,9 +255,23 @@ async function runInvestedEnterpriseAiEnrichTask({
       productIntroStored: llm.productIntroStored,
       tagsDisplay: llm.display,
     });
+    const introLen = String(llm.productIntroStored || '').trim().length;
+    let tagCount = 0;
+    try {
+      const arr = JSON.parse(llm.tagsJson || '[]');
+      tagCount = Array.isArray(arr) ? arr.length : 0;
+    } catch {
+      tagCount = 0;
+    }
     console.log(
-      `[ieAiEnrich] success enterprise_id=${enterpriseId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name}`
+      `[ieAiEnrich] success enterprise_id=${enterpriseId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name} product_intro_len=${introLen} tags_count=${tagCount}`
     );
+    if (introLen === 0 && tagCount === 0) {
+      const raw = llm.raw == null ? '' : String(llm.raw);
+      const max = Math.max(800, Math.min(50000, parseInt(process.env.AI_PARSE_FAIL_LOG_RAW_MAX || '8000', 10) || 8000));
+      const logged = raw.length > max ? `${raw.slice(0, max)}\n…(truncated total_len=${raw.length})` : raw;
+      console.warn(`[ieAiEnrich] persist_empty_llm_raw enterprise_id=${enterpriseId} log_id=${logId}\n${logged}`);
+    }
   } catch (err) {
     await db.execute(
       `UPDATE invested_enterprises SET

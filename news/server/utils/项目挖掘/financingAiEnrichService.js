@@ -1627,8 +1627,23 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
     });
   };
 
+  const logChatOk = (response, note) => {
+    try {
+      const ch0 = response?.data?.choices?.[0];
+      const content = ch0?.message?.content;
+      const len = content == null ? 0 : String(content).length;
+      const suffix = note ? ` ${note}` : '';
+      console.log(
+        `[financingAiEnrich] chat_response_ok model=${config.model_name} finish_reason=${ch0?.finish_reason ?? 'n/a'} content_len=${len} id=${response?.data?.id ?? 'n/a'}${suffix}`
+      );
+    } catch {
+      /* ignore log errors */
+    }
+  };
+
   try {
     const response = await post(true);
+    logChatOk(response, 'enable_search=1');
     return response.data?.choices?.[0]?.message?.content;
   } catch (err) {
     const status = err.response?.status;
@@ -1653,6 +1668,7 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
         console.warn(
           '[financingAiEnrich] 已降级为未开启 enable_search；若需联网请更换为支持联网的模型（如 qwen-plus / qwen-max 等）。'
         );
+        logChatOk(response2, 'enable_search=0_retry');
         return response2.data?.choices?.[0]?.message?.content;
       } catch (err2) {
         const second = formatDashScopeHttpError(err2);
@@ -2377,6 +2393,20 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
   );
   const tagsJson = JSON.stringify(norm.tags);
   const display = norm.tags.join('、');
+  const persistIntroLen = String(productIntroStored || '').trim().length;
+  const persistTagCount = Array.isArray(norm.tags) ? norm.tags.length : 0;
+  if (persistIntroLen === 0 && persistTagCount === 0) {
+    const rawStr = raw == null ? '' : String(raw);
+    const max = AI_PARSE_FAIL_LOG_RAW_MAX;
+    const logged =
+      rawStr.length > max
+        ? `${rawStr.slice(0, max)}\n…(truncated total_len=${rawStr.length})`
+        : rawStr;
+    const preStripIntroLen = String(norm.product_intro || '').trim().length;
+    console.warn(
+      `[financingAiEnrich] web_enrich_persist_empty tag=financing_style_llm model=${config.model_name} pre_strip_intro_len=${preStripIntroLen} parsed_keys=${parsed && typeof parsed === 'object' ? Object.keys(parsed).join(',') : 'n/a'}\n${logged}`
+    );
+  }
   return {
     raw,
     config,
