@@ -266,6 +266,15 @@ export default function ShareListingProjectProgressPage() {
   const [tableScrollY, setTableScrollY] = useState(520)
   const [shareTab, setShareTab] = useState('project')
   const [rangePreset, setRangePreset] = useState('all')
+  const [projectSearchDraft, setProjectSearchDraft] = useState('')
+  const [projectSearchKeyword, setProjectSearchKeyword] = useState('')
+
+  const applyShareProjectSearch = (raw) => {
+    const next = String(raw ?? '').trim()
+    setProjectSearchDraft(next)
+    setProjectSearchKeyword(next)
+    setPage(1)
+  }
 
   const formatAmount = (v) => {
     if (v === null || v === undefined || v === '') return '-'
@@ -317,6 +326,7 @@ export default function ShareListingProjectProgressPage() {
         page: p,
         pageSize: ps,
         rangePreset: rangePreset === 'all' ? '' : rangePreset,
+        ...(projectSearchKeyword ? { keyword: projectSearchKeyword } : {}),
       })
       if (res.data?.success) {
         const data = res.data.data || {}
@@ -337,6 +347,7 @@ export default function ShareListingProjectProgressPage() {
     try {
       const res = await downloadListingProjectProgressShareExport(token, {
         rangePreset: rangePreset === 'all' ? '' : rangePreset,
+        ...(projectSearchKeyword ? { keyword: projectSearchKeyword } : {}),
       })
       const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8' })
       const url = URL.createObjectURL(blob)
@@ -379,7 +390,7 @@ export default function ShareListingProjectProgressPage() {
     setPage(1)
     load(1, pageSize)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [verified, rangePreset])
+  }, [verified, rangePreset, projectSearchKeyword])
 
   useEffect(() => {
     const calc = () => {
@@ -429,6 +440,17 @@ export default function ShareListingProjectProgressPage() {
               <Button type="outline" status="success" onClick={handleMatchHint}>
                 匹配数据
               </Button>
+              <Input.Search
+                allowClear
+                placeholder="搜索各列（日期、交易所、金额、企业名称等）"
+                style={{ width: 340 }}
+                value={projectSearchDraft}
+                onChange={(v) => {
+                  setProjectSearchDraft(v)
+                  if (v === '') applyShareProjectSearch('')
+                }}
+                onSearch={(v) => applyShareProjectSearch(v)}
+              />
               <span>时间范围：</span>
               <Button
                 type={rangePreset === 'yesterday' ? 'primary' : 'secondary'}

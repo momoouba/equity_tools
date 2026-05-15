@@ -46,6 +46,11 @@ function rangeFromPresetBeijing(preset) {
   return null;
 }
 
+/** 统一为 utf8mb4_general_ci，避免 TEXT(utf8mb4_bin) 与字面量/绑定串在 CONCAT_WS/LIKE 中报 ER_CANT_AGGREGATE_2COLLATIONS */
+function listingProgressKeywordBlob(exprSql) {
+  return `CONVERT((${exprSql}) USING utf8mb4) COLLATE utf8mb4_general_ci`;
+}
+
 async function buildProgressWhere(req, user) {
   const preset = (req.query.rangePreset || '').trim();
   const startStr = (req.query.startDate || '').trim();
@@ -75,6 +80,32 @@ async function buildProgressWhere(req, user) {
   if (rangeStart && rangeEnd) {
     where.push('ipp.f_update_time >= ? AND ipp.f_update_time <= ?');
     params.push(rangeStart, rangeEnd);
+  }
+
+  const kwRaw = String(req.query.keyword || '').trim();
+  const kw = kwRaw.length > 200 ? kwRaw.slice(0, 200) : kwRaw;
+  if (kw) {
+    const like = `%${kw}%`;
+    where.push(`(
+      CONCAT_WS(' ',
+        ${listingProgressKeywordBlob(`IFNULL(DATE_FORMAT(ipp.f_update_time, '%Y-%m-%d'), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(DATE_FORMAT(ipp.f_update_time, '%H:%i:%s'), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.exchange, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.board, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.status, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.fund, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.sub, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.project_name, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(ipp.company, '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.inv_amount AS CHAR)), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.residual_amount AS CHAR)), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ratio AS CHAR)), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ratio * 100 AS CHAR)), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ct_amount AS CHAR)), '')`)},
+        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ct_residual AS CHAR)), '')`)}
+      ) LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+    )`);
+    params.push(like);
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';

@@ -227,6 +227,10 @@ function rangeFromPresetBeijingForShare(preset) {
   return null;
 }
 
+function listingShareProgressKeywordBlob(exprSql) {
+  return `CONVERT((${exprSql}) USING utf8mb4) COLLATE utf8mb4_general_ci`;
+}
+
 function buildShareProjectProgressDateWhere(query) {
   const preset = (query.rangePreset || '').trim();
   const startStr = (query.startDate || '').trim();
@@ -249,6 +253,33 @@ function buildShareProjectProgressDateWhere(query) {
     where.push('f_update_time >= ? AND f_update_time <= ?');
     params.push(rangeStart, rangeEnd);
   }
+
+  const kwRaw = String(query.keyword || '').trim();
+  const kw = kwRaw.length > 200 ? kwRaw.slice(0, 200) : kwRaw;
+  if (kw) {
+    const like = `%${kw}%`;
+    where.push(`(
+      CONCAT_WS(' ',
+        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(f_update_time, '%Y-%m-%d'), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(f_update_time, '%H:%i:%s'), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(exchange, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(board, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(status, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(fund, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(sub, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(project_name, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(company, '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(inv_amount AS CHAR)), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(residual_amount AS CHAR)), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(ratio AS CHAR)), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(ratio * 100 AS CHAR)), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(ct_amount AS CHAR)), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(TRIM(CAST(ct_residual AS CHAR)), '')`)}
+      ) LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
+    )`);
+    params.push(like);
+  }
+
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   return { whereSql, params };
 }

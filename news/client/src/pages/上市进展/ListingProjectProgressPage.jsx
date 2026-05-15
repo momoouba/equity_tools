@@ -321,6 +321,8 @@ export default function ListingProjectProgressPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(15)
   const [rangePreset, setRangePreset] = useState('all')
+  const [searchDraft, setSearchDraft] = useState('')
+  const [searchKeyword, setSearchKeyword] = useState('')
   const [editOpen, setEditOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [ippForm] = Form.useForm()
@@ -352,10 +354,22 @@ export default function ListingProjectProgressPage() {
     return () => window.removeEventListener('resize', calc)
   }, [])
 
+  const applyProjectProgressSearch = (raw) => {
+    const next = String(raw ?? '').trim()
+    setSearchDraft(next)
+    setSearchKeyword(next)
+    setPage(1)
+  }
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const params = { page, pageSize, rangePreset: rangePreset === 'all' ? '' : rangePreset }
+      const params = {
+        page,
+        pageSize,
+        rangePreset: rangePreset === 'all' ? '' : rangePreset,
+        ...(searchKeyword ? { keyword: searchKeyword } : {}),
+      }
       const res = await fetchIpoProjectProgressList(params)
       if (res.data?.success) {
         const d = res.data.data || {}
@@ -370,7 +384,7 @@ export default function ListingProjectProgressPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, rangePreset])
+  }, [page, pageSize, rangePreset, searchKeyword])
 
   useEffect(() => {
     load()
@@ -378,7 +392,10 @@ export default function ListingProjectProgressPage() {
 
   const handleExport = async () => {
     try {
-      const params = { rangePreset: rangePreset === 'all' ? '' : rangePreset }
+      const params = {
+        rangePreset: rangePreset === 'all' ? '' : rangePreset,
+        ...(searchKeyword ? { keyword: searchKeyword } : {}),
+      }
       const res = await downloadIpoProjectProgressExport(params)
       saveBlobAsCsv(res)
       Message.success('已开始下载')
@@ -744,6 +761,17 @@ export default function ListingProjectProgressPage() {
               <Button type="outline" status="success" onClick={openMatchModal} loading={matching}>
                 匹配数据
               </Button>
+              <Input.Search
+                allowClear
+                placeholder="搜索各列（日期、交易所、金额、企业名称等）"
+                style={{ width: 340 }}
+                value={searchDraft}
+                onChange={(v) => {
+                  setSearchDraft(v)
+                  if (v === '') applyProjectProgressSearch('')
+                }}
+                onSearch={(v) => applyProjectProgressSearch(v)}
+              />
               <span>时间范围：</span>
               <Button
                 type={rangePreset === 'yesterday' ? 'primary' : 'secondary'}
