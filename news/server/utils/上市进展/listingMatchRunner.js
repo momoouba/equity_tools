@@ -67,6 +67,32 @@ function normYmd(v) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
 }
 
+/** 同一底层项目 + 同一 ipo_progress 行 + 同一进展更新日：已存在则跳过（增量幂等，不删历史） */
+async function existsIpoProgressMatch(projectFId, progressRowId, updateTime) {
+  const ymd = normYmd(updateTime);
+  if (!ymd) {
+    const rows = await db.query(
+      `SELECT f_id FROM ipo_project_progress
+       WHERE match_source = 'ipo_progress'
+         AND ipo_project_f_id = ?
+         AND ipo_progress_row_id = ?
+       LIMIT 1`,
+      [projectFId, progressRowId]
+    );
+    return rows.length > 0;
+  }
+  const rows = await db.query(
+    `SELECT f_id FROM ipo_project_progress
+     WHERE match_source = 'ipo_progress'
+       AND ipo_project_f_id = ?
+       AND ipo_progress_row_id = ?
+       AND DATE(f_update_time) = ?
+     LIMIT 1`,
+    [projectFId, progressRowId, ymd]
+  );
+  return rows.length > 0;
+}
+
 async function runNewShareMatchBatch({
   restrictProjectUserId = null,
   listingDataAppId = null,
@@ -360,14 +386,9 @@ async function runListingMatchBatch({
   projectSql += ` ORDER BY f_id`;
   const projectRows = await db.query(projectSql, projectParams);
 
-  const progressIds = progressRows.map((r) => r.f_id);
-  if (progressIds.length) {
-    const ph = progressIds.map(() => '?').join(',');
-    await db.query(`DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${ph})`, progressIds);
-  }
-
   const now = new Date();
   let inserted = 0;
+  let skippedFromIpoProgress = 0;
 
   /** @type {Map<string, { ip: object, p: object }[]>} */
   const matchBuckets = new Map();
@@ -397,6 +418,11 @@ async function runListingMatchBatch({
     const ips = pairs.map((x) => x.ip);
     const ip = pickPreferredIpoProgressForProject(p, ips);
     if (!ip) continue;
+
+    if (await existsIpoProgressMatch(p.f_id, ip.f_id, ip.f_update_time)) {
+      skippedFromIpoProgress += 1;
+      continue;
+    }
 
     await db.execute(
       `INSERT INTO ipo_project_progress (
@@ -453,6 +479,7 @@ async function runListingMatchBatch({
     progressCount: progressRows.length,
     projectCount: projectRows.length,
     insertedFromIpoProgress: inserted,
+    skippedFromIpoProgress,
     insertedFromNewShare: Number(newShareResult.inserted || 0),
     inserted: inserted + Number(newShareResult.inserted || 0),
     newSharePublicDate: newShareResult.publicDate,

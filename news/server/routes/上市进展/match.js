@@ -77,6 +77,7 @@ async function runMatch(req, res) {
         newShareSkipped: result.newShareSkipped || 0,
         newSharePublicDate: result.newSharePublicDate || null,
         insertedFromIpoProgress: result.insertedFromIpoProgress || 0,
+        skippedFromIpoProgress: result.skippedFromIpoProgress || 0,
         insertedFromNewShare: result.insertedFromNewShare || 0,
         yesterdayStatusBackfilled: result.yesterdayStatusBackfilled || 0,
         yesterdaySourceBackfilled: result.yesterdaySourceBackfilled || 0,
