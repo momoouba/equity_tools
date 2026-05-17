@@ -1,10 +1,10 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
 const {
   runFinancingStyleWebEnrichLlmCall,
   withFinancingAiConcurrency,
-} = require('./financingAiEnrichService');
+} = require('../项目挖掘/financingAiEnrichService');
 const { parseTagsFromJson, mergeTagArrays, strTrim, normalizeCreditCode } = require('./competitorMatchUtils');
 const { logCompetitorRun } = require('./competitorAnalysisLogger');
 const { loadInternalDisplayFields } = require('./competitorInternalDisplayLoader');
@@ -17,7 +17,7 @@ function tagsToDisplay(tags) {
  * 从底层项目表聚合子基金名称（同一竞品企业信用代码/企业全称可能对应多行）。
  */
 async function resolveSubFundNamesFromIpo(unifiedCreditCode, companyName) {
-  const psAppId = await getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+  const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (!psAppId) return '';
   const credit = normalizeCreditCode(unifiedCreditCode);
   const name = strTrim(companyName);

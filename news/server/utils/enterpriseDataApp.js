@@ -6,8 +6,9 @@
  */
 const DATA_APP_NEWS_SENTIMENT = '新闻舆情';
 const DATA_APP_PROJECT_SOURCING = '项目挖掘';
+const DATA_APP_COMPETITOR_ANALYSIS = '竞品分析';
 
-const ALLOWED = new Set([DATA_APP_NEWS_SENTIMENT, DATA_APP_PROJECT_SOURCING]);
+const ALLOWED = new Set([DATA_APP_NEWS_SENTIMENT, DATA_APP_PROJECT_SOURCING, DATA_APP_COMPETITOR_ANALYSIS]);
 
 function normalizeDataAppName(input) {
   if (input === undefined || input === null) return DATA_APP_NEWS_SENTIMENT;
@@ -19,6 +20,7 @@ function normalizeDataAppName(input) {
 module.exports = {
   DATA_APP_NEWS_SENTIMENT,
   DATA_APP_PROJECT_SOURCING,
+  DATA_APP_COMPETITOR_ANALYSIS,
   ALLOWED,
   normalizeDataAppName,
 };

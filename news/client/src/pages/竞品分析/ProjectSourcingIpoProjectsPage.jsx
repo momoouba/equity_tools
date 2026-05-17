@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+﻿import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Table,
   Button,
@@ -23,27 +23,27 @@ import {
   formatFinancingDateTime,
 } from './financingDateUtils'
 import {
-  fetchProjectSourcingIpoProjects,
-  getProjectSourcingIpoProjectsExport,
+  fetchCompetitorAnalysisIpoProjects,
+  getCompetitorAnalysisIpoProjectsExport,
   postIpoProjectAiEnrich,
   postIpoProjectBatchAiEnrich,
   fetchIpoProjectAiEnrichLogs,
   postIpoProjectBatchQccCompanyBrief,
-  fetchProjectSourcingIpoProjectSqlSyncSetting,
-  putProjectSourcingIpoProjectSqlSyncSetting,
-  postProjectSourcingIpoProjectSqlSyncPreview,
-  postProjectSourcingIpoProjectSqlSyncRun,
+  fetchCompetitorAnalysisIpoProjectSqlSyncSetting,
+  putCompetitorAnalysisIpoProjectSqlSyncSetting,
+  postCompetitorAnalysisIpoProjectSqlSyncPreview,
+  postCompetitorAnalysisIpoProjectSqlSyncRun,
   postIpoProjectQccCompanyBriefSyncAllFiltered,
-  postProjectSourcingIpoProject,
-  putProjectSourcingIpoProject,
-  deleteProjectSourcingIpoProject,
-  fetchProjectSourcingIpoProjectChangeLog,
-} from '../../api/项目挖掘'
+  postCompetitorAnalysisIpoProject,
+  putCompetitorAnalysisIpoProject,
+  deleteCompetitorAnalysisIpoProject,
+  fetchCompetitorAnalysisIpoProjectChangeLog,
+} from '../../api/竞品分析'
 import BatchImportModal from '../BatchImportModal'
 import { IntroPopoverCell } from './introPopoverAiCell'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
-import './FinancingEventsPage.css'
+import '../项目挖掘/FinancingEventsPage.css'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -206,7 +206,7 @@ export default function ProjectSourcingIpoProjectsPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetchProjectSourcingIpoProjects({
+      const res = await fetchCompetitorAnalysisIpoProjects({
         page,
         pageSize,
         keyword: kwSearch || undefined,
@@ -258,7 +258,7 @@ export default function ProjectSourcingIpoProjectsPage() {
   const submitNew = useCallback(async () => {
     try {
       const v = await newForm.validate()
-      const res = await postProjectSourcingIpoProject(v)
+      const res = await postCompetitorAnalysisIpoProject(v)
       if (res.data?.success) {
         Message.success('已创建')
         setNewOpen(false)
@@ -276,7 +276,7 @@ export default function ProjectSourcingIpoProjectsPage() {
     if (!editing?.f_id) return
     try {
       const v = await editForm.validate()
-      const res = await putProjectSourcingIpoProject(String(editing.f_id), v)
+      const res = await putCompetitorAnalysisIpoProject(String(editing.f_id), v)
       if (res.data?.success) {
         Message.success('已保存')
         setEditOpen(false)
@@ -298,7 +298,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         content: '确认删除该底层项目？',
         onOk: async () => {
           try {
-            const res = await deleteProjectSourcingIpoProject(String(record.f_id))
+            const res = await deleteCompetitorAnalysisIpoProject(String(record.f_id))
             if (res.data?.success) {
               Message.success('已删除')
               load()
@@ -321,7 +321,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       setLogOpen(true)
       setLogLoading(true)
       try {
-        const res = await fetchProjectSourcingIpoProjectChangeLog(String(record.f_id))
+        const res = await fetchCompetitorAnalysisIpoProjectChangeLog(String(record.f_id))
         setLogRows(res.data?.success ? res.data.data || [] : [])
       } catch {
         setLogRows([])
@@ -461,12 +461,12 @@ export default function ProjectSourcingIpoProjectsPage() {
   const handleExportCsv = useCallback(async () => {
     setExporting(true)
     try {
-      const res = await getProjectSourcingIpoProjectsExport({
+      const res = await getCompetitorAnalysisIpoProjectsExport({
         keyword: kwSearch || undefined,
         creatorUserId: isAdmin && creatorSearch.trim() ? creatorSearch.trim() : undefined,
       })
       const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8' })
-      const name = `底层项目_项目挖掘_${financingNow().format('YYYY-MM-DD_HHmmss')}.csv`
+      const name = `底层项目_竞品分析_${financingNow().format('YYYY-MM-DD_HHmmss')}.csv`
       saveAs(blob, name)
       Message.success('已导出 CSV')
     } catch (e) {
@@ -554,7 +554,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       return
     }
     try {
-      const res = await fetchProjectSourcingIpoProjectSqlSyncSetting(externalDbConfigId)
+      const res = await fetchCompetitorAnalysisIpoProjectSqlSyncSetting(externalDbConfigId)
       const d = res.data?.data || {}
       sqlForm.setFieldsValue({
         external_db_config_id: externalDbConfigId,
@@ -591,7 +591,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       return []
     })()
     try {
-      const res = await fetchProjectSourcingIpoProjectSqlSyncSetting()
+      const res = await fetchCompetitorAnalysisIpoProjectSqlSyncSetting()
       const d = res.data?.data || {}
       const selectedDb = d.external_db_config_id || dbs[0]?.id || ''
       await loadSqlSettingByDb(selectedDb)
@@ -610,7 +610,7 @@ export default function ProjectSourcingIpoProjectsPage() {
     }
     setSqlSaving(true)
     try {
-      const res = await putProjectSourcingIpoProjectSqlSyncSetting({
+      const res = await putCompetitorAnalysisIpoProjectSqlSyncSetting({
         external_db_config_id: v.external_db_config_id || null,
         sql_text: (v.sql_text || '').trim(),
         is_enabled: v.is_enabled ? 1 : 0,
@@ -639,14 +639,14 @@ export default function ProjectSourcingIpoProjectsPage() {
     }
     setSqlPreviewing(true)
     try {
-      const res = await postProjectSourcingIpoProjectSqlSyncPreview({
+      const res = await postCompetitorAnalysisIpoProjectSqlSyncPreview({
         external_db_config_id: v.external_db_config_id,
         sql_text: (v.sql_text || '').trim(),
       })
       if (res.data?.success) {
         const sample = res.data.data?.sample || []
         Message.info(`共 ${res.data.data?.rowCount ?? 0} 行，预览前 ${sample.length} 条已输出到控制台`)
-        console.log('[项目挖掘 底层项目 SQL 预览]', sample)
+        console.log('[竞品分析 底层项目 SQL 预览]', sample)
       } else {
         Message.error(res.data?.message || '预览失败')
       }
@@ -666,7 +666,7 @@ export default function ProjectSourcingIpoProjectsPage() {
     }
     setSqlRunning(true)
     try {
-      const res = await postProjectSourcingIpoProjectSqlSyncRun({
+      const res = await postCompetitorAnalysisIpoProjectSqlSyncRun({
         external_db_config_id: v.external_db_config_id,
         sql_text: (v.sql_text || '').trim(),
         is_enabled: v.is_enabled ? 1 : 0,
@@ -685,7 +685,7 @@ export default function ProjectSourcingIpoProjectsPage() {
               ? `；企查查后处理失败：${d.qcc_post_sync.error}`
               : ''
         Message.success(
-          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}${snap}${qcc}（写入应用：项目挖掘）`
+          `同步完成：新增 ${d.inserted ?? 0}，更新 ${d.updated ?? 0}，跳过 ${d.skipped ?? 0}${snap}${qcc}（写入应用：竞品分析）`
         )
         setSqlModalOpen(false)
         load()
@@ -1042,7 +1042,7 @@ export default function ProjectSourcingIpoProjectsPage() {
 
       {showBatchImport ? (
         <BatchImportModal
-          dataAppName="项目挖掘"
+          dataAppName="竞品分析"
           onClose={() => setShowBatchImport(false)}
           onSuccess={() => {
             setShowBatchImport(false)
@@ -1211,7 +1211,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       </Modal>
 
       <Modal
-        title="业务库 SQL 同步（项目挖掘 · 底层项目）"
+        title="业务库 SQL 同步（竞品分析 · 底层项目）"
         visible={sqlModalOpen}
         onCancel={() => setSqlModalOpen(false)}
         style={{ width: 720 }}
@@ -1232,7 +1232,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       >
         <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
           与「上市进展 → 底层项目表」的 SQL 同步规则相同（仅只读 SELECT/WITH，字段映射一致）。差异：同步结果写入{' '}
-          <strong>ipo_project.data_app_id = 项目挖掘</strong>
+          <strong>ipo_project.data_app_id = 竞品分析</strong>
           ，且仅清空/覆盖<strong>当前用户</strong>在该应用下的底层项目行，不影响上市进展菜单中的底层项目数据。请在 SQL 中尽量提供{' '}
           <strong>unified_credit_code</strong>
           （统一社会信用代码），以便同步后自动回填本次清空前已存在的 AI 与企查查简介。若开启「同步后企查查简介」，写入完成后仅对<strong>18 位有效</strong>统一码自动拉取企查查企业简介，错误或非标准长度代码会跳过。
@@ -1274,14 +1274,14 @@ export default function ProjectSourcingIpoProjectsPage() {
             label="同步后企查查简介"
             field="qcc_brief_after_sync_enabled"
             triggerPropName="checked"
-            extra="每次 SQL 全量写入并提交成功后，对本用户在项目挖掘下的底层项目中「18 位有效统一社会信用代码」按码去重调用企查查 CompanyBrief 并写回简介；无效码跳过。与定时任务共用本开关。"
+            extra="每次 SQL 全量写入并提交成功后，对本用户在竞品分析下的底层项目中「18 位有效统一社会信用代码」按码去重调用企查查 CompanyBrief 并写回简介；无效码跳过。与定时任务共用本开关。"
           >
             <Switch checkedText="启用" uncheckedText="关闭" />
           </FormItem>
           <FormItem
             label="底层项目同步 Cron（可选）"
             field="cron_expression"
-            extra="定时任务将本配置的外部库数据同步至 ipo_project（data_app_id=项目挖掘），与上市进展侧 SQL 定时任务独立。"
+            extra="定时任务将本配置的外部库数据同步至 ipo_project（data_app_id=竞品分析），与上市进展侧 SQL 定时任务独立。"
           >
             <Input
               placeholder="点击右侧按钮配置 Cron（Quartz）"
@@ -1323,7 +1323,7 @@ export default function ProjectSourcingIpoProjectsPage() {
             <DatePicker.RangePicker style={{ width: '100%' }} />
           </FormItem>
           <div style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
-            仅处理 data_app_id 为「项目挖掘」的底层项目；按<strong>统一社会信用代码</strong>去重（无有效代码时按企业全称）；模型成功后同源代码的多行会一并写入。
+            仅处理 data_app_id 为「竞品分析」的底层项目；按<strong>统一社会信用代码</strong>去重（无有效代码时按企业全称）；模型成功后同源代码的多行会一并写入。
           </div>
         </Form>
       </Modal>

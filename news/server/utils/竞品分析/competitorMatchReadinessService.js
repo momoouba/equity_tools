@@ -1,6 +1,6 @@
 const db = require('../../db');
 const { sanitizeQccCompanyIntroForMatching } = require('./qccCompanyIntroSanitizer');
-const { isInvestedEnterpriseProjectSourcingApp } = require('../applicationIdResolve');
+const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
 
 function strTrim(v) {
   return v != null ? String(v).trim() : '';
@@ -138,8 +138,8 @@ async function getInvestedEnterpriseRowForCompetitor(enterpriseId) {
     e.code = 404;
     throw e;
   }
-  if (!(await isInvestedEnterpriseProjectSourcingApp(rows[0]))) {
-    const e = new Error('仅支持项目挖掘应用下的被投企业');
+  if (!(await isInvestedEnterpriseCompetitorAnalysisApp(rows[0]))) {
+    const e = new Error('仅支持竞品分析应用下的被投企业');
     e.code = 400;
     throw e;
   }

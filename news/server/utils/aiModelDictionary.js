@@ -11,7 +11,7 @@ const DICT_USAGE_TYPE = 'ai_model_usage_type';
 const FALLBACK_APPLICATION_TYPES = [
   { value: 'news_analysis', label: '新闻分析' },
   { value: 'project_sourcing_analysis', label: '项目挖掘分析' },
-  { value: 'project_sourcing_competitor', label: '竞品分析' },
+  { value: 'competitor_analysis', label: '竞品分析应用' },
   { value: 'listing_progress_analysis', label: '上市进展分析' },
   { value: 'general', label: '通用' },
 ];

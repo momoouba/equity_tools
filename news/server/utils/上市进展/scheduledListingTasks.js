@@ -7,6 +7,7 @@ const {
   runIpoProjectSqlSyncForUser,
   IPO_SQL_WRITE_TARGET_LISTING,
   IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+  IPO_SQL_WRITE_TARGET_COMPETITOR,
 } = require('./ipoProjectSqlSyncRunner');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 const { syncNewShareCalendar } = require('./newShareService');
@@ -483,10 +484,13 @@ async function updateListingScheduledTasks() {
             console.log(
               `[底层项目同步] Cron 触发 配置=${cfg.id} 用户=${cfg.user_id} 外部库=${dbLabel} write_target=${cfg.write_target || IPO_SQL_WRITE_TARGET_LISTING}`
             );
+            const wtRaw = String(cfg.write_target || '').trim();
             const wt =
-              String(cfg.write_target || '').trim() === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-                ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-                : IPO_SQL_WRITE_TARGET_LISTING;
+              wtRaw === IPO_SQL_WRITE_TARGET_COMPETITOR
+                ? IPO_SQL_WRITE_TARGET_COMPETITOR
+                : wtRaw === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                  ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                  : IPO_SQL_WRITE_TARGET_LISTING;
             const result = await runIpoProjectSqlSyncForUser({
               userId: cfg.user_id,
               external_db_config_id: cfg.external_db_config_id,

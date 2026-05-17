@@ -1,9 +1,9 @@
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
-const { isAdminUser } = require('./projectSourcingRouteAuth');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
+const { isAdminUser } = require('./competitorAnalysisRouteAuth');
 
 /**
- * 项目挖掘「底层项目」列表与导出、企查查全量同步共用的 WHERE 子句（不含 ORDER/LIMIT）。
+ * 竞品分析「底层项目」列表与导出、企查查全量同步共用的 WHERE 子句（不含 ORDER/LIMIT）。
  * @param {{ id?: string|number, role?: string, account?: string }|null} psUser
  * @param {string} [keyword]
  * @param {string} [creatorUserId] admin 筛选创建人 users.id
@@ -14,7 +14,7 @@ async function buildProjectSourcingIpoWhereClause({ psUser, keyword = '', creato
   const where = ['p.F_DeleteMark = 0'];
   const params = [];
 
-  const psId = await getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+  const psId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (psId) {
     where.push('p.data_app_id = ?');
     params.push(psId);
@@ -43,4 +43,10 @@ async function buildProjectSourcingIpoWhereClause({ psUser, keyword = '', creato
   return { whereSql, params };
 }
 
-module.exports = { buildProjectSourcingIpoWhereClause };
+/** @deprecated 使用 buildCompetitorAnalysisIpoWhereClause */
+const buildCompetitorAnalysisIpoWhereClause = buildProjectSourcingIpoWhereClause;
+
+module.exports = {
+  buildProjectSourcingIpoWhereClause,
+  buildCompetitorAnalysisIpoWhereClause,
+};

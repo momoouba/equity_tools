@@ -202,6 +202,8 @@ app.use('/api/performance', performanceRoutes);
 app.use('/api/listing', listingRoutes);
 app.use('/api/listing-share', listingShareRoutes);
 app.use('/api/project-sourcing', projectSourcingRoutes);
+const competitorAnalysisRoutes = require('./routes/竞品分析');
+app.use('/api/competitor-analysis', competitorAnalysisRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作

@@ -1,6 +1,6 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
 const {
   parseTagsFromJson,
   mergeTagArrays,
@@ -72,7 +72,7 @@ function mapFinancingRow(row) {
  * 底层项目池召回（项目挖掘 data_app_id，近 3 年有更新，具备 AI 简介或标签）。
  */
 async function recallFromIpoProjects(excludeCredit, excludeName) {
-  const psAppId = await getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+  const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (!psAppId) return [];
   const rows = await db.query(
     `SELECT f_id, project_name, company, unified_credit_code, sub,

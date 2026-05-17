@@ -3388,7 +3388,21 @@ router.get('/holidays/:id/logs', async (req, res) => {
 });
 
 // 数据库连接配置相关路由
-// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的
+function buildExternalDbWhere(isAdmin, userId, appId) {
+  const parts = ['delete_mark = 0'];
+  const params = [];
+  if (!isAdmin) {
+    parts.push('created_by = ?');
+    params.push(userId);
+  }
+  if (appId) {
+    parts.push('app_id = ?');
+    params.push(appId);
+  }
+  return { clause: `WHERE ${parts.join(' AND ')}`, params };
+}
+
+// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的；传 app_id 时按应用过滤
 router.get('/database-configs', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -3396,13 +3410,12 @@ router.get('/database-configs', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const userRole = req.headers['x-user-role'] || 'user';
     const userId = req.headers['x-user-id'] || null;
+    const appId = (req.query.app_id || '').trim() || null;
 
     const isAdmin = userRole === 'admin';
-    const whereClause = isAdmin
-      ? 'WHERE delete_mark = 0'
-      : 'WHERE delete_mark = 0 AND created_by = ?';
-    const countParams = isAdmin ? [] : [userId];
-    const listParams = isAdmin ? [pageSize, offset] : [userId, pageSize, offset];
+    const { clause: whereClause, params: whereParams } = buildExternalDbWhere(isAdmin, userId, appId);
+    const countParams = [...whereParams];
+    const listParams = [...whereParams, pageSize, offset];
 
     const totalResult = await db.query(
       `SELECT COUNT(*) as total FROM external_db_config ${whereClause}`,
@@ -3411,7 +3424,7 @@ router.get('/database-configs', async (req, res) => {
     const total = totalResult[0].total;
 
     const configs = await db.query(
-      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
+      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, app_id, created_at, updated_at
        FROM external_db_config
        ${whereClause}
        ORDER BY created_at DESC
@@ -3474,7 +3487,8 @@ router.post('/database-config', [
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { name, db_type, host, port, user, password, database, is_active } = req.body;
+    const { name, db_type, host, port, user, password, database, is_active, app_id: bodyAppId } = req.body;
+    const appId = (bodyAppId || req.query.app_id || '').trim() || null;
 
     // 检查配置名称是否已存在
     const existing = await db.query(
@@ -3491,8 +3505,8 @@ router.post('/database-config', [
 
     await db.execute(
       `INSERT INTO external_db_config 
-       (id, name, db_type, host, port, \`user\`, password, \`database\`, is_active, created_by, updated_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, db_type, host, port, \`user\`, password, \`database\`, is_active, app_id, created_by, updated_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         name,
@@ -3503,6 +3517,7 @@ router.post('/database-config', [
         password,
         database,
         finalIsActive,
+        appId,
         userId,
         userId
       ]
@@ -4278,6 +4293,45 @@ router.delete('/base-dictionary-items/:id', async (req, res) => {
   } catch (error) {
     errorWithTag('[系统配置][数据字典]', '删除字典选项失败：', error);
     res.status(500).json({ success: false, message: '删除字典选项失败' });
+  }
+});
+
+// 竞品分析 — 三源召回开关（管理员）
+router.get('/competitor-recall-source-config', async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || 'user';
+    if (userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: '仅管理员可查看竞品三源召回配置' });
+    }
+    const { getCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const flags = await getCompetitorRecallSourceFlags();
+    res.json({ success: true, data: flags });
+  } catch (error) {
+    console.error('获取竞品三源召回配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+router.put('/competitor-recall-source-config', [
+  body('enable_ipo_project').optional().isBoolean(),
+  body('enable_financing_event').optional().isBoolean(),
+  body('enable_ai_web').optional().isBoolean(),
+], async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || 'user';
+    if (userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: '仅管理员可修改竞品三源召回配置' });
+    }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    const { saveCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const data = await saveCompetitorRecallSourceFlags(req.body);
+    res.json({ success: true, message: '保存成功', data });
+  } catch (error) {
+    console.error('保存竞品三源召回配置失败：', error);
+    res.status(500).json({ success: false, message: '保存配置失败' });
   }
 });
 

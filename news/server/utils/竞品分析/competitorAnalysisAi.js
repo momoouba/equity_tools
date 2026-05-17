@@ -1,5 +1,5 @@
 const db = require('../../db');
-const { getActiveProjectMiningModelConfig } = require('./projectMiningAi');
+const { AI_APPLICATION_TYPE_COMPETITOR, AI_USAGE_TYPE_COMPETITOR_MATCH } = require('../竞品分析/constants');
 const {
   normalizeDashScopeChatEndpoint,
   formatDashScopeHttpError,
@@ -8,8 +8,8 @@ const axios = require('axios');
 const { extractJsonObject } = require('./competitorMatchUtils');
 const { logCompetitorAi } = require('./competitorAnalysisLogger');
 
-const APP_TYPE_COMPETITOR = 'project_sourcing_competitor';
-const USAGE_TYPE = 'competitor_match';
+const APP_TYPE_COMPETITOR = AI_APPLICATION_TYPE_COMPETITOR;
+const USAGE_TYPE = AI_USAGE_TYPE_COMPETITOR_MATCH;
 
 const PROMPTS = {
   pair_similarity: {
@@ -34,16 +34,41 @@ const PROMPTS = {
   },
 };
 
+/** 历史 ENUM 名，迁移前可能仍写在库中 */
+const LEGACY_APP_TYPE_COMPETITOR = 'project_sourcing_competitor';
+
 async function getActiveCompetitorModelConfig() {
   const rows = await db.query(
     `SELECT * FROM ai_model_config
      WHERE delete_mark = 0 AND is_active = 1
-       AND application_type = ? AND usage_type = ?
-     ORDER BY updated_at DESC LIMIT 1`,
-    [APP_TYPE_COMPETITOR, USAGE_TYPE]
+       AND usage_type = ?
+       AND application_type IN (?, ?)
+       AND api_key IS NOT NULL AND TRIM(api_key) != ''
+     ORDER BY
+       CASE application_type WHEN ? THEN 0 ELSE 1 END,
+       updated_at DESC
+     LIMIT 1`,
+    [USAGE_TYPE, APP_TYPE_COMPETITOR, LEGACY_APP_TYPE_COMPETITOR, APP_TYPE_COMPETITOR]
   );
   if (rows.length) return rows[0];
-  return getActiveProjectMiningModelConfig();
+
+  const diag = await db.query(
+    `SELECT id, config_name, application_type, usage_type, is_active,
+            (api_key IS NOT NULL AND TRIM(api_key) != '') AS has_api_key
+     FROM ai_model_config
+     WHERE delete_mark = 0
+       AND (usage_type = ? OR application_type IN (?, ?))
+     ORDER BY updated_at DESC
+     LIMIT 8`,
+    [USAGE_TYPE, APP_TYPE_COMPETITOR, LEGACY_APP_TYPE_COMPETITOR]
+  );
+  if (diag.length) {
+    console.warn(
+      '[competitorAnalysisAi] 未命中可用竞品模型（须 is_active=1、usage_type=competitor_match、application_type=competitor_analysis 且 api_key 非空）。库内相关行:',
+      JSON.stringify(diag)
+    );
+  }
+  return null;
 }
 
 function sleep(ms) {
@@ -84,9 +109,9 @@ function isEnableSearchUnsupportedError(err) {
  */
 async function invokeCompetitorChat(systemContent, userContent, { enableSearch = false, timeout, onSearchUnsupported } = {}) {
   const config = await getActiveCompetitorModelConfig();
-  if (!config || !config.api_key) {
+  if (!config || !String(config.api_key || '').trim()) {
     throw new Error(
-      '未配置可用的竞品分析大模型：请在「AI 模型配置」中维护 project_sourcing_competitor 或 project_sourcing_analysis 且启用的配置'
+      '未配置可用的竞品分析大模型：请在「AI 模型配置」新增或编辑一条——应用类型=竞品分析应用(competitor_analysis)、使用类型=竞品匹配(competitor_match)、已启用，并填写有效 API Key（编辑时勿留空密钥）。若刚改过类型请重启后端以执行库表迁移。'
     );
   }
   const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);

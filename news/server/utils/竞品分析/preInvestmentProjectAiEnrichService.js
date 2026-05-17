@@ -1,11 +1,11 @@
 const crypto = require('crypto');
 const db = require('../../db');
-const { isAdminUser } = require('./projectSourcingRouteAuth');
+const { isAdminUser } = require('./competitorAnalysisRouteAuth');
 const {
   runFinancingStyleWebEnrichLlmCall,
   withFinancingAiConcurrency,
   PROMPT_TYPE,
-} = require('./financingAiEnrichService');
+} = require('../项目挖掘/financingAiEnrichService');
 
 const PRE_INV_AI_VERSION = 'pre_investment_project_web_enrich_v1';
 
@@ -196,6 +196,23 @@ async function runPreInvestmentProjectAiEnrichTask({
     const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate));
     llmModelConfigId = llm.llmModelConfigId;
     promptConfigId = llm.promptConfigId;
+
+    const introLen = String(llm.productIntroStored || '').trim().length;
+    let tagCount = 0;
+    try {
+      const tags = typeof llm.tagsJson === 'string' ? JSON.parse(llm.tagsJson) : llm.tagsJson;
+      tagCount = Array.isArray(tags) ? tags.filter(Boolean).length : 0;
+    } catch {
+      tagCount = String(llm.display || '')
+        .split(/[,，、]/)
+        .map((x) => x.trim())
+        .filter(Boolean).length;
+    }
+    if (introLen === 0 && tagCount === 0) {
+      throw new Error(
+        '模型未返回有效产品介绍或企业标签（可能联网检索无结果或 JSON 字段为空），请核对企业全称后重试或更换模型'
+      );
+    }
 
     await db.execute(
       `UPDATE pre_investment_project SET

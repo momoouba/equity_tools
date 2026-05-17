@@ -1,5 +1,6 @@
 const db = require('../../db');
 const { listCompetitorRunStepLogs } = require('./competitorAnalysisRunner');
+const { computeRunProgress, buildProgressHeader } = require('./competitorRunProgress');
 const {
   candidateDedupeKey,
   strTrim,
@@ -71,6 +72,62 @@ function formatRetainReason(rel) {
   return parts.join('；');
 }
 
+const FINANCING_SKIP_LABELS = {
+  config_disabled: '融资事件源已在系统配置中关闭',
+  no_project_sourcing_permission: '当前用户无项目挖掘权限，未拉取融资事件',
+};
+
+function latestStepByCode(steps, code) {
+  let best = null;
+  for (const s of steps) {
+    if (s.step_code !== code) continue;
+    if (!best || String(s.created_at) > String(best.created_at)) best = s;
+  }
+  return best;
+}
+
+function parseStepDetail(step) {
+  if (!step?.detail_json) return null;
+  return parseJson(step.detail_json);
+}
+
+function formatSourceList(sources) {
+  if (!Array.isArray(sources) || !sources.length) return '—';
+  return sources.map((x) => SOURCE_LABELS[x] || x).join('、');
+}
+
+function formatSummarizedCandidates(arr, max = 12) {
+  if (!Array.isArray(arr) || !arr.length) return ['  （无）'];
+  return arr.slice(0, max).map((c, i) => {
+    const src = formatSourceList(c.sources);
+    const scores = [
+      c.internal != null ? `规则${c.internal}` : null,
+      c.llm != null ? `LLM${c.llm}` : null,
+      c.final != null ? `综合${c.final}` : null,
+    ]
+      .filter(Boolean)
+      .join('，');
+    const grade = c.grade ? `，${c.grade}级` : '';
+    return `  ${i + 1}. ${c.name || '—'}（${scores || '—'}${grade}；来源：${src}）`;
+  });
+}
+
+function formatRejectedSamples(arr, max = 20) {
+  if (!Array.isArray(arr) || !arr.length) return ['  （日志未记录排除样本，见上方统计）'];
+  return arr.slice(0, max).map((c, i) => {
+    const src = formatSourceList(c.sources);
+    const scores = [
+      c.internal != null ? `规则${c.internal}` : null,
+      c.llm != null ? `LLM${c.llm}` : null,
+      c.final != null ? `综合${c.final}` : null,
+    ]
+      .filter(Boolean)
+      .join('，');
+    return `  ${i + 1}. ${c.name || '—'}（${scores || '—'}；来源：${src}）\n     排除原因：${c.reason || '—'}`;
+  });
+}
+
+/** 从步骤日志 detail_json 拼装可读分析过程（召回 / 排除 / 保留） */
 function buildProcessNarrative(steps, run) {
   const lines = [];
   if (run) {
@@ -78,15 +135,132 @@ function buildProcessNarrative(steps, run) {
       `最近一次分析运行：${run.id}，状态 ${run.status || '—'}，完成时间 ${run.finished_at || run.updated_at || '—'}。`
     );
     if (run.message) lines.push(run.message);
+  } else {
+    lines.push('尚未找到竞品分析运行记录，请先发起「竞品分析」任务。');
+    return lines.join('\n');
   }
-  const order = ['S0_profile', 'S1_recall', 'S2_rule', 'S3_llm', 'S4_web', 'S5_validate', 'S5_filter', 'S5_expand', 'S6_persist', 'S6_done'];
+
+  const s0 = parseStepDetail(latestStepByCode(steps, 'S0_profile'));
+  if (s0) {
+    lines.push('', '【分析主体画像】');
+    lines.push(`  企业：${s0.display_name || '—'}`);
+    if (s0.unified_credit_code) lines.push(`  统一社会信用代码：${s0.unified_credit_code}`);
+    lines.push(
+      `  产品介绍 ${s0.product_intro_len || 0} 字；有效企查查介绍 ${s0.qcc_len || 0} 字；标签 ${s0.tag_count || 0} 个`
+    );
+    if (Array.isArray(s0.tags) && s0.tags.length) {
+      lines.push(`  标签：${s0.tags.join('、')}`);
+    }
+  }
+
+  const s1 = parseStepDetail(latestStepByCode(steps, 'S1_recall'));
+  if (s1) {
+    lines.push('', '【数据召回】');
+    lines.push(`  底层项目池：${s1.ipo ?? 0} 条`);
+    if (s1.financing_skipped) {
+      lines.push(
+        `  融资事件池：未拉取（${FINANCING_SKIP_LABELS[s1.financing_skipped] || s1.financing_skipped}）`
+      );
+    } else {
+      lines.push(`  融资事件池：${s1.financing ?? 0} 条`);
+    }
+    lines.push(`  合并去重后内部候选：${s1.merged ?? 0} 条`);
+    lines.push('  召回样本（前若干条）：');
+    lines.push(...formatSummarizedCandidates(s1.sample, 8));
+  }
+
+  const s2 = parseStepDetail(latestStepByCode(steps, 'S2_rule'));
+  if (s2?.top) {
+    lines.push('', '【规则打分（内部源）】');
+    lines.push('  规则分 Top 候选：');
+    lines.push(...formatSummarizedCandidates(s2.top, 10));
+  }
+
+  const s3 = parseStepDetail(latestStepByCode(steps, 'S3_llm'));
+  if (s3) {
+    lines.push('', '【LLM 产品对标】');
+    lines.push(
+      `  对标池 ${s3.pool_size ?? '—'} 条（规则 Top${s3.rule_top ?? 20} + 标签补充 ${s3.tag_supplement ?? 0} + 关键词 ${s3.keyword_supplement ?? 0}${s3.niche_track ? '，掩模/光罩赛道加宽' : ''}）`
+    );
+    if (s3.high_llm_count != null) lines.push(`  LLM 高信任（≥80）候选：${s3.high_llm_count} 条`);
+    if (s3.top) {
+      lines.push('  对标分 Top 候选：');
+      lines.push(...formatSummarizedCandidates(s3.top, 10));
+    }
+  }
+
+  const s4 = parseStepDetail(latestStepByCode(steps, 'S4_web'));
+  if (s4) {
+    lines.push('', '【联网发现】');
+    if (s4.skipped === 'config_disabled') {
+      lines.push('  已在系统配置中关闭联网发现源');
+    } else {
+      lines.push(`  新增联网候选：${s4.web_added ?? 0} 条`);
+      if (s4.used_enable_search === true) lines.push('  已启用模型联网检索');
+      if (s4.search_degraded === true) lines.push('  联网检索降级为无联网单次请求');
+      if (s4.model_name) lines.push(`  使用模型：${s4.model_name}`);
+    }
+  }
+
+  const s5v = parseStepDetail(latestStepByCode(steps, 'S5_validate'));
+  if (s5v) {
+    lines.push('', '【竞品校验（LLM）】');
+    const vr = s5v.validateReasons || {};
+    lines.push(
+      `  进入校验池：${(s5v.passed ?? 0) + (s5v.rejected ?? 0) + (s5v.upstream_downstream ?? 0)} 条（规则≥阈值 ${vr.by_internal_rule ?? '—'}；高 LLM ${vr.by_high_llm ?? '—'}；联网 ${vr.by_ai_web ?? '—'}）`
+    );
+    lines.push(`  校验通过（视为竞品）：${s5v.passed ?? '—'} 条`);
+    lines.push(`  校验排除（非竞品）：${s5v.rejected ?? '—'} 条`);
+    lines.push(`  校验排除（上下游）：${s5v.upstream_downstream ?? '—'} 条`);
+  }
+
+  const s5f = parseStepDetail(latestStepByCode(steps, 'S5_filter'));
+  if (s5f) {
+    lines.push('', '【初筛与排除】');
+    const fs = s5f.filterStats || {};
+    lines.push(`  参与打分的候选总数：${fs.total_scored ?? '—'}`);
+    lines.push(`  排除 — 非竞品：${fs.skip_not_competitor ?? 0} 条`);
+    lines.push(`  排除 — 上下游：${fs.skip_upstream_downstream ?? 0} 条`);
+    lines.push(`  排除 — 综合分未达阈值：${fs.skip_low_score ?? 0} 条`);
+    lines.push(
+      `  初筛通过：${(fs.accepted_internal ?? 0) + (fs.accepted_ai_only ?? 0)} 条（含内部源 ${fs.accepted_internal ?? 0}、仅联网/无内部 ${fs.accepted_ai_only ?? 0}）`
+    );
+    if (s5f.rejected_samples?.length) {
+      lines.push('  未保留样本（原因）：');
+      lines.push(...formatRejectedSamples(s5f.rejected_samples, 20));
+    }
+    if (s5f.candidates?.length) {
+      lines.push('  初筛通过样本：');
+      lines.push(...formatSummarizedCandidates(s5f.candidates, 12));
+    }
+  }
+
+  const s5e = parseStepDetail(latestStepByCode(steps, 'S5_expand'));
+  if (s5e) {
+    lines.push('', '【扩召回】');
+    lines.push('  因结果偏少触发放宽规则后合并的候选：');
+    lines.push(...formatSummarizedCandidates(s5e.candidates, 12));
+  }
+
+  const order = [
+    'S0_profile',
+    'S1_recall',
+    'S2_rule',
+    'S3_llm',
+    'S4_web',
+    'S5_validate',
+    'S5_filter',
+    'S5_expand',
+    'S6_persist',
+    'S6_done',
+  ];
   const byCode = new Map();
   for (const s of steps) {
     if (!byCode.has(s.step_code) || String(s.created_at) > String(byCode.get(s.step_code).created_at)) {
       byCode.set(s.step_code, s);
     }
   }
-  lines.push('', '【流水线步骤】');
+  lines.push('', '【流水线步骤（日志原文）】');
   for (const code of order) {
     const s = byCode.get(code);
     if (!s) continue;
@@ -95,7 +269,7 @@ function buildProcessNarrative(steps, run) {
   lines.push(
     '',
     '【保留规则】',
-    `综合分 ≥ ${SCORE_THRESHOLD} 的候选进入落库；LLM≥80 且校验为直接竞品时，综合分 ≥ 55 亦可落库。`,
+    `综合分 ≥ ${SCORE_THRESHOLD} 的候选进入落库；LLM≥80 且校验为直接竞品时，综合分 ≥ ${SCORE_THRESHOLD_HIGH_LLM} 亦可落库。`,
     '排除校验为「非竞品」或「上下游」的条目。',
     'LLM 对标池 = 规则分 Top20 ∪ 标签相似 Top15（掩模/光罩赛道加宽至 Top28）。',
     '有底层/融资内部源时默认内部×0.6+AI×0.4；LLM≥80 时内部×0.2+AI×0.8；仅联网源时综合分=AI 分。',
@@ -153,7 +327,12 @@ async function buildCompetitorAnalysisSummary(opts) {
   }
 
   const steps = run ? await listCompetitorRunStepLogs(run.id) : [];
-  const process_text = buildProcessNarrative(steps, run);
+  const progress = computeRunProgress(run, steps);
+  let process_text = buildProcessNarrative(steps, run);
+  const progressHeader = buildProgressHeader(progress);
+  if (progressHeader) {
+    process_text = progressHeader + (process_text || '');
+  }
 
   let relRows = [];
   if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
@@ -203,8 +382,12 @@ async function buildCompetitorAnalysisSummary(opts) {
   });
 
   const why_lines = ['【最终保留竞品及原因】'];
+  const emptyHint =
+    subjectType === 'pre_investment_project'
+      ? '当前无落库竞品，请在本页发起「竞品分析」后刷新查看。'
+      : '当前无落库竞品，请在被投企业列表发起「竞品分析」后查看。';
   if (!retained.length) {
-    why_lines.push('当前无落库竞品，请在被投企业列表发起「竞品分析」后查看。');
+    why_lines.push(emptyHint);
   } else {
     retained.forEach((item, i) => {
       why_lines.push(
@@ -219,9 +402,12 @@ async function buildCompetitorAnalysisSummary(opts) {
     run_status: run?.status || null,
     run_message: run?.message || null,
     finished_at: run?.finished_at || null,
+    progress,
     process_text,
     why_text: why_lines.join('\n'),
-    full_text: `${process_text}\n\n${why_lines.join('\n')}`,
+    full_text: progress.is_running
+      ? `${process_text}\n\n【进行中】最终结果尚未落库，完成后将在此展示「最终保留竞品及原因」。`
+      : `${process_text}\n\n${why_lines.join('\n')}`,
     steps,
     retained,
   };

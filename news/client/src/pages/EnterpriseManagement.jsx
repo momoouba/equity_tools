@@ -30,10 +30,10 @@ import {
   postInvestedEnterpriseBatchQccCompanyBrief,
   fetchInvestedEnterpriseCompetitorReadiness,
   postInvestedEnterpriseCompetitorAnalysisRun,
-} from '../api/项目挖掘'
-import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './项目挖掘/financingDateUtils'
-import { IntroPopoverCell } from './项目挖掘/introPopoverAiCell'
-import CompetitorMatchSupplementModal from './项目挖掘/CompetitorMatchSupplementModal'
+} from '../api/竞品分析'
+import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './竞品分析/financingDateUtils'
+import { IntroPopoverCell } from './竞品分析/introPopoverAiCell'
+import CompetitorMatchSupplementModal from './竞品分析/CompetitorMatchSupplementModal'
 import './EnterpriseManagement.css'
 
 const Option = Select.Option
@@ -43,7 +43,7 @@ const TabPane = Tabs.TabPane
 const FormItem = Form.Item
 
 const DATA_APP_NEWS = '新闻舆情'
-const DATA_APP_PROJECT = '项目挖掘'
+const DATA_APP_PROJECT = '竞品分析'
 
 /** 从行数据取金额（兼容 snake_case / camelCase；避免仅依赖 Table render 的第一个参数） */
 function pickAmountField(record, snakeKey) {

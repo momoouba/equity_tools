@@ -344,12 +344,20 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const rowFull = await db.query(
-      'SELECT provider, model_name FROM ai_model_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT * FROM ai_model_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
       [id]
     );
-    const effProvider = provider !== undefined ? provider : rowFull[0]?.provider;
-    const effModel = model_name !== undefined ? model_name : rowFull[0]?.model_name;
+    if (!rowFull.length) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const prev = rowFull[0];
+    const effProvider = provider !== undefined ? provider : prev.provider;
+    const effModel = model_name !== undefined ? model_name : prev.model_name;
     await assertModelNameAllowedForProvider(effProvider, effModel);
+
+    const incomingKey = api_key !== undefined && api_key !== null ? String(api_key).trim() : '';
+    const effApiKey =
+      incomingKey && !incomingKey.includes('****') ? incomingKey : prev.api_key;
 
     await db.execute(
       `UPDATE ai_model_config 
@@ -358,8 +366,20 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
            top_p = ?, application_type = ?, usage_type = ?, is_active = ?, updater_user_id = ?
        WHERE id = ?`,
       [
-        config_name, provider, model_name, api_type, api_key, api_endpoint,
-        temperature, max_tokens, top_p, application_type, usage_type !== undefined ? usage_type : 'content_analysis', is_active, req.currentUserId, id
+        config_name !== undefined ? config_name : prev.config_name,
+        provider !== undefined ? provider : prev.provider,
+        model_name !== undefined ? model_name : prev.model_name,
+        api_type !== undefined ? api_type : prev.api_type,
+        effApiKey,
+        api_endpoint !== undefined ? api_endpoint : prev.api_endpoint,
+        temperature !== undefined ? temperature : prev.temperature,
+        max_tokens !== undefined ? max_tokens : prev.max_tokens,
+        top_p !== undefined ? top_p : prev.top_p,
+        application_type !== undefined ? application_type : prev.application_type,
+        usage_type !== undefined ? usage_type : prev.usage_type,
+        is_active !== undefined ? is_active : prev.is_active,
+        req.currentUserId,
+        id,
       ]
     );
 

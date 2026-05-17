@@ -10,12 +10,13 @@ import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './上市进展/ListingDataConfig'
 import FinancingSourceConfig from './项目挖掘/FinancingSourceConfig'
+import CompetitorRecallSourceConfig from './竞品分析/CompetitorRecallSourceConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
 
-function SystemConfig({ isAdmin = true }) {
+function SystemConfig({ isAdmin = true, filterAppId = null }) {
   const [activeTab, setActiveTab] = useState(isAdmin ? 'basic' : 'database')
 
   if (!isAdmin) {
@@ -23,7 +24,7 @@ function SystemConfig({ isAdmin = true }) {
       <div className="system-config">
         <Card className="config-card" bordered={false}>
           <div className="config-content">
-            <DatabaseConfig />
+            <DatabaseConfig filterAppId={filterAppId} />
           </div>
         </Card>
       </div>
@@ -84,6 +85,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="database" title="数据库连接">
             <div className="config-content">
               <DatabaseConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="competitor-recall" title="竞品三源召回">
+            <div className="config-content">
+              <CompetitorRecallSourceConfig />
             </div>
           </TabPane>
 

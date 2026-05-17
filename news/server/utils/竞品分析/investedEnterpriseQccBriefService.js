@@ -1,11 +1,11 @@
 const db = require('../../db');
-const { isInvestedEnterpriseProjectSourcingApp } = require('../applicationIdResolve');
+const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
 const { fetchCompanyBriefGetInfo } = require('../qichachaCompanyBrief');
 const {
   normalizeUnifiedCreditCode,
   isCrossTableUnifiedCredit,
   runUnifiedCreditQccSync,
-} = require('./projectSourcingQccCrossTableSync');
+} = require('./competitorQccCrossTableSync');
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -41,8 +41,8 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     e.code = 404;
     throw e;
   }
-  if (!(await isInvestedEnterpriseProjectSourcingApp(rows[0]))) {
-    const e = new Error('仅支持项目挖掘应用下的被投企业');
+  if (!(await isInvestedEnterpriseCompetitorAnalysisApp(rows[0]))) {
+    const e = new Error('仅支持竞品分析应用下的被投企业');
     e.code = 400;
     throw e;
   }
@@ -127,8 +127,8 @@ async function batchSyncInvestedEnterpriseQccCompanyBrief(enterpriseIds, opts = 
         e.code = 404;
         throw e;
       }
-      if (!(await isInvestedEnterpriseProjectSourcingApp(row))) {
-        const e = new Error('仅支持项目挖掘应用下的被投企业');
+      if (!(await isInvestedEnterpriseCompetitorAnalysisApp(row))) {
+        const e = new Error('仅支持竞品分析应用下的被投企业');
         e.code = 400;
         throw e;
       }

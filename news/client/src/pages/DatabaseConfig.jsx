@@ -5,7 +5,7 @@ import './DatabaseConfig.css'
 
 const Option = Select.Option
 
-function DatabaseConfig() {
+function DatabaseConfig({ filterAppId = null }) {
   const [configs, setConfigs] = useState([])
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
@@ -29,16 +29,18 @@ function DatabaseConfig() {
 
   useEffect(() => {
     fetchConfigs()
-  }, [currentPage])
+  }, [currentPage, filterAppId])
 
   const fetchConfigs = async () => {
     setLoading(true)
     try {
+      const params = {
+        page: currentPage,
+        pageSize: pageSize,
+      }
+      if (filterAppId) params.app_id = filterAppId
       const response = await axios.get('/api/system/database-configs', {
-        params: {
-          page: currentPage,
-          pageSize: pageSize
-        }
+        params,
       })
       if (response.data.success) {
         setConfigs(response.data.data)
@@ -143,7 +145,9 @@ function DatabaseConfig() {
         }
         response = await axios.put(`/api/system/database-config/${editingConfig.id}`, updateData)
       } else {
-        response = await axios.post('/api/system/database-config', formData)
+        const createBody = { ...formData }
+        if (filterAppId) createBody.app_id = filterAppId
+        response = await axios.post('/api/system/database-config', createBody)
       }
 
       if (response.data.success) {
@@ -332,6 +336,11 @@ function DatabaseConfig() {
     <div className="database-config">
       <div className="config-header">
         <h3>数据库连接配置</h3>
+        {filterAppId ? (
+          <p style={{ margin: '8px 0 0', color: 'var(--color-text-2)', fontSize: 13 }}>
+            仅显示当前应用下的连接（按顶栏所选应用隔离）
+          </p>
+        ) : null}
         <Space>
           <Button
             onClick={fetchConfigs}

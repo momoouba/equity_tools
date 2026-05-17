@@ -5,7 +5,7 @@
  * 业务表写入以 id 为准，避免应用改名导致历史行语义漂移。
  */
 const db = require('../db');
-const { DATA_APP_PROJECT_SOURCING } = require('./enterpriseDataApp');
+const { DATA_APP_PROJECT_SOURCING, DATA_APP_COMPETITOR_ANALYSIS } = require('./enterpriseDataApp');
 
 const idByAppName = new Map();
 
@@ -53,8 +53,29 @@ async function isIpoProjectProjectSourcingApp(row) {
   return !!(idCol && psId && idCol === psId);
 }
 
+/**
+ * 是否「竞品分析」应用下的被投企业行。
+ */
+async function isInvestedEnterpriseCompetitorAnalysisApp(row) {
+  const caId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
+  const idCol = row.data_app_id != null ? String(row.data_app_id).trim() : '';
+  if (idCol && caId) return idCol === caId;
+  return String(row.data_app_name || '') === DATA_APP_COMPETITOR_ANALYSIS;
+}
+
+/**
+ * 是否「竞品分析」应用下的底层项目行。
+ */
+async function isIpoProjectCompetitorAnalysisApp(row) {
+  const caId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
+  const idCol = row.data_app_id != null ? String(row.data_app_id).trim() : '';
+  return !!(idCol && caId && idCol === caId);
+}
+
 module.exports = {
   getApplicationIdByAppName,
   isInvestedEnterpriseProjectSourcingApp,
   isIpoProjectProjectSourcingApp,
+  isInvestedEnterpriseCompetitorAnalysisApp,
+  isIpoProjectCompetitorAnalysisApp,
 };

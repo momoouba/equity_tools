@@ -92,9 +92,16 @@ async function ensureExternalPool(configId) {
   await createExternalPool(configs[0]);
 }
 
-/** 与 ipo_project_sql_sync_setting.write_target 一致：listing=上市进展写入；project_sourcing=项目挖掘写入 */
+/** 与 ipo_project_sql_sync_setting.write_target 一致 */
 const IPO_SQL_WRITE_TARGET_LISTING = 'listing';
+/** @deprecated 历史值；新配置请用 competitor_analysis */
 const IPO_SQL_WRITE_TARGET_PROJECT_SOURCING = 'project_sourcing';
+const IPO_SQL_WRITE_TARGET_COMPETITOR = 'competitor_analysis';
+
+function isCompetitorFamilyWriteTarget(wt) {
+  const s = String(wt || '').trim();
+  return s === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING || s === IPO_SQL_WRITE_TARGET_COMPETITOR;
+}
 
 /** MySQL：与快照表 unified_credit_code 存值一致（trim、去空格、大写） */
 function sqlNormIpoProjectUnifiedCredit(alias) {
@@ -109,12 +116,10 @@ function sqlNormIpoProjectUnifiedCredit(alias) {
 async function insertIpoProjectAiSnapshotBeforeDelete(conn, { batchId, userId, targetDataAppId, listingAppId, wt }) {
   const normP = sqlNormIpoProjectUnifiedCredit('p');
   const normSub = sqlNormIpoProjectUnifiedCredit('ipo_sub');
-  const scopeWhere =
-    wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+  const scopeWhere = isCompetitorFamilyWriteTarget(wt)
       ? 'ipo_sub.F_CreatorUserId = ? AND ipo_sub.data_app_id <=> ?'
       : 'ipo_sub.F_CreatorUserId = ? AND (ipo_sub.data_app_id <=> ? OR ipo_sub.data_app_id IS NULL)';
-  const scopeParams =
-    wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING ? [userId, targetDataAppId] : [userId, listingAppId];
+  const scopeParams = isCompetitorFamilyWriteTarget(wt) ? [userId, targetDataAppId] : [userId, listingAppId];
 
   const sql = `
     INSERT INTO ipo_project_ai_sync_snapshot (
@@ -184,7 +189,7 @@ async function pruneOldIpoProjectAiSnapshots() {
 async function maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId }) {
   if (!qccAfterSyncOn || !targetDataAppId) return null;
   try {
-    const { runPostSqlSyncQccBriefsForProjectSourcingUser } = require('../项目挖掘/ipoProjectQccBriefService');
+    const { runPostSqlSyncQccBriefsForProjectSourcingUser } = require('../竞品分析/ipoProjectQccBriefService');
     return await runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId: targetDataAppId });
   } catch (e) {
     console.error('[ipoProjectSqlSync] 同步后企查查简介失败', e);
@@ -203,15 +208,17 @@ async function runIpoProjectSqlSyncForUser({
   const configId = external_db_config_id;
   const sqlText = (sql_text || '').trim();
   const enabled = is_enabled === false || is_enabled === 0 || is_enabled === '0' ? 0 : 1;
-  const wt =
-    String(writeTarget || '').trim() === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-      ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-      : IPO_SQL_WRITE_TARGET_LISTING;
+  const wtRaw = String(writeTarget || '').trim();
+  const wt = isCompetitorFamilyWriteTarget(wtRaw)
+    ? wtRaw === IPO_SQL_WRITE_TARGET_COMPETITOR
+      ? IPO_SQL_WRITE_TARGET_COMPETITOR
+      : IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+    : IPO_SQL_WRITE_TARGET_LISTING;
   const qccAfterSyncOn =
     (qccBriefAfterSync === true ||
       qccBriefAfterSync === 1 ||
       qccBriefAfterSync === '1') &&
-    wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING;
+    isCompetitorFamilyWriteTarget(wt);
 
   if (!userId) throw new Error('缺少 userId');
   if (!configId) throw new Error('请选择业务数据库连接');
@@ -266,12 +273,12 @@ async function runIpoProjectSqlSyncForUser({
   const skipped = externalRows.length - prepared.length;
 
   const listingAppId = await getApplicationIdByAppName('上市进展');
-  const psAppId = await getApplicationIdByAppName('项目挖掘');
-  const targetDataAppId = wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING ? psAppId : listingAppId;
+  const caAppId = await getApplicationIdByAppName('竞品分析');
+  const targetDataAppId = isCompetitorFamilyWriteTarget(wt) ? caAppId : listingAppId;
   if (!targetDataAppId) {
     throw new Error(
-      wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-        ? '未找到「项目挖掘」应用，无法写入 data_app_id'
+      isCompetitorFamilyWriteTarget(wt)
+        ? '未找到「竞品分析」应用，无法写入 data_app_id'
         : '未找到「上市进展」应用，无法写入 data_app_id'
     );
   }
@@ -302,7 +309,7 @@ async function runIpoProjectSqlSyncForUser({
     }
 
     let idRows;
-    if (wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING) {
+    if (isCompetitorFamilyWriteTarget(wt)) {
       [idRows] = await conn.query(
         `SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
         [userId, targetDataAppId]
@@ -318,7 +325,7 @@ async function runIpoProjectSqlSyncForUser({
       const ph = prevIds.map(() => '?').join(',');
       await conn.query(`DELETE FROM ipo_project_progress WHERE ipo_project_f_id IN (${ph})`, prevIds);
     }
-    if (wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING) {
+    if (isCompetitorFamilyWriteTarget(wt)) {
       await conn.query(`DELETE FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`, [
         userId,
         targetDataAppId,
@@ -345,9 +352,8 @@ async function runIpoProjectSqlSyncForUser({
         ai_snapshot_saved: aiSnapshotSaved,
         ai_snapshot_restored: 0,
         qcc_post_sync,
-        message:
-          wt === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
-            ? '查询成功，已清空该用户在项目挖掘下的底层项目（本次无有效行可写入）'
+        message: isCompetitorFamilyWriteTarget(wt)
+            ? '查询成功，已清空该用户在竞品分析下的底层项目（本次无有效行可写入）'
             : '查询成功，已清空该用户在上市进展下的底层项目（本次无有效行可写入）',
       };
     }
@@ -435,4 +441,5 @@ module.exports = {
   runIpoProjectSqlSyncForUser,
   IPO_SQL_WRITE_TARGET_LISTING,
   IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+  IPO_SQL_WRITE_TARGET_COMPETITOR,
 };

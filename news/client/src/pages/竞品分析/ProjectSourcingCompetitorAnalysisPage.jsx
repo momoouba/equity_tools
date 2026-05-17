@@ -1,41 +1,24 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import { Card, Table, Button, Message, Collapse, Space, Select, Checkbox, Modal, Spin } from '@arco-design/web-react'
+﻿import React, { useEffect, useState, useCallback } from 'react'
+import { Card, Table, Button, Message, Collapse, Space, Select, Checkbox } from '@arco-design/web-react'
 import axios from '../../utils/axios'
 import {
   fetchCompetitorRelations,
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
-  fetchCompetitorAnalysisSummary,
-} from '../../api/项目挖掘'
-import { IntroPopoverCell, copyTextToClipboard } from './introPopoverAiCell'
+} from '../../api/竞品分析'
+import { AiIntroFullText } from './introPopoverAiCell'
+import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
+import {
+  getCompetitorRelationColumns,
+  downloadBlob,
+  parseExportFilename,
+} from './competitorRelationColumns'
 
 const CollapseItem = Collapse.Item
-
-function downloadBlob(blob, filename) {
-  const url = window.URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  window.URL.revokeObjectURL(url)
-}
-
-function parseExportFilename(contentDisposition, fallback) {
-  if (!contentDisposition) return fallback
-  const m = /filename\*=UTF-8''([^;]+)|filename="([^"]+)"/i.exec(contentDisposition)
-  const raw = m?.[1] || m?.[2]
-  if (!raw) return fallback
-  try {
-    return decodeURIComponent(raw)
-  } catch {
-    return raw
-  }
-}
+const relColumns = getCompetitorRelationColumns()
 
 /**
- * 项目挖掘 — 竞品分析（被投 × 竞品）：主数据来自被投列表，展开查看已落库竞品关系。
+ * 竞品分析 — 竞品分析（被投 × 竞品）：主数据来自被投列表，展开查看已落库竞品关系。
  */
 export default function ProjectSourcingCompetitorAnalysisPage() {
   const [loading, setLoading] = useState(false)
@@ -50,9 +33,9 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   const [exportYears, setExportYears] = useState([])
   const [yearFilter, setYearFilter] = useState([])
   const [exporting, setExporting] = useState(false)
-  const [summaryVisible, setSummaryVisible] = useState(false)
-  const [summaryLoading, setSummaryLoading] = useState(false)
-  const [summaryData, setSummaryData] = useState(null)
+  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [summaryParams, setSummaryParams] = useState(null)
+  const [summaryTitle, setSummaryTitle] = useState('')
 
   const fetchList = useCallback(async () => {
     setLoading(true)
@@ -61,7 +44,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
         params: {
           page,
           pageSize,
-          data_app_name: '项目挖掘',
+          data_app_name: '竞品分析',
           entity_type: '被投企业',
         },
       })
@@ -130,23 +113,11 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     else setSelectedIds([])
   }
 
-  const openSummary = async (enterpriseId, e) => {
+  const openSummary = (enterpriseId, e, row) => {
     e?.stopPropagation?.()
-    setSummaryVisible(true)
-    setSummaryLoading(true)
-    setSummaryData(null)
-    try {
-      const res = await fetchCompetitorAnalysisSummary({ invested_enterprise_id: enterpriseId })
-      if (res.data?.success) {
-        setSummaryData(res.data.data)
-      } else {
-        Message.error(res.data?.message || '加载说明失败')
-      }
-    } catch (err) {
-      Message.error(err.response?.data?.message || err.message || '加载说明失败')
-    } finally {
-      setSummaryLoading(false)
-    }
+    setSummaryParams({ invested_enterprise_id: enterpriseId })
+    setSummaryTitle(row?.enterprise_full_name || row?.project_abbreviation || '')
+    setSummaryOpen(true)
   }
 
   const runExport = async ({ exportAll }) => {
@@ -185,65 +156,13 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     }
   }
 
-  const relColumns = [
-    { title: '竞品名称', dataIndex: 'competitor_display_name', width: 140, ellipsis: true, render: (t) => t || '-' },
-    { title: '信用代码', dataIndex: 'unified_credit_code', width: 150, render: (t) => t || '-' },
-    { title: '等级', dataIndex: 'confidence_grade', width: 56, render: (t) => t || '-' },
-    { title: '综合分', dataIndex: 'relevance_score', width: 64, render: (v) => (v == null ? '-' : String(v)) },
-    {
-      title: '产品介绍',
-      dataIndex: 'competitor_product_intro',
-      width: 200,
-      render: (t) => <IntroPopoverCell columnTitle="产品介绍" raw={t} triggerMaxWidth={480} />,
-    },
-    {
-      title: '企业标签',
-      dataIndex: 'competitor_tags_display',
-      width: 160,
-      render: (t) => <IntroPopoverCell columnTitle="企业标签" raw={t} triggerMaxWidth={480} />,
-    },
-    {
-      title: '子基金名称',
-      dataIndex: 'sub_fund_names',
-      width: 120,
-      ellipsis: true,
-      render: (t) => t || '-',
-    },
-    {
-      title: '数据源',
-      dataIndex: 'data_sources_json',
-      width: 100,
-      ellipsis: true,
-      render: (v) => {
-        if (!v) return '-'
-        try {
-          const arr = typeof v === 'string' ? JSON.parse(v) : v
-          if (Array.isArray(arr)) {
-            const labels = { ipo_project: '底层', sourcing_financing_event: '融资', ai_web: '联网' }
-            return arr.map((x) => labels[x] || x).join('、') || '-'
-          }
-        } catch {
-          /* ignore */
-        }
-        return '-'
-      },
-    },
-    { title: '融资', dataIndex: 'financing_amount_text', width: 90, ellipsis: true, render: (t) => t || '-' },
-    {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      width: 160,
-      render: (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '-'),
-    },
-  ]
-
   const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id))
 
   return (
     <div className="page-scope" style={{ padding: '16px 24px' }}>
-      <Card title="竞品分析（被投企业 × 竞品）" bordered={false}>
+      <Card title="投后-竞品分析（被投企业 × 竞品）" bordered={false}>
         <p style={{ color: 'var(--color-text-2)', marginBottom: 16, fontSize: 13 }}>
-          展示项目挖掘下<strong>未退出</strong>被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
+          展示竞品分析下<strong>未退出</strong>被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
           <strong>被投企业</strong>列表左侧勾选 +「竞品分析（多选）」。
         </p>
         <Space wrap style={{ marginBottom: 12 }}>
@@ -303,14 +222,19 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
                       <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>编号：{r.project_number}</span>
                     ) : null}
                   </Space>
-                  <Button type="outline" size="mini" onClick={(e) => openSummary(r.id, e)}>
+                  <Button type="outline" size="mini" onClick={(e) => openSummary(r.id, e, r)}>
                     竞品分析说明
                   </Button>
                 </div>
               }
             >
               <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>产品介绍（AI）摘要：</div>
-              <IntroPopoverCell columnTitle="产品介绍(AI)" raw={r.ai_product_intro} triggerMaxWidth={720} />
+              <AiIntroFullText raw={r.ai_product_intro} />
+              <div style={{ marginTop: 12, marginBottom: 4 }}>
+                <Button type="outline" size="small" onClick={(e) => openSummary(r.id, e, r)}>
+                  竞品分析说明
+                </Button>
+              </div>
               <div style={{ marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: 500 }}>竞品明细</div>
               <Table
                 rowKey="id"
@@ -336,48 +260,15 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
           </Button>
         </div>
       </Card>
-      <Modal
-        title="竞品分析说明"
-        visible={summaryVisible}
-        style={{ width: 720 }}
-        footer={null}
-        onCancel={() => setSummaryVisible(false)}
-      >
-        {summaryLoading ? (
-          <div style={{ textAlign: 'center', padding: 32 }}>
-            <Spin />
-          </div>
-        ) : (
-          <>
-            <Space style={{ marginBottom: 12 }}>
-              <Button
-                type="outline"
-                size="mini"
-                disabled={!summaryData?.full_text}
-                onClick={() => copyTextToClipboard(summaryData?.full_text || '')}
-              >
-                复制全文
-              </Button>
-            </Space>
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                fontSize: 13,
-                lineHeight: 1.6,
-                maxHeight: 480,
-                overflow: 'auto',
-                margin: 0,
-                padding: 12,
-                background: 'var(--color-fill-1)',
-                borderRadius: 4,
-              }}
-            >
-              {summaryData?.full_text || '暂无分析记录，请先在「被投企业」列表发起竞品分析。'}
-            </pre>
-          </>
-        )}
-      </Modal>
+      <CompetitorAnalysisSummaryModal
+        visible={summaryOpen}
+        onClose={() => {
+          setSummaryOpen(false)
+          setSummaryParams(null)
+        }}
+        summaryParams={summaryParams}
+        subjectTitle={summaryTitle}
+      />
     </div>
   )
 }

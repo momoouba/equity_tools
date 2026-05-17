@@ -2,12 +2,12 @@ const db = require('../../db');
 const {
   enqueueManualInvestedEnterpriseAiEnrich,
   enqueueBatchInvestedEnterpriseAiEnrich,
-} = require('../../utils/项目挖掘/investedEnterpriseAiEnrichService');
+} = require('../../utils/竞品分析/investedEnterpriseAiEnrichService');
 const {
   syncInvestedEnterpriseQccCompanyBrief,
   batchSyncInvestedEnterpriseQccCompanyBrief,
-} = require('../../utils/项目挖掘/investedEnterpriseQccBriefService');
-const { requireAdmin } = require('../../utils/项目挖掘/projectSourcingRouteAuth');
+} = require('../../utils/竞品分析/investedEnterpriseQccBriefService');
+const { requireAdmin } = require('../../utils/竞品分析/competitorAnalysisRouteAuth');
 
 function clientIpFromReq(req) {
   const xf = req.headers['x-forwarded-for'];

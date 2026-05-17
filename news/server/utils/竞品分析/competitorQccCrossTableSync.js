@@ -2,7 +2,7 @@
 
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
 const { fetchCompanyBriefGetInfo } = require('../qichachaCompanyBrief');
 
 function creditNormalizeSql(columnExpr) {
@@ -61,13 +61,13 @@ async function runUnifiedCreditQccSync(creditRaw) {
     e.code = 400;
     throw e;
   }
-  const psAppId = await getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+  const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (!psAppId) {
-    const e = new Error('未解析到「项目挖掘」应用 id，无法三表对齐');
+    const e = new Error('未解析到「竞品分析」应用 id，无法三表对齐');
     e.code = 500;
     throw e;
   }
-  const appName = DATA_APP_PROJECT_SOURCING;
+  const appName = DATA_APP_COMPETITOR_ANALYSIS;
   const ieCredit = creditNormalizeSql('ie.unified_credit_code');
   const ipoCredit = creditNormalizeSql('p.unified_credit_code');
   const preCredit = creditNormalizeSql('pr.unified_credit_code');

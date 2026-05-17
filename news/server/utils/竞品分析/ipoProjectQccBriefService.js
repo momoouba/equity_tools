@@ -1,8 +1,8 @@
 const db = require('../../db');
-const { isIpoProjectProjectSourcingApp } = require('../applicationIdResolve');
+const { isIpoProjectCompetitorAnalysisApp } = require('../applicationIdResolve');
 const { fetchCompanyBriefGetInfo } = require('../qichachaCompanyBrief');
 const { buildProjectSourcingIpoWhereClause } = require('./ipoProjectSourcingListFilter');
-const { isCrossTableUnifiedCredit, runUnifiedCreditQccSync } = require('./projectSourcingQccCrossTableSync');
+const { isCrossTableUnifiedCredit, runUnifiedCreditQccSync } = require('./competitorQccCrossTableSync');
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -80,7 +80,7 @@ async function markQccErrorOnFids(fIds, errMsg) {
 }
 
 /**
- * 单条：拉取企查查企业简介并写入 ipo_project（仅项目挖掘 data_app_id）。
+ * 单条：拉取企查查企业简介并写入 ipo_project（仅竞品分析 data_app_id）。
  * @param {string|number} fId ipo_project.f_id
  */
 async function syncIpoProjectQccCompanyBrief(fId) {
@@ -100,8 +100,8 @@ async function syncIpoProjectQccCompanyBrief(fId) {
     e.code = 404;
     throw e;
   }
-  if (!(await isIpoProjectProjectSourcingApp(rows[0]))) {
-    const e = new Error('仅支持项目挖掘应用下的底层项目');
+  if (!(await isIpoProjectCompetitorAnalysisApp(rows[0]))) {
+    const e = new Error('仅支持竞品分析应用下的底层项目');
     e.code = 400;
     throw e;
   }
@@ -164,7 +164,7 @@ async function batchSyncIpoProjectQccCompanyBrief(fIds, opts = {}) {
   const valid = [];
   for (const r of rows) {
     if (Number(r.F_DeleteMark) !== 0) continue;
-    if (!(await isIpoProjectProjectSourcingApp(r))) continue;
+    if (!(await isIpoProjectCompetitorAnalysisApp(r))) continue;
     valid.push(r);
   }
 
@@ -173,7 +173,7 @@ async function batchSyncIpoProjectQccCompanyBrief(fIds, opts = {}) {
     return {
       ok: false,
       code: 400,
-      message: '勾选行中无可同步的底层项目（需为项目挖掘应用且具备统一社会信用代码或企业全称）',
+      message: '勾选行中无可同步的底层项目（需为竞品分析应用且具备统一社会信用代码或企业全称）',
     };
   }
 
@@ -240,7 +240,7 @@ async function syncAllIpoProjectQccCompanyBriefFiltered({ psUser, keyword, creat
   const valid = [];
   for (const r of rows) {
     if (Number(r.F_DeleteMark) !== 0) continue;
-    if (!(await isIpoProjectProjectSourcingApp(r))) continue;
+    if (!(await isIpoProjectCompetitorAnalysisApp(r))) continue;
     valid.push(r);
   }
 
@@ -302,7 +302,7 @@ async function syncAllIpoProjectQccCompanyBriefFiltered({ psUser, keyword, creat
 }
 
 /**
- * 底层项目 SQL 全量同步提交后：仅项目挖掘应用下、且统一社会信用代码通过校验的行，按代码去重调用企查查写简介。
+ * 底层项目 SQL 全量同步提交后：仅竞品分析应用下、且统一社会信用代码通过校验的行，按代码去重调用企查查写简介。
  * @param {{ userId: string, psAppId: string, gapMs?: number }} p
  */
 async function runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId, gapMs = 400 } = {}) {
@@ -322,7 +322,7 @@ async function runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId, 
   let skippedInvalidCredit = 0;
   const creditToFids = new Map();
   for (const r of rows) {
-    if (!(await isIpoProjectProjectSourcingApp(r))) continue;
+    if (!(await isIpoProjectCompetitorAnalysisApp(r))) continue;
     totalRows += 1;
     const fid = String(r.f_id || '').trim();
     if (!fid) continue;

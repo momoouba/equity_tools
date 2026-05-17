@@ -1465,7 +1465,7 @@ async function initializeTables(dbPool) {
       ai_model_application_type: [
         { id: '2026051612001000001', item_code: 'news_analysis', item_name: '新闻分析', sort_order: 0 },
         { id: '2026051612001000002', item_code: 'project_sourcing_analysis', item_name: '项目挖掘分析', sort_order: 1 },
-        { id: '2026051612001000003', item_code: 'project_sourcing_competitor', item_name: '竞品分析', sort_order: 2 },
+        { id: '2026051612001000003', item_code: 'competitor_analysis', item_name: '竞品分析应用', sort_order: 2 },
         { id: '2026051612001000004', item_code: 'listing_progress_analysis', item_name: '上市进展分析', sort_order: 3 },
         { id: '2026051612001000005', item_code: 'general', item_name: '通用', sort_order: 4 },
       ],
@@ -4271,6 +4271,7 @@ async function initializeTables(dbPool) {
   try {
     const { generateId } = require('./utils/idGenerator');
     const PS_C = require('./utils/项目挖掘/constants');
+    const CA_C = require('./utils/竞品分析/constants');
     const APPS = {
       performance: { id: '2026031616180010001', name: '业绩看板', created_at: '2026-03-16 16:18:00' },
       news: { id: '2025112019132600001', name: '新闻舆情', created_at: '2025-11-20 19:13:31' },
@@ -4279,6 +4280,11 @@ async function initializeTables(dbPool) {
         id: PS_C.PROJECT_SOURCING_APP_ID,
         name: PS_C.APP_NAME_PROJECT_SOURCING,
         created_at: PS_C.PROJECT_SOURCING_CREATED_AT,
+      },
+      competitorAnalysis: {
+        id: CA_C.COMPETITOR_ANALYSIS_APP_ID,
+        name: CA_C.APP_NAME_COMPETITOR_ANALYSIS,
+        created_at: CA_C.COMPETITOR_ANALYSIS_CREATED_AT,
       },
     };
 
@@ -4423,6 +4429,40 @@ async function initializeTables(dbPool) {
     await ensureCanonicalApp(APPS.news);
     await ensureCanonicalApp(APPS.listing);
     await ensureCanonicalApp(APPS.projectSourcing);
+    await ensureCanonicalApp(APPS.competitorAnalysis);
+
+    // 竞品分析应用：从项目挖掘迁出 data_app_id / data_app_name（新闻舆情行不动）
+    try {
+      const psId = APPS.projectSourcing.id;
+      const caId = APPS.competitorAnalysis.id;
+      const caName = APPS.competitorAnalysis.name;
+      const [ieM] = await dbPool.query(
+        `UPDATE invested_enterprises
+         SET data_app_id = ?, data_app_name = ?
+         WHERE delete_mark = 0
+           AND (data_app_id = ? OR (data_app_id IS NULL AND data_app_name = ?))`,
+        [caId, caName, psId, PS_C.APP_NAME_PROJECT_SOURCING]
+      );
+      if (ieM.affectedRows) console.log(`  ✓ invested_enterprises 已迁移 ${ieM.affectedRows} 行至竞品分析`);
+      const [ipoM] = await dbPool.query(`UPDATE ipo_project SET data_app_id = ? WHERE data_app_id = ?`, [
+        caId,
+        psId,
+      ]);
+      if (ipoM.affectedRows) console.log(`  ✓ ipo_project 已迁移 ${ipoM.affectedRows} 行至竞品分析`);
+      const [preM] = await dbPool.query(
+        `UPDATE pre_investment_project
+         SET data_app_id = ?, data_app_name = ?
+         WHERE delete_mark = 0 AND (data_app_id = ? OR data_app_name = ?)`,
+        [caId, caName, psId, PS_C.APP_NAME_PROJECT_SOURCING]
+      );
+      if (preM.affectedRows) console.log(`  ✓ pre_investment_project 已迁移 ${preM.affectedRows} 行至竞品分析`);
+      await dbPool.query(
+        `UPDATE ipo_project_sql_sync_setting SET write_target = ? WHERE write_target = ?`,
+        [CA_C.IPO_SQL_WRITE_TARGET_COMPETITOR, 'project_sourcing']
+      ).catch(() => {});
+    } catch (migErr) {
+      console.warn('  竞品分析 data_app 迁移时出现警告:', migErr.message);
+    }
 
     // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
     const [legacyPerfApps] = await dbPool.query(
@@ -4544,6 +4584,38 @@ async function initializeTables(dbPool) {
     await ensureAppMembershipLevels(APPS.performance.id, APPS.performance.name);
     await ensureAppMembershipLevels(APPS.listing.id, APPS.listing.name);
     await ensureAppMembershipLevels(APPS.projectSourcing.id, APPS.projectSourcing.name);
+    await ensureAppMembershipLevels(APPS.competitorAnalysis.id, APPS.competitorAnalysis.name);
+
+    // 竞品分析：从项目挖掘复制企查查配置（按 interface_type 去重）
+    try {
+      const caId = APPS.competitorAnalysis.id;
+      const psId = APPS.projectSourcing.id;
+      const [fromQc] = await dbPool.query('SELECT * FROM qichacha_config WHERE app_id = ?', [psId]);
+      for (const row of fromQc) {
+        const [dup] = await dbPool.query(
+          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
+          [caId, row.interface_type]
+        );
+        if (dup.length) continue;
+        const newId = await generateId('qichacha_config', dbPool);
+        await dbPool.execute(
+          `INSERT INTO qichacha_config (
+            id, app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            newId,
+            caId,
+            row.qichacha_app_key,
+            row.qichacha_secret_key,
+            row.qichacha_daily_limit,
+            row.interface_type,
+          ]
+        );
+      }
+      console.log('  ✓ 竞品分析企查查配置已从项目挖掘模板复制（如有）');
+    } catch (qcErr) {
+      console.warn('  复制竞品分析企查查配置时出现警告:', qcErr.message);
+    }
 
     // 防止后续重复写入：同应用下等级名称唯一
     const [lvlUniqIdx] = await dbPool.query(
@@ -4919,7 +4991,12 @@ async function initializeTables(dbPool) {
       LIMIT 1
     `);
     const atType2 = atCol2.length ? String(atCol2[0].COLUMN_TYPE || '') : '';
-    if (atType2 && !atType2.includes('project_sourcing_competitor')) {
+    if (atType2 && !atType2.includes('competitor_analysis')) {
+      if (atType2.includes('project_sourcing_competitor')) {
+        await dbPool.query(
+          `UPDATE ai_model_config SET application_type = 'competitor_analysis' WHERE application_type = 'project_sourcing_competitor'`
+        );
+      }
       await dbPool.query(`
         ALTER TABLE ai_model_config
         MODIFY COLUMN application_type ENUM(
@@ -4927,13 +5004,31 @@ async function initializeTables(dbPool) {
           'general',
           'project_sourcing_analysis',
           'listing_progress_analysis',
-          'project_sourcing_competitor'
+          'competitor_analysis'
         )
         DEFAULT 'news_analysis'
-        COMMENT '应用类型：含项目挖掘竞品分析'
+        COMMENT '应用类型：含竞品分析应用 competitor_analysis'
       `);
-      console.log('✓ ai_model_config.application_type 已扩展 project_sourcing_competitor');
+      console.log('✓ ai_model_config.application_type 已迁移为 competitor_analysis');
     }
+    const [fixCa] = await dbPool.query(
+      `UPDATE ai_model_config
+       SET application_type = 'competitor_analysis'
+       WHERE delete_mark = 0
+         AND usage_type = 'competitor_match'
+         AND application_type = 'project_sourcing_competitor'`
+    );
+    if (fixCa.affectedRows) {
+      console.log(`  ✓ 已将 ${fixCa.affectedRows} 条竞品匹配配置的 application_type 更正为 competitor_analysis`);
+    }
+    await dbPool.query(
+      `UPDATE base_dictionary SET delete_mark = 1, is_enabled = 0
+       WHERE parent_id IN (
+         SELECT id FROM (
+           SELECT id FROM base_dictionary WHERE dict_code = 'ai_model_application_type' AND parent_id IS NULL AND delete_mark = 0 LIMIT 1
+         ) t
+       ) AND item_code = 'project_sourcing_competitor' AND delete_mark = 0`
+    ).catch(() => {});
   } catch (err) {
     console.warn('迁移 ai_model_config.application_type 扩展时出现警告:', err.message);
   }
@@ -6358,6 +6453,99 @@ async function initializeTables(dbPool) {
     console.log('✓ competitor_match_supplement 表已就绪');
   } catch (err) {
     console.warn('创建 competitor_match_supplement 时出现警告:', err.message);
+  }
+
+  // 竞品分析：三源召回开关（默认全开；融资源仍受用户项目挖掘权限约束）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS competitor_recall_source_config (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        app_id VARCHAR(19) NOT NULL COMMENT 'applications.id，竞品分析应用',
+        enable_ipo_project TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用底层项目池',
+        enable_financing_event TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用融资事件池（须用户有项目挖掘权限）',
+        enable_ai_web TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用联网发现',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        delete_mark TINYINT(1) NOT NULL DEFAULT 0,
+        UNIQUE KEY uk_ca_recall_app (app_id),
+        CONSTRAINT fk_ca_recall_app FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析—三源召回配置';
+    `);
+    const CA_C = require('./utils/竞品分析/constants');
+    const [existRecall] = await dbPool.query(
+      'SELECT id FROM competitor_recall_source_config WHERE app_id = ? AND delete_mark = 0 LIMIT 1',
+      [CA_C.COMPETITOR_ANALYSIS_APP_ID]
+    );
+    if (!existRecall.length) {
+      const { generateId } = require('./utils/idGenerator');
+      const rid = await generateId('competitor_recall_source_config', dbPool);
+      await dbPool.execute(
+        `INSERT INTO competitor_recall_source_config (
+          id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
+        ) VALUES (?, ?, 1, 1, 1)`,
+        [rid, CA_C.COMPETITOR_ANALYSIS_APP_ID]
+      );
+    }
+    console.log('✓ competitor_recall_source_config 表已就绪');
+  } catch (err) {
+    console.warn('创建 competitor_recall_source_config 时出现警告:', err.message);
+  }
+
+  // external_db_config.app_id：各应用「数据库连接」按顶栏应用隔离
+  try {
+    const [edbAppCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_db_config' AND COLUMN_NAME = 'app_id'
+    `);
+    if (!edbAppCol.length) {
+      await dbPool.query(`
+        ALTER TABLE external_db_config
+        ADD COLUMN app_id VARCHAR(19) NULL COMMENT '所属应用 applications.id' AFTER is_active
+      `);
+      await dbPool.query(`
+        ALTER TABLE external_db_config ADD INDEX idx_external_db_config_app_id (app_id)
+      `);
+      console.log('✓ external_db_config 已添加 app_id');
+    }
+    const CA_C_EDB = require('./utils/竞品分析/constants');
+    const PS_C_EDB = require('./utils/项目挖掘/constants');
+    const LISTING_APP_ID = '2026033000000000001';
+    await dbPool.execute(
+      `UPDATE external_db_config e
+       INNER JOIN ipo_project_sql_sync_setting s
+         ON s.external_db_config_id = e.id AND s.write_target = ?
+       SET e.app_id = ?
+       WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+      [CA_C_EDB.IPO_SQL_WRITE_TARGET_COMPETITOR, CA_C_EDB.COMPETITOR_ANALYSIS_APP_ID]
+    );
+    await dbPool.execute(
+      `UPDATE external_db_config e
+       INNER JOIN ipo_project_sql_sync_setting s
+         ON s.external_db_config_id = e.id
+         AND (s.write_target IS NULL OR s.write_target = '' OR s.write_target = 'listing' OR s.write_target = 'project_sourcing')
+       SET e.app_id = ?
+       WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+      [LISTING_APP_ID]
+    );
+    const [perfApp] = await dbPool.query(
+      "SELECT id FROM applications WHERE app_name = '业绩看板' AND delete_mark = 0 LIMIT 1"
+    );
+    if (perfApp.length) {
+      await dbPool.execute(
+        `UPDATE external_db_config e
+         INNER JOIN b_sql b ON b.external_db_config_id = e.id AND b.F_DeleteMark = 0
+         SET e.app_id = ?
+         WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+        [perfApp[0].id]
+      );
+    }
+    await dbPool.execute(
+      `UPDATE external_db_config SET app_id = ? WHERE delete_mark = 0 AND (app_id IS NULL OR app_id = '')`,
+      [LISTING_APP_ID]
+    );
+    console.log('✓ external_db_config.app_id 历史数据已回填');
+  } catch (err) {
+    console.warn('迁移 external_db_config.app_id 时出现警告:', err.message);
   }
 
   // 项目挖掘：投前项目（独立表）

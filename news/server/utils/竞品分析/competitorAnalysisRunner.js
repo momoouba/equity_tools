@@ -33,7 +33,7 @@ const {
   scorePairSimilarity,
   discoverWebCompetitors,
   validateCandidate,
-} = require('./projectSourcingCompetitorAi');
+} = require('./competitorAnalysisAi');
 const {
   logCompetitorRun,
   summarizeCandidates,
@@ -452,8 +452,24 @@ async function executeCompetitorAnalysisRun(opts) {
       },
     });
 
-    const ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
-    const finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
+    const { getCompetitorRecallSourceFlags } = require('./competitorRecallSourceConfig');
+    const { canReadFinancingPoolForUser } = require('./competitorAnalysisRouteAuth');
+    const recallFlags = await getCompetitorRecallSourceFlags();
+    const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : false;
+
+    let ipoList = [];
+    if (recallFlags.enable_ipo_project) {
+      ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
+    }
+    let finList = [];
+    let financingSkipReason = null;
+    if (!recallFlags.enable_financing_event) {
+      financingSkipReason = 'config_disabled';
+    } else if (!canFinancing) {
+      financingSkipReason = 'no_project_sourcing_permission';
+    } else {
+      finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
+    }
     let candidates = mergeRecalledCandidates(ipoList, finList);
 
     await appendStepLog({
@@ -465,6 +481,8 @@ async function executeCompetitorAnalysisRun(opts) {
       detail: {
         ipo: ipoList.length,
         financing: finList.length,
+        financing_skipped: financingSkipReason,
+        recall_flags: recallFlags,
         merged: candidates.length,
         sample: summarizeCandidates(candidates, 5),
       },
@@ -531,7 +549,16 @@ async function executeCompetitorAnalysisRun(opts) {
     });
 
     let webAdded = 0;
-    try {
+    if (!recallFlags.enable_ai_web) {
+      await appendStepLog({
+        runId,
+        subjectType,
+        stepCode: 'S4_web',
+        status: 'ok',
+        message: '联网发现已关闭（配置）',
+        detail: { web_added: 0, skipped: 'config_disabled' },
+      });
+    } else try {
       const keywords = target.tags.slice(0, 8);
       const excludeNames = scored.slice(0, 30).map((x) => x.display_name).filter(Boolean);
       const webRes = await discoverWebCompetitors(target, keywords, excludeNames, logCtx);
@@ -655,19 +682,51 @@ async function executeCompetitorAnalysisRun(opts) {
       accepted_internal: 0,
       accepted_ai_only: 0,
     };
+    const rejectedSamples = [];
     for (const c of scored) {
       if (c.validation && c.validation.is_competitor === false) {
         filterStats.skip_not_competitor += 1;
+        if (rejectedSamples.length < 30) {
+          rejectedSamples.push({
+            name: c.display_name,
+            credit: c.unified_credit_code || null,
+            internal: c.internalScore,
+            llm: c.llmProductScore,
+            reason: '校验判定：非竞品',
+            sources: c.sources || (c.source ? [c.source] : []),
+          });
+        }
         continue;
       }
       if (c.validation && c.validation.is_upstream_downstream) {
         filterStats.skip_upstream_downstream += 1;
+        if (rejectedSamples.length < 30) {
+          rejectedSamples.push({
+            name: c.display_name,
+            credit: c.unified_credit_code || null,
+            internal: c.internalScore,
+            llm: c.llmProductScore,
+            reason: '校验判定：上下游关系',
+            sources: c.sources || (c.source ? [c.source] : []),
+          });
+        }
         continue;
       }
 
       const row = mapCandidateToPersistRow(c);
       if (!meetsPersistThreshold(c, row.finalScore)) {
         filterStats.skip_low_score += 1;
+        if (rejectedSamples.length < 30) {
+          rejectedSamples.push({
+            name: c.display_name,
+            credit: c.unified_credit_code || null,
+            internal: c.internalScore,
+            llm: c.llmProductScore,
+            final: row.finalScore,
+            reason: `综合分 ${row.finalScore} 未达落库阈值（常规≥${SCORE_THRESHOLD}，高信任竞品≥${SCORE_THRESHOLD_HIGH_LLM}）`,
+            sources: c.sources || (c.source ? [c.source] : []),
+          });
+        }
         continue;
       }
 
@@ -684,7 +743,11 @@ async function executeCompetitorAnalysisRun(opts) {
       stepCode: 'S5_filter',
       status: 'ok',
       message: `初筛通过 ${toPersist.length} 条（≥${SCORE_THRESHOLD}；高信任竞品≥${SCORE_THRESHOLD_HIGH_LLM}）`,
-      detail: { filterStats, candidates: summarizeCandidates(toPersist, 15) },
+      detail: {
+        filterStats,
+        candidates: summarizeCandidates(toPersist, 15),
+        rejected_samples: rejectedSamples,
+      },
     });
 
     let finalList = toPersist;

@@ -1,9 +1,9 @@
-import React, { useState } from 'react'
+﻿import React, { useState } from 'react'
 import { Modal, Form, Input, Button, Message, Space } from '@arco-design/web-react'
 import {
   postCompetitorExtractTagsFromNarrative,
   postInvestedEnterpriseCompetitorSupplement,
-} from '../../api/项目挖掘'
+} from '../../api/竞品分析'
 
 const FormItem = Form.Item
 

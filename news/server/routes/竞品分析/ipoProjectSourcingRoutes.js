@@ -1,22 +1,23 @@
 const db = require('../../db');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../../utils/上市进展/listingCsv');
-const { buildProjectSourcingIpoWhereClause } = require('../../utils/项目挖掘/ipoProjectSourcingListFilter');
+const { buildCompetitorAnalysisIpoWhereClause } = require('../../utils/竞品分析/ipoProjectSourcingListFilter');
 const {
-  requireProjectSourcingAccess,
+  requireCompetitorAnalysisAccess,
   requireAdmin,
   isAdminUser,
-} = require('../../utils/项目挖掘/projectSourcingRouteAuth');
+} = require('../../utils/竞品分析/competitorAnalysisRouteAuth');
 const {
   enqueueManualIpoProjectAiEnrich,
   enqueueBatchIpoProjectAiEnrich,
-} = require('../../utils/项目挖掘/ipoProjectAiEnrichService');
+} = require('../../utils/竞品分析/ipoProjectAiEnrichService');
 const {
   syncIpoProjectQccCompanyBrief,
   batchSyncIpoProjectQccCompanyBrief,
   syncAllIpoProjectQccCompanyBriefFiltered,
-} = require('../../utils/项目挖掘/ipoProjectQccBriefService');
-const { DATA_APP_PROJECT_SOURCING } = require('../../utils/enterpriseDataApp');
-const { getApplicationIdByAppName, isIpoProjectProjectSourcingApp } = require('../../utils/applicationIdResolve');
+} = require('../../utils/竞品分析/ipoProjectQccBriefService');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../../utils/enterpriseDataApp');
+const { IPO_SQL_WRITE_TARGET_COMPETITOR } = require('../../utils/竞品分析/constants');
+const { getApplicationIdByAppName, isIpoProjectCompetitorAnalysisApp } = require('../../utils/applicationIdResolve');
 const { generateIpoProjectNo } = require('../../utils/上市进展/ipoProjectNumber');
 const { generateId } = require('../../utils/idGenerator');
 const { queryExternal } = require('../../utils/externalDb');
@@ -25,7 +26,6 @@ const {
   ensureExternalPool,
   formatExternalSqlError,
   runIpoProjectSqlSyncForUser,
-  IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
 } = require('../../utils/上市进展/ipoProjectSqlSyncRunner');
 const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
 
@@ -42,15 +42,15 @@ function clientIpFromReq(req) {
 function ipoListFilterFromReq(req) {
   const keyword = (req.query.keyword || req.body?.keyword || '').trim();
   const creatorUserId = (req.query.creatorUserId || req.body?.creatorUserId || '').trim();
-  return buildProjectSourcingIpoWhereClause({
+  return buildCompetitorAnalysisIpoWhereClause({
     psUser: req.psUser,
     keyword,
     creatorUserId,
   });
 }
 
-async function getProjectSourcingApplicationId() {
-  return getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+async function getCompetitorAnalysisApplicationId() {
+  return getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
 }
 
 async function loadAccessibleIpoProjectRow(req, fId) {
@@ -58,9 +58,9 @@ async function loadAccessibleIpoProjectRow(req, fId) {
   if (!fid) {
     return { row: null, err: { status: 400, message: '无效的底层项目 id' } };
   }
-  const psId = await getProjectSourcingApplicationId();
+  const psId = await getCompetitorAnalysisApplicationId();
   if (!psId) {
-    return { row: null, err: { status: 400, message: '未找到「项目挖掘」应用' } };
+    return { row: null, err: { status: 400, message: '未找到「竞品分析」应用' } };
   }
   const rows = await db.query(
     `SELECT p.* FROM ipo_project p WHERE p.f_id = ? AND p.F_DeleteMark = 0 LIMIT 1`,
@@ -70,8 +70,8 @@ async function loadAccessibleIpoProjectRow(req, fId) {
     return { row: null, err: { status: 404, message: '记录不存在' } };
   }
   const row = rows[0];
-  if (!(await isIpoProjectProjectSourcingApp(row))) {
-    return { row: null, err: { status: 400, message: '非项目挖掘应用下的底层项目' } };
+  if (!(await isIpoProjectCompetitorAnalysisApp(row))) {
+    return { row: null, err: { status: 400, message: '非竞品分析应用下的底层项目' } };
   }
   const user = req.psUser;
   if (!isAdminUser(user) && String(row.F_CreatorUserId) !== String(user.id)) {
@@ -81,7 +81,7 @@ async function loadAccessibleIpoProjectRow(req, fId) {
 }
 
 function registerIpoProjectSourcingRoutes(router) {
-  router.get('/ipo-projects/sql-sync-setting', requireProjectSourcingAccess, async (req, res) => {
+  router.get('/ipo-projects/sql-sync-setting', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const user = req.psUser;
       const configId = (req.query?.external_db_config_id || '').trim();
@@ -93,7 +93,7 @@ function registerIpoProjectSourcingRoutes(router) {
              FROM ipo_project_sql_sync_setting
              WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
              LIMIT 1`,
-            [user.id, configId, IPO_SQL_WRITE_TARGET_PROJECT_SOURCING]
+            [user.id, configId, IPO_SQL_WRITE_TARGET_COMPETITOR]
           )
         : await db.query(
             `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
@@ -103,7 +103,7 @@ function registerIpoProjectSourcingRoutes(router) {
              WHERE user_id = ? AND write_target = ?
              ORDER BY updated_at DESC
              LIMIT 1`,
-            [user.id, IPO_SQL_WRITE_TARGET_PROJECT_SOURCING]
+            [user.id, IPO_SQL_WRITE_TARGET_COMPETITOR]
           );
       if (!rows.length) {
         return res.json({
@@ -114,7 +114,7 @@ function registerIpoProjectSourcingRoutes(router) {
             is_enabled: 1,
             cron_expression: '',
             qcc_brief_after_sync_enabled: 0,
-            write_target: IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+            write_target: IPO_SQL_WRITE_TARGET_COMPETITOR,
           },
         });
       }
@@ -133,7 +133,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.put('/ipo-projects/sql-sync-setting', requireProjectSourcingAccess, async (req, res) => {
+  router.put('/ipo-projects/sql-sync-setting', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const user = req.psUser;
       const body = req.body || {};
@@ -157,7 +157,7 @@ function registerIpoProjectSourcingRoutes(router) {
 
       const existing = await db.query(
         `SELECT id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
-        [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_PROJECT_SOURCING]
+        [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
       );
 
       if (existing.length) {
@@ -173,7 +173,7 @@ function registerIpoProjectSourcingRoutes(router) {
             qcc_brief_after_sync_enabled,
             user.id,
             external_db_config_id,
-            IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+            IPO_SQL_WRITE_TARGET_COMPETITOR,
           ]
         );
       } else {
@@ -184,7 +184,7 @@ function registerIpoProjectSourcingRoutes(router) {
           [
             id,
             user.id,
-            IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+            IPO_SQL_WRITE_TARGET_COMPETITOR,
             external_db_config_id,
             sql_text || null,
             is_enabled,
@@ -197,7 +197,7 @@ function registerIpoProjectSourcingRoutes(router) {
 
       const saved = await db.query(
         `SELECT * FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
-        [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_PROJECT_SOURCING]
+        [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
       );
       await updateListingScheduledTasks();
       return res.json({ success: true, data: saved[0] });
@@ -207,7 +207,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.post('/ipo-projects/sql-sync-preview', requireProjectSourcingAccess, async (req, res) => {
+  router.post('/ipo-projects/sql-sync-preview', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const body = req.body || {};
       const configId = body.external_db_config_id;
@@ -232,7 +232,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.post('/ipo-projects/sql-sync-run', requireProjectSourcingAccess, async (req, res) => {
+  router.post('/ipo-projects/sql-sync-run', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const user = req.psUser;
       const body = req.body || {};
@@ -246,7 +246,7 @@ function registerIpoProjectSourcingRoutes(router) {
           `SELECT * FROM ipo_project_sql_sync_setting
            WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
            LIMIT 1`,
-          [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_PROJECT_SOURCING]
+          [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
         );
         if (saved.length) {
           const s = saved[0];
@@ -263,7 +263,7 @@ function registerIpoProjectSourcingRoutes(router) {
         external_db_config_id,
         sql_text,
         is_enabled,
-        writeTarget: IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+        writeTarget: IPO_SQL_WRITE_TARGET_COMPETITOR,
         qccBriefAfterSync:
           qcc_brief_after_sync_enabled === 1 ||
           qcc_brief_after_sync_enabled === true ||
@@ -406,7 +406,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.get('/ipo-projects/export', requireProjectSourcingAccess, async (req, res) => {
+  router.get('/ipo-projects/export', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const { whereSql, params } = await ipoListFilterFromReq(req);
       const rows = await db.query(
@@ -440,14 +440,14 @@ function registerIpoProjectSourcingRoutes(router) {
         { label: '创建时间', key: 'F_CreatorTime', get: (r) => formatCsvDateYmdSlash(r.F_CreatorTime) },
         { label: '创建用户', key: 'creator_account' },
       ]);
-      sendCsv(res, `底层项目_项目挖掘_${Date.now()}.csv`, csv);
+      sendCsv(res, `底层项目_竞品分析_${Date.now()}.csv`, csv);
     } catch (e) {
       console.error('[project-sourcing/ipo-projects/export]', e);
       res.status(500).json({ success: false, message: e.message || '服务器错误' });
     }
   });
 
-  router.get('/ipo-projects', requireProjectSourcingAccess, async (req, res) => {
+  router.get('/ipo-projects', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
       const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
@@ -478,13 +478,13 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.post('/ipo-projects', requireProjectSourcingAccess, async (req, res) => {
+  router.post('/ipo-projects', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const user = req.psUser;
       const body = req.body || {};
-      const psId = await getProjectSourcingApplicationId();
+      const psId = await getCompetitorAnalysisApplicationId();
       if (!psId) {
-        return res.status(400).json({ success: false, message: '未找到「项目挖掘」应用' });
+        return res.status(400).json({ success: false, message: '未找到「竞品分析」应用' });
       }
       const checks = [
         ['project_name', '项目简称'],
@@ -543,7 +543,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.put('/ipo-projects/:f_id', requireProjectSourcingAccess, async (req, res) => {
+  router.put('/ipo-projects/:f_id', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const fid = String(req.params.f_id || '').trim();
       const { err } = await loadAccessibleIpoProjectRow(req, fid);
@@ -608,7 +608,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.delete('/ipo-projects/:f_id', requireProjectSourcingAccess, async (req, res) => {
+  router.delete('/ipo-projects/:f_id', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const fid = String(req.params.f_id || '').trim();
       const { err } = await loadAccessibleIpoProjectRow(req, fid);
@@ -626,7 +626,7 @@ function registerIpoProjectSourcingRoutes(router) {
     }
   });
 
-  router.get('/ipo-projects/:f_id/change-log', requireProjectSourcingAccess, async (req, res) => {
+  router.get('/ipo-projects/:f_id/change-log', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const fid = String(req.params.f_id || '').trim();
       const { err } = await loadAccessibleIpoProjectRow(req, fid);

@@ -1,8 +1,7 @@
 const xlsx = require('xlsx');
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
-const { isInvestedEnterpriseProjectSourcingApp } = require('../applicationIdResolve');
+const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
 
 const EXPORT_HEADERS = [
   '竞品名称',
@@ -88,7 +87,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
   for (const row of ieRows) {
     if (Number(row.delete_mark) !== 0) continue;
     if (String(row.exit_status || '').trim() === '已退出') continue;
-    if (!(await isInvestedEnterpriseProjectSourcingApp(row))) continue;
+    if (!(await isInvestedEnterpriseCompetitorAnalysisApp(row))) continue;
     if (!isAdmin && String(row.creator_user_id) !== uid) continue;
     if (years.length) {
       const y = String(row.project_number || '').slice(0, 4);
@@ -140,12 +139,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
   return { workbook, sheetCount, enterpriseCount: ieRows.length };
 }
 
-async function exportCompetitorRelationsToBuffer(opts) {
-  const { workbook } = await buildCompetitorRelationsExportWorkbook(opts);
-  return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
-}
-
-/** 可选年度列表（项目编号前四位） */
+/** 可选年度列表（被投项目编号前四位） */
 async function listInvestedEnterpriseYears(psUser, isAdmin) {
   const uid = psUser?.id ? String(psUser.id) : null;
   const rows = await db.query(
@@ -175,8 +169,119 @@ async function listInvestedEnterpriseYears(psUser, isAdmin) {
   return years;
 }
 
+function preProjectYear(projectNo) {
+  const s = String(projectNo || '').trim();
+  if (s.length >= 5 && s[0] === 'P') return s.slice(1, 5);
+  return s.slice(0, 4);
+}
+
+/**
+ * @param {object} opts
+ * @param {string[]} [opts.preInvestmentProjectIds]
+ * @param {boolean} [opts.exportAll]
+ * @param {string[]} [opts.years] 项目编号 P 后四位年度
+ */
+async function buildPreInvestmentCompetitorExportWorkbook(opts) {
+  const { preInvestmentProjectIds = [], exportAll = false, years = [], psUser, isAdmin } = opts;
+  const uid = psUser?.id ? String(psUser.id) : null;
+
+  let pipRows = await db.query(
+    `SELECT id, project_no, enterprise_full_name, project_abbreviation, creator_user_id
+     FROM pre_investment_project
+     WHERE delete_mark = 0`
+  );
+  const filtered = [];
+  for (const row of pipRows) {
+    if (!isAdmin && String(row.creator_user_id) !== uid) continue;
+    if (years.length) {
+      const y = preProjectYear(row.project_no);
+      if (!years.includes(y)) continue;
+    }
+    if (!exportAll && preInvestmentProjectIds.length) {
+      if (!preInvestmentProjectIds.includes(String(row.id))) continue;
+    }
+    filtered.push(row);
+  }
+
+  if (!exportAll && preInvestmentProjectIds.length) {
+    pipRows = preInvestmentProjectIds
+      .map((id) => filtered.find((r) => String(r.id) === String(id)))
+      .filter(Boolean);
+  } else {
+    pipRows = filtered.sort((a, b) => String(b.project_no || '').localeCompare(String(a.project_no || '')));
+  }
+
+  const workbook = xlsx.utils.book_new();
+  const usedNames = new Set();
+  let sheetCount = 0;
+
+  for (const pip of pipRows) {
+    const rels = await db.query(
+      `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+              competitor_product_intro, competitor_tags_display, sub_fund_names,
+              data_sources_json, financing_amount_text, created_at
+       FROM sourcing_competitor_relation
+       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
+       ORDER BY relevance_score DESC, created_at DESC`,
+      [pip.id]
+    );
+    const sheetLabel = sanitizeSheetName(
+      pip.project_abbreviation || pip.enterprise_full_name || pip.project_no || pip.id,
+      usedNames
+    );
+    const data = rels.length ? rels.map(relationToRow) : [Object.fromEntries(EXPORT_HEADERS.map((h) => [h, '']))];
+    const ws = xlsx.utils.json_to_sheet(data, { header: EXPORT_HEADERS });
+    xlsx.utils.book_append_sheet(workbook, ws, sheetLabel);
+    sheetCount += 1;
+  }
+
+  if (sheetCount === 0) {
+    const ws = xlsx.utils.aoa_to_sheet([EXPORT_HEADERS, ['（无数据）']]);
+    xlsx.utils.book_append_sheet(workbook, ws, '无数据');
+  }
+
+  return { workbook, sheetCount, enterpriseCount: pipRows.length };
+}
+
+async function exportCompetitorRelationsToBuffer(opts) {
+  const subjectType = opts.subjectType || 'invested_enterprise';
+  const { workbook } =
+    subjectType === 'pre_investment_project'
+      ? await buildPreInvestmentCompetitorExportWorkbook(opts)
+      : await buildCompetitorRelationsExportWorkbook(opts);
+  return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+}
+
+/** 投前项目编号 P+年度 可选列表 */
+async function listPreInvestmentYears(psUser, isAdmin) {
+  const uid = psUser?.id ? String(psUser.id) : null;
+  const rows = await db.query(
+    `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y
+     FROM pre_investment_project
+     WHERE delete_mark = 0 AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5
+       AND project_no LIKE 'P%'
+     ORDER BY y DESC`
+  );
+  let years = rows.map((r) => String(r.y || '').trim()).filter((y) => /^\d{4}$/.test(y));
+  if (!isAdmin && uid) {
+    const scoped = await db.query(
+      `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y
+       FROM pre_investment_project
+       WHERE delete_mark = 0 AND creator_user_id = ?
+         AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5
+         AND project_no LIKE 'P%'
+       ORDER BY y DESC`,
+      [uid]
+    );
+    years = scoped.map((r) => String(r.y)).filter((y) => /^\d{4}$/.test(y));
+  }
+  return years;
+}
+
 module.exports = {
   exportCompetitorRelationsToBuffer,
   listInvestedEnterpriseYears,
+  listPreInvestmentYears,
+  buildPreInvestmentCompetitorExportWorkbook,
   EXPORT_HEADERS,
 };

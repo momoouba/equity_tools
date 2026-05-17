@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
-import { useNavigate, Routes, Route, useLocation } from 'react-router-dom'
+import { useNavigate, Routes, Route, useLocation, Navigate } from 'react-router-dom'
 import { Layout, Button, Spin, Message } from '@arco-design/web-react'
-import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb } from '@arco-design/web-react/icon'
+import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb, IconMindMapping } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
 import EnterpriseManagement from './EnterpriseManagement'
 import CompanyManagement from './CompanyManagement'
@@ -17,16 +17,33 @@ import ListingIpoProjectPage from './上市进展/ListingIpoProjectPage'
 import ListingIpoProgressPage from './上市进展/ListingIpoProgressPage'
 import ListingNewSharePage from './上市进展/ListingNewSharePage'
 import ProjectSourcingPage from './项目挖掘/ProjectSourcingPage'
-import ProjectSourcingInvestedEnterprisesPage from './项目挖掘/ProjectSourcingInvestedEnterprisesPage'
-import ProjectSourcingIpoProjectsPage from './项目挖掘/ProjectSourcingIpoProjectsPage'
-import ProjectSourcingCompetitorAnalysisPage from './项目挖掘/ProjectSourcingCompetitorAnalysisPage'
-import ProjectSourcingPreInvestmentPage from './项目挖掘/ProjectSourcingPreInvestmentPage'
+import ProjectSourcingInvestedEnterprisesPage from './竞品分析/ProjectSourcingInvestedEnterprisesPage'
+import ProjectSourcingIpoProjectsPage from './竞品分析/ProjectSourcingIpoProjectsPage'
+import ProjectSourcingCompetitorAnalysisPage from './竞品分析/ProjectSourcingCompetitorAnalysisPage'
+import ProjectSourcingPreInvestmentPage from './竞品分析/ProjectSourcingPreInvestmentPage'
 import FinancingEventsPage from './项目挖掘/FinancingEventsPage'
 import TrackConfigPage from './项目挖掘/TrackConfigPage'
 import UserProfileModal from '../components/UserProfileModal'
 import './Dashboard.css'
 
 const { Header, Content } = Layout
+
+/** 各应用「数据库连接配置」按顶栏应用过滤 external_db_config.app_id */
+const FILTER_APP_ID_BY_KEY = {
+  'news-app': '2025112019132600001',
+  'performance-app': '2026031616180010001',
+  'listing-app': '2026033000000000001',
+  'project-sourcing-app': '2026050600000000001',
+  'competitor-analysis-app': '2026051712000000001',
+}
+
+/** 竞品分析子菜单 key → 实际路由段（须与 Route path 一致，不能用连字符拼成单段） */
+const COMPETITOR_MENU_ROUTES = {
+  'competitor-analysis-invested-enterprises': 'competitor-analysis/invested-enterprises',
+  'competitor-analysis-ipo-projects': 'competitor-analysis/ipo-projects',
+  'competitor-analysis-analysis': 'competitor-analysis/analysis',
+  'competitor-analysis-pre-investment': 'competitor-analysis/pre-investment',
+}
 
 function Dashboard() {
   const [user, setUser] = useState(null)
@@ -36,6 +53,7 @@ function Dashboard() {
   const [hasPerformancePermission, setHasPerformancePermission] = useState(false)
   const [hasListingPermission, setHasListingPermission] = useState(false)
   const [hasProjectSourcingPermission, setHasProjectSourcingPermission] = useState(false)
+  const [hasCompetitorAnalysisPermission, setHasCompetitorAnalysisPermission] = useState(false)
   const [systemConfig, setSystemConfig] = useState({
     system_name: '',
     logo: ''
@@ -72,19 +90,26 @@ function Dashboard() {
     const hasPsPerm = appPermissions.some(
       (perm) => perm.app_name === '项目挖掘' && perm.membership_level_id
     )
-    
+    const hasCaPerm = appPermissions.some(
+      (perm) => perm.app_name === '竞品分析' && perm.membership_level_id
+    )
+
     const newsEnabled = hasNewsPerm || isAdminUser
     const perfEnabled = hasPerfPerm || isAdminUser
     const listingEnabled = hasListingPerm || isAdminUser
     const projectSourcingEnabled = hasPsPerm || isAdminUser
+    const competitorAnalysisEnabled = hasCaPerm || isAdminUser
     setHasNewsPermission(newsEnabled)
     setHasPerformancePermission(perfEnabled)
     setHasListingPermission(listingEnabled)
     setHasProjectSourcingPermission(projectSourcingEnabled)
+    setHasCompetitorAnalysisPermission(competitorAnalysisEnabled)
 
     // 优先保持与当前路由一致，避免刷新用户信息后顶栏高亮跳回新闻舆情
     const p = location.pathname
-    if (p.includes('project-sourcing')) {
+    if (p.includes('competitor-analysis')) {
+      setActiveAppKey('competitor-analysis-app')
+    } else if (p.includes('project-sourcing')) {
       setActiveAppKey('project-sourcing-app')
     } else if (
       p.includes('listing-project-progress') ||
@@ -109,6 +134,8 @@ function Dashboard() {
       setActiveAppKey('performance-app')
     } else if (listingEnabled) {
       setActiveAppKey('listing-app')
+    } else if (competitorAnalysisEnabled) {
+      setActiveAppKey('competitor-analysis-app')
     } else if (projectSourcingEnabled) {
       setActiveAppKey('project-sourcing-app')
     } else if (isAdminUser) {
@@ -146,10 +173,25 @@ function Dashboard() {
   }, [navigate])
 
   useEffect(() => {
-    if (location.pathname.includes('enterprises')) {
+    const p = location.pathname
+    if (p.includes('competitor-analysis/')) {
+      if (p.includes('invested-enterprises')) {
+        setSelectedKeys(['competitor-analysis-invested-enterprises'])
+        setActiveAppKey('competitor-analysis-app')
+      } else if (p.includes('ipo-projects')) {
+        setSelectedKeys(['competitor-analysis-ipo-projects'])
+        setActiveAppKey('competitor-analysis-app')
+      } else if (p.includes('competitor-analysis/analysis')) {
+        setSelectedKeys(['competitor-analysis-analysis'])
+        setActiveAppKey('competitor-analysis-app')
+      } else if (p.includes('pre-investment')) {
+        setSelectedKeys(['competitor-analysis-pre-investment'])
+        setActiveAppKey('competitor-analysis-app')
+      }
+    } else if (p.includes('enterprises')) {
       setSelectedKeys(['enterprises'])
       setActiveAppKey('news-app')
-    } else if (location.pathname.includes('news')) {
+    } else if (p.includes('news')) {
       setSelectedKeys(['news'])
       setActiveAppKey('news-app')
     } else if (location.pathname.includes('system-db')) {
@@ -175,19 +217,7 @@ function Dashboard() {
     } else if (location.pathname.includes('listing-new-share')) {
       setSelectedKeys(['listing-new-share'])
       setActiveAppKey('listing-app')
-    } else if (location.pathname.includes('project-sourcing-invested-enterprises')) {
-      setSelectedKeys(['project-sourcing-invested-enterprises'])
-      setActiveAppKey('project-sourcing-app')
-    } else if (location.pathname.includes('project-sourcing-ipo-projects')) {
-      setSelectedKeys(['project-sourcing-ipo-projects'])
-      setActiveAppKey('project-sourcing-app')
-    } else if (location.pathname.includes('project-sourcing-competitor-analysis')) {
-      setSelectedKeys(['project-sourcing-competitor-analysis'])
-      setActiveAppKey('project-sourcing-app')
-    } else if (location.pathname.includes('project-sourcing-pre-investment')) {
-      setSelectedKeys(['project-sourcing-pre-investment'])
-      setActiveAppKey('project-sourcing-app')
-    } else if (location.pathname.includes('project-sourcing-financing-events')) {
+    } else if (p.includes('project-sourcing-financing-events')) {
       setSelectedKeys(['project-sourcing-financing-events'])
       setActiveAppKey('project-sourcing-app')
     } else if (location.pathname.includes('project-sourcing-track-config')) {
@@ -270,6 +300,8 @@ function Dashboard() {
     setSelectedKeys([key])
     if (key === 'system-db') {
       navigate('/dashboard/system-db')
+    } else if (COMPETITOR_MENU_ROUTES[key]) {
+      navigate(`/dashboard/${COMPETITOR_MENU_ROUTES[key]}`)
     } else {
       navigate(`/dashboard/${key}`)
     }
@@ -320,16 +352,25 @@ function Dashboard() {
       ]
     },
     {
+      key: 'competitor-analysis-app',
+      title: '竞品分析',
+      icon: <IconMindMapping />,
+      visible: isAdmin || hasCompetitorAnalysisPermission,
+      children: [
+        { key: 'competitor-analysis-invested-enterprises', title: '被投企业' },
+        { key: 'competitor-analysis-ipo-projects', title: '底层项目' },
+        { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
+        { key: 'competitor-analysis-pre-investment', title: '投前-竞品分析' },
+        { key: 'system-db', title: '数据库连接配置' }
+      ]
+    },
+    {
       key: 'project-sourcing-app',
       title: '项目挖掘',
       icon: <IconBulb />,
       visible: isAdmin || hasProjectSourcingPermission,
       children: [
         { key: 'project-sourcing', title: '融资与市场概览' },
-        { key: 'project-sourcing-invested-enterprises', title: '被投企业' },
-        { key: 'project-sourcing-ipo-projects', title: '底层项目' },
-        { key: 'project-sourcing-competitor-analysis', title: '竞品分析' },
-        { key: 'project-sourcing-pre-investment', title: '投前项目' },
         { key: 'project-sourcing-financing-events', title: '融资事件列表' },
         { key: 'project-sourcing-track-config', title: '赛道配置' },
         { key: 'system-db', title: '数据库连接配置' }
@@ -446,7 +487,15 @@ function Dashboard() {
             <Route path="/users" element={<UserManagement />} />
             <Route path="/scheduled-tasks" element={<ScheduledTaskManagement />} />
             <Route path="/system" element={<SystemConfig isAdmin={isAdmin} />} />
-            <Route path="/system-db" element={<SystemConfig isAdmin={false} />} />
+            <Route
+              path="/system-db"
+              element={
+                <SystemConfig
+                  isAdmin={false}
+                  filterAppId={FILTER_APP_ID_BY_KEY[activeAppKey] || null}
+                />
+              }
+            />
             <Route
               path="/performance"
               element={
@@ -496,37 +545,45 @@ function Dashboard() {
               }
             />
             <Route
-              path="/project-sourcing-invested-enterprises"
+              path="/competitor-analysis/invested-enterprises"
               element={
-                (isAdmin || hasProjectSourcingPermission)
+                (isAdmin || hasCompetitorAnalysisPermission)
                   ? <ProjectSourcingInvestedEnterprisesPage />
                   : <div>您没有访问权限</div>
               }
             />
             <Route
-              path="/project-sourcing-ipo-projects"
+              path="/competitor-analysis/ipo-projects"
               element={
-                (isAdmin || hasProjectSourcingPermission)
+                (isAdmin || hasCompetitorAnalysisPermission)
                   ? <ProjectSourcingIpoProjectsPage />
                   : <div>您没有访问权限</div>
               }
             />
             <Route
-              path="/project-sourcing-competitor-analysis"
+              path="/competitor-analysis/analysis"
               element={
-                (isAdmin || hasProjectSourcingPermission)
+                (isAdmin || hasCompetitorAnalysisPermission)
                   ? <ProjectSourcingCompetitorAnalysisPage />
                   : <div>您没有访问权限</div>
               }
             />
             <Route
-              path="/project-sourcing-pre-investment"
+              path="/competitor-analysis/pre-investment"
               element={
-                (isAdmin || hasProjectSourcingPermission)
+                (isAdmin || hasCompetitorAnalysisPermission)
                   ? <ProjectSourcingPreInvestmentPage />
                   : <div>您没有访问权限</div>
               }
             />
+            <Route path="/competitor-analysis-invested-enterprises" element={<Navigate to="competitor-analysis/invested-enterprises" replace />} />
+            <Route path="/competitor-analysis-ipo-projects" element={<Navigate to="competitor-analysis/ipo-projects" replace />} />
+            <Route path="/competitor-analysis-analysis" element={<Navigate to="competitor-analysis/analysis" replace />} />
+            <Route path="/competitor-analysis-pre-investment" element={<Navigate to="competitor-analysis/pre-investment" replace />} />
+            <Route path="/project-sourcing-invested-enterprises" element={<Navigate to="competitor-analysis/invested-enterprises" replace />} />
+            <Route path="/project-sourcing-ipo-projects" element={<Navigate to="/dashboard/competitor-analysis/ipo-projects" replace />} />
+            <Route path="/project-sourcing-competitor-analysis" element={<Navigate to="/dashboard/competitor-analysis/analysis" replace />} />
+            <Route path="/project-sourcing-pre-investment" element={<Navigate to="/dashboard/competitor-analysis/pre-investment" replace />} />
             <Route
               path="/project-sourcing-financing-events"
               element={

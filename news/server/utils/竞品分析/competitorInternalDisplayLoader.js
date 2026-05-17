@@ -1,6 +1,6 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { DATA_APP_PROJECT_SOURCING } = require('../enterpriseDataApp');
+const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
 const {
   parseTagsFromJson,
   mergeTagArrays,
@@ -37,7 +37,7 @@ async function loadInternalDisplayFields(unifiedCreditCode, companyName) {
   let ipoSubFunds = [];
   let bestScore = -1;
 
-  const psAppId = await getApplicationIdByAppName(DATA_APP_PROJECT_SOURCING);
+  const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
 
   if (psAppId) {
     let ipoRows = [];
