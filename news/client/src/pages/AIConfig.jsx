@@ -33,7 +33,8 @@ function AIConfig() {
     top_p: 1.0,
     application_type: 'news_analysis',
     usage_type: 'content_analysis',
-    is_active: 1
+    is_active: 1,
+    enable_thinking: 0,
   })
 
   const providers = [
@@ -121,6 +122,7 @@ function AIConfig() {
       application_type: 'news_analysis',
       usage_type: 'content_analysis',
       is_active: 1,
+      enable_thinking: 0,
     }
     initial.api_endpoint = getDefaultEndpoint(initial.provider, initial.usage_type, initial.model_name)
     setFormData(initial)
@@ -141,6 +143,12 @@ function AIConfig() {
     application_type: row.application_type || 'news_analysis',
     usage_type: row.usage_type || 'content_analysis',
     is_active: row.is_active === 0 || row.is_active === false ? 0 : 1,
+    enable_thinking:
+      row.enable_thinking === 1 || row.enable_thinking === true
+        ? 1
+        : row.enable_thinking === 0 || row.enable_thinking === false
+          ? 0
+          : null,
   })
 
   const applyDefaultEndpointForCreate = (prev, patch) => {
@@ -532,6 +540,23 @@ function AIConfig() {
                   ))}
                 </Select>
               </div>
+
+              {formData.provider === 'alibaba' && (
+                <div className="form-group">
+                  <label>
+                    <Switch
+                      checked={formData.enable_thinking === 1}
+                      onChange={(checked) => handleChange('enable_thinking', checked ? 1 : 0)}
+                      style={{ marginRight: 8 }}
+                    />
+                    深度思考（仅联网 AI 补齐）
+                  </label>
+                  <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-3)' }}>
+                    被投企业、投前、IPO、融资事件等「AI 补齐」会读取本配置；竞品匹配跑批不走此开关。
+                    请在「模型提示词」中确认「融资联网 AI 增强」绑定的模型行。
+                  </div>
+                </div>
+              )}
 
               <div className="form-group">
                 <label>使用类型 *</label>

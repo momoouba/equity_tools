@@ -122,7 +122,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
       `SELECT 
         id, config_name, provider, model_name, api_type, 
         CONCAT(LEFT(api_key, 8), '****') as api_key_masked,
-        api_endpoint, temperature, max_tokens, top_p, 
+        api_endpoint, temperature, max_tokens, top_p, enable_thinking,
         is_active, application_type, usage_type, creator_user_id, created_at, updated_at
        FROM ai_model_config 
        ${condition} 
@@ -237,8 +237,16 @@ router.post('/', checkAdminPermission, async (req, res) => {
       max_tokens = 2000,
       top_p = 1.0,
       application_type = 'news_analysis',
-      usage_type = 'content_analysis'
+      usage_type = 'content_analysis',
+      enable_thinking,
     } = req.body;
+
+    const effEnableThinking =
+      enable_thinking === undefined || enable_thinking === null || enable_thinking === ''
+        ? null
+        : Number(enable_thinking) === 1
+          ? 1
+          : 0;
 
     // 验证必填字段
     if (!config_name || !provider || !model_name || !api_type || !api_key || !api_endpoint) {
@@ -274,11 +282,12 @@ router.post('/', checkAdminPermission, async (req, res) => {
     await db.execute(
       `INSERT INTO ai_model_config 
        (id, config_name, provider, model_name, api_type, api_key, api_endpoint, 
-        temperature, max_tokens, top_p, application_type, usage_type, creator_user_id) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        temperature, max_tokens, top_p, enable_thinking, application_type, usage_type, creator_user_id) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId, config_name, provider, model_name, api_type, api_key, 
-        api_endpoint, temperature, max_tokens, top_p, application_type, usage_type, req.currentUserId
+        api_endpoint, temperature, max_tokens, top_p, effEnableThinking,
+        application_type, usage_type, req.currentUserId
       ]
     );
 
@@ -310,7 +319,8 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       top_p,
       application_type,
       usage_type,
-      is_active
+      is_active,
+      enable_thinking,
     } = req.body;
 
     // 检查记录是否存在
@@ -322,6 +332,15 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
+
+    const effEnableThinking =
+      enable_thinking === undefined
+        ? undefined
+        : enable_thinking === null || enable_thinking === ''
+          ? null
+          : Number(enable_thinking) === 1
+            ? 1
+            : 0;
 
     // 验证参数范围
     if (temperature !== undefined && (temperature < 0 || temperature > 2)) {
@@ -363,7 +382,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       `UPDATE ai_model_config 
        SET config_name = ?, provider = ?, model_name = ?, api_type = ?, 
            api_key = ?, api_endpoint = ?, temperature = ?, max_tokens = ?, 
-           top_p = ?, application_type = ?, usage_type = ?, is_active = ?, updater_user_id = ?
+           top_p = ?, enable_thinking = ?, application_type = ?, usage_type = ?, is_active = ?, updater_user_id = ?
        WHERE id = ?`,
       [
         config_name !== undefined ? config_name : prev.config_name,
@@ -375,6 +394,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
         temperature !== undefined ? temperature : prev.temperature,
         max_tokens !== undefined ? max_tokens : prev.max_tokens,
         top_p !== undefined ? top_p : prev.top_p,
+        effEnableThinking !== undefined ? effEnableThinking : prev.enable_thinking,
         application_type !== undefined ? application_type : prev.application_type,
         usage_type !== undefined ? usage_type : prev.usage_type,
         is_active !== undefined ? is_active : prev.is_active,

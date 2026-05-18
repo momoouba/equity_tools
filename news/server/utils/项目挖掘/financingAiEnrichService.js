@@ -11,7 +11,10 @@ const {
   searchMetaSqlAssignments,
   searchMetaSqlValues,
 } = require('./financingAiEnrichSearchMeta');
-const { postDashScopeChatWithSearchAndThinking } = require('./financingAiEnrichDashScopeChat');
+const {
+  postDashScopeChatWithSearchAndThinking,
+  resolveEnrichWantThinking,
+} = require('./financingAiEnrichDashScopeChat');
 const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns');
 
 const PROMPT_INTERFACE = '项目挖掘';
@@ -523,15 +526,18 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
 在启用联网检索的前提下，根据用户消息中给出的企业名称、统一社会信用代码（如有）以及可选的项目/融资侧名称，检索并归纳该工商主体在公开渠道可核对的业务与产品信息，并生成简短企业标签，供列表展示与检索使用。
 
 【信息来源与可信度】
-- 优先采信：国家企业信用信息公示系统、企查查/天眼查等聚合页中可交叉验证的公开信息、企业官网「关于我们/产品」、权威媒体报道、上市公司/发债主体披露文件（若适用）。
+- **product_intro 优先采信（按优先级）**：企业官网「产品/解决方案/关于我们」、权威媒体报道与访谈、产品发布/融资新闻、上市公司或发债主体披露（若适用）；须通过联网检索主动获取上述信息。
+- **企查查/工商侧材料（低优先级，用途受限）**：用户消息中的企查查简介、公示经营范围等，**多数与工商登记经营范围雷同、过宽**，**不得**作为 product_intro 的主依据或照抄；仅用于：核对统一社会信用代码对应主体、现用名/曾用名/更名迁址、排除同名误匹配。
 - 禁止编造：不得虚构融资额、估值、客户名单、订单收入、市占率等无法从公开检索合理支撑的数字与事实；不确定则省略或写笼统表述。
 - **写法边界**：上述渠道仅用于你内心的检索、交叉验证与取舍；**写入 product_intro 时禁止带出出处措辞**，例如「官网显示」「官方网站显示」「公开信息显示」「部分媒体报道」「有媒体报道」「据悉」「有消息称」「资料表明」等——应改用**直接陈述语气**写产品与服务事实，仿佛对产品说明撰稿，而非新闻摘要。
 - **主体对齐（硬性）**：
   - **统一社会信用代码是同一工商主体的主键**：代码不变则视为同一法人延续（含迁址、更名）；不得以「用户给出的名称与企查查现用名不一致」 alone 判定失败。
-  - **更名、迁址、曾用名与投资简称**：用户消息中的「企业名称」可能是现用工商全称、历史名称、投资档案简称或项目简称；项目简称（如有）可作检索别名。须结合信用代码、企查查简介（若有）、联网结果中的曾用名/原名/更名/迁址记录判断是否同一主体。**仅因字面名称不一致，禁止**直接输出「公开信息不足」。
+  - **更名、迁址、曾用名与投资简称**：用户消息中的「企业名称」可能是现用工商全称、历史名称、投资档案简称或项目简称；项目简称（如有）可作检索别名。须结合信用代码、企查查片段（若有，侧重名称与代码而非经营范围文案）、联网结果中的曾用名/原名/更名/迁址记录判断是否同一主体。**仅因字面名称不一致，禁止**直接输出「公开信息不足」。
   - 若提供了**非空**信用代码：以该代码锁定主体并归纳其业务；仅当代码明确指向另一家公司、或存在无法消解的同名歧义且完全无法建立名称与代码关联时，才按【失败与降级】处理。
   - 若信用代码**为空**：须联网检索，用企业名称、项目简称及企查查/官网交叉验证；仍无法唯一确认时才降级。
-- **内容与可核对性**：product_intro 须与**该主体**可核对的主营/产品一致（现用名或曾用名渠道均可）；勿写与检索结果无关的模板行业话术。
+- **内容与可核对性**：product_intro 须与**联网检索到的该主体实际产品/业务**一致；勿把工商经营范围、企查查模板式简介当作真实产品描述。
+- **反幻觉（硬性）**：以统一社会信用代码（若有）锁定主体后，product_intro 的每条关键表述须能在**官网产品页、媒体报道、检索摘要**等中合理对应；不得因名称含「智能/科技/机器人」等词默认写入人形机器人、通用机器人平台、全栈硬件+大模型等泛化话术。
+- **企查查简介勿当产品说明**：即使用户消息附有企查查介绍，若其内容仅为经营范围罗列或宽泛行业表述，应**忽略其业务措辞**，改从联网检索归纳真实产品与场景。
 
 【输出格式（硬性）】
 - 仅输出一个 JSON 对象，不要 markdown、不要代码围栏、不要任何前缀或后缀说明文字。
@@ -560,7 +566,7 @@ const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段
 企业名称（档案/列表用，可能是现用名、曾用名或投资简称）：{{COMPANY_NAME}}
 统一社会信用代码：{{CREDIT_CODE}}
 （可选）项目简称：{{PROJECT_NAME}}
-企查查企业介绍（若有，常含现用名与历史信息，供核对主体，勿照抄出处套话）：
+企查查侧参考（仅辅助核对主体/曾用名；多为经营范围口径，勿据此写 product_intro）：
 {{QCC_COMPANY_INTRO}}
 
 【本条执行要点】
@@ -570,7 +576,8 @@ const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段
    - 仅当确认是另一家无关公司，或完全无法建立名称与代码/业务关联时，才降级。
 
 2）**产品简介质量**
-   - 仅写产品与商业化能力；内容须与**官网、企查查等可核对**的业务一致，勿套与检索结果不符的模板行业话术。
+   - 仅写产品与商业化能力；**以联网检索到的官网/产品/报道为准**，勿照抄企查查或工商经营范围。
+   - 检索时建议组合：{{COMPANY_NAME}}、{{PROJECT_NAME}}（若有）、信用代码、官网域名/品牌名；优先找「产品」「解决方案」「关于我们」类页面。
    - **第一句不得以 {{COMPANY_NAME}} 全称起笔**；勿写「企业名称：」「统一社会信用代码：」等标签行；勿写「官网显示」「媒体报道」「公开信息显示」等出处套话；勿堆砌无对应产品的产学研合作花边。
 
 3）**输出格式**
@@ -625,9 +632,19 @@ function buildFinancingAiTemplateRow(fields) {
 
 function formatQccIntroForTemplate(raw) {
   const s = String(raw || '').trim();
-  if (!s) return '（暂无；请结合信用代码与联网检索，注意曾用名/更名/迁址）';
+  if (!s) return '（暂无；product_intro 请完全依赖联网检索与官网/报道，勿用经营范围凑数）';
   if (s.length <= QCC_INTRO_TEMPLATE_MAX) return s;
   return `${s.slice(0, QCC_INTRO_TEMPLATE_MAX)}…（已截断）`;
+}
+
+const QCC_BLOCK_FALLBACK = `企查查侧参考（仅辅助核对主体/曾用名；多为经营范围口径，勿据此写 product_intro）：
+{{QCC_COMPANY_INTRO}}`;
+
+/** 库内旧版 USER 段若缺少企查查占位符，自动补上，避免模型收不到 qcc_company_intro */
+function ensureUserTemplateHasQccBlock(userTemplate) {
+  const t = String(userTemplate || '');
+  if (/\{\{\s*QCC_COMPANY_INTRO\s*\}\}/i.test(t)) return t;
+  return `${t.trim()}\n\n${QCC_BLOCK_FALLBACK}`;
 }
 
 function fillTemplate(template, row) {
@@ -635,11 +652,12 @@ function fillTemplate(template, row) {
   const credit = row.company_credit_code != null ? String(row.company_credit_code) : '';
   const project = row.project_name != null ? String(row.project_name) : '';
   const qcc = formatQccIntroForTemplate(row.qcc_company_intro);
-  return String(template || '')
+  const tpl = ensureUserTemplateHasQccBlock(template);
+  return String(tpl || '')
     .replace(/\{\{COMPANY_NAME\}\}/g, company)
     .replace(/\{\{CREDIT_CODE\}\}/g, credit)
     .replace(/\{\{PROJECT_NAME\}\}/g, project)
-    .replace(/\{\{QCC_COMPANY_INTRO\}\}/g, qcc);
+    .replace(/\{\{\s*QCC_COMPANY_INTRO\s*\}\}/gi, qcc);
 }
 
 /** 模型正文无法解析为 JSON 时，Docker 日志里打印的原文上限（可用环境变量 AI_PARSE_FAIL_LOG_RAW_MAX 调整） */
@@ -850,8 +868,14 @@ function logFinancingLlmConfigResolved(source, llmModelConfigId, config) {
     return;
   }
   const ep = String(config.api_endpoint || '').trim().slice(0, 120);
+  const think =
+    config.enable_thinking != null && config.enable_thinking !== ''
+      ? Number(config.enable_thinking) === 1
+        ? '1'
+        : '0'
+      : 'env';
   console.log(
-    `[financingAiEnrich] resolveLlmConfig source=${source} llm_model_config_id=${llmModelConfigId ?? 'null'} model=${config.model_name || ''} api_key_hint=${maskApiKeyForLog(config.api_key)} endpoint_raw=${ep || '(empty)'}`
+    `[financingAiEnrich] resolveLlmConfig source=${source} llm_model_config_id=${llmModelConfigId ?? 'null'} model=${config.model_name || ''} enable_thinking=${think} api_key_hint=${maskApiKeyForLog(config.api_key)} endpoint_raw=${ep || '(empty)'}`
   );
   if (source === 'fallback_project_sourcing_analysis') {
     console.warn(
@@ -872,6 +896,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
         temperature: c.temperature,
         max_tokens: c.max_tokens,
         top_p: c.top_p,
+        enable_thinking: c.enable_thinking,
       },
     };
     logFinancingLlmConfigResolved('prompt_join', out.llm_model_config_id, out.config);
@@ -880,7 +905,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
   const idFromPrompt = promptMeta?.ai_model_config_id;
   if (idFromPrompt) {
     const rows = await db.query(
-      `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p
+      `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
        FROM ai_model_config
        WHERE id = ? AND is_active = 1 AND delete_mark = 0 LIMIT 1`,
       [idFromPrompt]
@@ -896,6 +921,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
           temperature: r.temperature,
           max_tokens: r.max_tokens,
           top_p: r.top_p,
+          enable_thinking: r.enable_thinking,
         },
       };
       logFinancingLlmConfigResolved('prompt_ai_model_config_id', out.llm_model_config_id, out.config);
@@ -906,7 +932,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     );
   }
   const fallback = await db.query(
-    `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p
+    `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
      FROM ai_model_config
      WHERE application_type = 'project_sourcing_analysis'
        AND is_active = 1 AND delete_mark = 0
@@ -916,15 +942,16 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     const r = fallback[0];
     const out = {
       llm_model_config_id: r.id,
-      config: {
-        model_name: r.model_name,
-        api_key: r.api_key,
-        api_endpoint: r.api_endpoint,
-        temperature: r.temperature,
-        max_tokens: r.max_tokens,
-        top_p: r.top_p,
-      },
-    };
+        config: {
+          model_name: r.model_name,
+          api_key: r.api_key,
+          api_endpoint: r.api_endpoint,
+          temperature: r.temperature,
+          max_tokens: r.max_tokens,
+          top_p: r.top_p,
+          enable_thinking: r.enable_thinking,
+        },
+      };
     logFinancingLlmConfigResolved('fallback_project_sourcing_analysis', out.llm_model_config_id, out.config);
     return out;
   }
@@ -1650,14 +1677,20 @@ function formatDashScopeHttpError(err) {
 
 /**
  * 调用 DashScope OpenAI 兼容 Chat Completions（联网 + 深度思考，按 400 自动降级）。
- * 环境变量：FINANCING_AI_ENABLE_THINKING（默认 1）、FINANCING_AI_THINKING_BUDGET（默认 8192）、
+ * 环境变量：FINANCING_AI_ENABLE_THINKING（默认 0；模型行 enable_thinking 优先）、FINANCING_AI_THINKING_BUDGET（默认 8192）、
  * FINANCING_AI_CHAT_TIMEOUT_THINKING_MS（默认 240000）。
  * @returns {Promise<{ content: string, used_enable_search: boolean, search_degraded: boolean, used_enable_thinking: boolean, thinking_degraded: boolean }>}
  */
 async function callDashScopeOpenAIChat(systemContent, userContent, config) {
   const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);
-  const temperature =
+  const tempRaw =
     typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.3;
+  const tempCap = parseFloat(process.env.FINANCING_AI_TEMPERATURE_CAP || '0.35');
+  const temperature = Number.isFinite(tempCap)
+    ? Math.min(tempCap, Number.isFinite(tempRaw) ? tempRaw : 0.3)
+    : Number.isFinite(tempRaw)
+      ? tempRaw
+      : 0.3;
   const maxTokensRaw =
     typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
   const maxCap = 32000;
@@ -1686,7 +1719,7 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
       max_tokens,
       top_p,
     },
-    wantThinking: true,
+    wantThinking: resolveEnrichWantThinking(config),
   });
 }
 
@@ -2396,6 +2429,16 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
       '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型'
     );
   }
+  const qccLen = String(rowForTemplate.qcc_company_intro || '').trim().length;
+  const thinkFlag =
+    config.enable_thinking != null && config.enable_thinking !== ''
+      ? Number(config.enable_thinking) === 1
+        ? '1'
+        : '0'
+      : 'env';
+  console.log(
+    `[financingAiEnrich] web_enrich_request company=${String(rowForTemplate.company_name || '').slice(0, 40)} credit=${String(rowForTemplate.company_credit_code || '').slice(0, 18)} qcc_len=${qccLen} enable_thinking=${thinkFlag} user_msg_len=${userContent.length}`
+  );
   const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
   const raw = llmOut.content;
   const parsed = extractJsonObject(raw);

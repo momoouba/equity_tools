@@ -7367,6 +7367,16 @@ async function init() {
       console.warn('补全 AI 增强日志列时出现警告:', migColErr.message);
     }
 
+    try {
+      const { ensureAiModelConfigEnrichFlags } = require('./utils/migrateAiModelConfigEnrichFlags');
+      const nModel = await ensureAiModelConfigEnrichFlags(pool);
+      if (nModel > 0) {
+        console.log('✓ ai_model_config 已添加 enable_thinking（联网 AI 补齐）');
+      }
+    } catch (migModelErr) {
+      console.warn('补全 ai_model_config.enable_thinking 时出现警告:', migModelErr.message);
+    }
+
     console.log('✓ 数据库初始化完成');
   } catch (error) {
     const detail =
@@ -7444,7 +7454,10 @@ async function closePool() {
 async function runPendingMigrations() {
   await ready;
   const { ensureAiEnrichLogSearchColumns } = require('./utils/migrateAiEnrichLogColumns');
-  return ensureAiEnrichLogSearchColumns(pool);
+  const { ensureAiModelConfigEnrichFlags } = require('./utils/migrateAiModelConfigEnrichFlags');
+  const n1 = await ensureAiEnrichLogSearchColumns(pool);
+  const n2 = await ensureAiModelConfigEnrichFlags(pool);
+  return n1 + n2;
 }
 
 module.exports = {

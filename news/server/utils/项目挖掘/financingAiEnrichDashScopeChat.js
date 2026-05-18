@@ -2,17 +2,43 @@
 
 const axios = require('axios');
 
-/** 是否开启深度思考（默认开；设 FINANCING_AI_ENABLE_THINKING=0 关闭） */
+/** 是否开启深度思考（默认关；设 FINANCING_AI_ENABLE_THINKING=1 开启） */
 function isFinancingAiThinkingEnabled() {
-  const v = String(process.env.FINANCING_AI_ENABLE_THINKING ?? '1')
+  const v = String(process.env.FINANCING_AI_ENABLE_THINKING ?? '0')
     .trim()
     .toLowerCase();
-  return v !== '0' && v !== 'false' && v !== 'no';
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** 联网 AI 补齐：模型配置优先，其次环境变量 */
+function resolveEnrichWantThinking(config) {
+  if (config != null && config.enable_thinking != null && config.enable_thinking !== '') {
+    const n = Number(config.enable_thinking);
+    if (n === 0 || n === 1) return n === 1;
+    const s = String(config.enable_thinking).trim().toLowerCase();
+    if (s === '0' || s === 'false' || s === 'no') return false;
+    if (s === '1' || s === 'true' || s === 'yes') return true;
+  }
+  return isFinancingAiThinkingEnabled();
 }
 
 function getFinancingAiThinkingBudget() {
   const n = parseInt(process.env.FINANCING_AI_THINKING_BUDGET || '8192', 10);
   return Number.isFinite(n) ? Math.min(32768, Math.max(512, n)) : 8192;
+}
+
+/** DashScope 联网检索参数（与豆包类「必搜再答」对齐：默认强制检索 + max 策略） */
+function getFinancingAiSearchOptions() {
+  const strategyRaw = String(process.env.FINANCING_AI_SEARCH_STRATEGY || 'max')
+    .trim()
+    .toLowerCase();
+  const allowed = new Set(['turbo', 'max', 'agent']);
+  const search_strategy = allowed.has(strategyRaw) ? strategyRaw : 'max';
+  const forcedRaw = String(process.env.FINANCING_AI_FORCED_SEARCH ?? '1')
+    .trim()
+    .toLowerCase();
+  const forced_search = forcedRaw !== '0' && forcedRaw !== 'false' && forcedRaw !== 'no';
+  return { search_strategy, forced_search };
 }
 
 function getFinancingAiChatTimeoutMs(withThinking) {
@@ -94,7 +120,10 @@ async function postDashScopeChatWithSearchAndThinking({
 
   const buildBody = ({ withSearch, withThinking }) => {
     const body = { ...bodyBase };
-    if (withSearch) body.enable_search = true;
+    if (withSearch) {
+      body.enable_search = true;
+      body.search_options = getFinancingAiSearchOptions();
+    }
     if (withThinking) {
       body.enable_thinking = true;
       body.thinking_budget = thinkingBudget;
@@ -136,8 +165,10 @@ async function postDashScopeChatWithSearchAndThinking({
   const attempt = async ({ withSearch, withThinking }) => {
     const response = await post({ withSearch, withThinking });
     const parts = [];
-    if (withSearch) parts.push('enable_search=1');
-    else parts.push('enable_search=0');
+    if (withSearch) {
+      const so = getFinancingAiSearchOptions();
+      parts.push(`enable_search=1 search_strategy=${so.search_strategy} forced_search=${so.forced_search ? 1 : 0}`);
+    } else parts.push('enable_search=0');
     if (withThinking) parts.push('enable_thinking=1');
     else parts.push('enable_thinking=0');
     logOk(response, parts.join(' '));
@@ -241,6 +272,7 @@ async function postDashScopeChatWithSearchAndThinking({
 
 module.exports = {
   isFinancingAiThinkingEnabled,
+  resolveEnrichWantThinking,
   getFinancingAiThinkingBudget,
   postDashScopeChatWithSearchAndThinking,
 };

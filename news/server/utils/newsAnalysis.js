@@ -3855,7 +3855,7 @@ class NewsAnalysis {
           p.*, 
           m.id as ai_model_config_id_full,
           m.config_name, m.provider, m.model_name, m.api_type, 
-          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p
+          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p, m.enable_thinking
          FROM ai_prompt_config p
          LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.is_active = 1 AND m.delete_mark = 0
          WHERE p.interface_type = ? 
@@ -3894,7 +3894,8 @@ class NewsAnalysis {
             api_endpoint: promptConfig.api_endpoint,
             temperature: promptConfig.temperature,
             max_tokens: promptConfig.max_tokens,
-            top_p: promptConfig.top_p
+            top_p: promptConfig.top_p,
+            enable_thinking: promptConfig.enable_thinking,
           } : null,
           // 返回所有匹配的配置，供调用方选择使用
           all_prompts: prompts.map(p => ({
