@@ -23,6 +23,7 @@ import {
   postPreInvestmentQccFuzzyLookup,
   postPreInvestmentAiEnrich,
   postPreInvestmentCompetitorAnalysisRun,
+  patchCompetitorRelationComparable,
 } from '../../api/竞品分析'
 import { IntroPopoverCell, AiIntroFullText } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
@@ -36,7 +37,6 @@ import '../EnterpriseForm.css'
 
 const FormItem = Form.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
-const relColumns = getCompetitorRelationColumns()
 const BATCH_GAP_MS = 500
 
 function rowLabel(row) {
@@ -117,6 +117,46 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [summaryParams, setSummaryParams] = useState(null)
   const [summaryTitle, setSummaryTitle] = useState('')
+  const [comparableSavingId, setComparableSavingId] = useState(null)
+
+  const handleComparableToggle = useCallback(async (record, checked) => {
+    const subjectId = record.pre_investment_project_id
+    if (!subjectId || !record.id) return
+    setComparableSavingId(record.id)
+    setRelMap((m) => {
+      const list = m[subjectId] || []
+      return {
+        ...m,
+        [subjectId]: list.map((r) =>
+          r.id === record.id ? { ...r, include_in_comparable: checked ? 1 : 0 } : r
+        ),
+      }
+    })
+    try {
+      const res = await patchCompetitorRelationComparable(record.id, checked)
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || '保存失败')
+      }
+    } catch (e) {
+      setRelMap((m) => {
+        const list = m[subjectId] || []
+        return {
+          ...m,
+          [subjectId]: list.map((r) =>
+            r.id === record.id ? { ...r, include_in_comparable: checked ? 0 : 1 } : r
+          ),
+        }
+      })
+      Message.error(e.response?.data?.message || e.message || '保存失败')
+    } finally {
+      setComparableSavingId(null)
+    }
+  }, [])
+
+  const relColumns = useMemo(
+    () => getCompetitorRelationColumns({ onComparableToggle: handleComparableToggle, comparableSavingId }),
+    [handleComparableToggle, comparableSavingId]
+  )
 
   const loadRelations = async (projectId, force = false) => {
     if (!force && relMap[projectId]) return

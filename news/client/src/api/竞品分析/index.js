@@ -113,6 +113,12 @@ export function fetchCompetitorRelations(params) {
   return axios.get(`${BASE}/competitor-analysis/relations`, { params })
 }
 
+export function patchCompetitorRelationComparable(relationId, includeInComparable) {
+  return axios.patch(`${BASE}/competitor-analysis/relations/${relationId}/comparable`, {
+    include_in_comparable: !!includeInComparable,
+  })
+}
+
 export function fetchCompetitorExportYears(params) {
   return axios.get(`${BASE}/competitor-analysis/export/years`, { params })
 }

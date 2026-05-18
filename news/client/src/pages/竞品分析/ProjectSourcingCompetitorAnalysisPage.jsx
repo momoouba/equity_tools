@@ -1,10 +1,11 @@
-﻿import React, { useEffect, useState, useCallback } from 'react'
+﻿import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import { Card, Table, Button, Message, Collapse, Space, Select, Checkbox } from '@arco-design/web-react'
 import axios from '../../utils/axios'
 import {
   fetchCompetitorRelations,
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
+  patchCompetitorRelationComparable,
 } from '../../api/竞品分析'
 import { AiIntroFullText } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
@@ -15,7 +16,6 @@ import {
 } from './competitorRelationColumns'
 
 const CollapseItem = Collapse.Item
-const relColumns = getCompetitorRelationColumns()
 
 /**
  * 竞品分析 — 竞品分析（被投 × 竞品）：主数据来自被投列表，展开查看已落库竞品关系。
@@ -36,6 +36,46 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   const [summaryOpen, setSummaryOpen] = useState(false)
   const [summaryParams, setSummaryParams] = useState(null)
   const [summaryTitle, setSummaryTitle] = useState('')
+  const [comparableSavingId, setComparableSavingId] = useState(null)
+
+  const handleComparableToggle = useCallback(async (record, checked) => {
+    const subjectId = record.invested_enterprise_id
+    if (!subjectId || !record.id) return
+    setComparableSavingId(record.id)
+    setRelMap((m) => {
+      const list = m[subjectId] || []
+      return {
+        ...m,
+        [subjectId]: list.map((r) =>
+          r.id === record.id ? { ...r, include_in_comparable: checked ? 1 : 0 } : r
+        ),
+      }
+    })
+    try {
+      const res = await patchCompetitorRelationComparable(record.id, checked)
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || '保存失败')
+      }
+    } catch (e) {
+      setRelMap((m) => {
+        const list = m[subjectId] || []
+        return {
+          ...m,
+          [subjectId]: list.map((r) =>
+            r.id === record.id ? { ...r, include_in_comparable: checked ? 0 : 1 } : r
+          ),
+        }
+      })
+      Message.error(e.response?.data?.message || e.message || '保存失败')
+    } finally {
+      setComparableSavingId(null)
+    }
+  }, [])
+
+  const relColumns = useMemo(
+    () => getCompetitorRelationColumns({ onComparableToggle: handleComparableToggle, comparableSavingId }),
+    [handleComparableToggle, comparableSavingId]
+  )
 
   const fetchList = useCallback(async () => {
     setLoading(true)
@@ -243,7 +283,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
                 columns={relColumns}
                 pagination={false}
                 border={{ wrapper: true, cell: true }}
-                scroll={{ x: 1200 }}
+                scroll={{ x: 1400 }}
               />
             </CollapseItem>
           ))}
