@@ -1371,6 +1371,12 @@ export default function ProjectSourcingIpoProjectsPage() {
           columns={[
             { title: 'ID', dataIndex: 'id', width: 72 },
             { title: '状态', dataIndex: 'execution_status', width: 88 },
+            {
+              title: '联网状态',
+              dataIndex: 'search_status_label',
+              width: 168,
+              render: (v) => v || '—',
+            },
             { title: '触发类型', dataIndex: 'trigger_type', width: 200, ellipsis: true },
             { title: '触发时间', dataIndex: 'triggered_at', width: 168, render: (v) => formatFinancingDateTime(v) },
             { title: '开始', dataIndex: 'started_at', width: 168, render: (v) => formatFinancingDateTime(v) },

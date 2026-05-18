@@ -10,6 +10,10 @@ const {
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../项目挖掘/financingAiEnrichService');
+const {
+  searchMetaSqlAssignments,
+  searchMetaSqlValues,
+} = require('../项目挖掘/financingAiEnrichSearchMeta');
 
 const IE_AI_VERSION = 'invested_enterprise_web_enrich_v1';
 
@@ -54,8 +58,10 @@ async function markIeAiLogSuccess({
   promptConfigId,
   productIntroStored,
   tagsDisplay,
+  searchMeta = null,
 }) {
   const duration = Date.now() - started;
+  const sm = searchMetaSqlValues(searchMeta);
   await db.execute(
     `UPDATE invested_enterprise_ai_enrich_log SET
        execution_status = 'success',
@@ -68,6 +74,7 @@ async function markIeAiLogSuccess({
        error_message = NULL,
        result_product_intro = ?,
        result_industry_tags_display = ?,
+       ${searchMetaSqlAssignments()},
        updated_at = NOW()
      WHERE id = ?`,
     [
@@ -78,6 +85,7 @@ async function markIeAiLogSuccess({
       IE_AI_VERSION,
       productIntroStored || null,
       tagsDisplay || null,
+      ...sm,
       logId,
     ]
   );
@@ -254,6 +262,7 @@ async function runInvestedEnterpriseAiEnrichTask({
       promptConfigId,
       productIntroStored: llm.productIntroStored,
       tagsDisplay: llm.display,
+      searchMeta: llm.searchMeta,
     });
     const introLen = String(llm.productIntroStored || '').trim().length;
     let tagCount = 0;
@@ -263,8 +272,9 @@ async function runInvestedEnterpriseAiEnrichTask({
     } catch {
       tagCount = 0;
     }
+    const sm = llm.searchMeta || {};
     console.log(
-      `[ieAiEnrich] success enterprise_id=${enterpriseId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name} product_intro_len=${introLen} tags_count=${tagCount}`
+      `[ieAiEnrich] success enterprise_id=${enterpriseId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name} product_intro_len=${introLen} tags_count=${tagCount} invoke=${sm.invoke_mode || 'n/a'} used_thinking=${sm.used_enable_thinking} thinking_degraded=${sm.thinking_degraded}`
     );
     if (introLen === 0 && tagCount === 0) {
       const raw = llm.raw == null ? '' : String(llm.raw);

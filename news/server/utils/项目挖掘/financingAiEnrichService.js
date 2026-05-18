@@ -3,6 +3,15 @@ const FormDataMultipart = require('form-data');
 const crypto = require('crypto');
 const db = require('../../db');
 const newsAnalysis = require('../newsAnalysis');
+const {
+  searchMetaFromLlmCall,
+  searchMetaForBatchFile,
+  searchMetaForReuseDonor,
+  searchMetaForReuseExisting,
+  searchMetaSqlAssignments,
+  searchMetaSqlValues,
+} = require('./financingAiEnrichSearchMeta');
+const { postDashScopeChatWithSearchAndThinking } = require('./financingAiEnrichDashScopeChat');
 
 const PROMPT_INTERFACE = '项目挖掘';
 const PROMPT_TYPE = 'project_sourcing_financing_web_enrich';
@@ -278,8 +287,10 @@ async function markFinancingAiEnrichLogSuccess({
   promptConfigId,
   productIntroStored,
   display,
+  searchMeta = null,
 }) {
   const duration = Date.now() - started;
+  const sm = searchMetaSqlValues(searchMeta);
   await db.execute(
     `UPDATE sourcing_financing_ai_enrich_log SET
        execution_status = 'success',
@@ -292,6 +303,7 @@ async function markFinancingAiEnrichLogSuccess({
        error_message = NULL,
        result_product_intro = ?,
        result_company_tags_display = ?,
+       ${searchMetaSqlAssignments()},
        updated_at = NOW()
      WHERE id = ?`,
     [
@@ -302,6 +314,7 @@ async function markFinancingAiEnrichLogSuccess({
       AI_ENRICH_VERSION,
       productIntroStored || null,
       display || null,
+      ...sm,
       logId,
     ]
   );
@@ -376,6 +389,7 @@ async function persistFinancingAiLlmSuccess({
   llmModelConfigId,
   started,
   taskLog = null,
+  searchMeta = null,
 }) {
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);
@@ -413,6 +427,7 @@ async function persistFinancingAiLlmSuccess({
   );
 
   const duration = Date.now() - started;
+  const sm = searchMetaSqlValues(searchMeta);
   await db.execute(
     `UPDATE sourcing_financing_ai_enrich_log SET
          execution_status = 'success',
@@ -425,6 +440,7 @@ async function persistFinancingAiLlmSuccess({
          error_message = NULL,
          result_product_intro = ?,
          result_company_tags_display = ?,
+         ${searchMetaSqlAssignments()},
          updated_at = NOW()
        WHERE id = ?`,
     [
@@ -435,12 +451,17 @@ async function persistFinancingAiLlmSuccess({
       AI_ENRICH_VERSION,
       productIntroStored || null,
       display || null,
+      ...sm,
       logId,
     ]
   );
 
   const affected = updHdr && typeof updHdr.affectedRows === 'number' ? updHdr.affectedRows : null;
-  const baseOk = `[financingAiEnrich] success event_id=${financingEventId} log_id=${logId} duration_ms=${duration} model=${config.model_name}` +
+  const searchNote =
+    searchMeta && searchMeta.invoke_mode
+      ? ` invoke=${searchMeta.invoke_mode} used_search=${searchMeta.used_enable_search} search_degraded=${searchMeta.search_degraded} used_thinking=${searchMeta.used_enable_thinking} thinking_degraded=${searchMeta.thinking_degraded}`
+      : '';
+  const baseOk = `[financingAiEnrich] success event_id=${financingEventId} log_id=${logId} duration_ms=${duration} model=${config.model_name}${searchNote}` +
     (affected != null ? ` rows_updated=${affected}` : '');
   if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
     financingAiJobLog(taskLog.batchId, taskLog.mode || 'batch_file', 'persist_llm_ok', baseOk.replace(/^\[financingAiEnrich\] /, ''));
@@ -502,7 +523,10 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
 - 优先采信：国家企业信用信息公示系统、企查查/天眼查等聚合页中可交叉验证的公开信息、企业官网「关于我们/产品」、权威媒体报道、上市公司/发债主体披露文件（若适用）。
 - 禁止编造：不得虚构融资额、估值、客户名单、订单收入、市占率等无法从公开检索合理支撑的数字与事实；不确定则省略或写笼统表述。
 - **写法边界**：上述渠道仅用于你内心的检索、交叉验证与取舍；**写入 product_intro 时禁止带出出处措辞**，例如「官网显示」「官方网站显示」「公开信息显示」「部分媒体报道」「有媒体报道」「据悉」「有消息称」「资料表明」等——应改用**直接陈述语气**写产品与服务事实，仿佛对产品说明撰稿，而非新闻摘要。
-- 主体对齐：若企业名称重名或存在集团/子公司关系，须结合统一社会信用代码与检索结果尽量对齐到「该代码对应主体」；仍无法区分时，在 product_intro 首句简要说明「公开信息存在同名主体，以下为基于当前名称与代码检索的归纳」，并避免武断下结论。
+- **主体对齐（硬性）**：
+  - 若用户消息中提供了**非空**统一社会信用代码：必须以该代码在公示系统/企查查等结果中锁定工商主体，product_intro 与 tags 仅描述**该代码对应主体**；检索发现重名、代码与名称明显不符、或无法证明名称与代码同属一体时，**不得**猜测或套模板行业话术，直接按【失败与降级】输出「公开信息不足，无法归纳」。
+  - 若统一社会信用代码**为空或未提供**：必须主动联网检索，用企业全称、项目简称（如有）及官网/企查查页面交叉验证主体；仍无法唯一确认时，同样输出「公开信息不足，无法归纳」，禁止把同名其它公司的业务写入本条记录。
+- **内容与可核对性**：product_intro 须与该企业**官网、企查查等可核对**的主营业务/产品一致；勿写与检索结果无关的泛化赛道描述（如未见机器人业务却写「具身智能」「模块化机器人」等模板话术）。
 
 【输出格式（硬性）】
 - 仅输出一个 JSON 对象，不要 markdown、不要代码围栏、不要任何前缀或后缀说明文字。
@@ -519,24 +543,30 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
 - tags：3～10 条为宜；每条 2～12 字为佳，如「工业机器人」「SaaS 财税」「半导体检测」；避免空泛词如「高科技」「创新企业」单独占一条；可与赛道弱相关但须能概括业务。完全无法归纳时允许 tags 为空数组。
 
 【失败与降级】
-- 若检索无法确认该主体或与企业名称/代码明显不匹配：product_intro 写「公开信息不足，无法归纳」；tags 为 []。
+- 若检索无法确认该主体、存在无法消解的同名歧义、或名称/代码/联网结果明显不匹配：product_intro **固定**写「公开信息不足，无法归纳」（不要用其它变体）；tags 为 []。
 - 仍须输出合法 JSON，不要输出 null 或省略字段。`;
 
 /**
  * 用户侧内置（兜底）：占位符说明 + 任务复述；库中 ---USER--- 为空或缺失时用本模板。
  */
-const BUILTIN_USER_PROMPT = `以下为待增强的一条融资标准层记录中的主体字段（已由系统替换占位符，你只需按要求输出 JSON）：
+const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段（占位符已由系统替换，你只需按要求输出 JSON）：
 
 企业名称：{{COMPANY_NAME}}
 统一社会信用代码：{{CREDIT_CODE}}
 （可选）项目/融资侧名称：{{PROJECT_NAME}}
 
-说明：
-- {{COMPANY_NAME}}、{{CREDIT_CODE}}、{{PROJECT_NAME}} 来自业务库；若代码为空，请主要依据企业名称与联网检索交叉判断主体。
-- product_intro 仅输出归纳正文：**第一句不得以企业全称开头**（表格已有「企业名称」列）；不要复述全称，可直接从「聚焦…主营…面向…」等业务叙述起笔；亦勿出现「企业名称：」「统一社会信用代码：」类标签。
-- product_intro **勿写**「官网显示」「媒体报道」「公开信息显示」等出处用语；勿堆砌高校实验室合作研发类花边，只保留精准的产品与解决方案描述。
-- 请使用联网检索获取公开信息，严格遵循系统消息中的角色、来源、输出 JSON 契约与降级规则。
-- 最终回复只能是形如 {"product_intro":"...","tags":["..."]} 的一个 JSON 对象，不要输出其它任何字符。`;
+【本条执行要点】
+1）**主体核对**
+   - 若 {{CREDIT_CODE}} 非空：必须用该信用代码核对工商主体；重名、代码与名称对不上、或无法证明为同一主体时，product_intro 写「公开信息不足，无法归纳」，tags 为 []。
+   - 若 {{CREDIT_CODE}} 为空：必须联网检索，结合 {{COMPANY_NAME}}、{{PROJECT_NAME}}（如有）及官网/企查查交叉确认；仍无法唯一确认主体时，同样写「公开信息不足，无法归纳」，tags 为 []。
+
+2）**产品简介质量**
+   - 仅写产品与商业化能力；内容须与**官网、企查查等可核对**的业务一致，勿套与检索结果不符的模板行业话术。
+   - **第一句不得以 {{COMPANY_NAME}} 全称起笔**；勿写「企业名称：」「统一社会信用代码：」等标签行；勿写「官网显示」「媒体报道」「公开信息显示」等出处套话；勿堆砌无对应产品的产学研合作花边。
+
+3）**输出格式**
+   - 严格遵循系统消息中的 JSON 契约与字段要求。
+   - 最终回复**只能**是一个 JSON 对象，形如 {"product_intro":"...","tags":["..."]}，不要 markdown、不要代码围栏、不要其它说明文字。`;
 
 function buildBuiltinPromptContentForDb() {
   return `${PROMPT_SECTION_SYSTEM}\n${BUILTIN_SYSTEM_PROMPT}\n${PROMPT_SECTION_USER}\n${BUILTIN_USER_PROMPT}`;
@@ -1484,6 +1514,7 @@ async function pollAndApplyLargeBatchFileFinancingAiEnrich({
           llmModelConfigId,
           started: startedLine,
           taskLog: applyTaskLog,
+          searchMeta: searchMetaForBatchFile(),
         });
         doneLogIds.add(logId);
         applyHandled += 1;
@@ -1583,8 +1614,10 @@ function formatDashScopeHttpError(err) {
 }
 
 /**
- * 调用 DashScope OpenAI 兼容 Chat Completions。
- * 部分模型不支持 enable_search，首次若返回 400 会自动去掉联网参数重试一次（降级为纯模型归纳）。
+ * 调用 DashScope OpenAI 兼容 Chat Completions（联网 + 深度思考，按 400 自动降级）。
+ * 环境变量：FINANCING_AI_ENABLE_THINKING（默认 1）、FINANCING_AI_THINKING_BUDGET（默认 8192）、
+ * FINANCING_AI_CHAT_TIMEOUT_THINKING_MS（默认 240000）。
+ * @returns {Promise<{ content: string, used_enable_search: boolean, search_degraded: boolean, used_enable_thinking: boolean, thinking_degraded: boolean }>}
  */
 async function callDashScopeOpenAIChat(systemContent, userContent, config) {
   const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);
@@ -1592,7 +1625,10 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
     typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.3;
   const maxTokensRaw =
     typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
-  const max_tokens = Number.isFinite(maxTokensRaw) ? Math.min(8000, Math.max(512, maxTokensRaw)) : 4096;
+  const maxCap = 32000;
+  const max_tokens = Number.isFinite(maxTokensRaw)
+    ? Math.min(maxCap, Math.max(1024, maxTokensRaw))
+    : 8192;
   const top_p =
     typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p ?? 0.9;
 
@@ -1602,8 +1638,10 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
     throw new Error('用户侧提示词为空，请检查 ---USER--- 段或占位符替换结果');
   }
 
-  const buildBody = (withSearch) => {
-    const body = {
+  return postDashScopeChatWithSearchAndThinking({
+    endpoint,
+    apiKey: config.api_key,
+    bodyBase: {
       model: config.model_name,
       messages: [
         { role: 'system', content: sys },
@@ -1612,71 +1650,9 @@ async function callDashScopeOpenAIChat(systemContent, userContent, config) {
       temperature,
       max_tokens,
       top_p,
-    };
-    if (withSearch) body.enable_search = true;
-    return body;
-  };
-
-  const post = async (withSearch) => {
-    return axios.post(endpoint, buildBody(withSearch), {
-      headers: {
-        Authorization: `Bearer ${config.api_key}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 120000,
-    });
-  };
-
-  const logChatOk = (response, note) => {
-    try {
-      const ch0 = response?.data?.choices?.[0];
-      const content = ch0?.message?.content;
-      const len = content == null ? 0 : String(content).length;
-      const suffix = note ? ` ${note}` : '';
-      console.log(
-        `[financingAiEnrich] chat_response_ok model=${config.model_name} finish_reason=${ch0?.finish_reason ?? 'n/a'} content_len=${len} id=${response?.data?.id ?? 'n/a'}${suffix}`
-      );
-    } catch {
-      /* ignore log errors */
-    }
-  };
-
-  try {
-    const response = await post(true);
-    logChatOk(response, 'enable_search=1');
-    return response.data?.choices?.[0]?.message?.content;
-  } catch (err) {
-    const status = err.response?.status;
-    const firstDetail = formatDashScopeHttpError(err);
-    const looksLikeWrongUrl =
-      /no static resource/i.test(firstDetail) ||
-      /invalid.*url/i.test(firstDetail) ||
-      /unknown path/i.test(firstDetail);
-    if (status === 400 && looksLikeWrongUrl) {
-      throw new Error(
-        `${firstDetail} 请检查「AI 模型配置」中的接口地址是否为 OpenAI 兼容地址：` +
-          `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions（国际域用 dashscope-intl 等）。` +
-          `勿使用 …/aigc/text-generation/generation 等原生路径。`
-      );
-    }
-    if (status === 400) {
-      console.warn(
-        `[financingAiEnrich] DashScope 400（含 enable_search），将不带联网参数重试一次。详情: ${firstDetail}`
-      );
-      try {
-        const response2 = await post(false);
-        console.warn(
-          '[financingAiEnrich] 已降级为未开启 enable_search；若需联网请更换为支持联网的模型（如 qwen-plus / qwen-max 等）。'
-        );
-        logChatOk(response2, 'enable_search=0_retry');
-        return response2.data?.choices?.[0]?.message?.content;
-      } catch (err2) {
-        const second = formatDashScopeHttpError(err2);
-        throw new Error(`${second}（此前带 enable_search 的请求: ${firstDetail}）`);
-      }
-    }
-    throw new Error(firstDetail);
-  }
+    },
+    wantThinking: true,
+  });
 }
 
 /** 竞品补录：仅从用户文本抽取标签，不启用联网检索。 */
@@ -1827,6 +1803,7 @@ async function runFinancingAiEnrichTask({
         promptConfigId: null,
         productIntroStored: introLog,
         display: dispLog,
+        searchMeta: searchMetaForReuseDonor(),
       });
       const duration = Date.now() - started;
       if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
@@ -1855,6 +1832,7 @@ async function runFinancingAiEnrichTask({
         promptConfigId: null,
         productIntroStored: introLog,
         display: dispLog,
+        searchMeta: searchMetaForReuseExisting(),
       });
       const duration = Date.now() - started;
       if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
@@ -1889,17 +1867,18 @@ async function runFinancingAiEnrichTask({
       throw new Error('未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型');
     }
 
-    const raw = await callDashScopeOpenAIChat(systemContent, userContent, config);
+    const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
     await persistFinancingAiLlmSuccess({
       row,
       financingEventId,
       logId,
-      raw,
+      raw: llmOut.content,
       config,
       promptConfigId,
       llmModelConfigId,
       started,
       taskLog,
+      searchMeta: searchMetaFromLlmCall(llmOut),
     });
   } catch (err) {
     await markFinancingAiEnrichFailed({
@@ -2382,7 +2361,8 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
       '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型'
     );
   }
-  const raw = await callDashScopeOpenAIChat(systemContent, userContent, config);
+  const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
+  const raw = llmOut.content;
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);
   if (!norm) {
@@ -2416,6 +2396,7 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
     productIntroStored,
     display,
     tagsJson,
+    searchMeta: searchMetaFromLlmCall(llmOut),
   };
 }
 
@@ -2428,6 +2409,7 @@ module.exports = {
   eventHasCompleteAiContent,
   runFinancingStyleWebEnrichLlmCall,
   withFinancingAiConcurrency,
+  callDashScopeOpenAIChat,
   PROMPT_INTERFACE,
   PROMPT_TYPE,
   AI_ENRICH_VERSION,

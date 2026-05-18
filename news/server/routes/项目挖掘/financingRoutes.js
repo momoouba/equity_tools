@@ -159,7 +159,9 @@ function registerFinancingRoutes(router) {
 
       const list = await db.query(
         `SELECT id, financing_event_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
-                duration_ms, error_message, result_product_intro, result_company_tags_display, job_trace_id
+                duration_ms, error_message, result_product_intro, result_company_tags_display, job_trace_id,
+                invoke_mode, used_enable_search, search_degraded,
+                used_enable_thinking, thinking_degraded
          FROM sourcing_financing_ai_enrich_log
          WHERE financing_event_id = ?
          ORDER BY id DESC
@@ -167,11 +169,15 @@ function registerFinancingRoutes(router) {
         [feId, pageSize, offset]
       );
 
-      const rows = list.map((r) => ({
-        ...r,
-        id: r.id != null ? String(r.id) : r.id,
-        financing_event_id: r.financing_event_id != null ? String(r.financing_event_id) : r.financing_event_id,
-      }));
+      const { attachSearchStatusLabel } = require('../../utils/项目挖掘/financingAiEnrichSearchMeta');
+      const rows = attachSearchStatusLabel(
+        list.map((r) => ({
+          ...r,
+          id: r.id != null ? String(r.id) : r.id,
+          financing_event_id:
+            r.financing_event_id != null ? String(r.financing_event_id) : r.financing_event_id,
+        }))
+      );
 
       res.json({
         success: true,

@@ -297,7 +297,9 @@ function registerIpoProjectSourcingRoutes(router) {
 
       const list = await db.query(
         `SELECT id, ipo_project_f_id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
-                duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id
+                duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id,
+                invoke_mode, used_enable_search, search_degraded,
+                used_enable_thinking, thinking_degraded
          FROM invested_enterprise_ai_enrich_log
          WHERE ipo_project_f_id = ?
          ORDER BY id DESC
@@ -305,13 +307,16 @@ function registerIpoProjectSourcingRoutes(router) {
         [fid, pageSize, offset]
       );
 
-      const rows = list.map((r) => ({
-        ...r,
-        id: r.id != null ? String(r.id) : r.id,
-        ipo_project_f_id: r.ipo_project_f_id != null ? String(r.ipo_project_f_id) : r.ipo_project_f_id,
-        invested_enterprise_id:
-          r.invested_enterprise_id != null ? String(r.invested_enterprise_id) : r.invested_enterprise_id,
-      }));
+      const { attachSearchStatusLabel } = require('../../utils/项目挖掘/financingAiEnrichSearchMeta');
+      const rows = attachSearchStatusLabel(
+        list.map((r) => ({
+          ...r,
+          id: r.id != null ? String(r.id) : r.id,
+          ipo_project_f_id: r.ipo_project_f_id != null ? String(r.ipo_project_f_id) : r.ipo_project_f_id,
+          invested_enterprise_id:
+            r.invested_enterprise_id != null ? String(r.invested_enterprise_id) : r.invested_enterprise_id,
+        }))
+      );
 
       res.json({
         success: true,

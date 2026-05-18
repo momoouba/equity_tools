@@ -6,6 +6,10 @@ const {
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../项目挖掘/financingAiEnrichService');
+const {
+  searchMetaSqlAssignments,
+  searchMetaSqlValues,
+} = require('../项目挖掘/financingAiEnrichSearchMeta');
 
 const PRE_INV_AI_VERSION = 'pre_investment_project_web_enrich_v1';
 
@@ -22,8 +26,10 @@ async function markPreInvAiLogSuccess({
   promptConfigId,
   productIntroStored,
   tagsDisplay,
+  searchMeta = null,
 }) {
   const duration = Date.now() - started;
+  const sm = searchMetaSqlValues(searchMeta);
   await db.execute(
     `UPDATE invested_enterprise_ai_enrich_log SET
        execution_status = 'success',
@@ -36,6 +42,7 @@ async function markPreInvAiLogSuccess({
        error_message = NULL,
        result_product_intro = ?,
        result_industry_tags_display = ?,
+       ${searchMetaSqlAssignments()},
        updated_at = NOW()
      WHERE id = ?`,
     [
@@ -46,6 +53,7 @@ async function markPreInvAiLogSuccess({
       PRE_INV_AI_VERSION,
       productIntroStored || null,
       tagsDisplay || null,
+      ...sm,
       logId,
     ]
   );
@@ -245,6 +253,7 @@ async function runPreInvestmentProjectAiEnrichTask({
       promptConfigId,
       productIntroStored: llm.productIntroStored,
       tagsDisplay: llm.display,
+      searchMeta: llm.searchMeta,
     });
     console.log(
       `[preInvAiEnrich] success pre_project_id=${preProjectId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name}`

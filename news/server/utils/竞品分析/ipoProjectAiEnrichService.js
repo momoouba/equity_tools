@@ -7,6 +7,10 @@ const {
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../项目挖掘/financingAiEnrichService');
+const {
+  searchMetaSqlAssignments,
+  searchMetaSqlValues,
+} = require('../项目挖掘/financingAiEnrichSearchMeta');
 
 const IPP_AI_VERSION = 'ipo_project_web_enrich_v1';
 const IPP_AI_LOG_TARGET = 'ipo_project';
@@ -57,8 +61,10 @@ async function markIppAiLogSuccess({
   promptConfigId,
   productIntroStored,
   tagsDisplay,
+  searchMeta = null,
 }) {
   const duration = Date.now() - started;
+  const sm = searchMetaSqlValues(searchMeta);
   await db.execute(
     `UPDATE invested_enterprise_ai_enrich_log SET
        execution_status = 'success',
@@ -71,6 +77,7 @@ async function markIppAiLogSuccess({
        error_message = NULL,
        result_product_intro = ?,
        result_industry_tags_display = ?,
+       ${searchMetaSqlAssignments()},
        updated_at = NOW()
      WHERE id = ?`,
     [
@@ -81,6 +88,7 @@ async function markIppAiLogSuccess({
       IPP_AI_VERSION,
       productIntroStored || null,
       tagsDisplay || null,
+      ...sm,
       logId,
     ]
   );
@@ -283,6 +291,7 @@ async function runIpoProjectAiEnrichTask({
       promptConfigId,
       productIntroStored: llm.productIntroStored,
       tagsDisplay: llm.display,
+      searchMeta: llm.searchMeta,
     });
     console.log(
       `[ippAiEnrich] success f_id=${fId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name}`

@@ -108,7 +108,7 @@ function AIConfig() {
 
   const handleAdd = () => {
     setCurrentConfig(null)
-    setFormData({
+    const initial = {
       config_name: '',
       provider: 'alibaba',
       model_name: '',
@@ -120,10 +120,33 @@ function AIConfig() {
       top_p: 1.0,
       application_type: 'news_analysis',
       usage_type: 'content_analysis',
-      is_active: 1
-    })
+      is_active: 1,
+    }
+    initial.api_endpoint = getDefaultEndpoint(initial.provider, initial.usage_type, initial.model_name)
+    setFormData(initial)
     setTestResult(null)
     setShowModal(true)
+  }
+
+  const normalizeConfigForm = (row) => ({
+    config_name: row.config_name || '',
+    provider: row.provider || 'alibaba',
+    model_name: row.model_name || '',
+    api_type: row.api_type || 'chat',
+    api_key: row.api_key || '',
+    api_endpoint: row.api_endpoint != null ? String(row.api_endpoint) : '',
+    temperature: row.temperature != null ? Number(row.temperature) : 0.7,
+    max_tokens: row.max_tokens != null ? Number(row.max_tokens) : 2000,
+    top_p: row.top_p != null ? Number(row.top_p) : 1,
+    application_type: row.application_type || 'news_analysis',
+    usage_type: row.usage_type || 'content_analysis',
+    is_active: row.is_active === 0 || row.is_active === false ? 0 : 1,
+  })
+
+  const applyDefaultEndpointForCreate = (prev, patch) => {
+    const next = { ...prev, ...patch }
+    next.api_endpoint = getDefaultEndpoint(next.provider, next.usage_type, next.model_name)
+    return next
   }
 
   const handleEdit = async (config) => {
@@ -131,7 +154,7 @@ function AIConfig() {
       const response = await axios.get(`/api/ai-config/${config.id}`)
       if (response.data.success) {
         setCurrentConfig(config)
-        setFormData(response.data.data)
+        setFormData(normalizeConfigForm(response.data.data))
         setTestResult(null)
         setShowModal(true)
       }
@@ -368,6 +391,7 @@ function AIConfig() {
           )}
 
           <Modal
+            key={currentConfig?.id || 'new'}
             visible={showModal}
             title={currentConfig ? '编辑AI模型配置' : '新增AI模型配置'}
             onCancel={() => {
@@ -393,8 +417,14 @@ function AIConfig() {
                 <Select
                   value={formData.provider}
                   onChange={(value) => {
-                    handleChange('provider', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(value, formData.usage_type, formData.model_name))
+                    if (currentConfig) {
+                      if (value === formData.provider) return
+                      handleChange('provider', value)
+                      return
+                    }
+                    setFormData((prev) =>
+                      applyDefaultEndpointForCreate(prev, { provider: value, model_name: '' })
+                    )
                   }}
                 >
                   {providers.map(p => (
@@ -408,8 +438,12 @@ function AIConfig() {
                 <Select
                   value={formData.model_name}
                   onChange={(value) => {
-                    handleChange('model_name', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(formData.provider, formData.usage_type, value))
+                    if (value === formData.model_name) return
+                    if (currentConfig) {
+                      handleChange('model_name', value)
+                      return
+                    }
+                    setFormData((prev) => applyDefaultEndpointForCreate(prev, { model_name: value }))
                   }}
                   placeholder="请选择模型"
                 >
@@ -504,8 +538,12 @@ function AIConfig() {
                 <Select
                   value={formData.usage_type}
                   onChange={(value) => {
-                    handleChange('usage_type', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(formData.provider, value, formData.model_name))
+                    if (value === formData.usage_type) return
+                    if (currentConfig) {
+                      handleChange('usage_type', value)
+                      return
+                    }
+                    setFormData((prev) => applyDefaultEndpointForCreate(prev, { usage_type: value }))
                   }}
                 >
                   {usageTypes.map(t => (

@@ -38,7 +38,9 @@ function registerInvestedEnterpriseAiRoutes(router) {
 
       const list = await db.query(
         `SELECT id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
-                duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id
+                duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id,
+                invoke_mode, used_enable_search, search_degraded,
+                used_enable_thinking, thinking_degraded
          FROM invested_enterprise_ai_enrich_log
          WHERE invested_enterprise_id = ?
          ORDER BY id DESC
@@ -46,11 +48,15 @@ function registerInvestedEnterpriseAiRoutes(router) {
         [ieId, pageSize, offset]
       );
 
-      const rows = list.map((r) => ({
-        ...r,
-        id: r.id != null ? String(r.id) : r.id,
-        invested_enterprise_id: r.invested_enterprise_id != null ? String(r.invested_enterprise_id) : r.invested_enterprise_id,
-      }));
+      const { attachSearchStatusLabel } = require('../../utils/项目挖掘/financingAiEnrichSearchMeta');
+      const rows = attachSearchStatusLabel(
+        list.map((r) => ({
+          ...r,
+          id: r.id != null ? String(r.id) : r.id,
+          invested_enterprise_id:
+            r.invested_enterprise_id != null ? String(r.invested_enterprise_id) : r.invested_enterprise_id,
+        }))
+      );
 
       res.json({
         success: true,

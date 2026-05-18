@@ -14,6 +14,7 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
   const [loading, setLoading] = useState(false)
   const [executing, setExecuting] = useState(false)
   const [savedTask, setSavedTask] = useState(null) // 已保存的任务信息
+  const [loadedFromApp, setLoadedFromApp] = useState(null) // 从其他应用回退加载的历史 SQL
 
   useEffect(() => {
     fetchDatabases()
@@ -62,6 +63,7 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
     } else if (name === 'db_config_id' && !value) {
       // 清空选择时，清空已保存的任务
       setSavedTask(null)
+      setLoadedFromApp(null)
       setFormData({
         ...newFormData,
         sql_query: '',
@@ -81,6 +83,7 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
       if (response.data.success && response.data.data) {
         const task = response.data.data
         setSavedTask(task)
+        setLoadedFromApp(task.loaded_from_app || null)
         // 自动填充已保存的SQL和时间
         const cron = task.cron_expression || '0 0 * * *'
         const [minutes, hours] = cron.split(' ')
@@ -95,10 +98,15 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
         }))
       } else {
         setSavedTask(null)
+        setLoadedFromApp(null)
       }
     } catch (error) {
-      // 如果没有找到任务，不显示错误，只是清空已保存的任务
       setSavedTask(null)
+      setLoadedFromApp(null)
+      const msg = error.response?.data?.message
+      if (error.response?.status === 403 && msg) {
+        console.warn('加载定时任务失败:', msg)
+      }
     }
   }
 
@@ -257,6 +265,11 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
             {savedTask && (
               <div style={{ marginTop: '8px', padding: '8px', background: '#e7f3ff', borderRadius: '4px', fontSize: '12px', color: '#0066cc' }}>
                 ✓ 已加载已保存的任务：{savedTask.description || '无描述'}
+                {loadedFromApp ? (
+                  <span style={{ display: 'block', marginTop: 4, color: '#d48806' }}>
+                    已从「{loadedFromApp}」读取历史 SQL；点击保存后将写入「{dataAppName}」
+                  </span>
+                ) : null}
               </div>
             )}
           </div>

@@ -269,7 +269,7 @@ function ListingRecipientsTab() {
             label="发件内容"
             field="listing_mail_types"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
-            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周一展示）、打新日历。"
+            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示，与周六抓取任务对齐）、打新日历。"
           >
             <Select mode="multiple" placeholder="请选择发件内容">
               <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>

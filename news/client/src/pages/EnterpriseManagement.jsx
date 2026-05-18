@@ -1518,7 +1518,7 @@ function EnterpriseManagement({
             unmountOnExit
           >
             <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
-              成功任务展示「产品简介」「企业标签」快照；失败任务显示错误摘要。大模型提示词与配置与融资事件联网 AI 一致，按被投企业全称（及模板内信用代码、项目简称占位）执行。
+              成功任务展示「产品简介」「企业标签」快照及「联网状态」；失败任务显示错误摘要。大模型提示词与融资事件联网 AI 一致。
             </p>
             <Table
               rowKey="id"
@@ -1535,6 +1535,12 @@ function EnterpriseManagement({
                   render: formatFinancingDateTime,
                 },
                 { title: '状态', dataIndex: 'execution_status', width: 88 },
+                {
+                  title: '联网状态',
+                  dataIndex: 'search_status_label',
+                  width: 168,
+                  render: (v) => v || '—',
+                },
                 { title: '耗时(ms)', dataIndex: 'duration_ms', width: 88 },
                 {
                   title: '产品简介(结果)',

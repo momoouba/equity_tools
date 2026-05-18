@@ -4464,6 +4464,64 @@ async function initializeTables(dbPool) {
       console.warn('  竞品分析 data_app 迁移时出现警告:', migErr.message);
     }
 
+    try {
+      const { dedupeCompetitorInvestedEnterprises } = require('./utils/竞品分析/investedEnterpriseDedupe');
+      const deduped = await dedupeCompetitorInvestedEnterprises(dbPool);
+      if (deduped > 0) {
+        console.log(`  ✓ 竞品分析被投企业去重：已删除重复行 ${deduped} 条（信用代码/企业全称/项目简称）`);
+      }
+    } catch (dedupeErr) {
+      console.warn('  竞品分析被投企业去重时出现警告:', dedupeErr.message);
+    }
+
+    // 竞品分析：从项目挖掘复制 enterprise_sync_task（同库同用户各一条，供定时同步写入竞品分析）
+    try {
+      const psName = PS_C.APP_NAME_PROJECT_SOURCING;
+      const caName = CA_C.APP_NAME_COMPETITOR_ANALYSIS;
+      const [psSyncTasks] = await dbPool.query(
+        `SELECT * FROM enterprise_sync_task WHERE data_app_name = ? AND delete_mark = 0`,
+        [psName]
+      );
+      let syncCopied = 0;
+      for (const t of psSyncTasks) {
+        const [exists] = await dbPool.query(
+          `SELECT id FROM enterprise_sync_task
+           WHERE db_config_id = ? AND created_by <=> ? AND data_app_name = ? AND delete_mark = 0`,
+          [t.db_config_id, t.created_by, caName]
+        );
+        if (exists.length) continue;
+        const newId = await generateId('enterprise_sync_task');
+        await dbPool.execute(
+          `INSERT INTO enterprise_sync_task
+           (id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
+            last_execution_time, last_execution_status, last_execution_message, execution_count,
+            created_by, updated_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newId,
+            t.db_config_id,
+            caName,
+            t.sql_query,
+            t.cron_expression,
+            t.description || '',
+            t.is_active,
+            t.last_execution_time,
+            t.last_execution_status,
+            t.last_execution_message,
+            t.execution_count,
+            t.created_by,
+            t.created_by,
+          ]
+        );
+        syncCopied += 1;
+      }
+      if (syncCopied > 0) {
+        console.log(`  ✓ 已从项目挖掘复制 ${syncCopied} 条被投企业定时同步任务至竞品分析`);
+      }
+    } catch (syncMigErr) {
+      console.warn('  复制竞品分析 enterprise_sync_task 时出现警告:', syncMigErr.message);
+    }
+
     // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
     const [legacyPerfApps] = await dbPool.query(
       `SELECT id, app_name FROM applications
@@ -6170,6 +6228,26 @@ async function initializeTables(dbPool) {
     'result_company_tags_display',
     `ADD COLUMN result_company_tags_display VARCHAR(2000) NULL COMMENT '成功时写入的企业标签(AI)展示快照' AFTER result_product_intro`
   );
+  await addSfAiLogCol(
+    'invoke_mode',
+    `ADD COLUMN invoke_mode VARCHAR(40) NULL COMMENT '调用方式：chat_with_search/chat_no_search/batch_file/reuse_donor/reuse_existing' AFTER result_company_tags_display`
+  );
+  await addSfAiLogCol(
+    'used_enable_search',
+    `ADD COLUMN used_enable_search TINYINT(1) NULL COMMENT '成功请求是否带enable_search：1是0否NULL未调模型' AFTER invoke_mode`
+  );
+  await addSfAiLogCol(
+    'search_degraded',
+    `ADD COLUMN search_degraded TINYINT(1) NULL COMMENT '是否联网参数失败后降级：1是0否NULL未调模型' AFTER used_enable_search`
+  );
+  await addSfAiLogCol(
+    'used_enable_thinking',
+    `ADD COLUMN used_enable_thinking TINYINT(1) NULL COMMENT '成功请求是否带enable_thinking：1是0否NULL未调模型' AFTER search_degraded`
+  );
+  await addSfAiLogCol(
+    'thinking_degraded',
+    `ADD COLUMN thinking_degraded TINYINT(1) NULL COMMENT '是否深度思考参数失败后降级：1是0否NULL未调模型' AFTER used_enable_thinking`
+  );
 
   // 项目挖掘：被投企业 invested_enterprises — 与融资事件同一套联网增强提示词产出（产品介绍 + 标签→行业标签落库）
   const addIeEnterpriseAiCol = async (name, ddl) => {
@@ -6289,6 +6367,42 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('创建 invested_enterprise_ai_enrich_log 时出现警告:', err.message);
   }
+
+  const addIeAiLogCol = async (colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invested_enterprise_ai_enrich_log' AND COLUMN_NAME = ?`,
+        [colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE invested_enterprise_ai_enrich_log ${ddl}`);
+        console.log(`✓ invested_enterprise_ai_enrich_log 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 invested_enterprise_ai_enrich_log.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await addIeAiLogCol(
+    'invoke_mode',
+    `ADD COLUMN invoke_mode VARCHAR(40) NULL COMMENT '调用方式：chat_with_search/chat_no_search/batch_file/reuse_donor/reuse_existing' AFTER error_message`
+  );
+  await addIeAiLogCol(
+    'used_enable_search',
+    `ADD COLUMN used_enable_search TINYINT(1) NULL COMMENT '成功请求是否带enable_search：1是0否NULL未调模型' AFTER invoke_mode`
+  );
+  await addIeAiLogCol(
+    'search_degraded',
+    `ADD COLUMN search_degraded TINYINT(1) NULL COMMENT '是否联网参数失败后降级：1是0否NULL未调模型' AFTER used_enable_search`
+  );
+  await addIeAiLogCol(
+    'used_enable_thinking',
+    `ADD COLUMN used_enable_thinking TINYINT(1) NULL COMMENT '成功请求是否带enable_thinking：1是0否NULL未调模型' AFTER search_degraded`
+  );
+  await addIeAiLogCol(
+    'thinking_degraded',
+    `ADD COLUMN thinking_degraded TINYINT(1) NULL COMMENT '是否深度思考参数失败后降级：1是0否NULL未调模型' AFTER used_enable_thinking`
+  );
 
   try {
     await dbPool.query(`

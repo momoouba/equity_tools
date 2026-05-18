@@ -7,9 +7,11 @@ const db = require('../db');
 const { logEnterpriseChange } = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission, checkProjectSourcingPermission } = require('../utils/permissionChecker');
+const { checkCompetitorAnalysisPermission } = require('../utils/竞品分析/competitorAnalysisPermission');
 const {
   DATA_APP_NEWS_SENTIMENT,
   DATA_APP_PROJECT_SOURCING,
+  DATA_APP_COMPETITOR_ANALYSIS,
   normalizeDataAppName,
 } = require('../utils/enterpriseDataApp');
 const { getApplicationIdByAppName } = require('../utils/applicationIdResolve');
@@ -44,6 +46,15 @@ async function assertEnterpriseDataAppPermission(userId, userRole, dataAppName) 
     }
     return;
   }
+  if (dataAppName === DATA_APP_COMPETITOR_ANALYSIS) {
+    const ok = await checkCompetitorAnalysisPermission(userId);
+    if (!ok) {
+      const err = new Error('FORBIDDEN');
+      err.statusCode = 403;
+      throw err;
+    }
+    return;
+  }
   const err = new Error('BAD_APP');
   err.statusCode = 400;
   throw err;
@@ -57,6 +68,39 @@ function parseDataAppNameFromQuery(req) {
 async function resolveListDataAppId(dataAppName) {
   const id = await getApplicationIdByAppName(String(dataAppName || '').trim());
   return id ? String(id) : null;
+}
+
+/** 按库加载定时任务时的应用回退顺序（竞品分析从项目挖掘迁出后，历史 SQL 多在项目挖掘下） */
+function syncTaskAppFallbackOrder(dataAppName) {
+  const name = String(dataAppName || '');
+  if (name === DATA_APP_COMPETITOR_ANALYSIS) {
+    return [DATA_APP_COMPETITOR_ANALYSIS, DATA_APP_PROJECT_SOURCING];
+  }
+  return [name];
+}
+
+async function findEnterpriseSyncTaskByDb(dbConfigId, dataAppName, userId, isAdmin) {
+  for (const app of syncTaskAppFallbackOrder(dataAppName)) {
+    const tasks = await db.query(
+      `SELECT id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
+              last_execution_time, last_execution_status, last_execution_message, execution_count,
+              created_at, updated_at
+       FROM enterprise_sync_task
+       WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1 AND delete_mark = 0
+         ${isAdmin ? '' : 'AND created_by = ?'}
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      isAdmin ? [dbConfigId, app] : [dbConfigId, app, userId]
+    );
+    if (tasks.length > 0) {
+      const task = tasks[0];
+      if (app !== dataAppName) {
+        task.loaded_from_app = app;
+      }
+      return task;
+    }
+  }
+  return null;
 }
 
 /**
@@ -115,15 +159,41 @@ function parseOptionalDecimal(value) {
 
 const COST_ROW_FIELDS = ['investment_cost', 'exited_cost', 'remaining_cost', 'residual_value'];
 
+const INVESTED_ENTERPRISE_AI_SNAPSHOT_APPS = new Set([
+  DATA_APP_PROJECT_SOURCING,
+  DATA_APP_COMPETITOR_ANALYSIS,
+]);
+
+function supportsInvestedEnterpriseAiSnapshot(dataAppName) {
+  return INVESTED_ENTERPRISE_AI_SNAPSHOT_APPS.has(String(dataAppName || ''));
+}
+
+/** 列表/硬删/快照：以 data_app_id 为准，data_app_name 仅兜底 NULL id 的历史行 */
+function investedEnterpriseAppMatchClause(alias, dataAppId, dataAppName) {
+  const p = alias ? `${alias}.` : '';
+  if (dataAppId) {
+    return {
+      sql: `(${p}data_app_id <=> ? OR (${p}data_app_id IS NULL AND ${p}data_app_name = ?))`,
+      params: [dataAppId, dataAppName],
+    };
+  }
+  return {
+    sql: `${p}data_app_name = ?`,
+    params: [dataAppName],
+  };
+}
+
 /**
  * 同步前硬删除：指定用户 + 应用下 invested_enterprises 全量物理删除（含变更日志），再全量重写入。
  * 与「先清空再导入」一致，避免旧行残留、UPDATE 未覆盖字段导致空值。
  */
 async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppName) {
   if (!creatorUserId) return 0;
+  const dataAppId = await getApplicationIdByAppName(dataAppName);
+  const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
   const rows = await db.query(
-    'SELECT id FROM invested_enterprises WHERE creator_user_id = ? AND data_app_name = ?',
-    [creatorUserId, dataAppName]
+    `SELECT id FROM invested_enterprises WHERE creator_user_id = ? AND ${appMatch}`,
+    [creatorUserId, ...appParams]
   );
   if (!rows.length) return 0;
   const ids = rows.map((r) => r.id);
@@ -137,8 +207,8 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
     );
   }
   const del = await db.execute(
-    'DELETE FROM invested_enterprises WHERE creator_user_id = ? AND data_app_name = ?',
-    [creatorUserId, dataAppName]
+    `DELETE FROM invested_enterprises WHERE creator_user_id = ? AND ${appMatch}`,
+    [creatorUserId, ...appParams]
   );
   return del.affectedRows || 0;
 }
@@ -154,36 +224,42 @@ function sqlNormInvestedEnterpriseUnifiedCredit(alias) {
  * @returns {Promise<string|null>} batch_id 或 null
  */
 async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId, dataAppName) {
-  if (!creatorUserId || String(dataAppName || '') !== DATA_APP_PROJECT_SOURCING) {
+  if (!creatorUserId || !supportsInvestedEnterpriseAiSnapshot(dataAppName)) {
     return null;
   }
+  const dataAppId = await getApplicationIdByAppName(dataAppName);
+  const { sql: appMatchBare, params: appParamsBare } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
   const batchId = crypto.randomUUID();
   const normE = sqlNormInvestedEnterpriseUnifiedCredit('e');
   const normBare = sqlNormInvestedEnterpriseUnifiedCredit('');
+  const enrichPickOrder = `(CASE WHEN NULLIF(TRIM(ai_product_intro),'') IS NOT NULL THEN 4 ELSE 0 END
+    + CASE WHEN NULLIF(TRIM(qcc_company_intro),'') IS NOT NULL THEN 2 ELSE 0 END
+    + CASE WHEN NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL THEN 1 ELSE 0 END) DESC, id DESC`;
   const ins = await db.execute(
     `INSERT INTO invested_enterprise_ai_sync_snapshot
      (batch_id, creator_user_id, data_app_name, unified_credit_code,
       ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
       ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version,
       qcc_company_intro)
-     SELECT ?, e.creator_user_id, e.data_app_name, ${normE},
+     SELECT ?, e.creator_user_id, ?, ${normE},
             e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
             e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version,
             e.qcc_company_intro
      FROM invested_enterprises e
      INNER JOIN (
-       SELECT creator_user_id, data_app_name, ${normBare} AS ucc, MAX(id) AS mid
+       SELECT creator_user_id, ${normBare} AS ucc,
+         CAST(SUBSTRING_INDEX(GROUP_CONCAT(id ORDER BY ${enrichPickOrder} SEPARATOR ','), ',', 1) AS UNSIGNED) AS mid
        FROM invested_enterprises
-       WHERE creator_user_id = ? AND data_app_name = ?
+       WHERE creator_user_id = ? AND ${appMatchBare}
          AND delete_mark = 0
          AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
-       GROUP BY creator_user_id, data_app_name, ${normBare}
+       GROUP BY creator_user_id, ${normBare}
      ) t ON e.id = t.mid`,
-    [batchId, creatorUserId, dataAppName]
+    [batchId, dataAppName, creatorUserId, ...appParamsBare]
   );
   const n = ins.affectedRows != null ? ins.affectedRows : 0;
   console.log(
-    `[企业同步任务] 项目挖掘 AI 快照已写入 batch_id=${batchId} rows=${n}（按统一社会信用代码，供硬删后回填）`
+    `[企业同步任务] ${dataAppName} AI 快照已写入 batch_id=${batchId} rows=${n}（按统一社会信用代码，供硬删后回填）`
   );
   return batchId;
 }
@@ -192,7 +268,7 @@ async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId,
  * 全量插入完成后，按统一社会信用代码将快照中的 AI 列写回新行。
  */
 async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUserId, dataAppName) {
-  if (!batchId || !creatorUserId || String(dataAppName || '') !== DATA_APP_PROJECT_SOURCING) {
+  if (!batchId || !creatorUserId || !supportsInvestedEnterpriseAiSnapshot(dataAppName)) {
     return 0;
   }
   const normT = sqlNormInvestedEnterpriseUnifiedCredit('t');
@@ -218,7 +294,7 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
     [batchId, creatorUserId, dataAppName]
   );
   const affected = res.affectedRows != null ? res.affectedRows : 0;
-  console.log(`[企业同步任务] 项目挖掘 AI 快照回填完成 batch_id=${batchId} affected_rows=${affected}`);
+  console.log(`[企业同步任务] ${dataAppName} AI 快照回填完成 batch_id=${batchId} affected_rows=${affected}`);
   return affected;
 }
 
@@ -1671,6 +1747,7 @@ async function executeSyncTask(
   let synced = 0;
   let updated = 0;
   let inserted = 0;
+  const targetDataAppId = await getApplicationIdByAppName(targetDataAppName);
 
   for (const row of externalData) {
     // 动态映射所有字段（支持不同的字段名格式）
@@ -1704,7 +1781,8 @@ async function executeSyncTask(
       enterpriseData.exit_status = row.exit_status || row.exitStatus || '未退出';
     }
     if (
-      targetDataAppName === DATA_APP_PROJECT_SOURCING &&
+      (targetDataAppName === DATA_APP_PROJECT_SOURCING ||
+        targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) &&
       (enterpriseData.entity_type === undefined ||
         enterpriseData.entity_type === null ||
         String(enterpriseData.entity_type).trim() === '')
@@ -1728,11 +1806,16 @@ async function executeSyncTask(
     let existing = null;
     if (enterpriseData.unified_credit_code && enterpriseData.unified_credit_code.trim() !== '') {
       // 如果有统一信用代码，根据统一信用代码查找（同应用、同创建人，避免误更新他人数据）
-      const matchParams = [enterpriseData.unified_credit_code, targetDataAppName];
+      const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause(
+        '',
+        targetDataAppId,
+        targetDataAppName
+      );
+      const matchParams = [enterpriseData.unified_credit_code, ...appParams];
       let matchSql = `SELECT id, project_number, exit_status FROM invested_enterprises 
          WHERE unified_credit_code = ? 
          AND delete_mark = 0
-         AND data_app_name = ?`;
+         AND ${appMatch}`;
       if (syncOwnerUserId) {
         matchSql += ' AND creator_user_id = ?';
         matchParams.push(syncOwnerUserId);
@@ -1888,9 +1971,8 @@ async function executeSyncTask(
         insertValues.push(targetDataAppName);
       }
       if (!insertFields.includes('data_app_id')) {
-        const syncAppId = await getApplicationIdByAppName(targetDataAppName);
         insertFields.push('data_app_id');
-        insertValues.push(syncAppId || null);
+        insertValues.push(targetDataAppId || null);
       }
       if (syncOwnerUserId && !insertFields.includes('creator_user_id')) {
         insertFields.push('creator_user_id');
@@ -2017,6 +2099,18 @@ async function executeSyncTask(
   }
   await pruneOldInvestedEnterpriseAiSnapshots();
 
+  if (targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) {
+    try {
+      const { dedupeCompetitorInvestedEnterprises } = require('../utils/竞品分析/investedEnterpriseDedupe');
+      const dedupedAfterSync = await dedupeCompetitorInvestedEnterprises();
+      if (dedupedAfterSync > 0) {
+        console.log(`[企业同步任务] 竞品分析去重：已删除重复行 ${dedupedAfterSync} 条`);
+      }
+    } catch (dedupeErr) {
+      console.warn('[企业同步任务] 竞品分析去重失败（不影响同步结果）', dedupeErr.message);
+    }
+  }
+
   const snapshotNote =
     aiSnapshotBatchId != null
       ? `；AI 快照 batch_id=${aiSnapshotBatchId}，已回填 ${aiSnapshotRestored} 行`
@@ -2061,20 +2155,10 @@ router.get('/sync-task/by-db/:db_config_id', async (req, res) => {
       throw e;
     }
 
-    const tasks = await db.query(
-      `SELECT id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active, 
-              last_execution_time, last_execution_status, last_execution_message, execution_count,
-              created_at, updated_at
-       FROM enterprise_sync_task 
-       WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1
-         ${isAdmin ? '' : 'AND created_by = ?'}
-       ORDER BY created_at DESC 
-       LIMIT 1`,
-      isAdmin ? [db_config_id, dataAppName] : [db_config_id, dataAppName, userId]
-    );
+    const task = await findEnterpriseSyncTaskByDb(db_config_id, dataAppName, userId, isAdmin);
 
-    if (tasks.length > 0) {
-      res.json({ success: true, data: tasks[0] });
+    if (task) {
+      res.json({ success: true, data: task });
     } else {
       res.json({ success: true, data: null });
     }
@@ -2232,17 +2316,14 @@ router.post('/sync-task/execute', [
     // 如果未提供SQL查询语句，从当前用户已保存的任务中读取（按应用）
     let finalSqlQuery = sql_query;
     if (!finalSqlQuery || finalSqlQuery.trim() === '') {
-      const tasks = await db.query(
-        `SELECT sql_query FROM enterprise_sync_task WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1 ${isAdmin ? '' : 'AND created_by = ?'}`,
-        isAdmin ? [db_config_id, dataAppName] : [db_config_id, dataAppName, userId]
-      );
-      if (tasks.length === 0) {
+      const saved = await findEnterpriseSyncTaskByDb(db_config_id, dataAppName, userId, isAdmin);
+      if (!saved) {
         return res.status(400).json({
           success: false,
           message: '该数据库配置下没有已保存的定时任务（当前应用），请先保存任务或提供SQL查询语句'
         });
       }
-      finalSqlQuery = tasks[0].sql_query;
+      finalSqlQuery = saved.sql_query;
       if (!finalSqlQuery || finalSqlQuery.trim() === '') {
         return res.status(400).json({ 
           success: false, 

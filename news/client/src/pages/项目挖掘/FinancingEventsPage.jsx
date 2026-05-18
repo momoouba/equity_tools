@@ -712,7 +712,7 @@ export default function FinancingEventsPage() {
         unmountOnExit
       >
         <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
-          成功任务会在下列表中展示「产品简介」「企业标签」快照，与服务端控制台 success 日志一致；失败任务仅显示错误摘要。
+          成功任务会在下列表中展示「产品简介」「企业标签」快照；「联网状态」记录本次是否带 enable_search、是否降级及批量/复用等调用方式。失败任务仅显示错误摘要。
         </p>
         <Table
           rowKey="id"
@@ -724,6 +724,12 @@ export default function FinancingEventsPage() {
           columns={[
             { title: '触发时间', dataIndex: 'triggered_at', width: 168, render: formatFinancingDateTime },
             { title: '状态', dataIndex: 'execution_status', width: 88 },
+            {
+              title: '联网状态',
+              dataIndex: 'search_status_label',
+              width: 168,
+              render: (v) => v || '—',
+            },
             { title: '耗时(ms)', dataIndex: 'duration_ms', width: 88 },
             {
               title: '产品简介(结果)',
