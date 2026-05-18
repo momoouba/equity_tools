@@ -7,6 +7,7 @@ const {
 } = require('../applicationIdResolve');
 const {
   runFinancingStyleWebEnrichLlmCall,
+  buildFinancingAiTemplateRow,
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../项目挖掘/financingAiEnrichService');
@@ -14,6 +15,7 @@ const {
   searchMetaSqlAssignments,
   searchMetaSqlValues,
 } = require('../项目挖掘/financingAiEnrichSearchMeta');
+const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns');
 
 const IE_AI_VERSION = 'invested_enterprise_web_enrich_v1';
 
@@ -62,7 +64,8 @@ async function markIeAiLogSuccess({
 }) {
   const duration = Date.now() - started;
   const sm = searchMetaSqlValues(searchMeta);
-  await db.execute(
+  await executeWithAiEnrichLogColumns(
+    db,
     `UPDATE invested_enterprise_ai_enrich_log SET
        execution_status = 'success',
        finished_at = NOW(),
@@ -210,7 +213,8 @@ async function runInvestedEnterpriseAiEnrichTask({
     );
 
     const ev = await db.query(
-      `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, delete_mark
+      `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation,
+              qcc_company_intro, delete_mark
        FROM invested_enterprises WHERE id = ? LIMIT 1`,
       [enterpriseId]
     );
@@ -219,11 +223,7 @@ async function runInvestedEnterpriseAiEnrichTask({
     }
     row = ev[0];
 
-    const rowForTemplate = {
-      company_name: String(row.enterprise_full_name || '').trim(),
-      company_credit_code: String(row.unified_credit_code || '').trim(),
-      project_name: String(row.project_abbreviation || '').trim(),
-    };
+    const rowForTemplate = buildFinancingAiTemplateRow(row);
     if (!rowForTemplate.company_name) {
       throw new Error('被投企业全称为空，无法调用模型');
     }

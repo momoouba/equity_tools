@@ -391,6 +391,9 @@ async function startServer() {
     try {
       await db.query('SELECT 1');
       console.log('✓ 数据库连接已就绪');
+      if (typeof db.runPendingMigrations === 'function') {
+        await db.runPendingMigrations();
+      }
       await restoreStoredConfigFiles();
     } catch (dbError) {
       console.error('✗ 数据库初始化失败:', formatStartupError(dbError));

@@ -7357,6 +7357,16 @@ async function init() {
       console.warn('创建 news_sentiment 索引时出现警告:', err.message);
     }
 
+    try {
+      const { ensureAiEnrichLogSearchColumns } = require('./utils/migrateAiEnrichLogColumns');
+      const n = await ensureAiEnrichLogSearchColumns(pool);
+      if (n > 0) {
+        console.log(`✓ AI 增强日志表联网/思考列补全 ${n} 列`);
+      }
+    } catch (migColErr) {
+      console.warn('补全 AI 增强日志列时出现警告:', migColErr.message);
+    }
+
     console.log('✓ 数据库初始化完成');
   } catch (error) {
     const detail =
@@ -7431,9 +7441,16 @@ async function closePool() {
   await pool.end();
 }
 
+async function runPendingMigrations() {
+  await ready;
+  const { ensureAiEnrichLogSearchColumns } = require('./utils/migrateAiEnrichLogColumns');
+  return ensureAiEnrichLogSearchColumns(pool);
+}
+
 module.exports = {
   query,
   execute,
   getConnection,
-  closePool
+  closePool,
+  runPendingMigrations,
 };

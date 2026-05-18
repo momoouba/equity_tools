@@ -12,6 +12,7 @@ const {
   searchMetaSqlValues,
 } = require('./financingAiEnrichSearchMeta');
 const { postDashScopeChatWithSearchAndThinking } = require('./financingAiEnrichDashScopeChat');
+const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns');
 
 const PROMPT_INTERFACE = '项目挖掘';
 const PROMPT_TYPE = 'project_sourcing_financing_web_enrich';
@@ -291,7 +292,8 @@ async function markFinancingAiEnrichLogSuccess({
 }) {
   const duration = Date.now() - started;
   const sm = searchMetaSqlValues(searchMeta);
-  await db.execute(
+  await executeWithAiEnrichLogColumns(
+    db,
     `UPDATE sourcing_financing_ai_enrich_log SET
        execution_status = 'success',
        finished_at = NOW(),
@@ -428,7 +430,8 @@ async function persistFinancingAiLlmSuccess({
 
   const duration = Date.now() - started;
   const sm = searchMetaSqlValues(searchMeta);
-  await db.execute(
+  await executeWithAiEnrichLogColumns(
+    db,
     `UPDATE sourcing_financing_ai_enrich_log SET
          execution_status = 'success',
          finished_at = NOW(),
@@ -524,9 +527,11 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
 - 禁止编造：不得虚构融资额、估值、客户名单、订单收入、市占率等无法从公开检索合理支撑的数字与事实；不确定则省略或写笼统表述。
 - **写法边界**：上述渠道仅用于你内心的检索、交叉验证与取舍；**写入 product_intro 时禁止带出出处措辞**，例如「官网显示」「官方网站显示」「公开信息显示」「部分媒体报道」「有媒体报道」「据悉」「有消息称」「资料表明」等——应改用**直接陈述语气**写产品与服务事实，仿佛对产品说明撰稿，而非新闻摘要。
 - **主体对齐（硬性）**：
-  - 若用户消息中提供了**非空**统一社会信用代码：必须以该代码在公示系统/企查查等结果中锁定工商主体，product_intro 与 tags 仅描述**该代码对应主体**；检索发现重名、代码与名称明显不符、或无法证明名称与代码同属一体时，**不得**猜测或套模板行业话术，直接按【失败与降级】输出「公开信息不足，无法归纳」。
-  - 若统一社会信用代码**为空或未提供**：必须主动联网检索，用企业全称、项目简称（如有）及官网/企查查页面交叉验证主体；仍无法唯一确认时，同样输出「公开信息不足，无法归纳」，禁止把同名其它公司的业务写入本条记录。
-- **内容与可核对性**：product_intro 须与该企业**官网、企查查等可核对**的主营业务/产品一致；勿写与检索结果无关的泛化赛道描述（如未见机器人业务却写「具身智能」「模块化机器人」等模板话术）。
+  - **统一社会信用代码是同一工商主体的主键**：代码不变则视为同一法人延续（含迁址、更名）；不得以「用户给出的名称与企查查现用名不一致」 alone 判定失败。
+  - **更名、迁址、曾用名与投资简称**：用户消息中的「企业名称」可能是现用工商全称、历史名称、投资档案简称或项目简称；项目简称（如有）可作检索别名。须结合信用代码、企查查简介（若有）、联网结果中的曾用名/原名/更名/迁址记录判断是否同一主体。**仅因字面名称不一致，禁止**直接输出「公开信息不足」。
+  - 若提供了**非空**信用代码：以该代码锁定主体并归纳其业务；仅当代码明确指向另一家公司、或存在无法消解的同名歧义且完全无法建立名称与代码关联时，才按【失败与降级】处理。
+  - 若信用代码**为空**：须联网检索，用企业名称、项目简称及企查查/官网交叉验证；仍无法唯一确认时才降级。
+- **内容与可核对性**：product_intro 须与**该主体**可核对的主营/产品一致（现用名或曾用名渠道均可）；勿写与检索结果无关的模板行业话术。
 
 【输出格式（硬性）】
 - 仅输出一个 JSON 对象，不要 markdown、不要代码围栏、不要任何前缀或后缀说明文字。
@@ -543,7 +548,8 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
 - tags：3～10 条为宜；每条 2～12 字为佳，如「工业机器人」「SaaS 财税」「半导体检测」；避免空泛词如「高科技」「创新企业」单独占一条；可与赛道弱相关但须能概括业务。完全无法归纳时允许 tags 为空数组。
 
 【失败与降级】
-- 若检索无法确认该主体、存在无法消解的同名歧义、或名称/代码/联网结果明显不匹配：product_intro **固定**写「公开信息不足，无法归纳」（不要用其它变体）；tags 为 []。
+- **仅当**经信用代码与联网/企查查仍无法确认主体、或确认是另一家无关公司时：product_intro **固定**写「公开信息不足，无法归纳」；tags 为 []。
+- **不得**因「档案名称≠企查查现用名」但信用代码一致且可查更名关系，就误判为信息不足。
 - 仍须输出合法 JSON，不要输出 null 或省略字段。`;
 
 /**
@@ -551,14 +557,17 @@ const BUILTIN_SYSTEM_PROMPT = `你是「项目挖掘-融资信息联网增强」
  */
 const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段（占位符已由系统替换，你只需按要求输出 JSON）：
 
-企业名称：{{COMPANY_NAME}}
+企业名称（档案/列表用，可能是现用名、曾用名或投资简称）：{{COMPANY_NAME}}
 统一社会信用代码：{{CREDIT_CODE}}
-（可选）项目/融资侧名称：{{PROJECT_NAME}}
+（可选）项目简称：{{PROJECT_NAME}}
+企查查企业介绍（若有，常含现用名与历史信息，供核对主体，勿照抄出处套话）：
+{{QCC_COMPANY_INTRO}}
 
 【本条执行要点】
-1）**主体核对**
-   - 若 {{CREDIT_CODE}} 非空：必须用该信用代码核对工商主体；重名、代码与名称对不上、或无法证明为同一主体时，product_intro 写「公开信息不足，无法归纳」，tags 为 []。
-   - 若 {{CREDIT_CODE}} 为空：必须联网检索，结合 {{COMPANY_NAME}}、{{PROJECT_NAME}}（如有）及官网/企查查交叉确认；仍无法唯一确认主体时，同样写「公开信息不足，无法归纳」，tags 为 []。
+1）**主体核对（含更名、迁址）**
+   - 信用代码非空时：以代码为准锁定工商主体；{{COMPANY_NAME}} 与企查查/联网「现用名」不一致时，应检索曾用名、更名、迁址、项目简称是否指向同一主体，**不得**仅因字面不同就写「公开信息不足」。
+   - 信用代码为空时：联网检索 {{COMPANY_NAME}}、{{PROJECT_NAME}} 及企查查片段；仍无法唯一确认时才写「公开信息不足，无法归纳」，tags 为 []。
+   - 仅当确认是另一家无关公司，或完全无法建立名称与代码/业务关联时，才降级。
 
 2）**产品简介质量**
    - 仅写产品与商业化能力；内容须与**官网、企查查等可核对**的业务一致，勿套与检索结果不符的模板行业话术。
@@ -597,14 +606,40 @@ function resolveFinancingAiPromptSections(storedContent) {
   };
 }
 
+const QCC_INTRO_TEMPLATE_MAX = Math.max(
+  2000,
+  Math.min(12000, parseInt(process.env.FINANCING_AI_QCC_INTRO_MAX_CHARS || '6000', 10) || 6000)
+);
+
+/** 供被投/投前/底层/融资等场景组装 LLM 用户消息占位符 */
+function buildFinancingAiTemplateRow(fields) {
+  const f = fields || {};
+  return {
+    company_name: String(f.company_name || f.enterprise_full_name || f.company || '').trim(),
+    company_credit_code: String(f.company_credit_code || f.unified_credit_code || '').trim(),
+    project_name: String(f.project_name || f.project_abbreviation || '').trim(),
+    qcc_company_intro:
+      f.qcc_company_intro != null ? String(f.qcc_company_intro).trim() : '',
+  };
+}
+
+function formatQccIntroForTemplate(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '（暂无；请结合信用代码与联网检索，注意曾用名/更名/迁址）';
+  if (s.length <= QCC_INTRO_TEMPLATE_MAX) return s;
+  return `${s.slice(0, QCC_INTRO_TEMPLATE_MAX)}…（已截断）`;
+}
+
 function fillTemplate(template, row) {
   const company = row.company_name != null ? String(row.company_name) : '';
   const credit = row.company_credit_code != null ? String(row.company_credit_code) : '';
   const project = row.project_name != null ? String(row.project_name) : '';
+  const qcc = formatQccIntroForTemplate(row.qcc_company_intro);
   return String(template || '')
     .replace(/\{\{COMPANY_NAME\}\}/g, company)
     .replace(/\{\{CREDIT_CODE\}\}/g, credit)
-    .replace(/\{\{PROJECT_NAME\}\}/g, project);
+    .replace(/\{\{PROJECT_NAME\}\}/g, project)
+    .replace(/\{\{QCC_COMPANY_INTRO\}\}/g, qcc);
 }
 
 /** 模型正文无法解析为 JSON 时，Docker 日志里打印的原文上限（可用环境变量 AI_PARSE_FAIL_LOG_RAW_MAX 调整） */
@@ -2408,6 +2443,7 @@ module.exports = {
   reuseFinancingAiForEventId,
   eventHasCompleteAiContent,
   runFinancingStyleWebEnrichLlmCall,
+  buildFinancingAiTemplateRow,
   withFinancingAiConcurrency,
   callDashScopeOpenAIChat,
   PROMPT_INTERFACE,

@@ -4,6 +4,7 @@ const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
 const { getApplicationIdByAppName, isIpoProjectCompetitorAnalysisApp } = require('../applicationIdResolve');
 const {
   runFinancingStyleWebEnrichLlmCall,
+  buildFinancingAiTemplateRow,
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../项目挖掘/financingAiEnrichService');
@@ -11,6 +12,7 @@ const {
   searchMetaSqlAssignments,
   searchMetaSqlValues,
 } = require('../项目挖掘/financingAiEnrichSearchMeta');
+const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns');
 
 const IPP_AI_VERSION = 'ipo_project_web_enrich_v1';
 const IPP_AI_LOG_TARGET = 'ipo_project';
@@ -65,7 +67,8 @@ async function markIppAiLogSuccess({
 }) {
   const duration = Date.now() - started;
   const sm = searchMetaSqlValues(searchMeta);
-  await db.execute(
+  await executeWithAiEnrichLogColumns(
+    db,
     `UPDATE invested_enterprise_ai_enrich_log SET
        execution_status = 'success',
        finished_at = NOW(),
@@ -210,7 +213,7 @@ async function runIpoProjectAiEnrichTask({
     );
 
     const ev = await db.query(
-      `SELECT f_id, company, project_name, unified_credit_code, data_app_id, F_DeleteMark
+      `SELECT f_id, company, project_name, unified_credit_code, qcc_company_intro, data_app_id, F_DeleteMark
        FROM ipo_project WHERE f_id = ? LIMIT 1`,
       [fId]
     );
@@ -222,11 +225,7 @@ async function runIpoProjectAiEnrichTask({
       throw new Error('仅支持竞品分析应用下的底层项目');
     }
 
-    const rowForTemplate = {
-      company_name: String(row.company || '').trim(),
-      company_credit_code: String(row.unified_credit_code || '').trim(),
-      project_name: String(row.project_name || '').trim(),
-    };
+    const rowForTemplate = buildFinancingAiTemplateRow(row);
     if (!rowForTemplate.company_name) {
       throw new Error('企业全称为空，无法调用模型');
     }
