@@ -33,6 +33,10 @@ const {
   dedupeRelations,
   hydrateRelationRow,
 } = require('../../utils/竞品分析/competitorAnalysisSummaryService');
+const {
+  upsertComparablePref,
+  competitorKeyFromRelationRow,
+} = require('../../utils/竞品分析/competitorComparablePrefService');
 const CA_C = require('../../utils/竞品分析/constants');
 
 function clientIpFromReq(req) {
@@ -364,11 +368,11 @@ function registerCompetitorMatchRoutes(router) {
       const list = ieId
         ? await db.query(
             `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
-                    competitor_display_name, unified_credit_code, competitor_weak_key,
+                    competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
-                    data_sources_json, financing_amount_text,
+                    data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                    created_at
+                    include_in_comparable, created_at
              FROM sourcing_competitor_relation
              WHERE invested_enterprise_id = ? AND delete_mark = 0
                AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
@@ -378,11 +382,11 @@ function registerCompetitorMatchRoutes(router) {
           )
         : await db.query(
             `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
-                    competitor_display_name, unified_credit_code, competitor_weak_key,
+                    competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
-                    data_sources_json, financing_amount_text,
+                    data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                    created_at
+                    include_in_comparable, created_at
              FROM sourcing_competitor_relation
              WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
              ORDER BY relevance_score DESC, created_at DESC
@@ -401,6 +405,63 @@ function registerCompetitorMatchRoutes(router) {
       res.status(code).json({ success: false, message: e.message || '查询失败' });
     }
   });
+
+  router.patch(
+    '/competitor-analysis/relations/:relationId/comparable',
+    requireCompetitorAnalysisAccess,
+    async (req, res) => {
+      try {
+        const relationId = String(req.params.relationId || '').trim();
+        const includeInComparable = !!req.body?.include_in_comparable;
+        if (!relationId) {
+          return res.status(400).json({ success: false, message: '缺少 relationId' });
+        }
+        const relRows = await db.query(
+          `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id,
+                  competitor_display_name, unified_credit_code, competitor_weak_key, delete_mark
+           FROM sourcing_competitor_relation WHERE id = ? LIMIT 1`,
+          [relationId]
+        );
+        if (!relRows.length || Number(relRows[0].delete_mark) !== 0) {
+          return res.status(404).json({ success: false, message: '竞品记录不存在' });
+        }
+        const rel = relRows[0];
+        const competitorKey = competitorKeyFromRelationRow(rel);
+        if (!competitorKey) {
+          return res.status(400).json({ success: false, message: '无法识别竞品键' });
+        }
+        const subjectType =
+          rel.subject_type === 'pre_investment_project' ? 'pre_investment_project' : 'invested_enterprise';
+        const userId = req.psUser?.id ? String(req.psUser.id) : null;
+        await upsertComparablePref({
+          subjectType,
+          investedEnterpriseId: rel.invested_enterprise_id,
+          preInvestmentProjectId: rel.pre_investment_project_id,
+          competitorKey,
+          includeInComparable,
+          userId,
+        });
+        await db.execute(
+          `UPDATE sourcing_competitor_relation
+           SET include_in_comparable = ?, updated_at = NOW()
+           WHERE id = ? AND delete_mark = 0`,
+          [includeInComparable ? 1 : 0, relationId]
+        );
+        res.json({
+          success: true,
+          data: {
+            id: relationId,
+            include_in_comparable: includeInComparable ? 1 : 0,
+            competitor_key: competitorKey,
+          },
+        });
+      } catch (e) {
+        const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
+        console.error('[competitor-analysis/relations/comparable]', e);
+        res.status(code).json({ success: false, message: e.message || '更新失败' });
+      }
+    }
+  );
 
   /** 竞品分析说明：流水线步骤 + 最终保留竞品及原因 */
   router.get('/competitor-analysis/summary', requireCompetitorAnalysisAccess, async (req, res) => {

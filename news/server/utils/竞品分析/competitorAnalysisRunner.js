@@ -39,6 +39,13 @@ const {
   summarizeCandidates,
 } = require('./competitorAnalysisLogger');
 const { enrichCompetitorDisplayFields } = require('./competitorRelationEnrichService');
+const { buildFinancingEventIndex } = require('./competitorFinancingResolve');
+const { loadComparablePrefsForSubject } = require('./competitorComparablePrefService');
+const { relationCompetitorKey } = require('./competitorCompanyMatch');
+const {
+  enrichRelationFieldsBeforePersist,
+  parseIsListedFromCandidate,
+} = require('./competitorRelationPersistEnhance');
 
 const SCORE_THRESHOLD = SCORE_THRESHOLD_PERSIST;
 /** 规则分 Top N 进入 LLM 对标 */
@@ -308,6 +315,13 @@ async function persistRelations({
   userId,
   candidateByKey,
 }) {
+  const comparablePrefs = await loadComparablePrefsForSubject({
+    subjectType,
+    investedEnterpriseId,
+    preInvestmentProjectId,
+  });
+  const financingIndex = await buildFinancingEventIndex();
+
   await archivePriorCompetitorRelations({
     subjectType,
     investedEnterpriseId,
@@ -323,18 +337,32 @@ async function persistRelations({
     });
     const cand = (candidateByKey && candidateByKey.get(key)) || r._candidate || r;
     const displayFields = await enrichCompetitorDisplayFields(cand, { runId });
+    const fieldEnhance = enrichRelationFieldsBeforePersist(
+      {
+        displayName: r.display_name,
+        unifiedCreditCode: r.unified_credit_code,
+        candidate: cand,
+      },
+      financingIndex
+    );
+    const creditFinal = fieldEnhance.unified_credit_code || r.unified_credit_code || null;
+    const compKey = relationCompetitorKey({
+      unified_credit_code: creditFinal,
+      competitor_display_name: r.display_name,
+    });
+    const includeComparable = compKey && comparablePrefs.get(compKey) ? 1 : 0;
 
     const relId = await generateId('sourcing_competitor_relation');
     await db.execute(
       `INSERT INTO sourcing_competitor_relation (
          id, subject_type, invested_enterprise_id, pre_investment_project_id,
          run_id, pre_investment_run_id, subject_display_name,
-         competitor_display_name, unified_credit_code, competitor_weak_key,
+         competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
          relevance_score, confidence_grade, score_breakdown_json,
-         data_sources_json, financing_amount_text,
+         data_sources_json, financing_amount_text, financing_history_text,
          competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-         created_at, updated_at, delete_mark
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
+         include_in_comparable, created_at, updated_at, delete_mark
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
       [
         relId,
         subjectType,
@@ -344,17 +372,22 @@ async function persistRelations({
         preInvestmentRunId || null,
         subjectDisplayName,
         r.display_name,
-        r.unified_credit_code || null,
-        r.unified_credit_code ? null : strTrim(r.display_name).slice(0, 160) || null,
+        creditFinal,
+        fieldEnhance.is_listed ? 1 : 0,
+        creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
         r.finalScore,
         r.grade,
         JSON.stringify(r.breakdown),
         JSON.stringify(r.sources || []),
-        r.financing_amount_text || null,
+        fieldEnhance.financing_history_text
+          ? String(fieldEnhance.financing_history_text).split('\n')[0].slice(0, 128)
+          : r.financing_amount_text || null,
+        fieldEnhance.financing_history_text || null,
         displayFields.competitor_product_intro,
         displayFields.competitor_tags_display,
         displayFields.competitor_tags_json,
         displayFields.sub_fund_names,
+        includeComparable,
       ]
     );
     n += 1;
@@ -582,6 +615,12 @@ async function executeCompetitorAnalysisRun(opts) {
           const webAi = Math.max(WEB_VALIDATE_AI_MIN, rel) || WEB_VALIDATE_AI_MIN;
           const prevLlm = x.llmProductScore != null ? Number(x.llmProductScore) : 0;
           x.llmProductScore = Math.max(Number.isFinite(prevLlm) ? prevLlm : 0, webAi);
+          if (w.is_listed != null && parseIsListedFromCandidate({ is_listed: w.is_listed })) {
+            x.is_listed = true;
+          }
+          if (w.unified_credit_code && !x.unified_credit_code) {
+            x.unified_credit_code = normalizeCreditCode(w.unified_credit_code) || null;
+          }
           continue;
         }
         const rawRel = Number(w.ai_relevance_score);
@@ -593,6 +632,7 @@ async function executeCompetitorAnalysisRun(opts) {
           sources: ['ai_web'],
           display_name: name,
           unified_credit_code: normalizeCreditCode(w.unified_credit_code) || null,
+          is_listed: parseIsListedFromCandidate({ is_listed: w.is_listed }) === 1,
           product_intro: strTrim(w.core_products),
           tags: [],
           internalScore: 0,
@@ -651,6 +691,9 @@ async function executeCompetitorAnalysisRun(opts) {
           runId,
           candidateName: c.display_name,
         });
+        if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
+          c.is_listed = true;
+        }
         if (!c.hasInternal && c.validation?.validated_score != null) {
           c.llmProductScore = Number(c.validation.validated_score);
         }

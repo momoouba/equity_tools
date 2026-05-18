@@ -6,13 +6,15 @@ const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdR
 const EXPORT_HEADERS = [
   '竞品名称',
   '统一社会信用代码',
+  '是否上市',
   '等级',
   '综合分',
   '产品介绍',
   '企业标签',
   '子基金名称',
   '数据源',
-  '融资金额',
+  '融资',
+  '是否放入可比公司',
   '落库时间',
 ];
 
@@ -54,13 +56,15 @@ function relationToRow(rel) {
   return {
     竞品名称: rel.competitor_display_name || '',
     统一社会信用代码: rel.unified_credit_code || '',
+    是否上市: Number(rel.is_listed) === 1 ? '是' : '否',
     等级: rel.confidence_grade || '',
     综合分: rel.relevance_score != null ? rel.relevance_score : '',
     产品介绍: rel.competitor_product_intro || '',
     企业标签: rel.competitor_tags_display || '',
     子基金名称: rel.sub_fund_names || '',
     数据源: formatSources(rel.data_sources_json),
-    融资金额: rel.financing_amount_text || '',
+    融资: rel.financing_history_text || rel.financing_amount_text || '',
+    是否放入可比公司: Number(rel.include_in_comparable) === 1 ? '是' : '否',
     落库时间: rel.created_at ? String(rel.created_at).replace('T', ' ').slice(0, 19) : '',
   };
 }
@@ -117,7 +121,8 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
     const rels = await db.query(
       `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
               competitor_product_intro, competitor_tags_display, sub_fund_names,
-              data_sources_json, financing_amount_text, created_at
+              data_sources_json, financing_amount_text, financing_history_text,
+              is_listed, include_in_comparable, created_at
        FROM sourcing_competitor_relation
        WHERE invested_enterprise_id = ? AND delete_mark = 0
          AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
@@ -219,7 +224,8 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
     const rels = await db.query(
       `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
               competitor_product_intro, competitor_tags_display, sub_fund_names,
-              data_sources_json, financing_amount_text, created_at
+              data_sources_json, financing_amount_text, financing_history_text,
+              is_listed, include_in_comparable, created_at
        FROM sourcing_competitor_relation
        WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
        ORDER BY relevance_score DESC, created_at DESC`,

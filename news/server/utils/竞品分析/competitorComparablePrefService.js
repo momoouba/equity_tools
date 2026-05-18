@@ -1,0 +1,114 @@
+const db = require('../../db');
+const { generateId } = require('../idGenerator');
+const { logDataChange } = require('../logger');
+const { relationCompetitorKey } = require('./competitorCompanyMatch');
+
+async function loadComparablePrefsForSubject({
+  subjectType,
+  investedEnterpriseId,
+  preInvestmentProjectId,
+}) {
+  const ieId = investedEnterpriseId ? String(investedEnterpriseId) : null;
+  const pipId = preInvestmentProjectId ? String(preInvestmentProjectId) : null;
+  const rows = await db.query(
+    `SELECT competitor_key, include_in_comparable
+     FROM sourcing_competitor_comparable_pref
+     WHERE subject_type = ?
+       AND (invested_enterprise_id <=> ?)
+       AND (pre_investment_project_id <=> ?)
+       AND include_in_comparable = 1`,
+    [subjectType, ieId, pipId]
+  );
+  const map = new Map();
+  for (const r of rows) {
+    if (r.competitor_key) map.set(String(r.competitor_key), true);
+  }
+  return map;
+}
+
+async function upsertComparablePref({
+  subjectType,
+  investedEnterpriseId,
+  preInvestmentProjectId,
+  competitorKey,
+  includeInComparable,
+  userId,
+}) {
+  const ieId = investedEnterpriseId ? String(investedEnterpriseId) : null;
+  const pipId = preInvestmentProjectId ? String(preInvestmentProjectId) : null;
+  const key = strTrimCompetitorKey(competitorKey);
+  if (!key) throw new Error('无效的竞品键');
+
+  const existing = await db.query(
+    `SELECT id, include_in_comparable
+     FROM sourcing_competitor_comparable_pref
+     WHERE subject_type = ?
+       AND (invested_enterprise_id <=> ?)
+       AND (pre_investment_project_id <=> ?)
+       AND competitor_key = ?
+     LIMIT 1`,
+    [subjectType, ieId, pipId, key]
+  );
+
+  const nextVal = includeInComparable ? 1 : 0;
+  let recordId;
+
+  if (existing.length) {
+    recordId = existing[0].id;
+    const oldVal = Number(existing[0].include_in_comparable) === 1 ? '1' : '0';
+    const newVal = String(nextVal);
+    if (oldVal !== newVal) {
+      await db.execute(
+        `UPDATE sourcing_competitor_comparable_pref
+         SET include_in_comparable = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [nextVal, recordId]
+      );
+      await logDataChange(
+        'sourcing_competitor_comparable_pref',
+        recordId,
+        { include_in_comparable: oldVal },
+        { include_in_comparable: newVal },
+        userId
+      );
+    }
+    return { updated: true, include_in_comparable: nextVal, recordId };
+  }
+  if (nextVal === 1) {
+    recordId = await generateId('sourcing_competitor_comparable_pref');
+    await db.execute(
+      `INSERT INTO sourcing_competitor_comparable_pref (
+         id, subject_type, invested_enterprise_id, pre_investment_project_id,
+         competitor_key, include_in_comparable, created_at, updated_at
+       ) VALUES (?,?,?,?,?,?,NOW(),NOW())`,
+      [recordId, subjectType, ieId, pipId, key, nextVal]
+    );
+    await logDataChange(
+      'sourcing_competitor_comparable_pref',
+      recordId,
+      { include_in_comparable: '' },
+      { include_in_comparable: '1' },
+      userId
+    );
+    return { updated: true, include_in_comparable: nextVal, recordId };
+  }
+  return { updated: false, include_in_comparable: 0, recordId: null };
+}
+
+function strTrimCompetitorKey(k) {
+  return k != null ? String(k).trim() : '';
+}
+
+function competitorKeyFromRelationRow(rel) {
+  return relationCompetitorKey({
+    unified_credit_code: rel.unified_credit_code,
+    competitor_display_name: rel.competitor_display_name,
+    competitor_weak_key: rel.competitor_weak_key,
+  });
+}
+
+module.exports = {
+  loadComparablePrefsForSubject,
+  upsertComparablePref,
+  competitorKeyFromRelationRow,
+};

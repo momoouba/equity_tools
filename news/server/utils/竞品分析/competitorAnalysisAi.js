@@ -21,14 +21,16 @@ const PROMPTS = {
   },
   web_discover: {
     system: `你是竞品研究助理。在允许联网时优先用联网检索；若无法联网则根据公开知识与检索词，列出与目标企业存在直接竞争关系的公司（同类产品/服务），不是上下游。
-仅输出 JSON：{"candidates":[{"company_name":"","unified_credit_code":"","core_products":"","business_domain":"","ai_relevance_score":0}]}
+仅输出 JSON：{"candidates":[{"company_name":"","unified_credit_code":"","is_listed":true/false,"core_products":"","business_domain":"","ai_relevance_score":0}]}
+is_listed：新三板、拟上市、A股/港股(含仅H股)等已上市或处于上市进程为 true；无法判断则为 false。
 禁止 Markdown。候选不超过 20 条。`,
     buildUser: (profile, keywords, excludeNames) =>
       `目标画像：\n${JSON.stringify(profile, null, 0)}\n\n检索词：${JSON.stringify(keywords)}\n\n排除公司：${JSON.stringify(excludeNames || [])}`,
   },
   validate: {
     system: `你是竞品校验助手。判断候选是否为目标的直接竞品。
-仅输出 JSON：{"is_competitor":true/false,"industry_match":true/false,"core_overlap_percent":0-100,"is_upstream_downstream":false,"validated_score":0-100,"reject_reason":""}`,
+仅输出 JSON：{"is_competitor":true/false,"is_listed":true/false,"industry_match":true/false,"core_overlap_percent":0-100,"is_upstream_downstream":false,"validated_score":0-100,"reject_reason":""}
+is_listed：新三板、拟上市、A股/港股(含仅H股)等已上市或处于上市进程为 true；无法判断则为 false。`,
     buildUser: (target, candidate) =>
       `目标：\n${JSON.stringify(target, null, 0)}\n\n候选：\n${JSON.stringify(candidate, null, 0)}`,
   },

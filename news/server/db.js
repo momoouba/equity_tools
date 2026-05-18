@@ -6932,6 +6932,37 @@ async function initializeTables(dbPool) {
     'sub_fund_names',
     `ADD COLUMN sub_fund_names VARCHAR(1000) NULL COMMENT '子基金名称(顿号分隔,来自底层项目)' AFTER competitor_tags_json`
   );
+  await addScrCol(
+    'is_listed',
+    `ADD COLUMN is_listed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否上市：1是0否(LLM不确定按否)' AFTER unified_credit_code`
+  );
+  await addScrCol(
+    'financing_history_text',
+    `ADD COLUMN financing_history_text TEXT NULL COMMENT '融资全轮次展示(日期-轮次-金额,多行)' AFTER financing_amount_text`
+  );
+  await addScrCol(
+    'include_in_comparable',
+    `ADD COLUMN include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司：1是0否' AFTER created_at`
+  );
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_comparable_pref (
+        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        subject_type VARCHAR(32) NOT NULL COMMENT 'invested_enterprise|pre_investment_project',
+        invested_enterprise_id VARCHAR(19) NULL COMMENT '被投企业 id',
+        pre_investment_project_id VARCHAR(19) NULL COMMENT '投前项目 id',
+        competitor_key VARCHAR(200) NOT NULL COMMENT '竞品稳定键 cc:或 name:',
+        include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        KEY idx_sccp_subject (subject_type, invested_enterprise_id, pre_investment_project_id),
+        UNIQUE KEY uk_sccp_subject_competitor (subject_type, invested_enterprise_id, pre_investment_project_id, competitor_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品可比公司勾选偏好(跨分析重跑保留)';
+    `);
+    console.log('✓ sourcing_competitor_comparable_pref 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_comparable_pref 时出现警告:', err.message);
+  }
   try {
     const [ieCol] = await dbPool.query(
       `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
