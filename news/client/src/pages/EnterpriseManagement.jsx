@@ -1469,6 +1469,7 @@ function EnterpriseManagement({
         <EnterpriseForm
           enterprise={editingEnterprise}
           dataAppName={dataAppName}
+          competitorInvestedForm={showInvestedEnterpriseAi}
           onClose={handleFormClose}
           onSubmit={handleFormSubmit}
         />
