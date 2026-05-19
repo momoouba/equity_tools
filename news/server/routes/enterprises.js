@@ -151,6 +151,17 @@ function mergeWechatOfficialAccountIds(oldIds, newIds) {
   return mergedArray.join(',');
 }
 
+/** 企业标签展示串（顿号/逗号分隔）→ JSON 数组，与竞品匹配解析一致 */
+function industryTagsDisplayToJson(display) {
+  const s = display != null ? String(display).trim() : '';
+  if (!s) return null;
+  const parts = s
+    .split(/[,，、]/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return parts.length ? JSON.stringify(parts) : null;
+}
+
 function parseOptionalDecimal(value) {
   if (value === undefined || value === null || value === '') return null;
   const n = Number(String(value).replace(/,/g, '').trim());
@@ -585,6 +596,10 @@ router.get('/', async (req, res) => {
     const search = req.query.search || '';
     const filterUserId = req.query.filter_user_id || ''; // 用户筛选（仅admin使用）
     const entityType = req.query.entity_type || ''; // 企业类型筛选
+    const hasCompetitorAnalysis =
+      req.query.has_competitor_analysis === '1' ||
+      req.query.has_competitor_analysis === 'true' ||
+      req.query.has_competitor_analysis === true;
     const offset = (page - 1) * pageSize;
 
     let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_id <=> ?';
@@ -670,6 +685,20 @@ router.get('/', async (req, res) => {
       )`;
         params.push(searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm, searchTerm);
       }
+    }
+
+    if (dataAppName === DATA_APP_COMPETITOR_ANALYSIS && hasCompetitorAnalysis) {
+      condition += ` AND (
+        EXISTS (
+          SELECT 1 FROM sourcing_competitor_run scr
+          WHERE scr.invested_enterprise_id = invested_enterprises.id AND scr.delete_mark = 0
+        )
+        OR EXISTS (
+          SELECT 1 FROM sourcing_competitor_relation rel
+          WHERE rel.invested_enterprise_id = invested_enterprises.id AND rel.delete_mark = 0
+            AND (rel.subject_type = 'invested_enterprise' OR rel.subject_type IS NULL)
+        )
+      )`;
     }
 
     const rawRows = await db.query(
@@ -1123,6 +1152,9 @@ router.put('/:id', [
   body('exited_cost').optional(),
   body('remaining_cost').optional(),
   body('residual_value').optional(),
+  body('ai_product_intro').optional(),
+  body('ai_industry_tags_display').optional(),
+  body('qcc_company_intro').optional(),
 ], async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -1195,11 +1227,34 @@ router.put('/:id', [
       }
     }
 
+    const enrichKeys = ['ai_product_intro', 'ai_industry_tags_display', 'qcc_company_intro'];
+    let enrichSql = '';
+    const enrichParams = [];
+    for (const k of enrichKeys) {
+      if (Object.prototype.hasOwnProperty.call(req.body, k)) {
+        const v = req.body[k] != null ? String(req.body[k]).trim() : '';
+        newData[k] = v || null;
+        enrichSql += `, ${k} = ?`;
+        enrichParams.push(newData[k]);
+        if (k === 'ai_industry_tags_display') {
+          newData.ai_industry_tags_json = industryTagsDisplayToJson(v);
+          enrichSql += ', ai_industry_tags_json = ?';
+          enrichParams.push(newData.ai_industry_tags_json);
+        }
+      } else {
+        newData[k] = oldData[k];
+        if (k === 'ai_industry_tags_display') {
+          newData.ai_industry_tags_json = oldData.ai_industry_tags_json;
+        }
+      }
+    }
+
     const result = await db.execute(
       `UPDATE invested_enterprises 
        SET project_abbreviation = ?, enterprise_full_name = ?, unified_credit_code = ?,
            wechat_official_account_id = ?, official_website = ?, entity_type = ?, exit_status = ?,
-           investment_cost = ?, exited_cost = ?, remaining_cost = ?, residual_value = ?,
+           investment_cost = ?, exited_cost = ?, remaining_cost = ?, residual_value = ?
+           ${enrichSql},
            modifier_user_id = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND delete_mark = 0`,
       [
@@ -1214,6 +1269,7 @@ router.put('/:id', [
         newData.exited_cost,
         newData.remaining_cost,
         newData.residual_value,
+        ...enrichParams,
         userId,
         id
       ]

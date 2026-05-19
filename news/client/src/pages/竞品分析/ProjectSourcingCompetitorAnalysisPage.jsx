@@ -86,6 +86,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
           pageSize,
           data_app_name: '竞品分析',
           entity_type: '被投企业',
+          has_competitor_analysis: 1,
         },
       })
       if (res.data?.success) {
@@ -202,7 +203,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     <div className="page-scope" style={{ padding: '16px 24px' }}>
       <Card title="投后-竞品分析（被投企业 × 竞品）" bordered={false}>
         <p style={{ color: 'var(--color-text-2)', marginBottom: 16, fontSize: 13 }}>
-          展示竞品分析下<strong>未退出</strong>被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
+          仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
           <strong>被投企业</strong>列表左侧勾选 +「竞品分析（多选）」。
         </p>
         <Space wrap style={{ marginBottom: 12 }}>
