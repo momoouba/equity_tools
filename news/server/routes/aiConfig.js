@@ -7,79 +7,12 @@ const router = express.Router();
 
 const {
   loadAiModelMetaFromDictionary,
+  loadAiModelOptionsFromDictionary,
+  assertProviderAllowed,
+  assertModelNameAllowedForProvider,
   assertApplicationTypeAllowed,
   assertUsageTypeAllowed,
 } = require('../utils/aiModelDictionary');
-
-/** 与 base_dictionary 中字典类型 dict_code 对应（选项 parent_id 指向该类型行） */
-const AI_MODEL_PROVIDER_DICT_CODE = {
-  alibaba: 'ai_model_alibaba',
-  openai: 'ai_model_openai',
-  baidu: 'ai_model_baidu',
-  tencent: 'ai_model_tencent',
-};
-
-/** 数据字典无数据时的兜底（与历史硬编码一致） */
-const FALLBACK_AI_MODELS = {
-  alibaba: ['qwen-turbo', 'qwen-plus', 'qwen3-max', 'qwen-long', 'qwen3-vl-plus'],
-  openai: ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o'],
-  baidu: ['ernie-bot', 'ernie-bot-turbo', 'ernie-bot-4'],
-  tencent: ['hunyuan-lite', 'hunyuan-standard', 'hunyuan-pro'],
-};
-
-/**
- * 从数据字典加载各提供商可选模型：value=item_code（写入 ai_model_config.model_name），label=item_name。
- */
-async function loadAiModelOptionsFromDictionary() {
-  const out = { alibaba: [], openai: [], baidu: [], tencent: [] };
-  for (const [provider, dictCode] of Object.entries(AI_MODEL_PROVIDER_DICT_CODE)) {
-    const parents = await db.query(
-      `SELECT id FROM base_dictionary
-       WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0
-       ORDER BY created_at ASC
-       LIMIT 1`,
-      [dictCode]
-    );
-    if (!parents.length) {
-      out[provider] = FALLBACK_AI_MODELS[provider].map((code) => ({ value: code, label: code }));
-      continue;
-    }
-    const rows = await db.query(
-      `SELECT item_code, item_name, sort_order
-       FROM base_dictionary
-       WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
-         AND item_code IS NOT NULL AND TRIM(item_code) != ''
-       ORDER BY sort_order ASC, id ASC`,
-      [parents[0].id]
-    );
-    if (!rows.length) {
-      out[provider] = FALLBACK_AI_MODELS[provider].map((code) => ({ value: code, label: code }));
-      continue;
-    }
-    out[provider] = rows.map((r) => {
-      const code = String(r.item_code || '').trim();
-      const name = String(r.item_name || '').trim() || code;
-      return { value: code, label: name };
-    });
-  }
-  return out;
-}
-
-async function assertModelNameAllowedForProvider(provider, modelName) {
-  const mn = String(modelName || '').trim();
-  if (!mn) return;
-  const opts = await loadAiModelOptionsFromDictionary();
-  const list = opts[provider] || [];
-  if (!list.length) return;
-  const codes = new Set(list.map((o) => o.value));
-  if (!codes.has(mn)) {
-    const err = new Error(
-      '模型名称须为当前提供商在数据字典中已启用的选项编码（item_code），请在「管理员设置 → 数据字典」维护对应字典类型'
-    );
-    err.statusCode = 400;
-    throw err;
-  }
-}
 
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
@@ -188,7 +121,7 @@ router.get('/models/available', checkAdminPermission, async (req, res) => {
   }
 });
 
-// 应用类型 / 使用类型下拉（数据字典 ai_model_application_type、ai_model_usage_type）
+// 应用类型 / 使用类型 / 提供商下拉（数据字典 ai_model_*）
 router.get('/meta/options', checkAdminPermission, async (req, res) => {
   try {
     const data = await loadAiModelMetaFromDictionary();
@@ -270,6 +203,7 @@ router.post('/', checkAdminPermission, async (req, res) => {
     }
 
     try {
+      await assertProviderAllowed(provider);
       await assertUsageTypeAllowed(usage_type);
       await assertApplicationTypeAllowed(application_type);
     } catch (e) {
@@ -356,6 +290,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     }
 
     try {
+      if (provider !== undefined) await assertProviderAllowed(provider);
       if (usage_type !== undefined) await assertUsageTypeAllowed(usage_type);
       if (application_type !== undefined) await assertApplicationTypeAllowed(application_type);
     } catch (e) {
@@ -468,12 +403,16 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
     
     if (config.provider === 'alibaba') {
       testResult = await testAlibabaModel(config);
-    } else if (config.provider === 'openai') {
+    } else if (
+      config.provider === 'openai' ||
+      config.provider === 'volcengine' ||
+      config.api_type === 'chat_completion'
+    ) {
       testResult = await testOpenAIModel(config);
     } else {
       return res.status(400).json({ 
         success: false, 
-        message: `暂不支持测试 ${config.provider} 提供商的模型` 
+        message: `暂不支持测试 ${config.provider} 提供商的模型（可尝试 API 类型选 Chat Completion API）` 
       });
     }
 

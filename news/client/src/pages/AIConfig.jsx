@@ -37,12 +37,7 @@ function AIConfig() {
     enable_thinking: 0,
   })
 
-  const providers = [
-    { value: 'alibaba', label: '阿里云（千问）' },
-    { value: 'openai', label: 'OpenAI' },
-    { value: 'baidu', label: '百度（文心一言）' },
-    { value: 'tencent', label: '腾讯（混元）' }
-  ]
+  const [providers, setProviders] = useState([])
 
   const apiTypes = [
     { value: 'chat', label: 'Chat API' },
@@ -101,6 +96,7 @@ function AIConfig() {
         const data = response.data.data || {}
         setApplicationTypes(data.applicationTypes || [])
         setUsageTypes(data.usageTypes || [])
+        setProviders(data.providers || [])
       }
     } catch (err) {
       console.error('获取应用/使用类型字典失败:', err)
@@ -109,9 +105,10 @@ function AIConfig() {
 
   const handleAdd = () => {
     setCurrentConfig(null)
+    const defaultProvider = providers[0]?.value || 'alibaba'
     const initial = {
       config_name: '',
-      provider: 'alibaba',
+      provider: defaultProvider,
       model_name: '',
       api_type: 'chat',
       api_key: '',
