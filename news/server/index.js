@@ -444,6 +444,12 @@ async function startServer() {
             console.error('初始化邮件发送定时任务失败:', error);
           });
 
+          console.log('正在执行竞品数据关联修复（按统一社会信用代码重挂孤儿记录）...');
+          const { runCompetitorRelinkOnStartup } = require('./utils/竞品分析/competitorRelinkStartup');
+          runCompetitorRelinkOnStartup().catch((error) => {
+            console.error('竞品数据关联修复失败:', error);
+          });
+
           // 初始化外部数据库连接（异步，不阻塞）
           console.log('正在初始化外部数据库连接...');
           db.query('SELECT * FROM external_db_config WHERE delete_mark = 0 AND is_active = 1')

@@ -38,6 +38,10 @@ const {
   competitorKeyFromRelationRow,
 } = require('../../utils/竞品分析/competitorComparablePrefService');
 const CA_C = require('../../utils/竞品分析/constants');
+const {
+  restoreCompetitorDataAfterInsert,
+  relinkOrphanCompetitorDataBySubjectMatch,
+} = require('../../utils/竞品分析/competitorSyncSnapshot');
 
 function clientIpFromReq(req) {
   const xf = req.headers['x-forwarded-for'];
@@ -504,6 +508,62 @@ function registerCompetitorMatchRoutes(router) {
       const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
       console.error('[project-sourcing/competitor-analysis/summary]', e);
       res.status(code).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 管理员：按统一社会信用代码/名称将库内孤儿竞品数据 UPDATE 到当前被投 id */
+  router.post('/competitor-analysis/relink-by-credit-code', requireAdmin, async (req, res) => {
+    try {
+      const creatorUserId = String(
+        req.body?.creator_user_id || req.query.creator_user_id || ''
+      ).trim();
+      const dryRun =
+        req.body?.dry_run === true ||
+        req.query.dry_run === '1' ||
+        req.query.dry_run === 'true';
+      const stats = await relinkOrphanCompetitorDataBySubjectMatch({
+        creatorUserId: creatorUserId || undefined,
+        dryRun,
+      });
+      res.json({
+        success: true,
+        message: dryRun
+          ? `预检：可重挂 ${stats.relinked} 组（孤儿旧 id ${stats.orphan_old_ids} 个，未解析 ${stats.unresolved}）`
+          : `已重挂 ${stats.relinked} 组竞品数据到当前被投（未解析 ${stats.unresolved}）`,
+        data: stats,
+      });
+    } catch (e) {
+      console.error('[competitor-analysis/relink-by-credit-code]', e);
+      res.status(500).json({ success: false, message: e.message || '重挂失败' });
+    }
+  });
+
+  /** 管理员：按同步快照 batch_id 将竞品数据挂回当前被投（信用代码/名称/简称匹配） */
+  router.post('/competitor-analysis/restore-sync-snapshot', requireAdmin, async (req, res) => {
+    try {
+      const batchId = String(req.body?.batch_id || req.query.batch_id || '').trim();
+      const creatorUserId = String(
+        req.body?.creator_user_id || req.psUser?.id || ''
+      ).trim();
+      if (!batchId) {
+        return res.status(400).json({ success: false, message: '缺少 batch_id' });
+      }
+      if (!creatorUserId) {
+        return res.status(400).json({ success: false, message: '缺少 creator_user_id' });
+      }
+      const restored = await restoreCompetitorDataAfterInsert(
+        batchId,
+        creatorUserId,
+        CA_C.APP_NAME_COMPETITOR_ANALYSIS
+      );
+      res.json({
+        success: true,
+        message: `已恢复 ${restored.subjects || 0} 家主体的竞品数据（关系 ${restored.relations || 0} 条）`,
+        data: restored,
+      });
+    } catch (e) {
+      console.error('[competitor-analysis/restore-sync-snapshot]', e);
+      res.status(500).json({ success: false, message: e.message || '恢复失败' });
     }
   });
 

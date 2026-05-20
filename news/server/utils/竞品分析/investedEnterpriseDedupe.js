@@ -2,6 +2,7 @@
 
 const db = require('../../db');
 const CA_C = require('./constants');
+const { migrateCompetitorEnterpriseIds } = require('./competitorSyncSnapshot');
 
 const MERGE_FIELDS = [
   'ai_product_intro',
@@ -51,6 +52,7 @@ async function mergeKeeperAndDeleteExtras(executor, keeperRow, extraRows, caName
       const rowHas = rv != null && String(rv).trim() !== '';
       if (keeperEmpty && rowHas) keeper[f] = rv;
     }
+    await migrateCompetitorEnterpriseIds(row.id, keeper.id);
     await executor.execute('DELETE FROM invested_enterprises WHERE id = ?', [row.id]);
   }
   await executor.execute(

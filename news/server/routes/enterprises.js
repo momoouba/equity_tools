@@ -322,6 +322,12 @@ async function pruneOldInvestedEnterpriseAiSnapshots() {
   } catch (e) {
     console.warn('[企业同步任务] 清理 AI 快照表失败', e.message);
   }
+  try {
+    const { pruneOldCompetitorSyncSnapshots } = require('../utils/竞品分析/competitorSyncSnapshot');
+    await pruneOldCompetitorSyncSnapshots();
+  } catch (e) {
+    console.warn('[企业同步任务] 清理竞品快照表失败', e.message);
+  }
 }
 
 /** 将查询行转为可序列化对象，并把 DECIMAL 规范为 number（避免 RowDataPacket/字符串千分位等导致前端取不到或解析失败） */
@@ -1702,6 +1708,7 @@ async function executeSyncTask(
   if (!externalData || externalData.length === 0) {
     let deleted = 0;
     let aiSnapshotBatchIdEmpty = null;
+    let competitorSnapshotBatchIdEmpty = null;
     if (syncOwnerUserId) {
       try {
         aiSnapshotBatchIdEmpty = await insertInvestedEnterpriseAiSnapshotBeforeHardDelete(
@@ -1710,6 +1717,21 @@ async function executeSyncTask(
         );
       } catch (e) {
         console.error('[企业同步任务] 写入 AI 快照失败（中止清空）', e);
+        throw e;
+      }
+      try {
+        const {
+          supportsCompetitorSyncSnapshot,
+          backupCompetitorDataBeforeHardDelete,
+        } = require('../utils/竞品分析/competitorSyncSnapshot');
+        if (supportsCompetitorSyncSnapshot(targetDataAppName)) {
+          competitorSnapshotBatchIdEmpty = await backupCompetitorDataBeforeHardDelete(
+            syncOwnerUserId,
+            targetDataAppName
+          );
+        }
+      } catch (e) {
+        console.error('[企业同步任务] 写入竞品快照失败（中止清空）', e);
         throw e;
       }
       deleted = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
@@ -1722,6 +1744,10 @@ async function executeSyncTask(
         deleted > 0
           ? `查询成功，外部无返回行；已清空本应用下共 ${deleted} 条本地数据${
               aiSnapshotBatchIdEmpty ? `（AI 快照 batch_id=${aiSnapshotBatchIdEmpty}，可按统一社会信用代码从表 invested_enterprise_ai_sync_snapshot 恢复）` : ''
+            }${
+              competitorSnapshotBatchIdEmpty
+                ? `；竞品快照 batch_id=${competitorSnapshotBatchIdEmpty}（待下次同步写入被投后自动恢复竞品关系）`
+                : ''
             }`
           : '查询成功，但没有数据需要同步',
       synced: 0,
@@ -1729,11 +1755,13 @@ async function executeSyncTask(
       inserted: 0,
       deleted,
       ai_snapshot_batch_id: aiSnapshotBatchIdEmpty || undefined,
+      competitor_snapshot_batch_id: competitorSnapshotBatchIdEmpty || undefined,
     };
   }
 
   let deletedBeforeSync = 0;
   let aiSnapshotBatchId = null;
+  let competitorSnapshotBatchId = null;
   if (syncOwnerUserId) {
     try {
       aiSnapshotBatchId = await insertInvestedEnterpriseAiSnapshotBeforeHardDelete(
@@ -1742,6 +1770,21 @@ async function executeSyncTask(
       );
     } catch (e) {
       console.error('[企业同步任务] 写入 AI 快照失败（中止硬删）', e);
+      throw e;
+    }
+    try {
+      const {
+        supportsCompetitorSyncSnapshot,
+        backupCompetitorDataBeforeHardDelete,
+      } = require('../utils/竞品分析/competitorSyncSnapshot');
+      if (supportsCompetitorSyncSnapshot(targetDataAppName)) {
+        competitorSnapshotBatchId = await backupCompetitorDataBeforeHardDelete(
+          syncOwnerUserId,
+          targetDataAppName
+        );
+      }
+    } catch (e) {
+      console.error('[企业同步任务] 写入竞品快照失败（中止硬删）', e);
       throw e;
     }
     deletedBeforeSync = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
@@ -2153,6 +2196,31 @@ async function executeSyncTask(
       );
     }
   }
+
+  let competitorSnapshotRestored = null;
+  if (competitorSnapshotBatchId && syncOwnerUserId) {
+    try {
+      const { restoreCompetitorDataAfterInsert } = require('../utils/竞品分析/competitorSyncSnapshot');
+      competitorSnapshotRestored = await restoreCompetitorDataAfterInsert(
+        competitorSnapshotBatchId,
+        syncOwnerUserId,
+        targetDataAppName
+      );
+      try {
+        const { relinkOrphanCompetitorDataBySubjectMatch } = require('../utils/竞品分析/competitorSyncSnapshot');
+        await relinkOrphanCompetitorDataBySubjectMatch({
+          creatorUserId: syncOwnerUserId,
+        });
+      } catch (relinkErr) {
+        console.warn('[企业同步任务] 竞品孤儿 id 重挂失败（不影响同步）', relinkErr.message);
+      }
+    } catch (e) {
+      console.error(
+        '[企业同步任务] 竞品快照恢复失败（可按 batch_id 查表 competitor_analysis_sync_snapshot 手工恢复）',
+        e
+      );
+    }
+  }
   await pruneOldInvestedEnterpriseAiSnapshots();
 
   if (targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) {
@@ -2171,19 +2239,27 @@ async function executeSyncTask(
     aiSnapshotBatchId != null
       ? `；AI 快照 batch_id=${aiSnapshotBatchId}，已回填 ${aiSnapshotRestored} 行`
       : '';
+  const competitorNote =
+    competitorSnapshotBatchId != null && competitorSnapshotRestored
+      ? `；竞品快照 batch_id=${competitorSnapshotBatchId}，已恢复 ${competitorSnapshotRestored.subjects || 0} 家主体、${competitorSnapshotRestored.relations || 0} 条竞品关系`
+      : competitorSnapshotBatchId != null
+        ? `；竞品快照 batch_id=${competitorSnapshotBatchId}（无匹配新被投或未恢复）`
+        : '';
 
   return {
     success: true,
     message:
       deletedBeforeSync > 0
-        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}`
-        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}`,
+        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}`
+        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}`,
     synced,
     updated,
     inserted,
     deleted: deletedBeforeSync,
     ai_snapshot_batch_id: aiSnapshotBatchId || undefined,
     ai_snapshot_restored: aiSnapshotRestored,
+    competitor_snapshot_batch_id: competitorSnapshotBatchId || undefined,
+    competitor_snapshot_restored: competitorSnapshotRestored || undefined,
   };
 }
 

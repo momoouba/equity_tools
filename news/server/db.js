@@ -6512,6 +6512,29 @@ async function initializeTables(dbPool) {
     console.warn('迁移 invested_enterprise_ai_sync_snapshot.qcc_company_intro 时出现警告:', err.message);
   }
 
+  // 竞品分析：被投企业定时同步硬删前快照（按信用代码/名称/简称恢复竞品运行与关系）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS competitor_analysis_sync_snapshot (
+        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
+        creator_user_id VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.creator_user_id 一致',
+        data_app_name VARCHAR(64) NOT NULL COMMENT '应用名（竞品分析）',
+        match_type VARCHAR(8) NOT NULL COMMENT 'ucc|name|abbr',
+        match_key VARCHAR(128) NOT NULL COMMENT '规范化匹配键',
+        old_invested_enterprise_id VARCHAR(19) NULL COMMENT '同步前被投 id（审计）',
+        payload_json LONGTEXT NOT NULL COMMENT 'runs/relations/step_logs/prefs/supplement',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        KEY idx_ca_snap_batch (batch_id),
+        KEY idx_ca_snap_batch_match (batch_id, match_type, match_key),
+        KEY idx_ca_snap_created (created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析被投同步前竞品数据快照';
+    `);
+    console.log('✓ competitor_analysis_sync_snapshot 表已就绪');
+  } catch (err) {
+    console.warn('创建 competitor_analysis_sync_snapshot 时出现警告:', err.message);
+  }
+
   // 底层项目 SQL 同步硬删前：按统一社会信用代码保存 AI/企查查简介，全量写入后回填
   try {
     await dbPool.query(`

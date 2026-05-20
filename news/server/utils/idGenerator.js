@@ -46,6 +46,7 @@ async function generateId(tableName, connection) {
       'sourcing_competitor_run',
       'sourcing_competitor_relation',
       'sourcing_competitor_run_step_log',
+      'sourcing_competitor_comparable_pref',
       'sourcing_pre_investment_competitor_run',
     ];
     
