@@ -120,8 +120,20 @@ const LISTING_CONTENT_TYPES = {
   LISTING_PROGRESS: 'listing_progress',
   LISTING_GUIDANCE: 'listing_guidance',
   OVERSEAS_FILING: 'overseas_filing',
+  /** 打新申购 + 未来上市日历（邮件「其他-打新日历」） */
   NEW_SHARE: 'new_share',
+  /** 上市首日表现（邮件「IPO上市（昨日）」） */
+  NEW_SHARE_LISTED_YESTERDAY: 'new_share_listed_yesterday',
 };
+
+const LISTING_MAIL_TYPE_VALUES = [
+  LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS,
+  LISTING_CONTENT_TYPES.LISTING_PROGRESS,
+  LISTING_CONTENT_TYPES.LISTING_GUIDANCE,
+  LISTING_CONTENT_TYPES.OVERSEAS_FILING,
+  LISTING_CONTENT_TYPES.NEW_SHARE,
+  LISTING_CONTENT_TYPES.NEW_SHARE_LISTED_YESTERDAY,
+];
 
 function parseListingMailTypes(raw) {
   if (!raw) return [LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS, LISTING_CONTENT_TYPES.LISTING_PROGRESS];
@@ -135,17 +147,7 @@ function parseListingMailTypes(raw) {
   }
   if (!Array.isArray(arr)) arr = [arr];
   const set = new Set(
-    arr
-      .map((v) => String(v || '').trim())
-      .filter((v) =>
-        [
-          LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS,
-          LISTING_CONTENT_TYPES.LISTING_PROGRESS,
-          LISTING_CONTENT_TYPES.LISTING_GUIDANCE,
-          LISTING_CONTENT_TYPES.OVERSEAS_FILING,
-          LISTING_CONTENT_TYPES.NEW_SHARE,
-        ].includes(v)
-      )
+    arr.map((v) => String(v || '').trim()).filter((v) => LISTING_MAIL_TYPE_VALUES.includes(v))
   );
   if (!set.size) {
     set.add(LISTING_CONTENT_TYPES.LISTING_PROJECT_PROGRESS);
@@ -214,7 +216,10 @@ async function executeListingEmailDigest(recipient, options = {}) {
   const includeListingProgress = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_PROGRESS);
   const includeListingGuidance = selectedTypes.includes(LISTING_CONTENT_TYPES.LISTING_GUIDANCE);
   const includeOverseasFiling = selectedTypes.includes(LISTING_CONTENT_TYPES.OVERSEAS_FILING);
-  const includeNewShare = selectedTypes.includes(LISTING_CONTENT_TYPES.NEW_SHARE);
+  const includeNewShareListedYesterday = selectedTypes.includes(
+    LISTING_CONTENT_TYPES.NEW_SHARE_LISTED_YESTERDAY
+  );
+  const includeNewShareCalendar = selectedTypes.includes(LISTING_CONTENT_TYPES.NEW_SHARE);
 
   let ipp = [];
   let ipoExchangeYesterday = [];
@@ -299,7 +304,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
   let nsApplyRows = [];
   let nsUpcomingListRows = [];
   let nsFirstDayRows = [];
-  if (includeNewShare) {
+  if (includeNewShareCalendar) {
     const dow = today.getDay();
     let applyFrom = null;
     let applyTo = null;
@@ -334,6 +339,8 @@ async function executeListingEmailDigest(recipient, options = {}) {
        LIMIT 500`,
       [todayYmd, todayYmd]
     );
+  }
+  if (includeNewShareListedYesterday) {
     nsFirstDayRows = await db.query(
       `SELECT stock_code, stock_name, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
               exchange, issue_price, first_day_close, first_day_chg_pct
@@ -466,8 +473,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
   if (includeListingProjectProgress) {
     listingSectionHtml += `${renderSectionTitle('底层项目上市进展（昨日）', '#1677ff')}${part1Project}`;
   }
-  if (includeNewShare) {
-    // 二、昨日上市：展示与「打新日历 -> 上市首日表现（上市日期=昨日）」相同数据
+  if (includeNewShareListedYesterday) {
     listingSectionHtml += `${renderSectionTitle('IPO上市（昨日）', '#f53f3f')}${newSharePart3}`;
   }
   if (includeListingProgress) {
@@ -480,7 +486,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
     listingSectionHtml += `${renderSectionTitle('境内企业境外上市备案（本周六同步）', '#f7ba1e')}${part2OverseasSaturday}`;
   }
 
-  const newShareSectionHtml = includeNewShare
+  const newShareSectionHtml = includeNewShareCalendar
     ? `
       ${renderSectionTitle('其他-打新日历', '#003a8c')}
       <h4 style="margin:10px 0 8px;color:#1d2129;">打新申购（本周）</h4>

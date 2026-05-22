@@ -148,6 +148,66 @@ async function insertIpoProjectAiSnapshotBeforeDelete(conn, { batchId, userId, t
 }
 
 /** 全量插入完成后，按统一社会信用代码将快照中的 AI/企查查简介写回新行 */
+/** 上市进展：底层项目 SQL 全量替换后，按 fund + sub + company 重挂 ipo_project_progress（不删历史匹配行） */
+async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId }) {
+  if (!listingAppId) {
+    return { progressRelinked: 0, progressOrphaned: 0 };
+  }
+
+  const [relinkRes] = await conn.query(
+    `UPDATE ipo_project_progress ipp
+     INNER JOIN (
+       SELECT F_CreatorUserId,
+              TRIM(fund) AS fund_k,
+              TRIM(IFNULL(sub, '')) AS sub_k,
+              TRIM(company) AS company_k,
+              MAX(f_id) AS new_f_id
+       FROM ipo_project
+       WHERE F_DeleteMark = 0
+         AND F_CreatorUserId = ?
+         AND data_app_id <=> ?
+       GROUP BY F_CreatorUserId, TRIM(fund), TRIM(IFNULL(sub, '')), TRIM(company)
+     ) pk ON ipp.F_CreatorUserId = pk.F_CreatorUserId
+        AND TRIM(ipp.fund) = pk.fund_k
+        AND TRIM(IFNULL(ipp.sub, '')) = pk.sub_k
+        AND TRIM(ipp.company) = pk.company_k
+     INNER JOIN ipo_project np ON np.f_id = pk.new_f_id
+     SET ipp.ipo_project_f_id = pk.new_f_id,
+         ipp.fund = np.fund,
+         ipp.sub = np.sub,
+         ipp.project_name = np.project_name,
+         ipp.company = np.company,
+         ipp.inv_amount = np.inv_amount,
+         ipp.residual_amount = np.residual_amount,
+         ipp.ratio = np.ratio,
+         ipp.ct_amount = np.ct_amount,
+         ipp.ct_residual = np.ct_residual
+     WHERE ipp.F_CreatorUserId = ?`,
+    [userId, listingAppId, userId]
+  );
+
+  const [orphanRes] = await conn.query(
+    `UPDATE ipo_project_progress ipp
+     SET ipp.ipo_project_f_id = NULL
+     WHERE ipp.F_CreatorUserId = ?
+       AND ipp.ipo_project_f_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM ipo_project p
+         WHERE p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
+       )`,
+    [userId]
+  );
+
+  const progressRelinked = relinkRes.affectedRows != null ? relinkRes.affectedRows : 0;
+  const progressOrphaned = orphanRes.affectedRows != null ? orphanRes.affectedRows : 0;
+  if (progressRelinked > 0 || progressOrphaned > 0) {
+    console.log(
+      `[ipoProjectSqlSync] 底层项目上市进展重关联 user=${userId} relinked=${progressRelinked} orphaned=${progressOrphaned}`
+    );
+  }
+  return { progressRelinked, progressOrphaned };
+}
+
 async function applyIpoProjectAiSnapshotAfterInsert(conn, { batchId, userId }) {
   const normT = sqlNormIpoProjectUnifiedCredit('t');
   const [r] = await conn.query(
@@ -321,10 +381,6 @@ async function runIpoProjectSqlSyncForUser({
       );
     }
     const prevIds = Array.isArray(idRows) ? idRows.map((r) => r.f_id).filter((id) => id != null) : [];
-    if (prevIds.length) {
-      const ph = prevIds.map(() => '?').join(',');
-      await conn.query(`DELETE FROM ipo_project_progress WHERE ipo_project_f_id IN (${ph})`, prevIds);
-    }
     if (isCompetitorFamilyWriteTarget(wt)) {
       await conn.query(`DELETE FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`, [
         userId,
@@ -337,7 +393,16 @@ async function runIpoProjectSqlSyncForUser({
       );
     }
 
+    let progressRelinked = 0;
+    let progressOrphaned = 0;
+
     if (!prepared.length) {
+      if (!isCompetitorFamilyWriteTarget(wt) && listingAppId) {
+        ({ progressRelinked, progressOrphaned } = await relinkIpoProjectProgressAfterSqlSync(conn, {
+          userId,
+          listingAppId,
+        }));
+      }
       await conn.commit();
       await pruneOldIpoProjectAiSnapshots();
       const qcc_post_sync = await maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId });
@@ -346,6 +411,8 @@ async function runIpoProjectSqlSyncForUser({
         updated: 0,
         skipped,
         deletedPrevious: prevIds.length,
+        progress_relinked: progressRelinked,
+        progress_orphaned: progressOrphaned,
         total: externalRows.length,
         write_target: wt,
         ai_snapshot_batch_id: batchId,
@@ -409,6 +476,13 @@ async function runIpoProjectSqlSyncForUser({
       console.log(`[ipoProjectSqlSync] AI/企查查快照回填完成 batch_id=${batchId} affected_rows=${aiSnapshotRestored}`);
     }
 
+    if (!isCompetitorFamilyWriteTarget(wt) && listingAppId) {
+      ({ progressRelinked, progressOrphaned } = await relinkIpoProjectProgressAfterSqlSync(conn, {
+        userId,
+        listingAppId,
+      }));
+    }
+
     await conn.commit();
     await pruneOldIpoProjectAiSnapshots();
 
@@ -419,6 +493,8 @@ async function runIpoProjectSqlSyncForUser({
       updated: 0,
       skipped,
       deletedPrevious: prevIds.length,
+      progress_relinked: progressRelinked,
+      progress_orphaned: progressOrphaned,
       total: externalRows.length,
       write_target: wt,
       ai_snapshot_batch_id: batchId,

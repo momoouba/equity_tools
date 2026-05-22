@@ -80,7 +80,14 @@ function ListingRecipientsTab() {
         arr
           .map((v) => String(v || '').trim())
           .filter((v) =>
-            ['listing_project_progress', 'listing_progress', 'listing_guidance', 'overseas_filing', 'new_share'].includes(v)
+            [
+              'listing_project_progress',
+              'listing_progress',
+              'listing_guidance',
+              'overseas_filing',
+              'new_share',
+              'new_share_listed_yesterday',
+            ].includes(v)
           )
       )
     )
@@ -93,6 +100,7 @@ function ListingRecipientsTab() {
     if (v === 'listing_guidance') return '上市辅导'
     if (v === 'overseas_filing') return '境外备案'
     if (v === 'new_share') return '打新日历'
+    if (v === 'new_share_listed_yesterday') return 'IPO上市（昨日）'
     return '上市进展'
   }
 
@@ -269,13 +277,14 @@ function ListingRecipientsTab() {
             label="发件内容"
             field="listing_mail_types"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
-            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示，与周六抓取任务对齐）、打新日历。"
+            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示）、IPO上市（昨日）、打新日历（申购与未来上市日程）。"
           >
             <Select mode="multiple" placeholder="请选择发件内容">
               <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>
               <Select.Option value="listing_progress">上市进展</Select.Option>
               <Select.Option value="listing_guidance">上市辅导</Select.Option>
               <Select.Option value="overseas_filing">境外备案</Select.Option>
+              <Select.Option value="new_share_listed_yesterday">IPO上市（昨日）</Select.Option>
               <Select.Option value="new_share">打新日历</Select.Option>
             </Select>
           </FormItem>

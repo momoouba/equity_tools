@@ -501,7 +501,8 @@ async function updateListingScheduledTasks() {
             });
             console.log(
               `[底层项目同步] 执行完成 配置=${cfg.id} write_target=${wt} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
-                `清空旧行=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0}（全量替换，无增量更新）` +
+                `清空旧项目=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0} ` +
+                `进展重挂=${result.progress_relinked ?? 0} 进展孤儿=${result.progress_orphaned ?? 0}（底层项目全量替换；上市进展匹配行按 fund+sub+company 重关联）` +
                 (result.qcc_post_sync
                   ? `；同步后企查查=${JSON.stringify(result.qcc_post_sync).slice(0, 200)}`
                   : '')

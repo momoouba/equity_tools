@@ -109,6 +109,7 @@ function getAllowedListingMailTypes(levelName) {
   }
   if (levelName === LISTING_LEVEL.VIP) {
     allowed.add('new_share');
+    allowed.add('new_share_listed_yesterday');
   }
   return allowed;
 }
