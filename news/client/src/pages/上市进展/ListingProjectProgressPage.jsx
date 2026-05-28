@@ -75,20 +75,29 @@ function ListingRecipientsTab() {
       }
     }
     if (!Array.isArray(arr)) arr = [arr]
+    const expanded = []
+    for (const v of arr) {
+      const s = String(v || '').trim()
+      if (!s) continue
+      if (s === 'new_share') {
+        expanded.push('new_share_upcoming', 'new_share_apply')
+      } else {
+        expanded.push(s)
+      }
+    }
     const valid = Array.from(
       new Set(
-        arr
-          .map((v) => String(v || '').trim())
-          .filter((v) =>
-            [
-              'listing_project_progress',
-              'listing_progress',
-              'listing_guidance',
-              'overseas_filing',
-              'new_share',
-              'new_share_listed_yesterday',
-            ].includes(v)
-          )
+        expanded.filter((v) =>
+          [
+            'listing_project_progress',
+            'listing_progress',
+            'listing_guidance',
+            'overseas_filing',
+            'new_share_upcoming',
+            'new_share_apply',
+            'new_share_listed_yesterday',
+          ].includes(v)
+        )
       )
     )
     return valid.length ? valid : ['listing_project_progress', 'listing_progress']
@@ -99,7 +108,8 @@ function ListingRecipientsTab() {
     if (v === 'listing_progress') return '上市进展'
     if (v === 'listing_guidance') return '上市辅导'
     if (v === 'overseas_filing') return '境外备案'
-    if (v === 'new_share') return '打新日历'
+    if (v === 'new_share_upcoming') return '上市日历'
+    if (v === 'new_share_apply') return '打新申购'
     if (v === 'new_share_listed_yesterday') return 'IPO上市（昨日）'
     return '上市进展'
   }
@@ -277,7 +287,7 @@ function ListingRecipientsTab() {
             label="发件内容"
             field="listing_mail_types"
             rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
-            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示）、IPO上市（昨日）、打新日历（申购与未来上市日程）。"
+            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示）、IPO上市（昨日）、上市日历（未来5天）、打新申购（本周）。"
           >
             <Select mode="multiple" placeholder="请选择发件内容">
               <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>
@@ -285,7 +295,8 @@ function ListingRecipientsTab() {
               <Select.Option value="listing_guidance">上市辅导</Select.Option>
               <Select.Option value="overseas_filing">境外备案</Select.Option>
               <Select.Option value="new_share_listed_yesterday">IPO上市（昨日）</Select.Option>
-              <Select.Option value="new_share">打新日历</Select.Option>
+              <Select.Option value="new_share_upcoming">上市日历</Select.Option>
+              <Select.Option value="new_share_apply">打新申购</Select.Option>
             </Select>
           </FormItem>
           <FormItem

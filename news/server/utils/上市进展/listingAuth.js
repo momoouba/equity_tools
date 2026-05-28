@@ -102,23 +102,13 @@ async function hasListingFeature(userId, account, feature) {
   return getAllowedListingFeatures(levelName).has(feature);
 }
 
-function getAllowedListingMailTypes(levelName) {
-  const allowed = new Set(['listing_progress', 'listing_guidance', 'overseas_filing']);
-  if (levelName === LISTING_LEVEL.ADVANCED || levelName === LISTING_LEVEL.VIP) {
-    allowed.add('listing_project_progress');
-  }
-  if (levelName === LISTING_LEVEL.VIP) {
-    allowed.add('new_share');
-    allowed.add('new_share_listed_yesterday');
-  }
-  return allowed;
-}
+const LEGACY_NEW_SHARE_MAIL_TYPE = 'new_share';
+const NEW_SHARE_UPCOMING_MAIL_TYPE = 'new_share_upcoming';
+const NEW_SHARE_APPLY_MAIL_TYPE = 'new_share_apply';
 
-function normalizeListingMailTypesByLevel(rawTypes, levelName) {
-  const allowed = getAllowedListingMailTypes(levelName);
-  if (!allowed.size) return [];
+function expandLegacyListingMailTypes(rawTypes) {
   let arr = rawTypes;
-  if (arr == null || arr === '') arr = ['listing_progress'];
+  if (arr == null || arr === '') return [];
   if (typeof arr === 'string') {
     try {
       arr = JSON.parse(arr);
@@ -127,12 +117,40 @@ function normalizeListingMailTypesByLevel(rawTypes, levelName) {
     }
   }
   if (!Array.isArray(arr)) arr = [arr];
+  const expanded = new Set();
+  for (const v of arr) {
+    const s = String(v || '').trim();
+    if (!s) continue;
+    if (s === LEGACY_NEW_SHARE_MAIL_TYPE) {
+      expanded.add(NEW_SHARE_UPCOMING_MAIL_TYPE);
+      expanded.add(NEW_SHARE_APPLY_MAIL_TYPE);
+    } else {
+      expanded.add(s);
+    }
+  }
+  return Array.from(expanded);
+}
+
+function getAllowedListingMailTypes(levelName) {
+  const allowed = new Set(['listing_progress', 'listing_guidance', 'overseas_filing']);
+  if (levelName === LISTING_LEVEL.ADVANCED || levelName === LISTING_LEVEL.VIP) {
+    allowed.add('listing_project_progress');
+  }
+  if (levelName === LISTING_LEVEL.VIP) {
+    allowed.add(NEW_SHARE_UPCOMING_MAIL_TYPE);
+    allowed.add(NEW_SHARE_APPLY_MAIL_TYPE);
+    allowed.add('new_share_listed_yesterday');
+  }
+  return allowed;
+}
+
+function normalizeListingMailTypesByLevel(rawTypes, levelName) {
+  const allowed = getAllowedListingMailTypes(levelName);
+  if (!allowed.size) return [];
+  let arr = expandLegacyListingMailTypes(rawTypes);
+  if (!arr.length) arr = ['listing_progress'];
   const normalized = Array.from(
-    new Set(
-      arr
-        .map((v) => String(v || '').trim())
-        .filter((v) => allowed.has(v))
-    )
+    new Set(arr.map((v) => String(v || '').trim()).filter((v) => allowed.has(v)))
   );
   if (normalized.length) return normalized;
   return allowed.has('listing_progress') ? ['listing_progress'] : [];
@@ -148,4 +166,8 @@ module.exports = {
   getListingMembershipLevelName,
   hasListingFeature,
   normalizeListingMailTypesByLevel,
+  expandLegacyListingMailTypes,
+  NEW_SHARE_UPCOMING_MAIL_TYPE,
+  NEW_SHARE_APPLY_MAIL_TYPE,
+  LEGACY_NEW_SHARE_MAIL_TYPE,
 };

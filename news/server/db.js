@@ -2112,7 +2112,7 @@ async function initializeTables(dbPool) {
       send_time TIME COMMENT '发送时间（格式：HH:mm:ss）',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       qichacha_category_codes JSON COMMENT '企查查新闻类别编码列表（JSON数组），为空时使用默认类别',
-      listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share_listed_yesterday/new_share',
+      listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share_listed_yesterday/new_share_upcoming/new_share_apply',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -2585,7 +2585,7 @@ async function initializeTables(dbPool) {
     `);
     if (mailTypesCol.length === 0) {
       await dbPool.query(
-        "ALTER TABLE recipient_management ADD COLUMN listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share_listed_yesterday/new_share'"
+        "ALTER TABLE recipient_management ADD COLUMN listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share_listed_yesterday/new_share_upcoming/new_share_apply'"
       );
       await dbPool.query(
         "UPDATE recipient_management SET listing_mail_types = JSON_ARRAY('listing_progress') WHERE listing_mail_types IS NULL"
@@ -2627,6 +2627,43 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 listing_mail_types 拆分打新选项时出现警告:', err.message);
+  }
+
+  // 拆分 new_share → new_share_upcoming + new_share_apply（上市日历 / 打新申购独立可选）
+  try {
+    const [legacySplitRows] = await dbPool.query(`
+      SELECT id, listing_mail_types
+      FROM recipient_management
+      WHERE listing_mail_types IS NOT NULL
+        AND JSON_CONTAINS(listing_mail_types, '"new_share"', '$')
+    `);
+    for (const row of legacySplitRows) {
+      let types = row.listing_mail_types;
+      if (typeof types === 'string') {
+        try {
+          types = JSON.parse(types);
+        } catch {
+          continue;
+        }
+      }
+      if (!Array.isArray(types)) continue;
+      const expanded = new Set(types.filter((t) => String(t || '').trim() !== 'new_share'));
+      if (types.some((t) => String(t || '').trim() === 'new_share')) {
+        expanded.add('new_share_upcoming');
+        expanded.add('new_share_apply');
+      }
+      await dbPool.query('UPDATE recipient_management SET listing_mail_types = ? WHERE id = ?', [
+        JSON.stringify(Array.from(expanded)),
+        row.id,
+      ]);
+    }
+    if (legacySplitRows.length > 0) {
+      console.log(
+        `✓ 已将 ${legacySplitRows.length} 条收件配置的 new_share 拆分为 new_share_upcoming + new_share_apply`
+      );
+    }
+  } catch (err) {
+    console.warn('迁移 listing_mail_types 拆分 new_share 为上市日历/打新申购时出现警告:', err.message);
   }
 
   // 迁移 recipient_management：第三方公众号按行业标签筛选（邮件内「第三方公众号」区块）
