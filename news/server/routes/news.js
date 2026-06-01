@@ -9017,7 +9017,31 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                 continue;
               }
 
-              // 新闻舆情：被投企业全称、简称、企业类型均来自 invested_enterprises（按统一社会信用代码），不使用接口返回的 instn_nm，不做AI关联性判断
+              // 入库前 AI 校验内容与企业的关联性（与新榜第三方公众号逻辑一致：不相关则解除关联）
+              let insertEnterpriseFullName = enterpriseFullName;
+              let insertEnterpriseAbbreviation = enterpriseAbbreviation;
+              let insertEntityType = entityType;
+              let insertFund = fund;
+              let insertSubFund = sub_fund;
+              try {
+                const shouldKeepAssociation = await newsAnalysis.validateExistingAssociation(
+                  title,
+                  finalContent,
+                  enterpriseFullName,
+                  '上海国际集团'
+                );
+                if (!shouldKeepAssociation) {
+                  console.log(`[上海国际集团同步] AI判断内容与企业不相关，解除企业关联: ${enterpriseFullName} - ${title}`);
+                  insertEnterpriseFullName = null;
+                  insertEnterpriseAbbreviation = null;
+                  insertEntityType = null;
+                  insertFund = null;
+                  insertSubFund = null;
+                }
+              } catch (validationError) {
+                console.warn(`[上海国际集团同步] AI关联验证异常，暂保留企业关联: ${validationError.message}`);
+              }
+
               const finalSentiment = analysisResult.sentiment === 'positive' ? 'positive'
                 : analysisResult.sentiment === 'negative' ? 'negative' : newsSentiment;
               const keywordsJson = JSON.stringify(analysisResult.keywords);
@@ -9030,9 +9054,9 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                   newsId,
                   accountName,
                   accountName,
-                  enterpriseFullName,
-                  enterpriseAbbreviation,
-                  entityType,
+                  insertEnterpriseFullName,
+                  insertEnterpriseAbbreviation,
+                  insertEntityType,
                   sourceUrl,
                   title,
                   item.event_nm_lv12 || item.risk_nm_lv12 || '',
@@ -9042,8 +9066,8 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                   finalSentiment,
                   '上海国际集团',
                   analysisResult.news_abstract,
-                  fund,
-                  sub_fund
+                  insertFund,
+                  insertSubFund
                 ]
               );
               totalSynced++;
