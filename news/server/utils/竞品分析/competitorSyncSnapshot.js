@@ -14,13 +14,50 @@ function supportsCompetitorSyncSnapshot(dataAppName) {
 
 /** @returns {{ type: 'ucc'|'name'|'abbr', key: string }|null} */
 function buildSubjectMatchKey(row) {
+  const keys = collectSubjectMatchKeys(row);
+  return keys.length ? keys[0] : null;
+}
+
+/** 同步匹配用：信用代码、企业全称、项目简称均可作为重挂键（全称优先用于查找）。 */
+function collectSubjectMatchKeys(row) {
+  const keys = [];
   const ucc = normalizeCreditCode(row.unified_credit_code);
-  if (ucc.length >= 15) return { type: 'ucc', key: ucc };
+  if (ucc.length >= 15) keys.push({ type: 'ucc', key: ucc });
   const name = strTrim(row.enterprise_full_name).toLowerCase();
-  if (name) return { type: 'name', key: name };
+  if (name) keys.push({ type: 'name', key: name });
   const abbr = strTrim(row.project_abbreviation).toLowerCase();
-  if (abbr) return { type: 'abbr', key: abbr };
+  if (abbr) keys.push({ type: 'abbr', key: abbr });
+  return keys;
+}
+
+const MATCH_LOOKUP_ORDER = ['name', 'ucc', 'abbr'];
+
+function lookupPayloadByEnterprise(ie, payloadByMatch) {
+  const keys = collectSubjectMatchKeys(ie);
+  const ordered = [
+    ...keys.filter((k) => k.type === 'name'),
+    ...keys.filter((k) => k.type === 'ucc'),
+    ...keys.filter((k) => k.type === 'abbr'),
+  ];
+  for (const mk of ordered) {
+    const payload = payloadByMatch.get(matchKeyString(mk.type, mk.key));
+    if (payload) return payload;
+  }
   return null;
+}
+
+function mergeHintMatch(hints, oldId, creatorUserId, match) {
+  const oid = String(oldId || '').trim();
+  if (!oid || !match?.key) return;
+  let hint = hints.get(oid);
+  if (!hint) {
+    hint = { creatorUserId: creatorUserId ? String(creatorUserId) : null, matches: [] };
+    hints.set(oid, hint);
+  } else if (creatorUserId && !hint.creatorUserId) {
+    hint.creatorUserId = String(creatorUserId);
+  }
+  const dup = hint.matches.some((m) => m.type === match.type && m.key === match.key);
+  if (!dup) hint.matches.push({ type: match.type, key: match.key });
 }
 
 function matchKeyString(type, key) {
@@ -155,24 +192,26 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
   for (const b of byIe.values()) {
     const { runs: rs, relations: rels, stepLogs: logs, prefs: pf, supplement } = b;
     if (!rs.length && !rels.length && !logs.length && !pf.length && !supplement) continue;
-    const mk = buildSubjectMatchKey(b.ie);
-    if (!mk) continue;
+    const matchKeys = collectSubjectMatchKeys(b.ie);
+    if (!matchKeys.length) continue;
     const payload = { runs: rs, relations: rels, step_logs: logs, comparable_prefs: pf, supplement };
-    await db.execute(
-      `INSERT INTO competitor_analysis_sync_snapshot (
-         batch_id, creator_user_id, data_app_name, match_type, match_key,
-         old_invested_enterprise_id, payload_json, created_at
-       ) VALUES (?,?,?,?,?,?,?,NOW())`,
-      [
-        batchId,
-        String(creatorUserId),
-        dataAppName,
-        mk.type,
-        mk.key,
-        String(b.ie.id),
-        JSON.stringify(payload),
-      ]
-    );
+    for (const mk of matchKeys) {
+      await db.execute(
+        `INSERT INTO competitor_analysis_sync_snapshot (
+           batch_id, creator_user_id, data_app_name, match_type, match_key,
+           old_invested_enterprise_id, payload_json, created_at
+         ) VALUES (?,?,?,?,?,?,?,NOW())`,
+        [
+          batchId,
+          String(creatorUserId),
+          dataAppName,
+          mk.type,
+          mk.key,
+          String(b.ie.id),
+          JSON.stringify(payload),
+        ]
+      );
+    }
     written += 1;
   }
 
@@ -457,9 +496,7 @@ async function restoreCompetitorDataAfterInsert(batchId, creatorUserId, dataAppN
   const totals = { subjects: 0, runs: 0, relations: 0, step_logs: 0, prefs: 0, supplement: 0 };
 
   for (const ie of newRows) {
-    const mk = buildSubjectMatchKey(ie);
-    if (!mk) continue;
-    const payload = payloadByMatch.get(matchKeyString(mk.type, mk.key));
+    const payload = lookupPayloadByEnterprise(ie, payloadByMatch);
     if (!payload) continue;
 
     const existingRels = await db.query(
@@ -488,28 +525,38 @@ async function restoreCompetitorDataAfterInsert(batchId, creatorUserId, dataAppN
 
 /**
  * 被投去重合并：删除重复行前，将竞品相关数据迁移到保留行。
+ * @param {string} fromEnterpriseId
+ * @param {string} toEnterpriseId
+ * @param {import('mysql2/promise').Pool|import('mysql2/promise').PoolConnection} [executor] 初始化阶段须传入 dbPool，避免 await db.ready 死锁
  */
-async function migrateCompetitorEnterpriseIds(fromEnterpriseId, toEnterpriseId) {
+async function migrateCompetitorEnterpriseIds(fromEnterpriseId, toEnterpriseId, executor = null) {
   const fromId = String(fromEnterpriseId || '').trim();
   const toId = String(toEnterpriseId || '').trim();
   if (!fromId || !toId || fromId === toId) return;
 
-  const r1 = await db.execute(
+  const run = executor
+    ? async (sql, params) => {
+        const [result] = await executor.execute(sql, params);
+        return result;
+      }
+    : (sql, params) => db.execute(sql, params);
+
+  const r1 = await run(
     `UPDATE sourcing_competitor_run SET invested_enterprise_id = ?, updated_at = NOW()
      WHERE invested_enterprise_id = ?`,
     [toId, fromId]
   );
-  const r2 = await db.execute(
+  const r2 = await run(
     `UPDATE sourcing_competitor_relation SET invested_enterprise_id = ?, updated_at = NOW()
      WHERE invested_enterprise_id = ? AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)`,
     [toId, fromId]
   );
-  const r3 = await db.execute(
+  const r3 = await run(
     `UPDATE sourcing_competitor_comparable_pref SET invested_enterprise_id = ?, updated_at = NOW()
      WHERE invested_enterprise_id = ? AND subject_type = 'invested_enterprise'`,
     [toId, fromId]
   );
-  const r4 = await db.execute(
+  const r4 = await run(
     `UPDATE competitor_match_supplement SET invested_enterprise_id = ?, updated_at = NOW()
      WHERE invested_enterprise_id = ? AND delete_mark = 0`,
     [toId, fromId]
@@ -559,6 +606,18 @@ function resolveNewIdFromMatchIndex(byCreator, creatorUserId, match) {
   return null;
 }
 
+function resolveNewIdFromMatchIndexMulti(byCreator, creatorUserId, matches) {
+  if (!matches?.length) return null;
+  const sorted = [...matches].sort(
+    (a, b) => MATCH_LOOKUP_ORDER.indexOf(a.type) - MATCH_LOOKUP_ORDER.indexOf(b.type)
+  );
+  for (const match of sorted) {
+    const hit = resolveNewIdFromMatchIndex(byCreator, creatorUserId, match);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 /** 当前竞品分析应用下被投：按创建人 + ucc/名称/简称 索引 */
 async function buildCompetitorEnterpriseMatchIndex(creatorUserIdFilter) {
   const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
@@ -584,22 +643,36 @@ async function buildCompetitorEnterpriseMatchIndex(creatorUserIdFilter) {
       byCreator.set(cid, { ucc: new Map(), name: new Map(), abbr: new Map() });
     }
     const bucket = byCreator.get(cid);
-    const mk = buildSubjectMatchKey(r);
-    if (!mk) continue;
-    if (!bucket[mk.type].has(mk.key)) bucket[mk.type].set(mk.key, ieId);
+    for (const mk of collectSubjectMatchKeys(r)) {
+      if (!bucket[mk.type].has(mk.key)) bucket[mk.type].set(mk.key, ieId);
+    }
   }
   return { byCreator, validIds, rowCount: rows.length };
 }
 
-async function loadOldIdMatchHints(creatorUserIdFilter) {
+async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
   const hints = new Map();
-  const add = (oldId, creatorUserId, match) => {
-    const oid = String(oldId || '').trim();
-    if (!oid || !match) return;
-    if (!hints.has(oid)) {
-      hints.set(oid, { creatorUserId: creatorUserId ? String(creatorUserId) : null, match });
+
+  if (batchIdFilter) {
+    const batchParams = [String(batchIdFilter), CA_C.APP_NAME_COMPETITOR_ANALYSIS];
+    let batchCreator = '';
+    if (creatorUserIdFilter) {
+      batchCreator = ' AND creator_user_id = ?';
+      batchParams.push(String(creatorUserIdFilter));
     }
-  };
+    const batchRows = await db.query(
+      `SELECT old_invested_enterprise_id, creator_user_id, match_type, match_key
+       FROM competitor_analysis_sync_snapshot
+       WHERE batch_id = ? AND data_app_name = ? AND old_invested_enterprise_id IS NOT NULL${batchCreator}`,
+      batchParams
+    );
+    for (const row of batchRows) {
+      mergeHintMatch(hints, row.old_invested_enterprise_id, row.creator_user_id, {
+        type: row.match_type,
+        key: row.match_key,
+      });
+    }
+  }
 
   const snapParams = [CA_C.APP_NAME_COMPETITOR_ANALYSIS];
   let snapCreator = '';
@@ -607,15 +680,20 @@ async function loadOldIdMatchHints(creatorUserIdFilter) {
     snapCreator = ' AND creator_user_id = ?';
     snapParams.push(String(creatorUserIdFilter));
   }
+  let batchExclude = '';
+  if (batchIdFilter) {
+    batchExclude = ' AND batch_id <> ?';
+    snapParams.push(String(batchIdFilter));
+  }
   const snapRows = await db.query(
     `SELECT old_invested_enterprise_id, creator_user_id, match_type, match_key
      FROM competitor_analysis_sync_snapshot
-     WHERE data_app_name = ? AND old_invested_enterprise_id IS NOT NULL${snapCreator}
+     WHERE data_app_name = ? AND old_invested_enterprise_id IS NOT NULL${snapCreator}${batchExclude}
      ORDER BY created_at DESC`,
     snapParams
   );
   for (const row of snapRows) {
-    add(row.old_invested_enterprise_id, row.creator_user_id, {
+    mergeHintMatch(hints, row.old_invested_enterprise_id, row.creator_user_id, {
       type: row.match_type,
       key: row.match_key,
     });
@@ -645,7 +723,10 @@ async function loadOldIdMatchHints(creatorUserIdFilter) {
   for (const row of orphanRelRows) {
     const name = strTrim(row.subject_name).toLowerCase();
     if (name) {
-      add(row.invested_enterprise_id, row.triggered_by_user_id, { type: 'name', key: name });
+      mergeHintMatch(hints, row.invested_enterprise_id, row.triggered_by_user_id, {
+        type: 'name',
+        key: name,
+      });
     }
   }
 
@@ -668,7 +749,7 @@ async function loadOldIdMatchHints(creatorUserIdFilter) {
     if (!hints.has(String(row.invested_enterprise_id))) {
       hints.set(String(row.invested_enterprise_id), {
         creatorUserId: row.triggered_by_user_id ? String(row.triggered_by_user_id) : null,
-        match: null,
+        matches: [],
       });
     }
   }
@@ -702,12 +783,13 @@ async function findOrphanInvestedEnterpriseIds() {
 /**
  * 库内仍有竞品数据但 invested_enterprise_id 指向已删除/旧 id 时：
  * 按快照或主体展示名匹配统一社会信用代码/名称/简称，UPDATE 关联字段到当前被投 id。
- * @param {{ creatorUserId?: string, dryRun?: boolean }} [opts]
+ * @param {{ creatorUserId?: string, batchId?: string, dryRun?: boolean }} [opts]
  */
 async function relinkOrphanCompetitorDataBySubjectMatch(opts = {}) {
   const creatorUserIdFilter = opts.creatorUserId
     ? String(opts.creatorUserId).trim()
     : null;
+  const batchIdFilter = opts.batchId ? String(opts.batchId).trim() : null;
   const dryRun = opts.dryRun === true;
 
   const { byCreator, validIds, rowCount } = await buildCompetitorEnterpriseMatchIndex(
@@ -724,7 +806,7 @@ async function relinkOrphanCompetitorDataBySubjectMatch(opts = {}) {
     };
   }
 
-  const hints = await loadOldIdMatchHints(creatorUserIdFilter);
+  const hints = await loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter);
   let orphanOldIds = await findOrphanInvestedEnterpriseIds();
   if (creatorUserIdFilter) {
     const cid = String(creatorUserIdFilter);
@@ -746,21 +828,25 @@ async function relinkOrphanCompetitorDataBySubjectMatch(opts = {}) {
   for (const oldId of orphanOldIds) {
     if (validIds.has(oldId)) continue;
     const hint = hints.get(oldId);
-    const match = hint?.match;
-    if (!match) {
+    const matches = hint?.matches || [];
+    if (!matches.length) {
       stats.unresolved += 1;
       continue;
     }
-    const newId = resolveNewIdFromMatchIndex(byCreator, hint?.creatorUserId, match);
+    const newId = resolveNewIdFromMatchIndexMulti(byCreator, hint?.creatorUserId, matches);
     if (!newId || newId === oldId) {
       stats.unresolved += 1;
       continue;
     }
+    const primaryMatch =
+      [...matches].sort(
+        (a, b) => MATCH_LOOKUP_ORDER.indexOf(a.type) - MATCH_LOOKUP_ORDER.indexOf(b.type)
+      )[0] || matches[0];
     stats.pairs.push({
       old_invested_enterprise_id: oldId,
       new_invested_enterprise_id: newId,
-      match_type: match.type,
-      match_key: match.key,
+      match_type: primaryMatch.type,
+      match_key: primaryMatch.key,
     });
     if (!dryRun) {
       await migrateCompetitorEnterpriseIds(oldId, newId);
@@ -784,4 +870,6 @@ module.exports = {
   pruneOldCompetitorSyncSnapshots,
   relinkOrphanCompetitorDataBySubjectMatch,
   buildSubjectMatchKey,
+  collectSubjectMatchKeys,
+  lookupPayloadByEnterprise,
 };

@@ -124,7 +124,11 @@ const performanceApi = {
   exportFundPortfolio: (version, fund) => axios.post('/api/performance/exports/fund-portfolio', { version, fund }, { responseType: 'blob' }),
   exportProjectCashflow: (version, fund) => axios.post('/api/performance/exports/project-cashflow', { version, fund }, { responseType: 'blob' }),
   exportPortfolioDetail: (version) => axios.post('/api/performance/exports/portfolio-detail', { version }, { responseType: 'blob' }),
+  exportPortfolio: (version) => axios.post('/api/performance/exports/portfolio', { version }, { responseType: 'blob' }),
+  exportFundProducts: (version) => axios.post('/api/performance/exports/fund-products', { version }, { responseType: 'blob' }),
   exportIpoCompanies: (version, type) => axios.post('/api/performance/exports/ipo-companies', { version, type }, { responseType: 'blob' }),
+  exportUnderlyingCompanies: (version, type) => axios.post('/api/performance/exports/underlying-companies', { version, type }, { responseType: 'blob' }),
+  exportRegionCompanies: (version, type) => axios.post('/api/performance/exports/region-companies', { version, type }, { responseType: 'blob' }),
 }
 
 // 下载文件工具
@@ -229,12 +233,23 @@ function MonthYearPicker({ value, onChange, placeholder = '选择年月', style 
 }
 
 // 模态框头部信息组件
-function ModalInfo({ version, unit = '人民币' }) {
+function ModalInfo({ version, unit = '人民币', onExport }) {
   return (
-    <div className="perf-modal-header">
+    <div className={`perf-modal-header${onExport ? ' perf-modal-header-with-action' : ''}`}>
       <span>单位：{unit}</span>
       <span>数据截至日期：{formatVersionDate(version)}</span>
       <span>版本号：{version}</span>
+      {onExport && (
+        <Button
+          type="primary"
+          className="perf-export-btn"
+          icon={<IconDownload />}
+          onClick={onExport}
+          style={{ marginLeft: 'auto' }}
+        >
+          导出底稿
+        </Button>
+      )}
     </div>
   )
 }
@@ -278,7 +293,7 @@ function ManagerCard({ data, config, onClick }) {
 }
 
 // 投资组合板块（参考设计图：左侧子基金/直投项目区隔指标块，每基金拆成投/退两列；整体组合左侧色块+子基金/直投项目区隔）
-function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail }) {
+function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onExport }) {
   const fundMap = (portfolioFunds || []).reduce((acc, r) => { acc[r.fund] = r; return acc }, {})
 
   const subFundRows = [
@@ -293,7 +308,19 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
 
   return (
     <div className="perf-section">
-      <div className="perf-section-title">投资组合</div>
+      <div className="perf-section-header-with-export">
+        <div className="perf-section-title">投资组合</div>
+        {onExport ? (
+          <Button
+            type="primary"
+            className="perf-export-btn"
+            icon={<IconDownload />}
+            onClick={onExport}
+          >
+            导出底稿
+          </Button>
+        ) : null}
+      </div>
       {/* 各基金：左侧子基金/直投项目标签区隔，每基金投/退两列 */}
       {funds && funds.length > 0 && (
         <div className="perf-fund-table-wrap perf-portfolio-wrap" style={{ marginBottom: 24 }}>
@@ -763,9 +790,25 @@ function PerformanceApp() {
           res = await performanceApi.exportPortfolioDetail(selectedVersion)
           filename = `${selectedVersion}-基金投资组合明细-${date}.xlsx`
           break
+        case 'fundProducts':
+          res = await performanceApi.exportFundProducts(selectedVersion)
+          filename = `${selectedVersion}-基金产品指标-${date}.xlsx`
+          break
+        case 'portfolio':
+          res = await performanceApi.exportPortfolio(selectedVersion)
+          filename = `${selectedVersion}-投资组合-${date}.xlsx`
+          break
         case 'ipoCompanies':
           res = await performanceApi.exportIpoCompanies(selectedVersion, modal.modalType)
           filename = `${selectedVersion}-上市企业明细-${date}.xlsx`
+          break
+        case 'underlyingCompanies':
+          res = await performanceApi.exportUnderlyingCompanies(selectedVersion, modal.modalType)
+          filename = `${selectedVersion}-底层企业明细-${modal.modalType === 'cumulative' ? '累计' : '当前'}-${date}.xlsx`
+          break
+        case 'regionCompanies':
+          res = await performanceApi.exportRegionCompanies(selectedVersion, modal.modalType)
+          filename = `${selectedVersion}-区域企业明细-${modal.modalType === 'cumulative' ? '累计' : '当前'}-${date}.xlsx`
           break
         default:
           return
@@ -1524,7 +1567,11 @@ function PerformanceApp() {
         const totalAmount = list.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)
         return (
           <div className="perf-modal-investors-wrap perf-ipo-wrap">
-            <ModalInfo version={selectedVersion} unit="人民币元" />
+            <ModalInfo
+              version={selectedVersion}
+              unit="人民币元"
+              onExport={() => handleExport('ipoCompanies', null)}
+            />
             <div className="perf-modal-ipo-scroll">
               <table className="perf-table perf-table-bordered perf-table-ipo">
                 <colgroup>
@@ -1581,7 +1628,11 @@ function PerformanceApp() {
         const sumDedup = modalData.summary?.totalDedup || null
         return (
           <div className="perf-modal-fundperf-wrap">
-            <ModalInfo version={selectedVersion} unit="人民币亿元" />
+            <ModalInfo
+              version={selectedVersion}
+              unit="人民币亿元"
+              onExport={() => handleExport('underlyingCompanies', null)}
+            />
             <div className="perf-modal-fundperf-scroll">
               <table className="perf-table perf-table-bordered perf-table-underlying">
                 <colgroup>
@@ -1665,7 +1716,11 @@ function PerformanceApp() {
         const sumDedup = modalData.summary?.totalDedup || null
         return (
           <div className="perf-modal-fundperf-wrap">
-            <ModalInfo version={selectedVersion} unit="人民币亿元" />
+            <ModalInfo
+              version={selectedVersion}
+              unit="人民币亿元"
+              onExport={() => handleExport('regionCompanies', null)}
+            />
             <div className="perf-modal-fundperf-scroll">
               <table className="perf-table perf-table-bordered perf-table-region">
                 <colgroup>
@@ -1820,7 +1875,17 @@ function PerformanceApp() {
 
           {/* 基金产品指标块 */}
           <div className="perf-section">
-            <div className="perf-section-title">基金产品</div>
+            <div className="perf-section-header-with-export">
+              <div className="perf-section-title">基金产品</div>
+              <Button
+                type="primary"
+                className="perf-export-btn"
+                icon={<IconDownload />}
+                onClick={() => handleExport('fundProducts', null)}
+              >
+                导出底稿
+              </Button>
+            </div>
             <div className="perf-fund-table-wrap">
               <table className="perf-fund-table">
                 <thead>
@@ -1872,6 +1937,7 @@ function PerformanceApp() {
             config={systemConfig}
             onFundPortfolio={(fund) => openModal('fundPortfolio', fund)}
             onPortfolioDetail={() => openModal('portfolioDetail')}
+            onExport={() => handleExport('portfolio', null)}
           />
 
           {/* 底层资产 */}

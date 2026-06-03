@@ -1,0 +1,57 @@
+.listing-ipo-project-page .arco-table-th.listing-num-col,
+.listing-ipo-project-page .arco-table-th.listing-num-col .arco-table-cell,
+.listing-project-progress-page .arco-table-th.listing-num-col,
+.listing-project-progress-page .arco-table-th.listing-num-col .arco-table-cell,
+.listing-new-share-page .arco-table-th.listing-num-col,
+.listing-new-share-page .arco-table-th.listing-num-col .arco-table-cell {
+  text-align: center;
+}
+
+.listing-ipo-project-page .arco-table-th.listing-num-col .arco-table-th-item,
+.listing-ipo-project-page .arco-table-th.listing-num-col .arco-table-th-content,
+.listing-project-progress-page .arco-table-th.listing-num-col .arco-table-th-item,
+.listing-project-progress-page .arco-table-th.listing-num-col .arco-table-th-content,
+.listing-new-share-page .arco-table-th.listing-num-col .arco-table-th-item,
+.listing-new-share-page .arco-table-th.listing-num-col .arco-table-th-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.listing-ipo-project-page .arco-table-td.listing-num-col,
+.listing-ipo-project-page .arco-table-td.listing-num-col .arco-table-cell,
+.listing-project-progress-page .arco-table-td.listing-num-col,
+.listing-project-progress-page .arco-table-td.listing-num-col .arco-table-cell,
+.listing-new-share-page .arco-table-td.listing-num-col,
+.listing-new-share-page .arco-table-td.listing-num-col .arco-table-cell {
+  text-align: right;
+}
+
+.listing-ipo-project-page .arco-table.arco-table-layout-fixed .arco-table-content-inner,
+.listing-project-progress-page .arco-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.listing-ipo-project-page .arco-table.arco-table-layout-fixed .arco-table-content-inner > table,
+.listing-project-progress-page .arco-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.listing-ipo-project-page .arco-table.arco-table-layout-fixed .arco-table-th,
+.listing-ipo-project-page .arco-table.arco-table-layout-fixed .arco-table-td,
+.listing-project-progress-page .arco-table.arco-table-layout-fixed .arco-table-th,
+.listing-project-progress-page .arco-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+/* 打新日历：列间竖线分隔 */
+.listing-new-share-page .arco-table .arco-table-th,
+.listing-new-share-page .arco-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+  vertical-align: middle;
+}
+
+.listing-new-share-page .arco-table .arco-table-tr .arco-table-th:last-child,
+.listing-new-share-page .arco-table .arco-table-tr .arco-table-td:last-child {
+  border-right: none !important;
+}

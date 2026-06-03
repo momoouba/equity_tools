@@ -1,6 +1,5 @@
 'use strict';
 
-const db = require('../../db');
 const CA_C = require('./constants');
 const { migrateCompetitorEnterpriseIds } = require('./competitorSyncSnapshot');
 
@@ -24,6 +23,14 @@ const ENRICH_ORDER = `(CASE WHEN NULLIF(TRIM(ai_product_intro),'') IS NOT NULL T
 const NORM_UCC = `UPPER(REPLACE(TRIM(IFNULL(unified_credit_code,'')),' ',''))`;
 const NORM_NAME = `LOWER(TRIM(IFNULL(enterprise_full_name,'')))`;
 const NORM_ABBR = `LOWER(TRIM(IFNULL(project_abbreviation,'')))`;
+
+async function queryRows(executor, sql, params) {
+  const result = await executor.query(sql, params);
+  if (Array.isArray(result) && result.length === 2 && Array.isArray(result[0])) {
+    return result[0];
+  }
+  return result;
+}
 
 function mergeWechatIds(a, b) {
   const oldStr = (a || '').trim();
@@ -52,7 +59,7 @@ async function mergeKeeperAndDeleteExtras(executor, keeperRow, extraRows, caName
       const rowHas = rv != null && String(rv).trim() !== '';
       if (keeperEmpty && rowHas) keeper[f] = rv;
     }
-    await migrateCompetitorEnterpriseIds(row.id, keeper.id);
+    await migrateCompetitorEnterpriseIds(row.id, keeper.id, executor);
     await executor.execute('DELETE FROM invested_enterprises WHERE id = ?', [row.id]);
   }
   await executor.execute(
@@ -85,7 +92,11 @@ async function mergeKeeperAndDeleteExtras(executor, keeperRow, extraRows, caName
  * @param {import('mysql2/promise').Pool|object} [executor] 默认 db；传 dbPool 用于 initializeTables
  * @returns {Promise<number>} 删除的重复行数
  */
-async function dedupeCompetitorInvestedEnterprises(executor = db) {
+async function dedupeCompetitorInvestedEnterprises(executor) {
+  if (!executor) {
+    const db = require('../../db');
+    executor = db;
+  }
   const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
   const caName = CA_C.APP_NAME_COMPETITOR_ANALYSIS;
   let deduped = 0;
@@ -94,7 +105,9 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version, qcc_company_intro,
     wechat_official_account_id, official_website`;
 
-  const [byUcc] = await executor.query(
+  console.log('  → 竞品分析被投企业去重：按统一社会信用代码…');
+  const byUcc = await queryRows(
+    executor,
     `SELECT creator_user_id, ${NORM_UCC} AS ucc, COUNT(*) AS cnt
      FROM invested_enterprises
      WHERE delete_mark = 0 AND data_app_id <=> ?
@@ -104,7 +117,8 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     [caId]
   );
   for (const g of byUcc) {
-    const [rows] = await executor.query(
+    const rows = await queryRows(
+      executor,
       `SELECT ${selectCols}
        FROM invested_enterprises
        WHERE delete_mark = 0 AND data_app_id <=> ?
@@ -116,7 +130,9 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     deduped += await mergeKeeperAndDeleteExtras(executor, rows[0], rows.slice(1), caName);
   }
 
-  const [byName] = await executor.query(
+  console.log('  → 竞品分析被投企业去重：按企业全称…');
+  const byName = await queryRows(
+    executor,
     `SELECT creator_user_id, ${NORM_NAME} AS ename, COUNT(*) AS cnt
      FROM invested_enterprises
      WHERE delete_mark = 0 AND data_app_id <=> ?
@@ -127,7 +143,8 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     [caId]
   );
   for (const g of byName) {
-    const [rows] = await executor.query(
+    const rows = await queryRows(
+      executor,
       `SELECT ${selectCols}
        FROM invested_enterprises
        WHERE delete_mark = 0 AND data_app_id <=> ?
@@ -140,7 +157,9 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     deduped += await mergeKeeperAndDeleteExtras(executor, rows[0], rows.slice(1), caName);
   }
 
-  const [byAbbr] = await executor.query(
+  console.log('  → 竞品分析被投企业去重：按项目简称…');
+  const byAbbr = await queryRows(
+    executor,
     `SELECT creator_user_id, ${NORM_ABBR} AS abbr, COUNT(*) AS cnt
      FROM invested_enterprises
      WHERE delete_mark = 0 AND data_app_id <=> ?
@@ -152,7 +171,8 @@ async function dedupeCompetitorInvestedEnterprises(executor = db) {
     [caId]
   );
   for (const g of byAbbr) {
-    const [rows] = await executor.query(
+    const rows = await queryRows(
+      executor,
       `SELECT ${selectCols}
        FROM invested_enterprises
        WHERE delete_mark = 0 AND data_app_id <=> ?

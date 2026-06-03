@@ -44,6 +44,25 @@ const FormItem = Form.Item
 
 const DATA_APP_NEWS = '新闻舆情'
 const DATA_APP_PROJECT = '竞品分析'
+const IE_ROW_SELECTION_WIDTH = 52
+const IE_NUM_COL_CLASS = 'invested-enterprises-num-col'
+
+/** 金额列：表头居中、内容右对齐 */
+function buildIeNumericColumn(title, dataIndex, width, render) {
+  return {
+    title,
+    dataIndex,
+    key: dataIndex,
+    width,
+    className: IE_NUM_COL_CLASS,
+    align: 'right',
+    headerCellClassName: IE_NUM_COL_CLASS,
+    bodyCellClassName: IE_NUM_COL_CLASS,
+    headerCellStyle: { textAlign: 'center' },
+    bodyCellStyle: { textAlign: 'right' },
+    render,
+  }
+}
 
 /** 从行数据取金额（兼容 snake_case / camelCase；避免仅依赖 Table render 的第一个参数） */
 function pickAmountField(record, snakeKey) {
@@ -685,10 +704,11 @@ function EnterpriseManagement({
     }
     const actionCol = {
       title: '操作',
-      width: showInvestedEnterpriseAi && isAdmin ? 300 : 220,
+      width: showInvestedEnterpriseAi && isAdmin ? 340 : 220,
+      fixed: showInvestedEnterpriseAi ? 'right' : undefined,
       align: 'left',
       render: (_, record) => (
-        <Space size={8}>
+        <Space size={8} wrap={false}>
           {showInvestedEnterpriseAi && isAdmin ? (
             <Button
               type="outline"
@@ -765,7 +785,8 @@ function EnterpriseManagement({
                     />
                   </div>
                 ),
-                width: 52,
+                width: IE_ROW_SELECTION_WIDTH,
+                fixed: 'left',
                 align: 'center',
                 headerCellStyle: { textAlign: 'center' },
                 bodyCellStyle: { textAlign: 'center' },
@@ -786,39 +807,52 @@ function EnterpriseManagement({
           : []
       const base = [
         ...competitorSelectCol,
-        indexCol,
+        {
+          ...indexCol,
+          width: 80,
+          fixed: 'left',
+        },
         {
           title: '项目编号',
           dataIndex: 'project_number',
+          width: 140,
+          fixed: 'left',
           ellipsis: true,
-          tooltip: true
+          tooltip: true,
         },
         {
           title: '企业类型',
           dataIndex: 'entity_type',
+          width: 100,
+          fixed: 'left',
           ellipsis: true,
           tooltip: true,
-          render: (text) => text || '-'
+          render: (text) => text || '-',
         },
         {
           title: '项目简称',
           dataIndex: 'project_abbreviation',
+          width: 120,
+          fixed: 'left',
           ellipsis: true,
           tooltip: true,
-          render: (text) => text || '-'
+          render: (text) => text || '-',
         },
         {
           title: '关联基金',
           dataIndex: 'fund',
+          width: 140,
+          fixed: 'left',
           ellipsis: true,
           tooltip: true,
-          render: (text) => text || '-'
+          render: (text) => text || '-',
         },
         {
           title: '被投企业全称',
           dataIndex: 'enterprise_full_name',
+          width: 220,
           ellipsis: true,
-          tooltip: true
+          tooltip: true,
         },
       ]
       if (showInvestedEnterpriseAi) {
@@ -875,40 +909,25 @@ function EnterpriseManagement({
         )
       }
       base.push(
-        {
-          title: '投资成本',
-          dataIndex: 'investment_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'investment_cost'))
-        },
-        {
-          title: '已退出成本',
-          dataIndex: 'exited_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'exited_cost'))
-        },
-        {
-          title: '剩余成本',
-          dataIndex: 'remaining_cost',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'remaining_cost'))
-        },
-        {
-          title: '剩余价值',
-          dataIndex: 'residual_value',
-          ellipsis: true,
-          tooltip: true,
-          render: (_, record) => formatTableAmount(pickAmountField(record, 'residual_value'))
-        },
+        buildIeNumericColumn('投资成本', 'investment_cost', 120, (_, record) =>
+          formatTableAmount(pickAmountField(record, 'investment_cost'))
+        ),
+        buildIeNumericColumn('已退出成本', 'exited_cost', 120, (_, record) =>
+          formatTableAmount(pickAmountField(record, 'exited_cost'))
+        ),
+        buildIeNumericColumn('剩余成本', 'remaining_cost', 120, (_, record) =>
+          formatTableAmount(pickAmountField(record, 'remaining_cost'))
+        ),
+        buildIeNumericColumn('剩余价值', 'residual_value', 120, (_, record) =>
+          formatTableAmount(pickAmountField(record, 'residual_value'))
+        ),
         {
           title: '退出状态',
           dataIndex: 'exit_status',
+          width: 100,
           ellipsis: true,
           tooltip: true,
-          render: (text) => text || '-'
+          render: (text) => text || '-',
         }
       )
       if (showInvestedEnterpriseAi) {
@@ -1010,9 +1029,14 @@ function EnterpriseManagement({
     runCompetitorFlowForEnterprise,
   ])
 
+  const investedEnterpriseTableScrollX = useMemo(() => {
+    if (!showInvestedEnterpriseAi) return 'max-content'
+    return columns.reduce((sum, col) => sum + (Number(col.width) || 0), 0)
+  }, [columns, showInvestedEnterpriseAi])
+
   return (
     <div
-      className="enterprise-management"
+      className={`enterprise-management${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-page' : ''}`}
       style={
         viewportBoundTable
           ? {
@@ -1396,14 +1420,15 @@ function EnterpriseManagement({
           }
         >
           <div
-            className={`table-container${showInvestedEnterpriseAi ? ' invested-enterprises-horizontal-scroll' : ''}`}
+            className={`table-container${
+              showInvestedEnterpriseAi && !viewportBoundTable ? ' invested-enterprises-horizontal-scroll' : ''
+            }${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-container' : ''}`}
             style={
               viewportBoundTable
                 ? {
                     flex: 1,
                     minHeight: 0,
-                    overflowX: showInvestedEnterpriseAi ? 'auto' : 'hidden',
-                    overflowY: 'hidden',
+                    overflow: 'hidden',
                     marginBottom: 0,
                   }
                 : undefined
@@ -1428,7 +1453,7 @@ function EnterpriseManagement({
               }}
               stripe
               scroll={{
-                x: showInvestedEnterpriseAi ? 2840 : 'max-content',
+                x: investedEnterpriseTableScrollX,
                 ...(viewportBoundTable ? { y: tableScrollY } : {}),
               }}
             />

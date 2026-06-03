@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
 import {
   Table,
   Button,
@@ -14,6 +14,13 @@ import {
   DatePicker,
 } from '@arco-design/web-react'
 import './ListingProjectProgressPage.css'
+import './listingTableColumns.css'
+import {
+  buildListingNumericColumn,
+  formatListingAmount,
+  formatListingPercent,
+  sumColumnWidths,
+} from './listingTableColumns'
 import {
   fetchIpoProjectProgressList,
   downloadIpoProjectProgressExport,
@@ -693,77 +700,78 @@ export default function ListingProjectProgressPage() {
     }
   }
 
-  const columns = [
-    {
-      title: '更新日期',
-      dataIndex: 'f_update_time',
-      width: 120,
-      render: (v) => (v ? String(v).slice(0, 10) : '-'),
-    },
-    { title: '交易所', dataIndex: 'exchange', width: 100 },
-    { title: '板块', dataIndex: 'board', width: 100 },
-    { title: '审核状态', dataIndex: 'status', width: 120 },
-    { title: '归属基金', dataIndex: 'fund', width: 180, ellipsis: true },
-    { title: '归属子基金', dataIndex: 'sub', width: 160, ellipsis: true },
-    { title: '项目简称', dataIndex: 'project_name', width: 140, ellipsis: true },
-    { title: '企业全称', dataIndex: 'company', width: 220, ellipsis: true },
-    {
-      title: '投资金额',
-      dataIndex: 'inv_amount',
-      width: 130,
-      render: (v) => (v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
-    },
-    {
-      title: '剩余金额',
-      dataIndex: 'residual_amount',
-      width: 130,
-      render: (v) => (v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
-    },
-    {
-      title: '穿透权益占比',
-      dataIndex: 'ratio',
-      width: 130,
-      render: (v) => {
-        if (v === null || v === undefined || v === '') return '-'
-        const n = Number(v)
-        if (!Number.isFinite(n)) return '-'
-        return `${(n * 100).toFixed(2)}%`
+  const columns = useMemo(() => {
+    const cols = [
+      {
+        title: '更新日期',
+        dataIndex: 'f_update_time',
+        key: 'f_update_time',
+        width: 120,
+        fixed: 'left',
+        render: (v) => (v ? String(v).slice(0, 10) : '-'),
       },
-    },
-    {
-      title: '穿透投资金额',
-      dataIndex: 'ct_amount',
-      width: 140,
-      render: (v) => (v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
-    },
-    {
-      title: '穿透剩余金额',
-      dataIndex: 'ct_residual',
-      width: 140,
-      render: (v) => (v === null || v === undefined || v === '' ? '-' : Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })),
-    },
-  ]
+      { title: '交易所', dataIndex: 'exchange', key: 'exchange', width: 100, fixed: 'left' },
+      { title: '板块', dataIndex: 'board', key: 'board', width: 100, fixed: 'left' },
+      { title: '审核状态', dataIndex: 'status', key: 'status', width: 120, fixed: 'left' },
+      {
+        title: '归属基金',
+        dataIndex: 'fund',
+        key: 'fund',
+        width: 180,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      {
+        title: '归属子基金',
+        dataIndex: 'sub',
+        key: 'sub',
+        width: 160,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      {
+        title: '项目简称',
+        dataIndex: 'project_name',
+        key: 'project_name',
+        width: 140,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      { title: '企业全称', dataIndex: 'company', key: 'company', width: 220, ellipsis: true, tooltip: true },
+      buildListingNumericColumn('投资金额', 'inv_amount', 130, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('剩余金额', 'residual_amount', 130, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('穿透权益占比', 'ratio', 130, (v) => formatListingPercent(v, true)),
+      buildListingNumericColumn('穿透投资金额', 'ct_amount', 140, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('穿透剩余金额', 'ct_residual', 140, (v) => formatListingAmount(v)),
+    ]
+    if (isAdmin) {
+      cols.push({
+        title: '操作',
+        key: 'actions',
+        width: 220,
+        fixed: 'right',
+        render: (_, record) => (
+          <Space size={8} wrap={false}>
+            <Button type="primary" size="small" onClick={() => openIppEdit(record)}>
+              编辑
+            </Button>
+            <Button type="outline" status="success" size="small" onClick={() => openIppLog(record)}>
+              日志
+            </Button>
+            <Button type="outline" status="danger" size="small" onClick={() => handleIppDelete(record)}>
+              删除
+            </Button>
+          </Space>
+        ),
+      })
+    }
+    return cols
+  }, [isAdmin])
 
-  if (isAdmin) {
-    columns.push({
-      title: '操作',
-      width: 220,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space>
-          <Button type="primary" size="small" onClick={() => openIppEdit(record)}>
-            编辑
-          </Button>
-          <Button type="outline" status="success" size="small" onClick={() => openIppLog(record)}>
-            日志
-          </Button>
-          <Button type="outline" status="danger" size="small" onClick={() => handleIppDelete(record)}>
-            删除
-          </Button>
-        </Space>
-      ),
-    })
-  }
+  const tableScrollX = useMemo(() => sumColumnWidths(columns), [columns])
 
   return (
     <div className="listing-project-progress-page" style={{ padding: '0 16px' }}>
@@ -842,7 +850,7 @@ export default function ListingProjectProgressPage() {
             data={data}
             border
             stripe
-            scroll={{ x: isAdmin ? 2200 : 2000, y: tableScrollY }}
+            scroll={{ x: tableScrollX, y: tableScrollY }}
             pagination={{
               current: page,
               pageSize: Number(pageSize),

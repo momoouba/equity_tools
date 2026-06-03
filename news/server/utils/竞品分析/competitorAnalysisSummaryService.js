@@ -301,10 +301,36 @@ async function hydrateRelationRow(rel) {
  * 被投/投前：竞品分析说明（最近成功运行步骤 + 当前保留竞品及原因）
  */
 async function buildCompetitorAnalysisSummary(opts) {
-  const { subjectType = 'invested_enterprise', investedEnterpriseId, preInvestmentProjectId } = opts;
+  const {
+    subjectType = 'invested_enterprise',
+    investedEnterpriseId,
+    preInvestmentProjectId,
+    runId: explicitRunId,
+  } = opts;
+  const runId = String(explicitRunId || '').trim();
 
   let run = null;
-  if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
+  if (runId) {
+    if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
+      const runs = await db.query(
+        `SELECT id, status, message, started_at, finished_at, updated_at
+         FROM sourcing_competitor_run
+         WHERE delete_mark = 0 AND id = ? AND invested_enterprise_id = ?
+         LIMIT 1`,
+        [runId, investedEnterpriseId]
+      );
+      run = runs[0] || null;
+    } else if (preInvestmentProjectId) {
+      const runs = await db.query(
+        `SELECT id, status, message, started_at, finished_at, updated_at
+         FROM sourcing_pre_investment_competitor_run
+         WHERE delete_mark = 0 AND id = ? AND pre_investment_project_id = ?
+         LIMIT 1`,
+        [runId, preInvestmentProjectId]
+      );
+      run = runs[0] || null;
+    }
+  } else if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
     const runs = await db.query(
       `SELECT id, status, message, started_at, finished_at, updated_at
        FROM sourcing_competitor_run
@@ -336,31 +362,61 @@ async function buildCompetitorAnalysisSummary(opts) {
 
   let relRows = [];
   if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
-    relRows = await db.query(
-      `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
-              relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
-              competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-              created_at, run_id
-       FROM sourcing_competitor_relation
-       WHERE delete_mark = 0 AND invested_enterprise_id = ?
-         AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-       ORDER BY relevance_score DESC, created_at DESC
-       LIMIT 200`,
-      [investedEnterpriseId]
-    );
+    if (runId) {
+      relRows = await db.query(
+        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+                relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
+                competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                created_at, run_id
+         FROM sourcing_competitor_relation
+         WHERE invested_enterprise_id = ? AND run_id = ?
+           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+         ORDER BY relevance_score DESC, created_at DESC
+         LIMIT 200`,
+        [investedEnterpriseId, runId]
+      );
+    } else {
+      relRows = await db.query(
+        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+                relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
+                competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                created_at, run_id
+         FROM sourcing_competitor_relation
+         WHERE delete_mark = 0 AND invested_enterprise_id = ?
+           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+         ORDER BY relevance_score DESC, created_at DESC
+         LIMIT 200`,
+        [investedEnterpriseId]
+      );
+    }
   } else if (preInvestmentProjectId) {
-    relRows = await db.query(
-      `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
-              relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
-              competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-              created_at, run_id
-       FROM sourcing_competitor_relation
-       WHERE delete_mark = 0 AND pre_investment_project_id = ?
-         AND subject_type = 'pre_investment_project'
-       ORDER BY relevance_score DESC, created_at DESC
-       LIMIT 200`,
-      [preInvestmentProjectId]
-    );
+    if (runId) {
+      relRows = await db.query(
+        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+                relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
+                competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                created_at, pre_investment_run_id
+         FROM sourcing_competitor_relation
+         WHERE pre_investment_project_id = ? AND pre_investment_run_id = ?
+           AND subject_type = 'pre_investment_project'
+         ORDER BY relevance_score DESC, created_at DESC
+         LIMIT 200`,
+        [preInvestmentProjectId, runId]
+      );
+    } else {
+      relRows = await db.query(
+        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+                relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
+                competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                created_at, pre_investment_run_id
+         FROM sourcing_competitor_relation
+         WHERE delete_mark = 0 AND pre_investment_project_id = ?
+           AND subject_type = 'pre_investment_project'
+         ORDER BY relevance_score DESC, created_at DESC
+         LIMIT 200`,
+        [preInvestmentProjectId]
+      );
+    }
   }
 
   const deduped = dedupeRelations(relRows);

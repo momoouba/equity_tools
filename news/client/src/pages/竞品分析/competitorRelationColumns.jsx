@@ -41,12 +41,10 @@ export function formatCompetitorDataSources(v) {
  * @param {(record: object, checked: boolean) => void} [opts.onComparableToggle]
 
  * @param {string|null} [opts.comparableSavingId]
-
+ * @param {boolean} [opts.comparableReadOnly]
  */
-
 export function getCompetitorRelationColumns(opts = {}) {
-
-  const { onComparableToggle, comparableSavingId } = opts
+  const { onComparableToggle, comparableSavingId, comparableReadOnly } = opts
 
   return [
 
@@ -166,7 +164,7 @@ export function getCompetitorRelationColumns(opts = {}) {
 
           checked={Number(v) === 1}
 
-          disabled={comparableSavingId === record.id}
+          disabled={comparableReadOnly || comparableSavingId === record.id}
 
           onChange={(checked) => onComparableToggle?.(record, checked)}
 

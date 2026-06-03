@@ -6,20 +6,27 @@ const router = express.Router();
 const XLSX = require('xlsx');
 const db = require('../../db');
 const { getCurrentUser } = require('../../middleware/auth');
-const { checkUserAppPermission } = require('../../utils/permissionChecker');
 
-// 构造安全的 Content-Disposition，避免中文/换行等导致 ERR_INVALID_CHAR
-function buildContentDisposition(filename) {
-  const safeAscii = String(filename)
-    .replace(/[\r\n]+/g, ' ')
-    .replace(/"/g, '')
-    .replace(/[^\x20-\x7E]/g, '_'); // 非 ASCII 替换为下划线，保证 Node 不报错
-  const encoded = encodeURIComponent(String(filename));
-  // 同时带上 filename*，方便支持 UTF-8 文件名的浏览器
-  return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encoded}`;
+const SYSTEM_COLUMN_RE =
+  /^F_(Id|CreatorUserId|CreatorTime|DeleteUserId|DeleteMark|DeleteTime|Lock|LastModifyUserId|LastModifyTime)$/i;
+
+const SYSTEM_COMMENT_RE =
+  /^(主键|创建用户|创建时间|删除用户|删除状态|删除时间|锁定状态|最后修改时间|修改用户)$/;
+
+function isSystemPerformanceColumn(columnName, comment) {
+  if (SYSTEM_COLUMN_RE.test(String(columnName || ''))) return true;
+  return SYSTEM_COMMENT_RE.test(String(comment || '').trim());
 }
 
-// 根据表结构中的字段注释（形如 "基金名称-03"），生成导出列顺序和表头
+function parseCommentOrder(comment) {
+  const m = String(comment || '').match(/^(.*?)-(\d+)$/);
+  if (!m) return null;
+  const label = m[1] && m[1].trim() ? m[1].trim() : '';
+  const order = parseInt(m[2], 10);
+  if (!label || !Number.isFinite(order)) return null;
+  return { label, order };
+}
+
 async function getOrderedColumnsByComment(tableName) {
   const cols = await db.query(
     `SELECT COLUMN_NAME, COLUMN_COMMENT, ORDINAL_POSITION
@@ -29,53 +36,46 @@ async function getOrderedColumnsByComment(tableName) {
     [tableName]
   );
 
-  // 只取注释中带有 "-X" 的字段，X 代表列顺序
   const withOrder = (cols || [])
     .map((c) => {
-      const comment = c.COLUMN_COMMENT || '';
-      const m = comment.match(/^(.*?)-(\d+)$/);
-      if (!m) return null;
-      const label = m[1] && m[1].trim() ? m[1].trim() : c.COLUMN_NAME;
-      const order = parseInt(m[2], 10);
-      if (!Number.isFinite(order)) return null;
-      return { name: c.COLUMN_NAME, label, order };
+      if (isSystemPerformanceColumn(c.COLUMN_NAME, c.COLUMN_COMMENT)) return null;
+      const parsed = parseCommentOrder(c.COLUMN_COMMENT);
+      if (!parsed) return null;
+      return { name: c.COLUMN_NAME, label: parsed.label, order: parsed.order };
     })
     .filter(Boolean)
-    .sort((a, b) => a.order - b.order);
+    .sort(
+      (a, b) => a.order - b.order || String(a.label).localeCompare(String(b.label), 'zh-CN')
+    );
 
-  // 如果没有任何带 -X 的注释，则退回到按物理顺序导出全部字段，列名用注释或字段名
-  if (withOrder.length === 0) {
-    return (cols || []).map((c) => ({
+  if (withOrder.length > 0) return withOrder;
+
+  return (cols || [])
+    .filter((c) => !isSystemPerformanceColumn(c.COLUMN_NAME, c.COLUMN_COMMENT))
+    .map((c) => ({
       name: c.COLUMN_NAME,
-      label: (c.COLUMN_COMMENT || '').replace(/-\d+$/, '') || c.COLUMN_NAME,
+      label: String(c.COLUMN_COMMENT || '').replace(/-\d+$/, '').trim() || c.COLUMN_NAME,
     }));
-  }
-  return withOrder;
 }
 
-// 使用字段注释作为表头生成工作表，并对数字保留 2 位小数、日期转为字符串、设置表头样式与列宽
 async function buildSheetFromRows(tableName, rows) {
   const cols = await getOrderedColumnsByComment(tableName);
   const data = [];
 
-  // 识别“日期/时间”列（根据列注释和字段名粗略判断）
   const dateColFlags = cols.map((c) => {
     const label = (c.label || '').toString();
     const name = (c.name || '').toString();
     return /日期|时间/.test(label) || /(_date|_time|b_date)$/i.test(name);
   });
 
-  // 表头
   data.push(cols.map((c) => c.label));
 
-  // 数据行：将日期列统一格式化为 YYYY-MM-DD 字符串
   (rows || []).forEach((row) => {
     const line = cols.map((c, idx) => {
       let v = row[c.name];
       if (v == null) return null;
 
       if (dateColFlags[idx]) {
-        // 转为日期字符串
         const d = v instanceof Date ? v : new Date(v);
         if (!Number.isNaN(d.getTime())) {
           const y = d.getFullYear();
@@ -83,7 +83,6 @@ async function buildSheetFromRows(tableName, rows) {
           const dd = String(d.getDate()).padStart(2, '0');
           return `${y}-${m}-${dd}`;
         }
-        // 非法日期则按原样转字符串
         return String(v).slice(0, 10);
       }
       return v;
@@ -92,8 +91,6 @@ async function buildSheetFromRows(tableName, rows) {
   });
 
   const ws = XLSX.utils.aoa_to_sheet(data);
-
-  // 自动计算列宽 & 数字保留两位小数
   const range = XLSX.utils.decode_range(ws['!ref']);
   const colWidths = new Array(range.e.c - range.s.c + 1).fill(0);
 
@@ -103,19 +100,16 @@ async function buildSheetFromRows(tableName, rows) {
       const cell = ws[cellRef];
       if (!cell) continue;
 
-      // 第一行表头样式：蓝底白字（部分 Excel 客户端可能不完全支持样式）
       if (R === range.s.r) {
         cell.s = cell.s || {};
-        cell.s.fill = { fgColor: { rgb: '165DFF' } }; // 蓝色
+        cell.s.fill = { fgColor: { rgb: '165DFF' } };
         cell.s.font = { color: { rgb: 'FFFFFF' }, bold: true };
       } else {
-        // 数据行：若是数字（或数字字符串），统一保留两位小数 + 千分位
         const isNumericString = typeof cell.v === 'string' && /^-?\d+(\.\d+)?$/.test(cell.v);
         if (typeof cell.v === 'number' || isNumericString) {
           const num = Number(cell.v);
           if (!Number.isNaN(num)) {
             cell.v = Number(num.toFixed(2));
-            // 明确标记为数字单元格，使用 Excel 数字格式：千分位 + 两位小数
             cell.t = 'n';
             cell.z = '#,##0.00';
           }
@@ -128,8 +122,18 @@ async function buildSheetFromRows(tableName, rows) {
   }
 
   ws['!cols'] = colWidths.map((w) => ({ wch: Math.min(Math.max(w + 2, 8), 40) }));
-
   return ws;
+}
+
+// 构造安全的 Content-Disposition，避免中文/换行等导致 ERR_INVALID_CHAR
+function buildContentDisposition(filename) {
+  const safeAscii = String(filename)
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/"/g, '')
+    .replace(/[^\x20-\x7E]/g, '_'); // 非 ASCII 替换为下划线，保证 Node 不报错
+  const encoded = encodeURIComponent(String(filename));
+  // 同时带上 filename*，方便支持 UTF-8 文件名的浏览器
+  return `attachment; filename="${safeAscii}"; filename*=UTF-8''${encoded}`;
 }
 
 router.use(getCurrentUser);
@@ -449,7 +453,7 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
     const wb = XLSX.utils.book_new();
     
     const ws1 = await buildSheetFromRows('b_investment_sum', portfolioRows);
-    XLSX.utils.book_append_sheet(wb, ws1, '基金投资组合明细');
+    XLSX.utils.book_append_sheet(wb, ws1, '全量基金投资组合明细');
     
     const ws2 = await buildSheetFromRows('b_transaction', detailRows);
     XLSX.utils.book_append_sheet(wb, ws2, '数据明细表');
@@ -464,6 +468,192 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
     res.send(buffer);
   } catch (error) {
     console.error('导出整体投资组合明细失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
+ * 导出投资组合（当前版本全部基金）
+ * POST /api/performance/exports/portfolio
+ */
+router.post('/portfolio', checkExportPermission, async (req, res) => {
+  try {
+    const { version } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const indicatorRows = await db.query(
+      `SELECT * FROM b_investment_indicator
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund_type, fund`,
+      [version]
+    );
+
+    const detailRows = await db.query(
+      `SELECT * FROM b_investment
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_type, first_date ASC`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const wsIndicator = await buildSheetFromRows('b_investment_indicator', indicatorRows);
+    XLSX.utils.book_append_sheet(wb, wsIndicator, '基金投资组合指标');
+
+    const wsDetail = await buildSheetFromRows('b_investment', detailRows);
+    XLSX.utils.book_append_sheet(wb, wsDetail, '基金投资组合明细');
+
+    const transactionRows = await db.query(
+      `SELECT * FROM b_transaction
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_date ASC`,
+      [version]
+    );
+    const wsTransaction = await buildSheetFromRows('b_transaction', transactionRows);
+    XLSX.utils.book_append_sheet(wb, wsTransaction, '数据明细表');
+
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-投资组合-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出投资组合失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
+ * 导出基金产品指标（当前版本全部基金）
+ * POST /api/performance/exports/fund-products
+ */
+router.post('/fund-products', checkExportPermission, async (req, res) => {
+  try {
+    const { version } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const indicatorRows = await db.query(
+      `SELECT * FROM b_transaction_indicator
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund_type, fund`,
+      [version]
+    );
+
+    const investorRows = await db.query(
+      `SELECT * FROM b_investor_list
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, lp`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const wsIndicator = await buildSheetFromRows('b_transaction_indicator', indicatorRows);
+    XLSX.utils.book_append_sheet(wb, wsIndicator, '基金产品指标');
+
+    const wsInvestors = await buildSheetFromRows('b_investor_list', investorRows);
+    XLSX.utils.book_append_sheet(wb, wsInvestors, '合伙人名录');
+
+    const transactionRows = await db.query(
+      `SELECT * FROM b_transaction
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_date ASC`,
+      [version]
+    );
+    const wsTransaction = await buildSheetFromRows('b_transaction', transactionRows);
+    XLSX.utils.book_append_sheet(wb, wsTransaction, '数据明细表');
+
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-基金产品指标-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出基金产品指标失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
+ * 导出底层企业明细
+ * POST /api/performance/exports/underlying-companies
+ */
+router.post('/underlying-companies', checkExportPermission, async (req, res) => {
+  try {
+    const { version, type = 'cumulative' } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const table = type === 'cumulative' ? 'b_project_a' : 'b_project';
+    const rows = await db.query(
+      `SELECT * FROM ${table}
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY set_up_date ASC`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const ws = await buildSheetFromRows(table, rows);
+    XLSX.utils.book_append_sheet(wb, ws, '底层企业明细');
+
+    const typeLabel = type === 'cumulative' ? '累计' : '当前';
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-底层企业明细-${typeLabel}-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出底层企业明细失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
+ * 导出区域企业明细
+ * POST /api/performance/exports/region-companies
+ */
+router.post('/region-companies', checkExportPermission, async (req, res) => {
+  try {
+    const { version, type = 'cumulative' } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const table = type === 'cumulative' ? 'b_region_a' : 'b_region';
+    const rows = await db.query(
+      `SELECT * FROM ${table}
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY set_up_date ASC`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const ws = await buildSheetFromRows(table, rows);
+    XLSX.utils.book_append_sheet(wb, ws, '区域企业明细');
+
+    const typeLabel = type === 'cumulative' ? '累计' : '当前';
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-区域企业明细-${typeLabel}-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出区域企业明细失败:', error);
     res.status(500).json({ success: false, message: '导出失败' });
   }
 });

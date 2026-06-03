@@ -10,10 +10,12 @@ import {
   Space,
   Checkbox,
   Select,
+  Radio,
 } from '@arco-design/web-react'
 import {
   fetchPreInvestmentProjects,
   fetchCompetitorRelations,
+  fetchCompetitorAnalysisRuns,
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
   postPreInvestmentProject,
@@ -54,6 +56,18 @@ function projectYear(projectNo) {
   const s = String(projectNo || '').trim()
   if (s.length >= 5 && s[0] === 'P') return s.slice(1, 5)
   return s.slice(0, 4)
+}
+
+function sortRelationsByComparable(list) {
+  return [...(list || [])].sort((a, b) => {
+    const ca = Number(a.include_in_comparable) === 1 ? 1 : 0
+    const cb = Number(b.include_in_comparable) === 1 ? 1 : 0
+    if (cb !== ca) return cb - ca
+    const sa = Number(a.relevance_score) || 0
+    const sb = Number(b.relevance_score) || 0
+    if (sb !== sa) return sb - sa
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  })
 }
 
 const AI_ENRICH_POLL_MS = 2500
@@ -105,10 +119,16 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [expandedKeys, setExpandedKeys] = useState([])
   const [relMap, setRelMap] = useState({})
   const [relLoading, setRelLoading] = useState({})
+  const [runMap, setRunMap] = useState({})
+  const [selectedRunMap, setSelectedRunMap] = useState({})
+  const [latestRunMap, setLatestRunMap] = useState({})
+  const [relCacheKey, setRelCacheKey] = useState({})
   const [selectedIds, setSelectedIds] = useState([])
   const [exportYears, setExportYears] = useState([])
   const [yearFilter, setYearFilter] = useState([])
   const [exporting, setExporting] = useState(false)
+  const [exportModalOpen, setExportModalOpen] = useState(false)
+  const [exportBatchMode, setExportBatchMode] = useState('latest')
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
   const [editVisible, setEditVisible] = useState(false)
@@ -122,15 +142,18 @@ export default function ProjectSourcingPreInvestmentPage() {
   const handleComparableToggle = useCallback(async (record, checked) => {
     const subjectId = record.pre_investment_project_id
     if (!subjectId || !record.id) return
+    if (selectedRunMap[subjectId] && latestRunMap[subjectId] && selectedRunMap[subjectId] !== latestRunMap[subjectId]) {
+      Message.warning('历史版本不可修改可比勾选，请切换到最新版本')
+      return
+    }
     setComparableSavingId(record.id)
     setRelMap((m) => {
-      const list = m[subjectId] || []
-      return {
-        ...m,
-        [subjectId]: list.map((r) =>
+      const list = sortRelationsByComparable(
+        (m[subjectId] || []).map((r) =>
           r.id === record.id ? { ...r, include_in_comparable: checked ? 1 : 0 } : r
-        ),
-      }
+        )
+      )
+      return { ...m, [subjectId]: list }
     })
     try {
       const res = await patchCompetitorRelationComparable(record.id, checked)
@@ -139,32 +162,69 @@ export default function ProjectSourcingPreInvestmentPage() {
       }
     } catch (e) {
       setRelMap((m) => {
-        const list = m[subjectId] || []
-        return {
-          ...m,
-          [subjectId]: list.map((r) =>
+        const list = sortRelationsByComparable(
+          (m[subjectId] || []).map((r) =>
             r.id === record.id ? { ...r, include_in_comparable: checked ? 0 : 1 } : r
-          ),
-        }
+          )
+        )
+        return { ...m, [subjectId]: list }
       })
       Message.error(e.response?.data?.message || e.message || '保存失败')
     } finally {
       setComparableSavingId(null)
     }
-  }, [])
+  }, [latestRunMap, selectedRunMap])
 
   const relColumns = useMemo(
     () => getCompetitorRelationColumns({ onComparableToggle: handleComparableToggle, comparableSavingId }),
     [handleComparableToggle, comparableSavingId]
   )
 
-  const loadRelations = async (projectId, force = false) => {
-    if (!force && relMap[projectId]) return
+  const loadRuns = async (projectId) => {
+    if (runMap[projectId]?.loaded) {
+      const list = runMap[projectId].list || []
+      return { list, latestRunId: latestRunMap[projectId] || (list.length ? list[0].id : null) }
+    }
+    setRunMap((m) => ({ ...m, [projectId]: { ...(m[projectId] || {}), loading: true } }))
+    try {
+      const res = await fetchCompetitorAnalysisRuns({ pre_investment_project_id: projectId })
+      const list = res.data?.success ? res.data.data?.list || [] : []
+      const latestRunId = res.data?.data?.latest_run_id || (list.length ? list[0].id : null)
+      setRunMap((m) => ({ ...m, [projectId]: { list, loaded: true, loading: false } }))
+      setLatestRunMap((m) => ({ ...m, [projectId]: latestRunId }))
+      setSelectedRunMap((m) => {
+        const prev = m[projectId]
+        const valid = new Set(list.map((run) => run.id))
+        if (prev && valid.has(prev)) return m
+        return { ...m, [projectId]: latestRunId }
+      })
+      return { list, latestRunId }
+    } catch (e) {
+      setRunMap((m) => ({ ...m, [projectId]: { list: [], loaded: true, loading: false } }))
+      Message.error(e.response?.data?.message || e.message || '加载版本失败')
+      return { list: [], latestRunId: null }
+    }
+  }
+
+  const loadRelations = async (projectId, runId, force = false) => {
+    const cacheKey = runId || 'latest'
+    if (!force && relCacheKey[projectId] === cacheKey && relMap[projectId]) return
     setRelLoading((m) => ({ ...m, [projectId]: true }))
     try {
-      const res = await fetchCompetitorRelations({ pre_investment_project_id: projectId })
+      const params = { pre_investment_project_id: projectId }
+      if (runId) params.run_id = runId
+      const res = await fetchCompetitorRelations(params)
       if (res.data?.success) {
-        setRelMap((m) => ({ ...m, [projectId]: res.data.data?.list || [] }))
+        const list = sortRelationsByComparable(res.data.data?.list || [])
+        setRelMap((m) => ({ ...m, [projectId]: list }))
+        setRelCacheKey((m) => ({ ...m, [projectId]: cacheKey }))
+        const latestRunId = res.data.data?.latest_run_id || null
+        if (latestRunId) {
+          setLatestRunMap((m) => ({ ...m, [projectId]: latestRunId }))
+        }
+        if (!runId && res.data.data?.run_id) {
+          setSelectedRunMap((m) => ({ ...m, [projectId]: res.data.data.run_id }))
+        }
       }
     } catch (e) {
       Message.error(e.response?.data?.message || e.message || '加载竞品失败')
@@ -173,8 +233,34 @@ export default function ProjectSourcingPreInvestmentPage() {
     }
   }
 
+  const onExpandedRowsChange = async (keys) => {
+    setExpandedKeys(keys)
+    for (const id of keys) {
+      const { latestRunId } = await loadRuns(id)
+      const runId = selectedRunMap[id] || latestRunId
+      const cacheKey = runId || 'latest'
+      if (relCacheKey[id] === cacheKey && relMap[id]) continue
+      await loadRelations(id, runId)
+    }
+  }
+
+  const onVersionChange = async (projectId, runId) => {
+    setSelectedRunMap((m) => ({ ...m, [projectId]: runId }))
+    await loadRelations(projectId, runId, true)
+  }
+
   const invalidateRelations = (projectId) => {
     setRelMap((m) => {
+      const next = { ...m }
+      delete next[projectId]
+      return next
+    })
+    setRelCacheKey((m) => {
+      const next = { ...m }
+      delete next[projectId]
+      return next
+    })
+    setRunMap((m) => {
       const next = { ...m }
       delete next[projectId]
       return next
@@ -185,7 +271,18 @@ export default function ProjectSourcingPreInvestmentPage() {
     await load()
     const keys = expandedKeys
     if (keys.length) {
-      await Promise.all(keys.map((id) => loadRelations(id, true)))
+      await Promise.all(
+        keys.map(async (id) => {
+          setRunMap((m) => {
+            const next = { ...m }
+            delete next[id]
+            return next
+          })
+          const { latestRunId } = await loadRuns(id)
+          const runId = selectedRunMap[id] || latestRunId
+          await loadRelations(id, runId, true)
+        })
+      )
     }
   }
 
@@ -344,7 +441,8 @@ export default function ProjectSourcingPreInvestmentPage() {
           }
           invalidateRelations(row.id)
           if (expandedKeys.includes(row.id)) {
-            await loadRelations(row.id, true)
+            const { latestRunId } = await loadRuns(row.id)
+            await loadRelations(row.id, latestRunId, true)
           }
         })
       },
@@ -365,7 +463,7 @@ export default function ProjectSourcingPreInvestmentPage() {
     else setSelectedIds([])
   }
 
-  const runExport = async ({ exportAll }) => {
+  const runExport = async ({ exportAll, batchMode = 'latest' }) => {
     if (!exportAll && !selectedIds.length) {
       Message.warning('请先勾选要导出的投前项目')
       return
@@ -377,14 +475,17 @@ export default function ProjectSourcingPreInvestmentPage() {
         export_all: exportAll,
         pre_investment_project_ids: exportAll ? [] : selectedIds,
         years: yearFilter,
+        export_batch_mode: exportAll ? 'latest' : batchMode,
       })
       const blob = res.data
+      const suffix = !exportAll && batchMode === 'all' ? '_所有批次' : ''
       const name = parseExportFilename(
         res.headers?.['content-disposition'],
-        exportAll ? '投前竞品导出_全量.xlsx' : `投前竞品导出_${selectedIds.length}项.xlsx`
+        exportAll ? '投前竞品导出_全量.xlsx' : `投前竞品导出_${selectedIds.length}项${suffix}.xlsx`
       )
       downloadBlob(blob, name)
       Message.success('导出成功')
+      setExportModalOpen(false)
     } catch (e) {
       if (e.response?.data instanceof Blob) {
         try {
@@ -456,8 +557,21 @@ export default function ProjectSourcingPreInvestmentPage() {
     Message.success('已填入企业全称与统一社会信用代码')
   }
 
+  const openExportModal = () => {
+    if (!selectedIds.length) {
+      Message.warning('请先勾选要导出的投前项目')
+      return
+    }
+    setExportBatchMode('latest')
+    setExportModalOpen(true)
+  }
+
   const openSummary = (projectId, row) => {
-    setSummaryParams({ pre_investment_project_id: projectId })
+    const runId = selectedRunMap[projectId] || latestRunMap[projectId] || undefined
+    setSummaryParams({
+      pre_investment_project_id: projectId,
+      ...(runId ? { run_id: runId } : {}),
+    })
     setSummaryTitle(rowLabel(row))
     setSummaryOpen(true)
   }
@@ -633,7 +747,7 @@ export default function ProjectSourcingPreInvestmentPage() {
           <Button type="outline" onClick={handleRefresh} loading={loading}>
             刷新
           </Button>
-          <Button type="primary" loading={exporting} onClick={() => runExport({ exportAll: false })}>
+          <Button type="primary" loading={exporting} onClick={openExportModal}>
             导出已选
           </Button>
           <Button type="outline" loading={exporting} onClick={() => runExport({ exportAll: true })}>
@@ -671,20 +785,37 @@ export default function ProjectSourcingPreInvestmentPage() {
           data={displayList}
           columns={columns}
           expandedRowKeys={expandedKeys}
-          onExpandedRowsChange={(keys) => {
-            setExpandedKeys(keys)
-            keys.forEach((id) => loadRelations(id))
-          }}
-          expandedRowRender={(row) => (
+          onExpandedRowsChange={onExpandedRowsChange}
+          expandedRowRender={(row) => {
+            const runs = runMap[row.id]?.list || []
+            const selectedRunId = selectedRunMap[row.id]
+            const latestRunId = latestRunMap[row.id]
+            const isHistorical =
+              selectedRunId && latestRunId && String(selectedRunId) !== String(latestRunId)
+            const columns = isHistorical
+              ? getCompetitorRelationColumns({ comparableReadOnly: true })
+              : relColumns
+
+            return (
             <div style={{ padding: '8px 12px 16px' }}>
               <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>
                 产品介绍（AI）摘要：
               </div>
               <AiIntroFullText raw={row.ai_product_intro} />
-              <div style={{ marginTop: 12, marginBottom: 4 }}>
+              <div
+                style={{
+                  marginTop: 12,
+                  marginBottom: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexWrap: 'wrap',
+                  gap: 12,
+                }}
+              >
                 <Button
                   type="outline"
                   size="small"
+                  style={{ color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' }}
                   onClick={(e) => {
                     e.stopPropagation()
                     openSummary(row.id, row)
@@ -692,6 +823,30 @@ export default function ProjectSourcingPreInvestmentPage() {
                 >
                   竞品分析说明
                 </Button>
+                {runs.length > 0 ? (
+                  <Space size={8} align="center">
+                    <span style={{ fontSize: 12, color: 'rgb(var(--primary-6))' }}>分析版本</span>
+                    <Select
+                      size="small"
+                      style={{ minWidth: 180 }}
+                      loading={!!runMap[row.id]?.loading}
+                      value={selectedRunId || runs[0]?.id}
+                      onChange={(v) => onVersionChange(row.id, v)}
+                      triggerProps={{
+                        style: { color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' },
+                      }}
+                      options={runs
+                        .filter((run) => run.id && run.version_label)
+                        .map((run) => ({
+                          label: run.version_label,
+                          value: run.id,
+                        }))}
+                    />
+                    {isHistorical ? (
+                      <span style={{ fontSize: 12, color: 'var(--color-warning-6)' }}>历史版本（只读）</span>
+                    ) : null}
+                  </Space>
+                ) : null}
               </div>
               <div style={{ marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: 500 }}>竞品明细</div>
               <Table
@@ -701,11 +856,12 @@ export default function ProjectSourcingPreInvestmentPage() {
                 data={relMap[row.id] || []}
                 pagination={false}
                 border={{ wrapper: true, cell: true }}
-                columns={relColumns}
+                columns={columns}
                 scroll={{ x: 1200 }}
               />
             </div>
-          )}
+            )
+          }}
           scroll={{ x: 1680, y: tableScrollY }}
           pagination={{
             current: page,
@@ -867,6 +1023,22 @@ export default function ProjectSourcingPreInvestmentPage() {
             <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
           </FormItem>
         </Form>
+      </Modal>
+      <Modal
+        title="导出已选投前项目"
+        visible={exportModalOpen}
+        onCancel={() => setExportModalOpen(false)}
+        onOk={() => runExport({ exportAll: false, batchMode: exportBatchMode })}
+        confirmLoading={exporting}
+        okText="开始导出"
+      >
+        <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
+          将导出当前勾选的 {selectedIds.length} 个投前项目竞品数据。
+        </p>
+        <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
+          <Radio value="latest">仅最新批次（当前有效竞品关系）</Radio>
+          <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
+        </Radio.Group>
       </Modal>
       <CompetitorAnalysisSummaryModal
         visible={summaryOpen}

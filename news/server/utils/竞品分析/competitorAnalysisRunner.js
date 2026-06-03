@@ -41,7 +41,7 @@ const {
 const { enrichCompetitorDisplayFields } = require('./competitorRelationEnrichService');
 const { buildFinancingEventIndex } = require('./competitorFinancingResolve');
 const { loadComparablePrefsForSubject } = require('./competitorComparablePrefService');
-const { relationCompetitorKey } = require('./competitorCompanyMatch');
+const { isComparablePreferred } = require('./competitorCompanyMatch');
 const {
   enrichRelationFieldsBeforePersist,
   parseIsListedFromCandidate,
@@ -346,11 +346,13 @@ async function persistRelations({
       financingIndex
     );
     const creditFinal = fieldEnhance.unified_credit_code || r.unified_credit_code || null;
-    const compKey = relationCompetitorKey({
+    const includeComparable = isComparablePreferred(comparablePrefs, {
       unified_credit_code: creditFinal,
       competitor_display_name: r.display_name,
-    });
-    const includeComparable = compKey && comparablePrefs.get(compKey) ? 1 : 0;
+      competitor_weak_key: creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
+    })
+      ? 1
+      : 0;
 
     const relId = await generateId('sourcing_competitor_relation');
     await db.execute(

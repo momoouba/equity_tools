@@ -3,6 +3,13 @@ import { Table, Button, Message, Space, Modal, Form, Input, Select, Switch } fro
 import axios from '../../utils/axios'
 import CronGenerator from '../../components/CronGenerator'
 import './ListingIpoProjectPage.css'
+import './listingTableColumns.css'
+import {
+  buildListingNumericColumn,
+  formatListingAmount,
+  formatListingPercent,
+  sumColumnWidths,
+} from './listingTableColumns'
 import {
   fetchIpoProjectList,
   fetchIpoProjectSqlSyncSetting,
@@ -93,13 +100,7 @@ export default function ListingIpoProjectPage() {
   const [logLoading, setLogLoading] = useState(false)
   const [tableScrollY, setTableScrollY] = useState(520)
 
-  const formatAmount = (v) => {
-    if (v === null || v === undefined || v === '') return '-'
-    const n = Number(v)
-    return Number.isFinite(n)
-      ? n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-      : '-'
-  }
+  const formatAmount = formatListingAmount
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -423,73 +424,91 @@ export default function ListingIpoProjectPage() {
   }
 
   const columns = [
-    { title: '项目编号', dataIndex: 'project_no', width: 160 },
-    { title: '归属基金', dataIndex: 'fund', width: 200, ellipsis: true },
-    { title: '归属子基金/SPV', dataIndex: 'sub', width: 220, ellipsis: true },
-    { title: '项目简称', dataIndex: 'project_name', width: 120 },
-    { title: '企业全称', dataIndex: 'company', width: 260, ellipsis: true },
     {
-      title: '投资成本',
-      dataIndex: 'inv_amount',
-      width: 140,
-      render: (v) => formatAmount(v),
+      title: '项目编号',
+      dataIndex: 'project_no',
+      key: 'project_no',
+      width: 160,
+      fixed: 'left',
+      ellipsis: true,
+      tooltip: true,
     },
     {
-      title: '剩余投资成本',
-      dataIndex: 'residual_amount',
-      width: 150,
-      render: (v) => formatAmount(v),
+      title: '归属基金',
+      dataIndex: 'fund',
+      key: 'fund',
+      width: 200,
+      fixed: 'left',
+      ellipsis: true,
+      tooltip: true,
     },
+    {
+      title: '归属子基金/SPV',
+      dataIndex: 'sub',
+      key: 'sub',
+      width: 220,
+      fixed: 'left',
+      ellipsis: true,
+      tooltip: true,
+    },
+    {
+      title: '项目简称',
+      dataIndex: 'project_name',
+      key: 'project_name',
+      width: 120,
+      fixed: 'left',
+      ellipsis: true,
+      tooltip: true,
+    },
+    { title: '企业全称', dataIndex: 'company', key: 'company', width: 260, ellipsis: true, tooltip: true },
+    buildListingNumericColumn('投资成本', 'inv_amount', 140, (v) => formatAmount(v)),
+    buildListingNumericColumn('剩余投资成本', 'residual_amount', 150, (v) => formatAmount(v)),
     {
       title: '穿透权益占比',
       dataIndex: 'ratio',
+      key: 'ratio',
       width: 130,
-      render: (v) => {
-        if (v === null || v === undefined || v === '') return '-'
-        const n = Number(v)
-        if (!Number.isFinite(n)) return '-'
-        return `${(n * 100).toFixed(2)}%`
-      },
+      render: (v) => formatListingPercent(v, true),
     },
+    buildListingNumericColumn('穿透投资成本', 'ct_amount', 140, (v) => formatAmount(v)),
+    buildListingNumericColumn('穿透剩余成本', 'ct_residual', 150, (v) => formatAmount(v)),
     {
-      title: '穿透投资成本',
-      dataIndex: 'ct_amount',
-      width: 140,
-      render: (v) => formatAmount(v),
+      title: '创建用户',
+      dataIndex: 'creator_account',
+      key: 'creator_account',
+      width: 100,
+      ellipsis: true,
+      tooltip: true,
     },
-    {
-      title: '穿透剩余成本',
-      dataIndex: 'ct_residual',
-      width: 150,
-      render: (v) => formatAmount(v),
-    },
-    { title: '创建用户', dataIndex: 'creator_account', width: 100 },
     {
       title: '创建时间',
       dataIndex: 'F_CreatorTime',
+      key: 'F_CreatorTime',
       width: 120,
       render: (v) => (v ? String(v).slice(0, 10) : '-'),
     },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 220,
+      fixed: 'right',
+      render: (_, record) => (
+        <Space size={8} wrap={false}>
+          <Button type="primary" size="small" onClick={() => openEdit(record)}>
+            编辑
+          </Button>
+          <Button type="outline" size="small" status="success" onClick={() => openLog(record)}>
+            日志
+          </Button>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
   ]
 
-  columns.push({
-    title: '操作',
-    width: 220,
-    fixed: 'right',
-    render: (_, record) => (
-      <Space>
-        <Button type="primary" size="small" onClick={() => openEdit(record)}>
-          编辑
-        </Button>
-        <Button type="outline" size="small" status="success" onClick={() => openLog(record)}>
-          日志
-        </Button>
-        <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record)}>
-          删除
-        </Button>
-      </Space>
-    ),
-  })
+  const tableScrollX = useMemo(() => sumColumnWidths(columns), [columns])
 
   return (
     <div className="listing-ipo-project-page" style={{ padding: 16 }}>
@@ -553,7 +572,7 @@ export default function ListingIpoProjectPage() {
         data={data}
         border
         stripe
-        scroll={{ x: 2200, y: tableScrollY }}
+        scroll={{ x: tableScrollX, y: tableScrollY }}
         pagination={{
           current: page,
           pageSize,

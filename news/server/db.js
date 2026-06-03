@@ -3631,56 +3631,10 @@ async function initializeTables(dbPool) {
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金产品指标';
   `);
-  // b_transaction_indicator 表若已存在则更新列注释（与 performance.sql 一致）
+  // 同步业绩看板导出表字段 COMMENT（含 -数字 排序标记）
   try {
-    const [rows] = await dbPool.query(`
-      SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_transaction_indicator'
-    `);
-    if (rows.length > 0) {
-      const alters = [
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_Id VARCHAR(50) NOT NULL COMMENT '主键'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteMark INT NOT NULL DEFAULT 0 COMMENT '删除状态'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN inv_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/实缴-14'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-16'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN girr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'GIRR-17'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN nirr DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'NIRR-12'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人实缴-7'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN distribution DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人分配-8'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-10'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN rvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'RVPI-11'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN tvpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'TVPI-9'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资金额/认缴-13'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN lp_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资人认缴-6'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN exit_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额-15'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-5'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投整体MOC-18'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投DPI-19'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投实缴-20'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投回款-21'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金整体MOC-24'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金DPI-25'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金实缴-26'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金回款-27'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN d_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投未实现价值-22'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN dt_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投总价值-23'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sf_unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金未实现价值-28'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN sft_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金总价值-29'",
-        "ALTER TABLE b_transaction_indicator MODIFY COLUMN net_asset DECIMAL(30,10) NULL DEFAULT NULL COMMENT '资本账户-30'"
-      ];
-      for (const sql of alters) {
-        await dbPool.query(sql);
-      }
-    }
+    const { applyPerformanceExportColumnComments } = require('./utils/performanceExportColumnComments');
+    await applyPerformanceExportColumnComments(dbPool);
   } catch (e) { /* ignore */ }
 
   // b_version - 管理人看板版本管理
@@ -4495,13 +4449,16 @@ async function initializeTables(dbPool) {
       ]);
     }
 
+    console.log('  → 校验标准应用记录…');
     await ensureCanonicalApp(APPS.performance);
     await ensureCanonicalApp(APPS.news);
     await ensureCanonicalApp(APPS.listing);
     await ensureCanonicalApp(APPS.projectSourcing);
     await ensureCanonicalApp(APPS.competitorAnalysis);
+    console.log('  ✓ 标准应用记录已校验');
 
     // 竞品分析应用：从项目挖掘迁出 data_app_id / data_app_name（新闻舆情行不动）
+    console.log('  → 竞品分析 data_app 迁移…');
     try {
       const psId = APPS.projectSourcing.id;
       const caId = APPS.competitorAnalysis.id;
@@ -4534,11 +4491,28 @@ async function initializeTables(dbPool) {
       console.warn('  竞品分析 data_app 迁移时出现警告:', migErr.message);
     }
 
+    console.log('  → 竞品分析被投企业去重…');
     try {
-      const { dedupeCompetitorInvestedEnterprises } = require('./utils/竞品分析/investedEnterpriseDedupe');
-      const deduped = await dedupeCompetitorInvestedEnterprises(dbPool);
-      if (deduped > 0) {
-        console.log(`  ✓ 竞品分析被投企业去重：已删除重复行 ${deduped} 条（信用代码/企业全称/项目简称）`);
+      const [dedupeFlag] = await dbPool.query(
+        `SELECT config_value FROM system_config WHERE config_key = 'migration_competitor_ie_dedupe_v1' LIMIT 1`
+      );
+      if (dedupeFlag.length > 0 && String(dedupeFlag[0].config_value) === '1') {
+        console.log('  ✓ 竞品分析被投企业去重已跳过（此前已完成）');
+      } else {
+        const { dedupeCompetitorInvestedEnterprises } = require('./utils/竞品分析/investedEnterpriseDedupe');
+        const deduped = await dedupeCompetitorInvestedEnterprises(dbPool);
+        const flagId = await generateId('system_config', dbPool);
+        await dbPool.execute(
+          `INSERT INTO system_config (id, config_key, config_value, config_desc)
+           VALUES (?, 'migration_competitor_ie_dedupe_v1', '1', '竞品分析被投企业去重已完成')
+           ON DUPLICATE KEY UPDATE config_value = '1', updated_at = CURRENT_TIMESTAMP`,
+          [flagId]
+        );
+        if (deduped > 0) {
+          console.log(`  ✓ 竞品分析被投企业去重：已删除重复行 ${deduped} 条（信用代码/企业全称/项目简称）`);
+        } else {
+          console.log('  ✓ 竞品分析被投企业去重：未发现重复行');
+        }
       }
     } catch (dedupeErr) {
       console.warn('  竞品分析被投企业去重时出现警告:', dedupeErr.message);
@@ -4593,6 +4567,7 @@ async function initializeTables(dbPool) {
     }
 
     // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
+    console.log('  → 归并历史业绩看板应用…');
     const [legacyPerfApps] = await dbPool.query(
       `SELECT id, app_name FROM applications
        WHERE id <> ?
@@ -4614,6 +4589,7 @@ async function initializeTables(dbPool) {
     await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE app_id IS NULL', [APPS.news.id]);
 
     // 统一会员等级：以“新闻舆情”应用为模板，同步到其他应用并去重
+    console.log('  → 统一各应用会员等级…');
     const defaultLevelTemplate = [
       { level_name: '普通会员', validity_days: 30 },
       { level_name: '高级会员', validity_days: 90 },
@@ -6652,7 +6628,6 @@ async function initializeTables(dbPool) {
         delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
         KEY idx_cms_ie_time (invested_enterprise_id, created_at),
         KEY idx_cms_delete (delete_mark),
-        CONSTRAINT fk_cms_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
         CONSTRAINT fk_cms_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
         CONSTRAINT fk_cms_delete_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品匹配—补充业务信息（标签/自由文本/AI抽标签）';
@@ -6881,7 +6856,6 @@ async function initializeTables(dbPool) {
         delete_user_id VARCHAR(19) NULL COMMENT '删除人',
         KEY idx_scr_ie_time (invested_enterprise_id, created_at),
         KEY idx_scr_delete (delete_mark),
-        CONSTRAINT fk_scr_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
         CONSTRAINT fk_scr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
         CONSTRAINT fk_scr_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析运行记录';
@@ -6911,7 +6885,6 @@ async function initializeTables(dbPool) {
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         KEY idx_rel_ie (invested_enterprise_id, delete_mark),
         KEY idx_rel_run (run_id),
-        CONSTRAINT fk_rel_ie FOREIGN KEY (invested_enterprise_id) REFERENCES invested_enterprises(id) ON DELETE CASCADE,
         CONSTRAINT fk_rel_run FOREIGN KEY (run_id) REFERENCES sourcing_competitor_run(id) ON DELETE SET NULL,
         CONSTRAINT fk_rel_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品关系明细';
@@ -7077,6 +7050,30 @@ async function initializeTables(dbPool) {
     );
   } catch (err) {
     console.warn('回填 sourcing_competitor_relation.subject_type 时出现警告:', err.message);
+  }
+
+  // 被投企业硬删时不级联清除竞品数据：同步后按企业全称/信用代码 UPDATE invested_enterprise_id 重挂
+  for (const { table, fk } of [
+    { table: 'sourcing_competitor_run', fk: 'fk_scr_ie' },
+    { table: 'sourcing_competitor_relation', fk: 'fk_rel_ie' },
+    { table: 'competitor_match_supplement', fk: 'fk_cms_ie' },
+  ]) {
+    try {
+      const [existing] = await dbPool.query(
+        `SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ? AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+         LIMIT 1`,
+        [table, fk]
+      );
+      if (existing.length) {
+        await dbPool.query(`ALTER TABLE \`${table}\` DROP FOREIGN KEY \`${fk}\``);
+        console.log(`  ✓ ${table} 已移除 ${fk}（避免被投硬删级联清除竞品分析数据）`);
+      }
+    } catch (err) {
+      if (!String(err.message || '').includes("doesn't exist")) {
+        console.warn(`迁移 ${table}.${fk} 时出现警告:`, err.message);
+      }
+    }
   }
 
   // 项目挖掘：赛道 — 一级分类 — 二级分类（配置化匹配）

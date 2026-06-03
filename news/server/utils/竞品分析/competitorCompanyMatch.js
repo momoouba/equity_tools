@@ -74,6 +74,42 @@ function relationCompetitorKey({ unified_credit_code, competitor_display_name, c
   return '';
 }
 
+/** 可比勾选恢复时尝试的全部键（含历史落库格式，避免重跑后键不一致） */
+function collectCompetitorLookupKeys({ unified_credit_code, competitor_display_name, competitor_weak_key }) {
+  const keys = new Set();
+  const canonical = relationCompetitorKey({
+    unified_credit_code,
+    competitor_display_name,
+    competitor_weak_key,
+  });
+  if (canonical) keys.add(canonical);
+
+  const code = normalizeCreditCode(unified_credit_code);
+  if (code.length >= 15) {
+    keys.add(`cc:${code}`);
+    keys.add(`cc:${code.toUpperCase()}`);
+  }
+
+  const simpleName = strTrim(competitor_display_name).toLowerCase();
+  if (simpleName) keys.add(`name:${simpleName}`);
+
+  const normalizedName = normalizeCompetitorCompanyNameForMatch(competitor_display_name);
+  if (normalizedName) keys.add(`name:${normalizedName}`);
+
+  const weak = strTrim(competitor_weak_key).toLowerCase();
+  if (weak) keys.add(`name:${weak.slice(0, 160)}`);
+
+  return [...keys];
+}
+
+function isComparablePreferred(comparablePrefs, fields) {
+  if (!comparablePrefs || !comparablePrefs.size) return false;
+  for (const k of collectCompetitorLookupKeys(fields)) {
+    if (comparablePrefs.get(k)) return true;
+  }
+  return false;
+}
+
 module.exports = {
   MAINLAND_USCC_LEN,
   isValidMainlandUscc,
@@ -81,5 +117,7 @@ module.exports = {
   requiresMainlandCreditCode,
   normalizeCompetitorCompanyNameForMatch,
   relationCompetitorKey,
+  collectCompetitorLookupKeys,
+  isComparablePreferred,
   stripSubsidiarySuffixes,
 };

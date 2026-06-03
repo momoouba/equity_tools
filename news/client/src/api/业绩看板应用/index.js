@@ -142,7 +142,19 @@ export const exportApi = {
   
   // 导出整体投资组合明细
   exportPortfolioDetail: (version) => api.post('/exports/portfolio-detail', { version }, { responseType: 'blob' }),
-  
+
+  // 导出投资组合（指标 + 明细）
+  exportPortfolio: (version) => api.post('/exports/portfolio', { version }, { responseType: 'blob' }),
+
+  // 导出基金产品指标（当前版本全部基金）
+  exportFundProducts: (version) => api.post('/exports/fund-products', { version }, { responseType: 'blob' }),
+
+  // 导出底层企业明细
+  exportUnderlyingCompanies: (version, type) => api.post('/exports/underlying-companies', { version, type }, { responseType: 'blob' }),
+
+  // 导出区域企业明细
+  exportRegionCompanies: (version, type) => api.post('/exports/region-companies', { version, type }, { responseType: 'blob' }),
+
   // 导出上市企业明细
   exportIpoCompanies: (version, type) => api.post('/exports/ipo-companies', { version, type }, { responseType: 'blob' })
 };

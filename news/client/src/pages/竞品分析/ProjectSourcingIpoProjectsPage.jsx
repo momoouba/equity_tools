@@ -49,6 +49,7 @@ const FormItem = Form.Item
 const Option = Select.Option
 const CollapseItem = Collapse.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100]
+const ROW_SELECTION_COL_WIDTH = 48
 
 function csvCell(v) {
   if (v == null || v === '') return ''
@@ -136,6 +137,25 @@ function formatIpoAmount(value) {
   return Number.isFinite(n)
     ? n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '-'
+}
+
+const IPO_NUM_COL = 'ipo-projects-num-col'
+
+/** 金额/占比列：表头居中、内容右对齐 */
+function buildIpoNumericColumn(title, dataIndex, width, render) {
+  return {
+    title,
+    dataIndex,
+    key: dataIndex,
+    width,
+    className: IPO_NUM_COL,
+    align: 'right',
+    headerCellClassName: IPO_NUM_COL,
+    bodyCellClassName: IPO_NUM_COL,
+    headerCellStyle: { textAlign: 'center' },
+    bodyCellStyle: { textAlign: 'right' },
+    render,
+  }
 }
 
 export default function ProjectSourcingIpoProjectsPage() {
@@ -334,11 +354,43 @@ export default function ProjectSourcingIpoProjectsPage() {
 
   const columns = useMemo(
     () => [
-      { title: '项目编号', dataIndex: 'project_no', key: 'project_no', width: 140, ellipsis: true },
-      { title: '归属基金', dataIndex: 'fund', key: 'fund', width: 140, ellipsis: true },
-      { title: '归属子基金/SPV', dataIndex: 'sub', key: 'sub', width: 140, ellipsis: true },
-      { title: '项目简称', dataIndex: 'project_name', key: 'project_name', width: 120, ellipsis: true },
-      { title: '企业全称', dataIndex: 'company', key: 'company', width: 200, ellipsis: true },
+      {
+        title: '项目编号',
+        dataIndex: 'project_no',
+        key: 'project_no',
+        width: 140,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      {
+        title: '归属基金',
+        dataIndex: 'fund',
+        key: 'fund',
+        width: 140,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      {
+        title: '归属子基金/SPV',
+        dataIndex: 'sub',
+        key: 'sub',
+        width: 160,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      {
+        title: '项目简称',
+        dataIndex: 'project_name',
+        key: 'project_name',
+        width: 140,
+        fixed: 'left',
+        ellipsis: true,
+        tooltip: true,
+      },
+      { title: '企业全称', dataIndex: 'company', key: 'company', width: 200, ellipsis: true, tooltip: true },
       {
         title: '产品简介(AI)',
         dataIndex: 'ai_product_intro',
@@ -376,47 +428,18 @@ export default function ProjectSourcingIpoProjectsPage() {
         key: 'unified_credit_code',
         width: 180,
         ellipsis: true,
+        tooltip: true,
       },
-      {
-        title: '投资成本',
-        dataIndex: 'inv_amount',
-        key: 'inv_amount',
-        width: 120,
-        render: (v) => formatIpoAmount(v),
-      },
-      {
-        title: '剩余成本',
-        dataIndex: 'residual_amount',
-        key: 'residual_amount',
-        width: 120,
-        render: (v) => formatIpoAmount(v),
-      },
-      {
-        title: '穿透权益占比',
-        dataIndex: 'ratio',
-        key: 'ratio',
-        width: 110,
-        render: (v) => {
-          if (v === null || v === undefined || v === '') return '-'
-          const n = Number(v)
-          if (!Number.isFinite(n)) return '-'
-          return `${(n * 100).toFixed(2)}%`
-        },
-      },
-      {
-        title: '穿透投资成本',
-        dataIndex: 'ct_amount',
-        key: 'ct_amount',
-        width: 120,
-        render: (v) => formatIpoAmount(v),
-      },
-      {
-        title: '穿透剩余成本',
-        dataIndex: 'ct_residual',
-        key: 'ct_residual',
-        width: 120,
-        render: (v) => formatIpoAmount(v),
-      },
+      buildIpoNumericColumn('投资成本', 'inv_amount', 120, (v) => formatIpoAmount(v)),
+      buildIpoNumericColumn('剩余成本', 'residual_amount', 120, (v) => formatIpoAmount(v)),
+      buildIpoNumericColumn('穿透权益占比', 'ratio', 132, (v) => {
+        if (v === null || v === undefined || v === '') return '-'
+        const n = Number(v)
+        if (!Number.isFinite(n)) return '-'
+        return `${(n * 100).toFixed(2)}%`
+      }),
+      buildIpoNumericColumn('穿透投资成本', 'ct_amount', 132, (v) => formatIpoAmount(v)),
+      buildIpoNumericColumn('穿透剩余成本', 'ct_residual', 132, (v) => formatIpoAmount(v)),
       {
         title: 'AI状态',
         dataIndex: 'ai_enrich_status',
@@ -431,23 +454,31 @@ export default function ProjectSourcingIpoProjectsPage() {
         width: 168,
         render: (v) => formatFinancingDateTime(v),
       },
-      { title: '创建人', dataIndex: 'creator_account', key: 'creator_account', width: 100, ellipsis: true },
+      {
+        title: '创建人',
+        dataIndex: 'creator_account',
+        key: 'creator_account',
+        width: 120,
+        ellipsis: true,
+        tooltip: true,
+      },
       {
         title: '操作',
         key: 'actions',
-        width: 200,
+        width: 240,
+        fixed: 'right',
         render: (_, row) => {
           const canEdit = canMutateRow(row)
           if (!canEdit) return <span style={{ color: 'var(--color-text-3)' }}>-</span>
           return (
-            <Space size={6} wrap={false}>
-              <Button type="primary" size="mini" onClick={() => openEdit(row)}>
+            <Space size={8} wrap={false}>
+              <Button type="primary" size="small" onClick={() => openEdit(row)}>
                 编辑
               </Button>
-              <Button type="outline" size="mini" status="success" onClick={() => openRowLog(row)}>
+              <Button type="outline" size="small" status="success" onClick={() => openRowLog(row)}>
                 日志
               </Button>
-              <Button type="outline" size="mini" status="danger" onClick={() => handleDeleteRow(row)}>
+              <Button type="outline" size="small" status="danger" onClick={() => handleDeleteRow(row)}>
                 删除
               </Button>
             </Space>
@@ -457,6 +488,12 @@ export default function ProjectSourcingIpoProjectsPage() {
     ],
     [canMutateRow, openEdit, openRowLog, handleDeleteRow]
   )
+
+  /** 列宽之和 + 勾选列，与 Arco fixed 布局 colgroup 一致，避免表头/表体竖线错位 */
+  const tableScrollX = useMemo(() => {
+    const colsWidth = columns.reduce((sum, col) => sum + (Number(col.width) || 0), 0)
+    return colsWidth + (isAdmin ? ROW_SELECTION_COL_WIDTH : 0)
+  }, [columns, isAdmin])
 
   const handleExportCsv = useCallback(async () => {
     setExporting(true)
@@ -701,7 +738,7 @@ export default function ProjectSourcingIpoProjectsPage() {
 
   return (
     <div
-      className="enterprise-management financing-events-page"
+      className="enterprise-management financing-events-page ipo-projects-page"
       style={{
         boxSizing: 'border-box',
         height: 'calc(100vh - 72px)',
@@ -1001,7 +1038,7 @@ export default function ProjectSourcingIpoProjectsPage() {
             overflow: 'hidden',
           }}
         >
-          <div className="table-container" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div className="table-container ipo-projects-table-container" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <Table
             rowKey="f_id"
             loading={loading}
@@ -1012,7 +1049,7 @@ export default function ProjectSourcingIpoProjectsPage() {
               cell: true,
             }}
             stripe
-            scroll={{ x: 2480, y: tableScrollY }}
+            scroll={{ x: tableScrollX, y: tableScrollY }}
             rowSelection={
               isAdmin
                 ? {

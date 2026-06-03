@@ -2,6 +2,7 @@ const xlsx = require('xlsx');
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
+const { buildVersionLabelMapForInvestedEnterprise, buildVersionLabelMapForPreInvestmentProject } = require('./competitorRunVersionService');
 
 const EXPORT_HEADERS = [
   '竞品名称',
@@ -17,6 +18,8 @@ const EXPORT_HEADERS = [
   '是否放入可比公司',
   '落库时间',
 ];
+
+const EXPORT_HEADERS_ALL_BATCHES = ['版本号', ...EXPORT_HEADERS];
 
 const SOURCE_LABELS = {
   ipo_project: '底层',
@@ -52,8 +55,8 @@ function formatSources(v) {
   return '';
 }
 
-function relationToRow(rel) {
-  return {
+function relationToRow(rel, versionLabel) {
+  const base = {
     竞品名称: rel.competitor_display_name || '',
     统一社会信用代码: rel.unified_credit_code || '',
     是否上市: Number(rel.is_listed) === 1 ? '是' : '否',
@@ -67,18 +70,26 @@ function relationToRow(rel) {
     是否放入可比公司: Number(rel.include_in_comparable) === 1 ? '是' : '否',
     落库时间: rel.created_at ? String(rel.created_at).replace('T', ' ').slice(0, 19) : '',
   };
+  if (versionLabel != null) {
+    return { 版本号: versionLabel || '', ...base };
+  }
+  return base;
 }
 
 /**
- * @param {object} opts
- * @param {string[]} [opts.investedEnterpriseIds]
- * @param {boolean} [opts.exportAll]
- * @param {string[]} [opts.years] 项目编号前四位年度
- * @param {object} opts.psUser
- * @param {boolean} opts.isAdmin
+ * @param {string} [opts.exportBatchMode] latest | all（all 仅被投多选导出）
  */
 async function buildCompetitorRelationsExportWorkbook(opts) {
-  const { investedEnterpriseIds = [], exportAll = false, years = [], psUser, isAdmin } = opts;
+  const {
+    investedEnterpriseIds = [],
+    exportAll = false,
+    exportBatchMode = 'latest',
+    years = [],
+    psUser,
+    isAdmin,
+  } = opts;
+  const allBatches = exportBatchMode === 'all';
+  const headers = allBatches ? EXPORT_HEADERS_ALL_BATCHES : EXPORT_HEADERS;
   const uid = psUser?.id ? String(psUser.id) : null;
 
   let ieRows = await db.query(
@@ -118,30 +129,59 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
   let sheetCount = 0;
 
   for (const ie of ieRows) {
-    const rels = await db.query(
-      `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-              competitor_product_intro, competitor_tags_display, sub_fund_names,
-              data_sources_json, financing_amount_text, financing_history_text,
-              is_listed, include_in_comparable, created_at
-       FROM sourcing_competitor_relation
-       WHERE invested_enterprise_id = ? AND delete_mark = 0
-         AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-       ORDER BY relevance_score DESC, created_at DESC`,
-      [ie.id]
-    );
+    let rels;
+    let versionMap = null;
+    if (allBatches) {
+      versionMap = await buildVersionLabelMapForInvestedEnterprise(ie.id);
+      rels = await db.query(
+        `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+                r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
+                r.data_sources_json, r.financing_amount_text, r.financing_history_text,
+                r.is_listed, r.include_in_comparable, r.created_at, r.run_id,
+                run.created_at AS run_created_at
+         FROM sourcing_competitor_relation r
+         INNER JOIN sourcing_competitor_run run ON run.id = r.run_id AND run.delete_mark = 0
+         WHERE r.invested_enterprise_id = ?
+           AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
+         ORDER BY run.created_at DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.created_at DESC`,
+        [ie.id]
+      );
+    } else {
+      rels = await db.query(
+        `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+                competitor_product_intro, competitor_tags_display, sub_fund_names,
+                data_sources_json, financing_amount_text, financing_history_text,
+                is_listed, include_in_comparable, created_at
+         FROM sourcing_competitor_relation
+         WHERE invested_enterprise_id = ? AND delete_mark = 0
+           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+         ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC`,
+        [ie.id]
+      );
+    }
+    if (!rels.length) {
+      if (exportAll) continue;
+    }
     const sheetLabel = sanitizeSheetName(ie.project_abbreviation || ie.enterprise_full_name || ie.id, usedNames);
-    const data = rels.length ? rels.map(relationToRow) : [Object.fromEntries(EXPORT_HEADERS.map((h) => [h, '']))];
-    const ws = xlsx.utils.json_to_sheet(data, { header: EXPORT_HEADERS });
+    const data = rels.length
+      ? rels.map((rel) =>
+          relationToRow(
+            rel,
+            allBatches ? versionMap.get(String(rel.run_id)) || '' : null
+          )
+        )
+      : [Object.fromEntries(headers.map((h) => [h, '']))];
+    const ws = xlsx.utils.json_to_sheet(data, { header: headers });
     xlsx.utils.book_append_sheet(workbook, ws, sheetLabel);
     sheetCount += 1;
   }
 
   if (sheetCount === 0) {
-    const ws = xlsx.utils.aoa_to_sheet([EXPORT_HEADERS, ['（无数据）']]);
+    const ws = xlsx.utils.aoa_to_sheet([headers, ['（无数据）']]);
     xlsx.utils.book_append_sheet(workbook, ws, '无数据');
   }
 
-  return { workbook, sheetCount, enterpriseCount: ieRows.length };
+  return { workbook, sheetCount, enterpriseCount: sheetCount };
 }
 
 /** 可选年度列表（被投项目编号前四位） */
@@ -187,7 +227,16 @@ function preProjectYear(projectNo) {
  * @param {string[]} [opts.years] 项目编号 P 后四位年度
  */
 async function buildPreInvestmentCompetitorExportWorkbook(opts) {
-  const { preInvestmentProjectIds = [], exportAll = false, years = [], psUser, isAdmin } = opts;
+  const {
+    preInvestmentProjectIds = [],
+    exportAll = false,
+    exportBatchMode = 'latest',
+    years = [],
+    psUser,
+    isAdmin,
+  } = opts;
+  const allBatches = exportBatchMode === 'all';
+  const headers = allBatches ? EXPORT_HEADERS_ALL_BATCHES : EXPORT_HEADERS;
   const uid = psUser?.id ? String(psUser.id) : null;
 
   let pipRows = await db.query(
@@ -221,22 +270,51 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
   let sheetCount = 0;
 
   for (const pip of pipRows) {
-    const rels = await db.query(
-      `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-              competitor_product_intro, competitor_tags_display, sub_fund_names,
-              data_sources_json, financing_amount_text, financing_history_text,
-              is_listed, include_in_comparable, created_at
-       FROM sourcing_competitor_relation
-       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
-       ORDER BY relevance_score DESC, created_at DESC`,
-      [pip.id]
-    );
+    let rels;
+    let versionMap = null;
+    if (allBatches) {
+      versionMap = await buildVersionLabelMapForPreInvestmentProject(pip.id);
+      rels = await db.query(
+        `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+                r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
+                r.data_sources_json, r.financing_amount_text, r.financing_history_text,
+                r.is_listed, r.include_in_comparable, r.created_at, r.pre_investment_run_id,
+                run.created_at AS run_created_at
+         FROM sourcing_competitor_relation r
+         INNER JOIN sourcing_pre_investment_competitor_run run
+           ON run.id = r.pre_investment_run_id AND run.delete_mark = 0
+         WHERE r.pre_investment_project_id = ?
+           AND r.subject_type = 'pre_investment_project'
+           AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
+         ORDER BY run.created_at DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.created_at DESC`,
+        [pip.id]
+      );
+    } else {
+      rels = await db.query(
+        `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+                competitor_product_intro, competitor_tags_display, sub_fund_names,
+                data_sources_json, financing_amount_text, financing_history_text,
+                is_listed, include_in_comparable, created_at
+         FROM sourcing_competitor_relation
+         WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
+         ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC`,
+        [pip.id]
+      );
+    }
+    if (!rels.length && exportAll) continue;
     const sheetLabel = sanitizeSheetName(
       pip.project_abbreviation || pip.enterprise_full_name || pip.project_no || pip.id,
       usedNames
     );
-    const data = rels.length ? rels.map(relationToRow) : [Object.fromEntries(EXPORT_HEADERS.map((h) => [h, '']))];
-    const ws = xlsx.utils.json_to_sheet(data, { header: EXPORT_HEADERS });
+    const data = rels.length
+      ? rels.map((rel) =>
+          relationToRow(
+            rel,
+            allBatches ? versionMap.get(String(rel.pre_investment_run_id)) || '' : null
+          )
+        )
+      : [Object.fromEntries(headers.map((h) => [h, '']))];
+    const ws = xlsx.utils.json_to_sheet(data, { header: headers });
     xlsx.utils.book_append_sheet(workbook, ws, sheetLabel);
     sheetCount += 1;
   }
@@ -290,4 +368,5 @@ module.exports = {
   listPreInvestmentYears,
   buildPreInvestmentCompetitorExportWorkbook,
   EXPORT_HEADERS,
+  EXPORT_HEADERS_ALL_BATCHES,
 };

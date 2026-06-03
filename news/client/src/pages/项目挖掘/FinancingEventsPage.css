@@ -20,7 +20,70 @@
   text-align: left;
 }
 
-.financing-events-page .arco-table .arco-table-th:last-child,
-.financing-events-page .arco-table .arco-table-td:last-child {
+.financing-events-page:not(.ipo-projects-page) .arco-table .arco-table-th:last-child,
+.financing-events-page:not(.ipo-projects-page) .arco-table .arco-table-td:last-child {
   border-right: none !important;
+}
+
+/* 底层项目：金额/占比列表头居中、内容右对齐（覆盖上方全局左对齐） */
+.financing-events-page .arco-table-th.ipo-projects-num-col,
+.financing-events-page .arco-table-th.ipo-projects-num-col .arco-table-cell {
+  text-align: center;
+}
+
+.financing-events-page .arco-table-th.ipo-projects-num-col .arco-table-th-item,
+.financing-events-page .arco-table-th.ipo-projects-num-col .arco-table-th-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.financing-events-page .arco-table-td.ipo-projects-num-col,
+.financing-events-page .arco-table-td.ipo-projects-num-col .arco-table-cell {
+  text-align: right;
+}
+
+/*
+ * 底层项目宽表（fixed 列 + scroll.x/y）：
+ * enterprise-management 里 width:100% !important 会破坏 Arco colgroup 同步，导致横向滚动时表头/表体竖线错位。
+ */
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.financing-events-page.ipo-projects-page .arco-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.financing-events-page.ipo-projects-page .arco-table.arco-table-layout-fixed .arco-table-th,
+.financing-events-page.ipo-projects-page .arco-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+/* 取消 enterprise-management 对「最后一列」的 padding 覆盖（fixed 分表下会放大错位） */
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-th:last-child,
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-td:last-child {
+  padding: 12px 16px !important;
+}
+
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-th:last-child .arco-table-cell,
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-td:last-child .arco-table-cell {
+  padding-right: 16px !important;
+  box-sizing: border-box;
+}
+
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-td:last-child .arco-space {
+  width: auto !important;
+  max-width: 100%;
+  display: inline-flex !important;
+  justify-content: flex-start;
+}
+
+.financing-events-page.ipo-projects-page.enterprise-management .arco-table-td:last-child > * {
+  max-width: 100%;
+}
+
+.financing-events-page.ipo-projects-page .arco-table-col-fixed-right-last .arco-table-cell,
+.financing-events-page.ipo-projects-page .arco-table-col-fixed-right .arco-table-cell {
+  white-space: nowrap;
 }

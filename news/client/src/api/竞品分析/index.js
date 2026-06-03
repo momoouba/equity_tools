@@ -113,6 +113,10 @@ export function fetchCompetitorRelations(params) {
   return axios.get(`${BASE}/competitor-analysis/relations`, { params })
 }
 
+export function fetchCompetitorAnalysisRuns(params) {
+  return axios.get(`${BASE}/competitor-analysis/runs`, { params })
+}
+
 export function patchCompetitorRelationComparable(relationId, includeInComparable) {
   return axios.patch(`${BASE}/competitor-analysis/relations/${relationId}/comparable`, {
     include_in_comparable: !!includeInComparable,

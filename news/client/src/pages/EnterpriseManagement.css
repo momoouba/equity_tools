@@ -306,3 +306,50 @@
 .pre-inv-sourcing-page .arco-table .arco-table-td:last-child {
   border-right: none !important;
 }
+
+/* 竞品分析-被投企业：fixed 列 + scroll 时保持表头/表体竖线对齐 */
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-th,
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col,
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-cell {
+  text-align: center;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-th-item,
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-th-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-td.invested-enterprises-num-col,
+.enterprise-management.invested-enterprises-table-page .arco-table-td.invested-enterprises-num-col .arco-table-cell {
+  text-align: right;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-col-fixed-right-last .arco-table-cell,
+.enterprise-management.invested-enterprises-table-page .arco-table-col-fixed-right .arco-table-cell {
+  white-space: nowrap;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-td:last-child .arco-space {
+  width: auto !important;
+  max-width: 100%;
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .invested-enterprises-table-container {
+  overflow: hidden !important;
+}

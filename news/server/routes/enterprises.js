@@ -2198,22 +2198,26 @@ async function executeSyncTask(
   }
 
   let competitorSnapshotRestored = null;
+  let competitorRelinkStats = null;
   if (competitorSnapshotBatchId && syncOwnerUserId) {
     try {
-      const { restoreCompetitorDataAfterInsert } = require('../utils/竞品分析/competitorSyncSnapshot');
+      const {
+        restoreCompetitorDataAfterInsert,
+        relinkOrphanCompetitorDataBySubjectMatch,
+      } = require('../utils/竞品分析/competitorSyncSnapshot');
+      try {
+        competitorRelinkStats = await relinkOrphanCompetitorDataBySubjectMatch({
+          creatorUserId: syncOwnerUserId,
+          batchId: competitorSnapshotBatchId,
+        });
+      } catch (relinkErr) {
+        console.warn('[企业同步任务] 竞品孤儿 id 重挂失败（将尝试快照恢复）', relinkErr.message);
+      }
       competitorSnapshotRestored = await restoreCompetitorDataAfterInsert(
         competitorSnapshotBatchId,
         syncOwnerUserId,
         targetDataAppName
       );
-      try {
-        const { relinkOrphanCompetitorDataBySubjectMatch } = require('../utils/竞品分析/competitorSyncSnapshot');
-        await relinkOrphanCompetitorDataBySubjectMatch({
-          creatorUserId: syncOwnerUserId,
-        });
-      } catch (relinkErr) {
-        console.warn('[企业同步任务] 竞品孤儿 id 重挂失败（不影响同步）', relinkErr.message);
-      }
     } catch (e) {
       console.error(
         '[企业同步任务] 竞品快照恢复失败（可按 batch_id 查表 competitor_analysis_sync_snapshot 手工恢复）',
@@ -2240,11 +2244,13 @@ async function executeSyncTask(
       ? `；AI 快照 batch_id=${aiSnapshotBatchId}，已回填 ${aiSnapshotRestored} 行`
       : '';
   const competitorNote =
-    competitorSnapshotBatchId != null && competitorSnapshotRestored
-      ? `；竞品快照 batch_id=${competitorSnapshotBatchId}，已恢复 ${competitorSnapshotRestored.subjects || 0} 家主体、${competitorSnapshotRestored.relations || 0} 条竞品关系`
-      : competitorSnapshotBatchId != null
-        ? `；竞品快照 batch_id=${competitorSnapshotBatchId}（无匹配新被投或未恢复）`
-        : '';
+    competitorSnapshotBatchId != null && competitorRelinkStats?.relinked
+      ? `；竞品已按企业全称/信用代码重挂 ${competitorRelinkStats.relinked} 家（batch_id=${competitorSnapshotBatchId}）`
+      : competitorSnapshotBatchId != null && competitorSnapshotRestored
+        ? `；竞品快照 batch_id=${competitorSnapshotBatchId}，已恢复 ${competitorSnapshotRestored.subjects || 0} 家主体、${competitorSnapshotRestored.relations || 0} 条竞品关系`
+        : competitorSnapshotBatchId != null
+          ? `；竞品快照 batch_id=${competitorSnapshotBatchId}（无匹配新被投或未恢复）`
+          : '';
 
   return {
     success: true,

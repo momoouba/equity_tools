@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Table, Button, Space, Input, Select, Message } from '@arco-design/web-react'
 import {
   fetchNewShareList,
@@ -6,20 +6,22 @@ import {
   postNewShareAiName,
   downloadNewShareExport,
 } from '../../api/上市进展'
+import './listingTableColumns.css'
+import {
+  buildListingNumericColumn,
+  formatListingAmount,
+  sumColumnWidths,
+} from './listingTableColumns'
 
 const Option = Select.Option
 const LISTING_PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
+const ROW_SELECTION_WIDTH = 48
 
 function formatPercent(v) {
+  if (v === null || v === undefined || v === '') return '-'
   const n = Number(v)
   if (!Number.isFinite(n)) return '-'
   return `${n.toFixed(2)}%`
-}
-
-function formatAmount(v) {
-  const n = Number(v)
-  if (!Number.isFinite(n)) return '-'
-  return n.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
 }
 
 function saveBlobAsCsv(res) {
@@ -129,39 +131,51 @@ export default function ListingNewSharePage() {
     }
   }
 
-  const columns = [
-    { title: '股票代码', dataIndex: 'stock_code', width: 110 },
-    { title: '股票简称', dataIndex: 'stock_name', width: 120 },
-    {
-      title: '企业全称（中/英）',
-      dataIndex: 'enterprise_full_name_display',
-      width: 280,
-      ellipsis: true,
-      tooltip: true,
-      render: (v) => (
-        <span
-          title={v || '-'}
-          style={{ display: 'inline-block', width: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
-        >
-          {v || '-'}
-        </span>
-      )
-    },
-    { title: '申购日期', dataIndex: 'issue_date', width: 120 },
-    { title: '星期', dataIndex: 'issue_weekday', width: 90, render: (v) => v || '-' },
-    { title: '发行价', dataIndex: 'issue_price', width: 100, render: (v) => (v ?? '-') },
-    { title: '申购上限', dataIndex: 'limit_shares', width: 100, render: (v) => formatAmount(v) },
-    { title: '上市日期', dataIndex: 'public_date', width: 120, render: (v) => v || '-' },
-    { title: '中签率', dataIndex: 'win_rate', width: 100, render: (v) => formatPercent(v) },
-    { title: '上市首日收盘价', dataIndex: 'first_day_close', width: 130, render: (v) => (v ?? '-') },
-    { title: '首日涨幅', dataIndex: 'first_day_chg_pct', width: 100, render: (v) => formatPercent(v) },
-    { title: '总发行数量', dataIndex: 'total_issued_shares', width: 130, render: (v) => formatAmount(v) },
-    { title: '市值', dataIndex: 'first_day_market_cap', width: 140, render: (v) => formatAmount(v) },
-    { title: '交易所', dataIndex: 'exchange', width: 120 },
-  ]
+  const columns = useMemo(
+    () => [
+      { title: '股票代码', dataIndex: 'stock_code', key: 'stock_code', width: 110 },
+      { title: '股票简称', dataIndex: 'stock_name', key: 'stock_name', width: 120 },
+      {
+        title: '企业全称（中/英）',
+        dataIndex: 'enterprise_full_name_display',
+        key: 'enterprise_full_name_display',
+        width: 280,
+        ellipsis: true,
+        tooltip: true,
+        render: (v) => (
+          <span
+            title={v || '-'}
+            style={{
+              display: 'inline-block',
+              width: '100%',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {v || '-'}
+          </span>
+        ),
+      },
+      { title: '申购日期', dataIndex: 'issue_date', key: 'issue_date', width: 120 },
+      { title: '星期', dataIndex: 'issue_weekday', key: 'issue_weekday', width: 90, render: (v) => v || '-' },
+      buildListingNumericColumn('发行价', 'issue_price', 100, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('申购上限', 'limit_shares', 110, (v) => formatListingAmount(v)),
+      { title: '上市日期', dataIndex: 'public_date', key: 'public_date', width: 120, render: (v) => v || '-' },
+      buildListingNumericColumn('中签率', 'win_rate', 100, (v) => formatPercent(v)),
+      buildListingNumericColumn('上市首日收盘价', 'first_day_close', 140, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('首日涨幅', 'first_day_chg_pct', 100, (v) => formatPercent(v)),
+      buildListingNumericColumn('总发行数量', 'total_issued_shares', 130, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('市值', 'first_day_market_cap', 140, (v) => formatListingAmount(v)),
+      { title: '交易所', dataIndex: 'exchange', key: 'exchange', width: 120 },
+    ],
+    []
+  )
+
+  const tableScrollX = useMemo(() => sumColumnWidths(columns) + ROW_SELECTION_WIDTH, [columns])
 
   return (
-    <div style={{ padding: '0 16px 16px' }}>
+    <div className="listing-new-share-page" style={{ padding: '0 16px 16px' }}>
       <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>打新日历</div>
       <Space wrap style={{ marginBottom: 12 }}>
         <Input
@@ -230,8 +244,11 @@ export default function ListingNewSharePage() {
           onChange: (keys) => setSelectedRowKeys(keys),
         }}
         stripe
-        border
-        scroll={{ x: 1880, y: tableScrollY }}
+        border={{
+          wrapper: true,
+          cell: true,
+        }}
+        scroll={{ x: tableScrollX, y: tableScrollY }}
         pagination={{
           current: page,
           pageSize,

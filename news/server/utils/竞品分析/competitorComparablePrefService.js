@@ -1,7 +1,7 @@
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const { logDataChange } = require('../logger');
-const { relationCompetitorKey } = require('./competitorCompanyMatch');
+const { relationCompetitorKey, collectCompetitorLookupKeys } = require('./competitorCompanyMatch');
 
 async function loadComparablePrefsForSubject({
   subjectType,
@@ -107,8 +107,36 @@ function competitorKeyFromRelationRow(rel) {
   });
 }
 
+/** 勾选/取消可比时同步写入 canonical 与历史 alias 键，避免重跑后恢复失败 */
+async function upsertComparablePrefForRelation(rel, includeInComparable, userId) {
+  const subjectType =
+    rel.subject_type === 'pre_investment_project' ? 'pre_investment_project' : 'invested_enterprise';
+  const fields = {
+    unified_credit_code: rel.unified_credit_code,
+    competitor_display_name: rel.competitor_display_name,
+    competitor_weak_key: rel.competitor_weak_key,
+  };
+  const canonical = relationCompetitorKey(fields);
+  const keys = [...new Set([canonical, ...collectCompetitorLookupKeys(fields)].filter(Boolean))];
+  if (!keys.length) throw new Error('无法识别竞品键');
+
+  let last = null;
+  for (const competitorKey of keys) {
+    last = await upsertComparablePref({
+      subjectType,
+      investedEnterpriseId: rel.invested_enterprise_id,
+      preInvestmentProjectId: rel.pre_investment_project_id,
+      competitorKey,
+      includeInComparable,
+      userId,
+    });
+  }
+  return { ...last, competitor_key: canonical || keys[0] };
+}
+
 module.exports = {
   loadComparablePrefsForSubject,
   upsertComparablePref,
+  upsertComparablePrefForRelation,
   competitorKeyFromRelationRow,
 };

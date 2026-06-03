@@ -106,6 +106,27 @@
   text-align: center;
 }
 
+.perf-section-header-with-export {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  background: #00024C;
+}
+
+.perf-section-header-with-export .perf-section-title {
+  margin-bottom: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.perf-section-header-with-export .perf-export-btn {
+  position: absolute;
+  right: 16px;
+}
+
 .perf-subsection-title {
   font-size: 15px;
   font-weight: 500;
