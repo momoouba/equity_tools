@@ -552,12 +552,22 @@ router.post('/fund-products', checkExportPermission, async (req, res) => {
       [version]
     );
 
+    const investmentRows = await db.query(
+      `SELECT * FROM b_investment
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_type, first_date ASC`,
+      [version]
+    );
+
     const wb = XLSX.utils.book_new();
     const wsIndicator = await buildSheetFromRows('b_transaction_indicator', indicatorRows);
     XLSX.utils.book_append_sheet(wb, wsIndicator, '基金产品指标');
 
     const wsInvestors = await buildSheetFromRows('b_investor_list', investorRows);
     XLSX.utils.book_append_sheet(wb, wsInvestors, '合伙人名录');
+
+    const wsInvestment = await buildSheetFromRows('b_investment', investmentRows);
+    XLSX.utils.book_append_sheet(wb, wsInvestment, '投资组合');
 
     const transactionRows = await db.query(
       `SELECT * FROM b_transaction
