@@ -16,7 +16,7 @@ const { syncOverseasFiling } = require('./overseasFilingService');
 const { normalizeSourceType, buildTaskKey } = require('./listingSourceType');
 const { executeWithRetry } = require('./listingRetry');
 const { createExecutionLog, finishExecutionLog, appendExecutionLogProgress } = require('./listingSyncExecutionLog');
-const { cleanupIpoProgress, cleanupIpoNewShare } = require('./cleanupTraditionalDuplicates');
+const { cleanupIpoProgress, cleanupIpoNewShare, cleanupOrphanedProgressLinks } = require('./cleanupTraditionalDuplicates');
 
 const scheduledTasks = new Map();
 const sqlSyncScheduledTasks = new Map();
@@ -293,14 +293,14 @@ async function executeListingSyncTask(configId) {
       }
       console.log(`[上市进展定时] 数据入库完成 sourceType=${sourceType}`, syncResult);
 
-      // 港股繁简体清理（入库后）：ipo_progress 繁简双写并存；仅合并「同书写」重复行，不再删「繁体+简体」配对
+      // 港股繁简体清理（入库后）：繁体记录一律转简体或删除，不保留繁体；同书写重复行仅保留最早一条
       if (sourceType === 'new_share' || sourceType === 'exchange_crawler') {
         console.log(`[上市进展定时] 开始港股繁简体重复数据清理 sourceType=${sourceType}`);
         try {
           const cleanupProgress = await cleanupIpoProgress(false);
           const cleanupNewShare = await cleanupIpoNewShare(false);
           console.log(
-            `[上市进展定时] 港股繁简体清理完成: ipo_progress删除=${cleanupProgress.cleaned}, ipo_new_share删除=${cleanupNewShare.cleaned}`
+            `[上市进展定时] 港股繁简体清理完成: ipo_progress(转换=${cleanupProgress.converted}, 删除=${cleanupProgress.cleaned}, 保留简体=${cleanupProgress.keptSimplified}), ipo_new_share(转换=${cleanupNewShare.converted}, 删除=${cleanupNewShare.cleaned}, 保留简体=${cleanupNewShare.keptSimplified})`
           );
         } catch (cleanupErr) {
           console.warn(`[上市进展定时] 港股繁简体清理异常（不影响主流程）:`, cleanupErr.message);
@@ -531,6 +531,39 @@ async function updateListingScheduledTasks() {
 
 async function initializeListingScheduledTasks() {
   await updateListingScheduledTasks();
+
+  // 启动时立即执行一次繁体数据清理（处理历史存量数据）
+  console.log('[上市进展定时] 启动时执行一次港股繁简体历史数据清理...');
+  try {
+    const progressResult = await cleanupIpoProgress(false);
+    const newShareResult = await cleanupIpoNewShare(false);
+    console.log(
+      `[上市进展定时] 启动清理完成: ipo_progress(转换=${progressResult.converted}, 删除=${progressResult.cleaned}, 保留简体=${progressResult.keptSimplified}), ipo_new_share(转换=${newShareResult.converted}, 删除=${newShareResult.cleaned}, 保留简体=${newShareResult.keptSimplified})`
+    );
+  } catch (cleanupErr) {
+    console.warn('[上市进展定时] 启动繁体清理异常（不影响后续流程）:', cleanupErr.message);
+  }
+
+  // 清理 ipo_project_progress 中的孤立记录（ipo_progress_row_id 指向已不存在的行）
+  try {
+    const orphanCount = await cleanupOrphanedProgressLinks(false);
+    console.log(`[上市进展定时] 孤立记录清理完成: ${orphanCount} 条`);
+  } catch (orphanErr) {
+    console.warn('[上市进展定时] 孤立记录清理异常（不影响后续流程）:', orphanErr.message);
+  }
+
+  // 启动时运行一次全量底层项目匹配（覆盖所有日期的 ipo_progress，确保历史数据关联正确）
+  try {
+    console.log('[上市进展定时] 启动时执行全量底层项目匹配...');
+    const matchResult = await runListingMatchBatch({
+      startDate: '2024-01-01',
+      endDate: '2027-12-31',
+      restrictProjectUserId: null,
+    });
+    console.log('[上市进展定时] 启动全量匹配完成:', JSON.stringify(matchResult));
+  } catch (matchErr) {
+    console.warn('[上市进展定时] 启动全量匹配异常（不影响定时任务）:', matchErr.message);
+  }
 }
 
 module.exports = {

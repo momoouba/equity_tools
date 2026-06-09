@@ -13,6 +13,14 @@ import sys
 from datetime import datetime, timedelta
 import requests
 
+# 港股公司名繁简转换（与 zhconvUtils.js 共享映射表）
+try:
+    from zh_t2s import load_t2s_mapping, to_simplified as _to_simplified
+    load_t2s_mapping()
+except ImportError:
+    def _to_simplified(text):
+        return text
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
@@ -225,6 +233,7 @@ def _extract_hk_rows(df, start_date, end_date, issue_date_after_exclusive=None):
         name = str(d.get("股票简称") or d.get("公司全称") or "").strip()
         if not name:
             continue
+        name = _to_simplified(name)
         public_date = _to_date_text(d.get("上市日期"))
         if not public_date:
             continue

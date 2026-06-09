@@ -31,6 +31,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import pymysql
 
+# ---------- 繁简转换（与 zhconvUtils.js 共享映射表）----------
+from zh_t2s import load_t2s_mapping, to_simplified as _to_simplified
+
 # ---------- 列名候选（与 hk_ipo_application 常见字段及手工导出表头兼容）----------
 
 COL_APPLY_DATE = ("申请日期", "递交申请日期", "申请日期(YYYY-MM-DD)")
@@ -194,7 +197,9 @@ def build_rows_for_day(df: pd.DataFrame, today: str) -> List[Dict[str, Any]]:
         company = str(row.get(c_comp) or "").strip() if c_comp else ""
         if not company:
             continue
+        company = _to_simplified(company)
         short = str(row.get(c_short) or "").strip() if c_short else ""
+        short = _to_simplified(short)
         code = str(row.get(c_code) or "").strip() if c_code else ""
         board = _board_zh(row.get(c_board)) if c_board else "主板"
         reg = str(row.get(c_reg) or "").strip() if c_reg else ""
@@ -477,6 +482,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = p.parse_args(argv)
 
     csv_path = args.csv or os.environ.get("HK_IPO_CSV_PATH") or None
+
+    # 加载繁简转换映射表
+    load_t2s_mapping()
 
     try:
         df, resolved_source = load_hk_ipo_dataframe(csv_path, args.source)
