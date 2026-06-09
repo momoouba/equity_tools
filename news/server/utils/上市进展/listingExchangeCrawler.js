@@ -259,6 +259,11 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
       .filter(Boolean);
     if (!toDeleteIds.length) continue;
     const idPlaceholders = toDeleteIds.map(() => '?').join(',');
+    // 先清理关联的 ipo_project_progress（硬删除）
+    await db.execute(
+      `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${idPlaceholders})`,
+      [...toDeleteIds]
+    );
     const header = await db.execute(
       `UPDATE ipo_progress
        SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
@@ -271,6 +276,118 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
     console.log(`${logTag} 详情时间轴反向清理：软删除错日期记录=${softDeleted}`);
   }
   return { softDeleted };
+}
+
+/**
+ * 修正历史记录的 f_update_time 日期，使其与详情页时间轴日期一致。
+ *
+ * 背景：早期插入的记录可能使用了上交所列表页的 updateDate（项目最后修改时间）作为
+ * f_update_time，而非时间轴上的审核状态达成日期。这会导致同一审核状态在 DB 中出现
+ * 两条日期不同的记录（一条旧的用 SSE 时间戳，一条新的用时间轴日期），且去重机制
+ * （mergeDuplicateIpoProgressExchangeRows）因 DATE(f_update_time) 不同而无法合并。
+ *
+ * 此函数在 insertRows 之前运行，将旧记录的 f_update_time 就地修正为时间轴日期，
+ * 从而让后续的业务键查重和去重逻辑正常工作。
+ */
+async function migrateStaleTimelineDates(rows, adminId, logTag = '[上市进展爬虫]') {
+  const list = Array.isArray(rows) ? rows : [];
+  const group = new Map();
+
+  list.forEach((r) => {
+    const exchange = String(r.exchange || '').trim();
+    const company = String(r.company || '').trim();
+    const board = String(r.board || '').trim();
+    if (!exchange || !company || !board) return;
+    const timeline = normalizeTimelineRows(r._timeline_rows || []);
+    if (!timeline.length) return;
+    const key = `${exchange}__${company}__${board}`;
+    if (!group.has(key)) {
+      group.set(key, { exchange, company, board, timeline });
+    }
+  });
+
+  let migrated = 0;
+
+  for (const g of group.values()) {
+    // 收集时间轴中该组所有状态和日期
+    const timelineDates = new Set(g.timeline.map((t) => t.ymd));
+    const timelineStatuses = [...new Set(g.timeline.map((t) => t.status))];
+    if (!timelineStatuses.length) continue;
+
+    // 查询 DB 中该公司这些状态的所有活跃记录
+    const statusPlaceholders = timelineStatuses.map(() => '?').join(',');
+    const candidates = await db.query(
+      `SELECT f_id, status, DATE_FORMAT(f_update_time, '%Y-%m-%d') AS ymd
+       FROM ipo_progress
+       WHERE F_DeleteMark = 0
+         AND exchange = ?
+         AND company = ?
+         AND board = ?
+         AND status IN (${statusPlaceholders})`,
+      [g.exchange, g.company, g.board, ...timelineStatuses]
+    );
+
+    for (const c of candidates) {
+      const cStatus = String(c.status || '').trim();
+      const cYmd = String(c.ymd || '').slice(0, 10);
+      // 如果该记录的日期已在时间轴中，无需修正
+      if (timelineDates.has(cYmd)) continue;
+
+      // 找到时间轴中匹配该记录状态的日期
+      const matchingEntry = g.timeline.find((t) => isStatusLikelySame(t.status, cStatus));
+      if (!matchingEntry) continue;
+
+      const targetYmd = matchingEntry.ymd;
+
+      // 检查目标日期是否已有记录存在（避免迁移后产生新重复）
+      const existingAtTarget = await db.query(
+        `SELECT f_id FROM ipo_progress
+         WHERE F_DeleteMark = 0
+           AND exchange = ? AND company = ? AND board = ?
+           AND status = ?
+           AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
+           AND f_id <> ?`,
+        [g.exchange, g.company, g.board, cStatus, targetYmd, c.f_id]
+      );
+      if (existingAtTarget.length > 0) {
+        // 目标日期已有正确记录，软删当前旧记录即可
+        // 同步清理关联的 ipo_project_progress（该表使用硬删除，无 F_DeleteMark）
+        await db.execute(
+          `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
+          [c.f_id]
+        );
+        await db.execute(
+          `UPDATE ipo_progress
+           SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+           WHERE f_id = ? AND F_DeleteMark = 0`,
+          [adminId, c.f_id]
+        );
+        migrated += 1;
+        continue;
+      }
+
+      // 就地修正 f_update_time 为时间轴日期（00:00:00），与 expandRowsWithTimeline 保持一致
+      await db.execute(
+        `UPDATE ipo_progress
+         SET f_update_time = CONCAT(?, ' 00:00:00'),
+             receive_date = ?,
+             F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+         WHERE f_id = ? AND F_DeleteMark = 0`,
+        [targetYmd, targetYmd, adminId, c.f_id]
+      );
+      // 清理关联的 ipo_project_progress 旧记录，由下次匹配流程（listingMatchRunner）自动重建正确数据
+      await db.execute(
+        `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
+        [c.f_id]
+      );
+      migrated += 1;
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`${logTag} 时间轴日期迁移：修正旧记录 f_update_time=${migrated}`);
+  }
+  return { migrated };
 }
 
 async function runWithConcurrency(items, worker, concurrency = 6) {
@@ -1072,12 +1189,30 @@ const EXCHANGES_IPO_PROGRESS_DEDUPE = ['深交所', '上交所', '北交所', '�
 
 /**
  * 同步入库前：按与 insertRows 一致的业务键合并历史重复行（仅四家交易所，不含证监会辅导备案）。
- * 业务键包含更新日期（日粒度），同键保留 f_id 最小的一条；其余 F_DeleteMark=1。
+ * 业务键包含受理日期（日粒度），同键保留 f_id 最小的一条；其余 F_DeleteMark=1。
  * @returns {Promise<{ softDeleted: number }>}
  */
 async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市进展爬虫]') {
   const now = new Date();
   const placeholders = EXCHANGES_IPO_PROGRESS_DEDUPE.map(() => '?').join(',');
+
+  // 先清理将被软删的 ipo_progress 所关联的 ipo_project_progress（硬删除，无 F_DeleteMark）
+  const delSql = `
+    DELETE ipp FROM ipo_project_progress ipp
+    INNER JOIN ipo_progress p1 ON ipp.ipo_progress_row_id = p1.f_id AND p1.F_DeleteMark = 0
+    INNER JOIN ipo_progress p2
+      ON p2.F_DeleteMark = 0
+      AND p2.exchange = p1.exchange
+      AND p2.company = p1.company
+      AND p2.status = p1.status
+      AND p2.board = p1.board
+      AND COALESCE(DATE(p2.receive_date), DATE(p2.f_update_time)) = COALESCE(DATE(p1.receive_date), DATE(p1.f_update_time))
+      AND p2.f_id <> p1.f_id
+      AND p2.f_id < p1.f_id
+    WHERE p1.exchange IN (${placeholders})`;
+  const delHeader = await db.execute(delSql, [...EXCHANGES_IPO_PROGRESS_DEDUPE]);
+  const progressDeleted = Number(delHeader?.affectedRows || 0);
+
   const sql = `
     UPDATE ipo_progress p
     INNER JOIN (
@@ -1090,7 +1225,7 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
         AND p2.company = p1.company
         AND p2.status = p1.status
         AND p2.board = p1.board
-        AND DATE(p2.f_update_time) = DATE(p1.f_update_time)
+        AND COALESCE(DATE(p2.receive_date), DATE(p2.f_update_time)) = COALESCE(DATE(p1.receive_date), DATE(p1.f_update_time))
         AND p2.f_id <> p1.f_id
         AND p2.f_id < p1.f_id
       WHERE p1.exchange IN (${placeholders})
@@ -1099,15 +1234,16 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
     WHERE p.F_DeleteMark = 0`;
   const header = await db.execute(sql, [...EXCHANGES_IPO_PROGRESS_DEDUPE, now, adminId]);
   const softDeleted = Number(header?.affectedRows || 0);
-  if (softDeleted > 0) {
-    console.log(`${logTag} 同步前已合并同键重复行，软删除=${softDeleted}（业务键含更新日期，保留每键 f_id 最小的一条）`);
+  if (softDeleted > 0 || progressDeleted > 0) {
+    console.log(`${logTag} 同步前已合并同键重复行，ipo_progress 软删除=${softDeleted}，ipo_project_progress 清理=${progressDeleted}（业务键含受理日期，保留每键 f_id 最小的一条）`);
   }
   return { softDeleted };
 }
 
 /**
- * 业务唯一键：交易所 + 公司全称 + 审核状态 + 上市板块 + 更新日期(YYYY-MM-DD)。
- * 同一键仅入库一次；同状态若更新日期变化，应新增入库。
+ * 业务唯一键：交易所 + 公司全称 + 审核状态 + 上市板块 + 受理日期(YYYY-MM-DD)。
+ * 同一键仅入库一次；同状态若受理日期相同则视为同一事件，不重复入库。
+ * 受理日期优先取时间轴日期（receive_date），无时间轴时回退到 f_update_time。
  */
 async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
   const { softDeleted: dedupeSoftDeleted } = await mergeDuplicateIpoProgressExchangeRows(adminId, logTag);
@@ -1137,6 +1273,8 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       skipped += 1;
       continue;
     }
+    // 业务去重日期：优先使用时间轴状态日期（receive_date），无时间轴时回退到 f_update_time
+    const dedupeDateStr = r.receive_date ? String(r.receive_date).slice(0, 10) : dateStr;
     const exchange = String(r.exchange || '').trim();
     const status = String(r.status || '-').trim() || '-';
     const board = String(r.board || '').trim();
@@ -1148,9 +1286,9 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
          AND company = ?
          AND status = ?
          AND board = ?
-         AND DATE(f_update_time) = ?
+         AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
        ORDER BY f_id ASC LIMIT 1`,
-      [exchange, company, status, board, dateStr]
+      [exchange, company, status, board, dedupeDateStr]
     );
 
     if (existing.length) {
@@ -1191,10 +1329,10 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
          AND company = ?
          AND status = ?
          AND board = ?
-         AND DATE(f_update_time) = ?
+         AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
        ORDER BY F_DeleteTime DESC, f_id DESC
        LIMIT 1`,
-      [exchange, company, status, board, dateStr]
+      [exchange, company, status, board, dedupeDateStr]
     );
     if (deletedSameKey.length) {
       await db.execute(
@@ -1339,6 +1477,7 @@ async function runListingExchangeCrawler({
   await enrichSzseStatusDate(merged, logTag);
   await enrichSseStatusDate(merged, logTag);
   await enrichBseStatusDate(merged, logTag);
+  await migrateStaleTimelineDates(merged, adminId, logTag);
   await pruneMismatchedTimelineRows(merged, adminId, logTag);
   const mergedExpanded = expandRowsWithTimeline(merged, logTag);
   await emit(`${logTag} 三家合并共 ${mergedExpanded.length} 条，开始去重入库 ipo_progress`);

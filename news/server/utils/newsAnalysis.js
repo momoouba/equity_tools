@@ -5554,6 +5554,46 @@ ${enterpriseList}
       return false;
     }
 
+    // 第二步半：提及权重分析 — 判断企业名称是否为新闻主体，还是仅在列举中被一笔带过
+    const titleLower = (title || '').toLowerCase();
+    const contentLower = (content || '').toLowerCase();
+    const contentLength = contentLower.length;
+
+    // 取最核心的关键词（简称优先，其次是全称，用于统计提及质量）
+    const coreKeyword = (projectAbbreviation
+      || (enterpriseExists.length > 0 && enterpriseExists[0].project_abbreviation ? enterpriseExists[0].project_abbreviation : null)
+      || enterpriseName.split(/有限公司|股份有限公司|集团/)[0]
+      || enterpriseName
+    ).toLowerCase();
+
+    // 统计核心关键词在全文中的出现次数
+    let mentionCount = 0;
+    let searchIdx = 0;
+    while (true) {
+      const foundIdx = fullText.indexOf(coreKeyword, searchIdx);
+      if (foundIdx === -1) break;
+      mentionCount++;
+      searchIdx = foundIdx + coreKeyword.length;
+    }
+
+    // 检查关键词是否出现在标题中
+    const inTitle = titleLower.includes(coreKeyword);
+
+    // 检查关键词是否出现在正文前 300 字（主体段落）中
+    const inOpening = contentLower.substring(0, 300).includes(coreKeyword);
+
+    // 弱提及判定：仅出现 1 次 + 不在标题 + 不在开头 + 文章较长 → 大概率是顺带提及
+    const isWeakMention = mentionCount <= 1 && !inTitle && !inOpening && contentLength > 1500;
+
+    if (isWeakMention) {
+      logWithTag('[validateExistingAssociation]',
+        `提及权重分析：企业"${enterpriseName}"在全文(长度${contentLength})中仅出现${mentionCount}次，不在标题和开头，判定为顺带提及/列举式提及，解除关联`);
+      return false;
+    }
+
+    logWithTag('[validateExistingAssociation]',
+      `提及权重分析通过：企业"${enterpriseName}"出现${mentionCount}次，标题:${inTitle ? '是' : '否'}，开头:${inOpening ? '是' : '否'}，进入AI校验`);
+
     // 获取提示词配置（包含关联的AI模型配置）
     let promptConfig = await this.getPrompt(interfaceType, 'validation');
     let promptTemplate = null;
@@ -5597,6 +5637,7 @@ ${enterpriseList}
 - 科技行业新闻不等于与科技企业相关
 - 宁可错误地解除关联，也不要错误地保持关联
 - **信息源企业识别**：**极其重要** - 信息源企业（如"企查查消息"、"据企查查"、"格隆汇消息"等中的"企查查"、"格隆汇"）**不作为企业关联的直接依据**。这些只是新闻的信息来源，不是新闻的主体企业。必须根据正文内容实际的主要信息判断是否与企业相关。例如，如果新闻开头是"企查查消息，珠海博瑞晶芯完成融资"，那么新闻主体企业是"珠海博瑞晶芯"，而不是"企查查"。只有当信息源企业本身是新闻的主体内容时（如"企查查获得融资"），才应该关联信息源企业。
+- **列举式提及排除**：**极其重要** - 如果指定企业仅在投资清单、合作伙伴列表、被投企业名录、供应链名单等列举段落中被一笔带过（例如"先后投资了A公司、B公司、C公司"中的B公司），而新闻的讨论主体是其他机构或话题，**必须判断为不合理关联**。判断标准：企业新闻主体应有独立的段落或事件描述，而非仅作为枚举列表中的一个条目出现。
 
 **示例**：
 - "安谋科技发布NPU芯片" 与 "浙江太美医疗" → 不合理（完全不同的公司和业务）
@@ -5604,6 +5645,9 @@ ${enterpriseList}
 - "AI技术发展趋势" 与 "AI企业" → 不合理（行业趋势，非企业特定）
 - "企查查消息，珠海博瑞晶芯完成融资" 与 "企查查" → 不合理（企查查只是信息源，新闻主体是珠海博瑞晶芯）
 - "企查查消息，珠海博瑞晶芯完成融资" 与 "珠海博瑞晶芯" → 合理（珠海博瑞晶芯是新闻主体）
+- "某基金投资了A公司、B公司、C公司" 与 "B公司" → 不合理（B公司仅在投资列表中被列举提及，不是新闻主体）
+- "成都商业航天产业布局，包括星际荣耀、星河动力、九州云箭等企业" 与 "九州云箭" → 不合理（九州云箭仅在企业名录中被一笔带过，新闻主体是成都商业航天产业）
+- "三角防务入股液体火箭发动机研发商九州云箭" 与 "九州云箭" → 合理（九州云箭是新闻的核心主体，有独立的事件描述）
 
 请返回JSON格式：
 {
@@ -5662,8 +5706,9 @@ ${enterpriseList}
         console.warn('企业关联验证解析失败:', parseError.message);
         console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
         console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
-        // 如果解析失败，默认保持关联（保守策略）
-        return true;
+        // 解析失败时解除关联（避免因AI输出格式异常而保留误关联）
+        logWithTag('[validateExistingAssociation]', `AI响应解析失败，解除企业"${enterpriseName}"的关联`);
+        return false;
       }
 
       const isReasonable = result.is_reasonable === true;
@@ -5691,8 +5736,9 @@ ${enterpriseList}
 
     } catch (error) {
       console.error('企业关联验证失败:', error);
-      // 出错时保持关联（保守策略）
-      return true;
+      // AI调用异常时解除关联（避免因超时/限流等偶发故障保留误关联）
+      logWithTag('[validateExistingAssociation]', `AI校验异常(${error.message})，解除企业"${enterpriseName}"的关联`);
+      return false;
     }
   }
 

@@ -15,7 +15,8 @@ description: 所有已提交变更推送到 equity_tools；仅当本次待推送
 
 ## Workflow（执行顺序固定）
 
-1. **确认待推送范围**：通常为 `HEAD` 相对于 `equity_tools/<当前分支>` 多出的提交；若两远程均已对齐，则检查是否已有本地 commit 未推送。
+0. **先提交工作区改动（必须）**：执行 `git status`；若存在未暂存/未提交的本地修改，**必须先完成 commit**，再进入后续推送步骤。不得在有工作区改动时直接推送并报告「已是最新」。用户未指定 commit message 时，根据 `git diff` 拟定符合仓库风格的说明；用户要求「一并提交」时，将当前工作区相关改动全部纳入本次 commit。
+1. **确认待推送范围**：通常为 `HEAD` 相对于 `equity_tools/<当前分支>` 多出的提交。
 2. **枚举本批提交涉及的所有文件路径**：例如  
    `git log equity_tools/<branch>..HEAD --name-only --pretty=format: | sort -u`  
    若本地未跟踪 `equity_tools` 分支，可用 `git log -1 --name-only` 仅判断最近一次提交，或与用户确认范围。
@@ -76,8 +77,8 @@ git push origin HEAD
 
 ## 执行步骤（给 Agent）
 
-1. `git status`；若有未提交改动且用户意图包含「提交并推送」，先按用户要求完成 commit。
-2. 用 `git log` + `--name-only` 列出待推送提交涉及的路径，按 §规则计算 `need_equity_news`。
+1. `git status`：**若有未提交改动，先 `git add` + `git commit` 全部纳入本次推送**（用户未给 message 则根据 diff 自拟；勿跳过此步）。
+2. 用 `git log equity_tools/<branch>..HEAD` + `--name-only` 列出待推送提交涉及的路径，按 §规则计算 `need_equity_news`。
 3. 执行 `git push equity_tools HEAD`。
 4. 若 `need_equity_news`：执行 `git push origin HEAD`；否则打印「跳过 origin（equity_news）：本批无新闻域文件」。
 5. 若推送失败（认证、冲突、分支不存在），说明原因并停止；**不要** `push --force` 到 `main/master`，除非用户明确要求。
