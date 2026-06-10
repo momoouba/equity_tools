@@ -285,17 +285,19 @@ async function archivePriorCompetitorRelations({
   investedEnterpriseId,
   preInvestmentProjectId,
   userId,
+  executor,
 }) {
+  const dbExec = executor || db.execute.bind(db);
   const uid = userId ? String(userId) : null;
   if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
-    await db.execute(
+    await dbExec(
       `UPDATE sourcing_competitor_relation
        SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
        WHERE invested_enterprise_id = ? AND delete_mark = 0`,
       [uid, investedEnterpriseId]
     );
   } else if (subjectType === 'pre_investment_project' && preInvestmentProjectId) {
-    await db.execute(
+    await dbExec(
       `UPDATE sourcing_competitor_relation
        SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
        WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0`,
@@ -322,14 +324,8 @@ async function persistRelations({
   });
   const financingIndex = await buildFinancingEventIndex();
 
-  await archivePriorCompetitorRelations({
-    subjectType,
-    investedEnterpriseId,
-    preInvestmentProjectId,
-    userId,
-  });
-
-  let n = 0;
+  // ── 预先准备好所有待写入的数据（在事务外完成，减少事务持有时间）──
+  const preparedRows = [];
   for (const r of rows) {
     const key = candidateDedupeKey({
       unified_credit_code: r.unified_credit_code,
@@ -353,48 +349,108 @@ async function persistRelations({
     })
       ? 1
       : 0;
-
     const relId = await generateId('sourcing_competitor_relation');
-    await db.execute(
-      `INSERT INTO sourcing_competitor_relation (
-         id, subject_type, invested_enterprise_id, pre_investment_project_id,
-         run_id, pre_investment_run_id, subject_display_name,
-         competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
-         relevance_score, confidence_grade, score_breakdown_json,
-         data_sources_json, financing_amount_text, financing_history_text,
-         competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-         include_in_comparable, created_at, updated_at, delete_mark
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
-      [
-        relId,
-        subjectType,
-        investedEnterpriseId || null,
-        preInvestmentProjectId || null,
-        subjectType === 'invested_enterprise' ? runId : null,
-        preInvestmentRunId || null,
-        subjectDisplayName,
-        r.display_name,
-        creditFinal,
-        fieldEnhance.is_listed ? 1 : 0,
-        creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
-        r.finalScore,
-        r.grade,
-        JSON.stringify(r.breakdown),
-        JSON.stringify(r.sources || []),
-        fieldEnhance.financing_history_text
-          ? String(fieldEnhance.financing_history_text).split('\n')[0].slice(0, 128)
-          : r.financing_amount_text || null,
-        fieldEnhance.financing_history_text || null,
-        displayFields.competitor_product_intro,
-        displayFields.competitor_tags_display,
-        displayFields.competitor_tags_json,
-        displayFields.sub_fund_names,
-        includeComparable,
-      ]
-    );
-    n += 1;
+
+    preparedRows.push({
+      relId,
+      subjectType,
+      investedEnterpriseId: investedEnterpriseId || null,
+      preInvestmentProjectId: preInvestmentProjectId || null,
+      runIdValue: subjectType === 'invested_enterprise' ? runId : null,
+      preInvestmentRunId: preInvestmentRunId || null,
+      subjectDisplayName,
+      displayName: r.display_name,
+      creditFinal,
+      isListed: fieldEnhance.is_listed ? 1 : 0,
+      weakKey: creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
+      finalScore: r.finalScore,
+      grade: r.grade,
+      breakdownJson: JSON.stringify(r.breakdown),
+      sourcesJson: JSON.stringify(r.sources || []),
+      financingAmountText: fieldEnhance.financing_history_text
+        ? String(fieldEnhance.financing_history_text).split('\n')[0].slice(0, 128)
+        : r.financing_amount_text || null,
+      financingHistoryText: fieldEnhance.financing_history_text || null,
+      competitorProductIntro: displayFields.competitor_product_intro,
+      competitorTagsDisplay: displayFields.competitor_tags_display,
+      competitorTagsJson: displayFields.competitor_tags_json,
+      subFundNames: displayFields.sub_fund_names,
+      includeComparable,
+    });
   }
-  return n;
+
+  // ── 在事务中原子执行：归档旧数据 + 写入新数据 ──
+  let conn;
+  try {
+    conn = await db.getConnection();
+    await conn.beginTransaction();
+
+    // 归档旧竞品关系（事务内）
+    await archivePriorCompetitorRelations({
+      subjectType,
+      investedEnterpriseId,
+      preInvestmentProjectId,
+      userId,
+      executor: (sql, params) => conn.execute(sql, params),
+    });
+
+    // 批量插入新关系（事务内）
+    let n = 0;
+    for (const p of preparedRows) {
+      await conn.execute(
+        `INSERT INTO sourcing_competitor_relation (
+           id, subject_type, invested_enterprise_id, pre_investment_project_id,
+           run_id, pre_investment_run_id, subject_display_name,
+           competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
+           relevance_score, confidence_grade, score_breakdown_json,
+           data_sources_json, financing_amount_text, financing_history_text,
+           competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+           include_in_comparable, created_at, updated_at, delete_mark
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
+        [
+          p.relId,
+          p.subjectType,
+          p.investedEnterpriseId,
+          p.preInvestmentProjectId,
+          p.runIdValue,
+          p.preInvestmentRunId,
+          p.subjectDisplayName,
+          p.displayName,
+          p.creditFinal,
+          p.isListed,
+          p.weakKey,
+          p.finalScore,
+          p.grade,
+          p.breakdownJson,
+          p.sourcesJson,
+          p.financingAmountText,
+          p.financingHistoryText,
+          p.competitorProductIntro,
+          p.competitorTagsDisplay,
+          p.competitorTagsJson,
+          p.subFundNames,
+          p.includeComparable,
+        ]
+      );
+      n += 1;
+    }
+
+    await conn.commit();
+    return n;
+  } catch (txErr) {
+    // 事务回滚：归档操作和新数据写入全部撤销，旧竞品数据安全保留
+    if (conn) {
+      try {
+        await conn.rollback();
+        console.log('[persistRelations] 事务已回滚，旧竞品关系数据已恢复');
+      } catch (rbErr) {
+        console.error('[persistRelations] 事务回滚失败:', rbErr.message);
+      }
+    }
+    throw txErr;
+  } finally {
+    if (conn) conn.release();
+  }
 }
 
 /**

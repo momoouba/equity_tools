@@ -1793,8 +1793,20 @@ async function executeSyncTask(
     );
   }
 
-  // 获取invested_enterprises表的所有字段（排除系统字段）
-  const systemFields = ['id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time', 'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name', 'data_app_id'];
+  // 获取invested_enterprises表的所有字段（排除系统字段和AI增强字段）
+  // AI增强字段（产品简介AI、企业标签AI、企查查介绍等）由 AI enrichment 服务独立写入，
+  // 不应被定时同步覆盖；硬删→重插入场景由 AI 快照备份/回填机制保护。
+  const systemFields = [
+    'id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time',
+    'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name', 'data_app_id',
+    // ── AI 增强字段（防止同步覆盖）──
+    'ai_product_intro',
+    'ai_industry_tags_display', 'ai_industry_tags_json',
+    'ai_company_tags_display', 'ai_company_tags_json',
+    'ai_enrich_status', 'ai_enrich_at', 'ai_enrich_model', 'ai_enrich_version', 'ai_enrich_error',
+    // ── 企查查字段（由 QCC 同步服务独立写入）──
+    'qcc_company_intro', 'qcc_sync_at', 'qcc_sync_error',
+  ];
   const tableColumns = await db.query(`
     SELECT COLUMN_NAME 
     FROM INFORMATION_SCHEMA.COLUMNS 

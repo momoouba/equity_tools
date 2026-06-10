@@ -3617,7 +3617,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : (config.temperature || 0.7),
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : (config.max_tokens || 2000),
+      max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : (config.top_p || 0.9)
     };
     
@@ -3662,7 +3662,7 @@ class NewsAnalysis {
       },
       parameters: {
         temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-        max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+        max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
         top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
       }
     };
@@ -3696,7 +3696,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
     };
 
@@ -3819,6 +3819,7 @@ class NewsAnalysis {
    * 调用OpenAI模型
    */
   async callOpenAIModel(prompt, config) {
+    const safeMaxTokens = (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })();
     const requestData = {
       model: config.model_name,
       messages: [
@@ -3828,7 +3829,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      max_tokens: safeMaxTokens,
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
     };
 

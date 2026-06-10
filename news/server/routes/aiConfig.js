@@ -485,9 +485,10 @@ async function testAlibabaModel(config) {
   
   let requestData;
   
-  // 确保参数类型正确（转换为数字类型）
+  // 确保参数类型正确（转换为数字类型），并做安全兜底
   const temperature = typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature;
-  const maxTokens = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const maxTokensRaw = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const maxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : 2000;
   const topP = typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p;
   
   // 根据API类型选择不同的请求格式
@@ -597,6 +598,9 @@ async function testAlibabaModel(config) {
 async function testOpenAIModel(config) {
   const testMessage = "Hello, please reply 'Test successful'";
   
+  const maxTokensRaw = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
+  const safeMaxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : 2000;
+
   const requestData = {
     model: config.model_name,
     messages: [
@@ -605,9 +609,9 @@ async function testOpenAIModel(config) {
         content: testMessage
       }
     ],
-    temperature: config.temperature,
-    max_tokens: Math.min(config.max_tokens, 100),
-    top_p: config.top_p
+    temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : (config.temperature ?? 0.7),
+    max_tokens: Math.min(safeMaxTokens, 100),
+    top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
   };
 
   const response = await axios.post(config.api_endpoint, requestData, {
