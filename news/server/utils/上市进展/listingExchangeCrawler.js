@@ -258,23 +258,24 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
       .map((x) => x.f_id)
       .filter(Boolean);
     if (!toDeleteIds.length) continue;
-    if (toDeleteIds.length > 500) {
-      console.warn(`[pruneMismatchedTimelineRows] toDeleteIds 过长(${toDeleteIds.length})，截断至 500`);
-      toDeleteIds.length = 500;
+    // #17: 分块处理 IN 子句，避免占位符超限（替代原截断 500 方案，防止遗漏删除）
+    const CHUNK = 500;
+    for (let ci = 0; ci < toDeleteIds.length; ci += CHUNK) {
+      const chunk = toDeleteIds.slice(ci, ci + CHUNK);
+      const idPlaceholders = chunk.map(() => '?').join(',');
+      // 先清理关联的 ipo_project_progress（硬删除）
+      await db.execute(
+        `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${idPlaceholders})`,
+        [...chunk]
+      );
+      const header = await db.execute(
+        `UPDATE ipo_progress
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+         WHERE F_DeleteMark = 0 AND f_id IN (${idPlaceholders})`,
+        [adminId, ...chunk]
+      );
+      softDeleted += Number(header?.affectedRows || 0);
     }
-    const idPlaceholders = toDeleteIds.map(() => '?').join(',');
-    // 先清理关联的 ipo_project_progress（硬删除）
-    await db.execute(
-      `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${idPlaceholders})`,
-      [...toDeleteIds]
-    );
-    const header = await db.execute(
-      `UPDATE ipo_progress
-       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
-       WHERE F_DeleteMark = 0 AND f_id IN (${idPlaceholders})`,
-      [adminId, ...toDeleteIds]
-    );
-    softDeleted += Number(header?.affectedRows || 0);
   }
   if (softDeleted > 0) {
     console.log(`${logTag} 详情时间轴反向清理：软删除错日期记录=${softDeleted}`);
@@ -1478,9 +1479,12 @@ async function runListingExchangeCrawler({
     }
   }
   const merged = [...parts[0], ...parts[1], ...parts[2]];
-  await enrichSzseStatusDate(merged, logTag);
-  await enrichSseStatusDate(merged, logTag);
-  await enrichBseStatusDate(merged, logTag);
+  // #11: 三家交易所详情补全并行化（各函数仅处理本所行，互不干扰），提速约 3 倍
+  const [szseEnrich, sseEnrich, bseEnrich] = await Promise.all([
+    enrichSzseStatusDate(merged, logTag),
+    enrichSseStatusDate(merged, logTag),
+    enrichBseStatusDate(merged, logTag),
+  ]);
   await migrateStaleTimelineDates(merged, adminId, logTag);
   await pruneMismatchedTimelineRows(merged, adminId, logTag);
   const mergedExpanded = expandRowsWithTimeline(merged, logTag);

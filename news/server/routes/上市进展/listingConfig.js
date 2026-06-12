@@ -9,7 +9,7 @@ const {
 } = require('../../utils/上市进展/listingAuth');
 const { runListingExchangeCrawler } = require('../../utils/上市进展/listingExchangeCrawler');
 const { runListingMatchBatch } = require('../../utils/上市进展/listingMatchRunner');
-const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
+const { updateListingScheduledTasks, tryAcquireTaskLock, releaseTaskLock } = require('../../utils/上市进展/scheduledListingTasks');
 const { encryptText, decryptText, maskToken } = require('../../utils/上市进展/listingSecret');
 const { normalizeSourceType, buildTaskKey } = require('../../utils/上市进展/listingSourceType');
 const { executeWithRetry } = require('../../utils/上市进展/listingRetry');
@@ -19,7 +19,7 @@ const { syncGuidanceProgress } = require('../../utils/上市进展/guidanceProgr
 const { syncOverseasFiling, DEFAULT_CSRC_PORTAL_URL } = require('../../utils/上市进展/overseasFilingService');
 const { createShanghaiDate, formatDateOnly, subtractOneBeijingCalendarDay } = require('../../utils/上市进展/listingBeijingDate');
 
-const runningManualTaskKeys = new Set();
+// #13: 手动同步互斥锁改用 DB 持久化（通过 tryAcquireTaskLock / releaseTaskLock），与定时任务共享同一锁表
 const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
 const LISTING_DEFAULT_CONFIG_TEMPLATES = [
   { name: '交易所IPO主爬虫', interface_type: 'crawler', news_interface_type: 'exchange_ipo', request_url: null },
@@ -486,10 +486,11 @@ async function syncListingConfig(req, res) {
       });
     }
     const taskKey = buildTaskKey(cfg, effectiveStart, endDateFinal);
-    if (runningManualTaskKeys.has(taskKey)) {
+    // #13: 使用 DB 持久化锁替代内存 Set
+    const manualLockAcquired = await tryAcquireTaskLock(taskKey);
+    if (!manualLockAcquired) {
       return res.status(409).json({ success: false, message: '同源同窗口任务正在执行，请稍后重试' });
     }
-    runningManualTaskKeys.add(taskKey);
 
     let logId = null;
     try {
@@ -657,7 +658,8 @@ async function syncListingConfig(req, res) {
       }
       throw syncErr;
     } finally {
-      runningManualTaskKeys.delete(taskKey);
+      // #13: 释放 DB 持久化锁
+      await releaseTaskLock(taskKey);
     }
   } catch (e) {
     console.error('syncListingConfig', e);

@@ -253,7 +253,7 @@ router.put('/indicators', async (req, res) => {
           project_num_a_desc, total_amount_a_desc, ipo_num_a_desc, sh_num_a_desc,
           project_num_desc, total_amount_desc, ipo_num_desc, sh_num_desc,
           F_CreatorUserId, F_CreatorTime, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 0)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NOW(), 0)`,
         [
           id, systemName, manualUrl, redirectUrl,
           fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc,
@@ -267,7 +267,7 @@ router.put('/indicators', async (req, res) => {
           projectExitAmountAccDesc, projectReceiveAccDesc,
           projectNumADesc, totalAmountADesc, ipoNumADesc, shNumADesc,
           projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc,
-          userId, userId, new Date()
+          userId, userId // fix#17: F_CreatorUserId 和 F_LastModifyUserId 均为 userId，时间字段统一用 NOW()
         ]
       );
       await conn.commit();

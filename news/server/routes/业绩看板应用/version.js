@@ -25,6 +25,14 @@ const ID_COLUMN = 'F_Id';
 // 版本创建并发锁（防止同日期并发创建导致版本号重复）
 const versionCreationLocks = new Set();
 
+// fix#19: 版本号解析统一用正则，与 SQL SUBSTRING_INDEX(version, 'V', -1) 行为一致
+// 正常格式 "20250601V01" → 1；畸形（无V/无数字）→ 0，与 SQL CAST(...AS UNSIGNED) 对齐
+function parseVersionNum(versionStr) {
+  if (!versionStr) return 0;
+  const m = String(versionStr).match(/V(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+
 // 统一使用中国上海时间（UTC+8）—— 使用 Intl API 避免 Date 方法在非 UTC/UTC+8 服务器上出错
 function getShanghaiNow() {
   const now = new Date();
@@ -142,6 +150,7 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ success: false, message: '日期参数不能为空' });
     }
     
+    // fix#19: SUBSTRING_INDEX 排序与 JS parseVersionNum 正则解析对畸形版本号行为一致（无数字均视为 0）
     const rows = await db.query(
       `SELECT 
         version,
@@ -184,6 +193,7 @@ router.get('/history', async (req, res) => {
       return res.status(400).json({ success: false, message: '日期参数不能为空' });
     }
     
+    // fix#19: 排序逻辑与 parseVersionNum 一致
     const rows = await db.query(
       `SELECT 
         version,
@@ -269,16 +279,10 @@ router.post('/', async (req, res) => {
         [monthDate]
       );
       
-      // 生成新版本号
+      // 生成新版本号（fix#19: 使用 parseVersionNum 正则解析，与 SQL SUBSTRING_INDEX 排序逻辑一致）
       let newVersionNum = 1;
       if (maxVersionRow.length > 0) {
-        const maxVersion = maxVersionRow[0].version;
-        const parts = String(maxVersion).split('V');
-        const lastPart = parts[parts.length - 1];
-        const parsed = parseInt(lastPart, 10);
-        if (Number.isFinite(parsed)) {
-          newVersionNum = parsed + 1;
-        }
+        newVersionNum = parseVersionNum(maxVersionRow[0].version) + 1;
       }
       
       const version = `${monthDate.replace(/-/g, '')}V${String(newVersionNum).padStart(2, '0')}`;

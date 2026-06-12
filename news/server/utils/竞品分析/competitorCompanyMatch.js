@@ -86,7 +86,8 @@ function collectCompetitorLookupKeys({ unified_credit_code, competitor_display_n
 
   const code = normalizeCreditCode(unified_credit_code);
   if (code.length >= 15) {
-    keys.add(`cc:${code}`);
+    // fix #17: 信用代码规范键始终大写，无需额外添加小写变体
+    keys.add(`cc:${code.toUpperCase()}`);
   }
 
   const simpleName = strTrim(competitor_display_name).toLowerCase();

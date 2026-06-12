@@ -72,6 +72,27 @@ const { normalizeCompanyName, containsTraditional, toSimplified } = require('./z
 
 const DRY_RUN = process.argv.includes('--dry-run');
 
+// #17: IN 子句占位符上限，防止参数过多导致 SQL 异常
+const MAX_IN_CLAUSE_SIZE = 500;
+
+/**
+ * #17: 分块执行带 IN 子句的 SQL，避免占位符数量超限
+ * @param {string} sqlTemplate SQL 模板，包含 __IN__ 占位符
+ * @param {Array} ids ID 数组
+ * @param {Array} prefixParams IN 子句前的绑定参数
+ */
+async function chunkedInExecute(sqlTemplate, ids, prefixParams = []) {
+  let totalAffected = 0;
+  for (let i = 0; i < ids.length; i += MAX_IN_CLAUSE_SIZE) {
+    const chunk = ids.slice(i, i + MAX_IN_CLAUSE_SIZE);
+    const placeholders = chunk.map(() => '?').join(',');
+    const sql = sqlTemplate.replace('__IN__', placeholders);
+    const [res] = await db.execute(sql, [...prefixParams, ...chunk]);
+    totalAffected += res.affectedRows || 0;
+  }
+  return totalAffected;
+}
+
 /**
  * 检测文本是否包含繁体字
  * @param {string} text 输入文本
@@ -166,11 +187,10 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
 
       if (!dryRun) {
         const tradIds = traditionalRecords.map(r => r.f_id);
-        // 先删除关联的 ipo_project_progress
+        // 先删除关联的 ipo_project_progress（#17: 分块执行避免 IN 子句超限）
         if (tradIds.length > 0) {
-          const placeholders = tradIds.map(() => '?').join(',');
-          await db.execute(
-            `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${placeholders})`,
+          await chunkedInExecute(
+            `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (__IN__)`,
             tradIds
           );
         }
@@ -486,10 +506,10 @@ async function cleanupOrphanedProgressLinks(dryRun = DRY_RUN) {
 
   if (!dryRun) {
     const orphanIds = orphans.map(r => r.f_id);
-    const ph = orphanIds.map(() => '?').join(',');
-    await db.execute(
+    // #17: 分块执行避免 IN 子句占位符超限
+    await chunkedInExecute(
       `UPDATE ipo_project_progress SET delete_mark = 1, delete_time = NOW(), delete_user_id = 'system_orphan_cleanup'
-       WHERE f_id IN (${ph})`,
+       WHERE f_id IN (__IN__)`,
       orphanIds
     );
     console.log(`[orphan-cleanup] 已软删除 ${orphanIds.length} 条孤立记录`);

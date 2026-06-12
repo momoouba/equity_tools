@@ -348,29 +348,16 @@ async function exportCompetitorRelationsToBuffer(opts) {
 }
 
 /** 投前项目编号 P+年度 可选列表 */
+// fix #15: 非管理员仅需一次限定查询，避免先全量查询再丢弃结果
 async function listPreInvestmentYears(psUser, isAdmin) {
   const uid = psUser?.id ? String(psUser.id) : null;
-  const rows = await db.query(
-    `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y
-     FROM pre_investment_project
-     WHERE delete_mark = 0 AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5
-       AND project_no LIKE 'P%'
-     ORDER BY y DESC`
-  );
-  let years = rows.map((r) => String(r.y || '').trim()).filter((y) => /^\d{4}$/.test(y));
-  if (!isAdmin && uid) {
-    const scoped = await db.query(
-      `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y
-       FROM pre_investment_project
-       WHERE delete_mark = 0 AND creator_user_id = ?
-         AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5
-         AND project_no LIKE 'P%'
-       ORDER BY y DESC`,
-      [uid]
-    );
-    years = scoped.map((r) => String(r.y)).filter((y) => /^\d{4}$/.test(y));
-  }
-  return years;
+  const baseWhere = `delete_mark = 0 AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5 AND project_no LIKE 'P%'`;
+  const sql = isAdmin || !uid
+    ? `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y FROM pre_investment_project WHERE ${baseWhere} ORDER BY y DESC`
+    : `SELECT DISTINCT SUBSTRING(project_no, 2, 4) AS y FROM pre_investment_project WHERE ${baseWhere} AND creator_user_id = ? ORDER BY y DESC`;
+  const params = (!isAdmin && uid) ? [uid] : [];
+  const rows = await db.query(sql, params);
+  return rows.map((r) => String(r.y || '').trim()).filter((y) => /^\d{4}$/.test(y));
 }
 
 module.exports = {

@@ -34,13 +34,26 @@ function trimCell(v) {
   return String(v == null ? '' : v).trim();
 }
 
+// #4.2 fix: ensure* 函数在并发导入时存在竞态条件 —— 两个事务同时 SELECT FOR UPDATE
+// 未命中行（gap lock 兼容），随后双方都 INSERT 导致死锁/ER_DUP_ENTRY。
+// 修复方式：INSERT 失败时捕获 ER_DUP_ENTRY 并重新 SELECT 获取并发方已插入的行。
+
 async function ensureTrack(name, sortOrder, conn) {
   const executor = conn || db;
   const forUpdate = conn ? ' FOR UPDATE' : '';
   const rows = await executor.query(`SELECT id FROM sourcing_track WHERE name = ? AND delete_mark = 0 LIMIT 1${forUpdate}`, [name]);
-  if (rows.length) return conn ? rows[0].id : rows[0].id;
-  const r = await executor.execute(`INSERT INTO sourcing_track (name, sort_order) VALUES (?,?)`, [name, sortOrder]);
-  return r.insertId;
+  if (rows.length) return rows[0].id;
+  try {
+    const r = await executor.execute(`INSERT INTO sourcing_track (name, sort_order) VALUES (?,?)`, [name, sortOrder]);
+    return r.insertId;
+  } catch (e) {
+    // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
+    if (e.code === 'ER_DUP_ENTRY') {
+      const retry = await executor.query(`SELECT id FROM sourcing_track WHERE name = ? AND delete_mark = 0 LIMIT 1`, [name]);
+      if (retry.length) return retry[0].id;
+    }
+    throw e;
+  }
 }
 
 async function ensureLv1(trackId, name, sortOrder, conn) {
@@ -51,12 +64,24 @@ async function ensureLv1(trackId, name, sortOrder, conn) {
     [trackId, name]
   );
   if (rows.length) return rows[0].id;
-  const r = await executor.execute(`INSERT INTO sourcing_track_lv1 (track_id, name, sort_order) VALUES (?,?,?)`, [
-    trackId,
-    name,
-    sortOrder,
-  ]);
-  return r.insertId;
+  try {
+    const r = await executor.execute(`INSERT INTO sourcing_track_lv1 (track_id, name, sort_order) VALUES (?,?,?)`, [
+      trackId,
+      name,
+      sortOrder,
+    ]);
+    return r.insertId;
+  } catch (e) {
+    // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
+    if (e.code === 'ER_DUP_ENTRY') {
+      const retry = await executor.query(
+        `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        [trackId, name]
+      );
+      if (retry.length) return retry[0].id;
+    }
+    throw e;
+  }
 }
 
 async function ensureLv2(lv1Id, name, sortOrder, conn) {
@@ -67,12 +92,24 @@ async function ensureLv2(lv1Id, name, sortOrder, conn) {
     [lv1Id, name]
   );
   if (rows.length) return rows[0].id;
-  const r = await executor.execute(`INSERT INTO sourcing_track_lv2 (lv1_id, name, sort_order) VALUES (?,?,?)`, [
-    lv1Id,
-    name,
-    sortOrder,
-  ]);
-  return r.insertId;
+  try {
+    const r = await executor.execute(`INSERT INTO sourcing_track_lv2 (lv1_id, name, sort_order) VALUES (?,?,?)`, [
+      lv1Id,
+      name,
+      sortOrder,
+    ]);
+    return r.insertId;
+  } catch (e) {
+    // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
+    if (e.code === 'ER_DUP_ENTRY') {
+      const retry = await executor.query(
+        `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        [lv1Id, name]
+      );
+      if (retry.length) return retry[0].id;
+    }
+    throw e;
+  }
 }
 
 async function upsertLv3(lv2Id, name, sortOrder, m1, m2, kw, pri, conn) {
@@ -95,11 +132,29 @@ async function upsertLv3(lv2Id, name, sortOrder, m1, m2, kw, pri, conn) {
     );
     return 'updated';
   }
-  await executor.execute(
-    `INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority) VALUES (?,?,?,?,?,?,?)`,
-    [lv2Id, safeName, safeSortOrder, safeM1, safeM2, safeKw, safePri]
-  );
-  return 'created';
+  try {
+    await executor.execute(
+      `INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority) VALUES (?,?,?,?,?,?,?)`,
+      [lv2Id, safeName, safeSortOrder, safeM1, safeM2, safeKw, safePri]
+    );
+    return 'created';
+  } catch (e) {
+    // #4.2 fix: 并发 INSERT 冲突时回退为 UPDATE 已有行
+    if (e.code === 'ER_DUP_ENTRY') {
+      const retry = await executor.query(
+        `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        [lv2Id, safeName]
+      );
+      if (retry.length) {
+        await executor.execute(
+          `UPDATE sourcing_track_lv3 SET sort_order = ?, match_industry_lv1 = ?, match_industry_lv2 = ?, match_keywords = ?, match_priority = ? WHERE id = ?`,
+          [safeSortOrder, safeM1, safeM2, safeKw, safePri, retry[0].id]
+        );
+        return 'updated';
+      }
+    }
+    throw e;
+  }
 }
 
 function parseWorkbook(buffer) {

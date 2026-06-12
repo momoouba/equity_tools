@@ -136,7 +136,8 @@ function parseFinancingMoneyText(raw) {
     currency = 'CNY';
     amountAbsolute = num;
   } else if (/^\d+(?:\.\d+)?$/.test(compact) && num > 0) {
-    // #2.4: 纯数字无单位，视为人民币元（低置信度）
+    // #2.4 fix: 纯数字无货币/单位指示符（如 "5000000"）不应返回 unparsed，
+    // 统一视为人民币元，低置信度 estimated，避免下游因 unparsed 丢失数值信息
     currency = 'CNY';
     amountAbsolute = num;
   } else {
@@ -148,7 +149,7 @@ function parseFinancingMoneyText(raw) {
   if (currency === 'CNY') amountCny = amountAbsolute;
   else amountCny = amountAbsolute * rate;
 
-  // #2.4: 纯数字无单位标记为低置信度
+  // #2.4 fix: 纯数字无单位 → estimated + 低置信度 0.45，区别于有单位的 parsed(0.93) 和模糊词 estimated(0.78)
   const isBareNumber = /^\d+(?:\.\d+)?$/.test(compact);
   const status = fuzzy ? 'estimated' : (isBareNumber ? 'estimated' : 'parsed');
   const confidence = fuzzy ? 0.78 : (isBareNumber ? 0.45 : 0.93);

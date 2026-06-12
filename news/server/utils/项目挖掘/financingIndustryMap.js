@@ -68,12 +68,14 @@ function mapIndustryToStd(lv1, lv2) {
     };
   }
 
+  // #5.2 fix: 仅 lv1 命中时，lv2 未经映射验证，不应将原始来源 lv2 透传为"标准" lv2，
+  // 否则下游会误以为 lv2 已标准化。改为 null 并降低置信度至 0.55。
   const lv1Only = SEED_MAP.find((m) => m.lv1 === a && !m.lv2);
   if (lv1Only) {
     return {
       industry_std_lv1: lv1Only.std1 || null,
-      industry_std_lv2: b || null,
-      industry_match_confidence: 0.65,  // lv1-only: lv2 未经映射验证，降低置信度
+      industry_std_lv2: null,
+      industry_match_confidence: 0.55,
     };
   }
 

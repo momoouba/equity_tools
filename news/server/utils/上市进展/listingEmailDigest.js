@@ -285,44 +285,65 @@ async function executeListingEmailDigest(recipient, options = {}) {
     );
   }
   if (includeListingProgress) {
+    // #28: 仅展示与收件人底层项目关联的 ipo_progress 行，避免多用户场景下展示其他用户的匹配结果
     ipoExchangeYesterday = await db.query(
       `SELECT f_id, company, status, exchange, board, f_update_time, project_name
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND DATE(f_update_time) = ?
          AND exchange IN ('北交所','深交所','上交所','香港联交所','港交所')
+         AND EXISTS (
+           SELECT 1 FROM ipo_project_progress ipp2
+           WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
+             AND ipp2.F_CreatorUserId = ?
+             AND ipp2.delete_mark = 0
+         )
        ORDER BY f_update_time DESC
        LIMIT 300`,
-      [reportDay]
+      [reportDay, recipient.user_id]
     );
     ipoExchangeYesterday = dedupeHkIpoRowsForListingMail(ipoExchangeYesterday);
     ipoExchangeYesterday = filterNewlyListedFromIpoAuditMailRows(ipoExchangeYesterday);
   }
   if (includeListingGuidance) {
+    // #28: 仅展示与收件人底层项目关联的辅导备案行
     ipoGuidanceYesterday = await db.query(
       `SELECT company, status, register_address, f_update_time
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND DATE(f_update_time) = ?
          AND exchange = '证监会辅导备案'
+         AND EXISTS (
+           SELECT 1 FROM ipo_project_progress ipp2
+           WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
+             AND ipp2.F_CreatorUserId = ?
+             AND ipp2.delete_mark = 0
+         )
        ORDER BY f_update_time DESC
        LIMIT 200`,
-      [reportDay]
+      [reportDay, recipient.user_id]
     );
   }
   if (includeOverseasFiling) {
     /** 境外备案：与定时抓取对齐，仅周六发信日汇总当日 f_create_date 入库记录（抓取任务已改为周六早上执行） */
     const isSaturday = today.getDay() === 6;
     if (isSaturday) {
+      // #28: 仅展示与收件人底层项目关联的境外备案行
       ipoOverseasSaturday = await db.query(
         `SELECT company, status, exchange, DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date
          FROM ipo_progress
          WHERE F_DeleteMark = 0
            AND DATE(f_create_date) = ?
            AND (exchange = '境外发行备案' OR board = '境外发行备案')
+           AND EXISTS (
+             SELECT 1 FROM ipo_project_progress ipp2
+             WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
+               AND ipp2.F_CreatorUserId = ?
+               AND ipp2.delete_mark = 0
+           )
          ORDER BY receive_date DESC, f_update_time DESC
          LIMIT 200`,
-        [todayYmd]
+        [todayYmd, recipient.user_id]
       );
     }
   }

@@ -6053,6 +6053,18 @@ async function initializeTables(dbPool) {
     console.warn('迁移 listing_sync_execution_log.heartbeat_at 时出现警告:', err.message);
   }
 
+  // ——— #13: 上市进展定时任务持久化互斥锁表 ———
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS listing_sync_task_lock (
+        task_key VARCHAR(255) NOT NULL PRIMARY KEY COMMENT '互斥任务键',
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '锁获取时间'
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展定时任务持久化互斥锁'
+    `);
+  } catch (err) {
+    console.warn('创建 listing_sync_task_lock 表时出现警告:', err.message);
+  }
+
   // ——— 项目挖掘：投融资明细层 + 标准层 ———
   try {
     await dbPool.query(`

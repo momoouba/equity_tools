@@ -7,12 +7,20 @@ const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
  * 上市进展匹配用：去掉全角/半角括号字符，括号内文字保留拼接（与需求文档示例一致）
  * 例：华太电子（深圳）有限公司 → 华太电子深圳有限公司
  *
+ * #22: 括号内容归一化 —— 去除常见行政区划后缀（市/省/自治区/特别行政区），
+ * 使 "深圳" 与 "深圳市"、"北京" 与 "北京市" 在匹配时等价。
+ *
  * 港交所等披露常见在公司英文名后带表决权架构后缀（与投资组合底层全称不一致），对齐后再做等价判断：
  * 例：Eccogene Inc. - B → Eccogene Inc.
  */
 function normalizeCompanyNameForMatch(input) {
   if (input == null || input === '') return '';
-  let s = String(input).replace(/[()（）]/g, '').trim();
+  let s = String(input);
+  // #22: 先对括号内内容做行政区划后缀归一化，再移除括号字符
+  s = s.replace(/[（(]([^）)]+)[）)]/g, (_, inner) => {
+    return inner.replace(/(市|省|自治区|特别行政区|回族|壮族|维吾尔)$/g, '');
+  });
+  s = s.replace(/[()（）]/g, '').trim();
   // trailing " - B" / "- W" / "－Ｂ"（加权投票权或类别股份标注）
   s = s.replace(/\s*[-－]\s*[BWＢＷ]\s*$/i, '').trim();
   s = s.replace(/[-－][BWＢＷ]\s*$/i, '').trim();

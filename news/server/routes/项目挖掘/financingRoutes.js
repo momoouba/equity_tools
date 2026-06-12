@@ -17,15 +17,8 @@ function safeErrorMessage(err, fallback = '操作失败') {
   return msg.slice(0, 200) || fallback;
 }
 
-function clientIpFromReq(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf && typeof xf === 'string') {
-    const first = xf.split(',')[0].trim();
-    if (first) return first.slice(0, 64);
-  }
-  if (req.ip) return String(req.ip).slice(0, 64);
-  return null;
-}
+// fix #14: 复用共享工具函数，移除本地重复定义
+const { clientIpFromReq } = require('../../utils/竞品分析/competitorRouteUtils');
 
 function registerFinancingRoutes(router) {
   router.post('/sync', requireAdmin, async (req, res) => {

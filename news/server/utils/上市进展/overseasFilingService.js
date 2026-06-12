@@ -32,22 +32,30 @@ function looksLikeCsrcDocNumber(registerAddress) {
 
 /**
  * 与 Excel 先入行合并：同日、同企业（规范化全等），且 register_address 尚非文号。
+ * #21: 增加 exchange 过滤，多条匹配时取最新行（f_id 最大），避免同日同公司多条非文号记录时更新错误行。
  */
-async function findOverseasExcelMergeTarget(projectName, receiveYmd) {
+async function findOverseasExcelMergeTarget(projectName, receiveYmd, exchange) {
   const key = normalizeOverseasNameKey(projectName);
   if (!key) return null;
   const rows = await db.query(
     `SELECT f_id, project_name, register_address, status, company, exchange
      FROM ipo_progress
      WHERE F_DeleteMark = 0 AND board = ? AND receive_date = ?
-     ORDER BY f_id ASC`,
+     ORDER BY f_id DESC`,
     [OVERSEAS_BOARD, receiveYmd]
   );
+  // #21: 优先匹配同 exchange 的行，其次取最新行
+  let sameExchangeMatch = null;
+  let anyMatch = null;
   for (const r of rows) {
     if (normalizeOverseasNameKey(r.project_name) !== key) continue;
-    if (!looksLikeCsrcDocNumber(r.register_address)) return r;
+    if (looksLikeCsrcDocNumber(r.register_address)) continue;
+    if (!anyMatch) anyMatch = r;
+    if (exchange && r.exchange === exchange && !sameExchangeMatch) {
+      sameExchangeMatch = r;
+    }
   }
-  return null;
+  return sameExchangeMatch || anyMatch || null;
 }
 
 function assertManualOverseasDateRange(from, to, triggerType) {
@@ -82,7 +90,7 @@ async function upsertNoticeFilingRow(row, adminId, writeDate) {
   const fUpdateTime = `${receiveYmd} 00:00:00`;
   const writeYmd = String(writeDate || '').slice(0, 10) || receiveYmd;
 
-  const merge = await findOverseasExcelMergeTarget(projectName, receiveYmd);
+  const merge = await findOverseasExcelMergeTarget(projectName, receiveYmd, exchange);
   if (merge) {
     await db.execute(
       `UPDATE ipo_progress SET
@@ -198,15 +206,22 @@ async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
   const exchange = String(row.target_exchange || '').trim().slice(0, 100);
   const writeYmd = String(writeDate || '').slice(0, 10) || receiveYmd;
 
+  // #20: 去重键增加 exchange，与交易所爬虫去重逻辑对齐；同时用 normalizeOverseasNameKey 做规范化比较
+  const normalizedInputKey = normalizeOverseasNameKey(projectName);
   const exists = await db.query(
     `SELECT f_id, status, company, exchange, project_name
      FROM ipo_progress
-     WHERE F_DeleteMark = 0 AND board = ?
-       AND project_name = ? AND receive_date = ? AND register_address = ?`,
-    [OVERSEAS_BOARD, projectName, receiveYmd, registerAddress]
+     WHERE F_DeleteMark = 0 AND board = ? AND exchange = ?
+       AND receive_date = ? AND register_address = ?`,
+    [OVERSEAS_BOARD, exchange, receiveYmd, registerAddress]
   );
 
-  if (!exists.length) {
+  // 按规范化公司名匹配（处理繁简体 / 全半角差异）
+  const matchedExists = exists.filter(
+    (r) => normalizeOverseasNameKey(r.project_name) === normalizedInputKey
+  );
+
+  if (!matchedExists.length) {
     await db.execute(
       `INSERT INTO ipo_progress (
         f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
@@ -230,7 +245,7 @@ async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
     return 'inserted';
   }
 
-  const old = exists[0];
+  const old = matchedExists[0];
   const changed =
     String(old.status || '') !== status ||
     String(old.company || '') !== company ||

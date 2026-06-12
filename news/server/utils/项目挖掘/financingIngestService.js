@@ -148,7 +148,8 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
   const fundingDt = normalizeFundingDatetime(deal.funding_dt);
   const eventDate = fundingDateOnlyFromDeal(deal) || fundingDtYmd || null;
   const fundingId = String(deal.funding_id ?? '');
-  const credit = String(deal.instn_idtfn_cd ?? '').trim();
+  // #3.2 fix: 统一将空 credit code 归一化为 NULL（而非 ''），避免 DB 中 NULL 与空字符串混存
+  const credit = String(deal.instn_idtfn_cd ?? '').trim() || null;
 
   if (!eventDate) {
     console.warn('[投融资入库] 跳过无融资日期的记录 funding_id=', fundingId);
@@ -247,6 +248,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
     ON DUPLICATE KEY UPDATE
       source_record_id = VALUES(source_record_id),
       company_name = VALUES(company_name),
+      company_credit_code = VALUES(company_credit_code),
       project_name = VALUES(project_name),
       project_desc = VALUES(project_desc),
       latest_round = VALUES(latest_round),

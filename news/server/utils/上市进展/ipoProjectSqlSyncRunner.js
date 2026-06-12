@@ -162,7 +162,7 @@ async function insertIpoProjectAiSnapshotBeforeDelete(conn, { batchId, userId, t
 }
 
 /** 全量插入完成后，按统一社会信用代码将快照中的 AI/企查查简介写回新行 */
-/** 上市进展：底层项目 SQL 全量替换后，按 fund + sub + company 重挂 ipo_project_progress（不删历史匹配行） */
+/** 上市进展：底层项目 SQL 全量替换后，按 fund + sub + company + project_name 重挂 ipo_project_progress（不删历史匹配行；#3: 加入 project_name 避免同基金/同管理人/同公司时错配） */
 async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId }) {
   if (!listingAppId) {
     return { progressRelinked: 0, progressOrphaned: 0 };

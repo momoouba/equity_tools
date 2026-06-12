@@ -20,8 +20,43 @@ const { cleanupIpoProgress, cleanupIpoNewShare, cleanupOrphanedProgressLinks } =
 
 const scheduledTasks = new Map();
 const sqlSyncScheduledTasks = new Map();
-const runningTaskKeys = new Set();
+// #13: 互斥锁改用 DB 持久化（替代原内存 Set），PM2 等进程重启后不会丢失
 const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
+
+/**
+ * #13: 尝试获取 DB 持久化任务锁（替代内存 Set，进程重启后不丢失）。
+ * - 先清理超过 2 小时的过期锁（防止崩溃后死锁）
+ * - 再 INSERT IGNORE 尝试获取锁
+ * @returns {Promise<boolean>} 是否成功获取锁
+ */
+async function tryAcquireTaskLock(taskKey) {
+  try {
+    await db.execute(
+      `DELETE FROM listing_sync_task_lock WHERE task_key = ? AND created_at < DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
+      [taskKey]
+    );
+    const [res] = await db.execute(
+      `INSERT IGNORE INTO listing_sync_task_lock (task_key, created_at) VALUES (?, NOW())`,
+      [taskKey]
+    );
+    return res.affectedRows > 0;
+  } catch (e) {
+    // 表不存在时自动降级为允许执行（首次运行需手动建表或由 migration 创建）
+    console.warn('[上市进展定时] 任务锁表异常，降级为允许执行:', e.message);
+    return true;
+  }
+}
+
+/**
+ * #13: 释放 DB 持久化任务锁
+ */
+async function releaseTaskLock(taskKey) {
+  try {
+    await db.execute(`DELETE FROM listing_sync_task_lock WHERE task_key = ?`, [taskKey]);
+  } catch (e) {
+    console.warn('[上市进展定时] 释放任务锁异常:', e.message);
+  }
+}
 
 function normalizeYmd(v) {
   const s = String(v || '').trim().slice(0, 10);
@@ -218,7 +253,9 @@ async function executeListingSyncTask(configId) {
       : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
   );
   const taskKey = buildTaskKey(cfg, startDate, endDate);
-  if (runningTaskKeys.has(taskKey)) {
+  // #13: 使用 DB 持久化锁替代内存 Set，避免 PM2 重启后丢失互斥状态
+  const lockAcquired = await tryAcquireTaskLock(taskKey);
+  if (!lockAcquired) {
     console.warn(`[上市进展定时] 命中并发互斥，跳过 task=${taskKey}`);
     const logId = await createExecutionLog({
       configId: cfg.id,
@@ -233,7 +270,6 @@ async function executeListingSyncTask(configId) {
     await finishExecutionLog(logId, { status: 'skipped', errorMessage: '同源同窗口任务运行中，已跳过' });
     return;
   }
-  runningTaskKeys.add(taskKey);
   let logId = null;
   let syncResult = null;
   let syncError = null;
@@ -409,7 +445,8 @@ async function executeListingSyncTask(configId) {
       console.warn('[上市进展定时] 告警邮件未发送:', alertErr.message);
     }
   } finally {
-    runningTaskKeys.delete(taskKey);
+    // #13: 释放 DB 持久化锁
+    await releaseTaskLock(taskKey);
   }
 }
 
@@ -519,7 +556,7 @@ async function updateListingScheduledTasks() {
             console.log(
               `[底层项目同步] 执行完成 配置=${cfg.id} write_target=${wt} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
                 `清空旧项目=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0} ` +
-                `进展重挂=${result.progress_relinked ?? 0} 进展孤儿=${result.progress_orphaned ?? 0}（底层项目全量替换；上市进展匹配行按 fund+sub+company 重关联）` +
+                `进展重挂=${result.progress_relinked ?? 0} 进展孤儿=${result.progress_orphaned ?? 0}（底层项目全量替换；上市进展匹配行按 fund+sub+company+project_name 重关联）` +
                 (result.qcc_post_sync
                   ? `；同步后企查查=${JSON.stringify(result.qcc_post_sync).slice(0, 200)}`
                   : '')
@@ -587,4 +624,6 @@ module.exports = {
   initializeListingScheduledTasks,
   updateListingScheduledTasks,
   executeListingSyncTask,
+  tryAcquireTaskLock,
+  releaseTaskLock,
 };
