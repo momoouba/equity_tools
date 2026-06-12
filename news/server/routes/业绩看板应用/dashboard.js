@@ -387,30 +387,42 @@ router.get('/underlying', async (req, res) => {
       return res.status(400).json({ success: false, message: '版本号不能为空' });
     }
     
-    // 累计组合
-    const cumulativeRows = await db.query(
+    // 一次查询获取累计+当前所有字段
+    const rows = await db.query(
       `SELECT project_num_a, company_num_a, total_amount_a, ct_amount_a,
-              ipo_num_a, ipo_amount_a, sh_num_a, sh_amount_a
-       FROM b_project_all
-       WHERE version = ? AND F_DeleteMark = 0`,
-      [version]
-    );
-    
-    // 当前组合
-    const currentRows = await db.query(
-      `SELECT project_num, company_num, total_amount, ct_amount,
+              ipo_num_a, ipo_amount_a, sh_num_a, sh_amount_a,
+              project_num, company_num, total_amount, ct_amount,
               ipo_num, ipo_amount, sh_num, sh_amount
        FROM b_project_all
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]
     );
     
+    const row = rows[0] || null;
+    const cumulative = row ? {
+      project_num_a: row.project_num_a,
+      company_num_a: row.company_num_a,
+      total_amount_a: row.total_amount_a,
+      ct_amount_a: row.ct_amount_a,
+      ipo_num_a: row.ipo_num_a,
+      ipo_amount_a: row.ipo_amount_a,
+      sh_num_a: row.sh_num_a,
+      sh_amount_a: row.sh_amount_a
+    } : null;
+    const current = row ? {
+      project_num: row.project_num,
+      company_num: row.company_num,
+      total_amount: row.total_amount,
+      ct_amount: row.ct_amount,
+      ipo_num: row.ipo_num,
+      ipo_amount: row.ipo_amount,
+      sh_num: row.sh_num,
+      sh_amount: row.sh_amount
+    } : null;
+    
     res.json({
       success: true,
-      data: {
-        cumulative: cumulativeRows[0] || null,
-        current: currentRows[0] || null
-      }
+      data: { cumulative, current }
     });
   } catch (error) {
     console.error('获取底层资产数据失败:', error);

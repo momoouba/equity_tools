@@ -10,13 +10,32 @@ const { getCurrentUser } = require('../../middleware/auth');
 
 router.use(getCurrentUser);
 
-// 统一使用中国上海时间（UTC+8）
+// 定时任务执行并发锁（防止同一任务类型同时执行）
+const runningTaskLocks = new Set();
+
+// 统一使用中国上海时间（UTC+8）—— 使用 Intl API 避免 Date 方法在非 UTC/UTC+8 服务器上出错
 function getShanghaiNow() {
   const now = new Date();
-  const shanghaiOffsetMinutes = -8 * 60; // UTC+8
-  const localOffsetMinutes = now.getTimezoneOffset();
-  const diffMs = (localOffsetMinutes - shanghaiOffsetMinutes) * 60 * 1000;
-  return new Date(now.getTime() + diffMs);
+  // 用 Intl.DateTimeFormat 获取上海时区的日期和时间分量
+  const shanghaiParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).formatToParts(now);
+  const get = (type) => {
+    const part = shanghaiParts.find(p => p.type === type);
+    return part ? part.value : '00';
+  };
+  // 返回一个 Date 对象，其 UTC 分量对应上海时间
+  return new Date(Date.UTC(
+    parseInt(get('year')),
+    parseInt(get('month')) - 1,
+    parseInt(get('day')),
+    parseInt(get('hour')) === 24 ? 0 : parseInt(get('hour')), // Intl 可能返回 24 表示午夜
+    parseInt(get('minute')),
+    parseInt(get('second'))
+  ));
 }
 
 // 获取业绩看板定时任务列表
@@ -175,6 +194,14 @@ router.post('/:id/run', async (req, res) => {
       try {
         // 若为“数据清理”，先按需求文档中的规则删除最新版本数据
         if (task.interface_type === '数据清理') {
+          // 并发锁：防止同一类型任务同时执行
+          const lockKey = `cleanup_task`;
+          if (runningTaskLocks.has(lockKey)) {
+            console.log(`数据清理任务正在执行中，跳过本次触发`);
+            return res.json({ success: false, message: '数据清理任务正在执行中，请稍后重试' });
+          }
+          runningTaskLocks.add(lockKey);
+          try {
           // 1) 查询 b_version 中最大日期的最大版本号（形如 YYYYMMDDVn）
           const versionRows = await db.query(
             `SELECT version
@@ -207,7 +234,12 @@ router.post('/:id/run', async (req, res) => {
 
               let deleteFlag = false;
               if (!creatorId && creatorTime) {
-                const day = new Date(creatorTime).getDate();
+                // 使用上海时区判断日期，避免服务器时区导致误判
+                const creatorDateStr = new Intl.DateTimeFormat('en-CA', {
+                  timeZone: 'Asia/Shanghai',
+                  year: 'numeric', month: '2-digit', day: '2-digit'
+                }).format(new Date(creatorTime));
+                const day = parseInt(creatorDateStr.split('-')[2], 10);
                 if (day !== 1 && day !== 4) {
                   deleteFlag = true;
                 }
@@ -235,16 +267,25 @@ router.post('/:id/run', async (req, res) => {
                   'b_ipo_a'
                 ];
 
-                for (const table of tables) {
-                  await db.execute(
-                    `DELETE FROM \`${table}\` WHERE version = ?`,
-                    [targetVersion]
+                const cleanupConn = await db.getConnection();
+                try {
+                  await cleanupConn.beginTransaction();
+                  for (const table of tables) {
+                    await cleanupConn.execute(
+                      `DELETE FROM \`${table}\` WHERE version = ? AND F_DeleteMark = 1`,
+                      [targetVersion]
+                    );
+                  }
+                  await cleanupConn.commit();
+                  console.log(
+                    `已删除版本：${targetVersion}（原因：创建人ID为空且创建时间不是1日或4日）`
                   );
+                } catch (cleanupErr) {
+                  await cleanupConn.rollback();
+                  throw cleanupErr;
+                } finally {
+                  cleanupConn.release();
                 }
-
-                console.log(
-                  `已删除版本：${targetVersion}（原因：创建人ID为空且创建时间不是1日或4日）`
-                );
               } else {
                 console.log(
                   `版本 ${targetVersion} 满足保留条件，未删除（F_CreatorUserId: ${
@@ -255,6 +296,9 @@ router.post('/:id/run', async (req, res) => {
             }
           } else {
             console.log('未查询到符合格式的版本数据，无需删除');
+          }
+          } finally {
+            runningTaskLocks.delete(lockKey);
           }
         }
 
@@ -268,7 +312,8 @@ router.post('/:id/run', async (req, res) => {
             headers: {
               // 透传鉴权信息，便于 getCurrentUser 识别触发用户
               cookie: req.headers.cookie || '',
-              authorization: req.headers.authorization || ''
+              authorization: req.headers.authorization || '',
+              'x-user-id': req.headers['x-user-id'] || ''
             },
             timeout: 1000 * 60 * 10 // 最长10分钟
           }

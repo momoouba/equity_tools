@@ -87,7 +87,6 @@ function collectCompetitorLookupKeys({ unified_credit_code, competitor_display_n
   const code = normalizeCreditCode(unified_credit_code);
   if (code.length >= 15) {
     keys.add(`cc:${code}`);
-    keys.add(`cc:${code.toUpperCase()}`);
   }
 
   const simpleName = strTrim(competitor_display_name).toLowerCase();

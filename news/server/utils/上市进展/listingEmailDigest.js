@@ -174,6 +174,14 @@ function parseListingMailTypes(raw) {
 
 function weekdayZh(dateObj) {
   const names = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+  try {
+    const formatter = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', weekday: 'short' });
+    const short = formatter.format(dateObj);
+    const idx = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(short);
+    if (idx >= 0) return names[idx];
+  } catch {
+    /* fallback */
+  }
   return names[dateObj.getDay()] || '';
 }
 

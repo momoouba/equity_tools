@@ -32,6 +32,9 @@ function computeIRR(amounts, dates) {
   const oneYearMs = 365.25 * 24 * 3600 * 1000;
   const periods = pairs.map((p) => (p.time - t0) / oneYearMs);
 
+  // 退化情况：所有交易发生在同一天（所有 period=0），NPV 退化为金额之和，导数恒为 0，IRR 无意义
+  if (periods.every(p => p === 0)) return null;
+
   function npv(rate) {
     return pairs.reduce((sum, p, i) => sum + p.amount / Math.pow(1 + rate, periods[i]), 0);
   }

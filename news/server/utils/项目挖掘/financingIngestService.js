@@ -273,17 +273,17 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       funding_status = VALUES(funding_status),
       source_create_time = VALUES(source_create_time),
       source_update_time = VALUES(source_update_time),
-      classification_status = VALUES(classification_status),
-      classification_source = VALUES(classification_source),
-      classification_version = VALUES(classification_version),
-      classification_retry_count = VALUES(classification_retry_count),
+      classification_status = IF(classification_status = 'completed', classification_status, VALUES(classification_status)),
+      classification_source = IF(classification_status = 'completed', classification_source, VALUES(classification_source)),
+      classification_version = IF(classification_status = 'completed', classification_version, VALUES(classification_version)),
+      classification_retry_count = IF(classification_status = 'completed', classification_retry_count, VALUES(classification_retry_count)),
       updated_at = CURRENT_TIMESTAMP`,
     [
       wInferId,
       fundingId,
       eventDate,
       deal.instn_nm ?? null,
-      credit || '',
+      credit || null,
       deal.proj_nm ?? null,
       deal.proj_desc ?? null,
       deal.cp_round ?? null,
@@ -319,8 +319,8 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
 
   try {
     const evRows = await db.query(
-      `SELECT id FROM sourcing_financing_event WHERE event_id = ? AND company_credit_code = ? AND event_date = ? LIMIT 1`,
-      [fundingId, credit || '', eventDate]
+      `SELECT id FROM sourcing_financing_event WHERE event_id = ? AND company_credit_code <=> ? AND event_date = ? LIMIT 1`,
+      [fundingId, credit || null, eventDate]
     );
     if (evRows.length) {
       const eventPk = evRows[0].id;
@@ -502,12 +502,12 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
       }
     }
 
-    await db.execute(
-      `UPDATE news_interface_config SET last_sync_time = NOW(), last_sync_date = ? WHERE id = ?`,
-      [endDate, configId]
-    );
-
     const allDaysFailed = dates.length > 0 && errors.length === dates.length;
+
+    await db.execute(
+      `UPDATE news_interface_config SET last_sync_time = NOW()${allDaysFailed ? '' : ', last_sync_date = ?'} WHERE id = ?`,
+      allDaysFailed ? [configId] : [endDate, configId]
+    );
     const finalDetails = financingExecutionDetails(startDate, endDate, progressLines, {
       request_url_host: (() => {
         try {

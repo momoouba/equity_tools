@@ -39,7 +39,7 @@ function mergeTagArrays(...lists) {
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(s);
-      if (out.length >= 24) return out;
+      if (out.length >= 32) return out;
     }
   }
   return out;

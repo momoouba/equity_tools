@@ -8,16 +8,7 @@ const {
   batchSyncInvestedEnterpriseQccCompanyBrief,
 } = require('../../utils/竞品分析/investedEnterpriseQccBriefService');
 const { requireAdmin } = require('../../utils/竞品分析/competitorAnalysisRouteAuth');
-
-function clientIpFromReq(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf && typeof xf === 'string') {
-    const first = xf.split(',')[0].trim();
-    if (first) return first.slice(0, 64);
-  }
-  if (req.ip) return String(req.ip).slice(0, 64);
-  return null;
-}
+const { clientIpFromReq } = require('../../utils/竞品分析/competitorRouteUtils');
 
 function registerInvestedEnterpriseAiRoutes(router) {
   router.get('/invested-enterprises/ai-enrich-logs', requireAdmin, async (req, res) => {

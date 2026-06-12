@@ -21,9 +21,23 @@ function assertReadOnlySql(sql) {
   const s = String(sql || '')
     .trim()
     .replace(/^\s*\/\*[\s\S]*?\*\/\s*/gm, '');
+
+  // 拒绝多语句 SQL（分号分隔），防止 "SELECT 1; DROP TABLE ..." 攻击
+  // 简单策略：在去掉字符串字面量后，若存在分号则拒绝
+  const stripped = s.replace(/'(?:[^'\\]|\\.)*'/g, "''").replace(/`(?:[^`\\]|\\.)*`/g, '``');
+  if (stripped.includes(';')) {
+    throw new Error('仅允许单条 SELECT / WITH 查询，不允许包含分号的多语句 SQL');
+  }
+
   const first = s.split(/\s+/)[0]?.toLowerCase();
   if (first !== 'select' && first !== 'with') {
     throw new Error('仅允许 SELECT / WITH 查询');
+  }
+
+  // SELECT ... INTO OUTFILE / INTO DUMPFILE 可写文件，INTO @var 可设置变量
+  const sUpper = s.toUpperCase();
+  if (/\bINTO\s+(OUTFILE|DUMPFILE)\b/.test(sUpper)) {
+    throw new Error('SELECT 中不允许使用 INTO OUTFILE / DUMPFILE');
   }
 }
 
@@ -118,7 +132,7 @@ async function insertIpoProjectAiSnapshotBeforeDelete(conn, { batchId, userId, t
   const normSub = sqlNormIpoProjectUnifiedCredit('ipo_sub');
   const scopeWhere = isCompetitorFamilyWriteTarget(wt)
       ? 'ipo_sub.F_CreatorUserId = ? AND ipo_sub.data_app_id <=> ?'
-      : 'ipo_sub.F_CreatorUserId = ? AND (ipo_sub.data_app_id <=> ? OR ipo_sub.data_app_id IS NULL)';
+      : 'ipo_sub.F_CreatorUserId = ? AND ipo_sub.data_app_id <=> ?';
   const scopeParams = isCompetitorFamilyWriteTarget(wt) ? [userId, targetDataAppId] : [userId, listingAppId];
 
   const sql = `
@@ -154,6 +168,7 @@ async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId
     return { progressRelinked: 0, progressOrphaned: 0 };
   }
 
+  // #3: JOIN key 增加 project_name，避免 fund+sub+company 相同但项目不同时误关联
   const [relinkRes] = await conn.query(
     `UPDATE ipo_project_progress ipp
      INNER JOIN (
@@ -161,16 +176,18 @@ async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId
               TRIM(fund) AS fund_k,
               TRIM(IFNULL(sub, '')) AS sub_k,
               TRIM(company) AS company_k,
+              TRIM(IFNULL(project_name, '')) AS project_name_k,
               MAX(f_id) AS new_f_id
        FROM ipo_project
        WHERE F_DeleteMark = 0
          AND F_CreatorUserId = ?
          AND data_app_id <=> ?
-       GROUP BY F_CreatorUserId, TRIM(fund), TRIM(IFNULL(sub, '')), TRIM(company)
+       GROUP BY F_CreatorUserId, TRIM(fund), TRIM(IFNULL(sub, '')), TRIM(company), TRIM(IFNULL(project_name, ''))
      ) pk ON ipp.F_CreatorUserId = pk.F_CreatorUserId
         AND TRIM(ipp.fund) = pk.fund_k
         AND TRIM(IFNULL(ipp.sub, '')) = pk.sub_k
         AND TRIM(ipp.company) = pk.company_k
+        AND TRIM(IFNULL(ipp.project_name, '')) = pk.project_name_k
      INNER JOIN ipo_project np ON np.f_id = pk.new_f_id
      SET ipp.ipo_project_f_id = pk.new_f_id,
          ipp.fund = np.fund,
@@ -330,6 +347,13 @@ async function runIpoProjectSqlSyncForUser({
     );
   }
 
+  // 外部查询返回空集时中止同步：防止外部数据库故障（返回空结果）时清空现有底层项目
+  if (externalRows.length === 0) {
+    throw new Error(
+      '外部查询返回空结果，已中止同步以免清空现有底层项目。请检查外部数据库连接及 SQL 条件。'
+    );
+  }
+
   const skipped = externalRows.length - prepared.length;
 
   const listingAppId = await getApplicationIdByAppName('上市进展');
@@ -376,7 +400,7 @@ async function runIpoProjectSqlSyncForUser({
       );
     } else {
       [idRows] = await conn.query(
-        `SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ? AND (data_app_id <=> ? OR data_app_id IS NULL)`,
+        `SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
         [userId, listingAppId]
       );
     }
@@ -388,7 +412,7 @@ async function runIpoProjectSqlSyncForUser({
       ]);
     } else {
       await conn.query(
-        `DELETE FROM ipo_project WHERE F_CreatorUserId = ? AND (data_app_id <=> ? OR data_app_id IS NULL)`,
+        `DELETE FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
         [userId, listingAppId]
       );
     }

@@ -5,6 +5,14 @@ const { applyTrackMatchForEvents } = require('../../utils/项目挖掘/financing
 const trackExcelImport = require('../../utils/项目挖掘/trackExcelImport');
 const { requireProjectSourcingAccess } = require('../../utils/项目挖掘/projectSourcingRouteAuth');
 
+/** 脱敏错误消息：避免向前端泄露 SQL、连接字符串、文件路径等内部信息 */
+function safeErrorMessage(err, fallback = '操作失败') {
+  const msg = String(err?.message || err || '');
+  if (/ER_|SQLSTATE|ECONNREFUSED|ENOTFOUND|mysql|syntax|Duplicate entry|Deadlock/i.test(msg)) return fallback;
+  if (/\/[\w.]+|\\[\w.]+/.test(msg) && msg.length > 120) return fallback;
+  return msg.slice(0, 200) || fallback;
+}
+
 const trackUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -81,7 +89,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: tree });
     } catch (e) {
       console.error('[project-sourcing/tracks/tree]', e);
-      res.status(500).json({ success: false, message: e.message || '加载失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '加载失败' });
     }
   });
 
@@ -107,7 +115,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: result });
     } catch (e) {
       console.error('[project-sourcing/tracks/apply-match]', e);
-      res.status(500).json({ success: false, message: e.message || '匹配失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '匹配失败' });
     }
   });
 
@@ -137,7 +145,7 @@ function registerTrackRoutes(router) {
       res.send(buf);
     } catch (e) {
       console.error('[project-sourcing/tracks/import/template]', e);
-      res.status(500).json({ success: false, message: e.message || '模板生成失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '模板生成失败' });
     }
   });
 
@@ -153,7 +161,7 @@ function registerTrackRoutes(router) {
       res.send(buf);
     } catch (e) {
       console.error('[project-sourcing/tracks/export/excel]', e);
-      res.status(500).json({ success: false, message: e.message || '导出失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '导出失败' });
     }
   });
 
@@ -178,7 +186,7 @@ function registerTrackRoutes(router) {
         const result = await trackExcelImport.importTrackRows(dataRows);
         const msg =
           `处理 ${result.rowCount} 行：新建三级 ${result.createdLeaves} 条，更新三级 ${result.updatedLeaves} 条` +
-          (result.errors.length ? `；失败 ${result.errors.length} 行` : '');
+          (result.errors.length ? `；失败 ${result.errors.length} 行（已回滚，请修正后重新上传）` : '');
         res.json({
           success: result.errors.length === 0,
           message: msg,
@@ -186,12 +194,13 @@ function registerTrackRoutes(router) {
             createdLeaves: result.createdLeaves,
             updatedLeaves: result.updatedLeaves,
             rowCount: result.rowCount,
+            rolledBack: result.rolledBack || false,
           },
           errors: result.errors,
         });
       } catch (e) {
         console.error('[project-sourcing/tracks/import/upload]', e);
-        res.status(500).json({ success: false, message: e.message || '导入失败' });
+        res.status(500).json({ success: false, message: safeErrorMessage(e) || '导入失败' });
       }
     }
   );
@@ -232,7 +241,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: { id: ins.insertId } });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv3 POST]', e);
-      res.status(500).json({ success: false, message: e.message || '创建失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '创建失败' });
     }
   });
 
@@ -315,7 +324,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv3 PUT]', e);
-      res.status(500).json({ success: false, message: e.message || '更新失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '更新失败' });
     }
   });
 
@@ -327,7 +336,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv3 DELETE]', e);
-      res.status(500).json({ success: false, message: e.message || '删除失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '删除失败' });
     }
   });
 
@@ -351,7 +360,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: { id: insLv2.insertId } });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv2 POST]', e);
-      res.status(500).json({ success: false, message: e.message || '创建失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '创建失败' });
     }
   });
 
@@ -409,7 +418,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv2 PUT]', e);
-      res.status(500).json({ success: false, message: e.message || '更新失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '更新失败' });
     }
   });
 
@@ -422,7 +431,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv2 DELETE]', e);
-      res.status(500).json({ success: false, message: e.message || '删除失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '删除失败' });
     }
   });
 
@@ -446,7 +455,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: { id: insLv1.insertId } });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv1 POST]', e);
-      res.status(500).json({ success: false, message: e.message || '创建失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '创建失败' });
     }
   });
 
@@ -501,7 +510,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv1 PUT]', e);
-      res.status(500).json({ success: false, message: e.message || '更新失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '更新失败' });
     }
   });
 
@@ -517,7 +526,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv1 DELETE]', e);
-      res.status(500).json({ success: false, message: e.message || '删除失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '删除失败' });
     }
   });
 
@@ -533,7 +542,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true, data: { id: insTr.insertId } });
     } catch (e) {
       console.error('[project-sourcing/tracks POST]', e);
-      res.status(500).json({ success: false, message: e.message || '创建失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '创建失败' });
     }
   });
 
@@ -563,7 +572,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks PUT]', e);
-      res.status(500).json({ success: false, message: e.message || '更新失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '更新失败' });
     }
   });
 
@@ -585,7 +594,7 @@ function registerTrackRoutes(router) {
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks DELETE]', e);
-      res.status(500).json({ success: false, message: e.message || '删除失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '删除失败' });
     }
   });
 }

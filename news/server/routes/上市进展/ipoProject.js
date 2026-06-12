@@ -162,36 +162,46 @@ async function importIpoProjectRows(rowsIn, user) {
   let inserted = 0;
   const now = new Date();
   const listingAppId = await getApplicationIdByAppName('上市进展');
-  for (const raw of rowsIn) {
-    const r = normalizeIpoBatchImportRow(raw);
-    if (!r) continue;
-    const project_no = await generateIpoProjectNo();
-    await db.execute(
-      `INSERT INTO ipo_project (
-        project_no, biz_update_time, F_CreatorTime, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
-        project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub,
-        data_app_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        project_no,
-        r.biz_update_time || now,
-        now,
-        user.id,
-        user.id,
-        now,
-        r.project_name,
-        r.company,
-        r.inv_amount,
-        r.residual_amount,
-        r.ratio,
-        r.ct_amount,
-        r.ct_residual,
-        r.fund,
-        r.sub,
-        listingAppId,
-      ]
-    );
-    inserted += 1;
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    for (const raw of rowsIn) {
+      const r = normalizeIpoBatchImportRow(raw);
+      if (!r) continue;
+      const project_no = await generateIpoProjectNo();
+      await conn.execute(
+        `INSERT INTO ipo_project (
+          project_no, biz_update_time, F_CreatorTime, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
+          project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual, fund, sub,
+          data_app_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          project_no,
+          r.biz_update_time || now,
+          now,
+          user.id,
+          user.id,
+          now,
+          r.project_name,
+          r.company,
+          r.inv_amount,
+          r.residual_amount,
+          r.ratio,
+          r.ct_amount,
+          r.ct_residual,
+          r.fund,
+          r.sub,
+          listingAppId,
+        ]
+      );
+      inserted += 1;
+    }
+    await conn.commit();
+  } catch (importErr) {
+    await conn.rollback();
+    throw importErr;
+  } finally {
+    conn.release();
   }
 
   return { success: true, data: { inserted, total: rowsIn.length } };

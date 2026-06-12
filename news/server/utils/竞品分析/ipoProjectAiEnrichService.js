@@ -234,6 +234,12 @@ async function runIpoProjectAiEnrichTask({
     llmModelConfigId = llm.llmModelConfigId;
     promptConfigId = llm.promptConfigId;
 
+    const introLen = String(llm.productIntroStored || '').trim().length;
+    const tagCount = (() => { try { const a = JSON.parse(llm.tagsJson || '[]'); return Array.isArray(a) ? a.length : 0; } catch { return 0; } })();
+    if (introLen === 0 && tagCount === 0) {
+      throw new Error('AI 补全返回空结果（product_intro 和 industry_tags 均为空），标记为失败以便重试');
+    }
+
     await db.execute(
       `UPDATE ipo_project SET
          ai_product_intro = ?,

@@ -138,7 +138,13 @@ function extractCsrcGuidanceCompanyName(input) {
       }
     }
   }
-  s = s.replace(/（[^）]{0,40}）\s*$/u, '').replace(/\([^)]{0,40}\)\s*$/, '').trim();
+  // 移除尾部括号内容，但保留包含地名关键词的括号（属于合法公司名的一部分，如"某某（深圳）有限公司"）
+  const locationKeywords = ['深圳', '北京', '上海', '广州', '杭州', '南京', '成都', '重庆', '武汉', '西安', '苏州', '天津', '珠海', '厦门', '长沙', '青岛', '大连', '宁波', '合肥', '东莞', '佛山', '无锡', '济南', '郑州', '福州', '昆明', '贵阳', '沈阳', '哈尔滨', '石家庄', '太原', '南昌', '南宁', '海口', '兰州', '呼和浩特', '乌鲁木齐', '拉萨', '银川', '西宁', '长春', '中国', '香港', '澳门', '台湾'];
+  s = s.replace(/（([^）]{0,40})）\s*$/u, (match, inner) => {
+    return locationKeywords.some(loc => inner.includes(loc)) ? match : '';
+  }).replace(/\(([^)]{0,40})\)\s*$/, (match, inner) => {
+    return locationKeywords.some(loc => inner.includes(loc)) ? match : '';
+  }).trim();
   return s.trim();
 }
 

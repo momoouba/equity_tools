@@ -62,7 +62,7 @@ class NewsAnalysis {
       const existingFullName = existingFormatMatch[2];
       // 使用传入的参数重新格式化，如果没有传入则使用现有的
       const abbreviation = projectAbbreviation || existingAbbreviation;
-      const fullName = enterpriseFullName || existingFullName;
+      const fullName = existingFullName; // 使用解析出的纯全称，而非原始传入值（避免嵌套格式）
       return `${abbreviation}【${fullName}】`;
     }
 
@@ -5073,15 +5073,22 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
     const s2 = str2.trim();
     if (!s1 || !s2) return false;
     
+    // 精确匹配始终有效
+    if (s1 === s2) return true;
+    
+    // 子串匹配要求较短字符串至少有3个字符，防止短名称误匹配
+    // 例如："华科" 不应匹配 "东华科技"，"博瑞" 不应匹配 "博瑞医药"
+    const shorter = s1.length <= s2.length ? s1 : s2;
+    const longer = s1.length <= s2.length ? s2 : s1;
+    if (shorter.length < 3) return false; // 太短的名称只做精确匹配
+    
     // 如果包含英文字符，进行大小写不敏感匹配
     if (/[a-zA-Z]/.test(s1) || /[a-zA-Z]/.test(s2)) {
-      return s1.toLowerCase() === s2.toLowerCase() ||
-        s1.toLowerCase().includes(s2.toLowerCase()) ||
-        s2.toLowerCase().includes(s1.toLowerCase());
+      return longer.toLowerCase().includes(shorter.toLowerCase());
     }
     
-    // 纯中文，直接匹配
-    return s1 === s2 || s1.includes(s2) || s2.includes(s1);
+    // 纯中文，子串匹配
+    return longer.includes(shorter);
   }
 
   /**
@@ -5172,7 +5179,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 **重要：您只能从以下被投企业列表中选择企业，不得返回列表之外的任何企业名称！**
 
 新闻标题：${title}
-新闻内容：${content.substring(0, 3000)}...
+新闻内容：${content.substring(0, 5000)}${content.length > 5000 ? '...' : ''}
 
 被投企业列表（您只能从这些企业中选择）：
 ${enterpriseList}
@@ -5223,13 +5230,19 @@ ${enterpriseList}
     // 替换变量
     const prompt = this.replacePromptVariables(promptTemplate, {
       title: title || '',
-      content: (content || '').substring(0, 3000) + ((content || '').length > 3000 ? '...' : ''),
+      content: (content || '').substring(0, 5000) + ((content || '').length > 5000 ? '...' : ''),
       enterpriseList: enterpriseList || ''
     });
 
     try {
       // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
       const response = await this.callAIModel(prompt, aiModelConfig);
+      
+      // 检查AI响应是否为空
+      if (!response || typeof response !== 'string' || response.trim().length === 0) {
+        console.warn('企业关联性分析：AI模型返回空响应');
+        return [];
+      }
       
       // 尝试解析JSON响应
       let result;
@@ -5602,8 +5615,12 @@ ${enterpriseList}
     ];
     
     // 如果提取到了简称，也加入关键词列表
+    // projectAbbreviation 来自 "全称(简称)" 格式，abbreviation 来自 "简称【全称】" 格式
     if (projectAbbreviation) {
       enterpriseKeywords.push(projectAbbreviation.toLowerCase());
+    }
+    if (abbreviation) {
+      enterpriseKeywords.push(abbreviation.toLowerCase());
     }
     
     // 如果匹配到了企业记录，也使用数据库中的简称
@@ -5633,6 +5650,7 @@ ${enterpriseList}
 
     // 取最核心的关键词（简称优先，其次是全称，用于统计提及质量）
     const coreKeyword = (projectAbbreviation
+      || abbreviation  // "简称【全称】" 格式的简称
       || (enterpriseExists.length > 0 && enterpriseExists[0].project_abbreviation ? enterpriseExists[0].project_abbreviation : null)
       || enterpriseName.split(/有限公司|股份有限公司|集团/)[0]
       || enterpriseName
@@ -5735,13 +5753,49 @@ ${enterpriseList}
     // 替换变量
     const prompt = this.replacePromptVariables(promptTemplate, {
       title: title || '',
-      content: (content || '').substring(0, 3000),
+      content: (content || '').substring(0, 5000) + ((content || '').length > 5000 ? '...' : ''),
       enterpriseName: enterpriseName || ''
     });
 
     try {
       // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
-      const response = await this.callAIModel(prompt, aiModelConfig);
+      let response = null;
+      const maxAttempts = 2; // 最多重试1次（共2次尝试）
+      
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          response = await this.callAIModel(prompt, aiModelConfig);
+          break; // 成功获取响应，退出重试循环
+        } catch (callError) {
+          // 最后一次尝试仍然失败，向外抛出
+          if (attempt === maxAttempts) throw callError;
+          
+          // 判断是否为瞬时错误（超时、网络错误），可以重试
+          const isTransient = callError.code === 'ECONNABORTED' || 
+                             callError.code === 'ETIMEDOUT' ||
+                             callError.code === 'ECONNRESET' ||
+                             callError.code === 'ENOTFOUND' ||
+                             (callError.message && (
+                               callError.message.includes('timeout') ||
+                               callError.message.includes('Timeout') ||
+                               callError.message.includes('ECONNREFUSED')
+                             ));
+          
+          if (isTransient) {
+            logWithTag('[validateExistingAssociation]', `AI调用瞬时错误(${callError.code || callError.message})，第${attempt}次尝试失败，等待1秒后重试...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            // 非瞬时错误（如配额超限、400错误），不重试
+            throw callError;
+          }
+        }
+      }
+      
+      // 检查AI响应是否为空（空响应也重试一次）
+      if (!response || typeof response !== 'string' || response.trim().length === 0) {
+        logWithTag('[validateExistingAssociation]', `AI模型返回空响应，解除企业"${enterpriseName}"的关联`);
+        return false;
+      }
       
       // 尝试解析JSON响应
       let result;
@@ -6366,10 +6420,22 @@ ${enterpriseList}
         logWithTag('[processNewsWithEnterprise]', '跳过AI验证，直接保持企业关联');
       }
 
-      // === 弱提及检测（所有接口路径都执行，包括shouldValidate=false的新榜"免检通道"） ===
+      // === 弱提及检测（仅在shouldValidate=false的新榜"免检通道"执行） ===
       // 修复：新榜接口跳过AI验证时，列举式提及的企业也会被保留的问题
-      if (shouldKeepAssociation && finalEnterpriseName) {
-        const weakMentionContent = newsItem.content || '';
+      // 注意：shouldValidate=true的路径已经在validateExistingAssociation中完成了提及权重分析，不需要重复检测
+      if (!shouldValidate && shouldKeepAssociation && finalEnterpriseName) {
+        // 确保内容有值（新榜免检通道可能未调用ensureNewsContent）
+        let weakMentionContent = newsItem.content || '';
+        if (weakMentionContent.trim().length < 50 && newsItem.source_url) {
+          try {
+            const fetchedContent = await this.ensureNewsContent(newsItem);
+            if (fetchedContent && fetchedContent.trim().length > weakMentionContent.trim().length) {
+              weakMentionContent = fetchedContent;
+            }
+          } catch (e) {
+            logWithTag('[processNewsWithEnterprise]', `弱提及检测前抓取内容失败: ${e.message}，使用原始内容`);
+          }
+        }
 
         // 解析企业名称格式（"简称【全称】"格式需拆分）
         let wmEnterpriseName = finalEnterpriseName;
@@ -6393,6 +6459,8 @@ ${enterpriseList}
             `🚫 弱提及检测：企业"${finalEnterpriseName}"在新闻中仅为顺带提及/列举提及（出现次数少、不在标题和开头），解除关联`);
           shouldKeepAssociation = false;
           finalEnterpriseName = null;
+          enterpriseAbbreviation = null;
+          entityTypeFromEnterpriseCheck = null;
         }
       }
 
@@ -6651,7 +6719,7 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] ❌ 更新失败！无法验证更新结果`);
       }
 
-      logWithTag('[processNewsWithEnterprise]', `✓ 已完成新闻分析: ${newsItem.id}${shouldValidate && !shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
+      logWithTag('[processNewsWithEnterprise]', `✓ 已完成新闻分析: ${newsItem.id}${!shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
       return true;
     } catch (error) {
       errorWithTag('[processNewsWithEnterprise]', `新闻分析失败 ${newsItem.id}:`, error);

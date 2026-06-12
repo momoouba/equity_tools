@@ -104,6 +104,14 @@ function computeScheduledSyncRange(config, baseRunDate) {
     if (gapStart <= endDate) {
       startDate = gapStart;
     }
+  } else {
+    // 首次运行（无 last_sync_range_end）：从 min_sync_date 回填历史数据，而非仅同步昨天
+    if (config.min_sync_date) {
+      const minDate = String(config.min_sync_date).slice(0, 10);
+      if (minDate < endDate) {
+        startDate = minDate;
+      }
+    }
   }
   if (startDate > endDate) {
     startDate = endDate;
@@ -331,15 +339,24 @@ async function executeListingSyncTask(configId) {
 
     // 合并结果
     const result = { ...syncResult, matchResult };
-    const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
-    await db.execute(
-      `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
-      [rangeEndStored, cfg.id]
-    );
-
-    // 判断整体状态：如果数据入库或项目匹配有异常，记录为 partial_success 或 failed
     const hasSyncError = syncError !== null;
     const hasMatchError = matchError !== null;
+    // 仅在同步无错误时推进 last_sync_range_end，否则下次运行会重试该日期区间
+    if (!hasSyncError) {
+      const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
+      await db.execute(
+        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
+        [rangeEndStored, cfg.id]
+      );
+    } else {
+      // 同步出错时仅更新 last_sync_time（方便排查），不推进 range_end
+      await db.execute(
+        `UPDATE listing_data_config SET last_sync_time = NOW() WHERE id = ?`,
+        [cfg.id]
+      );
+    }
+
+    // 判断整体状态：如果数据入库或项目匹配有异常，记录为 partial_success 或 failed
     const overallStatus = (hasSyncError || hasMatchError)
       ? (syncResult ? 'partial_success' : 'failed')
       : 'success';

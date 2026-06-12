@@ -193,14 +193,17 @@ router.put('/indicators', async (req, res) => {
       projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc
     } = req.body;
     
-    // 检查是否已有配置
-    const existingRows = await db.query(
-      'SELECT F_Id FROM b_indicator_describe WHERE F_DeleteMark = 0 LIMIT 1'
-    );
+    // 事务保护：SELECT FOR UPDATE + INSERT/UPDATE 防止并发竞态
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      const existingRows = await conn.query(
+        'SELECT F_Id FROM b_indicator_describe WHERE F_DeleteMark = 0 LIMIT 1 FOR UPDATE'
+      );
     
     if (existingRows.length > 0) {
       // 更新
-      await db.execute(
+      await conn.execute(
         `UPDATE b_indicator_describe SET
           system_name = ?, manual_url = ?, redirect_url = ?,
           fof_num_desc = ?, direct_num_desc = ?, sub_amount_desc = ?, paid_in_amount_desc = ?, dis_amount_desc = ?,
@@ -235,7 +238,7 @@ router.put('/indicators', async (req, res) => {
     } else {
       // 新建
       const id = await generateId('b_indicator_describe');
-      await db.execute(
+      await conn.execute(
         `INSERT INTO b_indicator_describe
          (F_Id, system_name, manual_url, redirect_url,
           fof_num_desc, direct_num_desc, sub_amount_desc, paid_in_amount_desc, dis_amount_desc,
@@ -264,14 +267,22 @@ router.put('/indicators', async (req, res) => {
           projectExitAmountAccDesc, projectReceiveAccDesc,
           projectNumADesc, totalAmountADesc, ipoNumADesc, shNumADesc,
           projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc,
-          userId, null, null
+          userId, userId, new Date()
         ]
       );
+      await conn.commit();
     }
     
     res.json({ success: true, message: '配置已保存' });
-  } catch (error) {
+    } catch (error) {
+    await conn.rollback();
     console.error('保存指标说明配置失败:', error);
+    res.status(500).json({ success: false, message: '保存配置失败' });
+  } finally {
+    conn.release();
+  }
+  } catch (outerErr) {
+    console.error('保存指标说明配置失败:', outerErr);
     res.status(500).json({ success: false, message: '保存配置失败' });
   }
 });

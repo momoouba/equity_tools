@@ -133,6 +133,12 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
     let versionMap = null;
     if (allBatches) {
       versionMap = await buildVersionLabelMapForInvestedEnterprise(ie.id);
+      const relParams = [ie.id];
+      let yearClause = '';
+      if (years.length) {
+        yearClause = ` AND YEAR(run.created_at) IN (${years.map(() => '?').join(',')})`;
+        relParams.push(...years.map(Number));
+      }
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
@@ -143,10 +149,17 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
          INNER JOIN sourcing_competitor_run run ON run.id = r.run_id AND run.delete_mark = 0
          WHERE r.invested_enterprise_id = ?
            AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
+           ${yearClause}
          ORDER BY run.created_at DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.created_at DESC`,
-        [ie.id]
+        relParams
       );
     } else {
+      const relParams = [ie.id];
+      let yearClause = '';
+      if (years.length) {
+        yearClause = ` AND YEAR(created_at) IN (${years.map(() => '?').join(',')})`;
+        relParams.push(...years.map(Number));
+      }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
@@ -155,8 +168,9 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
          FROM sourcing_competitor_relation
          WHERE invested_enterprise_id = ? AND delete_mark = 0
            AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+           ${yearClause}
          ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC`,
-        [ie.id]
+        relParams
       );
     }
     if (!rels.length) {
@@ -187,31 +201,14 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
 /** 可选年度列表（被投项目编号前四位） */
 async function listInvestedEnterpriseYears(psUser, isAdmin) {
   const uid = psUser?.id ? String(psUser.id) : null;
-  const rows = await db.query(
-    `SELECT DISTINCT LEFT(project_number, 4) AS y
-     FROM invested_enterprises
-     WHERE delete_mark = 0 AND TRIM(COALESCE(exit_status,'')) <> '已退出'
-       AND project_number IS NOT NULL AND LENGTH(TRIM(project_number)) >= 4
-     ORDER BY y DESC`
-  );
-  const years = [];
-  for (const r of rows) {
-    const y = String(r.y || '').trim();
-    if (/^\d{4}$/.test(y)) years.push(y);
-  }
-  if (!isAdmin && uid) {
-    const scoped = await db.query(
-      `SELECT DISTINCT LEFT(project_number, 4) AS y
-       FROM invested_enterprises
-       WHERE delete_mark = 0 AND creator_user_id = ?
-         AND TRIM(COALESCE(exit_status,'')) <> '已退出'
-         AND project_number IS NOT NULL AND LENGTH(TRIM(project_number)) >= 4
-       ORDER BY y DESC`,
-      [uid]
-    );
-    return scoped.map((r) => String(r.y)).filter((y) => /^\d{4}$/.test(y));
-  }
-  return years;
+  const baseWhere = `delete_mark = 0 AND TRIM(COALESCE(exit_status,'')) <> '已退出'
+    AND project_number IS NOT NULL AND LENGTH(TRIM(project_number)) >= 4`;
+  const sql = isAdmin || !uid
+    ? `SELECT DISTINCT LEFT(project_number, 4) AS y FROM invested_enterprises WHERE ${baseWhere} ORDER BY y DESC`
+    : `SELECT DISTINCT LEFT(project_number, 4) AS y FROM invested_enterprises WHERE ${baseWhere} AND creator_user_id = ? ORDER BY y DESC`;
+  const params = (!isAdmin && uid) ? [uid] : [];
+  const rows = await db.query(sql, params);
+  return rows.map((r) => String(r.y || '').trim()).filter((y) => /^\d{4}$/.test(y));
 }
 
 function preProjectYear(projectNo) {
@@ -274,6 +271,12 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
     let versionMap = null;
     if (allBatches) {
       versionMap = await buildVersionLabelMapForPreInvestmentProject(pip.id);
+      const pipRelParams = [pip.id];
+      let pipYearClause = '';
+      if (years.length) {
+        pipYearClause = ` AND YEAR(run.created_at) IN (${years.map(() => '?').join(',')})`;
+        pipRelParams.push(...years.map(Number));
+      }
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
@@ -286,10 +289,17 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
          WHERE r.pre_investment_project_id = ?
            AND r.subject_type = 'pre_investment_project'
            AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
+           ${pipYearClause}
          ORDER BY run.created_at DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.created_at DESC`,
-        [pip.id]
+        pipRelParams
       );
     } else {
+      const pipRelParams = [pip.id];
+      let pipYearClause = '';
+      if (years.length) {
+        pipYearClause = ` AND YEAR(created_at) IN (${years.map(() => '?').join(',')})`;
+        pipRelParams.push(...years.map(Number));
+      }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
@@ -297,8 +307,9 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
                 is_listed, include_in_comparable, created_at
          FROM sourcing_competitor_relation
          WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
+           ${pipYearClause}
          ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC`,
-        [pip.id]
+        pipRelParams
       );
     }
     if (!rels.length && exportAll) continue;

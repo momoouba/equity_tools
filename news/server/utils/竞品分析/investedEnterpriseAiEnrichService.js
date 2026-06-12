@@ -233,6 +233,12 @@ async function runInvestedEnterpriseAiEnrichTask({
     promptMeta = llm.promptMeta;
     promptConfigId = llm.promptConfigId;
 
+    const introLen = String(llm.productIntroStored || '').trim().length;
+    const tagCount = (() => { try { const a = JSON.parse(llm.tagsJson || '[]'); return Array.isArray(a) ? a.length : 0; } catch { return 0; } })();
+    if (introLen === 0 && tagCount === 0) {
+      throw new Error('AI 补全返回空结果（product_intro 和 industry_tags 均为空），标记为失败以便重试');
+    }
+
     await db.execute(
       `UPDATE invested_enterprises SET
          ai_product_intro = ?,
@@ -264,14 +270,6 @@ async function runInvestedEnterpriseAiEnrichTask({
       tagsDisplay: llm.display,
       searchMeta: llm.searchMeta,
     });
-    const introLen = String(llm.productIntroStored || '').trim().length;
-    let tagCount = 0;
-    try {
-      const arr = JSON.parse(llm.tagsJson || '[]');
-      tagCount = Array.isArray(arr) ? arr.length : 0;
-    } catch {
-      tagCount = 0;
-    }
     const sm = llm.searchMeta || {};
     console.log(
       `[ieAiEnrich] success enterprise_id=${enterpriseId} log_id=${logId} trigger=${triggerType} model=${llm.config.model_name} product_intro_len=${introLen} tags_count=${tagCount} invoke=${sm.invoke_mode || 'n/a'} used_thinking=${sm.used_enable_thinking} thinking_degraded=${sm.thinking_degraded}`

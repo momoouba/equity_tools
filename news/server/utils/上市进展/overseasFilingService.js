@@ -3,19 +3,23 @@ const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
 const { runOverseasFilingDiscoverSync } = require('./overseasFilingDiscoverSync');
 const { runOverseasFilingSync } = require('./overseasFilingSync');
 const { runOverseasFilingNoticeSync } = require('./overseasFilingNoticeSync');
+const { normalizeCompanyName } = require('./zhconvUtils');
 
 const OVERSEAS_BOARD = '境外发行备案';
 /** 证监会政府信息公开 · 境外证券发行（含 channelid，与需求文档列表入口一致） */
 const DEFAULT_CSRC_PORTAL_URL =
   'http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede';
 
-/** 企业名称匹配：规范化后全等（与需求 2026-04-20 一致） */
+/** 企业名称匹配：Unicode 规范化 + 繁简统一 + 去空白（与 listingMatchRunner 的 canonicalCompanyForMatchCross 对齐） */
 function normalizeOverseasNameKey(name) {
-  return String(name || '')
+  let s = String(name || '')
     .normalize('NFKC')
     .replace(/\u00a0/g, ' ')
     .replace(/\s+/g, '')
     .trim();
+  // #19: 繁简统一，确保写入 ipo_progress 时与匹配端使用相同的规范化链路
+  s = normalizeCompanyName(s);
+  return s;
 }
 
 /** `register_address` 是否像公文文号（国合函〔…〕号） */
@@ -64,7 +68,9 @@ function assertManualOverseasDateRange(from, to, triggerType) {
  */
 async function upsertNoticeFilingRow(row, adminId, writeDate) {
   if (row && row.error && !row.company_name) return 'skipped';
-  const projectName = String(row.company_name || '').trim();
+  const rawProjectName = String(row.company_name || '').trim();
+  // #19: 写入前繁简统一
+  const projectName = normalizeCompanyName(rawProjectName) || rawProjectName;
   const receiveYmd = String(row.receive_date || '').slice(0, 10);
   const docNo = String(row.filing_type || '').trim().slice(0, 200);
   if (!receiveYmd || !docNo) return 'skipped';
@@ -179,7 +185,9 @@ async function resolveOverseasSourceUrl() {
  * 判重键：board + project_name(企业名称) + receive_date + register_address(申报类型)
  */
 async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
-  const projectName = String(row.company_name || '').trim();
+  const rawProjectName = String(row.company_name || '').trim();
+  // #19: 写入前繁简统一，与 normalizeOverseasNameKey / canonicalCompanyForMatchCross 保持一致
+  const projectName = normalizeCompanyName(rawProjectName) || rawProjectName;
   const company = overseasCompanyFromRow(row.filing_entity, projectName);
   if (!projectName || !row.receive_date) return 'skipped';
 

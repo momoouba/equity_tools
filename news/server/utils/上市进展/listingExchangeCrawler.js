@@ -76,8 +76,8 @@ async function getWithRetry(url, options = {}, retry = {}) {
   const baseDelayMs = Math.max(100, Number(retry.baseDelayMs || 500));
   const maxDelayMs = Math.max(baseDelayMs, Number(retry.maxDelayMs || 5000));
   const factor = Math.max(1.2, Number(retry.factor || 2));
-  const blockedCooldownMs = Math.max(1000, Number(retry.blockedCooldownMs || 15 * 60 * 1000));
-  const maxBlockedWaits = Math.max(1, Number(retry.maxBlockedWaits || 2));
+  const blockedCooldownMs = Math.max(1000, Number(retry.blockedCooldownMs || 3 * 60 * 1000));
+  const maxBlockedWaits = Math.max(1, Number(retry.maxBlockedWaits || 3));
   const label = String(retry.label || url);
   let lastErr = null;
   let attempt = 1;
@@ -258,6 +258,10 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
       .map((x) => x.f_id)
       .filter(Boolean);
     if (!toDeleteIds.length) continue;
+    if (toDeleteIds.length > 500) {
+      console.warn(`[pruneMismatchedTimelineRows] toDeleteIds 过长(${toDeleteIds.length})，截断至 500`);
+      toDeleteIds.length = 500;
+    }
     const idPlaceholders = toDeleteIds.map(() => '?').join(',');
     // 先清理关联的 ipo_project_progress（硬删除）
     await db.execute(
@@ -805,7 +809,7 @@ async function enrichBseStatusDate(rows, logTag) {
             reason: 'missing_id',
           });
         }
-        return;
+        continue;
       }
       const fromTpl = (Array.isArray(detailUrlTemplates) ? detailUrlTemplates : []).map((tpl) => {
         if (/[?&]id=/.test(tpl)) return tpl.replace(/([?&]id=)[^&#]*/i, `$1${encodeURIComponent(id)}`);
@@ -861,7 +865,7 @@ async function enrichBseStatusDate(rows, logTag) {
             reason: 'empty_detail_html',
           });
         }
-        return;
+        continue;
       }
       const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
       const candidates = [];

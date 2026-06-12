@@ -22,13 +22,30 @@ const { computeAndUpdateTransactionIrr } = require('./transactionIrr');
 // 业绩看板 b_* 表主键为 F_Id，插入时若结果中无则需生成
 const ID_COLUMN = 'F_Id';
 
-// 统一使用中国上海时间（UTC+8）
+// 版本创建并发锁（防止同日期并发创建导致版本号重复）
+const versionCreationLocks = new Set();
+
+// 统一使用中国上海时间（UTC+8）—— 使用 Intl API 避免 Date 方法在非 UTC/UTC+8 服务器上出错
 function getShanghaiNow() {
   const now = new Date();
-  const shanghaiOffsetMinutes = -8 * 60; // UTC+8
-  const localOffsetMinutes = now.getTimezoneOffset(); // 本地相对 UTC 的偏移（分钟，西区为正）
-  const diffMs = (localOffsetMinutes - shanghaiOffsetMinutes) * 60 * 1000;
-  return new Date(now.getTime() + diffMs);
+  const shanghaiParts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).formatToParts(now);
+  const get = (type) => {
+    const part = shanghaiParts.find(p => p.type === type);
+    return part ? part.value : '00';
+  };
+  return new Date(Date.UTC(
+    parseInt(get('year')),
+    parseInt(get('month')) - 1,
+    parseInt(get('day')),
+    parseInt(get('hour')) === 24 ? 0 : parseInt(get('hour')),
+    parseInt(get('minute')),
+    parseInt(get('second'))
+  ));
 }
 
 /** 是否为需要写入创建人/修改人时间的 b_ 业务表（排除 b_sql、b_sql_change_log） */
@@ -215,12 +232,12 @@ router.post('/', async (req, res) => {
       : (req.currentUserId != null ? String(req.currentUserId) : null);
     // 统一使用上海时间当前时间，用于 F_CreatorTime（MySQL datetime 格式）
     const shNow = getShanghaiNow();
-    const creatorTimeStr = `${shNow.getFullYear()}-${String(shNow.getMonth() + 1).padStart(2, '0')}-${String(
-      shNow.getDate()
-    ).padStart(2, '0')} ${String(shNow.getHours()).padStart(2, '0')}:${String(shNow.getMinutes()).padStart(
+    const creatorTimeStr = `${shNow.getUTCFullYear()}-${String(shNow.getUTCMonth() + 1).padStart(2, '0')}-${String(
+      shNow.getUTCDate()
+    ).padStart(2, '0')} ${String(shNow.getUTCHours()).padStart(2, '0')}:${String(shNow.getUTCMinutes()).padStart(
       2,
       '0'
-    )}:${String(shNow.getSeconds()).padStart(2, '0')}`;
+    )}:${String(shNow.getUTCSeconds()).padStart(2, '0')}`;
     
     if (!date || !months || !Array.isArray(months) || months.length === 0) {
       return res.status(400).json({ success: false, message: '日期和月份列表不能为空' });
@@ -235,6 +252,13 @@ router.post('/', async (req, res) => {
     const createdVersions = [];
     
     for (const monthDate of months) {
+      // 应用层并发锁：防止同日期并发创建导致版本号重复（FOR UPDATE 在空结果集上不获取锁）
+      const dateLockKey = `version_${monthDate}`;
+      if (versionCreationLocks.has(dateLockKey)) {
+        throw new Error(`日期 ${monthDate} 的版本正在创建中，请稍后重试`);
+      }
+      versionCreationLocks.add(dateLockKey);
+      try {
       // 获取当前日期的最大版本号（带锁）
       const [maxVersionRow] = await connection.query(
         `SELECT version 
@@ -249,9 +273,11 @@ router.post('/', async (req, res) => {
       let newVersionNum = 1;
       if (maxVersionRow.length > 0) {
         const maxVersion = maxVersionRow[0].version;
-        const match = maxVersion.match(/V(\d+)$/);
-        if (match) {
-          newVersionNum = parseInt(match[1]) + 1;
+        const parts = String(maxVersion).split('V');
+        const lastPart = parts[parts.length - 1];
+        const parsed = parseInt(lastPart, 10);
+        if (Number.isFinite(parsed)) {
+          newVersionNum = parsed + 1;
         }
       }
       
@@ -285,8 +311,13 @@ router.post('/', async (req, res) => {
         const targetTable = row.target_table;
 
         // b_version 版本元数据只由当前接口维护，若某些数据接口配置了 b_version 作为目标表，避免重复写入
-        if (targetTable && String(targetTable).toLowerCase() === 'b_version') {
+        // 加强校验：trim 后比较，且拒绝包含 schema 限定（含点号）的表名，防止绕过
+        const sanitizedTargetTable = targetTable ? String(targetTable).trim() : '';
+        if (sanitizedTargetTable && sanitizedTargetTable.toLowerCase() === 'b_version') {
           continue;
+        }
+        if (sanitizedTargetTable && sanitizedTargetTable.includes('.')) {
+          throw new Error(`数据接口「${row.interface_name || row.F_Id}」目标表名包含非法字符（不允许 schema 限定）: ${targetTable}`);
         }
 
         if (externalId) {
@@ -325,15 +356,15 @@ router.post('/', async (req, res) => {
               throw err;
             }
           }
-          if (rows.length > 0 && targetTable) {
+          if (rows.length > 0 && sanitizedTargetTable) {
             const withVersion = rows.map((r) => (typeof r === 'object' && r !== null ? { ...r, version } : { version, value: r }));
-            if (isBizTableWithAudit(targetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
-            const withIds = await ensureRowIds(withVersion, targetTable, connection);
+            if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
+            const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
             const cols = Object.keys(withIds[0]);
             const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
             const values = withIds.map((r) => cols.map((c) => r[c]));
             await connection.query(
-              `INSERT INTO \`${String(targetTable).replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
+              `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
               [values]
             );
           }
@@ -342,15 +373,15 @@ router.post('/', async (req, res) => {
             await connection.execute(sql, []);
           } else {
             const [rows] = await connection.query(sql, []);
-            if (rows.length > 0 && targetTable) {
+            if (rows.length > 0 && sanitizedTargetTable) {
               const withVersion = rows.map((r) => ({ ...r, version }));
-              if (isBizTableWithAudit(targetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
-              const withIds = await ensureRowIds(withVersion, targetTable, connection);
+              if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
+              const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
               const cols = Object.keys(withIds[0]);
               const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
               const values = withIds.map((r) => cols.map((c) => r[c]));
               await connection.query(
-                `INSERT INTO \`${String(targetTable).replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
+                `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
                 [values]
               );
             }
@@ -360,6 +391,9 @@ router.post('/', async (req, res) => {
 
       // b_transaction_indicator 写入完成后，基于 b_transaction 同版本数据计算 Gross IRR / Net IRR 并回写
       await computeAndUpdateTransactionIrr(connection, version);
+      } finally {
+        versionCreationLocks.delete(dateLockKey);
+      }
     }
 
     await connection.commit();
@@ -469,6 +503,7 @@ router.delete('/:version', async (req, res) => {
     }
     
     // 软删除版本及关联数据（F_DeleteMark=1, F_DeleteUserId=操作人, F_DeleteTime=NOW()）
+    // 使用事务保护：确保 17 张表要么全部删除成功，要么全部回滚
     const tables = [
       'b_version', 'b_investment_indicator', 'b_investment_sum', 'b_investor_list',
       'b_manage_indicator', 'b_project_all', 'b_transaction_indicator', 'b_all_indicator',
@@ -476,13 +511,23 @@ router.delete('/:version', async (req, res) => {
       'b_project_a', 'b_region_a', 'b_region', 'b_ipo_a'
     ];
     
-    for (const table of tables) {
-      await db.execute(
-        `UPDATE \`${table}\`
-         SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = NOW()
-         WHERE version = ? AND F_DeleteMark = 0`,
-        [deleteUserId, version]
-      );
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      for (const table of tables) {
+        await conn.execute(
+          `UPDATE \`${table}\`
+           SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = NOW()
+           WHERE version = ? AND F_DeleteMark = 0`,
+          [deleteUserId, version]
+        );
+      }
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
     }
     
     res.json({

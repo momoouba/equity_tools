@@ -7576,9 +7576,11 @@ async function runPendingMigrations() {
   await ready;
   const { ensureAiEnrichLogSearchColumns } = require('./utils/migrateAiEnrichLogColumns');
   const { ensureAiModelConfigEnrichFlags } = require('./utils/migrateAiModelConfigEnrichFlags');
+  const { migrateOverseasNameNormalization } = require('./utils/上市进展/migrateOverseasNameNormalization');
   const n1 = await ensureAiEnrichLogSearchColumns(pool);
   const n2 = await ensureAiModelConfigEnrichFlags(pool);
-  return n1 + n2;
+  const n3 = await migrateOverseasNameNormalization(pool);
+  return n1 + n2 + n3;
 }
 
 module.exports = {

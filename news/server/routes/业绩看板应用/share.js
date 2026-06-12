@@ -9,6 +9,7 @@ const bcrypt = require('bcrypt');
 const db = require('../../db');
 const { generateId } = require('../../utils/idGenerator');
 const { getCurrentUser } = require('../../middleware/auth');
+const { fetchDashboardData } = require('./dashboardQueries');
 
 router.use(getCurrentUser);
 
@@ -166,8 +167,11 @@ router.get('/verify', async (req, res) => {
       }
     }
     
-    // 检查密码
-    if (link.has_password && link.password_hash) {
+    // 检查密码（当 has_password 为 true 时必须验证，即使 password_hash 意外为空也拒绝访问）
+    if (link.has_password) {
+      if (!link.password_hash) {
+        return res.json({ success: false, message: '分享链接密码配置异常，请联系管理员' });
+      }
       if (!password) {
         return res.json({ success: false, message: '需要访问密码' });
       }
@@ -201,7 +205,7 @@ router.get('/verify', async (req, res) => {
  */
 router.get('/data', async (req, res) => {
   try {
-    const { token } = req.query;
+    const { token, password } = req.query;
     
     if (!token) {
       return res.status(400).json({ success: false, message: 'Token不能为空' });
@@ -227,20 +231,33 @@ router.get('/data', async (req, res) => {
         return res.status(403).json({ success: false, message: '分享链接已过期' });
       }
     }
-    
-    // TODO: 获取完整的业绩看板数据
-    // 这里简化处理，仅返回版本信息
+
+    // 密码校验（与 /verify 端点对齐，防止绕过 verify 直接拉数据）
+    if (link.has_password) {
+      if (!link.password_hash) {
+        return res.status(403).json({ success: false, message: '分享链接密码配置异常，请联系管理员' });
+      }
+      if (!password) {
+        return res.status(403).json({ success: false, message: '需要访问密码' });
+      }
+      const isValid = await bcrypt.compare(password, link.password_hash);
+      if (!isValid) {
+        return res.status(403).json({ success: false, message: '密码错误' });
+      }
+    }
+
+    // 实时获取看板四大板块数据
+    const dashboard = await fetchDashboardData(version);
     
     res.json({
       success: true,
       data: {
         version,
         canExport: link.can_export === 1,
-        // TODO: 添加完整的数据查询
-        manager: null,
-        funds: [],
-        portfolio: null,
-        underlying: null
+        manager: dashboard.manager,
+        funds: dashboard.funds,
+        portfolio: dashboard.portfolio,
+        underlying: dashboard.underlying,
       }
     });
   } catch (error) {

@@ -11,6 +11,13 @@ const { logCompetitorAi } = require('./competitorAnalysisLogger');
 const APP_TYPE_COMPETITOR = AI_APPLICATION_TYPE_COMPETITOR;
 const USAGE_TYPE = AI_USAGE_TYPE_COMPETITOR_MATCH;
 
+/** 截断 prompt 内容，防止超出模型上下文窗口 */
+function truncatePromptContent(text, maxLen = 5000) {
+  const s = String(text || '');
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen) + '\n...(truncated, original length=' + s.length + ')';
+}
+
 const PROMPTS = {
   pair_similarity: {
     system: `你是企业产品对标分析助手。根据目标企业与候选企业的产品简介与业务介绍，评估产品/业务相似度。
@@ -127,7 +134,7 @@ async function invokeCompetitorChat(systemContent, userContent, { enableSearch =
     model: config.model_name,
     messages: [
       { role: 'system', content: String(systemContent || '').trim() },
-      { role: 'user', content: String(userContent || '').trim() },
+      { role: 'user', content: truncatePromptContent(String(userContent || '').trim()) },
     ],
     temperature,
     max_tokens,
@@ -207,8 +214,8 @@ async function scorePairSimilarity(targetSlice, candidateSlice, logCtx = {}) {
   const introA = [targetSlice.product_intro, targetSlice.qcc_intro_effective].filter(Boolean).join('\n');
   const introB = [candidateSlice.product_intro, candidateSlice.qcc_intro_effective].filter(Boolean).join('\n');
   const fallback = Math.round(textOverlapFallback(introA, introB) * 100);
-  logCompetitorAi(runId, 'pair_similarity', `文本重叠 ${label} score=${fallback}`);
-  return fallback;
+  logCompetitorAi(runId, 'pair_similarity', `文本重叠(降级) ${label} score=${fallback}（AI 未返回有效分数，使用 bigram 文本重叠近似，仅供参考）`);
+  return { score: fallback, degraded: true };
 }
 
 function textOverlapFallback(a, b) {
@@ -246,6 +253,9 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
   });
   const parsed = extractJsonObject(raw);
   if (!parsed || !Array.isArray(parsed.candidates)) {
+    if (!raw || (typeof raw === 'string' && !raw.trim())) {
+      throw new Error(`竞品发现 AI 返回空响应（search_degraded=${searchUnsupportedDegraded}），无法区分"无竞品"与"调用失败"`);
+    }
     logCompetitorAi(runId, 'web_discover', '无有效 candidates JSON', {
       used_enable_search: !searchUnsupportedDegraded,
       search_degraded_no_api: searchUnsupportedDegraded,
@@ -295,16 +305,29 @@ async function validateCandidate(targetSlice, candidateSlice, logCtx = {}) {
       return parsed;
     }
   } catch (e) {
-    logCompetitorAi(runId, 'validate', `失败 ${label}，使用默认通过: ${e.message}`);
+    logCompetitorAi(runId, 'validate', `失败 ${label}，标记为非竞品: ${e.message}`);
+    return {
+      is_competitor: false,
+      industry_match: false,
+      core_overlap_percent: 0,
+      is_upstream_downstream: false,
+      validated_score: 0,
+      reject_reason: `AI 校验失败: ${e.message}`,
+      ai_failed: true,
+    };
   }
-  return {
-    is_competitor: true,
-    industry_match: true,
-    core_overlap_percent: 50,
-    is_upstream_downstream: false,
-    validated_score: 50,
-    reject_reason: '',
-  };
+  if (!parsed || typeof parsed !== 'object') {
+    logCompetitorAi(runId, 'validate', `空响应 ${label}，标记为非竞品`);
+    return {
+      is_competitor: false,
+      industry_match: false,
+      core_overlap_percent: 0,
+      is_upstream_downstream: false,
+      validated_score: 0,
+      reject_reason: 'AI 返回空响应或无法解析',
+      ai_failed: true,
+    };
+  }
 }
 
 module.exports = {

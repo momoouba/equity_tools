@@ -9,6 +9,14 @@ const {
   requireAdmin,
 } = require('../../utils/项目挖掘/projectSourcingRouteAuth');
 
+/** 脱敏错误消息：避免向前端泄露 SQL、连接字符串等内部信息 */
+function safeErrorMessage(err, fallback = '操作失败') {
+  const msg = String(err?.message || err || '');
+  if (/ER_|SQLSTATE|ECONNREFUSED|ENOTFOUND|mysql|syntax|Duplicate entry|Deadlock/i.test(msg)) return fallback;
+  if (/\/[\w.]+|\\[\w.]+/.test(msg) && msg.length > 120) return fallback;
+  return msg.slice(0, 200) || fallback;
+}
+
 function clientIpFromReq(req) {
   const xf = req.headers['x-forwarded-for'];
   if (xf && typeof xf === 'string') {
@@ -43,7 +51,7 @@ function registerFinancingRoutes(router) {
       res.json(result);
     } catch (e) {
       console.error('[project-sourcing/sync]', e);
-      res.status(500).json({ success: false, message: e.message || '同步失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '同步失败' });
     }
   });
 
@@ -136,7 +144,7 @@ function registerFinancingRoutes(router) {
       });
     } catch (e) {
       console.error('[project-sourcing/events]', e);
-      res.status(500).json({ success: false, message: e.message || '查询失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '查询失败' });
     }
   });
 
@@ -185,7 +193,7 @@ function registerFinancingRoutes(router) {
       });
     } catch (e) {
       console.error('[project-sourcing/ai-enrich-logs]', e);
-      res.status(500).json({ success: false, message: e.message || '查询失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '查询失败' });
     }
   });
 
@@ -242,7 +250,7 @@ function registerFinancingRoutes(router) {
       });
     } catch (e) {
       console.error('[project-sourcing/batch-ai-enrich]', e);
-      res.status(500).json({ success: false, message: e.message || '受理失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '受理失败' });
     }
   });
 
@@ -265,7 +273,7 @@ function registerFinancingRoutes(router) {
       });
     } catch (e) {
       console.error('[project-sourcing/events/ai-enrich]', e);
-      res.status(500).json({ success: false, message: e.message || '受理失败' });
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '受理失败' });
     }
   });
 }

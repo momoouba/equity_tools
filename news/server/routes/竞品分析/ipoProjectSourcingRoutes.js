@@ -28,16 +28,7 @@ const {
   runIpoProjectSqlSyncForUser,
 } = require('../../utils/上市进展/ipoProjectSqlSyncRunner');
 const { updateListingScheduledTasks } = require('../../utils/上市进展/scheduledListingTasks');
-
-function clientIpFromReq(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf && typeof xf === 'string') {
-    const first = xf.split(',')[0].trim();
-    if (first) return first.slice(0, 64);
-  }
-  if (req.ip) return String(req.ip).slice(0, 64);
-  return null;
-}
+const { clientIpFromReq } = require('../../utils/竞品分析/competitorRouteUtils');
 
 function ipoListFilterFromReq(req) {
   const keyword = (req.query.keyword || req.body?.keyword || '').trim();

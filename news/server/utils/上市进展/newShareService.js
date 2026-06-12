@@ -858,14 +858,20 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
 
   const logTag = options.logTag || '[打新日历AI查名]';
   const concurrency = Math.max(1, Math.min(16, Number(options.concurrency || process.env.NEW_SHARE_FULLNAME_BACKFILL_CONCURRENCY || 3)));
-  const placeholders = ids.map(() => '?').join(', ');
-  const candidates = await db.query(
-    `SELECT id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
-     FROM ipo_new_share
-     WHERE id IN (${placeholders})
-     ORDER BY id DESC`,
-    ids
-  );
+  const MAX_IN_CHUNK = 500;
+  let candidates = [];
+  for (let i = 0; i < ids.length; i += MAX_IN_CHUNK) {
+    const chunk = ids.slice(i, i + MAX_IN_CHUNK);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const rows = await db.query(
+      `SELECT id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
+       FROM ipo_new_share
+       WHERE id IN (${placeholders})
+       ORDER BY id DESC`,
+      chunk
+    );
+    candidates = candidates.concat(rows);
+  }
 
   if (!candidates.length) {
     return { total: 0, updated: 0, skipped: 0, failed: 0 };

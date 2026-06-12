@@ -1,6 +1,6 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { canonicalCompanyForMatchCross } = require('./listingCompanyNormalize');
+const { canonicalCompanyForMatchCross, fuzzySimilarity } = require('./listingCompanyNormalize');
 const { containsTraditional } = require('./zhconvUtils');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 
@@ -50,15 +50,34 @@ function isNewShareMatch(projectRow, newShareRow) {
   }
   const cn = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_cn, ex);
   const en = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_en, ex);
-  const companyCnScore = proj && cn && proj === cn ? 1 : 0;
-  const companyEnScore = proj && en && proj === en ? 1 : 0;
-  const hit = companyCnScore === 1 || companyEnScore === 1;
+  const companyCnScore = proj && cn && proj === cn ? 1 : (proj && cn ? fuzzySimilarity(proj, cn) : 0);
+  const companyEnScore = proj && en && proj === en ? 1 : (proj && en ? fuzzySimilarity(proj, en) : 0);
+
+  // #6: project_name matching (ipo_project.project_name ↔ ipo_new_share.stock_name)
+  const projName = canonicalCompanyForMatchCross(projectRow.project_name, ex);
+  const stockName = canonicalCompanyForMatchCross(newShareRow.stock_name, ex);
+  let projectNameScore = 0;
+  if (projName && stockName) {
+    projectNameScore = projName === stockName ? 1 : fuzzySimilarity(projName, stockName);
+  }
+
+  const COMPANY_THRESHOLD = 0.85;
+  const PROJECT_NAME_THRESHOLD = 0.80;
+  const companyHit = companyCnScore >= COMPANY_THRESHOLD || companyEnScore >= COMPANY_THRESHOLD;
+  const projectHit = projectNameScore >= PROJECT_NAME_THRESHOLD;
+  const hit = companyHit || projectHit;
+
+  // score: weighted combination (company match weighs more)
+  const score = hit
+    ? Math.max(companyCnScore, companyEnScore, projectNameScore * 0.9)
+    : 0;
+
   return {
     hit,
-    score: hit ? 1 : 0,
-    projectNameScore: 0,
-    companyCnScore,
-    companyEnScore,
+    score: Math.round(score * 10000) / 10000,
+    projectNameScore: Math.round(projectNameScore * 10000) / 10000,
+    companyCnScore: Math.round(companyCnScore * 10000) / 10000,
+    companyEnScore: Math.round(companyEnScore * 10000) / 10000,
   };
 }
 
@@ -339,9 +358,10 @@ async function runListingMatchBatch({
 
   if (listingAppId && (includeIpoProgress || includeNewShare)) {
     const delParams = [listingAppId];
-    let delSql = `DELETE ipp FROM ipo_project_progress ipp
+    let delSql = `UPDATE ipo_project_progress ipp
       INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
-      WHERE NOT (p.data_app_id <=> ?)`;
+      SET ipp.F_DeleteMark = 1, ipp.F_DeleteTime = NOW()
+      WHERE ipp.F_DeleteMark = 0 AND p.data_app_id IS NOT NULL AND NOT (p.data_app_id <=> ?)`;
     if (restrictProjectUserId) {
       delSql += ` AND ipp.F_CreatorUserId = ?`;
       delParams.push(restrictProjectUserId);
@@ -392,12 +412,40 @@ async function runListingMatchBatch({
 
   /** @type {Map<string, { ip: object, p: object }[]>} */
   const matchBuckets = new Map();
+  const FUZZY_MATCH_THRESHOLD = 0.85;
   for (const ip of progressRows) {
     const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
     if (!nip) continue;
     for (const p of projectRows) {
       const np = canonicalCompanyForMatchCross(p.company, ip.exchange);
-      if (!np || nip !== np) continue;
+      let matched = false;
+      let matchScore = null;
+      if (np && nip === np) {
+        matched = true;
+      } else if (np) {
+        // #4: fuzzy fallback when strict canonical match fails
+        const sim = fuzzySimilarity(nip, np);
+        if (sim >= FUZZY_MATCH_THRESHOLD) {
+          matched = true;
+          matchScore = Math.round(sim * 1000) / 1000;
+        }
+      }
+      // #6: project_name as additional matching key
+      if (!matched) {
+        const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
+        const pProjName = canonicalCompanyForMatchCross(p.project_name, ip.exchange);
+        if (ipProjName && pProjName && ipProjName === pProjName) {
+          matched = true;
+          matchScore = matchScore || 1;
+        } else if (ipProjName && pProjName) {
+          const projSim = fuzzySimilarity(ipProjName, pProjName);
+          if (projSim >= FUZZY_MATCH_THRESHOLD) {
+            matched = true;
+            matchScore = Math.round(projSim * 1000) / 1000;
+          }
+        }
+      }
+      if (!matched) continue;
       const dateStr = String(ip.f_update_time || '').slice(0, 10);
       const bucketKey = [
         p.f_id,
@@ -408,13 +456,14 @@ async function runListingMatchBatch({
         nip,
       ].join('|');
       if (!matchBuckets.has(bucketKey)) matchBuckets.set(bucketKey, []);
-      matchBuckets.get(bucketKey).push({ ip, p });
+      matchBuckets.get(bucketKey).push({ ip, p, matchScore });
     }
   }
 
   for (const [, pairs] of matchBuckets) {
     if (!pairs.length) continue;
     const p = pairs[0].p;
+    const bucketMatchScore = pairs[0].matchScore || null;
     const ips = pairs.map((x) => x.ip);
     const ip = pickPreferredIpoProgressForProject(p, ips);
     if (!ip) continue;
@@ -439,7 +488,7 @@ async function runListingMatchBatch({
         ip.f_id,
         null,
         'ipo_progress',
-        null,
+        bucketMatchScore,
         p.fund,
         p.sub,
         p.project_name,

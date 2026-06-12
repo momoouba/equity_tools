@@ -49,7 +49,7 @@ function dedupeRelations(list) {
       (strTrim(row.competitor_product_intro).length ? 4 : 0) +
       (strTrim(row.competitor_tags_display).length ? 2 : 0) +
       (Number(row.relevance_score) || 0) / 100;
-    if (richness(r) > richness(prev) || String(r.created_at) > String(prev.created_at)) {
+    if (richness(r) > richness(prev) || new Date(r.created_at).getTime() > new Date(prev.created_at).getTime()) {
       map.set(key, r);
     }
   }
@@ -369,7 +369,7 @@ async function buildCompetitorAnalysisSummary(opts) {
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                 created_at, run_id
          FROM sourcing_competitor_relation
-         WHERE invested_enterprise_id = ? AND run_id = ?
+         WHERE delete_mark = 0 AND invested_enterprise_id = ? AND run_id = ?
            AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
          ORDER BY relevance_score DESC, created_at DESC
          LIMIT 200`,
@@ -397,7 +397,7 @@ async function buildCompetitorAnalysisSummary(opts) {
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                 created_at, pre_investment_run_id
          FROM sourcing_competitor_relation
-         WHERE pre_investment_project_id = ? AND pre_investment_run_id = ?
+         WHERE delete_mark = 0 AND pre_investment_project_id = ? AND pre_investment_run_id = ?
            AND subject_type = 'pre_investment_project'
          ORDER BY relevance_score DESC, created_at DESC
          LIMIT 200`,

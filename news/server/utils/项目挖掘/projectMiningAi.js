@@ -31,7 +31,11 @@ async function invokeProjectMiningChat(prompt) {
       '未找到启用的项目挖掘大模型配置：请在「系统设置 → AI模型配置」中新增一条应用类型为「项目挖掘分析」、使用类型为「项目挖掘」且启用的配置'
     );
   }
-  return newsAnalysis.callAIModel(prompt, config);
+  const result = await newsAnalysis.callAIModel(prompt, config);
+  if (result == null || (typeof result === 'string' && !result.trim())) {
+    throw new Error('项目挖掘 AI 返回空响应，请检查模型配置或提示词后重试');
+  }
+  return result;
 }
 
 module.exports = {

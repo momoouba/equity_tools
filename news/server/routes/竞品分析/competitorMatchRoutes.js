@@ -47,16 +47,7 @@ const {
   restoreCompetitorDataAfterInsert,
   relinkOrphanCompetitorDataBySubjectMatch,
 } = require('../../utils/竞品分析/competitorSyncSnapshot');
-
-function clientIpFromReq(req) {
-  const xf = req.headers['x-forwarded-for'];
-  if (xf && typeof xf === 'string') {
-    const first = xf.split(',')[0].trim();
-    if (first) return first.slice(0, 64);
-  }
-  if (req.ip) return String(req.ip).slice(0, 64);
-  return null;
-}
+const { clientIpFromReq } = require('../../utils/竞品分析/competitorRouteUtils');
 
 function normTags(arr) {
   if (!Array.isArray(arr)) return [];
@@ -719,6 +710,10 @@ function registerCompetitorMatchRoutes(router) {
             assertInvestedEnterpriseCompetitorOwner(req, row);
           }
         }
+      } else if (!isAdminUser(req.psUser)) {
+        const e = new Error('全量导出仅限管理员操作；非管理员请勾选具体项目后导出');
+        e.code = 403;
+        throw e;
       }
 
       const buf = await exportCompetitorRelationsToBuffer({

@@ -9,6 +9,10 @@ const {
 } = require('./competitorMatchUtils');
 const { parseFinancingTags } = require('./competitorMatchRecall');
 
+// ── 运行级缓存：同批次内相同企业查询只跑一次 DB ──
+const _internalDisplayCache = new Map();
+function clearInternalDisplayCache() { _internalDisplayCache.clear(); }
+
 function tagsFromIpoRow(row) {
   return mergeTagArrays(
     parseTagsFromJson(row.ai_industry_tags_json),
@@ -32,6 +36,12 @@ function rowRichness(productIntro, tags) {
 async function loadInternalDisplayFields(unifiedCreditCode, companyName) {
   const credit = normalizeCreditCode(unifiedCreditCode);
   const name = strTrim(companyName);
+
+  // 缓存命中
+  const ck = `${credit}|${name}`;
+  const hit = _internalDisplayCache.get(ck);
+  if (hit) return hit;
+
   let productIntro = '';
   let tags = [];
   let ipoSubFunds = [];
@@ -114,13 +124,16 @@ async function loadInternalDisplayFields(unifiedCreditCode, companyName) {
     }
   }
 
-  return {
+  const result = {
     product_intro: productIntro || null,
     tags,
     ipo_sub_funds: ipoSubFunds,
   };
+  _internalDisplayCache.set(ck, result);
+  return result;
 }
 
 module.exports = {
   loadInternalDisplayFields,
+  clearInternalDisplayCache,
 };

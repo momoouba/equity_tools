@@ -51,6 +51,27 @@ function listingProgressKeywordBlob(exprSql) {
   return `CONVERT((${exprSql}) USING utf8mb4) COLLATE utf8mb4_general_ci`;
 }
 
+// #16: 白名单校验 —— exprSql 仅允许引用已知列，防止意外注入用户可控内容
+const ALLOWED_EXPR_COLUMNS = new Set([
+  'ipp.f_update_time', 'ipp.exchange', 'ipp.board', 'ipp.status',
+  'ipp.fund', 'ipp.sub', 'ipp.project_name', 'ipp.company',
+  'ipp.inv_amount', 'ipp.residual_amount', 'ipp.ratio', 'ipp.ct_amount', 'ipp.ct_residual',
+]);
+function assertSafeExprSql(exprSql) {
+  // 允许的模式：IFNULL(列引用, ...)、DATE_FORMAT(列引用, ...)、TRIM(CAST(列引用 AS CHAR))
+  // 提取所有 ipp.xxx 引用并验证是否在白名单内
+  const refs = (exprSql.match(/ipp\.\w+/g) || []);
+  for (const ref of refs) {
+    if (!ALLOWED_EXPR_COLUMNS.has(ref)) {
+      throw new Error(`listingProgressKeywordBlob: 不允许的列引用 ${ref}`);
+    }
+  }
+  // 禁止 SQL 关键字（除 IFNULL/DATE_FORMAT/TRIM/CAST/AS/CHAR 外的危险函数）
+  if (/\b(DROP|INSERT|UPDATE|DELETE|EXEC|EXECUTE|INTO|UNION|SELECT|ALTER|CREATE|GRANT)\b/i.test(exprSql)) {
+    throw new Error(`listingProgressKeywordBlob: 表达式包含禁止的 SQL 关键字`);
+  }
+}
+
 async function buildProgressWhere(req, user) {
   const preset = (req.query.rangePreset || '').trim();
   const startStr = (req.query.startDate || '').trim();
@@ -86,23 +107,28 @@ async function buildProgressWhere(req, user) {
   const kw = kwRaw.length > 200 ? kwRaw.slice(0, 200) : kwRaw;
   if (kw) {
     const like = `%${kw}%`;
+    // #16: 所有 exprSql 均为硬编码列引用，此处做运行时白名单校验
+    const exprList = [
+      `IFNULL(DATE_FORMAT(ipp.f_update_time, '%Y-%m-%d'), '')`,
+      `IFNULL(DATE_FORMAT(ipp.f_update_time, '%H:%i:%s'), '')`,
+      `IFNULL(ipp.exchange, '')`,
+      `IFNULL(ipp.board, '')`,
+      `IFNULL(ipp.status, '')`,
+      `IFNULL(ipp.fund, '')`,
+      `IFNULL(ipp.sub, '')`,
+      `IFNULL(ipp.project_name, '')`,
+      `IFNULL(ipp.company, '')`,
+      `IFNULL(TRIM(CAST(ipp.inv_amount AS CHAR)), '')`,
+      `IFNULL(TRIM(CAST(ipp.residual_amount AS CHAR)), '')`,
+      `IFNULL(TRIM(CAST(ipp.ratio AS CHAR)), '')`,
+      `IFNULL(TRIM(CAST(ipp.ratio * 100 AS CHAR)), '')`,
+      `IFNULL(TRIM(CAST(ipp.ct_amount AS CHAR)), '')`,
+      `IFNULL(TRIM(CAST(ipp.ct_residual AS CHAR)), '')`,
+    ];
+    exprList.forEach(assertSafeExprSql);
     where.push(`(
       CONCAT_WS(' ',
-        ${listingProgressKeywordBlob(`IFNULL(DATE_FORMAT(ipp.f_update_time, '%Y-%m-%d'), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(DATE_FORMAT(ipp.f_update_time, '%H:%i:%s'), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.exchange, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.board, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.status, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.fund, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.sub, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.project_name, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(ipp.company, '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.inv_amount AS CHAR)), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.residual_amount AS CHAR)), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ratio AS CHAR)), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ratio * 100 AS CHAR)), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ct_amount AS CHAR)), '')`)},
-        ${listingProgressKeywordBlob(`IFNULL(TRIM(CAST(ipp.ct_residual AS CHAR)), '')`)}
+        ${exprList.map(e => listingProgressKeywordBlob(e)).join(',\n        ')}
       ) LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci
     )`);
     params.push(like);
@@ -257,7 +283,11 @@ async function softDeleteIpoProjectProgress(req, res) {
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
 
     const fId = req.params.fId;
-    await db.execute(`DELETE FROM ipo_project_progress WHERE f_id = ?`, [fId]);
+    // 真正的软删除（原代码误用 DELETE FROM 导致硬删除）
+    await db.execute(
+      `UPDATE ipo_project_progress SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE f_id = ?`,
+      [user.id, fId]
+    );
     return res.json({ success: true });
   } catch (e) {
     console.error('softDeleteIpoProjectProgress', e);

@@ -1755,7 +1755,12 @@ async function callDashScopeOpenAiChatNoSearch(systemContent, userContent, confi
       },
       timeout: 120000,
     });
-    return response.data?.choices?.[0]?.message?.content;
+    const content = response.data?.choices?.[0]?.message?.content;
+    if (content == null || (typeof content === 'string' && !content.trim())) {
+      console.warn('[callDashScopeOpenAiChatNoSearch] AI 返回空 content');
+      return undefined;
+    }
+    return content;
   } catch (err) {
     throw new Error(formatDashScopeHttpError(err));
   }
@@ -1935,7 +1940,26 @@ async function runFinancingAiEnrichTask({
       throw new Error('未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型');
     }
 
-    const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
+    let llmOut = null;
+    const enrichMaxRetries = 2;
+    for (let attempt = 0; attempt <= enrichMaxRetries; attempt++) {
+      try {
+        llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
+        break;
+      } catch (enrichErr) {
+        const status = enrichErr?.response?.status;
+        const code = enrichErr?.code;
+        const isTransient = status === 429 || (status >= 500 && status < 600) ||
+          code === 'ECONNABORTED' || code === 'ETIMEDOUT' || code === 'ECONNRESET';
+        if (isTransient && attempt < enrichMaxRetries) {
+          const delay = (attempt + 1) * 2000;
+          console.warn(`[financingAiEnrich] 瞬时错误，${delay}ms 后重试 (${attempt + 1}/${enrichMaxRetries}): ${enrichErr.message}`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw enrichErr;
+      }
+    }
     await persistFinancingAiLlmSuccess({
       row,
       financingEventId,

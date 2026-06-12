@@ -38,7 +38,8 @@ const {
   logCompetitorRun,
   summarizeCandidates,
 } = require('./competitorAnalysisLogger');
-const { enrichCompetitorDisplayFields } = require('./competitorRelationEnrichService');
+const { enrichCompetitorDisplayFields, clearEnrichCache } = require('./competitorRelationEnrichService');
+const { clearInternalDisplayCache } = require('./competitorInternalDisplayLoader');
 const { buildFinancingEventIndex } = require('./competitorFinancingResolve');
 const { loadComparablePrefsForSubject } = require('./competitorComparablePrefService');
 const { isComparablePreferred } = require('./competitorCompanyMatch');
@@ -325,8 +326,20 @@ async function persistRelations({
   const financingIndex = await buildFinancingEventIndex();
 
   // ── 预先准备好所有待写入的数据（在事务外完成，减少事务持有时间）──
-  const preparedRows = [];
-  for (const r of rows) {
+
+  // #9: 清空运行级富化缓存，避免跨批次脏读
+  clearEnrichCache();
+  clearInternalDisplayCache();
+
+  // 预生成所有 relId（串行，避免 generateId 的 MAX+1 竞态）
+  const relIds = [];
+  for (let i = 0; i < rows.length; i++) {
+    relIds.push(await generateId('sourcing_competitor_relation'));
+  }
+
+  // #9: 并行富化——enrichCompetitorDisplayFields 内部有 withFinancingAiConcurrency
+  // 信号量（默认 4 路）控制 LLM 并发，其余字段补齐为纯本地计算
+  const preparedRows = await Promise.all(rows.map(async (r, idx) => {
     const key = candidateDedupeKey({
       unified_credit_code: r.unified_credit_code,
       display_name: r.display_name,
@@ -349,9 +362,9 @@ async function persistRelations({
     })
       ? 1
       : 0;
-    const relId = await generateId('sourcing_competitor_relation');
+    const relId = relIds[idx];
 
-    preparedRows.push({
+    return {
       relId,
       subjectType,
       investedEnterpriseId: investedEnterpriseId || null,
@@ -376,8 +389,8 @@ async function persistRelations({
       competitorTagsJson: displayFields.competitor_tags_json,
       subFundNames: displayFields.sub_fund_names,
       includeComparable,
-    });
-  }
+    };
+  }));
 
   // ── 在事务中原子执行：归档旧数据 + 写入新数据 ──
   let conn;
@@ -611,10 +624,14 @@ async function executeCompetitorAnalysisRun(opts) {
       const c = llmPool[i];
       if (i > 0 && LLM_REQUEST_GAP_MS > 0) await sleep(LLM_REQUEST_GAP_MS);
       try {
-        c.llmProductScore = await scorePairSimilarity(targetSlice, sliceForLlm(target, c), {
+        const simResult = await scorePairSimilarity(targetSlice, sliceForLlm(target, c), {
           runId,
           candidateName: c.display_name,
         });
+        c.llmProductScore = typeof simResult === 'object' && simResult !== null ? simResult.score : simResult;
+        if (typeof simResult === 'object' && simResult !== null && simResult.degraded) {
+          c.llmProductScoreDegraded = true;
+        }
       } catch (err) {
         c.llmProductScore = c.productScore;
         logCompetitorRun(runId, 'S3_llm', `对标异常 ${c.display_name}: ${err.message}`);
@@ -863,6 +880,9 @@ async function executeCompetitorAnalysisRun(opts) {
         });
         const relaxed = scored
           .filter((c) => {
+            // 排除 AI 明确拒绝的候选（is_competitor=false 或 is_upstream_downstream=true）
+            if (c.validation?.is_competitor === false) return false;
+            if (c.validation?.is_upstream_downstream === true) return false;
             const srcs = c.sources || (c.source ? [c.source] : []);
             const ai = getCandidateAiPart(c);
             return (

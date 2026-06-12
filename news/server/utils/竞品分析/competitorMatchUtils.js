@@ -105,7 +105,9 @@ function candidateDedupeKey(row) {
   const code = normalizeCreditCode(row.unified_credit_code || row.company_credit_code);
   if (code.length >= 15) return `cc:${code}`;
   const name = strTrim(row.display_name || row.company_name || row.project_name).toLowerCase();
-  return name ? `name:${name}` : `id:${row.source_id || Math.random()}`;
+  if (name) return `name:${name}`;
+  const id = row.source_id || row.id || row.f_id;
+  return id ? `id:${String(id).trim()}` : `unknown:${Date.now()}_${process.pid}`;
 }
 
 function scoreToGrade(score) {

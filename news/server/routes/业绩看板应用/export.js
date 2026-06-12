@@ -58,7 +58,12 @@ async function getOrderedColumnsByComment(tableName) {
     }));
 }
 
-async function buildSheetFromRows(tableName, rows) {
+const DEFAULT_MAX_EXPORT_ROWS = parseInt(process.env.MAX_EXPORT_ROWS || '50000', 10) || 50000;
+
+async function buildSheetFromRows(tableName, rows, opts = {}) {
+  const maxRows = Math.max(100, Math.min(200000, parseInt(opts.maxExportRows || DEFAULT_MAX_EXPORT_ROWS, 10) || DEFAULT_MAX_EXPORT_ROWS));
+  const truncated = rows && rows.length > maxRows;
+  const safeRows = truncated ? rows.slice(0, maxRows) : (rows || []);
   const cols = await getOrderedColumnsByComment(tableName);
   const data = [];
 
@@ -70,7 +75,7 @@ async function buildSheetFromRows(tableName, rows) {
 
   data.push(cols.map((c) => c.label));
 
-  (rows || []).forEach((row) => {
+  safeRows.forEach((row) => {
     const line = cols.map((c, idx) => {
       let v = row[c.name];
       if (v == null) return null;
@@ -89,6 +94,10 @@ async function buildSheetFromRows(tableName, rows) {
     });
     data.push(line);
   });
+
+  if (truncated) {
+    data.push([`⚠ 数据量过大，已截断显示前 ${maxRows} 行（共 ${rows.length} 行），请缩小查询范围或联系管理员提高上限后重新导出`]);
+  }
 
   const ws = XLSX.utils.aoa_to_sheet(data);
   const range = XLSX.utils.decode_range(ws['!ref']);
@@ -109,9 +118,10 @@ async function buildSheetFromRows(tableName, rows) {
         if (typeof cell.v === 'number' || isNumericString) {
           const num = Number(cell.v);
           if (!Number.isNaN(num)) {
-            cell.v = Number(num.toFixed(2));
+            const isInteger = Number.isInteger(num);
+            cell.v = isInteger ? num : Number(num.toFixed(2));
             cell.t = 'n';
-            cell.z = '#,##0.00';
+            cell.z = isInteger ? '#,##0' : '#,##0.00';
           }
         }
       }

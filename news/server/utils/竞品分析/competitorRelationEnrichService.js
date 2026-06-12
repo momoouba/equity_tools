@@ -13,6 +13,12 @@ function tagsToDisplay(tags) {
   return (tags || []).map((t) => strTrim(t)).filter(Boolean).join('、');
 }
 
+// ── 运行级富化缓存：同一分析批次内相同竞品只调一次 LLM ──
+const _enrichCache = new Map();
+
+/** 清空富化缓存（每次分析运行开始时调用） */
+function clearEnrichCache() { _enrichCache.clear(); }
+
 /**
  * 从底层项目表聚合子基金名称（同一竞品企业信用代码/企业全称可能对应多行）。
  */
@@ -55,6 +61,11 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
   const name = strTrim(candidate.display_name);
   const credit = normalizeCreditCode(candidate.unified_credit_code);
 
+  // ── 缓存命中：同批次内相同竞品直接返回 ──
+  const cacheKey = `${credit}|${name}`;
+  const cached = _enrichCache.get(cacheKey);
+  if (cached) return cached;
+
   let productIntro = strTrim(candidate.product_intro);
   let tags = Array.isArray(candidate.tags) ? [...candidate.tags] : [];
   if (!tags.length && candidate.ai_company_tags_display) {
@@ -76,6 +87,34 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
 
   const needLlm = !productIntro || tags.length < 1;
   if (needLlm && name) {
+    // ── 持久化缓存：查数据库中已有富化结果，跳过 LLM 调用 ──
+    if (credit) {
+      try {
+        const prevRows = await db.query(
+          `SELECT competitor_product_intro, competitor_tags_display, competitor_tags_json
+           FROM sourcing_competitor_relation
+           WHERE delete_mark = 0 AND unified_credit_code = ?
+             AND (competitor_product_intro IS NOT NULL OR competitor_tags_json IS NOT NULL)
+           ORDER BY updated_at DESC LIMIT 1`,
+          [credit]
+        );
+        if (prevRows.length) {
+          const prev = prevRows[0];
+          if (!productIntro && prev.competitor_product_intro) {
+            productIntro = strTrim(prev.competitor_product_intro);
+          }
+          if (tags.length < 1 && prev.competitor_tags_json) {
+            tags = parseTagsFromJson(prev.competitor_tags_json);
+          }
+        }
+      } catch (e) {
+        // 缓存查询失败不阻断主流程
+      }
+    }
+  }
+
+  const stillNeedLlm = !productIntro || tags.length < 1;
+  if (stillNeedLlm && name) {
     try {
       logCompetitorRun(runId, 'S6_enrich', `联网增强补齐 ${name}`);
       const llm = await withFinancingAiConcurrency(() =>
@@ -110,16 +149,19 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
     }
   }
 
-  return {
+  const result = {
     competitor_product_intro: productIntro || null,
     competitor_tags_display: tagsToDisplay(tags) || null,
     competitor_tags_json: tags.length ? JSON.stringify(tags) : null,
     sub_fund_names: subFundNames || null,
   };
+  _enrichCache.set(cacheKey, result);
+  return result;
 }
 
 module.exports = {
   enrichCompetitorDisplayFields,
+  clearEnrichCache,
   resolveSubFundNamesFromIpo,
   loadInternalDisplayFields,
 };

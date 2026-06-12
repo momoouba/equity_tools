@@ -62,6 +62,21 @@ function isHttp400(err) {
   return err?.response?.status === 400;
 }
 
+/** 判断是否为瞬时错误（限流 429、服务端 5xx、网络超时等），应重试而非降级 */
+function isTransientError(err) {
+  const status = err?.response?.status;
+  if (status === 429 || (status >= 500 && status < 600)) return true;
+  const code = err?.code;
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ENOTFOUND') return true;
+  const msg = err?.message || '';
+  if (/timeout|ECONNREFUSED|socket hang up/i.test(msg)) return true;
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function looksLikeWrongChatUrl(detail) {
   return (
     /no static resource/i.test(detail) ||
@@ -86,7 +101,8 @@ function isSearchParamRejected(detail) {
 function extractAssistantContent(response) {
   const msg = response?.data?.choices?.[0]?.message;
   const content = msg?.content;
-  return content != null ? String(content) : '';
+  if (content == null || (typeof content === 'string' && !content.trim())) return '';
+  return String(content);
 }
 
 function extractReasoningLen(response) {
@@ -178,26 +194,45 @@ async function postDashScopeChatWithSearchAndThinking({
   const wantSearch = true;
   const tryThinking = wantThinking && isFinancingAiThinkingEnabled();
 
-  try {
-    const response = await attempt({ withSearch: wantSearch, withThinking: tryThinking });
-    return wrapResult(response, {
-      used_enable_search: wantSearch,
-      search_degraded: false,
-      used_enable_thinking: tryThinking,
-      thinking_degraded: false,
-    });
-  } catch (err) {
-    const firstDetail = errorBlob(err);
-    if (isHttp400(err) && looksLikeWrongChatUrl(firstDetail)) {
-      throw new Error(
-        `${firstDetail} 请检查「AI 模型配置」中的接口地址是否为 OpenAI 兼容地址：` +
-          `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions（国际域用 dashscope-intl 等）。` +
-          `勿使用 …/aigc/text-generation/generation 等原生路径。`
-      );
-    }
-    if (!isHttp400(err)) {
-      throw err;
-    }
+  // 首次调用：支持瞬时错误（429/5xx/超时）自动重试，最多重试 2 次
+  const maxRetries = 2;
+  let lastTransientErr = null;
+  for (let retryAttempt = 0; retryAttempt <= maxRetries; retryAttempt++) {
+    try {
+      const response = await attempt({ withSearch: wantSearch, withThinking: tryThinking });
+      const result = wrapResult(response, {
+        used_enable_search: wantSearch,
+        search_degraded: false,
+        used_enable_thinking: tryThinking,
+        thinking_degraded: false,
+      });
+      if (!result.content && retryAttempt < maxRetries) {
+        console.warn(`${logPrefix} HTTP 200 空 content，${(retryAttempt + 1) * 2000}ms 后重试 (${retryAttempt + 1}/${maxRetries})`);
+        await sleep((retryAttempt + 1) * 2000);
+        continue;
+      }
+      return result;
+    } catch (err) {
+      // 瞬时错误（限流 429、服务端 5xx、网络超时）：等待后重试
+      if (isTransientError(err) && retryAttempt < maxRetries) {
+        const delayMs = (retryAttempt + 1) * 2000; // 2s, 4s 指数退避
+        console.warn(`${logPrefix} 瞬时错误 (${err?.response?.status || err?.code || err?.message})，${delayMs}ms 后第 ${retryAttempt + 1} 次重试…`);
+        await sleep(delayMs);
+        lastTransientErr = err;
+        continue;
+      }
+      // 重试耗尽或非瞬时错误，进入降级逻辑
+      const firstDetail = errorBlob(err);
+      if (isHttp400(err) && looksLikeWrongChatUrl(firstDetail)) {
+        throw new Error(
+          `${firstDetail} 请检查「AI 模型配置」中的接口地址是否为 OpenAI 兼容地址：` +
+            `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions（国际域用 dashscope-intl 等）。` +
+            `勿使用 …/aigc/text-generation/generation 等原生路径。`
+        );
+      }
+      if (!isHttp400(err)) {
+        throw err;
+      }
 
     const thinkingRejected = tryThinking && isThinkingParamRejected(firstDetail);
     const searchRejected = isSearchParamRejected(firstDetail);
@@ -267,6 +302,9 @@ async function postDashScopeChatWithSearchAndThinking({
     }
 
     throw new Error(firstDetail);
+    }
+    // for 循环正常结束不应到达此处（try 内 return 或 catch 内 throw/return）
+    if (lastTransientErr) throw lastTransientErr;
   }
 }
 

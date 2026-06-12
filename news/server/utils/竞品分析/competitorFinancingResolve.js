@@ -41,12 +41,15 @@ function eventGroupKeyFromRow(row) {
  * 全量加载融资事件池索引（单次分析落库调用一次）。
  */
 async function buildFinancingEventIndex() {
+  const maxAgeYears = parseInt(process.env.COMPETITOR_FINANCING_MAX_AGE_YEARS || '3', 10) || 3;
   const rows = await db.query(
     `SELECT company_name, company_credit_code, event_date, round, latest_round,
             funding_amt_raw, estimated_amt_raw
      FROM sourcing_financing_event
      WHERE delete_mark = 0
-     ORDER BY event_date DESC, id DESC`
+       AND (event_date IS NULL OR event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR))
+     ORDER BY event_date DESC, id DESC`,
+    [maxAgeYears]
   );
   const byKey = new Map();
   for (const r of rows) {
