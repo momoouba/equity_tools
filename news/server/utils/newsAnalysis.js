@@ -5085,6 +5085,65 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
   }
 
   /**
+   * 检测企业名称是否仅为新闻中的弱提及（列举式/顺带提及）
+   * 从 validateExistingAssociation 中提取为独立方法，供所有处理路径共用
+   * @param {string} title - 新闻标题
+   * @param {string} content - 新闻内容
+   * @param {string} enterpriseName - 企业名称（AI返回的或数据库中的）
+   * @param {string} projectAbbreviation - 项目简称（可选）
+   * @param {string} enterpriseFullName - 企业全称（可选）
+   * @returns {boolean} true = 弱提及/未提及（应解除关联），false = 非弱提及（保留关联）
+   */
+  detectWeakMention(title, content, enterpriseName, projectAbbreviation = null, enterpriseFullName = null) {
+    const fullText = ((title || '') + ' ' + (content || '')).toLowerCase();
+    const titleLower = (title || '').toLowerCase();
+    const contentLower = (content || '').toLowerCase();
+    const contentLength = contentLower.length;
+
+    // 确定核心关键词（优先级：项目简称 > 企业名称去掉后缀 > 企业全称去掉后缀 > 原始名称）
+    const coreKeyword = (
+      projectAbbreviation ||
+      (enterpriseName || '').split(/有限公司|股份有限公司|集团/)[0] ||
+      (enterpriseFullName || '').split(/有限公司|股份有限公司|集团/)[0] ||
+      enterpriseName ||
+      ''
+    ).toLowerCase().trim();
+
+    if (!coreKeyword || coreKeyword.length < 2) return true;
+
+    // 统计核心关键词在全文中的出现次数
+    let mentionCount = 0;
+    let searchIdx = 0;
+    while (true) {
+      const foundIdx = fullText.indexOf(coreKeyword, searchIdx);
+      if (foundIdx === -1) break;
+      mentionCount++;
+      searchIdx = foundIdx + coreKeyword.length;
+    }
+
+    // 检查关键词是否出现在标题中
+    const inTitle = titleLower.includes(coreKeyword);
+
+    // 检查关键词是否出现在正文前300字（主体段落）中
+    const inOpening = contentLower.substring(0, 300).includes(coreKeyword);
+
+    logWithTag('[detectWeakMention]',
+      `企业"${enterpriseName}"(核心词: "${coreKeyword}") - 提及次数: ${mentionCount}, 标题:${inTitle ? '是' : '否'}, 开头:${inOpening ? '是' : '否'}, 文章长度: ${contentLength}`);
+
+    // 弱提及判定：仅出现1次 + 不在标题 + 不在开头 + 文章较长 → 大概率是顺带提及/列举提及
+    if (mentionCount <= 1 && !inTitle && !inOpening && contentLength > 1500) {
+      return true;
+    }
+
+    // 未提及：企业名称在全文中完全未出现
+    if (mentionCount === 0) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
    * 分析新闻与被投企业的关联性
    * @param {string} title - 新闻标题
    * @param {string} content - 新闻内容
@@ -5348,6 +5407,18 @@ ${enterpriseList}
           // 如果只有关键词匹配但没有企业全名、项目简称或企业名称，降低相关度
           console.log(`二次验证：企业"${enterprise.enterprise_name}"未直接出现，但有关键词匹配，相关度从${enterprise.relevance_score}%降低到${Math.max(enterprise.relevance_score - 40, 0)}%`);
           enterprise.relevance_score = Math.max(enterprise.relevance_score - 40, 0);
+        }
+        
+        // 弱提及检测：即使名称在全文中出现，如果只是列举式提及（仅出现1次、不在标题和开头），也大幅降低相关度
+        const isWeak = this.detectWeakMention(
+          title, content,
+          enterprise.enterprise_name,
+          matchedEnterprise.project_abbreviation || null,
+          matchedEnterprise.enterprise_full_name || null
+        );
+        if (isWeak && enterprise.relevance_score >= 30) {
+          console.log(`二次验证弱提及检测：企业"${enterprise.enterprise_name}"在长文(${content.length}字)中仅为列举式/顺带提及，相关度从${enterprise.relevance_score}%降低到10%`);
+          enterprise.relevance_score = 10;
         }
         
         return enterprise;
@@ -6293,6 +6364,36 @@ ${enterpriseList}
         }
       } else {
         logWithTag('[processNewsWithEnterprise]', '跳过AI验证，直接保持企业关联');
+      }
+
+      // === 弱提及检测（所有接口路径都执行，包括shouldValidate=false的新榜"免检通道"） ===
+      // 修复：新榜接口跳过AI验证时，列举式提及的企业也会被保留的问题
+      if (shouldKeepAssociation && finalEnterpriseName) {
+        const weakMentionContent = newsItem.content || '';
+
+        // 解析企业名称格式（"简称【全称】"格式需拆分）
+        let wmEnterpriseName = finalEnterpriseName;
+        let wmFullName = finalEnterpriseName;
+        const wmFormatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
+        if (wmFormatMatch) {
+          wmEnterpriseName = wmFormatMatch[1].trim();
+          wmFullName = wmFormatMatch[2].trim();
+        }
+
+        const isWeakMention = this.detectWeakMention(
+          newsItem.title,
+          weakMentionContent,
+          wmEnterpriseName,
+          enterpriseAbbreviation || null,
+          wmFullName
+        );
+
+        if (isWeakMention) {
+          logWithTag('[processNewsWithEnterprise]',
+            `🚫 弱提及检测：企业"${finalEnterpriseName}"在新闻中仅为顺带提及/列举提及（出现次数少、不在标题和开头），解除关联`);
+          shouldKeepAssociation = false;
+          finalEnterpriseName = null;
+        }
       }
 
       // 检查是否是额外公众号的新闻
