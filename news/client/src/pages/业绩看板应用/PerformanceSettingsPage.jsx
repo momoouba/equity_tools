@@ -78,6 +78,8 @@ function SqlCodeEditor({ value = '', onChange, placeholder, minRows = 6 }) {
   const textareaRef = useRef(null)
   const highlightRef = useRef(null)
   const innerRef = useRef(null)
+  const codeWrapRef = useRef(null)
+  const lineNumsRef = useRef(null)
   const lines = (value || '').split('\n')
   const lineCount = Math.max(lines.length, minRows)
 
@@ -90,14 +92,24 @@ function SqlCodeEditor({ value = '', onChange, placeholder, minRows = 6 }) {
     inner.style.height = h + 'px'
   }, [value])
 
+  // 代码区域滚动时，同步行编号的垂直滚动位置
+  useEffect(() => {
+    const wrap = codeWrapRef.current
+    const nums = lineNumsRef.current
+    if (!wrap || !nums) return
+    const onScroll = () => { nums.scrollTop = wrap.scrollTop }
+    wrap.addEventListener('scroll', onScroll)
+    return () => wrap.removeEventListener('scroll', onScroll)
+  }, [])
+
   return (
     <div className="perf-sql-code-block perf-sql-editor">
-      <div className="perf-sql-editor-line-nums" aria-hidden>
+      <div ref={lineNumsRef} className="perf-sql-editor-line-nums" aria-hidden>
         {Array.from({ length: lineCount }, (_, i) => (
           <div key={i} className="perf-sql-line-num">{i + 1}</div>
         ))}
       </div>
-      <div className="perf-sql-editor-code-wrap">
+      <div ref={codeWrapRef} className="perf-sql-editor-code-wrap">
         <div ref={innerRef} className="perf-sql-editor-inner">
           <div ref={highlightRef} className="perf-sql-editor-highlight">
             {lines.map((line, i) => (

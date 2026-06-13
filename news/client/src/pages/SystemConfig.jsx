@@ -16,7 +16,7 @@ import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
 
-function SystemConfig({ isAdmin = true, filterAppId = null }) {
+function SystemConfig({ isAdmin = true }) {
   const [activeTab, setActiveTab] = useState(isAdmin ? 'basic' : 'database')
 
   if (!isAdmin) {
@@ -24,7 +24,7 @@ function SystemConfig({ isAdmin = true, filterAppId = null }) {
       <div className="system-config">
         <Card className="config-card" bordered={false}>
           <div className="config-content">
-            <DatabaseConfig filterAppId={filterAppId} />
+            <DatabaseConfig />
           </div>
         </Card>
       </div>

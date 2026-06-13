@@ -28,15 +28,6 @@ import './Dashboard.css'
 
 const { Header, Content } = Layout
 
-/** 各应用「数据库连接配置」按顶栏应用过滤 external_db_config.app_id */
-const FILTER_APP_ID_BY_KEY = {
-  'news-app': '2025112019132600001',
-  'performance-app': '2026031616180010001',
-  'listing-app': '2026033000000000001',
-  'project-sourcing-app': '2026050600000000001',
-  'competitor-analysis-app': '2026051712000000001',
-}
-
 /** 竞品分析子菜单 key → 实际路由段（须与 Route path 一致，不能用连字符拼成单段） */
 const COMPETITOR_MENU_ROUTES = {
   'competitor-analysis-invested-enterprises': 'competitor-analysis/invested-enterprises',
@@ -492,7 +483,6 @@ function Dashboard() {
               element={
                 <SystemConfig
                   isAdmin={false}
-                  filterAppId={FILTER_APP_ID_BY_KEY[activeAppKey] || null}
                 />
               }
             />

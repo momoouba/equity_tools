@@ -3388,21 +3388,17 @@ router.get('/holidays/:id/logs', async (req, res) => {
 });
 
 // 数据库连接配置相关路由
-function buildExternalDbWhere(isAdmin, userId, appId) {
+function buildExternalDbWhere(isAdmin, userId) {
   const parts = ['delete_mark = 0'];
   const params = [];
   if (!isAdmin) {
     parts.push('created_by = ?');
     params.push(userId);
   }
-  if (appId) {
-    parts.push('app_id = ?');
-    params.push(appId);
-  }
   return { clause: `WHERE ${parts.join(' AND ')}`, params };
 }
 
-// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的；传 app_id 时按应用过滤
+// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的
 router.get('/database-configs', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -3410,10 +3406,9 @@ router.get('/database-configs', async (req, res) => {
     const offset = (page - 1) * pageSize;
     const userRole = req.headers['x-user-role'] || 'user';
     const userId = req.headers['x-user-id'] || null;
-    const appId = (req.query.app_id || '').trim() || null;
 
     const isAdmin = userRole === 'admin';
-    const { clause: whereClause, params: whereParams } = buildExternalDbWhere(isAdmin, userId, appId);
+    const { clause: whereClause, params: whereParams } = buildExternalDbWhere(isAdmin, userId);
     const countParams = [...whereParams];
     const listParams = [...whereParams, pageSize, offset];
 
@@ -3424,7 +3419,7 @@ router.get('/database-configs', async (req, res) => {
     const total = totalResult[0].total;
 
     const configs = await db.query(
-      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, app_id, created_at, updated_at
+      `SELECT id, name, db_type, host, port, \`user\`, \`database\`, is_active, created_at, updated_at
        FROM external_db_config
        ${whereClause}
        ORDER BY created_at DESC
@@ -3487,8 +3482,7 @@ router.post('/database-config', [
       return res.status(400).json({ success: false, errors: errors.array() });
     }
 
-    const { name, db_type, host, port, user, password, database, is_active, app_id: bodyAppId } = req.body;
-    const appId = (bodyAppId || req.query.app_id || '').trim() || null;
+    const { name, db_type, host, port, user, password, database, is_active } = req.body;
 
     // 检查配置名称是否已存在
     const existing = await db.query(
@@ -3505,8 +3499,8 @@ router.post('/database-config', [
 
     await db.execute(
       `INSERT INTO external_db_config 
-       (id, name, db_type, host, port, \`user\`, password, \`database\`, is_active, app_id, created_by, updated_by) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, name, db_type, host, port, \`user\`, password, \`database\`, is_active, created_by, updated_by) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId,
         name,
@@ -3517,7 +3511,6 @@ router.post('/database-config', [
         password,
         database,
         finalIsActive,
-        appId,
         userId,
         userId
       ]

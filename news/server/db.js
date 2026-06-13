@@ -3896,10 +3896,21 @@ async function initializeTables(dbPool) {
       b_sql_id VARCHAR(50) NOT NULL COMMENT 'b_sql配置ID',
       modify_time DATETIME NOT NULL COMMENT '修改时间',
       modify_user_id VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户id',
-      changes_json TEXT NULL COMMENT '变更明细JSON：[{field,fieldLabel,oldVal,newVal}]',
+      changes_json MEDIUMTEXT NULL COMMENT '变更明细JSON：[{field,fieldLabel,oldVal,newVal}]',
       PRIMARY KEY (F_Id), INDEX idx_b_sql_id (b_sql_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-数据接口配置修改日志';
   `);
+
+  // 兼容已有表：将 changes_json 从 TEXT 升级为 MEDIUMTEXT，防止大 SQL 变更日志写入时报 Data too long
+  try {
+    const [colRows] = await dbPool.query(
+      `SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_sql_change_log' AND COLUMN_NAME = 'changes_json'`
+    );
+    if (colRows.length > 0 && colRows[0].DATA_TYPE === 'text') {
+      await dbPool.query('ALTER TABLE b_sql_change_log MODIFY COLUMN changes_json MEDIUMTEXT NULL');
+    }
+  } catch (e) { /* ignore */ }
 
   console.log('  → 进度：业绩看板 b_* 表列清理与注释同步（数据多时可能需数十秒）…');
 
