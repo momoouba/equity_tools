@@ -37,6 +37,9 @@
           <a-form-item label="累计分配总额">
             <a-textarea v-model="formData.disAmountDesc" placeholder="请输入指标说明" />
           </a-form-item>
+          <a-form-item label="SPV数量（备案）">
+            <a-textarea v-model="formData.spvNumDesc" placeholder="请输入指标说明" />
+          </a-form-item>
         </a-form>
       </a-tab-pane>
       <a-tab-pane key="fund" title="基金产品指标说明">
@@ -109,6 +112,7 @@ const formData = ref({
   subAmountDesc: '',
   paidInAmountDesc: '',
   disAmountDesc: '',
+  spvNumDesc: '',
   lpSubDesc: '',
   paidinDesc: '',
   distributionDesc: '',
@@ -139,6 +143,7 @@ const initFormData = () => {
     subAmountDesc: props.config.subAmountDesc || '',
     paidInAmountDesc: props.config.paidInAmountDesc || '',
     disAmountDesc: props.config.disAmountDesc || '',
+    spvNumDesc: props.config.spvNumDesc || '',
     lpSubDesc: props.config.lpSubDesc || '',
     paidinDesc: props.config.paidinDesc || '',
     distributionDesc: props.config.distributionDesc || '',

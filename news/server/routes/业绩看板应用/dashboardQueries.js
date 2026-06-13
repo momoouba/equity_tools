@@ -13,7 +13,8 @@ const db = require('../../db');
 async function fetchManagerData(version) {
   const indicatorRows = await db.query(
     `SELECT fof_num, direct_num, sub_amount, sub_add,
-            paid_in_amount, paid_in_add, dis_amount, dis_add
+            paid_in_amount, paid_in_add, dis_amount, dis_add,
+            spv_num
      FROM b_manage_indicator
      WHERE version = ? AND F_DeleteMark = 0`,
     [version]
@@ -101,7 +102,8 @@ async function fetchPortfolioData(version) {
             fund_paidin, fund_paidin_change, fund_exit, fund_exit_change,
             fund_exit_amount, fund_exit_amount_change, fund_receive, fund_receive_change,
             project_inv, project_inv_change, project_paidin, project_paidin_change,
-            project_exit, project_exit_change, project_receive, project_receive_change
+            project_exit, project_exit_change, project_receive, project_receive_change,
+            spv_paidin, spv_paidin_change, spv_receive, spv_receive_change
      FROM b_all_indicator
      WHERE version = ? AND F_DeleteMark = 0`,
     [version]
@@ -167,6 +169,7 @@ async function fetchDashboardData(version) {
     paidInAdd: mgr.indicator ? mgr.indicator.paid_in_add : null,
     disAmount: mgr.indicator ? mgr.indicator.dis_amount : null,
     disAdd: mgr.indicator ? mgr.indicator.dis_add : null,
+    spvNum: mgr.indicator ? mgr.indicator.spv_num : null,
     fofSinceYear: mgr.fofSinceYear,
     directSinceYear: mgr.directSinceYear,
     fundsList: mgr.fundsList,

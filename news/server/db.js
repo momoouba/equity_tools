@@ -3170,6 +3170,12 @@ async function initializeTables(dbPool) {
       lm_project_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月直投项目累计回款金额',
       project_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目累计回款金额变动',
       project_paidin_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '直投项目累计投资金额变动',
+      spv_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'SPV累计投资金额',
+      lm_spv_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月SPV累计投资金额',
+      spv_paidin_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'SPV累计投资金额变动',
+      spv_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'SPV累计回款金额',
+      lm_spv_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月SPV累计回款金额',
+      spv_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'SPV累计回款金额变动',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理人整体指标';
@@ -3210,6 +3216,31 @@ async function initializeTables(dbPool) {
       acc_dividend DECIMAL(30,10) NULL DEFAULT NULL COMMENT '其中:累计分红-24',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细';
+  `);
+  // b_investment_spv - 定开看板-SPV投资组合明细
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investment_spv (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-01',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-3',
+      fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-4',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-5',
+      transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资类别-6',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目名称-7',
+      first_date DATETIME NULL DEFAULT NULL COMMENT '首次投资时间-8',
+      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-9',
+      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-10',
+      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-11',
+      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-12',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-SPV投资组合明细';
   `);
   // b_investment_indicator
   await dbPool.query(`
@@ -3384,6 +3415,7 @@ async function initializeTables(dbPool) {
       sub_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '认缴规模较上年变动',
       paid_in_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '实缴规模较上年度变动',
       dis_add DECIMAL(30,10) NULL DEFAULT 0 COMMENT '累计分配总额较上年度变动',
+      spv_num INT NULL DEFAULT NULL COMMENT 'SPV数量_备案',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理人指标显示';
@@ -3672,6 +3704,7 @@ async function initializeTables(dbPool) {
       sub_amount_desc TEXT NULL COMMENT '认缴管理规模',
       paid_in_amount_desc TEXT NULL COMMENT '实缴管理规模',
       dis_amount_desc TEXT NULL COMMENT '累计分配总额',
+      spv_num_desc TEXT NULL COMMENT 'SPV数量_备案',
       lp_sub_desc TEXT NULL COMMENT '投资人认缴',
       paidin_desc TEXT NULL COMMENT '投资人实缴',
       distribution_desc TEXT NULL COMMENT '投资人分配',
@@ -3700,6 +3733,8 @@ async function initializeTables(dbPool) {
       project_exit_acc_desc TEXT NULL COMMENT '直投项目_累计退出数量',
       project_exit_amount_acc_desc TEXT NULL COMMENT '直投项目_累计退出金额',
       project_receive_acc_desc TEXT NULL COMMENT '直投项目_累计回款金额',
+      spv_paidin_acc_desc TEXT NULL COMMENT 'SPV累计投资金额',
+      spv_receive_acc_desc TEXT NULL COMMENT 'SPV累计回款金额',
       project_num_a_desc TEXT NULL COMMENT '累计组合_底层资产_数量',
       total_amount_a_desc TEXT NULL COMMENT '累计组合_底层资产_金额',
       ipo_num_a_desc TEXT NULL COMMENT '累计组合_上市企业',
@@ -3748,6 +3783,7 @@ async function initializeTables(dbPool) {
         "ALTER TABLE b_indicator_describe MODIFY COLUMN sub_amount_desc TEXT NULL COMMENT '认缴管理规模'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN paid_in_amount_desc TEXT NULL COMMENT '实缴管理规模'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN dis_amount_desc TEXT NULL COMMENT '累计分配总额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN spv_num_desc TEXT NULL COMMENT 'SPV数量_备案'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN lp_sub_desc TEXT NULL COMMENT '投资人认缴'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN paidin_desc TEXT NULL COMMENT '投资人实缴'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN distribution_desc TEXT NULL COMMENT '投资人分配'",
@@ -3776,6 +3812,8 @@ async function initializeTables(dbPool) {
         "ALTER TABLE b_indicator_describe MODIFY COLUMN project_exit_acc_desc TEXT NULL COMMENT '直投项目_累计退出数量'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN project_exit_amount_acc_desc TEXT NULL COMMENT '直投项目_累计退出金额'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN project_receive_acc_desc TEXT NULL COMMENT '直投项目_累计回款金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN spv_paidin_acc_desc TEXT NULL COMMENT 'SPV累计投资金额'",
+        "ALTER TABLE b_indicator_describe MODIFY COLUMN spv_receive_acc_desc TEXT NULL COMMENT 'SPV累计回款金额'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN project_num_a_desc TEXT NULL COMMENT '累计组合_底层资产_数量'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN total_amount_a_desc TEXT NULL COMMENT '累计组合_底层资产_金额'",
         "ALTER TABLE b_indicator_describe MODIFY COLUMN ipo_num_a_desc TEXT NULL COMMENT '累计组合_上市企业'",
@@ -3788,6 +3826,32 @@ async function initializeTables(dbPool) {
       for (const sql of alters) {
         await dbPool.query(sql);
       }
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_indicator_describe 表若已存在则补充 spv_num_desc 列（若缺失）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_indicator_describe' AND COLUMN_NAME = 'spv_num_desc'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_indicator_describe ADD COLUMN spv_num_desc TEXT NULL COMMENT 'SPV数量_备案' AFTER dis_amount_desc`);
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_indicator_describe 表若已存在则补充 spv_paidin_acc_desc、spv_receive_acc_desc 列（若缺失）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_indicator_describe' AND COLUMN_NAME IN ('spv_paidin_acc_desc', 'spv_receive_acc_desc')
+    `);
+    const existing = new Set(cols.map(c => c.COLUMN_NAME));
+    if (!existing.has('spv_paidin_acc_desc')) {
+      await dbPool.query(`ALTER TABLE b_indicator_describe ADD COLUMN spv_paidin_acc_desc TEXT NULL COMMENT 'SPV累计投资金额' AFTER project_receive_acc_desc`);
+    }
+    if (!existing.has('spv_receive_acc_desc')) {
+      await dbPool.query(`ALTER TABLE b_indicator_describe ADD COLUMN spv_receive_acc_desc TEXT NULL COMMENT 'SPV累计回款金额' AFTER spv_paidin_acc_desc`);
     }
   } catch (e) { /* ignore */ }
 
@@ -3861,6 +3925,38 @@ async function initializeTables(dbPool) {
       // 表不存在或列已不存在时忽略
     }
   }
+
+  // b_manage_indicator 表：若已存在则补充 spv_num 列（若缺失）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_manage_indicator' AND COLUMN_NAME = 'spv_num'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_manage_indicator ADD COLUMN spv_num INT NULL DEFAULT NULL COMMENT 'SPV数量_备案'`);
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_all_indicator 表：若已存在则补充 SPV 相关列（若缺失）
+  try {
+    const spvFields = ['spv_paidin', 'lm_spv_paidin', 'spv_paidin_change', 'spv_receive', 'lm_spv_receive', 'spv_receive_change'];
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_all_indicator' AND COLUMN_NAME IN (${spvFields.map(() => '?').join(',')})
+    `, spvFields);
+    const existing = new Set(cols.map(c => c.COLUMN_NAME));
+    const addCol = (name, type, comment) => {
+      if (!existing.has(name)) {
+        return dbPool.query(`ALTER TABLE b_all_indicator ADD COLUMN ${name} ${type} NULL DEFAULT NULL COMMENT '${comment}'`);
+      }
+    };
+    await addCol('spv_paidin', 'DECIMAL(30,10)', 'SPV累计投资金额');
+    await addCol('lm_spv_paidin', 'DECIMAL(30,10)', '上月SPV累计投资金额');
+    await addCol('spv_paidin_change', 'DECIMAL(30,10)', 'SPV累计投资金额变动');
+    await addCol('spv_receive', 'DECIMAL(30,10)', 'SPV累计回款金额');
+    await addCol('lm_spv_receive', 'DECIMAL(30,10)', '上月SPV累计回款金额');
+    await addCol('spv_receive_change', 'DECIMAL(30,10)', 'SPV累计回款金额变动');
+  } catch (e) { /* ignore */ }
 
   // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
   await ensureBTableComments(dbPool);

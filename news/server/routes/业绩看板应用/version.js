@@ -511,7 +511,7 @@ router.delete('/:version', async (req, res) => {
     const tables = [
       'b_version', 'b_investment_indicator', 'b_investment_sum', 'b_investor_list',
       'b_manage_indicator', 'b_project_all', 'b_transaction_indicator', 'b_all_indicator',
-      'b_investment', 'b_ipo', 'b_manage', 'b_project', 'b_transaction',
+      'b_investment', 'b_investment_spv', 'b_ipo', 'b_manage', 'b_project', 'b_transaction',
       'b_project_a', 'b_region_a', 'b_region', 'b_ipo_a'
     ];
     

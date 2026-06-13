@@ -15,6 +15,12 @@
       </div>
       <div class="indicator-item">
         <div class="indicator-label">
+          <span class="indicator-label-wrap">SPV数量（备案）<a-tooltip v-if="config?.spvNumDesc" :content="config.spvNumDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+        </div>
+        <div class="indicator-value">{{ formatNumber(data.spvNum) }}</div>
+      </div>
+      <div class="indicator-item">
+        <div class="indicator-label">
           <span class="indicator-label-wrap">认缴管理规模<a-tooltip v-if="config?.subAmountDesc" :content="config.subAmountDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
         </div>
         <div class="indicator-value indicator-value-red">{{ formatAmount(data.subAmount) }}</div>
@@ -102,7 +108,7 @@ const formatAmount = (val) => {
 
 .indicator-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 20px;
 }
 

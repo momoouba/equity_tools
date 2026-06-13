@@ -111,6 +111,7 @@ const performanceApi = {
   getProjectCashflow: (version, fund) => axios.get(`/api/performance/dashboard/project-cashflow?version=${encodeURIComponent(version)}&fund=${encodeURIComponent(fund)}`),
   getPortfolio: (version) => axios.get(`/api/performance/dashboard/portfolio?version=${encodeURIComponent(version)}`),
   getPortfolioDetail: (version) => axios.get(`/api/performance/dashboard/portfolio-detail?version=${encodeURIComponent(version)}`),
+  getSpvDetail: (version) => axios.get(`/api/performance/dashboard/spv-detail?version=${encodeURIComponent(version)}`),
   getUnderlying: (version) => axios.get(`/api/performance/dashboard/underlying?version=${encodeURIComponent(version)}`),
   getUnderlyingCompanies: (version, type) => axios.get(`/api/performance/dashboard/underlying-companies?version=${encodeURIComponent(version)}&type=${type}`),
   getIpoCompanies: (version, type) => axios.get(`/api/performance/dashboard/ipo-companies?version=${encodeURIComponent(version)}&type=${type}`),
@@ -124,6 +125,7 @@ const performanceApi = {
   exportFundPortfolio: (version, fund) => axios.post('/api/performance/exports/fund-portfolio', { version, fund }, { responseType: 'blob' }),
   exportProjectCashflow: (version, fund) => axios.post('/api/performance/exports/project-cashflow', { version, fund }, { responseType: 'blob' }),
   exportPortfolioDetail: (version) => axios.post('/api/performance/exports/portfolio-detail', { version }, { responseType: 'blob' }),
+  exportSpvDetail: (version) => axios.post('/api/performance/exports/spv-detail', { version }, { responseType: 'blob' }),
   exportPortfolio: (version) => axios.post('/api/performance/exports/portfolio', { version }, { responseType: 'blob' }),
   exportFundProducts: (version) => axios.post('/api/performance/exports/fund-products', { version }, { responseType: 'blob' }),
   exportIpoCompanies: (version, type) => axios.post('/api/performance/exports/ipo-companies', { version, type }, { responseType: 'blob' }),
@@ -254,11 +256,12 @@ function ModalInfo({ version, unit = '人民币', onExport }) {
   )
 }
 
-// 管理人指标卡（参考设计图：5 张卡片，母/直投下显示「自XX年起」，认缴/实缴/累计分配下显示「较上月增加」）
+// 管理人指标卡（参考设计图：6 张卡片，母/直投/SPV下显示说明，认缴/实缴/累计分配下显示「较上月增加」）
 function ManagerCard({ data, config, onClick }) {
   const items = [
     { label: '母基金数量', value: formatNumber(data?.fofNum), sub: (data?.fofSinceYear != null && data?.fofSinceYear !== '') ? `自${data.fofSinceYear}年起` : (config?.fofNumDesc || ''), descKey: 'fofNumDesc' },
     { label: '直投基金数量', value: formatNumber(data?.directNum), sub: (data?.directSinceYear != null && data?.directSinceYear !== '') ? `自${data.directSinceYear}年起` : (config?.directNumDesc || ''), descKey: 'directNumDesc' },
+    { label: 'SPV数量（备案）', value: formatNumber(data?.spvNum), sub: config?.spvNumDesc || '', descKey: 'spvNumDesc' },
     { label: '认缴管理规模', value: formatAmount(data?.subAmount), change: data?.subAdd, subLabel: '较上月增加', valueRed: true, descKey: 'subAmountDesc' },
     { label: '实缴管理规模', value: formatAmount(data?.paidInAmount), change: data?.paidInAdd, subLabel: '较上月增加', valueRed: true, descKey: 'paidInAmountDesc' },
     { label: '累计分配总额', value: formatAmount(data?.disAmount), change: data?.disAdd, subLabel: '较上月增加', valueRed: true, descKey: 'disAmountDesc' },
@@ -267,7 +270,7 @@ function ManagerCard({ data, config, onClick }) {
   return (
     <div className="perf-section perf-clickable" onClick={onClick}>
       <div className="perf-section-title">管理人指标</div>
-      <div className="perf-indicator-grid perf-indicator-grid-5">
+      <div className="perf-indicator-grid perf-indicator-grid-6">
         {items.map((item, idx) => (
           <div key={idx} className="perf-indicator-item">
             <div className="perf-indicator-label">
@@ -293,7 +296,7 @@ function ManagerCard({ data, config, onClick }) {
 }
 
 // 投资组合板块（参考设计图：左侧子基金/直投项目区隔指标块，每基金拆成投/退两列；整体组合左侧色块+子基金/直投项目区隔）
-function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onExport }) {
+function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onSpvDetail, onExport }) {
   const fundMap = (portfolioFunds || []).reduce((acc, r) => { acc[r.fund] = r; return acc }, {})
 
   const subFundRows = [
@@ -415,14 +418,16 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
             <div className="perf-portfolio-block">
               <div className="perf-portfolio-block-title">直投项目</div>
               <div className="perf-portfolio-block-cards">
-              <div className="perf-indicator-grid perf-indicator-grid-4">
+              <div className="perf-indicator-grid perf-indicator-grid-6">
                 {[
                   { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc' },
                   { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
+                  { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc', isSpv: true },
                   { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, isExit: true, descKey: 'projectExitAccDesc' },
                   { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, isExit: true, descKey: 'projectReceiveAccDesc' },
+                  { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, isExit: true, descKey: 'spvReceiveAccDesc', isSpv: true },
                 ].map((item, idx) => (
-                  <div key={idx} className="perf-indicator-item perf-clickable" onClick={onPortfolioDetail}>
+                  <div key={idx} className="perf-indicator-item perf-clickable" onClick={item.isSpv ? onSpvDetail : onPortfolioDetail}>
                     <div className="perf-indicator-label">
                       <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
                     </div>
@@ -678,6 +683,9 @@ function PerformanceApp() {
           case 'portfolioDetail':
             res = await performanceApi.getPortfolioDetail(selectedVersion)
             break
+          case 'spvDetail':
+            res = await performanceApi.getSpvDetail(selectedVersion)
+            break
           case 'underlyingCompanies':
             res = await performanceApi.getUnderlyingCompanies(selectedVersion, modal.modalType)
             break
@@ -702,6 +710,7 @@ function PerformanceApp() {
         if (modal.type === 'investors') setModalData({ list: [] })
         if (modal.type === 'fundPerformance') setModalData({ indicator: [], cashflow: [] })
         if (modal.type === 'portfolioDetail') setModalData({ list: [] })
+        if (modal.type === 'spvDetail') setModalData({ list: [] })
       } finally {
         setModalLoading(false)
       }
@@ -789,6 +798,10 @@ function PerformanceApp() {
         case 'portfolioDetail':
           res = await performanceApi.exportPortfolioDetail(selectedVersion)
           filename = `${selectedVersion}-基金投资组合明细-${date}.xlsx`
+          break
+        case 'spvDetail':
+          res = await performanceApi.exportSpvDetail(selectedVersion)
+          filename = `${selectedVersion}-SPV投资组合明细-${date}.xlsx`
           break
         case 'fundProducts':
           res = await performanceApi.exportFundProducts(selectedVersion)
@@ -1468,6 +1481,107 @@ function PerformanceApp() {
           </div>
         )
       }
+      case 'spvDetail': {
+        const list = modalData.list || []
+
+        const sumGroup = (rows) => {
+          const sum = {
+            acc_sub: 0,
+            acc_paidin: 0,
+            acc_exit: 0,
+            acc_receive: 0,
+          }
+          rows.forEach((r) => {
+            sum.acc_sub += toNum(r.acc_sub) || 0
+            sum.acc_paidin += toNum(r.acc_paidin) || 0
+            sum.acc_exit += toNum(r.acc_exit) || 0
+            sum.acc_receive += toNum(r.acc_receive) || 0
+          })
+          return sum
+        }
+
+        const allSum = sumGroup(list)
+
+        return (
+          <div className="perf-modal-fundperf-wrap">
+            <div className="perf-modal-header perf-modal-header-with-action">
+              <span>单位：人民币元</span>
+              <span>数据截至日期：{formatVersionDate(selectedVersion)}</span>
+              <span>版本号：{selectedVersion}</span>
+              <Button
+                type="primary"
+                className="perf-export-btn"
+                icon={<IconDownload />}
+                onClick={() => handleExport('spvDetail', null)}
+                style={{ marginLeft: 'auto' }}
+              >
+                导出底稿
+              </Button>
+            </div>
+            <div className="perf-fundperf-section-title">SPV投资组合明细</div>
+            <div className="perf-modal-fundperf-scroll">
+              <table className="perf-table perf-table-bordered perf-table-fundportfolio perf-table-portfolio-detail">
+                <colgroup>
+                  <col style={{ width: 48 }} />
+                  <col style={{ width: 160 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 160 }} />
+                  <col style={{ width: 130 }} /><col style={{ width: 130 }} />
+                  <col style={{ width: 130 }} /><col style={{ width: 130 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th className="perf-col-index">序号</th>
+                    <th>基金名称</th>
+                    <th>基金类型</th>
+                    <th>成立时间</th>
+                    <th>投资类别</th>
+                    <th>项目名称</th>
+                    <th className="perf-col-amount">认缴金额累计</th>
+                    <th className="perf-col-amount">实缴金额累计</th>
+                    <th className="perf-col-amount">退出金额累计</th>
+                    <th className="perf-col-amount">回款金额累计</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map((row, idx) => (
+                    <tr key={`spv-${idx}`}>
+                      <td className="perf-col-index">{idx + 1}</td>
+                      <td>{row.fund || '-'}</td>
+                      <td>{row.fund_type || '-'}</td>
+                      <td>{row.set_up_date ? String(row.set_up_date).slice(0, 10) : '-'}</td>
+                      <td>{row.transaction_type || '-'}</td>
+                      <td>{row.project || '-'}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_sub)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_paidin)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_exit)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_receive)}</td>
+                    </tr>
+                  ))}
+                  {list.length > 0 && (
+                    <tr className="perf-table-summary">
+                      <td className="perf-col-index" colSpan={2}>合计</td>
+                      <td>{`项目个数：${list.length} 个`}</td>
+                      <td colSpan={3}></td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_sub)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_paidin)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_exit)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_receive)}</td>
+                    </tr>
+                  )}
+                  {list.length === 0 && (
+                    <tr>
+                      <td colSpan={10} style={{ textAlign: 'center', color: '#86909c', padding: '24px 0' }}>暂无数据</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      }
       case 'projectCashflow': {
         const indicator = modalData.indicator || null
         const list = modalData.cashflow || []
@@ -1806,6 +1920,7 @@ function PerformanceApp() {
       fundPortfolio: `${modal.fund} - 基金投资组合明细`,
       projectCashflow: `${modal.fund} - 项目现金流及业绩指标`,
       portfolioDetail: '整体基金投资组合明细',
+      spvDetail: 'SPV投资组合明细',
       underlyingCompanies: `底层企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
       ipoCompanies: `上市企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
       regionCompanies: `区域企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
@@ -1937,6 +2052,7 @@ function PerformanceApp() {
             config={systemConfig}
             onFundPortfolio={(fund) => openModal('fundPortfolio', fund)}
             onPortfolioDetail={() => openModal('portfolioDetail')}
+            onSpvDetail={() => openModal('spvDetail')}
             onExport={() => handleExport('portfolio', null)}
           />
 
@@ -1967,10 +2083,10 @@ function PerformanceApp() {
           onCancel={closeModal}
           footer={null}
           style={{
-            width: ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
-            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? { maxHeight: '75vh', paddingBottom: 0, overflow: 'hidden' } : {})
+            width: ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
+            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? { maxHeight: '75vh', paddingBottom: 0, overflow: 'hidden' } : {})
           }}
-          bodyStyle={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type)
+          bodyStyle={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type)
             ? { height: 'calc(75vh - 56px)', maxHeight: 'calc(75vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }
             : undefined}
         >

@@ -21,7 +21,8 @@ router.get('/manager', async (req, res) => {
     
     const rows = await db.query(
       `SELECT fof_num, direct_num, sub_amount, sub_add, 
-              paid_in_amount, paid_in_add, dis_amount, dis_add
+              paid_in_amount, paid_in_add, dis_amount, dis_add,
+              spv_num
        FROM b_manage_indicator
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]
@@ -61,6 +62,7 @@ router.get('/manager', async (req, res) => {
           paidInAdd: null,
           disAmount: null,
           disAdd: null,
+          spvNum: null,
           fofSinceYear: fofSinceYear,
           directSinceYear: directSinceYear
         }
@@ -79,6 +81,7 @@ router.get('/manager', async (req, res) => {
         paidInAdd: data.paid_in_add,
         disAmount: data.dis_amount,
         disAdd: data.dis_add,
+        spvNum: data.spv_num,
         fofSinceYear: fofSinceYear,
         directSinceYear: directSinceYear
       }
@@ -329,7 +332,8 @@ router.get('/portfolio', async (req, res) => {
               fund_paidin, fund_paidin_change, fund_exit, fund_exit_change,
               fund_exit_amount, fund_exit_amount_change, fund_receive, fund_receive_change,
               project_inv, project_inv_change, project_paidin, project_paidin_change,
-              project_exit, project_exit_change, project_receive, project_receive_change
+              project_exit, project_exit_change, project_receive, project_receive_change,
+              spv_paidin, spv_paidin_change, spv_receive, spv_receive_change
        FROM b_all_indicator
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]
@@ -373,6 +377,33 @@ router.get('/portfolio-detail', async (req, res) => {
   } catch (error) {
     console.error('获取整体投资组合明细失败:', error);
     res.status(500).json({ success: false, message: '获取整体投资组合明细失败' });
+  }
+});
+
+/**
+ * 获取SPV投资组合明细
+ * GET /api/performance/dashboard/spv-detail?version=xxx
+ */
+router.get('/spv-detail', async (req, res) => {
+  try {
+    const { version } = req.query;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+    
+    const rows = await db.query(
+      `SELECT fund, fund_type, set_up_date, transaction_type, project,
+              acc_sub, acc_paidin, acc_exit, acc_receive
+       FROM b_investment_spv
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_type, first_date ASC`,
+      [version]
+    );
+    
+    res.json({ success: true, data: { list: rows } });
+  } catch (error) {
+    console.error('获取SPV投资组合明细失败:', error);
+    res.status(500).json({ success: false, message: '获取SPV投资组合明细失败' });
   }
 });
 

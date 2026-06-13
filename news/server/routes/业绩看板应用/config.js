@@ -127,6 +127,7 @@ router.get('/indicators', async (req, res) => {
         subAmountDesc: config.sub_amount_desc,
         paidInAmountDesc: config.paid_in_amount_desc,
         disAmountDesc: config.dis_amount_desc,
+        spvNumDesc: config.spv_num_desc,
         lpSubDesc: config.lp_sub_desc,
         paidinDesc: config.paidin_desc,
         distributionDesc: config.distribution_desc,
@@ -155,6 +156,8 @@ router.get('/indicators', async (req, res) => {
         projectExitAccDesc: config.project_exit_acc_desc,
         projectExitAmountAccDesc: config.project_exit_amount_acc_desc,
         projectReceiveAccDesc: config.project_receive_acc_desc,
+        spvPaidinAccDesc: config.spv_paidin_acc_desc,
+        spvReceiveAccDesc: config.spv_receive_acc_desc,
         projectNumADesc: config.project_num_a_desc,
         totalAmountADesc: config.total_amount_a_desc,
         ipoNumADesc: config.ipo_num_a_desc,
@@ -180,7 +183,7 @@ router.put('/indicators', async (req, res) => {
     const userId = req.currentUserId;
     const {
       systemName, manualUrl, redirectUrl,
-      fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc,
+      fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc, spvNumDesc,
       lpSubDesc, paidinDesc, distributionDesc, tvpiDesc, dpiDesc, rvpiDesc, nirrDesc,
       subAmountInvDesc, invAmountDesc, exitAmountDesc, girrDesc, mocDesc,
       fundInvExitDesc, fundSubExitDesc, fundPaidinReceiveDesc,
@@ -189,6 +192,7 @@ router.put('/indicators', async (req, res) => {
       fundExitAmountAccDesc, fundReceiveAccDesc,
       projectInvAccDesc, projectPaidinAccDesc, projectExitAccDesc,
       projectExitAmountAccDesc, projectReceiveAccDesc,
+      spvPaidinAccDesc, spvReceiveAccDesc,
       projectNumADesc, totalAmountADesc, ipoNumADesc, shNumADesc,
       projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc
     } = req.body;
@@ -206,7 +210,7 @@ router.put('/indicators', async (req, res) => {
       await conn.execute(
         `UPDATE b_indicator_describe SET
           system_name = ?, manual_url = ?, redirect_url = ?,
-          fof_num_desc = ?, direct_num_desc = ?, sub_amount_desc = ?, paid_in_amount_desc = ?, dis_amount_desc = ?,
+          fof_num_desc = ?, direct_num_desc = ?, sub_amount_desc = ?, paid_in_amount_desc = ?, dis_amount_desc = ?, spv_num_desc = ?,
           lp_sub_desc = ?, paidin_desc = ?, distribution_desc = ?, tvpi_desc = ?, dpi_desc = ?, rvpi_desc = ?, nirr_desc = ?,
           sub_amount_inv_desc = ?, inv_amount_desc = ?, exit_amount_desc = ?, girr_desc = ?, moc_desc = ?,
           fund_inv_exit_desc = ?, fund_sub_exit_desc = ?, fund_paidin_receive_desc = ?,
@@ -215,13 +219,14 @@ router.put('/indicators', async (req, res) => {
           fund_exit_amount_acc_desc = ?, fund_receive_acc_desc = ?,
           project_inv_acc_desc = ?, project_paidin_acc_desc = ?, project_exit_acc_desc = ?,
           project_exit_amount_acc_desc = ?, project_receive_acc_desc = ?,
+          spv_paidin_acc_desc = ?, spv_receive_acc_desc = ?,
           project_num_a_desc = ?, total_amount_a_desc = ?, ipo_num_a_desc = ?, sh_num_a_desc = ?,
           project_num_desc = ?, total_amount_desc = ?, ipo_num_desc = ?, sh_num_desc = ?,
           F_LastModifyUserId = ?, F_LastModifyTime = NOW()
          WHERE F_Id = ?`,
         [
           systemName, manualUrl, redirectUrl,
-          fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc,
+          fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc, spvNumDesc,
           lpSubDesc, paidinDesc, distributionDesc, tvpiDesc, dpiDesc, rvpiDesc, nirrDesc,
           subAmountInvDesc, invAmountDesc, exitAmountDesc, girrDesc, mocDesc,
           fundInvExitDesc, fundSubExitDesc, fundPaidinReceiveDesc,
@@ -230,6 +235,7 @@ router.put('/indicators', async (req, res) => {
           fundExitAmountAccDesc, fundReceiveAccDesc,
           projectInvAccDesc, projectPaidinAccDesc, projectExitAccDesc,
           projectExitAmountAccDesc, projectReceiveAccDesc,
+          spvPaidinAccDesc, spvReceiveAccDesc,
           projectNumADesc, totalAmountADesc, ipoNumADesc, shNumADesc,
           projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc,
           userId, existingRows[0].F_Id
@@ -241,7 +247,7 @@ router.put('/indicators', async (req, res) => {
       await conn.execute(
         `INSERT INTO b_indicator_describe
          (F_Id, system_name, manual_url, redirect_url,
-          fof_num_desc, direct_num_desc, sub_amount_desc, paid_in_amount_desc, dis_amount_desc,
+          fof_num_desc, direct_num_desc, sub_amount_desc, paid_in_amount_desc, dis_amount_desc, spv_num_desc,
           lp_sub_desc, paidin_desc, distribution_desc, tvpi_desc, dpi_desc, rvpi_desc, nirr_desc,
           sub_amount_inv_desc, inv_amount_desc, exit_amount_desc, girr_desc, moc_desc,
           fund_inv_exit_desc, fund_sub_exit_desc, fund_paidin_receive_desc,
@@ -250,13 +256,14 @@ router.put('/indicators', async (req, res) => {
           fund_exit_amount_acc_desc, fund_receive_acc_desc,
           project_inv_acc_desc, project_paidin_acc_desc, project_exit_acc_desc,
           project_exit_amount_acc_desc, project_receive_acc_desc,
+          spv_paidin_acc_desc, spv_receive_acc_desc,
           project_num_a_desc, total_amount_a_desc, ipo_num_a_desc, sh_num_a_desc,
           project_num_desc, total_amount_desc, ipo_num_desc, sh_num_desc,
           F_CreatorUserId, F_CreatorTime, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NOW(), 0)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, NOW(), 0)`,
         [
           id, systemName, manualUrl, redirectUrl,
-          fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc,
+          fofNumDesc, directNumDesc, subAmountDesc, paidInAmountDesc, disAmountDesc, spvNumDesc,
           lpSubDesc, paidinDesc, distributionDesc, tvpiDesc, dpiDesc, rvpiDesc, nirrDesc,
           subAmountInvDesc, invAmountDesc, exitAmountDesc, girrDesc, mocDesc,
           fundInvExitDesc, fundSubExitDesc, fundPaidinReceiveDesc,
@@ -265,6 +272,7 @@ router.put('/indicators', async (req, res) => {
           fundExitAmountAccDesc, fundReceiveAccDesc,
           projectInvAccDesc, projectPaidinAccDesc, projectExitAccDesc,
           projectExitAmountAccDesc, projectReceiveAccDesc,
+          spvPaidinAccDesc, spvReceiveAccDesc,
           projectNumADesc, totalAmountADesc, ipoNumADesc, shNumADesc,
           projectNumDesc, totalAmountDesc, ipoNumDesc, shNumDesc,
           userId, userId // fix#17: F_CreatorUserId 和 F_LastModifyUserId 均为 userId，时间字段统一用 NOW()

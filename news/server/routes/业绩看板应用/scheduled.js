@@ -257,6 +257,7 @@ router.post('/:id/run', async (req, res) => {
                   'b_transaction_indicator',
                   'b_all_indicator',
                   'b_investment',
+                  'b_investment_spv',
                   'b_ipo',
                   'b_manage',
                   'b_project',

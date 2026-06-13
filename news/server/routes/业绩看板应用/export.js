@@ -451,6 +451,14 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
        ORDER BY transaction_type`,
       [version]
     );
+
+    // 获取SPV投资组合明细
+    const spvRows = await db.query(
+      `SELECT * FROM b_investment_spv
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_type, first_date ASC`,
+      [version]
+    );
     
     // 获取数据明细
     const detailRows = await db.query(
@@ -464,6 +472,9 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
     
     const ws1 = await buildSheetFromRows('b_investment_sum', portfolioRows);
     XLSX.utils.book_append_sheet(wb, ws1, '全量基金投资组合明细');
+
+    const wsSpv = await buildSheetFromRows('b_investment_spv', spvRows);
+    XLSX.utils.book_append_sheet(wb, wsSpv, 'SPV投资组合明细');
     
     const ws2 = await buildSheetFromRows('b_transaction', detailRows);
     XLSX.utils.book_append_sheet(wb, ws2, '数据明细表');
@@ -478,6 +489,55 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
     res.send(buffer);
   } catch (error) {
     console.error('导出整体投资组合明细失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
+ * 导出SPV投资组合明细
+ * POST /api/performance/exports/spv-detail
+ */
+router.post('/spv-detail', checkExportPermission, async (req, res) => {
+  try {
+    const { version } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    // 获取SPV投资组合明细
+    const spvRows = await db.query(
+      `SELECT * FROM b_investment_spv
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY fund, transaction_type, first_date ASC`,
+      [version]
+    );
+
+    // 获取数据明细
+    const detailRows = await db.query(
+      `SELECT * FROM b_transaction
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY transaction_date DESC`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+
+    const wsSpv = await buildSheetFromRows('b_investment_spv', spvRows);
+    XLSX.utils.book_append_sheet(wb, wsSpv, 'SPV投资组合明细');
+
+    const wsDetail = await buildSheetFromRows('b_transaction', detailRows);
+    XLSX.utils.book_append_sheet(wb, wsDetail, '数据明细表');
+
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-SPV投资组合明细-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出SPV投资组合明细失败:', error);
     res.status(500).json({ success: false, message: '导出失败' });
   }
 });

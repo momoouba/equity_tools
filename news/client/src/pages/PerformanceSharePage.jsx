@@ -80,6 +80,7 @@ function ManagerCard({ data, config }) {
   const items = [
     { label: '母基金数量', value: formatNumber(data?.fofNum), sub: (data?.fofSinceYear != null && data?.fofSinceYear !== '') ? `自${data.fofSinceYear}年起` : (config?.fofNumDesc || ''), descKey: 'fofNumDesc' },
     { label: '直投基金数量', value: formatNumber(data?.directNum), sub: (data?.directSinceYear != null && data?.directSinceYear !== '') ? `自${data.directSinceYear}年起` : (config?.directNumDesc || ''), descKey: 'directNumDesc' },
+    { label: 'SPV数量（备案）', value: formatNumber(data?.spvNum), sub: config?.spvNumDesc || '', descKey: 'spvNumDesc' },
     { label: '认缴管理规模', value: formatAmount(data?.subAmount), change: data?.subAdd, subLabel: '较上月增加', valueRed: true, descKey: 'subAmountDesc' },
     { label: '实缴管理规模', value: formatAmount(data?.paidInAmount), change: data?.paidInAdd, subLabel: '较上月增加', valueRed: true, descKey: 'paidInAmountDesc' },
     { label: '累计分配总额', value: formatAmount(data?.disAmount), change: data?.disAdd, subLabel: '较上月增加', valueRed: true, descKey: 'disAmountDesc' },
@@ -88,7 +89,7 @@ function ManagerCard({ data, config }) {
   return (
     <div className="perf-section">
       <div className="perf-section-title">管理人指标</div>
-      <div className="perf-indicator-grid perf-indicator-grid-5">
+      <div className="perf-indicator-grid perf-indicator-grid-6">
         {items.map((item, idx) => (
           <div key={idx} className="perf-indicator-item">
             <div className="perf-indicator-label">
@@ -224,12 +225,14 @@ function PortfolioSection({ funds, portfolioFunds, overall, config }) {
             <div className="perf-portfolio-block">
               <div className="perf-portfolio-block-title">直投项目</div>
               <div className="perf-portfolio-block-cards">
-              <div className="perf-indicator-grid perf-indicator-grid-4">
+              <div className="perf-indicator-grid perf-indicator-grid-6">
                 {[
                   { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc' },
                   { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
+                  { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc' },
                   { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, isExit: true, descKey: 'projectExitAccDesc' },
                   { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, isExit: true, descKey: 'projectReceiveAccDesc' },
+                  { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, isExit: true, descKey: 'spvReceiveAccDesc' },
                 ].map((item, idx) => (
                   <div key={idx} className="perf-indicator-item">
                     <div className="perf-indicator-label">
