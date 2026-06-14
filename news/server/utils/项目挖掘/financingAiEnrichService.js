@@ -2439,14 +2439,17 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
  * 与融资事件同一套提示词/模型：仅执行一次 chat，返回解析后的简介与标签（不落库）。
  * rowForTemplate 需含 financing 模板占位：company_name、company_credit_code、project_name（可空）。
  */
-async function runFinancingStyleWebEnrichLlmCall(rowForTemplate) {
+async function runFinancingStyleWebEnrichLlmCall(rowForTemplate, extraContext) {
   const promptMeta = await loadActivePromptMeta();
   const promptConfigId = promptMeta?.id || null;
   const promptBundle = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
   const storedRaw =
     promptBundle && promptBundle.prompt_content != null ? String(promptBundle.prompt_content) : '';
   const { system: systemContent, userTemplate } = resolveFinancingAiPromptSections(storedRaw);
-  const userContent = fillTemplate(userTemplate, rowForTemplate);
+  let userContent = fillTemplate(userTemplate, rowForTemplate);
+  if (extraContext && typeof extraContext === 'string' && extraContext.trim()) {
+    userContent += `\n\n【以下为商业计划书（BP）内容，请一并参考】\n${extraContext.trim()}`;
+  }
   const { llm_model_config_id, config } = await resolveLlmConfig(promptBundle, promptMeta);
   if (!config) {
     throw new Error(

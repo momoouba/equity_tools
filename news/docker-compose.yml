@@ -62,7 +62,7 @@ services:
     ports:
       - "${APP_PORT:-3001}:3001"
     volumes:
-      - ./uploads:/app/uploads
+      - app_uploads:/app/uploads
       - ./logs:/app/logs
       # 注释掉 .env 文件挂载，使用 docker-compose.yml 的环境变量
       # - ./.env:/app/.env:ro
@@ -109,6 +109,8 @@ volumes:
   mysql_data:
     driver: local
   app_frontend:
+    driver: local
+  app_uploads:
     driver: local
 
 networks:

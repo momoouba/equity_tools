@@ -15,6 +15,12 @@ const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns'
 
 const PRE_INV_AI_VERSION = 'pre_investment_project_web_enrich_v1';
 
+/** BP 内容注入到 AI 取数 prompt 时的最大字符数，防止超大 BP 超出模型上下文窗口 */
+const BP_CONTEXT_MAX_CHARS = Math.max(
+  2000,
+  Math.min(80000, parseInt(process.env.FINANCING_AI_BP_CONTEXT_MAX_CHARS || '50000', 10) || 50000)
+);
+
 function formatPreInvAiEnrichTriggerType(shortType) {
   const s = String(shortType || 'manual_api').trim();
   if (s.startsWith('pre_investment_project:')) return s;
@@ -187,7 +193,7 @@ async function runPreInvestmentProjectAiEnrichTask({
 
     const ev = await db.query(
       `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation,
-              qcc_company_intro, delete_mark
+              qcc_company_intro, bp_extract_text, delete_mark
        FROM pre_investment_project WHERE id = ? LIMIT 1`,
       [preProjectId]
     );
@@ -201,7 +207,13 @@ async function runPreInvestmentProjectAiEnrichTask({
       throw new Error('企业全称为空，无法调用模型');
     }
 
-    const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate));
+    // 如果有 BP 提取文本，作为额外上下文传入 LLM（不受 QCC 截断限制）
+    let bpExtraContext = row.bp_extract_text ? String(row.bp_extract_text).trim() : null;
+    if (bpExtraContext && bpExtraContext.length > BP_CONTEXT_MAX_CHARS) {
+      bpExtraContext = bpExtraContext.slice(0, BP_CONTEXT_MAX_CHARS) + '\n\n…（BP 内容过长已截断）';
+    }
+
+    const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate, bpExtraContext));
     llmModelConfigId = llm.llmModelConfigId;
     promptConfigId = llm.promptConfigId;
 

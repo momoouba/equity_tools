@@ -15,3 +15,6 @@ pymysql>=1.1.0
 # 同花顺 iFinD SDK（THS_iFinD）通常由同花顺提供离线安装包，不通过 PyPI 安装；
 # Linux 生产环境请按同花顺官方文档安装后再启用上市进展 iFinD 同步。
 
+# BP 文件解析（投前竞品分析 — BP 上传功能），将 PDF/DOCX/PPTX/XLSX 等文档转为 Markdown
+markitdown[all]>=0.1.0
+

@@ -6868,6 +6868,9 @@ async function initializeTables(dbPool) {
         ai_industry_tags_json JSON NULL COMMENT '行业标签(AI) JSON',
         ai_enrich_status VARCHAR(32) NULL COMMENT 'AI 状态',
         ai_enrich_at DATETIME NULL COMMENT '最近 AI 成功时间',
+        bp_filename VARCHAR(255) NULL COMMENT '上传的BP原始文件名',
+        bp_file_path VARCHAR(500) NULL COMMENT 'BP文件磁盘路径（相对uploads根目录）',
+        bp_extract_text LONGTEXT NULL COMMENT 'BP文件MarkItDown转换后的Markdown全文',
         data_app_id VARCHAR(19) NULL COMMENT 'applications.id',
         data_app_name VARCHAR(64) NOT NULL DEFAULT '项目挖掘' COMMENT '应用名',
         creator_user_id VARCHAR(19) NOT NULL COMMENT '创建人',
@@ -6955,6 +6958,67 @@ async function initializeTables(dbPool) {
     if (!String(err.message || '').includes('Duplicate column')) {
       console.warn('迁移 pre_investment_project.ai_enrich_error 时出现警告:', err.message);
     }
+  }
+
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN bp_filename VARCHAR(255) NULL COMMENT '上传的BP原始文件名' AFTER ai_enrich_at`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 bp_filename');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.bp_filename 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN bp_file_path VARCHAR(500) NULL COMMENT 'BP文件磁盘路径' AFTER bp_filename`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 bp_file_path');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.bp_file_path 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE pre_investment_project
+       ADD COLUMN bp_extract_text LONGTEXT NULL COMMENT 'BP文件MarkItDown转换后的Markdown全文' AFTER bp_file_path`
+    );
+    console.log('  ✓ pre_investment_project 已添加列 bp_extract_text');
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column')) {
+      console.warn('迁移 pre_investment_project.bp_extract_text 时出现警告:', err.message);
+    }
+  }
+
+  // 修复 bp_filename 中文编码乱码（Windows multer 以 Latin-1 解析 UTF-8 字节）
+  try {
+    const rows = await dbPool.query(
+      `SELECT id, bp_filename FROM pre_investment_project
+       WHERE bp_filename IS NOT NULL AND bp_filename != '' AND delete_mark = 0`
+    );
+    let fixedCount = 0;
+    for (const row of rows) {
+      try {
+        const fixed = Buffer.from(row.bp_filename, 'latin1').toString('utf-8');
+        // 修复后如果包含正常中文字符且与原来不同，说明原来确实是乱码
+        if (fixed !== row.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
+          await dbPool.query(
+            `UPDATE pre_investment_project SET bp_filename = ? WHERE id = ?`,
+            [fixed, row.id]
+          );
+          fixedCount++;
+        }
+      } catch { /* skip unconvertible rows */ }
+    }
+    if (fixedCount > 0) {
+      console.log(`  ✓ 已修复 ${fixedCount} 条 bp_filename 编码乱码`);
+    }
+  } catch (err) {
+    console.warn('迁移 bp_filename 编码修复时出现警告:', err.message);
   }
 
   // 项目挖掘：竞品分析任务运行记录

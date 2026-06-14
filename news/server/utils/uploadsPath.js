@@ -27,4 +27,18 @@ function ensureUploadsDir() {
   return dir;
 }
 
-module.exports = { resolveUploadsDir, ensureUploadsDir };
+/**
+ * 确保 uploads 下的子目录存在（按应用/功能分文件夹存储）。
+ * @param {string} relativePath - 相对于 uploads 根目录的路径，如 'competitor-analysis/bp'
+ * @returns {string} 子目录的绝对路径
+ */
+function ensureUploadsSubDir(relativePath) {
+  const base = ensureUploadsDir();
+  const sub = path.join(base, relativePath);
+  if (!fs.existsSync(sub)) {
+    fs.mkdirSync(sub, { recursive: true });
+  }
+  return sub;
+}
+
+module.exports = { resolveUploadsDir, ensureUploadsDir, ensureUploadsSubDir };

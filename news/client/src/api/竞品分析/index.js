@@ -161,6 +161,10 @@ export function postPreInvestmentQccBrief(id) {
   return axios.post(`${BASE}/pre-investment-projects/${id}/qcc-company-brief`)
 }
 
+export function postPreInvestmentBpExtract(id) {
+  return axios.post(`${BASE}/pre-investment-projects/${id}/bp-extract`)
+}
+
 export function postPreInvestmentAiEnrich(id) {
   return axios.post(`${BASE}/pre-investment-projects/${id}/ai-enrich`)
 }

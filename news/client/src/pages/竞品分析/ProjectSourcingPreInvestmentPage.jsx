@@ -11,6 +11,7 @@ import {
   Checkbox,
   Select,
   Radio,
+  Upload,
 } from '@arco-design/web-react'
 import {
   fetchPreInvestmentProjects,
@@ -22,6 +23,7 @@ import {
   putPreInvestmentProject,
   deletePreInvestmentProject,
   postPreInvestmentQccBrief,
+  postPreInvestmentBpExtract,
   postPreInvestmentQccFuzzyLookup,
   postPreInvestmentAiEnrich,
   postPreInvestmentCompetitorAnalysisRun,
@@ -109,6 +111,10 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [pageSize, setPageSize] = useState(20)
   const [createVisible, setCreateVisible] = useState(false)
   const [createSubmitting, setCreateSubmitting] = useState(false)
+  const [bpFile, setBpFile] = useState(null)
+  const [bpFileList, setBpFileList] = useState([])
+  const [editBpFile, setEditBpFile] = useState(null)
+  const [editBpFileList, setEditBpFileList] = useState([])
   const [lookupLoading, setLookupLoading] = useState(false)
   const [qccCandidates, setQccCandidates] = useState([])
   const [showQccDropdown, setShowQccDropdown] = useState(false)
@@ -507,12 +513,15 @@ export default function ProjectSourcingPreInvestmentPage() {
     setProjectNoPreview(genPreviewProjectNo())
     form.resetFields()
     clearQccDropdown()
+    setBpFile(null)
+    setBpFileList([])
     setCreateVisible(true)
   }
 
-  /** 新增成功后：先企查查简介，再 AI 取数（与工具栏批量逻辑一致，逐条串行） */
-  const runPostCreatePipeline = async (projectId, projectNo) => {
+  /** 新增成功后：先企查查简介 → BP 提取（如有 BP 文件）→ AI 取数（整合 BP + 企查查信息） */
+  const runPostCreatePipeline = async (projectId, projectNo, { hasBpFile = false } = {}) => {
     let qccOk = false
+    let bpOk = false
     let aiOk = false
     try {
       const qccRes = await postPreInvestmentQccBrief(projectId)
@@ -525,6 +534,21 @@ export default function ProjectSourcingPreInvestmentPage() {
       Message.warning(`企查查简介：${e.response?.data?.message || e.message || '同步失败'}`)
     }
     await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
+
+    // BP 提取：后端会轮询等待 MarkItDown 转换完成（最多 60 秒）
+    if (hasBpFile) {
+      try {
+        const bpRes = await postPreInvestmentBpExtract(projectId)
+        if (bpRes.data?.success && bpRes.data?.data?.extracted) {
+          bpOk = true
+        }
+      } catch (e) {
+        Message.warning(`BP 提取：${e.response?.data?.message || e.message || '提取失败'}`)
+      }
+      await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
+    }
+
+    // AI 取数始终运行；如果有 BP 提取内容，后端会将其与企查查信息整合
     try {
       const aiRes = await postPreInvestmentAiEnrich(projectId)
       if (aiRes.status === 202 || aiRes.data?.success) {
@@ -535,17 +559,22 @@ export default function ProjectSourcingPreInvestmentPage() {
     } catch (e) {
       Message.warning(`AI 取数：${e.response?.data?.message || e.message || '受理失败'}`)
     }
+
     const label = projectNo ? `项目 ${projectNo}` : '新项目'
-    if (qccOk && aiOk) {
+    if (bpOk && aiOk) {
+      Message.success(`${label} 已创建：企查查简介已同步，BP 提取 + AI 取数已受理（已整合 BP 内容），请稍后刷新列表`)
+    } else if (qccOk && aiOk) {
       Message.success(`${label} 已创建：企查查简介已同步，AI 取数已受理，请稍后刷新列表`)
-    } else if (qccOk) {
-      Message.warning(`${label} 已创建：企查查简介已同步；AI 取数未成功，请在列表中重试`)
-    } else if (aiOk) {
-      Message.warning(`${label} 已创建：AI 取数已受理；企查查简介未成功，请在列表中重试`)
+    } else if (qccOk || bpOk || aiOk) {
+      const parts = []
+      if (qccOk) parts.push('企查查简介已同步')
+      if (bpOk) parts.push('BP 提取完成')
+      if (aiOk) parts.push('AI 取数已受理')
+      Message.warning(`${label} 已创建：${parts.join('，')}；部分步骤未成功，请在列表中重试`)
     } else {
       Message.warning(`${label} 已创建，但企查查简介与 AI 取数均未成功，请在列表中手动重试`)
     }
-    return { qccOk, aiOk }
+    return { qccOk, bpOk, aiOk }
   }
 
   const handleSelectQccCandidate = (company) => {
@@ -583,6 +612,8 @@ export default function ProjectSourcingPreInvestmentPage() {
       ai_industry_tags: row.ai_industry_tags_display || '',
       qcc_company_intro: row.qcc_company_intro || '',
     })
+    setEditBpFile(null)
+    setEditBpFileList([])
     setEditVisible(true)
   }
 
@@ -591,16 +622,54 @@ export default function ProjectSourcingPreInvestmentPage() {
     try {
       const v = await editForm.validate()
       setEditSubmitting(true)
-      const res = await putPreInvestmentProject(editingRow.id, {
+
+      const payload = {
         ai_product_intro: v.ai_product_intro,
         ai_industry_tags: v.ai_industry_tags,
         qcc_company_intro: v.qcc_company_intro,
-      })
+      }
+
+      let res
+      if (editBpFile) {
+        const fd = new FormData()
+        Object.entries(payload).forEach(([k, val]) => fd.append(k, val ?? ''))
+        fd.append('bp_file', editBpFile)
+        res = await putPreInvestmentProject(editingRow.id, fd)
+      } else {
+        res = await putPreInvestmentProject(editingRow.id, payload)
+      }
+
       if (res.data?.success) {
-        Message.success('已保存')
+        // 如果上传了新 BP，触发 BP 提取 + AI 取数整合
+        if (editBpFile) {
+          let bpOk = false
+          try {
+            const bpRes = await postPreInvestmentBpExtract(editingRow.id)
+            if (bpRes.data?.success && bpRes.data?.data?.extracted) {
+              bpOk = true
+            }
+          } catch (e) {
+            Message.warning(`BP 提取：${e.response?.data?.message || e.message || '提取失败'}`)
+          }
+          await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
+          try {
+            const aiRes = await postPreInvestmentAiEnrich(editingRow.id)
+            if (aiRes.status === 202 || aiRes.data?.success) {
+              Message.success(`已保存：${bpOk ? 'BP 提取 + ' : ''}AI 取数已受理，请稍后刷新查看整合结果`)
+            } else {
+              Message.warning(`已保存，但 AI 取数受理失败：${aiRes.data?.message || '未知错误'}`)
+            }
+          } catch (e) {
+            Message.warning(`已保存，但 AI 取数受理失败：${e.response?.data?.message || e.message}`)
+          }
+        } else {
+          Message.success('已保存')
+        }
         setEditVisible(false)
         setEditingRow(null)
         editForm.resetFields()
+        setEditBpFile(null)
+        setEditBpFileList([])
         setSelectedIds((prev) => prev.filter((id) => id !== editingRow.id))
         load()
       } else {
@@ -890,6 +959,8 @@ export default function ProjectSourcingPreInvestmentPage() {
           setEditVisible(false)
           setEditingRow(null)
           editForm.resetFields()
+          setEditBpFile(null)
+          setEditBpFileList([])
         }}
         onOk={handleEditSave}
         confirmLoading={editSubmitting}
@@ -899,6 +970,43 @@ export default function ProjectSourcingPreInvestmentPage() {
           可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
         </p>
         <Form form={editForm} layout="vertical">
+          <FormItem
+            label="上传BP"
+            extra={editingRow?.bp_filename && !editBpFile
+              ? `当前BP：${editingRow.bp_filename}；重新选择文件将替换原BP并重新提取`
+              : editBpFile
+                ? '保存后将解析此文件并与现有产品介绍、企业标签整合'
+                : '非必填，支持任意格式文件；上传保存后将自动解析并与现有信息整合'}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Upload
+                limit={1}
+                fileList={editBpFileList}
+                autoUpload={false}
+                showUploadList={false}
+                onChange={(fileList) => {
+                  setEditBpFileList(fileList)
+                  const item = fileList.length > 0 ? fileList[0] : null
+                  const rawFile = item?.originFile || item?.file || null
+                  setEditBpFile(rawFile)
+                }}
+              >
+                <Button type="outline" size="small">
+                  {editingRow?.bp_filename ? '重新选择文件' : '选择文件'}
+                </Button>
+              </Upload>
+              {editBpFile && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                  <span style={{ color: 'rgb(var(--primary-6))' }}>{editBpFile.name}</span>
+                  <span
+                    onClick={() => { setEditBpFile(null); setEditBpFileList([]) }}
+                    style={{ cursor: 'pointer', color: 'var(--color-text-3)', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
+                    title="移除文件"
+                  >×</span>
+                </span>
+              )}
+            </div>
+          </FormItem>
           <FormItem label="产品介绍（AI）" field="ai_product_intro">
             <Input.TextArea
               placeholder="请输入或粘贴产品介绍"
@@ -933,28 +1041,41 @@ export default function ProjectSourcingPreInvestmentPage() {
           setCreateVisible(false)
           form.resetFields()
           clearQccDropdown()
+          setBpFile(null)
+          setBpFileList([])
         }}
         onOk={async () => {
           try {
             const v = await form.validate()
             setCreateSubmitting(true)
-            const res = await postPreInvestmentProject({
+            const payload = {
               enterprise_full_name: v.enterprise_full_name,
-              unified_credit_code: v.unified_credit_code || undefined,
-              project_abbreviation: v.project_abbreviation || undefined,
+              unified_credit_code: v.unified_credit_code || '',
+              project_abbreviation: v.project_abbreviation || '',
               project_no: projectNoPreview,
-            })
+            }
+            let res
+            if (bpFile) {
+              const fd = new FormData()
+              Object.entries(payload).forEach(([k, val]) => fd.append(k, val))
+              fd.append('bp_file', bpFile)
+              res = await postPreInvestmentProject(fd)
+            } else {
+              res = await postPreInvestmentProject(payload)
+            }
             if (res.data?.success) {
               const savedNo = res.data.data?.project_no || projectNoPreview
               const projectId = res.data.data?.id
               if (projectId) {
-                await runPostCreatePipeline(projectId, savedNo)
+                await runPostCreatePipeline(projectId, savedNo, { hasBpFile: !!bpFile })
               } else {
                 Message.success(`已创建（项目编号 ${savedNo}）`)
               }
               setCreateVisible(false)
               form.resetFields()
               clearQccDropdown()
+              setBpFile(null)
+              setBpFileList([])
               load()
             } else {
               Message.error(res.data?.message || '创建失败')
@@ -1021,6 +1142,34 @@ export default function ProjectSourcingPreInvestmentPage() {
           </FormItem>
           <FormItem label="统一信用代码" field="unified_credit_code">
             <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
+          </FormItem>
+          <FormItem label="上传BP" extra="非必填，支持任意格式文件">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Upload
+                limit={1}
+                fileList={bpFileList}
+                autoUpload={false}
+                showUploadList={false}
+                onChange={(fileList) => {
+                  setBpFileList(fileList)
+                  const item = fileList.length > 0 ? fileList[0] : null
+                  const rawFile = item?.originFile || item?.file || null
+                  setBpFile(rawFile)
+                }}
+              >
+                <Button type="outline" size="small">选择文件</Button>
+              </Upload>
+              {bpFile && (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
+                  <span style={{ color: 'rgb(var(--primary-6))' }}>{bpFile.name}</span>
+                  <span
+                    onClick={() => { setBpFile(null); setBpFileList([]) }}
+                    style={{ cursor: 'pointer', color: 'var(--color-text-3)', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
+                    title="移除文件"
+                  >×</span>
+                </span>
+              )}
+            </div>
           </FormItem>
         </Form>
       </Modal>

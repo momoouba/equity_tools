@@ -360,8 +360,8 @@ async function runListingMatchBatch({
     const delParams = [listingAppId];
     let delSql = `UPDATE ipo_project_progress ipp
       INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
-      SET ipp.F_DeleteMark = 1, ipp.F_DeleteTime = NOW()
-      WHERE ipp.F_DeleteMark = 0 AND p.data_app_id IS NOT NULL AND NOT (p.data_app_id <=> ?)`;
+      SET ipp.delete_mark = 1, ipp.delete_time = NOW()
+      WHERE ipp.delete_mark = 0 AND p.data_app_id IS NOT NULL AND NOT (p.data_app_id <=> ?)`;
     if (restrictProjectUserId) {
       delSql += ` AND ipp.F_CreatorUserId = ?`;
       delParams.push(restrictProjectUserId);

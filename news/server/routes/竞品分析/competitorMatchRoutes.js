@@ -48,6 +48,14 @@ const {
   relinkOrphanCompetitorDataBySubjectMatch,
 } = require('../../utils/竞品分析/competitorSyncSnapshot');
 const { clientIpFromReq } = require('../../utils/竞品分析/competitorRouteUtils');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { ensureUploadsSubDir } = require('../../utils/uploadsPath');
+
+// BP 文件上传子目录（相对 uploads 根目录），使用 ASCII 避免 MarkItDown 中文路径编码问题
+const BP_UPLOAD_SUBDIR = path.join('competitor-analysis', 'bp');
+const { processBpFile, extractBpForProject } = require('../../utils/竞品分析/bpFileParser');
 
 function normTags(arr) {
   if (!Array.isArray(arr)) return [];
@@ -767,19 +775,30 @@ function registerCompetitorMatchRoutes(router) {
       const list = await db.query(
         admin
           ? `SELECT id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
-                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, created_at, updated_at, creator_user_id
+                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, created_at, updated_at, creator_user_id
              FROM pre_investment_project
              WHERE delete_mark = 0
              ORDER BY updated_at DESC
              LIMIT ? OFFSET ?`
           : `SELECT id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
-                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, created_at, updated_at, creator_user_id
+                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, created_at, updated_at, creator_user_id
              FROM pre_investment_project
              WHERE delete_mark = 0 AND creator_user_id = ?
              ORDER BY updated_at DESC
              LIMIT ? OFFSET ?`,
         admin ? [pageSize, offset] : [uid, pageSize, offset]
       );
+      // 修复 bp_filename 中文编码（历史数据可能因 Windows multer Latin-1 解析导致乱码）
+      for (const row of list) {
+        if (row.bp_filename) {
+          try {
+            const fixed = Buffer.from(row.bp_filename, 'latin1').toString('utf-8');
+            if (fixed !== row.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
+              row.bp_filename = fixed;
+            }
+          } catch { /* keep original */ }
+        }
+      }
       res.json({ success: true, data: { list, total, page, pageSize } });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects GET]', e);
@@ -822,8 +841,22 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 新建投前项目（最小字段） */
-  router.post('/pre-investment-projects', requireCompetitorAnalysisAccess, async (req, res) => {
+  /**
+   * 修复 multer originalname 在 Windows 上的编码问题。
+   * Windows 下 multer 以 Latin-1 解析 multipart header 中的 UTF-8 字节，导致中文文件名乱码。
+   */
+  function fixMulterOriginalName(raw) {
+    if (!raw || typeof raw !== 'string') return raw || 'bp';
+    try {
+      return Buffer.from(raw, 'latin1').toString('utf-8');
+    } catch {
+      return raw;
+    }
+  }
+
+  /** 新建投前项目（最小字段，支持上传 BP 文件） */
+  const bpUpload = multer({ storage: multer.memoryStorage() });
+  router.post('/pre-investment-projects', requireCompetitorAnalysisAccess, bpUpload.single('bp_file'), async (req, res) => {
     try {
       const name = String(req.body?.enterprise_full_name || '').trim();
       if (!name || name.length < 2) {
@@ -837,11 +870,30 @@ function registerCompetitorMatchRoutes(router) {
       }
       const projectNo = await allocPreProjectNo(req.body?.project_no);
       const id = await generateId('pre_investment_project');
+
+      // 处理 BP 文件上传
+      let bpFilename = null;
+      let bpFilePath = null;
+      let bpAbsoluteDiskPath = null;
+      if (req.file && req.file.buffer && req.file.buffer.length > 0) {
+        const bpDir = ensureUploadsSubDir(BP_UPLOAD_SUBDIR);
+        const originalName = fixMulterOriginalName(req.file.originalname);
+        // 磁盘文件名仅保留 ASCII 字符（扩展名），避免中文路径导致 MarkItDown 子进程编码问题
+        const ext = path.extname(originalName).replace(/[^a-zA-Z0-9.]/g, '') || '.bin';
+        const diskName = `${projectNo}_${Date.now()}${ext}`;
+        const fullPath = path.join(bpDir, diskName);
+        fs.writeFileSync(fullPath, req.file.buffer);
+        bpFilename = originalName;
+        bpFilePath = path.join(BP_UPLOAD_SUBDIR, diskName);
+        bpAbsoluteDiskPath = fullPath;
+      }
+
       await db.execute(
         `INSERT INTO pre_investment_project (
            id, enterprise_full_name, unified_credit_code, project_abbreviation, project_no, pipeline_status,
+           bp_filename, bp_file_path,
            data_app_id, data_app_name, creator_user_id, created_at, updated_at, delete_mark
-         ) VALUES (?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
         [
           id,
           name,
@@ -849,11 +901,31 @@ function registerCompetitorMatchRoutes(router) {
           abbrev,
           projectNo,
           'draft',
+          bpFilename,
+          bpFilePath,
           CA_C.COMPETITOR_ANALYSIS_APP_ID,
           CA_C.APP_NAME_COMPETITOR_ANALYSIS,
           uid,
         ]
       );
+
+      // 异步调用 MarkItDown 转换 BP 文件（不阻塞响应）
+      if (bpAbsoluteDiskPath) {
+        setImmediate(() => {
+          processBpFile({ absolutePath: bpAbsoluteDiskPath, projectId: id })
+            .then((result) => {
+              if (result.success) {
+                console.log(`[bpFileParser] MarkItDown 转换完成: ${bpFilename} → ${result.markdownText?.length || 0} 字符`);
+              } else {
+                console.warn(`[bpFileParser] MarkItDown 转换失败: ${bpFilename} - ${result.error}`);
+              }
+            })
+            .catch((err) => {
+              console.error(`[bpFileParser] MarkItDown 转换异常: ${bpFilename}`, err);
+            });
+        });
+      }
+
       res.json({ success: true, data: { id, project_no: projectNo } });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects POST]', e);
@@ -861,8 +933,9 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 投前：人工编辑 AI 简介/标签、企查查介绍 */
-  router.put('/pre-investment-projects/:id', requireCompetitorAnalysisAccess, async (req, res) => {
+  /** 投前：人工编辑 AI 简介/标签、企查查介绍，支持上传 BP 文件 */
+  const editBpUpload = multer({ storage: multer.memoryStorage() });
+  router.put('/pre-investment-projects/:id', requireCompetitorAnalysisAccess, editBpUpload.single('bp_file'), async (req, res) => {
     try {
       const id = String(req.params.id || '').trim();
       await loadPreInvestmentProjectForWrite(req, id);
@@ -870,7 +943,8 @@ function registerCompetitorMatchRoutes(router) {
       const hasAiIntro = Object.prototype.hasOwnProperty.call(req.body, 'ai_product_intro');
       const hasAiTags = Object.prototype.hasOwnProperty.call(req.body, 'ai_industry_tags');
       const hasQcc = Object.prototype.hasOwnProperty.call(req.body, 'qcc_company_intro');
-      if (!hasAiIntro && !hasAiTags && !hasQcc) {
+      const hasBpFile = !!(req.file && req.file.buffer && req.file.buffer.length > 0);
+      if (!hasAiIntro && !hasAiTags && !hasQcc && !hasBpFile) {
         return res.status(400).json({ success: false, message: '请至少提交一个可编辑字段' });
       }
 
@@ -891,6 +965,25 @@ function registerCompetitorMatchRoutes(router) {
         params.push(nullableLongText(req.body.qcc_company_intro));
       }
 
+      // 处理 BP 文件上传（编辑模式）
+      let bpAbsoluteDiskPath = null;
+      if (hasBpFile) {
+        const existingRow = await db.query(
+          `SELECT project_no FROM pre_investment_project WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+          [id]
+        );
+        const projectNo = existingRow[0]?.project_no || 'P00000000';
+        const bpDir = ensureUploadsSubDir(BP_UPLOAD_SUBDIR);
+        const originalName = fixMulterOriginalName(req.file.originalname);
+        const ext = path.extname(originalName).replace(/[^a-zA-Z0-9.]/g, '') || '.bin';
+        const diskName = `${projectNo}_${Date.now()}${ext}`;
+        const fullPath = path.join(bpDir, diskName);
+        fs.writeFileSync(fullPath, req.file.buffer);
+        bpAbsoluteDiskPath = fullPath;
+        sets.push('bp_filename = ?', 'bp_file_path = ?');
+        params.push(originalName, path.join(BP_UPLOAD_SUBDIR, diskName));
+      }
+
       sets.push('updated_at = NOW()');
       if (hasAiIntro || hasAiTags) {
         sets.push('ai_enrich_error = NULL');
@@ -901,17 +994,46 @@ function registerCompetitorMatchRoutes(router) {
         [...params, id]
       );
 
+      // 异步调用 MarkItDown 转换 BP 文件（不阻塞响应）
+      if (bpAbsoluteDiskPath) {
+        const bpFileName = fixMulterOriginalName(req.file.originalname);
+        setImmediate(() => {
+          processBpFile({ absolutePath: bpAbsoluteDiskPath, projectId: id })
+            .then((result) => {
+              if (result.success) {
+                console.log(`[bpFileParser/edit] MarkItDown 转换完成: ${bpFileName} → ${result.markdownText?.length || 0} 字符`);
+              } else {
+                console.warn(`[bpFileParser/edit] MarkItDown 转换失败: ${bpFileName} - ${result.error}`);
+              }
+            })
+            .catch((err) => {
+              console.error(`[bpFileParser/edit] MarkItDown 转换异常: ${bpFileName}`, err);
+            });
+        });
+      }
+
       const refreshed = await db.query(
         `SELECT id, project_no, enterprise_full_name, ai_product_intro, ai_industry_tags_display,
-                qcc_company_intro, pipeline_status, ai_enrich_status
+                qcc_company_intro, pipeline_status, ai_enrich_status, bp_filename
          FROM pre_investment_project WHERE id = ? AND delete_mark = 0 LIMIT 1`,
         [id]
       );
 
+      // 修复 bp_filename 编码（返回给前端前统一处理）
+      const respData = refreshed[0] || { id };
+      if (respData.bp_filename) {
+        try {
+          const fixed = Buffer.from(respData.bp_filename, 'latin1').toString('utf-8');
+          if (fixed !== respData.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
+            respData.bp_filename = fixed;
+          }
+        } catch { /* keep original */ }
+      }
+
       res.json({
         success: true,
         message: '已保存',
-        data: refreshed[0] || { id },
+        data: respData,
       });
     } catch (e) {
       const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
@@ -999,6 +1121,21 @@ function registerCompetitorMatchRoutes(router) {
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects/qcc]', e);
       res.status(500).json({ success: false, message: e.message || '同步失败' });
+    }
+  });
+
+  /** 投前：从 BP 文件提取产品介绍和企业标签（同步，用于创建后 pipeline） */
+  router.post('/pre-investment-projects/:id/bp-extract', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) {
+        return res.status(400).json({ success: false, message: '缺少项目 ID' });
+      }
+      const result = await extractBpForProject(id);
+      res.json({ success: true, data: result });
+    } catch (e) {
+      console.error('[project-sourcing/pre-investment-projects/bp-extract]', e);
+      res.status(500).json({ success: false, message: e.message || 'BP 提取失败' });
     }
   });
 
