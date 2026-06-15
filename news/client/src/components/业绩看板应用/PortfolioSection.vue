@@ -97,7 +97,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">子基金累计退出数量<a-tooltip v-if="config.fundExitAccDesc" :content="config.fundExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatNumber(overall?.fund_exit) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatNumber(overall?.fund_exit) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.fund_exit_change)">
             {{ formatChange(overall?.fund_exit_change) }}
           </div>
@@ -106,7 +106,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">子基金累计退出金额<a-tooltip v-if="config.fundExitAmountAccDesc" :content="config.fundExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatAmount(overall?.fund_exit_amount) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_exit_amount) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.fund_exit_amount_change)">
             {{ formatChange(overall?.fund_exit_amount_change) }}
           </div>
@@ -115,7 +115,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">子基金累计回款金额<a-tooltip v-if="config.fundReceiveAccDesc" :content="config.fundReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatAmount(overall?.fund_receive) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_receive) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.fund_receive_change)">
             {{ formatChange(overall?.fund_receive_change) }}
           </div>
@@ -142,7 +142,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">直投项目累计退出数量<a-tooltip v-if="config.projectExitAccDesc" :content="config.projectExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatNumber(overall?.project_exit) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatNumber(overall?.project_exit) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_exit_change)">
             {{ formatChange(overall?.project_exit_change) }}
           </div>
@@ -151,7 +151,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">直投项目累计退出金额<a-tooltip v-if="config.projectExitAmountAccDesc" :content="config.projectExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatAmount(overall?.project_exit_amount) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.project_exit_amount) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_exit_amount_change)">
             {{ formatChange(overall?.project_exit_amount_change) }}
           </div>
@@ -160,7 +160,7 @@
           <div class="overall-label">
             <span class="indicator-label-wrap">直投项目累计回款金额<a-tooltip v-if="config.projectReceiveAccDesc" :content="config.projectReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
-          <div class="overall-value">{{ formatAmount(overall?.project_receive) }}</div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.project_receive) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_receive_change)">
             {{ formatChange(overall?.project_receive_change) }}
           </div>
@@ -353,6 +353,10 @@ const handleFundClick = (type) => {
   font-weight: 600;
   color: #1d2129;
   margin-bottom: 4px;
+}
+
+.overall-value-blue {
+  color: #1AA8E9;
 }
 
 .overall-change {

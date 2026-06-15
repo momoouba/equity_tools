@@ -298,6 +298,8 @@ function ManagerCard({ data, config, onClick }) {
 // 投资组合板块（参考设计图：左侧子基金/直投项目区隔指标块，每基金拆成投/退两列；整体组合左侧色块+子基金/直投项目区隔）
 function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onSpvDetail, onExport }) {
   const fundMap = (portfolioFunds || []).reduce((acc, r) => { acc[r.fund] = r; return acc }, {})
+  // 投资组合列名取自 b_investment_indicator.fund
+  const portfolioFundNames = (portfolioFunds || []).map(r => r.fund)
 
   const subFundRows = [
     { label: '投/退数量', keyInvest: 'fund_inv', keyExit: 'fund_exit', fmt: formatNumber, descKey: 'fundInvExitDesc' },
@@ -325,18 +327,18 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
         ) : null}
       </div>
       {/* 各基金：左侧子基金/直投项目标签区隔，每基金投/退两列 */}
-      {funds && funds.length > 0 && (
+      {portfolioFundNames.length > 0 && (
         <div className="perf-fund-table-wrap perf-portfolio-wrap" style={{ marginBottom: 24 }}>
           <table className="perf-fund-table perf-portfolio-table">
             <thead>
               <tr>
                 <th className="perf-portfolio-label-col perf-sticky-col" rowSpan={2}>指标</th>
-                {funds.map(fund => (
+                {portfolioFundNames.map(fund => (
                   <th key={fund} colSpan={2} className="perf-portfolio-fund-th">{fund}</th>
                 ))}
               </tr>
               <tr>
-                {funds.flatMap(fund => [
+                {portfolioFundNames.flatMap(fund => [
                   <th key={`${fund}-投`} className="perf-portfolio-invest-th">投</th>,
                   <th key={`${fund}-退`} className="perf-portfolio-exit-th">退</th>,
                 ])}
@@ -345,14 +347,14 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
             <tbody>
               <tr className="perf-portfolio-group-row">
                 <td className="perf-portfolio-group-label perf-sticky-col">子基金</td>
-                {funds.map((f, i) => <td key={`empty-sf-${i}`} className="perf-portfolio-empty" colSpan={2} />)}
+                {portfolioFundNames.map((f, i) => <td key={`empty-sf-${i}`} className="perf-portfolio-empty" colSpan={2} />)}
               </tr>
               {subFundRows.map((s, ri) => (
                 <tr key={`sf-${ri}`}>
                   <td className="perf-portfolio-metric-label perf-sticky-col">
                     <IndicatorLabel label={s.label} desc={config?.[s.descKey]} />
                   </td>
-                  {funds.flatMap(fund => {
+                  {portfolioFundNames.flatMap(fund => {
                     const row = fundMap[fund]
                     return [
                       <td key={`${fund}-投`} className="perf-clickable-cell perf-invest-cell" onClick={() => onFundPortfolio(fund)}>{row ? s.fmt(row[s.keyInvest]) : '-'}</td>,
@@ -363,14 +365,14 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
               ))}
               <tr className="perf-portfolio-group-row">
                 <td className="perf-portfolio-group-label perf-sticky-col">直投项目</td>
-                {funds.flatMap((f, i) => [<td key={`e2-${f}-${i}`} className="perf-portfolio-empty" colSpan={2} />])}
+                {portfolioFundNames.flatMap((f, i) => [<td key={`e2-${f}-${i}`} className="perf-portfolio-empty" colSpan={2} />])}
               </tr>
               {directRows.map((s, ri) => (
                 <tr key={`dp-${ri}`}>
                   <td className="perf-portfolio-metric-label perf-sticky-col">
                     <IndicatorLabel label={s.label} desc={config?.[s.descKey]} />
                   </td>
-                  {funds.flatMap(fund => {
+                  {portfolioFundNames.flatMap(fund => {
                     const row = fundMap[fund]
                     return [
                       <td key={`${fund}-投`} className="perf-clickable-cell perf-invest-cell" onClick={() => onFundPortfolio(fund)}>{row ? s.fmt(row[s.keyInvest]) : '-'}</td>,
@@ -573,30 +575,35 @@ function PerformanceApp() {
         if (dateList.length > 0) {
           setSelectedDate(dateList[0])
         }
+        return dateList
       }
     } catch (error) {
       console.error('加载日期失败:', error)
       setDates([])
     }
+    return []
   }
 
   // 加载版本列表（防御：保证 versions 始终为数组，避免白屏）
   const loadVersions = async (date) => {
-    if (!date) return
+    if (!date) return []
     try {
       const res = await performanceApi.getVersions(date)
       if (res.data?.success) {
         const versionList = Array.isArray(res.data.data?.versions) ? res.data.data.versions : []
         setVersions(versionList)
         setSelectedVersion(versionList[0]?.version ?? '')
+        return versionList
       } else {
         setVersions([])
         setSelectedVersion('')
+        return []
       }
     } catch (error) {
       console.error('加载版本失败:', error)
       setVersions([])
       setSelectedVersion('')
+      return []
     }
   }
 
@@ -2190,8 +2197,17 @@ function PerformanceApp() {
                     const res = await performanceApi.createVersion({ date: months[0], months })
                     if (res.data.success) {
                       Message.success('版本创建成功')
-                      loadDates()
                       closeModal()
+                      // 刷新后默认显示最大日期的最大版本号，并重新加载看板数据
+                      const dateList = await loadDates()
+                      const targetDate = dateList[0] || selectedDate
+                      if (targetDate) {
+                        const versionList = await loadVersions(targetDate)
+                        const latestVer = versionList[0]?.version
+                        if (latestVer) {
+                          await loadDashboardData(latestVer)
+                        }
+                      }
                     } else {
                       Message.error(res.data.message || '版本创建失败')
                     }

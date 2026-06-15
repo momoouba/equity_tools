@@ -93,7 +93,7 @@
     <SettingsModal v-model:visible="modals.settings" :config="systemConfig" @save="loadSystemConfig" />
     
     <!-- 版本更新弹窗 -->
-    <VersionUpdateModal v-model:visible="modals.versionUpdate" @success="loadDates" />
+    <VersionUpdateModal v-model:visible="modals.versionUpdate" @success="onVersionUpdateSuccess" />
     
     <!-- 分享弹窗 -->
     <ShareModal v-model:visible="modals.share" :version="selectedVersion" />
@@ -263,6 +263,23 @@ const loadSystemConfig = async () => {
 // 日期变化
 const onDateChange = async (date) => {
   await loadVersions(date);
+};
+
+// 版本更新成功后的回调：刷新最大日期的最大版本并重新加载看板数据
+const onVersionUpdateSuccess = async () => {
+  await loadDates();
+  const targetDate = dates.value[0] || selectedDate.value;
+  if (targetDate) {
+    const prevVersion = selectedVersion.value;
+    await loadVersions(targetDate);
+    // 如果版本号没变，watch 不会触发，手动加载数据
+    if (selectedVersion.value === prevVersion && selectedVersion.value) {
+      loadManagerData();
+      loadFundsData();
+      loadPortfolioData();
+      loadUnderlyingData();
+    }
+  }
 };
 
 // 监听版本变化，加载数据
