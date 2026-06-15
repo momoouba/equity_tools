@@ -17,7 +17,7 @@ const { IE_NEWS_APP_FILTER_SQL, IE_NEWS_APP_FILTER_SQL_IE } = require('../utils/
 /** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
 async function getNewsSentimentAppId() {
   const rows = await db.query(
-    `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+    `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
     ['新闻舆情']
   );
   return rows.length ? rows[0].id : null;
@@ -51,23 +51,23 @@ async function getFundAndSubFundFromEnterprise(enterpriseFullName, unifiedCredit
       return { fund: null, sub_fund: null };
     }
 
-    let query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND enterprise_full_name = ?`;
+    let query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND enterprise_full_name = ?`;
     const params = [enterpriseFullName];
 
     // 优先使用统一信用代码匹配
     if (unifiedCreditCode && unifiedCreditCode.trim() !== '') {
-      query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND unified_credit_code = ?`;
+      query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND unified_credit_code = ?`;
       params[0] = unifiedCreditCode.trim();
     } else if (wechatAccountId && wechatAccountId.trim() !== '') {
       // 其次使用公众号ID匹配（支持逗号分隔的多个ID）
       const accountIds = splitAccountIds(wechatAccountId);
       if (accountIds.length > 0) {
         const placeholders = accountIds.map(() => '?').join(',');
-        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
+        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
         params[0] = `%${accountIds[0]}%`;
         // 如果只有一个ID，使用LIKE匹配；如果有多个，尝试FIND_IN_SET
         if (accountIds.length > 1) {
-          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  delete_mark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
+          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
         }
       }
     }
@@ -135,7 +135,7 @@ async function createSyncLog(params) {
   
   await db.execute(
     `INSERT INTO news_sync_execution_log 
-     (id, config_id, execution_type, start_time, status, execution_details, created_by) 
+     (F_Id, config_id, execution_type, start_time, status, execution_details, F_CreatorUserId) 
      VALUES (?, ?, ?, ?, 'running', ?, ?)`,
     [
       logId,
@@ -173,7 +173,7 @@ async function updateSyncLog(logId, params) {
   }
   
   const logs = await db.query(
-    'SELECT start_time FROM news_sync_execution_log WHERE id = ?',
+    'SELECT start_time FROM news_sync_execution_log WHERE F_Id = ?',
     [logId]
   );
   
@@ -230,19 +230,19 @@ async function updateSyncLog(logId, params) {
   await db.execute(
     `UPDATE news_sync_execution_log 
      SET ${updateFields.join(', ')} 
-     WHERE id = ?`,
+     WHERE F_Id = ?`,
     updateValues
   );
   
   // 更新对应配置的last_sync_time为执行日志的end_time
   try {
     const configRecords = await db.query(
-      'SELECT config_id FROM news_sync_execution_log WHERE id = ?',
+      'SELECT config_id FROM news_sync_execution_log WHERE F_Id = ?',
       [logId]
     );
     if (configRecords.length > 0 && configRecords[0].config_id) {
       await db.execute(
-        'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+        'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
         [endTime, formatDateOnly(endTime), configRecords[0].config_id]
       );
       console.log(`[新闻同步] 已使用执行日志的end_time更新配置 ${configRecords[0].config_id} 的last_sync_time: ${endTime}`);
@@ -270,7 +270,7 @@ async function patchRunningSyncLog(logId, { executionDetails, syncedCount } = {}
   }
   if (!fields.length) return;
   values.push(logId);
-  await db.execute(`UPDATE news_sync_execution_log SET ${fields.join(', ')} WHERE id = ?`, values);
+  await db.execute(`UPDATE news_sync_execution_log SET ${fields.join(', ')} WHERE F_Id = ?`, values);
 }
 
 /**
@@ -412,7 +412,7 @@ async function isWorkdayDate(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -646,7 +646,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
       AND wechat_official_account_id IS NOT NULL 
       AND wechat_official_account_id != ''
-      AND delete_mark = 0
+      AND F_DeleteMark = 0
     `;
     
     // 如果指定了企业类型，添加过滤条件
@@ -673,7 +673,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
        WHERE status = 'active' 
        AND wechat_account_id IS NOT NULL 
        AND wechat_account_id != ''
-       AND delete_mark = 0`
+       AND F_DeleteMark = 0`
     );
     additionalAccountIds = additionalAccounts.map(a => a.wechat_account_id);
   }
@@ -707,11 +707,11 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       `SELECT DISTINCT wechat_account 
        FROM news_detail 
        WHERE APItype = '新榜' 
-       AND created_at >= ? 
-       AND created_at <= ?
+       AND F_CreatorTime >= ? 
+       AND F_CreatorTime <= ?
        AND wechat_account IS NOT NULL 
        AND wechat_account != ''
-       AND delete_mark = 0`,
+       AND F_DeleteMark = 0`,
       [todayStart, todayEnd]
     );
 
@@ -815,16 +815,16 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
 
             // 检查标题是否重复（仅针对新榜接口）
             const existingByTitle = await db.query(
-              'SELECT id, delete_mark, source_url FROM news_detail WHERE title = ? AND APItype = ? LIMIT 1',
+              'SELECT F_Id, F_DeleteMark, source_url FROM news_detail WHERE title = ? AND APItype = ? LIMIT 1',
               [title, '新榜']
             );
 
             // 如果标题已存在（无论是否已删除），跳过（避免重复）
             if (existingByTitle.length > 0) {
-              if (existingByTitle[0].delete_mark === 1) {
+              if (existingByTitle[0].F_DeleteMark === 1) {
                 console.log(`[入库] 跳过已删除的新闻（标题重复，用户手动删除）: ${title} (source_url: ${existingByTitle[0].source_url})`);
               } else {
-                console.log(`[入库] 跳过重复标题的新闻: ${title} (已存在ID: ${existingByTitle[0].id}, source_url: ${existingByTitle[0].source_url})`);
+                console.log(`[入库] 跳过重复标题的新闻: ${title} (已存在ID: ${existingByTitle[0].F_Id}, source_url: ${existingByTitle[0].source_url})`);
               }
               continue; // 跳过标题重复的记录（无论是否已删除）
             }
@@ -867,7 +867,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?)
                    AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-                   AND delete_mark = 0 
+                   AND F_DeleteMark = 0 
                    LIMIT 1`,
                   [
                     wechatAccountId,
@@ -904,7 +904,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                     `SELECT entity_type, enterprise_full_name, project_abbreviation
                      FROM invested_enterprises 
                      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
-                     AND delete_mark = 0 
+                     AND F_DeleteMark = 0 
                      LIMIT 1`,
                     [enterpriseFullName, `%【${enterpriseFullName}】`]
                   );
@@ -918,7 +918,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                         `SELECT entity_type, enterprise_full_name, project_abbreviation
                          FROM invested_enterprises 
                          WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? 
-                         AND delete_mark = 0 
+                         AND F_DeleteMark = 0 
                          LIMIT 1`,
                         [extractedFullName]
                       );
@@ -940,7 +940,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
               const newsId = await generateId('news_detail');
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype, fund, sub_fund) 
+                 (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_abstract, news_sentiment, APItype, fund, sub_fund) 
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
@@ -1135,7 +1135,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           const detailLogId = await generateId('news_sync_detail_log');
           await db.execute(
             `INSERT INTO news_sync_detail_log 
-             (id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
+             (F_Id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               detailLogId,
@@ -1333,7 +1333,7 @@ async function scheduleRetryIfNeeded(config, range, options = {}) {
       
       // 重新获取配置（可能已被更新）
       const updatedConfigs = await db.query(
-        'SELECT nic.*, a.app_name FROM news_interface_config nic LEFT JOIN applications a ON nic.app_id = a.id WHERE nic.id = ? AND nic.is_active = 1 AND nic.delete_mark = 0',
+        'SELECT nic.*, nic.F_Id AS id, a.app_name FROM news_interface_config nic LEFT JOIN applications a ON nic.app_id = a.F_Id WHERE nic.F_Id = ? AND nic.is_active = 1 AND nic.F_DeleteMark = 0',
         [config.id]
       );
       
@@ -1647,16 +1647,16 @@ async function syncNewsData(options = {}) {
   try {
     const params = [];
     let sql = `
-      SELECT nic.*, a.app_name
+      SELECT nic.*, nic.F_Id AS id, a.app_name
       FROM news_interface_config nic
-      LEFT JOIN applications a ON nic.app_id = a.id
-      WHERE nic.is_active = 1 AND nic.delete_mark = 0
+      LEFT JOIN applications a ON nic.app_id = a.F_Id
+      WHERE nic.is_active = 1 AND nic.F_DeleteMark = 0
     `;
     if (configId) {
-      sql += ' AND nic.id = ?';
+      sql += ' AND nic.F_Id = ?';
       params.push(configId);
     }
-    sql += ' ORDER BY nic.created_at ASC';
+    sql += ' ORDER BY nic.F_CreatorTime ASC';
 
     const configs = await db.query(sql, params);
     if (!configs.length) {
@@ -1757,7 +1757,7 @@ router.post('/sync', async (req, res) => {
     }
 
     // 获取配置
-    const configs = await db.query('SELECT * FROM news_interface_config WHERE id = ?', [config_id]);
+    const configs = await db.query('SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ?', [config_id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -1942,9 +1942,9 @@ router.get('/user-stats', async (req, res) => {
     const totalEnterprisesQuery = `
       SELECT COUNT(*) as count
       FROM invested_enterprises 
-      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
       AND exit_status NOT IN ('完全退出', '已上市')
-      AND delete_mark = 0
+      AND F_DeleteMark = 0
     `;
     
     const totalEnterprisesResult = await db.query(totalEnterprisesQuery, [userId]);
@@ -1954,11 +1954,11 @@ router.get('/user-stats', async (req, res) => {
     let wechatAccountsQuery = `
       SELECT DISTINCT wechat_official_account_id 
       FROM invested_enterprises 
-      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
       AND wechat_official_account_id IS NOT NULL 
       AND wechat_official_account_id != ''
       AND exit_status NOT IN ('完全退出', '已上市')
-      AND delete_mark = 0
+      AND F_DeleteMark = 0
     `;
     
     const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
@@ -1967,11 +1967,11 @@ router.get('/user-stats', async (req, res) => {
     const userAdditionalAccounts = await db.query(
       `SELECT DISTINCT wechat_account_id 
        FROM additional_wechat_accounts 
-       WHERE creator_user_id = ? 
+       WHERE F_CreatorUserId = ? 
        AND status = 'active' 
        AND wechat_account_id IS NOT NULL 
        AND wechat_account_id != ''
-       AND delete_mark = 0`,
+       AND F_DeleteMark = 0`,
       [userId]
     );
 
@@ -2005,7 +2005,7 @@ router.get('/user-stats', async (req, res) => {
     
     // 添加微信公众号ID占位符（包含被投企业 + 额外公众号）
     const placeholders = uniqueAccountIds.map(() => '?').join(',');
-    condition += placeholders + ') AND delete_mark = 0';
+    condition += placeholders + ') AND F_DeleteMark = 0';
     params.push(...uniqueAccountIds);
 
     // 计算昨日日期范围
@@ -2017,12 +2017,12 @@ router.get('/user-stats', async (req, res) => {
     yesterdayEnd.setHours(23, 59, 59, 999);
 
     // 查询昨日新增数量
-    const yesterdayCondition = condition + ' AND created_at >= ? AND created_at <= ?';
+    const yesterdayCondition = condition + ' AND F_CreatorTime >= ? AND F_CreatorTime <= ?';
     const yesterdayParams = [...params, yesterdayStart, yesterdayEnd];
     const yesterdayResult = await db.query(`SELECT COUNT(*) as count ${yesterdayCondition}`, yesterdayParams);
 
     // 查询昨日发布新闻的企业个数（去重）
-    const yesterdayAccountsCondition = condition + ' AND created_at >= ? AND created_at <= ?';
+    const yesterdayAccountsCondition = condition + ' AND F_CreatorTime >= ? AND F_CreatorTime <= ?';
     const yesterdayAccountsParams = [...params, yesterdayStart, yesterdayEnd];
     const yesterdayAccountsResult = await db.query(
       `SELECT COUNT(DISTINCT wechat_account) as count ${yesterdayAccountsCondition}`, 
@@ -2088,7 +2088,7 @@ router.get('/user-news', async (req, res) => {
       const todayEnd = new Date(beijingNow);
       todayEnd.setHours(23, 59, 59, 999);
       
-      timeCondition = ' AND created_at >= ? AND created_at <= ?';
+      timeCondition = ' AND F_CreatorTime >= ? AND F_CreatorTime <= ?';
       timeParams = [todayStart, todayEnd];
     } else if (timeRange === 'thisWeek') {
       // 本周：本周一00:00:00到现在（北京时区）
@@ -2134,7 +2134,7 @@ router.get('/user-news', async (req, res) => {
       lastSunday.setHours(23, 59, 59, 999);
       
       // 支持public_time或created_at在上周范围内（用于处理企查查新闻public_time可能为NULL的情况）
-      timeCondition = ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND created_at >= ? AND created_at <= ?))';
+      timeCondition = ' AND ((public_time >= ? AND public_time <= ?) OR (public_time IS NULL AND F_CreatorTime >= ? AND F_CreatorTime <= ?))';
       timeParams = [lastMonday, lastSunday, lastMonday, lastSunday];
     } else if (timeRange === 'thisMonth') {
       // 本月：本月1日00:00:00到现在（北京时区）
@@ -2167,8 +2167,8 @@ router.get('/user-news', async (req, res) => {
     let enterprisesQuery = `
       SELECT DISTINCT wechat_official_account_id, enterprise_full_name
       FROM invested_enterprises 
-      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
-      AND delete_mark = 0
+      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
+      AND F_DeleteMark = 0
     `;
     
     const enterprises = await db.query(enterprisesQuery, [userId]);
@@ -2177,11 +2177,11 @@ router.get('/user-news', async (req, res) => {
     const userAdditionalAccounts = await db.query(
       `SELECT DISTINCT wechat_account_id 
        FROM additional_wechat_accounts 
-       WHERE creator_user_id = ? 
+       WHERE F_CreatorUserId = ? 
        AND status = 'active' 
        AND wechat_account_id IS NOT NULL 
        AND wechat_account_id != ''
-       AND delete_mark = 0`,
+       AND F_DeleteMark = 0`,
       [userId]
     );
 
@@ -2200,7 +2200,7 @@ router.get('/user-news', async (req, res) => {
       .map(item => item.enterprise_full_name);
 
     // 构建查询条件：支持新榜（通过wechat_account）和企查查（通过enterprise_full_name）
-    let condition = 'FROM news_detail WHERE delete_mark = 0 AND (';
+    let condition = 'FROM news_detail WHERE F_DeleteMark = 0 AND (';
     const params = [];
     const conditions = [];
     
@@ -2251,7 +2251,7 @@ router.get('/user-news', async (req, res) => {
       condition += ` AND EXISTS (
         SELECT 1
         FROM additional_wechat_accounts awa
-        WHERE awa.delete_mark = 0
+        WHERE awa.F_DeleteMark = 0
           AND awa.wechat_account_id = wechat_account
       )`;
     }
@@ -2283,12 +2283,12 @@ router.get('/user-news', async (req, res) => {
 
     // 查询数据（有企业的优先，然后按发布时间降序）
     const data = await db.query(
-      `SELECT account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, public_time, title, source_url, keywords, fund, sub_fund, entity_type, news_abstract, news_sentiment
+      `SELECT F_Id AS id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, public_time, title, source_url, keywords, fund, sub_fund, entity_type, news_abstract, news_sentiment
        ${condition}
        ORDER BY
          CASE WHEN enterprise_full_name IS NOT NULL AND enterprise_full_name != '' THEN 0 ELSE 1 END,
          public_time DESC,
-         created_at DESC
+         F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
@@ -2368,10 +2368,10 @@ router.get('/', async (req, res) => {
       let wechatAccountsQuery = `
         SELECT DISTINCT wechat_official_account_id 
         FROM invested_enterprises 
-        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
+        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
         AND wechat_official_account_id IS NOT NULL 
         AND wechat_official_account_id != ''
-        AND delete_mark = 0
+        AND F_DeleteMark = 0
       `;
       
       const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
@@ -2380,11 +2380,11 @@ router.get('/', async (req, res) => {
       const userAdditionalAccounts = await db.query(
         `SELECT DISTINCT wechat_account_id 
          FROM additional_wechat_accounts 
-         WHERE creator_user_id = ? 
+         WHERE F_CreatorUserId = ? 
          AND status = 'active' 
          AND wechat_account_id IS NOT NULL 
          AND wechat_account_id != ''
-         AND delete_mark = 0`,
+         AND F_DeleteMark = 0`,
         [userId]
       );
 
@@ -2415,7 +2415,7 @@ router.get('/', async (req, res) => {
       
       // 添加微信公众号ID占位符（包含被投企业 + 额外公众号）
       const placeholders = uniqueAccountIds.map(() => '?').join(',');
-      whereCondition += placeholders + ') AND nd.delete_mark = 0';
+      whereCondition += placeholders + ') AND nd.F_DeleteMark = 0';
       params.push(...uniqueAccountIds);
 
       // 添加搜索条件（支持多标签搜索）
@@ -2450,9 +2450,9 @@ router.get('/', async (req, res) => {
                 nd.fund, nd.sub_fund, nd.news_abstract, nd.news_sentiment,
                 COALESCE(nd.entity_type, ie.entity_type) as entity_type
          FROM news_detail nd
-         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
          ${whereCondition}
-         ORDER BY nd.public_time DESC, nd.created_at DESC
+         ORDER BY nd.public_time DESC, nd.F_CreatorTime DESC
          LIMIT ? OFFSET ?`,
         [...params, parseInt(pageSize), offset]
       );
@@ -2460,7 +2460,7 @@ router.get('/', async (req, res) => {
       const totalRows = await db.query(
         `SELECT COUNT(*) as total
          FROM news_detail nd
-         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
+         LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
          ${whereCondition}`,
         params
       );
@@ -2510,7 +2510,7 @@ router.get('/', async (req, res) => {
     const { page = 1, pageSize = 10, search, account, timeRange = 'all', enterpriseFilter = 'all' } = req.query;
     const offset = (page - 1) * pageSize;
 
-    let whereCondition = 'WHERE nd.delete_mark = 0';
+    let whereCondition = 'WHERE nd.F_DeleteMark = 0';
     const params = [];
 
     // 添加时间范围条件（管理员也支持时间筛选，使用北京时区）
@@ -2524,7 +2524,7 @@ router.get('/', async (req, res) => {
       const todayEnd = new Date(beijingNow);
       todayEnd.setHours(23, 59, 59, 999);
       
-      whereCondition += ' AND nd.created_at >= ? AND nd.created_at <= ?';
+      whereCondition += ' AND nd.F_CreatorTime >= ? AND nd.F_CreatorTime <= ?';
       params.push(todayStart, todayEnd);
     } else if (timeRange === 'thisWeek') {
       // 本周：本周一00:00:00到现在（北京时区）
@@ -2571,7 +2571,7 @@ router.get('/', async (req, res) => {
       lastSunday.setHours(23, 59, 59, 999);
       
       // 支持public_time或created_at在上周范围内（用于处理企查查新闻public_time可能为NULL的情况）
-      whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.created_at >= ? AND nd.created_at <= ?))';
+      whereCondition += ' AND ((nd.public_time >= ? AND nd.public_time <= ?) OR (nd.public_time IS NULL AND nd.F_CreatorTime >= ? AND nd.F_CreatorTime <= ?))';
       params.push(lastMonday, lastSunday, lastMonday, lastSunday);
     } else if (timeRange === 'thisMonth') {
       // 本月：本月1日00:00:00到现在（北京时区）
@@ -2604,7 +2604,7 @@ router.get('/', async (req, res) => {
       whereCondition += ` AND EXISTS (
         SELECT 1
         FROM additional_wechat_accounts awa
-        WHERE awa.delete_mark = 0
+        WHERE awa.F_DeleteMark = 0
           AND awa.wechat_account_id = nd.wechat_account
       )`;
     }
@@ -2643,25 +2643,25 @@ router.get('/', async (req, res) => {
     // 优先使用news_detail表中的entity_type，如果没有则从invested_enterprises表获取
     // 注意：使用COALESCE确保优先使用news_detail表中的entity_type
     const data = await db.query(
-      `SELECT nd.id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url,
+      `SELECT nd.F_Id AS id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url,
               nd.keywords, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_abstract, nd.news_sentiment, nd.content,
-              nd.created_at, nd.APItype, nd.news_category,
+              nd.F_CreatorTime, nd.APItype, nd.news_category,
               nd.fund, nd.sub_fund,
               COALESCE(nd.entity_type, ie.entity_type) as entity_type
        FROM news_detail nd
-       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        ${whereCondition}
        ORDER BY
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
          nd.public_time DESC,
-         nd.created_at DESC
+         nd.F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
     const totalRows = await db.query(
       `SELECT COUNT(*) as total 
        FROM news_detail nd
-       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
+       LEFT JOIN invested_enterprises ie ON nd.enterprise_full_name = ie.enterprise_full_name AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        ${whereCondition}`,
       params
     );
@@ -2864,7 +2864,7 @@ router.post('/export', async (req, res) => {
 
     if (userRole === 'admin') {
       // 管理员可以导出所有数据
-      condition = 'FROM news_detail WHERE delete_mark = 0';
+      condition = 'FROM news_detail WHERE F_DeleteMark = 0';
       params = [];
       
       if (timeCondition) {
@@ -2876,11 +2876,11 @@ router.post('/export', async (req, res) => {
       const wechatAccountsQuery = `
         SELECT DISTINCT wechat_official_account_id 
         FROM invested_enterprises 
-        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
+        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
         AND wechat_official_account_id IS NOT NULL 
         AND wechat_official_account_id != ''
         AND exit_status NOT IN ('完全退出', '已上市')
-        AND delete_mark = 0
+        AND F_DeleteMark = 0
       `;
       
       const wechatAccounts = await db.query(wechatAccountsQuery, [userId]);
@@ -2888,11 +2888,11 @@ router.post('/export', async (req, res) => {
       const userAdditionalAccounts = await db.query(
         `SELECT DISTINCT wechat_account_id 
          FROM additional_wechat_accounts 
-         WHERE creator_user_id = ? 
+         WHERE F_CreatorUserId = ? 
          AND status = 'active' 
          AND wechat_account_id IS NOT NULL 
          AND wechat_account_id != ''
-         AND delete_mark = 0`,
+         AND F_DeleteMark = 0`,
         [userId]
       );
 
@@ -2916,7 +2916,7 @@ router.post('/export', async (req, res) => {
 
       const placeholders = uniqueAccountIds.map(() => '?').join(',');
       
-      condition = `FROM news_detail WHERE wechat_account IN (${placeholders}) AND delete_mark = 0`;
+      condition = `FROM news_detail WHERE wechat_account IN (${placeholders}) AND F_DeleteMark = 0`;
       params = [...uniqueAccountIds];
       
       if (timeCondition) {
@@ -2936,9 +2936,9 @@ router.post('/export', async (req, res) => {
         public_time as '发布时间',
         source_url as '原文链接',
         keywords as '关键词',
-        created_at as '创建时间'
+        F_CreatorTime as '创建时间'
        ${condition} 
-       ORDER BY public_time DESC, created_at DESC`,
+       ORDER BY public_time DESC, F_CreatorTime DESC`,
       params
     );
 
@@ -3102,7 +3102,7 @@ router.delete('/:id', async (req, res) => {
 
     // 检查记录是否存在且未被删除
     const checkResult = await db.query(
-      'SELECT id FROM news_detail WHERE id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM news_detail WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -3115,7 +3115,7 @@ router.delete('/:id', async (req, res) => {
 
     // 执行逻辑删除操作
     await db.query(
-      'UPDATE news_detail SET delete_mark = 1, delete_user_id = ?, delete_time = NOW() WHERE id = ?',
+      'UPDATE news_detail SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = NOW() WHERE F_Id = ?',
       [userId, id]
     );
 
@@ -3215,30 +3215,30 @@ router.get('/recipients', async (req, res) => {
     if (userRole === 'admin') {
       // 管理员查看全部，包含用户名称（排除已删除的记录）
       query = `
-        SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.delete_mark, rm.delete_time, rm.delete_user_id, u2.account as delete_user_account
+        SELECT rm.F_Id AS id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.F_CreatorTime AS created_at, rm.F_LastModifyTime AS updated_at,
+               rm.F_DeleteMark, rm.F_DeleteTime, rm.F_DeleteUserId, u2.account as delete_user_account
         FROM recipient_management rm
-        LEFT JOIN users u ON rm.user_id = u.id
-        LEFT JOIN users u2 ON rm.delete_user_id = u2.id
-        WHERE rm.delete_mark = 0 AND rm.app_id = ?
-        ORDER BY rm.created_at DESC
+        LEFT JOIN users u ON rm.user_id = u.F_Id
+        LEFT JOIN users u2 ON rm.F_DeleteUserId = u2.F_Id
+        WHERE rm.F_DeleteMark = 0 AND rm.app_id = ?
+        ORDER BY rm.F_CreatorTime DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE delete_mark = 0 AND app_id = ?';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE F_DeleteMark = 0 AND app_id = ?';
       queryParams = [newsAppId, pageSize, offset];
     } else {
       // 用户只查看自己的（排除已删除的记录）
       query = `
-        SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.delete_mark, rm.delete_time, rm.delete_user_id
+        SELECT rm.F_Id AS id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.F_CreatorTime AS created_at, rm.F_LastModifyTime AS updated_at,
+               rm.F_DeleteMark, rm.F_DeleteTime, rm.F_DeleteUserId
         FROM recipient_management rm
-        WHERE rm.user_id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
-        ORDER BY rm.created_at DESC
+        WHERE rm.user_id = ? AND rm.F_DeleteMark = 0 AND rm.app_id = ?
+        ORDER BY rm.F_CreatorTime DESC
         LIMIT ? OFFSET ?
       `;
-      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND delete_mark = 0 AND app_id = ?';
+      countQuery = 'SELECT COUNT(*) as total FROM recipient_management WHERE user_id = ? AND F_DeleteMark = 0 AND app_id = ?';
       queryParams = [userId, newsAppId, pageSize, offset];
     }
 
@@ -3321,21 +3321,21 @@ router.get('/recipients/:id', async (req, res) => {
     let query;
     if (userRole === 'admin') {
       query = `
-        SELECT rm.id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.delete_mark, rm.delete_time, rm.delete_user_id, u2.account as delete_user_account
+        SELECT rm.F_Id AS id, rm.user_id, rm.app_id, u.account as user_account, rm.recipient_email, rm.email_subject, 
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.F_CreatorTime AS created_at, rm.F_LastModifyTime AS updated_at,
+               rm.F_DeleteMark, rm.F_DeleteTime, rm.F_DeleteUserId, u2.account as delete_user_account
         FROM recipient_management rm
-        LEFT JOIN users u ON rm.user_id = u.id
-        LEFT JOIN users u2 ON rm.delete_user_id = u2.id
-        WHERE rm.id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
+        LEFT JOIN users u ON rm.user_id = u.F_Id
+        LEFT JOIN users u2 ON rm.F_DeleteUserId = u2.F_Id
+        WHERE rm.F_Id = ? AND rm.F_DeleteMark = 0 AND rm.app_id = ?
       `;
     } else {
       query = `
-        SELECT rm.id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
-               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.created_at, rm.updated_at,
-               rm.delete_mark, rm.delete_time, rm.delete_user_id
+        SELECT rm.F_Id AS id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject, 
+               rm.send_frequency, rm.send_time, rm.cron_expression, rm.skip_holiday, rm.is_active, rm.qichacha_category_codes, rm.entity_type, rm.additional_account_tag_codes, rm.F_CreatorTime AS created_at, rm.F_LastModifyTime AS updated_at,
+               rm.F_DeleteMark, rm.F_DeleteTime, rm.F_DeleteUserId
         FROM recipient_management rm
-        WHERE rm.id = ? AND rm.user_id = ? AND rm.delete_mark = 0 AND rm.app_id = ?
+        WHERE rm.F_Id = ? AND rm.user_id = ? AND rm.F_DeleteMark = 0 AND rm.app_id = ?
       `;
     }
 
@@ -3629,7 +3629,7 @@ router.post('/recipients', [
     const recipientId = await generateId('recipient_management');
 
     const newsAppRows = await db.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       ['新闻舆情']
     );
     const newsAppId = newsAppRows.length ? newsAppRows[0].id : null;
@@ -3655,7 +3655,7 @@ router.post('/recipients', [
     
     await db.execute(
       `INSERT INTO recipient_management 
-       (id, user_id, app_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type, additional_account_tag_codes) 
+       (F_Id, user_id, app_id, recipient_email, email_subject, cron_expression, send_frequency, send_time, is_active, qichacha_category_codes, entity_type, additional_account_tag_codes) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         recipientId,
@@ -3715,7 +3715,7 @@ router.put('/recipients/:id', [
     }
 
     // 检查记录是否存在（排除已删除的记录）
-    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0', [id]);
+    const existing = await db.query('SELECT * FROM recipient_management WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
@@ -3881,10 +3881,10 @@ router.put('/recipients/:id', [
     }
 
     if (updateFields.length > 0) {
-      updateFields.push('updated_at = CURRENT_TIMESTAMP');
+      updateFields.push('F_LastModifyTime = CURRENT_TIMESTAMP');
       updateValues.push(id);
       await db.execute(
-        `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
+        `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
         updateValues
       );
 
@@ -3910,7 +3910,7 @@ router.put('/recipients/:id', [
       await logRecipientChange(id, oldData, newData, userId);
       
       // 验证更新后的数据
-      const verifyQuery = await db.query('SELECT qichacha_category_codes FROM recipient_management WHERE id = ?', [id]);
+      const verifyQuery = await db.query('SELECT qichacha_category_codes FROM recipient_management WHERE F_Id = ?', [id]);
       if (verifyQuery.length > 0) {
         console.log(`[更新收件管理] 验证：数据库中保存的值:`, verifyQuery[0].qichacha_category_codes);
       }
@@ -3934,7 +3934,7 @@ router.delete('/recipients/:id', async (req, res) => {
     const userRole = req.headers['x-user-role'];
 
     // 检查记录是否存在（排除已删除的记录）
-    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0', [id]);
+    const existing = await db.query('SELECT * FROM recipient_management WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在或已被删除' });
     }
@@ -3957,23 +3957,23 @@ router.delete('/recipients/:id', async (req, res) => {
       send_frequency: existing[0].send_frequency,
       send_time: existing[0].send_time || '',
       is_active: existing[0].is_active,
-      delete_mark: existing[0].delete_mark || 0,
-      delete_time: existing[0].delete_time || null,
-      delete_user_id: existing[0].delete_user_id || null
+      F_DeleteMark: existing[0].F_DeleteMark || 0,
+      F_DeleteTime: existing[0].F_DeleteTime || null,
+      F_DeleteUserId: existing[0].F_DeleteUserId || null
     };
 
-    // 软删除：更新 delete_mark、delete_time、delete_user_id
+    // 软删除：更新 F_DeleteMark、F_DeleteTime、F_DeleteUserId
     await db.execute(
-      'UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+      'UPDATE recipient_management SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
       [userId, id]
     );
 
     // 构建新数据用于日志（标记为已删除）
     const newData = {
       ...oldData,
-      delete_mark: 1,
-      delete_time: new Date().toISOString().slice(0, 19).replace('T', ' '),
-      delete_user_id: userId
+      F_DeleteMark: 1,
+      F_DeleteTime: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      F_DeleteUserId: userId
     };
 
     // 记录删除日志
@@ -3997,7 +3997,7 @@ router.get('/recipients/:id/logs', async (req, res) => {
     const userRole = req.headers['x-user-role'];
 
     // 检查记录是否存在
-    const existing = await db.query('SELECT * FROM recipient_management WHERE id = ?', [id]);
+    const existing = await db.query('SELECT * FROM recipient_management WHERE F_Id = ?', [id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, message: '记录不存在' });
     }
@@ -4015,9 +4015,9 @@ router.get('/recipients/:id/logs', async (req, res) => {
     const logs = await db.query(
       `SELECT l.*, u.account as change_user_account
        FROM data_change_log l
-       LEFT JOIN users u ON l.change_user_id = u.id
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
        WHERE l.table_name = 'recipient_management' AND l.record_id = ?
-       ORDER BY l.change_time DESC`,
+       ORDER BY l.F_CreatorTime DESC`,
       [id]
     );
     res.json({ success: true, data: logs });
@@ -4067,7 +4067,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
     
     // 检查收件管理配置是否存在，以及用户是否有权限
     const existing = await db.query(
-      'SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM recipient_management WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
     
@@ -4111,7 +4111,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
          WHERE status = 'active' 
          AND wechat_account_id IS NOT NULL 
          AND wechat_account_id != ''
-         AND delete_mark = 0`
+         AND F_DeleteMark = 0`
       );
       additionalAccounts.forEach(acc => {
         if (acc.wechat_account_id) {
@@ -4214,7 +4214,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
           
           // 获取完整的新闻数据（包括content）
           const fullNewsItems = await db.query(
-            'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
+            'SELECT F_Id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE F_Id = ?',
             [news.id]
           );
           
@@ -4268,12 +4268,12 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       if (newsIds.length > 0) {
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
-          `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
-                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+          `SELECT DISTINCT nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
                   nd.APItype, nd.news_category, nd.entity_type
            FROM news_detail nd
-           WHERE nd.id IN (${placeholders})
-           AND nd.delete_mark = 0`,
+           WHERE nd.F_Id IN (${placeholders})
+           AND nd.F_DeleteMark = 0`,
           newsIds
         );
         
@@ -4309,7 +4309,7 @@ router.post('/recipients/:id/send-email', async (req, res) => {
            WHERE status = 'active' 
            AND wechat_account_id IS NOT NULL 
            AND wechat_account_id != ''
-           AND delete_mark = 0`
+           AND F_DeleteMark = 0`
         );
         additionalAccounts.forEach(acc => {
           if (acc.wechat_account_id) {
@@ -4495,7 +4495,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '企查查']
       );
       if (configs.length === 0) {
@@ -4504,7 +4504,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['企查查']
       );
       if (configs.length === 0) {
@@ -4520,7 +4520,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
       `SELECT qichacha_app_key, qichacha_secret_key, qichacha_daily_limit
        FROM qichacha_config 
        WHERE interface_type = '新闻舆情' AND is_active = 1 
-       ORDER BY created_at DESC LIMIT 1`
+       ORDER BY F_CreatorTime DESC LIMIT 1`
     );
 
     if (qichachaConfigs.length === 0) {
@@ -4658,7 +4658,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
        AND unified_credit_code IS NOT NULL 
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -4695,11 +4695,11 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
           `SELECT DISTINCT enterprise_full_name 
            FROM news_detail 
            WHERE APItype = '企查查' 
-           AND created_at >= ? 
-           AND created_at <= ?
+           AND F_CreatorTime >= ? 
+           AND F_CreatorTime <= ?
            AND enterprise_full_name IS NOT NULL 
            AND enterprise_full_name != ''
-           AND delete_mark = 0`,
+           AND F_DeleteMark = 0`,
           [todayStart, todayEnd]
         );
 
@@ -4886,20 +4886,20 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
                   if (sourceUrl) {
                     // 优先使用source_url去重（包括已删除的记录）
                     existing = await db.query(
-                      'SELECT id, delete_mark FROM news_detail WHERE source_url = ? LIMIT 1',
+                      'SELECT F_Id, F_DeleteMark FROM news_detail WHERE source_url = ? LIMIT 1',
                       [sourceUrl]
                     );
                   } else if (title && publicTime) {
                     // 如果没有source_url，使用title和public_time组合去重（包括已删除的记录）
                     existing = await db.query(
-                      'SELECT id, delete_mark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
+                      'SELECT F_Id, F_DeleteMark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
                       [title, publicTime]
                     );
                   }
 
                   // 如果已存在，无论是否已删除，都跳过（保护用户手动删除的记录）
                   if (existing.length > 0) {
-                    if (existing[0].delete_mark === 1) {
+                    if (existing[0].F_DeleteMark === 1) {
                       console.log(`[入库] 跳过已删除的企查查新闻（用户手动删除）: ${sourceUrl || title}`);
                     }
                     continue; // 跳过已存在的记录（无论是否已删除）
@@ -4932,7 +4932,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
                        FROM invested_enterprises 
                        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  unified_credit_code = ? 
                        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-                       AND delete_mark = 0 
+                       AND F_DeleteMark = 0 
                        LIMIT 1`,
                       [creditCode]
                     );
@@ -5022,7 +5022,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
                     // 所以这里news_abstract设为NULL，等待后续AI分析
                     await db.execute(
                       `INSERT INTO news_detail 
-                       (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract, fund, sub_fund) 
+                       (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_category, news_abstract, fund, sub_fund) 
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                       [
                         newsId,
@@ -5145,7 +5145,7 @@ async function syncQichachaNewsData(configId = null, logId = null, customRange =
             const detailLogId = await generateId('news_sync_detail_log');
             await db.execute(
               `INSERT INTO news_sync_detail_log 
-               (id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
+               (F_Id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 detailLogId,
@@ -5720,7 +5720,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -5729,7 +5729,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '被执行人']
       );
       if (configs.length === 0) {
@@ -5739,7 +5739,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -5792,7 +5792,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -5891,7 +5891,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
             const newsId = await generateId('news_detail');
             await db.execute(
               `INSERT INTO news_detail
-               (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+               (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 newsId,
@@ -5927,7 +5927,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -5987,7 +5987,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -5996,7 +5996,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '失信被执行人']
       );
       if (configs.length === 0) {
@@ -6006,7 +6006,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -6059,7 +6059,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -6160,7 +6160,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -6196,7 +6196,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -6256,7 +6256,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -6265,7 +6265,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '限制高消费']
       );
       if (configs.length === 0) {
@@ -6275,7 +6275,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -6328,7 +6328,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -6429,7 +6429,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -6465,7 +6465,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -6525,7 +6525,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -6534,7 +6534,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '行政处罚']
       );
       if (configs.length === 0) {
@@ -6544,7 +6544,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -6597,7 +6597,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -6698,7 +6698,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -6734,7 +6734,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -6794,7 +6794,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -6803,7 +6803,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '终本案件']
       );
       if (configs.length === 0) {
@@ -6813,7 +6813,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -6866,7 +6866,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -6968,7 +6968,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -7004,7 +7004,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -7064,7 +7064,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -7073,7 +7073,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '裁判文书']
       );
       if (configs.length === 0) {
@@ -7083,7 +7083,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -7136,7 +7136,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -7236,7 +7236,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -7272,7 +7272,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -7332,7 +7332,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -7341,7 +7341,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '法院公告']
       );
       if (configs.length === 0) {
@@ -7351,7 +7351,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -7404,7 +7404,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -7504,7 +7504,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -7540,7 +7540,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -7600,7 +7600,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -7609,7 +7609,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '开庭公告']
       );
       if (configs.length === 0) {
@@ -7619,7 +7619,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -7672,7 +7672,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -7773,7 +7773,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -7809,7 +7809,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -7869,7 +7869,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -7878,7 +7878,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '立案信息']
       );
       if (configs.length === 0) {
@@ -7888,7 +7888,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -7941,7 +7941,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -8042,7 +8042,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -8078,7 +8078,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -8138,7 +8138,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -8147,7 +8147,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '送达公告']
       );
       if (configs.length === 0) {
@@ -8157,7 +8157,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -8210,7 +8210,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -8309,7 +8309,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -8345,7 +8345,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -8405,7 +8405,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -8414,7 +8414,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '破产重整']
       );
       if (configs.length === 0) {
@@ -8424,7 +8424,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key, daily_limit FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -8477,7 +8477,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -8579,7 +8579,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           const newsId = await generateId('news_detail');
           await db.execute(
             `INSERT INTO news_detail
-             (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
+             (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, news_sentiment, APItype, news_abstract, keywords, fund, sub_fund)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               newsId,
@@ -8615,7 +8615,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
       try {
         const endTime = new Date();
         await db.execute(
-          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE id = ?',
+          'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = ? WHERE F_Id = ?',
           [endTime, lastQueryDate, config.id]
         );
       } catch (e) {
@@ -8674,7 +8674,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -8683,7 +8683,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团']
       );
       if (configs.length === 0) {
@@ -8699,7 +8699,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
       `SELECT x_app_id, api_key, daily_limit
        FROM shanghai_international_group_config
        WHERE is_active = 1
-       ORDER BY created_at DESC LIMIT 1`
+       ORDER BY F_CreatorTime DESC LIMIT 1`
     );
 
     if (sigConfigs.length === 0) {
@@ -8825,7 +8825,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
        AND unified_credit_code IS NOT NULL
        AND unified_credit_code != ''
        AND unified_credit_code != 'null'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}
        ORDER BY unified_credit_code`
     );
@@ -8913,7 +8913,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
              FROM invested_enterprises
              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  unified_credit_code = ?
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-             AND delete_mark = 0
+             AND F_DeleteMark = 0
              LIMIT 1`,
             [creditCode]
           );
@@ -8944,17 +8944,17 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
               let existing = [];
               if (sourceUrl) {
                 existing = await db.query(
-                  'SELECT id, delete_mark FROM news_detail WHERE source_url = ? LIMIT 1',
+                  'SELECT F_Id, F_DeleteMark FROM news_detail WHERE source_url = ? LIMIT 1',
                   [sourceUrl]
                 );
               } else if (title && publicTime) {
                 existing = await db.query(
-                  'SELECT id, delete_mark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
+                  'SELECT F_Id, F_DeleteMark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
                   [title, publicTime]
                 );
               }
               if (existing.length > 0) {
-                if (existing[0].delete_mark === 1) {
+                if (existing[0].F_DeleteMark === 1) {
                   console.log(`[上海国际集团同步] 跳过已删除的新闻: ${sourceUrl || title}`);
                 }
                 continue;
@@ -9048,7 +9048,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
 
               await db.execute(
                 `INSERT INTO news_detail
-                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_abstract, fund, sub_fund)
+                 (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_abstract, fund, sub_fund)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
@@ -9151,7 +9151,7 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
     let config;
     if (configId) {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1',
         [configId, '上海国际集团']
       );
       if (configs.length === 0) {
@@ -9160,7 +9160,7 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
       config = configs[0];
     } else {
       const configs = await db.query(
-        'SELECT * FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY id DESC LIMIT 1',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE interface_type = ? AND news_type = ? AND is_active = 1 ORDER BY F_Id DESC LIMIT 1',
         ['上海国际集团', '同花顺订阅']
       );
       if (configs.length === 0) {
@@ -9170,7 +9170,7 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
     }
 
     const sigConfigs = await db.query(
-      `SELECT x_app_id, api_key FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1`
+      `SELECT x_app_id, api_key FROM shanghai_international_group_config WHERE is_active = 1 ORDER BY F_CreatorTime DESC LIMIT 1`
     );
     if (sigConfigs.length === 0) {
       throw new Error('请先配置上海国际集团接口的X-App-Id、APIkey等凭证');
@@ -9188,7 +9188,7 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
       // 手动触发：使用传入的时间范围（start_date/end_date），按天补拉 company.updated_at
       const startDate = String(customRange.from).split(' ')[0];
       const endDate = String(customRange.to).split(' ')[0];
-      console.log(`[上海国际集团同花顺订阅] 手动触发，同步 company.updated_at 在 ${startDate} 至 ${endDate} 之间的企业`);
+      console.log(`[上海国际集团同花顺订阅] 手动触发，同步 company.F_LastModifyTime 在 ${startDate} 至 ${endDate} 之间的企业`);
 
       companyRows = await db.query(
         `SELECT DISTINCT unified_credit_code
@@ -9196,8 +9196,8 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
          WHERE unified_credit_code IS NOT NULL
            AND unified_credit_code != ''
            AND unified_credit_code != 'null'
-           AND DATE(updated_at) >= ?
-           AND DATE(updated_at) <= ?`,
+           AND DATE(F_LastModifyTime) >= ?
+           AND DATE(F_LastModifyTime) <= ?`,
         [startDate, endDate]
       );
     } else {
@@ -9209,7 +9209,7 @@ async function syncShanghaiInternationalGroupThsSubscriptionData(configId = null
          WHERE unified_credit_code IS NOT NULL
            AND unified_credit_code != ''
            AND unified_credit_code != 'null'
-           AND DATE(updated_at) = CURRENT_DATE`
+           AND DATE(F_LastModifyTime) = CURRENT_DATE`
       );
     }
 

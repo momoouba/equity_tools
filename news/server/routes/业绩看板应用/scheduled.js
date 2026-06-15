@@ -42,11 +42,11 @@ function getShanghaiNow() {
 router.get('/', async (req, res) => {
   try {
     const rows = await db.query(
-      `SELECT id, task_name, app_name, interface_type, request_url,
+      `SELECT F_Id AS id, task_name, app_name, interface_type, request_url,
               cron_expression, is_active, retry_count, retry_interval,
-              last_run_at, last_run_status, remark, created_at, updated_at
+              last_run_at, last_run_status, remark, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
        FROM performance_scheduled
-       ORDER BY created_at DESC`
+       ORDER BY F_CreatorTime DESC`
     );
 
     res.json({ success: true, data: rows });
@@ -79,7 +79,7 @@ router.post('/', async (req, res) => {
 
     await db.execute(
       `INSERT INTO performance_scheduled
-       (id, task_name, app_name, interface_type, request_url,
+       (F_Id, task_name, app_name, interface_type, request_url,
         cron_expression, is_active, retry_count, retry_interval, remark)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -128,7 +128,7 @@ router.put('/:id', async (req, res) => {
       `UPDATE performance_scheduled
        SET task_name = ?, app_name = ?, interface_type = ?, request_url = ?,
            cron_expression = ?, is_active = ?, retry_count = ?, retry_interval = ?, remark = ?
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [
         taskName,
         app_name,
@@ -154,7 +154,7 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    await db.execute('DELETE FROM performance_scheduled WHERE id = ?', [id]);
+    await db.execute('DELETE FROM performance_scheduled WHERE F_Id = ?', [id]);
     res.json({ success: true });
   } catch (error) {
     console.error('删除业绩看板定时任务失败:', error);
@@ -168,9 +168,9 @@ router.post('/:id/run', async (req, res) => {
     const { id } = req.params;
 
     const tasks = await db.query(
-      `SELECT id, app_name, interface_type, request_url
+      `SELECT F_Id AS id, app_name, interface_type, request_url
        FROM performance_scheduled
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [id]
     );
     if (!tasks || tasks.length === 0) {
@@ -339,7 +339,7 @@ router.post('/:id/run', async (req, res) => {
     await db.execute(
       `UPDATE performance_scheduled
        SET last_run_at = NOW(), last_run_status = ?
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [status, id]
     );
 

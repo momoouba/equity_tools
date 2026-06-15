@@ -78,14 +78,14 @@ async function getYesterdayNewsByEnterprise() {
   
   // 查询今天获取的所有新闻（有企业全称的）
   const newsList = await db.query(
-    `SELECT id, title, enterprise_full_name, news_sentiment, keywords, 
-            news_abstract, public_time, account_name, source_url, created_at
+    `SELECT F_Id AS id, title, enterprise_full_name, news_sentiment, keywords, 
+            news_abstract, public_time, account_name, source_url, F_CreatorTime
      FROM news_detail 
      WHERE enterprise_full_name IS NOT NULL 
      AND enterprise_full_name != ''
-     AND created_at >= ? 
-     AND created_at < ?
-     AND delete_mark = 0
+     AND F_CreatorTime >= ? 
+     AND F_CreatorTime < ?
+     AND F_DeleteMark = 0
      ORDER BY enterprise_full_name, public_time DESC`,
     [from, to]
   );
@@ -382,7 +382,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
       // 调试日志：检查数据
       if (entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') {
         console.log(`[邮件生成] 企业类型: ${entityType}, 企业名称: ${enterpriseName}`);
-        console.log(`[邮件生成] 第一条新闻ID: ${firstNews?.id}, fund: ${fund || '(NULL)'}, sub_fund: ${subFund || '(NULL)'}`);
+        console.log(`[邮件生成] 第一条新闻ID: ${firstNews?.F_Id}, fund: ${fund || '(NULL)'}, sub_fund: ${subFund || '(NULL)'}`);
         if (firstNews) {
           console.log(`[邮件生成] 新闻数据包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
           console.log(`[邮件生成] 新闻数据所有字段:`, Object.keys(firstNews).join(', '));
@@ -683,12 +683,12 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
     const logId = await generateId('email_logs');
     await db.execute(
       `INSERT INTO email_logs 
-       (id, email_config_id, operation_type, from_email, to_email, 
-        subject, content, status, created_by) 
+       (F_Id, email_config_id, operation_type, from_email, to_email, 
+        subject, content, status, F_CreatorUserId) 
        VALUES (?, ?, 'send', ?, ?, ?, ?, 'success', ?)`,
       [
         logId,
-        emailConfig.id,
+        emailConfig.F_Id,
         emailConfig.from_email,
         recipientEmails.join(','),
         subject,
@@ -717,12 +717,12 @@ async function sendNewsEmail(recipientConfig, emailConfig, newsByEnterprise) {
       
       await db.execute(
         `INSERT INTO email_logs 
-         (id, email_config_id, operation_type, from_email, to_email, 
-          subject, status, error_message, created_by) 
+         (F_Id, email_config_id, operation_type, from_email, to_email, 
+          subject, status, error_message, F_CreatorUserId) 
          VALUES (?, ?, 'send', ?, ?, ?, 'failed', ?, ?)`,
         [
           logId,
-          emailConfig.id,
+          emailConfig.F_Id,
           emailConfig.from_email,
           recipientEmails || recipientConfig.recipient_email,
           recipientConfig.email_subject || '舆情信息日报',
@@ -750,7 +750,7 @@ async function getEmailConfigForRecipient(recipient) {
     const byApp = await db.query(
       `SELECT ec.*, a.app_name
        FROM email_config ec
-       LEFT JOIN applications a ON ec.app_id = a.id
+       LEFT JOIN applications a ON ec.app_id = a.F_Id
        WHERE ec.app_id = ?
          AND ec.is_active = 1
        LIMIT 1`,
@@ -770,7 +770,7 @@ async function getEmailConfigForRecipient(recipient) {
   const fallback = await db.query(
     `SELECT ec.*, a.app_name
      FROM email_config ec
-     LEFT JOIN applications a ON ec.app_id = a.id
+     LEFT JOIN applications a ON ec.app_id = a.F_Id
      WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
       AND ec.is_active = 1
      LIMIT 1`,
@@ -792,7 +792,7 @@ function resolveEntityType(news) {
   }
   const validEntityTypes = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
   if (!validEntityTypes.includes(entityType)) {
-    console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
+    console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.F_Id})`);
     return '被投企业';
   }
   return entityType;
@@ -824,9 +824,9 @@ async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
   const additionalRows = await db.query(
     `SELECT DISTINCT wechat_account_id
      FROM additional_wechat_accounts
-     WHERE creator_user_id = ?
+     WHERE F_CreatorUserId = ?
        AND status = 'active'
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        AND wechat_account_id IS NOT NULL
        AND wechat_account_id != ''`,
     [recipient.user_id]
@@ -836,7 +836,7 @@ async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
   const addToGroup = (groupName, enterpriseName, news) => {
     if (!grouped[groupName]) grouped[groupName] = {};
     if (!grouped[groupName][enterpriseName]) grouped[groupName][enterpriseName] = [];
-    const dedupKey = `${groupName}::${enterpriseName}::${news.id}`;
+    const dedupKey = `${groupName}::${enterpriseName}::${news.F_Id}`;
     if (groupedDedup.has(dedupKey)) return;
     groupedDedup.add(dedupKey);
     grouped[groupName][enterpriseName].push(news);
@@ -869,11 +869,11 @@ async function sendNewsEmailToRecipient(recipientId) {
     
     // 获取指定的收件管理配置
     const recipients = await db.query(
-      `SELECT rm.*, u.account as user_account
+      `SELECT rm.*, rm.F_Id AS id, u.account as user_account
        FROM recipient_management rm
-       LEFT JOIN users u ON rm.user_id = u.id
-       WHERE rm.id = ? 
-       AND rm.delete_mark = 0`,
+       LEFT JOIN users u ON rm.user_id = u.F_Id
+       WHERE rm.F_Id = ? 
+       AND rm.F_DeleteMark = 0`,
       [recipientId]
     );
     
@@ -901,7 +901,7 @@ async function sendNewsEmailToRecipient(recipientId) {
     
     return {
       success: true,
-      recipientId: recipient.id,
+      recipientId: recipient.F_Id,
       recipientEmail: recipient.recipient_email,
       logId: result.logId,
       message: '邮件发送成功'
@@ -921,11 +921,11 @@ async function sendNewsEmailsToAllRecipients() {
     
     // 获取所有启用的收件管理配置
     const recipients = await db.query(
-      `SELECT rm.*, u.account as user_account
+      `SELECT rm.*, rm.F_Id AS id, u.account as user_account
        FROM recipient_management rm
-       LEFT JOIN users u ON rm.user_id = u.id
+       LEFT JOIN users u ON rm.user_id = u.F_Id
        WHERE rm.is_active = 1 
-       AND rm.delete_mark = 0
+       AND rm.F_DeleteMark = 0
        AND rm.send_frequency = 'daily'`,
       []
     );
@@ -955,17 +955,17 @@ async function sendNewsEmailsToAllRecipients() {
     const results = [];
 
     const listingAppRows = await db.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       ['上市进展']
     );
-    const listingAppId = listingAppRows.length ? listingAppRows[0].id : null;
+    const listingAppId = listingAppRows.length ? listingAppRows[0].F_Id : null;
 
     // 为每个收件人发送邮件（根据各自的entity_type配置获取对应的新闻）
     for (const recipient of recipients) {
       try {
         if (listingAppId && recipient.app_id === listingAppId) {
           console.log(
-            `[邮件发送] 跳过收件配置 ${recipient.id}：所属应用为「上市进展」（由定时任务 executeEmailTask 单独处理）`
+            `[邮件发送] 跳过收件配置 ${recipient.F_Id}：所属应用为「上市进展」（由定时任务 executeEmailTask 单独处理）`
           );
           continue;
         }

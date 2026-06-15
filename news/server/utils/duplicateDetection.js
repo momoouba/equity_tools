@@ -120,22 +120,22 @@ function calculateContentSimilarity(content1, content2) {
  */
 async function checkArticleDuplicate(title, content, sourceUrl, currentCreatedAt = null) {
   try {
-    let query = `SELECT id, title, content, source_url, created_at
+    let query = `SELECT F_Id AS id, title, content, source_url, F_CreatorTime
                  FROM news_detail 
-                 WHERE delete_mark = 0 
+                 WHERE F_DeleteMark = 0 
                  AND source_url != ?`;
     let params = [sourceUrl];
 
     // 如果提供了当前文章的创建时间，只检查更早的文章
     if (currentCreatedAt) {
-      query += ` AND created_at < ?`;
+      query += ` AND F_CreatorTime < ?`;
       params.push(currentCreatedAt);
     } else {
       // 如果没有提供时间，检查最近30天内的文章
-      query += ` AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)`;
+      query += ` AND F_CreatorTime >= DATE_SUB(NOW(), INTERVAL 30 DAY)`;
     }
 
-    query += ` ORDER BY created_at DESC LIMIT 1000`; // 限制查询数量，避免性能问题
+    query += ` ORDER BY F_CreatorTime DESC LIMIT 1000`; // 限制查询数量，避免性能问题
 
     const existingArticles = await db.query(query, params);
 
@@ -188,7 +188,7 @@ async function batchCheckDuplicates(articles) {
       if (result.isDuplicate) {
         // 标记为重复文章
         await db.execute(
-          'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+          'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
           [article.id]
         );
         duplicates++;

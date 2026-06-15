@@ -39,10 +39,10 @@ router.post('/create', checkAuth, async (req, res) => {
 
     // 检查是否已有活跃的分享链接
     const existingLinks = await db.query(
-      `SELECT id, share_token, status
+      `SELECT F_Id, share_token, status
        FROM news_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC
+       ORDER BY F_CreatorTime DESC
        LIMIT 1`,
       [userId]
     );
@@ -63,14 +63,14 @@ router.post('/create', checkAuth, async (req, res) => {
 
     if (existingLinks.length > 0) {
       // 更新已有链接
-      shareId = existingLinks[0].id;
+      shareId = existingLinks[0].F_Id;
       shareToken = existingLinks[0].share_token;
 
       // 更新数据库
       await db.execute(
         `UPDATE news_share_links 
-         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND user_id = ?`,
+         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ? AND user_id = ?`,
         [
           hasExpiry ? 1 : 0,
           expiryTimeValue,
@@ -88,7 +88,7 @@ router.post('/create', checkAuth, async (req, res) => {
       // 插入数据库
       await db.execute(
         `INSERT INTO news_share_links 
-         (id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
+         (F_Id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
          VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
         [
           shareId,
@@ -144,10 +144,10 @@ router.get('/current', checkAuth, async (req, res) => {
     const userId = req.currentUserId;
 
     const links = await db.query(
-      `SELECT id, share_token, status, has_expiry, expiry_time, has_password, created_at, updated_at
+      `SELECT F_Id, share_token, status, has_expiry, expiry_time, has_password, F_CreatorTime, F_LastModifyTime
        FROM news_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC
+       ORDER BY F_CreatorTime DESC
        LIMIT 1`,
       [userId]
     );
@@ -182,7 +182,7 @@ router.get('/current', checkAuth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        id: link.id,
+        id: link.F_Id,
         shareToken: link.share_token,
         shareUrl: `${req.protocol}://${frontendHost}/share/${link.share_token}`,
         status: link.status,
@@ -210,10 +210,10 @@ router.get('/list', checkAuth, async (req, res) => {
     const userId = req.currentUserId;
 
     const links = await db.query(
-      `SELECT id, share_token, status, has_expiry, expiry_time, has_password, created_at, updated_at
+      `SELECT F_Id, share_token, status, has_expiry, expiry_time, has_password, F_CreatorTime, F_LastModifyTime
        FROM news_share_links
        WHERE user_id = ?
-       ORDER BY created_at DESC`,
+       ORDER BY F_CreatorTime DESC`,
       [userId]
     );
 
@@ -254,7 +254,7 @@ router.put('/:id', checkAuth, async (req, res) => {
 
     // 检查链接是否存在且属于当前用户
     const existingLinks = await db.query(
-      'SELECT * FROM news_share_links WHERE id = ? AND user_id = ?',
+      'SELECT *, F_Id AS id FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -316,7 +316,7 @@ router.put('/:id', checkAuth, async (req, res) => {
     await db.execute(
       `UPDATE news_share_links 
        SET ${updateFields.join(', ')}
-       WHERE id = ? AND user_id = ?`,
+       WHERE F_Id = ? AND user_id = ?`,
       updateValues
     );
 
@@ -344,7 +344,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
 
     // 检查链接是否存在且属于当前用户
     const existingLinks = await db.query(
-      'SELECT * FROM news_share_links WHERE id = ? AND user_id = ?',
+      'SELECT *, F_Id AS id FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -356,7 +356,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
     }
 
     await db.execute(
-      'DELETE FROM news_share_links WHERE id = ? AND user_id = ?',
+      'DELETE FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -382,7 +382,7 @@ router.get('/verify/:token', async (req, res) => {
     const token = req.params.token;
 
     const links = await db.query(
-      `SELECT id, user_id, status, has_expiry, expiry_time, has_password
+      `SELECT F_Id, user_id, status, has_expiry, expiry_time, has_password
        FROM news_share_links
        WHERE share_token = ?`,
       [token]
@@ -443,7 +443,7 @@ router.post('/verify-password/:token', async (req, res) => {
     const { password } = req.body;
 
     const links = await db.query(
-      `SELECT id, user_id, password_hash, status, has_expiry, expiry_time, has_password
+      `SELECT F_Id, user_id, password_hash, status, has_expiry, expiry_time, has_password
        FROM news_share_links
        WHERE share_token = ?`,
       [token]
@@ -568,7 +568,7 @@ router.get('/news/:token', async (req, res) => {
 
     // 获取用户信息以判断是否为管理员
     const users = await db.query(
-      'SELECT role FROM users WHERE id = ?',
+      'SELECT role FROM users WHERE F_Id = ?',
       [userId]
     );
 
@@ -607,7 +607,7 @@ router.get('/news/:token', async (req, res) => {
           todayStart.setHours(0, 0, 0, 0);
           const todayEnd = new Date(beijingNow);
           todayEnd.setHours(23, 59, 59, 999);
-          whereConditions.push('nd.created_at >= ? AND nd.created_at <= ?');
+          whereConditions.push('nd.F_CreatorTime >= ? AND nd.F_CreatorTime <= ?');
           queryParams.push(todayStart, todayEnd);
           break;
         case 'thisWeek':
@@ -647,7 +647,7 @@ router.get('/news/:token', async (req, res) => {
     if (!isAdmin) {
       whereConditions.push(`EXISTS (
         SELECT 1 FROM invested_enterprises ie
-        WHERE ${IE_NEWS_APP_FILTER_SQL_IE} AND  ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
+        WHERE ${IE_NEWS_APP_FILTER_SQL_IE} AND  ie.F_CreatorUserId = ? AND ie.enterprise_full_name = nd.enterprise_full_name
       )`);
       queryParams.push(userId);
     }
@@ -692,7 +692,7 @@ router.get('/news/:token', async (req, res) => {
       whereConditions.push(`EXISTS (
         SELECT 1
         FROM additional_wechat_accounts awa
-        WHERE awa.delete_mark = 0
+        WHERE awa.F_DeleteMark = 0
           AND awa.wechat_account_id = nd.wechat_account
       )`);
     }
@@ -714,12 +714,12 @@ router.get('/news/:token', async (req, res) => {
     // 查询数据
     const dataQuery = `
       SELECT 
-        nd.id,
+        nd.F_Id AS id,
         nd.title,
         nd.content,
         nd.source_url,
         nd.public_time,
-        nd.created_at,
+        nd.F_CreatorTime,
         nd.account_name,
         nd.wechat_account,
         nd.enterprise_full_name,

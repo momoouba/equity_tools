@@ -76,7 +76,7 @@ async function allocPreProjectNo(preferredRaw) {
   const preferred = normPreProjectNo(preferredRaw);
   const exists = async (no) => {
     const r = await db.query(
-      `SELECT id FROM pre_investment_project WHERE delete_mark = 0 AND project_no = ? LIMIT 1`,
+      `SELECT F_Id AS id FROM pre_investment_project WHERE F_DeleteMark = 0 AND project_no = ? LIMIT 1`,
       [no]
     );
     return r.length > 0;
@@ -96,7 +96,7 @@ function assertInvestedEnterpriseCompetitorOwner(req, row) {
   if (!row) return;
   if (!isAdminUser(req.psUser)) {
     const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : '';
-    if (String(row.creator_user_id || '') !== uid) {
+    if (String(row.F_CreatorUserId || '') !== uid) {
       const e = new Error('仅管理员或创建人可操作该企业的竞品补录/运行');
       e.code = 403;
       throw e;
@@ -112,8 +112,8 @@ async function loadPreInvestmentProjectForWrite(req, projectId) {
     throw e;
   }
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, project_no, creator_user_id, delete_mark
-     FROM pre_investment_project WHERE id = ? LIMIT 1`,
+    `SELECT F_Id AS id, enterprise_full_name, project_no, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark
+     FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
     [id]
   );
   if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -207,12 +207,12 @@ function registerCompetitorMatchRoutes(router) {
       const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
       await db.execute(
         `INSERT INTO competitor_match_supplement (
-           id, invested_enterprise_id, user_tags_json, user_narrative_raw, ai_extracted_tags_json, ai_short_summary,
-           batch_id, created_by, created_at, updated_at, delete_mark
+           F_Id, invested_enterprise_id, user_tags_json, user_narrative_raw, ai_extracted_tags_json, ai_short_summary,
+           batch_id, created_by, F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,?,NULL,?,NOW(),NOW(),0)`,
         [
           id,
-          String(row.id),
+          String(row.F_Id),
           userTags.length ? JSON.stringify(userTags) : null,
           narrative || null,
           aiTags.length ? JSON.stringify(aiTags) : null,
@@ -261,9 +261,9 @@ function registerCompetitorMatchRoutes(router) {
       }
       if (force) {
         await db.execute(
-          `UPDATE sourcing_competitor_relation SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-           WHERE invested_enterprise_id = ? AND subject_type = 'invested_enterprise' AND delete_mark = 0`,
-          [req.psUser?.id || null, String(row.id)]
+          `UPDATE sourcing_competitor_relation SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+           WHERE invested_enterprise_id = ? AND subject_type = 'invested_enterprise' AND F_DeleteMark = 0`,
+          [req.psUser?.id || null, String(row.F_Id)]
         );
       }
 
@@ -272,16 +272,16 @@ function registerCompetitorMatchRoutes(router) {
       const msg = '已受理竞品分析，后台召回与打分中，请稍后刷新查看结果';
       await db.execute(
         `INSERT INTO sourcing_competitor_run (
-           id, invested_enterprise_id, status, message, triggered_by_user_id, started_at,
-           created_at, updated_at, delete_mark
+           F_Id, invested_enterprise_id, status, message, triggered_by_user_id, started_at,
+           F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
-        [runId, String(row.id), 'queued', msg, uid]
+        [runId, String(row.F_Id), 'queued', msg, uid]
       );
 
       enqueueCompetitorAnalysisRun({
         subjectType: 'invested_enterprise',
         runId,
-        investedEnterpriseId: String(row.id),
+        investedEnterpriseId: String(row.F_Id),
         userId: uid,
         enableAutoExpand: req.body?.enable_auto_expand !== false,
       });
@@ -309,7 +309,7 @@ function registerCompetitorMatchRoutes(router) {
       if (subjectType === 'invested_enterprise') {
         const runs = await db.query(
           `SELECT invested_enterprise_id FROM sourcing_competitor_run
-           WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+           WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
           [runId]
         );
         if (!runs.length) {
@@ -319,10 +319,10 @@ function registerCompetitorMatchRoutes(router) {
         assertInvestedEnterpriseCompetitorOwner(req, row);
       } else {
         const runs = await db.query(
-          `SELECT p.creator_user_id
+          `SELECT p.F_CreatorUserId AS creator_user_id
            FROM sourcing_pre_investment_competitor_run r
-           INNER JOIN pre_investment_project p ON p.id = r.pre_investment_project_id
-           WHERE r.id = ? AND r.delete_mark = 0 LIMIT 1`,
+           INNER JOIN pre_investment_project p ON p.F_Id = r.pre_investment_project_id
+           WHERE r.F_Id = ? AND r.F_DeleteMark = 0 LIMIT 1`,
           [runId]
         );
         if (!runs.length) {
@@ -364,7 +364,7 @@ function registerCompetitorMatchRoutes(router) {
         return res.json({ success: true, data: { list, latest_run_id: latestRunId } });
       }
       const rows = await db.query(
-        `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+        `SELECT F_Id AS id, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
         [pipId]
       );
       if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -401,7 +401,7 @@ function registerCompetitorMatchRoutes(router) {
         assertInvestedEnterpriseCompetitorOwner(req, row);
       } else {
         const rows = await db.query(
-          `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+          `SELECT F_Id AS id, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
           [pipId]
         );
         if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -421,61 +421,61 @@ function registerCompetitorMatchRoutes(router) {
       if (ieId) {
         if (runId) {
           list = await db.query(
-            `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+            `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                     competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
                     data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                    include_in_comparable, created_at
+                    include_in_comparable, F_CreatorTime AS created_at
              FROM sourcing_competitor_relation
              WHERE invested_enterprise_id = ? AND run_id = ?
                AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-             ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC
+             ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
              LIMIT 200`,
             [ieId, runId]
           );
         } else {
           list = await db.query(
-            `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+            `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                     competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
                     data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                    include_in_comparable, created_at
+                    include_in_comparable, F_CreatorTime AS created_at
              FROM sourcing_competitor_relation
-             WHERE invested_enterprise_id = ? AND delete_mark = 0
+             WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
                AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-             ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC
+             ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
              LIMIT 200`,
             [ieId]
           );
         }
       } else if (runId) {
         list = await db.query(
-          `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+          `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                   pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                   relevance_score, confidence_grade, score_breakdown_json,
                   data_sources_json, financing_amount_text, financing_history_text,
                   competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                  include_in_comparable, created_at
+                  include_in_comparable, F_CreatorTime AS created_at
            FROM sourcing_competitor_relation
            WHERE pre_investment_project_id = ? AND pre_investment_run_id = ?
              AND subject_type = 'pre_investment_project'
-           ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC
+           ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
            LIMIT 200`,
           [pipId, runId]
         );
       } else {
         list = await db.query(
-          `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+          `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                   pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                   relevance_score, confidence_grade, score_breakdown_json,
                   data_sources_json, financing_amount_text, financing_history_text,
                   competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                  include_in_comparable, created_at
+                  include_in_comparable, F_CreatorTime AS created_at
            FROM sourcing_competitor_relation
-           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0
-           ORDER BY include_in_comparable DESC, relevance_score DESC, created_at DESC
+           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0
+           ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
            LIMIT 200`,
           [pipId]
         );
@@ -514,9 +514,9 @@ function registerCompetitorMatchRoutes(router) {
           return res.status(400).json({ success: false, message: '缺少 relationId' });
         }
         const relRows = await db.query(
-          `SELECT id, subject_type, invested_enterprise_id, pre_investment_project_id,
-                  competitor_display_name, unified_credit_code, competitor_weak_key, delete_mark
-           FROM sourcing_competitor_relation WHERE id = ? LIMIT 1`,
+          `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id,
+                  competitor_display_name, unified_credit_code, competitor_weak_key, F_DeleteMark AS delete_mark
+           FROM sourcing_competitor_relation WHERE F_Id = ? LIMIT 1`,
           [relationId]
         );
         if (!relRows.length || Number(relRows[0].delete_mark) !== 0) {
@@ -527,8 +527,8 @@ function registerCompetitorMatchRoutes(router) {
         const prefResult = await upsertComparablePrefForRelation(rel, includeInComparable, userId);
         await db.execute(
           `UPDATE sourcing_competitor_relation
-           SET include_in_comparable = ?, updated_at = NOW()
-           WHERE id = ? AND delete_mark = 0`,
+           SET include_in_comparable = ?, F_LastModifyTime = NOW()
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
           [includeInComparable ? 1 : 0, relationId]
         );
         res.json({
@@ -563,7 +563,7 @@ function registerCompetitorMatchRoutes(router) {
         assertInvestedEnterpriseCompetitorOwner(req, row);
       } else {
         const rows = await db.query(
-          `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+          `SELECT F_Id AS id, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
           [pipId]
         );
         if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -698,7 +698,7 @@ function registerCompetitorMatchRoutes(router) {
           const uid = req.psUser?.id ? String(req.psUser.id) : '';
           for (const pipId of pipIds) {
             const rows = await db.query(
-              `SELECT id, creator_user_id, delete_mark FROM pre_investment_project WHERE id = ? LIMIT 1`,
+              `SELECT F_Id AS id, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
               [pipId]
             );
             if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -767,24 +767,24 @@ function registerCompetitorMatchRoutes(router) {
       const admin = isAdminUser(req.psUser);
       const countRows = await db.query(
         admin
-          ? `SELECT COUNT(*) AS c FROM pre_investment_project WHERE delete_mark = 0`
-          : `SELECT COUNT(*) AS c FROM pre_investment_project WHERE delete_mark = 0 AND creator_user_id = ?`,
+          ? `SELECT COUNT(*) AS c FROM pre_investment_project WHERE F_DeleteMark = 0`
+          : `SELECT COUNT(*) AS c FROM pre_investment_project WHERE F_DeleteMark = 0 AND F_CreatorUserId = ?`,
         admin ? [] : [uid]
       );
       const total = Number(countRows[0]?.c || 0);
       const list = await db.query(
         admin
-          ? `SELECT id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
-                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, created_at, updated_at, creator_user_id
+          ? `SELECT F_Id AS id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
+                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at, F_CreatorUserId AS creator_user_id
              FROM pre_investment_project
-             WHERE delete_mark = 0
-             ORDER BY updated_at DESC
+             WHERE F_DeleteMark = 0
+             ORDER BY F_LastModifyTime DESC
              LIMIT ? OFFSET ?`
-          : `SELECT id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
-                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, created_at, updated_at, creator_user_id
+          : `SELECT F_Id AS id, project_no, enterprise_full_name, unified_credit_code, project_abbreviation, pipeline_status, pipeline_error,
+                    qcc_company_intro, ai_product_intro, ai_industry_tags_display, ai_enrich_status, bp_filename, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at, F_CreatorUserId AS creator_user_id
              FROM pre_investment_project
-             WHERE delete_mark = 0 AND creator_user_id = ?
-             ORDER BY updated_at DESC
+             WHERE F_DeleteMark = 0 AND F_CreatorUserId = ?
+             ORDER BY F_LastModifyTime DESC
              LIMIT ? OFFSET ?`,
         admin ? [pageSize, offset] : [uid, pageSize, offset]
       );
@@ -890,9 +890,9 @@ function registerCompetitorMatchRoutes(router) {
 
       await db.execute(
         `INSERT INTO pre_investment_project (
-           id, enterprise_full_name, unified_credit_code, project_abbreviation, project_no, pipeline_status,
+           F_Id, enterprise_full_name, unified_credit_code, project_abbreviation, project_no, pipeline_status,
            bp_filename, bp_file_path,
-           data_app_id, data_app_name, creator_user_id, created_at, updated_at, delete_mark
+           data_app_id, data_app_name, F_CreatorUserId, F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
         [
           id,
@@ -969,7 +969,7 @@ function registerCompetitorMatchRoutes(router) {
       let bpAbsoluteDiskPath = null;
       if (hasBpFile) {
         const existingRow = await db.query(
-          `SELECT project_no FROM pre_investment_project WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+          `SELECT project_no FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
           [id]
         );
         const projectNo = existingRow[0]?.project_no || 'P00000000';
@@ -984,13 +984,13 @@ function registerCompetitorMatchRoutes(router) {
         params.push(originalName, path.join(BP_UPLOAD_SUBDIR, diskName));
       }
 
-      sets.push('updated_at = NOW()');
+      sets.push('F_LastModifyTime = NOW()');
       if (hasAiIntro || hasAiTags) {
         sets.push('ai_enrich_error = NULL');
       }
 
       await db.execute(
-        `UPDATE pre_investment_project SET ${sets.join(', ')} WHERE id = ? AND delete_mark = 0`,
+        `UPDATE pre_investment_project SET ${sets.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
         [...params, id]
       );
 
@@ -1013,9 +1013,9 @@ function registerCompetitorMatchRoutes(router) {
       }
 
       const refreshed = await db.query(
-        `SELECT id, project_no, enterprise_full_name, ai_product_intro, ai_industry_tags_display,
+        `SELECT F_Id AS id, project_no, enterprise_full_name, ai_product_intro, ai_industry_tags_display,
                 qcc_company_intro, pipeline_status, ai_enrich_status, bp_filename
-         FROM pre_investment_project WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+         FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
         [id]
       );
 
@@ -1051,15 +1051,15 @@ function registerCompetitorMatchRoutes(router) {
 
       await db.execute(
         `UPDATE sourcing_competitor_relation
-         SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
-         WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0`,
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
+         WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0`,
         [uid, id]
       );
 
       await db.execute(
         `UPDATE pre_investment_project
-         SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
-         WHERE id = ? AND delete_mark = 0`,
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
+         WHERE F_Id = ? AND F_DeleteMark = 0`,
         [uid, id]
       );
 
@@ -1076,8 +1076,8 @@ function registerCompetitorMatchRoutes(router) {
     try {
       const id = String(req.params.id || '').trim();
       const rows = await db.query(
-        `SELECT id, enterprise_full_name, unified_credit_code, creator_user_id, delete_mark
-         FROM pre_investment_project WHERE id = ? LIMIT 1`,
+        `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark
+         FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
         [id]
       );
       if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -1109,8 +1109,8 @@ function registerCompetitorMatchRoutes(router) {
       const intro = desc != null && String(desc).trim() !== '' ? String(desc).trim() : null;
       await db.execute(
         `UPDATE pre_investment_project SET qcc_company_intro = ?, qcc_sync_at = NOW(), qcc_sync_error = NULL,
-           pipeline_status = 'qcc_done', pipeline_error = NULL, updated_at = NOW()
-         WHERE id = ? AND delete_mark = 0`,
+           pipeline_status = 'qcc_done', pipeline_error = NULL, F_LastModifyTime = NOW()
+         WHERE F_Id = ? AND F_DeleteMark = 0`,
         [intro, id]
       );
       res.json({
@@ -1169,9 +1169,9 @@ function registerCompetitorMatchRoutes(router) {
     try {
       const id = String(req.params.id || '').trim();
       const rows = await db.query(
-        `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, creator_user_id, delete_mark,
+        `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, project_abbreviation, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark,
                 ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro
-         FROM pre_investment_project WHERE id = ? LIMIT 1`,
+         FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
         [id]
       );
       if (!rows.length || Number(rows[0].delete_mark) !== 0) {
@@ -1199,8 +1199,8 @@ function registerCompetitorMatchRoutes(router) {
       }
       if (force) {
         await db.execute(
-          `UPDATE sourcing_competitor_relation SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0`,
+          `UPDATE sourcing_competitor_relation SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0`,
           [uid, id]
         );
       }
@@ -1209,8 +1209,8 @@ function registerCompetitorMatchRoutes(router) {
       const msg = '已受理投前竞品分析，后台处理中，请稍后刷新查看';
       await db.execute(
         `INSERT INTO sourcing_pre_investment_competitor_run (
-           id, pre_investment_project_id, status, message, triggered_by_user_id, started_at,
-           created_at, updated_at, delete_mark
+           F_Id, pre_investment_project_id, status, message, triggered_by_user_id, started_at,
+           F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
         [runId, id, 'queued', msg, uid]
       );

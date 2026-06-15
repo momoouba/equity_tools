@@ -39,8 +39,8 @@ async function markAllInvestedEnterprisesQccSyncViaForCredit(creditNorm, psAppId
     `UPDATE invested_enterprises ie SET
        ie.qcc_sync_via = ?,
        ie.qcc_sync_at = NOW(),
-       ie.updated_at = NOW()
-     WHERE ie.delete_mark = 0 AND ${expr} = ?
+       ie.F_LastModifyTime = NOW()
+     WHERE ie.F_DeleteMark = 0 AND ${expr} = ?
        AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))`,
     [via, creditNorm, psAppId, appName]
   );
@@ -75,14 +75,14 @@ async function runUnifiedCreditQccSync(creditRaw) {
   const snap = await db.query(
     `SELECT qcc FROM (
        SELECT ie.qcc_company_intro AS qcc FROM invested_enterprises ie
-        WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+        WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
           AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))
        UNION ALL
        SELECT p.qcc_company_intro AS qcc FROM ipo_project p
         WHERE p.F_DeleteMark = 0 AND p.data_app_id <=> ? AND ${ipoCredit} = ?
        UNION ALL
        SELECT pr.qcc_company_intro AS qcc FROM pre_investment_project pr
-        WHERE pr.delete_mark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
+        WHERE pr.F_DeleteMark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
      ) t`,
     [creditNorm, psAppId, appName, psAppId, creditNorm, appName, creditNorm]
   );
@@ -95,8 +95,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
          ie.qcc_sync_at = NOW(),
          ie.qcc_sync_error = NULL,
          ie.qcc_sync_via = 'cross_table_propagate',
-         ie.updated_at = NOW()
-       WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+         ie.F_LastModifyTime = NOW()
+       WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
          AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))
          AND (ie.qcc_company_intro IS NULL OR TRIM(ie.qcc_company_intro) = '')`,
       [best0, creditNorm, psAppId, appName]
@@ -117,8 +117,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
          pr.qcc_sync_error = NULL,
          pr.pipeline_status = 'qcc_done',
          pr.pipeline_error = NULL,
-         pr.updated_at = NOW()
-       WHERE pr.delete_mark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
+         pr.F_LastModifyTime = NOW()
+       WHERE pr.F_DeleteMark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
          AND (pr.qcc_company_intro IS NULL OR TRIM(pr.qcc_company_intro) = '')`,
       [best0, appName, creditNorm]
     );
@@ -126,17 +126,17 @@ async function runUnifiedCreditQccSync(creditRaw) {
 
   const still = await db.query(
     `SELECT 1 AS x FROM (
-       SELECT ie.id FROM invested_enterprises ie
-        WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+       SELECT ie.F_Id FROM invested_enterprises ie
+        WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
           AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))
           AND (ie.qcc_company_intro IS NULL OR TRIM(ie.qcc_company_intro) = '')
        UNION ALL
-       SELECT p.f_id FROM ipo_project p
+       SELECT p.F_Id FROM ipo_project p
         WHERE p.F_DeleteMark = 0 AND p.data_app_id <=> ? AND ${ipoCredit} = ?
           AND (p.qcc_company_intro IS NULL OR TRIM(p.qcc_company_intro) = '')
        UNION ALL
-       SELECT pr.id FROM pre_investment_project pr
-        WHERE pr.delete_mark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
+       SELECT pr.F_Id FROM pre_investment_project pr
+        WHERE pr.F_DeleteMark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?
           AND (pr.qcc_company_intro IS NULL OR TRIM(pr.qcc_company_intro) = '')
      ) u LIMIT 1`,
     [creditNorm, psAppId, appName, psAppId, creditNorm, appName, creditNorm]
@@ -144,7 +144,7 @@ async function runUnifiedCreditQccSync(creditRaw) {
   if (!still.length) {
     const filled = await db.query(
       `SELECT ie.qcc_company_intro AS qcc FROM invested_enterprises ie
-        WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+        WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
           AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))
         LIMIT 1`,
       [creditNorm, psAppId, appName]
@@ -171,8 +171,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
          ie.qcc_sync_at = NOW(),
          ie.qcc_sync_error = NULL,
          ie.qcc_sync_via = 'qcc_api',
-         ie.updated_at = NOW()
-       WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+         ie.F_LastModifyTime = NOW()
+       WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
          AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))`,
       [intro, creditNorm, psAppId, appName]
     );
@@ -191,8 +191,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
          pr.qcc_sync_error = NULL,
          pr.pipeline_status = 'qcc_done',
          pr.pipeline_error = NULL,
-         pr.updated_at = NOW()
-       WHERE pr.delete_mark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?`,
+         pr.F_LastModifyTime = NOW()
+       WHERE pr.F_DeleteMark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?`,
       [intro, appName, creditNorm]
     );
     return { ok: true, source: 'qcc_api', desc_len: intro ? intro.length : 0 };
@@ -200,8 +200,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
     const msg = shortErr(err && err.message);
     try {
       await db.execute(
-        `UPDATE invested_enterprises ie SET ie.qcc_sync_error = ?, ie.updated_at = NOW()
-         WHERE ie.delete_mark = 0 AND ${ieCredit} = ?
+        `UPDATE invested_enterprises ie SET ie.qcc_sync_error = ?, ie.F_LastModifyTime = NOW()
+         WHERE ie.F_DeleteMark = 0 AND ${ieCredit} = ?
            AND (ie.data_app_id <=> ? OR (ie.data_app_id IS NULL AND ie.data_app_name = ?))`,
         [msg, creditNorm, psAppId, appName]
       );
@@ -222,8 +222,8 @@ async function runUnifiedCreditQccSync(creditRaw) {
         `UPDATE pre_investment_project pr SET
            pr.qcc_sync_error = ?,
            pr.pipeline_error = ?,
-           pr.updated_at = NOW()
-         WHERE pr.delete_mark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?`,
+           pr.F_LastModifyTime = NOW()
+         WHERE pr.F_DeleteMark = 0 AND pr.data_app_name = ? AND ${preCredit} = ?`,
         [msg, msg, appName, creditNorm]
       );
     } catch {

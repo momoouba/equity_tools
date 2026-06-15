@@ -28,9 +28,9 @@ async function listDataChangeLog(req, res) {
     const rows = await db.query(
       `SELECT d.*, u.account AS change_user_account
        FROM data_change_log d
-       LEFT JOIN users u ON u.id = d.change_user_id
+       LEFT JOIN users u ON u.F_Id = d.F_CreatorUserId
        WHERE d.table_name = ? AND d.record_id = ?
-       ORDER BY d.change_time DESC
+       ORDER BY d.F_CreatorTime DESC
        LIMIT 500`,
       [tableName, recordId]
     );
@@ -64,7 +64,7 @@ async function listSyncExecutionLog(req, res) {
     const where = ['1=1'];
     const params = [];
     if (id) {
-      where.push('id = ?');
+      where.push('F_Id = ?');
       params.push(Number(id));
     }
     if (configId) {
@@ -90,12 +90,12 @@ async function listSyncExecutionLog(req, res) {
     );
     const rows = await db.query(
       `SELECT
-         id, config_id, config_name, source_type, trigger_type, window_start, window_end, task_key, status,
+         F_Id AS id, config_id, config_name, source_type, trigger_type, window_start, window_end, task_key, status,
          DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at,
          DATE_FORMAT(finished_at, '%Y-%m-%d %H:%i:%s') AS ended_at,
          retry_count, inserted_count, updated_count, skipped_count, dedup_hits, error_message, progress_log,
-         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-         DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
+         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at,
+         DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS updated_at
        FROM listing_sync_execution_log
        ${whereSql}
        ORDER BY started_at DESC

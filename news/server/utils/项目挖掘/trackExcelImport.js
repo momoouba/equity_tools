@@ -41,7 +41,7 @@ function trimCell(v) {
 async function ensureTrack(name, sortOrder, conn) {
   const executor = conn || db;
   const forUpdate = conn ? ' FOR UPDATE' : '';
-  const rows = await executor.query(`SELECT id FROM sourcing_track WHERE name = ? AND delete_mark = 0 LIMIT 1${forUpdate}`, [name]);
+  const rows = await executor.query(`SELECT F_Id AS id FROM sourcing_track WHERE name = ? AND F_DeleteMark = 0 LIMIT 1${forUpdate}`, [name]);
   if (rows.length) return rows[0].id;
   try {
     const r = await executor.execute(`INSERT INTO sourcing_track (name, sort_order) VALUES (?,?)`, [name, sortOrder]);
@@ -49,7 +49,7 @@ async function ensureTrack(name, sortOrder, conn) {
   } catch (e) {
     // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
     if (e.code === 'ER_DUP_ENTRY') {
-      const retry = await executor.query(`SELECT id FROM sourcing_track WHERE name = ? AND delete_mark = 0 LIMIT 1`, [name]);
+      const retry = await executor.query(`SELECT F_Id AS id FROM sourcing_track WHERE name = ? AND F_DeleteMark = 0 LIMIT 1`, [name]);
       if (retry.length) return retry[0].id;
     }
     throw e;
@@ -60,7 +60,7 @@ async function ensureLv1(trackId, name, sortOrder, conn) {
   const executor = conn || db;
   const forUpdate = conn ? ' FOR UPDATE' : '';
   const rows = await executor.query(
-    `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 LIMIT 1${forUpdate}`,
+    `SELECT F_Id AS id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1${forUpdate}`,
     [trackId, name]
   );
   if (rows.length) return rows[0].id;
@@ -75,7 +75,7 @@ async function ensureLv1(trackId, name, sortOrder, conn) {
     // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
     if (e.code === 'ER_DUP_ENTRY') {
       const retry = await executor.query(
-        `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        `SELECT F_Id AS id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1`,
         [trackId, name]
       );
       if (retry.length) return retry[0].id;
@@ -88,7 +88,7 @@ async function ensureLv2(lv1Id, name, sortOrder, conn) {
   const executor = conn || db;
   const forUpdate = conn ? ' FOR UPDATE' : '';
   const rows = await executor.query(
-    `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 LIMIT 1${forUpdate}`,
+    `SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1${forUpdate}`,
     [lv1Id, name]
   );
   if (rows.length) return rows[0].id;
@@ -103,7 +103,7 @@ async function ensureLv2(lv1Id, name, sortOrder, conn) {
     // #4.2: 并发 INSERT 冲突时回退到 SELECT 获取已有行
     if (e.code === 'ER_DUP_ENTRY') {
       const retry = await executor.query(
-        `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        `SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1`,
         [lv1Id, name]
       );
       if (retry.length) return retry[0].id;
@@ -122,12 +122,12 @@ async function upsertLv3(lv2Id, name, sortOrder, m1, m2, kw, pri, conn) {
 
   const executor = conn || db;
   const rows = await executor.query(
-    `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+    `SELECT F_Id AS id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1`,
     [lv2Id, safeName]
   );
   if (rows.length) {
     await executor.execute(
-      `UPDATE sourcing_track_lv3 SET sort_order = ?, match_industry_lv1 = ?, match_industry_lv2 = ?, match_keywords = ?, match_priority = ? WHERE id = ?`,
+      `UPDATE sourcing_track_lv3 SET sort_order = ?, match_industry_lv1 = ?, match_industry_lv2 = ?, match_keywords = ?, match_priority = ? WHERE F_Id = ?`,
       [safeSortOrder, safeM1, safeM2, safeKw, safePri, rows[0].id]
     );
     return 'updated';
@@ -142,12 +142,12 @@ async function upsertLv3(lv2Id, name, sortOrder, m1, m2, kw, pri, conn) {
     // #4.2 fix: 并发 INSERT 冲突时回退为 UPDATE 已有行
     if (e.code === 'ER_DUP_ENTRY') {
       const retry = await executor.query(
-        `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 LIMIT 1`,
+        `SELECT F_Id AS id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND F_DeleteMark = 0 LIMIT 1`,
         [lv2Id, safeName]
       );
       if (retry.length) {
         await executor.execute(
-          `UPDATE sourcing_track_lv3 SET sort_order = ?, match_industry_lv1 = ?, match_industry_lv2 = ?, match_keywords = ?, match_priority = ? WHERE id = ?`,
+          `UPDATE sourcing_track_lv3 SET sort_order = ?, match_industry_lv1 = ?, match_industry_lv2 = ?, match_keywords = ?, match_priority = ? WHERE F_Id = ?`,
           [safeSortOrder, safeM1, safeM2, safeKw, safePri, retry[0].id]
         );
         return 'updated';
@@ -278,14 +278,14 @@ async function fetchFlatTrackRowsForExport() {
        lv3.match_keywords,
        lv3.match_priority
      FROM sourcing_track_lv3 lv3
-     INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.delete_mark = 0
-     INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.delete_mark = 0
-     INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.delete_mark = 0
-     WHERE lv3.delete_mark = 0
-     ORDER BY t.sort_order ASC, t.id ASC,
-              lv1.sort_order ASC, lv1.id ASC,
-              lv2.sort_order ASC, lv2.id ASC,
-              lv3.sort_order ASC, lv3.id ASC`
+     INNER JOIN sourcing_track_lv2 lv2 ON lv2.F_Id = lv3.lv2_id AND lv2.F_DeleteMark = 0
+     INNER JOIN sourcing_track_lv1 lv1 ON lv1.F_Id = lv2.lv1_id AND lv1.F_DeleteMark = 0
+     INNER JOIN sourcing_track t ON t.F_Id = lv1.track_id AND t.F_DeleteMark = 0
+     WHERE lv3.F_DeleteMark = 0
+     ORDER BY t.sort_order ASC, t.F_Id ASC,
+              lv1.sort_order ASC, lv1.F_Id ASC,
+              lv2.sort_order ASC, lv2.F_Id ASC,
+              lv3.sort_order ASC, lv3.F_Id ASC`
   );
 }
 

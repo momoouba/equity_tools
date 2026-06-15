@@ -60,7 +60,7 @@ function registerFinancingRoutes(router) {
       const dateFrom = req.query.date_from ? String(req.query.date_from).slice(0, 10) : '';
       const dateTo = req.query.date_to ? String(req.query.date_to).slice(0, 10) : '';
 
-      const where = ['delete_mark = 0'];
+      const where = ['F_DeleteMark = 0'];
       const params = [];
       if (keyword) {
         const k = `%${keyword}%`;
@@ -108,7 +108,7 @@ function registerFinancingRoutes(router) {
       const total = Number(countRows[0].total || 0);
 
       const rows = await db.query(
-        `SELECT id, source_record_id, event_id, event_date, company_name, company_credit_code,
+        `SELECT F_Id AS id, source_record_id, event_id, event_date, company_name, company_credit_code,
                 project_name, project_desc, latest_round, round,
                 funding_amt_raw, estimated_amt_raw, post_valuation_raw,
                 industry_source_lv1, industry_source_lv2,
@@ -117,10 +117,10 @@ function registerFinancingRoutes(router) {
                 classification_status,
                 ai_product_intro, ai_company_tags_display, ai_company_tags_json,
                 ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version, ai_enrich_error,
-                created_at, updated_at
+                F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
          FROM sourcing_financing_event
          ${sqlWhere}
-         ORDER BY event_date DESC, id DESC
+         ORDER BY event_date DESC, F_Id DESC
          LIMIT ? OFFSET ?`,
         [...params, pageSize, offset]
       );
@@ -159,13 +159,13 @@ function registerFinancingRoutes(router) {
       const total = Number(countRows[0].total || 0);
 
       const list = await db.query(
-        `SELECT id, financing_event_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
+        `SELECT F_Id AS id, financing_event_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
                 duration_ms, error_message, result_product_intro, result_company_tags_display, job_trace_id,
                 invoke_mode, used_enable_search, search_degraded,
                 used_enable_thinking, thinking_degraded
          FROM sourcing_financing_ai_enrich_log
          WHERE financing_event_id = ?
-         ORDER BY id DESC
+         ORDER BY F_Id DESC
          LIMIT ? OFFSET ?`,
         [feId, pageSize, offset]
       );

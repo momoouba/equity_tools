@@ -14,8 +14,8 @@ async function getActiveQichachaEnterpriseInfoConfig() {
   const rows = await db.query(
     `SELECT qichacha_app_key, qichacha_secret_key, qichacha_daily_limit
      FROM qichacha_config
-     WHERE interface_type = '企业信息' AND is_active = 1 AND delete_mark = 0
-     ORDER BY created_at DESC
+     WHERE interface_type = '企业信息' AND is_active = 1 AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime DESC
      LIMIT 1`
   );
   if (!rows.length) {

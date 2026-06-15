@@ -4,7 +4,7 @@ const { normalizeCompanyNameForMatch, extractCsrcGuidanceCompanyName } = require
 const { runGuidanceProgressSync } = require('./guidanceProgressSync');
 
 async function resolveAdminId() {
-  const rows = await db.query(`SELECT id FROM users WHERE account='admin' LIMIT 1`);
+  const rows = await db.query(`SELECT F_Id AS id FROM users WHERE account='admin' LIMIT 1`);
   if (!rows.length) throw new Error('未找到 account=admin 用户，无法写入辅导备案');
   return rows[0].id;
 }
@@ -26,19 +26,19 @@ async function upsertGuidanceRow(row, adminId, writeDate) {
   const projectName = company;
 
   const exists = await db.query(
-    `SELECT f_id, status, register_address, board, code, project_name, company
+    `SELECT F_Id, status, register_address, board, code, project_name, company
      FROM ipo_progress
      WHERE F_DeleteMark = 0
        AND exchange = ?
        AND company = ?
-       AND f_update_time = ?
+       AND F_UpdateTime = ?
      LIMIT 1`,
     [exchange, company, updateTime]
   );
   if (!exists.length) {
     await db.execute(
       `INSERT INTO ipo_progress (
-        f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+        F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
         company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
       [
@@ -73,8 +73,8 @@ async function upsertGuidanceRow(row, adminId, writeDate) {
     `UPDATE ipo_progress
      SET status = ?, register_address = ?, board = ?, code = ?, project_name = ?, company = ?,
          receive_date = ?, F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-     WHERE f_id = ? AND F_DeleteMark = 0`,
-    [status, registerAddress, board, code, projectName, company, updateDate, adminId, old.f_id]
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
+    [status, registerAddress, board, code, projectName, company, updateDate, adminId, old.F_Id]
   );
   return 'updated';
 }

@@ -7,7 +7,7 @@
  *   node server/scripts/backfillFinancingRuleEnrich.js --force --batch=300
  *   node server/scripts/backfillFinancingRuleEnrich.js --limit=5000
  *
- * 默认仅处理：delete_mark=0 且 (classification_version IS NULL OR classification_version='ingest_v1')
+ * 默认仅处理：F_DeleteMark=0 且 (classification_version IS NULL OR classification_version='ingest_v1')
  * --force：额外包含 classification_source 为空或 rule、且非 llm/hybrid 的记录（仍会跳过 classification_source 为 llm/hybrid）
  */
 
@@ -31,10 +31,10 @@ function parseArgs() {
 
 function whereClause(force) {
   if (force) {
-    return `delete_mark = 0
+    return `F_DeleteMark = 0
       AND COALESCE(classification_source, '') NOT IN ('llm', 'hybrid')`;
   }
-  return `delete_mark = 0
+  return `F_DeleteMark = 0
       AND (classification_version IS NULL OR classification_version = 'ingest_v1')`;
 }
 
@@ -65,10 +65,10 @@ async function main() {
   while (updated < opts.limit) {
     const take = Math.min(opts.batch, opts.limit - updated);
     const rows = await db.query(
-      `SELECT id, funding_amt_raw, estimated_amt_raw, industry_source_lv1, industry_source_lv2
+      `SELECT F_Id, funding_amt_raw, estimated_amt_raw, industry_source_lv1, industry_source_lv2
        FROM sourcing_financing_event
-       WHERE ${w} AND id > ?
-       ORDER BY id ASC
+       WHERE ${w} AND F_Id > ?
+       ORDER BY F_Id ASC
        LIMIT ?`,
       [lastId, take]
     );
@@ -83,8 +83,8 @@ async function main() {
           amount = ?, amount_currency = ?, amount_cny = ?, amount_parse_status = ?, amount_parse_confidence = ?,
           industry_std_lv1 = ?, industry_std_lv2 = ?, industry_match_confidence = ?,
           classification_status = 'verified', classification_source = 'rule', classification_version = ?, classification_retry_count = 0,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?`,
+          F_LastModifyTime = CURRENT_TIMESTAMP
+        WHERE F_Id = ?`,
         [
           amt.amount,
           amt.amount_currency,
@@ -95,13 +95,13 @@ async function main() {
           ind.industry_std_lv2,
           ind.industry_match_confidence,
           RULE_ENRICH_VERSION,
-          row.id,
+          row.F_Id,
         ]
       );
       updated += 1;
       if (updated >= opts.limit) break;
     }
-    lastId = rows[rows.length - 1].id;
+    lastId = rows[rows.length - 1].F_Id;
     if (rows.length < take) break;
     if (updated % (opts.batch * 5) === 0) {
       console.log('[backfillFinancingRuleEnrich] 已更新', updated);

@@ -54,7 +54,7 @@ async function loadAccessibleIpoProjectRow(req, fId) {
     return { row: null, err: { status: 400, message: '未找到「竞品分析」应用' } };
   }
   const rows = await db.query(
-    `SELECT p.* FROM ipo_project p WHERE p.f_id = ? AND p.F_DeleteMark = 0 LIMIT 1`,
+    `SELECT p.* FROM ipo_project p WHERE p.F_Id = ? AND p.F_DeleteMark = 0 LIMIT 1`,
     [fid]
   );
   if (!rows.length) {
@@ -78,21 +78,21 @@ function registerIpoProjectSourcingRoutes(router) {
       const configId = (req.query?.external_db_config_id || '').trim();
       const rows = configId
         ? await db.query(
-            `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
+            `SELECT F_Id AS id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
                     COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
-                    column_map, created_at, updated_at
+                    column_map, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
              FROM ipo_project_sql_sync_setting
              WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
              LIMIT 1`,
             [user.id, configId, IPO_SQL_WRITE_TARGET_COMPETITOR]
           )
         : await db.query(
-            `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
+            `SELECT F_Id AS id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
                     COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
-                    column_map, created_at, updated_at
+                    column_map, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
              FROM ipo_project_sql_sync_setting
              WHERE user_id = ? AND write_target = ?
-             ORDER BY updated_at DESC
+             ORDER BY F_LastModifyTime DESC
              LIMIT 1`,
             [user.id, IPO_SQL_WRITE_TARGET_COMPETITOR]
           );
@@ -147,7 +147,7 @@ function registerIpoProjectSourcingRoutes(router) {
       }
 
       const existing = await db.query(
-        `SELECT id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+        `SELECT F_Id AS id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
         [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
       );
 
@@ -170,7 +170,7 @@ function registerIpoProjectSourcingRoutes(router) {
       } else {
         const id = await generateId('ipo_project_sql_sync_setting');
         await db.execute(
-          `INSERT INTO ipo_project_sql_sync_setting (id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, qcc_brief_after_sync_enabled, column_map)
+          `INSERT INTO ipo_project_sql_sync_setting (F_Id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, qcc_brief_after_sync_enabled, column_map)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
@@ -187,7 +187,7 @@ function registerIpoProjectSourcingRoutes(router) {
       }
 
       const saved = await db.query(
-        `SELECT * FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+        `SELECT *, F_Id AS id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
         [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
       );
       await updateListingScheduledTasks();
@@ -234,7 +234,7 @@ function registerIpoProjectSourcingRoutes(router) {
 
       if (!external_db_config_id || !sql_text || is_enabled === undefined || qcc_brief_after_sync_enabled === undefined) {
         const saved = await db.query(
-          `SELECT * FROM ipo_project_sql_sync_setting
+          `SELECT *, F_Id AS id FROM ipo_project_sql_sync_setting
            WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
            LIMIT 1`,
           [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_COMPETITOR]
@@ -287,13 +287,13 @@ function registerIpoProjectSourcingRoutes(router) {
       const total = Number(countRows[0].total || 0);
 
       const list = await db.query(
-        `SELECT id, ipo_project_f_id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
+        `SELECT F_Id AS id, ipo_project_f_id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
                 duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id,
                 invoke_mode, used_enable_search, search_degraded,
                 used_enable_thinking, thinking_degraded
          FROM invested_enterprise_ai_enrich_log
          WHERE ipo_project_f_id = ?
-         ORDER BY id DESC
+         ORDER BY F_Id DESC
          LIMIT ? OFFSET ?`,
         [fid, pageSize, offset]
       );
@@ -408,7 +408,7 @@ function registerIpoProjectSourcingRoutes(router) {
       const rows = await db.query(
         `SELECT p.*, u.account AS creator_account
          FROM ipo_project p
-         LEFT JOIN users u ON u.id = p.F_CreatorUserId
+         LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
          ${whereSql}
          ORDER BY p.F_CreatorTime DESC
          LIMIT 50000`,
@@ -457,7 +457,7 @@ function registerIpoProjectSourcingRoutes(router) {
       const list = await db.query(
         `SELECT p.*, u.account AS creator_account
          FROM ipo_project p
-         LEFT JOIN users u ON u.id = p.F_CreatorUserId
+         LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
          ${whereSql}
          ORDER BY p.F_CreatorTime DESC
          LIMIT ? OFFSET ?`,
@@ -528,9 +528,9 @@ function registerIpoProjectSourcingRoutes(router) {
           psId,
         ]
       );
-      const inserted = await db.query(`SELECT * FROM ipo_project WHERE project_no = ? LIMIT 1`, [project_no]);
+      const inserted = await db.query(`SELECT *, F_Id AS id FROM ipo_project WHERE project_no = ? LIMIT 1`, [project_no]);
       const row = inserted[0];
-      const urows = await db.query(`SELECT account AS creator_account FROM users WHERE id = ? LIMIT 1`, [user.id]);
+      const urows = await db.query(`SELECT account AS creator_account FROM users WHERE F_Id = ? LIMIT 1`, [user.id]);
       row.creator_account = urows.length ? urows[0].creator_account : null;
       return res.json({ success: true, data: row });
     } catch (e) {
@@ -572,7 +572,7 @@ function registerIpoProjectSourcingRoutes(router) {
           ct_amount = ?, ct_residual = ?, fund = ?, sub = ?,
           biz_update_time = COALESCE(?, biz_update_time),
           F_LastModifyUserId = ?, F_LastModifyTime = ?
-         WHERE f_id = ? AND F_DeleteMark = 0`,
+         WHERE F_Id = ? AND F_DeleteMark = 0`,
         [
           String(body.project_name).trim(),
           String(body.company).trim(),
@@ -593,8 +593,8 @@ function registerIpoProjectSourcingRoutes(router) {
       const updated = await db.query(
         `SELECT p.*, u.account AS creator_account
          FROM ipo_project p
-         LEFT JOIN users u ON u.id = p.F_CreatorUserId
-         WHERE p.f_id = ? LIMIT 1`,
+         LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
+         WHERE p.F_Id = ? LIMIT 1`,
         [fid]
       );
       return res.json({ success: true, data: updated[0] });
@@ -612,7 +612,7 @@ function registerIpoProjectSourcingRoutes(router) {
       const user = req.psUser;
       const now = new Date();
       await db.execute(
-        `UPDATE ipo_project SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE f_id = ?`,
+        `UPDATE ipo_project SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE F_Id = ?`,
         [now, user.id, fid]
       );
       return res.json({ success: true, message: '已删除' });
@@ -630,9 +630,9 @@ function registerIpoProjectSourcingRoutes(router) {
       const rows = await db.query(
         `SELECT d.*, u.account AS change_user_account
          FROM data_change_log d
-         LEFT JOIN users u ON u.id = d.change_user_id
+         LEFT JOIN users u ON u.F_Id = d.F_CreatorUserId
          WHERE d.table_name = 'ipo_project' AND d.record_id = ?
-         ORDER BY d.change_time DESC
+         ORDER BY d.F_CreatorTime DESC
          LIMIT 500`,
         [fid]
       );

@@ -49,25 +49,25 @@ const LEGACY_APP_TYPE_COMPETITOR = 'project_sourcing_competitor';
 async function getActiveCompetitorModelConfig() {
   const rows = await db.query(
     `SELECT * FROM ai_model_config
-     WHERE delete_mark = 0 AND is_active = 1
+     WHERE F_DeleteMark = 0 AND is_active = 1
        AND usage_type = ?
        AND application_type IN (?, ?)
        AND api_key IS NOT NULL AND TRIM(api_key) != ''
      ORDER BY
        CASE application_type WHEN ? THEN 0 ELSE 1 END,
-       updated_at DESC
+       F_LastModifyTime DESC
      LIMIT 1`,
     [USAGE_TYPE, APP_TYPE_COMPETITOR, LEGACY_APP_TYPE_COMPETITOR, APP_TYPE_COMPETITOR]
   );
   if (rows.length) return rows[0];
 
   const diag = await db.query(
-    `SELECT id, config_name, application_type, usage_type, is_active,
+    `SELECT F_Id AS id, config_name, application_type, usage_type, is_active,
             (api_key IS NOT NULL AND TRIM(api_key) != '') AS has_api_key
      FROM ai_model_config
-     WHERE delete_mark = 0
+     WHERE F_DeleteMark = 0
        AND (usage_type = ? OR application_type IN (?, ?))
-     ORDER BY updated_at DESC
+     ORDER BY F_LastModifyTime DESC
      LIMIT 8`,
     [USAGE_TYPE, APP_TYPE_COMPETITOR, LEGACY_APP_TYPE_COMPETITOR]
   );

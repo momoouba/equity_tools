@@ -23,17 +23,17 @@ router.post('/register', [
 
     const { account, phone, email, password, company_name } = req.body;
 
-    const accountRows = await db.query('SELECT id FROM users WHERE account = ?', [account]);
+    const accountRows = await db.query('SELECT F_Id FROM users WHERE account = ?', [account]);
     if (accountRows.length > 0) {
       return res.status(400).json({ success: false, message: '账号已存在' });
     }
 
-    const phoneRows = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
+    const phoneRows = await db.query('SELECT F_Id FROM users WHERE phone = ?', [phone]);
     if (phoneRows.length > 0) {
       return res.status(400).json({ success: false, message: '手机号已存在' });
     }
 
-    const emailRows = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    const emailRows = await db.query('SELECT F_Id FROM users WHERE email = ?', [email]);
     if (emailRows.length > 0) {
       return res.status(400).json({ success: false, message: '邮箱已存在' });
     }
@@ -44,8 +44,8 @@ router.post('/register', [
     let membershipLevelId = null;
     try {
       const levelRows = await db.query(
-        `SELECT ml.id FROM membership_levels ml
-         JOIN applications a ON ml.app_id = a.id
+        `SELECT ml.F_Id AS id FROM membership_levels ml
+         JOIN applications a ON ml.app_id = a.F_Id
          WHERE a.app_name = '新闻舆情'
          AND ml.level_name = '普通会员'
          LIMIT 1`
@@ -64,14 +64,14 @@ router.post('/register', [
     const userId = await generateId('users');
 
     await db.execute(
-      'INSERT INTO users (id, account, phone, email, password, company_name, membership_level_id, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (F_Id, account, phone, email, password, company_name, membership_level_id, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [userId, account, phone, email, hashedPassword, company_name || '', membershipLevelId, 'active']
     );
 
     // 注册时生成 API Token 并写入 user 表（用于对外接口鉴权）
     const apiToken = crypto.randomBytes(32).toString('hex');
     await db.execute(
-      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
       [apiToken, userId]
     );
 
@@ -135,10 +135,13 @@ router.post('/login', [
     const { account, password } = req.body;
 
     const users = await db.query(
-      `SELECT u.*, ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.id as application_id
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.password, u.company_name,
+              u.role, u.membership_level_id, u.app_permissions, u.account_status,
+              u.api_token, u.F_CreatorTime AS created_at, u.F_LastModifyTime AS updated_at,
+              ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.F_Id as application_id
        FROM users u 
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id 
-       LEFT JOIN applications a ON ml.app_id = a.id
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id 
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
        WHERE u.account = ?`,
       [account]
     );
@@ -161,7 +164,7 @@ router.post('/login', [
     if (!user.api_token) {
       const apiToken = crypto.randomBytes(32).toString('hex');
       await db.execute(
-        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
         [apiToken, user.id]
       );
       user.api_token = apiToken;
@@ -189,10 +192,10 @@ router.post('/login', [
           if (missingName.length > 0) {
             const levelIds = missingName.map(p => p.membership_level_id);
             levelRows = await db.query(
-              `SELECT ml.id AS membership_level_id, a.id AS app_id, a.app_name
+              `SELECT ml.F_Id AS membership_level_id, a.F_Id AS app_id, a.app_name
                FROM membership_levels ml
-               JOIN applications a ON ml.app_id = a.id
-               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
               levelIds
             );
           }
@@ -246,11 +249,14 @@ router.get('/me', async (req, res) => {
     }
 
     const users = await db.query(
-      `SELECT u.*, ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.id as application_id
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.password, u.company_name,
+              u.role, u.membership_level_id, u.app_permissions, u.account_status,
+              u.api_token, u.F_CreatorTime AS created_at, u.F_LastModifyTime AS updated_at,
+              ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.F_Id as application_id
        FROM users u 
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id 
-       LEFT JOIN applications a ON ml.app_id = a.id
-       WHERE u.id = ?`,
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id 
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
+       WHERE u.F_Id = ?`,
       [userId]
     );
 
@@ -283,10 +289,10 @@ router.get('/me', async (req, res) => {
           if (missingName.length > 0) {
             const levelIds = missingName.map(p => p.membership_level_id);
             levelRows = await db.query(
-              `SELECT ml.id AS membership_level_id, a.id AS app_id, a.app_name
+              `SELECT ml.F_Id AS membership_level_id, a.F_Id AS app_id, a.app_name
                FROM membership_levels ml
-               JOIN applications a ON ml.app_id = a.id
-               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
               levelIds
             );
           }
@@ -339,7 +345,7 @@ router.get('/api-token', async (req, res) => {
       return res.status(401).json({ success: false, message: '未登录，请先登录后获取 API Token' });
     }
     const users = await db.query(
-      'SELECT id, account, api_token, account_status FROM users WHERE id = ?',
+      'SELECT F_Id, account, api_token, account_status FROM users WHERE F_Id = ?',
       [userId]
     );
     if (!users.length) {
@@ -353,7 +359,7 @@ router.get('/api-token', async (req, res) => {
     if (!token) {
       token = crypto.randomBytes(32).toString('hex');
       await db.execute(
-        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
         [token, userId]
       );
     }
@@ -376,7 +382,7 @@ router.post('/api-token/regenerate', async (req, res) => {
       return res.status(401).json({ success: false, message: '未登录' });
     }
     const users = await db.query(
-      'SELECT id, account_status FROM users WHERE id = ?',
+      'SELECT F_Id, account_status FROM users WHERE F_Id = ?',
       [userId]
     );
     if (!users.length) {
@@ -387,7 +393,7 @@ router.post('/api-token/regenerate', async (req, res) => {
     }
     const token = crypto.randomBytes(32).toString('hex');
     await db.execute(
-      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
       [token, userId]
     );
     return res.json({
@@ -420,14 +426,14 @@ router.get('/users', async (req, res) => {
 
     // 获取用户列表，包含会员等级和应用信息
     const users = await db.query(
-      `SELECT u.id, u.account, u.phone, u.email, u.company_name, u.account_status, 
-              u.membership_level_id, u.app_permissions, u.created_at,
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.company_name, u.account_status,
+              u.role, u.membership_level_id, u.app_permissions, u.F_CreatorTime AS created_at,
               ml.level_name as membership_level_name, ml.app_id as membership_app_id,
               a.app_name as membership_app_name
        FROM users u
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
-       LEFT JOIN applications a ON ml.app_id = a.id
-       ORDER BY u.created_at DESC
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
+       ORDER BY u.F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [parseInt(pageSize), offset]
     );
@@ -464,7 +470,7 @@ router.get('/users', async (req, res) => {
 // 获取所有应用列表
 router.get('/applications', async (req, res) => {
   try {
-    const applications = await db.query('SELECT id, app_name FROM applications ORDER BY app_name');
+    const applications = await db.query('SELECT F_Id AS id, app_name FROM applications ORDER BY app_name');
     res.json({
       success: true,
       data: applications
@@ -480,7 +486,7 @@ router.get('/membership-levels/:appId', async (req, res) => {
   try {
     const { appId } = req.params;
     const levels = await db.query(
-      'SELECT id, level_name, validity_days, app_id FROM membership_levels WHERE app_id = ? ORDER BY level_name',
+      'SELECT F_Id AS id, level_name, validity_days, app_id FROM membership_levels WHERE app_id = ? ORDER BY level_name',
       [appId]
     );
     res.json({
@@ -512,7 +518,7 @@ router.put('/users/:id/memberships', [
     const { memberships } = req.body; // [{app_id, membership_level_id}, ...]
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id, app_permissions FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id, app_permissions FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -562,7 +568,7 @@ router.put('/users/:id/memberships', [
 
     // 更新数据库
     await db.execute(
-      'UPDATE users SET app_permissions = ? WHERE id = ?',
+      'UPDATE users SET app_permissions = ? WHERE F_Id = ?',
       [JSON.stringify(updatedPermissions), id]
     );
 
@@ -590,14 +596,14 @@ router.put('/users/:id/main-membership', [
     const { membership_level_id } = req.body;
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
 
     // 更新主会员等级
     await db.execute(
-      'UPDATE users SET membership_level_id = ? WHERE id = ?',
+      'UPDATE users SET membership_level_id = ? WHERE F_Id = ?',
       [membership_level_id || null, id]
     );
 
@@ -620,12 +626,12 @@ router.get('/profile', async (req, res) => {
     }
 
     const users = await db.query(
-      `SELECT u.id, u.account, u.phone, u.email, u.company_name,
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.company_name,
               u.membership_level_id, ml.level_name AS main_membership_level,
               u.app_permissions, u.account_status
        FROM users u
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
-       WHERE u.id = ?`,
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       WHERE u.F_Id = ?`,
       [userId]
     );
 
@@ -646,10 +652,10 @@ router.get('/profile', async (req, res) => {
             .filter(Boolean);
           if (levelIds.length > 0) {
             const levelRows = await db.query(
-              `SELECT ml.id AS membership_level_id, ml.level_name, a.id AS app_id, a.app_name
+              `SELECT ml.F_Id AS membership_level_id, ml.level_name, a.F_Id AS app_id, a.app_name
                FROM membership_levels ml
-               JOIN applications a ON ml.app_id = a.id
-               WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
               levelIds
             );
             appMemberships = parsed.map(p => {
@@ -700,7 +706,7 @@ router.put('/profile', [
 
     // 检查手机号是否已被其他用户使用
     const existingUsers = await db.query(
-      'SELECT id FROM users WHERE phone = ? AND id != ?',
+      'SELECT F_Id FROM users WHERE phone = ? AND F_Id != ?',
       [phone, userId]
     );
 
@@ -711,7 +717,7 @@ router.put('/profile', [
     // 如果提供了邮箱，检查邮箱是否已被其他用户使用
     if (email) {
       const existingEmailUsers = await db.query(
-        'SELECT id FROM users WHERE email = ? AND id != ?',
+        'SELECT F_Id FROM users WHERE email = ? AND F_Id != ?',
         [email, userId]
       );
 
@@ -723,12 +729,12 @@ router.put('/profile', [
     // 更新用户信息
     if (email) {
       await db.execute(
-        'UPDATE users SET phone = ?, email = ? WHERE id = ?',
+        'UPDATE users SET phone = ?, email = ? WHERE F_Id = ?',
         [phone, email, userId]
       );
     } else {
       await db.execute(
-        'UPDATE users SET phone = ? WHERE id = ?',
+        'UPDATE users SET phone = ? WHERE F_Id = ?',
         [phone, userId]
       );
     }
@@ -762,7 +768,7 @@ router.put('/change-password', [
     const { oldPassword, newPassword } = req.body;
 
     // 获取用户信息
-    const users = await db.query('SELECT id, password FROM users WHERE id = ?', [userId]);
+    const users = await db.query('SELECT F_Id, password FROM users WHERE F_Id = ?', [userId]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -786,7 +792,7 @@ router.put('/change-password', [
 
     // 更新密码
     await db.execute(
-      'UPDATE users SET password = ? WHERE id = ?',
+      'UPDATE users SET password = ? WHERE F_Id = ?',
       [hashedPassword, userId]
     );
 
@@ -811,7 +817,7 @@ router.put('/users/:id/reset-password', async (req, res) => {
     const { id } = req.params;
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id, account FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id, account FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -822,7 +828,7 @@ router.put('/users/:id/reset-password', async (req, res) => {
 
     // 更新密码
     await db.execute(
-      'UPDATE users SET password = ? WHERE id = ?',
+      'UPDATE users SET password = ? WHERE F_Id = ?',
       [hashedPassword, id]
     );
 

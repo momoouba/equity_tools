@@ -30,7 +30,7 @@ async function runFinancingScheduledSync(configId) {
     if (configId) {
       try {
         const cfgRows = await db.query(
-          `SELECT last_sync_date FROM news_interface_config WHERE id = ? LIMIT 1`,
+          `SELECT last_sync_date FROM news_interface_config WHERE F_Id = ? LIMIT 1`,
           [configId]
         );
         if (cfgRows.length && cfgRows[0].last_sync_date) {

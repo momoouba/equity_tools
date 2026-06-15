@@ -89,11 +89,11 @@ function saveMarkdownFile(originalFilePath, markdownText) {
  */
 async function resolveBpModelConfig() {
   const rows = await db.query(
-    `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
+    `SELECT F_Id AS id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
      FROM ai_model_config
      WHERE application_type = 'project_sourcing_analysis'
-       AND is_active = 1 AND delete_mark = 0
-     ORDER BY created_at DESC LIMIT 1`
+       AND is_active = 1 AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime DESC LIMIT 1`
   );
   if (rows.length && rows[0].api_key && rows[0].model_name) {
     return {
@@ -301,7 +301,7 @@ async function processBpFile({ absolutePath, projectId }) {
 
     // 3. 将 Markdown 全文写入数据库
     await db.execute(
-      'UPDATE pre_investment_project SET bp_extract_text = ? WHERE id = ?',
+      'UPDATE pre_investment_project SET bp_extract_text = ? WHERE F_Id = ?',
       [markdownText, projectId]
     );
     console.log(`[bpFileParser] Markdown 已保存: ${projectId}, ${markdownText.length} 字符`);
@@ -332,7 +332,7 @@ async function extractBpForProject(projectId) {
 
     while (Date.now() - start < POLL_MAX_WAIT) {
       const rows = await db.query(
-        'SELECT bp_filename, bp_extract_text FROM pre_investment_project WHERE id = ? AND delete_mark = 0',
+        'SELECT bp_filename, bp_extract_text FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
         [projectId]
       );
       if (!rows.length) {
@@ -362,7 +362,7 @@ async function extractBpForProject(projectId) {
         `UPDATE pre_investment_project
          SET ai_product_intro = ?, ai_industry_tags_display = ?, ai_industry_tags_json = ?,
              ai_enrich_status = 'success', pipeline_status = 'ai_done'
-         WHERE id = ?`,
+         WHERE F_Id = ?`,
         [extracted.productIntro, extracted.tagsDisplay, extracted.tagsJson, projectId]
       );
       console.log(`[bpFileParser] BP 提取成功: ${projectId}`);

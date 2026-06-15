@@ -46,9 +46,9 @@ async function buildFinancingEventIndex() {
     `SELECT company_name, company_credit_code, event_date, round, latest_round,
             funding_amt_raw, estimated_amt_raw
      FROM sourcing_financing_event
-     WHERE delete_mark = 0
+     WHERE F_DeleteMark = 0
        AND (event_date IS NULL OR event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR))
-     ORDER BY event_date DESC, id DESC`,
+     ORDER BY event_date DESC, F_Id DESC`,
     [maxAgeYears]
   );
   const byKey = new Map();

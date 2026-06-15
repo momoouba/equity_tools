@@ -22,7 +22,7 @@ function latestStepMap(steps) {
     const code = String(s.step_code || '').trim();
     if (!code) continue;
     const prev = m.get(code);
-    if (!prev || String(s.created_at) > String(prev.created_at)) {
+    if (!prev || String(s.F_CreatorTime) > String(prev.F_CreatorTime)) {
       m.set(code, s);
     }
   }

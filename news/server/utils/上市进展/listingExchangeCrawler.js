@@ -244,7 +244,7 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
     const params = [adminId, g.exchange, g.company, g.board, ...statuses];
     // 先查候选，避免误删；仅删除不在时间轴集合的状态+日期。
     const candidates = await db.query(
-      `SELECT f_id, status, DATE_FORMAT(f_update_time, '%Y-%m-%d') AS ymd
+      `SELECT F_Id, status, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange = ?
@@ -255,7 +255,7 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
     );
     const toDeleteIds = candidates
       .filter((x) => !g.allowed.has(`${String(x.status || '').trim()}__${String(x.ymd || '').slice(0, 10)}`))
-      .map((x) => x.f_id)
+      .map((x) => x.F_Id)
       .filter(Boolean);
     if (!toDeleteIds.length) continue;
     // #17: 分块处理 IN 子句，避免占位符超限（替代原截断 500 方案，防止遗漏删除）
@@ -271,7 +271,7 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
       const header = await db.execute(
         `UPDATE ipo_progress
          SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
-         WHERE F_DeleteMark = 0 AND f_id IN (${idPlaceholders})`,
+         WHERE F_DeleteMark = 0 AND F_Id IN (${idPlaceholders})`,
         [adminId, ...chunk]
       );
       softDeleted += Number(header?.affectedRows || 0);
@@ -322,7 +322,7 @@ async function migrateStaleTimelineDates(rows, adminId, logTag = '[上市进展�
     // 查询 DB 中该公司这些状态的所有活跃记录
     const statusPlaceholders = timelineStatuses.map(() => '?').join(',');
     const candidates = await db.query(
-      `SELECT f_id, status, DATE_FORMAT(f_update_time, '%Y-%m-%d') AS ymd
+      `SELECT F_Id, status, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange = ?
@@ -346,26 +346,26 @@ async function migrateStaleTimelineDates(rows, adminId, logTag = '[上市进展�
 
       // 检查目标日期是否已有记录存在（避免迁移后产生新重复）
       const existingAtTarget = await db.query(
-        `SELECT f_id FROM ipo_progress
+        `SELECT F_Id FROM ipo_progress
          WHERE F_DeleteMark = 0
            AND exchange = ? AND company = ? AND board = ?
            AND status = ?
-           AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
-           AND f_id <> ?`,
-        [g.exchange, g.company, g.board, cStatus, targetYmd, c.f_id]
+           AND COALESCE(DATE(receive_date), DATE(F_UpdateTime)) = ?
+           AND F_Id <> ?`,
+        [g.exchange, g.company, g.board, cStatus, targetYmd, c.F_Id]
       );
       if (existingAtTarget.length > 0) {
         // 目标日期已有正确记录，软删当前旧记录即可
         // 同步清理关联的 ipo_project_progress（该表使用硬删除，无 F_DeleteMark）
         await db.execute(
           `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
-          [c.f_id]
+          [c.F_Id]
         );
         await db.execute(
           `UPDATE ipo_progress
            SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
-           WHERE f_id = ? AND F_DeleteMark = 0`,
-          [adminId, c.f_id]
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [adminId, c.F_Id]
         );
         migrated += 1;
         continue;
@@ -374,16 +374,16 @@ async function migrateStaleTimelineDates(rows, adminId, logTag = '[上市进展�
       // 就地修正 f_update_time 为时间轴日期（00:00:00），与 expandRowsWithTimeline 保持一致
       await db.execute(
         `UPDATE ipo_progress
-         SET f_update_time = CONCAT(?, ' 00:00:00'),
+         SET F_UpdateTime = CONCAT(?, ' 00:00:00'),
              receive_date = ?,
              F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-         WHERE f_id = ? AND F_DeleteMark = 0`,
-        [targetYmd, targetYmd, adminId, c.f_id]
+         WHERE F_Id = ? AND F_DeleteMark = 0`,
+        [targetYmd, targetYmd, adminId, c.F_Id]
       );
       // 清理关联的 ipo_project_progress 旧记录，由下次匹配流程（listingMatchRunner）自动重建正确数据
       await db.execute(
         `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
-        [c.f_id]
+        [c.F_Id]
       );
       migrated += 1;
     }
@@ -1204,16 +1204,16 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
   // 先清理将被软删的 ipo_progress 所关联的 ipo_project_progress（硬删除，无 F_DeleteMark）
   const delSql = `
     DELETE ipp FROM ipo_project_progress ipp
-    INNER JOIN ipo_progress p1 ON ipp.ipo_progress_row_id = p1.f_id AND p1.F_DeleteMark = 0
+    INNER JOIN ipo_progress p1 ON ipp.ipo_progress_row_id = p1.F_Id AND p1.F_DeleteMark = 0
     INNER JOIN ipo_progress p2
       ON p2.F_DeleteMark = 0
       AND p2.exchange = p1.exchange
       AND p2.company = p1.company
       AND p2.status = p1.status
       AND p2.board = p1.board
-      AND COALESCE(DATE(p2.receive_date), DATE(p2.f_update_time)) = COALESCE(DATE(p1.receive_date), DATE(p1.f_update_time))
-      AND p2.f_id <> p1.f_id
-      AND p2.f_id < p1.f_id
+      AND COALESCE(DATE(p2.receive_date), DATE(p2.F_UpdateTime)) = COALESCE(DATE(p1.receive_date), DATE(p1.F_UpdateTime))
+      AND p2.F_Id <> p1.F_Id
+      AND p2.F_Id < p1.F_Id
     WHERE p1.exchange IN (${placeholders})`;
   const delHeader = await db.execute(delSql, [...EXCHANGES_IPO_PROGRESS_DEDUPE]);
   const progressDeleted = Number(delHeader?.affectedRows || 0);
@@ -1221,7 +1221,7 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
   const sql = `
     UPDATE ipo_progress p
     INNER JOIN (
-      SELECT p1.f_id
+      SELECT p1.F_Id
       FROM ipo_progress p1
       INNER JOIN ipo_progress p2
         ON p2.F_DeleteMark = 0
@@ -1230,11 +1230,11 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
         AND p2.company = p1.company
         AND p2.status = p1.status
         AND p2.board = p1.board
-        AND COALESCE(DATE(p2.receive_date), DATE(p2.f_update_time)) = COALESCE(DATE(p1.receive_date), DATE(p1.f_update_time))
-        AND p2.f_id <> p1.f_id
-        AND p2.f_id < p1.f_id
+        AND COALESCE(DATE(p2.receive_date), DATE(p2.F_UpdateTime)) = COALESCE(DATE(p1.receive_date), DATE(p1.F_UpdateTime))
+        AND p2.F_Id <> p1.F_Id
+        AND p2.F_Id < p1.F_Id
       WHERE p1.exchange IN (${placeholders})
-    ) d ON p.f_id = d.f_id
+    ) d ON p.F_Id = d.F_Id
     SET p.F_DeleteMark = 1, p.F_DeleteTime = ?, p.F_DeleteUserId = ?
     WHERE p.F_DeleteMark = 0`;
   const header = await db.execute(sql, [...EXCHANGES_IPO_PROGRESS_DEDUPE, now, adminId]);
@@ -1285,14 +1285,14 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
     const board = String(r.board || '').trim();
 
     const existing = await db.query(
-      `SELECT f_id, receive_date, project_name, register_address, code FROM ipo_progress
+      `SELECT F_Id, receive_date, project_name, register_address, code FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange = ?
          AND company = ?
          AND status = ?
          AND board = ?
-         AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
-       ORDER BY f_id ASC LIMIT 1`,
+         AND COALESCE(DATE(receive_date), DATE(F_UpdateTime)) = ?
+       ORDER BY F_Id ASC LIMIT 1`,
       [exchange, company, status, board, dedupeDateStr]
     );
 
@@ -1316,8 +1316,8 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
           `UPDATE ipo_progress
            SET receive_date = ?, project_name = ?, register_address = ?, code = ?,
                F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-           WHERE f_id = ? AND F_DeleteMark = 0`,
-          [newReceive, newProject, newAddr, newCode, adminId, old.f_id]
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [newReceive, newProject, newAddr, newCode, adminId, old.F_Id]
         );
         updatedExisting += 1;
       }
@@ -1328,25 +1328,25 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
 
     // 同键若存在历史软删记录，优先恢复并以抓取结果覆盖，避免同键反复新增新行。
     const deletedSameKey = await db.query(
-      `SELECT f_id FROM ipo_progress
+      `SELECT F_Id FROM ipo_progress
        WHERE F_DeleteMark = 1
          AND exchange = ?
          AND company = ?
          AND status = ?
          AND board = ?
-         AND COALESCE(DATE(receive_date), DATE(f_update_time)) = ?
-       ORDER BY F_DeleteTime DESC, f_id DESC
+         AND COALESCE(DATE(receive_date), DATE(F_UpdateTime)) = ?
+       ORDER BY F_DeleteTime DESC, F_Id DESC
        LIMIT 1`,
       [exchange, company, status, board, dedupeDateStr]
     );
     if (deletedSameKey.length) {
       await db.execute(
         `UPDATE ipo_progress SET
-           f_create_date = ?, f_update_time = ?, code = ?, project_name = ?, status = ?, register_address = ?,
+           F_CreatorTime = ?, F_UpdateTime = ?, code = ?, project_name = ?, status = ?, register_address = ?,
            receive_date = ?, company = ?, board = ?, exchange = ?,
            F_DeleteMark = 0, F_DeleteTime = NULL, F_DeleteUserId = NULL,
            F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-         WHERE f_id = ?`,
+         WHERE F_Id = ?`,
         [
           dateStr,
           r.f_update_time || `${dateStr} 00:00:00`,
@@ -1359,7 +1359,7 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
           board,
           exchange,
           adminId,
-          deletedSameKey[0].f_id,
+          deletedSameKey[0].F_Id,
         ]
       );
       revivedExisting += 1;
@@ -1379,7 +1379,7 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
 
     await db.execute(
       `INSERT INTO ipo_progress (
-        f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+        F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
         company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
       [
@@ -1434,7 +1434,7 @@ async function runListingExchangeCrawler({
   config = null,
   progressReporter = null,
 } = {}) {
-  const adminRows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
+  const adminRows = await db.query(`SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1`);
   const adminId = adminRows[0]?.id;
   if (!adminId) throw new Error('未找到 account=admin 用户，无法写入上市进展数据');
 

@@ -42,7 +42,7 @@ function shouldSyncSendFrequencyFromFrequencyType(interfaceType) {
 
 async function validateFinancingSigByApp(db, appId) {
   const sigConfigs = await db.query(
-    `SELECT id FROM shanghai_international_group_config WHERE app_id = ? AND is_active = 1 LIMIT 1`,
+    `SELECT F_Id AS id FROM shanghai_international_group_config WHERE app_id = ? AND is_active = 1 LIMIT 1`,
     [appId]
   );
   if (sigConfigs.length === 0) {

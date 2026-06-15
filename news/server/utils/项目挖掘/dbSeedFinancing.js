@@ -26,7 +26,7 @@ async function seedInterfaceNewsTypeFinancing(dbPool) {
 async function seedApplicationsAndEmailFallback(dbPool) {
   try {
     await dbPool.query(
-      `INSERT IGNORE INTO applications (id, app_name, created_at) VALUES (?, ?, ?)`,
+      `INSERT IGNORE INTO applications (F_Id, app_name, F_CreatorTime) VALUES (?, ?, ?)`,
       [PROJECT_SOURCING_APP_ID, APP_NAME_PROJECT_SOURCING, PROJECT_SOURCING_CREATED_AT]
     );
     console.log('✓ applications 项目挖掘应用记录已就绪');
@@ -37,18 +37,18 @@ async function seedApplicationsAndEmailFallback(dbPool) {
   try {
     const { generateId } = require('../idGenerator');
     const [psApps] = await dbPool.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       [APP_NAME_PROJECT_SOURCING]
     );
     if (!psApps.length) return;
 
     const psAppId = psApps[0].id;
-    const [existPsEc] = await dbPool.query(`SELECT id FROM email_config WHERE app_id = ? LIMIT 1`, [psAppId]);
+    const [existPsEc] = await dbPool.query(`SELECT F_Id AS id FROM email_config WHERE app_id = ? LIMIT 1`, [psAppId]);
     if (existPsEc.length > 0) return;
 
     const [newsEc] = await dbPool.query(
       `SELECT ec.* FROM email_config ec
-       INNER JOIN applications a ON ec.app_id = a.id
+       INNER JOIN applications a ON ec.app_id = a.F_Id
        WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
       ['新闻舆情']
     );
@@ -61,7 +61,7 @@ async function seedApplicationsAndEmailFallback(dbPool) {
     const newEcId = await generateId('email_config', dbPool);
     await dbPool.execute(
       `INSERT INTO email_config (
-        id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
+        F_Id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
         from_email, from_name, pop_host, pop_port, pop_secure, pop_user, pop_password, is_active
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [

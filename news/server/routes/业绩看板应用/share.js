@@ -38,7 +38,7 @@ router.post('/create', async (req, res) => {
     }
 
     // 外键约束：user_id 必须存在于 users 表
-    const userRows = await db.query('SELECT id FROM users WHERE id = ? LIMIT 1', [userId]);
+    const userRows = await db.query('SELECT F_Id AS id FROM users WHERE F_Id = ? LIMIT 1', [userId]);
     if (!userRows || userRows.length === 0) {
       return res.status(400).json({
         success: false,
@@ -48,9 +48,9 @@ router.post('/create', async (req, res) => {
     
     // 检查是否已有活跃的业绩看板分享链接
     const existingLinks = await db.query(
-      `SELECT id, share_token FROM news_share_links
+      `SELECT F_Id AS id, share_token FROM news_share_links
        WHERE user_id = ? AND status = 'active' AND link_type = 'performance'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY F_CreatorTime DESC LIMIT 1`,
       [userId]
     );
     
@@ -75,8 +75,8 @@ router.post('/create', async (req, res) => {
         `UPDATE news_share_links 
          SET share_token = ?, has_expiry = ?, expiry_time = ?, 
              has_password = ?, password_hash = ?, performance_version = ?, can_export = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND user_id = ?`,
+             F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ? AND user_id = ?`,
         [
           shareToken,
           hasExpiry ? 1 : 0,
@@ -95,9 +95,9 @@ router.post('/create', async (req, res) => {
       
       await db.execute(
         `INSERT INTO news_share_links 
-         (id, user_id, share_token, status, has_expiry, expiry_time, 
+         (F_Id, user_id, share_token, status, has_expiry, expiry_time, 
           has_password, password_hash, link_type, performance_version, can_export,
-          created_at, updated_at)
+          F_CreatorTime, F_LastModifyTime)
          VALUES (?, ?, ?, 'active', ?, ?, ?, ?, 'performance', ?, ?, NOW(), NOW())`,
         [
           id,
@@ -149,7 +149,7 @@ router.get('/verify', async (req, res) => {
     
     // 查询分享链接
     const links = await db.query(
-      `SELECT * FROM news_share_links 
+      `SELECT *, F_Id AS id FROM news_share_links 
        WHERE share_token = ? AND link_type = 'performance' AND status = 'active'`,
       [token]
     );
@@ -213,7 +213,7 @@ router.get('/data', async (req, res) => {
     
     // 查询分享链接
     const links = await db.query(
-      `SELECT * FROM news_share_links 
+      `SELECT *, F_Id AS id FROM news_share_links 
        WHERE share_token = ? AND link_type = 'performance' AND status = 'active'`,
       [token]
     );
@@ -282,7 +282,7 @@ router.post('/close', async (req, res) => {
     // 只能关闭自己创建的链接
     await db.execute(
       `UPDATE news_share_links 
-       SET status = 'inactive', updated_at = CURRENT_TIMESTAMP
+       SET status = 'inactive', F_LastModifyTime = CURRENT_TIMESTAMP
        WHERE share_token = ? AND user_id = ? AND link_type = 'performance'`,
       [shareToken, userId]
     );

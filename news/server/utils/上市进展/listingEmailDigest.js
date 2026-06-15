@@ -13,7 +13,7 @@ async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -34,7 +34,7 @@ function dedupeHkIpoRowsForListingMail(rows) {
     const r = rows[i];
     const ex = String(r.exchange || '').trim();
     if (!HK_IPO_MAIL_EXCHANGES.has(ex)) continue;
-    const dateStr = String(r.f_update_time || '').slice(0, 10);
+    const dateStr = String(r.F_UpdateTime || '').slice(0, 10);
     const key = `${normalizeCompanyName(String(r.company || '').trim())}|${String(r.status || '').trim()}|${String(r.board || '').trim()}|${dateStr}|${ex}`;
     const prevIdx = byKey.get(key);
     if (prevIdx === undefined) {
@@ -207,8 +207,8 @@ async function executeListingEmailDigest(recipient, options = {}) {
   }
 
   const ec = await db.query(
-    `SELECT ec.id FROM email_config ec
-     INNER JOIN applications a ON ec.app_id = a.id
+    `SELECT ec.F_Id AS id FROM email_config ec
+     INNER JOIN applications a ON ec.app_id = a.F_Id
      WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
     ['上市进展']
   );
@@ -252,98 +252,80 @@ async function executeListingEmailDigest(recipient, options = {}) {
   let ipoOverseasSaturday = [];
   if (includeListingProjectProgress) {
     /** 报告日 reportDay = 发信日的前一自然日（北京）。
-     * - ipo_progress 匹配行：仍按 f_update_time 对齐 reportDay。
+     * - ipo_progress 匹配行：仍按 F_UpdateTime 对齐 reportDay。
      * - 打新「昨日上市」行：以打新 public_date 对齐 reportDay（与 listingMatchRunner 写入一致）；无 public_date 时回退 f_update_time。
      * - 兼容历史脏数据：曾把 f_update_time 写成匹配执行日、与 public_date 不一致时，不以 f_update_time 误纳入。 */
     ipp = await db.query(
-      `SELECT ipp.fund, ipp.sub, ipp.project_name, ipp.company, ipp.status, ipp.exchange, ipp.board, ipp.f_update_time,
+      `SELECT ipp.fund, ipp.sub, ipp.project_name, ipp.company, ipp.status, ipp.exchange, ipp.board, ipp.F_UpdateTime,
               ipp.inv_amount, ipp.residual_amount, ipp.ratio, ipp.ct_amount, ipp.ct_residual
        FROM ipo_project_progress ipp
        WHERE ipp.F_CreatorUserId = ?
          AND (
            (
              ipp.new_share_row_id IS NULL
-             AND DATE(ipp.f_update_time) = ?
+             AND DATE(ipp.F_UpdateTime) = ?
            )
            OR (
              ipp.new_share_row_id IS NOT NULL
              AND EXISTS (
                SELECT 1 FROM ipo_new_share ns
-               WHERE ns.id = ipp.new_share_row_id
+               WHERE ns.F_Id = ipp.new_share_row_id
                  AND (
                    (ns.public_date IS NOT NULL AND TRIM(ns.public_date) <> '' AND DATE(ns.public_date) = ?)
                    OR (
                      (ns.public_date IS NULL OR TRIM(ns.public_date) = '')
-                     AND DATE(ipp.f_update_time) = ?
+                     AND DATE(ipp.F_UpdateTime) = ?
                    )
                  )
              )
            )
          )
-       ORDER BY ipp.f_update_time DESC`,
+       ORDER BY ipp.F_UpdateTime DESC`,
       [recipient.user_id, reportDay, reportDay, reportDay]
     );
   }
   if (includeListingProgress) {
-    // #28: 仅展示与收件人底层项目关联的 ipo_progress 行，避免多用户场景下展示其他用户的匹配结果
+    // 独立查询 IPO 审核数据，不依赖 ipo_project_progress 匹配表
     ipoExchangeYesterday = await db.query(
-      `SELECT f_id, company, status, exchange, board, f_update_time, project_name
+      `SELECT F_Id, company, status, exchange, board, F_UpdateTime, project_name
        FROM ipo_progress
        WHERE F_DeleteMark = 0
-         AND DATE(f_update_time) = ?
+         AND DATE(F_UpdateTime) = ?
          AND exchange IN ('北交所','深交所','上交所','香港联交所','港交所')
-         AND EXISTS (
-           SELECT 1 FROM ipo_project_progress ipp2
-           WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
-             AND ipp2.F_CreatorUserId = ?
-             AND ipp2.delete_mark = 0
-         )
-       ORDER BY f_update_time DESC
+       ORDER BY F_UpdateTime DESC
        LIMIT 300`,
-      [reportDay, recipient.user_id]
+      [reportDay]
     );
     ipoExchangeYesterday = dedupeHkIpoRowsForListingMail(ipoExchangeYesterday);
     ipoExchangeYesterday = filterNewlyListedFromIpoAuditMailRows(ipoExchangeYesterday);
   }
   if (includeListingGuidance) {
-    // #28: 仅展示与收件人底层项目关联的辅导备案行
+    // 独立查询证监会辅导备案数据，不依赖 ipo_project_progress 匹配表
     ipoGuidanceYesterday = await db.query(
-      `SELECT company, status, register_address, f_update_time
+      `SELECT company, status, register_address, F_UpdateTime
        FROM ipo_progress
        WHERE F_DeleteMark = 0
-         AND DATE(f_update_time) = ?
+         AND DATE(F_UpdateTime) = ?
          AND exchange = '证监会辅导备案'
-         AND EXISTS (
-           SELECT 1 FROM ipo_project_progress ipp2
-           WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
-             AND ipp2.F_CreatorUserId = ?
-             AND ipp2.delete_mark = 0
-         )
-       ORDER BY f_update_time DESC
+       ORDER BY F_UpdateTime DESC
        LIMIT 200`,
-      [reportDay, recipient.user_id]
+      [reportDay]
     );
   }
   if (includeOverseasFiling) {
     /** 境外备案：与定时抓取对齐，仅周六发信日汇总当日 f_create_date 入库记录（抓取任务已改为周六早上执行） */
     const isSaturday = today.getDay() === 6;
     if (isSaturday) {
-      // #28: 仅展示与收件人底层项目关联的境外备案行
+      // 独立查询境外上市备案数据，不依赖 ipo_project_progress 匹配表
       ipoOverseasSaturday = await db.query(
         `SELECT company, status, exchange, DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date
          FROM ipo_progress
          WHERE F_DeleteMark = 0
-           AND DATE(f_create_date) = ?
+           AND DATE(F_CreatorTime) = ?
            AND (exchange = '境外发行备案' OR board = '境外发行备案')
-           AND EXISTS (
-             SELECT 1 FROM ipo_project_progress ipp2
-             WHERE ipp2.ipo_progress_row_id = ipo_progress.f_id
-               AND ipp2.F_CreatorUserId = ?
-               AND ipp2.delete_mark = 0
-           )
-         ORDER BY receive_date DESC, f_update_time DESC
+         ORDER BY receive_date DESC, F_UpdateTime DESC
          LIMIT 200`,
-        [todayYmd, recipient.user_id]
+        [todayYmd]
       );
     }
   }

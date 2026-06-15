@@ -91,7 +91,7 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime) {
   const ymd = normYmd(updateTime);
   if (!ymd) {
     const rows = await db.query(
-      `SELECT f_id FROM ipo_project_progress
+      `SELECT F_Id FROM ipo_project_progress
        WHERE match_source = 'ipo_progress'
          AND ipo_project_f_id = ?
          AND ipo_progress_row_id = ?
@@ -101,11 +101,11 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime) {
     return rows.length > 0;
   }
   const rows = await db.query(
-    `SELECT f_id FROM ipo_project_progress
+    `SELECT F_Id FROM ipo_project_progress
      WHERE match_source = 'ipo_progress'
        AND ipo_project_f_id = ?
        AND ipo_progress_row_id = ?
-       AND DATE(f_update_time) = ?
+       AND DATE(F_UpdateTime) = ?
      LIMIT 1`,
     [projectFId, progressRowId, ymd]
   );
@@ -141,7 +141,7 @@ async function runNewShareMatchBatch({
   }
 
   const newShareRows = await db.query(
-    `SELECT id, stock_code, stock_name, enterprise_full_name_cn, enterprise_full_name_en, exchange,
+    `SELECT F_Id, stock_code, stock_name, enterprise_full_name_cn, enterprise_full_name_en, exchange,
             DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date
      FROM ipo_new_share
      WHERE public_date IS NOT NULL
@@ -150,7 +150,7 @@ async function runNewShareMatchBatch({
     [startYmd, endYmd]
   );
 
-  let projectSql = `SELECT * FROM ipo_project WHERE F_DeleteMark = 0`;
+  let projectSql = `SELECT *, F_Id AS id FROM ipo_project WHERE F_DeleteMark = 0`;
   const projectParams = [];
   if (restrictProjectUserId) {
     projectSql += ` AND F_CreatorUserId = ?`;
@@ -162,7 +162,7 @@ async function runNewShareMatchBatch({
   } else {
     projectSql += ` AND 1 = 0`;
   }
-  projectSql += ` ORDER BY f_id`;
+  projectSql += ` ORDER BY F_Id`;
   const projectRows = await db.query(projectSql, projectParams);
   console.log(
     `[listing-match][new-share] public_date=${startYmd}~${endYmd} new_share=${newShareRows.length} projects=${projectRows.length}` +
@@ -184,13 +184,13 @@ async function runNewShareMatchBatch({
       matchedPairs += 1;
       // 与上市日对齐：避免「晚一天匹配」导致 f_update_time=写入日，进而在次日日报被误当作「昨日进展」
       const existing = await db.query(
-        `SELECT f_id
+        `SELECT F_Id
          FROM ipo_project_progress
          WHERE match_source = 'new_share'
            AND ipo_project_f_id = ?
            AND new_share_row_id = ?
          LIMIT 1`,
-        [p.f_id, ns.id]
+        [p.F_Id, ns.F_Id]
       );
       if (existing.length) {
         skipped += 1;
@@ -198,18 +198,18 @@ async function runNewShareMatchBatch({
       }
       await db.execute(
         `INSERT INTO ipo_project_progress (
-          f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+          F_CreatorTime, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
           new_share_row_id, match_source, match_score,
           fund, sub, project_name, company,
           inv_amount, residual_amount, ratio, ct_amount, ct_residual,
-          status, board, exchange, f_update_time
+          status, board, exchange, F_UpdateTime
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           now,
           p.F_CreatorUserId,
-          p.f_id,
+          p.F_Id,
           null,
-          ns.id,
+          ns.F_Id,
           'new_share',
           Number(hitInfo.score.toFixed(4)),
           p.fund,
@@ -256,7 +256,7 @@ async function backfillYesterdayListedStatus({ restrictProjectUserId = null, lis
     params1.push(restrictProjectUserId);
     params2.push(restrictProjectUserId);
   }
-  const joinListing = ` INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0 AND p.data_app_id <=> ? `;
+  const joinListing = ` INNER JOIN ipo_project p ON p.F_Id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0 AND p.data_app_id <=> ? `;
   params1.unshift(listingId);
   params2.unshift(listingId);
 
@@ -359,9 +359,9 @@ async function runListingMatchBatch({
   if (listingAppId && (includeIpoProgress || includeNewShare)) {
     const delParams = [listingAppId];
     let delSql = `UPDATE ipo_project_progress ipp
-      INNER JOIN ipo_project p ON p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
-      SET ipp.delete_mark = 1, ipp.delete_time = NOW()
-      WHERE ipp.delete_mark = 0 AND p.data_app_id IS NOT NULL AND NOT (p.data_app_id <=> ?)`;
+      INNER JOIN ipo_project p ON p.F_Id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
+      SET ipp.F_DeleteMark = 1, ipp.F_DeleteTime = NOW(), ipp.F_DeleteUserId = 'system_match_cleanup'
+      WHERE ipp.F_DeleteMark = 0 AND p.data_app_id IS NOT NULL AND NOT (p.data_app_id <=> ?)`;
     if (restrictProjectUserId) {
       delSql += ` AND ipp.F_CreatorUserId = ?`;
       delParams.push(restrictProjectUserId);
@@ -384,14 +384,14 @@ async function runListingMatchBatch({
   if (includeIpoProgress && startDate && endDate) {
     const sql = `SELECT * FROM ipo_progress
       WHERE F_DeleteMark = 0
-        AND DATE(f_update_time) >= ?
-        AND DATE(f_update_time) <= ?
+        AND DATE(F_UpdateTime) >= ?
+        AND DATE(F_UpdateTime) <= ?
         AND (${ipoWhere.join(' OR ')})
-      ORDER BY f_id`;
+      ORDER BY F_Id`;
     progressRows = await db.query(sql, [startDate, endDate]);
   }
 
-  let projectSql = `SELECT * FROM ipo_project WHERE F_DeleteMark = 0`;
+  let projectSql = `SELECT *, F_Id AS id FROM ipo_project WHERE F_DeleteMark = 0`;
   const projectParams = [];
   if (restrictProjectUserId) {
     projectSql += ` AND F_CreatorUserId = ?`;
@@ -403,7 +403,7 @@ async function runListingMatchBatch({
   } else {
     projectSql += ` AND 1 = 0`;
   }
-  projectSql += ` ORDER BY f_id`;
+  projectSql += ` ORDER BY F_Id`;
   const projectRows = await db.query(projectSql, projectParams);
 
   const now = new Date();
@@ -446,9 +446,9 @@ async function runListingMatchBatch({
         }
       }
       if (!matched) continue;
-      const dateStr = String(ip.f_update_time || '').slice(0, 10);
+      const dateStr = String(ip.F_UpdateTime || '').slice(0, 10);
       const bucketKey = [
-        p.f_id,
+        p.F_Id,
         dateStr,
         String(ip.status || '').trim(),
         String(ip.board || '').trim(),
@@ -468,24 +468,24 @@ async function runListingMatchBatch({
     const ip = pickPreferredIpoProgressForProject(p, ips);
     if (!ip) continue;
 
-    if (await existsIpoProgressMatch(p.f_id, ip.f_id, ip.f_update_time)) {
+    if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime)) {
       skippedFromIpoProgress += 1;
       continue;
     }
 
     await db.execute(
       `INSERT INTO ipo_project_progress (
-        f_create_date, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+        F_CreatorTime, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
         new_share_row_id, match_source, match_score,
         fund, sub, project_name, company,
         inv_amount, residual_amount, ratio, ct_amount, ct_residual,
-        status, board, exchange, f_update_time
+        status, board, exchange, F_UpdateTime
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         now,
         p.F_CreatorUserId,
-        p.f_id,
-        ip.f_id,
+        p.F_Id,
+        ip.F_Id,
         null,
         'ipo_progress',
         bucketMatchScore,
@@ -501,7 +501,7 @@ async function runListingMatchBatch({
         ip.status,
         ip.board,
         ip.exchange,
-        ip.f_update_time,
+        ip.F_UpdateTime,
       ]
     );
     inserted += 1;

@@ -82,13 +82,13 @@ function syncTaskAppFallbackOrder(dataAppName) {
 async function findEnterpriseSyncTaskByDb(dbConfigId, dataAppName, userId, isAdmin) {
   for (const app of syncTaskAppFallbackOrder(dataAppName)) {
     const tasks = await db.query(
-      `SELECT id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
+      `SELECT F_Id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
               last_execution_time, last_execution_status, last_execution_message, execution_count,
-              created_at, updated_at
+              F_CreatorTime, F_LastModifyTime
        FROM enterprise_sync_task
-       WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1 AND delete_mark = 0
-         ${isAdmin ? '' : 'AND created_by = ?'}
-       ORDER BY created_at DESC
+       WHERE db_config_id = ? AND data_app_name = ? AND is_active = 1 AND F_DeleteMark = 0
+         ${isAdmin ? '' : 'AND F_CreatorUserId = ?'}
+       ORDER BY F_CreatorTime DESC
        LIMIT 1`,
       isAdmin ? [dbConfigId, app] : [dbConfigId, app, userId]
     );
@@ -203,11 +203,11 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
   const dataAppId = await getApplicationIdByAppName(dataAppName);
   const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
   const rows = await db.query(
-    `SELECT id FROM invested_enterprises WHERE creator_user_id = ? AND ${appMatch}`,
+    `SELECT F_Id FROM invested_enterprises WHERE F_CreatorUserId = ? AND ${appMatch}`,
     [creatorUserId, ...appParams]
   );
   if (!rows.length) return 0;
-  const ids = rows.map((r) => r.id);
+  const ids = rows.map((r) => r.F_Id);
   const chunkSize = 200;
   for (let i = 0; i < ids.length; i += chunkSize) {
     const chunk = ids.slice(i, i + chunkSize);
@@ -218,7 +218,7 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
     );
   }
   const del = await db.execute(
-    `DELETE FROM invested_enterprises WHERE creator_user_id = ? AND ${appMatch}`,
+    `DELETE FROM invested_enterprises WHERE F_CreatorUserId = ? AND ${appMatch}`,
     [creatorUserId, ...appParams]
   );
   return del.affectedRows || 0;
@@ -245,27 +245,27 @@ async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId,
   const normBare = sqlNormInvestedEnterpriseUnifiedCredit('');
   const enrichPickOrder = `(CASE WHEN NULLIF(TRIM(ai_product_intro),'') IS NOT NULL THEN 4 ELSE 0 END
     + CASE WHEN NULLIF(TRIM(qcc_company_intro),'') IS NOT NULL THEN 2 ELSE 0 END
-    + CASE WHEN NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL THEN 1 ELSE 0 END) DESC, id DESC`;
+    + CASE WHEN NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL THEN 1 ELSE 0 END) DESC, F_Id DESC`;
   const ins = await db.execute(
     `INSERT INTO invested_enterprise_ai_sync_snapshot
-     (batch_id, creator_user_id, data_app_name, unified_credit_code,
+     (batch_id, F_CreatorUserId, data_app_name, unified_credit_code,
       ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
       ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version,
       qcc_company_intro)
-     SELECT ?, e.creator_user_id, ?, ${normE},
+     SELECT ?, e.F_CreatorUserId, ?, ${normE},
             e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
             e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version,
             e.qcc_company_intro
      FROM invested_enterprises e
      INNER JOIN (
-       SELECT creator_user_id, ${normBare} AS ucc,
-         CAST(SUBSTRING_INDEX(GROUP_CONCAT(id ORDER BY ${enrichPickOrder} SEPARATOR ','), ',', 1) AS UNSIGNED) AS mid
+       SELECT F_CreatorUserId, ${normBare} AS ucc,
+         CAST(SUBSTRING_INDEX(GROUP_CONCAT(F_Id ORDER BY ${enrichPickOrder} SEPARATOR ','), ',', 1) AS UNSIGNED) AS mid
        FROM invested_enterprises
-       WHERE creator_user_id = ? AND ${appMatchBare}
-         AND delete_mark = 0
+       WHERE F_CreatorUserId = ? AND ${appMatchBare}
+         AND F_DeleteMark = 0
          AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
-       GROUP BY creator_user_id, ${normBare}
-     ) t ON e.id = t.mid`,
+       GROUP BY F_CreatorUserId, ${normBare}
+     ) t ON e.F_Id = t.mid`,
     [batchId, dataAppName, creatorUserId, ...appParamsBare]
   );
   const n = ins.affectedRows != null ? ins.affectedRows : 0;
@@ -287,10 +287,10 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
     `UPDATE invested_enterprises t
      INNER JOIN invested_enterprise_ai_sync_snapshot s
        ON s.batch_id = ?
-       AND s.creator_user_id = t.creator_user_id
+       AND s.F_CreatorUserId = t.F_CreatorUserId
        AND s.data_app_name = t.data_app_name
        AND s.unified_credit_code = ${normT}
-       AND t.delete_mark = 0
+       AND t.F_DeleteMark = 0
      SET t.ai_product_intro = s.ai_product_intro,
          t.ai_industry_tags_display = s.ai_industry_tags_display,
          t.ai_industry_tags_json = s.ai_industry_tags_json,
@@ -300,8 +300,8 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
          t.ai_enrich_version = s.ai_enrich_version,
          t.ai_enrich_error = NULL,
          t.qcc_company_intro = s.qcc_company_intro,
-         t.updated_at = CURRENT_TIMESTAMP
-     WHERE t.creator_user_id = ? AND t.data_app_name = ?`,
+         t.F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE t.F_CreatorUserId = ? AND t.data_app_name = ?`,
     [batchId, creatorUserId, dataAppName]
   );
   const affected = res.affectedRows != null ? res.affectedRows : 0;
@@ -313,7 +313,7 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
 async function pruneOldInvestedEnterpriseAiSnapshots() {
   try {
     const r = await db.execute(
-      `DELETE FROM invested_enterprise_ai_sync_snapshot WHERE created_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`
+      `DELETE FROM invested_enterprise_ai_sync_snapshot WHERE F_CreatorTime < DATE_SUB(NOW(), INTERVAL 180 DAY)`
     );
     const n = r.affectedRows != null ? r.affectedRows : 0;
     if (n > 0) {
@@ -391,7 +391,7 @@ async function checkDuplicateData({
   // 查询是否存在相同的统一社会信用代码
   const existing = await db.query(
     `SELECT * FROM invested_enterprises 
-     WHERE unified_credit_code = ? AND delete_mark = 0 AND data_app_name = ?`,
+     WHERE unified_credit_code = ? AND F_DeleteMark = 0 AND data_app_name = ?`,
     [unified_credit_code, data_app_name]
   );
 
@@ -438,9 +438,9 @@ async function insertEnterpriseRow({
   // 插入到 invested_enterprises 表
   await db.execute(
     `INSERT INTO invested_enterprises 
-     (id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
+     (F_Id, project_number, project_abbreviation, enterprise_full_name, unified_credit_code, 
       wechat_official_account_id, official_website, entity_type, exit_status, data_app_name, data_app_id,
-      investment_cost, exited_cost, remaining_cost, residual_value, creator_user_id) 
+      investment_cost, exited_cost, remaining_cost, residual_value, F_CreatorUserId) 
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       enterpriseId,
@@ -519,15 +519,15 @@ async function insertEnterpriseRow({
                  enterprise_full_name = ?,
                  official_website = ?,
                  wechat_official_account_id = ?,
-                 updater_user_id = ?
-             WHERE id = ?`,
+                 F_LastModifyUserId = ?
+             WHERE F_Id = ?`,
             [
               project_abbreviation,
               enterprise_full_name,
               finalWebsite,
               finalWechatId,
               userId,
-              existingCompany.id
+              existingCompany.F_Id
             ]
           );
         }
@@ -536,8 +536,8 @@ async function insertEnterpriseRow({
         const companyId = await generateId('company');
         await db.execute(
           `INSERT INTO company 
-           (id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
-            official_website, wechat_official_account_id, creator_user_id) 
+           (F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
+            official_website, wechat_official_account_id, F_CreatorUserId) 
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             companyId,
@@ -608,13 +608,13 @@ router.get('/', async (req, res) => {
       req.query.has_competitor_analysis === true;
     const offset = (page - 1) * pageSize;
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_id <=> ?';
+    let condition = 'FROM invested_enterprises WHERE F_DeleteMark = 0 AND data_app_id <=> ?';
     const params = [dataAppId];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {
       if (userId) {
-        condition += ' AND creator_user_id = ?';
+        condition += ' AND F_CreatorUserId = ?';
         params.push(userId);
       } else {
         // 如果没有用户ID，返回空数据
@@ -629,7 +629,7 @@ router.get('/', async (req, res) => {
     } else {
       // admin用户：如果指定了筛选用户ID，则只显示该用户的数据
       if (filterUserId && filterUserId.trim() !== '') {
-        condition += ' AND creator_user_id = ?';
+        condition += ' AND F_CreatorUserId = ?';
         params.push(filterUserId);
       }
     }
@@ -697,18 +697,18 @@ router.get('/', async (req, res) => {
       condition += ` AND (
         EXISTS (
           SELECT 1 FROM sourcing_competitor_run scr
-          WHERE scr.invested_enterprise_id = invested_enterprises.id AND scr.delete_mark = 0
+          WHERE scr.invested_enterprise_id = invested_enterprises.F_Id AND scr.F_DeleteMark = 0
         )
         OR EXISTS (
           SELECT 1 FROM sourcing_competitor_relation rel
-          WHERE rel.invested_enterprise_id = invested_enterprises.id AND rel.delete_mark = 0
+          WHERE rel.invested_enterprise_id = invested_enterprises.F_Id AND rel.F_DeleteMark = 0
             AND (rel.subject_type = 'invested_enterprise' OR rel.subject_type IS NULL)
         )
       )`;
     }
 
     const rawRows = await db.query(
-      `SELECT * ${condition} ORDER BY project_number DESC, id DESC LIMIT ? OFFSET ?`,
+      `SELECT *, F_Id AS id ${condition} ORDER BY project_number DESC, F_Id DESC LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
     const data = serializeEnterpriseRows(rawRows);
@@ -766,13 +766,13 @@ router.get('/export', async (req, res) => {
     const search = req.query.search || '';
     const filterUserId = req.query.filter_user_id || ''; // 用户筛选（仅admin使用）
 
-    let condition = 'FROM invested_enterprises WHERE delete_mark = 0 AND data_app_id <=> ?';
+    let condition = 'FROM invested_enterprises WHERE F_DeleteMark = 0 AND data_app_id <=> ?';
     const params = [dataAppId];
 
     // 如果不是admin，只显示当前用户创建的数据
     if (userRole !== 'admin') {
       if (userId) {
-        condition += ' AND creator_user_id = ?';
+        condition += ' AND F_CreatorUserId = ?';
         params.push(userId);
       } else {
         // 如果没有用户ID，返回空数据
@@ -784,7 +784,7 @@ router.get('/export', async (req, res) => {
     } else {
       // admin用户：如果指定了筛选用户ID，则只显示该用户的数据
       if (filterUserId && filterUserId.trim() !== '') {
-        condition += ' AND creator_user_id = ?';
+        condition += ' AND F_CreatorUserId = ?';
         params.push(filterUserId);
       }
     }
@@ -832,7 +832,7 @@ router.get('/export', async (req, res) => {
 
     // 查询所有符合条件的数据（不分页）
     const rawExportRows = await db.query(
-      `SELECT * ${condition} ORDER BY project_number DESC, id DESC`,
+      `SELECT *, F_Id AS id ${condition} ORDER BY project_number DESC, F_Id DESC`,
       params
     );
     const data = serializeEnterpriseRows(rawExportRows);
@@ -872,8 +872,8 @@ router.get('/export', async (req, res) => {
           '企业标签(AI)': item.ai_industry_tags_display || '',
           AI状态: item.ai_enrich_status || '',
           '企业介绍（企查查）': item.qcc_company_intro || '',
-          创建时间: item.created_at ? new Date(item.created_at) : null,
-          更新时间: item.updated_at ? new Date(item.updated_at) : null,
+          创建时间: item.F_CreatorTime ? new Date(item.F_CreatorTime) : null,
+          更新时间: item.F_LastModifyTime ? new Date(item.F_LastModifyTime) : null,
         };
       }
       return {
@@ -885,8 +885,8 @@ router.get('/export', async (req, res) => {
         企业公众号id: item.wechat_official_account_id || '',
         企业官网: item.official_website || '',
         退出状态: item.exit_status || '未退出',
-        创建时间: item.created_at ? new Date(item.created_at) : null,
-        更新时间: item.updated_at ? new Date(item.updated_at) : null,
+        创建时间: item.F_CreatorTime ? new Date(item.F_CreatorTime) : null,
+        更新时间: item.F_LastModifyTime ? new Date(item.F_LastModifyTime) : null,
       };
     });
 
@@ -1188,7 +1188,7 @@ router.put('/:id', [
 
     // 获取旧数据用于日志记录
     const oldDataRows = await db.query(
-      'SELECT * FROM invested_enterprises WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM invested_enterprises WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -1211,7 +1211,7 @@ router.put('/:id', [
       }
       throw e;
     }
-    if (userRole !== 'admin' && oldData.creator_user_id && oldData.creator_user_id !== userId) {
+    if (userRole !== 'admin' && oldData.F_CreatorUserId && oldData.F_CreatorUserId !== userId) {
       return res.status(403).json({ success: false, message: '无权修改该企业数据' });
     }
 
@@ -1261,8 +1261,8 @@ router.put('/:id', [
            wechat_official_account_id = ?, official_website = ?, entity_type = ?, exit_status = ?,
            investment_cost = ?, exited_cost = ?, remaining_cost = ?, residual_value = ?
            ${enrichSql},
-           modifier_user_id = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND delete_mark = 0`,
+           F_LastModifyUserId = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [
         newData.project_abbreviation,
         newData.enterprise_full_name,
@@ -1334,15 +1334,15 @@ router.put('/:id', [
                    enterprise_full_name = ?,
                    official_website = ?,
                    wechat_official_account_id = ?,
-                   updater_user_id = ?
-               WHERE id = ?`,
+                   F_LastModifyUserId = ?
+               WHERE F_Id = ?`,
               [
                 newData.project_abbreviation,
                 newData.enterprise_full_name,
                 finalWebsite,
                 mergedWechatId,
                 userId,
-                company.id
+                company.F_Id
               ]
             );
           }
@@ -1351,8 +1351,8 @@ router.put('/:id', [
           const companyId = await generateId('company');
           await db.execute(
             `INSERT INTO company 
-             (id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
-              official_website, wechat_official_account_id, creator_user_id) 
+             (F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
+              official_website, wechat_official_account_id, F_CreatorUserId) 
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
               companyId,
@@ -1387,7 +1387,7 @@ router.delete('/:id', async (req, res) => {
     const userRole = req.headers['x-user-role'] || 'user';
 
     const rows = await db.query(
-      'SELECT * FROM invested_enterprises WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM invested_enterprises WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
     if (rows.length === 0) {
@@ -1407,14 +1407,14 @@ router.delete('/:id', async (req, res) => {
       }
       throw e;
     }
-    if (userRole !== 'admin' && row.creator_user_id && row.creator_user_id !== userId) {
+    if (userRole !== 'admin' && row.F_CreatorUserId && row.F_CreatorUserId !== userId) {
       return res.status(403).json({ success: false, message: '无权删除该企业数据' });
     }
 
     const result = await db.execute(
       `UPDATE invested_enterprises 
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-       WHERE id = ? AND delete_mark = 0`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [userId, id]
     );
 
@@ -1559,9 +1559,9 @@ router.get('/:id/logs', async (req, res) => {
     const logs = await db.query(
       `SELECT l.*, u.account as change_user_account 
        FROM data_change_log l
-       LEFT JOIN users u ON l.change_user_id = u.id
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
        WHERE l.table_name = 'invested_enterprises' AND l.record_id = ?
-       ORDER BY l.change_time DESC`,
+       ORDER BY l.F_CreatorTime DESC`,
       [id]
     );
 
@@ -1578,7 +1578,7 @@ router.get('/:id', async (req, res) => {
     const userId = req.headers['x-user-id'] || null;
     const userRole = req.headers['x-user-role'] || 'user';
     const rows = await db.query(
-      'SELECT * FROM invested_enterprises WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM invested_enterprises WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -1601,7 +1601,7 @@ router.get('/:id', async (req, res) => {
       }
       throw e;
     }
-    if (userRole !== 'admin' && row.creator_user_id && row.creator_user_id !== userId) {
+    if (userRole !== 'admin' && row.F_CreatorUserId && row.F_CreatorUserId !== userId) {
       return res.status(403).json({ success: false, message: '无权查看该企业数据' });
     }
 
@@ -1632,7 +1632,7 @@ async function executeSyncTask(
       if (!pool) {
         // 如果连接池不存在，从数据库获取配置并创建
         const configs = await db.query(
-          'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
+          'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
           [dbConfigId]
         );
         if (configs.length === 0) {
@@ -1789,7 +1789,7 @@ async function executeSyncTask(
     }
     deletedBeforeSync = await hardDeleteInvestedEnterprisesByUserAndApp(syncOwnerUserId, targetDataAppName);
     console.log(
-      `[企业同步任务] 硬删除本用户本应用旧数据 ${deletedBeforeSync} 条（creator_user_id=${syncOwnerUserId}, data_app_name=${targetDataAppName}）`
+      `[企业同步任务] 硬删除本用户本应用旧数据 ${deletedBeforeSync} 条（F_CreatorUserId=${syncOwnerUserId}, data_app_name=${targetDataAppName}）`
     );
   }
 
@@ -1797,8 +1797,8 @@ async function executeSyncTask(
   // AI增强字段（产品简介AI、企业标签AI、企查查介绍等）由 AI enrichment 服务独立写入，
   // 不应被定时同步覆盖；硬删→重插入场景由 AI 快照备份/回填机制保护。
   const systemFields = [
-    'id', 'project_number', 'created_at', 'updated_at', 'delete_mark', 'delete_time',
-    'delete_user_id', 'creator_user_id', 'modifier_user_id', 'data_app_name', 'data_app_id',
+    'F_Id', 'project_number', 'F_CreatorTime', 'F_LastModifyTime', 'F_DeleteMark', 'F_DeleteTime',
+    'F_DeleteUserId', 'F_CreatorUserId', 'F_LastModifyUserId', 'data_app_name', 'data_app_id',
     // ── AI 增强字段（防止同步覆盖）──
     'ai_product_intro',
     'ai_industry_tags_display', 'ai_industry_tags_json',
@@ -1923,12 +1923,12 @@ async function executeSyncTask(
         targetDataAppName
       );
       const matchParams = [enterpriseData.unified_credit_code, ...appParams];
-      let matchSql = `SELECT id, project_number, exit_status FROM invested_enterprises 
+      let matchSql = `SELECT F_Id, project_number, exit_status FROM invested_enterprises 
          WHERE unified_credit_code = ? 
-         AND delete_mark = 0
+         AND F_DeleteMark = 0
          AND ${appMatch}`;
       if (syncOwnerUserId) {
-        matchSql += ' AND creator_user_id = ?';
+        matchSql += ' AND F_CreatorUserId = ?';
         matchParams.push(syncOwnerUserId);
       }
       matchSql += ' LIMIT 1';
@@ -1960,11 +1960,11 @@ async function executeSyncTask(
       }
       
       if (updateFields.length > 0) {
-        updateFields.push('updated_at = CURRENT_TIMESTAMP');
-        updateValues.push(existing.id);
-        let whereSql = 'WHERE id = ?';
+        updateFields.push('F_LastModifyTime = CURRENT_TIMESTAMP');
+        updateValues.push(existing.F_Id);
+        let whereSql = 'WHERE F_Id = ?';
         if (syncOwnerUserId) {
-          whereSql += ' AND creator_user_id = ?';
+          whereSql += ' AND F_CreatorUserId = ?';
           updateValues.push(syncOwnerUserId);
         }
         await db.execute(
@@ -2024,13 +2024,13 @@ async function executeSyncTask(
                      enterprise_full_name = ?,
                      official_website = ?,
                      wechat_official_account_id = ?
-                 WHERE id = ?`,
+                 WHERE F_Id = ?`,
                 [
                   enterpriseData.project_abbreviation,
                   enterpriseData.enterprise_full_name,
                   finalWebsite,
                   mergedWechatId,
-                  company.id
+                  company.F_Id
                 ]
               );
             }
@@ -2039,7 +2039,7 @@ async function executeSyncTask(
             const companyId = await generateId('company');
             await db.execute(
               `INSERT INTO company 
-               (id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
+               (F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
                 official_website, wechat_official_account_id) 
                VALUES (?, ?, ?, ?, ?, ?)`,
               [
@@ -2085,8 +2085,8 @@ async function executeSyncTask(
         insertFields.push('data_app_id');
         insertValues.push(targetDataAppId || null);
       }
-      if (syncOwnerUserId && !insertFields.includes('creator_user_id')) {
-        insertFields.push('creator_user_id');
+      if (syncOwnerUserId && !insertFields.includes('F_CreatorUserId')) {
+        insertFields.push('F_CreatorUserId');
         insertValues.push(syncOwnerUserId);
       }
 
@@ -2156,13 +2156,13 @@ async function executeSyncTask(
                      enterprise_full_name = ?,
                      official_website = ?,
                      wechat_official_account_id = ?
-                 WHERE id = ?`,
+                 WHERE F_Id = ?`,
                 [
                   enterpriseData.project_abbreviation,
                   enterpriseData.enterprise_full_name,
                   finalWebsite,
                   mergedWechatId,
-                  existingCompany.id
+                  existingCompany.F_Id
                 ]
               );
             }
@@ -2171,7 +2171,7 @@ async function executeSyncTask(
             const companyId = await generateId('company');
             await db.execute(
               `INSERT INTO company 
-               (id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
+               (F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, 
                 official_website, wechat_official_account_id) 
                VALUES (?, ?, ?, ?, ?, ?)`,
               [
@@ -2363,37 +2363,37 @@ router.post('/sync-task', [
 
     // 检查数据库配置是否存在且当前用户有权限（本人创建的或管理员）
     const dbConfigs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
+      'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
       [db_config_id]
     );
     if (dbConfigs.length === 0) {
       return res.status(400).json({ success: false, message: '数据库配置不存在或未启用' });
     }
-    if (!isAdmin && dbConfigs[0].created_by !== userId) {
+    if (!isAdmin && dbConfigs[0].F_CreatorUserId !== userId) {
       return res.status(403).json({ success: false, message: '只能选择自己创建的数据库配置' });
     }
 
     // 同一用户、同一库、同一应用一条任务
     const existing = await db.query(
-      'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0',
+      'SELECT F_Id FROM enterprise_sync_task WHERE db_config_id = ? AND F_CreatorUserId = ? AND data_app_name = ? AND F_DeleteMark = 0',
       [db_config_id, userId, dataAppName]
     );
 
-    const taskId = existing.length > 0 ? existing[0].id : await generateId('enterprise_sync_task');
+    const taskId = existing.length > 0 ? existing[0].F_Id : await generateId('enterprise_sync_task');
 
     if (existing.length > 0) {
       // 更新现有任务
       await db.execute(
         `UPDATE enterprise_sync_task 
-         SET sql_query = ?, cron_expression = ?, description = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
+         SET sql_query = ?, cron_expression = ?, description = ?, F_LastModifyUserId = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ?`,
         [sql_query, cron_expression, description || '', userId, taskId]
       );
     } else {
       // 创建新任务
       await db.execute(
         `INSERT INTO enterprise_sync_task 
-         (id, db_config_id, data_app_name, sql_query, cron_expression, description, created_by, updated_by) 
+         (F_Id, db_config_id, data_app_name, sql_query, cron_expression, description, F_CreatorUserId, F_LastModifyUserId) 
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [taskId, db_config_id, dataAppName, sql_query, cron_expression, description || '', userId, userId]
       );
@@ -2453,13 +2453,13 @@ router.post('/sync-task/execute', [
 
     // 校验是否有权使用该数据库配置
     const dbConfigs = await db.query(
-      'SELECT id, created_by FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
+      'SELECT F_Id, F_CreatorUserId FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
       [db_config_id]
     );
     if (dbConfigs.length === 0) {
       return res.status(400).json({ success: false, message: '数据库配置不存在或未启用' });
     }
-    if (!isAdmin && dbConfigs[0].created_by !== userId) {
+    if (!isAdmin && dbConfigs[0].F_CreatorUserId !== userId) {
       return res.status(403).json({ success: false, message: '只能执行自己创建的数据库配置下的任务' });
     }
 
@@ -2494,7 +2494,7 @@ router.post('/sync-task/execute', [
     // 更新当前用户该库、该应用下任务的执行记录（如果存在）
     try {
       const tasks = await db.query(
-        `SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0`,
+        `SELECT F_Id FROM enterprise_sync_task WHERE db_config_id = ? AND F_CreatorUserId = ? AND data_app_name = ? AND F_DeleteMark = 0`,
         [db_config_id, userId, dataAppName]
       );
       if (tasks.length > 0) {
@@ -2504,8 +2504,8 @@ router.post('/sync-task/execute', [
                last_execution_status = ?,
                last_execution_message = ?,
                execution_count = execution_count + 1
-           WHERE id = ?`,
-          ['success', result.message, tasks[0].id]
+           WHERE F_Id = ?`,
+          ['success', result.message, tasks[0].F_Id]
         );
       }
     } catch (updateError) {
@@ -2520,7 +2520,7 @@ router.post('/sync-task/execute', [
     // 尝试更新当前用户该库、该应用下任务的执行记录为失败
     try {
       const tasks = await db.query(
-        'SELECT id FROM enterprise_sync_task WHERE db_config_id = ? AND created_by = ? AND data_app_name = ? AND delete_mark = 0',
+        'SELECT F_Id FROM enterprise_sync_task WHERE db_config_id = ? AND F_CreatorUserId = ? AND data_app_name = ? AND F_DeleteMark = 0',
         [req.body.db_config_id, failedUserId, failedDataApp]
       );
       if (tasks.length > 0) {
@@ -2530,8 +2530,8 @@ router.post('/sync-task/execute', [
                last_execution_status = ?,
                last_execution_message = ?,
                execution_count = execution_count + 1
-           WHERE id = ?`,
-          ['failed', error.message, tasks[0].id]
+           WHERE F_Id = ?`,
+          ['failed', error.message, tasks[0].F_Id]
         );
       }
     } catch (updateError) {

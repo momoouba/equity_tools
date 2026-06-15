@@ -54,7 +54,7 @@ function mapIpoRow(row) {
 function mapFinancingRow(row) {
   return {
     source: 'sourcing_financing_event',
-    source_id: String(row.id),
+    source_id: String(row.F_Id),
     display_name: strTrim(row.company_name) || strTrim(row.project_name),
     unified_credit_code: normalizeCreditCode(row.company_credit_code),
     product_intro: strTrim(row.ai_product_intro) || strTrim(row.project_desc),
@@ -141,7 +141,7 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
          COALESCE(NULLIF(TRIM(company_credit_code), ''), CONCAT('nm:', TRIM(company_name))) AS grp_key,
          MAX(event_date) AS max_dt
        FROM sourcing_financing_event
-       WHERE delete_mark = 0
+       WHERE F_DeleteMark = 0
          AND event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
          AND (
            TRIM(IFNULL(ai_product_intro, '')) <> ''
@@ -151,7 +151,7 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
        GROUP BY grp_key
      ) t ON COALESCE(NULLIF(TRIM(e.company_credit_code), ''), CONCAT('nm:', TRIM(e.company_name))) = t.grp_key
         AND e.event_date = t.max_dt
-     WHERE e.delete_mark = 0
+     WHERE e.F_DeleteMark = 0
      ORDER BY e.event_date DESC
      LIMIT ?`,
     [FIN_YEARS, RECALL_LIMIT]

@@ -24,21 +24,21 @@ async function initPrompts() {
         console.warn('  警告：ai_model_config 表不存在，提示词将不关联AI模型');
       } else {
         const aiConfigs = await db.query(
-          `SELECT id FROM ai_model_config 
+          `SELECT F_Id AS id FROM ai_model_config 
            WHERE application_type = 'news_analysis' 
            AND is_active = 1 
-           AND delete_mark = 0 
-           ORDER BY created_at DESC 
+           AND F_DeleteMark = 0 
+           ORDER BY F_CreatorTime DESC 
            LIMIT 1`
         );
         
         if (aiConfigs.length === 0) {
           // 如果没有 news_analysis 类型的，尝试获取任何启用的配置
           const anyConfigs = await db.query(
-            `SELECT id FROM ai_model_config 
+            `SELECT F_Id AS id FROM ai_model_config 
              WHERE is_active = 1 
-             AND delete_mark = 0 
-             ORDER BY created_at DESC 
+             AND F_DeleteMark = 0 
+             ORDER BY F_CreatorTime DESC 
              LIMIT 1`
           );
           if (anyConfigs.length > 0) {
@@ -66,10 +66,10 @@ async function initPrompts() {
     let projectSourcingAnalysisModelId = null;
     try {
       const psaRows = await db.query(
-        `SELECT id FROM ai_model_config
+        `SELECT F_Id AS id FROM ai_model_config
          WHERE application_type = 'project_sourcing_analysis'
-           AND is_active = 1 AND delete_mark = 0
-         ORDER BY created_at DESC LIMIT 1`
+           AND is_active = 1 AND F_DeleteMark = 0
+         ORDER BY F_CreatorTime DESC LIMIT 1`
       );
       if (psaRows.length > 0) {
         projectSourcingAnalysisModelId = psaRows[0].id;
@@ -83,10 +83,10 @@ async function initPrompts() {
     let newShareListingDataModelId = null;
     try {
       const lsRows = await db.query(
-        `SELECT id FROM ai_model_config
+        `SELECT F_Id AS id FROM ai_model_config
          WHERE usage_type = 'listing_data'
-           AND is_active = 1 AND delete_mark = 0
-         ORDER BY created_at DESC LIMIT 1`
+           AND is_active = 1 AND F_DeleteMark = 0
+         ORDER BY F_CreatorTime DESC LIMIT 1`
       );
       if (lsRows.length > 0) {
         newShareListingDataModelId = lsRows[0].id;
@@ -398,7 +398,7 @@ async function initPrompts() {
     ];
 
     // 获取系统用户ID（admin用户）
-    const adminUsers = await db.query("SELECT id FROM users WHERE account = 'admin' LIMIT 1");
+    const adminUsers = await db.query("SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1");
     const adminUserId = adminUsers.length > 0 ? adminUsers[0].id : null;
 
     let createdCount = 0;
@@ -419,10 +419,10 @@ async function initPrompts() {
 
         // 检查该提示词是否已存在（按 interface_type 和 prompt_type 组合）
         const existing = await db.query(
-          `SELECT id, ai_model_config_id, prompt_content FROM ai_prompt_config 
+          `SELECT F_Id AS id, ai_model_config_id, prompt_content FROM ai_prompt_config 
            WHERE interface_type = ? 
            AND prompt_type = ? 
-           AND delete_mark = 0 
+           AND F_DeleteMark = 0 
            LIMIT 1`,
           [prompt.interface_type, prompt.prompt_type]
         );
@@ -452,8 +452,8 @@ async function initPrompts() {
             updateValues.push(existingPrompt.id);
             await db.execute(
               `UPDATE ai_prompt_config 
-               SET ${updateFields.join(', ')}, updated_at = NOW()
-               WHERE id = ?`,
+               SET ${updateFields.join(', ')}, F_LastModifyTime = NOW()
+               WHERE F_Id = ?`,
               updateValues
             );
             updatedCount++;
@@ -464,7 +464,7 @@ async function initPrompts() {
           const promptId = await generateId('ai_prompt_config');
           await db.execute(
             `INSERT INTO ai_prompt_config 
-             (id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, creator_user_id) 
+             (F_Id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, F_CreatorUserId) 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               promptId,
@@ -489,7 +489,7 @@ async function initPrompts() {
             };
             await db.execute(
               `INSERT INTO ai_prompt_change_log 
-               (id, prompt_config_id, change_type, old_value, new_value, change_user_id, change_reason) 
+               (F_Id, prompt_config_id, change_type, old_value, new_value, F_CreatorUserId, change_reason) 
                VALUES (?, ?, ?, ?, ?, ?, ?)`,
               [
                 logId,

@@ -547,7 +547,7 @@ router.get('/sql/:id/log', async (req, res) => {
     const userIds = [...new Set(list.map(l => l.modifyUserId).filter(Boolean))];
     if (userIds.length > 0) {
       const placeholders = userIds.map(() => '?').join(',');
-      const users = await db.query(`SELECT id, account FROM users WHERE id IN (${placeholders})`, userIds);
+      const users = await db.query(`SELECT F_Id AS id, account FROM users WHERE F_Id IN (${placeholders})`, userIds);
       const userMap = {};
       users.forEach(u => { userMap[String(u.id)] = u.account || u.id; });
       list.forEach(l => { l.modifyUserName = l.modifyUserId ? (userMap[String(l.modifyUserId)] || l.modifyUserId) : '未知'; });
@@ -639,7 +639,7 @@ router.post('/sql/:id/test', async (req, res) => {
       if (config.external_db_config_id) {
         const { queryExternal, executeExternal, getExternalPool, createExternalPool } = require('../../utils/externalDb');
         if (!getExternalPool(config.external_db_config_id)) {
-          const cfgRows = await db.query('SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1', [config.external_db_config_id]);
+          const cfgRows = await db.query('SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1', [config.external_db_config_id]);
           if (cfgRows && cfgRows.length > 0) {
             await createExternalPool(cfgRows[0]);
           }
@@ -700,9 +700,9 @@ router.post('/sql/:id/test', async (req, res) => {
 router.get('/databases', async (req, res) => {
   try {
     const rows = await db.query(
-      `SELECT id, name, db_type, host, port, \`database\` AS database_name, is_active
+      `SELECT F_Id AS id, name, db_type, host, port, \`database\` AS database_name, is_active
        FROM external_db_config
-       WHERE delete_mark = 0 AND is_active = 1`
+       WHERE F_DeleteMark = 0 AND is_active = 1`
     );
     
     res.json({ success: true, data: { list: rows } });

@@ -250,7 +250,7 @@ function buildShareProjectProgressDateWhere(query) {
     }
   }
   if (rangeStart && rangeEnd) {
-    where.push('f_update_time >= ? AND f_update_time <= ?');
+    where.push('F_UpdateTime >= ? AND F_UpdateTime <= ?');
     params.push(rangeStart, rangeEnd);
   }
 
@@ -260,8 +260,8 @@ function buildShareProjectProgressDateWhere(query) {
     const like = `%${kw}%`;
     where.push(`(
       CONCAT_WS(' ',
-        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(f_update_time, '%Y-%m-%d'), '')`)},
-        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(f_update_time, '%H:%i:%s'), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(F_UpdateTime, '%Y-%m-%d'), '')`)},
+        ${listingShareProgressKeywordBlob(`IFNULL(DATE_FORMAT(F_UpdateTime, '%H:%i:%s'), '')`)},
         ${listingShareProgressKeywordBlob(`IFNULL(exchange, '')`)},
         ${listingShareProgressKeywordBlob(`IFNULL(board, '')`)},
         ${listingShareProgressKeywordBlob(`IFNULL(status, '')`)},
@@ -315,11 +315,11 @@ router.get('/data/:token', async (req, res) => {
       dateParams
     );
     const dataRows = await db.query(
-      `SELECT f_id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
-              status, board, exchange, DATE_FORMAT(f_update_time, '%Y-%m-%d') AS f_update_time
+      `SELECT F_Id AS id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+              status, board, exchange, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time
        FROM ipo_project_progress
        ${whereSql}
-       ORDER BY f_update_time DESC, fund DESC, sub DESC
+       ORDER BY F_UpdateTime DESC, fund DESC, sub DESC
        LIMIT ? OFFSET ?`,
       [...dateParams, pageSize, offset]
     );
@@ -347,7 +347,7 @@ router.get('/project-progress-export/:token', async (req, res) => {
     const { whereSql, params } = buildShareProjectProgressDateWhere(req.query);
     const rows = await db.query(
       `SELECT
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          exchange,
          board,
          status,
@@ -362,13 +362,13 @@ router.get('/project-progress-export/:token', async (req, res) => {
          ct_residual
        FROM ipo_project_progress
        ${whereSql}
-       ORDER BY f_update_time DESC, fund DESC, sub DESC
+       ORDER BY F_UpdateTime DESC, fund DESC, sub DESC
        LIMIT 50000`,
       params
     );
 
     const csv = rowsToCsv(rows, [
-      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.f_update_time) },
+      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.F_UpdateTime) },
       { label: '交易所', key: 'exchange' },
       { label: '板块', key: 'board' },
       { label: '审核状态', key: 'status' },
@@ -402,8 +402,8 @@ router.get('/ipo-progress-stats/:token', async (req, res) => {
     const rows = await db.query(
       `SELECT
          exchange,
-         SUM(CASE WHEN DATE(f_update_time) = ? THEN 1 ELSE 0 END) AS yesterday_count,
-         SUM(CASE WHEN DATE(f_update_time) >= ? THEN 1 ELSE 0 END) AS year_count
+         SUM(CASE WHEN DATE(F_UpdateTime) = ? THEN 1 ELSE 0 END) AS yesterday_count,
+         SUM(CASE WHEN DATE(F_UpdateTime) >= ? THEN 1 ELSE 0 END) AS year_count
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange IN ('深交所', '上交所', '北交所', '港交所')
@@ -454,9 +454,9 @@ router.get('/ipo-progress-data/:token', async (req, res) => {
 
     const rows = await db.query(
       `SELECT
-         f_id,
-         f_create_date,
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         F_Id,
+         F_CreatorTime,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          code,
          project_name,
          status,
@@ -466,7 +466,7 @@ router.get('/ipo-progress-data/:token', async (req, res) => {
          board,
          exchange
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC, exchange DESC, board DESC
+       ORDER BY F_UpdateTime DESC, exchange DESC, board DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -487,7 +487,7 @@ router.get('/ipo-progress-export/:token', async (req, res) => {
     const { whereSql, params } = buildIpoProgressShareWhere(req.query.keyword);
     const rows = await db.query(
       `SELECT
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          company,
          status,
          exchange,
@@ -496,7 +496,7 @@ router.get('/ipo-progress-export/:token', async (req, res) => {
          register_address,
          code
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC, exchange DESC, board DESC
+       ORDER BY F_UpdateTime DESC, exchange DESC, board DESC
        LIMIT 50000`,
       params
     );

@@ -29,7 +29,7 @@ router.get('/records', async (req, res) => {
       const recipientConfigs = await db.query(
         `SELECT recipient_email 
          FROM recipient_management 
-         WHERE user_id = ? AND delete_mark = 0 AND is_active = 1`,
+         WHERE user_id = ? AND F_DeleteMark = 0 AND is_active = 1`,
         [userId]
       );
       
@@ -79,11 +79,11 @@ router.get('/records', async (req, res) => {
 
     // 获取分页数据
     const records = await db.query(
-      `SELECT id, operation_type, from_email, to_email, cc_email, bcc_email, 
-              subject, status, created_at
+      `SELECT F_Id AS id, operation_type, from_email, to_email, cc_email, bcc_email, 
+              subject, status, F_CreatorTime AS created_at
        FROM email_logs 
        WHERE ${whereClause}
-       ORDER BY created_at DESC 
+       ORDER BY F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [...queryParams, parseInt(pageSize), offset]
     );
@@ -123,7 +123,7 @@ router.get('/logs', async (req, res) => {
       const recipientConfigs = await db.query(
         `SELECT recipient_email 
          FROM recipient_management 
-         WHERE user_id = ? AND delete_mark = 0 AND is_active = 1`,
+         WHERE user_id = ? AND F_DeleteMark = 0 AND is_active = 1`,
         [userId]
       );
       
@@ -173,11 +173,11 @@ router.get('/logs', async (req, res) => {
 
     // 获取分页数据
     const logs = await db.query(
-      `SELECT id, operation_type, from_email, to_email, subject, status, 
-              error_message, created_at, created_by
+      `SELECT F_Id AS id, operation_type, from_email, to_email, subject, status, 
+              error_message, F_CreatorTime AS created_at
        FROM email_logs 
        WHERE ${whereClause}
-       ORDER BY created_at DESC 
+       ORDER BY F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [...queryParams, parseInt(pageSize), offset]
     );
@@ -213,7 +213,7 @@ router.post('/send', [
     const userId = req.headers['x-user-id'] || null;
 
     // 获取邮件配置
-    const configs = await db.query('SELECT * FROM email_config WHERE id = ?', [email_config_id]);
+    const configs = await db.query('SELECT * FROM email_config WHERE F_Id = ?', [email_config_id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '邮件配置不存在' });
     }
@@ -275,8 +275,8 @@ router.post('/send', [
       logId = generateId('email_logs');
       await db.query(
         `INSERT INTO email_logs 
-         (id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, 
-          subject, content, status, created_by) 
+         (F_Id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, 
+          subject, content, status, F_CreatorUserId) 
          VALUES (?, ?, 'send', ?, ?, ?, ?, ?, ?, 'success', ?)`,
         [logId, email_config_id, config.from_email, to_email, cc_email || null, 
          bcc_email || null, subject, truncateContentForEmailLog(content), userId]
@@ -295,8 +295,8 @@ router.post('/send', [
       logId = generateId('email_logs');
       await db.query(
         `INSERT INTO email_logs 
-         (id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, 
-          subject, content, status, error_message, created_by) 
+         (F_Id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, 
+          subject, content, status, error_message, F_CreatorUserId) 
          VALUES (?, ?, 'send', ?, ?, ?, ?, ?, ?, 'failed', ?, ?)`,
         [logId, email_config_id, config.from_email, to_email, cc_email || null, 
          bcc_email || null, subject, truncateContentForEmailLog(content), errorMessage, userId]
@@ -330,7 +330,7 @@ router.post('/receive', [
     const userId = req.headers['x-user-id'] || null;
 
     // 获取邮件配置
-    const configs = await db.query('SELECT * FROM email_config WHERE id = ?', [email_config_id]);
+    const configs = await db.query('SELECT * FROM email_config WHERE F_Id = ?', [email_config_id]);
     if (configs.length === 0) {
       return res.status(404).json({ success: false, message: '邮件配置不存在' });
     }
@@ -350,8 +350,8 @@ router.post('/receive', [
     
     await db.query(
       `INSERT INTO email_logs 
-       (id, email_config_id, operation_type, from_email, to_email, 
-        subject, status, error_message, created_by) 
+       (F_Id, email_config_id, operation_type, from_email, to_email, 
+        subject, status, error_message, F_CreatorUserId) 
        VALUES (?, ?, 'receive', ?, ?, ?, 'failed', ?, ?)`,
       [logId, email_config_id, config.pop_user, config.pop_user, 
        '接收邮件', errorMessage, userId]

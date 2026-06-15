@@ -28,13 +28,13 @@ function registerInvestedEnterpriseAiRoutes(router) {
       const total = Number(countRows[0].total || 0);
 
       const list = await db.query(
-        `SELECT id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
+        `SELECT F_Id AS id, invested_enterprise_id, trigger_type, execution_status, triggered_at, started_at, finished_at,
                 duration_ms, error_message, result_product_intro, result_industry_tags_display, job_trace_id,
                 invoke_mode, used_enable_search, search_degraded,
                 used_enable_thinking, thinking_degraded
          FROM invested_enterprise_ai_enrich_log
          WHERE invested_enterprise_id = ?
-         ORDER BY id DESC
+         ORDER BY F_Id DESC
          LIMIT ? OFFSET ?`,
         [ieId, pageSize, offset]
       );

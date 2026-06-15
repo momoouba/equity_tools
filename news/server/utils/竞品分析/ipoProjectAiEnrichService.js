@@ -81,8 +81,8 @@ async function markIppAiLogSuccess({
        result_product_intro = ?,
        result_industry_tags_display = ?,
        ${searchMetaSqlAssignments()},
-       updated_at = NOW()
-     WHERE id = ?`,
+       F_LastModifyTime = NOW()
+     WHERE F_Id = ?`,
     [
       duration,
       llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -112,8 +112,8 @@ async function markIppAiLogFailed({ logId, started, llmModelConfigId, promptConf
          prompt_version = ?,
          ai_enrich_version = ?,
          error_message = ?,
-         updated_at = NOW()
-       WHERE id = ?`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [
         duration,
         llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -140,7 +140,7 @@ async function prepareIpoProjectAiJob({ fId, triggerType, triggeredByUserId, cli
 
   const rows = await db.query(
     `SELECT f_id, company, project_name, unified_credit_code, data_app_id, F_DeleteMark
-     FROM ipo_project WHERE f_id = ? LIMIT 1`,
+     FROM ipo_project WHERE F_Id = ? LIMIT 1`,
     [id]
   );
   if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
@@ -151,9 +151,9 @@ async function prepareIpoProjectAiJob({ fId, triggerType, triggeredByUserId, cli
   }
 
   const dup = await db.query(
-    `SELECT id, triggered_at FROM invested_enterprise_ai_enrich_log
+    `SELECT F_Id AS id, triggered_at FROM invested_enterprise_ai_enrich_log
      WHERE ipo_project_f_id = ? AND execution_status IN ('pending','running')
-     ORDER BY id DESC LIMIT 1`,
+     ORDER BY F_Id DESC LIMIT 1`,
     [id]
   );
   if (dup.length) {
@@ -187,7 +187,7 @@ async function prepareIpoProjectAiJob({ fId, triggerType, triggeredByUserId, cli
   const logId = ins.insertId;
 
   await db.execute(
-    `UPDATE ipo_project SET ai_enrich_status = 'running', ai_enrich_error = NULL WHERE f_id = ? AND F_DeleteMark = 0`,
+    `UPDATE ipo_project SET ai_enrich_status = 'running', ai_enrich_error = NULL WHERE F_Id = ? AND F_DeleteMark = 0`,
     [id]
   );
 
@@ -207,14 +207,14 @@ async function runIpoProjectAiEnrichTask({
   try {
     await db.execute(
       `UPDATE invested_enterprise_ai_enrich_log
-       SET execution_status = 'running', started_at = NOW(), updated_at = NOW()
-       WHERE id = ?`,
+       SET execution_status = 'running', started_at = NOW(), F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [logId]
     );
 
     const ev = await db.query(
       `SELECT f_id, company, project_name, unified_credit_code, qcc_company_intro, data_app_id, F_DeleteMark
-       FROM ipo_project WHERE f_id = ? LIMIT 1`,
+       FROM ipo_project WHERE F_Id = ? LIMIT 1`,
       [fId]
     );
     if (!ev.length || Number(ev[0].F_DeleteMark) !== 0) {

@@ -21,8 +21,8 @@ async function normalizeIndustryTagCode(raw) {
   const rows = await db.query(
     `SELECT c.item_code, c.item_name
      FROM base_dictionary p
-     INNER JOIN base_dictionary c ON c.parent_id = p.id AND c.delete_mark = 0
-     WHERE p.delete_mark = 0 AND p.parent_id IS NULL AND p.dict_code = ?
+     INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+     WHERE p.F_DeleteMark = 0 AND p.parent_id IS NULL AND p.dict_code = ?
        AND (c.item_code = ? OR c.item_name = ?) AND p.is_enabled = 1 AND c.is_enabled = 1
      LIMIT 1`,
     [INDUSTRY_DICT_CODE, s, s]
@@ -60,7 +60,7 @@ const checkAuth = async (req, res, next) => {
 
   try {
     const rows = await db.query(
-      'SELECT id, account, role FROM users WHERE id = ? LIMIT 1',
+      'SELECT F_Id, account, role FROM users WHERE F_Id = ? LIMIT 1',
       [userId]
     );
     const currentUser = rows[0] || null;
@@ -85,7 +85,7 @@ async function getUserAdditionalAccountLimit(userId) {
   const rows = await db.query(
     `SELECT u.account, u.role, u.app_permissions
      FROM users u
-     WHERE u.id = ?`,
+     WHERE u.F_Id = ?`,
     [userId]
   );
 
@@ -112,10 +112,10 @@ async function getUserAdditionalAccountLimit(userId) {
 
         if (levelIds.length > 0) {
           const levelRows = await db.query(
-            `SELECT ml.id, ml.level_name, a.app_name
+            `SELECT ml.F_Id, ml.level_name, a.app_name
              FROM membership_levels ml
-             INNER JOIN applications a ON a.id = ml.app_id
-             WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+             INNER JOIN applications a ON a.F_Id = ml.app_id
+             WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
             levelIds
           );
           const newsLevel = levelRows.find((item) => item.app_name === '新闻舆情');
@@ -142,8 +142,8 @@ async function getUserAdditionalAccountCount(userId) {
   const rows = await db.query(
     `SELECT COUNT(*) AS total
      FROM additional_wechat_accounts
-     WHERE creator_user_id = ?
-       AND delete_mark = 0`,
+     WHERE F_CreatorUserId = ?
+       AND F_DeleteMark = 0`,
     [userId]
   );
   return rows[0]?.total || 0;
@@ -156,17 +156,17 @@ router.get('/', checkAuth, async (req, res) => {
     const offset = (page - 1) * pageSize;
     const isAdmin = req.isAdmin === true;
 
-    let condition = 'WHERE a.delete_mark = 0';
+    let condition = 'WHERE a.F_DeleteMark = 0';
     const params = [];
 
     // 权限控制：普通用户只能看到自己创建的，管理员可以看到所有，并能切换用户查看
     if (isAdmin && userId) {
       // 管理员指定查看某个用户创建的
-      condition += ' AND a.creator_user_id = ?';
+      condition += ' AND a.F_CreatorUserId = ?';
       params.push(userId);
     } else if (!isAdmin) {
       // 普通用户只能看到自己创建的
-      condition += ' AND a.creator_user_id = ?';
+      condition += ' AND a.F_CreatorUserId = ?';
       params.push(req.currentUserId);
     }
 
@@ -184,18 +184,18 @@ router.get('/', checkAuth, async (req, res) => {
     // 查询数据，包含创建人信息、行业标签名称（数据字典 industry）
     const data = await db.query(
       `SELECT 
-        a.id, a.account_name, a.wechat_account_id, a.status, a.industry_tag_code,
+        a.F_Id AS id, a.account_name, a.wechat_account_id, a.status, a.industry_tag_code,
         tag.item_name AS industry_tag_name,
-        a.creator_user_id, a.created_at, a.updater_user_id, a.updated_at,
+        a.F_CreatorUserId, a.F_CreatorTime, a.F_LastModifyUserId, a.F_LastModifyTime,
         u.account as creator_account
        FROM additional_wechat_accounts a
-       LEFT JOIN users u ON a.creator_user_id = u.id
-       LEFT JOIN base_dictionary ind_parent ON ind_parent.delete_mark = 0
+       LEFT JOIN users u ON a.F_CreatorUserId = u.F_Id
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.F_DeleteMark = 0
          AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
-       LEFT JOIN base_dictionary tag ON tag.delete_mark = 0
-         AND tag.parent_id = ind_parent.id AND tag.item_code = a.industry_tag_code
+       LEFT JOIN base_dictionary tag ON tag.F_DeleteMark = 0
+         AND tag.parent_id = ind_parent.F_Id AND tag.item_code = a.industry_tag_code
        ${condition} 
-       ORDER BY a.created_at DESC 
+       ORDER BY a.F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [INDUSTRY_DICT_CODE, ...params, parseInt(pageSize), offset]
     );
@@ -243,8 +243,8 @@ router.get('/', checkAuth, async (req, res) => {
 router.get('/industry-tag-options', checkAuth, async (req, res) => {
   try {
     const parent = await db.query(
-      `SELECT id FROM base_dictionary
-       WHERE delete_mark = 0 AND parent_id IS NULL AND dict_code = ?
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_DeleteMark = 0 AND parent_id IS NULL AND dict_code = ?
        LIMIT 1`,
       [INDUSTRY_DICT_CODE]
     );
@@ -254,9 +254,9 @@ router.get('/industry-tag-options', checkAuth, async (req, res) => {
     const items = await db.query(
       `SELECT item_code AS value, item_name AS label, sort_order
        FROM base_dictionary
-       WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
-       ORDER BY sort_order ASC, created_at DESC`,
-      [parent[0].id]
+       WHERE parent_id = ? AND F_DeleteMark = 0 AND is_enabled = 1
+       ORDER BY sort_order ASC, F_CreatorTime DESC`,
+      [parent[0].F_Id]
     );
     res.json({ success: true, data: items || [] });
   } catch (error) {
@@ -299,7 +299,7 @@ router.post('/', checkAuth, async (req, res) => {
     // 检查是否已存在（允许不同用户创建相同的公众号ID，但在同步时会去重）
     // 这里只检查当前用户是否已经创建过相同的公众号ID
     const existing = await db.query(
-      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND creator_user_id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
       [wechat_account_id, req.currentUserId]
     );
 
@@ -318,7 +318,7 @@ router.post('/', checkAuth, async (req, res) => {
     const accountId = await generateId('additional_wechat_accounts');
     await db.execute(
       `INSERT INTO additional_wechat_accounts 
-       (id, account_name, wechat_account_id, status, industry_tag_code, creator_user_id) 
+       (F_Id, account_name, wechat_account_id, status, industry_tag_code, F_CreatorUserId) 
        VALUES (?, ?, ?, ?, ?, ?)`,
       [accountId, account_name, wechat_account_id, status, tagNorm.value, req.currentUserId]
     );
@@ -358,7 +358,7 @@ router.put('/:id', checkAuth, async (req, res) => {
 
     // 检查记录是否存在并获取旧数据
     const existing = await db.query(
-      'SELECT * FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -372,7 +372,7 @@ router.put('/:id', checkAuth, async (req, res) => {
     const oldData = existing[0];
     
     // 权限检查：普通用户只能更新自己创建的
-    if (!req.isAdmin && oldData.creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && oldData.F_CreatorUserId !== req.currentUserId) {
       return res.status(403).json({ 
         success: false, 
         message: '无权更新此记录' 
@@ -381,9 +381,9 @@ router.put('/:id', checkAuth, async (req, res) => {
 
     // 检查微信账号ID是否重复（排除当前记录，按被编辑记录所属用户维度校验）
     // 管理员编辑他人记录时，仍应沿用该记录 creator_user_id 的唯一约束范围
-    const duplicateScopeUserId = oldData.creator_user_id || req.currentUserId;
+    const duplicateScopeUserId = oldData.F_CreatorUserId || req.currentUserId;
     const duplicate = await db.query(
-      'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND id != ? AND creator_user_id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_Id != ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
       [wechat_account_id, id, duplicateScopeUserId]
     );
 
@@ -401,8 +401,8 @@ router.put('/:id', checkAuth, async (req, res) => {
 
     await db.execute(
       `UPDATE additional_wechat_accounts 
-       SET account_name = ?, wechat_account_id = ?, status = ?, industry_tag_code = ?, updater_user_id = ?
-       WHERE id = ?`,
+       SET account_name = ?, wechat_account_id = ?, status = ?, industry_tag_code = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
       [account_name, wechat_account_id, status, tagNorm.value, req.currentUserId, id]
     );
 
@@ -432,7 +432,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT id, creator_user_id FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
+      'SELECT F_Id, F_CreatorUserId FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -444,7 +444,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
     }
     
     // 权限检查：普通用户只能删除自己创建的
-    if (!req.isAdmin && existing[0].creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && existing[0].F_CreatorUserId !== req.currentUserId) {
       return res.status(403).json({ 
         success: false, 
         message: '无权删除此记录' 
@@ -453,8 +453,8 @@ router.delete('/:id', checkAuth, async (req, res) => {
 
     await db.execute(
       `UPDATE additional_wechat_accounts 
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-       WHERE id = ?`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+       WHERE F_Id = ?`,
       [req.currentUserId, id]
     );
 
@@ -568,7 +568,7 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
 
         // 检查当前用户是否已创建过该公众号ID
         const existing = await db.query(
-          'SELECT id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND creator_user_id = ? AND delete_mark = 0',
+          'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
           [wechat_account_id, req.currentUserId]
         );
 
@@ -581,7 +581,7 @@ router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) 
         const accountId = await generateId('additional_wechat_accounts');
         await db.execute(
           `INSERT INTO additional_wechat_accounts 
-           (id, account_name, wechat_account_id, status, industry_tag_code, creator_user_id) 
+           (F_Id, account_name, wechat_account_id, status, industry_tag_code, F_CreatorUserId) 
            VALUES (?, ?, ?, 'active', ?, ?)`,
           [accountId, account_name, wechat_account_id, tagNorm.value, req.currentUserId]
         );
@@ -626,13 +626,13 @@ router.get('/download-template', checkAuth, async (req, res) => {
     const industryRows = await db.query(
       `SELECT c.item_code, c.item_name, c.sort_order
        FROM base_dictionary p
-       INNER JOIN base_dictionary c ON c.parent_id = p.id AND c.delete_mark = 0
-       WHERE p.delete_mark = 0
+       INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+       WHERE p.F_DeleteMark = 0
          AND p.parent_id IS NULL
          AND p.dict_code = ?
          AND p.is_enabled = 1
          AND c.is_enabled = 1
-       ORDER BY c.sort_order ASC, c.created_at DESC`,
+       ORDER BY c.sort_order ASC, c.F_CreatorTime DESC`,
       [INDUSTRY_DICT_CODE]
     );
     const firstIndustryName = industryRows[0]?.item_name || '人工智能';
@@ -714,15 +714,15 @@ router.get('/export', checkAuth, async (req, res) => {
     const { search, status, userId } = req.query;
     const isAdmin = req.isAdmin === true;
 
-    let condition = 'WHERE a.delete_mark = 0';
+    let condition = 'WHERE a.F_DeleteMark = 0';
     const params = [];
 
     // 权限控制：普通用户仅导出自己创建的数据；管理员可按用户筛选导出
     if (isAdmin && userId) {
-      condition += ' AND a.creator_user_id = ?';
+      condition += ' AND a.F_CreatorUserId = ?';
       params.push(userId);
     } else if (!isAdmin) {
-      condition += ' AND a.creator_user_id = ?';
+      condition += ' AND a.F_CreatorUserId = ?';
       params.push(req.currentUserId);
     }
 
@@ -745,12 +745,12 @@ router.get('/export', checkAuth, async (req, res) => {
         tag.item_name AS industry_tag_name,
         a.status
        FROM additional_wechat_accounts a
-       LEFT JOIN base_dictionary ind_parent ON ind_parent.delete_mark = 0
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.F_DeleteMark = 0
          AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
-       LEFT JOIN base_dictionary tag ON tag.delete_mark = 0
-         AND tag.parent_id = ind_parent.id AND tag.item_code = a.industry_tag_code
+       LEFT JOIN base_dictionary tag ON tag.F_DeleteMark = 0
+         AND tag.parent_id = ind_parent.F_Id AND tag.item_code = a.industry_tag_code
        ${condition}
-       ORDER BY a.created_at DESC`,
+       ORDER BY a.F_CreatorTime DESC`,
       [INDUSTRY_DICT_CODE, ...params]
     );
 
@@ -791,7 +791,7 @@ router.get('/:id/logs', checkAuth, async (req, res) => {
     
     // 检查记录是否存在并验证权限
     const existing = await db.query(
-      'SELECT creator_user_id FROM additional_wechat_accounts WHERE id = ? AND delete_mark = 0',
+      'SELECT F_CreatorUserId FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
     
@@ -800,16 +800,16 @@ router.get('/:id/logs', checkAuth, async (req, res) => {
     }
     
     // 权限检查：普通用户只能查看自己创建的
-    if (!req.isAdmin && existing[0].creator_user_id !== req.currentUserId) {
+    if (!req.isAdmin && existing[0].F_CreatorUserId !== req.currentUserId) {
       return res.status(403).json({ success: false, message: '无权查看此记录的日志' });
     }
     
     const logs = await db.query(
       `SELECT l.*, u.account as change_user_account
        FROM data_change_log l
-       LEFT JOIN users u ON l.change_user_id = u.id
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
        WHERE l.table_name = 'additional_wechat_accounts' AND l.record_id = ?
-       ORDER BY l.change_time DESC`,
+       ORDER BY l.F_CreatorTime DESC`,
       [id]
     );
     res.json({ success: true, data: logs });

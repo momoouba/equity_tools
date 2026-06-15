@@ -62,14 +62,14 @@ async function listNewShare(req, res) {
 
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_new_share ${whereSql}`, params);
     const list = await db.query(
-      `SELECT id, stock_code, stock_name,
+      `SELECT F_Id AS id, stock_code, stock_name,
               enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display,
               DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
               issue_weekday, issue_price, offer_pe, limit_shares,
               exchange, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
               win_rate, total_issued_shares, first_day_close, first_day_chg_pct, first_day_market_cap,
-              DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-              DATE_FORMAT(updated_at, '%Y-%m-%d %H:%i:%s') AS updated_at
+              DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at,
+              DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS updated_at
        FROM ipo_new_share ${whereSql}
        ORDER BY issue_date DESC, stock_code ASC
        LIMIT ? OFFSET ?`,

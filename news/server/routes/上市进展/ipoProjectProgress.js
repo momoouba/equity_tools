@@ -53,7 +53,7 @@ function listingProgressKeywordBlob(exprSql) {
 
 // #16: 白名单校验 —— exprSql 仅允许引用已知列，防止意外注入用户可控内容
 const ALLOWED_EXPR_COLUMNS = new Set([
-  'ipp.f_update_time', 'ipp.exchange', 'ipp.board', 'ipp.status',
+  'ipp.F_UpdateTime', 'ipp.exchange', 'ipp.board', 'ipp.status',
   'ipp.fund', 'ipp.sub', 'ipp.project_name', 'ipp.company',
   'ipp.inv_amount', 'ipp.residual_amount', 'ipp.ratio', 'ipp.ct_amount', 'ipp.ct_residual',
 ]);
@@ -99,7 +99,7 @@ async function buildProgressWhere(req, user) {
   }
 
   if (rangeStart && rangeEnd) {
-    where.push('ipp.f_update_time >= ? AND ipp.f_update_time <= ?');
+    where.push('ipp.F_UpdateTime >= ? AND ipp.F_UpdateTime <= ?');
     params.push(rangeStart, rangeEnd);
   }
 
@@ -109,8 +109,8 @@ async function buildProgressWhere(req, user) {
     const like = `%${kw}%`;
     // #16: 所有 exprSql 均为硬编码列引用，此处做运行时白名单校验
     const exprList = [
-      `IFNULL(DATE_FORMAT(ipp.f_update_time, '%Y-%m-%d'), '')`,
-      `IFNULL(DATE_FORMAT(ipp.f_update_time, '%H:%i:%s'), '')`,
+      `IFNULL(DATE_FORMAT(ipp.F_UpdateTime, '%Y-%m-%d'), '')`,
+      `IFNULL(DATE_FORMAT(ipp.F_UpdateTime, '%H:%i:%s'), '')`,
       `IFNULL(ipp.exchange, '')`,
       `IFNULL(ipp.board, '')`,
       `IFNULL(ipp.status, '')`,
@@ -158,7 +158,7 @@ async function listIpoProjectProgress(req, res) {
 
     const rows = await db.query(
       `SELECT
-         ipp.f_id,
+         ipp.F_Id,
          ipp.ipo_progress_row_id,
          ipp.ipo_project_f_id,
          ipp.fund,
@@ -173,14 +173,14 @@ async function listIpoProjectProgress(req, res) {
          ipp.status,
          ipp.board,
          ipp.exchange,
-         DATE_FORMAT(ipp.f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
-         ipp.f_create_date,
+         DATE_FORMAT(ipp.F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         ipp.F_CreatorTime,
          ipp.F_CreatorUserId,
          u.account AS creator_account
        FROM ipo_project_progress ipp
-       LEFT JOIN users u ON u.id = ipp.F_CreatorUserId
+       LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
        ${whereSql}
-       ORDER BY ipp.f_update_time DESC, ipp.fund DESC, ipp.sub DESC
+       ORDER BY ipp.F_UpdateTime DESC, ipp.fund DESC, ipp.sub DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -202,15 +202,15 @@ async function exportIpoProjectProgressCsv(req, res) {
     const rows = await db.query(
       `SELECT ipp.*, u.account AS creator_account
        FROM ipo_project_progress ipp
-       LEFT JOIN users u ON u.id = ipp.F_CreatorUserId
+       LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
        ${whereSql}
-       ORDER BY ipp.f_update_time DESC, ipp.fund DESC, ipp.sub DESC
+       ORDER BY ipp.F_UpdateTime DESC, ipp.fund DESC, ipp.sub DESC
        LIMIT 50000`,
       params
     );
 
     const csv = rowsToCsv(rows, [
-      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.f_update_time) },
+      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.F_UpdateTime) },
       { label: '交易所', key: 'exchange' },
       { label: '板块', key: 'board' },
       { label: '审核状态', key: 'status' },
@@ -241,15 +241,15 @@ async function updateIpoProjectProgress(req, res) {
 
     const fId = req.params.fId;
     const body = req.body || {};
-    const rows = await db.query(`SELECT f_id, f_update_time FROM ipo_project_progress WHERE f_id = ? LIMIT 1`, [fId]);
+    const rows = await db.query(`SELECT F_Id, F_UpdateTime FROM ipo_project_progress WHERE F_Id = ? LIMIT 1`, [fId]);
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
     await db.execute(
       `UPDATE ipo_project_progress SET
         fund = ?, sub = ?, project_name = ?, company = ?,
         inv_amount = ?, residual_amount = ?, ratio = ?, ct_amount = ?, ct_residual = ?,
-        status = ?, board = ?, exchange = ?, f_update_time = ?
-       WHERE f_id = ?`,
+        status = ?, board = ?, exchange = ?, F_UpdateTime = ?
+       WHERE F_Id = ?`,
       [
         body.fund,
         body.sub ?? null,
@@ -263,11 +263,11 @@ async function updateIpoProjectProgress(req, res) {
         body.status,
         body.board,
         body.exchange,
-        body.f_update_time || rows[0].f_update_time,
+        body.f_update_time || rows[0].F_UpdateTime,
         fId,
       ]
     );
-    const updated = await db.query(`SELECT * FROM ipo_project_progress WHERE f_id = ? LIMIT 1`, [fId]);
+    const updated = await db.query(`SELECT * FROM ipo_project_progress WHERE F_Id = ? LIMIT 1`, [fId]);
     return res.json({ success: true, data: updated[0] });
   } catch (e) {
     console.error('updateIpoProjectProgress', e);
@@ -285,7 +285,7 @@ async function softDeleteIpoProjectProgress(req, res) {
     const fId = req.params.fId;
     // 真正的软删除（原代码误用 DELETE FROM 导致硬删除）
     await db.execute(
-      `UPDATE ipo_project_progress SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE f_id = ?`,
+      `UPDATE ipo_project_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ?`,
       [user.id, fId]
     );
     return res.json({ success: true });

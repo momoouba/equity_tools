@@ -93,9 +93,9 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
         const prevRows = await db.query(
           `SELECT competitor_product_intro, competitor_tags_display, competitor_tags_json
            FROM sourcing_competitor_relation
-           WHERE delete_mark = 0 AND unified_credit_code = ?
+           WHERE F_DeleteMark = 0 AND unified_credit_code = ?
              AND (competitor_product_intro IS NOT NULL OR competitor_tags_json IS NOT NULL)
-           ORDER BY updated_at DESC LIMIT 1`,
+           ORDER BY F_LastModifyTime DESC LIMIT 1`,
           [credit]
         );
         if (prevRows.length) {

@@ -169,7 +169,7 @@ function overseasCompanyFromRow(filingEntity, projectName) {
 }
 
 async function resolveAdminId() {
-  const rows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
+  const rows = await db.query(`SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1`);
   if (!rows.length) throw new Error('未找到 account=admin 用户，无法写入境外备案数据');
   return rows[0].id;
 }
@@ -182,7 +182,7 @@ async function resolveOverseasSourceUrl() {
        AND news_interface_type = 'overseas_filing'
        AND request_url IS NOT NULL
        AND TRIM(request_url) <> ''
-     ORDER BY updated_at DESC, id DESC
+     ORDER BY F_LastModifyTime DESC, F_Id DESC
      LIMIT 1`
   );
   return rows[0]?.request_url ? String(rows[0].request_url).trim() : '';

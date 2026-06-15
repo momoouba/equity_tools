@@ -47,28 +47,28 @@ async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
   if (!ieId) return [];
 
   const runRows = await db.query(
-    `SELECT r.run_id AS id,
-            MIN(r.created_at) AS first_relation_at,
+    `SELECT r.run_id,
+            MIN(r.F_CreatorTime) AS first_relation_at,
             COUNT(*) AS relation_count,
-            MAX(scr.created_at) AS run_created_at,
+            MAX(scr.F_CreatorTime) AS run_created_at,
             MAX(scr.status) AS status,
             MAX(scr.message) AS message,
             MAX(scr.finished_at) AS finished_at,
             MAX(scr.triggered_by_user_id) AS triggered_by_user_id
      FROM sourcing_competitor_relation r
-     LEFT JOIN sourcing_competitor_run scr ON scr.id = r.run_id AND scr.delete_mark = 0
+     LEFT JOIN sourcing_competitor_run scr ON scr.F_Id = r.run_id AND scr.F_DeleteMark = 0
      WHERE r.invested_enterprise_id = ?
        AND r.run_id IS NOT NULL AND TRIM(r.run_id) <> ''
        AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
      GROUP BY r.run_id
-     ORDER BY COALESCE(MAX(scr.created_at), MIN(r.created_at)) ASC, r.run_id ASC`,
+     ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.run_id ASC`,
     [ieId]
   );
 
   const runsAsc = runRows
-    .filter((row) => row.id && String(row.id).trim())
+    .filter((row) => row.run_id && String(row.run_id).trim())
     .map((row) => ({
-      id: row.id,
+      id: row.run_id,
       created_at: row.run_created_at || row.first_relation_at,
       status: row.status,
       message: row.message,
@@ -85,16 +85,16 @@ async function getLatestRunIdForInvestedEnterprise(investedEnterpriseId) {
   const ieId = String(investedEnterpriseId || '').trim();
   if (!ieId) return null;
   const rows = await db.query(
-    `SELECT run_id AS id
+    `SELECT run_id
      FROM sourcing_competitor_relation
-     WHERE invested_enterprise_id = ? AND delete_mark = 0
+     WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
        AND run_id IS NOT NULL AND TRIM(run_id) <> ''
        AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-     ORDER BY created_at DESC
+     ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     [ieId]
   );
-  return rows.length ? rows[0].id : null;
+  return rows.length ? rows[0].run_id : null;
 }
 
 async function buildVersionLabelMapForInvestedEnterprise(investedEnterpriseId) {
@@ -114,29 +114,29 @@ async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
   if (!pipId) return [];
 
   const runRows = await db.query(
-    `SELECT r.pre_investment_run_id AS id,
-            MIN(r.created_at) AS first_relation_at,
+    `SELECT r.pre_investment_run_id,
+            MIN(r.F_CreatorTime) AS first_relation_at,
             COUNT(*) AS relation_count,
-            MAX(scr.created_at) AS run_created_at,
+            MAX(scr.F_CreatorTime) AS run_created_at,
             MAX(scr.status) AS status,
             MAX(scr.message) AS message,
             MAX(scr.finished_at) AS finished_at,
             MAX(scr.triggered_by_user_id) AS triggered_by_user_id
      FROM sourcing_competitor_relation r
      LEFT JOIN sourcing_pre_investment_competitor_run scr
-       ON scr.id = r.pre_investment_run_id AND scr.delete_mark = 0
+       ON scr.F_Id = r.pre_investment_run_id AND scr.F_DeleteMark = 0
      WHERE r.pre_investment_project_id = ?
        AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
        AND r.subject_type = 'pre_investment_project'
      GROUP BY r.pre_investment_run_id
-     ORDER BY COALESCE(MAX(scr.created_at), MIN(r.created_at)) ASC, r.pre_investment_run_id ASC`,
+     ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.pre_investment_run_id ASC`,
     [pipId]
   );
 
   const runsAsc = runRows
-    .filter((row) => row.id && String(row.id).trim())
+    .filter((row) => row.pre_investment_run_id && String(row.pre_investment_run_id).trim())
     .map((row) => ({
-      id: row.id,
+      id: row.pre_investment_run_id,
       created_at: row.run_created_at || row.first_relation_at,
       status: row.status,
       message: row.message,
@@ -153,16 +153,16 @@ async function getLatestRunIdForPreInvestmentProject(preInvestmentProjectId) {
   const pipId = String(preInvestmentProjectId || '').trim();
   if (!pipId) return null;
   const rows = await db.query(
-    `SELECT pre_investment_run_id AS id
+    `SELECT pre_investment_run_id
      FROM sourcing_competitor_relation
-     WHERE pre_investment_project_id = ? AND delete_mark = 0
+     WHERE pre_investment_project_id = ? AND F_DeleteMark = 0
        AND subject_type = 'pre_investment_project'
        AND pre_investment_run_id IS NOT NULL AND TRIM(pre_investment_run_id) <> ''
-     ORDER BY created_at DESC
+     ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     [pipId]
   );
-  return rows.length ? rows[0].id : null;
+  return rows.length ? rows[0].pre_investment_run_id : null;
 }
 
 async function buildVersionLabelMapForPreInvestmentProject(preInvestmentProjectId) {

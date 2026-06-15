@@ -5,7 +5,7 @@ const db = require('../../db');
  * @returns {{ inserted: number, skipped: number }}
  */
 async function runListingMockCrawler({ startDate, endDate }) {
-  const adminRows = await db.query(`SELECT id FROM users WHERE account = 'admin' LIMIT 1`);
+  const adminRows = await db.query(`SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1`);
   const adminId = adminRows[0]?.id;
   if (!adminId) throw new Error('??? account=admin ???????? Mock ????');
 

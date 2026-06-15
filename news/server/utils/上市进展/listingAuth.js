@@ -18,7 +18,7 @@ const LISTING_FEATURE = {
 async function getUserFromHeader(req) {
   const userId = req.headers['x-user-id'] || null;
   if (!userId) return null;
-  const rows = await db.query('SELECT id, account, role FROM users WHERE id = ? LIMIT 1', [userId]);
+  const rows = await db.query('SELECT F_Id AS id, account, role FROM users WHERE F_Id = ? LIMIT 1', [userId]);
   return rows.length ? rows[0] : null;
 }
 
@@ -36,7 +36,7 @@ function isListingMailUnrestrictedUser(userRow) {
 async function getListingMembershipLevelName(userId) {
   if (!userId) return '';
   const rows = await db.query(
-    'SELECT app_permissions, account, role FROM users WHERE id = ? LIMIT 1',
+    'SELECT app_permissions, account, role FROM users WHERE F_Id = ? LIMIT 1',
     [userId]
   );
   if (!rows.length) return '';
@@ -55,10 +55,10 @@ async function getListingMembershipLevelName(userId) {
   const levelIds = appPermissions.map((p) => p?.membership_level_id).filter(Boolean);
   if (!levelIds.length) return '';
   const levelRows = await db.query(
-    `SELECT ml.id, ml.level_name, a.app_name
+    `SELECT ml.F_Id, ml.level_name, a.app_name
      FROM membership_levels ml
-     INNER JOIN applications a ON a.id = ml.app_id
-     WHERE ml.id IN (${levelIds.map(() => '?').join(',')})`,
+     INNER JOIN applications a ON a.F_Id = ml.app_id
+     WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
     levelIds
   );
   const listingLevel = levelRows.find((item) => item.app_name === LISTING_APP_NAME);

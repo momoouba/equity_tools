@@ -32,11 +32,11 @@ const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
 async function tryAcquireTaskLock(taskKey) {
   try {
     await db.execute(
-      `DELETE FROM listing_sync_task_lock WHERE task_key = ? AND created_at < DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
+      `DELETE FROM listing_sync_task_lock WHERE task_key = ? AND F_CreatorTime < DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
       [taskKey]
     );
     const [res] = await db.execute(
-      `INSERT IGNORE INTO listing_sync_task_lock (task_key, created_at) VALUES (?, NOW())`,
+      `INSERT IGNORE INTO listing_sync_task_lock (task_key, F_CreatorTime) VALUES (?, NOW())`,
       [taskKey]
     );
     return res.affectedRows > 0;
@@ -107,7 +107,7 @@ async function isWorkdayBeijing(date) {
   const dateStr = formatDateOnly(date);
   try {
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -191,7 +191,7 @@ function computeOverseasScheduledSyncRange(config, baseRunDate) {
 async function executeListingSyncTask(configId) {
   console.log(`[上市进展定时] 开始执行 配置 id=${configId}`);
   const rows = await db.query(
-    `SELECT * FROM listing_data_config WHERE id = ? AND is_active = 1`,
+    `SELECT *, F_Id AS id FROM listing_data_config WHERE F_Id = ? AND is_active = 1`,
     [configId]
   );
   if (!rows.length) {
@@ -381,13 +381,13 @@ async function executeListingSyncTask(configId) {
     if (!hasSyncError) {
       const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
       await db.execute(
-        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
+        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
         [rangeEndStored, cfg.id]
       );
     } else {
       // 同步出错时仅更新 last_sync_time（方便排查），不推进 range_end
       await db.execute(
-        `UPDATE listing_data_config SET last_sync_time = NOW() WHERE id = ?`,
+        `UPDATE listing_data_config SET last_sync_time = NOW() WHERE F_Id = ?`,
         [cfg.id]
       );
     }
@@ -422,12 +422,12 @@ async function executeListingSyncTask(configId) {
     }
     try {
       const admins = await db.query(
-        `SELECT id, email FROM users WHERE account = 'admin' LIMIT 1`
+        `SELECT F_Id AS id, email FROM users WHERE account = 'admin' LIMIT 1`
       );
       const to = process.env.LISTING_ALERT_EMAIL || admins[0]?.email;
       const ec = await db.query(
-        `SELECT ec.id FROM email_config ec
-         INNER JOIN applications a ON ec.app_id = a.id
+        `SELECT ec.F_Id AS id FROM email_config ec
+         INNER JOIN applications a ON ec.app_id = a.F_Id
          WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
         ['上市进展']
       );
@@ -463,7 +463,7 @@ async function updateListingScheduledTasks() {
     sqlSyncScheduledTasks.clear();
 
     const configs = await db.query(
-      `SELECT * FROM listing_data_config
+      `SELECT *, F_Id AS id FROM listing_data_config
        WHERE is_active = 1
          AND cron_expression IS NOT NULL
          AND TRIM(cron_expression) != ''`
@@ -498,7 +498,7 @@ async function updateListingScheduledTasks() {
     }
 
     const sqlSettings = await db.query(
-      `SELECT id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression,
+      `SELECT F_Id AS id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression,
               COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
               COALESCE(NULLIF(TRIM(write_target), ''), ?) AS write_target
        FROM ipo_project_sql_sync_setting
@@ -526,7 +526,7 @@ async function updateListingScheduledTasks() {
             let dbLabel = String(cfg.external_db_config_id || '');
             try {
               const dbRows = await db.query(
-                'SELECT name, host FROM external_db_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
+                'SELECT name, host FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1',
                 [cfg.external_db_config_id]
               );
               if (dbRows[0]) {

@@ -8,6 +8,7 @@ client/node_modules/
 dist/
 build/
 *.log
+uploads/
 
 # Python
 __pycache__/

@@ -63,7 +63,7 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
     scopedRows = await db.query(
       `SELECT wechat_account_id, industry_tag_code
        FROM additional_wechat_accounts
-       WHERE creator_user_id = ? AND status = 'active' AND delete_mark = 0
+       WHERE F_CreatorUserId = ? AND status = 'active' AND F_DeleteMark = 0
          AND wechat_account_id IS NOT NULL AND wechat_account_id != ''`,
       [recipientConfig.user_id]
     );
@@ -217,10 +217,10 @@ function formatDateOnly(date) {
  */
 function passShanghaiInternationalTimeWindow(news) {
   if (!news || news.APItype !== '上海国际') return true;
-  if (!news.public_time || !news.created_at) return false;
+  if (!news.public_time || !news.F_CreatorTime) return false;
 
   const publicDate = new Date(news.public_time);
-  const createdDate = new Date(news.created_at);
+  const createdDate = new Date(news.F_CreatorTime);
   if (Number.isNaN(publicDate.getTime()) || Number.isNaN(createdDate.getTime())) {
     return false;
   }
@@ -241,7 +241,7 @@ async function isWorkdayDate(date) {
   try {
     const db = require('../db');
     const rows = await db.query(
-      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
       [dateStr]
     );
     if (rows.length > 0) {
@@ -488,7 +488,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
   console.log(`[邮件发送] 时间范围（基于创建时间）: ${from} 到 ${to}`);
 
   // 先检查用户角色（管理员自动拥有所有权限）
-  const users = await db.query('SELECT role FROM users WHERE id = ?', [userId]);
+  const users = await db.query('SELECT role FROM users WHERE F_Id = ?', [userId]);
   const userRole = users.length > 0 ? users[0].role : 'user';
   console.log(`[邮件发送] 用户角色: ${userRole}`);
   
@@ -564,7 +564,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}`
     );
     
@@ -599,9 +599,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const testTimeQuery = await db.query(
       `SELECT COUNT(*) as count 
        FROM news_detail 
-       WHERE created_at >= ? 
-       AND created_at < ?
-       AND delete_mark = 0`,
+       WHERE F_CreatorTime >= ? 
+       AND F_CreatorTime < ?
+       AND F_DeleteMark = 0`,
       [from, to]
     );
     console.log(`[邮件发送] 管理员：时间范围内总新闻数（基于创建时间）：${testTimeQuery[0]?.count || 0}`);
@@ -612,7 +612,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE wechat_account IN (${placeholders})
-         AND delete_mark = 0`,
+         AND F_DeleteMark = 0`,
         uniqueAccountIds
       );
       console.log(`[邮件发送] 管理员：公众号ID匹配的新闻总数（不限时间）：${testAccountQuery[0]?.count || 0}`);
@@ -622,9 +622,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE wechat_account IN (${placeholders})
-         AND created_at >= ? 
-         AND created_at < ?
-         AND delete_mark = 0`,
+         AND F_CreatorTime >= ? 
+         AND F_CreatorTime < ?
+         AND F_DeleteMark = 0`,
         [...uniqueAccountIds, from, to]
       );
       console.log(`[邮件发送] 管理员：公众号ID匹配 + 时间范围的新闻数（基于创建时间）：${testAccountTimeQuery[0]?.count || 0}`);
@@ -703,7 +703,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     // 先简化查询，不使用LEFT JOIN，直接查询news_detail表，确保fund和sub_fund字段能正确返回
     newsList = await db.query(
       `SELECT 
-              nd.id, 
+              nd.F_Id AS id, 
               nd.enterprise_full_name, 
               nd.enterprise_abbreviation,
               nd.title, 
@@ -719,7 +719,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               nd.account_name, 
               nd.wechat_account, 
               nd.source_url, 
-              nd.created_at,
+              nd.F_CreatorTime,
               nd.APItype, 
               nd.news_category
        FROM news_detail nd
@@ -738,7 +738,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               SELECT enterprise_full_name 
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               ${entityTypeSubqueryFilter}
             )
             OR
@@ -753,7 +753,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               SELECT enterprise_full_name 
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               ${entityTypeSubqueryFilter}
             )
             OR
@@ -767,7 +767,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               END
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               ${entityTypeSubqueryFilter}
             )
             OR
@@ -776,7 +776,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               SELECT project_abbreviation 
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               AND project_abbreviation IS NOT NULL
               AND project_abbreviation != ''
               ${entityTypeSubqueryFilter}
@@ -792,7 +792,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               SELECT enterprise_full_name 
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               ${entityTypeSubqueryFilter}
             )
             -- 兼容旧数据：如果数据库中的enterprise_full_name仍存在"简称【全称】"格式，提取全称部分与新闻中的企业全称匹配
@@ -806,7 +806,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               END
               FROM invested_enterprises 
               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  exit_status NOT IN ('完全退出', '已上市', '不再观察')
-              AND delete_mark = 0
+              AND F_DeleteMark = 0
               ${entityTypeSubqueryFilter}
             )
           ))
@@ -817,7 +817,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             SELECT wechat_account_id 
             FROM additional_wechat_accounts 
             WHERE status = 'active' 
-            AND delete_mark = 0
+            AND F_DeleteMark = 0
           )
           AND (
             nd.keywords LIKE '%"榜单"%'
@@ -826,17 +826,17 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
             OR nd.keywords LIKE '%获奖%'
           ))
        )
-       AND nd.created_at >= ? 
-       AND nd.created_at < ?
+       AND nd.F_CreatorTime >= ? 
+       AND nd.F_CreatorTime < ?
        AND (
          nd.APItype != '上海国际'
          OR (
           NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
           AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
-          AND DATEDIFF(DATE(nd.created_at), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
+          AND DATEDIFF(DATE(nd.F_CreatorTime), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
          )
        )
-      AND nd.delete_mark = 0
+      AND nd.F_DeleteMark = 0
        ${entityTypeCondition}
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
       [...uniqueAccountIds, from, to]
@@ -852,7 +852,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       
       // 直接查询数据库验证
       const testQuery = await db.query(
-        `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+        `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id = ?`,
         [firstNews.id]
       );
       if (testQuery.length > 0) {
@@ -872,7 +872,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         const newsIds = newsList.map(n => n.id);
         const placeholders = newsIds.map(() => '?').join(',');
         const fundData = await db.query(
-          `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+          `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
           newsIds
         );
         
@@ -915,9 +915,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE wechat_account = ?
-         AND created_at >= ? 
-         AND created_at < ?
-         AND delete_mark = 0`,
+         AND F_CreatorTime >= ? 
+         AND F_CreatorTime < ?
+         AND F_DeleteMark = 0`,
         [quantumBitAccountId, from, to]
       );
       const quantumBitCount = quantumBitTestQuery[0]?.count || 0;
@@ -925,13 +925,13 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       
       if (quantumBitCount > 0) {
         const quantumBitNewsSample = await db.query(
-          `SELECT id, title, enterprise_full_name, account_name, wechat_account, 
+          `SELECT F_Id, title, enterprise_full_name, account_name, wechat_account, 
                   news_abstract, summary, content, public_time, APItype
            FROM news_detail 
            WHERE wechat_account = ?
-           AND created_at >= ? 
-           AND created_at < ?
-           AND delete_mark = 0
+           AND F_CreatorTime >= ? 
+           AND F_CreatorTime < ?
+           AND F_DeleteMark = 0
            ORDER BY public_time DESC
            LIMIT 5`,
           [quantumBitAccountId, from, to]
@@ -961,7 +961,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
                FROM invested_enterprises 
                WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-               AND delete_mark = 0
+               AND F_DeleteMark = 0
                LIMIT 1`,
               [targetNewsInDB.enterprise_full_name]
             );
@@ -977,7 +977,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
                    FROM invested_enterprises 
                    WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
                    AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-                   AND delete_mark = 0
+                   AND F_DeleteMark = 0
                    LIMIT 1`,
                   [enterpriseNameWithoutBrackets]
                 );
@@ -1002,7 +1002,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       const newsIds = newsList.map(n => n.id);
       const placeholders = newsIds.map(() => '?').join(',');
       const fundData = await db.query(
-        `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+        `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
         newsIds
       );
       
@@ -1038,7 +1038,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 直接测试查询这条新闻的fund和sub_fund
       if (firstNews.id) {
         const testQuery = await db.query(
-          `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+          `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id = ?`,
           [firstNews.id]
         );
         if (testQuery.length > 0) {
@@ -1059,9 +1059,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       const testNewsIds = newsList.slice(0, 5).map(n => n.id);
       const placeholders = testNewsIds.map(() => '?').join(',');
       const testQuery = await db.query(
-        `SELECT id, entity_type, enterprise_full_name 
+        `SELECT F_Id, entity_type, enterprise_full_name 
          FROM news_detail 
-         WHERE id IN (${placeholders})`,
+         WHERE F_Id IN (${placeholders})`,
         testNewsIds
       );
       console.log(`[邮件发送] ========== 直接查询数据库测试 ==========`);
@@ -1105,9 +1105,9 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         `SELECT COUNT(*) as count 
          FROM news_detail 
          WHERE (APItype = '企查查' OR APItype = 'qichacha')
-         AND created_at >= ? 
-         AND created_at < ?
-         AND delete_mark = 0`,
+         AND F_CreatorTime >= ? 
+         AND F_CreatorTime < ?
+         AND F_DeleteMark = 0`,
         [from, to]
       );
       const qichachaCount = qichachaCountQuery[0]?.count || 0;
@@ -1116,12 +1116,12 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       if (qichachaCount > 0) {
         // 查询一些企查查新闻示例，检查企业全称和entity_type
         const qichachaSample = await db.query(
-          `SELECT id, title, enterprise_full_name, entity_type, news_category, APItype, wechat_account
+          `SELECT F_Id, title, enterprise_full_name, entity_type, news_category, APItype, wechat_account
            FROM news_detail 
            WHERE (APItype = '企查查' OR APItype = 'qichacha')
-           AND created_at >= ? 
-           AND created_at < ?
-           AND delete_mark = 0
+           AND F_CreatorTime >= ? 
+           AND F_CreatorTime < ?
+           AND F_DeleteMark = 0
            LIMIT 10`,
           [from, to]
         );
@@ -1222,11 +1222,11 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const wechatAccounts = await db.query(
       `SELECT DISTINCT wechat_official_account_id 
        FROM invested_enterprises 
-       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  creator_user_id = ? 
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_CreatorUserId = ? 
        AND wechat_official_account_id IS NOT NULL 
        AND wechat_official_account_id != ''
        AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        ${entityTypeFilter}`,
       [userId]
     );
@@ -1235,11 +1235,11 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const userAdditionalAccounts = await db.query(
       `SELECT DISTINCT wechat_account_id 
        FROM additional_wechat_accounts 
-       WHERE creator_user_id = ? 
+       WHERE F_CreatorUserId = ? 
        AND status = 'active' 
        AND wechat_account_id IS NOT NULL 
        AND wechat_account_id != ''
-       AND delete_mark = 0`,
+       AND F_DeleteMark = 0`,
       [userId]
     );
     
@@ -1271,8 +1271,8 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     // 1. 通过公众号ID匹配且有企业全称的新闻（来自被投企业）
     // 2. 通过公众号ID匹配的额外公众号新闻（可能有企业全称，也可能没有）
     newsList = await db.query(
-      `SELECT nd.id, nd.title, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_sentiment, nd.keywords, 
-              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+      `SELECT nd.F_Id AS id, nd.title, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_sentiment, nd.keywords, 
+              nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
               nd.APItype, nd.news_category, nd.entity_type, 
               nd.fund, nd.sub_fund
        FROM news_detail nd
@@ -1290,19 +1290,19 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
            ELSE 
              ie.enterprise_full_name
          END)
-       ) AND ie.delete_mark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
+       ) AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
        WHERE nd.wechat_account IN (${placeholders})
-       AND nd.created_at >= ? 
-       AND nd.created_at < ?
+       AND nd.F_CreatorTime >= ? 
+       AND nd.F_CreatorTime < ?
        AND (
          nd.APItype != '上海国际'
          OR (
           NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
           AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
-          AND DATEDIFF(DATE(nd.created_at), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
+          AND DATEDIFF(DATE(nd.F_CreatorTime), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
          )
        )
-       AND nd.delete_mark = 0
+       AND nd.F_DeleteMark = 0
        ORDER BY 
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
          COALESCE(nd.enterprise_full_name, nd.account_name, ''),
@@ -1318,7 +1318,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       const newsIds = newsList.map(n => n.id);
       const placeholders = newsIds.map(() => '?').join(',');
       const fundData = await db.query(
-        `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+        `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
         newsIds
       );
       
@@ -1373,7 +1373,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        WHERE status = 'active' 
        AND wechat_account_id IS NOT NULL 
        AND wechat_account_id != ''
-       AND delete_mark = 0`
+       AND F_DeleteMark = 0`
     );
     additionalAccounts.forEach(acc => {
       if (acc.wechat_account_id) {
@@ -1467,7 +1467,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
           `SELECT DISTINCT enterprise_full_name, entity_type 
            FROM invested_enterprises 
            WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name IN (${placeholders}) 
-           AND delete_mark = 0`,
+           AND F_DeleteMark = 0`,
           enterpriseNames
         );
         
@@ -1792,7 +1792,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     const newsIds = finalNewsList.map(n => n.id);
     const placeholders = newsIds.map(() => '?').join(',');
     const fundData = await db.query(
-      `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+      `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
       newsIds
     );
     
@@ -2107,7 +2107,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         const newsIds = newsList.map(n => n.id);
         const placeholders = newsIds.map(() => '?').join(',');
         const fundData = await db.query(
-          `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+          `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
           newsIds
         );
         
@@ -2165,7 +2165,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         `SELECT wechat_account_id 
          FROM additional_wechat_accounts 
          WHERE status = 'active' 
-         AND delete_mark = 0
+         AND F_DeleteMark = 0
          AND wechat_account_id IS NOT NULL 
          AND wechat_account_id != ''`
       );
@@ -2368,12 +2368,12 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     const logId = await generateId('email_logs');
     await db.execute(
       `INSERT INTO email_logs 
-       (id, email_config_id, operation_type, from_email, to_email, 
-        subject, content, status, created_by) 
+       (F_Id, email_config_id, operation_type, from_email, to_email, 
+        subject, content, status, F_CreatorUserId) 
        VALUES (?, ?, 'send', ?, ?, ?, ?, 'success', ?)`,
       [
         logId,
-        emailConfig.id,
+        emailConfig.F_Id,
         emailConfig.from_email,
         recipientEmails.join(','),
         subject,
@@ -2402,12 +2402,12 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       
       await db.execute(
         `INSERT INTO email_logs 
-         (id, email_config_id, operation_type, from_email, to_email, 
-          subject, status, error_message, created_by) 
+         (F_Id, email_config_id, operation_type, from_email, to_email, 
+          subject, status, error_message, F_CreatorUserId) 
          VALUES (?, ?, 'send', ?, ?, ?, 'failed', ?, ?)`,
         [
           logId,
-          emailConfig.id,
+          emailConfig.F_Id,
           emailConfig.from_email,
           recipientEmails || recipientConfig.recipient_email,
           recipientConfig.email_subject || '舆情信息日报',
@@ -2437,7 +2437,7 @@ async function isWorkdayForEmail(date) {
     // 使用北京时区格式化日期，确保与节假日表中的日期（北京时区）一致
     const dateStr = formatDateOnly(date);
     const holidays = await db.query(
-      'SELECT is_workday, workday_type FROM holiday_calendar WHERE holiday_date = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT is_workday, workday_type FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
       [dateStr]
     );
     
@@ -2469,11 +2469,11 @@ async function executeEmailTask(recipientId) {
     
     // 获取收件管理配置，包括企查查类别编码
     const recipients = await db.query(
-      `SELECT rm.*, u.account as user_account, u.role as user_role
+      `SELECT rm.*, rm.F_Id AS id, u.account as user_account, u.role as user_role
        FROM recipient_management rm
-       LEFT JOIN users u ON rm.user_id = u.id
-       WHERE rm.id = ? 
-       AND rm.delete_mark = 0
+       LEFT JOIN users u ON rm.user_id = u.F_Id
+       WHERE rm.F_Id = ? 
+       AND rm.F_DeleteMark = 0
        AND rm.is_active = 1`,
       [recipientId]
     );
@@ -2486,7 +2486,7 @@ async function executeEmailTask(recipientId) {
     const recipient = recipients[0];
 
     const listingAppRows = await db.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       ['上市进展']
     );
     const listingAppId = listingAppRows.length ? listingAppRows[0].id : null;
@@ -2534,8 +2534,8 @@ async function executeEmailTask(recipientId) {
       
       // 查询包含荣誉奖项关键词的企查查新闻（仅按创建时间筛选）
       const honorAwardNews = await db.query(
-        `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
-                nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+        `SELECT DISTINCT nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
                 nd.APItype, nd.news_category
          FROM news_detail nd
          WHERE nd.APItype = '企查查'
@@ -2567,9 +2567,9 @@ async function executeEmailTask(recipientId) {
              OR nd.news_abstract LIKE '%榜单%'
            )
          )
-         AND nd.created_at >= ? 
-         AND nd.created_at < ?
-         AND nd.delete_mark = 0
+         AND nd.F_CreatorTime >= ? 
+         AND nd.F_CreatorTime < ?
+         AND nd.F_DeleteMark = 0
          -- 过滤掉摘要和正文都为空的数据
          AND (
            (nd.news_abstract IS NOT NULL AND nd.news_abstract != '')
@@ -2645,7 +2645,7 @@ async function executeEmailTask(recipientId) {
           
           // 获取完整的新闻数据（包括content）
           const fullNewsItems = await db.query(
-            'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
+            'SELECT F_Id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE F_Id = ?',
             [news.id]
           );
           
@@ -2700,9 +2700,9 @@ async function executeEmailTask(recipientId) {
         // 先测试查询一条新闻，确认 entity_type 是否有值
         const testNewsId = newsIds[0];
         const testQuery = await db.query(
-          `SELECT id, entity_type, enterprise_full_name 
+          `SELECT F_Id, entity_type, enterprise_full_name 
            FROM news_detail 
-           WHERE id = ?`,
+           WHERE F_Id = ?`,
           [testNewsId]
         );
         if (testQuery.length > 0) {
@@ -2711,13 +2711,13 @@ async function executeEmailTask(recipientId) {
         
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
-          `SELECT DISTINCT nd.id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
-                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.created_at,
+          `SELECT DISTINCT nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+                  nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
                   nd.APItype, nd.news_category, nd.entity_type, 
                   nd.fund, nd.sub_fund
            FROM news_detail nd
-           WHERE nd.id IN (${placeholders})
-           AND nd.delete_mark = 0`,
+           WHERE nd.F_Id IN (${placeholders})
+           AND nd.F_DeleteMark = 0`,
           newsIds
         );
         
@@ -2733,7 +2733,7 @@ async function executeEmailTask(recipientId) {
           
           // 直接查询数据库验证
           const testQuery = await db.query(
-            `SELECT id, fund, sub_fund FROM news_detail WHERE id = ?`,
+            `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id = ?`,
             [firstRefreshed.id]
           );
           if (testQuery.length > 0) {
@@ -2751,7 +2751,7 @@ async function executeEmailTask(recipientId) {
           if (!('fund' in firstRefreshed)) {
             logWithTimestamp(`[邮件发送] ⚠️ 重新获取的数据缺少fund和sub_fund字段，手动补充...`);
             const fundData = await db.query(
-              `SELECT id, fund, sub_fund FROM news_detail WHERE id IN (${placeholders})`,
+              `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
               newsIds
             );
             
@@ -2894,7 +2894,7 @@ async function executeEmailTask(recipientId) {
          WHERE status = 'active' 
          AND wechat_account_id IS NOT NULL 
          AND wechat_account_id != ''
-         AND delete_mark = 0`
+         AND F_DeleteMark = 0`
       );
       additionalAccounts.forEach(acc => {
         if (acc.wechat_account_id) {
@@ -3030,11 +3030,11 @@ async function updateScheduledTasks() {
     
     // 获取所有启用的收件管理配置
     const recipients = await db.query(
-      `SELECT rm.*, u.account as user_account
+      `SELECT rm.*, rm.F_Id AS id, u.account as user_account
        FROM recipient_management rm
-       LEFT JOIN users u ON rm.user_id = u.id
+       LEFT JOIN users u ON rm.user_id = u.F_Id
        WHERE rm.is_active = 1 
-       AND rm.delete_mark = 0`,
+       AND rm.F_DeleteMark = 0`,
       []
     );
     

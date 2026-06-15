@@ -97,7 +97,7 @@ async function ensureCoreSchemaComments(dbPool) {
   const commentDefs = {
     applications: {
       app_name: '应用名称',
-      created_at: '创建时间'
+      F_CreatorTime: '创建时间'
     },
     b_investment_sum: {
       F_LastModifyTime: '最后修改时间'
@@ -106,12 +106,12 @@ async function ensureCoreSchemaComments(dbPool) {
       F_LastModifyTime: '最后修改时间'
     },
     base_dictionary: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     interface_news_type_enabled: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     invested_enterprises: {
       project_number: '项目编号',
@@ -123,13 +123,13 @@ async function ensureCoreSchemaComments(dbPool) {
       exit_status: '退出状态'
     },
     ipo_project_sql_sync_setting: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     listing_data_config: {
       request_url: '请求地址',
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     listing_share_links: {
       share_token: '分享令牌',
@@ -137,26 +137,26 @@ async function ensureCoreSchemaComments(dbPool) {
       expiry_time: '过期时间',
       has_password: '是否启用访问密码',
       password_hash: '访问密码哈希',
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     listing_sync_execution_log: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     membership_levels: {
       level_name: '会员等级名称',
       validity_days: '有效期天数',
       activation_date: '生效日期',
-      created_at: '创建时间'
+      F_CreatorTime: '创建时间'
     },
     system_config: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     system_file_storage: {
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     },
     users: {
       account: '账号',
@@ -167,8 +167,8 @@ async function ensureCoreSchemaComments(dbPool) {
       account_status: '账号状态',
       membership_level_id: '会员等级ID',
       app_permissions: '应用权限列表（JSON）',
-      created_at: '创建时间',
-      updated_at: '更新时间'
+      F_CreatorTime: '创建时间',
+      F_LastModifyTime: '更新时间'
     }
   };
 
@@ -469,10 +469,10 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
       }
     }
   }
-  async function addFkDeleteUser(table) {
+  async function addFkDeleteUser(table, colName = 'delete_user_id') {
     try {
       await dbPool.query(
-        `ALTER TABLE \`${table}\` ADD CONSTRAINT \`${table}_fk_del_user\` FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL`
+        `ALTER TABLE \`${table}\` ADD CONSTRAINT \`${table}_fk_del_user\` FOREIGN KEY (\`${colName}\`) REFERENCES users(F_Id) ON DELETE SET NULL`
       );
     } catch (e) {
       /* ignore duplicate */
@@ -486,19 +486,22 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
       if (!cols.length) continue;
 
       if (cols.includes('is_deleted')) {
-        if (!cols.includes('delete_mark')) {
+        if (!cols.includes('delete_mark') && !cols.includes('F_DeleteMark')) {
           await dbPool.query(
             `ALTER TABLE \`${t}\` ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'`
           );
         }
-        if (!cols.includes('delete_time')) {
+        if (!cols.includes('delete_time') && !cols.includes('F_DeleteTime')) {
           await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间'`);
         }
-        if (!cols.includes('delete_user_id')) {
+        if (!cols.includes('delete_user_id') && !cols.includes('F_DeleteUserId')) {
           await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'`);
         }
+        const dmCol = cols.includes('F_DeleteMark') ? 'F_DeleteMark' : 'delete_mark';
+        const dtCol = cols.includes('F_DeleteTime') ? 'F_DeleteTime' : 'delete_time';
+        const duCol = cols.includes('F_DeleteUserId') ? 'F_DeleteUserId' : 'delete_user_id';
         await dbPool.query(
-          `UPDATE \`${t}\` SET delete_mark = IFNULL(is_deleted,0), delete_time = deleted_at, delete_user_id = deleted_by`
+          `UPDATE \`${t}\` SET \`${dmCol}\` = IFNULL(is_deleted,0), \`${dtCol}\` = deleted_at, \`${duCol}\` = deleted_by`
         );
         await dropFkForColumn(t, 'deleted_by');
         for (const c of ['is_deleted', 'deleted_at', 'deleted_by']) {
@@ -513,18 +516,18 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
         cols = await tableCols(t);
       }
 
-      if (!cols.includes('delete_mark')) {
+      if (!cols.includes('delete_mark') && !cols.includes('F_DeleteMark')) {
         await dbPool.query(
           `ALTER TABLE \`${t}\` ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除'`
         );
       }
-      if (!cols.includes('delete_time')) {
+      if (!cols.includes('delete_time') && !cols.includes('F_DeleteTime')) {
         await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间'`);
       }
-      if (!cols.includes('delete_user_id')) {
+      if (!cols.includes('delete_user_id') && !cols.includes('F_DeleteUserId')) {
         await dbPool.query(`ALTER TABLE \`${t}\` ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'`);
       }
-      addFkDeleteUser(t);
+      addFkDeleteUser(t, cols.includes('F_DeleteUserId') ? 'F_DeleteUserId' : 'delete_user_id');
     } catch (err) {
       console.warn(`迁移 ${t} delete_mark 字段时出现警告:`, err.message);
     }
@@ -534,7 +537,7 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
   for (const t of renameTrackTables) {
     try {
       const cols = await tableCols(t);
-      if (cols.includes('is_deleted') && !cols.includes('delete_mark')) {
+      if (cols.includes('is_deleted') && !cols.includes('delete_mark') && !cols.includes('F_DeleteMark')) {
         await dbPool.query(
           `ALTER TABLE \`${t}\` CHANGE COLUMN is_deleted delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除'`
         );
@@ -546,13 +549,134 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
 
   try {
     const cols = await tableCols('sourcing_financing_event');
-    if (cols.includes('is_deleted') && !cols.includes('delete_mark')) {
+    if (cols.includes('is_deleted') && !cols.includes('delete_mark') && !cols.includes('F_DeleteMark')) {
       await dbPool.query(
         `ALTER TABLE sourcing_financing_event CHANGE COLUMN is_deleted delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0未删除，1已删除'`
       );
     }
   } catch (err) {
     console.warn('重命名 sourcing_financing_event.is_deleted 时出现警告:', err.message);
+  }
+}
+
+/**
+ * 第三优先级：批量将剩余表的 snake_case / 小写系统字段重命名为 F_ PascalCase 规范。
+ * 通过 INFORMATION_SCHEMA 读取当前列定义，仅修改列名，保留原有类型/默认值/注释。
+ */
+async function migrateBatchFColumns(dbPool) {
+  // 表 → [{ old: '旧列名', new: '新列名' }, ...]
+  const tableRenames = {
+    // ── 基础平台表 ──
+    applications:             [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    membership_levels:        [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    users:                    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    invested_enterprises:     [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'modifier_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    company:                  [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    qichacha_config:          [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    shanghai_international_group_config: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    qichacha_news_categories: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    system_config:            [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    system_file_storage:      [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    base_dictionary:          [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }],
+    data_change_log:          [{ old: 'id', new: 'F_Id' }, { old: 'change_user_id', new: 'F_CreatorUserId' }, { old: 'change_time', new: 'F_CreatorTime' }],
+    news_interface_config:    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    interface_news_type_enabled: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    recipient_management:     [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    email_config:             [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    email_logs:               [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    news_sync_execution_log:  [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    ai_news_analysis_cache:   [{ old: 'updated_at', new: 'F_LastModifyTime' }],
+    news_sync_detail_log:     [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    news_detail:              [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    additional_wechat_accounts: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    ai_model_config:          [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    holiday_calendar:         [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    ai_prompt_config:         [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    ai_prompt_change_log:     [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    external_db_config:       [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    enterprise_sync_task:     [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    performance_scheduled:    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    // ── 新闻舆情表 ──
+    news_share_links:         [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    // ── 上市进展表 ──
+    ipo_new_share:            [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    listing_data_config:      [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    listing_sync_execution_log: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    listing_sync_task_lock:   [{ old: 'created_at', new: 'F_CreatorTime' }],
+    // ── 项目挖掘表 ──
+    sourcing_financing_event_w_infer: [{ old: 'id', new: 'F_Id' }],
+    sourcing_financing_event:  [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_financing_ai_enrich_log: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    invested_enterprise_ai_enrich_log: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    invested_enterprise_ai_sync_snapshot: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    competitor_analysis_sync_snapshot: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    ipo_project_ai_sync_snapshot: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    competitor_match_supplement: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    competitor_recall_source_config: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }],
+    pre_investment_project:   [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    sourcing_competitor_run:  [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    sourcing_competitor_relation: [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_pre_investment_competitor_run: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
+    sourcing_competitor_run_step_log: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    sourcing_competitor_comparable_pref: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_track:           [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_track_lv1:       [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_track_lv2:       [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_track_lv3:       [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    ipo_project_sql_sync_setting: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+  };
+
+  let totalRenamed = 0;
+
+  for (const [table, renames] of Object.entries(tableRenames)) {
+    for (const { old: oldCol, new: newCol } of renames) {
+      try {
+        // 检查旧列是否存在
+        const [cols] = await dbPool.query(
+          `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT
+           FROM INFORMATION_SCHEMA.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+          [table, oldCol]
+        );
+        if (cols.length === 0) continue; // 旧列不存在，跳过
+
+        const c = cols[0];
+        // 重建列定义（保留原有类型、默认值等）
+        let colDef = c.COLUMN_TYPE;
+        if (c.EXTRA === 'auto_increment') {
+          colDef += ' NOT NULL AUTO_INCREMENT';
+        } else {
+          colDef += c.IS_NULLABLE === 'NO' ? ' NOT NULL' : ' NULL';
+          if (c.COLUMN_DEFAULT !== null) {
+            if (['CURRENT_TIMESTAMP', 'current_timestamp()'].includes(c.COLUMN_DEFAULT)) {
+              colDef += ' DEFAULT CURRENT_TIMESTAMP';
+            } else {
+              colDef += ` DEFAULT ${dbPool.escape(c.COLUMN_DEFAULT)}`;
+            }
+          }
+          if (c.EXTRA && c.EXTRA.includes('on update')) {
+            colDef += ' ON UPDATE CURRENT_TIMESTAMP';
+          }
+        }
+        if (c.COLUMN_COMMENT) {
+          colDef += ` COMMENT ${dbPool.escape(c.COLUMN_COMMENT)}`;
+        }
+
+        await dbPool.query(
+          `ALTER TABLE \`${table}\` CHANGE COLUMN \`${oldCol}\` \`${newCol}\` ${colDef}`
+        );
+        console.log(`  ✓ ${table}: ${oldCol} → ${newCol}`);
+        totalRenamed++;
+      } catch (err) {
+        console.warn(`迁移 ${table}.${oldCol} → ${newCol} 时出现警告:`, err.message);
+      }
+    }
+  }
+
+  if (totalRenamed > 0) {
+    console.log(`✓ 批量字段重命名完成，共重命名 ${totalRenamed} 个列`);
+  } else {
+    console.log('✓ 批量字段重命名：无需迁移（所有列已是 F_ 命名）');
   }
 }
 
@@ -597,27 +721,27 @@ async function initializeTables(dbPool) {
 
     await dbPool.query(`
     CREATE TABLE IF NOT EXISTS applications (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       app_name VARCHAR(255) NOT NULL UNIQUE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS membership_levels (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       level_name VARCHAR(100) NOT NULL,
       validity_days INT NOT NULL,
       activation_date DATETIME NULL,
       app_id VARCHAR(19),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE SET NULL
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       account VARCHAR(100) NOT NULL UNIQUE,
       phone VARCHAR(20) NOT NULL UNIQUE,
       password VARCHAR(255) NOT NULL,
@@ -625,9 +749,9 @@ async function initializeTables(dbPool) {
       account_status VARCHAR(20) DEFAULT 'active',
       membership_level_id VARCHAR(19),
       app_permissions TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      FOREIGN KEY (membership_level_id) REFERENCES membership_levels(id) ON DELETE SET NULL
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (membership_level_id) REFERENCES membership_levels(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -654,7 +778,7 @@ async function initializeTables(dbPool) {
 
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS invested_enterprises (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       project_number VARCHAR(32) NOT NULL UNIQUE,
       project_abbreviation VARCHAR(255),
       enterprise_full_name VARCHAR(255) NOT NULL,
@@ -667,16 +791,16 @@ async function initializeTables(dbPool) {
       exited_cost DECIMAL(20,2) NULL COMMENT '已退出成本',
       remaining_cost DECIMAL(20,2) NULL COMMENT '剩余成本',
       residual_value DECIMAL(20,2) NULL COMMENT '剩余价值',
-      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      modifier_user_id VARCHAR(19) COMMENT '修改用户ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
-      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (modifier_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      F_CreatorUserId VARCHAR(19) COMMENT '创建用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '修改用户ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      F_DeleteMark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -701,9 +825,9 @@ async function initializeTables(dbPool) {
       `);
       await dbPool.query(`
         ALTER TABLE invested_enterprises 
-        ADD FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        ADD FOREIGN KEY (modifier_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        ADD FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        ADD FOREIGN KEY (creator_user_id) REFERENCES users(F_Id) ON DELETE SET NULL,
+        ADD FOREIGN KEY (modifier_user_id) REFERENCES users(F_Id) ON DELETE SET NULL,
+        ADD FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
       `);
       // 已为 invested_enterprises 表添加用户和删除相关字段
     }
@@ -714,23 +838,23 @@ async function initializeTables(dbPool) {
   // company 表：存储去重的被投企业信息
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS company (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       enterprise_abbreviation VARCHAR(255) NOT NULL COMMENT '被投企业简称',
       enterprise_full_name VARCHAR(255) NOT NULL COMMENT '被投企业全称',
       unified_credit_code VARCHAR(64) COMMENT '统一社会信用代码',
       official_website VARCHAR(255) COMMENT '公司官网',
       wechat_official_account_id VARCHAR(100) COMMENT '微信公众号id',
-      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updater_user_id VARCHAR(19) COMMENT '更新用户ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '更新用户ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       UNIQUE KEY uk_credit_code (unified_credit_code),
-      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      F_DeleteMark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -752,8 +876,8 @@ async function initializeTables(dbPool) {
       `);
       await dbPool.query(`
         ALTER TABLE company 
-        ADD FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        ADD FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL
+        ADD FOREIGN KEY (creator_user_id) REFERENCES users(F_Id) ON DELETE SET NULL,
+        ADD FOREIGN KEY (updater_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
       `);
       // 已为 company 表添加用户相关字段
     }
@@ -767,7 +891,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE company
-          ADD CONSTRAINT company_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT company_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -780,21 +904,21 @@ async function initializeTables(dbPool) {
   // qichacha_config 表：企查查接口配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS qichacha_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       app_id VARCHAR(19) NOT NULL COMMENT '应用ID',
       qichacha_app_key VARCHAR(255) COMMENT '企查查应用凭证',
       qichacha_secret_key VARCHAR(255) COMMENT '企查查凭证秘钥',
       qichacha_daily_limit INT DEFAULT 100 COMMENT '每日查询限制次数',
       interface_type VARCHAR(50) DEFAULT '企业信息' COMMENT '接口类型：企业信息/新闻舆情',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_interface (app_id, interface_type),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -813,7 +937,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE qichacha_config
-          ADD CONSTRAINT qichacha_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT qichacha_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -885,7 +1009,7 @@ async function initializeTables(dbPool) {
         console.warn('添加新唯一键时出现警告:', err.message);
       }
       
-      await dbPool.query('ALTER TABLE qichacha_config ADD FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE');
+      await dbPool.query('ALTER TABLE qichacha_config ADD FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE');
     }
     // 添加is_active字段
     const [isActiveCol] = await dbPool.query(`
@@ -970,20 +1094,20 @@ async function initializeTables(dbPool) {
   // shanghai_international_group_config 表：上海国际集团接口配置（类似qichacha_config）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS shanghai_international_group_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       app_id VARCHAR(19) NOT NULL COMMENT '应用ID',
       x_app_id VARCHAR(255) COMMENT 'X-App-Id：Ipass平台授权的消费方标识',
       api_key VARCHAR(255) COMMENT 'APIkey：消费方认证',
       daily_limit INT DEFAULT 100 COMMENT '每日查询限制次数',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_id (app_id),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -1002,7 +1126,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE shanghai_international_group_config
-          ADD CONSTRAINT shanghai_sig_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT shanghai_sig_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -1015,16 +1139,16 @@ async function initializeTables(dbPool) {
   // qichacha_news_categories 表：企查查新闻类别列表
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS qichacha_news_categories (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       category_code VARCHAR(50) NOT NULL UNIQUE COMMENT '类别编码',
       category_name VARCHAR(255) NOT NULL COMMENT '类别描述',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_category_code (category_code),
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -1043,7 +1167,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE qichacha_news_categories
-          ADD CONSTRAINT qichacha_news_cat_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT qichacha_news_cat_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -1249,32 +1373,32 @@ async function initializeTables(dbPool) {
   // system_config 表：系统配置（保留用于其他配置）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS system_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       config_key VARCHAR(100) NOT NULL UNIQUE COMMENT '配置键',
       config_value TEXT COMMENT '配置值',
       config_desc VARCHAR(255) COMMENT '配置描述',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS system_file_storage (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       config_key VARCHAR(100) NOT NULL UNIQUE COMMENT '关联的配置键',
       filename VARCHAR(255) NOT NULL COMMENT '文件名称',
       mime_type VARCHAR(100) DEFAULT 'image/jpeg' COMMENT '文件类型',
       file_size INT COMMENT '文件大小（字节）',
       file_data LONGBLOB NOT NULL COMMENT '文件内容',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   // base_dictionary 表：数据字典（单表存储字典类型 + 字典选项）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS base_dictionary (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       parent_id VARCHAR(19) NULL COMMENT '父级字典ID，NULL=字典类型，非NULL=字典选项',
       dict_code VARCHAR(100) NOT NULL COMMENT '字典编码（类型和选项都保留，选项继承所属类型编码）',
       dict_name VARCHAR(200) NOT NULL COMMENT '字典名称（类型名称）',
@@ -1282,17 +1406,17 @@ async function initializeTables(dbPool) {
       item_name VARCHAR(200) NULL COMMENT '选项名称（仅选项行有值）',
       sort_order INT NOT NULL DEFAULT 0 COMMENT '排序值，越小越靠前',
       is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0停用',
-      delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
-      created_by VARCHAR(19) NULL COMMENT '创建人ID',
-      updated_by VARCHAR(19) NULL COMMENT '更新人ID',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+      F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人ID',
+      F_LastModifyUserId VARCHAR(19) NULL COMMENT '更新人ID',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人ID',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_base_dict_parent (parent_id),
       INDEX idx_base_dict_code (dict_code),
       INDEX idx_base_dict_enabled (is_enabled),
-      INDEX idx_base_dict_delete (delete_mark)
+      INDEX idx_base_dict_delete (F_DeleteMark)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -1532,16 +1656,16 @@ async function initializeTables(dbPool) {
   // 先创建表（不包含外键约束，稍后添加）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS data_change_log (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       table_name VARCHAR(100) NOT NULL COMMENT '表名',
       record_id VARCHAR(19) NOT NULL COMMENT '表数据的ID值',
       changed_field VARCHAR(100) NOT NULL COMMENT '变更字段名',
       old_value TEXT COMMENT '旧值',
       new_value TEXT COMMENT '新值',
-      change_user_id VARCHAR(19) COMMENT '变更人ID',
-      change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '变更时间',
+      F_CreatorUserId VARCHAR(19) COMMENT '变更人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '变更时间',
       INDEX idx_table_record (table_name, record_id),
-      INDEX idx_change_time (change_time),
+      INDEX idx_change_time (F_CreatorTime),
       INDEX idx_table_name (table_name)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
@@ -1573,7 +1697,7 @@ async function initializeTables(dbPool) {
         await dbPool.query(`
           ALTER TABLE data_change_log 
           ADD CONSTRAINT data_change_log_ibfk_1 
-          FOREIGN KEY (change_user_id) REFERENCES users(id) ON DELETE SET NULL
+          FOREIGN KEY (change_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
         // 已为 data_change_log 表添加外键约束
       }
@@ -1585,7 +1709,7 @@ async function initializeTables(dbPool) {
   // news_interface_config 表：新闻接口配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_interface_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       app_id VARCHAR(19) NOT NULL COMMENT '应用ID',
       interface_type VARCHAR(50) DEFAULT '新榜' COMMENT '新闻接口类型：新榜',
       request_url VARCHAR(500) NOT NULL COMMENT '请求地址',
@@ -1600,13 +1724,13 @@ async function initializeTables(dbPool) {
       last_sync_time DATETIME NULL COMMENT '最后同步时间',
       last_sync_date DATE NULL COMMENT '最后同步日期',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
   
@@ -1675,7 +1799,7 @@ async function initializeTables(dbPool) {
         AND REFERENCED_TABLE_NAME = 'applications'
       `);
       if (fkCheck.length === 0) {
-        await dbPool.query('ALTER TABLE news_interface_config ADD FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE');
+        await dbPool.query('ALTER TABLE news_interface_config ADD FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE');
       }
     }
   } catch (err) {
@@ -1855,12 +1979,12 @@ async function initializeTables(dbPool) {
   // interface_news_type_enabled 表：接口类型与新闻类型的启用关系（后续开发新类型时更新is_enabled）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS interface_news_type_enabled (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
       interface_type VARCHAR(50) NOT NULL COMMENT '接口类型：新榜/企查查/上海国际集团',
       news_type VARCHAR(50) NOT NULL COMMENT '新闻类型',
       is_enabled TINYINT(1) DEFAULT 0 COMMENT '是否已开发可选用：1-是，0-否',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uk_interface_news (interface_type, news_type)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
@@ -2090,7 +2214,7 @@ async function initializeTables(dbPool) {
     `);
     if (fkExists.length === 0) {
       try {
-        await dbPool.query('ALTER TABLE news_interface_config ADD CONSTRAINT fk_news_interface_config_app_id FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE');
+        await dbPool.query('ALTER TABLE news_interface_config ADD CONSTRAINT fk_news_interface_config_app_id FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE');
         // 已重新添加外键约束（不依赖唯一索引）
       } catch (err) {
         console.warn('重新添加外键约束时出现警告:', err.message);
@@ -2104,7 +2228,7 @@ async function initializeTables(dbPool) {
   // recipient_management 表：收件管理
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS recipient_management (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       user_id VARCHAR(19) NOT NULL COMMENT '用户ID',
       recipient_email TEXT NOT NULL COMMENT '收件人邮箱（多个邮箱用逗号或换行分隔）',
       email_subject VARCHAR(500) COMMENT '邮件主题',
@@ -2113,9 +2237,9 @@ async function initializeTables(dbPool) {
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       qichacha_category_codes JSON COMMENT '企查查新闻类别编码列表（JSON数组），为空时使用默认类别',
       listing_mail_types JSON COMMENT '上市进展收件内容类型（JSON数组）：listing_project_progress/listing_progress/listing_guidance/overseas_filing/new_share_listed_yesterday/new_share_upcoming/new_share_apply',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      FOREIGN KEY (user_id) REFERENCES users(F_Id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
   
@@ -2164,7 +2288,7 @@ async function initializeTables(dbPool) {
   // email_config 表：邮件发送配置（必须在 email_logs 之前创建，因为 email_logs 有外键引用它）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS email_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       app_id VARCHAR(19) NOT NULL COMMENT '应用ID',
       smtp_host VARCHAR(255) NOT NULL COMMENT 'SMTP服务器地址',
       smtp_port INT NOT NULL COMMENT 'SMTP端口',
@@ -2179,14 +2303,14 @@ async function initializeTables(dbPool) {
       pop_user VARCHAR(255) COMMENT 'POP用户名（邮箱地址）',
       pop_password VARCHAR(255) COMMENT 'POP密码或授权码',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_app_id (app_id),
-      FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2205,7 +2329,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE email_config
-          ADD CONSTRAINT email_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT email_config_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -2349,7 +2473,7 @@ async function initializeTables(dbPool) {
         await dbPool.query(`
           ALTER TABLE email_config 
           ADD CONSTRAINT fk_email_config_app 
-          FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+          FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE
         `);
       } catch (e) {
         console.warn('  添加外键约束时出现警告（可能已存在）:', e.message);
@@ -2417,7 +2541,7 @@ async function initializeTables(dbPool) {
   // email_logs 表：邮件收发日志
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS email_logs (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       email_config_id VARCHAR(19) NOT NULL COMMENT '邮件配置ID',
       operation_type ENUM('send', 'receive') NOT NULL COMMENT '操作类型：send-发送，receive-接收',
       from_email VARCHAR(255) COMMENT '发件人邮箱',
@@ -2428,14 +2552,14 @@ async function initializeTables(dbPool) {
       content TEXT COMMENT '邮件内容',
       status ENUM('success', 'failed') NOT NULL COMMENT '状态：success-成功，failed-失败',
       error_message TEXT COMMENT '错误信息（失败时记录）',
-      created_by VARCHAR(19) COMMENT '操作人ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_CreatorUserId VARCHAR(19) COMMENT '操作人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       INDEX idx_email_config_id (email_config_id),
       INDEX idx_operation_type (operation_type),
       INDEX idx_status (status),
-      INDEX idx_created_at (created_at),
-      FOREIGN KEY (email_config_id) REFERENCES email_config(id) ON DELETE CASCADE,
-      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_created_at (F_CreatorTime),
+      FOREIGN KEY (email_config_id) REFERENCES email_config(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2455,6 +2579,25 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 email_logs.content 时出现警告:', err.message);
+  }
+
+  // 迁移 email_logs 表：添加 F_CreatorUserId 列（如果不存在）
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME 
+      FROM INFORMATION_SCHEMA.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'email_logs' AND COLUMN_NAME = 'F_CreatorUserId'
+    `);
+    if (cols.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE email_logs 
+        ADD COLUMN F_CreatorUserId VARCHAR(19) COMMENT '操作人ID' AFTER status,
+        ADD INDEX idx_email_logs_creator (F_CreatorUserId)
+      `);
+      console.log('✓ 已为 email_logs 表添加 F_CreatorUserId 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 email_logs.F_CreatorUserId 时出现警告:', err.message);
   }
   
   // 迁移 recipient_management 表，将 recipient_email 字段从 VARCHAR 改为 TEXT
@@ -2689,7 +2832,7 @@ async function initializeTables(dbPool) {
   // news_sync_execution_log 表：新闻同步执行日志
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_sync_execution_log (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       config_id VARCHAR(19) NOT NULL COMMENT '新闻接口配置ID',
       execution_type ENUM('manual', 'scheduled') NOT NULL COMMENT '执行类型：manual-手动触发，scheduled-定时任务',
       start_time TIMESTAMP NOT NULL COMMENT '开始执行时间',
@@ -2702,15 +2845,15 @@ async function initializeTables(dbPool) {
       error_count INT DEFAULT 0 COMMENT '错误数量',
       error_message TEXT COMMENT '错误信息（失败时记录）',
       execution_details JSON COMMENT '执行详情（时间范围、配置信息等）',
-      created_by VARCHAR(19) COMMENT '操作人ID（手动触发时记录）',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_CreatorUserId VARCHAR(19) COMMENT '操作人ID（手动触发时记录）',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
       INDEX idx_config_id (config_id),
       INDEX idx_execution_type (execution_type),
       INDEX idx_status (status),
       INDEX idx_start_time (start_time),
-      INDEX idx_created_at (created_at),
-      FOREIGN KEY (config_id) REFERENCES news_interface_config(id) ON DELETE CASCADE,
-      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_created_at (F_CreatorTime),
+      FOREIGN KEY (config_id) REFERENCES news_interface_config(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2719,7 +2862,7 @@ async function initializeTables(dbPool) {
     CREATE TABLE IF NOT EXISTS ai_news_analysis_cache (
       news_id VARCHAR(19) PRIMARY KEY COMMENT 'news_detail.id',
       analyzed_at DATETIME NOT NULL COMMENT '最近一次传入AI分析时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
       INDEX idx_ai_news_analyzed_at (analyzed_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
@@ -2727,7 +2870,7 @@ async function initializeTables(dbPool) {
   // news_sync_detail_log 表：新闻同步详细记录（每个公众号/企业的同步详情）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_sync_detail_log (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       sync_log_id VARCHAR(19) NOT NULL COMMENT '关联的同步执行日志ID',
       interface_type ENUM('新榜', '企查查', '上海国际集团') NOT NULL COMMENT '接口类型',
       account_id VARCHAR(255) NOT NULL COMMENT '公众号ID（新榜）或统一信用代码（企查查）',
@@ -2736,12 +2879,12 @@ async function initializeTables(dbPool) {
       insert_success TINYINT(1) DEFAULT 0 COMMENT '是否成功入库：0-否，1-是',
       insert_count INT DEFAULT 0 COMMENT '成功入库的条数',
       error_message TEXT COMMENT '错误信息',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '操作时间',
       INDEX idx_sync_log_id (sync_log_id),
       INDEX idx_interface_type (interface_type),
       INDEX idx_account_id (account_id),
-      INDEX idx_created_at (created_at),
-      FOREIGN KEY (sync_log_id) REFERENCES news_sync_execution_log(id) ON DELETE CASCADE
+      INDEX idx_created_at (F_CreatorTime),
+      FOREIGN KEY (sync_log_id) REFERENCES news_sync_execution_log(F_Id) ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2761,11 +2904,11 @@ async function initializeTables(dbPool) {
   // news_detail 表：公众号文章详情
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_detail (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       account_name VARCHAR(255) NOT NULL COMMENT '公众号名称',
       wechat_account VARCHAR(255) NOT NULL COMMENT '微信号',
       enterprise_full_name VARCHAR(255) COMMENT '被投企业全称',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（接口返回数据入库时间）',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（接口返回数据入库时间）',
       source_url VARCHAR(500) COMMENT '原文链接',
       title VARCHAR(500) COMMENT '图文标题',
       summary TEXT COMMENT '图文摘要',
@@ -2774,7 +2917,7 @@ async function initializeTables(dbPool) {
       keywords JSON COMMENT '关键词（基于正文提取的关键词）',
       INDEX idx_wechat_account (wechat_account),
       INDEX idx_public_time (public_time),
-      INDEX idx_created_at (created_at),
+      INDEX idx_created_at (F_CreatorTime),
       INDEX idx_enterprise_full_name (enterprise_full_name)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
@@ -2784,25 +2927,25 @@ async function initializeTables(dbPool) {
   // 校验规则：同一用户(creator_user_id)下 wechat_account_id 唯一，不同用户可创建相同的 wechat_account_id
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS additional_wechat_accounts (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       account_name VARCHAR(255) NOT NULL COMMENT '公众号名称',
       wechat_account_id VARCHAR(255) NOT NULL COMMENT '微信账号ID',
       status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态：active-生效，inactive-失效',
       industry_tag_code VARCHAR(100) NULL COMMENT '行业标签：数据字典 industry 的 item_code',
-      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updater_user_id VARCHAR(19) COMMENT '更新用户ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
-      UNIQUE KEY uk_creator_wechat (creator_user_id, wechat_account_id) COMMENT '同一用户下公众号ID唯一',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '更新用户ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+      UNIQUE KEY uk_creator_wechat (F_CreatorUserId, wechat_account_id) COMMENT '同一用户下公众号ID唯一',
       INDEX idx_wechat_account_id (wechat_account_id),
       INDEX idx_status (status),
-      INDEX idx_delete_mark (delete_mark),
-      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_delete_mark (F_DeleteMark),
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -2850,7 +2993,7 @@ async function initializeTables(dbPool) {
   // ai_model_config 表：AI模型配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS ai_model_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       config_name VARCHAR(255) NOT NULL COMMENT '配置名称',
       provider VARCHAR(100) NOT NULL COMMENT '提供商：alibaba,openai,baidu,tencent等',
       model_name VARCHAR(255) NOT NULL COMMENT '模型名称',
@@ -2863,71 +3006,71 @@ async function initializeTables(dbPool) {
       is_active TINYINT DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
       application_type ENUM('news_analysis', 'general', 'project_sourcing_analysis', 'listing_progress_analysis', 'project_sourcing_competitor') DEFAULT 'news_analysis' COMMENT '应用类型：新闻分析/通用/项目挖掘分析/上市进展分析/竞品分析',
       usage_type ENUM('content_analysis', 'image_recognition', 'project_mining', 'listing_data', 'competitor_match') DEFAULT 'content_analysis' COMMENT '用途类型：content_analysis-内容分析，image_recognition-图片识别，project_mining-项目挖掘，listing_data-上市数据，competitor_match-竞品匹配',
-      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updater_user_id VARCHAR(19) COMMENT '更新用户ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '更新用户ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_provider (provider),
       INDEX idx_application_type (application_type),
       INDEX idx_is_active (is_active),
-      INDEX idx_delete_mark (delete_mark),
-      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_delete_mark (F_DeleteMark),
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS holiday_calendar (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       holiday_date DATE NOT NULL COMMENT '日期',
       is_workday TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否工作日：1-是，0-否',
       workday_type VARCHAR(30) NOT NULL COMMENT '工作日类型：周末/调休/法定节假日/工作日',
       holiday_name VARCHAR(100) DEFAULT '' COMMENT '节日名称',
-      created_by VARCHAR(19) COMMENT '创建人ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_by VARCHAR(19) COMMENT '修改人ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '修改人ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       UNIQUE KEY uk_holiday_date (holiday_date),
       INDEX idx_is_workday (is_workday),
       INDEX idx_workday_type (workday_type),
-      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   // ai_prompt_config 表：AI提示词配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS ai_prompt_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       prompt_name VARCHAR(255) NOT NULL COMMENT '提示词名称',
       interface_type VARCHAR(50) NOT NULL COMMENT '新闻接口类型：新榜/企查查',
       prompt_type VARCHAR(50) NOT NULL COMMENT '提示词类型：sentiment_analysis-情绪分析, enterprise_relevance-企业关联分析, validation-关联验证',
       prompt_content LONGTEXT NOT NULL COMMENT '提示词内容',
       ai_model_config_id VARCHAR(19) NULL COMMENT '关联的AI模型配置ID',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      creator_user_id VARCHAR(19) COMMENT '创建用户ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updater_user_id VARCHAR(19) COMMENT '更新用户ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '更新用户ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_interface_type (interface_type),
       INDEX idx_prompt_type (prompt_type),
       INDEX idx_is_active (is_active),
-      INDEX idx_delete_mark (delete_mark),
+      INDEX idx_delete_mark (F_DeleteMark),
       INDEX idx_ai_model_config_id (ai_model_config_id),
-      FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updater_user_id) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
   
@@ -2967,7 +3110,7 @@ async function initializeTables(dbPool) {
             await dbPool.query(`
               ALTER TABLE ai_prompt_config 
               ADD CONSTRAINT fk_ai_prompt_config_model 
-              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(id) ON DELETE SET NULL
+              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(F_Id) ON DELETE SET NULL
             `);
             console.log('✓ 已为 ai_prompt_config 表添加 ai_model_config_id 外键约束');
           } catch (fkErr) {
@@ -3036,7 +3179,7 @@ async function initializeTables(dbPool) {
             await dbPool.query(`
               ALTER TABLE ai_prompt_config 
               ADD CONSTRAINT fk_ai_prompt_config_model 
-              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(id) ON DELETE SET NULL
+              FOREIGN KEY (ai_model_config_id) REFERENCES ai_model_config(F_Id) ON DELETE SET NULL
             `);
           } catch (fkErr) {
             if (!fkErr.message.includes('Duplicate foreign key')) {
@@ -3060,26 +3203,26 @@ async function initializeTables(dbPool) {
   // ai_prompt_change_log 表：AI提示词修改历史日志
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS ai_prompt_change_log (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       prompt_config_id VARCHAR(19) NOT NULL COMMENT '提示词配置ID',
       change_type ENUM('create', 'update', 'delete', 'activate', 'deactivate') NOT NULL COMMENT '变更类型',
       old_value LONGTEXT COMMENT '旧值（JSON格式，包含所有字段）',
       new_value LONGTEXT COMMENT '新值（JSON格式，包含所有字段）',
-      change_user_id VARCHAR(19) COMMENT '变更用户ID',
-      change_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '变更时间',
+      F_CreatorUserId VARCHAR(19) COMMENT '变更用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '变更时间',
       change_reason VARCHAR(500) COMMENT '变更原因',
       INDEX idx_prompt_config_id (prompt_config_id),
       INDEX idx_change_type (change_type),
-      INDEX idx_change_time (change_time),
-      FOREIGN KEY (prompt_config_id) REFERENCES ai_prompt_config(id) ON DELETE CASCADE,
-      FOREIGN KEY (change_user_id) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_change_time (F_CreatorTime),
+      FOREIGN KEY (prompt_config_id) REFERENCES ai_prompt_config(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
   // external_db_config 表：外部数据库配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS external_db_config (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       name VARCHAR(255) NOT NULL UNIQUE COMMENT '配置名称',
       db_type VARCHAR(20) NOT NULL DEFAULT 'mysql' COMMENT '数据库类型：mysql/postgresql',
       host VARCHAR(255) NOT NULL COMMENT '数据库主机',
@@ -3088,18 +3231,18 @@ async function initializeTables(dbPool) {
       password VARCHAR(255) NOT NULL COMMENT '数据库密码',
       \`database\` VARCHAR(255) NOT NULL COMMENT '数据库名称',
       is_active TINYINT(1) DEFAULT 1 COMMENT '是否启用：1-启用，0-禁用',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      created_by VARCHAR(19) COMMENT '创建人ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_by VARCHAR(19) COMMENT '修改人ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
-      delete_time DATETIME NULL COMMENT '删除时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '修改人ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
       INDEX idx_is_active (is_active),
-      INDEX idx_delete_mark (delete_mark),
-      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      INDEX idx_delete_mark (F_DeleteMark),
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -3978,7 +4121,7 @@ async function initializeTables(dbPool) {
   // enterprise_sync_task 表：被投企业数据同步定时任务
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS enterprise_sync_task (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       db_config_id VARCHAR(19) NOT NULL COMMENT '外部数据库配置ID',
       data_app_name VARCHAR(64) NOT NULL DEFAULT '新闻舆情' COMMENT '同步目标应用：新闻舆情、项目挖掘（与 invested_enterprises.data_app_name 一致）',
       sql_query TEXT NOT NULL COMMENT 'SQL查询语句',
@@ -3989,21 +4132,21 @@ async function initializeTables(dbPool) {
       last_execution_status VARCHAR(20) DEFAULT 'pending' COMMENT '最后执行状态：success/failed/pending',
       last_execution_message TEXT COMMENT '最后执行结果消息',
       execution_count INT DEFAULT 0 COMMENT '执行次数',
-      created_by VARCHAR(19) COMMENT '创建人ID',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_by VARCHAR(19) COMMENT '修改人ID',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorUserId VARCHAR(19) COMMENT '创建人ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(19) COMMENT '修改人ID',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_db_config_id (db_config_id),
       INDEX idx_est_db_app (db_config_id, data_app_name),
       INDEX idx_is_active (is_active),
       INDEX idx_last_execution_time (last_execution_time),
-      FOREIGN KEY (db_config_id) REFERENCES external_db_config(id) ON DELETE CASCADE,
-      FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (db_config_id) REFERENCES external_db_config(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_LastModifyUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -4022,7 +4165,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE enterprise_sync_task
-          ADD CONSTRAINT enterprise_sync_task_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT enterprise_sync_task_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -4055,7 +4198,7 @@ async function initializeTables(dbPool) {
   // performance_scheduled 表：业绩看板定时任务配置
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS performance_scheduled (
-      id VARCHAR(19) NOT NULL COMMENT '任务ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) NOT NULL COMMENT '任务ID：年月日时分秒+5位自增序列',
       task_name VARCHAR(200) NULL DEFAULT NULL COMMENT '任务名称',
       app_name VARCHAR(200) NULL DEFAULT NULL COMMENT '应用名称，如：业绩看板应用',
       interface_type VARCHAR(50) NULL DEFAULT NULL COMMENT '接口类型：数据生成/数据清理/HTTP',
@@ -4067,12 +4210,12 @@ async function initializeTables(dbPool) {
       last_run_at DATETIME NULL DEFAULT NULL COMMENT '最后执行时间',
       last_run_status VARCHAR(20) NULL DEFAULT NULL COMMENT '最后执行状态：success/failed',
       remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
-      PRIMARY KEY (id)
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '修改时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
+      PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-定时任务配置';
   `);
 
@@ -5085,7 +5228,7 @@ async function initializeTables(dbPool) {
             
             // 重新添加外键（不依赖唯一索引）
             if (fkCheck.length > 0) {
-              await dbPool.query('ALTER TABLE news_interface_config ADD CONSTRAINT fk_news_interface_config_app_id FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE');
+              await dbPool.query('ALTER TABLE news_interface_config ADD CONSTRAINT fk_news_interface_config_app_id FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE');
             }
           } catch (err) {
             // 静默处理错误
@@ -5276,7 +5419,7 @@ async function initializeTables(dbPool) {
   // 创建舆情信息分享链接表
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS news_share_links (
-      id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID：年月日时分秒+5位自增序列',
       user_id VARCHAR(19) NOT NULL COMMENT '创建用户ID',
       share_token VARCHAR(64) NOT NULL UNIQUE COMMENT '分享链接token',
       status ENUM('active', 'inactive') DEFAULT 'active' COMMENT '状态：active-启用，inactive-禁用',
@@ -5284,16 +5427,16 @@ async function initializeTables(dbPool) {
       expiry_time DATETIME NULL COMMENT '有效期至',
       has_password TINYINT(1) DEFAULT 0 COMMENT '是否有密码：1-是，0-否',
       password_hash VARCHAR(255) NULL COMMENT '密码哈希值',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-      delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-      delete_time DATETIME NULL COMMENT '删除时间',
-      delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      F_DeleteMark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+      F_DeleteTime DATETIME NULL COMMENT '删除时间',
+      F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
       INDEX idx_user_id (user_id),
       INDEX idx_share_token (share_token),
       INDEX idx_status (status),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-      FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+      FOREIGN KEY (user_id) REFERENCES users(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
@@ -5312,7 +5455,7 @@ async function initializeTables(dbPool) {
       try {
         await dbPool.query(`
           ALTER TABLE news_share_links
-          ADD CONSTRAINT news_share_links_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+          ADD CONSTRAINT news_share_links_fk_del_user FOREIGN KEY (delete_user_id) REFERENCES users(F_Id) ON DELETE SET NULL
         `);
       } catch (fkErr) {
         /* ignore */
@@ -5365,9 +5508,9 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_progress (
-        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-        f_create_date DATE NOT NULL COMMENT '入库日期（北京时间）',
-        f_update_time DATETIME NOT NULL COMMENT '交易所侧更新日期时间',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_CreatorTime DATE NOT NULL COMMENT '入库日期（北京时间）',
+        F_UpdateTime DATETIME NOT NULL COMMENT '交易所侧更新日期时间',
         code VARCHAR(20) NOT NULL DEFAULT '' COMMENT '证券代码',
         project_name TEXT NOT NULL COMMENT '项目简称',
         status VARCHAR(50) NOT NULL COMMENT '审核状态',
@@ -5382,7 +5525,7 @@ async function initializeTables(dbPool) {
         F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID',
         F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除状态：0未删除，1已删除',
         F_DeleteTime DATETIME NULL COMMENT '删除时间',
-        KEY idx_ipo_progress_f_update_time (f_update_time),
+        KEY idx_ipo_progress_f_update_time (F_UpdateTime),
         KEY idx_ipo_progress_delete (F_DeleteMark)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展（交易所爬取）';
     `);
@@ -5394,7 +5537,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project (
-        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         project_no VARCHAR(64) NOT NULL COMMENT '项目编号',
         biz_update_time DATETIME NULL COMMENT '更新日期（业务库同步更新时间）',
         F_CreatorTime DATETIME NOT NULL COMMENT '创建时间',
@@ -5523,11 +5666,11 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project_progress (
-        f_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
-        f_create_date DATETIME NOT NULL COMMENT '创建时间',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_CreatorTime DATETIME NOT NULL COMMENT '创建时间',
         F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID',
-        ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id',
-        ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照',
+        ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.F_Id',
+        ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.F_Id 快照',
         new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照',
         match_source VARCHAR(30) NOT NULL DEFAULT 'ipo_progress' COMMENT '匹配来源：ipo_progress|new_share',
         match_score DECIMAL(8,4) NULL COMMENT '匹配得分（0~1）',
@@ -5543,13 +5686,13 @@ async function initializeTables(dbPool) {
         status VARCHAR(50) NOT NULL COMMENT '审核状态',
         board VARCHAR(20) NOT NULL COMMENT '板块',
         exchange VARCHAR(20) NOT NULL COMMENT '交易所',
-        f_update_time DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.f_update_time）',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人ID',
+        F_UpdateTime DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.F_UpdateTime）',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人ID',
         KEY idx_ipp_creator (F_CreatorUserId),
-        KEY idx_ipp_update (f_update_time),
-        KEY idx_ipp_delete_mark (delete_mark)
+        KEY idx_ipp_update (F_UpdateTime),
+        KEY idx_ipp_delete_mark (F_DeleteMark)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目与上市进展匹配结果';
     `);
     console.log('✓ ipo_project_progress 表已就绪');
@@ -5560,26 +5703,100 @@ async function initializeTables(dbPool) {
   try {
     const [ippDel] = await dbPool.query(`
       SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'delete_mark'
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'F_DeleteMark'
     `);
     if (ippDel.length === 0) {
-      await dbPool.query(`
-        ALTER TABLE ipo_project_progress
-        ADD COLUMN delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除' AFTER f_update_time,
-        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
-        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除人ID' AFTER delete_time,
-        ADD KEY idx_ipp_delete_mark (delete_mark)
+      // 先检查旧列名 delete_mark 是否存在（兼容迁移）
+      const [ippOld] = await dbPool.query(`
+        SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = 'delete_mark'
       `);
-      console.log('✓ ipo_project_progress 已添加 delete_mark/delete_time/delete_user_id');
+      if (ippOld.length > 0) {
+        // 旧列存在，走重命名迁移（下方统一处理）
+      } else {
+        await dbPool.query(`
+          ALTER TABLE ipo_project_progress
+          ADD COLUMN F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除' AFTER F_UpdateTime,
+          ADD COLUMN F_DeleteTime DATETIME NULL COMMENT '删除时间' AFTER F_DeleteMark,
+          ADD COLUMN F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人ID' AFTER F_DeleteTime,
+          ADD KEY idx_ipp_delete_mark (F_DeleteMark)
+        `);
+        console.log('✓ ipo_project_progress 已添加 F_DeleteMark/F_DeleteTime/F_DeleteUserId');
+      }
     }
   } catch (err) {
     console.warn('迁移 ipo_project_progress 删除字段时出现警告:', err.message);
   }
 
+  // ── ipo_project_progress 系统字段统一命名迁移（snake_case / f_ → F_ PascalCase）──
+  try {
+    const renameMap = [
+      { old: 'f_id', new: 'F_Id', def: 'BIGINT NOT NULL AUTO_INCREMENT', comment: '主键ID' },
+      { old: 'f_create_date', new: 'F_CreatorTime', def: 'DATETIME NOT NULL', comment: '创建时间' },
+      { old: 'f_update_time', new: 'F_UpdateTime', def: 'DATETIME NOT NULL', comment: '更新日期（对应ipo_progress.F_UpdateTime）' },
+      { old: 'delete_mark', new: 'F_DeleteMark', def: 'TINYINT(1) NOT NULL DEFAULT 0', comment: '删除标记：0未删除，1已删除' },
+      { old: 'delete_time', new: 'F_DeleteTime', def: 'DATETIME NULL', comment: '删除时间' },
+      { old: 'delete_user_id', new: 'F_DeleteUserId', def: 'VARCHAR(19) NULL', comment: '删除人ID' },
+    ];
+    for (const { old: oldCol, new: newCol, def, comment } of renameMap) {
+      const [cols] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project_progress' AND COLUMN_NAME = ?`,
+        [oldCol]
+      );
+      if (cols.length > 0) {
+        await dbPool.query(
+          `ALTER TABLE ipo_project_progress CHANGE COLUMN \`${oldCol}\` \`${newCol}\` ${def} COMMENT '${comment}'`
+        );
+        console.log(`  ✓ ipo_project_progress: ${oldCol} → ${newCol}`);
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project_progress 字段重命名时出现警告:', err.message);
+  }
+
+  // ── ipo_progress 系统字段统一命名迁移 ──
+  try {
+    const progressRename = [
+      { old: 'f_id', new: 'F_Id', def: 'BIGINT NOT NULL AUTO_INCREMENT', comment: '主键ID' },
+      { old: 'f_create_date', new: 'F_CreatorTime', def: 'DATE NOT NULL', comment: '入库日期（北京时间）' },
+      { old: 'f_update_time', new: 'F_UpdateTime', def: 'DATETIME NOT NULL', comment: '交易所侧更新日期时间' },
+    ];
+    for (const { old: o, new: n, def, comment } of progressRename) {
+      const [cols] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_progress' AND COLUMN_NAME = ?`, [o]
+      );
+      if (cols.length > 0) {
+        await dbPool.query(`ALTER TABLE ipo_progress CHANGE COLUMN \`${o}\` \`${n}\` ${def} COMMENT '${comment}'`);
+        console.log(`  ✓ ipo_progress: ${o} → ${n}`);
+      }
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_progress 字段重命名时出现警告:', err.message);
+  }
+
+  // ── ipo_project 系统字段统一命名迁移 ──
+  try {
+    const [cols] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_project' AND COLUMN_NAME = 'f_id'`
+    );
+    if (cols.length > 0) {
+      await dbPool.query(`ALTER TABLE ipo_project CHANGE COLUMN \`f_id\` \`F_Id\` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'`);
+      console.log('  ✓ ipo_project: f_id → F_Id');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_project 字段重命名时出现警告:', err.message);
+  }
+
+  // ── 第三优先级：批量迁移剩余表的系统字段命名 ──
+  await migrateBatchFColumns(dbPool);
+
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_new_share (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         stock_code VARCHAR(20) NOT NULL COMMENT '股票代码',
         stock_name VARCHAR(200) NOT NULL COMMENT '股票简称',
         enterprise_full_name_cn VARCHAR(255) NULL COMMENT '企业中文全称（AI补齐）',
@@ -5597,8 +5814,8 @@ async function initializeTables(dbPool) {
         first_day_close DECIMAL(12,4) NULL COMMENT '上市首日收盘价',
         first_day_chg_pct DECIMAL(10,4) NULL COMMENT '首日涨幅（数值，不含%）',
         first_day_market_cap DECIMAL(20,2) NULL COMMENT '首日市值（首日收盘价×总发行数量）',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         UNIQUE KEY uk_ipo_new_share_code_exchange (stock_code, exchange),
         KEY idx_ipo_new_share_issue_date (issue_date),
         KEY idx_ipo_new_share_public_date (public_date)
@@ -5750,9 +5967,9 @@ async function initializeTables(dbPool) {
   try {
     const ipoProgressCommentSql = [
       "ALTER TABLE ipo_progress COMMENT='上市进展（交易所爬取）'",
-      "ALTER TABLE ipo_progress MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
-      "ALTER TABLE ipo_progress MODIFY COLUMN f_create_date DATE NOT NULL COMMENT '入库日期（北京时间）'",
-      "ALTER TABLE ipo_progress MODIFY COLUMN f_update_time DATETIME NOT NULL COMMENT '交易所侧更新日期时间'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_Id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_CreatorTime DATE NOT NULL COMMENT '入库日期（北京时间）'",
+      "ALTER TABLE ipo_progress MODIFY COLUMN F_UpdateTime DATETIME NOT NULL COMMENT '交易所侧更新日期时间'",
       "ALTER TABLE ipo_progress MODIFY COLUMN code VARCHAR(20) NOT NULL DEFAULT '' COMMENT '证券代码'",
       "ALTER TABLE ipo_progress MODIFY COLUMN project_name TEXT NOT NULL COMMENT '项目简称'",
       "ALTER TABLE ipo_progress MODIFY COLUMN status VARCHAR(50) NOT NULL COMMENT '审核状态'",
@@ -5770,7 +5987,7 @@ async function initializeTables(dbPool) {
     ];
     const ipoProjectCommentSql = [
       "ALTER TABLE ipo_project COMMENT='上市进展-底层项目'",
-      "ALTER TABLE ipo_project MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_project MODIFY COLUMN F_Id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
       "ALTER TABLE ipo_project MODIFY COLUMN project_no VARCHAR(64) NOT NULL COMMENT '项目编号'",
       "ALTER TABLE ipo_project MODIFY COLUMN biz_update_time DATETIME NULL COMMENT '更新日期（业务库同步更新时间）'",
       "ALTER TABLE ipo_project MODIFY COLUMN F_CreatorTime DATETIME NOT NULL COMMENT '创建时间'",
@@ -5792,12 +6009,12 @@ async function initializeTables(dbPool) {
     ];
     const ipoProjectProgressCommentSql = [
       "ALTER TABLE ipo_project_progress COMMENT='底层项目与上市进展匹配结果'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_create_date DATETIME NOT NULL COMMENT '创建时间'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN F_Id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN F_CreatorTime DATETIME NOT NULL COMMENT '创建时间'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建用户ID'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.f_id 快照'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.F_Id'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN ipo_progress_row_id BIGINT NULL COMMENT '对应 ipo_progress.F_Id 快照'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.F_Id 快照'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN match_source VARCHAR(30) NOT NULL DEFAULT 'ipo_progress' COMMENT '匹配来源：ipo_progress|new_share'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN match_score DECIMAL(8,4) NULL COMMENT '匹配得分（0~1）'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN fund TEXT NOT NULL COMMENT '归属基金'",
@@ -5812,7 +6029,7 @@ async function initializeTables(dbPool) {
       "ALTER TABLE ipo_project_progress MODIFY COLUMN status VARCHAR(50) NOT NULL COMMENT '审核状态'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN board VARCHAR(20) NOT NULL COMMENT '板块'",
       "ALTER TABLE ipo_project_progress MODIFY COLUMN exchange VARCHAR(20) NOT NULL COMMENT '交易所'",
-      "ALTER TABLE ipo_project_progress MODIFY COLUMN f_update_time DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.f_update_time）'",
+      "ALTER TABLE ipo_project_progress MODIFY COLUMN F_UpdateTime DATETIME NOT NULL COMMENT '更新日期（对应ipo_progress.F_UpdateTime）'",
     ];
 
     for (const sql of [...ipoProgressCommentSql, ...ipoProjectCommentSql, ...ipoProjectProgressCommentSql]) {
@@ -5831,7 +6048,7 @@ async function initializeTables(dbPool) {
     if (ippProjCol.length === 0) {
       await dbPool.query(`
         ALTER TABLE ipo_project_progress
-        ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.f_id' AFTER F_CreatorUserId
+        ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT '底层项目 ipo_project.F_Id' AFTER F_CreatorUserId
       `);
       console.log('✓ ipo_project_progress 已添加 ipo_project_f_id');
     }
@@ -5847,7 +6064,7 @@ async function initializeTables(dbPool) {
     if (ippNewShareRowCol.length === 0) {
       await dbPool.query(`
         ALTER TABLE ipo_project_progress
-        ADD COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.id 快照' AFTER ipo_progress_row_id
+        ADD COLUMN new_share_row_id BIGINT NULL COMMENT '对应 ipo_new_share.F_Id 快照' AFTER ipo_progress_row_id
       `);
       console.log('✓ ipo_project_progress 已添加 new_share_row_id');
     }
@@ -5890,7 +6107,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS listing_data_config (
-        id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
+        F_Id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
         name VARCHAR(200) NOT NULL COMMENT '配置名称',
         interface_type VARCHAR(20) NOT NULL COMMENT 'crawler|api',
         request_url VARCHAR(1000) NULL,
@@ -5911,11 +6128,11 @@ async function initializeTables(dbPool) {
         status VARCHAR(50) NULL,
         is_active TINYINT(1) NOT NULL DEFAULT 1,
         news_interface_type VARCHAR(50) NULL COMMENT '上海国际集团|企查查|其他',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID'
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID'
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置-上市数据配置';
     `);
     console.log('✓ listing_data_config 表已就绪');
@@ -5926,14 +6143,14 @@ async function initializeTables(dbPool) {
   try {
     const [ldcDm] = await dbPool.query(`
       SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = 'delete_mark'
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'listing_data_config' AND COLUMN_NAME = 'F_DeleteMark'
     `);
     if (ldcDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE listing_data_config
-        ADD COLUMN delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
-        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
-        ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
+        ADD COLUMN F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
+        ADD COLUMN F_DeleteTime DATETIME NULL COMMENT '删除时间' AFTER F_DeleteMark,
+        ADD COLUMN F_DeleteUserId VARCHAR(19) NULL COMMENT '删除用户ID' AFTER F_DeleteTime
       `);
     }
   } catch (err) {
@@ -6001,7 +6218,7 @@ async function initializeTables(dbPool) {
 
   try {
     const [legacyPerf] = await dbPool.query(
-      `SELECT id FROM listing_data_config
+      `SELECT F_Id AS id FROM listing_data_config
        WHERE IFNULL(news_interface_type, '') = 'listed_performance'
           OR name = '新股五日表现'`
     );
@@ -6036,7 +6253,7 @@ async function initializeTables(dbPool) {
     const makeId = async () => {
       for (let i = 0; i < 5; i += 1) {
         const id = `${Date.now()}${String(Math.floor(Math.random() * 1000000)).padStart(6, '0')}`.slice(0, 19);
-        const [rows] = await dbPool.query(`SELECT id FROM listing_data_config WHERE id = ? LIMIT 1`, [id]);
+        const [rows] = await dbPool.query(`SELECT F_Id FROM listing_data_config WHERE F_Id = ? LIMIT 1`, [id]);
         if (!rows.length) return id;
       }
       throw new Error('生成 listing_data_config.id 失败');
@@ -6045,21 +6262,21 @@ async function initializeTables(dbPool) {
     let created = 0;
     for (const d of defaults) {
       const [rows] = await dbPool.query(
-        `SELECT id, request_url FROM listing_data_config WHERE name = ? AND interface_type = ? AND IFNULL(news_interface_type, '') = ? LIMIT 1`,
+        `SELECT F_Id AS id, request_url FROM listing_data_config WHERE name = ? AND interface_type = ? AND IFNULL(news_interface_type, '') = ? LIMIT 1`,
         [d.name, d.interface_type, d.news_interface_type]
       );
       if (rows.length) {
         const currentUrl = String(rows[0].request_url || '').trim();
         const targetUrl = String(d.request_url || '').trim();
         if (!currentUrl && targetUrl) {
-          await dbPool.query(`UPDATE listing_data_config SET request_url = ? WHERE id = ?`, [targetUrl, rows[0].id]);
+          await dbPool.query(`UPDATE listing_data_config SET request_url = ? WHERE F_Id = ?`, [targetUrl, rows[0].id]);
         }
         continue;
       }
       const id = await makeId();
       await dbPool.query(
         `INSERT INTO listing_data_config (
-          id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+          F_Id, name, interface_type, request_url, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
           ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
         ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -6097,7 +6314,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS listing_sync_execution_log (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         config_id VARCHAR(19) NULL COMMENT '配置ID',
         config_name VARCHAR(200) NULL COMMENT '配置名称',
         task_key VARCHAR(255) NULL COMMENT '互斥任务键',
@@ -6116,8 +6333,8 @@ async function initializeTables(dbPool) {
         error_message TEXT NULL COMMENT '错误摘要',
         started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '开始时间',
         finished_at DATETIME NULL COMMENT '结束时间',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         KEY idx_listing_sync_log_cfg_time (config_id, started_at),
         KEY idx_listing_sync_log_status_time (status, started_at),
         KEY idx_listing_sync_log_task_key (task_key)
@@ -6165,7 +6382,7 @@ async function initializeTables(dbPool) {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS listing_sync_task_lock (
         task_key VARCHAR(255) NOT NULL PRIMARY KEY COMMENT '互斥任务键',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '锁获取时间'
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '锁获取时间'
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展定时任务持久化互斥锁'
     `);
   } catch (err) {
@@ -6176,7 +6393,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_financing_event_w_infer (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         request_id VARCHAR(64) NULL COMMENT '本次接口请求流水号（RequestId）',
         query_type VARCHAR(32) NOT NULL COMMENT '查询方式：queryByCode/queryByDate/fuzzyQuery',
         proj_cd_xn VARCHAR(100) NULL COMMENT '项目烯牛编码',
@@ -6213,7 +6430,7 @@ async function initializeTables(dbPool) {
     `);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_financing_event (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
         source_record_id BIGINT NULL COMMENT '来源明细ID，关联 sourcing_financing_event_w_infer.id',
         event_id VARCHAR(64) NOT NULL COMMENT '融资事件ID（funding_id）',
         event_date DATE NULL COMMENT '融资日期（Asia/Shanghai）',
@@ -6258,9 +6475,9 @@ async function initializeTables(dbPool) {
         funding_status VARCHAR(100) NULL COMMENT '融资状态',
         source_create_time DATETIME NULL COMMENT '源端创建时间（Asia/Shanghai）',
         source_update_time DATETIME NULL COMMENT '源端更新时间（Asia/Shanghai）',
-        delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0未删除，1已删除',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（Asia/Shanghai）',
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间（Asia/Shanghai）',
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除标记：0未删除，1已删除',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间（Asia/Shanghai）',
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间（Asia/Shanghai）',
         UNIQUE KEY uk_sourcing_event_natural (event_id, company_credit_code, event_date),
         KEY idx_sourcing_event_date (event_date),
         KEY idx_sourcing_event_track (track_primary, track_secondary),
@@ -6290,7 +6507,7 @@ async function initializeTables(dbPool) {
   };
   await addSfeCol(
     'ai_product_intro',
-    `ADD COLUMN ai_product_intro TEXT NULL COMMENT '产品简介(AI)，联网归纳，不覆盖 project_desc' AFTER updated_at`
+    `ADD COLUMN ai_product_intro TEXT NULL COMMENT '产品简介(AI)，联网归纳，不覆盖 project_desc' AFTER F_LastModifyTime`
   );
   await addSfeCol(
     'ai_company_tags_display',
@@ -6327,7 +6544,7 @@ async function initializeTables(dbPool) {
     );
     if (ix.length === 0) {
       await dbPool.query(
-        `ALTER TABLE sourcing_financing_event ADD KEY idx_sourcing_event_ai_enrich (ai_enrich_status, id)`
+        `ALTER TABLE sourcing_financing_event ADD KEY idx_sourcing_event_ai_enrich (ai_enrich_status, F_Id)`
       );
       console.log('✓ sourcing_financing_event 已添加 idx_sourcing_event_ai_enrich');
     }
@@ -6339,7 +6556,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_financing_ai_enrich_log (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
         financing_event_id BIGINT NOT NULL COMMENT '标准表 sourcing_financing_event.id',
         event_id VARCHAR(64) NULL COMMENT '融资事件业务键快照',
         company_name VARCHAR(255) NULL COMMENT '企业名称快照',
@@ -6358,8 +6575,8 @@ async function initializeTables(dbPool) {
         ai_enrich_version VARCHAR(50) NULL COMMENT '与标准表写入版本对齐',
         error_message VARCHAR(500) NULL COMMENT '失败摘要',
         retry_index INT NOT NULL DEFAULT 0 COMMENT '重试序号从0起',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         KEY idx_sf_ai_log_event_time (financing_event_id, triggered_at),
         KEY idx_sf_ai_log_type_time (trigger_type, triggered_at),
         KEY idx_sf_ai_log_status_time (execution_status, triggered_at)
@@ -6489,7 +6706,7 @@ async function initializeTables(dbPool) {
       INNER JOIN applications a
         ON CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
            CAST(ie.data_app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
-      SET ie.data_app_id = a.id
+      SET ie.data_app_id = a.F_Id
       WHERE (ie.data_app_id IS NULL OR TRIM(ie.data_app_id) = '')
         AND ie.data_app_name IS NOT NULL AND TRIM(ie.data_app_name) <> ''
     `);
@@ -6501,9 +6718,9 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS invested_enterprise_ai_enrich_log (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
         invested_enterprise_id VARCHAR(19) NULL COMMENT 'invested_enterprises.id；与 ipo_project_f_id 二选一',
-        ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.f_id（底层项目）',
+        ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.F_Id（底层项目）',
         enterprise_full_name VARCHAR(255) NULL COMMENT '企业全称快照（被投企业或底层项目）',
         trigger_type VARCHAR(80) NOT NULL COMMENT 'invested_enterprises:<原值> 或 ipo_project:<原值>；无前缀的旧数据按被投企业解读',
         triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人 users.id',
@@ -6521,8 +6738,8 @@ async function initializeTables(dbPool) {
         error_message VARCHAR(500) NULL COMMENT '失败摘要',
         result_product_intro LONGTEXT NULL COMMENT '成功时产品介绍(AI)快照',
         result_industry_tags_display VARCHAR(2000) NULL COMMENT '成功时行业标签(AI)快照',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         KEY idx_ie_ai_log_ent_time (invested_enterprise_id, triggered_at),
         KEY idx_ie_ai_log_status_time (execution_status, triggered_at),
         KEY idx_ie_ai_log_ipo (ipo_project_f_id, triggered_at)
@@ -6587,7 +6804,7 @@ async function initializeTables(dbPool) {
     if (!colIpo.length) {
       await dbPool.query(`
         ALTER TABLE invested_enterprise_ai_enrich_log
-          ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.f_id（底层项目）' AFTER invested_enterprise_id
+          ADD COLUMN ipo_project_f_id BIGINT NULL COMMENT 'ipo_project.F_Id（底层项目）' AFTER invested_enterprise_id
       `);
       console.log('✓ invested_enterprise_ai_enrich_log 已添加 ipo_project_f_id');
     }
@@ -6636,9 +6853,9 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS invested_enterprise_ai_sync_snapshot (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
         batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
-        creator_user_id VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.creator_user_id 一致',
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.F_CreatorUserId 一致',
         data_app_name VARCHAR(64) NOT NULL COMMENT '应用名，与 invested_enterprises.data_app_name 一致',
         unified_credit_code VARCHAR(64) NOT NULL COMMENT '规范化后的统一社会信用代码（用于匹配）',
         ai_product_intro LONGTEXT NULL COMMENT '同步前产品简介(AI)',
@@ -6649,10 +6866,10 @@ async function initializeTables(dbPool) {
         ai_enrich_model VARCHAR(128) NULL COMMENT '同步前模型名',
         ai_enrich_version VARCHAR(64) NULL COMMENT '同步前管线版本',
         qcc_company_intro LONGTEXT NULL COMMENT '同步前企业介绍（企查查）',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
         KEY idx_ie_ai_snap_batch (batch_id),
         KEY idx_ie_ai_snap_batch_credit (batch_id, unified_credit_code),
-        KEY idx_ie_ai_snap_created (created_at)
+        KEY idx_ie_ai_snap_created (F_CreatorTime)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='被投企业定时同步前 AI 快照（按统一社会信用代码回填）';
     `);
     console.log('✓ invested_enterprise_ai_sync_snapshot 表已就绪');
@@ -6681,18 +6898,18 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS competitor_analysis_sync_snapshot (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
         batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
-        creator_user_id VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.creator_user_id 一致',
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '与 invested_enterprises.F_CreatorUserId 一致',
         data_app_name VARCHAR(64) NOT NULL COMMENT '应用名（竞品分析）',
         match_type VARCHAR(8) NOT NULL COMMENT 'ucc|name|abbr',
         match_key VARCHAR(128) NOT NULL COMMENT '规范化匹配键',
         old_invested_enterprise_id VARCHAR(19) NULL COMMENT '同步前被投 id（审计）',
         payload_json LONGTEXT NOT NULL COMMENT 'runs/relations/step_logs/prefs/supplement',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
         KEY idx_ca_snap_batch (batch_id),
         KEY idx_ca_snap_batch_match (batch_id, match_type, match_key),
-        KEY idx_ca_snap_created (created_at)
+        KEY idx_ca_snap_created (F_CreatorTime)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析被投同步前竞品数据快照';
     `);
     console.log('✓ competitor_analysis_sync_snapshot 表已就绪');
@@ -6704,7 +6921,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project_ai_sync_snapshot (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键',
         batch_id VARCHAR(36) NOT NULL COMMENT '单次同步 UUID',
         F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '与 ipo_project.F_CreatorUserId 一致',
         data_app_id VARCHAR(19) NOT NULL COMMENT '本次同步写入的 applications.id（与回填目标行一致）',
@@ -6717,10 +6934,10 @@ async function initializeTables(dbPool) {
         ai_enrich_model VARCHAR(128) NULL COMMENT '同步前模型名',
         ai_enrich_version VARCHAR(64) NULL COMMENT '同步前管线版本',
         qcc_company_intro LONGTEXT NULL COMMENT '同步前企业介绍（企查查）',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '快照写入时间',
         KEY idx_ipo_ai_snap_batch (batch_id),
         KEY idx_ipo_ai_snap_batch_credit (batch_id, unified_credit_code),
-        KEY idx_ipo_ai_snap_created (created_at)
+        KEY idx_ipo_ai_snap_created (F_CreatorTime)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目 SQL 同步前 AI/企查查快照（按统一社会信用代码回填）';
     `);
     console.log('✓ ipo_project_ai_sync_snapshot 表已就绪');
@@ -6732,23 +6949,23 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS competitor_match_supplement (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         invested_enterprise_id VARCHAR(19) NOT NULL COMMENT 'invested_enterprises.id',
         user_tags_json JSON NULL COMMENT '用户录入的业务标签 JSON 数组',
         user_narrative_raw LONGTEXT NULL COMMENT '用户粘贴的企业业务/产品介绍原文',
         ai_extracted_tags_json JSON NULL COMMENT '从自由文本抽取的结构化标签 JSON 数组',
         ai_short_summary VARCHAR(500) NULL COMMENT '抽取时可选短摘要',
         batch_id VARCHAR(64) NULL COMMENT '可选批次号',
-        created_by VARCHAR(19) NULL COMMENT '创建人 users.id',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
-        KEY idx_cms_ie_time (invested_enterprise_id, created_at),
-        KEY idx_cms_delete (delete_mark),
-        CONSTRAINT fk_cms_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
-        CONSTRAINT fk_cms_delete_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人 users.id',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_cms_ie_time (invested_enterprise_id, F_CreatorTime),
+        KEY idx_cms_delete (F_DeleteMark),
+        CONSTRAINT fk_cms_created_by FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL,
+        CONSTRAINT fk_cms_delete_user FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品匹配—补充业务信息（标签/自由文本/AI抽标签）';
     `);
     console.log('✓ competitor_match_supplement 表已就绪');
@@ -6760,21 +6977,21 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS competitor_recall_source_config (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         app_id VARCHAR(19) NOT NULL COMMENT 'applications.id，竞品分析应用',
         enable_ipo_project TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用底层项目池',
         enable_financing_event TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用融资事件池（须用户有项目挖掘权限）',
         enable_ai_web TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用联网发现',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0,
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
         UNIQUE KEY uk_ca_recall_app (app_id),
-        CONSTRAINT fk_ca_recall_app FOREIGN KEY (app_id) REFERENCES applications(id) ON DELETE CASCADE
+        CONSTRAINT fk_ca_recall_app FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析—三源召回配置';
     `);
     const CA_C = require('./utils/竞品分析/constants');
     const [existRecall] = await dbPool.query(
-      'SELECT id FROM competitor_recall_source_config WHERE app_id = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT F_Id AS id FROM competitor_recall_source_config WHERE app_id = ? AND F_DeleteMark = 0 LIMIT 1',
       [CA_C.COMPETITOR_ANALYSIS_APP_ID]
     );
     if (!existRecall.length) {
@@ -6782,7 +6999,7 @@ async function initializeTables(dbPool) {
       const rid = await generateId('competitor_recall_source_config', dbPool);
       await dbPool.execute(
         `INSERT INTO competitor_recall_source_config (
-          id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
+          F_Id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
         ) VALUES (?, ?, 1, 1, 1)`,
         [rid, CA_C.COMPETITOR_ANALYSIS_APP_ID]
       );
@@ -6814,34 +7031,34 @@ async function initializeTables(dbPool) {
     await dbPool.execute(
       `UPDATE external_db_config e
        INNER JOIN ipo_project_sql_sync_setting s
-         ON s.external_db_config_id = e.id AND s.write_target = ?
+         ON s.external_db_config_id = e.F_Id AND s.write_target = ?
        SET e.app_id = ?
-       WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+       WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
       [CA_C_EDB.IPO_SQL_WRITE_TARGET_COMPETITOR, CA_C_EDB.COMPETITOR_ANALYSIS_APP_ID]
     );
     await dbPool.execute(
       `UPDATE external_db_config e
        INNER JOIN ipo_project_sql_sync_setting s
-         ON s.external_db_config_id = e.id
+         ON s.external_db_config_id = e.F_Id
          AND (s.write_target IS NULL OR s.write_target = '' OR s.write_target = 'listing' OR s.write_target = 'project_sourcing')
        SET e.app_id = ?
-       WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+       WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
       [LISTING_APP_ID]
     );
     const [perfApp] = await dbPool.query(
-      "SELECT id FROM applications WHERE app_name = '业绩看板' AND delete_mark = 0 LIMIT 1"
+      "SELECT F_Id AS id FROM applications WHERE app_name = '业绩看板' AND delete_mark = 0 LIMIT 1"
     );
     if (perfApp.length) {
       await dbPool.execute(
         `UPDATE external_db_config e
-         INNER JOIN b_sql b ON b.external_db_config_id = e.id AND b.F_DeleteMark = 0
+         INNER JOIN b_sql b ON b.external_db_config_id = e.F_Id AND b.F_DeleteMark = 0
          SET e.app_id = ?
-         WHERE e.delete_mark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+         WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
         [perfApp[0].id]
       );
     }
     await dbPool.execute(
-      `UPDATE external_db_config SET app_id = ? WHERE delete_mark = 0 AND (app_id IS NULL OR app_id = '')`,
+      `UPDATE external_db_config SET app_id = ? WHERE F_DeleteMark = 0 AND (app_id IS NULL OR app_id = '')`,
       [LISTING_APP_ID]
     );
     console.log('✓ external_db_config.app_id 历史数据已回填');
@@ -6853,7 +7070,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS pre_investment_project (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         enterprise_full_name VARCHAR(255) NOT NULL COMMENT '企业全称',
         unified_credit_code VARCHAR(64) NULL COMMENT '统一社会信用代码',
         project_abbreviation VARCHAR(255) NULL COMMENT '项目简称/检索用简称',
@@ -6873,17 +7090,17 @@ async function initializeTables(dbPool) {
         bp_extract_text LONGTEXT NULL COMMENT 'BP文件MarkItDown转换后的Markdown全文',
         data_app_id VARCHAR(19) NULL COMMENT 'applications.id',
         data_app_name VARCHAR(64) NOT NULL DEFAULT '项目挖掘' COMMENT '应用名',
-        creator_user_id VARCHAR(19) NOT NULL COMMENT '创建人',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
-        KEY idx_pip_creator (creator_user_id, delete_mark),
+        F_CreatorUserId VARCHAR(19) NOT NULL COMMENT '创建人',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_pip_creator (F_CreatorUserId, F_DeleteMark),
         KEY idx_pip_name (enterprise_full_name(64)),
-        KEY idx_pip_delete (delete_mark),
-        CONSTRAINT fk_pip_creator FOREIGN KEY (creator_user_id) REFERENCES users(id) ON DELETE RESTRICT,
-        CONSTRAINT fk_pip_delete_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        KEY idx_pip_delete (F_DeleteMark),
+        CONSTRAINT fk_pip_creator FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE RESTRICT,
+        CONSTRAINT fk_pip_delete_user FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘—投前项目';
     `);
     console.log('✓ pre_investment_project 表已就绪');
@@ -6997,8 +7214,8 @@ async function initializeTables(dbPool) {
   // 修复 bp_filename 中文编码乱码（Windows multer 以 Latin-1 解析 UTF-8 字节）
   try {
     const rows = await dbPool.query(
-      `SELECT id, bp_filename FROM pre_investment_project
-       WHERE bp_filename IS NOT NULL AND bp_filename != '' AND delete_mark = 0`
+      `SELECT F_Id AS id, bp_filename FROM pre_investment_project
+       WHERE bp_filename IS NOT NULL AND bp_filename != '' AND F_DeleteMark = 0`
     );
     let fixedCount = 0;
     for (const row of rows) {
@@ -7007,7 +7224,7 @@ async function initializeTables(dbPool) {
         // 修复后如果包含正常中文字符且与原来不同，说明原来确实是乱码
         if (fixed !== row.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
           await dbPool.query(
-            `UPDATE pre_investment_project SET bp_filename = ? WHERE id = ?`,
+            `UPDATE pre_investment_project SET bp_filename = ? WHERE F_Id = ?`,
             [fixed, row.id]
           );
           fixedCount++;
@@ -7025,22 +7242,22 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_competitor_run (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         invested_enterprise_id VARCHAR(19) NOT NULL COMMENT '被投企业 id',
         status VARCHAR(32) NOT NULL DEFAULT 'success' COMMENT 'queued/running/success/failed/stub',
         message VARCHAR(500) NULL COMMENT '结果说明',
         triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人',
         started_at DATETIME NULL COMMENT '开始时间',
         finished_at DATETIME NULL COMMENT '结束时间',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人',
-        KEY idx_scr_ie_time (invested_enterprise_id, created_at),
-        KEY idx_scr_delete (delete_mark),
-        CONSTRAINT fk_scr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        CONSTRAINT fk_scr_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人',
+        KEY idx_scr_ie_time (invested_enterprise_id, F_CreatorTime),
+        KEY idx_scr_delete (F_DeleteMark),
+        CONSTRAINT fk_scr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(F_Id) ON DELETE SET NULL,
+        CONSTRAINT fk_scr_del_user FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析运行记录';
     `);
     console.log('✓ sourcing_competitor_run 表已就绪');
@@ -7052,7 +7269,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_competitor_relation (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         invested_enterprise_id VARCHAR(19) NOT NULL COMMENT '被投企业 id',
         run_id VARCHAR(19) NULL COMMENT 'sourcing_competitor_run.id',
         competitor_display_name VARCHAR(255) NULL COMMENT '竞品展示名',
@@ -7061,15 +7278,15 @@ async function initializeTables(dbPool) {
         relevance_score INT NULL COMMENT '相关性 0-100',
         data_sources_json JSON NULL COMMENT '数据源标记数组',
         financing_amount_text VARCHAR(128) NULL COMMENT '融资金额展示',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-        KEY idx_rel_ie (invested_enterprise_id, delete_mark),
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        KEY idx_rel_ie (invested_enterprise_id, F_DeleteMark),
         KEY idx_rel_run (run_id),
-        CONSTRAINT fk_rel_run FOREIGN KEY (run_id) REFERENCES sourcing_competitor_run(id) ON DELETE SET NULL,
-        CONSTRAINT fk_rel_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        CONSTRAINT fk_rel_run FOREIGN KEY (run_id) REFERENCES sourcing_competitor_run(F_Id) ON DELETE SET NULL,
+        CONSTRAINT fk_rel_del_user FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品关系明细';
     `);
     console.log('✓ sourcing_competitor_relation 表已就绪');
@@ -7081,23 +7298,23 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_pre_investment_competitor_run (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         pre_investment_project_id VARCHAR(19) NOT NULL COMMENT 'pre_investment_project.id',
         status VARCHAR(32) NOT NULL DEFAULT 'stub' COMMENT 'queued/running/success/failed/stub',
         message VARCHAR(500) NULL COMMENT '结果说明',
         triggered_by_user_id VARCHAR(19) NULL COMMENT '触发人',
         started_at DATETIME NULL COMMENT '开始时间',
         finished_at DATETIME NULL COMMENT '结束时间',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
-        delete_mark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
-        delete_time DATETIME NULL COMMENT '删除时间',
-        delete_user_id VARCHAR(19) NULL COMMENT '删除人用户ID',
-        KEY idx_spicr_pip_time (pre_investment_project_id, created_at),
-        KEY idx_spicr_delete (delete_mark),
-        CONSTRAINT fk_spicr_pip FOREIGN KEY (pre_investment_project_id) REFERENCES pre_investment_project(id) ON DELETE CASCADE,
-        CONSTRAINT fk_spicr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
-        CONSTRAINT fk_spicr_del_user FOREIGN KEY (delete_user_id) REFERENCES users(id) ON DELETE SET NULL
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人用户ID',
+        KEY idx_spicr_pip_time (pre_investment_project_id, F_CreatorTime),
+        KEY idx_spicr_delete (F_DeleteMark),
+        CONSTRAINT fk_spicr_pip FOREIGN KEY (pre_investment_project_id) REFERENCES pre_investment_project(F_Id) ON DELETE CASCADE,
+        CONSTRAINT fk_spicr_user FOREIGN KEY (triggered_by_user_id) REFERENCES users(F_Id) ON DELETE SET NULL,
+        CONSTRAINT fk_spicr_del_user FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='投前项目竞品分析运行记录';
     `);
     console.log('✓ sourcing_pre_investment_competitor_run 表已就绪');
@@ -7109,15 +7326,15 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_competitor_run_step_log (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         run_id VARCHAR(19) NOT NULL COMMENT '运行记录 id（被投或投前 run 表）',
         subject_type VARCHAR(32) NOT NULL DEFAULT 'invested_enterprise' COMMENT 'invested_enterprise|pre_investment_project',
         step_code VARCHAR(32) NOT NULL COMMENT '步骤编码 S0~S6',
         status VARCHAR(16) NOT NULL DEFAULT 'ok' COMMENT 'ok|warn|failed',
         message VARCHAR(500) NULL COMMENT '步骤摘要',
         detail_json JSON NULL COMMENT '结构化明细',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        KEY idx_scrs_run (run_id, created_at),
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        KEY idx_scrs_run (run_id, F_CreatorTime),
         KEY idx_scrs_step (step_code)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析运行步骤日志';
     `);
@@ -7143,7 +7360,7 @@ async function initializeTables(dbPool) {
   };
   await addScrCol(
     'subject_type',
-    `ADD COLUMN subject_type VARCHAR(32) NOT NULL DEFAULT 'invested_enterprise' COMMENT '主体类型' AFTER id`
+    `ADD COLUMN subject_type VARCHAR(32) NOT NULL DEFAULT 'invested_enterprise' COMMENT '主体类型' AFTER F_Id`
   );
   await addScrCol(
     'pre_investment_project_id',
@@ -7191,19 +7408,19 @@ async function initializeTables(dbPool) {
   );
   await addScrCol(
     'include_in_comparable',
-    `ADD COLUMN include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司：1是0否' AFTER created_at`
+    `ADD COLUMN include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司：1是0否' AFTER F_CreatorTime`
   );
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_competitor_comparable_pref (
-        id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
         subject_type VARCHAR(32) NOT NULL COMMENT 'invested_enterprise|pre_investment_project',
         invested_enterprise_id VARCHAR(19) NULL COMMENT '被投企业 id',
         pre_investment_project_id VARCHAR(19) NULL COMMENT '投前项目 id',
         competitor_key VARCHAR(200) NOT NULL COMMENT '竞品稳定键 cc:或 name:',
         include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
         KEY idx_sccp_subject (subject_type, invested_enterprise_id, pre_investment_project_id),
         UNIQUE KEY uk_sccp_subject_competitor (subject_type, invested_enterprise_id, pre_investment_project_id, competitor_key)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品可比公司勾选偏好(跨分析重跑保留)';
@@ -7263,46 +7480,46 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_track (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '赛道ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '赛道ID',
         name VARCHAR(100) NOT NULL COMMENT '赛道名称',
         sort_order INT NOT NULL DEFAULT 0 COMMENT '排序（小在前）',
-        delete_mark TINYINT NOT NULL DEFAULT 0 COMMENT '0正常 1删除',
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_sort (delete_mark, sort_order, id)
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0 COMMENT '0正常 1删除',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_sort (F_DeleteMark, sort_order, F_Id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道';
     `);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_track_lv1 (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '一级分类ID',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '一级分类ID',
         track_id BIGINT NOT NULL COMMENT '赛道ID',
         name VARCHAR(100) NOT NULL COMMENT '一级分类名称',
         sort_order INT NOT NULL DEFAULT 0,
-        delete_mark TINYINT NOT NULL DEFAULT 0,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv1_track (track_id, delete_mark, sort_order),
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0,
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv1_track (track_id, F_DeleteMark, sort_order),
         CONSTRAINT fk_sourcing_track_lv1_track
-          FOREIGN KEY (track_id) REFERENCES sourcing_track(id) ON DELETE CASCADE
+          FOREIGN KEY (track_id) REFERENCES sourcing_track(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-赛道下一级分类';
     `);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_track_lv2 (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '二级分类ID（分组节点）',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '二级分类ID（分组节点）',
         lv1_id BIGINT NOT NULL COMMENT '一级分类ID',
         name VARCHAR(100) NOT NULL COMMENT '二级分类名称',
         sort_order INT NOT NULL DEFAULT 0,
-        delete_mark TINYINT NOT NULL DEFAULT 0,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv2_lv1 (lv1_id, delete_mark, sort_order),
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0,
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv2_lv1 (lv1_id, F_DeleteMark, sort_order),
         CONSTRAINT fk_sourcing_track_lv2_lv1
-          FOREIGN KEY (lv1_id) REFERENCES sourcing_track_lv1(id) ON DELETE CASCADE
+          FOREIGN KEY (lv1_id) REFERENCES sourcing_track_lv1(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-二级分类（分组）';
     `);
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_track_lv3 (
-        id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '三级节点ID（匹配叶子）',
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '三级节点ID（匹配叶子）',
         lv2_id BIGINT NOT NULL COMMENT '二级分类ID',
         name VARCHAR(100) NOT NULL COMMENT '三级名称',
         sort_order INT NOT NULL DEFAULT 0,
@@ -7310,12 +7527,12 @@ async function initializeTables(dbPool) {
         match_industry_lv2 VARCHAR(100) NULL COMMENT '匹配用来源/标准二级行业（精确，可空）',
         match_keywords VARCHAR(500) NULL COMMENT '关键词（逗号/分号分隔，任一命中）',
         match_priority INT NOT NULL DEFAULT 0 COMMENT '优先级，越大越先匹配',
-        delete_mark TINYINT NOT NULL DEFAULT 0,
-        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_sourcing_track_lv3_lv2 (lv2_id, delete_mark, match_priority),
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0,
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_sourcing_track_lv3_lv2 (lv2_id, F_DeleteMark, match_priority),
         CONSTRAINT fk_sourcing_track_lv3_lv2
-          FOREIGN KEY (lv2_id) REFERENCES sourcing_track_lv2(id) ON DELETE CASCADE
+          FOREIGN KEY (lv2_id) REFERENCES sourcing_track_lv2(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目挖掘-三级分类（匹配规则）';
     `);
     console.log('✓ sourcing_track / lv1 / lv2 / lv3 表已就绪');
@@ -7323,7 +7540,12 @@ async function initializeTables(dbPool) {
     console.warn('创建项目挖掘赛道表时出现警告:', err.message);
   }
 
-  await migrateSoftDeleteToDeleteMarkConvention(dbPool);
+  // 注意：此函数在 migrateBatchFColumns 之后运行，内部已兼容 F_ 命名列（F_DeleteMark 等），可安全重复执行
+  try {
+    await migrateSoftDeleteToDeleteMarkConvention(dbPool);
+  } catch (err) {
+    console.warn('migrateSoftDeleteToDeleteMarkConvention 执行时出现警告:', err.message);
+  }
 
   // 赛道：将二级上的匹配字段迁移到三级（旧库一次性迁移）
   try {
@@ -7339,9 +7561,9 @@ async function initializeTables(dbPool) {
       const [lv3Cnt] = await dbPool.query(`SELECT COUNT(*) AS c FROM sourcing_track_lv3`);
       if (mCol.length && Number(lv3Cnt[0].c || 0) === 0) {
         await dbPool.query(`
-          INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, delete_mark)
-          SELECT id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, delete_mark
-          FROM sourcing_track_lv2 WHERE delete_mark = 0
+          INSERT INTO sourcing_track_lv3 (lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, F_DeleteMark)
+          SELECT F_Id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority, F_DeleteMark
+          FROM sourcing_track_lv2 WHERE F_DeleteMark = 0
         `);
         console.log('✓ 已将旧版 sourcing_track_lv2 匹配规则迁移至 sourcing_track_lv3');
       }
@@ -7372,7 +7594,7 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project_sql_sync_setting (
-        id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
+        F_Id VARCHAR(19) PRIMARY KEY COMMENT '配置ID',
         user_id VARCHAR(50) NOT NULL COMMENT '用户ID',
         write_target VARCHAR(32) NOT NULL DEFAULT 'listing' COMMENT 'listing=上市进展写入; project_sourcing=项目挖掘写入',
         external_db_config_id VARCHAR(19) NULL COMMENT 'external_db_config.id',
@@ -7380,8 +7602,8 @@ async function initializeTables(dbPool) {
         is_enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用，0禁用',
         cron_expression VARCHAR(100) NULL COMMENT '定时同步Cron表达式（5位或Quartz 6/7位）',
         column_map JSON NULL COMMENT 'SQL列名 -> ipo_project 业务字段名',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         UNIQUE KEY uk_ipo_sql_sync_user_db_target (user_id, external_db_config_id, write_target)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='底层项目-业务库SQL同步配置（按用户+数据库连接+写入应用）';
     `);
@@ -7521,7 +7743,7 @@ async function initializeTables(dbPool) {
         ADD COLUMN app_id VARCHAR(19) NULL COMMENT '应用ID' AFTER user_id
       `);
       const [newsApps] = await dbPool.query(
-        `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+        `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
         ['新闻舆情']
       );
       if (newsApps.length > 0) {
@@ -7535,7 +7757,7 @@ async function initializeTables(dbPool) {
 
   try {
     await dbPool.query(`
-      INSERT IGNORE INTO applications (id, app_name, created_at)
+      INSERT IGNORE INTO applications (F_Id, app_name, F_CreatorTime)
       VALUES ('2026033000000000001', '上市进展', '2026-03-30 18:00:00')
     `);
     console.log('✓ applications 上市进展应用记录已就绪');
@@ -7547,19 +7769,19 @@ async function initializeTables(dbPool) {
   try {
     const { generateId } = require('./utils/idGenerator');
     const [listingApps] = await dbPool.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       ['上市进展']
     );
     if (listingApps.length) {
       const listingAppId = listingApps[0].id;
       const [existEc] = await dbPool.query(
-        `SELECT id FROM email_config WHERE app_id = ? LIMIT 1`,
+        `SELECT F_Id AS id FROM email_config WHERE app_id = ? LIMIT 1`,
         [listingAppId]
       );
       if (existEc.length === 0) {
         const [newsEc] = await dbPool.query(
           `SELECT ec.* FROM email_config ec
-           INNER JOIN applications a ON ec.app_id = a.id
+           INNER JOIN applications a ON ec.app_id = a.F_Id
            WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
           ['新闻舆情']
         );
@@ -7568,7 +7790,7 @@ async function initializeTables(dbPool) {
           const newEcId = await generateId('email_config', dbPool);
           await dbPool.execute(
             `INSERT INTO email_config (
-              id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
+              F_Id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password,
               from_email, from_name, pop_host, pop_port, pop_secure, pop_user, pop_password, is_active
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [

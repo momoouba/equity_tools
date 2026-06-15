@@ -114,13 +114,13 @@ async function listConfig(req, res) {
 
     const rows = await db.query(`
       SELECT
-        id, name, interface_type, request_url, min_sync_date, cron_expression,
+        F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
         DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
-        DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+        DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
       FROM listing_data_config
-      ORDER BY created_at DESC
+      ORDER BY F_CreatorTime DESC
     `);
     const safeRows = rows.map((r) => {
       const row = { ...r };
@@ -151,7 +151,7 @@ async function createConfig(req, res) {
     const encryptedIfindToken = body.ifind_token ? encryptText(String(body.ifind_token).trim()) : null;
     await db.execute(
       `INSERT INTO listing_data_config (
-        id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+        F_Id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
       ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -183,13 +183,13 @@ async function createConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
          last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
-         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [id]
     );
     if (row[0]) {
@@ -220,7 +220,7 @@ async function initDefaultConfigs(req, res) {
     );
 
     const existing = await db.query(
-      `SELECT id, name, interface_type, news_interface_type, request_url FROM listing_data_config WHERE is_active = 1`
+      `SELECT F_Id AS id, name, interface_type, news_interface_type, request_url FROM listing_data_config WHERE is_active = 1`
     );
     const existsSet = new Set(
       existing.map((r) => `${String(r.name || '').trim()}|${String(r.interface_type || '').trim()}|${String(r.news_interface_type || '').trim()}`)
@@ -238,14 +238,14 @@ async function initDefaultConfigs(req, res) {
         const reqUrl = String(hit?.request_url || '').trim();
         const targetUrl = String(tpl.request_url || '').trim();
         if (hit?.id && !reqUrl && targetUrl) {
-          await db.execute(`UPDATE listing_data_config SET request_url = ? WHERE id = ?`, [targetUrl, hit.id]);
+          await db.execute(`UPDATE listing_data_config SET request_url = ? WHERE F_Id = ?`, [targetUrl, hit.id]);
         }
         continue;
       }
       const id = await generateId('listing_data_config');
       await db.execute(
         `INSERT INTO listing_data_config (
-          id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
+          F_Id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, status, is_active, news_interface_type, skip_holiday,
           ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
         ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -317,7 +317,7 @@ async function updateConfig(req, res) {
         name = ?, interface_type = ?, request_url = ?, min_sync_date = ?, cron_expression = ?, status = ?, is_active = ?, news_interface_type = ?, skip_holiday = ?,
         ifind_enabled = ?, ${ifindUsernameSql} ${ifindPasswordSql} ${ifindTokenSql}
         ifind_dr_code = ?, ifind_query_params = ?, ifind_fields = ?, ifind_format = ?, ifind_fallback_to_hkex = ?
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [
         body.name,
         body.interface_type,
@@ -347,13 +347,13 @@ async function updateConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
          last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
-         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [id]
     );
     if (row[0]) {
@@ -375,7 +375,7 @@ async function deleteConfig(req, res) {
     const user = await assertAdminListing(req, res);
     if (!user) return;
 
-    await db.execute(`DELETE FROM listing_data_config WHERE id = ?`, [req.params.id]);
+    await db.execute(`DELETE FROM listing_data_config WHERE F_Id = ?`, [req.params.id]);
     await refreshListingCrons();
     return res.json({ success: true });
   } catch (e) {
@@ -390,7 +390,7 @@ async function copyListingConfig(req, res) {
     const user = await assertAdminListing(req, res);
     if (!user) return;
 
-    const rows = await db.query(`SELECT * FROM listing_data_config WHERE id = ? LIMIT 1`, [req.params.id]);
+    const rows = await db.query(`SELECT *, F_Id AS id FROM listing_data_config WHERE F_Id = ? LIMIT 1`, [req.params.id]);
     if (!rows.length) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -399,7 +399,7 @@ async function copyListingConfig(req, res) {
     const skip_holiday = src.skip_holiday === 1 || src.skip_holiday === true ? 1 : 0;
     await db.execute(
       `INSERT INTO listing_data_config (
-        id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+        F_Id, name, interface_type, request_url, min_sync_date, cron_expression, last_sync_time, last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex
       ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -427,13 +427,13 @@ async function copyListingConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
          last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
-         DATE_FORMAT(created_at, '%Y-%m-%d %H:%i:%s') AS created_at
+         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [newId]
     );
     if (row[0]) {
@@ -464,7 +464,7 @@ async function syncListingConfig(req, res) {
       return res.status(400).json({ success: false, message: '请提供 startDate（YYYY-MM-DD）' });
     }
 
-    const rows = await db.query(`SELECT * FROM listing_data_config WHERE id = ? LIMIT 1`, [req.params.id]);
+    const rows = await db.query(`SELECT *, F_Id AS id FROM listing_data_config WHERE F_Id = ? LIMIT 1`, [req.params.id]);
     if (!rows.length) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
@@ -617,7 +617,7 @@ async function syncListingConfig(req, res) {
       const rangeEndStored =
         sourceType === 'new_share' ? formatDateOnly(createShanghaiDate()) : endDateFinal;
       await db.execute(
-        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE id = ?`,
+        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
         [rangeEndStored, cfg.id]
       );
       await finishExecutionLog(logId, {

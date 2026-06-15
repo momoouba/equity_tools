@@ -4,7 +4,7 @@ const { checkProjectSourcingPermission } = require('./projectSourcingPermission'
 async function getUserFromHeader(req) {
   const userId = req.headers['x-user-id'] || null;
   if (!userId) return null;
-  const rows = await db.query('SELECT id, account, role FROM users WHERE id = ? LIMIT 1', [userId]);
+  const rows = await db.query('SELECT F_Id AS id, account, role FROM users WHERE F_Id = ? LIMIT 1', [userId]);
   return rows.length ? rows[0] : null;
 }
 

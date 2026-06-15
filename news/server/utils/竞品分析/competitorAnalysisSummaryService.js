@@ -49,7 +49,7 @@ function dedupeRelations(list) {
       (strTrim(row.competitor_product_intro).length ? 4 : 0) +
       (strTrim(row.competitor_tags_display).length ? 2 : 0) +
       (Number(row.relevance_score) || 0) / 100;
-    if (richness(r) > richness(prev) || new Date(r.created_at).getTime() > new Date(prev.created_at).getTime()) {
+    if (richness(r) > richness(prev) || new Date(r.F_CreatorTime).getTime() > new Date(prev.F_CreatorTime).getTime()) {
       map.set(key, r);
     }
   }
@@ -81,7 +81,7 @@ function latestStepByCode(steps, code) {
   let best = null;
   for (const s of steps) {
     if (s.step_code !== code) continue;
-    if (!best || String(s.created_at) > String(best.created_at)) best = s;
+    if (!best || String(s.F_CreatorTime) > String(best.F_CreatorTime)) best = s;
   }
   return best;
 }
@@ -132,7 +132,7 @@ function buildProcessNarrative(steps, run) {
   const lines = [];
   if (run) {
     lines.push(
-      `最近一次分析运行：${run.id}，状态 ${run.status || '—'}，完成时间 ${run.finished_at || run.updated_at || '—'}。`
+      `最近一次分析运行：${run.F_Id}，状态 ${run.status || '—'}，完成时间 ${run.finished_at || run.F_LastModifyTime || '—'}。`
     );
     if (run.message) lines.push(run.message);
   } else {
@@ -256,7 +256,7 @@ function buildProcessNarrative(steps, run) {
   ];
   const byCode = new Map();
   for (const s of steps) {
-    if (!byCode.has(s.step_code) || String(s.created_at) > String(byCode.get(s.step_code).created_at)) {
+    if (!byCode.has(s.step_code) || String(s.F_CreatorTime) > String(byCode.get(s.step_code).F_CreatorTime)) {
       byCode.set(s.step_code, s);
     }
   }
@@ -313,18 +313,18 @@ async function buildCompetitorAnalysisSummary(opts) {
   if (runId) {
     if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
       const runs = await db.query(
-        `SELECT id, status, message, started_at, finished_at, updated_at
+        `SELECT F_Id, status, message, started_at, finished_at, F_LastModifyTime
          FROM sourcing_competitor_run
-         WHERE delete_mark = 0 AND id = ? AND invested_enterprise_id = ?
+         WHERE F_DeleteMark = 0 AND F_Id = ? AND invested_enterprise_id = ?
          LIMIT 1`,
         [runId, investedEnterpriseId]
       );
       run = runs[0] || null;
     } else if (preInvestmentProjectId) {
       const runs = await db.query(
-        `SELECT id, status, message, started_at, finished_at, updated_at
+        `SELECT F_Id, status, message, started_at, finished_at, F_LastModifyTime
          FROM sourcing_pre_investment_competitor_run
-         WHERE delete_mark = 0 AND id = ? AND pre_investment_project_id = ?
+         WHERE F_DeleteMark = 0 AND F_Id = ? AND pre_investment_project_id = ?
          LIMIT 1`,
         [runId, preInvestmentProjectId]
       );
@@ -332,27 +332,27 @@ async function buildCompetitorAnalysisSummary(opts) {
     }
   } else if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
     const runs = await db.query(
-      `SELECT id, status, message, started_at, finished_at, updated_at
+      `SELECT F_Id, status, message, started_at, finished_at, F_LastModifyTime
        FROM sourcing_competitor_run
-       WHERE delete_mark = 0 AND invested_enterprise_id = ?
-       ORDER BY COALESCE(finished_at, updated_at, started_at) DESC
+       WHERE F_DeleteMark = 0 AND invested_enterprise_id = ?
+       ORDER BY COALESCE(finished_at, F_LastModifyTime, started_at) DESC
        LIMIT 1`,
       [investedEnterpriseId]
     );
     run = runs[0] || null;
   } else if (preInvestmentProjectId) {
     const runs = await db.query(
-      `SELECT id, status, message, started_at, finished_at, updated_at
+      `SELECT F_Id, status, message, started_at, finished_at, F_LastModifyTime
        FROM sourcing_pre_investment_competitor_run
-       WHERE delete_mark = 0 AND pre_investment_project_id = ?
-       ORDER BY COALESCE(finished_at, updated_at, started_at) DESC
+       WHERE F_DeleteMark = 0 AND pre_investment_project_id = ?
+       ORDER BY COALESCE(finished_at, F_LastModifyTime, started_at) DESC
        LIMIT 1`,
       [preInvestmentProjectId]
     );
     run = runs[0] || null;
   }
 
-  const steps = run ? await listCompetitorRunStepLogs(run.id) : [];
+  const steps = run ? await listCompetitorRunStepLogs(run.F_Id) : [];
   const progress = computeRunProgress(run, steps);
   let process_text = buildProcessNarrative(steps, run);
   const progressHeader = buildProgressHeader(progress);
@@ -364,27 +364,27 @@ async function buildCompetitorAnalysisSummary(opts) {
   if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
     if (runId) {
       relRows = await db.query(
-        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+        `SELECT F_Id, competitor_display_name, unified_credit_code, competitor_weak_key,
                 relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                created_at, run_id
+                F_CreatorTime, run_id
          FROM sourcing_competitor_relation
-         WHERE delete_mark = 0 AND invested_enterprise_id = ? AND run_id = ?
+         WHERE F_DeleteMark = 0 AND invested_enterprise_id = ? AND run_id = ?
            AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-         ORDER BY relevance_score DESC, created_at DESC
+         ORDER BY relevance_score DESC, F_CreatorTime DESC
          LIMIT 200`,
         [investedEnterpriseId, runId]
       );
     } else {
       relRows = await db.query(
-        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+        `SELECT F_Id, competitor_display_name, unified_credit_code, competitor_weak_key,
                 relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                created_at, run_id
+                F_CreatorTime, run_id
          FROM sourcing_competitor_relation
-         WHERE delete_mark = 0 AND invested_enterprise_id = ?
+         WHERE F_DeleteMark = 0 AND invested_enterprise_id = ?
            AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-         ORDER BY relevance_score DESC, created_at DESC
+         ORDER BY relevance_score DESC, F_CreatorTime DESC
          LIMIT 200`,
         [investedEnterpriseId]
       );
@@ -392,27 +392,27 @@ async function buildCompetitorAnalysisSummary(opts) {
   } else if (preInvestmentProjectId) {
     if (runId) {
       relRows = await db.query(
-        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+        `SELECT F_Id, competitor_display_name, unified_credit_code, competitor_weak_key,
                 relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                created_at, pre_investment_run_id
+                F_CreatorTime, pre_investment_run_id
          FROM sourcing_competitor_relation
-         WHERE delete_mark = 0 AND pre_investment_project_id = ? AND pre_investment_run_id = ?
+         WHERE F_DeleteMark = 0 AND pre_investment_project_id = ? AND pre_investment_run_id = ?
            AND subject_type = 'pre_investment_project'
-         ORDER BY relevance_score DESC, created_at DESC
+         ORDER BY relevance_score DESC, F_CreatorTime DESC
          LIMIT 200`,
         [preInvestmentProjectId, runId]
       );
     } else {
       relRows = await db.query(
-        `SELECT id, competitor_display_name, unified_credit_code, competitor_weak_key,
+        `SELECT F_Id, competitor_display_name, unified_credit_code, competitor_weak_key,
                 relevance_score, confidence_grade, score_breakdown_json, data_sources_json,
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-                created_at, pre_investment_run_id
+                F_CreatorTime, pre_investment_run_id
          FROM sourcing_competitor_relation
-         WHERE delete_mark = 0 AND pre_investment_project_id = ?
+         WHERE F_DeleteMark = 0 AND pre_investment_project_id = ?
            AND subject_type = 'pre_investment_project'
-         ORDER BY relevance_score DESC, created_at DESC
+         ORDER BY relevance_score DESC, F_CreatorTime DESC
          LIMIT 200`,
         [preInvestmentProjectId]
       );
@@ -454,7 +454,7 @@ async function buildCompetitorAnalysisSummary(opts) {
   }
 
   return {
-    run_id: run?.id || null,
+    run_id: run?.F_Id || null,
     run_status: run?.status || null,
     run_message: run?.message || null,
     finished_at: run?.finished_at || null,

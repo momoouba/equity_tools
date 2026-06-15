@@ -10,9 +10,9 @@ const USAGE_TYPE = 'project_mining';
 async function getActiveProjectMiningModelConfig() {
   const rows = await db.query(
     `SELECT * FROM ai_model_config
-     WHERE delete_mark = 0 AND is_active = 1
+     WHERE F_DeleteMark = 0 AND is_active = 1
        AND application_type = ? AND usage_type = ?
-     ORDER BY updated_at DESC
+     ORDER BY F_LastModifyTime DESC
      LIMIT 1`,
     [APP_TYPE, USAGE_TYPE]
   );

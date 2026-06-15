@@ -37,7 +37,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
     const { page = 1, pageSize = 10, provider, application_type } = req.query;
     const offset = (page - 1) * pageSize;
 
-    let condition = 'WHERE delete_mark = 0';
+    let condition = 'WHERE F_DeleteMark = 0';
     const params = [];
 
     if (provider) {
@@ -53,13 +53,13 @@ router.get('/', checkAdminPermission, async (req, res) => {
     // 查询数据（隐藏API密钥）
     const data = await db.query(
       `SELECT 
-        id, config_name, provider, model_name, api_type, 
+        F_Id AS id, config_name, provider, model_name, api_type, 
         CONCAT(LEFT(api_key, 8), '****') as api_key_masked,
         api_endpoint, temperature, max_tokens, top_p, enable_thinking,
-        is_active, application_type, usage_type, creator_user_id, created_at, updated_at
+        is_active, application_type, usage_type, F_CreatorUserId, F_CreatorTime, F_LastModifyTime
        FROM ai_model_config 
        ${condition} 
-       ORDER BY created_at DESC 
+       ORDER BY F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
@@ -88,11 +88,11 @@ router.get('/active', checkAdminPermission, async (req, res) => {
   try {
     const data = await db.query(
       `SELECT 
-        id, config_name, provider, model_name, api_type, 
+        F_Id AS id, config_name, provider, model_name, api_type, 
         application_type, usage_type
        FROM ai_model_config 
-       WHERE delete_mark = 0 AND is_active = 1
-       ORDER BY created_at DESC`
+       WHERE F_DeleteMark = 0 AND is_active = 1
+       ORDER BY F_CreatorTime DESC`
     );
 
     res.json({
@@ -138,7 +138,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     const { id } = req.params;
     
     const data = await db.query(
-      'SELECT * FROM ai_model_config WHERE id = ? AND delete_mark = 0',
+      'SELECT *, F_Id AS id FROM ai_model_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -215,8 +215,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
     const configId = await generateId('ai_model_config');
     await db.execute(
       `INSERT INTO ai_model_config 
-       (id, config_name, provider, model_name, api_type, api_key, api_endpoint, 
-        temperature, max_tokens, top_p, enable_thinking, application_type, usage_type, creator_user_id) 
+       (F_Id, config_name, provider, model_name, api_type, api_key, api_endpoint, 
+        temperature, max_tokens, top_p, enable_thinking, application_type, usage_type, F_CreatorUserId) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId, config_name, provider, model_name, api_type, api_key, 
@@ -259,7 +259,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT id FROM ai_model_config WHERE id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM ai_model_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -298,7 +298,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const rowFull = await db.query(
-      'SELECT * FROM ai_model_config WHERE id = ? AND delete_mark = 0 LIMIT 1',
+      'SELECT * FROM ai_model_config WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1',
       [id]
     );
     if (!rowFull.length) {
@@ -317,8 +317,8 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       `UPDATE ai_model_config 
        SET config_name = ?, provider = ?, model_name = ?, api_type = ?, 
            api_key = ?, api_endpoint = ?, temperature = ?, max_tokens = ?, 
-           top_p = ?, enable_thinking = ?, application_type = ?, usage_type = ?, is_active = ?, updater_user_id = ?
-       WHERE id = ?`,
+           top_p = ?, enable_thinking = ?, application_type = ?, usage_type = ?, is_active = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
       [
         config_name !== undefined ? config_name : prev.config_name,
         provider !== undefined ? provider : prev.provider,
@@ -356,7 +356,7 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT id FROM ai_model_config WHERE id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM ai_model_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -366,8 +366,8 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     await db.execute(
       `UPDATE ai_model_config 
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-       WHERE id = ?`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+       WHERE F_Id = ?`,
       [req.currentUserId, id]
     );
 
@@ -388,7 +388,7 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
     
     // 获取配置信息
     const configs = await db.query(
-      'SELECT * FROM ai_model_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM ai_model_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 

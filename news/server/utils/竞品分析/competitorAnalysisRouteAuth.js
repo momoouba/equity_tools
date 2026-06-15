@@ -5,7 +5,7 @@ const { checkProjectSourcingPermission } = require('../项目挖掘/projectSourc
 async function getUserFromHeader(req) {
   const userId = req.headers['x-user-id'] || null;
   if (!userId) return null;
-  const rows = await db.query('SELECT id, account, role FROM users WHERE id = ? LIMIT 1', [userId]);
+  const rows = await db.query('SELECT F_Id AS id, account, role FROM users WHERE F_Id = ? LIMIT 1', [userId]);
   return rows.length ? rows[0] : null;
 }
 
@@ -61,7 +61,7 @@ async function canReadFinancingPoolForUser(userId) {
   const flags = await getCompetitorRecallSourceFlags();
   if (!flags.enable_financing_event) return false;
   if (await checkProjectSourcingPermission(userId)) return true;
-  const user = await db.query('SELECT role, account FROM users WHERE id = ? LIMIT 1', [userId]);
+  const user = await db.query('SELECT role, account FROM users WHERE F_Id = ? LIMIT 1', [userId]);
   if (!user.length) return false;
   const u = user[0];
   if (String(u.role || '').trim().toLowerCase() === 'admin') return true;

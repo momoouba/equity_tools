@@ -21,7 +21,7 @@ async function cleanupApplications() {
 
     // 1. 先查询将要删除的应用ID
     const appsToDelete = await db.query(
-      `SELECT id, app_name FROM applications WHERE id NOT IN (?)`,
+      `SELECT F_Id AS id, app_name FROM applications WHERE F_Id NOT IN (?)`,
       [keepIds]
     );
 
@@ -40,9 +40,9 @@ async function cleanupApplications() {
 
     // 2.1 检查 membership_levels 表
     const membershipLevels = await db.query(
-      `SELECT ml.id, ml.level_name, ml.app_id, a.app_name 
+      `SELECT ml.F_Id, ml.level_name, ml.app_id, a.app_name 
        FROM membership_levels ml 
-       LEFT JOIN applications a ON ml.app_id = a.id 
+       LEFT JOIN applications a ON ml.app_id = a.F_Id 
        WHERE ml.app_id NOT IN (?)`,
       [keepIds]
     );
@@ -54,22 +54,22 @@ async function cleanupApplications() {
 
     // 2.2 检查 email_config 表
     const emailConfigs = await db.query(
-      `SELECT ec.id, ec.app_id, a.app_name 
+      `SELECT ec.F_Id, ec.app_id, a.app_name 
        FROM email_config ec 
-       LEFT JOIN applications a ON ec.app_id = a.id 
+       LEFT JOIN applications a ON ec.app_id = a.F_Id 
        WHERE ec.app_id NOT IN (?)`,
       [keepIds]
     );
     if (emailConfigs.length > 0) {
       console.log(`  发现 ${emailConfigs.length} 条 email_config 记录关联到将被删除的应用`);
-      const existsPerfEmail = await db.query(`SELECT id FROM email_config WHERE app_id = ? LIMIT 1`, [perfId]);
+      const existsPerfEmail = await db.query(`SELECT F_Id FROM email_config WHERE app_id = ? LIMIT 1`, [perfId]);
       if (existsPerfEmail.length > 0) {
         await db.execute(`DELETE FROM email_config WHERE app_id NOT IN (?)`, [keepIds]);
         console.log('  ✓ 业绩看板 email_config 已存在，已删除其他应用的 email_config');
       } else {
-        const legacyEmail = await db.query(`SELECT id FROM email_config WHERE app_id NOT IN (?) LIMIT 1`, [keepIds]);
+        const legacyEmail = await db.query(`SELECT F_Id AS id FROM email_config WHERE app_id NOT IN (?) LIMIT 1`, [keepIds]);
         if (legacyEmail.length > 0) {
-          await db.execute(`UPDATE email_config SET app_id = ? WHERE id = ?`, [perfId, legacyEmail[0].id]);
+          await db.execute(`UPDATE email_config SET app_id = ? WHERE F_Id = ?`, [perfId, legacyEmail[0].id]);
         }
         await db.execute(`DELETE FROM email_config WHERE app_id NOT IN (?)`, [keepIds]);
         console.log('  ✓ 已迁移并清理 email_config');
@@ -78,9 +78,9 @@ async function cleanupApplications() {
 
     // 2.3 检查 qichacha_config 表
     const qichachaConfigs = await db.query(
-      `SELECT qc.id, qc.app_id, a.app_name 
+      `SELECT qc.F_Id, qc.app_id, a.app_name 
        FROM qichacha_config qc 
-       LEFT JOIN applications a ON qc.app_id = a.id 
+       LEFT JOIN applications a ON qc.app_id = a.F_Id 
        WHERE qc.app_id NOT IN (?)`,
       [keepIds]
     );
@@ -92,9 +92,9 @@ async function cleanupApplications() {
 
     // 2.4 检查 news_interface_config 表
     const newsInterfaceConfigs = await db.query(
-      `SELECT nic.id, nic.app_id, a.app_name 
+      `SELECT nic.F_Id, nic.app_id, a.app_name 
        FROM news_interface_config nic 
-       LEFT JOIN applications a ON nic.app_id = a.id 
+       LEFT JOIN applications a ON nic.app_id = a.F_Id 
        WHERE nic.app_id NOT IN (?)`,
       [keepIds]
     );
@@ -106,9 +106,9 @@ async function cleanupApplications() {
 
     // 2.5 检查 recipient_management 表
     const recipients = await db.query(
-      `SELECT rm.id, rm.app_id, a.app_name 
+      `SELECT rm.F_Id, rm.app_id, a.app_name 
        FROM recipient_management rm 
-       LEFT JOIN applications a ON rm.app_id = a.id 
+       LEFT JOIN applications a ON rm.app_id = a.F_Id 
        WHERE rm.app_id NOT IN (?)`,
       [keepIds]
     );
@@ -120,14 +120,14 @@ async function cleanupApplications() {
 
     // 3. 删除 applications 表中不需要的记录
     const deleteResult = await db.execute(
-      `DELETE FROM applications WHERE id NOT IN (?)`,
+      `DELETE FROM applications WHERE F_Id NOT IN (?)`,
       [keepIds]
     );
     console.log(`✓ 已删除 ${deleteResult.affectedRows || 0} 条 applications 记录`);
 
     // 4. 验证保留的应用
     const remainingApps = await db.query(
-      `SELECT id, app_name FROM applications ORDER BY id`
+      `SELECT F_Id AS id, app_name FROM applications ORDER BY F_Id`
     );
     console.log('\n保留的应用:');
     remainingApps.forEach(app => {

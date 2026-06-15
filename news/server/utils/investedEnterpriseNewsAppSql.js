@@ -6,7 +6,7 @@ const { DATA_APP_NEWS_SENTIMENT } = require('./enterpriseDataApp');
  * 子查询：applications 表中「新闻舆情」应用的 id（与 db.js 回填 invested_enterprises.data_app_id 的比对方式一致）。
  * 嵌入 SQL 片段，避免在大量调用点逐个 await 传参。
  */
-const NEWS_SENTIMENT_APP_ID_SUBSELECT = `(SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST('${DATA_APP_NEWS_SENTIMENT}' AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1)`;
+const NEWS_SENTIMENT_APP_ID_SUBSELECT = `(SELECT F_Id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST('${DATA_APP_NEWS_SENTIMENT}' AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1)`;
 
 /**
  * invested_enterprises 属于「新闻舆情」监控对象：

@@ -95,9 +95,9 @@ async function listIpoProgress(req, res) {
 
     const rows = await db.query(
       `SELECT
-         f_id,
-         f_create_date,
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         F_Id,
+         F_CreatorTime,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          code,
          project_name,
          status,
@@ -110,7 +110,7 @@ async function listIpoProgress(req, res) {
          F_LastModifyUserId,
          DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS F_LastModifyTime
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC, exchange DESC, board DESC
+       ORDER BY F_UpdateTime DESC, exchange DESC, board DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -158,7 +158,7 @@ async function exportIpoProgressCsv(req, res) {
     const { whereSql, params } = await buildIpoProgressWhere(req);
     const rows = await db.query(
       `SELECT
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          company,
          status,
          exchange,
@@ -167,7 +167,7 @@ async function exportIpoProgressCsv(req, res) {
          register_address,
          code
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC, exchange DESC, board DESC
+       ORDER BY F_UpdateTime DESC, exchange DESC, board DESC
        LIMIT 50000`,
       params
     );
@@ -202,8 +202,8 @@ async function fetchIpoProgressStats(req, res) {
     const rows = await db.query(
       `SELECT
          exchange,
-         SUM(CASE WHEN DATE(f_update_time) = ? THEN 1 ELSE 0 END) AS yesterday_count,
-         SUM(CASE WHEN DATE(f_update_time) >= ? THEN 1 ELSE 0 END) AS year_count
+         SUM(CASE WHEN DATE(F_UpdateTime) = ? THEN 1 ELSE 0 END) AS yesterday_count,
+         SUM(CASE WHEN DATE(F_UpdateTime) >= ? THEN 1 ELSE 0 END) AS year_count
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange IN ('深交所', '上交所', '北交所', '港交所')
@@ -269,7 +269,7 @@ async function createIpoProgress(req, res) {
 
     const result = await db.execute(
       `INSERT INTO ipo_progress (
-        f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+        F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
         company, board, exchange,
         F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime,
         F_DeleteMark
@@ -293,9 +293,9 @@ async function createIpoProgress(req, res) {
     const insertId = result.insertId;
     const rows = await db.query(
       `SELECT
-         f_id,
-         f_create_date,
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         F_Id,
+         F_CreatorTime,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          code,
          project_name,
          status,
@@ -307,7 +307,7 @@ async function createIpoProgress(req, res) {
          F_CreatorUserId,
          F_LastModifyUserId,
          DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS F_LastModifyTime
-       FROM ipo_progress WHERE f_id = ? LIMIT 1`,
+       FROM ipo_progress WHERE F_Id = ? LIMIT 1`,
       [insertId]
     );
     return res.json({ success: true, data: rows[0] });
@@ -326,7 +326,7 @@ async function updateIpoProgress(req, res) {
 
     const fId = req.params.fId;
     const body = req.body || {};
-    const rows = await db.query(`SELECT * FROM ipo_progress WHERE f_id = ? AND F_DeleteMark = 0 LIMIT 1`, [fId]);
+    const rows = await db.query(`SELECT * FROM ipo_progress WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [fId]);
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
     const now = new Date();
@@ -334,9 +334,9 @@ async function updateIpoProgress(req, res) {
     await db.execute(
       `UPDATE ipo_progress SET
         code = ?, project_name = ?, status = ?, register_address = ?, receive_date = ?,
-        company = ?, board = ?, exchange = ?, f_update_time = ?,
+        company = ?, board = ?, exchange = ?, F_UpdateTime = ?,
         F_LastModifyUserId = ?, F_LastModifyTime = ?
-       WHERE f_id = ?`,
+       WHERE F_Id = ?`,
       [
         body.code ?? rows[0].code,
         body.project_name,
@@ -346,13 +346,13 @@ async function updateIpoProgress(req, res) {
         body.company,
         board,
         body.exchange,
-        body.f_update_time || rows[0].f_update_time,
+        body.f_update_time || rows[0].F_UpdateTime,
         user.id,
         now,
         fId,
       ]
     );
-    const updated = await db.query(`SELECT * FROM ipo_progress WHERE f_id = ? LIMIT 1`, [fId]);
+    const updated = await db.query(`SELECT * FROM ipo_progress WHERE F_Id = ? LIMIT 1`, [fId]);
     return res.json({ success: true, data: updated[0] });
   } catch (e) {
     console.error('updateIpoProgress', e);
@@ -368,12 +368,12 @@ async function softDeleteIpoProgress(req, res) {
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
 
     const fId = req.params.fId;
-    const rows = await db.query(`SELECT * FROM ipo_progress WHERE f_id = ? AND F_DeleteMark = 0 LIMIT 1`, [fId]);
+    const rows = await db.query(`SELECT * FROM ipo_progress WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [fId]);
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
     const now = new Date();
     await db.execute(
-      `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE f_id = ?`,
+      `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE F_Id = ?`,
       [now, user.id, fId]
     );
     return res.json({ success: true });

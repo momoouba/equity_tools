@@ -47,7 +47,7 @@ router.get('/permissions', getCurrentUser, async (req, res) => {
 
     // 通过应用名找到业绩看板应用的 app_id
     const appRows = await db.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       ['业绩看板应用']
     );
     if (!appRows || appRows.length === 0) {
@@ -71,7 +71,7 @@ router.get('/permissions', getCurrentUser, async (req, res) => {
       const perfPerm = user.app_permissions.find(p => p.app_id === performanceAppId);
       if (perfPerm && perfPerm.membership_level_id) {
         const rows = await db.query(
-          `SELECT level_name FROM membership_levels WHERE id = ? LIMIT 1`,
+          `SELECT level_name FROM membership_levels WHERE F_Id = ? LIMIT 1`,
           [perfPerm.membership_level_id]
         );
         if (rows && rows.length > 0) {
@@ -85,7 +85,7 @@ router.get('/permissions', getCurrentUser, async (req, res) => {
     if (!levelName) {
       if (user.membership_level_id) {
         const rows = await db.query(
-          `SELECT level_name FROM membership_levels WHERE id = ? LIMIT 1`,
+          `SELECT level_name FROM membership_levels WHERE F_Id = ? LIMIT 1`,
           [user.membership_level_id]
         );
         if (rows && rows.length > 0) {

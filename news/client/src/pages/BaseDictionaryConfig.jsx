@@ -31,7 +31,7 @@ function BaseDictionaryConfig() {
   const [itemFormKey, setItemFormKey] = useState(0)
 
   const activeDict = useMemo(
-    () => dictList.find((d) => d.id === activeDictId) || null,
+    () => dictList.find((d) => d.F_Id === activeDictId) || null,
     [dictList, activeDictId]
   )
 
@@ -45,8 +45,8 @@ function BaseDictionaryConfig() {
         if (rows.length === 0) {
           setActiveDictId(null)
           setItemList([])
-        } else if (!activeDictId || !rows.some((r) => r.id === activeDictId)) {
-          setActiveDictId(rows[0].id)
+        } else if (!activeDictId || !rows.some((r) => r.F_Id === activeDictId)) {
+          setActiveDictId(rows[0].F_Id)
         }
       } else {
         Message.error(res.data?.message || '获取数据字典失败')
@@ -90,7 +90,7 @@ function BaseDictionaryConfig() {
   const submitDict = async (values) => {
     try {
       if (editingDict) {
-        await axios.put(`/api/system/base-dictionaries/${editingDict.id}`, values)
+        await axios.put(`/api/system/base-dictionaries/${editingDict.F_Id}`, values)
         Message.success('更新字典类型成功')
       } else {
         await axios.post('/api/system/base-dictionaries', values)
@@ -111,7 +111,7 @@ function BaseDictionaryConfig() {
     }
     try {
       if (editingItem) {
-        await axios.put(`/api/system/base-dictionary-items/${editingItem.id}`, values)
+        await axios.put(`/api/system/base-dictionary-items/${editingItem.F_Id}`, values)
         Message.success('更新字典选项成功')
       } else {
         await axios.post(`/api/system/base-dictionaries/${activeDictId}/items`, values)
@@ -128,12 +128,12 @@ function BaseDictionaryConfig() {
 
   const toggleDictStatus = async (row, checked) => {
     try {
-      await axios.put(`/api/system/base-dictionaries/${row.id}/status`, {
+      await axios.put(`/api/system/base-dictionaries/${row.F_Id}/status`, {
         is_enabled: checked ? 1 : 0
       })
       Message.success(checked ? '已启用' : '已停用')
       fetchDictList()
-      if (activeDictId === row.id) fetchItems(row.id)
+      if (activeDictId === row.F_Id) fetchItems(row.F_Id)
     } catch (e) {
       Message.error(e.response?.data?.message || '更新状态失败')
     }
@@ -141,7 +141,7 @@ function BaseDictionaryConfig() {
 
   const toggleItemStatus = async (row, checked) => {
     try {
-      await axios.put(`/api/system/base-dictionary-items/${row.id}/status`, {
+      await axios.put(`/api/system/base-dictionary-items/${row.F_Id}/status`, {
         is_enabled: checked ? 1 : 0
       })
       Message.success(checked ? '已启用' : '已停用')
@@ -153,7 +153,7 @@ function BaseDictionaryConfig() {
 
   const removeDict = async (row) => {
     try {
-      await axios.delete(`/api/system/base-dictionaries/${row.id}`)
+      await axios.delete(`/api/system/base-dictionaries/${row.F_Id}`)
       Message.success('删除成功')
       fetchDictList()
     } catch (e) {
@@ -163,7 +163,7 @@ function BaseDictionaryConfig() {
 
   const removeItem = async (row) => {
     try {
-      await axios.delete(`/api/system/base-dictionary-items/${row.id}`)
+      await axios.delete(`/api/system/base-dictionary-items/${row.F_Id}`)
       Message.success('删除成功')
       fetchItems(activeDictId)
       fetchDictList()
@@ -330,13 +330,13 @@ function BaseDictionaryConfig() {
             </Button>
           </div>
           <Table
-            rowKey="id"
+            rowKey="F_Id"
             loading={loading}
             columns={dictColumns}
             data={dictList}
             pagination={false}
             onRow={(record) => ({
-              onClick: () => setActiveDictId(record.id)
+              onClick: () => setActiveDictId(record.F_Id)
             })}
             rowSelection={{
               type: 'radio',
@@ -366,7 +366,7 @@ function BaseDictionaryConfig() {
             </Button>
           </div>
           <Table
-            rowKey="id"
+            rowKey="F_Id"
             loading={itemLoading}
             columns={itemColumns}
             data={itemList}
@@ -392,7 +392,7 @@ function BaseDictionaryConfig() {
         footer={null}
       >
         <Form
-          key={editingDict ? `dict-${editingDict.id}` : `dict-new-${dictFormKey}`}
+          key={editingDict ? `dict-${editingDict.F_Id}` : `dict-new-${dictFormKey}`}
           layout="vertical"
           initialValues={
             editingDict || { dict_code: '', dict_name: '', sort_order: 0, is_enabled: 1 }
@@ -443,7 +443,7 @@ function BaseDictionaryConfig() {
         footer={null}
       >
         <Form
-          key={editingItem ? `item-${editingItem.id}` : `item-new-${itemFormKey}`}
+          key={editingItem ? `item-${editingItem.F_Id}` : `item-new-${itemFormKey}`}
           layout="vertical"
           initialValues={
             editingItem || { item_code: '', item_name: '', sort_order: 0, is_enabled: 1 }

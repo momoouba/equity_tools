@@ -181,7 +181,7 @@ async function appendStepLog({ runId, subjectType, stepCode, status, message, de
     const id = await generateId('sourcing_competitor_run_step_log');
     await db.execute(
       `INSERT INTO sourcing_competitor_run_step_log (
-         id, run_id, subject_type, step_code, status, message, detail_json, created_at
+         F_Id, run_id, subject_type, step_code, status, message, detail_json, F_CreatorTime
        ) VALUES (?,?,?,?,?,?,?,NOW())`,
       [
         id,
@@ -276,7 +276,7 @@ async function evaluatePreInvestmentReadiness(row) {
 
 async function updateRunStatus(runTable, runId, status, message) {
   await db.execute(
-    `UPDATE ${runTable} SET status = ?, message = ?, finished_at = NOW(), updated_at = NOW() WHERE id = ?`,
+    `UPDATE ${runTable} SET status = ?, message = ?, finished_at = NOW(), F_LastModifyTime = NOW() WHERE F_Id = ?`,
     [status, message ? String(message).slice(0, 500) : null, runId]
   );
 }
@@ -293,15 +293,15 @@ async function archivePriorCompetitorRelations({
   if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
     await dbExec(
       `UPDATE sourcing_competitor_relation
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
-       WHERE invested_enterprise_id = ? AND delete_mark = 0`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
+       WHERE invested_enterprise_id = ? AND F_DeleteMark = 0`,
       [uid, investedEnterpriseId]
     );
   } else if (subjectType === 'pre_investment_project' && preInvestmentProjectId) {
     await dbExec(
       `UPDATE sourcing_competitor_relation
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?, updated_at = NOW()
-       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND delete_mark = 0`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
+       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0`,
       [uid, preInvestmentProjectId]
     );
   }
@@ -412,13 +412,13 @@ async function persistRelations({
     for (const p of preparedRows) {
       await conn.execute(
         `INSERT INTO sourcing_competitor_relation (
-           id, subject_type, invested_enterprise_id, pre_investment_project_id,
+           F_Id, subject_type, invested_enterprise_id, pre_investment_project_id,
            run_id, pre_investment_run_id, subject_display_name,
            competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
            relevance_score, confidence_grade, score_breakdown_json,
            data_sources_json, financing_amount_text, financing_history_text,
            competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-           include_in_comparable, created_at, updated_at, delete_mark
+           include_in_comparable, F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
         [
           p.relId,
@@ -510,7 +510,7 @@ async function executeCompetitorAnalysisRun(opts) {
 
   try {
     await db.execute(
-      `UPDATE ${runTable} SET status = 'running', started_at = COALESCE(started_at, NOW()), updated_at = NOW() WHERE id = ?`,
+      `UPDATE ${runTable} SET status = 'running', started_at = COALESCE(started_at, NOW()), F_LastModifyTime = NOW() WHERE F_Id = ?`,
       [runId]
     );
 
@@ -518,7 +518,7 @@ async function executeCompetitorAnalysisRun(opts) {
     let readiness;
     if (subjectType === 'invested_enterprise') {
       row = await getInvestedEnterpriseRowForCompetitor(investedEnterpriseId);
-      const supTags = await loadLatestSupplementTags(row.id);
+      const supTags = await loadLatestSupplementTags(row.F_Id);
       readiness = await evaluateInvestedEnterpriseCompetitorReadiness(row);
       readiness.tags = mergeTagArrays(readiness.tags, supTags);
       if (!readiness.ready) {
@@ -526,9 +526,9 @@ async function executeCompetitorAnalysisRun(opts) {
       }
     } else {
       const rows = await db.query(
-        `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation,
+        `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
                 ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro
-         FROM pre_investment_project WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+         FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
         [preInvestmentProjectId]
       );
       if (!rows.length) throw new Error('投前项目不存在');
@@ -995,10 +995,10 @@ async function listCompetitorRunStepLogs(runId) {
   const id = String(runId || '').trim();
   if (!id) return [];
   return db.query(
-    `SELECT id, run_id, subject_type, step_code, status, message, detail_json, created_at
+    `SELECT F_Id, run_id, subject_type, step_code, status, message, detail_json, F_CreatorTime
      FROM sourcing_competitor_run_step_log
      WHERE run_id = ?
-     ORDER BY created_at ASC`,
+     ORDER BY F_CreatorTime ASC`,
     [id]
   );
 }

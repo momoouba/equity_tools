@@ -84,7 +84,7 @@ async function listIpoProjects(req, res) {
     const rows = await db.query(
       `SELECT p.*, u.account AS creator_account
        FROM ipo_project p
-       LEFT JOIN users u ON u.id = p.F_CreatorUserId
+       LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
        ${whereSql}
        ORDER BY p.F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
@@ -111,7 +111,7 @@ async function exportIpoProjectsCsv(req, res) {
     const rows = await db.query(
       `SELECT p.*, u.account AS creator_account
        FROM ipo_project p
-       LEFT JOIN users u ON u.id = p.F_CreatorUserId
+       LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
        ${whereSql}
        ORDER BY p.F_CreatorTime DESC
        LIMIT 50000`,
@@ -318,7 +318,7 @@ async function createIpoProject(req, res) {
     );
 
     const inserted = await db.query(
-      `SELECT * FROM ipo_project WHERE project_no = ? LIMIT 1`,
+      `SELECT *, F_Id AS id FROM ipo_project WHERE project_no = ? LIMIT 1`,
       [project_no]
     );
     return res.json({ success: true, data: inserted[0] });
@@ -338,7 +338,7 @@ async function updateIpoProject(req, res) {
     const body = req.body || {};
 
     const rows = await db.query(
-      `SELECT * FROM ipo_project WHERE f_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      `SELECT *, F_Id AS id FROM ipo_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
       [fId]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
@@ -355,7 +355,7 @@ async function updateIpoProject(req, res) {
         ct_amount = ?, ct_residual = ?, fund = ?, sub = ?,
         biz_update_time = COALESCE(?, biz_update_time),
         F_LastModifyUserId = ?, F_LastModifyTime = ?
-       WHERE f_id = ?`,
+       WHERE F_Id = ?`,
       [
         body.project_name,
         body.company,
@@ -373,7 +373,7 @@ async function updateIpoProject(req, res) {
       ]
     );
 
-    const updated = await db.query(`SELECT * FROM ipo_project WHERE f_id = ? LIMIT 1`, [fId]);
+    const updated = await db.query(`SELECT *, F_Id AS id FROM ipo_project WHERE F_Id = ? LIMIT 1`, [fId]);
     return res.json({ success: true, data: updated[0] });
   } catch (e) {
     console.error('updateIpoProject', e);
@@ -389,7 +389,7 @@ async function softDeleteIpoProject(req, res) {
 
     const fId = req.params.fId;
     const rows = await db.query(
-      `SELECT * FROM ipo_project WHERE f_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      `SELECT *, F_Id AS id FROM ipo_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
       [fId]
     );
     if (!rows.length) return res.status(404).json({ success: false, message: '记录不存在' });
@@ -401,7 +401,7 @@ async function softDeleteIpoProject(req, res) {
 
     const now = new Date();
     await db.execute(
-      `UPDATE ipo_project SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE f_id = ?`,
+      `UPDATE ipo_project SET F_DeleteMark = 1, F_DeleteTime = ?, F_DeleteUserId = ? WHERE F_Id = ?`,
       [now, user.id, fId]
     );
     return res.json({ success: true });

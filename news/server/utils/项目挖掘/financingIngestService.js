@@ -220,7 +220,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
     ]
   );
 
-  const idRows = await db.query(`SELECT id FROM sourcing_financing_event_w_infer WHERE record_hash = ? LIMIT 1`, [
+  const idRows = await db.query(`SELECT F_Id AS id FROM sourcing_financing_event_w_infer WHERE record_hash = ? LIMIT 1`, [
     recordHash,
   ]);
   const wInferId = idRows[0].id;
@@ -243,7 +243,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       region_country, region_province, region_city, region_county,
       funding_status, source_create_time, source_update_time,
       classification_status, classification_source, classification_version, classification_retry_count,
-      delete_mark
+      F_DeleteMark
     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
     ON DUPLICATE KEY UPDATE
       source_record_id = VALUES(source_record_id),
@@ -279,7 +279,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       classification_source = IF(classification_status = 'completed', classification_source, VALUES(classification_source)),
       classification_version = IF(classification_status = 'completed', classification_version, VALUES(classification_version)),
       classification_retry_count = IF(classification_status = 'completed', classification_retry_count, VALUES(classification_retry_count)),
-      updated_at = CURRENT_TIMESTAMP`,
+      F_LastModifyTime = CURRENT_TIMESTAMP`,
     [
       wInferId,
       fundingId,
@@ -321,7 +321,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
 
   try {
     const evRows = await db.query(
-      `SELECT id FROM sourcing_financing_event WHERE event_id = ? AND company_credit_code <=> ? AND event_date = ? LIMIT 1`,
+      `SELECT F_Id AS id FROM sourcing_financing_event WHERE event_id = ? AND company_credit_code <=> ? AND event_date = ? LIMIT 1`,
       [fundingId, credit || null, eventDate]
     );
     if (evRows.length) {
@@ -334,7 +334,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       try {
         const aiRows = await db.query(
           `SELECT ai_product_intro, ai_company_tags_display, ai_company_tags_json
-           FROM sourcing_financing_event WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+           FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
           [eventPk]
         );
         if (aiRows.length && !eventHasCompleteAiContent(aiRows[0])) {
@@ -391,7 +391,7 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
   let logId = null;
 
   const configs = await db.query(
-    `SELECT * FROM news_interface_config WHERE id = ? AND interface_type = ? AND is_active = 1 AND (delete_mark = 0 OR delete_mark IS NULL)`,
+    `SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND interface_type = ? AND is_active = 1 AND (F_DeleteMark = 0 OR F_DeleteMark IS NULL)`,
     [configId, C.INTERFACE_TYPE_SHANGHAI_INTERNATIONAL_FINANCING]
   );
   if (configs.length === 0) {
@@ -507,7 +507,7 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
     const allDaysFailed = dates.length > 0 && errors.length === dates.length;
 
     await db.execute(
-      `UPDATE news_interface_config SET last_sync_time = NOW()${allDaysFailed ? '' : ', last_sync_date = ?'} WHERE id = ?`,
+      `UPDATE news_interface_config SET last_sync_time = NOW()${allDaysFailed ? '' : ', last_sync_date = ?'} WHERE F_Id = ?`,
       allDaysFailed ? [configId] : [endDate, configId]
     );
     const finalDetails = financingExecutionDetails(startDate, endDate, progressLines, {

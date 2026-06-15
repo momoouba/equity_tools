@@ -144,7 +144,7 @@ function buildEnterpriseFanOutWhere(row, financingEventId) {
   const credit = normalizedCreditCode(row.company_credit_code);
   if (credit) {
     return {
-      clause: 'delete_mark = 0 AND TRIM(company_credit_code) = ?',
+      clause: 'F_DeleteMark = 0 AND TRIM(company_credit_code) = ?',
       params: [credit],
     };
   }
@@ -152,12 +152,12 @@ function buildEnterpriseFanOutWhere(row, financingEventId) {
   if (nm) {
     return {
       clause:
-        "delete_mark = 0 AND (company_credit_code IS NULL OR TRIM(company_credit_code) = '') AND TRIM(company_name) = ?",
+        "F_DeleteMark = 0 AND (company_credit_code IS NULL OR TRIM(company_credit_code) = '') AND TRIM(company_name) = ?",
       params: [nm],
     };
   }
   return {
-    clause: 'delete_mark = 0 AND id = ?',
+    clause: 'F_DeleteMark = 0 AND F_Id = ?',
     params: [financingEventId],
   };
 }
@@ -195,25 +195,25 @@ async function findFinancingAiDonorRow({ credit, name, excludeId }) {
         TRIM(IFNULL(ai_company_tags_display,'')) <> ''
         OR (ai_company_tags_json IS NOT NULL AND JSON_LENGTH(ai_company_tags_json) > 0)
       )
-      ORDER BY ai_enrich_at DESC, id DESC
+      ORDER BY ai_enrich_at DESC, F_Id DESC
       LIMIT 1`;
 
   if (creditNorm) {
     const rows = await db.query(
-      `SELECT id, ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+      `SELECT F_Id AS id, ai_product_intro, ai_company_tags_display, ai_company_tags_json,
               ai_enrich_at, ai_enrich_model, ai_enrich_version
        FROM sourcing_financing_event
-       WHERE delete_mark = 0 AND id <> ? AND TRIM(IFNULL(company_credit_code,'')) = ? ${tail}`,
+       WHERE F_DeleteMark = 0 AND F_Id <> ? AND TRIM(IFNULL(company_credit_code,'')) = ? ${tail}`,
       [idEx, creditNorm]
     );
     return rows[0] || null;
   }
   if (nameNorm) {
     const rows = await db.query(
-      `SELECT id, ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+      `SELECT F_Id AS id, ai_product_intro, ai_company_tags_display, ai_company_tags_json,
               ai_enrich_at, ai_enrich_model, ai_enrich_version
        FROM sourcing_financing_event
-       WHERE delete_mark = 0 AND id <> ?
+       WHERE F_DeleteMark = 0 AND F_Id <> ?
          AND (company_credit_code IS NULL OR TRIM(company_credit_code) = '')
          AND TRIM(IFNULL(company_name,'')) = ?
        ${tail}`,
@@ -259,9 +259,9 @@ async function applyFinancingAiReuseFromDonor(donor, centerRow, financingEventId
        ai_enrich_model = ?,
        ai_enrich_version = ?,
        ai_enrich_error = NULL,
-       updated_at = NOW()
+       F_LastModifyTime = NOW()
      WHERE ${fan.clause}
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        AND (
          ai_enrich_status IS NULL
          OR ai_enrich_status IN ('pending','failed','skipped','running')
@@ -278,7 +278,7 @@ async function restoreFanOutAiSuccessWithoutLlm(row, financingEventId) {
     `UPDATE sourcing_financing_event SET
        ai_enrich_status = 'success',
        ai_enrich_error = NULL,
-       updated_at = NOW()
+       F_LastModifyTime = NOW()
      WHERE ${fan.clause}`,
     [...fan.params]
   );
@@ -309,8 +309,8 @@ async function markFinancingAiEnrichLogSuccess({
        result_product_intro = ?,
        result_company_tags_display = ?,
        ${searchMetaSqlAssignments()},
-       updated_at = NOW()
-     WHERE id = ?`,
+       F_LastModifyTime = NOW()
+     WHERE F_Id = ?`,
     [
       duration,
       llmModelConfigId != null ? llmModelConfigId : null,
@@ -340,12 +340,12 @@ async function markFinancingAiEnrichFailed({
   try {
     const fanFail = row
       ? buildEnterpriseFanOutWhere(row, financingEventId)
-      : { clause: 'delete_mark = 0 AND id = ?', params: [financingEventId] };
+      : { clause: 'F_DeleteMark = 0 AND F_Id = ?', params: [financingEventId] };
     await db.execute(
       `UPDATE sourcing_financing_event SET
            ai_enrich_status = 'failed',
            ai_enrich_error = ?,
-           updated_at = NOW()
+           F_LastModifyTime = NOW()
          WHERE ${fanFail.clause}`,
       [short, ...fanFail.params]
     );
@@ -363,8 +363,8 @@ async function markFinancingAiEnrichFailed({
            prompt_version = ?,
            ai_enrich_version = ?,
            error_message = ?,
-           updated_at = NOW()
-         WHERE id = ?`,
+           F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
       [
         duration,
         llmModelConfigId,
@@ -419,7 +419,7 @@ async function persistFinancingAiLlmSuccess({
          ai_enrich_model = ?,
          ai_enrich_version = ?,
          ai_enrich_error = NULL,
-         updated_at = NOW()
+         F_LastModifyTime = NOW()
        WHERE ${fan.clause}`,
     [
       productIntroStored || null,
@@ -447,8 +447,8 @@ async function persistFinancingAiLlmSuccess({
          result_product_intro = ?,
          result_company_tags_display = ?,
          ${searchMetaSqlAssignments()},
-         updated_at = NOW()
-       WHERE id = ?`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
     [
       duration,
       llmModelConfigId,
@@ -489,9 +489,9 @@ async function reuseFinancingAiForEventId(eventDbId) {
   if (!Number.isFinite(idNum) || idNum <= 0) return false;
 
   const ev = await db.query(
-    `SELECT id, company_name, company_credit_code, ai_enrich_status, ai_product_intro,
+    `SELECT F_Id AS id, company_name, company_credit_code, ai_enrich_status, ai_product_intro,
             ai_company_tags_display, ai_company_tags_json
-     FROM sourcing_financing_event WHERE id = ? AND delete_mark = 0 LIMIT 1`,
+     FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
     [idNum]
   );
   if (!ev.length) return false;
@@ -843,10 +843,10 @@ function stripProductIntroMetaAttribution(text) {
 
 async function loadActivePromptMeta() {
   const rows = await db.query(
-    `SELECT id, ai_model_config_id FROM ai_prompt_config
+    `SELECT F_Id, ai_model_config_id FROM ai_prompt_config
      WHERE interface_type = ? AND prompt_type = ?
-       AND is_active = 1 AND delete_mark = 0
-     ORDER BY created_at DESC LIMIT 1`,
+       AND is_active = 1 AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime DESC LIMIT 1`,
     [PROMPT_INTERFACE, PROMPT_TYPE]
   );
   return rows[0] || null;
@@ -905,9 +905,9 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
   const idFromPrompt = promptMeta?.ai_model_config_id;
   if (idFromPrompt) {
     const rows = await db.query(
-      `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
+      `SELECT F_Id AS id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
        FROM ai_model_config
-       WHERE id = ? AND is_active = 1 AND delete_mark = 0 LIMIT 1`,
+       WHERE F_Id = ? AND is_active = 1 AND F_DeleteMark = 0 LIMIT 1`,
       [idFromPrompt]
     );
     if (rows.length && rows[0].api_key && rows[0].model_name) {
@@ -932,11 +932,11 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     );
   }
   const fallback = await db.query(
-    `SELECT id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
+    `SELECT F_Id AS id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
      FROM ai_model_config
      WHERE application_type = 'project_sourcing_analysis'
-       AND is_active = 1 AND delete_mark = 0
-     ORDER BY created_at DESC LIMIT 1`
+       AND is_active = 1 AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime DESC LIMIT 1`
   );
   if (fallback.length && fallback[0].api_key && fallback[0].model_name) {
     const r = fallback[0];
@@ -1143,9 +1143,9 @@ async function submitLargeBatchFileFinancingAiEnrich({
       }
 
       const events = await db.query(
-        `SELECT id, event_id, company_name, company_credit_code, project_name, delete_mark,
+        `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
                 ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
-         FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+         FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
         [prep.idNum]
       );
       if (!events.length || Number(events[0].delete_mark) !== 0) {
@@ -1362,7 +1362,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
     const logIds = llmJobs.map((j) => j.logId);
     const ph = logIds.map(() => '?').join(',');
     await db.execute(
-      `UPDATE sourcing_financing_ai_enrich_log SET execution_status = 'running', started_at = NOW(), updated_at = NOW() WHERE id IN (${ph})`,
+      `UPDATE sourcing_financing_ai_enrich_log SET execution_status = 'running', started_at = NOW(), F_LastModifyTime = NOW() WHERE F_Id IN (${ph})`,
       logIds
     );
 
@@ -1386,9 +1386,9 @@ async function submitLargeBatchFileFinancingAiEnrich({
     for (const j of llmJobs) {
       try {
         const rows = await db.query(
-          `SELECT id, company_name, company_credit_code, project_name, delete_mark,
+          `SELECT F_Id AS id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
                   ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
-           FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+           FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
           [j.financingEventId]
         );
         const row = rows[0] || j.row;
@@ -1628,9 +1628,9 @@ async function pollAndApplyLargeBatchFileFinancingAiEnrich({
     for (const j of llmJobs) {
       try {
         const rows = await db.query(
-          `SELECT id, company_name, company_credit_code, project_name, delete_mark,
+          `SELECT F_Id AS id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
                   ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
-           FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+           FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
           [j.financingEventId]
         );
         const row = rows[0] || j.row;
@@ -1842,15 +1842,15 @@ async function runFinancingAiEnrichTask({
   try {
     await db.execute(
       `UPDATE sourcing_financing_ai_enrich_log
-       SET execution_status = 'running', started_at = NOW(), updated_at = NOW()
-       WHERE id = ?`,
+       SET execution_status = 'running', started_at = NOW(), F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [logId]
     );
 
     const events = await db.query(
-      `SELECT id, event_id, company_name, company_credit_code, project_name, delete_mark,
+      `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
               ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
-       FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+       FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
       [financingEventId]
     );
     if (!events.length || Number(events[0].delete_mark) !== 0) {
@@ -1996,7 +1996,7 @@ async function prepareFinancingAiEnrichJob({ eventId, triggerType, triggeredByUs
   }
 
   const ev = await db.query(
-    `SELECT id, event_id, company_name, company_credit_code, delete_mark FROM sourcing_financing_event WHERE id = ? LIMIT 1`,
+    `SELECT F_Id AS id, event_id, company_name, company_credit_code, F_DeleteMark AS delete_mark FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
     [idNum]
   );
   if (!ev.length || Number(ev[0].delete_mark) !== 0) {
@@ -2008,8 +2008,8 @@ async function prepareFinancingAiEnrichJob({ eventId, triggerType, triggeredByUs
 
   if (credit) {
     const busyEnt = await db.query(
-      `SELECT l.id FROM sourcing_financing_ai_enrich_log l
-       INNER JOIN sourcing_financing_event e ON e.id = l.financing_event_id
+      `SELECT l.F_Id FROM sourcing_financing_ai_enrich_log l
+       INNER JOIN sourcing_financing_event e ON e.F_Id = l.financing_event_id
        WHERE l.execution_status IN ('pending','running')
          AND TIMESTAMPDIFF(MINUTE, l.triggered_at, NOW()) < 10
          AND TRIM(IFNULL(e.company_credit_code,'')) <> ''
@@ -2025,8 +2025,8 @@ async function prepareFinancingAiEnrichJob({ eventId, triggerType, triggeredByUs
     }
   } else if (nameNorm) {
     const busyName = await db.query(
-      `SELECT l.id FROM sourcing_financing_ai_enrich_log l
-       INNER JOIN sourcing_financing_event e ON e.id = l.financing_event_id
+      `SELECT l.F_Id FROM sourcing_financing_ai_enrich_log l
+       INNER JOIN sourcing_financing_event e ON e.F_Id = l.financing_event_id
        WHERE l.execution_status IN ('pending','running')
          AND TIMESTAMPDIFF(MINUTE, l.triggered_at, NOW()) < 10
          AND (e.company_credit_code IS NULL OR TRIM(e.company_credit_code) = '')
@@ -2043,9 +2043,9 @@ async function prepareFinancingAiEnrichJob({ eventId, triggerType, triggeredByUs
   }
 
   const dup = await db.query(
-    `SELECT id, triggered_at FROM sourcing_financing_ai_enrich_log
+    `SELECT F_Id AS id, triggered_at FROM sourcing_financing_ai_enrich_log
      WHERE financing_event_id = ? AND execution_status IN ('pending','running')
-     ORDER BY id DESC LIMIT 1`,
+     ORDER BY F_Id DESC LIMIT 1`,
     [idNum]
   );
   if (dup.length) {
@@ -2081,7 +2081,7 @@ async function prepareFinancingAiEnrichJob({ eventId, triggerType, triggeredByUs
 
   const fanRun = buildEnterpriseFanOutWhere(ev[0], idNum);
   await db.execute(
-    `UPDATE sourcing_financing_event SET ai_enrich_status = 'running', ai_enrich_error = NULL, updated_at = NOW() WHERE ${fanRun.clause}`,
+    `UPDATE sourcing_financing_event SET ai_enrich_status = 'running', ai_enrich_error = NULL, F_LastModifyTime = NOW() WHERE ${fanRun.clause}`,
     [...fanRun.params]
   );
 
@@ -2253,9 +2253,9 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
 
   const failedClause = onlyFailed ? ` AND ai_enrich_status = 'failed' ` : '';
   const rows = await db.query(
-    `SELECT id, company_name, company_credit_code FROM sourcing_financing_event
-     WHERE delete_mark = 0 AND event_date >= ? AND event_date <= ? ${failedClause}
-     ORDER BY event_date DESC, id DESC`,
+    `SELECT F_Id AS id, company_name, company_credit_code FROM sourcing_financing_event
+     WHERE F_DeleteMark = 0 AND event_date >= ? AND event_date <= ? ${failedClause}
+     ORDER BY event_date DESC, F_Id DESC`,
     [df, dt]
   );
   const totalInRange = rows.length;

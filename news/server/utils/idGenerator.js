@@ -54,8 +54,8 @@ async function generateId(tableName, connection) {
       throw new Error(`无效的表名: ${tableName}`);
     }
 
-    // 业绩看板等表主键为 F_Id，其余表为 id
-    const idColumn = (tableName.startsWith('b_') || tableName === 'b_sql_change_log') ? 'F_Id' : 'id';
+    // 所有表的主键已统一为 F_Id
+    const idColumn = 'F_Id';
 
     // 简化逻辑：直接查询表的最大ID；传入 connection 时用其查询，可看到本事务未提交行，避免重复
     let result = [];

@@ -35,14 +35,14 @@ async function appendExecutionLogProgress(logId, message, options = {}) {
   if (!logId || !message) return;
   const line = `[${new Date().toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}] ${String(message)}`;
   const maxBytes = Math.max(4000, Math.min(200000, Number(options.maxBytes || 120000)));
-  const rows = await db.query(`SELECT progress_log FROM listing_sync_execution_log WHERE id = ? LIMIT 1`, [logId]);
+  const rows = await db.query(`SELECT progress_log FROM listing_sync_execution_log WHERE F_Id = ? LIMIT 1`, [logId]);
   const oldLog = String(rows[0]?.progress_log || '');
   const next = oldLog ? `${oldLog}\n${line}` : line;
   const truncated = truncateExecutionLogMessage(next, maxBytes);
   await db.execute(
     `UPDATE listing_sync_execution_log
-        SET progress_log = ?, heartbeat_at = NOW(), updated_at = NOW()
-      WHERE id = ?`,
+        SET progress_log = ?, heartbeat_at = NOW(), F_LastModifyTime = NOW()
+      WHERE F_Id = ?`,
     [truncated, logId]
   );
 }
@@ -60,7 +60,7 @@ async function finishExecutionLog(logId, payload = {}) {
             error_message = ?,
             heartbeat_at = NOW(),
             finished_at = NOW()
-      WHERE id = ?`,
+      WHERE F_Id = ?`,
     [
       Number(payload.retryCount || 0),
       Number(payload.dedupHits || 0),

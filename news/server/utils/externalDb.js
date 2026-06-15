@@ -8,7 +8,7 @@ const externalPools = new Map();
 /**
  * 创建外部数据库连接池
  * @param {Object} config - 数据库配置
- * @param {string} config.id - 配置ID
+ * @param {string} config.F_Id - 配置ID
  * @param {string} config.db_type - 数据库类型：mysql/postgresql
  * @param {string} config.host - 数据库主机
  * @param {number} config.port - 数据库端口
@@ -40,7 +40,7 @@ async function createExternalPool(config) {
       client.release();
       
       // 将连接池保存到缓存中
-      externalPools.set(config.id, pool);
+      externalPools.set(config.F_Id, pool);
 
       return pool;
     } else {
@@ -68,12 +68,12 @@ async function createExternalPool(config) {
       connection.release();
       
       // 将连接池保存到缓存中
-      externalPools.set(config.id, pool);
+      externalPools.set(config.F_Id, pool);
 
       return pool;
     }
   } catch (error) {
-    console.error(`创建外部数据库连接池失败 (${config.id}):`, error.message);
+    console.error(`创建外部数据库连接池失败 (${config.F_Id}):`, error.message);
     throw error;
   }
 }
@@ -96,10 +96,10 @@ async function initializeExternalDatabases(configs) {
 
     // 创建新连接
     for (const config of configs) {
-      if (config.is_active === 1 && !config.delete_mark) {
+      if (config.is_active === 1 && !config.F_DeleteMark) {
         try {
           const pool = await createExternalPool(config);
-          externalPools.set(config.id, pool);
+          externalPools.set(config.F_Id, pool);
           console.log(`✓ 外部数据库连接已建立: ${config.name} (${config.host}:${config.port}/${config.database})`);
         } catch (error) {
           console.error(`✗ 外部数据库连接失败: ${config.name}`, error.message);

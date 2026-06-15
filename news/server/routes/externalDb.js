@@ -59,11 +59,11 @@ router.get('/', checkDatabaseConfigPermission('read'), async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(pageSize);
 
     const configs = await db.query(
-      `SELECT id, name, db_type, host, port, user, database, is_active, delete_mark, 
-              created_at, updated_at, created_by, updated_by
+      `SELECT F_Id AS id, name, db_type, host, port, user, database, is_active, F_DeleteMark, 
+              F_CreatorTime, F_LastModifyTime, F_CreatorUserId, F_LastModifyUserId
        FROM external_db_config 
-       WHERE delete_mark = 0
-       ORDER BY created_at DESC
+       WHERE F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [parseInt(pageSize), offset]
     );
@@ -74,7 +74,7 @@ router.get('/', checkDatabaseConfigPermission('read'), async (req, res) => {
       password: '***' // 不返回真实密码
     }));
 
-    const [totalResult] = await db.query('SELECT COUNT(*) as total FROM external_db_config WHERE delete_mark = 0');
+    const [totalResult] = await db.query('SELECT COUNT(*) as total FROM external_db_config WHERE F_DeleteMark = 0');
     const total = totalResult.total || 0;
 
     res.json({
@@ -96,7 +96,7 @@ router.get('/:id', checkDatabaseConfigPermission('read'), async (req, res) => {
     const { id } = req.params;
 
     const configs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0',
+      'SELECT *, F_Id AS id FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -139,7 +139,7 @@ router.post('/', [
 
     // 检查配置名称是否重复
     const existing = await db.query(
-      'SELECT id FROM external_db_config WHERE name = ? AND delete_mark = 0',
+      'SELECT F_Id FROM external_db_config WHERE name = ? AND F_DeleteMark = 0',
       [name]
     );
 
@@ -151,7 +151,7 @@ router.post('/', [
 
     await db.execute(
       `INSERT INTO external_db_config 
-       (id, name, db_type, host, port, user, password, database, is_active, created_by) 
+       (F_Id, name, db_type, host, port, user, password, database, is_active, F_CreatorUserId) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [configId, name, db_type, host, port, user, password, database, is_active ? 1 : 0, req.currentUserId]
     );
@@ -159,7 +159,7 @@ router.post('/', [
     // 如果配置是启用状态，立即初始化连接
     if (is_active) {
       const configs = await db.query(
-        'SELECT * FROM external_db_config WHERE delete_mark = 0 AND is_active = 1'
+        'SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1'
       );
       await initializeExternalDatabases(configs);
     }
@@ -196,7 +196,7 @@ router.put('/:id', [
 
     // 检查配置是否存在
     const existing = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -207,7 +207,7 @@ router.put('/:id', [
     // 如果修改了配置名称，检查是否重复
     if (name && name !== existing[0].name) {
       const duplicate = await db.query(
-        'SELECT id FROM external_db_config WHERE name = ? AND id != ? AND delete_mark = 0',
+        'SELECT F_Id FROM external_db_config WHERE name = ? AND F_Id != ? AND F_DeleteMark = 0',
         [name, id]
       );
 
@@ -254,18 +254,18 @@ router.put('/:id', [
     }
 
     if (updateFields.length > 0) {
-      updateFields.push('updated_by = ?');
+      updateFields.push('F_LastModifyUserId = ?');
       updateValues.push(req.currentUserId);
       updateValues.push(id);
 
       await db.execute(
-        `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE F_Id = ?`,
         updateValues
       );
 
       // 重新初始化所有启用的外部数据库连接
       const configs = await db.query(
-        'SELECT * FROM external_db_config WHERE delete_mark = 0 AND is_active = 1'
+        'SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1'
       );
       await initializeExternalDatabases(configs);
     }
@@ -286,7 +286,7 @@ router.delete('/:id', checkDatabaseConfigPermission('write'), async (req, res) =
     const { id } = req.params;
 
     const existing = await db.query(
-      'SELECT id FROM external_db_config WHERE id = ? AND delete_mark = 0',
+      'SELECT F_Id FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -295,7 +295,7 @@ router.delete('/:id', checkDatabaseConfigPermission('write'), async (req, res) =
     }
 
     await db.execute(
-      'UPDATE external_db_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ?',
+      'UPDATE external_db_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ?',
       [req.currentUserId, id]
     );
 
@@ -318,7 +318,7 @@ router.post('/:id/test', checkDatabaseConfigPermission('write'), async (req, res
     const { id } = req.params;
 
     const configs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 

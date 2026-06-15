@@ -42,7 +42,7 @@ function groupIpoRowsByQccSearchKey(rows) {
   for (const row of rows) {
     const sk = pickQccSearchKey(row);
     if (!sk) continue;
-    const fid = String(row.f_id || '').trim();
+    const fid = String(row.F_Id || '').trim();
     if (!fid) continue;
     if (!map.has(sk)) map.set(sk, { searchKey: sk, fIdSet: new Set() });
     map.get(sk).fIdSet.add(fid);
@@ -59,7 +59,7 @@ async function applyQccIntroToFids(fIds, intro) {
        qcc_company_intro = ?,
        qcc_sync_at = NOW(),
        qcc_sync_error = NULL
-     WHERE f_id IN (${ph}) AND F_DeleteMark = 0`,
+     WHERE F_Id IN (${ph}) AND F_DeleteMark = 0`,
     [intro, ...uniq]
   );
 }
@@ -69,7 +69,7 @@ async function markQccErrorOnFids(fIds, errMsg) {
   const uniq = [...new Set((fIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
   for (const fid of uniq) {
     try {
-      await db.execute(`UPDATE ipo_project SET qcc_sync_error = ? WHERE f_id = ? AND F_DeleteMark = 0`, [
+      await db.execute(`UPDATE ipo_project SET qcc_sync_error = ? WHERE F_Id = ? AND F_DeleteMark = 0`, [
         short,
         fid,
       ]);
@@ -81,7 +81,7 @@ async function markQccErrorOnFids(fIds, errMsg) {
 
 /**
  * 单条：拉取企查查企业简介并写入 ipo_project（仅竞品分析 data_app_id）。
- * @param {string|number} fId ipo_project.f_id
+ * @param {string|number} fId ipo_project.F_Id
  */
 async function syncIpoProjectQccCompanyBrief(fId) {
   const id = String(fId || '').trim();
@@ -91,8 +91,8 @@ async function syncIpoProjectQccCompanyBrief(fId) {
     throw e;
   }
   const rows = await db.query(
-    `SELECT f_id, company, unified_credit_code, data_app_id, F_DeleteMark
-     FROM ipo_project WHERE f_id = ? LIMIT 1`,
+    `SELECT F_Id, company, unified_credit_code, data_app_id, F_DeleteMark
+     FROM ipo_project WHERE F_Id = ? LIMIT 1`,
     [id]
   );
   if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
@@ -156,8 +156,8 @@ async function batchSyncIpoProjectQccCompanyBrief(fIds, opts = {}) {
 
   const ph = ids.map(() => '?').join(',');
   const rows = await db.query(
-    `SELECT f_id, company, unified_credit_code, data_app_id, F_DeleteMark
-     FROM ipo_project WHERE f_id IN (${ph})`,
+    `SELECT F_Id, company, unified_credit_code, data_app_id, F_DeleteMark
+     FROM ipo_project WHERE F_Id IN (${ph})`,
     ids
   );
 
@@ -229,7 +229,7 @@ async function syncAllIpoProjectQccCompanyBriefFiltered({ psUser, keyword, creat
     creatorUserId: creatorUserId != null ? String(creatorUserId) : '',
   });
   const rows = await db.query(
-    `SELECT p.f_id, p.company, p.unified_credit_code, p.data_app_id, p.F_DeleteMark
+    `SELECT p.F_Id, p.company, p.unified_credit_code, p.data_app_id, p.F_DeleteMark
      FROM ipo_project p
      ${whereSql}
      ORDER BY p.F_CreatorTime DESC
@@ -313,7 +313,7 @@ async function runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId, 
   }
   const g = Math.max(0, Math.min(5000, parseInt(gapMs ?? '400', 10) || 400));
   const rows = await db.query(
-    `SELECT f_id, company, unified_credit_code, data_app_id, F_DeleteMark
+    `SELECT F_Id, company, unified_credit_code, data_app_id, F_DeleteMark
      FROM ipo_project
      WHERE F_CreatorUserId = ? AND data_app_id <=> ? AND F_DeleteMark = 0`,
     [uid, appId]
@@ -324,7 +324,7 @@ async function runPostSqlSyncQccBriefsForProjectSourcingUser({ userId, psAppId, 
   for (const r of rows) {
     if (!(await isIpoProjectCompetitorAnalysisApp(r))) continue;
     totalRows += 1;
-    const fid = String(r.f_id || '').trim();
+    const fid = String(r.F_Id || '').trim();
     if (!fid) continue;
     const credit = normalizeCreditKey(r.unified_credit_code);
     if (!isValidUnifiedCreditForQccSync(credit)) {

@@ -21,7 +21,7 @@ async function getApplicationIdByAppName(appName) {
     return cached === false ? null : cached;
   }
   const rows = await db.query(
-    `SELECT id FROM applications
+    `SELECT F_Id AS id FROM applications
      WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
            CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
      LIMIT 1`,

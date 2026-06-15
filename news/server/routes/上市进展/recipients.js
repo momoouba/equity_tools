@@ -13,6 +13,19 @@ const {
 const { executeListingEmailDigest } = require('../../utils/上市进展/listingEmailDigest');
 const { updateScheduledTasks } = require('../../utils/scheduledEmailTasks');
 
+/** Column list with aliases for recipient_management queries returned to the frontend */
+const RM_SELECT_COLS = `rm.F_Id AS id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject,
+  rm.cron_expression, rm.send_frequency, rm.send_time, rm.is_active,
+  rm.qichacha_category_codes, rm.entity_type, rm.listing_mail_types,
+  rm.F_CreatorTime AS created_at, rm.F_LastModifyTime AS updated_at,
+  rm.F_DeleteMark AS delete_mark, rm.F_DeleteTime AS delete_time, rm.F_DeleteUserId AS delete_user_id`;
+
+const RM_SELECT_COLS_NO_ALIAS = `F_Id AS id, user_id, app_id, recipient_email, email_subject,
+  cron_expression, send_frequency, send_time, is_active,
+  qichacha_category_codes, entity_type, listing_mail_types,
+  F_CreatorTime AS created_at, F_LastModifyTime AS updated_at,
+  F_DeleteMark AS delete_mark, F_DeleteTime AS delete_time, F_DeleteUserId AS delete_user_id`;
+
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
 }
@@ -23,7 +36,7 @@ function forbidden(res) {
 
 async function getListingAppId() {
   const rows = await db.query(
-    `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+    `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
     ['上市进展']
   );
   return rows.length ? rows[0].id : null;
@@ -31,8 +44,8 @@ async function getListingAppId() {
 
 async function getListingEmailConfigRow() {
   const rows = await db.query(
-    `SELECT ec.id FROM email_config ec
-     INNER JOIN applications a ON ec.app_id = a.id
+    `SELECT ec.F_Id AS id FROM email_config ec
+     INNER JOIN applications a ON ec.app_id = a.F_Id
      WHERE BINARY a.app_name = BINARY ?
      LIMIT 1`,
     ['上市进展']
@@ -77,10 +90,10 @@ async function listRecipients(req, res) {
     }
 
     let sql = `
-      SELECT rm.*, u.account AS user_account
+      SELECT ${RM_SELECT_COLS}, u.account AS user_account
       FROM recipient_management rm
-      INNER JOIN users u ON rm.user_id = u.id
-      WHERE rm.app_id = ? AND rm.delete_mark = 0
+      INNER JOIN users u ON rm.user_id = u.F_Id
+      WHERE rm.app_id = ? AND rm.F_DeleteMark = 0
     `;
     const params = [listingAppId];
 
@@ -89,7 +102,7 @@ async function listRecipients(req, res) {
       params.push(user.id);
     }
 
-    sql += ` ORDER BY rm.created_at DESC`;
+    sql += ` ORDER BY rm.F_CreatorTime DESC`;
 
     const rows = await db.query(sql, params);
     return res.json({ success: true, data: rows });
@@ -133,7 +146,7 @@ async function createRecipient(req, res) {
 
     await db.execute(
       `INSERT INTO recipient_management (
-        id, user_id, app_id, recipient_email, email_subject, cron_expression,
+        F_Id, user_id, app_id, recipient_email, email_subject, cron_expression,
         send_frequency, send_time, is_active, qichacha_category_codes, entity_type, listing_mail_types
       ) VALUES (?, ?, ?, ?, ?, ?, 'daily', NULL, ?, NULL, NULL, ?)`,
       [
@@ -148,7 +161,7 @@ async function createRecipient(req, res) {
       ]
     );
 
-    const row = await db.query(`SELECT * FROM recipient_management WHERE id = ?`, [recipientId]);
+    const row = await db.query(`SELECT ${RM_SELECT_COLS_NO_ALIAS} FROM recipient_management WHERE F_Id = ?`, [recipientId]);
     try {
       await updateScheduledTasks();
     } catch (schedErr) {
@@ -172,7 +185,7 @@ async function updateRecipient(req, res) {
     const id = req.params.id;
 
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
+      `SELECT * FROM recipient_management WHERE F_Id = ? AND app_id = ? AND F_DeleteMark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {
@@ -196,7 +209,7 @@ async function updateRecipient(req, res) {
     await db.execute(
       `UPDATE recipient_management SET
         recipient_email = ?, email_subject = ?, cron_expression = ?, is_active = ?, listing_mail_types = ?
-       WHERE id = ?`,
+       WHERE F_Id = ?`,
       [
         body.recipient_email ?? existing[0].recipient_email,
         body.email_subject ?? existing[0].email_subject,
@@ -207,7 +220,7 @@ async function updateRecipient(req, res) {
       ]
     );
 
-    const row = await db.query(`SELECT * FROM recipient_management WHERE id = ?`, [id]);
+    const row = await db.query(`SELECT ${RM_SELECT_COLS_NO_ALIAS} FROM recipient_management WHERE F_Id = ?`, [id]);
     try {
       await updateScheduledTasks();
     } catch (schedErr) {
@@ -231,7 +244,7 @@ async function deleteRecipient(req, res) {
     const id = req.params.id;
 
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
+      `SELECT * FROM recipient_management WHERE F_Id = ? AND app_id = ? AND F_DeleteMark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {
@@ -242,7 +255,7 @@ async function deleteRecipient(req, res) {
     }
 
     await db.execute(
-      `UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0`,
+      `UPDATE recipient_management SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0`,
       [user.id, id]
     );
     try {
@@ -272,7 +285,7 @@ async function sendTest(req, res) {
 
     const id = req.params.id;
     const existing = await db.query(
-      `SELECT * FROM recipient_management WHERE id = ? AND app_id = ? AND delete_mark = 0`,
+      `SELECT * FROM recipient_management WHERE F_Id = ? AND app_id = ? AND F_DeleteMark = 0`,
       [id, listingAppId]
     );
     if (!existing.length) {

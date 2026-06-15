@@ -29,7 +29,7 @@ async function softDeleteLv3ForLv2Ids(lv2Ids) {
   if (!lv2Ids || !lv2Ids.length) return;
   const placeholders = lv2Ids.map(() => '?').join(',');
   await db.execute(
-    `UPDATE sourcing_track_lv3 SET delete_mark = 1 WHERE lv2_id IN (${placeholders}) AND delete_mark = 0`,
+    `UPDATE sourcing_track_lv3 SET F_DeleteMark = 1 WHERE lv2_id IN (${placeholders}) AND F_DeleteMark = 0`,
     lv2Ids
   );
 }
@@ -38,17 +38,17 @@ function registerTrackRoutes(router) {
   router.get('/tracks/tree', requireProjectSourcingAccess, async (req, res) => {
     try {
       const tracks = await db.query(
-        `SELECT id, name, sort_order FROM sourcing_track WHERE delete_mark = 0 ORDER BY sort_order ASC, id ASC`
+        `SELECT F_Id AS id, name, sort_order FROM sourcing_track WHERE F_DeleteMark = 0 ORDER BY sort_order ASC, F_Id ASC`
       );
       const lv1Rows = await db.query(
-        `SELECT id, track_id, name, sort_order FROM sourcing_track_lv1 WHERE delete_mark = 0 ORDER BY sort_order ASC, id ASC`
+        `SELECT F_Id AS id, track_id, name, sort_order FROM sourcing_track_lv1 WHERE F_DeleteMark = 0 ORDER BY sort_order ASC, F_Id ASC`
       );
       const lv2Rows = await db.query(
-        `SELECT id, lv1_id, name, sort_order FROM sourcing_track_lv2 WHERE delete_mark = 0 ORDER BY sort_order ASC, id ASC`
+        `SELECT F_Id AS id, lv1_id, name, sort_order FROM sourcing_track_lv2 WHERE F_DeleteMark = 0 ORDER BY sort_order ASC, F_Id ASC`
       );
       const lv3Rows = await db.query(
-        `SELECT id, lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority
-         FROM sourcing_track_lv3 WHERE delete_mark = 0 ORDER BY sort_order ASC, id ASC`
+        `SELECT F_Id AS id, lv2_id, name, sort_order, match_industry_lv1, match_industry_lv2, match_keywords, match_priority
+         FROM sourcing_track_lv3 WHERE F_DeleteMark = 0 ORDER BY sort_order ASC, F_Id ASC`
       );
 
       const lv3ByLv2 = new Map();
@@ -221,7 +221,7 @@ function registerTrackRoutes(router) {
       if (!lv2Id || !nm) {
         return res.status(400).json({ success: false, message: 'lv2_id、name 不能为空' });
       }
-      const check = await db.query(`SELECT id FROM sourcing_track_lv2 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [lv2Id]);
+      const check = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv2 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [lv2Id]);
       if (!check.length) {
         return res.status(400).json({ success: false, message: '二级分类不存在' });
       }
@@ -259,7 +259,7 @@ function registerTrackRoutes(router) {
         match_priority,
       } = req.body || {};
 
-      const existing = await db.query(`SELECT id, name, lv2_id FROM sourcing_track_lv3 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [id]);
+      const existing = await db.query(`SELECT F_Id AS id, name, lv2_id FROM sourcing_track_lv3 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [id]);
       if (!existing.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
       const fields = [];
@@ -268,7 +268,7 @@ function registerTrackRoutes(router) {
       if (lv2_id !== undefined) {
         const nid = parseInt(lv2_id, 10);
         if (!nid) return res.status(400).json({ success: false, message: '无效的 lv2_id' });
-        const chk = await db.query(`SELECT id FROM sourcing_track_lv2 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [nid]);
+        const chk = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv2 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [nid]);
         if (!chk.length) return res.status(400).json({ success: false, message: '目标二级分类不存在' });
         targetLv2Id = nid;
         fields.push('lv2_id = ?');
@@ -279,7 +279,7 @@ function registerTrackRoutes(router) {
         if (!nm) return res.status(400).json({ success: false, message: 'name 不能为空' });
         const nmFinal = nm;
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetLv2Id, nmFinal, id]
         );
         if (dup.length) {
@@ -289,7 +289,7 @@ function registerTrackRoutes(router) {
         params.push(nmFinal);
       } else if (lv2_id !== undefined) {
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv3 WHERE lv2_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetLv2Id, existing[0].name, id]
         );
         if (dup.length) {
@@ -320,7 +320,7 @@ function registerTrackRoutes(router) {
         return res.json({ success: true });
       }
       params.push(id);
-      await db.execute(`UPDATE sourcing_track_lv3 SET ${fields.join(', ')} WHERE id = ?`, params);
+      await db.execute(`UPDATE sourcing_track_lv3 SET ${fields.join(', ')} WHERE F_Id = ?`, params);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv3 PUT]', e);
@@ -332,7 +332,7 @@ function registerTrackRoutes(router) {
     try {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
-      await db.execute(`UPDATE sourcing_track_lv3 SET delete_mark = 1 WHERE id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track_lv3 SET F_DeleteMark = 1 WHERE F_Id = ?`, [id]);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv3 DELETE]', e);
@@ -348,7 +348,7 @@ function registerTrackRoutes(router) {
       if (!lv1Id || !nm) {
         return res.status(400).json({ success: false, message: 'lv1_id、name 不能为空' });
       }
-      const check = await db.query(`SELECT id FROM sourcing_track_lv1 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [lv1Id]);
+      const check = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv1 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [lv1Id]);
       if (!check.length) {
         return res.status(400).json({ success: false, message: '一级分类不存在' });
       }
@@ -370,7 +370,7 @@ function registerTrackRoutes(router) {
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
       const { name, sort_order, lv1_id } = req.body || {};
 
-      const existing = await db.query(`SELECT id, name, lv1_id FROM sourcing_track_lv2 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [id]);
+      const existing = await db.query(`SELECT F_Id AS id, name, lv1_id FROM sourcing_track_lv2 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [id]);
       if (!existing.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
       const fields = [];
@@ -379,7 +379,7 @@ function registerTrackRoutes(router) {
       if (lv1_id !== undefined) {
         const nid = parseInt(lv1_id, 10);
         if (!nid) return res.status(400).json({ success: false, message: '无效的 lv1_id' });
-        const chk = await db.query(`SELECT id FROM sourcing_track_lv1 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [nid]);
+        const chk = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv1 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [nid]);
         if (!chk.length) return res.status(400).json({ success: false, message: '目标一级分类不存在' });
         targetLv1Id = nid;
         fields.push('lv1_id = ?');
@@ -389,7 +389,7 @@ function registerTrackRoutes(router) {
         const nm = trimStr(name, 100);
         if (!nm) return res.status(400).json({ success: false, message: 'name 不能为空' });
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetLv1Id, nm, id]
         );
         if (dup.length) {
@@ -399,7 +399,7 @@ function registerTrackRoutes(router) {
         params.push(nm);
       } else if (lv1_id !== undefined) {
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetLv1Id, existing[0].name, id]
         );
         if (dup.length) {
@@ -414,7 +414,7 @@ function registerTrackRoutes(router) {
         return res.json({ success: true });
       }
       params.push(id);
-      await db.execute(`UPDATE sourcing_track_lv2 SET ${fields.join(', ')} WHERE id = ?`, params);
+      await db.execute(`UPDATE sourcing_track_lv2 SET ${fields.join(', ')} WHERE F_Id = ?`, params);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv2 PUT]', e);
@@ -427,7 +427,7 @@ function registerTrackRoutes(router) {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
       await softDeleteLv3ForLv2Ids([id]);
-      await db.execute(`UPDATE sourcing_track_lv2 SET delete_mark = 1 WHERE id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track_lv2 SET F_DeleteMark = 1 WHERE F_Id = ?`, [id]);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv2 DELETE]', e);
@@ -443,7 +443,7 @@ function registerTrackRoutes(router) {
       if (!tid || !nm) {
         return res.status(400).json({ success: false, message: 'track_id、name 不能为空' });
       }
-      const check = await db.query(`SELECT id FROM sourcing_track WHERE id = ? AND delete_mark = 0 LIMIT 1`, [tid]);
+      const check = await db.query(`SELECT F_Id AS id FROM sourcing_track WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [tid]);
       if (!check.length) {
         return res.status(400).json({ success: false, message: '赛道不存在' });
       }
@@ -464,7 +464,7 @@ function registerTrackRoutes(router) {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
       const { name, sort_order, track_id } = req.body || {};
-      const existing = await db.query(`SELECT id, name, track_id FROM sourcing_track_lv1 WHERE id = ? AND delete_mark = 0 LIMIT 1`, [id]);
+      const existing = await db.query(`SELECT F_Id AS id, name, track_id FROM sourcing_track_lv1 WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [id]);
       if (!existing.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
       const fields = [];
@@ -473,7 +473,7 @@ function registerTrackRoutes(router) {
       if (track_id !== undefined) {
         const nid = parseInt(track_id, 10);
         if (!nid) return res.status(400).json({ success: false, message: '无效的 track_id' });
-        const chk = await db.query(`SELECT id FROM sourcing_track WHERE id = ? AND delete_mark = 0 LIMIT 1`, [nid]);
+        const chk = await db.query(`SELECT F_Id AS id FROM sourcing_track WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [nid]);
         if (!chk.length) return res.status(400).json({ success: false, message: '目标赛道不存在' });
         targetTrackId = nid;
         fields.push('track_id = ?');
@@ -483,7 +483,7 @@ function registerTrackRoutes(router) {
         const nm = trimStr(name, 100);
         if (!nm) return res.status(400).json({ success: false, message: 'name 不能为空' });
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetTrackId, nm, id]
         );
         if (dup.length) {
@@ -493,7 +493,7 @@ function registerTrackRoutes(router) {
         params.push(nm);
       } else if (track_id !== undefined) {
         const dup = await db.query(
-          `SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND delete_mark = 0 AND id != ? LIMIT 1`,
+          `SELECT F_Id AS id FROM sourcing_track_lv1 WHERE track_id = ? AND name = ? AND F_DeleteMark = 0 AND F_Id != ? LIMIT 1`,
           [targetTrackId, existing[0].name, id]
         );
         if (dup.length) {
@@ -506,7 +506,7 @@ function registerTrackRoutes(router) {
       }
       if (!fields.length) return res.json({ success: true });
       params.push(id);
-      await db.execute(`UPDATE sourcing_track_lv1 SET ${fields.join(', ')} WHERE id = ?`, params);
+      await db.execute(`UPDATE sourcing_track_lv1 SET ${fields.join(', ')} WHERE F_Id = ?`, params);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv1 PUT]', e);
@@ -518,11 +518,11 @@ function registerTrackRoutes(router) {
     try {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
-      const l2rows = await db.query(`SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND delete_mark = 0`, [id]);
+      const l2rows = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND F_DeleteMark = 0`, [id]);
       const l2ids = l2rows.map((r) => r.id);
       await softDeleteLv3ForLv2Ids(l2ids);
-      await db.execute(`UPDATE sourcing_track_lv2 SET delete_mark = 1 WHERE lv1_id = ?`, [id]);
-      await db.execute(`UPDATE sourcing_track_lv1 SET delete_mark = 1 WHERE id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track_lv2 SET F_DeleteMark = 1 WHERE lv1_id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track_lv1 SET F_DeleteMark = 1 WHERE F_Id = ?`, [id]);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks/lv1 DELETE]', e);
@@ -551,7 +551,7 @@ function registerTrackRoutes(router) {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
       const { name, sort_order } = req.body || {};
-      const existing = await db.query(`SELECT id FROM sourcing_track WHERE id = ? AND delete_mark = 0 LIMIT 1`, [id]);
+      const existing = await db.query(`SELECT F_Id AS id FROM sourcing_track WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [id]);
       if (!existing.length) return res.status(404).json({ success: false, message: '记录不存在' });
 
       const fields = [];
@@ -568,7 +568,7 @@ function registerTrackRoutes(router) {
       }
       if (!fields.length) return res.json({ success: true });
       params.push(id);
-      await db.execute(`UPDATE sourcing_track SET ${fields.join(', ')} WHERE id = ?`, params);
+      await db.execute(`UPDATE sourcing_track SET ${fields.join(', ')} WHERE F_Id = ?`, params);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks PUT]', e);
@@ -581,16 +581,16 @@ function registerTrackRoutes(router) {
       const id = parseInt(req.params.id, 10);
       if (!id) return res.status(400).json({ success: false, message: '无效 id' });
 
-      const lv1Rows = await db.query(`SELECT id FROM sourcing_track_lv1 WHERE track_id = ? AND delete_mark = 0`, [id]);
+      const lv1Rows = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv1 WHERE track_id = ? AND F_DeleteMark = 0`, [id]);
       for (let i = 0; i < lv1Rows.length; i++) {
         const lid = lv1Rows[i].id;
-        const l2rows = await db.query(`SELECT id FROM sourcing_track_lv2 WHERE lv1_id = ? AND delete_mark = 0`, [lid]);
+        const l2rows = await db.query(`SELECT F_Id AS id FROM sourcing_track_lv2 WHERE lv1_id = ? AND F_DeleteMark = 0`, [lid]);
         const l2ids = l2rows.map((r) => r.id);
         await softDeleteLv3ForLv2Ids(l2ids);
-        await db.execute(`UPDATE sourcing_track_lv2 SET delete_mark = 1 WHERE lv1_id = ? AND delete_mark = 0`, [lid]);
+        await db.execute(`UPDATE sourcing_track_lv2 SET F_DeleteMark = 1 WHERE lv1_id = ? AND F_DeleteMark = 0`, [lid]);
       }
-      await db.execute(`UPDATE sourcing_track_lv1 SET delete_mark = 1 WHERE track_id = ?`, [id]);
-      await db.execute(`UPDATE sourcing_track SET delete_mark = 1 WHERE id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track_lv1 SET F_DeleteMark = 1 WHERE track_id = ?`, [id]);
+      await db.execute(`UPDATE sourcing_track SET F_DeleteMark = 1 WHERE F_Id = ?`, [id]);
       res.json({ success: true });
     } catch (e) {
       console.error('[project-sourcing/tracks DELETE]', e);

@@ -99,7 +99,7 @@ async function ensureExternalPool(configId) {
   const pool = getExternalPool(configId);
   if (pool) return;
   const configs = await db.query(
-    'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
+    'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
     [configId]
   );
   if (!configs.length) throw new Error('数据库配置不存在或未启用');
@@ -148,13 +148,13 @@ async function insertIpoProjectAiSnapshotBeforeDelete(conn, { batchId, userId, t
            p.qcc_company_intro
     FROM ipo_project p
     INNER JOIN (
-      SELECT ipo_sub.F_CreatorUserId, ${normSub} AS ucc, MAX(ipo_sub.f_id) AS mid
+      SELECT ipo_sub.F_CreatorUserId, ${normSub} AS ucc, MAX(ipo_sub.F_Id) AS mid
       FROM ipo_project ipo_sub
       WHERE ${scopeWhere}
         AND ipo_sub.unified_credit_code IS NOT NULL
         AND TRIM(IFNULL(ipo_sub.unified_credit_code,'')) != ''
       GROUP BY ipo_sub.F_CreatorUserId, ${normSub}
-    ) t ON p.f_id = t.mid
+    ) t ON p.F_Id = t.mid
   `;
   const params = [batchId, targetDataAppId, ...scopeParams];
   const [res] = await conn.query(sql, params);
@@ -177,7 +177,7 @@ async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId
               TRIM(IFNULL(sub, '')) AS sub_k,
               TRIM(company) AS company_k,
               TRIM(IFNULL(project_name, '')) AS project_name_k,
-              MAX(f_id) AS new_f_id
+              MAX(F_Id) AS new_f_id
        FROM ipo_project
        WHERE F_DeleteMark = 0
          AND F_CreatorUserId = ?
@@ -188,7 +188,7 @@ async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId
         AND TRIM(IFNULL(ipp.sub, '')) = pk.sub_k
         AND TRIM(ipp.company) = pk.company_k
         AND TRIM(IFNULL(ipp.project_name, '')) = pk.project_name_k
-     INNER JOIN ipo_project np ON np.f_id = pk.new_f_id
+     INNER JOIN ipo_project np ON np.F_Id = pk.new_f_id
      SET ipp.ipo_project_f_id = pk.new_f_id,
          ipp.fund = np.fund,
          ipp.sub = np.sub,
@@ -210,7 +210,7 @@ async function relinkIpoProjectProgressAfterSqlSync(conn, { userId, listingAppId
        AND ipp.ipo_project_f_id IS NOT NULL
        AND NOT EXISTS (
          SELECT 1 FROM ipo_project p
-         WHERE p.f_id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
+         WHERE p.F_Id = ipp.ipo_project_f_id AND p.F_DeleteMark = 0
        )`,
     [userId]
   );
@@ -252,7 +252,7 @@ async function applyIpoProjectAiSnapshotAfterInsert(conn, { batchId, userId }) {
 async function pruneOldIpoProjectAiSnapshots() {
   try {
     const r = await db.execute(
-      `DELETE FROM ipo_project_ai_sync_snapshot WHERE created_at < DATE_SUB(NOW(), INTERVAL 180 DAY)`
+      `DELETE FROM ipo_project_ai_sync_snapshot WHERE F_CreatorTime < DATE_SUB(NOW(), INTERVAL 180 DAY)`
     );
     const n = r.affectedRows != null ? r.affectedRows : 0;
     if (n > 0) {
@@ -395,16 +395,16 @@ async function runIpoProjectSqlSyncForUser({
     let idRows;
     if (isCompetitorFamilyWriteTarget(wt)) {
       [idRows] = await conn.query(
-        `SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
+        `SELECT F_Id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
         [userId, targetDataAppId]
       );
     } else {
       [idRows] = await conn.query(
-        `SELECT f_id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
+        `SELECT F_Id FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`,
         [userId, listingAppId]
       );
     }
-    const prevIds = Array.isArray(idRows) ? idRows.map((r) => r.f_id).filter((id) => id != null) : [];
+    const prevIds = Array.isArray(idRows) ? idRows.map((r) => r.F_Id).filter((id) => id != null) : [];
     if (isCompetitorFamilyWriteTarget(wt)) {
       await conn.query(`DELETE FROM ipo_project WHERE F_CreatorUserId = ? AND data_app_id <=> ?`, [
         userId,

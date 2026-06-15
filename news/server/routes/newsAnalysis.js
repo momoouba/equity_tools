@@ -68,7 +68,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     
     // 获取新闻详情，包括公众号信息和现有分析结果
     const newsItems = await db.query(
-      'SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE id = ?',
+      'SELECT F_Id AS id, title, content, source_url, enterprise_full_name, wechat_account, account_name, news_abstract, news_sentiment, keywords, APItype FROM news_detail WHERE F_Id = ?',
       [id]
     );
     
@@ -127,13 +127,13 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
         const reason = isContentContaminated ? '正文乱码，清空 content 并从 URL 重新抓取' : `content 无效（${newsItem.content ? `长度: ${newsItem.content.length} 字符` : '为空'}），清空并重新抓取`;
         console.log(`⚠️ 检测到 ${reason}`);
         await db.execute(
-          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL, content = NULL WHERE id = ?',
+          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL, content = NULL WHERE F_Id = ?',
           [id]
         );
         newsItem.content = null;
       } else {
         await db.execute(
-          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE id = ?',
+          'UPDATE news_detail SET news_abstract = NULL, news_sentiment = "neutral", keywords = NULL WHERE F_Id = ?',
           [id]
         );
         console.log(`✓ 已清空分析结果字段（保留企业全称和 content），将重新生成摘要和关键词`);
@@ -171,19 +171,19 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
         // 优先使用wechat_account匹配（这是最准确的匹配方式）
         if (newsItem.wechat_account) {
           console.log(`\n尝试方式1: 使用wechat_account匹配`);
-          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${newsItem.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${newsItem.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND F_DeleteMark = 0`);
           
           // 支持逗号分隔的多个公众号ID
           // 一次性查询企业全称、简称、entity_type、fund、sub_fund，避免二次查询失败导致 entity_type 为空但简称不为空的不一致
           const enterpriseResult = await db.query(
-            `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, delete_mark
+            `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, F_DeleteMark
              FROM invested_enterprises 
              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?
                OR wechat_official_account_id LIKE ?)
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-             AND delete_mark = 0 
+             AND F_DeleteMark = 0 
              LIMIT 1`,
             [
               newsItem.wechat_account,
@@ -206,15 +206,15 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             
             // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund（同一次查询结果，保证一致性）
             console.log(`\n--- 步骤3: 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund ---`);
-            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', enterprise_abbreviation = '${newsItem.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${id}'`);
+            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', enterprise_abbreviation = '${newsItem.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE F_Id = '${id}'`);
             await db.execute(
-              'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+              'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
               [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, id]
             );
             
             // 验证更新是否成功
             const verifyResult = await db.query(
-              'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
+              'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE F_Id = ?',
               [id]
             );
             if (verifyResult.length > 0) {
@@ -227,7 +227,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             // 查询所有相关记录以便调试
             // 支持逗号分隔的多个公众号ID
             const allResults = await db.query(
-              `SELECT enterprise_full_name, wechat_official_account_id, exit_status, delete_mark
+              `SELECT enterprise_full_name, wechat_official_account_id, exit_status, F_DeleteMark
                FROM invested_enterprises 
                WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                  OR wechat_official_account_id LIKE ?
@@ -249,15 +249,15 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
         // 如果wechat_account匹配失败，尝试使用account_name匹配
         if (!newsItem.enterprise_full_name && newsItem.account_name) {
           console.log(`\n尝试方式2: 使用account_name匹配`);
-          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${newsItem.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+          console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${newsItem.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND F_DeleteMark = 0`);
           
           // 一次性查询企业全称、简称、entity_type、fund、sub_fund，避免二次查询失败导致 entity_type 为空但简称不为空的不一致
           const enterpriseResultByName = await db.query(
-            `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, delete_mark
+            `SELECT enterprise_full_name, project_abbreviation, entity_type, fund, sub_fund, exit_status, F_DeleteMark
              FROM invested_enterprises 
              WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = ? 
              AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-             AND delete_mark = 0 
+             AND F_DeleteMark = 0 
              LIMIT 1`,
             [newsItem.account_name]
           );
@@ -275,15 +275,15 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
             
             // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund（同一次查询结果，保证一致性）
             console.log(`\n--- 步骤3: 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund ---`);
-            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', enterprise_abbreviation = '${newsItem.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${id}'`);
+            console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${newsItem.enterprise_full_name}', enterprise_abbreviation = '${newsItem.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE F_Id = '${id}'`);
             await db.execute(
-              'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+              'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
               [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, id]
             );
             
             // 验证更新是否成功
             const verifyResult = await db.query(
-              'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
+              'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE F_Id = ?',
               [id]
             );
             if (verifyResult.length > 0) {
@@ -331,7 +331,7 @@ router.post('/analyze/:id', checkAdminPermission, async (req, res) => {
     if (result) {
       // 返回更新后的新闻信息
       const updatedNews = await db.query(
-        'SELECT id, title, enterprise_full_name, news_sentiment, keywords, news_abstract FROM news_detail WHERE id = ?',
+        'SELECT F_Id AS id, title, enterprise_full_name, news_sentiment, keywords, news_abstract FROM news_detail WHERE F_Id = ?',
         [id]
       );
       
@@ -372,12 +372,12 @@ router.get('/stats', checkAdminPermission, async (req, res) => {
   try {
     // 总新闻数
     const totalNews = await db.query(
-      'SELECT COUNT(*) as total FROM news_detail WHERE delete_mark = 0'
+      'SELECT COUNT(*) as total FROM news_detail WHERE F_DeleteMark = 0'
     );
     
     // 已分析新闻数
     const analyzedNews = await db.query(
-      'SELECT COUNT(*) as analyzed FROM news_detail WHERE news_abstract IS NOT NULL AND delete_mark = 0'
+      'SELECT COUNT(*) as analyzed FROM news_detail WHERE news_abstract IS NOT NULL AND F_DeleteMark = 0'
     );
     
     // 待分析新闻数
@@ -386,7 +386,7 @@ router.get('/stats', checkAdminPermission, async (req, res) => {
        WHERE news_abstract IS NULL 
        AND content IS NOT NULL 
        AND content != '' 
-       AND delete_mark = 0`
+       AND F_DeleteMark = 0`
     );
     
     // 情绪分布统计
@@ -394,18 +394,18 @@ router.get('/stats', checkAdminPermission, async (req, res) => {
       `SELECT news_sentiment, COUNT(*) as count 
        FROM news_detail 
        WHERE news_sentiment IS NOT NULL 
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        GROUP BY news_sentiment`
     );
     
     // 最近7天的分析数量
     const recentAnalysis = await db.query(
-      `SELECT DATE(updated_at) as date, COUNT(*) as count
+      `SELECT DATE(F_LastModifyTime) as date, COUNT(*) as count
        FROM news_detail 
        WHERE news_abstract IS NOT NULL 
-       AND updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-       AND delete_mark = 0
-       GROUP BY DATE(updated_at)
+       AND F_LastModifyTime >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+       AND F_DeleteMark = 0
+       GROUP BY DATE(F_LastModifyTime)
        ORDER BY date DESC`
     );
     
@@ -435,13 +435,13 @@ router.get('/pending', checkAdminPermission, async (req, res) => {
     const offset = (page - 1) * pageSize;
     
     const pendingNews = await db.query(
-      `SELECT id, title, account_name, enterprise_full_name, created_at, public_time
-       FROM news_detail 
+      `SELECT F_Id AS id, title, account_name, enterprise_full_name, F_CreatorTime, public_time
+       FROM news_detail
        WHERE news_abstract IS NULL 
        AND content IS NOT NULL 
        AND content != '' 
-       AND delete_mark = 0
-       ORDER BY created_at DESC 
+       AND F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [parseInt(pageSize), offset]
     );
@@ -451,7 +451,7 @@ router.get('/pending', checkAdminPermission, async (req, res) => {
        WHERE news_abstract IS NULL 
        AND content IS NOT NULL 
        AND content != '' 
-       AND delete_mark = 0`
+       AND F_DeleteMark = 0`
     );
     
     res.json({
@@ -484,12 +484,12 @@ router.post('/clean-associations', checkAdminPermission, async (req, res) => {
     
     // 查找可能错误关联的新闻
     const suspiciousNews = await db.query(
-      `SELECT id, title, content, enterprise_full_name, source_url
-       FROM news_detail 
+      `SELECT F_Id AS id, title, content, enterprise_full_name, source_url
+       FROM news_detail
        WHERE title LIKE ? 
        AND enterprise_full_name IS NOT NULL 
        AND enterprise_full_name != ''
-       ORDER BY created_at DESC`,
+       ORDER BY F_CreatorTime DESC`,
       [`%${keyword}%`]
     );
     
@@ -514,7 +514,7 @@ router.post('/clean-associations', checkAdminPermission, async (req, res) => {
         if (!dryRun) {
           // 清除错误的企业关联
           await db.execute(
-            'UPDATE news_detail SET enterprise_full_name = NULL, entity_type = NULL WHERE id = ?',
+            'UPDATE news_detail SET enterprise_full_name = NULL, entity_type = NULL WHERE F_Id = ?',
             [news.id]
           );
           cleanedCount++;
@@ -574,9 +574,9 @@ router.post('/batch-analyze-selected', async (req, res) => {
     // 查询选中的新闻，包括公众号信息和APItype（接口类型）
     const placeholders = newsIds.map(() => '?').join(',');
     const newsToAnalyze = await db.query(
-      `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, APItype
-       FROM news_detail 
-       WHERE id IN (${placeholders}) AND delete_mark = 0`,
+      `SELECT F_Id AS id, title, content, source_url, enterprise_full_name, wechat_account, account_name, APItype
+       FROM news_detail
+       WHERE F_Id IN (${placeholders}) AND F_DeleteMark = 0`,
       newsIds
     );
 
@@ -661,7 +661,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
           await db.execute(
             `UPDATE news_detail 
              SET news_abstract = NULL, news_sentiment = 'neutral', keywords = NULL 
-             WHERE id = ?`,
+             WHERE F_Id = ?`,
             [news.id]
           );
           console.log(`✓ 已清空分析结果字段（保留企业全称）`);
@@ -683,18 +683,18 @@ router.post('/batch-analyze-selected', async (req, res) => {
               // 优先使用wechat_account匹配（这是最准确的匹配方式）
               if (news.wechat_account) {
                 console.log(`\n尝试方式1: 使用wechat_account匹配`);
-                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${news.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${news.wechat_account}' AND exit_status NOT IN ('完全退出', '已上市') AND F_DeleteMark = 0`);
                 
                 // 支持逗号分隔的多个公众号ID
                 const enterpriseResult = await db.query(
-                  `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+                  `SELECT enterprise_full_name, project_abbreviation, exit_status, F_DeleteMark
                    FROM invested_enterprises 
                    WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?
                      OR wechat_official_account_id LIKE ?)
                    AND exit_status NOT IN ('完全退出', '已上市')
-                   AND delete_mark = 0 
+                   AND F_DeleteMark = 0 
                    LIMIT 1`,
                   [
                     news.wechat_account,
@@ -720,7 +720,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [enterpriseResult[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -739,15 +739,15 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   
                   // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund
                   console.log(`\n--- 步骤3: 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund ---`);
-                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', enterprise_abbreviation = '${news.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${news.id}'`);
+                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', enterprise_abbreviation = '${news.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE F_Id = '${news.id}'`);
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
                     [news.enterprise_full_name, news.enterprise_abbreviation, entityType, fund, sub_fund, news.id]
                   );
                   
                   // 验证更新是否成功
                   const verifyResult = await db.query(
-                    'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
+                    'SELECT enterprise_full_name, enterprise_abbreviation, entity_type, fund, sub_fund FROM news_detail WHERE F_Id = ?',
                     [news.id]
                   );
                   if (verifyResult.length > 0) {
@@ -760,7 +760,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   // 查询所有相关记录以便调试
                   // 支持逗号分隔的多个公众号ID
                   const allResults = await db.query(
-                    `SELECT enterprise_full_name, wechat_official_account_id, exit_status, delete_mark
+                    `SELECT enterprise_full_name, wechat_official_account_id, exit_status, F_DeleteMark
                      FROM invested_enterprises 
                      WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                        OR wechat_official_account_id LIKE ?
@@ -782,14 +782,14 @@ router.post('/batch-analyze-selected', async (req, res) => {
               // 如果wechat_account匹配失败，尝试使用account_name匹配
               if (!news.enterprise_full_name && news.account_name) {
                 console.log(`\n尝试方式2: 使用account_name匹配`);
-                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${news.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND delete_mark = 0`);
+                console.log(`查询SQL: SELECT enterprise_full_name FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = '${news.account_name}' AND exit_status NOT IN ('完全退出', '已上市') AND F_DeleteMark = 0`);
                 
                 const enterpriseResultByName = await db.query(
-                  `SELECT enterprise_full_name, project_abbreviation, exit_status, delete_mark
+                  `SELECT enterprise_full_name, project_abbreviation, exit_status, F_DeleteMark
                    FROM invested_enterprises 
                    WHERE ${IE_NEWS_APP_FILTER_SQL} AND  wechat_official_account_id = ? 
                    AND exit_status NOT IN ('完全退出', '已上市')
-                   AND delete_mark = 0 
+                   AND F_DeleteMark = 0 
                    LIMIT 1`,
                   [news.account_name]
                 );
@@ -810,7 +810,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [enterpriseResultByName[0].enterprise_full_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -829,15 +829,15 @@ router.post('/batch-analyze-selected', async (req, res) => {
                   
                   // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund
                   console.log(`\n--- 步骤3: 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund ---`);
-                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', enterprise_abbreviation = '${news.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE id = '${news.id}'`);
+                  console.log(`执行SQL: UPDATE news_detail SET enterprise_full_name = '${news.enterprise_full_name}', enterprise_abbreviation = '${news.enterprise_abbreviation || 'NULL'}', entity_type = '${entityType || 'NULL'}', fund = '${fund || 'NULL'}', sub_fund = '${sub_fund || 'NULL'}' WHERE F_Id = '${news.id}'`);
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
                     [news.enterprise_full_name, news.enterprise_abbreviation, entityType, fund, sub_fund, news.id]
                   );
                   
                   // 验证更新是否成功
                   const verifyResult = await db.query(
-                    'SELECT enterprise_full_name, entity_type, fund, sub_fund FROM news_detail WHERE id = ?',
+                    'SELECT enterprise_full_name, entity_type, fund, sub_fund FROM news_detail WHERE F_Id = ?',
                     [news.id]
                   );
                   if (verifyResult.length > 0) {
@@ -885,7 +885,7 @@ router.post('/batch-analyze-selected', async (req, res) => {
           if (result) {
             // 验证最终结果
             const finalNews = await db.query(
-              'SELECT id, title, enterprise_full_name, news_sentiment, keywords, news_abstract FROM news_detail WHERE id = ?',
+              'SELECT F_Id AS id, title, enterprise_full_name, news_sentiment, keywords, news_abstract FROM news_detail WHERE F_Id = ?',
               [news.id]
             );
             
@@ -997,10 +997,10 @@ router.get('/analysis-status', async (req, res) => {
       SELECT 
         COUNT(*) as total,
         SUM(CASE WHEN news_abstract IS NOT NULL THEN 1 ELSE 0 END) as analyzed,
-        MAX(updated_at) as last_update
+        MAX(F_LastModifyTime) as last_update
       FROM news_detail 
-      WHERE delete_mark = 0 
-        AND created_at >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+      WHERE F_DeleteMark = 0 
+        AND F_CreatorTime >= DATE_SUB(NOW(), INTERVAL 5 MINUTE)
         AND (enterprise_full_name IS NOT NULL OR source_url LIKE '%additional%')
     `);
 
@@ -1044,11 +1044,11 @@ router.post('/clean-invalid-associations', async (req, res) => {
 
     // 查找所有有企业关联的新闻
     const newsWithEnterprises = await db.query(`
-      SELECT id, enterprise_full_name, title
+      SELECT F_Id AS id, enterprise_full_name, title
       FROM news_detail 
-      WHERE enterprise_full_name IS NOT NULL 
+      WHERE enterprise_full_name IS NOT NULL
         AND enterprise_full_name != ''
-        AND delete_mark = 0
+        AND F_DeleteMark = 0
     `);
     
     console.log(`找到 ${newsWithEnterprises.length} 条有企业关联的新闻`);
@@ -1060,7 +1060,7 @@ router.post('/clean-invalid-associations', async (req, res) => {
       // 检查企业是否在被投企业表中存在
       const existsInDB = await db.query(
         `SELECT enterprise_full_name FROM invested_enterprises 
-         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND delete_mark = 0`,
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0`,
         [news.enterprise_full_name]
       );
 
@@ -1072,7 +1072,7 @@ router.post('/clean-invalid-associations', async (req, res) => {
                entity_type = NULL,
                fund = NULL,
                sub_fund = NULL
-           WHERE id = ?`,
+           WHERE F_Id = ?`,
           [news.id]
         );
 
@@ -1140,7 +1140,7 @@ router.post('/clean-invalid-associations-selected', async (req, res) => {
         }
         // 检查用户是否为管理员
         const users = await db.query(
-          'SELECT role FROM users WHERE id = ?',
+          'SELECT role FROM users WHERE F_Id = ?',
           [link.user_id]
         );
         if (users.length > 0 && users[0].role === 'admin') {
@@ -1171,10 +1171,10 @@ router.post('/clean-invalid-associations-selected', async (req, res) => {
     // 验证选中的新闻ID是否存在
     const placeholders = newsIds.map(() => '?').join(',');
     const selectedNews = await db.query(`
-      SELECT id, enterprise_full_name, title
+      SELECT F_Id AS id, enterprise_full_name, title
       FROM news_detail 
-      WHERE id IN (${placeholders})
-        AND delete_mark = 0
+      WHERE F_Id IN (${placeholders})
+        AND F_DeleteMark = 0
     `, newsIds);
     
     console.log(`找到 ${selectedNews.length} 条选中的新闻`);
@@ -1194,8 +1194,8 @@ router.post('/clean-invalid-associations-selected', async (req, res) => {
            entity_type = NULL,
            fund = NULL,
            sub_fund = NULL
-       WHERE id IN (${updatePlaceholders})
-         AND delete_mark = 0`,
+       WHERE F_Id IN (${updatePlaceholders})
+         AND F_DeleteMark = 0`,
       newsIds
     );
 
@@ -1326,7 +1326,7 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
     const enterpriseExists = await db.query(
       `SELECT enterprise_full_name, project_abbreviation, exit_status 
        FROM invested_enterprises 
-       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND delete_mark = 0`,
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0`,
       [enterpriseName]
     );
 
@@ -1334,7 +1334,7 @@ router.get('/debug-enterprise/:enterpriseName', async (req, res) => {
     const similarEnterprises = await db.query(
       `SELECT enterprise_full_name, project_abbreviation, exit_status 
        FROM invested_enterprises 
-       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name LIKE ? AND delete_mark = 0 
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name LIKE ? AND F_DeleteMark = 0 
        LIMIT 10`,
       [`%${enterpriseName}%`]
     );
@@ -1373,26 +1373,26 @@ router.post('/reanalyze-xinbang-missing', checkAdminPermission, async (req, res)
                      AND content IS NOT NULL
                      AND content != ''
                      AND LENGTH(content) > 20
-                     AND delete_mark = 0`;
+                     AND F_DeleteMark = 0`;
     const params = [];
 
     if (startDate) {
-      condition += ' AND created_at >= ?';
+      condition += ' AND F_CreatorTime >= ?';
       params.push(startDate);
     }
 
     if (endDate) {
-      condition += ' AND created_at <= ?';
+      condition += ' AND F_CreatorTime <= ?';
       params.push(endDate);
     }
 
     // 查询需要分析的新闻
     const newsToAnalyze = await db.query(
-      `SELECT id, title, content, source_url, enterprise_full_name,
+      `SELECT F_Id AS id, title, content, source_url, enterprise_full_name,
               wechat_account, account_name, APItype, news_abstract, keywords
        FROM news_detail
        ${condition}
-       ORDER BY created_at DESC
+       ORDER BY F_CreatorTime DESC
        LIMIT ?`,
       [...params, limit]
     );
@@ -1500,7 +1500,7 @@ router.post('/reanalyze-xinbang-missing', checkAdminPermission, async (req, res)
           if (result) {
             // 验证最终结果
             const finalNews = await db.query(
-              'SELECT id, title, news_abstract, keywords FROM news_detail WHERE id = ?',
+              'SELECT F_Id AS id, title, news_abstract, keywords FROM news_detail WHERE F_Id = ?',
               [news.id]
             );
             

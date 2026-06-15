@@ -52,8 +52,8 @@ async function markPreInvAiLogSuccess({
        result_product_intro = ?,
        result_industry_tags_display = ?,
        ${searchMetaSqlAssignments()},
-       updated_at = NOW()
-     WHERE id = ?`,
+       F_LastModifyTime = NOW()
+     WHERE F_Id = ?`,
     [
       duration,
       llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -83,8 +83,8 @@ async function markPreInvAiLogFailed({ logId, started, llmModelConfigId, promptC
          prompt_version = ?,
          ai_enrich_version = ?,
          error_message = ?,
-         updated_at = NOW()
-       WHERE id = ?`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [
         duration,
         llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -116,22 +116,22 @@ async function preparePreInvestmentProjectAiJob({
   }
 
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, creator_user_id, delete_mark
-     FROM pre_investment_project WHERE id = ? LIMIT 1`,
+    `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation, F_CreatorUserId, F_DeleteMark
+     FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
     [id]
   );
-  if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+  if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
     return { ok: false, code: 404, message: '投前项目不存在或已删除' };
   }
   const uid = psUser && psUser.id ? String(psUser.id) : '';
-  if (!isAdminUser(psUser) && String(rows[0].creator_user_id || '') !== uid) {
+  if (!isAdminUser(psUser) && String(rows[0].F_CreatorUserId || '') !== uid) {
     return { ok: false, code: 403, message: '仅创建人或管理员可发起 AI 取数' };
   }
 
   const dup = await db.query(
-    `SELECT id, triggered_at FROM invested_enterprise_ai_enrich_log
+    `SELECT F_Id, triggered_at FROM invested_enterprise_ai_enrich_log
      WHERE pre_investment_project_id = ? AND execution_status IN ('pending','running')
-     ORDER BY id DESC LIMIT 1`,
+     ORDER BY F_Id DESC LIMIT 1`,
     [id]
   );
   if (dup.length) {
@@ -165,8 +165,8 @@ async function preparePreInvestmentProjectAiJob({
   const logId = ins.insertId;
 
   await db.execute(
-    `UPDATE pre_investment_project SET ai_enrich_status = 'running', ai_enrich_error = NULL, pipeline_error = NULL, updated_at = NOW()
-     WHERE id = ? AND delete_mark = 0`,
+    `UPDATE pre_investment_project SET ai_enrich_status = 'running', ai_enrich_error = NULL, pipeline_error = NULL, F_LastModifyTime = NOW()
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
     [id]
   );
 
@@ -186,18 +186,18 @@ async function runPreInvestmentProjectAiEnrichTask({
   try {
     await db.execute(
       `UPDATE invested_enterprise_ai_enrich_log
-       SET execution_status = 'running', started_at = NOW(), updated_at = NOW()
-       WHERE id = ?`,
+       SET execution_status = 'running', started_at = NOW(), F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [logId]
     );
 
     const ev = await db.query(
-      `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation,
-              qcc_company_intro, bp_extract_text, delete_mark
-       FROM pre_investment_project WHERE id = ? LIMIT 1`,
+      `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
+              qcc_company_intro, bp_extract_text, F_DeleteMark
+       FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
       [preProjectId]
     );
-    if (!ev.length || Number(ev[0].delete_mark) !== 0) {
+    if (!ev.length || Number(ev[0].F_DeleteMark) !== 0) {
       throw new Error('投前项目不存在或已删除');
     }
     const row = ev[0];
@@ -246,8 +246,8 @@ async function runPreInvestmentProjectAiEnrichTask({
          ai_enrich_error = NULL,
          pipeline_status = 'ai_done',
          pipeline_error = NULL,
-         updated_at = NOW()
-       WHERE id = ? AND delete_mark = 0`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [
         llm.productIntroStored || null,
         llm.display || null,
@@ -278,8 +278,8 @@ async function runPreInvestmentProjectAiEnrichTask({
          ai_enrich_error = ?,
          pipeline_status = 'failed',
          pipeline_error = ?,
-         updated_at = NOW()
-       WHERE id = ? AND delete_mark = 0`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [errMsg, errMsg, preProjectId]
     );
     await markPreInvAiLogFailed({

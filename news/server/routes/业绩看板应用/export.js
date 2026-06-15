@@ -165,8 +165,8 @@ async function checkExportPermission(req, res, next) {
     const levelRows = await db.query(
       `SELECT ml.level_name
        FROM users u
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
-       WHERE u.id = ?
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       WHERE u.F_Id = ?
        LIMIT 1`,
       [user.id]
     );

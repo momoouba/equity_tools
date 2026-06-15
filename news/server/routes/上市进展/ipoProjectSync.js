@@ -28,21 +28,21 @@ async function getSqlSyncSetting(req, res) {
     const configId = (req.query?.external_db_config_id || '').trim();
     const rows = configId
       ? await db.query(
-          `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
+          `SELECT F_Id AS id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
                   COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
-                  column_map, created_at, updated_at
+                  column_map, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
            FROM ipo_project_sql_sync_setting
            WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
            LIMIT 1`,
           [user.id, configId, IPO_SQL_WRITE_TARGET_LISTING]
         )
       : await db.query(
-          `SELECT id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
+          `SELECT F_Id AS id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
                   COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
-                  column_map, created_at, updated_at
+                  column_map, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
            FROM ipo_project_sql_sync_setting
            WHERE user_id = ? AND write_target = ?
-           ORDER BY updated_at DESC
+           ORDER BY F_LastModifyTime DESC
            LIMIT 1`,
           [user.id, IPO_SQL_WRITE_TARGET_LISTING]
         );
@@ -102,7 +102,7 @@ async function putSqlSyncSetting(req, res) {
     }
 
     const existing = await db.query(
-      `SELECT id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+      `SELECT F_Id AS id FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
       [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]
     );
 
@@ -125,7 +125,7 @@ async function putSqlSyncSetting(req, res) {
     } else {
       const id = await generateId('ipo_project_sql_sync_setting');
       await db.execute(
-        `INSERT INTO ipo_project_sql_sync_setting (id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, qcc_brief_after_sync_enabled, column_map)
+        `INSERT INTO ipo_project_sql_sync_setting (F_Id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression, qcc_brief_after_sync_enabled, column_map)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
@@ -142,7 +142,10 @@ async function putSqlSyncSetting(req, res) {
     }
 
     const saved = await db.query(
-      `SELECT * FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
+      `SELECT F_Id AS id, user_id, write_target, external_db_config_id, sql_text, is_enabled, cron_expression,
+              COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
+              column_map, F_CreatorTime AS created_at, F_LastModifyTime AS updated_at
+       FROM ipo_project_sql_sync_setting WHERE user_id = ? AND external_db_config_id = ? AND write_target = ? LIMIT 1`,
       [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]
     );
     await updateListingScheduledTasks();
@@ -196,7 +199,7 @@ async function postSqlSyncRun(req, res) {
 
     if (!external_db_config_id || !sql_text || is_enabled === undefined || qcc_brief_after_sync_enabled === undefined) {
       const saved = await db.query(
-        `SELECT * FROM ipo_project_sql_sync_setting
+        `SELECT *, F_Id AS id FROM ipo_project_sql_sync_setting
          WHERE user_id = ? AND external_db_config_id = ? AND write_target = ?
          LIMIT 1`,
         [user.id, external_db_config_id, IPO_SQL_WRITE_TARGET_LISTING]

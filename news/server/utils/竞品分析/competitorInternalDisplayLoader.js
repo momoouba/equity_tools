@@ -94,7 +94,7 @@ async function loadInternalDisplayFields(unifiedCreditCode, companyName) {
     finRows = await db.query(
       `SELECT ai_product_intro, project_desc, ai_company_tags_display, ai_company_tags_json, event_date
        FROM sourcing_financing_event
-       WHERE delete_mark = 0 AND company_credit_code = ?
+       WHERE F_DeleteMark = 0 AND company_credit_code = ?
        ORDER BY event_date DESC
        LIMIT 5`,
       [credit]
@@ -104,7 +104,7 @@ async function loadInternalDisplayFields(unifiedCreditCode, companyName) {
     finRows = await db.query(
       `SELECT ai_product_intro, project_desc, ai_company_tags_display, ai_company_tags_json, event_date
        FROM sourcing_financing_event
-       WHERE delete_mark = 0 AND TRIM(company_name) = ?
+       WHERE F_DeleteMark = 0 AND TRIM(company_name) = ?
        ORDER BY event_date DESC
        LIMIT 5`,
       [name]

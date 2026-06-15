@@ -101,27 +101,27 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
 
   const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
   const ieRows = await db.query(
-    `SELECT id, creator_user_id, unified_credit_code, enterprise_full_name, project_abbreviation
+    `SELECT F_Id, F_CreatorUserId, unified_credit_code, enterprise_full_name, project_abbreviation
      FROM invested_enterprises
-     WHERE delete_mark = 0 AND creator_user_id = ? AND data_app_id <=> ?`,
+     WHERE F_DeleteMark = 0 AND F_CreatorUserId = ? AND data_app_id <=> ?`,
     [String(creatorUserId), caId]
   );
   if (!ieRows.length) return null;
 
-  const ieIds = ieRows.map((r) => String(r.id));
+  const ieIds = ieRows.map((r) => String(r.F_Id));
   const runs = await queryInChunks(
-    'SELECT * FROM sourcing_competitor_run WHERE delete_mark = 0 AND invested_enterprise_id IN',
+    'SELECT * FROM sourcing_competitor_run WHERE F_DeleteMark = 0 AND invested_enterprise_id IN',
     '',
     ieIds
   );
   const relations = await queryInChunks(
-    `SELECT * FROM sourcing_competitor_relation WHERE delete_mark = 0
+    `SELECT * FROM sourcing_competitor_relation WHERE F_DeleteMark = 0
        AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
        AND invested_enterprise_id IN`,
     '',
     ieIds
   );
-  const runIds = [...new Set(runs.map((r) => String(r.id)).filter(Boolean))];
+  const runIds = [...new Set(runs.map((r) => String(r.F_Id)).filter(Boolean))];
   const stepLogs = runIds.length
     ? await queryInChunks('SELECT * FROM sourcing_competitor_run_step_log WHERE run_id IN', '', runIds)
     : [];
@@ -138,12 +138,12 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
     const rows = await db.query(
       `SELECT s.* FROM competitor_match_supplement s
        INNER JOIN (
-         SELECT invested_enterprise_id, MAX(created_at) AS mx
+         SELECT invested_enterprise_id, MAX(F_CreatorTime) AS mx
          FROM competitor_match_supplement
-         WHERE delete_mark = 0 AND invested_enterprise_id IN (${ph})
+         WHERE F_DeleteMark = 0 AND invested_enterprise_id IN (${ph})
          GROUP BY invested_enterprise_id
-       ) t ON s.invested_enterprise_id = t.invested_enterprise_id AND s.created_at = t.mx
-       WHERE s.delete_mark = 0 AND s.invested_enterprise_id IN (${ph})`,
+       ) t ON s.invested_enterprise_id = t.invested_enterprise_id AND s.F_CreatorTime = t.mx
+       WHERE s.F_DeleteMark = 0 AND s.invested_enterprise_id IN (${ph})`,
       [...chunk, ...chunk]
     );
     supplements.push(...rows);
@@ -156,7 +156,7 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
   const batchId = crypto.randomUUID();
   const byIe = new Map();
   for (const ie of ieRows) {
-    byIe.set(String(ie.id), {
+    byIe.set(String(ie.F_Id), {
       ie,
       runs: [],
       relations: [],
@@ -174,7 +174,7 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
     if (b) b.relations.push(serializeRow(r));
   }
   for (const s of stepLogs) {
-    const run = runs.find((r) => String(r.id) === String(s.run_id));
+    const run = runs.find((r) => String(r.F_Id) === String(s.run_id));
     if (!run) continue;
     const b = byIe.get(String(run.invested_enterprise_id));
     if (b) b.stepLogs.push(serializeRow(s));
@@ -198,8 +198,8 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
     for (const mk of matchKeys) {
       await db.execute(
         `INSERT INTO competitor_analysis_sync_snapshot (
-           batch_id, creator_user_id, data_app_name, match_type, match_key,
-           old_invested_enterprise_id, payload_json, created_at
+           batch_id, F_CreatorUserId, data_app_name, match_type, match_key,
+           old_invested_enterprise_id, payload_json, F_CreatorTime
          ) VALUES (?,?,?,?,?,?,?,NOW())`,
         [
           batchId,
@@ -207,7 +207,7 @@ async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) 
           dataAppName,
           mk.type,
           mk.key,
-          String(b.ie.id),
+          String(b.ie.F_Id),
           JSON.stringify(payload),
         ]
       );
@@ -228,25 +228,25 @@ function mergePayloads(target, source) {
   target.relations = target.relations || [];
   target.step_logs = target.step_logs || [];
   target.comparable_prefs = target.comparable_prefs || [];
-  const runIds = new Set(target.runs.map((r) => String(r.id)));
+  const runIds = new Set(target.runs.map((r) => String(r.F_Id)));
   for (const r of source.runs || []) {
-    if (!runIds.has(String(r.id))) {
+    if (!runIds.has(String(r.F_Id))) {
       target.runs.push(r);
-      runIds.add(String(r.id));
+      runIds.add(String(r.F_Id));
     }
   }
-  const relIds = new Set(target.relations.map((r) => String(r.id)));
+  const relIds = new Set(target.relations.map((r) => String(r.F_Id)));
   for (const r of source.relations || []) {
-    if (!relIds.has(String(r.id))) {
+    if (!relIds.has(String(r.F_Id))) {
       target.relations.push(r);
-      relIds.add(String(r.id));
+      relIds.add(String(r.F_Id));
     }
   }
-  const logIds = new Set(target.step_logs.map((r) => String(r.id)));
+  const logIds = new Set(target.step_logs.map((r) => String(r.F_Id)));
   for (const r of source.step_logs || []) {
-    if (!logIds.has(String(r.id))) {
+    if (!logIds.has(String(r.F_Id))) {
       target.step_logs.push(r);
-      logIds.add(String(r.id));
+      logIds.add(String(r.F_Id));
     }
   }
   const prefKeys = new Set(
@@ -268,15 +268,15 @@ async function restoreSubjectPayload(newIeId, payload) {
   const oldRunToNew = new Map();
 
   const runs = [...(payload.runs || [])].sort(
-    (a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0)
+    (a, b) => new Date(a.F_CreatorTime || 0) - new Date(b.F_CreatorTime || 0)
   );
   for (const run of runs) {
     const newRunId = await generateId('sourcing_competitor_run');
-    oldRunToNew.set(String(run.id), newRunId);
+    oldRunToNew.set(String(run.F_Id), newRunId);
     await db.execute(
       `INSERT INTO sourcing_competitor_run (
-         id, invested_enterprise_id, status, message, triggered_by_user_id,
-         started_at, finished_at, created_at, updated_at, delete_mark, delete_time, delete_user_id
+         F_Id, invested_enterprise_id, status, message, triggered_by_user_id,
+         started_at, finished_at, F_CreatorTime, F_LastModifyTime, F_DeleteMark, F_DeleteTime, F_DeleteUserId
        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         newRunId,
@@ -286,11 +286,11 @@ async function restoreSubjectPayload(newIeId, payload) {
         run.triggered_by_user_id || null,
         run.started_at || null,
         run.finished_at || null,
-        run.created_at || new Date(),
-        run.updated_at || new Date(),
-        Number(run.delete_mark) || 0,
-        run.delete_time || null,
-        run.delete_user_id || null,
+        run.F_CreatorTime || new Date(),
+        run.F_LastModifyTime || new Date(),
+        Number(run.F_DeleteMark) || 0,
+        run.F_DeleteTime || null,
+        run.F_DeleteUserId || null,
       ]
     );
     stats.runs += 1;
@@ -302,13 +302,13 @@ async function restoreSubjectPayload(newIeId, payload) {
     const newRunId = oldRunId && oldRunToNew.has(oldRunId) ? oldRunToNew.get(oldRunId) : null;
     await db.execute(
       `INSERT INTO sourcing_competitor_relation (
-         id, subject_type, invested_enterprise_id, pre_investment_project_id,
+         F_Id, subject_type, invested_enterprise_id, pre_investment_project_id,
          run_id, pre_investment_run_id, subject_display_name,
          competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
          relevance_score, confidence_grade, score_breakdown_json,
          data_sources_json, financing_amount_text, financing_history_text,
          competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
-         include_in_comparable, created_at, updated_at, delete_mark, delete_time, delete_user_id
+         include_in_comparable, F_CreatorTime, F_LastModifyTime, F_DeleteMark, F_DeleteTime, F_DeleteUserId
        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         newRelId,
@@ -345,11 +345,11 @@ async function restoreSubjectPayload(newIeId, payload) {
           : null,
         rel.sub_fund_names || null,
         rel.include_in_comparable != null ? Number(rel.include_in_comparable) : 0,
-        rel.created_at || new Date(),
-        rel.updated_at || new Date(),
-        Number(rel.delete_mark) || 0,
-        rel.delete_time || null,
-        rel.delete_user_id || null,
+        rel.F_CreatorTime || new Date(),
+        rel.F_LastModifyTime || new Date(),
+        Number(rel.F_DeleteMark) || 0,
+        rel.F_DeleteTime || null,
+        rel.F_DeleteUserId || null,
       ]
     );
     stats.relations += 1;
@@ -362,7 +362,7 @@ async function restoreSubjectPayload(newIeId, payload) {
     const newLogId = await generateId('sourcing_competitor_run_step_log');
     await db.execute(
       `INSERT INTO sourcing_competitor_run_step_log (
-         id, run_id, subject_type, step_code, status, message, detail_json, created_at
+         F_Id, run_id, subject_type, step_code, status, message, detail_json, F_CreatorTime
        ) VALUES (?,?,?,?,?,?,?,?)`,
       [
         newLogId,
@@ -376,7 +376,7 @@ async function restoreSubjectPayload(newIeId, payload) {
             ? log.detail_json
             : JSON.stringify(log.detail_json)
           : null,
-        log.created_at || new Date(),
+        log.F_CreatorTime || new Date(),
       ]
     );
     stats.step_logs += 1;
@@ -385,7 +385,7 @@ async function restoreSubjectPayload(newIeId, payload) {
   for (const pref of payload.comparable_prefs || []) {
     if (!pref.competitor_key) continue;
     const existing = await db.query(
-      `SELECT id FROM sourcing_competitor_comparable_pref
+      `SELECT F_Id FROM sourcing_competitor_comparable_pref
        WHERE subject_type = 'invested_enterprise'
          AND invested_enterprise_id <=> ?
          AND pre_investment_project_id <=> ?
@@ -397,9 +397,9 @@ async function restoreSubjectPayload(newIeId, payload) {
       if (Number(pref.include_in_comparable) === 1) {
         await db.execute(
           `UPDATE sourcing_competitor_comparable_pref
-           SET include_in_comparable = 1, updated_at = NOW()
-           WHERE id = ?`,
-          [existing[0].id]
+           SET include_in_comparable = 1, F_LastModifyTime = NOW()
+           WHERE F_Id = ?`,
+          [existing[0].F_Id]
         );
       }
       continue;
@@ -407,8 +407,8 @@ async function restoreSubjectPayload(newIeId, payload) {
     const prefId = await generateId('sourcing_competitor_comparable_pref');
     await db.execute(
       `INSERT INTO sourcing_competitor_comparable_pref (
-         id, subject_type, invested_enterprise_id, pre_investment_project_id,
-         competitor_key, include_in_comparable, created_at, updated_at
+         F_Id, subject_type, invested_enterprise_id, pre_investment_project_id,
+         competitor_key, include_in_comparable, F_CreatorTime, F_LastModifyTime
        ) VALUES (?,?,?,?,?,?,NOW(),NOW())`,
       [
         prefId,
@@ -427,9 +427,9 @@ async function restoreSubjectPayload(newIeId, payload) {
     const supId = await generateId('competitor_match_supplement');
     await db.execute(
       `INSERT INTO competitor_match_supplement (
-         id, invested_enterprise_id, user_tags_json, user_narrative_raw,
+         F_Id, invested_enterprise_id, user_tags_json, user_narrative_raw,
          ai_extracted_tags_json, ai_short_summary, batch_id, created_by,
-         created_at, updated_at, delete_mark
+         F_CreatorTime, F_LastModifyTime, F_DeleteMark
        ) VALUES (?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
       [
         supId,
@@ -467,7 +467,7 @@ async function restoreCompetitorDataAfterInsert(batchId, creatorUserId, dataAppN
   const snapshots = await db.query(
     `SELECT match_type, match_key, payload_json
      FROM competitor_analysis_sync_snapshot
-     WHERE batch_id = ? AND creator_user_id = ? AND data_app_name = ?`,
+     WHERE batch_id = ? AND F_CreatorUserId = ? AND data_app_name = ?`,
     [batchId, String(creatorUserId), dataAppName]
   );
   if (!snapshots.length) return { subjects: 0, runs: 0, relations: 0, step_logs: 0, prefs: 0, supplement: 0 };
@@ -487,9 +487,9 @@ async function restoreCompetitorDataAfterInsert(batchId, creatorUserId, dataAppN
 
   const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
   const newRows = await db.query(
-    `SELECT id, unified_credit_code, enterprise_full_name, project_abbreviation
+    `SELECT F_Id, unified_credit_code, enterprise_full_name, project_abbreviation
      FROM invested_enterprises
-     WHERE delete_mark = 0 AND creator_user_id = ? AND data_app_id <=> ?`,
+     WHERE F_DeleteMark = 0 AND F_CreatorUserId = ? AND data_app_id <=> ?`,
     [String(creatorUserId), caId]
   );
 
@@ -501,12 +501,12 @@ async function restoreCompetitorDataAfterInsert(batchId, creatorUserId, dataAppN
 
     const existingRels = await db.query(
       `SELECT 1 FROM sourcing_competitor_relation
-       WHERE invested_enterprise_id = ? AND delete_mark = 0 LIMIT 1`,
-      [String(ie.id)]
+       WHERE invested_enterprise_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      [String(ie.F_Id)]
     );
     if (existingRels.length) continue;
 
-    const st = await restoreSubjectPayload(String(ie.id), payload);
+    const st = await restoreSubjectPayload(String(ie.F_Id), payload);
     totals.subjects += 1;
     totals.runs += st.runs;
     totals.relations += st.relations;
@@ -542,23 +542,23 @@ async function migrateCompetitorEnterpriseIds(fromEnterpriseId, toEnterpriseId, 
     : (sql, params) => db.execute(sql, params);
 
   const r1 = await run(
-    `UPDATE sourcing_competitor_run SET invested_enterprise_id = ?, updated_at = NOW()
+    `UPDATE sourcing_competitor_run SET invested_enterprise_id = ?, F_LastModifyTime = NOW()
      WHERE invested_enterprise_id = ?`,
     [toId, fromId]
   );
   const r2 = await run(
-    `UPDATE sourcing_competitor_relation SET invested_enterprise_id = ?, updated_at = NOW()
+    `UPDATE sourcing_competitor_relation SET invested_enterprise_id = ?, F_LastModifyTime = NOW()
      WHERE invested_enterprise_id = ? AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)`,
     [toId, fromId]
   );
   const r3 = await run(
-    `UPDATE sourcing_competitor_comparable_pref SET invested_enterprise_id = ?, updated_at = NOW()
+    `UPDATE sourcing_competitor_comparable_pref SET invested_enterprise_id = ?, F_LastModifyTime = NOW()
      WHERE invested_enterprise_id = ? AND subject_type = 'invested_enterprise'`,
     [toId, fromId]
   );
   const r4 = await run(
-    `UPDATE competitor_match_supplement SET invested_enterprise_id = ?, updated_at = NOW()
-     WHERE invested_enterprise_id = ? AND delete_mark = 0`,
+    `UPDATE competitor_match_supplement SET invested_enterprise_id = ?, F_LastModifyTime = NOW()
+     WHERE invested_enterprise_id = ? AND F_DeleteMark = 0`,
     [toId, fromId]
   );
   const n =
@@ -574,7 +574,7 @@ async function migrateCompetitorEnterpriseIds(fromEnterpriseId, toEnterpriseId, 
 async function pruneOldCompetitorSyncSnapshots() {
   try {
     const r = await db.execute(
-      `DELETE FROM competitor_analysis_sync_snapshot WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)`,
+      `DELETE FROM competitor_analysis_sync_snapshot WHERE F_CreatorTime < DATE_SUB(NOW(), INTERVAL ? DAY)`,
       [SNAPSHOT_RETENTION_DAYS]
     );
     const n = r.affectedRows != null ? r.affectedRows : 0;
@@ -624,21 +624,21 @@ async function buildCompetitorEnterpriseMatchIndex(creatorUserIdFilter) {
   const params = [caId];
   let creatorClause = '';
   if (creatorUserIdFilter) {
-    creatorClause = ' AND creator_user_id = ?';
+    creatorClause = ' AND F_CreatorUserId = ?';
     params.push(String(creatorUserIdFilter));
   }
   const rows = await db.query(
-    `SELECT id, creator_user_id, unified_credit_code, enterprise_full_name, project_abbreviation
+    `SELECT F_Id, F_CreatorUserId, unified_credit_code, enterprise_full_name, project_abbreviation
      FROM invested_enterprises
-     WHERE delete_mark = 0 AND data_app_id <=> ?${creatorClause}`,
+     WHERE F_DeleteMark = 0 AND data_app_id <=> ?${creatorClause}`,
     params
   );
   const byCreator = new Map();
   const validIds = new Set();
   for (const r of rows) {
-    const ieId = String(r.id);
+    const ieId = String(r.F_Id);
     validIds.add(ieId);
-    const cid = String(r.creator_user_id || '');
+    const cid = String(r.F_CreatorUserId || '');
     if (!byCreator.has(cid)) {
       byCreator.set(cid, { ucc: new Map(), name: new Map(), abbr: new Map() });
     }
@@ -657,17 +657,17 @@ async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
     const batchParams = [String(batchIdFilter), CA_C.APP_NAME_COMPETITOR_ANALYSIS];
     let batchCreator = '';
     if (creatorUserIdFilter) {
-      batchCreator = ' AND creator_user_id = ?';
+      batchCreator = ' AND F_CreatorUserId = ?';
       batchParams.push(String(creatorUserIdFilter));
     }
     const batchRows = await db.query(
-      `SELECT old_invested_enterprise_id, creator_user_id, match_type, match_key
+      `SELECT old_invested_enterprise_id, F_CreatorUserId, match_type, match_key
        FROM competitor_analysis_sync_snapshot
        WHERE batch_id = ? AND data_app_name = ? AND old_invested_enterprise_id IS NOT NULL${batchCreator}`,
       batchParams
     );
     for (const row of batchRows) {
-      mergeHintMatch(hints, row.old_invested_enterprise_id, row.creator_user_id, {
+      mergeHintMatch(hints, row.old_invested_enterprise_id, row.F_CreatorUserId, {
         type: row.match_type,
         key: row.match_key,
       });
@@ -677,7 +677,7 @@ async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
   const snapParams = [CA_C.APP_NAME_COMPETITOR_ANALYSIS];
   let snapCreator = '';
   if (creatorUserIdFilter) {
-    snapCreator = ' AND creator_user_id = ?';
+    snapCreator = ' AND F_CreatorUserId = ?';
     snapParams.push(String(creatorUserIdFilter));
   }
   let batchExclude = '';
@@ -686,14 +686,14 @@ async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
     snapParams.push(String(batchIdFilter));
   }
   const snapRows = await db.query(
-    `SELECT old_invested_enterprise_id, creator_user_id, match_type, match_key
+    `SELECT old_invested_enterprise_id, F_CreatorUserId, match_type, match_key
      FROM competitor_analysis_sync_snapshot
      WHERE data_app_name = ? AND old_invested_enterprise_id IS NOT NULL${snapCreator}${batchExclude}
-     ORDER BY created_at DESC`,
+     ORDER BY F_CreatorTime DESC`,
     snapParams
   );
   for (const row of snapRows) {
-    mergeHintMatch(hints, row.old_invested_enterprise_id, row.creator_user_id, {
+    mergeHintMatch(hints, row.old_invested_enterprise_id, row.F_CreatorUserId, {
       type: row.match_type,
       key: row.match_key,
     });
@@ -711,12 +711,12 @@ async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
             MAX(scr.triggered_by_user_id) AS triggered_by_user_id
      FROM sourcing_competitor_relation r
      LEFT JOIN invested_enterprises ie
-       ON ie.id = r.invested_enterprise_id AND ie.delete_mark = 0 AND ie.data_app_id <=> ?
-     LEFT JOIN sourcing_competitor_run scr ON scr.id = r.run_id AND scr.delete_mark = 0
-     WHERE r.delete_mark = 0
+       ON ie.F_Id = r.invested_enterprise_id AND ie.F_DeleteMark = 0 AND ie.data_app_id <=> ?
+     LEFT JOIN sourcing_competitor_run scr ON scr.F_Id = r.run_id AND scr.F_DeleteMark = 0
+     WHERE r.F_DeleteMark = 0
        AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
        AND r.invested_enterprise_id IS NOT NULL
-       AND ie.id IS NULL${relCreator}
+       AND ie.F_Id IS NULL${relCreator}
      GROUP BY r.invested_enterprise_id`,
     orphanRelParams
   );
@@ -740,8 +740,8 @@ async function loadOldIdMatchHints(creatorUserIdFilter, batchIdFilter) {
     `SELECT scr.invested_enterprise_id, MAX(scr.triggered_by_user_id) AS triggered_by_user_id
      FROM sourcing_competitor_run scr
      LEFT JOIN invested_enterprises ie
-       ON ie.id = scr.invested_enterprise_id AND ie.delete_mark = 0 AND ie.data_app_id <=> ?
-     WHERE scr.delete_mark = 0 AND ie.id IS NULL${runCreator}
+       ON ie.F_Id = scr.invested_enterprise_id AND ie.F_DeleteMark = 0 AND ie.data_app_id <=> ?
+     WHERE scr.F_DeleteMark = 0 AND ie.F_Id IS NULL${runCreator}
      GROUP BY scr.invested_enterprise_id`,
     orphanRunParams
   );
@@ -762,19 +762,19 @@ async function findOrphanInvestedEnterpriseIds() {
   const rows = await db.query(
     `SELECT DISTINCT x.ie_id AS old_id
      FROM (
-       SELECT invested_enterprise_id AS ie_id FROM sourcing_competitor_run WHERE delete_mark = 0
+       SELECT invested_enterprise_id AS ie_id FROM sourcing_competitor_run WHERE F_DeleteMark = 0
        UNION
        SELECT invested_enterprise_id AS ie_id FROM sourcing_competitor_relation
-         WHERE delete_mark = 0 AND invested_enterprise_id IS NOT NULL
+         WHERE F_DeleteMark = 0 AND invested_enterprise_id IS NOT NULL
        UNION
        SELECT invested_enterprise_id AS ie_id FROM sourcing_competitor_comparable_pref
          WHERE subject_type = 'invested_enterprise' AND invested_enterprise_id IS NOT NULL
        UNION
-       SELECT invested_enterprise_id AS ie_id FROM competitor_match_supplement WHERE delete_mark = 0
+       SELECT invested_enterprise_id AS ie_id FROM competitor_match_supplement WHERE F_DeleteMark = 0
      ) x
      LEFT JOIN invested_enterprises ie
-       ON ie.id = x.ie_id AND ie.delete_mark = 0 AND ie.data_app_id <=> ?
-     WHERE x.ie_id IS NOT NULL AND ie.id IS NULL`,
+       ON ie.F_Id = x.ie_id AND ie.F_DeleteMark = 0 AND ie.data_app_id <=> ?
+     WHERE x.ie_id IS NOT NULL AND ie.F_Id IS NULL`,
     [caId]
   );
   return rows.map((r) => String(r.old_id));

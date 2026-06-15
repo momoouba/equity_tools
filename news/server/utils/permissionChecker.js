@@ -11,7 +11,7 @@ async function checkUserAppPermission(userId, appName) {
   try {
     // 先通过 app_name 精确找到应用 ID，使用 BINARY 避免字符串比较的 collation 问题
     const appResult = await db.query(
-      `SELECT id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
+      `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
       [appName]
     );
 
@@ -26,8 +26,8 @@ async function checkUserAppPermission(userId, appName) {
     const levelResult = await db.query(
       `SELECT 1 AS has_permission
        FROM users u
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
-       WHERE u.id = ? AND ml.app_id = ?
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       WHERE u.F_Id = ? AND ml.app_id = ?
        LIMIT 1`,
       [userId, appId]
     );
@@ -48,7 +48,7 @@ async function checkUserAppPermission(userId, appName) {
              app_id VARCHAR(19) PATH '$.app_id'
            )
          ) AS jt
-         WHERE u.id = ? AND BINARY jt.app_id = BINARY ?
+         WHERE u.F_Id = ? AND BINARY jt.app_id = BINARY ?
          LIMIT 1`,
         [userId, appId]
       );

@@ -83,7 +83,7 @@ async function executeNewsSyncTask(configId) {
     
     // 获取新闻接口配置
     const configs = await db.query(
-      'SELECT * FROM news_interface_config WHERE id = ? AND is_active = 1 AND delete_mark = 0',
+      'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND is_active = 1 AND F_DeleteMark = 0',
       [configId]
     );
     
@@ -227,9 +227,9 @@ async function updateNewsSyncScheduledTasks() {
     // 获取所有启用的新闻接口配置
     // 查询条件：有 cron_expression 或者有 send_frequency 和 send_time
     const configs = await db.query(
-      `SELECT * FROM news_interface_config 
+      `SELECT *, F_Id AS id FROM news_interface_config 
        WHERE is_active = 1 
-       AND delete_mark = 0
+       AND F_DeleteMark = 0
        AND (
          (cron_expression IS NOT NULL AND cron_expression != '')
          OR (send_frequency IS NOT NULL AND send_time IS NOT NULL)

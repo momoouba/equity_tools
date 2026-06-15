@@ -342,7 +342,7 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
       { key: 'ai_reanalysis_cron_expression', value: cron_expression.trim(), desc: 'AI分析定时任务Cron表达式（7字段Quartz格式）' },
       { key: 'ai_reanalysis_active', value: isActive ? '1' : '0', desc: 'AI分析定时任务是否启用' }
     ]) {
-      const existing = await db.query('SELECT id FROM system_config WHERE config_key = ?', [config.key]);
+      const existing = await db.query('SELECT F_Id FROM system_config WHERE config_key = ?', [config.key]);
       
       if (existing.length > 0) {
         await db.execute(
@@ -352,7 +352,7 @@ router.put('/ai-analysis-config', checkAdminPermission, async (req, res) => {
       } else {
         const configId = await generateId('system_config');
         await db.execute(
-          'INSERT INTO system_config (id, config_key, config_value, config_desc) VALUES (?, ?, ?, ?)',
+          'INSERT INTO system_config (F_Id, config_key, config_value, config_desc) VALUES (?, ?, ?, ?)',
           [configId, config.key, config.value, config.desc]
         );
       }
@@ -423,20 +423,20 @@ router.get('/', checkAdminPermission, async (req, res) => {
       const recipients = await db.query(
         `SELECT rm.*, u.account as user_account, u.email as user_email
          FROM recipient_management rm
-         LEFT JOIN users u ON rm.user_id = u.id
-         WHERE rm.delete_mark = 0
-         ORDER BY rm.created_at DESC
+         LEFT JOIN users u ON rm.user_id = u.F_Id
+         WHERE rm.F_DeleteMark = 0
+         ORDER BY rm.F_CreatorTime DESC
          LIMIT ? OFFSET ?`,
         [parseInt(pageSize), offset]
       );
 
       // 获取总数
-      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM recipient_management WHERE delete_mark = 0');
+      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM recipient_management WHERE F_DeleteMark = 0');
       const total = totalResult.total || 0;
 
       // 为每个配置添加定时任务信息
       const tasks = recipients.map(recipient => {
-        const isActive = recipient.is_active === 1 && recipient.delete_mark === 0;
+        const isActive = recipient.is_active === 1 && recipient.F_DeleteMark === 0;
         
         // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
         let nextExecution = null;
@@ -446,7 +446,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
             try {
               nextExecution = calculateNextExecutionTimeFromCron(recipient.cron_expression);
             } catch (error) {
-              errorWithTag('[定时任务]', `计算收件配置 ${recipient.id} 的cron表达式下次执行时间失败:`, error);
+              errorWithTag('[定时任务]', `计算收件配置 ${recipient.F_Id} 的cron表达式下次执行时间失败:`, error);
             }
           } else if (recipient.send_frequency && recipient.send_time) {
             // 使用传统的 send_frequency 和 send_time
@@ -455,7 +455,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
         }
         
         return {
-          id: recipient.id,
+          id: recipient.F_Id,
           userId: recipient.user_id,
           userAccount: recipient.user_account,
           userEmail: recipient.user_email,
@@ -466,10 +466,10 @@ router.get('/', checkAdminPermission, async (req, res) => {
           cronExpression: recipient.cron_expression,
           skipHoliday: recipient.skip_holiday === 1,
           isActive: isActive,
-          isDeleted: recipient.delete_mark === 1,
+          isDeleted: recipient.F_DeleteMark === 1,
           nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
-          createdAt: recipient.created_at,
-          updatedAt: recipient.updated_at
+          createdAt: recipient.F_CreatorTime,
+          updatedAt: recipient.F_LastModifyTime
         };
       });
 
@@ -485,15 +485,15 @@ router.get('/', checkAdminPermission, async (req, res) => {
       const configs = await db.query(
         `SELECT nic.*, a.app_name
          FROM news_interface_config nic
-         LEFT JOIN applications a ON nic.app_id = a.id
-         WHERE nic.delete_mark = 0
-         ORDER BY nic.created_at DESC
+         LEFT JOIN applications a ON nic.app_id = a.F_Id
+         WHERE nic.F_DeleteMark = 0
+         ORDER BY nic.F_CreatorTime DESC
          LIMIT ? OFFSET ?`,
         [parseInt(pageSize), offset]
       );
 
       // 获取总数
-      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM news_interface_config WHERE delete_mark = 0');
+      const [totalResult] = await db.query('SELECT COUNT(*) as total FROM news_interface_config WHERE F_DeleteMark = 0');
       const total = totalResult.total || 0;
 
       // 为每个配置添加定时任务信息
@@ -530,7 +530,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
             `SELECT end_time FROM news_sync_execution_log 
              WHERE config_id = ? AND end_time IS NOT NULL 
              ORDER BY end_time DESC LIMIT 1`,
-            [config.id]
+            [config.F_Id]
           );
           if (latestLogs.length > 0 && latestLogs[0].end_time) {
             lastSyncTime = latestLogs[0].end_time;
@@ -543,17 +543,17 @@ router.get('/', checkAdminPermission, async (req, res) => {
               setImmediate(async () => {
                 try {
                   await db.execute(
-                    'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = DATE(?) WHERE id = ?',
-                    [lastSyncTime, lastSyncTime, config.id]
+                    'UPDATE news_interface_config SET last_sync_time = ?, last_sync_date = DATE(?) WHERE F_Id = ?',
+                    [lastSyncTime, lastSyncTime, config.F_Id]
                   );
                 } catch (updateError) {
-                  logWithTag('[定时任务API]', `更新配置 ${config.id} 的last_sync_time失败:`, updateError.message);
+                  logWithTag('[定时任务API]', `更新配置 ${config.F_Id} 的last_sync_time失败:`, updateError.message);
                 }
               });
             }
           }
         } catch (logError) {
-          logWithTag('[定时任务API]', `查询配置 ${config.id} 的执行日志失败:`, logError.message);
+          logWithTag('[定时任务API]', `查询配置 ${config.F_Id} 的执行日志失败:`, logError.message);
           // 如果查询失败，继续使用config.last_sync_time
         }
         
@@ -563,12 +563,12 @@ router.get('/', checkAdminPermission, async (req, res) => {
           try {
             nextExecutionFromCron = calculateNextExecutionTimeFromCron(config.cron_expression);
           } catch (error) {
-            errorWithTag('[定时任务]', `计算配置 ${config.id} 的cron表达式下次执行时间失败:`, error);
+            errorWithTag('[定时任务]', `计算配置 ${config.F_Id} 的cron表达式下次执行时间失败:`, error);
           }
         }
         
         return {
-          id: config.id,
+          id: config.F_Id,
           appId: config.app_id,
           appName: config.app_name,
           interfaceType: config.interface_type || '新榜',
@@ -586,8 +586,8 @@ router.get('/', checkAdminPermission, async (req, res) => {
           retry_interval: config.retry_interval || 0,
           nextExecutionTime: (nextExecutionFromCron || nextExecution) ? (nextExecutionFromCron || nextExecution).toISOString() : null,
           lastSyncTime: lastSyncTime,
-          createdAt: config.created_at,
-          updatedAt: config.updated_at
+          createdAt: config.F_CreatorTime,
+          updatedAt: config.F_LastModifyTime
         };
       }));
 
@@ -615,8 +615,8 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     const recipients = await db.query(
       `SELECT rm.*, u.account as user_account, u.email as user_email
        FROM recipient_management rm
-       LEFT JOIN users u ON rm.user_id = u.id
-       WHERE rm.id = ? AND rm.delete_mark = 0`,
+       LEFT JOIN users u ON rm.user_id = u.F_Id
+       WHERE rm.F_Id = ? AND rm.F_DeleteMark = 0`,
       [id]
     );
 
@@ -625,7 +625,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const recipient = recipients[0];
-    const isActive = recipient.is_active === 1 && recipient.delete_mark === 0;
+    const isActive = recipient.is_active === 1 && recipient.F_DeleteMark === 0;
     
     // 计算下次执行时间：优先使用 cron_expression，否则使用 send_frequency 和 send_time
     let nextExecution = null;
@@ -635,7 +635,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
         try {
           nextExecution = calculateNextExecutionTimeFromCron(recipient.cron_expression);
         } catch (error) {
-          errorWithTag('[定时任务]', `计算收件配置 ${recipient.id} 的cron表达式下次执行时间失败:`, error);
+          errorWithTag('[定时任务]', `计算收件配置 ${recipient.F_Id} 的cron表达式下次执行时间失败:`, error);
         }
       } else if (recipient.send_frequency && recipient.send_time) {
         // 使用传统的 send_frequency 和 send_time
@@ -644,7 +644,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     }
 
     const task = {
-      id: recipient.id,
+      id: recipient.F_Id,
       userId: recipient.user_id,
       userAccount: recipient.user_account,
       userEmail: recipient.user_email,
@@ -655,10 +655,10 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
       cronExpression: recipient.cron_expression,
       skipHoliday: recipient.skip_holiday === 1,
       isActive: isActive,
-      isDeleted: recipient.delete_mark === 1,
+      isDeleted: recipient.F_DeleteMark === 1,
       nextExecutionTime: nextExecution ? nextExecution.toISOString() : null,
-      createdAt: recipient.created_at,
-      updatedAt: recipient.updated_at
+      createdAt: recipient.F_CreatorTime,
+      updatedAt: recipient.F_LastModifyTime
     };
 
     res.json({
@@ -682,7 +682,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       // 新闻同步日志查询
       // 检查配置是否存在
       const configs = await db.query(
-        'SELECT id FROM news_interface_config WHERE id = ?',
+        'SELECT F_Id FROM news_interface_config WHERE F_Id = ?',
         [id]
       );
 
@@ -701,9 +701,9 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
 
       // 获取分页数据
       const logs = await db.query(
-        `SELECT id, execution_type, start_time, end_time, duration_seconds, 
+        `SELECT F_Id, execution_type, start_time, end_time, duration_seconds, 
                 status, synced_count, total_enterprises, processed_enterprises, 
-                error_count, error_message, execution_details, created_at, created_by
+                error_count, error_message, execution_details, F_CreatorTime, F_CreatorUserId
          FROM news_sync_execution_log 
          WHERE config_id = ?
          ORDER BY start_time DESC 
@@ -714,12 +714,12 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       // 为每个日志获取详细记录
       for (const log of logs) {
         const detailLogs = await db.query(
-          `SELECT id, interface_type, account_id, has_data, data_count, 
-                  insert_success, insert_count, error_message, created_at
+          `SELECT F_Id, interface_type, account_id, has_data, data_count, 
+                  insert_success, insert_count, error_message, F_CreatorTime
            FROM news_sync_detail_log 
            WHERE sync_log_id = ?
-           ORDER BY created_at ASC`,
-          [log.id]
+           ORDER BY F_CreatorTime ASC`,
+          [log.F_Id]
         );
         log.detail_logs = detailLogs || [];
       }
@@ -757,7 +757,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       // 邮件发送日志查询（原有逻辑）
     // 获取收件管理配置（含 app_id：上市进展与新闻舆情等分应用发信，email_logs 按对应应用的 email_config 落库）
     const recipients = await db.query(
-      'SELECT recipient_email, app_id FROM recipient_management WHERE id = ?',
+      'SELECT recipient_email, app_id FROM recipient_management WHERE F_Id = ?',
       [id]
     );
 
@@ -784,16 +784,16 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
     let emailConfigs = [];
     if (recipient.app_id) {
       emailConfigs = await db.query(
-        `SELECT ec.id FROM email_config ec WHERE ec.app_id = ? AND ec.is_active = 1 LIMIT 1`,
+        `SELECT ec.F_Id FROM email_config ec WHERE ec.app_id = ? AND ec.is_active = 1 LIMIT 1`,
         [recipient.app_id]
       );
     }
     if (!emailConfigs.length) {
       // 兼容旧数据：未绑定 app_id 的收件配置默认按「新闻舆情」应用查日志
       emailConfigs = await db.query(
-        `SELECT ec.id
+        `SELECT ec.F_Id
          FROM email_config ec
-         LEFT JOIN applications a ON ec.app_id = a.id
+         LEFT JOIN applications a ON ec.app_id = a.F_Id
          WHERE CAST(a.app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci 
          AND ec.is_active = 1
          LIMIT 1`,
@@ -811,7 +811,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
       });
     }
 
-    const emailConfigId = emailConfigs[0].id;
+    const emailConfigId = emailConfigs[0].F_Id;
 
     // 构建查询条件：匹配收件人邮箱
     // 使用LIKE匹配，因为to_email可能包含多个邮箱（逗号分隔）
@@ -833,12 +833,12 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
 
     // 获取分页数据
     const logs = await db.query(
-      `SELECT id, operation_type, from_email, to_email, subject, status, 
-              error_message, created_at, created_by
+      `SELECT F_Id, operation_type, from_email, to_email, subject, status, 
+              error_message, F_CreatorTime, F_CreatorUserId
        FROM email_logs 
        WHERE email_config_id = ? 
        AND (${emailConditions})
-       ORDER BY created_at DESC 
+       ORDER BY F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [emailConfigId, ...queryParams, parseInt(pageSize), offset]
     );
@@ -873,7 +873,7 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
       
       // 检查接口类型
       const configs = await db.query(
-        'SELECT interface_type FROM news_interface_config WHERE id = ?',
+        'SELECT interface_type FROM news_interface_config WHERE F_Id = ?',
         [id]
       );
       
@@ -952,7 +952,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     if (task_type === 'email') {
       // 检查收件管理配置是否存在
       const existing = await db.query(
-        'SELECT * FROM recipient_management WHERE id = ? AND delete_mark = 0',
+        'SELECT * FROM recipient_management WHERE F_Id = ? AND F_DeleteMark = 0',
         [id]
       );
 
@@ -983,7 +983,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (updateFields.length > 0) {
         updateValues.push(id);
         await db.execute(
-          `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
+          `UPDATE recipient_management SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
           updateValues
         );
 
@@ -993,7 +993,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     } else if (task_type === 'news_sync') {
       // 检查新闻接口配置是否存在
       const existing = await db.query(
-        'SELECT * FROM news_interface_config WHERE id = ? AND delete_mark = 0',
+        'SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ? AND F_DeleteMark = 0',
         [id]
       );
 
@@ -1068,7 +1068,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       if (updateFields.length > 0) {
         updateValues.push(id);
         await db.execute(
-          `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE id = ? AND delete_mark = 0`,
+          `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
           updateValues
         );
 
@@ -1098,14 +1098,14 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     if (task_type === 'email') {
       const existing = await db.query(
-        'SELECT id FROM recipient_management WHERE id = ? AND delete_mark = 0',
+        'SELECT F_Id FROM recipient_management WHERE F_Id = ? AND F_DeleteMark = 0',
         [id]
       );
       if (existing.length === 0) {
         return res.status(404).json({ success: false, message: '定时任务不存在' });
       }
       const result = await db.execute(
-        'UPDATE recipient_management SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+        'UPDATE recipient_management SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
         [req.currentUserId || null, id]
       );
       if (result.affectedRows === 0) {
@@ -1114,14 +1114,14 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
       await updateScheduledTasks();
     } else if (task_type === 'news_sync') {
       const existing = await db.query(
-        'SELECT id FROM news_interface_config WHERE id = ? AND delete_mark = 0',
+        'SELECT F_Id FROM news_interface_config WHERE F_Id = ? AND F_DeleteMark = 0',
         [id]
       );
       if (existing.length === 0) {
         return res.status(404).json({ success: false, message: '定时任务不存在' });
       }
       const result = await db.execute(
-        'UPDATE news_interface_config SET delete_mark = 1, delete_time = NOW(), delete_user_id = ? WHERE id = ? AND delete_mark = 0',
+        'UPDATE news_interface_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
         [req.currentUserId || null, id]
       );
       if (result.affectedRows === 0) {

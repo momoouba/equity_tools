@@ -269,7 +269,7 @@ def get_db_conf() -> Dict[str, Any]:
 
 def fetch_admin_id(conn: pymysql.connections.Connection) -> str:
     with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE account = 'admin' LIMIT 1")
+        cur.execute("SELECT F_Id FROM users WHERE account = 'admin' LIMIT 1")
         r = cur.fetchone()
         if not r:
             raise RuntimeError("未找到 account=admin 用户，无法写入 ipo_progress")

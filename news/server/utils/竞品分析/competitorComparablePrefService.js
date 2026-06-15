@@ -40,7 +40,7 @@ async function upsertComparablePref({
   if (!key) throw new Error('无效的竞品键');
 
   const existing = await db.query(
-    `SELECT id, include_in_comparable
+    `SELECT F_Id, include_in_comparable
      FROM sourcing_competitor_comparable_pref
      WHERE subject_type = ?
        AND (invested_enterprise_id <=> ?)
@@ -54,14 +54,14 @@ async function upsertComparablePref({
   let recordId;
 
   if (existing.length) {
-    recordId = existing[0].id;
+    recordId = existing[0].F_Id;
     const oldVal = Number(existing[0].include_in_comparable) === 1 ? '1' : '0';
     const newVal = String(nextVal);
     if (oldVal !== newVal) {
       await db.execute(
         `UPDATE sourcing_competitor_comparable_pref
-         SET include_in_comparable = ?, updated_at = NOW()
-         WHERE id = ?`,
+         SET include_in_comparable = ?, F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
         [nextVal, recordId]
       );
       await logDataChange(
@@ -78,8 +78,8 @@ async function upsertComparablePref({
     recordId = await generateId('sourcing_competitor_comparable_pref');
     await db.execute(
       `INSERT INTO sourcing_competitor_comparable_pref (
-         id, subject_type, invested_enterprise_id, pre_investment_project_id,
-         competitor_key, include_in_comparable, created_at, updated_at
+         F_Id, subject_type, invested_enterprise_id, pre_investment_project_id,
+         competitor_key, include_in_comparable, F_CreatorTime, F_LastModifyTime
        ) VALUES (?,?,?,?,?,?,NOW(),NOW())`,
       [recordId, subjectType, ieId, pipId, key, nextVal]
     );

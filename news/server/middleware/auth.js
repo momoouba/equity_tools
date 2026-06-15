@@ -15,9 +15,9 @@ async function getCurrentUser(req, res, next) {
     }
 
     const users = await db.query(
-      `SELECT id, account, role, membership_level_id, app_permissions
+      `SELECT F_Id AS id, account, role, membership_level_id, app_permissions
        FROM users
-       WHERE id = ? LIMIT 1`,
+       WHERE F_Id = ? LIMIT 1`,
       [userId]
     );
 

@@ -32,11 +32,11 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
     throw e;
   }
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, delete_mark
-     FROM invested_enterprises WHERE id = ? LIMIT 1`,
+    `SELECT F_Id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, F_DeleteMark
+     FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
     [id]
   );
-  if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+  if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
     const e = new Error('被投企业不存在或已删除');
     e.code = 404;
     throw e;
@@ -76,8 +76,8 @@ async function syncInvestedEnterpriseQccCompanyBrief(enterpriseId) {
        qcc_sync_at = NOW(),
        qcc_sync_error = NULL,
        qcc_sync_via = 'legacy_api',
-       updated_at = NOW()
-     WHERE id = ? AND delete_mark = 0`,
+       F_LastModifyTime = NOW()
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
     [intro, id]
   );
 
@@ -107,11 +107,11 @@ async function batchSyncInvestedEnterpriseQccCompanyBrief(enterpriseIds, opts = 
   }
   const rowMap = new Map();
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, delete_mark
-     FROM invested_enterprises WHERE id IN (${ids.map(() => '?').join(',')})`,
+    `SELECT F_Id, enterprise_full_name, unified_credit_code, data_app_name, data_app_id, F_DeleteMark
+     FROM invested_enterprises WHERE F_Id IN (${ids.map(() => '?').join(',')})`,
     ids
   );
-  for (const r of rows) rowMap.set(String(r.id), r);
+  for (const r of rows) rowMap.set(String(r.F_Id), r);
 
   /** @type {Map<string, { ok: boolean, err?: string }>} */
   const creditBatch = new Map();
@@ -122,7 +122,7 @@ async function batchSyncInvestedEnterpriseQccCompanyBrief(enterpriseIds, opts = 
     const eid = ids[i];
     const row = rowMap.get(eid);
     try {
-      if (!row || Number(row.delete_mark) !== 0) {
+      if (!row || Number(row.F_DeleteMark) !== 0) {
         const e = new Error('被投企业不存在或已删除');
         e.code = 404;
         throw e;
@@ -172,7 +172,7 @@ async function batchSyncInvestedEnterpriseQccCompanyBrief(enterpriseIds, opts = 
       const msg = (err && err.message) || String(err);
       try {
         await db.execute(
-          `UPDATE invested_enterprises SET qcc_sync_error = ?, updated_at = NOW() WHERE id = ? AND delete_mark = 0`,
+          `UPDATE invested_enterprises SET qcc_sync_error = ?, F_LastModifyTime = NOW() WHERE F_Id = ? AND F_DeleteMark = 0`,
           [String(msg).slice(0, 480), eid]
         );
       } catch {

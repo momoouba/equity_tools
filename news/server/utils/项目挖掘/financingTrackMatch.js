@@ -51,11 +51,11 @@ async function loadActiveRules() {
       lv1.name AS lv1_name,
       t.name AS track_name
     FROM sourcing_track_lv3 lv3
-    INNER JOIN sourcing_track_lv2 lv2 ON lv2.id = lv3.lv2_id AND lv2.delete_mark = 0
-    INNER JOIN sourcing_track_lv1 lv1 ON lv1.id = lv2.lv1_id AND lv1.delete_mark = 0
-    INNER JOIN sourcing_track t ON t.id = lv1.track_id AND t.delete_mark = 0
-    WHERE lv3.delete_mark = 0
-    ORDER BY lv3.match_priority DESC, lv3.id ASC
+    INNER JOIN sourcing_track_lv2 lv2 ON lv2.F_Id = lv3.lv2_id AND lv2.F_DeleteMark = 0
+    INNER JOIN sourcing_track_lv1 lv1 ON lv1.F_Id = lv2.lv1_id AND lv1.F_DeleteMark = 0
+    INNER JOIN sourcing_track t ON t.F_Id = lv1.track_id AND t.F_DeleteMark = 0
+    WHERE lv3.F_DeleteMark = 0
+    ORDER BY lv3.match_priority DESC, lv3.F_Id ASC
   `);
   return rows || [];
 }
@@ -129,16 +129,16 @@ async function applyTrackMatchForEvents({ limit = 5000, offset = 0, mode = 'fill
   }
 
   let sql = `
-    SELECT id, company_name, project_name, project_desc,
+    SELECT F_Id AS id, company_name, project_name, project_desc,
            industry_source_lv1, industry_source_lv2, industry_std_lv1, industry_std_lv2,
            track_primary, track_secondary
     FROM sourcing_financing_event
-    WHERE delete_mark = 0
+    WHERE F_DeleteMark = 0
   `;
   const params = [];
 
   if (eventIds && eventIds.length) {
-    sql += ` AND id IN (${eventIds.map(() => '?').join(',')})`;
+    sql += ` AND F_Id IN (${eventIds.map(() => '?').join(',')})`;
     params.push(...eventIds);
   } else {
     if (mode === 'fill_empty') {
@@ -147,7 +147,7 @@ async function applyTrackMatchForEvents({ limit = 5000, offset = 0, mode = 'fill
         OR track_secondary IS NULL OR track_secondary = ''
       )`;
     }
-    sql += ' ORDER BY id ASC LIMIT ? OFFSET ?';
+    sql += ' ORDER BY F_Id ASC LIMIT ? OFFSET ?';
     params.push(Math.min(Math.max(parseInt(limit, 10) || 5000, 1), 20000), Math.max(parseInt(offset, 10) || 0, 0));
   }
 
@@ -185,8 +185,8 @@ async function applyTrackMatchForEvents({ limit = 5000, offset = 0, mode = 'fill
 
         await db.execute(
           `UPDATE sourcing_financing_event
-           SET track_primary = ?, track_secondary = ?, track_keywords = ?, updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?`,
+           SET track_primary = ?, track_secondary = ?, track_keywords = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+           WHERE F_Id = ?`,
           [rule.track_name, secondary, kw || null, row.id]
         );
         matched++;

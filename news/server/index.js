@@ -452,7 +452,7 @@ async function startServer() {
 
           // 初始化外部数据库连接（异步，不阻塞）
           console.log('正在初始化外部数据库连接...');
-          db.query('SELECT * FROM external_db_config WHERE delete_mark = 0 AND is_active = 1')
+          db.query('SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1')
             .then(configs => {
               if (configs && configs.length > 0) {
                 return initializeExternalDatabases(configs);

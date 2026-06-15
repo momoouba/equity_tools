@@ -115,6 +115,39 @@ async function ensureRowIds(rows, targetTable, connection) {
 router.use(getCurrentUser);
 
 /**
+ * 获取目标表的实际列名集合（带缓存），用于向下兼容写入：
+ * 若 SQL 查询返回的字段多于数据库表的字段，只写入匹配的列，多余的自动忽略。
+ */
+const tableColumnCache = new Map();
+async function getTableColumns(tableName, connection) {
+  if (tableColumnCache.has(tableName)) return tableColumnCache.get(tableName);
+  const [cols] = await connection.query(
+    `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  const set = new Set(cols.map(c => c.COLUMN_NAME));
+  tableColumnCache.set(tableName, set);
+  return set;
+}
+
+/**
+ * 过滤行对象，只保留目标表中实际存在的列。
+ * 向下兼容：SQL 查询返回的字段多于数据库表字段时，不阻断流程，只写入匹配字段。
+ */
+async function filterColumnsForInsert(rows, targetTable, connection) {
+  const validCols = await getTableColumns(targetTable, connection);
+  return rows.map(r => {
+    const filtered = {};
+    for (const key of Object.keys(r)) {
+      if (validCols.has(key)) {
+        filtered[key] = r[key];
+      }
+    }
+    return filtered;
+  });
+}
+
+/**
  * 获取日期列表
  * GET /api/performance/versions/dates
  */
@@ -328,7 +361,7 @@ router.post('/', async (req, res) => {
           const ensureExternalPool = async () => {
             if (!getExternalPool(externalId)) {
               const cfgRows = await db.query(
-                'SELECT * FROM external_db_config WHERE id = ? AND delete_mark = 0 AND is_active = 1',
+                'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
                 [externalId]
               );
               if (!cfgRows || cfgRows.length === 0) {
@@ -364,9 +397,11 @@ router.post('/', async (req, res) => {
             const withVersion = rows.map((r) => (typeof r === 'object' && r !== null ? { ...r, version } : { version, value: r }));
             if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
             const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
-            const cols = Object.keys(withIds[0]);
+            // 向下兼容：只写入目标表中实际存在的列
+            const filtered = await filterColumnsForInsert(withIds, sanitizedTargetTable, connection);
+            const cols = Object.keys(filtered[0]);
             const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
-            const values = withIds.map((r) => cols.map((c) => r[c]));
+            const values = filtered.map((r) => cols.map((c) => r[c]));
             await connection.query(
               `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
               [values]
@@ -381,9 +416,11 @@ router.post('/', async (req, res) => {
               const withVersion = rows.map((r) => ({ ...r, version }));
               if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
               const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
-              const cols = Object.keys(withIds[0]);
+              // 向下兼容：只写入目标表中实际存在的列
+              const filtered = await filterColumnsForInsert(withIds, sanitizedTargetTable, connection);
+              const cols = Object.keys(filtered[0]);
               const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
-              const values = withIds.map((r) => cols.map((c) => r[c]));
+              const values = filtered.map((r) => cols.map((c) => r[c]));
               await connection.query(
                 `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
                 [values]
@@ -433,7 +470,7 @@ router.patch('/:version/lock', async (req, res) => {
     }
     
     // 检查用户权限
-    const userRows = await db.query('SELECT role FROM users WHERE id = ?', [userId]);
+    const userRows = await db.query('SELECT role FROM users WHERE F_Id = ?', [userId]);
     const isAdmin = userRows.length > 0 && userRows[0].role === 'admin';
     
     // 获取当前版本状态

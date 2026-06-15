@@ -45,11 +45,11 @@ async function isRecentlyAnalyzed(newsId) {
  */
 async function recordAnalysis(newsId) {
   await db.execute(
-    `INSERT INTO ai_news_analysis_cache (news_id, analyzed_at, updated_at)
+    `INSERT INTO ai_news_analysis_cache (news_id, analyzed_at, F_LastModifyTime)
      VALUES (?, NOW(), NOW())
      ON DUPLICATE KEY UPDATE
        analyzed_at = VALUES(analyzed_at),
-       updated_at = VALUES(updated_at)`,
+       F_LastModifyTime = VALUES(F_LastModifyTime)`,
     [String(newsId)]
   );
 }

@@ -128,10 +128,10 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
 
   // 查询港交所所有未删除的记录
   const rows = await db.query(`
-    SELECT f_id, company, project_name, status, board, exchange, f_update_time, receive_date
+    SELECT F_Id, company, project_name, status, board, exchange, F_UpdateTime, receive_date
     FROM ipo_progress
     WHERE F_DeleteMark = 0 AND exchange = '港交所'
-    ORDER BY f_id ASC
+    ORDER BY F_Id ASC
   `);
 
   console.log(`[ipo_progress] 港交所记录总数: ${rows.length}`);
@@ -143,7 +143,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
     if (!originalCompany) continue;
 
     const simplifiedCompany = normalizeCompanyName(originalCompany);
-    const dateStr = String(row.f_update_time || '').slice(0, 10);
+    const dateStr = String(row.F_UpdateTime || '').slice(0, 10);
     const status = String(row.status || '').trim();
     const board = String(row.board || '').trim();
 
@@ -154,7 +154,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
     }
 
     groups.get(key).push({
-      f_id: row.f_id,
+      F_Id: row.F_Id,
       company: originalCompany,
       project_name: row.project_name,
       simplifiedCompany,
@@ -186,7 +186,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
       });
 
       if (!dryRun) {
-        const tradIds = traditionalRecords.map(r => r.f_id);
+        const tradIds = traditionalRecords.map(r => r.F_Id);
         // 先删除关联的 ipo_project_progress（#17: 分块执行避免 IN 子句超限）
         if (tradIds.length > 0) {
           await chunkedInExecute(
@@ -198,7 +198,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
         for (const id of tradIds) {
           await db.execute(
             `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system'
-             WHERE f_id = ? AND F_DeleteMark = 0`,
+             WHERE F_Id = ? AND F_DeleteMark = 0`,
             [id]
           );
           cleaned += 1;
@@ -210,11 +210,11 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
 
       // 多条简体时也去重
       if (simplifiedRecords.length >= 2) {
-        const sorted = simplifiedRecords.sort((a, b) => a.f_id - b.f_id);
+        const sorted = simplifiedRecords.sort((a, b) => a.F_Id - b.F_Id);
         const deleteRecords = sorted.slice(1);
         if (!dryRun) {
           for (const del of deleteRecords) {
-            const delIds = [del.f_id];
+            const delIds = [del.F_Id];
             const ph = delIds.map(() => '?').join(',');
             await db.execute(
               `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${ph})`,
@@ -222,8 +222,8 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
             );
             await db.execute(
               `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system'
-               WHERE f_id = ? AND F_DeleteMark = 0`,
-              [del.f_id]
+               WHERE F_Id = ? AND F_DeleteMark = 0`,
+              [del.F_Id]
             );
             cleaned += 1;
           }
@@ -235,7 +235,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
     }
     // 情况2：只有繁体记录（无简体） → 原地转为简体
     else if (simplifiedRecords.length === 0 && traditionalRecords.length >= 1) {
-      const sorted = traditionalRecords.sort((a, b) => a.f_id - b.f_id);
+      const sorted = traditionalRecords.sort((a, b) => a.F_Id - b.F_Id);
       // 第一条转为简体
       const convertRecord = sorted[0];
       const deleteRecords = sorted.slice(1);
@@ -251,13 +251,13 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
       if (!dryRun) {
         // 将第一条繁体记录原地更新为简体
         await db.execute(
-          `UPDATE ipo_progress SET company = ?, project_name = ? WHERE f_id = ? AND F_DeleteMark = 0`,
-          [convertRecord.simplifiedCompany, normalizeCompanyName(convertRecord.project_name || convertRecord.simplifiedCompany), convertRecord.f_id]
+          `UPDATE ipo_progress SET company = ?, project_name = ? WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [convertRecord.simplifiedCompany, normalizeCompanyName(convertRecord.project_name || convertRecord.simplifiedCompany), convertRecord.F_Id]
         );
         // 删除关联的 ipo_project_progress（让 listingMatchRunner 重新匹配）
         await db.execute(
           `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
-          [convertRecord.f_id]
+          [convertRecord.F_Id]
         );
         converted += 1;
 
@@ -265,12 +265,12 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
         for (const del of deleteRecords) {
           await db.execute(
             `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id = ?`,
-            [del.f_id]
+            [del.F_Id]
           );
           await db.execute(
             `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system'
-             WHERE f_id = ? AND F_DeleteMark = 0`,
-            [del.f_id]
+             WHERE F_Id = ? AND F_DeleteMark = 0`,
+            [del.F_Id]
           );
           cleaned += 1;
         }
@@ -281,7 +281,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
     }
     // 情况3：只有简体记录且有多条 → 保留最早一条
     else if (simplifiedRecords.length >= 2 && traditionalRecords.length === 0) {
-      const sorted = simplifiedRecords.sort((a, b) => a.f_id - b.f_id);
+      const sorted = simplifiedRecords.sort((a, b) => a.F_Id - b.F_Id);
       const deleteRecords = sorted.slice(1);
 
       console.log(`[ipo_progress] 组 "${key}" 多条简体，保留最早一条`);
@@ -294,7 +294,7 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
 
       if (!dryRun) {
         for (const del of deleteRecords) {
-          const delIds = [del.f_id];
+          const delIds = [del.F_Id];
           const ph = delIds.map(() => '?').join(',');
           await db.execute(
             `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${ph})`,
@@ -302,8 +302,8 @@ async function cleanupIpoProgress(dryRun = DRY_RUN) {
           );
           await db.execute(
             `UPDATE ipo_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system'
-             WHERE f_id = ? AND F_DeleteMark = 0`,
-            [del.f_id]
+             WHERE F_Id = ? AND F_DeleteMark = 0`,
+            [del.F_Id]
           );
           cleaned += 1;
         }
@@ -339,10 +339,10 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
 
   // 查询港交所所有记录
   const rows = await db.query(`
-    SELECT id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_display
+    SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_display
     FROM ipo_new_share
     WHERE exchange = '港交所'
-    ORDER BY id ASC
+    ORDER BY F_Id ASC
   `);
 
   console.log(`[ipo_new_share] 港交所记录总数: ${rows.length}`);
@@ -360,7 +360,7 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
     }
 
     codeGroups.get(code).push({
-      id: row.id,
+      F_Id: row.F_Id,
       stock_code: code,
       stock_name: stockName,
       simplifiedName: normalizeCompanyName(stockName),
@@ -391,7 +391,7 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
 
       if (!dryRun) {
         for (const del of traditionalRecords) {
-          await db.execute(`DELETE FROM ipo_new_share WHERE id = ?`, [del.id]);
+          await db.execute(`DELETE FROM ipo_new_share WHERE F_Id = ?`, [del.F_Id]);
           cleaned += 1;
         }
       } else {
@@ -401,11 +401,11 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
 
       // 多条简体时也去重
       if (simplifiedRecords.length >= 2) {
-        const sorted = simplifiedRecords.sort((a, b) => a.id - b.id);
+        const sorted = simplifiedRecords.sort((a, b) => a.F_Id - b.F_Id);
         const deleteRecords = sorted.slice(1);
         if (!dryRun) {
           for (const del of deleteRecords) {
-            await db.execute(`DELETE FROM ipo_new_share WHERE id = ?`, [del.id]);
+            await db.execute(`DELETE FROM ipo_new_share WHERE F_Id = ?`, [del.F_Id]);
             cleaned += 1;
           }
         } else {
@@ -416,7 +416,7 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
     }
     // 情况2：只有繁体记录（无简体） → 原地转为简体
     else if (simplifiedRecords.length === 0 && traditionalRecords.length >= 1) {
-      const sorted = traditionalRecords.sort((a, b) => a.id - b.id);
+      const sorted = traditionalRecords.sort((a, b) => a.F_Id - b.F_Id);
       const convertRecord = sorted[0];
       const deleteRecords = sorted.slice(1);
 
@@ -431,14 +431,14 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
       if (!dryRun) {
         // 将第一条繁体记录原地更新为简体
         await db.execute(
-          `UPDATE ipo_new_share SET stock_name = ? WHERE id = ?`,
-          [convertRecord.simplifiedName, convertRecord.id]
+          `UPDATE ipo_new_share SET stock_name = ? WHERE F_Id = ?`,
+          [convertRecord.simplifiedName, convertRecord.F_Id]
         );
         converted += 1;
 
         // 删除多余的繁体记录
         for (const del of deleteRecords) {
-          await db.execute(`DELETE FROM ipo_new_share WHERE id = ?`, [del.id]);
+          await db.execute(`DELETE FROM ipo_new_share WHERE F_Id = ?`, [del.F_Id]);
           cleaned += 1;
         }
       } else {
@@ -448,7 +448,7 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
     }
     // 情况3：只有简体记录且有多条 → 保留最早一条
     else if (simplifiedRecords.length >= 2 && traditionalRecords.length === 0) {
-      const sorted = simplifiedRecords.sort((a, b) => a.id - b.id);
+      const sorted = simplifiedRecords.sort((a, b) => a.F_Id - b.F_Id);
       const deleteRecords = sorted.slice(1);
 
       console.log(`[ipo_new_share] 股票代码 "${code}" 多条简体，保留最早一条`);
@@ -461,7 +461,7 @@ async function cleanupIpoNewShare(dryRun = DRY_RUN) {
 
       if (!dryRun) {
         for (const del of deleteRecords) {
-          await db.execute(`DELETE FROM ipo_new_share WHERE id = ?`, [del.id]);
+          await db.execute(`DELETE FROM ipo_new_share WHERE F_Id = ?`, [del.F_Id]);
           cleaned += 1;
         }
       } else {
@@ -491,13 +491,13 @@ async function cleanupOrphanedProgressLinks(dryRun = DRY_RUN) {
 
   // 查找所有 match_source='ipo_progress' 且 ipo_progress_row_id 在 ipo_progress 表中不存在的记录
   const orphans = await db.query(
-    `SELECT ipp.f_id, ipp.ipo_project_f_id, ipp.ipo_progress_row_id, ipp.company, ipp.status, ipp.f_update_time
+    `SELECT ipp.F_Id, ipp.ipo_project_f_id, ipp.ipo_progress_row_id, ipp.company, ipp.status, ipp.F_UpdateTime
      FROM ipo_project_progress ipp
-     LEFT JOIN ipo_progress ip ON ipp.ipo_progress_row_id = ip.f_id
-     WHERE ip.f_id IS NULL
-       AND ipp.delete_mark = 0
+     LEFT JOIN ipo_progress ip ON ipp.ipo_progress_row_id = ip.F_Id
+     WHERE ip.F_Id IS NULL
+       AND ipp.F_DeleteMark = 0
        AND ipp.match_source = 'ipo_progress'
-     ORDER BY ipp.f_id ASC`
+     ORDER BY ipp.F_Id ASC`
   );
 
   console.log(`[orphan-cleanup] 发现 ${orphans.length} 条孤立记录`);
@@ -505,18 +505,18 @@ async function cleanupOrphanedProgressLinks(dryRun = DRY_RUN) {
   if (orphans.length === 0) return 0;
 
   if (!dryRun) {
-    const orphanIds = orphans.map(r => r.f_id);
+    const orphanIds = orphans.map(r => r.F_Id);
     // #17: 分块执行避免 IN 子句占位符超限
     await chunkedInExecute(
-      `UPDATE ipo_project_progress SET delete_mark = 1, delete_time = NOW(), delete_user_id = 'system_orphan_cleanup'
-       WHERE f_id IN (__IN__)`,
+      `UPDATE ipo_project_progress SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system_orphan_cleanup'
+       WHERE F_Id IN (__IN__)`,
       orphanIds
     );
     console.log(`[orphan-cleanup] 已软删除 ${orphanIds.length} 条孤立记录`);
   } else {
     for (const r of orphans.slice(0, 10)) {
-      const dt = r.f_update_time ? new Date(r.f_update_time).toISOString().slice(0, 10) : '';
-      console.log(`  [dry-run] f_id=${r.f_id} | proj=${r.ipo_project_f_id} | row_id=${r.ipo_progress_row_id} | company=${r.company} | status=${r.status} | date=${dt}`);
+      const dt = r.F_UpdateTime ? new Date(r.F_UpdateTime).toISOString().slice(0, 10) : '';
+      console.log(`  [dry-run] F_Id=${r.F_Id} | proj=${r.ipo_project_f_id} | row_id=${r.ipo_progress_row_id} | company=${r.company} | status=${r.status} | date=${dt}`);
     }
     if (orphans.length > 10) {
       console.log(`  ... 及其他 ${orphans.length - 10} 条`);

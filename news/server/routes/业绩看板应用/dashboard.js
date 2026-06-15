@@ -108,7 +108,8 @@ router.get('/manager-funds', async (req, res) => {
               paid_in_amount, paid_in_add, dis_amount, dis_add
        FROM b_manage
        WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY fund_type, set_up_date DESC`,
+         AND fund_type NOT IN ('内部非备案SPV', '外部非备案SPV', '外部备案SPV')
+       ORDER BY CASE fund_type WHEN '母基金' THEN 1 WHEN '直投基金' THEN 2 WHEN '内部备案SPV' THEN 3 ELSE 4 END, set_up_date DESC`,
       [version]
     );
     
@@ -130,17 +131,7 @@ router.get('/funds', async (req, res) => {
       return res.status(400).json({ success: false, message: '版本号不能为空' });
     }
     
-    // 获取基金列表
-    const fundRows = await db.query(
-      `SELECT fund FROM b_manage
-       WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY fund_type, set_up_date ASC`,
-      [version]
-    );
-    
-    const funds = fundRows.map(row => row.fund);
-    
-    // 获取指标数据
+    // 获取指标数据（表头直接取自 b_transaction_indicator，该版本有什么就展示什么）
     const indicatorRows = await db.query(
       `SELECT fund, lp_sub, paidin, distribution, tvpi, dpi, rvpi, nirr,
               sub_amount, inv_amount, exit_amount, girr, moc
@@ -148,12 +139,14 @@ router.get('/funds', async (req, res) => {
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]
     );
-    
+
     const indicators = {};
+    const funds = [];
     indicatorRows.forEach(row => {
       indicators[row.fund] = row;
+      if (!funds.includes(row.fund)) funds.push(row.fund);
     });
-    
+
     res.json({
       success: true,
       data: {

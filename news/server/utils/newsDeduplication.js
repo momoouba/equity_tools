@@ -31,9 +31,9 @@ class NewsDeduplication {
       
       // 查找所有有重复source_url的记录（排除已删除的）
       const duplicates = await db.query(
-        `SELECT source_url, COUNT(*) as count, GROUP_CONCAT(id ORDER BY created_at) as ids
+        `SELECT source_url, COUNT(*) as count, GROUP_CONCAT(F_Id ORDER BY F_CreatorTime) as ids
          FROM news_detail
-         WHERE source_url IS NOT NULL AND source_url != '' AND delete_mark = 0
+         WHERE source_url IS NOT NULL AND source_url != '' AND F_DeleteMark = 0
          GROUP BY source_url
          HAVING count > 1`
       );
@@ -53,10 +53,10 @@ class NewsDeduplication {
 
         // 获取所有重复记录的详细信息
         const records = await db.query(
-          `SELECT id, content, APItype, created_at, delete_mark
+          `SELECT F_Id AS id, content, APItype, F_CreatorTime, F_DeleteMark
            FROM news_detail
-           WHERE id IN (${ids.map(() => '?').join(',')}) AND delete_mark = 0
-           ORDER BY created_at ASC`,
+           WHERE F_Id IN (${ids.map(() => '?').join(',')}) AND F_DeleteMark = 0
+           ORDER BY F_CreatorTime ASC`,
           ids
         );
 
@@ -81,7 +81,7 @@ class NewsDeduplication {
         if (contaminatedRecords.length > 0) {
           for (const record of contaminatedRecords) {
             await db.execute(
-              'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+              'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
               [record.id]
             );
             cleanedCount++;
@@ -96,7 +96,7 @@ class NewsDeduplication {
             // 如果同时有企查查和新榜的记录，优先删除企查查的记录
             for (const record of qichachaRecords) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;
@@ -107,7 +107,7 @@ class NewsDeduplication {
             const recordsToDelete = qichachaRecords.slice(0, qichachaRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;
@@ -118,7 +118,7 @@ class NewsDeduplication {
             const recordsToDelete = cleanRecords.slice(0, cleanRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;
@@ -146,9 +146,9 @@ class NewsDeduplication {
       
       // 先找出所有source_url重复的记录ID（这些记录已经在第一步处理过了）
       const sourceUrlDuplicates = await db.query(
-        `SELECT GROUP_CONCAT(id) as ids
+        `SELECT GROUP_CONCAT(F_Id) as ids
          FROM news_detail
-         WHERE source_url IS NOT NULL AND source_url != '' AND delete_mark = 0
+         WHERE source_url IS NOT NULL AND source_url != '' AND F_DeleteMark = 0
          GROUP BY source_url
          HAVING COUNT(*) > 1`
       );
@@ -170,19 +170,19 @@ class NewsDeduplication {
         const processedIdsArray = Array.from(processedIds);
         const placeholders = processedIdsArray.map(() => '?').join(',');
         duplicates = await db.query(
-          `SELECT title, COUNT(*) as count, GROUP_CONCAT(id ORDER BY created_at) as ids
+          `SELECT title, COUNT(*) as count, GROUP_CONCAT(F_Id ORDER BY F_CreatorTime) as ids
            FROM news_detail
-           WHERE title IS NOT NULL AND title != '' AND delete_mark = 0
-             AND id NOT IN (${placeholders})
+           WHERE title IS NOT NULL AND title != '' AND F_DeleteMark = 0
+             AND F_Id NOT IN (${placeholders})
            GROUP BY title
            HAVING count > 1`,
           processedIdsArray
         );
       } else {
         duplicates = await db.query(
-          `SELECT title, COUNT(*) as count, GROUP_CONCAT(id ORDER BY created_at) as ids
+          `SELECT title, COUNT(*) as count, GROUP_CONCAT(F_Id ORDER BY F_CreatorTime) as ids
            FROM news_detail
-           WHERE title IS NOT NULL AND title != '' AND delete_mark = 0
+           WHERE title IS NOT NULL AND title != '' AND F_DeleteMark = 0
            GROUP BY title
            HAVING count > 1`
         );
@@ -203,10 +203,10 @@ class NewsDeduplication {
 
         // 获取所有重复记录的详细信息
         const records = await db.query(
-          `SELECT id, content, APItype, created_at, delete_mark, source_url, wechat_account
+          `SELECT F_Id AS id, content, APItype, F_CreatorTime, F_DeleteMark, source_url, wechat_account
            FROM news_detail
-           WHERE id IN (${ids.map(() => '?').join(',')}) AND delete_mark = 0
-           ORDER BY created_at ASC`,
+           WHERE F_Id IN (${ids.map(() => '?').join(',')}) AND F_DeleteMark = 0
+           ORDER BY F_CreatorTime ASC`,
           ids
         );
 
@@ -216,11 +216,11 @@ class NewsDeduplication {
 
         console.log(`[数据去重] 处理title重复: ${title.substring(0, 50)}..., 共 ${records.length} 条记录`);
         console.log(`[数据去重] 重复记录详情:`, records.map(r => ({
-          id: r.id,
+          id: r.F_Id,
           APItype: r.APItype,
           wechat_account: r.wechat_account,
           source_url: r.source_url ? r.source_url.substring(0, 50) + '...' : 'NULL',
-          created_at: r.created_at,
+          created_at: r.F_CreatorTime,
           content_length: r.content ? r.content.length : 0
         })));
 
@@ -239,7 +239,7 @@ class NewsDeduplication {
         if (contaminatedRecords.length > 0) {
           for (const record of contaminatedRecords) {
             await db.execute(
-              'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+              'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
               [record.id]
             );
             cleanedCount++;
@@ -254,7 +254,7 @@ class NewsDeduplication {
             // 如果同时有企查查和新榜的记录，优先删除企查查的记录
             for (const record of qichachaRecords) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;
@@ -265,7 +265,7 @@ class NewsDeduplication {
             const recordsToDelete = qichachaRecords.slice(0, qichachaRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;
@@ -276,7 +276,7 @@ class NewsDeduplication {
             const recordsToDelete = cleanRecords.slice(0, cleanRecords.length - 1);
             for (const record of recordsToDelete) {
               await db.execute(
-                'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
+                'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
                 [record.id]
               );
               cleanedCount++;

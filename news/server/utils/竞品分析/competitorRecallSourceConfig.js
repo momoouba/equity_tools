@@ -12,16 +12,16 @@ const DEFAULTS = {
  */
 async function getCompetitorRecallSourceFlags() {
   const rows = await db.query(
-    `SELECT id, enable_ipo_project, enable_financing_event, enable_ai_web
+    `SELECT F_Id, enable_ipo_project, enable_financing_event, enable_ai_web
      FROM competitor_recall_source_config
-     WHERE app_id = ? AND delete_mark = 0
+     WHERE app_id = ? AND F_DeleteMark = 0
      LIMIT 1`,
     [COMPETITOR_ANALYSIS_APP_ID]
   );
   if (!rows.length) return { id: null, ...DEFAULTS };
   const r = rows[0];
   return {
-    id: r.id,
+    id: r.F_Id,
     enable_ipo_project: !!Number(r.enable_ipo_project),
     enable_financing_event: !!Number(r.enable_financing_event),
     enable_ai_web: !!Number(r.enable_ai_web),
@@ -42,8 +42,8 @@ async function saveCompetitorRecallSourceFlags(flags) {
   if (current.id) {
     await db.execute(
       `UPDATE competitor_recall_source_config
-       SET enable_ipo_project = ?, enable_financing_event = ?, enable_ai_web = ?, updated_at = NOW()
-       WHERE id = ? AND delete_mark = 0`,
+       SET enable_ipo_project = ?, enable_financing_event = ?, enable_ai_web = ?, F_LastModifyTime = NOW()
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [
         payload.enable_ipo_project ? 1 : 0,
         payload.enable_financing_event ? 1 : 0,
@@ -57,7 +57,7 @@ async function saveCompetitorRecallSourceFlags(flags) {
   const rid = await generateId('competitor_recall_source_config');
   await db.execute(
     `INSERT INTO competitor_recall_source_config (
-      id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
+      F_Id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
     ) VALUES (?, ?, ?, ?, ?)`,
     [
       rid,

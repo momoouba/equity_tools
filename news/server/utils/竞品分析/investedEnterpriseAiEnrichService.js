@@ -78,8 +78,8 @@ async function markIeAiLogSuccess({
        result_product_intro = ?,
        result_industry_tags_display = ?,
        ${searchMetaSqlAssignments()},
-       updated_at = NOW()
-     WHERE id = ?`,
+       F_LastModifyTime = NOW()
+     WHERE F_Id = ?`,
     [
       duration,
       llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -109,8 +109,8 @@ async function markIeAiLogFailed({ logId, started, llmModelConfigId, promptConfi
          prompt_version = ?,
          ai_enrich_version = ?,
          error_message = ?,
-         updated_at = NOW()
-       WHERE id = ?`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [
         duration,
         llmModelConfigId != null ? String(llmModelConfigId) : null,
@@ -136,11 +136,11 @@ async function prepareInvestedEnterpriseAiJob({ enterpriseId, triggerType, trigg
   }
 
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, data_app_name, data_app_id, delete_mark
-     FROM invested_enterprises WHERE id = ? LIMIT 1`,
+    `SELECT F_Id, enterprise_full_name, data_app_name, data_app_id, F_DeleteMark
+     FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
     [id]
   );
-  if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+  if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
     return { ok: false, code: 404, message: '被投企业不存在或已删除' };
   }
   if (!(await isInvestedEnterpriseCompetitorAnalysisApp(rows[0]))) {
@@ -148,10 +148,10 @@ async function prepareInvestedEnterpriseAiJob({ enterpriseId, triggerType, trigg
   }
 
   const dup = await db.query(
-    `SELECT id, triggered_at FROM invested_enterprise_ai_enrich_log
+    `SELECT F_Id, triggered_at FROM invested_enterprise_ai_enrich_log
      WHERE invested_enterprise_id = ? AND ipo_project_f_id IS NULL
        AND execution_status IN ('pending','running')
-     ORDER BY id DESC LIMIT 1`,
+     ORDER BY F_Id DESC LIMIT 1`,
     [id]
   );
   if (dup.length) {
@@ -184,8 +184,8 @@ async function prepareInvestedEnterpriseAiJob({ enterpriseId, triggerType, trigg
   const logId = ins.insertId;
 
   await db.execute(
-    `UPDATE invested_enterprises SET ai_enrich_status = 'running', ai_enrich_error = NULL, updated_at = NOW()
-     WHERE id = ? AND delete_mark = 0`,
+    `UPDATE invested_enterprises SET ai_enrich_status = 'running', ai_enrich_error = NULL, F_LastModifyTime = NOW()
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
     [id]
   );
 
@@ -207,18 +207,18 @@ async function runInvestedEnterpriseAiEnrichTask({
   try {
     await db.execute(
       `UPDATE invested_enterprise_ai_enrich_log
-       SET execution_status = 'running', started_at = NOW(), updated_at = NOW()
-       WHERE id = ?`,
+       SET execution_status = 'running', started_at = NOW(), F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
       [logId]
     );
 
     const ev = await db.query(
-      `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation,
-              qcc_company_intro, delete_mark
-       FROM invested_enterprises WHERE id = ? LIMIT 1`,
+      `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
+              qcc_company_intro, F_DeleteMark
+       FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
       [enterpriseId]
     );
-    if (!ev.length || Number(ev[0].delete_mark) !== 0) {
+    if (!ev.length || Number(ev[0].F_DeleteMark) !== 0) {
       throw new Error('被投企业不存在或已删除');
     }
     row = ev[0];
@@ -249,8 +249,8 @@ async function runInvestedEnterpriseAiEnrichTask({
          ai_enrich_model = ?,
          ai_enrich_version = ?,
          ai_enrich_error = NULL,
-         updated_at = NOW()
-       WHERE id = ? AND delete_mark = 0`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [
         llm.productIntroStored || null,
         llm.display || null,
@@ -285,8 +285,8 @@ async function runInvestedEnterpriseAiEnrichTask({
       `UPDATE invested_enterprises SET
          ai_enrich_status = 'failed',
          ai_enrich_error = ?,
-         updated_at = NOW()
-       WHERE id = ? AND delete_mark = 0`,
+         F_LastModifyTime = NOW()
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [String((err && err.message) || err).slice(0, 480), enterpriseId]
     );
     await markIeAiLogFailed({
@@ -353,11 +353,11 @@ async function enqueueBatchInvestedEnterpriseAiEnrich({
     : `data_app_name = ?`;
   const appParams = psId ? [psId, DATA_APP_COMPETITOR_ANALYSIS] : [DATA_APP_COMPETITOR_ANALYSIS];
   const rows = await db.query(
-    `SELECT id, enterprise_full_name FROM invested_enterprises
-     WHERE delete_mark = 0 AND ${appClause}
-       AND DATE(created_at) >= ? AND DATE(created_at) <= ?
+    `SELECT F_Id, enterprise_full_name FROM invested_enterprises
+     WHERE F_DeleteMark = 0 AND ${appClause}
+       AND DATE(F_CreatorTime) >= ? AND DATE(F_CreatorTime) <= ?
        ${failedClause}
-     ORDER BY created_at DESC, id DESC`,
+     ORDER BY F_CreatorTime DESC, F_Id DESC`,
     [...appParams, df, dt]
   );
   const totalInRange = rows.length;
@@ -374,10 +374,10 @@ async function enqueueBatchInvestedEnterpriseAiEnrich({
   const seen = new Set();
   const representativeIds = [];
   for (const r of rows) {
-    const k = normalizeNameKey(r.enterprise_full_name) || `id:${r.id}`;
+    const k = normalizeNameKey(r.enterprise_full_name) || `id:${r.F_Id}`;
     if (seen.has(k)) continue;
     seen.add(k);
-    representativeIds.push(String(r.id));
+    representativeIds.push(String(r.F_Id));
   }
 
   const batchId = crypto.randomUUID();

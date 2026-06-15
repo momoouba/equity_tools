@@ -62,9 +62,9 @@ async function loadDictOptionsByCode(dictCode) {
   const code = String(dictCode || '').trim();
   if (!code) return [];
   const parents = await db.query(
-    `SELECT id FROM base_dictionary
-     WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0
-     ORDER BY sort_order ASC, created_at ASC
+    `SELECT F_Id FROM base_dictionary
+     WHERE dict_code = ? AND parent_id IS NULL AND F_DeleteMark = 0
+     ORDER BY sort_order ASC, F_CreatorTime ASC
      LIMIT 1`,
     [code]
   );
@@ -72,10 +72,10 @@ async function loadDictOptionsByCode(dictCode) {
   const rows = await db.query(
     `SELECT item_code, item_name, sort_order
      FROM base_dictionary
-     WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
+     WHERE parent_id = ? AND F_DeleteMark = 0 AND is_enabled = 1
        AND item_code IS NOT NULL AND TRIM(item_code) != ''
-     ORDER BY sort_order ASC, id ASC`,
-    [parents[0].id]
+     ORDER BY sort_order ASC, F_Id ASC`,
+    [parents[0].F_Id]
   );
   return rows.map((r) => {
     const v = String(r.item_code || '').trim();
@@ -102,9 +102,9 @@ async function loadAiModelProviderTypesFromDictionary() {
   const rows = await db.query(
     `SELECT dict_code, dict_name, sort_order
      FROM base_dictionary
-     WHERE parent_id IS NULL AND delete_mark = 0 AND is_enabled = 1
+     WHERE parent_id IS NULL AND F_DeleteMark = 0 AND is_enabled = 1
        AND dict_code LIKE 'ai_model_%'
-     ORDER BY sort_order ASC, created_at ASC`
+     ORDER BY sort_order ASC, F_CreatorTime ASC`
   );
   const providers = [];
   for (const r of rows) {
@@ -140,9 +140,9 @@ async function loadAiModelProviderDictMap() {
 
 async function loadModelOptionsForDictCode(provider, dictCode) {
   const parents = await db.query(
-    `SELECT id FROM base_dictionary
-     WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0
-     ORDER BY created_at ASC
+    `SELECT F_Id FROM base_dictionary
+     WHERE dict_code = ? AND parent_id IS NULL AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime ASC
      LIMIT 1`,
     [dictCode]
   );
@@ -153,10 +153,10 @@ async function loadModelOptionsForDictCode(provider, dictCode) {
   const rows = await db.query(
     `SELECT item_code, item_name, sort_order
      FROM base_dictionary
-     WHERE parent_id = ? AND delete_mark = 0 AND is_enabled = 1
+     WHERE parent_id = ? AND F_DeleteMark = 0 AND is_enabled = 1
        AND item_code IS NOT NULL AND TRIM(item_code) != ''
-     ORDER BY sort_order ASC, id ASC`,
-    [parents[0].id]
+     ORDER BY sort_order ASC, F_Id ASC`,
+    [parents[0].F_Id]
   );
   if (!rows.length) {
     const fallback = FALLBACK_AI_MODELS[provider];

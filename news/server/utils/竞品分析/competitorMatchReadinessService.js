@@ -55,8 +55,8 @@ async function loadLatestSupplementTags(investedEnterpriseId) {
   const rows = await db.query(
     `SELECT user_tags_json, ai_extracted_tags_json
      FROM competitor_match_supplement
-     WHERE invested_enterprise_id = ? AND delete_mark = 0
-     ORDER BY created_at DESC
+     WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
+     ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     [id]
   );
@@ -89,7 +89,7 @@ async function evaluateInvestedEnterpriseCompetitorReadiness(row) {
   const productIntro = strTrim(row.ai_product_intro);
   const qccSan = sanitizeQccCompanyIntroForMatching(row.qcc_company_intro);
   const baseTags = parseTagsFromRow(row);
-  const supTags = await loadLatestSupplementTags(row.id);
+  const supTags = await loadLatestSupplementTags(row.F_Id);
   const allTags = mergeTagArrays(baseTags, supTags);
 
   const hasProduct = productIntro.length > 0;
@@ -127,13 +127,13 @@ async function getInvestedEnterpriseRowForCompetitor(enterpriseId) {
     throw e;
   }
   const rows = await db.query(
-    `SELECT id, enterprise_full_name, unified_credit_code, project_abbreviation, data_app_name, data_app_id,
+    `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation, data_app_name, data_app_id,
             ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro,
-            exit_status, delete_mark, creator_user_id
-     FROM invested_enterprises WHERE id = ? LIMIT 1`,
+            exit_status, F_DeleteMark, F_CreatorUserId
+     FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
     [id]
   );
-  if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+  if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
     const e = new Error('被投企业不存在或已删除');
     e.code = 404;
     throw e;

@@ -48,7 +48,8 @@ async function fetchManagerData(version) {
             paid_in_amount, paid_in_add, dis_amount, dis_add
      FROM b_manage
      WHERE version = ? AND F_DeleteMark = 0
-     ORDER BY fund_type, set_up_date DESC`,
+       AND fund_type NOT IN ('内部非备案SPV', '外部非备案SPV', '外部备案SPV')
+     ORDER BY CASE fund_type WHEN '母基金' THEN 1 WHEN '直投基金' THEN 2 WHEN '内部备案SPV' THEN 3 ELSE 4 END, set_up_date DESC`,
     [version]
   );
 
@@ -61,14 +62,6 @@ async function fetchManagerData(version) {
  * @returns {{ funds: string[], indicators: Object<string, object> }}
  */
 async function fetchFundsData(version) {
-  const fundRows = await db.query(
-    `SELECT fund FROM b_manage
-     WHERE version = ? AND F_DeleteMark = 0
-     ORDER BY fund_type, set_up_date ASC`,
-    [version]
-  );
-  const funds = fundRows.map((row) => row.fund);
-
   const indicatorRows = await db.query(
     `SELECT fund, lp_sub, paidin, distribution, tvpi, dpi, rvpi, nirr,
             sub_amount, inv_amount, exit_amount, girr, moc
@@ -77,7 +70,11 @@ async function fetchFundsData(version) {
     [version]
   );
   const indicators = {};
-  indicatorRows.forEach((row) => { indicators[row.fund] = row; });
+  const funds = [];
+  indicatorRows.forEach((row) => {
+    indicators[row.fund] = row;
+    if (!funds.includes(row.fund)) funds.push(row.fund);
+  });
 
   return { funds, indicators };
 }

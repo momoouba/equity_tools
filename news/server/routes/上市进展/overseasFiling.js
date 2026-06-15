@@ -69,7 +69,7 @@ async function listOverseasFiling(req, res) {
          NULL AS source_page_url,
          NULL AS source_file_url,
          NULL AS batch_week,
-         DATE_FORMAT(f_create_date, '%Y-%m-%d %H:%i:%s') AS created_at
+         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM ipo_progress ${whereSql}
        ORDER BY receive_date DESC, f_id DESC
        LIMIT ? OFFSET ?`,

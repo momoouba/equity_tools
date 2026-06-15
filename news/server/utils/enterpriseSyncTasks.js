@@ -14,13 +14,13 @@ const scheduledTasks = new Map();
  */
 async function executeEnterpriseSyncTask(task) {
   try {
-    console.log(`[企业同步任务] 开始执行任务: ${task.id} (${task.description || '无描述'})`);
+    console.log(`[企业同步任务] 开始执行任务: ${task.F_Id} (${task.description || '无描述'})`);
     
     const result = await executeSyncTask(
       task.db_config_id,
       task.sql_query,
       task.data_app_name || DATA_APP_NEWS_SENTIMENT,
-      task.created_by || null
+      task.F_CreatorUserId || null
     );
     
     // 更新任务执行记录
@@ -30,14 +30,14 @@ async function executeEnterpriseSyncTask(task) {
            last_execution_status = ?,
            last_execution_message = ?,
            execution_count = execution_count + 1
-       WHERE id = ?`,
-      ['success', result.message, task.id]
+       WHERE F_Id = ?`,
+      ['success', result.message, task.F_Id]
     );
 
-    console.log(`[企业同步任务] 任务执行成功: ${task.id} - ${result.message}`);
+    console.log(`[企业同步任务] 任务执行成功: ${task.F_Id} - ${result.message}`);
     return result;
   } catch (error) {
-    console.error(`[企业同步任务] 任务执行失败: ${task.id}`, error);
+    console.error(`[企业同步任务] 任务执行失败: ${task.F_Id}`, error);
     
     // 更新任务执行记录为失败
     try {
@@ -47,8 +47,8 @@ async function executeEnterpriseSyncTask(task) {
              last_execution_status = ?,
              last_execution_message = ?,
              execution_count = execution_count + 1
-         WHERE id = ?`,
-        ['failed', error.message || '执行失败', task.id]
+         WHERE F_Id = ?`,
+        ['failed', error.message || '执行失败', task.F_Id]
       );
     } catch (updateError) {
       console.error('更新任务执行记录失败：', updateError);
@@ -70,8 +70,8 @@ async function initializeEnterpriseSyncTasks() {
     const tasks = await db.query(
       `SELECT est.*, edc.name as db_name, edc.host, edc.port, edc.\`database\`
        FROM enterprise_sync_task est
-       INNER JOIN external_db_config edc ON est.db_config_id = edc.id
-       WHERE est.is_active = 1 AND edc.delete_mark = 0 AND edc.is_active = 1`
+       INNER JOIN external_db_config edc ON est.db_config_id = edc.F_Id
+       WHERE est.is_active = 1 AND edc.F_DeleteMark = 0 AND edc.is_active = 1`
     );
 
     if (tasks.length === 0) {
@@ -84,7 +84,7 @@ async function initializeEnterpriseSyncTasks() {
       try {
         // 验证cron表达式
         if (!cron.validate(task.cron_expression)) {
-          console.error(`✗ 无效的Cron表达式: ${task.cron_expression} (任务ID: ${task.id})`);
+          console.error(`✗ 无效的Cron表达式: ${task.cron_expression} (任务ID: ${task.F_Id})`);
           continue;
         }
 
@@ -100,10 +100,10 @@ async function initializeEnterpriseSyncTasks() {
           }
         );
 
-        scheduledTasks.set(task.id, cronTask);
-        console.log(`✓ 企业同步定时任务已启动: ${task.id} (${task.description || '无描述'}) - Cron: ${task.cron_expression}`);
+        scheduledTasks.set(task.F_Id, cronTask);
+        console.log(`✓ 企业同步定时任务已启动: ${task.F_Id} (${task.description || '无描述'}) - Cron: ${task.cron_expression}`);
       } catch (error) {
-        console.error(`✗ 启动企业同步定时任务失败 (${task.id}):`, error.message);
+        console.error(`✗ 启动企业同步定时任务失败 (${task.F_Id}):`, error.message);
       }
     }
 

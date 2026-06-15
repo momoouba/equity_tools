@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
     }
 
     const data = await db.query(
-      `SELECT * ${condition} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT *, F_Id AS id ${condition} ORDER BY F_CreatorTime DESC LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
     const totalRows = await db.query(`SELECT COUNT(*) as total ${condition}`, params);
@@ -49,7 +49,7 @@ router.get('/search', async (req, res) => {
     }
 
     const companies = await db.query(
-      `SELECT id, enterprise_abbreviation, enterprise_full_name, unified_credit_code 
+      `SELECT F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code 
        FROM company 
        WHERE enterprise_abbreviation LIKE ? 
        ORDER BY enterprise_abbreviation 
@@ -68,7 +68,7 @@ router.get('/search', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const companies = await db.query('SELECT * FROM company WHERE id = ?', [id]);
+    const companies = await db.query('SELECT *, F_Id AS id FROM company WHERE F_Id = ?', [id]);
     
     if (companies.length === 0) {
       return res.status(404).json({ success: false, message: '企业不存在' });
@@ -105,7 +105,7 @@ router.post('/', [
 
     // 检查统一信用代码是否已存在
     if (unified_credit_code) {
-      const existing = await db.query('SELECT id FROM company WHERE unified_credit_code = ?', [unified_credit_code]);
+      const existing = await db.query('SELECT F_Id FROM company WHERE unified_credit_code = ?', [unified_credit_code]);
       if (existing.length > 0) {
         return res.status(400).json({ success: false, message: '该统一信用代码已存在' });
       }
@@ -114,7 +114,7 @@ router.post('/', [
     const companyId = await generateId('company');
     await db.execute(
       `INSERT INTO company 
-       (id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, official_website, wechat_official_account_id) 
+       (F_Id, enterprise_abbreviation, enterprise_full_name, unified_credit_code, official_website, wechat_official_account_id) 
        VALUES (?, ?, ?, ?, ?, ?)`,
       [
         companyId,
@@ -174,7 +174,7 @@ router.put('/:id', [
     const userId = req.headers['x-user-id'] || req.body.userId || null;
 
     // 获取旧数据用于日志记录
-    const oldDataRows = await db.query('SELECT * FROM company WHERE id = ?', [id]);
+    const oldDataRows = await db.query('SELECT * FROM company WHERE F_Id = ?', [id]);
     if (oldDataRows.length === 0) {
       return res.status(404).json({ success: false, message: '企业不存在' });
     }
@@ -184,7 +184,7 @@ router.put('/:id', [
     // 检查统一信用代码是否被其他企业使用
     if (unified_credit_code) {
       const existing = await db.query(
-        'SELECT id FROM company WHERE unified_credit_code = ? AND id != ?',
+        'SELECT F_Id FROM company WHERE unified_credit_code = ? AND F_Id != ?',
         [unified_credit_code, id]
       );
       if (existing.length > 0) {
@@ -203,8 +203,8 @@ router.put('/:id', [
     const result = await db.execute(
       `UPDATE company 
        SET enterprise_abbreviation = ?, enterprise_full_name = ?, unified_credit_code = ?,
-           official_website = ?, wechat_official_account_id = ?, updater_user_id = ?
-       WHERE id = ?`,
+           official_website = ?, wechat_official_account_id = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
       [
         newData.enterprise_abbreviation,
         newData.enterprise_full_name,
@@ -237,9 +237,9 @@ router.get('/:id/logs', async (req, res) => {
     const logs = await db.query(
       `SELECT l.*, u.account as change_user_account 
        FROM data_change_log l
-       LEFT JOIN users u ON l.change_user_id = u.id
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
        WHERE l.table_name = 'company' AND l.record_id = ?
-       ORDER BY l.change_time DESC`,
+       ORDER BY l.F_CreatorTime DESC`,
       [id]
     );
 
@@ -254,7 +254,7 @@ router.get('/:id/logs', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await db.execute('DELETE FROM company WHERE id = ?', [id]);
+    const result = await db.execute('DELETE FROM company WHERE F_Id = ?', [id]);
 
     if (result.affectedRows === 0) {
       return res.status(404).json({ success: false, message: '企业不存在' });

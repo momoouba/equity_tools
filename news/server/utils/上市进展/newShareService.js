@@ -75,7 +75,7 @@ function pickPositiveOrNullFromRow(rowVal, oldVal) {
 async function upsertNewShareRow(row) {
   const rowIssueSlice = String(row.issue_date || '').slice(0, 10);
   const existing = await db.query(
-    `SELECT id, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares,
+    `SELECT F_Id, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares,
             public_date, win_rate, first_day_close, first_day_chg_pct, first_day_market_cap
      FROM ipo_new_share
      WHERE stock_code = ? AND exchange = ?
@@ -158,7 +158,7 @@ async function upsertNewShareRow(row) {
       SET stock_name = ?, issue_date = ?, issue_weekday = ?, issue_price = ?, offer_pe = ?,
           limit_shares = ?, total_issued_shares = ?, public_date = ?, win_rate = ?,
           first_day_close = ?, first_day_chg_pct = ?, first_day_market_cap = ?
-      WHERE id = ?`,
+      WHERE F_Id = ?`,
     [
       nextStockName,
       issueDate,
@@ -172,7 +172,7 @@ async function upsertNewShareRow(row) {
       nextFirstDayClose,
       Number.isFinite(nextFirstDayChgPct) ? nextFirstDayChgPct : null,
       nextFirstDayMarketCap,
-      old.id,
+      old.F_Id,
     ]
   );
   return 'updated';
@@ -309,11 +309,11 @@ function mapAiModelConfigRow(row) {
 
 async function fetchActiveAiModelRow(whereSql, params = []) {
   const rows = await db.query(
-    `SELECT id, config_name, provider, model_name, api_type, api_key, api_endpoint,
+    `SELECT F_Id AS id, config_name, provider, model_name, api_type, api_key, api_endpoint,
             temperature, max_tokens, top_p, application_type, usage_type
      FROM ai_model_config
-     WHERE is_active = 1 AND delete_mark = 0 ${whereSql}
-     ORDER BY created_at DESC
+     WHERE is_active = 1 AND F_DeleteMark = 0 ${whereSql}
+     ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     params
   );
@@ -325,16 +325,16 @@ async function getPromptAndModelConfigForNewShareName() {
     `SELECT
        p.prompt_content,
        p.ai_model_config_id,
-       m.id as model_id, m.config_name, m.provider, m.model_name, m.api_type,
+       m.F_Id as model_id, m.config_name, m.provider, m.model_name, m.api_type,
        m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p,
        m.application_type as bound_application_type, m.usage_type as bound_usage_type
      FROM ai_prompt_config p
-     LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.is_active = 1 AND m.delete_mark = 0
+     LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.F_Id AND m.is_active = 1 AND m.F_DeleteMark = 0
      WHERE p.interface_type = '打新接口'
        AND p.prompt_type = 'enterprise_full_name'
        AND p.is_active = 1
-       AND p.delete_mark = 0
-     ORDER BY p.created_at DESC
+       AND p.F_DeleteMark = 0
+     ORDER BY p.F_CreatorTime DESC
      LIMIT 1`
   );
 
@@ -362,7 +362,7 @@ async function getPromptAndModelConfigForNewShareName() {
       });
       if (model) modelSource = 'prompt_bind';
     } else if (p.ai_model_config_id) {
-      const rebound = await fetchActiveAiModelRow('AND id = ?', [p.ai_model_config_id]);
+      const rebound = await fetchActiveAiModelRow('AND F_Id = ?', [p.ai_model_config_id]);
       if (rebound) {
         model = mapAiModelConfigRow(rebound);
         modelSource = 'prompt_bind';
@@ -745,7 +745,7 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
   const limit = Math.max(1, Math.min(1000, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_LIMIT || 300)));
   const concurrency = Math.max(1, Math.min(16, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_CONCURRENCY || 3)));
   const candidates = await db.query(
-    `SELECT id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
+    `SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
      FROM ipo_new_share
      WHERE (enterprise_full_name_display IS NULL OR TRIM(enterprise_full_name_display) = '')
        AND (
@@ -754,7 +754,7 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
        )
        AND stock_code IS NOT NULL AND TRIM(stock_code) != ''
        AND stock_name IS NOT NULL AND TRIM(stock_name) != ''
-     ORDER BY updated_at DESC, id DESC
+     ORDER BY F_LastModifyTime DESC, F_Id DESC
      LIMIT ?`,
     [minSyncDate, minSyncDate, limit]
   );
@@ -816,8 +816,8 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
       await db.execute(
         `UPDATE ipo_new_share
          SET enterprise_full_name_cn = ?, enterprise_full_name_en = ?, enterprise_full_name_display = ?
-         WHERE id = ?`,
-        [parsed.cn || null, parsed.en || null, parsed.display || null, row.id]
+         WHERE F_Id = ?`,
+        [parsed.cn || null, parsed.en || null, parsed.display || null, row.F_Id]
       );
       updated += 1;
       console.log(
@@ -864,10 +864,10 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
     const chunk = ids.slice(i, i + MAX_IN_CHUNK);
     const placeholders = chunk.map(() => '?').join(', ');
     const rows = await db.query(
-      `SELECT id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
+      `SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
        FROM ipo_new_share
-       WHERE id IN (${placeholders})
-       ORDER BY id DESC`,
+       WHERE F_Id IN (${placeholders})
+       ORDER BY F_Id DESC`,
       chunk
     );
     candidates = candidates.concat(rows);
@@ -902,7 +902,7 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
       const prompt = composeNewShareFullNamePrompt(cfg.promptTemplate, stockCode, stockName, row.exchange);
       const modelOut = await callAiModelForFullName(prompt, cfg.model);
       console.log(
-        `${logTag} 模型已调用并返回 id=${row.id} stock=${stockCode} outputChars=${String(modelOut ?? '').length}`
+        `${logTag} 模型已调用并返回 id=${row.F_Id} stock=${stockCode} outputChars=${String(modelOut ?? '').length}`
       );
       const rawLog = truncateForLog(stripCodeFence(modelOut), 600);
       const parsed = applyNewShareNameOverrides(stockCode, parseNamePairFromModelOutput(modelOut));
@@ -916,18 +916,18 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
           await db.execute(
             `UPDATE ipo_new_share
              SET enterprise_full_name_cn = NULL, enterprise_full_name_en = NULL, enterprise_full_name_display = NULL
-             WHERE id = ?`,
-            [row.id]
+             WHERE F_Id = ?`,
+            [row.F_Id]
           );
           updated += 1;
           console.log(
-            `${logTag} 查名已清空旧全称(模型未给出可核验全称) id=${row.id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
+            `${logTag} 查名已清空旧全称(模型未给出可核验全称) id=${row.F_Id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
           );
           return;
         }
         skipped += 1;
         console.log(
-          `${logTag} 查名跳过(解析为空) id=${row.id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
+          `${logTag} 查名跳过(解析为空) id=${row.F_Id} stock=${stockCode} name=${stockName} raw=${JSON.stringify(rawLog)}`
         );
         return;
       }
@@ -939,23 +939,23 @@ async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
       if (noChange) {
         skipped += 1;
         console.log(
-          `${logTag} 查名跳过(无变化) id=${row.id} stock=${stockCode} name=${stockName} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
+          `${logTag} 查名跳过(无变化) id=${row.F_Id} stock=${stockCode} name=${stockName} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
         );
         return;
       }
       await db.execute(
         `UPDATE ipo_new_share
          SET enterprise_full_name_cn = ?, enterprise_full_name_en = ?, enterprise_full_name_display = ?
-         WHERE id = ?`,
-        [parsed.cn || null, parsed.en || null, parsed.display || null, row.id]
+         WHERE F_Id = ?`,
+        [parsed.cn || null, parsed.en || null, parsed.display || null, row.F_Id]
       );
       updated += 1;
       console.log(
-        `${logTag} 查名成功 id=${row.id} stock=${stockCode} name=${stockName} source=${cfg.modelSource} model=${cfg.model.config_name || cfg.model.id} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
+        `${logTag} 查名成功 id=${row.F_Id} stock=${stockCode} name=${stockName} source=${cfg.modelSource} model=${cfg.model.config_name || cfg.model.id} parsed_cn=${JSON.stringify(parsed.cn)} parsed_en=${JSON.stringify(parsed.en)} parsed_display=${JSON.stringify(parsed.display)} raw=${JSON.stringify(rawLog)}`
       );
     } catch (err) {
       failed += 1;
-      console.warn(`${logTag} 查名失败 id=${row.id} stock=${stockCode} name=${stockName} err=${String(err.message || err)}`);
+      console.warn(`${logTag} 查名失败 id=${row.F_Id} stock=${stockCode} name=${stockName} err=${String(err.message || err)}`);
     }
   });
 

@@ -6,7 +6,7 @@ const { generateId } = require('./idGenerator');
  * 使用 email_config 发一封 HTML 邮件（供上市进展测试发信等复用）
  */
 async function sendMailWithConfig({ emailConfigId, toEmail, subject, html, userId }) {
-  const configs = await db.query('SELECT * FROM email_config WHERE id = ?', [emailConfigId]);
+  const configs = await db.query('SELECT * FROM email_config WHERE F_Id = ?', [emailConfigId]);
   if (!configs.length) {
     throw new Error('邮件配置不存在');
   }
@@ -48,7 +48,7 @@ async function sendMailWithConfig({ emailConfigId, toEmail, subject, html, userI
   const logId = await generateId('email_logs');
   await db.query(
     `INSERT INTO email_logs 
-     (id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, subject, content, status, created_by) 
+     (F_Id, email_config_id, operation_type, from_email, to_email, cc_email, bcc_email, subject, content, status, F_CreatorUserId) 
      VALUES (?, ?, 'send', ?, ?, NULL, NULL, ?, ?, 'success', ?)`,
     [logId, emailConfigId, config.from_email, toEmail, subject, html, userId || null]
   );
