@@ -213,7 +213,45 @@ async function runPreInvestmentProjectAiEnrichTask({
       bpExtraContext = bpExtraContext.slice(0, BP_CONTEXT_MAX_CHARS) + '\n\n…（BP 内容过长已截断）';
     }
 
-    const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate, bpExtraContext));
+    // 已有较长 BP 正文时，联网检索为增强项：上游 500/503 时允许降级，避免整单失败
+    const bpContextRich =
+      bpExtraContext && bpExtraContext.length >= Math.max(500, parseInt(process.env.PRE_INV_BP_SEARCH_OPTIONAL_MIN_CHARS || '2000', 10) || 2000);
+
+    if (bpContextRich) {
+      console.log(
+        `[preInvAiEnrich] BP 正文 ${bpExtraContext.length} 字，联网检索为可选（searchRequired=0，失败可降级）`
+      );
+    }
+
+    const enrichMaxRetries = Math.max(0, parseInt(process.env.PRE_INV_AI_ENRICH_RETRIES || '2', 10) || 2);
+    let llm = null;
+    let lastErr;
+    for (let attempt = 0; attempt <= enrichMaxRetries; attempt++) {
+      try {
+        llm = await withFinancingAiConcurrency(() =>
+          runFinancingStyleWebEnrichLlmCall(rowForTemplate, bpExtraContext, {
+            searchRequired: !bpContextRich,
+            wantSearch: true,
+          })
+        );
+        break;
+      } catch (enrichErr) {
+        lastErr = enrichErr;
+        const msg = String(enrichErr?.message || enrichErr || '');
+        const isTransient =
+          /429|50[023]|503|timeout|ECONNABORTED|ETIMEDOUT|ECONNRESET|server had an error/i.test(msg);
+        if (isTransient && attempt < enrichMaxRetries) {
+          const delay = (attempt + 1) * 2000;
+          console.warn(
+            `[preInvAiEnrich] 瞬时错误，${delay}ms 后重试 (${attempt + 1}/${enrichMaxRetries}): ${msg.slice(0, 200)}`
+          );
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+        throw enrichErr;
+      }
+    }
+    if (!llm) throw lastErr || new Error('AI 取数失败');
     llmModelConfigId = llm.llmModelConfigId;
     promptConfigId = llm.promptConfigId;
 

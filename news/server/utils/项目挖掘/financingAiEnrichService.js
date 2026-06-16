@@ -2453,7 +2453,7 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate, extraContext, o
         : '0'
       : 'env';
   console.log(
-    `[financingAiEnrich] web_enrich_request company=${String(rowForTemplate.company_name || '').slice(0, 40)} credit=${String(rowForTemplate.company_credit_code || '').slice(0, 18)} qcc_len=${qccLen} enable_thinking=${thinkFlag} user_msg_len=${userContent.length}`
+    `[financingAiEnrich] web_enrich_request company=${String(rowForTemplate.company_name || '').slice(0, 40)} credit=${String(rowForTemplate.company_credit_code || '').slice(0, 18)} qcc_len=${qccLen} enable_thinking=${thinkFlag} user_msg_len=${userContent.length} search_required=${searchRequired ? 1 : 0}`
   );
   const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config, {
     searchRequired,

@@ -168,7 +168,13 @@ async function llmInvoke(config, opts = {}) {
         if (!attemptSearch || profile.wire_protocol !== WIRE_PROTOCOL.RESPONSES) {
           throw err;
         }
-        console.warn(`${logPrefix} Responses 联网失败，降级 plain chat：${errorBlob(err)}`);
+        const errBlob = errorBlob(err).toLowerCase();
+        const isUpstream5xx =
+          err?.response?.status >= 500 ||
+          /server had an error|azure support|upstream|503|502|500/.test(errBlob);
+        console.warn(
+          `${logPrefix} Responses 联网失败${isUpstream5xx ? '（上游 5xx）' : ''}，降级 plain chat：${errorBlob(err)}`
+        );
         const fallback = await invokePlainChat({
           endpoint: resolveEndpoint(config, WIRE_PROTOCOL.CHAT_COMPLETIONS),
           apiKey: config.api_key,
