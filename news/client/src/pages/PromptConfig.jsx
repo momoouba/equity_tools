@@ -116,6 +116,7 @@ function PromptConfig() {
   useEffect(() => {
     if (showModal) {
       fetchAiModelConfigs()
+      fetchAiMetaLabels()
     }
   }, [showModal])
 

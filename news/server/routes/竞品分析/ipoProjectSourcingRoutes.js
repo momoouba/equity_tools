@@ -455,7 +455,7 @@ function registerIpoProjectSourcingRoutes(router) {
 
       const offset = (page - 1) * pageSize;
       const list = await db.query(
-        `SELECT p.*, u.account AS creator_account
+        `SELECT p.*, p.F_Id AS f_id, u.account AS creator_account
          FROM ipo_project p
          LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
          ${whereSql}

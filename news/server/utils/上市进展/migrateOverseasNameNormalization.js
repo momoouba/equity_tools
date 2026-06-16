@@ -12,7 +12,7 @@ const { normalizeCompanyName, containsTraditional } = require('./zhconvUtils');
  */
 async function migrateOverseasNameNormalization(pool) {
   const [rows] = await pool.query(
-    `SELECT f_id, project_name, company
+    `SELECT F_Id AS f_id, project_name, company
      FROM ipo_progress
      WHERE F_DeleteMark = 0 AND board = '境外发行备案'`
   );
@@ -35,7 +35,7 @@ async function migrateOverseasNameNormalization(pool) {
 
       await conn.execute(
         `UPDATE ipo_progress SET project_name = ?, company = ?, F_LastModifyTime = NOW()
-         WHERE f_id = ? AND F_DeleteMark = 0`,
+         WHERE F_Id = ? AND F_DeleteMark = 0`,
         [newName, newCompany, r.f_id]
       );
       updated += 1;

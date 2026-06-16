@@ -24,6 +24,7 @@ import {
   deleteIpoProject,
   fetchListingDataChangeLog,
 } from '../../api/上市进展'
+import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -113,7 +114,7 @@ export default function ListingIpoProjectPage() {
       }
       const res = await fetchIpoProjectList(params)
       if (res.data?.success) {
-        setData(res.data.data?.list || [])
+        setData(normalizeRecordList(res.data.data?.list || []))
         setTotal(res.data.data?.total || 0)
       } else {
         Message.error(res.data?.message || '加载失败')
@@ -566,7 +567,7 @@ export default function ListingIpoProjectPage() {
         </Space>
       </div>
       <Table
-        rowKey="f_id"
+        rowKey={resolveRecordId}
         loading={loading}
         columns={columns}
         data={data}

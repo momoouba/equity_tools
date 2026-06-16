@@ -159,6 +159,7 @@ async function listIpoProjectProgress(req, res) {
     const rows = await db.query(
       `SELECT
          ipp.F_Id,
+         ipp.F_Id AS f_id,
          ipp.ipo_progress_row_id,
          ipp.ipo_project_f_id,
          ipp.fund,

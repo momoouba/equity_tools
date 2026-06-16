@@ -13,6 +13,8 @@ const {
   DATA_APP_PROJECT_SOURCING,
   DATA_APP_COMPETITOR_ANALYSIS,
   normalizeDataAppName,
+  investedEnterpriseAppMatchClause,
+  investedEnterpriseSyncOwnerClause,
 } = require('../utils/enterpriseDataApp');
 const { getApplicationIdByAppName } = require('../utils/applicationIdResolve');
 const { queryExternal, getExternalPool, createExternalPool } = require('../utils/externalDb');
@@ -179,21 +181,6 @@ function supportsInvestedEnterpriseAiSnapshot(dataAppName) {
   return INVESTED_ENTERPRISE_AI_SNAPSHOT_APPS.has(String(dataAppName || ''));
 }
 
-/** 列表/硬删/快照：以 data_app_id 为准，data_app_name 仅兜底 NULL id 的历史行 */
-function investedEnterpriseAppMatchClause(alias, dataAppId, dataAppName) {
-  const p = alias ? `${alias}.` : '';
-  if (dataAppId) {
-    return {
-      sql: `(${p}data_app_id <=> ? OR (${p}data_app_id IS NULL AND ${p}data_app_name = ?))`,
-      params: [dataAppId, dataAppName],
-    };
-  }
-  return {
-    sql: `${p}data_app_name = ?`,
-    params: [dataAppName],
-  };
-}
-
 /**
  * 同步前硬删除：指定用户 + 应用下 invested_enterprises 全量物理删除（含变更日志），再全量重写入。
  * 与「先清空再导入」一致，避免旧行残留、UPDATE 未覆盖字段导致空值。
@@ -202,9 +189,10 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
   if (!creatorUserId) return 0;
   const dataAppId = await getApplicationIdByAppName(dataAppName);
   const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
+  const { sql: ownerMatch, params: ownerParams } = investedEnterpriseSyncOwnerClause('', creatorUserId);
   const rows = await db.query(
-    `SELECT F_Id FROM invested_enterprises WHERE F_CreatorUserId = ? AND ${appMatch}`,
-    [creatorUserId, ...appParams]
+    `SELECT F_Id FROM invested_enterprises WHERE ${ownerMatch} AND ${appMatch}`,
+    [...ownerParams, ...appParams]
   );
   if (!rows.length) return 0;
   const ids = rows.map((r) => r.F_Id);
@@ -218,8 +206,8 @@ async function hardDeleteInvestedEnterprisesByUserAndApp(creatorUserId, dataAppN
     );
   }
   const del = await db.execute(
-    `DELETE FROM invested_enterprises WHERE F_CreatorUserId = ? AND ${appMatch}`,
-    [creatorUserId, ...appParams]
+    `DELETE FROM invested_enterprises WHERE ${ownerMatch} AND ${appMatch}`,
+    [...ownerParams, ...appParams]
   );
   return del.affectedRows || 0;
 }
@@ -246,29 +234,58 @@ async function insertInvestedEnterpriseAiSnapshotBeforeHardDelete(creatorUserId,
   const enrichPickOrder = `(CASE WHEN NULLIF(TRIM(ai_product_intro),'') IS NOT NULL THEN 4 ELSE 0 END
     + CASE WHEN NULLIF(TRIM(qcc_company_intro),'') IS NOT NULL THEN 2 ELSE 0 END
     + CASE WHEN NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL THEN 1 ELSE 0 END) DESC, F_Id DESC`;
-  const ins = await db.execute(
-    `INSERT INTO invested_enterprise_ai_sync_snapshot
-     (batch_id, F_CreatorUserId, data_app_name, unified_credit_code,
-      ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
-      ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version,
-      qcc_company_intro)
-     SELECT ?, e.F_CreatorUserId, ?, ${normE},
-            e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
-            e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version,
-            e.qcc_company_intro
-     FROM invested_enterprises e
-     INNER JOIN (
-       SELECT F_CreatorUserId, ${normBare} AS ucc,
-         CAST(SUBSTRING_INDEX(GROUP_CONCAT(F_Id ORDER BY ${enrichPickOrder} SEPARATOR ','), ',', 1) AS UNSIGNED) AS mid
-       FROM invested_enterprises
-       WHERE F_CreatorUserId = ? AND ${appMatchBare}
-         AND F_DeleteMark = 0
-         AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
-       GROUP BY F_CreatorUserId, ${normBare}
-     ) t ON e.F_Id = t.mid`,
-    [batchId, dataAppName, creatorUserId, ...appParamsBare]
-  );
-  const n = ins.affectedRows != null ? ins.affectedRows : 0;
+
+  const runSnapshotInsert = async (ownerClause, ownerParams) => {
+    const ins = await db.execute(
+      `INSERT INTO invested_enterprise_ai_sync_snapshot
+       (batch_id, F_CreatorUserId, data_app_name, unified_credit_code,
+        ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
+        ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version,
+        qcc_company_intro)
+       SELECT ?, ?, ?, ${normE},
+              e.ai_product_intro, e.ai_industry_tags_display, e.ai_industry_tags_json,
+              e.ai_enrich_status, e.ai_enrich_at, e.ai_enrich_model, e.ai_enrich_version,
+              e.qcc_company_intro
+       FROM invested_enterprises e
+       INNER JOIN (
+         SELECT F_CreatorUserId, ${normBare} AS ucc,
+           CAST(SUBSTRING_INDEX(GROUP_CONCAT(F_Id ORDER BY ${enrichPickOrder} SEPARATOR ','), ',', 1) AS UNSIGNED) AS mid
+         FROM invested_enterprises
+         WHERE ${ownerClause} AND ${appMatchBare}
+           AND F_DeleteMark = 0
+           AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
+         GROUP BY F_CreatorUserId, ${normBare}
+       ) t ON e.F_Id = t.mid`,
+      [batchId, creatorUserId, dataAppName, ...ownerParams, ...appParamsBare]
+    );
+    return ins.affectedRows != null ? ins.affectedRows : 0;
+  };
+
+  const { sql: ownerMatch, params: ownerParams } = investedEnterpriseSyncOwnerClause('', creatorUserId);
+  let n = await runSnapshotInsert(ownerMatch, ownerParams);
+
+  if (n === 0) {
+    const [hint] = await db.query(
+      `SELECT COUNT(*) AS c FROM invested_enterprises
+       WHERE ${appMatchBare} AND F_DeleteMark = 0
+         AND (
+           NULLIF(TRIM(ai_product_intro),'') IS NOT NULL
+           OR NULLIF(TRIM(qcc_company_intro),'') IS NOT NULL
+           OR NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL
+         )`,
+      appParamsBare
+    );
+    const aiRows = Number(hint?.[0]?.c || 0);
+    if (aiRows > 0) {
+      n = await runSnapshotInsert('1=1', []);
+      if (n > 0) {
+        console.log(
+          `[企业同步任务] ${dataAppName} AI 快照已扩大至全应用范围（任务用户范围内无行，但应用内另有 ${aiRows} 行含 AI/企查查数据）rows=${n}`
+        );
+      }
+    }
+  }
+
   console.log(
     `[企业同步任务] ${dataAppName} AI 快照已写入 batch_id=${batchId} rows=${n}（按统一社会信用代码，供硬删后回填）`
   );
@@ -282,15 +299,15 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
   if (!batchId || !creatorUserId || !supportsInvestedEnterpriseAiSnapshot(dataAppName)) {
     return 0;
   }
+  const dataAppId = await getApplicationIdByAppName(dataAppName);
+  const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('t', dataAppId, dataAppName);
   const normT = sqlNormInvestedEnterpriseUnifiedCredit('t');
   const res = await db.execute(
     `UPDATE invested_enterprises t
      INNER JOIN invested_enterprise_ai_sync_snapshot s
        ON s.batch_id = ?
-       AND s.F_CreatorUserId = t.F_CreatorUserId
-       AND s.data_app_name = t.data_app_name
+       AND s.data_app_name = ?
        AND s.unified_credit_code = ${normT}
-       AND t.F_DeleteMark = 0
      SET t.ai_product_intro = s.ai_product_intro,
          t.ai_industry_tags_display = s.ai_industry_tags_display,
          t.ai_industry_tags_json = s.ai_industry_tags_json,
@@ -301,8 +318,8 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
          t.ai_enrich_error = NULL,
          t.qcc_company_intro = s.qcc_company_intro,
          t.F_LastModifyTime = CURRENT_TIMESTAMP
-     WHERE t.F_CreatorUserId = ? AND t.data_app_name = ?`,
-    [batchId, creatorUserId, dataAppName]
+     WHERE t.F_DeleteMark = 0 AND ${appMatch}`,
+    [batchId, dataAppName, ...appParams]
   );
   const affected = res.affectedRows != null ? res.affectedRows : 0;
   console.log(`[企业同步任务] ${dataAppName} AI 快照回填完成 batch_id=${batchId} affected_rows=${affected}`);
@@ -1928,8 +1945,9 @@ async function executeSyncTask(
          AND F_DeleteMark = 0
          AND ${appMatch}`;
       if (syncOwnerUserId) {
-        matchSql += ' AND F_CreatorUserId = ?';
-        matchParams.push(syncOwnerUserId);
+        const { sql: ownerMatch, params: ownerParams } = investedEnterpriseSyncOwnerClause('', syncOwnerUserId);
+        matchSql += ` AND ${ownerMatch}`;
+        matchParams.push(...ownerParams);
       }
       matchSql += ' LIMIT 1';
       const existingRecords = await db.query(matchSql, matchParams);
@@ -2065,7 +2083,7 @@ async function executeSyncTask(
       const enterpriseId = await generateId('invested_enterprises');
       
       // 动态构建INSERT语句，包含所有匹配的字段
-      const insertFields = ['id', 'project_number'];
+      const insertFields = ['F_Id', 'project_number'];
       const insertValues = [enterpriseId, projectNumber];
       
       // 添加所有匹配的字段

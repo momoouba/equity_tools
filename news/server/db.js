@@ -560,6 +560,175 @@ async function migrateSoftDeleteToDeleteMarkConvention(dbPool) {
 }
 
 /**
+ * 将单表旧系统字段重命名为 F_ 规范（幂等）。
+ * @returns {Promise<number>} 成功重命名的列数
+ */
+async function applyTableColumnRenames(dbPool, table, renames) {
+  let renamed = 0;
+  for (const { old: oldCol, new: newCol } of renames) {
+    try {
+      const [cols] = await dbPool.query(
+        `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [table, oldCol]
+      );
+      if (cols.length === 0) continue;
+
+      const [newExists] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [table, newCol]
+      );
+      if (newExists.length > 0) continue;
+
+      const c = cols[0];
+      let colDef = c.COLUMN_TYPE;
+      if (c.EXTRA === 'auto_increment') {
+        colDef += ' NOT NULL AUTO_INCREMENT';
+      } else {
+        colDef += c.IS_NULLABLE === 'NO' ? ' NOT NULL' : ' NULL';
+        if (c.COLUMN_DEFAULT !== null) {
+          if (['CURRENT_TIMESTAMP', 'current_timestamp()'].includes(c.COLUMN_DEFAULT)) {
+            colDef += ' DEFAULT CURRENT_TIMESTAMP';
+          } else {
+            colDef += ` DEFAULT ${dbPool.escape(c.COLUMN_DEFAULT)}`;
+          }
+        }
+        if (c.EXTRA && c.EXTRA.includes('on update')) {
+          colDef += ' ON UPDATE CURRENT_TIMESTAMP';
+        }
+      }
+      if (c.COLUMN_COMMENT) {
+        colDef += ` COMMENT ${dbPool.escape(c.COLUMN_COMMENT)}`;
+      }
+
+      await dbPool.query(
+        `ALTER TABLE \`${table}\` CHANGE COLUMN \`${oldCol}\` \`${newCol}\` ${colDef}`
+      );
+      console.log(`  ✓ ${table}: ${oldCol} → ${newCol}`);
+      renamed += 1;
+    } catch (err) {
+      console.warn(`迁移 ${table}.${oldCol} → ${newCol} 时出现警告:`, err.message);
+    }
+  }
+  return renamed;
+}
+
+const BASE_DICTIONARY_COLUMN_RENAMES = [
+  { old: 'id', new: 'F_Id' },
+  { old: 'created_at', new: 'F_CreatorTime' },
+  { old: 'updated_at', new: 'F_LastModifyTime' },
+  { old: 'modify_time', new: 'F_LastModifyTime' },
+  { old: 'last_modify_time', new: 'F_LastModifyTime' },
+  { old: 'delete_mark', new: 'F_DeleteMark' },
+  { old: 'created_by', new: 'F_CreatorUserId' },
+  { old: 'updated_by', new: 'F_LastModifyUserId' },
+];
+
+const BASE_DICTIONARY_REQUIRED_COLUMNS = [
+  {
+    name: 'F_DeleteMark',
+    ddl: "F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记：0未删除，1已删除'",
+    after: 'is_enabled',
+  },
+  {
+    name: 'F_CreatorUserId',
+    ddl: "F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人ID'",
+    after: 'F_DeleteMark',
+  },
+  {
+    name: 'F_LastModifyUserId',
+    ddl: "F_LastModifyUserId VARCHAR(19) NULL COMMENT '更新人ID'",
+    after: 'F_CreatorUserId',
+  },
+  {
+    name: 'F_DeleteUserId',
+    ddl: "F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人ID'",
+    after: 'F_LastModifyUserId',
+  },
+  {
+    name: 'F_DeleteTime',
+    ddl: "F_DeleteTime DATETIME NULL COMMENT '删除时间'",
+    after: 'F_DeleteUserId',
+  },
+  {
+    name: 'F_CreatorTime',
+    ddl: "F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'",
+    after: 'F_DeleteTime',
+  },
+  {
+    name: 'F_LastModifyTime',
+    ddl:
+      "F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'",
+    after: 'F_CreatorTime',
+    // 部分 MySQL 版本对第二列 TIMESTAMP 的 ON UPDATE 较严格，回退为 DATETIME
+    fallbackDdl:
+      "F_LastModifyTime DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'",
+  },
+];
+
+/**
+ * base_dictionary 须在种子数据与 API 使用前完成 F_ 字段迁移（旧库可能仅有 id/delete_mark 等）。
+ */
+async function ensureBaseDictionarySchema(dbPool) {
+  const table = 'base_dictionary';
+  const [tables] = await dbPool.query(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+    [table]
+  );
+  if (!tables.length) return;
+
+  await applyTableColumnRenames(dbPool, table, BASE_DICTIONARY_COLUMN_RENAMES);
+
+  const getColumnSet = async () => {
+    const [rows] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
+      [table]
+    );
+    return new Set((rows || []).map((r) => r.COLUMN_NAME));
+  };
+
+  const addColumnSafe = async ({ name, ddl, after, fallbackDdl }) => {
+    const cols = await getColumnSet();
+    if (cols.has(name)) return;
+
+    const attempts = [];
+    if (after && cols.has(after)) {
+      attempts.push(`${ddl} AFTER ${after}`);
+    }
+    attempts.push(ddl);
+    if (fallbackDdl && fallbackDdl !== ddl) {
+      attempts.push(fallbackDdl);
+    }
+
+    for (const fragment of attempts) {
+      try {
+        await dbPool.query(`ALTER TABLE base_dictionary ADD COLUMN ${fragment}`);
+        console.log(`  ✓ base_dictionary 已添加列 ${name}`);
+        return;
+      } catch (err) {
+        if (fragment === attempts[attempts.length - 1]) {
+          console.warn(`迁移 base_dictionary.${name} 时出现警告:`, err.message);
+        }
+      }
+    }
+  };
+
+  for (const spec of BASE_DICTIONARY_REQUIRED_COLUMNS) {
+    await addColumnSafe(spec);
+  }
+
+  const finalCols = await getColumnSet();
+  const missing = BASE_DICTIONARY_REQUIRED_COLUMNS.map((c) => c.name).filter((n) => !finalCols.has(n));
+  if (missing.length) {
+    console.warn(`  ⚠ base_dictionary 仍缺少列: ${missing.join(', ')}`);
+  }
+}
+
+/**
  * 第三优先级：批量将剩余表的 snake_case / 小写系统字段重命名为 F_ PascalCase 规范。
  * 通过 INFORMATION_SCHEMA 读取当前列定义，仅修改列名，保留原有类型/默认值/注释。
  */
@@ -577,7 +746,7 @@ async function migrateBatchFColumns(dbPool) {
     qichacha_news_categories: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     system_config:            [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
     system_file_storage:      [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
-    base_dictionary:          [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }],
+    base_dictionary:          [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'updated_by', new: 'F_LastModifyUserId' }],
     data_change_log:          [{ old: 'id', new: 'F_Id' }, { old: 'change_user_id', new: 'F_CreatorUserId' }, { old: 'change_time', new: 'F_CreatorTime' }],
     news_interface_config:    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     interface_news_type_enabled: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
@@ -597,6 +766,7 @@ async function migrateBatchFColumns(dbPool) {
     enterprise_sync_task:     [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     performance_scheduled:    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     // ── 新闻舆情表 ──
+    listing_share_links:      [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
     news_share_links:         [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     // ── 上市进展表 ──
     ipo_new_share:            [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
@@ -629,48 +799,8 @@ async function migrateBatchFColumns(dbPool) {
   let totalRenamed = 0;
 
   for (const [table, renames] of Object.entries(tableRenames)) {
-    for (const { old: oldCol, new: newCol } of renames) {
-      try {
-        // 检查旧列是否存在
-        const [cols] = await dbPool.query(
-          `SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT
-           FROM INFORMATION_SCHEMA.COLUMNS
-           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
-          [table, oldCol]
-        );
-        if (cols.length === 0) continue; // 旧列不存在，跳过
-
-        const c = cols[0];
-        // 重建列定义（保留原有类型、默认值等）
-        let colDef = c.COLUMN_TYPE;
-        if (c.EXTRA === 'auto_increment') {
-          colDef += ' NOT NULL AUTO_INCREMENT';
-        } else {
-          colDef += c.IS_NULLABLE === 'NO' ? ' NOT NULL' : ' NULL';
-          if (c.COLUMN_DEFAULT !== null) {
-            if (['CURRENT_TIMESTAMP', 'current_timestamp()'].includes(c.COLUMN_DEFAULT)) {
-              colDef += ' DEFAULT CURRENT_TIMESTAMP';
-            } else {
-              colDef += ` DEFAULT ${dbPool.escape(c.COLUMN_DEFAULT)}`;
-            }
-          }
-          if (c.EXTRA && c.EXTRA.includes('on update')) {
-            colDef += ' ON UPDATE CURRENT_TIMESTAMP';
-          }
-        }
-        if (c.COLUMN_COMMENT) {
-          colDef += ` COMMENT ${dbPool.escape(c.COLUMN_COMMENT)}`;
-        }
-
-        await dbPool.query(
-          `ALTER TABLE \`${table}\` CHANGE COLUMN \`${oldCol}\` \`${newCol}\` ${colDef}`
-        );
-        console.log(`  ✓ ${table}: ${oldCol} → ${newCol}`);
-        totalRenamed++;
-      } catch (err) {
-        console.warn(`迁移 ${table}.${oldCol} → ${newCol} 时出现警告:`, err.message);
-      }
-    }
+    if (table === 'base_dictionary') continue;
+    totalRenamed += await applyTableColumnRenames(dbPool, table, renames);
   }
 
   if (totalRenamed > 0) {
@@ -959,7 +1089,7 @@ async function initializeTables(dbPool) {
     if (columns.length === 0) {
       await dbPool.query('ALTER TABLE qichacha_config ADD COLUMN app_id VARCHAR(19) NULL');
       // 如果有数据，设置默认app_id为'新闻舆情'
-      const [newsApp] = await dbPool.query("SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1", ['新闻舆情']);
+      const [newsApp] = await dbPool.query("SELECT F_Id AS id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1", ['新闻舆情']);
       if (newsApp.length > 0) {
         await dbPool.query('UPDATE qichacha_config SET app_id = ? WHERE app_id IS NULL', [newsApp[0].id]);
       }
@@ -1358,7 +1488,7 @@ async function initializeTables(dbPool) {
         // 必须传入 dbPool：否则 generateId 内部 db.query 会 await ready，与正在执行的 init() 死锁
         const categoryId = await generateId('qichacha_news_categories', dbPool);
         await dbPool.execute(
-          'INSERT INTO qichacha_news_categories (id, category_code, category_name) VALUES (?, ?, ?)',
+          'INSERT INTO qichacha_news_categories (F_Id, category_code, category_name) VALUES (?, ?, ?)',
           [categoryId, category.code, category.name]
         );
       }
@@ -1420,6 +1550,13 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  try {
+    await ensureBaseDictionarySchema(dbPool);
+    console.log('✓ base_dictionary 表结构已校验（F_ 系统字段）');
+  } catch (err) {
+    console.warn('迁移 base_dictionary 表结构时出现警告:', err.message);
+  }
+
   // 初始化 base_dictionary 默认数据：industry（行业）及其选项（幂等）
   try {
     const defaultParentId = '2026042114193800001';
@@ -1428,10 +1565,10 @@ async function initializeTables(dbPool) {
     const defaultUpdatedAt = '2026-04-21 14:21:04';
 
     const [industryTypeRows] = await dbPool.query(
-      `SELECT id
+      `SELECT F_Id AS id
        FROM base_dictionary
-       WHERE dict_code = 'industry' AND parent_id IS NULL AND delete_mark = 0
-       ORDER BY created_at ASC
+       WHERE dict_code = 'industry' AND parent_id IS NULL AND F_DeleteMark = 0
+       ORDER BY F_CreatorTime ASC
        LIMIT 1`
     );
 
@@ -1441,7 +1578,7 @@ async function initializeTables(dbPool) {
     } else {
       await dbPool.execute(
         `INSERT INTO base_dictionary
-         (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+         (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
          VALUES (?, NULL, 'industry', '行业', NULL, NULL, 0, 1, 0, ?, ?, NULL, NULL, ?, ?)
          ON DUPLICATE KEY UPDATE
            parent_id = NULL,
@@ -1451,11 +1588,11 @@ async function initializeTables(dbPool) {
            item_name = NULL,
            sort_order = VALUES(sort_order),
            is_enabled = VALUES(is_enabled),
-           delete_mark = 0,
-           updated_by = VALUES(updated_by),
-           delete_user_id = NULL,
-           delete_time = NULL,
-           updated_at = VALUES(updated_at)`,
+           F_DeleteMark = 0,
+           F_LastModifyUserId = VALUES(F_LastModifyUserId),
+           F_DeleteUserId = NULL,
+           F_DeleteTime = NULL,
+           F_LastModifyTime = VALUES(F_LastModifyTime)`,
         [defaultParentId, defaultOperatorId, defaultOperatorId, defaultCreatedAt, defaultUpdatedAt]
       );
       industryParentId = defaultParentId;
@@ -1470,9 +1607,9 @@ async function initializeTables(dbPool) {
 
     for (const item of industryItems) {
       const [existingItemRows] = await dbPool.query(
-        `SELECT id
+        `SELECT F_Id AS id
          FROM base_dictionary
-         WHERE parent_id = ? AND dict_code = 'industry' AND item_code = ? AND delete_mark = 0
+         WHERE parent_id = ? AND dict_code = 'industry' AND item_code = ? AND F_DeleteMark = 0
          LIMIT 1`,
         [industryParentId, item.item_code]
       );
@@ -1482,7 +1619,7 @@ async function initializeTables(dbPool) {
 
       await dbPool.execute(
         `INSERT INTO base_dictionary
-         (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+         (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
          VALUES (?, ?, 'industry', '行业', ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
         [item.id, industryParentId, item.item_code, item.item_name, item.sort_order, defaultOperatorId, defaultOperatorId, item.created_at, defaultUpdatedAt]
       );
@@ -1529,7 +1666,7 @@ async function initializeTables(dbPool) {
 
     for (const t of aiModelDictTypes) {
       const [typeRows] = await dbPool.query(
-        `SELECT id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0 ORDER BY created_at ASC LIMIT 1`,
+        `SELECT F_Id AS id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND F_DeleteMark = 0 ORDER BY F_CreatorTime ASC LIMIT 1`,
         [t.dict_code]
       );
       let parentId = t.id;
@@ -1538,7 +1675,7 @@ async function initializeTables(dbPool) {
       } else {
         await dbPool.execute(
           `INSERT INTO base_dictionary
-           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
            VALUES (?, NULL, ?, ?, NULL, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
           [t.id, t.dict_code, t.dict_name, t.sort_order, opId, opId, nowType, nowType]
         );
@@ -1548,13 +1685,13 @@ async function initializeTables(dbPool) {
       const items = aiModelItemsByCode[t.dict_code] || [];
       for (const it of items) {
         const [exItem] = await dbPool.query(
-          `SELECT id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND delete_mark = 0 LIMIT 1`,
+          `SELECT F_Id AS id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND F_DeleteMark = 0 LIMIT 1`,
           [parentId, t.dict_code, it.item_code]
         );
         if (exItem && exItem.length > 0) continue;
         await dbPool.execute(
           `INSERT INTO base_dictionary
-           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
           [
             it.id,
@@ -1604,7 +1741,7 @@ async function initializeTables(dbPool) {
 
     for (const t of aiMetaDictTypes) {
       const [typeRows] = await dbPool.query(
-        `SELECT id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND delete_mark = 0 ORDER BY created_at ASC LIMIT 1`,
+        `SELECT F_Id AS id FROM base_dictionary WHERE dict_code = ? AND parent_id IS NULL AND F_DeleteMark = 0 ORDER BY F_CreatorTime ASC LIMIT 1`,
         [t.dict_code]
       );
       let parentId = t.id;
@@ -1613,7 +1750,7 @@ async function initializeTables(dbPool) {
       } else {
         await dbPool.execute(
           `INSERT INTO base_dictionary
-           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
            VALUES (?, NULL, ?, ?, NULL, NULL, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
           [t.id, t.dict_code, t.dict_name, t.sort_order, opId, opId, nowDict, nowDict]
         );
@@ -1623,13 +1760,13 @@ async function initializeTables(dbPool) {
       const items = aiMetaItemsByCode[t.dict_code] || [];
       for (const it of items) {
         const [exItem] = await dbPool.query(
-          `SELECT id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND delete_mark = 0 LIMIT 1`,
+          `SELECT F_Id AS id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND F_DeleteMark = 0 LIMIT 1`,
           [parentId, t.dict_code, it.item_code]
         );
         if (exItem && exItem.length > 0) continue;
         await dbPool.execute(
           `INSERT INTO base_dictionary
-           (id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, delete_mark, created_by, updated_by, delete_user_id, delete_time, created_at, updated_at)
+           (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
            VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
           [
             it.id,
@@ -1746,7 +1883,7 @@ async function initializeTables(dbPool) {
     if (columns.length === 0) {
       await dbPool.query('ALTER TABLE news_interface_config ADD COLUMN app_id VARCHAR(19) NULL');
       // 如果有数据，设置默认app_id为'新闻舆情'
-      const [newsApp] = await dbPool.query("SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1", ['新闻舆情']);
+      const [newsApp] = await dbPool.query("SELECT F_Id AS id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1", ['新闻舆情']);
       if (newsApp.length > 0) {
         await dbPool.query('UPDATE news_interface_config SET app_id = ? WHERE app_id IS NULL', [newsApp[0].id]);
       }
@@ -2001,7 +2138,7 @@ async function initializeTables(dbPool) {
           }
           const id = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}${String(++seq).padStart(5, '0')}`;
           await dbPool.query(
-            'INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, ?)',
+            'INSERT INTO interface_news_type_enabled (F_Id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, ?)',
             [id, interfaceType, newsType, isEnabled ? 1 : 0]
           );
         }
@@ -2043,7 +2180,7 @@ async function initializeTables(dbPool) {
     if (hasBankrpt.length === 0) {
       const bankrptId = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}00001`;
       await dbPool.query(
-        `INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, '上海国际集团', '破产重整', 1)`,
+        `INSERT INTO interface_news_type_enabled (F_Id, interface_type, news_type, is_enabled) VALUES (?, '上海国际集团', '破产重整', 1)`,
         [bankrptId]
       );
       console.log('已为上海国际集团启用「破产重整」新闻类型');
@@ -2075,7 +2212,7 @@ async function initializeTables(dbPool) {
     if (hasThs.length === 0) {
       const thsId = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}00002`;
       await dbPool.query(
-        `INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, '上海国际集团', '同花顺订阅', 1)`,
+        `INSERT INTO interface_news_type_enabled (F_Id, interface_type, news_type, is_enabled) VALUES (?, '上海国际集团', '同花顺订阅', 1)`,
         [thsId]
       );
       console.log('已为上海国际集团启用「同花顺订阅」新闻类型');
@@ -2371,7 +2508,7 @@ async function initializeTables(dbPool) {
         
         // 获取"新闻舆情"应用的ID（作为默认值）
         const [newsApp] = await dbPool.query(
-          "SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
+          "SELECT F_Id AS id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
           ['新闻舆情']
         );
         
@@ -2413,7 +2550,7 @@ async function initializeTables(dbPool) {
       } else {
         // 没有旧数据，需要先获取默认应用ID
         const [newsApp] = await dbPool.query(
-          "SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
+          "SELECT F_Id AS id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
           ['新闻舆情']
         );
         
@@ -2742,7 +2879,7 @@ async function initializeTables(dbPool) {
   // 方案 A：历史仅勾选 new_share 的收件配置补写 new_share_listed_yesterday，保持改前邮件行为
   try {
     const [legacyNewShareRows] = await dbPool.query(`
-      SELECT id, listing_mail_types
+      SELECT F_Id AS id, listing_mail_types
       FROM recipient_management
       WHERE listing_mail_types IS NOT NULL
         AND JSON_CONTAINS(listing_mail_types, '"new_share"', '$')
@@ -2758,7 +2895,7 @@ async function initializeTables(dbPool) {
         }
       }
       if (!Array.isArray(types)) continue;
-      await dbPool.query('UPDATE recipient_management SET listing_mail_types = ? WHERE id = ?', [
+      await dbPool.query('UPDATE recipient_management SET listing_mail_types = ? WHERE F_Id = ?', [
         JSON.stringify([...types, 'new_share_listed_yesterday']),
         row.id,
       ]);
@@ -2775,7 +2912,7 @@ async function initializeTables(dbPool) {
   // 拆分 new_share → new_share_upcoming + new_share_apply（上市日历 / 打新申购独立可选）
   try {
     const [legacySplitRows] = await dbPool.query(`
-      SELECT id, listing_mail_types
+      SELECT F_Id AS id, listing_mail_types
       FROM recipient_management
       WHERE listing_mail_types IS NOT NULL
         AND JSON_CONTAINS(listing_mail_types, '"new_share"', '$')
@@ -2795,7 +2932,7 @@ async function initializeTables(dbPool) {
         expanded.add('new_share_upcoming');
         expanded.add('new_share_apply');
       }
-      await dbPool.query('UPDATE recipient_management SET listing_mail_types = ? WHERE id = ?', [
+      await dbPool.query('UPDATE recipient_management SET listing_mail_types = ? WHERE F_Id = ?', [
         JSON.stringify(Array.from(expanded)),
         row.id,
       ]);
@@ -4571,7 +4708,7 @@ async function initializeTables(dbPool) {
       ]);
 
       const [permUsers] = await dbPool.query(
-        `SELECT id, app_permissions FROM users
+        `SELECT F_Id AS id, app_permissions FROM users
          WHERE app_permissions IS NOT NULL
            AND app_permissions <> ''`
       );
@@ -4592,7 +4729,7 @@ async function initializeTables(dbPool) {
           return perm;
         });
         if (changed) {
-          await dbPool.execute('UPDATE users SET app_permissions = ? WHERE id = ?', [
+          await dbPool.execute('UPDATE users SET app_permissions = ? WHERE F_Id = ?', [
             JSON.stringify(nextPermissions),
             user.id,
           ]);
@@ -4604,7 +4741,7 @@ async function initializeTables(dbPool) {
       if (!fromId || !toId || fromId === toId) return;
 
       // email_config: app_id 唯一，避免冲突
-      const [toEmail] = await dbPool.query('SELECT id FROM email_config WHERE app_id = ? LIMIT 1', [toId]);
+      const [toEmail] = await dbPool.query('SELECT F_Id AS id FROM email_config WHERE app_id = ? LIMIT 1', [toId]);
       if (toEmail.length > 0) {
         await dbPool.execute('DELETE FROM email_config WHERE app_id = ?', [fromId]);
       } else {
@@ -4612,27 +4749,27 @@ async function initializeTables(dbPool) {
       }
 
       // qichacha_config: (app_id, interface_type) 唯一，逐类型迁移避免冲突
-      const [fromQc] = await dbPool.query('SELECT id, interface_type FROM qichacha_config WHERE app_id = ?', [fromId]);
+      const [fromQc] = await dbPool.query('SELECT F_Id AS id, interface_type FROM qichacha_config WHERE app_id = ?', [fromId]);
       for (const row of fromQc) {
         const [dupQc] = await dbPool.query(
-          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
+          'SELECT F_Id AS id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
           [toId, row.interface_type]
         );
         if (dupQc.length > 0) {
-          await dbPool.execute('DELETE FROM qichacha_config WHERE id = ?', [row.id]);
+          await dbPool.execute('DELETE FROM qichacha_config WHERE F_Id = ?', [row.id]);
         } else {
-          await dbPool.execute('UPDATE qichacha_config SET app_id = ? WHERE id = ?', [toId, row.id]);
+          await dbPool.execute('UPDATE qichacha_config SET app_id = ? WHERE F_Id = ?', [toId, row.id]);
         }
       }
 
       // membership_levels：(app_id, level_name) 唯一；批量 UPDATE app_id 会与目标应用已有等级撞键
       const [fromLevels] = await dbPool.query(
-        'SELECT id, level_name FROM membership_levels WHERE app_id = ?',
+        'SELECT F_Id AS id, level_name FROM membership_levels WHERE app_id = ?',
         [fromId]
       );
       for (const lvl of fromLevels) {
         const [dupLvl] = await dbPool.query(
-          `SELECT id FROM membership_levels
+          `SELECT F_Id AS id FROM membership_levels
            WHERE app_id = ? AND CAST(level_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
                  CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
            LIMIT 1`,
@@ -4640,16 +4777,16 @@ async function initializeTables(dbPool) {
         );
         if (dupLvl.length > 0) {
           await remapMembershipLevelReferences(lvl.id, dupLvl[0].id);
-          await dbPool.execute('DELETE FROM membership_levels WHERE id = ?', [lvl.id]);
+          await dbPool.execute('DELETE FROM membership_levels WHERE F_Id = ?', [lvl.id]);
         } else {
-          await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE id = ?', [toId, lvl.id]);
+          await dbPool.execute('UPDATE membership_levels SET app_id = ? WHERE F_Id = ?', [toId, lvl.id]);
         }
       }
 
       await dbPool.execute('UPDATE news_interface_config SET app_id = ? WHERE app_id = ?', [toId, fromId]);
       await dbPool.execute('UPDATE recipient_management SET app_id = ? WHERE app_id = ?', [toId, fromId]);
 
-      const [toSig] = await dbPool.query('SELECT id FROM shanghai_international_group_config WHERE app_id = ? LIMIT 1', [toId]);
+      const [toSig] = await dbPool.query('SELECT F_Id AS id FROM shanghai_international_group_config WHERE app_id = ? LIMIT 1', [toId]);
       if (toSig.length > 0) {
         await dbPool.execute('DELETE FROM shanghai_international_group_config WHERE app_id = ?', [fromId]);
       } else {
@@ -4658,10 +4795,10 @@ async function initializeTables(dbPool) {
     }
 
     async function ensureCanonicalApp(app) {
-      const [byId] = await dbPool.query('SELECT id, app_name FROM applications WHERE id = ? LIMIT 1', [app.id]);
+      const [byId] = await dbPool.query('SELECT F_Id AS id, app_name FROM applications WHERE F_Id = ? LIMIT 1', [app.id]);
       if (byId.length > 0) {
         if (byId[0].app_name !== app.name) {
-          await dbPool.execute('UPDATE applications SET app_name = ?, created_at = ? WHERE id = ?', [
+          await dbPool.execute('UPDATE applications SET app_name = ?, F_CreatorTime = ? WHERE F_Id = ?', [
             app.name,
             app.created_at,
             app.id,
@@ -4671,7 +4808,7 @@ async function initializeTables(dbPool) {
       }
 
       const [byName] = await dbPool.query(
-        'SELECT id, app_name FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1',
+        'SELECT F_Id AS id, app_name FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1',
         [app.name]
       );
       if (byName.length > 0) {
@@ -4679,20 +4816,20 @@ async function initializeTables(dbPool) {
         if (oldId === app.id) return;
         // app_name 有 UNIQUE：INSERT IGNORE 会因同名已存在而跳过插入，导致标准 id 不存在，后续 UPDATE membership_levels 外键失败
         await dbPool.execute(
-          `UPDATE applications SET app_name = CONCAT('__migrate_app_', id) WHERE id = ?`,
+          `UPDATE applications SET app_name = CONCAT('__migrate_app_', F_Id) WHERE F_Id = ?`,
           [oldId]
         );
-        await dbPool.execute('INSERT INTO applications (id, app_name, created_at) VALUES (?, ?, ?)', [
+        await dbPool.execute('INSERT INTO applications (F_Id, app_name, F_CreatorTime) VALUES (?, ?, ?)', [
           app.id,
           app.name,
           app.created_at,
         ]);
         await remapAppRelations(oldId, app.id);
-        await dbPool.execute('DELETE FROM applications WHERE id = ?', [oldId]);
+        await dbPool.execute('DELETE FROM applications WHERE F_Id = ?', [oldId]);
         return;
       }
 
-      await dbPool.execute('INSERT IGNORE INTO applications (id, app_name, created_at) VALUES (?, ?, ?)', [
+      await dbPool.execute('INSERT IGNORE INTO applications (F_Id, app_name, F_CreatorTime) VALUES (?, ?, ?)', [
         app.id,
         app.name,
         app.created_at,
@@ -4716,7 +4853,7 @@ async function initializeTables(dbPool) {
       const [ieM] = await dbPool.query(
         `UPDATE invested_enterprises
          SET data_app_id = ?, data_app_name = ?
-         WHERE delete_mark = 0
+         WHERE F_DeleteMark = 0
            AND (data_app_id = ? OR (data_app_id IS NULL AND data_app_name = ?))`,
         [caId, caName, psId, PS_C.APP_NAME_PROJECT_SOURCING]
       );
@@ -4729,7 +4866,7 @@ async function initializeTables(dbPool) {
       const [preM] = await dbPool.query(
         `UPDATE pre_investment_project
          SET data_app_id = ?, data_app_name = ?
-         WHERE delete_mark = 0 AND (data_app_id = ? OR data_app_name = ?)`,
+         WHERE F_DeleteMark = 0 AND (data_app_id = ? OR data_app_name = ?)`,
         [caId, caName, psId, PS_C.APP_NAME_PROJECT_SOURCING]
       );
       if (preM.affectedRows) console.log(`  ✓ pre_investment_project 已迁移 ${preM.affectedRows} 行至竞品分析`);
@@ -4753,9 +4890,9 @@ async function initializeTables(dbPool) {
         const deduped = await dedupeCompetitorInvestedEnterprises(dbPool);
         const flagId = await generateId('system_config', dbPool);
         await dbPool.execute(
-          `INSERT INTO system_config (id, config_key, config_value, config_desc)
+          `INSERT INTO system_config (F_Id, config_key, config_value, config_desc)
            VALUES (?, 'migration_competitor_ie_dedupe_v1', '1', '竞品分析被投企业去重已完成')
-           ON DUPLICATE KEY UPDATE config_value = '1', updated_at = CURRENT_TIMESTAMP`,
+           ON DUPLICATE KEY UPDATE config_value = '1', F_LastModifyTime = CURRENT_TIMESTAMP`,
           [flagId]
         );
         if (deduped > 0) {
@@ -4773,23 +4910,23 @@ async function initializeTables(dbPool) {
       const psName = PS_C.APP_NAME_PROJECT_SOURCING;
       const caName = CA_C.APP_NAME_COMPETITOR_ANALYSIS;
       const [psSyncTasks] = await dbPool.query(
-        `SELECT * FROM enterprise_sync_task WHERE data_app_name = ? AND delete_mark = 0`,
+        `SELECT * FROM enterprise_sync_task WHERE data_app_name = ? AND F_DeleteMark = 0`,
         [psName]
       );
       let syncCopied = 0;
       for (const t of psSyncTasks) {
         const [exists] = await dbPool.query(
-          `SELECT id FROM enterprise_sync_task
-           WHERE db_config_id = ? AND created_by <=> ? AND data_app_name = ? AND delete_mark = 0`,
-          [t.db_config_id, t.created_by, caName]
+          `SELECT F_Id FROM enterprise_sync_task
+           WHERE db_config_id = ? AND F_CreatorUserId <=> ? AND data_app_name = ? AND F_DeleteMark = 0`,
+          [t.db_config_id, t.F_CreatorUserId, caName]
         );
         if (exists.length) continue;
         const newId = await generateId('enterprise_sync_task');
         await dbPool.execute(
           `INSERT INTO enterprise_sync_task
-           (id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
+           (F_Id, db_config_id, data_app_name, sql_query, cron_expression, description, is_active,
             last_execution_time, last_execution_status, last_execution_message, execution_count,
-            created_by, updated_by)
+            F_CreatorUserId, F_LastModifyUserId)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             newId,
@@ -4803,8 +4940,8 @@ async function initializeTables(dbPool) {
             t.last_execution_status,
             t.last_execution_message,
             t.execution_count,
-            t.created_by,
-            t.created_by,
+            t.F_CreatorUserId,
+            t.F_CreatorUserId,
           ]
         );
         syncCopied += 1;
@@ -4819,8 +4956,8 @@ async function initializeTables(dbPool) {
     // 迁移历史“业绩看板/业绩看板应用/业绩应用看板/股权投资小工具锦集”等别名到标准业绩看板应用
     console.log('  → 归并历史业绩看板应用…');
     const [legacyPerfApps] = await dbPool.query(
-      `SELECT id, app_name FROM applications
-       WHERE id <> ?
+      `SELECT F_Id AS id, app_name FROM applications
+       WHERE F_Id <> ?
          AND (
            app_name LIKE '%业绩看板%'
            OR app_name LIKE '%业绩应用看板%'
@@ -4831,7 +4968,7 @@ async function initializeTables(dbPool) {
     );
     for (const app of legacyPerfApps) {
       await remapAppRelations(app.id, APPS.performance.id);
-      await dbPool.execute('DELETE FROM applications WHERE id = ?', [app.id]);
+      await dbPool.execute('DELETE FROM applications WHERE F_Id = ?', [app.id]);
       console.log(`  ✓ 已归并历史应用 ${app.app_name}(${app.id}) -> 业绩看板(${APPS.performance.id})`);
     }
 
@@ -4851,7 +4988,7 @@ async function initializeTables(dbPool) {
       `SELECT level_name, validity_days
        FROM membership_levels
        WHERE app_id = ?
-       ORDER BY validity_days ASC, created_at ASC`,
+       ORDER BY validity_days ASC, F_CreatorTime ASC`,
       [APPS.news.id]
     );
     if (newsTemplateRows.length > 0) {
@@ -4866,7 +5003,7 @@ async function initializeTables(dbPool) {
       for (const level of defaultLevelTemplate) {
         const newId = await generateId('membership_levels', dbPool);
         await dbPool.execute(
-          'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+          'INSERT INTO membership_levels (F_Id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
           [newId, level.level_name, level.validity_days, APPS.news.id]
         );
       }
@@ -4877,17 +5014,17 @@ async function initializeTables(dbPool) {
       // 1) 先确保模板等级存在
       for (const level of levelTemplate) {
         const [sameNameRows] = await dbPool.query(
-          `SELECT id, validity_days, created_at
+          `SELECT F_Id AS id, validity_days, F_CreatorTime
            FROM membership_levels
            WHERE app_id = ? AND level_name = ?
-           ORDER BY created_at ASC, id ASC`,
+           ORDER BY F_CreatorTime ASC, F_Id ASC`,
           [appId, level.level_name]
         );
 
         if (sameNameRows.length === 0) {
           const newId = await generateId('membership_levels', dbPool);
           await dbPool.execute(
-            'INSERT INTO membership_levels (id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
+            'INSERT INTO membership_levels (F_Id, level_name, validity_days, app_id) VALUES (?, ?, ?, ?)',
             [newId, level.level_name, level.validity_days, appId]
           );
           continue;
@@ -4896,20 +5033,20 @@ async function initializeTables(dbPool) {
         // 2) 保留首条，修正有效期，删除同名重复
         const keeper = sameNameRows[0];
         if (Number(keeper.validity_days) !== Number(level.validity_days)) {
-          await dbPool.execute('UPDATE membership_levels SET validity_days = ? WHERE id = ?', [
+          await dbPool.execute('UPDATE membership_levels SET validity_days = ? WHERE F_Id = ?', [
             level.validity_days,
             keeper.id,
           ]);
         }
         for (let i = 1; i < sameNameRows.length; i += 1) {
           await remapMembershipLevelReferences(sameNameRows[i].id, keeper.id);
-          await dbPool.execute('DELETE FROM membership_levels WHERE id = ?', [sameNameRows[i].id]);
+          await dbPool.execute('DELETE FROM membership_levels WHERE F_Id = ?', [sameNameRows[i].id]);
         }
       }
 
       // 3) 全量兜底去重：同 app + 同等级名 只保留一条（避免历史脏数据）
       const [dups] = await dbPool.query(
-        `SELECT level_name, MIN(id) AS keep_id, COUNT(*) AS c
+        `SELECT level_name, MIN(F_Id) AS keep_id, COUNT(*) AS c
          FROM membership_levels
          WHERE app_id = ?
          GROUP BY level_name
@@ -4918,15 +5055,15 @@ async function initializeTables(dbPool) {
       );
       for (const dup of dups) {
         const [dupRows] = await dbPool.query(
-          `SELECT id FROM membership_levels
-           WHERE app_id = ? AND level_name = ? AND id <> ?`,
+          `SELECT F_Id AS id FROM membership_levels
+           WHERE app_id = ? AND level_name = ? AND F_Id <> ?`,
           [appId, dup.level_name, dup.keep_id]
         );
         for (const row of dupRows) {
           await remapMembershipLevelReferences(row.id, dup.keep_id);
         }
         await dbPool.execute(
-          'DELETE FROM membership_levels WHERE app_id = ? AND level_name = ? AND id <> ?',
+          'DELETE FROM membership_levels WHERE app_id = ? AND level_name = ? AND F_Id <> ?',
           [appId, dup.level_name, dup.keep_id]
         );
       }
@@ -4947,7 +5084,7 @@ async function initializeTables(dbPool) {
       const [fromQc] = await dbPool.query('SELECT * FROM qichacha_config WHERE app_id = ?', [psId]);
       for (const row of fromQc) {
         const [dup] = await dbPool.query(
-          'SELECT id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
+          'SELECT F_Id AS id FROM qichacha_config WHERE app_id = ? AND interface_type = ? LIMIT 1',
           [caId, row.interface_type]
         );
         if (dup.length) continue;
@@ -4995,13 +5132,13 @@ async function initializeTables(dbPool) {
     // 检查并创建默认 admin 账号
     const bcrypt = require('bcrypt');
     const { generateId } = require('./utils/idGenerator');
-    const [adminUsers] = await dbPool.query('SELECT id FROM users WHERE account = ?', ['admin']);
+    const [adminUsers] = await dbPool.query('SELECT F_Id AS id FROM users WHERE account = ?', ['admin']);
     if (adminUsers.length === 0) {
       const hashedPassword = await bcrypt.hash('wenchao', 10);
       const adminId = await generateId('users', dbPool);
       console.log(`  生成admin用户ID: ${adminId}`);
       await dbPool.execute(
-        'INSERT INTO users (id, account, phone, email, password, role, account_status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO users (F_Id, account, phone, email, password, role, account_status) VALUES (?, ?, ?, ?, ?, ?, ?)',
         [adminId, 'admin', '13800000000', 'admin@example.com', hashedPassword, 'admin', 'active']
       );
       // 已创建默认 admin 账号
@@ -5018,7 +5155,7 @@ async function initializeTables(dbPool) {
   if (qichachaConfigs[0].count === 0) {
     // 获取"新闻舆情"应用的ID（作为默认值）
     const [newsApp] = await dbPool.query(
-      "SELECT id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
+      "SELECT F_Id AS id FROM applications WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci = CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci LIMIT 1",
       ['新闻舆情']
     );
     
@@ -5036,7 +5173,7 @@ async function initializeTables(dbPool) {
       const configId = `${prefix}00001`;
       
       await dbPool.execute(
-        'INSERT INTO qichacha_config (id, app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO qichacha_config (F_Id, app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type) VALUES (?, ?, ?, ?, ?, ?)',
         [configId, defaultAppId, '', '', 100, '企业信息']
       );
       console.log('✓ 已初始化企查查配置');
@@ -5368,7 +5505,7 @@ async function initializeTables(dbPool) {
     const [fixCa] = await dbPool.query(
       `UPDATE ai_model_config
        SET application_type = 'competitor_analysis'
-       WHERE delete_mark = 0
+       WHERE F_DeleteMark = 0
          AND usage_type = 'competitor_match'
          AND application_type = 'project_sourcing_competitor'`
     );
@@ -5376,12 +5513,12 @@ async function initializeTables(dbPool) {
       console.log(`  ✓ 已将 ${fixCa.affectedRows} 条竞品匹配配置的 application_type 更正为 competitor_analysis`);
     }
     await dbPool.query(
-      `UPDATE base_dictionary SET delete_mark = 1, is_enabled = 0
+      `UPDATE base_dictionary SET F_DeleteMark = 1, is_enabled = 0
        WHERE parent_id IN (
-         SELECT id FROM (
-           SELECT id FROM base_dictionary WHERE dict_code = 'ai_model_application_type' AND parent_id IS NULL AND delete_mark = 0 LIMIT 1
+         SELECT rid FROM (
+           SELECT F_Id AS rid FROM base_dictionary WHERE dict_code = 'ai_model_application_type' AND parent_id IS NULL AND F_DeleteMark = 0 LIMIT 1
          ) t
-       ) AND item_code = 'project_sourcing_competitor' AND delete_mark = 0`
+       ) AND item_code = 'project_sourcing_competitor' AND F_DeleteMark = 0`
     ).catch(() => {});
   } catch (err) {
     console.warn('迁移 ai_model_config.application_type 扩展时出现警告:', err.message);
@@ -5438,6 +5575,25 @@ async function initializeTables(dbPool) {
       FOREIGN KEY (user_id) REFERENCES users(F_Id) ON DELETE CASCADE,
       FOREIGN KEY (F_DeleteUserId) REFERENCES users(F_Id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+
+  // 上市进展：项目进展分享链接（与 news_share_links 结构类似，独立表）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS listing_share_links (
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
+      user_id VARCHAR(19) NOT NULL COMMENT '创建用户ID',
+      share_token VARCHAR(64) NOT NULL UNIQUE COMMENT '分享令牌',
+      status VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态：active/inactive',
+      has_expiry TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用过期时间',
+      expiry_time DATETIME NULL COMMENT '过期时间',
+      has_password TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用访问密码',
+      password_hash VARCHAR(255) NULL COMMENT '访问密码哈希',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      INDEX idx_listing_share_user (user_id),
+      INDEX idx_listing_share_status (status),
+      FOREIGN KEY (user_id) REFERENCES users(F_Id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展项目进展分享链接';
   `);
 
   try {
@@ -5636,7 +5792,7 @@ async function initializeTables(dbPool) {
 
   try {
     const [listingRows] = await dbPool.query(
-      `SELECT id FROM applications
+      `SELECT F_Id AS id FROM applications
        WHERE CAST(app_name AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci =
              CAST(? AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci
        LIMIT 1`,
@@ -5914,11 +6070,11 @@ async function initializeTables(dbPool) {
       }
       await dbPool.query(`
         INSERT INTO ipo_progress (
-          f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+          F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
           company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
         )
         SELECT
-          DATE(COALESCE(o.created_at, CURDATE())),
+          DATE(COALESCE(o.F_CreatorTime, o.created_at, CURDATE())),
           CONCAT(DATE_FORMAT(o.receive_date, '%Y-%m-%d'), ' 00:00:00'),
           '',
           o.company_name,
@@ -7046,7 +7202,7 @@ async function initializeTables(dbPool) {
       [LISTING_APP_ID]
     );
     const [perfApp] = await dbPool.query(
-      "SELECT F_Id AS id FROM applications WHERE app_name = '业绩看板' AND delete_mark = 0 LIMIT 1"
+      "SELECT F_Id AS id FROM applications WHERE app_name = '业绩看板' AND F_DeleteMark = 0 LIMIT 1"
     );
     if (perfApp.length) {
       await dbPool.execute(
@@ -7545,6 +7701,20 @@ async function initializeTables(dbPool) {
     await migrateSoftDeleteToDeleteMarkConvention(dbPool);
   } catch (err) {
     console.warn('migrateSoftDeleteToDeleteMarkConvention 执行时出现警告:', err.message);
+  }
+
+  // 软删除补齐可能新增 snake_case 列（delete_mark 等），再跑一轮 F_ 重命名确保 API 可用
+  try {
+    await migrateBatchFColumns(dbPool);
+  } catch (err) {
+    console.warn('migrateBatchFColumns（软删除补齐后）执行时出现警告:', err.message);
+  }
+
+  try {
+    await ensureBaseDictionarySchema(dbPool);
+    console.log('✓ base_dictionary 表结构终检完成（F_ 系统字段）');
+  } catch (err) {
+    console.warn('base_dictionary 终检迁移时出现警告:', err.message);
   }
 
   // 赛道：将二级上的匹配字段迁移到三级（旧库一次性迁移）

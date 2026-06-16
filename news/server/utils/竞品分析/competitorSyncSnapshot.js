@@ -5,6 +5,11 @@ const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const CA_C = require('./constants');
 const { normalizeCreditCode, strTrim } = require('./competitorMatchUtils');
+const {
+  investedEnterpriseAppMatchClause,
+  investedEnterpriseSyncOwnerClause,
+} = require('../enterpriseDataApp');
+const { getApplicationIdByAppName } = require('../applicationIdResolve');
 
 const SNAPSHOT_RETENTION_DAYS = 180;
 
@@ -99,13 +104,24 @@ async function queryInChunks(sqlPrefix, sqlSuffix, ids, params = []) {
 async function backupCompetitorDataBeforeHardDelete(creatorUserId, dataAppName) {
   if (!creatorUserId || !supportsCompetitorSyncSnapshot(dataAppName)) return null;
 
-  const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
-  const ieRows = await db.query(
+  const dataAppId = await getApplicationIdByAppName(dataAppName);
+  const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
+  const { sql: ownerMatch, params: ownerParams } = investedEnterpriseSyncOwnerClause('', creatorUserId);
+
+  let ieRows = await db.query(
     `SELECT F_Id, F_CreatorUserId, unified_credit_code, enterprise_full_name, project_abbreviation
      FROM invested_enterprises
-     WHERE F_DeleteMark = 0 AND F_CreatorUserId = ? AND data_app_id <=> ?`,
-    [String(creatorUserId), caId]
+     WHERE F_DeleteMark = 0 AND ${ownerMatch} AND ${appMatch}`,
+    [...ownerParams, ...appParams]
   );
+  if (!ieRows.length) {
+    ieRows = await db.query(
+      `SELECT F_Id, F_CreatorUserId, unified_credit_code, enterprise_full_name, project_abbreviation
+       FROM invested_enterprises
+       WHERE F_DeleteMark = 0 AND ${appMatch}`,
+      appParams
+    );
+  }
   if (!ieRows.length) return null;
 
   const ieIds = ieRows.map((r) => String(r.F_Id));
@@ -428,7 +444,7 @@ async function restoreSubjectPayload(newIeId, payload) {
     await db.execute(
       `INSERT INTO competitor_match_supplement (
          F_Id, invested_enterprise_id, user_tags_json, user_narrative_raw,
-         ai_extracted_tags_json, ai_short_summary, batch_id, created_by,
+         ai_extracted_tags_json, ai_short_summary, batch_id, F_CreatorUserId,
          F_CreatorTime, F_LastModifyTime, F_DeleteMark
        ) VALUES (?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
       [
@@ -447,7 +463,7 @@ async function restoreSubjectPayload(newIeId, payload) {
           : null,
         sup.ai_short_summary || null,
         sup.batch_id || null,
-        sup.created_by || null,
+        sup.F_CreatorUserId || sup.creator_user_id || sup.created_by || null,
       ]
     );
     stats.supplement += 1;

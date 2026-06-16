@@ -36,6 +36,7 @@ import {
   getListingProjectProgressShareCurrent,
   createListingProjectProgressShare,
 } from '../../api/上市进展'
+import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
 import CronGenerator from '../../components/CronGenerator'
 
 const TabPane = Tabs.TabPane
@@ -400,7 +401,7 @@ export default function ListingProjectProgressPage() {
       const res = await fetchIpoProjectProgressList(params)
       if (res.data?.success) {
         const d = res.data.data || {}
-        setData(d.list || [])
+        setData(normalizeRecordList(d.list || []))
         setTotal(d.total || 0)
         if (d.pageSize != null) setPageSize(Number(d.pageSize))
       } else {
@@ -844,7 +845,7 @@ export default function ListingProjectProgressPage() {
             </Space>
           </div>
           <Table
-            rowKey="f_id"
+            rowKey={resolveRecordId}
             loading={loading}
             columns={columns}
             data={data}

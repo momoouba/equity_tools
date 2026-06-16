@@ -41,6 +41,7 @@ import {
 } from '../../api/竞品分析'
 import BatchImportModal from '../BatchImportModal'
 import { IntroPopoverCell } from './introPopoverAiCell'
+import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
 import '../项目挖掘/FinancingEventsPage.css'
@@ -234,7 +235,7 @@ export default function ProjectSourcingIpoProjectsPage() {
       })
       if (res.data?.success) {
         const d = res.data.data || {}
-        setData(d.list || [])
+        setData(normalizeRecordList(d.list || []))
         setTotal(Number(d.total || 0))
       } else {
         Message.error(res.data?.message || '加载失败')
@@ -1040,7 +1041,7 @@ export default function ProjectSourcingIpoProjectsPage() {
         >
           <div className="table-container ipo-projects-table-container" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <Table
-            rowKey="f_id"
+            rowKey={resolveRecordId}
             loading={loading}
             data={data}
             columns={columns}

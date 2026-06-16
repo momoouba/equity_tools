@@ -15,7 +15,7 @@ async function seedInterfaceNewsTypeFinancing(dbPool) {
   if (hasFinancingIface.length === 0) {
     const finIfaceId = `${new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)}00003`;
     await dbPool.query(
-      `INSERT INTO interface_news_type_enabled (id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, 1)`,
+      `INSERT INTO interface_news_type_enabled (F_Id, interface_type, news_type, is_enabled) VALUES (?, ?, ?, 1)`,
       [finIfaceId, INTERFACE_TYPE_SHANGHAI_INTERNATIONAL_FINANCING, NEWS_TYPE_FINANCING_INFO]
     );
     console.log(`已为 ${INTERFACE_TYPE_SHANGHAI_INTERNATIONAL_FINANCING} 启用「${NEWS_TYPE_FINANCING_INFO}」类型`);

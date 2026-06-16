@@ -40,6 +40,23 @@ function RecipientManagement() {
   const [categoryMap, setCategoryMap] = useState({})
   const [showCronModal, setShowCronModal] = useState(false)
 
+  const fetchIndustryTagOptions = async () => {
+    try {
+      const res = await axios.get('/api/additional-accounts/industry-tag-options')
+      if (res.data?.success) {
+        setIndustryTagOptions(res.data.data || [])
+      }
+    } catch (e) {
+      console.error('获取行业标签失败:', e)
+    }
+  }
+
+  useEffect(() => {
+    if (showForm) {
+      fetchIndustryTagOptions()
+    }
+  }, [showForm])
+
   useEffect(() => {
     if (showCategoryModal) {
       if (editingRecipient) {
@@ -151,16 +168,7 @@ function RecipientManagement() {
       }
     }
     
-    const loadIndustryTags = async () => {
-      try {
-        const res = await axios.get('/api/additional-accounts/industry-tag-options')
-        if (isMounted && res.data?.success) {
-          setIndustryTagOptions(res.data.data || [])
-        }
-      } catch (e) {
-        console.error('获取行业标签失败:', e)
-      }
-    }
+    const loadIndustryTags = () => fetchIndustryTagOptions()
 
     loadData()
     loadCategoryMap()

@@ -82,7 +82,7 @@ async function listIpoProjects(req, res) {
 
     const offset = (page - 1) * pageSize;
     const rows = await db.query(
-      `SELECT p.*, u.account AS creator_account
+      `SELECT p.*, p.F_Id AS f_id, u.account AS creator_account
        FROM ipo_project p
        LEFT JOIN users u ON u.F_Id = p.F_CreatorUserId
        ${whereSql}

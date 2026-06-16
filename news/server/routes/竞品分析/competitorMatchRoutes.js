@@ -208,7 +208,7 @@ function registerCompetitorMatchRoutes(router) {
       await db.execute(
         `INSERT INTO competitor_match_supplement (
            F_Id, invested_enterprise_id, user_tags_json, user_narrative_raw, ai_extracted_tags_json, ai_short_summary,
-           batch_id, created_by, F_CreatorTime, F_LastModifyTime, F_DeleteMark
+           batch_id, F_CreatorUserId, F_CreatorTime, F_LastModifyTime, F_DeleteMark
          ) VALUES (?,?,?,?,?,?,NULL,?,NOW(),NOW(),0)`,
         [
           id,

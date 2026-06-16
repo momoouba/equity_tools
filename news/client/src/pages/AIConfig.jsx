@@ -54,6 +54,13 @@ function AIConfig() {
     fetchMetaOptions()
   }, [pagination.page, pagination.pageSize])
 
+  useEffect(() => {
+    if (showModal) {
+      fetchMetaOptions()
+      fetchAvailableModels()
+    }
+  }, [showModal])
+
   const fetchConfigs = async () => {
     setLoading(true)
     try {
@@ -345,7 +352,11 @@ function AIConfig() {
             <h3>AI模型配置管理</h3>
             <Space>
               <Button
-                onClick={fetchConfigs}
+                onClick={() => {
+                  fetchConfigs()
+                  fetchMetaOptions()
+                  fetchAvailableModels()
+                }}
                 loading={loading}
               >
                 刷新

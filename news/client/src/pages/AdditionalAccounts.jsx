@@ -77,6 +77,12 @@ function AdditionalAccounts() {
     fetchIndustryTagOptions()
   }, [])
 
+  useEffect(() => {
+    if (showAddModal || showEditModal || showImportModal) {
+      fetchIndustryTagOptions()
+    }
+  }, [showAddModal, showEditModal, showImportModal])
+
   const fetchUsers = async () => {
     try {
       const response = await axios.get('/api/auth/users', {

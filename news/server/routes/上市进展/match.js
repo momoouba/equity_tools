@@ -42,8 +42,8 @@ async function runMatch(req, res) {
     if (selectedIpoTypes.length > 0 && (!startDate || !endDate)) {
       const rows = await db.query(
         `SELECT
-           DATE_FORMAT(MIN(f_update_time), '%Y-%m-%d') AS min_date,
-           DATE_FORMAT(MAX(f_update_time), '%Y-%m-%d') AS max_date
+           DATE_FORMAT(MIN(F_UpdateTime), '%Y-%m-%d') AS min_date,
+           DATE_FORMAT(MAX(F_UpdateTime), '%Y-%m-%d') AS max_date
          FROM ipo_progress
          WHERE F_DeleteMark = 0`
       );

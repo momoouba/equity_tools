@@ -59,7 +59,7 @@ async function listOverseasFiling(req, res) {
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_progress ${whereSql}`, params);
     const list = await db.query(
       `SELECT
-         f_id AS id,
+         F_Id AS id,
          project_name AS company_name,
          register_address AS filing_type,
          company AS filing_entity,
@@ -71,7 +71,7 @@ async function listOverseasFiling(req, res) {
          NULL AS batch_week,
          DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM ipo_progress ${whereSql}
-       ORDER BY receive_date DESC, f_id DESC
+       ORDER BY receive_date DESC, F_Id DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -98,7 +98,7 @@ async function exportOverseasFiling(req, res) {
          status AS filing_status,
          NULL AS batch_week
        FROM ipo_progress ${whereSql}
-       ORDER BY receive_date DESC, f_id DESC
+       ORDER BY receive_date DESC, F_Id DESC
        LIMIT 50000`,
       params
     );

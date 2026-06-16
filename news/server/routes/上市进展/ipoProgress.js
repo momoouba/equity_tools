@@ -96,6 +96,7 @@ async function listIpoProgress(req, res) {
     const rows = await db.query(
       `SELECT
          F_Id,
+         F_Id AS f_id,
          F_CreatorTime,
          DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          code,

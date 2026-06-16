@@ -139,7 +139,7 @@ async function prepareIpoProjectAiJob({ fId, triggerType, triggeredByUserId, cli
   }
 
   const rows = await db.query(
-    `SELECT f_id, company, project_name, unified_credit_code, data_app_id, F_DeleteMark
+    `SELECT F_Id AS f_id, company, project_name, unified_credit_code, data_app_id, F_DeleteMark
      FROM ipo_project WHERE F_Id = ? LIMIT 1`,
     [id]
   );
@@ -213,7 +213,7 @@ async function runIpoProjectAiEnrichTask({
     );
 
     const ev = await db.query(
-      `SELECT f_id, company, project_name, unified_credit_code, qcc_company_intro, data_app_id, F_DeleteMark
+      `SELECT F_Id AS f_id, company, project_name, unified_credit_code, qcc_company_intro, data_app_id, F_DeleteMark
        FROM ipo_project WHERE F_Id = ? LIMIT 1`,
       [fId]
     );
@@ -250,7 +250,7 @@ async function runIpoProjectAiEnrichTask({
          ai_enrich_model = ?,
          ai_enrich_version = ?,
          ai_enrich_error = NULL
-       WHERE f_id = ? AND F_DeleteMark = 0`,
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [
         llm.productIntroStored || null,
         llm.display || null,
@@ -275,7 +275,7 @@ async function runIpoProjectAiEnrichTask({
            ai_enrich_error = NULL
          WHERE F_DeleteMark = 0 AND data_app_id <=> ?
            AND UPPER(REPLACE(REPLACE(IFNULL(unified_credit_code,''),' ',''),'　','')) = ?
-           AND f_id <> ?`,
+           AND F_Id <> ?`,
         [
           llm.productIntroStored || null,
           llm.display || null,
@@ -306,7 +306,7 @@ async function runIpoProjectAiEnrichTask({
       `UPDATE ipo_project SET
          ai_enrich_status = 'failed',
          ai_enrich_error = ?
-       WHERE f_id = ? AND F_DeleteMark = 0`,
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [String((err && err.message) || err).slice(0, 480), fId]
     );
     await markIppAiLogFailed({
@@ -372,11 +372,11 @@ async function enqueueBatchIpoProjectAiEnrich({
     return { ok: false, code: 400, message: '未找到「竞品分析」应用，无法筛选底层项目' };
   }
   const rows = await db.query(
-    `SELECT f_id, company, unified_credit_code FROM ipo_project
+    `SELECT F_Id AS f_id, company, unified_credit_code FROM ipo_project
      WHERE F_DeleteMark = 0 AND data_app_id = ?
        AND DATE(F_CreatorTime) >= ? AND DATE(F_CreatorTime) <= ?
        ${failedClause}
-     ORDER BY F_CreatorTime DESC, f_id DESC`,
+     ORDER BY F_CreatorTime DESC, F_Id DESC`,
     [psId, df, dt]
   );
   const totalInRange = rows.length;

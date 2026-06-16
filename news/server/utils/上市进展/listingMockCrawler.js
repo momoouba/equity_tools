@@ -37,8 +37,8 @@ async function runListingMockCrawler({ startDate, endDate }) {
       const { code: exchange, board } = exchanges[i];
       const company = `?????Mock?${dateStr.replace(/-/g, '')}-${i}`;
       const dup = await db.query(
-        `SELECT f_id FROM ipo_progress
-         WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND DATE(f_update_time) = ? LIMIT 1`,
+        `SELECT F_Id AS f_id FROM ipo_progress
+         WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND DATE(F_UpdateTime) = ? LIMIT 1`,
         [exchange, company, dateStr]
       );
       if (dup.length) {
@@ -48,7 +48,7 @@ async function runListingMockCrawler({ startDate, endDate }) {
       const fUpdate = `${dateStr} 10:00:00`;
       await db.execute(
         `INSERT INTO ipo_progress (
-          f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+          F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
           company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
         ) VALUES (?, ?, '', ?, '???', '', NULL, ?, ?, ?, ?, ?, NOW(), 0)`,
         [dateStr, fUpdate, `Mock-${dateStr}`, company, board, exchange, adminId, adminId]

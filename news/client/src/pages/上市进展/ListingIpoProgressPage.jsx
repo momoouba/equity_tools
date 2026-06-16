@@ -11,6 +11,7 @@ import {
   deleteIpoProgress,
   fetchListingDataChangeLog,
 } from '../../api/上市进展'
+import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -89,7 +90,7 @@ export default function ListingIpoProgressPage() {
       })
       if (res.data?.success) {
         const d = res.data.data || {}
-        setData(d.list || [])
+        setData(normalizeRecordList(d.list || []))
         setTotal(d.total || 0)
         if (d.pageSize != null) setPageSize(Number(d.pageSize))
       } else {
@@ -470,7 +471,7 @@ export default function ListingIpoProgressPage() {
         </div>
       </div>
       <Table
-        rowKey="f_id"
+        rowKey={resolveRecordId}
         loading={loading}
         columns={columns}
         data={data}

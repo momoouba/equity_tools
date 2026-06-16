@@ -23,7 +23,7 @@ const checkAuth = (req, res, next) => {
 async function ensureListingShareTable() {
   await db.execute(`
     CREATE TABLE IF NOT EXISTS listing_share_links (
-      id VARCHAR(19) PRIMARY KEY,
+      F_Id VARCHAR(19) PRIMARY KEY,
       user_id VARCHAR(19) NOT NULL,
       share_token VARCHAR(64) NOT NULL UNIQUE,
       status VARCHAR(20) NOT NULL DEFAULT 'active',
@@ -31,8 +31,8 @@ async function ensureListingShareTable() {
       expiry_time DATETIME NULL,
       has_password TINYINT(1) NOT NULL DEFAULT 0,
       password_hash VARCHAR(255) NULL,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       INDEX idx_listing_share_user (user_id),
       INDEX idx_listing_share_status (status)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -52,9 +52,9 @@ router.post('/create', checkAuth, async (req, res) => {
     const { hasExpiry, expiryTime, hasPassword, password } = req.body || {};
 
     const existing = await db.query(
-      `SELECT id, share_token FROM listing_share_links
+      `SELECT F_Id AS id, share_token FROM listing_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY F_CreatorTime DESC LIMIT 1`,
       [userId]
     );
 
@@ -69,8 +69,8 @@ router.post('/create', checkAuth, async (req, res) => {
       token = existing[0].share_token;
       await db.execute(
         `UPDATE listing_share_links
-         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?
-         WHERE id = ?`,
+         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
         [hasExpiry ? 1 : 0, expiryTimeValue, hasPassword ? 1 : 0, passwordHash, id]
       );
     } else {
@@ -78,7 +78,7 @@ router.post('/create', checkAuth, async (req, res) => {
       token = generateShareToken();
       await db.execute(
         `INSERT INTO listing_share_links
-         (id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
+         (F_Id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
          VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
         [id, userId, token, hasExpiry ? 1 : 0, expiryTimeValue, hasPassword ? 1 : 0, passwordHash]
       );
@@ -106,10 +106,10 @@ router.get('/current', checkAuth, async (req, res) => {
     await ensureListingShareTable();
     const userId = req.currentUserId;
     const rows = await db.query(
-      `SELECT id, share_token, status, has_expiry, expiry_time, has_password
+      `SELECT F_Id AS id, share_token, status, has_expiry, expiry_time, has_password
        FROM listing_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY F_CreatorTime DESC LIMIT 1`,
       [userId]
     );
     if (!rows.length) return res.json({ success: true, data: null });
@@ -315,7 +315,7 @@ router.get('/data/:token', async (req, res) => {
       dateParams
     );
     const dataRows = await db.query(
-      `SELECT F_Id AS id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+      `SELECT F_Id AS id, F_Id AS f_id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
               status, board, exchange, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time
        FROM ipo_project_progress
        ${whereSql}
@@ -455,6 +455,7 @@ router.get('/ipo-progress-data/:token', async (req, res) => {
     const rows = await db.query(
       `SELECT
          F_Id,
+         F_Id AS f_id,
          F_CreatorTime,
          DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          code,

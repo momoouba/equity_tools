@@ -38,10 +38,10 @@ async function findOverseasExcelMergeTarget(projectName, receiveYmd, exchange) {
   const key = normalizeOverseasNameKey(projectName);
   if (!key) return null;
   const rows = await db.query(
-    `SELECT f_id, project_name, register_address, status, company, exchange
+    `SELECT F_Id AS f_id, project_name, register_address, status, company, exchange
      FROM ipo_progress
      WHERE F_DeleteMark = 0 AND board = ? AND receive_date = ?
-     ORDER BY f_id DESC`,
+     ORDER BY F_Id DESC`,
     [OVERSEAS_BOARD, receiveYmd]
   );
   // #21: 优先匹配同 exchange 的行，其次取最新行
@@ -94,16 +94,16 @@ async function upsertNoticeFilingRow(row, adminId, writeDate) {
   if (merge) {
     await db.execute(
       `UPDATE ipo_progress SET
-        f_update_time = ?, status = ?, company = ?, exchange = ?, project_name = ?,
+        F_UpdateTime = ?, status = ?, company = ?, exchange = ?, project_name = ?,
         register_address = ?, F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-       WHERE f_id = ? AND F_DeleteMark = 0`,
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [fUpdateTime, status, company, exchange, projectName, docNo, adminId, merge.f_id]
     );
     return 'updated';
   }
 
   const byDoc = await db.query(
-    `SELECT f_id, project_name, status, company, exchange, receive_date
+    `SELECT F_Id AS f_id, project_name, status, company, exchange, receive_date
      FROM ipo_progress
      WHERE F_DeleteMark = 0 AND board = ? AND register_address = ?`,
     [OVERSEAS_BOARD, docNo]
@@ -119,9 +119,9 @@ async function upsertNoticeFilingRow(row, adminId, writeDate) {
     if (!changed) return 'skipped';
     await db.execute(
       `UPDATE ipo_progress SET
-        f_update_time = ?, status = ?, company = ?, exchange = ?, project_name = ?, receive_date = ?,
+        F_UpdateTime = ?, status = ?, company = ?, exchange = ?, project_name = ?, receive_date = ?,
         F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-       WHERE f_id = ? AND F_DeleteMark = 0`,
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [fUpdateTime, status, company, exchange, projectName, receiveYmd, adminId, old.f_id]
     );
     return 'updated';
@@ -129,7 +129,7 @@ async function upsertNoticeFilingRow(row, adminId, writeDate) {
 
   await db.execute(
     `INSERT INTO ipo_progress (
-      f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+      F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
       company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
     [
@@ -209,7 +209,7 @@ async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
   // #20: 去重键增加 exchange，与交易所爬虫去重逻辑对齐；同时用 normalizeOverseasNameKey 做规范化比较
   const normalizedInputKey = normalizeOverseasNameKey(projectName);
   const exists = await db.query(
-    `SELECT f_id, status, company, exchange, project_name
+    `SELECT F_Id AS f_id, status, company, exchange, project_name
      FROM ipo_progress
      WHERE F_DeleteMark = 0 AND board = ? AND exchange = ?
        AND receive_date = ? AND register_address = ?`,
@@ -224,7 +224,7 @@ async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
   if (!matchedExists.length) {
     await db.execute(
       `INSERT INTO ipo_progress (
-        f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+        F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
         company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
       [
@@ -255,9 +255,9 @@ async function upsertOverseasToIpoProgress(row, adminId, writeDate) {
 
   await db.execute(
     `UPDATE ipo_progress SET
-      f_update_time = ?, status = ?, company = ?, exchange = ?, project_name = ?,
+      F_UpdateTime = ?, status = ?, company = ?, exchange = ?, project_name = ?,
       F_LastModifyUserId = ?, F_LastModifyTime = NOW()
-     WHERE f_id = ? AND F_DeleteMark = 0`,
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
     [fUpdateTime, status, company, exchange, projectName, adminId, old.f_id]
   );
   return 'updated';

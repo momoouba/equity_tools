@@ -10,6 +10,7 @@ import {
   downloadListingIpoProgressShareExport,
   downloadListingProjectProgressShareExport,
 } from '../api/上市进展'
+import { normalizeRecordList, resolveRecordId } from '../utils/recordId'
 import './上市进展/ListingIpoProgressPage.css'
 
 const TabPane = Tabs.TabPane
@@ -55,7 +56,7 @@ function ShareIpoAuditTab({ token }) {
       const res = await fetchListingIpoProgressShareData(token, { page, pageSize, keyword: kwSearch })
       if (res.data?.success) {
         const d = res.data.data || {}
-        setData(d.list || [])
+        setData(normalizeRecordList(d.list || []))
         setTotal(d.total || 0)
         if (d.pageSize != null) setPageSize(Number(d.pageSize))
       } else {
@@ -221,7 +222,7 @@ function ShareIpoAuditTab({ token }) {
         </div>
       </div>
       <Table
-        rowKey="f_id"
+        rowKey={resolveRecordId}
         loading={loading}
         columns={columns}
         data={data}
@@ -330,7 +331,7 @@ export default function ShareListingProjectProgressPage() {
       })
       if (res.data?.success) {
         const data = res.data.data || {}
-        setList(data.list || [])
+        setList(normalizeRecordList(data.list || []))
         setTotal(data.total || 0)
         if (data.pageSize != null) setPageSize(Number(data.pageSize))
       } else {
@@ -483,7 +484,7 @@ export default function ShareListingProjectProgressPage() {
             </Space>
           </div>
           <Table
-            rowKey="f_id"
+            rowKey={resolveRecordId}
             loading={loading}
             columns={columns}
             data={list}

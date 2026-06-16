@@ -29,11 +29,11 @@ function buildWhere(req) {
     params.push(`%${registerAddress}%`);
   }
   if (startDate) {
-    where.push('DATE(f_update_time) >= ?');
+    where.push('DATE(F_UpdateTime) >= ?');
     params.push(startDate);
   }
   if (endDate) {
-    where.push('DATE(f_update_time) <= ?');
+    where.push('DATE(F_UpdateTime) <= ?');
     params.push(endDate);
   }
   return { whereSql: `WHERE ${where.join(' AND ')}`, params };
@@ -51,11 +51,11 @@ async function listGuidanceProgress(req, res) {
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_progress ${whereSql}`, params);
     const list = await db.query(
       `SELECT
-         f_id,
-         DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         F_Id AS f_id,
+         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
          company, project_name, status, exchange, board, register_address, code, receive_date
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC
+       ORDER BY F_UpdateTime DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -73,9 +73,9 @@ async function exportGuidanceProgress(req, res) {
     if (!(await canAccessListing(user.id, user.account))) return forbidden(res);
     const { whereSql, params } = buildWhere(req);
     const rows = await db.query(
-      `SELECT DATE_FORMAT(f_update_time, '%Y-%m-%d %H:%i:%s') AS f_update_time, company, project_name, status, exchange, board, register_address
+      `SELECT DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time, company, project_name, status, exchange, board, register_address
        FROM ipo_progress ${whereSql}
-       ORDER BY f_update_time DESC
+       ORDER BY F_UpdateTime DESC
        LIMIT 50000`,
       params
     );

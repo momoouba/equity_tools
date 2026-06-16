@@ -75,7 +75,7 @@ async function recallFromIpoProjects(excludeCredit, excludeName) {
   const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (!psAppId) return [];
   const rows = await db.query(
-    `SELECT f_id, project_name, company, unified_credit_code, sub,
+    `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
             ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
             qcc_company_intro, biz_update_time, F_LastModifyTime, F_CreatorTime
      FROM ipo_project
@@ -131,7 +131,7 @@ function dedupeRecalledByCompanyKey(list) {
  */
 async function recallFromFinancingEvents(excludeCredit, excludeName) {
   const rows = await db.query(
-    `SELECT e.id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
+    `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
             e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
             e.industry_std_lv1, e.industry_std_lv2, e.funding_amt_raw, e.estimated_amt_raw,
             e.round, e.latest_round, e.event_date
