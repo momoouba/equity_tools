@@ -3856,7 +3856,8 @@ class NewsAnalysis {
           p.*, 
           m.F_Id as ai_model_config_id_full,
           m.config_name, m.provider, m.model_name, m.api_type, 
-          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p, m.enable_thinking
+          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p, m.enable_thinking,
+          m.wire_protocol, m.web_search_mode, m.reasoning_effort
          FROM ai_prompt_config p
          LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.F_Id AND m.is_active = 1 AND m.F_DeleteMark = 0
          WHERE p.interface_type = ? 
@@ -3897,6 +3898,9 @@ class NewsAnalysis {
             max_tokens: promptConfig.max_tokens,
             top_p: promptConfig.top_p,
             enable_thinking: promptConfig.enable_thinking,
+            wire_protocol: promptConfig.wire_protocol,
+            web_search_mode: promptConfig.web_search_mode,
+            reasoning_effort: promptConfig.reasoning_effort,
           } : null,
           // 返回所有匹配的配置，供调用方选择使用
           all_prompts: prompts.map(p => ({

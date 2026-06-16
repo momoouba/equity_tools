@@ -49,6 +49,25 @@ function normalizeDashScopeChatEndpoint(raw) {
   return DEFAULT_CN;
 }
 
+/** 端点为 DashScope OpenAI 兼容模式（应走 /chat/completions + messages，而非原生 input 体） */
+function isDashScopeCompatibleModeEndpoint(raw) {
+  const lower = String(raw || '').trim().toLowerCase();
+  if (!lower) return false;
+  return lower.includes('compatible-mode') || lower.includes('/v1/chat/completions');
+}
+
+/** 端点为 DashScope 原生文本生成 API */
+function isDashScopeNativeGenerationEndpoint(raw) {
+  const lower = String(raw || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (isDashScopeCompatibleModeEndpoint(lower)) return false;
+  return (
+    lower.includes('aigc/text-generation') ||
+    lower.includes('/api/v1/aigc/') ||
+    (lower.includes('text-generation') && lower.includes('generation'))
+  );
+}
+
 function formatDashScopeHttpError(err) {
   const status = err.response?.status;
   const data = err.response?.data;
@@ -76,4 +95,6 @@ function formatDashScopeHttpError(err) {
 module.exports = {
   normalizeDashScopeChatEndpoint,
   formatDashScopeHttpError,
+  isDashScopeCompatibleModeEndpoint,
+  isDashScopeNativeGenerationEndpoint,
 };

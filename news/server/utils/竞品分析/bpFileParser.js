@@ -192,7 +192,10 @@ function chunkMarkdown(text) {
  */
 async function extractChunk(chunkText, modelConfig) {
   const userPrompt = `请从以下商业计划书内容中提取产品介绍和企业标签：\n\n${chunkText}`;
-  const result = await callDashScopeOpenAIChat(BP_EXTRACT_SYSTEM, userPrompt, modelConfig);
+  const result = await callDashScopeOpenAIChat(BP_EXTRACT_SYSTEM, userPrompt, modelConfig, {
+    wantSearch: false,
+    searchRequired: false,
+  });
   const raw = result?.content || '';
   const parsed = extractJson(raw);
   return normalizeExtract(parsed);
@@ -214,7 +217,10 @@ async function mergeChunkResults(extracts, modelConfig) {
   }).join('\n\n');
 
   const userPrompt = `以下是从商业计划书不同段落中分别提取的信息，请合并为一份完整、去重的结果：\n\n${summaries}`;
-  const result = await callDashScopeOpenAIChat(BP_MERGE_SYSTEM, userPrompt, modelConfig);
+  const result = await callDashScopeOpenAIChat(BP_MERGE_SYSTEM, userPrompt, modelConfig, {
+    wantSearch: false,
+    searchRequired: false,
+  });
   const raw = result?.content || '';
   const parsed = extractJson(raw);
   return normalizeExtract(parsed);

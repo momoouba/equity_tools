@@ -1,10 +1,11 @@
 const express = require('express');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
-const axios = require('axios');
 
 const router = express.Router();
 
+const { testLlmConfig } = require('../utils/testLlmConfig');
+const { normalizeLlmConfigWireFields } = require('../utils/llm/llmProfile');
 const {
   loadAiModelMetaFromDictionary,
   loadAiModelOptionsFromDictionary,
@@ -13,6 +14,11 @@ const {
   assertApplicationTypeAllowed,
   assertUsageTypeAllowed,
 } = require('../utils/aiModelDictionary');
+
+function normOptionalLlmField(v) {
+  if (v === undefined || v === null || String(v).trim() === '') return null;
+  return String(v).trim();
+}
 
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
@@ -56,6 +62,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
         F_Id AS id, config_name, provider, model_name, api_type, 
         CONCAT(LEFT(api_key, 8), '****') as api_key_masked,
         api_endpoint, temperature, max_tokens, top_p, enable_thinking,
+        wire_protocol, web_search_mode, reasoning_effort,
         is_active, application_type, usage_type, F_CreatorUserId, F_CreatorTime, F_LastModifyTime
        FROM ai_model_config 
        ${condition} 
@@ -172,6 +179,9 @@ router.post('/', checkAdminPermission, async (req, res) => {
       application_type = 'news_analysis',
       usage_type = 'content_analysis',
       enable_thinking,
+      wire_protocol,
+      web_search_mode,
+      reasoning_effort,
     } = req.body;
 
     const effEnableThinking =
@@ -212,15 +222,28 @@ router.post('/', checkAdminPermission, async (req, res) => {
 
     await assertModelNameAllowedForProvider(provider, model_name);
 
+    const wireNorm = normalizeLlmConfigWireFields({
+      provider,
+      model_name,
+      api_endpoint,
+      api_type,
+      wire_protocol,
+      web_search_mode,
+    });
+
     const configId = await generateId('ai_model_config');
     await db.execute(
       `INSERT INTO ai_model_config 
        (F_Id, config_name, provider, model_name, api_type, api_key, api_endpoint, 
-        temperature, max_tokens, top_p, enable_thinking, application_type, usage_type, F_CreatorUserId) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        temperature, max_tokens, top_p, enable_thinking, wire_protocol, web_search_mode, reasoning_effort,
+        application_type, usage_type, F_CreatorUserId) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        configId, config_name, provider, model_name, api_type, api_key, 
+        configId, config_name, provider, model_name, api_type, api_key,
         api_endpoint, temperature, max_tokens, top_p, effEnableThinking,
+        wireNorm.wire_protocol,
+        wireNorm.web_search_mode,
+        normOptionalLlmField(reasoning_effort),
         application_type, usage_type, req.currentUserId
       ]
     );
@@ -255,6 +278,9 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       usage_type,
       is_active,
       enable_thinking,
+      wire_protocol,
+      web_search_mode,
+      reasoning_effort,
     } = req.body;
 
     // 检查记录是否存在
@@ -313,11 +339,28 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     const effApiKey =
       incomingKey && !incomingKey.includes('****') ? incomingKey : prev.api_key;
 
+    const effWireProtocol =
+      wire_protocol !== undefined ? normOptionalLlmField(wire_protocol) : undefined;
+    const effWebSearchMode =
+      web_search_mode !== undefined ? normOptionalLlmField(web_search_mode) : undefined;
+    const effReasoningEffort =
+      reasoning_effort !== undefined ? normOptionalLlmField(reasoning_effort) : undefined;
+
+    const wireNorm = normalizeLlmConfigWireFields({
+      provider: effProvider,
+      model_name: effModel,
+      api_endpoint: api_endpoint !== undefined ? api_endpoint : prev.api_endpoint,
+      api_type: api_type !== undefined ? api_type : prev.api_type,
+      wire_protocol: effWireProtocol !== undefined ? effWireProtocol : prev.wire_protocol,
+      web_search_mode: effWebSearchMode !== undefined ? effWebSearchMode : prev.web_search_mode,
+    });
+
     await db.execute(
       `UPDATE ai_model_config 
        SET config_name = ?, provider = ?, model_name = ?, api_type = ?, 
            api_key = ?, api_endpoint = ?, temperature = ?, max_tokens = ?, 
-           top_p = ?, enable_thinking = ?, application_type = ?, usage_type = ?, is_active = ?, F_LastModifyUserId = ?
+           top_p = ?, enable_thinking = ?, wire_protocol = ?, web_search_mode = ?, reasoning_effort = ?,
+           application_type = ?, usage_type = ?, is_active = ?, F_LastModifyUserId = ?
        WHERE F_Id = ?`,
       [
         config_name !== undefined ? config_name : prev.config_name,
@@ -330,6 +373,9 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
         max_tokens !== undefined ? max_tokens : prev.max_tokens,
         top_p !== undefined ? top_p : prev.top_p,
         effEnableThinking !== undefined ? effEnableThinking : prev.enable_thinking,
+        wireNorm.wire_protocol,
+        wireNorm.web_search_mode,
+        effReasoningEffort !== undefined ? effReasoningEffort : prev.reasoning_effort,
         application_type !== undefined ? application_type : prev.application_type,
         usage_type !== undefined ? usage_type : prev.usage_type,
         is_active !== undefined ? is_active : prev.is_active,
@@ -397,24 +443,19 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
     }
 
     const config = configs[0];
-    
-    // 根据提供商构建测试请求
-    let testResult;
-    
-    if (config.provider === 'alibaba') {
-      testResult = await testAlibabaModel(config);
-    } else if (
-      config.provider === 'openai' ||
-      config.provider === 'volcengine' ||
-      config.api_type === 'chat_completion'
+    const wireNorm = normalizeLlmConfigWireFields(config);
+    if (
+      wireNorm.wire_protocol !== config.wire_protocol ||
+      wireNorm.web_search_mode !== config.web_search_mode
     ) {
-      testResult = await testOpenAIModel(config);
-    } else {
-      return res.status(400).json({ 
-        success: false, 
-        message: `暂不支持测试 ${config.provider} 提供商的模型（可尝试 API 类型选 Chat Completion API）` 
-      });
+      await db.execute(
+        `UPDATE ai_model_config SET wire_protocol = ?, web_search_mode = ?, F_LastModifyUserId = ? WHERE F_Id = ?`,
+        [wireNorm.wire_protocol, wireNorm.web_search_mode, req.currentUserId, id]
+      );
+      config.wire_protocol = wireNorm.wire_protocol;
+      config.web_search_mode = wireNorm.web_search_mode;
     }
+    const testResult = await testLlmConfig(config);
 
     res.json({
       success: true,
@@ -453,181 +494,5 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
     });
   }
 });
-
-// 测试阿里云千问模型
-async function testAlibabaModel(config) {
-  const testMessage = "你好，请回复'测试成功'";
-  
-  // 检查是否是视觉模型（VL模型）
-  const isVisionModel = config.model_name && (
-    config.model_name.toLowerCase().includes('vl') || 
-    config.model_name.toLowerCase().includes('vision') ||
-    config.usage_type === 'image_recognition'
-  );
-  
-  // 对于视觉模型，验证API端点是否正确
-  if (isVisionModel) {
-    const endpoint = config.api_endpoint || '';
-    // 视觉模型应该使用兼容模式端点或multimodal端点
-    const isValidVisionEndpoint = 
-      endpoint.includes('/compatible-mode/v1/chat/completions') ||
-      endpoint.includes('/multimodal-generation/generation') ||
-      endpoint.includes('/chat/completions');
-    
-    if (!isValidVisionEndpoint) {
-      throw new Error(
-        '视觉模型需要使用正确的API端点。\n' +
-        '推荐使用：https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions\n' +
-        '或：https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
-      );
-    }
-  }
-  
-  let requestData;
-  
-  // 确保参数类型正确（转换为数字类型），并做安全兜底
-  const temperature = typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature;
-  const maxTokensRaw = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
-  const maxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : 2000;
-  const topP = typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p;
-  
-  // 根据API类型选择不同的请求格式
-  if (config.api_type === 'chat_completion') {
-    // Chat Completion API（兼容OpenAI格式）
-    requestData = {
-      model: config.model_name,
-      messages: [
-        {
-          role: "user",
-          content: testMessage
-        }
-      ],
-      temperature: temperature,
-      max_tokens: Math.min(maxTokens, 100), // 测试时限制token数
-      top_p: topP
-    };
-  } else {
-    // Chat API（阿里云原生格式）
-    requestData = {
-      model: config.model_name,
-      input: {
-        messages: [
-          {
-            role: "user",
-            content: testMessage
-          }
-        ]
-      },
-      parameters: {
-        temperature: temperature,
-        max_tokens: Math.min(maxTokens, 100), // 测试时限制token数
-        top_p: topP
-      }
-    };
-  }
-
-  // 添加调试日志
-  console.log(`[测试AI模型] 模型: ${config.model_name}, API类型: ${config.api_type}, 端点: ${config.api_endpoint}`);
-  console.log(`[测试AI模型] 请求数据:`, JSON.stringify(requestData, null, 2));
-  
-  let response;
-  try {
-    response = await axios.post(config.api_endpoint, requestData, {
-      headers: {
-        'Authorization': `Bearer ${config.api_key}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 30000
-    });
-    console.log(`[测试AI模型] 响应成功:`, JSON.stringify(response.data, null, 2));
-  } catch (error) {
-    // 捕获并抛出更详细的错误信息
-    console.error(`[测试AI模型] 请求失败:`, error.response?.data || error.message);
-    
-    if (error.response) {
-      const statusCode = error.response.status;
-      const errorData = error.response.data;
-      let detailedError = `API请求失败 (HTTP ${statusCode})`;
-      
-      if (errorData) {
-        if (errorData.message) {
-          detailedError += `: ${errorData.message}`;
-        } else if (errorData.error) {
-          detailedError += `: ${errorData.error.message || errorData.error}`;
-        } else if (errorData.code) {
-          detailedError += `: ${errorData.code} - ${errorData.message || '未知错误'}`;
-        }
-        
-        // 如果是模型不存在错误，提供更详细的提示
-        if (errorData.code === 'InvalidParameter' && errorData.message && errorData.message.includes('Model not exist')) {
-          detailedError += '\n\n可能的原因：\n';
-          detailedError += '1. 模型名称不正确，请确认模型名称完全匹配（qwen3-vl-plus）\n';
-          detailedError += '2. API端点不正确，视觉模型应使用兼容模式端点\n';
-          detailedError += '3. 账户可能没有权限使用该模型\n';
-          detailedError += '\n推荐配置：\n';
-          detailedError += '- API端点：https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions\n';
-          detailedError += '- API类型：Chat Completion API\n';
-          detailedError += '- 模型名称：qwen3-vl-plus（注意大小写）';
-        }
-      }
-      
-      throw new Error(detailedError);
-    }
-    throw error;
-  }
-
-  // 根据API类型解析响应
-  let modelResponse;
-  if (config.api_type === 'chat_completion') {
-    // Chat Completion API响应格式（兼容OpenAI）
-    modelResponse = response.data.choices?.[0]?.message?.content || '模型响应格式未知';
-  } else {
-    // Chat API响应格式（阿里云原生）
-    modelResponse = response.data.output?.text || response.data.output?.choices?.[0]?.message?.content || '模型响应格式未知';
-  }
-
-  return {
-    status: 'success',
-    response_time: new Date().toISOString(),
-    model_response: modelResponse,
-    token_usage: response.data.usage || null
-  };
-}
-
-// 测试OpenAI模型
-async function testOpenAIModel(config) {
-  const testMessage = "Hello, please reply 'Test successful'";
-  
-  const maxTokensRaw = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
-  const safeMaxTokens = Number.isFinite(maxTokensRaw) ? maxTokensRaw : 2000;
-
-  const requestData = {
-    model: config.model_name,
-    messages: [
-      {
-        role: "user",
-        content: testMessage
-      }
-    ],
-    temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : (config.temperature ?? 0.7),
-    max_tokens: Math.min(safeMaxTokens, 100),
-    top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
-  };
-
-  const response = await axios.post(config.api_endpoint, requestData, {
-    headers: {
-      'Authorization': `Bearer ${config.api_key}`,
-      'Content-Type': 'application/json'
-    },
-    timeout: 30000
-  });
-
-  return {
-    status: 'success',
-    response_time: new Date().toISOString(),
-    model_response: response.data.choices?.[0]?.message?.content || '模型响应格式未知',
-    token_usage: response.data.usage || null
-  };
-}
 
 module.exports = router;

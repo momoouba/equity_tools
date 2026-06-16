@@ -228,7 +228,12 @@ async function runInvestedEnterpriseAiEnrichTask({
       throw new Error('被投企业全称为空，无法调用模型');
     }
 
-    const llm = await withFinancingAiConcurrency(() => runFinancingStyleWebEnrichLlmCall(rowForTemplate));
+    const llm = await withFinancingAiConcurrency(() =>
+      runFinancingStyleWebEnrichLlmCall(rowForTemplate, undefined, {
+        searchRequired: false,
+        wantSearch: true,
+      })
+    );
     llmModelConfigId = llm.llmModelConfigId;
     promptMeta = llm.promptMeta;
     promptConfigId = llm.promptConfigId;

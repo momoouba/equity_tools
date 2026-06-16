@@ -1,4 +1,4 @@
-const { generateId } = require('../idGenerator');
+const { generateId, generateSequentialIds } = require('../idGenerator');
 const db = require('../../db');
 const { sanitizeQccCompanyIntroForMatching } = require('./qccCompanyIntroSanitizer');
 const {
@@ -331,11 +331,8 @@ async function persistRelations({
   clearEnrichCache();
   clearInternalDisplayCache();
 
-  // 预生成所有 relId（串行，避免 generateId 的 MAX+1 竞态）
-  const relIds = [];
-  for (let i = 0; i < rows.length; i++) {
-    relIds.push(await generateId('sourcing_competitor_relation'));
-  }
+  // 预生成所有 relId（批量连续序列，避免同秒多次 MAX+1 得到相同 ID）
+  const relIds = await generateSequentialIds('sourcing_competitor_relation', rows.length);
 
   // #9: 并行富化——enrichCompetitorDisplayFields 内部有 withFinancingAiConcurrency
   // 信号量（默认 4 路）控制 LLM 并发，其余字段补齐为纯本地计算

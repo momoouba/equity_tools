@@ -1,10 +1,6 @@
 const db = require('../../db');
 const { AI_APPLICATION_TYPE_COMPETITOR, AI_USAGE_TYPE_COMPETITOR_MATCH } = require('../竞品分析/constants');
-const {
-  normalizeDashScopeChatEndpoint,
-  formatDashScopeHttpError,
-} = require('../dashScopeOpenAICompat');
-const axios = require('axios');
+const { llmInvoke, LlmSearchRequiredError } = require('../llm/llmInvoke');
 const { extractJsonObject } = require('./competitorMatchUtils');
 const { logCompetitorAi } = require('./competitorAnalysisLogger');
 
@@ -96,23 +92,6 @@ function isRetryableLlmError(err) {
   );
 }
 
-/** DashScope 等：当前模型不支持联网参数时返回 400 */
-function isEnableSearchUnsupportedError(err) {
-  const status = err?.response?.status;
-  const data = err?.response?.data;
-  const dataStr =
-    data && typeof data === 'object'
-      ? JSON.stringify(data)
-      : data != null
-        ? String(data)
-        : '';
-  const blob = `${formatDashScopeHttpError(err)}\n${dataStr}`.toLowerCase();
-  if (status === 400 && /enable_search|does not support.*search|不支持.*联网|invalidparameter.*search/.test(blob)) {
-    return true;
-  }
-  return /enable_search|does not support.*search/.test(String(err?.message || ''));
-}
-
 /** 独立请求，无多轮上下文。
  * @param {{ onSearchUnsupported?: () => void }} [opts]
  */
@@ -123,73 +102,47 @@ async function invokeCompetitorChat(systemContent, userContent, { enableSearch =
       '未配置可用的竞品分析大模型：请在「AI 模型配置」新增或编辑一条——应用类型=竞品分析应用(competitor_analysis)、使用类型=竞品匹配(competitor_match)、已启用，并填写有效 API Key（编辑时勿留空密钥）。若刚改过类型请重启后端以执行库表迁移。'
     );
   }
-  const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);
-  const temperature =
-    typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.2;
-  const maxTokensRaw =
-    typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
-  const max_tokens = Number.isFinite(maxTokensRaw) ? Math.min(8000, Math.max(512, maxTokensRaw)) : 2048;
 
-  const body = {
-    model: config.model_name,
-    messages: [
-      { role: 'system', content: String(systemContent || '').trim() },
-      { role: 'user', content: truncatePromptContent(String(userContent || '').trim()) },
-    ],
-    temperature,
-    max_tokens,
-  };
+  const wantSearch =
+    enableSearch && String(process.env.COMPETITOR_WEB_FORCE_NO_SEARCH || '').trim() !== '1';
+  const userTrimmed = truncatePromptContent(String(userContent || '').trim());
+  const defaultTimeout = wantSearch
+    ? parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000
+    : parseInt(process.env.COMPETITOR_LLM_TIMEOUT_MS || '90000', 10) || 90000;
 
-  let effTimeout = timeout;
-  const post = async (withSearch) => {
-    const b = { ...body };
-    if (withSearch) b.enable_search = true;
-    else delete b.enable_search;
-    const defaultTimeout = withSearch
-      ? parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000
-      : parseInt(process.env.COMPETITOR_LLM_TIMEOUT_MS || '90000', 10) || 90000;
-    const res = await axios.post(endpoint, b, {
-      headers: {
-        Authorization: `Bearer ${config.api_key}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: effTimeout ?? defaultTimeout,
-    });
-    return res.data?.choices?.[0]?.message?.content;
-  };
-
-  let withSearch = enableSearch && String(process.env.COMPETITOR_WEB_FORCE_NO_SEARCH || '').trim() !== '1';
-
-  const maxAttempts = withSearch
+  const maxAttempts = wantSearch
     ? Math.max(1, parseInt(process.env.COMPETITOR_WEB_RETRIES || '2', 10) || 2)
     : Math.max(1, parseInt(process.env.COMPETITOR_LLM_RETRIES || '3', 10) || 3);
 
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      return await post(withSearch);
+      const result = await llmInvoke(config, {
+        systemContent: String(systemContent || '').trim(),
+        userContent: userTrimmed,
+        wantSearch,
+        searchRequired: wantSearch,
+        timeout: timeout ?? defaultTimeout,
+        logPrefix: '[projectSourcingCompetitorAi]',
+      });
+      return result.content;
     } catch (err) {
       lastErr = err;
-      if (withSearch && isEnableSearchUnsupportedError(err)) {
+      if (wantSearch && err instanceof LlmSearchRequiredError) {
         console.warn(
-          '[projectSourcingCompetitorAi] enable_search 不被当前模型支持，已降级为普通 chat 请求（无联网）:',
-          formatDashScopeHttpError(err)
+          '[projectSourcingCompetitorAi] 联网调用失败（本场景要求联网）:',
+          err.message
         );
         onSearchUnsupported?.();
-        withSearch = false;
-        const noSearchFloor =
-          parseInt(process.env.COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS || '300000', 10) || 300000;
-        effTimeout = Math.max(effTimeout || 0, noSearchFloor);
-        continue;
       }
       if (attempt < maxAttempts && isRetryableLlmError(lastErr)) {
         await sleep(800 * attempt);
         continue;
       }
-      throw new Error(formatDashScopeHttpError(lastErr));
+      throw new Error(err.message || String(err));
     }
   }
-  throw new Error(formatDashScopeHttpError(lastErr));
+  throw new Error(lastErr?.message || String(lastErr));
 }
 
 async function scorePairSimilarity(targetSlice, candidateSlice, logCtx = {}) {

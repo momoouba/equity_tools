@@ -121,7 +121,36 @@ async function generateId(tableName, connection) {
   }
 }
 
+/**
+ * 一次分配 count 个连续 ID（同一秒内本地递增序列，避免循环 generateId 重复）。
+ * @param {string} tableName
+ * @param {number} count
+ * @param {object} [connection]
+ * @returns {Promise<string[]>}
+ */
+async function generateSequentialIds(tableName, count, connection) {
+  const n = Math.max(0, parseInt(count, 10) || 0);
+  if (n === 0) return [];
+  const ids = [];
+  let current = await generateId(tableName, connection);
+  ids.push(current);
+  for (let i = 1; i < n; i++) {
+    const prefix = current.slice(0, -5);
+    let seq = parseInt(current.slice(-5), 10);
+    seq += 1;
+    if (seq > 99999) {
+      current = await generateId(tableName, connection);
+      ids.push(current);
+      continue;
+    }
+    current = `${prefix}${String(seq).padStart(5, '0')}`;
+    ids.push(current);
+  }
+  return ids;
+}
+
 module.exports = {
-  generateId
+  generateId,
+  generateSequentialIds,
 };
 

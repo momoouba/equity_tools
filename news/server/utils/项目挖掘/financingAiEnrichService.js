@@ -11,10 +11,8 @@ const {
   searchMetaSqlAssignments,
   searchMetaSqlValues,
 } = require('./financingAiEnrichSearchMeta');
-const {
-  postDashScopeChatWithSearchAndThinking,
-  resolveEnrichWantThinking,
-} = require('./financingAiEnrichDashScopeChat');
+const { llmInvoke, resolveLlmProfile } = require('../llm/llmInvoke');
+const { LLM_CONFIG_SELECT_SQL, mapAiModelConfigRow } = require('../llm/llmConfigMap');
 const { executeWithAiEnrichLogColumns } = require('../migrateAiEnrichLogColumns');
 
 const PROMPT_INTERFACE = '项目挖掘';
@@ -889,7 +887,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     const c = promptBundle.ai_model_config;
     const out = {
       llm_model_config_id: c.id || null,
-      config: {
+      config: mapAiModelConfigRow(c) || {
         model_name: c.model_name,
         api_key: c.api_key,
         api_endpoint: c.api_endpoint,
@@ -897,6 +895,11 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
         max_tokens: c.max_tokens,
         top_p: c.top_p,
         enable_thinking: c.enable_thinking,
+        provider: c.provider,
+        api_type: c.api_type,
+        wire_protocol: c.wire_protocol,
+        web_search_mode: c.web_search_mode,
+        reasoning_effort: c.reasoning_effort,
       },
     };
     logFinancingLlmConfigResolved('prompt_join', out.llm_model_config_id, out.config);
@@ -905,7 +908,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
   const idFromPrompt = promptMeta?.ai_model_config_id;
   if (idFromPrompt) {
     const rows = await db.query(
-      `SELECT F_Id AS id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
+      `SELECT ${LLM_CONFIG_SELECT_SQL}
        FROM ai_model_config
        WHERE F_Id = ? AND is_active = 1 AND F_DeleteMark = 0 LIMIT 1`,
       [idFromPrompt]
@@ -914,15 +917,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
       const r = rows[0];
       const out = {
         llm_model_config_id: r.id,
-        config: {
-          model_name: r.model_name,
-          api_key: r.api_key,
-          api_endpoint: r.api_endpoint,
-          temperature: r.temperature,
-          max_tokens: r.max_tokens,
-          top_p: r.top_p,
-          enable_thinking: r.enable_thinking,
-        },
+        config: mapAiModelConfigRow(r),
       };
       logFinancingLlmConfigResolved('prompt_ai_model_config_id', out.llm_model_config_id, out.config);
       return out;
@@ -932,7 +927,7 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     );
   }
   const fallback = await db.query(
-    `SELECT F_Id AS id, model_name, api_key, api_endpoint, temperature, max_tokens, top_p, enable_thinking
+    `SELECT ${LLM_CONFIG_SELECT_SQL}
      FROM ai_model_config
      WHERE application_type = 'project_sourcing_analysis'
        AND is_active = 1 AND F_DeleteMark = 0
@@ -942,16 +937,8 @@ async function resolveLlmConfig(promptBundle, promptMeta) {
     const r = fallback[0];
     const out = {
       llm_model_config_id: r.id,
-        config: {
-          model_name: r.model_name,
-          api_key: r.api_key,
-          api_endpoint: r.api_endpoint,
-          temperature: r.temperature,
-          max_tokens: r.max_tokens,
-          top_p: r.top_p,
-          enable_thinking: r.enable_thinking,
-        },
-      };
+        config: mapAiModelConfigRow(r),
+    };
     logFinancingLlmConfigResolved('fallback_project_sourcing_analysis', out.llm_model_config_id, out.config);
     return out;
   }
@@ -1681,45 +1668,24 @@ function formatDashScopeHttpError(err) {
  * FINANCING_AI_CHAT_TIMEOUT_THINKING_MS（默认 240000）。
  * @returns {Promise<{ content: string, used_enable_search: boolean, search_degraded: boolean, used_enable_thinking: boolean, thinking_degraded: boolean }>}
  */
-async function callDashScopeOpenAIChat(systemContent, userContent, config) {
-  const endpoint = normalizeDashScopeChatEndpoint(config.api_endpoint);
-  const tempRaw =
-    typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature ?? 0.3;
-  const tempCap = parseFloat(process.env.FINANCING_AI_TEMPERATURE_CAP || '0.35');
-  const temperature = Number.isFinite(tempCap)
-    ? Math.min(tempCap, Number.isFinite(tempRaw) ? tempRaw : 0.3)
-    : Number.isFinite(tempRaw)
-      ? tempRaw
-      : 0.3;
-  const maxTokensRaw =
-    typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens;
-  const maxCap = 32000;
-  const max_tokens = Number.isFinite(maxTokensRaw)
-    ? Math.min(maxCap, Math.max(1024, maxTokensRaw))
-    : 8192;
-  const top_p =
-    typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p ?? 0.9;
-
+async function callDashScopeOpenAIChat(
+  systemContent,
+  userContent,
+  config,
+  { searchRequired = true, wantSearch = true } = {}
+) {
   const sys = String(systemContent || '').trim() || BUILTIN_SYSTEM_PROMPT;
   const usr = String(userContent || '').trim();
   if (!usr) {
     throw new Error('用户侧提示词为空，请检查 ---USER--- 段或占位符替换结果');
   }
 
-  return postDashScopeChatWithSearchAndThinking({
-    endpoint,
-    apiKey: config.api_key,
-    bodyBase: {
-      model: config.model_name,
-      messages: [
-        { role: 'system', content: sys },
-        { role: 'user', content: usr },
-      ],
-      temperature,
-      max_tokens,
-      top_p,
-    },
-    wantThinking: resolveEnrichWantThinking(config),
+  return llmInvoke(config, {
+    systemContent: sys,
+    userContent: usr,
+    wantSearch,
+    searchRequired,
+    logPrefix: '[financingAiEnrich]',
   });
 }
 
@@ -2290,7 +2256,28 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   const batchId = crypto.randomUUID();
   const queuedJobs = representativeIds.length;
 
-  if (queuedJobs > BATCH_FILE_THRESHOLD) {
+  let useDashScopeBatchFile = queuedJobs > BATCH_FILE_THRESHOLD;
+  if (useDashScopeBatchFile) {
+    try {
+      const promptMetaProbe = await loadActivePromptMeta();
+      const promptBundleProbe = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
+      const { config: probeConfig } = await resolveLlmConfig(promptBundleProbe, promptMetaProbe);
+      if (probeConfig && (resolveLlmProfile(probeConfig).is_gateway || resolveLlmProfile(probeConfig).is_volcengine)) {
+        useDashScopeBatchFile = false;
+        financingAiJobLog(
+          batchId,
+          'concurrent_chat',
+          'gateway_skip_dashscope_batch',
+          `dedup_jobs=${queuedJobs} gateway 模型走 Responses 异步并发，不使用百炼 Batch File`,
+          { threshold: BATCH_FILE_THRESHOLD, model: probeConfig.model_name }
+        );
+      }
+    } catch (probeErr) {
+      console.warn('[financingAiEnrich] gateway batch probe failed, fallback dashscope batch', probeErr);
+    }
+  }
+
+  if (useDashScopeBatchFile) {
     financingAiJobLog(batchId, 'batch_file', 'enqueue', `date=${df}..${dt} dedup_jobs=${queuedJobs} threshold=${BATCH_FILE_THRESHOLD}`, {
       rows_in_range: totalInRange,
       only_failed: !!onlyFailed,
@@ -2439,7 +2426,9 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
  * 与融资事件同一套提示词/模型：仅执行一次 chat，返回解析后的简介与标签（不落库）。
  * rowForTemplate 需含 financing 模板占位：company_name、company_credit_code、project_name（可空）。
  */
-async function runFinancingStyleWebEnrichLlmCall(rowForTemplate, extraContext) {
+async function runFinancingStyleWebEnrichLlmCall(rowForTemplate, extraContext, opts = {}) {
+  const searchRequired = opts.searchRequired !== false;
+  const wantSearch = opts.wantSearch !== false;
   const promptMeta = await loadActivePromptMeta();
   const promptConfigId = promptMeta?.id || null;
   const promptBundle = await newsAnalysis.getPrompt(PROMPT_INTERFACE, PROMPT_TYPE);
@@ -2466,7 +2455,10 @@ async function runFinancingStyleWebEnrichLlmCall(rowForTemplate, extraContext) {
   console.log(
     `[financingAiEnrich] web_enrich_request company=${String(rowForTemplate.company_name || '').slice(0, 40)} credit=${String(rowForTemplate.company_credit_code || '').slice(0, 18)} qcc_len=${qccLen} enable_thinking=${thinkFlag} user_msg_len=${userContent.length}`
   );
-  const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config);
+  const llmOut = await callDashScopeOpenAIChat(systemContent, userContent, config, {
+    searchRequired,
+    wantSearch,
+  });
   const raw = llmOut.content;
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);

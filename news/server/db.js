@@ -1637,6 +1637,8 @@ async function initializeTables(dbPool) {
       { id: '2026051315000100001', dict_code: 'ai_model_openai', dict_name: 'AI模型（OpenAI）', sort_order: 1 },
       { id: '2026051315000200001', dict_code: 'ai_model_baidu', dict_name: 'AI模型（百度文心）', sort_order: 2 },
       { id: '2026051315000300001', dict_code: 'ai_model_tencent', dict_name: 'AI模型（腾讯混元）', sort_order: 3 },
+      { id: '2026051618000000001', dict_code: 'ai_model_gateway', dict_name: 'AI模型（API网关）', sort_order: 4 },
+      { id: '2026051619000000001', dict_code: 'ai_model_volcengine', dict_name: 'AI模型（火山豆包）', sort_order: 5 },
     ];
     const aiModelItemsByCode = {
       ai_model_alibaba: [
@@ -1661,6 +1663,20 @@ async function initializeTables(dbPool) {
         { id: '2026051315001300001', item_code: 'hunyuan-lite', item_name: 'hunyuan-lite', sort_order: 0 },
         { id: '2026051315001300002', item_code: 'hunyuan-standard', item_name: 'hunyuan-standard', sort_order: 1 },
         { id: '2026051315001300003', item_code: 'hunyuan-pro', item_name: 'hunyuan-pro', sort_order: 2 },
+      ],
+      ai_model_gateway: [
+        { id: '2026061618001000001', item_code: 'claude-opus-4-7', item_name: 'claude-opus-4-7', sort_order: 0 },
+        { id: '2026061618001000002', item_code: 'gpt-5.4', item_name: 'gpt-5.4', sort_order: 1 },
+        { id: '2026061618001000003', item_code: 'claude-opus-4-6', item_name: 'claude-opus-4-6', sort_order: 2 },
+        { id: '2026061618001000004', item_code: 'gpt-5.5', item_name: 'gpt-5.5', sort_order: 3 },
+        { id: '2026061618001000005', item_code: 'gemini-3.1-pro-preview', item_name: 'gemini-3.1-pro-preview', sort_order: 4 },
+        { id: '2026061618001000006', item_code: 'gemini-3-pro-image-preview', item_name: 'gemini-3-pro-image-preview', sort_order: 5 },
+        { id: '2026061618001000007', item_code: 'gpt-image-2', item_name: 'gpt-image-2', sort_order: 6 },
+      ],
+      ai_model_volcengine: [
+        { id: '2026051619001000001', item_code: 'doubao-pro-32k', item_name: 'doubao-pro-32k', sort_order: 0 },
+        { id: '2026051619001000002', item_code: 'doubao-lite-32k', item_name: 'doubao-lite-32k', sort_order: 1 },
+        { id: '2026051619001000003', item_code: 'doubao-1.5-pro-32k', item_name: 'doubao-1.5-pro-32k', sort_order: 2 },
       ],
     };
 
@@ -8071,6 +8087,16 @@ async function init() {
       }
     } catch (migModelErr) {
       console.warn('补全 ai_model_config.enable_thinking 时出现警告:', migModelErr.message);
+    }
+
+    try {
+      const { ensureAiModelConfigLlmFields } = require('./utils/migrateAiModelConfigLlmFields');
+      const nLlm = await ensureAiModelConfigLlmFields(pool);
+      if (nLlm > 0) {
+        console.log(`✓ ai_model_config 已添加 LLM 协议字段 ${nLlm} 列`);
+      }
+    } catch (migLlmErr) {
+      console.warn('补全 ai_model_config LLM 字段时出现警告:', migLlmErr.message);
     }
 
     console.log('✓ 数据库初始化完成');

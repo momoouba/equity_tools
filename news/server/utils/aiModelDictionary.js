@@ -16,6 +16,8 @@ const AI_MODEL_META_DICT_CODES = new Set([
 
 const FALLBACK_PROVIDERS = [
   { value: 'alibaba', label: '阿里云（千问）' },
+  { value: 'gateway', label: 'API 网关（DMGateway 等）' },
+  { value: 'volcengine', label: '火山引擎（豆包）' },
   { value: 'openai', label: 'OpenAI' },
   { value: 'baidu', label: '百度（文心一言）' },
   { value: 'tencent', label: '腾讯（混元）' },
@@ -24,6 +26,8 @@ const FALLBACK_PROVIDERS = [
 /** 数据字典无提供商类型时的兜底（与历史硬编码一致） */
 const LEGACY_PROVIDER_DICT_CODE = {
   alibaba: 'ai_model_alibaba',
+  gateway: 'ai_model_gateway',
+  volcengine: 'ai_model_volcengine',
   openai: 'ai_model_openai',
   baidu: 'ai_model_baidu',
   tencent: 'ai_model_tencent',
@@ -31,6 +35,16 @@ const LEGACY_PROVIDER_DICT_CODE = {
 
 const FALLBACK_AI_MODELS = {
   alibaba: ['qwen-turbo', 'qwen-plus', 'qwen3-max', 'qwen-long', 'qwen3-vl-plus'],
+  gateway: [
+    'claude-opus-4-7',
+    'gpt-5.4',
+    'claude-opus-4-6',
+    'gpt-5.5',
+    'gemini-3.1-pro-preview',
+    'gemini-3-pro-image-preview',
+    'gpt-image-2',
+  ],
+  volcengine: ['doubao-pro-32k', 'doubao-lite-32k', 'doubao-1.5-pro-32k'],
   openai: ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o'],
   baidu: ['ernie-bot', 'ernie-bot-turbo', 'ernie-bot-4'],
   tencent: ['hunyuan-lite', 'hunyuan-standard', 'hunyuan-pro'],

@@ -35,6 +35,9 @@ function AIConfig() {
     usage_type: 'content_analysis',
     is_active: 1,
     enable_thinking: 0,
+    wire_protocol: '',
+    web_search_mode: '',
+    reasoning_effort: '',
   })
 
   const [providers, setProviders] = useState([])
@@ -43,6 +46,36 @@ function AIConfig() {
     { value: 'chat', label: 'Chat API' },
     { value: 'completion', label: 'Completion API' },
     { value: 'chat_completion', label: 'Chat Completion API' }
+  ]
+
+  const wireProtocols = [
+    { value: '', label: '自动推断' },
+    { value: 'chat_completions', label: 'Chat Completions (/v1/chat/completions)' },
+    { value: 'responses', label: 'Responses API (/v1/responses，GPT 联网推荐)' },
+    { value: 'anthropic_messages', label: 'Anthropic Messages (/v1/messages，Claude)' },
+    { value: 'gemini_generate_content', label: 'Gemini generateContent (Google 原生)' },
+    { value: 'volcengine_bot', label: '火山 Bot 应用 (bots/chat/completions，bot-xxx)' },
+    { value: 'alibaba_native', label: '阿里云原生 Chat' },
+  ]
+
+  const webSearchModes = [
+    { value: '', label: '自动推断' },
+    { value: 'off', label: '不联网' },
+    { value: 'dashscope_enable_search', label: 'DashScope enable_search' },
+    { value: 'openai_web_search_tool', label: 'OpenAI web_search 工具（Responses）' },
+    { value: 'openai_web_search_options', label: 'OpenAI web_search_options（Chat）' },
+    { value: 'anthropic_web_search', label: 'Anthropic web_search（Messages）' },
+    { value: 'gemini_google_search', label: 'Gemini google_search（Grounding）' },
+    { value: 'volcengine_web_search_tool', label: '火山 web_search 工具（Responses/Chat）' },
+    { value: 'volcengine_bot', label: '火山 Bot 应用联网（控制台配置）' },
+  ]
+
+  const reasoningEfforts = [
+    { value: '', label: '默认' },
+    { value: 'low', label: 'low' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+    { value: 'xhigh', label: 'xhigh' },
   ]
 
   const [applicationTypes, setApplicationTypes] = useState([])
@@ -127,6 +160,9 @@ function AIConfig() {
       usage_type: 'content_analysis',
       is_active: 1,
       enable_thinking: 0,
+      wire_protocol: '',
+      web_search_mode: '',
+      reasoning_effort: '',
     }
     initial.api_endpoint = getDefaultEndpoint(initial.provider, initial.usage_type, initial.model_name)
     setFormData(initial)
@@ -153,11 +189,55 @@ function AIConfig() {
         : row.enable_thinking === 0 || row.enable_thinking === false
           ? 0
           : null,
+    wire_protocol: row.wire_protocol || '',
+    web_search_mode: row.web_search_mode || '',
+    reasoning_effort: row.reasoning_effort || '',
   })
+
+  const syncGatewayFormFromModel = (form) => {
+    if (form.provider !== 'gateway') return form
+    const model = String(form.model_name || '').trim()
+    const next = { ...form, api_type: 'chat_completion' }
+    if (/claude/i.test(model)) {
+      next.wire_protocol = 'anthropic_messages'
+      next.web_search_mode = 'anthropic_web_search'
+    } else if (/gemini/i.test(model)) {
+      next.wire_protocol = 'gemini_generate_content'
+      next.web_search_mode = 'gemini_google_search'
+    } else if (
+      /^gpt-|^o[1-9]|^chatgpt-/i.test(model) ||
+      model.toLowerCase().includes('search-api')
+    ) {
+      next.wire_protocol = 'responses'
+      next.web_search_mode = 'openai_web_search_tool'
+    }
+    next.api_endpoint = getDefaultEndpoint('gateway', next.usage_type, model)
+    return next
+  }
 
   const applyDefaultEndpointForCreate = (prev, patch) => {
     const next = { ...prev, ...patch }
     next.api_endpoint = getDefaultEndpoint(next.provider, next.usage_type, next.model_name)
+    if (next.provider === 'gateway') {
+      if (patch.provider === 'gateway' || patch.model_name) {
+        return syncGatewayFormFromModel(next)
+      }
+      next.api_type = 'chat_completion'
+    }
+    if (next.provider === 'volcengine') {
+      next.api_type = 'chat_completion'
+      const model = String(next.model_name || '').trim()
+      if (model.toLowerCase().startsWith('bot-')) {
+        if (!next.wire_protocol) next.wire_protocol = 'volcengine_bot'
+        if (!next.web_search_mode) next.web_search_mode = 'volcengine_bot'
+      } else {
+        if (!next.wire_protocol) next.wire_protocol = 'responses'
+        if (!next.web_search_mode) next.web_search_mode = 'volcengine_web_search_tool'
+      }
+    }
+    if (next.provider === 'alibaba') {
+      next.api_type = 'chat_completion'
+    }
     return next
   }
 
@@ -166,7 +246,7 @@ function AIConfig() {
       const response = await axios.get(`/api/ai-config/${config.id}`)
       if (response.data.success) {
         setCurrentConfig(config)
-        setFormData(normalizeConfigForm(response.data.data))
+        setFormData(syncGatewayFormFromModel(normalizeConfigForm(response.data.data)))
         setTestResult(null)
         setShowModal(true)
       }
@@ -255,12 +335,14 @@ function AIConfig() {
                          (modelName && (modelName.toLowerCase().includes('vl') || modelName.toLowerCase().includes('vision')))
     
     const endpoints = {
-      alibaba: isVisionModel 
+      alibaba: isVisionModel
         ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        : 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-      openai: 'https://api.openai.com/v1/chat/completions',
+        : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+      gateway: 'https://gateway.di-matrix.ai/v1',
+      openai: 'https://api.openai.com/v1',
       baidu: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions',
-      tencent: 'https://hunyuan.tencentcloudapi.com/'
+      tencent: 'https://hunyuan.tencentcloudapi.com/',
+      volcengine: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
     }
     return endpoints[provider] || ''
   }
@@ -499,8 +581,50 @@ function AIConfig() {
                 <Input
                   value={formData.api_endpoint}
                   onChange={(value) => handleChange('api_endpoint', value)}
-                  placeholder="请输入API端点"
+                  placeholder="网关填 https://gateway.di-matrix.ai/v1；阿里填 compatible-mode 地址"
                 />
+              </div>
+
+              <div className="form-group">
+                <label>API 协议</label>
+                <Select
+                  value={formData.wire_protocol || ''}
+                  onChange={(value) => handleChange('wire_protocol', value)}
+                  placeholder="自动推断"
+                  allowClear
+                >
+                  {wireProtocols.map((t) => (
+                    <Option key={t.value || 'auto'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="form-group">
+                <label>联网模式</label>
+                <Select
+                  value={formData.web_search_mode || ''}
+                  onChange={(value) => handleChange('web_search_mode', value)}
+                  placeholder="自动推断"
+                  allowClear
+                >
+                  {webSearchModes.map((t) => (
+                    <Option key={t.value || 'auto'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="form-group">
+                <label>Reasoning Effort（Responses）</label>
+                <Select
+                  value={formData.reasoning_effort || ''}
+                  onChange={(value) => handleChange('reasoning_effort', value)}
+                  placeholder="默认"
+                  allowClear
+                >
+                  {reasoningEfforts.map((t) => (
+                    <Option key={t.value || 'default'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
               </div>
 
               <div className="form-group">
