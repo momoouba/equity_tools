@@ -1,0 +1,247 @@
+/**
+ * 竞品明细展开区 — 独立样式域 cr-rel-*
+ * 对齐 Arco scroll.x + fixed 列布局，勿改 cell display/flex 以免表头表体错位。
+ */
+
+.cr-rel-scope {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope--embedded {
+  padding: 12px 16px 16px;
+  background: var(--color-bg-1);
+}
+
+.cr-rel-intro-label {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--color-text-2);
+}
+
+.cr-rel-actions {
+  margin-top: 12px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cr-rel-table-section {
+  margin-top: 16px;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-2);
+  border-radius: 4px;
+  background: var(--color-bg-2);
+}
+
+.cr-rel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  background: var(--color-fill-2);
+  border-bottom: 1px solid var(--color-border-2);
+}
+
+.cr-rel-toolbar-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-1);
+  flex-shrink: 0;
+  line-height: 28px;
+}
+
+.cr-rel-toolbar-actions {
+  flex-shrink: 0;
+}
+
+.cr-rel-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  background: var(--color-bg-2);
+}
+
+/* ========== 表格：scroll.x + layout-fixed，列宽由 colgroup 控制 ========== */
+.cr-rel-scope .cr-rel-table.arco-table {
+  width: 100%;
+  font-size: 14px;
+}
+
+/* layout-fixed 下 content-inner 按 colgroup 列宽自适应 */
+.cr-rel-scope .cr-rel-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.cr-rel-scope .cr-rel-table .arco-table-th,
+.cr-rel-scope .cr-rel-table .arco-table-td {
+  padding: 0 !important;
+  white-space: normal !important;
+  vertical-align: middle;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table .arco-table-th .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell {
+  padding: 12px 2px !important;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.cr-rel-scope .cr-rel-table .arco-table-th .arco-table-th-item {
+  padding: 9px 2px;
+  white-space: normal;
+  height: auto;
+  min-height: 40px;
+  justify-content: center;
+  align-items: center;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-col-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.25;
+  text-align: center;
+}
+
+/* 左对齐列 */
+.cr-rel-scope .cr-rel-table .arco-table-col-left .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-col-left .arco-table-th-item {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-cell-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-sizing: border-box;
+  text-align: left;
+}
+
+/*
+ * 竞品名称列：td=138px，内部容器 -2px，无左缩进
+ */
+.cr-rel-scope .cr-rel-table th.cr-rel-col-name,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-name {
+  width: 138px !important;
+  min-width: 138px !important;
+  max-width: 138px !important;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-name .arco-table-cell,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-name .arco-table-cell {
+  width: 136px !important;
+  min-width: 136px !important;
+  max-width: 136px !important;
+  padding: 12px 0 !important;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-name .arco-table-th-item {
+  width: 136px !important;
+  min-width: 136px !important;
+  max-width: 136px !important;
+  padding: 9px 0;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-name .cr-rel-col-title,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-name .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-name .cr-rel-cell-text {
+  width: 134px !important;
+  min-width: 134px !important;
+  max-width: 134px !important;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-product,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-product,
+.cr-rel-scope .cr-rel-table th.cr-rel-col-tags,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-tags {
+  width: 128px !important;
+  min-width: 128px !important;
+  max-width: 128px !important;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-product .arco-table-cell,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-product .arco-table-cell,
+.cr-rel-scope .cr-rel-table th.cr-rel-col-tags .arco-table-cell,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-tags .arco-table-cell {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 12px 0 !important;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table th.cr-rel-col-product .arco-table-th-item,
+.cr-rel-scope .cr-rel-table th.cr-rel-col-tags .arco-table-th-item {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding: 9px 0;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table td.cr-rel-col-product .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-product .cr-rel-intro-cell,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-tags .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-tags .cr-rel-intro-cell {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table td.cr-rel-col-product .cr-rel-intro-cell .intro-popover-ai-cell-wrap,
+.cr-rel-scope .cr-rel-table td.cr-rel-col-tags .cr-rel-intro-cell .intro-popover-ai-cell-wrap {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-created-at {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.3;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cr-rel-scope .cr-rel-table .arco-table-th,
+.cr-rel-scope .cr-rel-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-border:not(.arco-table-borderless) .arco-table-container {
+  border: none;
+  border-radius: 0;
+}
+
+/* 主表展开行：仅清外层 padding */
+.pre-inv-sourcing-page .arco-table-expand-content > .arco-table-td {
+  padding: 0;
+  background: var(--color-bg-1);
+}
+
+.pre-inv-sourcing-page .arco-table-expand-content > .arco-table-td > .arco-table-cell {
+  padding: 0;
+}

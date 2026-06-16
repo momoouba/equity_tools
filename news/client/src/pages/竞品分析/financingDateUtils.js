@@ -27,8 +27,11 @@ export function financingNow() {
 /** 日志、详情等：北京时间日期时间 */
 export function formatFinancingDateTime(value) {
   if (value == null || value === '') return '-'
+  const s = String(value).trim()
+  // 库内已是北京时间墙钟（无时区后缀）时直接展示，避免二次换算
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) return s
   const d = dayjs(value)
-  if (!d.isValid()) return String(value)
+  if (!d.isValid()) return s || '-'
   return d.tz(FINANCING_DATE_TZ).format('YYYY-MM-DD HH:mm:ss')
 }
 

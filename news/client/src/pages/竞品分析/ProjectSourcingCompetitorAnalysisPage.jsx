@@ -1,5 +1,5 @@
 ﻿import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { Card, Table, Button, Message, Collapse, Space, Select, Checkbox, Modal, Radio } from '@arco-design/web-react'
+import { Card, Table, Button, Message, Space, Select, Checkbox, Modal, Radio } from '@arco-design/web-react'
 import axios from '../../utils/axios'
 import {
   fetchCompetitorRelations,
@@ -7,16 +7,22 @@ import {
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
   patchCompetitorRelationComparable,
+  deleteCompetitorRelation,
 } from '../../api/竞品分析'
-import { AiIntroFullText } from './introPopoverAiCell'
+import { IntroPopoverCell } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
+import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
+import CompetitorRelationDetailBlock from './CompetitorRelationDetailBlock'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
   parseExportFilename,
 } from './competitorRelationColumns'
+import '../EnterpriseManagement.css'
 
-const CollapseItem = Collapse.Item
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
+/** 展开列 40 + 勾选 48 + 各列 width 之和 */
+const POST_INV_MAIN_TABLE_SCROLL_X = 1328
 
 function sortRelationsByComparable(list) {
   return [...(list || [])].sort((a, b) => {
@@ -38,8 +44,9 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
-  const [pageSize] = useState(20)
-  const [activeKeys, setActiveKeys] = useState([])
+  const [pageSize, setPageSize] = useState(20)
+  const [tableScrollY, setTableScrollY] = useState(520)
+  const [expandedKeys, setExpandedKeys] = useState([])
   const [relMap, setRelMap] = useState({})
   const [relLoading, setRelLoading] = useState({})
   const [runMap, setRunMap] = useState({})
@@ -56,6 +63,9 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   const [summaryParams, setSummaryParams] = useState(null)
   const [summaryTitle, setSummaryTitle] = useState('')
   const [comparableSavingId, setComparableSavingId] = useState(null)
+  const [manualAddVisible, setManualAddVisible] = useState(false)
+  const [manualAddSubject, setManualAddSubject] = useState(null)
+  const [editingRelation, setEditingRelation] = useState(null)
 
   const handleComparableToggle = useCallback(async (record, checked) => {
     const subjectId = record.invested_enterprise_id
@@ -93,13 +103,56 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     }
   }, [latestRunMap, selectedRunMap])
 
+  const handleEditRelation = useCallback(
+    (record) => {
+      const subjectId = record.invested_enterprise_id
+      if (!subjectId) return
+      const row = rows.find((r) => String(r.id) === String(subjectId))
+      setEditingRelation(record)
+      setManualAddSubject({
+        id: subjectId,
+        label: row?.enterprise_full_name || row?.project_abbreviation || subjectId,
+        type: 'invested_enterprise',
+        runId: selectedRunMap[subjectId] || latestRunMap[subjectId],
+      })
+      setManualAddVisible(true)
+    },
+    [rows, latestRunMap, selectedRunMap]
+  )
+
+  const handleDeleteRelation = useCallback(
+    (record) => {
+      const subjectId = record.invested_enterprise_id
+      if (!subjectId || !record.id) return
+      Modal.confirm({
+        title: '确认删除',
+        content: `确定删除竞品「${record.competitor_display_name || record.id}」？删除后不可恢复。`,
+        onOk: async () => {
+          try {
+            const res = await deleteCompetitorRelation(record.id)
+            if (!res.data?.success) {
+              throw new Error(res.data?.message || '删除失败')
+            }
+            Message.success(res.data.message || '已删除')
+            await loadRelations(subjectId, selectedRunMap[subjectId] || latestRunMap[subjectId], true)
+          } catch (e) {
+            Message.error(e.response?.data?.message || e.message || '删除失败')
+          }
+        },
+      })
+    },
+    [latestRunMap, selectedRunMap]
+  )
+
   const relColumns = useMemo(
     () =>
       getCompetitorRelationColumns({
         onComparableToggle: handleComparableToggle,
         comparableSavingId,
+        onEdit: handleEditRelation,
+        onDelete: handleDeleteRelation,
       }),
-    [handleComparableToggle, comparableSavingId]
+    [handleComparableToggle, comparableSavingId, handleEditRelation, handleDeleteRelation]
   )
 
   const fetchList = useCallback(async () => {
@@ -143,10 +196,19 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
       .catch(() => {})
   }, [])
 
+  useEffect(() => {
+    const calc = () => {
+      setTableScrollY(Math.max(320, window.innerHeight - 320))
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+  }, [])
+
   const loadRuns = async (enterpriseId) => {
     if (runMap[enterpriseId]?.loaded) {
       const list = runMap[enterpriseId].list || []
-      return { list, latestRunId: list.length ? list[0].id : null }
+      return { list, latestRunId: latestRunMap[enterpriseId] || (list.length ? list[0].id : null) }
     }
     setRunMap((m) => ({ ...m, [enterpriseId]: { ...(m[enterpriseId] || {}), loading: true } }))
     try {
@@ -169,8 +231,9 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     }
   }
 
-  const loadRelations = async (enterpriseId, runId) => {
+  const loadRelations = async (enterpriseId, runId, force = false) => {
     const cacheKey = runId || 'latest'
+    if (!force && relCacheKey[enterpriseId] === cacheKey && relMap[enterpriseId]) return
     setRelLoading((m) => ({ ...m, [enterpriseId]: true }))
     try {
       const params = { invested_enterprise_id: enterpriseId }
@@ -195,8 +258,8 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     }
   }
 
-  const onCollapseChange = async (_key, keys) => {
-    setActiveKeys(keys)
+  const onExpandedRowsChange = async (keys) => {
+    setExpandedKeys(keys)
     for (const id of keys) {
       const { latestRunId } = await loadRuns(id)
       const runId = selectedRunMap[id] || latestRunId
@@ -208,7 +271,26 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
 
   const onVersionChange = async (enterpriseId, runId) => {
     setSelectedRunMap((m) => ({ ...m, [enterpriseId]: runId }))
-    await loadRelations(enterpriseId, runId)
+    await loadRelations(enterpriseId, runId, true)
+  }
+
+  const handleRefresh = async () => {
+    await fetchList()
+    const keys = expandedKeys
+    if (keys.length) {
+      await Promise.all(
+        keys.map(async (id) => {
+          setRunMap((m) => {
+            const next = { ...m }
+            delete next[id]
+            return next
+          })
+          const { latestRunId } = await loadRuns(id)
+          const runId = selectedRunMap[id] || latestRunId
+          await loadRelations(id, runId, true)
+        })
+      )
+    }
   }
 
   const toggleSelect = (id, checked) => {
@@ -225,8 +307,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     else setSelectedIds([])
   }
 
-  const openSummary = (enterpriseId, e, row) => {
-    e?.stopPropagation?.()
+  const openSummary = (enterpriseId, row) => {
     setSummaryParams({ invested_enterprise_id: enterpriseId })
     setSummaryTitle(row?.enterprise_full_name || row?.project_abbreviation || '')
     setSummaryOpen(true)
@@ -282,21 +363,63 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
 
   const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id))
 
+  const columns = [
+    {
+      title: (
+        <Checkbox
+          checked={allPageSelected}
+          indeterminate={selectedIds.length > 0 && !allPageSelected}
+          onChange={toggleSelectAllPage}
+        />
+      ),
+      width: 48,
+      fixed: 'left',
+      render: (_, row) => (
+        <Checkbox
+          checked={selectedIds.includes(row.id)}
+          onChange={(checked) => toggleSelect(row.id, checked)}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ),
+    },
+    { title: '项目编号', dataIndex: 'project_number', width: 140, render: (t) => t || '-' },
+    { title: '企业全称', dataIndex: 'enterprise_full_name', width: 220, ellipsis: true, tooltip: true },
+    { title: '项目简称', dataIndex: 'project_abbreviation', width: 120, ellipsis: true, render: (t) => t || '-' },
+    { title: '统一信用代码', dataIndex: 'unified_credit_code', width: 180, render: (t) => t || '-' },
+    {
+      title: '产品介绍（AI）',
+      dataIndex: 'ai_product_intro',
+      width: 200,
+      render: (t) => <IntroPopoverCell columnTitle="产品介绍（AI）" raw={t} triggerMaxWidth={180} />,
+    },
+    {
+      title: '企业标签（AI）',
+      dataIndex: 'ai_industry_tags_display',
+      width: 180,
+      render: (t) => <IntroPopoverCell columnTitle="企业标签（AI）" raw={t} triggerMaxWidth={160} />,
+    },
+    {
+      title: '企业介绍（企查查）',
+      dataIndex: 'qcc_company_intro',
+      width: 200,
+      render: (t, row) => (
+        <IntroPopoverCell
+          columnTitle="企业介绍（企查查）"
+          raw={t || row.qcc_company_intro}
+          triggerMaxWidth={180}
+        />
+      ),
+    },
+  ]
+
   return (
-    <div className="page-scope" style={{ padding: '16px 24px' }}>
+    <div className="pre-inv-sourcing-page" style={{ padding: '16px 24px' }}>
       <Card title="投后-竞品分析（被投企业 × 竞品）" bordered={false}>
-        <p style={{ color: 'var(--color-text-2)', marginBottom: 16, fontSize: 13 }}>
+        <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
           仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
           <strong>被投企业</strong>列表左侧勾选 +「竞品分析（多选）」。
         </p>
         <Space wrap style={{ marginBottom: 12 }}>
-          <Checkbox
-            checked={allPageSelected}
-            indeterminate={selectedIds.length > 0 && !allPageSelected}
-            onChange={toggleSelectAllPage}
-          >
-            全选本页
-          </Checkbox>
           <span style={{ fontSize: 13, color: 'var(--color-text-3)' }}>已选 {selectedIds.length} 家</span>
           <Select
             mode="multiple"
@@ -307,7 +430,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
             onChange={setYearFilter}
             options={exportYears.map((y) => ({ label: y, value: y }))}
           />
-          <Button type="outline" onClick={fetchList} loading={loading}>
+          <Button type="outline" onClick={handleRefresh} loading={loading}>
             刷新
           </Button>
           <Button type="primary" loading={exporting} onClick={openExportModal}>
@@ -317,121 +440,73 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
             全量导出{yearFilter.length ? `（${yearFilter.join('、')}）` : ''}
           </Button>
         </Space>
-        <Collapse activeKey={activeKeys} onChange={onCollapseChange}>
-          {rows.map((r) => {
-            const runs = runMap[r.id]?.list || []
-            const selectedRunId = selectedRunMap[r.id]
-            const latestRunId = latestRunMap[r.id]
+        <Table
+          className="pre-inv-sourcing-main-table"
+          rowKey="id"
+          stripe
+          loading={loading}
+          data={rows}
+          columns={columns}
+          expandedRowKeys={expandedKeys}
+          onExpandedRowsChange={onExpandedRowsChange}
+          expandProps={{ width: 40 }}
+          expandedRowRender={(row) => {
+            const runs = runMap[row.id]?.list || []
+            const selectedRunId = selectedRunMap[row.id]
+            const latestRunId = latestRunMap[row.id]
             const isHistorical =
               selectedRunId && latestRunId && String(selectedRunId) !== String(latestRunId)
-            const columns = isHistorical
-              ? getCompetitorRelationColumns({ comparableReadOnly: true })
+            const detailColumns = isHistorical
+              ? getCompetitorRelationColumns({ comparableReadOnly: true, actionReadOnly: true })
               : relColumns
 
             return (
-              <CollapseItem
-                key={r.id}
-                name={r.id}
-                header={
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      width: '100%',
-                      gap: 12,
-                    }}
-                  >
-                    <Space>
-                      <Checkbox
-                        checked={selectedIds.includes(r.id)}
-                        onChange={(checked) => toggleSelect(r.id, checked)}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <span style={{ fontWeight: 500 }}>{r.enterprise_full_name || r.project_abbreviation || r.id}</span>
-                      <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
-                        项目简称：{r.project_abbreviation || '—'}
-                      </span>
-                      {r.project_number ? (
-                        <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>编号：{r.project_number}</span>
-                      ) : null}
-                    </Space>
-                    <Button type="outline" size="mini" onClick={(e) => openSummary(r.id, e, r)}>
-                      竞品分析说明
-                    </Button>
-                  </div>
-                }
-              >
-                <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>产品介绍（AI）摘要：</div>
-                <AiIntroFullText raw={r.ai_product_intro || r.qcc_company_intro} />
-                <div
-                  style={{
-                    marginTop: 12,
-                    marginBottom: 4,
-                    display: 'flex',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
-                    gap: 12,
-                  }}
-                >
-                  <Button
-                    type="outline"
-                    size="small"
-                    style={{ color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' }}
-                    onClick={(e) => openSummary(r.id, e, r)}
-                  >
-                    竞品分析说明
-                  </Button>
-                  {runs.length > 0 ? (
-                    <Space size={8} align="center">
-                      <span style={{ fontSize: 12, color: 'rgb(var(--primary-6))' }}>分析版本</span>
-                      <Select
-                        size="small"
-                        style={{ minWidth: 180 }}
-                        loading={!!runMap[r.id]?.loading}
-                        value={selectedRunId || runs[0]?.id}
-                        onChange={(v) => onVersionChange(r.id, v)}
-                        triggerProps={{
-                          style: { color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' },
-                        }}
-                        options={runs
-                          .filter((run) => run.id && run.version_label)
-                          .map((run) => ({
-                            label: run.version_label,
-                            value: run.id,
-                          }))}
-                      />
-                      {isHistorical ? (
-                        <span style={{ fontSize: 12, color: 'var(--color-warning-6)' }}>历史版本（只读）</span>
-                      ) : null}
-                    </Space>
-                  ) : null}
-                </div>
-                <div style={{ marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: 500 }}>竞品明细</div>
-                <Table
-                  rowKey="id"
-                  loading={!!relLoading[r.id]}
-                  data={relMap[r.id] || []}
-                  columns={columns}
-                  pagination={false}
-                  border={{ wrapper: true, cell: true }}
-                  scroll={{ x: 1400 }}
-                />
-              </CollapseItem>
+              <CompetitorRelationDetailBlock
+                embedded
+                stopPropagation
+                aiProductIntro={row.ai_product_intro || row.qcc_company_intro}
+                runs={runs}
+                selectedRunId={selectedRunId}
+                runLoading={!!runMap[row.id]?.loading}
+                isHistorical={isHistorical}
+                onOpenSummary={() => openSummary(row.id, row)}
+                onVersionChange={(v) => onVersionChange(row.id, v)}
+                onAdd={() => {
+                  setEditingRelation(null)
+                  setManualAddSubject({
+                    id: row.id,
+                    label: row.enterprise_full_name || row.project_abbreviation || row.id,
+                    type: 'invested_enterprise',
+                    runId: selectedRunId || latestRunId,
+                  })
+                  setManualAddVisible(true)
+                }}
+                onRefresh={() => loadRelations(row.id, selectedRunId || latestRunId, true)}
+                refreshLoading={!!relLoading[row.id]}
+                relationColumns={detailColumns}
+                relationData={relMap[row.id] || []}
+                relationLoading={!!relLoading[row.id]}
+              />
             )
-          })}
-        </Collapse>
-        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 13, color: 'var(--color-text-3)' }}>
-            本页 {rows.length} 条（接口 total: {total}）
-          </span>
-          <Button type="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
-            上一页
-          </Button>
-          <Button type="outline" disabled={rows.length < pageSize} onClick={() => setPage((p) => p + 1)}>
-            下一页
-          </Button>
-        </div>
+          }}
+          scroll={{ x: POST_INV_MAIN_TABLE_SCROLL_X, y: tableScrollY }}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            onChange: (p) => setPage(p),
+            showTotal: true,
+            showJumper: true,
+            sizeCanChange: true,
+            pageSizeChangeResetCurrent: true,
+            pageSizeOptions: PAGE_SIZE_OPTIONS,
+            onPageSizeChange: (ps) => {
+              setPageSize(ps)
+              setPage(1)
+            },
+          }}
+          border={{ wrapper: true, cell: true }}
+        />
       </Card>
       <Modal
         title="导出已选被投企业"
@@ -457,6 +532,22 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
         }}
         summaryParams={summaryParams}
         subjectTitle={summaryTitle}
+      />
+      <CompetitorRelationManualAddModal
+        visible={manualAddVisible}
+        onClose={() => {
+          setManualAddVisible(false)
+          setManualAddSubject(null)
+          setEditingRelation(null)
+        }}
+        subjectType={manualAddSubject?.type}
+        subjectId={manualAddSubject?.id}
+        subjectLabel={manualAddSubject?.label}
+        editingRecord={editingRelation}
+        onSaved={() => {
+          if (!manualAddSubject?.id) return
+          loadRelations(manualAddSubject.id, manualAddSubject.runId, true)
+        }}
       />
     </div>
   )

@@ -28,9 +28,12 @@ import {
   postPreInvestmentAiEnrich,
   postPreInvestmentCompetitorAnalysisRun,
   patchCompetitorRelationComparable,
+  deleteCompetitorRelation,
 } from '../../api/竞品分析'
-import { IntroPopoverCell, AiIntroFullText } from './introPopoverAiCell'
+import { IntroPopoverCell } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
+import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
+import CompetitorRelationDetailBlock from './CompetitorRelationDetailBlock'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
@@ -42,6 +45,8 @@ import '../EnterpriseForm.css'
 const FormItem = Form.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 const BATCH_GAP_MS = 500
+/** 展开列 40 + 勾选 48 + 各列 width 之和 */
+const PRE_INV_MAIN_TABLE_SCROLL_X = 1428
 
 function rowLabel(row) {
   return row.enterprise_full_name || row.project_abbreviation || row.project_no || row.id
@@ -144,6 +149,9 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [summaryParams, setSummaryParams] = useState(null)
   const [summaryTitle, setSummaryTitle] = useState('')
   const [comparableSavingId, setComparableSavingId] = useState(null)
+  const [manualAddVisible, setManualAddVisible] = useState(false)
+  const [manualAddSubject, setManualAddSubject] = useState(null)
+  const [editingRelation, setEditingRelation] = useState(null)
 
   const handleComparableToggle = useCallback(async (record, checked) => {
     const subjectId = record.pre_investment_project_id
@@ -181,9 +189,56 @@ export default function ProjectSourcingPreInvestmentPage() {
     }
   }, [latestRunMap, selectedRunMap])
 
+  const handleEditRelation = useCallback(
+    (record) => {
+      const subjectId = record.pre_investment_project_id
+      if (!subjectId) return
+      const row = list.find((r) => String(r.id) === String(subjectId))
+      setEditingRelation(record)
+      setManualAddSubject({
+        id: subjectId,
+        label: row ? rowLabel(row) : subjectId,
+        type: 'pre_investment_project',
+        runId: selectedRunMap[subjectId] || latestRunMap[subjectId],
+      })
+      setManualAddVisible(true)
+    },
+    [list, latestRunMap, selectedRunMap]
+  )
+
+  const handleDeleteRelation = useCallback(
+    (record) => {
+      const subjectId = record.pre_investment_project_id
+      if (!subjectId || !record.id) return
+      Modal.confirm({
+        title: '确认删除',
+        content: `确定删除竞品「${record.competitor_display_name || record.id}」？删除后不可恢复。`,
+        onOk: async () => {
+          try {
+            const res = await deleteCompetitorRelation(record.id)
+            if (!res.data?.success) {
+              throw new Error(res.data?.message || '删除失败')
+            }
+            Message.success(res.data.message || '已删除')
+            await loadRelations(subjectId, selectedRunMap[subjectId] || latestRunMap[subjectId], true)
+          } catch (e) {
+            Message.error(e.response?.data?.message || e.message || '删除失败')
+          }
+        },
+      })
+    },
+    [latestRunMap, selectedRunMap]
+  )
+
   const relColumns = useMemo(
-    () => getCompetitorRelationColumns({ onComparableToggle: handleComparableToggle, comparableSavingId }),
-    [handleComparableToggle, comparableSavingId]
+    () =>
+      getCompetitorRelationColumns({
+        onComparableToggle: handleComparableToggle,
+        comparableSavingId,
+        onEdit: handleEditRelation,
+        onDelete: handleDeleteRelation,
+      }),
+    [handleComparableToggle, comparableSavingId, handleEditRelation, handleDeleteRelation]
   )
 
   const loadRuns = async (projectId) => {
@@ -848,6 +903,7 @@ export default function ProjectSourcingPreInvestmentPage() {
           </Button>
         </Space>
         <Table
+          className="pre-inv-sourcing-main-table"
           rowKey="id"
           stripe
           loading={loading}
@@ -855,6 +911,7 @@ export default function ProjectSourcingPreInvestmentPage() {
           columns={columns}
           expandedRowKeys={expandedKeys}
           onExpandedRowsChange={onExpandedRowsChange}
+          expandProps={{ width: 40 }}
           expandedRowRender={(row) => {
             const runs = runMap[row.id]?.list || []
             const selectedRunId = selectedRunMap[row.id]
@@ -862,76 +919,39 @@ export default function ProjectSourcingPreInvestmentPage() {
             const isHistorical =
               selectedRunId && latestRunId && String(selectedRunId) !== String(latestRunId)
             const columns = isHistorical
-              ? getCompetitorRelationColumns({ comparableReadOnly: true })
+              ? getCompetitorRelationColumns({ comparableReadOnly: true, actionReadOnly: true })
               : relColumns
 
             return (
-            <div style={{ padding: '8px 12px 16px' }}>
-              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-2)' }}>
-                产品介绍（AI）摘要：
-              </div>
-              <AiIntroFullText raw={row.ai_product_intro} />
-              <div
-                style={{
-                  marginTop: 12,
-                  marginBottom: 4,
-                  display: 'flex',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: 12,
+              <CompetitorRelationDetailBlock
+                embedded
+                stopPropagation
+                aiProductIntro={row.ai_product_intro}
+                runs={runs}
+                selectedRunId={selectedRunId}
+                runLoading={!!runMap[row.id]?.loading}
+                isHistorical={isHistorical}
+                onOpenSummary={() => openSummary(row.id, row)}
+                onVersionChange={(v) => onVersionChange(row.id, v)}
+                onAdd={() => {
+                  setEditingRelation(null)
+                  setManualAddSubject({
+                    id: row.id,
+                    label: rowLabel(row),
+                    type: 'pre_investment_project',
+                    runId: selectedRunId || latestRunId,
+                  })
+                  setManualAddVisible(true)
                 }}
-              >
-                <Button
-                  type="outline"
-                  size="small"
-                  style={{ color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' }}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    openSummary(row.id, row)
-                  }}
-                >
-                  竞品分析说明
-                </Button>
-                {runs.length > 0 ? (
-                  <Space size={8} align="center">
-                    <span style={{ fontSize: 12, color: 'rgb(var(--primary-6))' }}>分析版本</span>
-                    <Select
-                      size="small"
-                      style={{ minWidth: 180 }}
-                      loading={!!runMap[row.id]?.loading}
-                      value={selectedRunId || runs[0]?.id}
-                      onChange={(v) => onVersionChange(row.id, v)}
-                      triggerProps={{
-                        style: { color: 'rgb(var(--primary-6))', borderColor: 'rgb(var(--primary-6))' },
-                      }}
-                      options={runs
-                        .filter((run) => run.id && run.version_label)
-                        .map((run) => ({
-                          label: run.version_label,
-                          value: run.id,
-                        }))}
-                    />
-                    {isHistorical ? (
-                      <span style={{ fontSize: 12, color: 'var(--color-warning-6)' }}>历史版本（只读）</span>
-                    ) : null}
-                  </Space>
-                ) : null}
-              </div>
-              <div style={{ marginTop: 16, marginBottom: 8, fontSize: 13, fontWeight: 500 }}>竞品明细</div>
-              <Table
-                rowKey="id"
-                size="small"
-                loading={!!relLoading[row.id]}
-                data={relMap[row.id] || []}
-                pagination={false}
-                border={{ wrapper: true, cell: true }}
-                columns={columns}
-                scroll={{ x: 1200 }}
+                onRefresh={() => loadRelations(row.id, selectedRunId || latestRunId, true)}
+                refreshLoading={!!relLoading[row.id]}
+                relationColumns={columns}
+                relationData={relMap[row.id] || []}
+                relationLoading={!!relLoading[row.id]}
               />
-            </div>
             )
           }}
-          scroll={{ x: 1680, y: tableScrollY }}
+          scroll={{ x: PRE_INV_MAIN_TABLE_SCROLL_X, y: tableScrollY }}
           pagination={{
             current: page,
             pageSize,
@@ -1197,6 +1217,22 @@ export default function ProjectSourcingPreInvestmentPage() {
         }}
         summaryParams={summaryParams}
         subjectTitle={summaryTitle}
+      />
+      <CompetitorRelationManualAddModal
+        visible={manualAddVisible}
+        onClose={() => {
+          setManualAddVisible(false)
+          setManualAddSubject(null)
+          setEditingRelation(null)
+        }}
+        subjectType={manualAddSubject?.type}
+        subjectId={manualAddSubject?.id}
+        subjectLabel={manualAddSubject?.label}
+        editingRecord={editingRelation}
+        onSaved={() => {
+          if (!manualAddSubject?.id) return
+          loadRelations(manualAddSubject.id, manualAddSubject.runId, true)
+        }}
       />
     </div>
   )

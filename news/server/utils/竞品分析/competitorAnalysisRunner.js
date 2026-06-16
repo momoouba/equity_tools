@@ -294,14 +294,15 @@ async function archivePriorCompetitorRelations({
     await dbExec(
       `UPDATE sourcing_competitor_relation
        SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
-       WHERE invested_enterprise_id = ? AND F_DeleteMark = 0`,
+       WHERE invested_enterprise_id = ? AND F_DeleteMark = 0 AND F_CreatorUserId IS NULL`,
       [uid, investedEnterpriseId]
     );
   } else if (subjectType === 'pre_investment_project' && preInvestmentProjectId) {
     await dbExec(
       `UPDATE sourcing_competitor_relation
        SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyTime = NOW()
-       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0`,
+       WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project'
+         AND F_DeleteMark = 0 AND F_CreatorUserId IS NULL`,
       [uid, preInvestmentProjectId]
     );
   }

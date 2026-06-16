@@ -297,14 +297,40 @@
   border-right: 1px solid #e5e6eb;
 }
 
-/* 投前项目列表：列分隔线（与 frontend-list-standards 一致） */
-.pre-inv-sourcing-page .arco-table .arco-table-th,
-.pre-inv-sourcing-page .arco-table .arco-table-td {
+/* 投前项目主列表：列分隔线（与 frontend-list-standards 一致；勿作用于展开区内竞品明细表） */
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-td {
   border-right: 1px solid #e5e6eb !important;
 }
-.pre-inv-sourcing-page .arco-table .arco-table-th:last-child,
-.pre-inv-sourcing-page .arco-table .arco-table-td:last-child {
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-th:last-child,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-td:last-child {
   border-right: none !important;
+}
+
+/* 投前/投后主列表：fixed 列 + scroll 时表头/表体同步（避免横向滚动错列） */
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td {
+  padding: 0 !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th .arco-table-cell,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td .arco-table-cell {
+  padding: 12px 16px;
+  box-sizing: border-box;
 }
 
 /* 竞品分析-被投企业：fixed 列 + scroll 时保持表头/表体竖线对齐 */

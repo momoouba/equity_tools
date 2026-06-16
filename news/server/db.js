@@ -1,3 +1,5 @@
+// 全系统默认北京时间（须在 dotenv 与其它模块加载前设置）
+process.env.TZ = 'Asia/Shanghai';
 // 加载 .env 文件，但不覆盖已存在的环境变量（Docker 环境变量优先级更高）
 require('dotenv').config({ override: false });
 const mysql = require('mysql2/promise');
@@ -785,7 +787,7 @@ async function migrateBatchFColumns(dbPool) {
     competitor_recall_source_config: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }],
     pre_investment_project:   [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     sourcing_competitor_run:  [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
-    sourcing_competitor_relation: [{ old: 'id', new: 'F_Id' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
+    sourcing_competitor_relation: [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
     sourcing_pre_investment_competitor_run: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     sourcing_competitor_run_step_log: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }],
     sourcing_competitor_comparable_pref: [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }],
@@ -7582,6 +7584,27 @@ async function initializeTables(dbPool) {
     'include_in_comparable',
     `ADD COLUMN include_in_comparable TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否放入可比公司：1是0否' AFTER F_CreatorTime`
   );
+  await addScrCol(
+    'F_CreatorUserId',
+    `ADD COLUMN F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人ID（NULL为AI创建）' AFTER include_in_comparable`
+  );
+  try {
+    const [fkRows] = await dbPool.query(
+      `SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_competitor_relation'
+         AND CONSTRAINT_NAME = 'fk_scr_rel_creator_user' AND CONSTRAINT_TYPE = 'FOREIGN KEY'
+       LIMIT 1`
+    );
+    if (!fkRows.length) {
+      await dbPool.query(
+        `ALTER TABLE sourcing_competitor_relation
+         ADD CONSTRAINT fk_scr_rel_creator_user FOREIGN KEY (F_CreatorUserId) REFERENCES users(F_Id) ON DELETE SET NULL`
+      );
+      console.log('  ✓ sourcing_competitor_relation 已添加 F_CreatorUserId 外键');
+    }
+  } catch (err) {
+    console.warn('迁移 sourcing_competitor_relation.F_CreatorUserId 外键时出现警告:', err.message);
+  }
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS sourcing_competitor_comparable_pref (
@@ -8046,8 +8069,10 @@ async function init() {
       waitForConnections: true,
       connectionLimit: 10,
       charset: 'utf8mb4',
+      timezone: '+08:00',
       connectTimeout: 20000
     });
+    await pool.query("SET time_zone = '+08:00'");
     // 初始化数据库表结构
     await initializeTables(pool);
     // 创建新增字段的索引

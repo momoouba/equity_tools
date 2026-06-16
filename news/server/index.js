@@ -1,3 +1,6 @@
+// 全系统默认北京时间（Docker 等环境常为 UTC，避免落库/日志/定时任务偏差）
+process.env.TZ = 'Asia/Shanghai';
+
 // Express/parseurl、axios/follow-redirects 等仍会触发对 legacy url.parse() 的 DEP0169。
 // 推荐用 npm scripts（已带 node --disable-warning=DEP0169）；若直接执行 node server/index.js，由此处兜底。
 process.on('warning', (w) => {

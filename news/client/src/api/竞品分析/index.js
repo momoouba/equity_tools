@@ -113,6 +113,18 @@ export function fetchCompetitorRelations(params) {
   return axios.get(`${BASE}/competitor-analysis/relations`, { params })
 }
 
+export function postCompetitorRelation(body) {
+  return axios.post(`${BASE}/competitor-analysis/relations`, body)
+}
+
+export function putCompetitorRelation(relationId, body) {
+  return axios.put(`${BASE}/competitor-analysis/relations/${encodeURIComponent(relationId)}`, body)
+}
+
+export function deleteCompetitorRelation(relationId) {
+  return axios.delete(`${BASE}/competitor-analysis/relations/${encodeURIComponent(relationId)}`)
+}
+
 export function fetchCompetitorAnalysisRuns(params) {
   return axios.get(`${BASE}/competitor-analysis/runs`, { params })
 }

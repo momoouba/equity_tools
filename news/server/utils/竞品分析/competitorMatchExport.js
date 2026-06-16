@@ -25,6 +25,7 @@ const SOURCE_LABELS = {
   ipo_project: '底层',
   sourcing_financing_event: '融资',
   ai_web: '联网',
+  user_added: '用户新增',
 };
 
 function sanitizeSheetName(name, used) {
