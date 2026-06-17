@@ -1,28 +1,26 @@
-import { Button, Checkbox, Space } from '@arco-design/web-react'
+import { Button, Checkbox, Space, Tooltip } from '@arco-design/web-react'
 
 import { IntroPopoverCell } from './introPopoverAiCell'
 import { formatFinancingDateTime } from './financingDateUtils'
 
 const SOURCE_LABELS = { ipo_project: '底层', sourcing_financing_event: '融资', ai_web: '联网', user_added: '用户新增' }
 
-/** 竞品明细：长文本列左对齐，其余列居中 */
+/** 竞品明细：长文本列（除竞品名称外）左对齐；竞品名称表头居中、内容左对齐由 cr-rel-col-name 控制 */
 const LEFT_ALIGN_FIELDS = new Set([
-  'competitor_display_name',
   'competitor_product_intro',
   'competitor_tags_display',
 ])
 
 /** 各列 width 之和，供 Table scroll.x 使用 */
-export const COMPETITOR_RELATION_TABLE_SCROLL_X = 1155
+export const COMPETITOR_RELATION_TABLE_SCROLL_X = 1400
 
-/**
- * 左对齐长文本列宽（px）：与 columns.width 一致。
- * cell = col - 2（右缘留 2px 与分隔线对齐）；inner = cell - 2（左内边距 2px）。
- */
+/** 长文本 Popover 触发区最大宽度（px），与列宽 - 左右 padding 对齐 */
 export const CR_REL_COL_WIDTH = {
-  name: { col: 140, cell: 138, inner: 136 },
-  product: { col: 130, cell: 128, inner: 126 },
-  tags: { col: 130, cell: 128, inner: 126 },
+  name: { col: 187, inner: 163 },
+  product: { col: 140, inner: 108 },
+  tags: { col: 140, inner: 108 },
+  credit: { col: 140 },
+  financing: { col: 120, inner: 88 },
 }
 
 /** 竞品明细独立样式前缀（cr-rel-*），避免通用表格样式干扰 */
@@ -30,23 +28,27 @@ export const CR_REL_CSS = {
   scope: 'cr-rel-scope',
   scopeEmbedded: 'cr-rel-scope--embedded',
   table: 'cr-rel-table',
-  colTitle: 'cr-rel-col-title',
-  colName: 'cr-rel-col-name',
   colProduct: 'cr-rel-col-product',
   colTags: 'cr-rel-col-tags',
-  cellText: 'cr-rel-cell-text',
+  cellMono: 'cr-rel-cell-mono',
   createdAt: 'cr-rel-created-at',
   introCell: 'cr-rel-intro-cell',
+  sourceText: 'cr-rel-source-text',
+  colNumeric: 'cr-rel-col-numeric',
 }
 
-function wrapColTitle(text) {
-  return <span className={CR_REL_CSS.colTitle}>{text}</span>
-}
-
-/** 列内省略：内容限制在列宽内，左侧 2px 缩进 */
-function renderEllipsisText(raw, empty = '-') {
-  const text = raw == null || String(raw).trim() === '' ? empty : String(raw)
-  return <span className={CR_REL_CSS.cellText} title={text === empty ? undefined : text}>{text}</span>
+function renderMonoEllipsis(raw, empty = '-') {
+  const text = raw || empty
+  if (text === empty) {
+    return <span>{empty}</span>
+  }
+  return (
+    <Tooltip content={text}>
+      <span className={CR_REL_CSS.cellMono} translate="no" tabIndex={0}>
+        {text}
+      </span>
+    </Tooltip>
+  )
 }
 
 function renderCreatedAtTwoLines(value) {
@@ -118,27 +120,27 @@ export function getCompetitorRelationColumns(opts = {}) {
       title: '竞品名称',
       dataIndex: 'competitor_display_name',
       width: CR_REL_COL_WIDTH.name.col,
-      className: CR_REL_CSS.colName,
-      render: (t) => renderEllipsisText(t),
+      ellipsis: true,
+      render: (t) => t || '-',
     },
-
-    { title: '信用代码', dataIndex: 'unified_credit_code', width: 120, render: (t) => t || '-' },
 
     {
-
-      title: '上市',
-
-      dataIndex: 'is_listed',
-
-      width: 40,
-
-      render: (v) => (Number(v) === 1 ? '是' : '否'),
-
+      title: '信用代码',
+      dataIndex: 'unified_credit_code',
+      width: CR_REL_COL_WIDTH.credit.col,
+      render: (t) => renderMonoEllipsis(t),
     },
 
-    { title: '等级', dataIndex: 'confidence_grade', width: 40, render: (t) => t || '-' },
+    {
+      title: '上市',
+      dataIndex: 'is_listed',
+      width: 56,
+      render: (v) => (Number(v) === 1 ? '是' : '否'),
+    },
 
-    { title: '综合分', dataIndex: 'relevance_score', width: 50, render: (v) => (v == null ? '-' : String(v)) },
+    { title: '等级', dataIndex: 'confidence_grade', width: 56, render: (t) => t || '-' },
+
+    { title: '综合分', dataIndex: 'relevance_score', width: 70, className: CR_REL_CSS.colNumeric, render: (v) => (v == null ? '-' : String(v)) },
 
     {
 
@@ -185,27 +187,28 @@ export function getCompetitorRelationColumns(opts = {}) {
     },
 
     {
-
       title: '子基金名称',
-
       dataIndex: 'sub_fund_names',
-
-      width: 80,
-
+      width: 100,
+      ellipsis: true,
       render: (t) => t || '-',
-
     },
 
     {
-
       title: '数据源',
-
       dataIndex: 'data_sources_json',
-
-      width: 55,
-
-      render: (v) => formatCompetitorDataSources(v),
-
+      width: 70,
+      render: (v) => {
+        const text = formatCompetitorDataSources(v)
+        if (text === '-') return '-'
+        return (
+          <Tooltip content={text}>
+            <span className={CR_REL_CSS.sourceText} tabIndex={0}>
+              {text}
+            </span>
+          </Tooltip>
+        )
+      },
     },
 
     {
@@ -222,7 +225,11 @@ export function getCompetitorRelationColumns(opts = {}) {
 
         return (
           <div className={CR_REL_CSS.introCell}>
-            <IntroPopoverCell columnTitle="融资" raw={text} triggerMaxWidth={116} />
+            <IntroPopoverCell
+              columnTitle="融资"
+              raw={text}
+              triggerMaxWidth={CR_REL_COL_WIDTH.financing.inner}
+            />
           </div>
         )
 
@@ -236,7 +243,7 @@ export function getCompetitorRelationColumns(opts = {}) {
 
       dataIndex: 'created_at',
 
-      width: 70,
+      width: 88,
 
       render: (t) => renderCreatedAtTwoLines(t),
 
@@ -248,19 +255,16 @@ export function getCompetitorRelationColumns(opts = {}) {
 
       dataIndex: 'include_in_comparable',
 
-      width: 60,
+      width: 100,
       fixed: 'right',
 
       render: (v, record) => (
 
         <Checkbox
-
+          aria-label={`${record.competitor_display_name || '竞品'}是否可比公司`}
           checked={Number(v) === 1}
-
           disabled={comparableReadOnly || comparableSavingId === record.id}
-
           onChange={(checked) => onComparableToggle?.(record, checked)}
-
         />
 
       ),
@@ -269,16 +273,16 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     {
       title: '操作',
-      width: 120,
+      width: 140,
       fixed: 'right',
       render: (_, record) => {
         if (actionReadOnly || !record.creator_user_id) return '-'
         return (
           <Space size={8} style={{ padding: '0 10px' }} wrap={false}>
-            <Button type="primary" size="small" onClick={() => onEdit?.(record)}>
+            <Button type="primary" size="small" aria-label={`编辑竞品 ${record.competitor_display_name || ''}`} onClick={() => onEdit?.(record)}>
               编辑
             </Button>
-            <Button type="outline" size="small" status="danger" onClick={() => onDelete?.(record)}>
+            <Button type="outline" size="small" status="danger" aria-label={`删除竞品 ${record.competitor_display_name || ''}`} onClick={() => onDelete?.(record)}>
               删除
             </Button>
           </Space>
@@ -286,11 +290,12 @@ export function getCompetitorRelationColumns(opts = {}) {
       },
     },
 
-  ].map((col) => ({
-    ...col,
-    title: typeof col.title === 'string' ? wrapColTitle(col.title) : col.title,
-    align: LEFT_ALIGN_FIELDS.has(col.dataIndex) ? 'left' : 'center',
-  }))
+  ].map((col) => {
+    if (LEFT_ALIGN_FIELDS.has(col.dataIndex)) {
+      return { ...col, align: 'left' }
+    }
+    return col
+  })
 
 }
 

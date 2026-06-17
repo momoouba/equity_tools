@@ -543,6 +543,7 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
         subjectType={manualAddSubject?.type}
         subjectId={manualAddSubject?.id}
         subjectLabel={manualAddSubject?.label}
+        runId={manualAddSubject?.runId}
         editingRecord={editingRelation}
         onSaved={() => {
           if (!manualAddSubject?.id) return

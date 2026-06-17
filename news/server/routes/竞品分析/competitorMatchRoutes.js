@@ -638,17 +638,34 @@ function registerCompetitorMatchRoutes(router) {
       let runId = null;
       let preInvestmentRunId = null;
 
+      const bodySubjectType = strTrim(req.body?.subject_type);
+      const bodySubjectDisplayName = strTrim(req.body?.subject_display_name);
+      const bodyRunId = strTrim(req.body?.run_id);
+      const bodyPreInvRunId = strTrim(req.body?.pre_investment_run_id || req.body?.run_id);
+
       if (ieId) {
         const row = await getInvestedEnterpriseRowForCompetitor(ieId);
         assertInvestedEnterpriseCompetitorOwner(req, row);
+        if (bodySubjectType && bodySubjectType !== 'invested_enterprise') {
+          return res.status(400).json({ success: false, message: 'subject_type 与被投企业主体不一致' });
+        }
         subjectType = 'invested_enterprise';
-        subjectDisplayName = strTrim(row.enterprise_full_name || row.project_abbreviation) || null;
-        runId = await getLatestRunIdForInvestedEnterprise(ieId);
+        subjectDisplayName =
+          bodySubjectDisplayName ||
+          strTrim(row.enterprise_full_name || row.project_abbreviation) ||
+          null;
+        runId = bodyRunId || (await getLatestRunIdForInvestedEnterprise(ieId));
       } else {
         const project = await loadPreInvestmentProjectForWrite(req, pipId);
+        if (bodySubjectType && bodySubjectType !== 'pre_investment_project') {
+          return res.status(400).json({ success: false, message: 'subject_type 与投前项目主体不一致' });
+        }
         subjectType = 'pre_investment_project';
-        subjectDisplayName = strTrim(project.enterprise_full_name || project.project_no) || null;
-        preInvestmentRunId = await getLatestRunIdForPreInvestmentProject(pipId);
+        subjectDisplayName =
+          bodySubjectDisplayName ||
+          strTrim(project.enterprise_full_name || project.project_abbreviation || project.project_no) ||
+          null;
+        preInvestmentRunId = bodyPreInvRunId || (await getLatestRunIdForPreInvestmentProject(pipId));
       }
 
       const creditCode = normalizeCreditCode(req.body?.unified_credit_code) || null;

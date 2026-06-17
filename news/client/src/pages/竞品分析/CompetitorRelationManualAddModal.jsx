@@ -12,8 +12,8 @@ const GRADE_OPTIONS = [
   { label: 'C', value: 'C' },
 ]
 
-function buildSubmitBody(values, subjectType, subjectId) {
-  const body = {
+function buildCompetitorFields(values) {
+  return {
     competitor_display_name: String(values.competitor_display_name || '').trim(),
     unified_credit_code: String(values.unified_credit_code || '').trim() || undefined,
     is_listed: Number(values.is_listed) === 1 ? 1 : 0,
@@ -25,10 +25,21 @@ function buildSubmitBody(values, subjectType, subjectId) {
     financing_history_text: String(values.financing_history_text || '').trim() || undefined,
     include_in_comparable: !!values.include_in_comparable,
   }
+}
+
+function buildCreateBody(values, ctx) {
+  const { subjectType, subjectId, subjectLabel, runId } = ctx
+  const body = {
+    ...buildCompetitorFields(values),
+    subject_type: subjectType,
+    subject_display_name: String(subjectLabel || '').trim() || undefined,
+  }
   if (subjectType === 'pre_investment_project') {
     body.pre_investment_project_id = subjectId
+    if (runId) body.pre_investment_run_id = String(runId)
   } else {
     body.invested_enterprise_id = subjectId
+    if (runId) body.run_id = String(runId)
   }
   return body
 }
@@ -42,6 +53,7 @@ export default function CompetitorRelationManualAddModal({
   subjectType,
   subjectId,
   subjectLabel,
+  runId,
   editingRecord,
   onSaved,
 }) {
@@ -79,7 +91,13 @@ export default function CompetitorRelationManualAddModal({
   const handleOk = async () => {
     try {
       const values = await form.validate()
-      const body = buildSubmitBody(values, subjectType, subjectId)
+      if (!isEdit && (!subjectType || !subjectId)) {
+        Message.error('缺少主体信息，请从对应项目行展开后新增竞品')
+        return
+      }
+      const body = isEdit
+        ? buildCompetitorFields(values)
+        : buildCreateBody(values, { subjectType, subjectId, subjectLabel, runId })
       setSubmitting(true)
       const res = isEdit
         ? await putCompetitorRelation(editingRecord.id, body)

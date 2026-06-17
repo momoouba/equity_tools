@@ -119,16 +119,16 @@ function Dashboard() {
       p.includes('scheduled-tasks')
     ) {
       setActiveAppKey('admin')
-    } else if (newsEnabled) {
-      setActiveAppKey('news-app')
-    } else if (perfEnabled) {
-      setActiveAppKey('performance-app')
-    } else if (listingEnabled) {
-      setActiveAppKey('listing-app')
-    } else if (competitorAnalysisEnabled) {
-      setActiveAppKey('competitor-analysis-app')
     } else if (projectSourcingEnabled) {
       setActiveAppKey('project-sourcing-app')
+    } else if (competitorAnalysisEnabled) {
+      setActiveAppKey('competitor-analysis-app')
+    } else if (newsEnabled) {
+      setActiveAppKey('news-app')
+    } else if (listingEnabled) {
+      setActiveAppKey('listing-app')
+    } else if (perfEnabled) {
+      setActiveAppKey('performance-app')
     } else if (isAdminUser) {
       setActiveAppKey('admin')
     }
@@ -308,14 +308,28 @@ function Dashboard() {
 
   const menuGroups = [
     {
-      key: 'performance-app',
-      title: '业绩看板',
-      icon: <IconApps />,
-      visible: isAdmin || hasPerformancePermission,
+      key: 'project-sourcing-app',
+      title: '项目挖掘',
+      icon: <IconBulb />,
+      visible: isAdmin || hasProjectSourcingPermission,
       children: [
-        { key: 'performance',          title: '业绩看板' },
-        { key: 'performance-settings', title: '业绩看板设置' },
-        { key: 'system-db',            title: '数据库连接配置' }
+        { key: 'project-sourcing', title: '融资与市场概览' },
+        { key: 'project-sourcing-financing-events', title: '融资事件列表' },
+        { key: 'project-sourcing-track-config', title: '赛道配置' },
+        { key: 'system-db', title: '数据库连接配置' }
+      ]
+    },
+    {
+      key: 'competitor-analysis-app',
+      title: '竞品分析',
+      icon: <IconMindMapping />,
+      visible: isAdmin || hasCompetitorAnalysisPermission,
+      children: [
+        { key: 'competitor-analysis-invested-enterprises', title: '被投企业' },
+        { key: 'competitor-analysis-ipo-projects', title: '底层项目' },
+        { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
+        { key: 'competitor-analysis-pre-investment', title: '投前-竞品分析' },
+        { key: 'system-db', title: '数据库连接配置' }
       ]
     },
     {
@@ -343,28 +357,14 @@ function Dashboard() {
       ]
     },
     {
-      key: 'competitor-analysis-app',
-      title: '竞品分析',
-      icon: <IconMindMapping />,
-      visible: isAdmin || hasCompetitorAnalysisPermission,
+      key: 'performance-app',
+      title: '业绩看板',
+      icon: <IconApps />,
+      visible: isAdmin || hasPerformancePermission,
       children: [
-        { key: 'competitor-analysis-invested-enterprises', title: '被投企业' },
-        { key: 'competitor-analysis-ipo-projects', title: '底层项目' },
-        { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
-        { key: 'competitor-analysis-pre-investment', title: '投前-竞品分析' },
-        { key: 'system-db', title: '数据库连接配置' }
-      ]
-    },
-    {
-      key: 'project-sourcing-app',
-      title: '项目挖掘',
-      icon: <IconBulb />,
-      visible: isAdmin || hasProjectSourcingPermission,
-      children: [
-        { key: 'project-sourcing', title: '融资与市场概览' },
-        { key: 'project-sourcing-financing-events', title: '融资事件列表' },
-        { key: 'project-sourcing-track-config', title: '赛道配置' },
-        { key: 'system-db', title: '数据库连接配置' }
+        { key: 'performance',          title: '业绩看板' },
+        { key: 'performance-settings', title: '业绩看板设置' },
+        { key: 'system-db',            title: '数据库连接配置' }
       ]
     },
     {
