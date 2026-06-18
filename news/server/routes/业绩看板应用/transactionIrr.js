@@ -3,8 +3,39 @@
  * 在 b_transaction_indicator 写入完成后，基于 b_transaction 同版本数据计算并回写 girr、nirr。
  */
 
+const BEIJING_TZ = 'Asia/Shanghai';
+const MS_PER_DAY = 24 * 3600 * 1000;
+const DAYS_PER_YEAR = 365;
+
 /**
- * 根据现金流序列计算年化 IRR（牛顿法）
+ * 将交易日期转为北京时间日历日序号（与 Excel XIRR 日期语义一致）
+ * @param {string|Date} date
+ * @returns {number}
+ */
+function toBeijingDayIndex(date) {
+  if (date == null) return NaN;
+  const str = typeof date === 'string' ? date.trim() : null;
+  if (str && /^\d{4}-\d{2}-\d{2}/.test(str)) {
+    const [y, m, d] = str.slice(0, 10).split('-').map(Number);
+    return Math.floor(Date.UTC(y, m - 1, d) / MS_PER_DAY);
+  }
+  const d = date instanceof Date ? date : new Date(date);
+  if (Number.isNaN(d.getTime())) return NaN;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: BEIJING_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  const y = Number(get('year'));
+  const m = Number(get('month'));
+  const day = Number(get('day'));
+  return Math.floor(Date.UTC(y, m - 1, day) / MS_PER_DAY);
+}
+
+/**
+ * 根据现金流序列计算年化 IRR（牛顿法，对齐 Excel XIRR：北京时间日历日 + 365 天年化）
  * - 在计算前，会按交易时间升序重新排序现金流
  * @param {number[]} amounts - 现金流金额（正=流入，负=流出）
  * @param {Date[]} dates - 对应交易日期
@@ -13,24 +44,23 @@
 function computeIRR(amounts, dates) {
   if (!amounts.length || !dates.length || amounts.length !== dates.length) return null;
 
-  // 按日期升序重新排序现金流，确保时间序列正确
+  // 按北京时间日历日升序重新排序现金流，确保时间序列正确
   const pairs = amounts.map((amt, i) => ({
     amount: Number(amt),
-    time: new Date(dates[i]).getTime(),
-  })).filter(p => !Number.isNaN(p.amount) && !Number.isNaN(p.time));
+    day: toBeijingDayIndex(dates[i]),
+  })).filter(p => !Number.isNaN(p.amount) && !Number.isNaN(p.day));
 
   if (pairs.length < 2) return null;
 
-  pairs.sort((a, b) => a.time - b.time);
+  pairs.sort((a, b) => a.day - b.day);
 
   // 若所有现金流同号，IRR 数学上无解，直接返回 null
   const hasPositive = pairs.some(p => p.amount > 0);
   const hasNegative = pairs.some(p => p.amount < 0);
   if (!hasPositive || !hasNegative) return null;
 
-  const t0 = pairs[0].time;
-  const oneYearMs = 365.25 * 24 * 3600 * 1000;
-  const periods = pairs.map((p) => (p.time - t0) / oneYearMs);
+  const t0 = pairs[0].day;
+  const periods = pairs.map((p) => (p.day - t0) / DAYS_PER_YEAR);
 
   // 退化情况：所有交易发生在同一天（所有 period=0），NPV 退化为金额之和，导数恒为 0，IRR 无意义
   if (periods.every(p => p === 0)) return null;
@@ -133,12 +163,12 @@ function buildNetCashFlows(rows) {
 
 /**
  * 从 b_transaction 行构建 Gross IRR 现金流（基金视角）
- * - 现金流流出（负数）：lp is not null AND transaction_type IN ('实缴','出资')
- * - 现金流流入（正数）：lp is not null AND transaction_type IN ('分配','转让','分红','退出')
+ * - 现金流流出（负数）：lp is null AND transaction_type IN ('实缴','出资')
+ * - 现金流流入（正数）：lp is null AND transaction_type IN ('分配','转让','分红','退出','债转股回收')
  * - 终值（正数）：lp is null AND (sub_fund is not null OR company is not null) AND transaction_type = '未实现价值'
  */
 const GROSS_OUT_TYPES = ['实缴', '出资'];
-const GROSS_IN_TYPES = ['分配', '转让', '分红', '退出'];
+const GROSS_IN_TYPES = ['分配', '转让', '分红', '退出', '债转股回收'];
 
 function buildGrossCashFlows(rows) {
   const amounts = [];
@@ -156,7 +186,7 @@ function buildGrossCashFlows(rows) {
     if (!lp && GROSS_OUT_TYPES.includes(type)) {
       amounts.push(-Math.abs(amount));
       dates.push(date);
-    // 流入：lp IS NULL AND transaction_type IN ('分配','转让','分红','退出')
+    // 流入：lp IS NULL AND transaction_type IN ('分配','转让','分红','退出','债转股回收')
     } else if (!lp && GROSS_IN_TYPES.includes(type)) {
       amounts.push(Math.abs(amount));
       dates.push(date);
@@ -217,6 +247,7 @@ async function computeAndUpdateTransactionIrr(connection, version) {
 }
 
 module.exports = {
+  toBeijingDayIndex,
   computeIRR,
   buildNetCashFlows,
   buildGrossCashFlows,
