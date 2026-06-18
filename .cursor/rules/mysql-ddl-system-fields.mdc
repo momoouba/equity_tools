@@ -1,0 +1,36 @@
+---
+description: 建表/改表时必须遵循 F_* 系统字段标准；写 DDL 前先读 mysql-ddl-system-fields skill
+alwaysApply: true
+---
+
+# MySQL DDL：强制 F_* 系统字段
+
+任务涉及 **新建表、改表结构、`news/server/db.js` 迁移、为新模块设计 DDL、或为新表写路由 SQL** 时：
+
+1. **先读取** `.cursor/skills/mysql-ddl-system-fields/SKILL.md` 并完整遵循（无需用户 `@`）。
+2. 需求文档未列系统字段时，**仍须补齐**。
+
+## 命名
+
+| 类别 | 风格 | 示例 |
+|------|------|------|
+| 系统/审计/逻辑删除 | `F_` + PascalCase | `F_Id`, `F_CreatorTime`, `F_DeleteMark` |
+| 业务字段 | snake_case | `project_name`, `app_id` |
+
+## 新建表最低要求
+
+- 主键：`F_Id VARCHAR(19)`（默认；特殊 bigint 表见 skill）
+- 时间：`F_CreatorTime`, `F_LastModifyTime`（TIMESTAMP + 默认/ON UPDATE）
+- 可删除列表：`F_DeleteMark`, `F_DeleteTime`, `F_DeleteUserId` → `users(F_Id)`
+- 可编辑配置表：加 `F_CreatorUserId`, `F_LastModifyUserId`
+
+## 禁止（新表）
+
+`f_id`, `id`（系统主键）, `created_at`, `updated_at`, `delete_mark`, `is_deleted`, `deleted_at`, `deleted_by`, `created_by`, `updated_by`
+
+## 路由
+
+- 列表/详情：`WHERE F_DeleteMark = 0`
+- 软删：`UPDATE ... SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?`
+
+细节、完整模板、迁移对照与例外见 skill 全文。

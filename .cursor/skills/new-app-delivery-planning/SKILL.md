@@ -65,6 +65,7 @@ Default related tables to check:
 Plan backend in this order:
 
 1. **Schema and init**
+   - **Read and apply** `.cursor/skills/mysql-ddl-system-fields/SKILL.md` before any DDL (`F_Id`, `F_CreatorTime`, `F_DeleteMark`, etc.).
    - Update `news/server/db.js` table creation/migration/seed logic.
    - Add indexes/unique constraints needed for new app data.
 2. **Domain utilities**
