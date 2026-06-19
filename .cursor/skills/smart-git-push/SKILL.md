@@ -61,6 +61,8 @@ description: 所有已提交变更推送到 equity_tools；仅当本次待推送
 以下通常 **只** 需要 `equity_tools`，**不**因单独修改而要求 `origin`：
 
 - `.cursor/`（含 skills、rules 等编辑器侧配置）
+- `docs/agents/`（Agent 配置文档）
+- `news-backup-*/` 及分支 **`backup`** 上的归档提交
 - 明确仅属于另一产品、且不在 `news/` 下的目录（若仓库中有）
 
 > 若单次 commit **同时** 含 `news/` 下文件与 `.cursor/` 仅工具文件，仍应 **`need_equity_news=true`**（因有新闻域变更）。
@@ -105,6 +107,8 @@ git push origin HEAD
 - **场景 1**：只改 `news/server/...` → **两个远程都推**
 - **场景 2**：只改 `.cursor/skills/...` → **只推 equity_tools**
 - **场景 3**：混合 `news/` + 需求文档根目录 → 若需求文档路径命中关键词或 `docs/*新闻*` 等 → **两个都推**；否则仅 **news 部分**已足以 `need_equity_news=true` 若同 commit 含 `news/`
+
+- **场景 4**：分支 **`backup`** 或仅 `news-backup-*/` → **只推 equity_tools**（见 `docs/agents/backup-branch.md`）
 
 ## 注意事项
 

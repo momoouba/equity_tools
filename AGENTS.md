@@ -15,3 +15,7 @@ Single-context layout: `CONTEXT.md` at repo root + `docs/adr/`. See `docs/agents
 ### Database DDL (mandatory)
 
 Any task that creates or alters MySQL tables (including `news/server/db.js` migrations) **must** read and apply `.cursor/skills/mysql-ddl-system-fields/SKILL.md` before writing DDL or route SQL. System fields use **`F_*` PascalCase** (`F_Id`, `F_CreatorTime`, `F_DeleteMark`, etc.); business columns use snake_case. Do not wait for the user to `@` this skill.
+
+### Backup branch
+
+Local `news-backup-YYYYMMDD/` snapshots **only** on branch **`backup`**, pushed to **`equity_tools`** — never on feature branches or `origin`. See `docs/agents/backup-branch.md`.

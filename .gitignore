@@ -1,1 +1,6 @@
-news/server/routes/业绩看板应用/nul
+# Windows reserved-name artifact from accidental shell redirects
+news/server/routes/performance/nul
+**/nul
+
+# Local news snapshots — commit only on branch `backup` (see docs/agents/backup-branch.md)
+news-backup-*/
