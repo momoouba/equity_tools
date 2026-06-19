@@ -1,0 +1,165 @@
+const { normalizeCompanyName, containsTraditional } = require('./zhconvUtils');
+
+/** 港股 IPO 进展 exchange 枚举（与 ipo_progress.exchange 一致） */
+const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
+
+/**
+ * 上市进展匹配用：去掉全角/半角括号字符，括号内文字保留拼接（与需求文档示例一致）
+ * 例：华太电子（深圳）有限公司 → 华太电子深圳有限公司
+ *
+ * #22: 括号内容归一化 —— 去除常见行政区划后缀（市/省/自治区/特别行政区），
+ * 使 "深圳" 与 "深圳市"、"北京" 与 "北京市" 在匹配时等价。
+ *
+ * 港交所等披露常见在公司英文名后带表决权架构后缀（与投资组合底层全称不一致），对齐后再做等价判断：
+ * 例：Eccogene Inc. - B → Eccogene Inc.
+ */
+function normalizeCompanyNameForMatch(input) {
+  if (input == null || input === '') return '';
+  let s = String(input);
+  // #22: 先对括号内内容做行政区划后缀归一化，再移除括号字符
+  s = s.replace(/[（(]([^）)]+)[）)]/g, (_, inner) => {
+    return inner.replace(/(市|省|自治区|特别行政区|回族|壮族|维吾尔)$/g, '');
+  });
+  s = s.replace(/[()（）]/g, '').trim();
+  // trailing " - B" / "- W" / "－Ｂ"（加权投票权或类别股份标注）
+  s = s.replace(/\s*[-－]\s*[BWＢＷ]\s*$/i, '').trim();
+  s = s.replace(/[-－][BWＢＷ]\s*$/i, '').trim();
+  return s;
+}
+
+/**
+ * 匹配用 canonical：港股含中文公司名时繁简统一到 zhconvUtils.normalizeCompanyName，避免同一公司繁简两行与底层项目无法对齐。
+ * 纯英文港股名不做 strip 式繁简处理，避免破坏英文字符匹配。
+ *
+ * @param {string} name 公司全称
+ * @param {string} [ipoExchange] 当前正在匹配的 ipo_progress.exchange（底层项目无交易所时传对手方 IPO 行的 exchange）
+ */
+function canonicalCompanyForMatchCross(name, ipoExchange) {
+  const base = normalizeCompanyNameForMatch(name);
+  if (!base) return '';
+  const ex = String(ipoExchange || '').trim();
+  const hk = HK_IPO_PROGRESS_EXCHANGES.has(ex);
+  if (hk && /[\u4e00-\u9fff]/.test(base)) {
+    return normalizeCompanyName(base);
+  }
+  if (!hk && containsTraditional(base)) {
+    return normalizeCompanyName(base);
+  }
+  return base;
+}
+
+function normalizeFuzzyText(input) {
+  if (input == null || input === '') return '';
+  return String(input)
+    .toLowerCase()
+    .replace(/[()（）]/g, '')
+    .replace(/\s+/g, '')
+    .replace(/[·•,.，。;；:：'"‘’“”\-_/\\|]/g, '')
+    .trim();
+}
+
+function buildBigrams(text) {
+  const s = String(text || '');
+  if (!s) return [];
+  if (s.length === 1) return [s];
+  const grams = [];
+  for (let i = 0; i < s.length - 1; i += 1) {
+    grams.push(s.slice(i, i + 2));
+  }
+  return grams;
+}
+
+function diceSimilarity(a, b) {
+  const aa = normalizeFuzzyText(a);
+  const bb = normalizeFuzzyText(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  const ga = buildBigrams(aa);
+  const gb = buildBigrams(bb);
+  if (!ga.length || !gb.length) return 0;
+  const bucket = new Map();
+  ga.forEach((g) => bucket.set(g, (bucket.get(g) || 0) + 1));
+  let overlap = 0;
+  gb.forEach((g) => {
+    const c = bucket.get(g) || 0;
+    if (c > 0) {
+      overlap += 1;
+      bucket.set(g, c - 1);
+    }
+  });
+  return (2 * overlap) / (ga.length + gb.length);
+}
+
+function fuzzySimilarity(a, b) {
+  const aa = normalizeFuzzyText(a);
+  const bb = normalizeFuzzyText(b);
+  if (!aa || !bb) return 0;
+  if (aa === bb) return 1;
+  const shortLen = Math.min(aa.length, bb.length);
+  const longLen = Math.max(aa.length, bb.length);
+  const containScore = (aa.includes(bb) || bb.includes(aa)) && longLen > 0 ? shortLen / longLen : 0;
+  const diceScore = diceSimilarity(aa, bb);
+  return Math.max(containScore, diceScore);
+}
+
+/** 证监会辅导公示/报告标题 → 仅保留公司全称（去掉「关于…报告」等套话）
+ * 注意：如果输入已经是公司名称（如从辅导对象列获取），直接返回，不做额外提取。
+ */
+const GUIDANCE_TITLE_SUFFIXES = [
+  '首次公开发行股票并上市辅导备案报告',
+  '首次公开发行股票并在科创板上市辅导备案报告',
+  '首次公开发行股票并在创业板上市辅导备案报告',
+  '辅导备案报告',
+  '辅导工作进展情况报告',
+  '辅导工作进展报告',
+  '辅导工作总结报告',
+  '上市辅导备案报告',
+  '公开发行辅导备案报告',
+];
+
+function extractCsrcGuidanceCompanyName(input) {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  // 如果输入不包含"报告"、"辅导"等关键字，说明已经是公司名称，直接返回
+  const reportKeywords = ['报告', '辅导备案', '辅导工作', '首次公开发行', '公开发行'];
+  if (!reportKeywords.some(kw => s.includes(kw))) {
+    return s;
+  }
+  // 从报告标题中提取公司名称
+  if (s.startsWith('关于')) {
+    s = s.slice(2).trim();
+  }
+  for (const suf of GUIDANCE_TITLE_SUFFIXES) {
+    const i = s.indexOf(suf);
+    if (i > 0) {
+      s = s.slice(0, i);
+      break;
+    }
+  }
+  if (s.length > 4) {
+    const cutKeys = ['首次公开发行股票', '首次公开发行', '公开发行股票并上市', '辅导工作进展', '上市辅导'];
+    for (const k of cutKeys) {
+      const i = s.indexOf(k);
+      if (i > 0) {
+        s = s.slice(0, i);
+        break;
+      }
+    }
+  }
+  // 移除尾部括号内容，但保留包含地名关键词的括号（属于合法公司名的一部分，如"某某（深圳）有限公司"）
+  const locationKeywords = ['深圳', '北京', '上海', '广州', '杭州', '南京', '成都', '重庆', '武汉', '西安', '苏州', '天津', '珠海', '厦门', '长沙', '青岛', '大连', '宁波', '合肥', '东莞', '佛山', '无锡', '济南', '郑州', '福州', '昆明', '贵阳', '沈阳', '哈尔滨', '石家庄', '太原', '南昌', '南宁', '海口', '兰州', '呼和浩特', '乌鲁木齐', '拉萨', '银川', '西宁', '长春', '中国', '香港', '澳门', '台湾'];
+  s = s.replace(/（([^）]{0,40})）\s*$/u, (match, inner) => {
+    return locationKeywords.some(loc => inner.includes(loc)) ? match : '';
+  }).replace(/\(([^)]{0,40})\)\s*$/, (match, inner) => {
+    return locationKeywords.some(loc => inner.includes(loc)) ? match : '';
+  }).trim();
+  return s.trim();
+}
+
+module.exports = {
+  normalizeCompanyNameForMatch,
+  canonicalCompanyForMatchCross,
+  HK_IPO_PROGRESS_EXCHANGES,
+  extractCsrcGuidanceCompanyName,
+  fuzzySimilarity,
+};

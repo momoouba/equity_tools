@@ -1,0 +1,9 @@
+.listing-ipo-project-page .arco-table .arco-table-th,
+.listing-ipo-project-page .arco-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+
+.listing-ipo-project-page .arco-table .arco-table-th:last-child,
+.listing-ipo-project-page .arco-table .arco-table-td:last-child {
+  border-right: none !important;
+}

@@ -1,0 +1,338 @@
+.database-config {
+  padding: 24px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.database-config .config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.database-config .config-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #333;
+}
+
+.database-config .btn-primary {
+  padding: 8px 16px;
+  background: #357abd;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.database-config .btn-primary:hover {
+  background: #2c5f8f;
+}
+
+.database-config .loading,
+.database-config .empty-data {
+  text-align: center;
+  padding: 40px;
+  color: #999;
+}
+
+.database-config .config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.config-table thead {
+  background: #f5f7fa;
+}
+
+.config-table th {
+  padding: 12px;
+  text-align: left;
+  font-weight: 600;
+  color: #333;
+  border-bottom: 2px solid #e0e0e0;
+}
+
+.config-table td {
+  padding: 12px;
+  border-bottom: 1px solid #e0e0e0;
+  color: #666;
+}
+
+.config-table th:last-child,
+.config-table td:last-child {
+  width: 280px;
+  min-width: 280px;
+  max-width: 280px;
+  padding: 8px 4px;
+  text-align: center;
+}
+
+.config-table tbody tr:hover {
+  background: #f9f9f9;
+}
+
+.database-config .status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-badge.active {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status-badge.inactive {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.database-config .action-buttons {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.database-config .btn-edit,
+.database-config .btn-test,
+.database-config .btn-delete {
+  padding: 6px 8px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.3s ease;
+  white-space: nowrap;
+  flex-shrink: 0;
+  width: auto;
+  min-width: 50px;
+  max-width: none;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.database-config .btn-edit {
+  background: #357abd;
+  color: white;
+}
+
+.database-config .btn-edit:hover {
+  background: #2c5f8f;
+}
+
+.database-config .btn-test {
+  background: #28a745;
+  color: white;
+}
+
+.database-config .btn-test:hover {
+  background: #218838;
+}
+
+.database-config .btn-test:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.database-config .btn-delete {
+  background: #dc3545;
+  color: white;
+}
+
+.database-config .btn-delete:hover {
+  background: #c82333;
+}
+
+.database-config .test-result {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.database-config .test-result.success {
+  background: #d4edda;
+  color: #155724;
+}
+
+.database-config .test-result.error {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.database-config .modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.database-config .modal-content {
+  background: white;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+}
+
+.database-config .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f5f7fa;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #1a1a1a;
+}
+
+.database-config .close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+}
+
+.close-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.database-config .modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  max-height: calc(80vh - 60px);
+}
+
+.database-config .form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 500;
+  color: #333;
+}
+
+.form-group input[type="text"],
+.form-group input[type="password"],
+.form-group input[type="number"],
+.form-group select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.form-group select:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #357abd;
+  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
+}
+
+.form-group input[type="checkbox"] {
+  width: auto;
+  margin-right: 8px;
+}
+
+.form-hint {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: #999;
+}
+
+.database-config .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.form-actions button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.form-actions button[type="button"]:not(.btn-test) {
+  background: #6c757d;
+  color: white;
+}
+
+.form-actions button[type="button"]:not(.btn-test):hover {
+  background: #5a6268;
+}
+
+.form-actions .btn-test {
+  background: #28a745;
+  color: white;
+}
+
+.form-actions .btn-test:hover {
+  background: #218838;
+}
+
+.form-actions .btn-test:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.form-actions button[type="submit"] {
+  background: #357abd;
+  color: white;
+}
+
+.form-actions button[type="submit"]:hover {
+  background: #2c5f8f;
+}
+

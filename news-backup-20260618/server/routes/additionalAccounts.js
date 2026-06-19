@@ -1,0 +1,822 @@
+const express = require('express');
+const multer = require('multer');
+const XLSX = require('xlsx');
+const db = require('../db');
+const { generateId } = require('../utils/idGenerator');
+const { logDataChange } = require('../utils/logger');
+
+const router = express.Router();
+
+/** 第三方公众号「行业」标签：与数据字典类型 dict_code = industry 的选项 item_code 对应 */
+const INDUSTRY_DICT_CODE = 'industry';
+
+async function normalizeIndustryTagCode(raw) {
+  if (raw === null || raw === undefined) {
+    return { ok: true, value: null };
+  }
+  const s = String(raw).trim();
+  if (!s) {
+    return { ok: true, value: null };
+  }
+  const rows = await db.query(
+    `SELECT c.item_code, c.item_name
+     FROM base_dictionary p
+     INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+     WHERE p.F_DeleteMark = 0 AND p.parent_id IS NULL AND p.dict_code = ?
+       AND (c.item_code = ? OR c.item_name = ?) AND p.is_enabled = 1 AND c.is_enabled = 1
+     LIMIT 1`,
+    [INDUSTRY_DICT_CODE, s, s]
+  );
+  if (!rows.length) {
+    return {
+      ok: false,
+      message: '行业标签无效或已停用，请填写数据字典「行业」下已启用的标签名称或选项编码'
+    };
+  }
+  return { ok: true, value: rows[0].item_code };
+}
+
+// 配置multer用于文件上传
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB限制
+  }
+});
+
+function isAdminUser(user) {
+  if (!user) return false;
+  return String(user.account || '').trim() === 'admin' || String(user.role || '').trim() === 'admin';
+}
+
+// 用户认证中间件（所有用户都可以访问）
+const checkAuth = async (req, res, next) => {
+  const userRole = req.headers['x-user-role'] || 'user';
+  const userId = req.headers['x-user-id'] || null;
+
+  if (!userId) {
+    return res.status(401).json({ success: false, message: '未登录' });
+  }
+
+  try {
+    const rows = await db.query(
+      'SELECT F_Id, account, role FROM users WHERE F_Id = ? LIMIT 1',
+      [userId]
+    );
+    const currentUser = rows[0] || null;
+    const isAdmin = isAdminUser(currentUser) || String(userRole).trim() === 'admin';
+
+    req.currentUserId = userId;
+    req.currentUserRole = currentUser?.role || userRole;
+    req.currentUserAccount = currentUser?.account || '';
+    req.isAdmin = isAdmin;
+    next();
+  } catch (error) {
+    console.error('额外公众号鉴权失败：', error);
+    return res.status(500).json({ success: false, message: '鉴权失败' });
+  }
+};
+
+// 根据会员等级计算当前用户允许创建的额外公众号数量
+async function getUserAdditionalAccountLimit(userId) {
+  if (!userId) return 0;
+
+  // 查询用户角色及应用会员配置（按「新闻舆情」应用会员等级判断）
+  const rows = await db.query(
+    `SELECT u.account, u.role, u.app_permissions
+     FROM users u
+     WHERE u.F_Id = ?`,
+    [userId]
+  );
+
+  if (!rows || rows.length === 0) {
+    return 0;
+  }
+
+  const role = rows[0].role || 'user';
+  const account = rows[0].account || '';
+
+  // 管理员账号不受数量限制
+  if (role === 'admin' || account === 'admin') return Number.MAX_SAFE_INTEGER;
+
+  // 从 app_permissions 中解析「新闻舆情」应用会员等级
+  let newsMembershipLevelName = '';
+  const appPermissionsText = rows[0].app_permissions;
+  if (appPermissionsText) {
+    try {
+      const appPermissions = JSON.parse(appPermissionsText);
+      if (Array.isArray(appPermissions)) {
+        const levelIds = appPermissions
+          .map((p) => p?.membership_level_id)
+          .filter(Boolean);
+
+        if (levelIds.length > 0) {
+          const levelRows = await db.query(
+            `SELECT ml.F_Id, ml.level_name, a.app_name
+             FROM membership_levels ml
+             INNER JOIN applications a ON a.F_Id = ml.app_id
+             WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
+            levelIds
+          );
+          const newsLevel = levelRows.find((item) => item.app_name === '新闻舆情');
+          newsMembershipLevelName = newsLevel?.level_name || '';
+        }
+      }
+    } catch (error) {
+      console.warn('解析 app_permissions 失败：', error.message);
+    }
+  }
+
+  // 根据新闻舆情应用会员等级名称控制额度
+  if (newsMembershipLevelName === '普通会员') return 10;
+  if (newsMembershipLevelName === '高级会员') return 20;
+  if (newsMembershipLevelName === 'VIP会员') return 30;
+
+  // 其他未知等级暂不允许创建
+  return 0;
+}
+
+// 统计用户当前已创建的额外公众号数量（未删除）
+async function getUserAdditionalAccountCount(userId) {
+  if (!userId) return 0;
+  const rows = await db.query(
+    `SELECT COUNT(*) AS total
+     FROM additional_wechat_accounts
+     WHERE F_CreatorUserId = ?
+       AND F_DeleteMark = 0`,
+    [userId]
+  );
+  return rows[0]?.total || 0;
+}
+
+// 获取额外公众号列表
+router.get('/', checkAuth, async (req, res) => {
+  try {
+    const { page = 1, pageSize = 10, search, status, userId } = req.query;
+    const offset = (page - 1) * pageSize;
+    const isAdmin = req.isAdmin === true;
+
+    let condition = 'WHERE a.F_DeleteMark = 0';
+    const params = [];
+
+    // 权限控制：普通用户只能看到自己创建的，管理员可以看到所有，并能切换用户查看
+    if (isAdmin && userId) {
+      // 管理员指定查看某个用户创建的
+      condition += ' AND a.F_CreatorUserId = ?';
+      params.push(userId);
+    } else if (!isAdmin) {
+      // 普通用户只能看到自己创建的
+      condition += ' AND a.F_CreatorUserId = ?';
+      params.push(req.currentUserId);
+    }
+
+    if (search) {
+      condition += ' AND (a.account_name LIKE ? OR a.wechat_account_id LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+
+    if (status) {
+      condition += ' AND a.status = ?';
+      params.push(status);
+    }
+
+    // 查询数据，包含创建人信息、行业标签名称（数据字典 industry）
+    const data = await db.query(
+      `SELECT 
+        a.F_Id AS id, a.account_name, a.wechat_account_id, a.status, a.industry_tag_code,
+        tag.item_name AS industry_tag_name,
+        a.F_CreatorUserId, a.F_CreatorTime, a.F_LastModifyUserId, a.F_LastModifyTime,
+        u.account as creator_account
+       FROM additional_wechat_accounts a
+       LEFT JOIN users u ON a.F_CreatorUserId = u.F_Id
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.F_DeleteMark = 0
+         AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
+       LEFT JOIN base_dictionary tag ON tag.F_DeleteMark = 0
+         AND tag.parent_id = ind_parent.F_Id AND tag.item_code = a.industry_tag_code
+       ${condition} 
+       ORDER BY a.F_CreatorTime DESC 
+       LIMIT ? OFFSET ?`,
+      [INDUSTRY_DICT_CODE, ...params, parseInt(pageSize), offset]
+    );
+
+    // 查询总数
+    const totalRows = await db.query(
+      `SELECT COUNT(*) as total 
+       FROM additional_wechat_accounts a
+       ${condition}`,
+      params
+    );
+
+    // 仅当查询当前登录用户自己的列表时，返回额度信息
+    let quota = null;
+    if (!isAdmin || (isAdmin && !userId)) {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      quota = {
+        totalLimit: limit,
+        usedCount: used,
+        remaining: Math.max(0, limit - used)
+      };
+    }
+
+    res.json({
+      success: true,
+      data: data || [],
+      total: totalRows[0]?.total || 0,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize),
+      quota
+    });
+  } catch (error) {
+    console.error('查询额外公众号列表失败：', error);
+    console.error('错误详情：', error.message);
+    console.error('错误堆栈：', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: '查询失败：' + (error.message || '未知错误') 
+    });
+  }
+});
+
+// 行业标签下拉选项（数据字典 industry，仅已启用项）
+router.get('/industry-tag-options', checkAuth, async (req, res) => {
+  try {
+    const parent = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_DeleteMark = 0 AND parent_id IS NULL AND dict_code = ?
+       LIMIT 1`,
+      [INDUSTRY_DICT_CODE]
+    );
+    if (!parent.length) {
+      return res.json({ success: true, data: [] });
+    }
+    const items = await db.query(
+      `SELECT item_code AS value, item_name AS label, sort_order
+       FROM base_dictionary
+       WHERE parent_id = ? AND F_DeleteMark = 0 AND is_enabled = 1
+       ORDER BY sort_order ASC, F_CreatorTime DESC`,
+      [parent[0].F_Id]
+    );
+    res.json({ success: true, data: items || [] });
+  } catch (error) {
+    console.error('获取行业标签选项失败：', error);
+    res.status(500).json({ success: false, message: '获取行业标签选项失败' });
+  }
+});
+
+// 新增额外公众号（所有用户都可以创建）
+router.post('/', checkAuth, async (req, res) => {
+  try {
+    const { account_name, wechat_account_id, status = 'active', industry_tag_code } = req.body;
+
+    if (!account_name || !wechat_account_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '公众号名称和账号ID不能为空' 
+      });
+    }
+
+    // 会员额度检查：管理员不受限；普通用户按 membership_levels 限制可创建数量
+    if (!req.isAdmin) {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      if (limit <= 0) {
+        return res.status(403).json({
+          success: false,
+          message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+        });
+      }
+
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      if (used >= limit) {
+        return res.status(400).json({
+          success: false,
+          message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个）`
+        });
+      }
+    }
+
+    // 检查是否已存在（允许不同用户创建相同的公众号ID，但在同步时会去重）
+    // 这里只检查当前用户是否已经创建过相同的公众号ID
+    const existing = await db.query(
+      'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
+      [wechat_account_id, req.currentUserId]
+    );
+
+    if (existing.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '您已经创建过该微信账号ID' 
+      });
+    }
+
+    const tagNorm = await normalizeIndustryTagCode(industry_tag_code);
+    if (!tagNorm.ok) {
+      return res.status(400).json({ success: false, message: tagNorm.message });
+    }
+
+    const accountId = await generateId('additional_wechat_accounts');
+    await db.execute(
+      `INSERT INTO additional_wechat_accounts 
+       (F_Id, account_name, wechat_account_id, status, industry_tag_code, F_CreatorUserId) 
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [accountId, account_name, wechat_account_id, status, tagNorm.value, req.currentUserId]
+    );
+
+    // 记录新增日志（新增时旧数据为空）
+    const newData = {
+      account_name,
+      wechat_account_id,
+      status,
+      industry_tag_code: tagNorm.value
+    };
+    await logDataChange('additional_wechat_accounts', accountId, {}, newData, req.currentUserId);
+
+    res.json({
+      success: true,
+      message: '添加成功',
+      data: { id: accountId }
+    });
+  } catch (error) {
+    console.error('新增额外公众号失败：', error);
+    res.status(500).json({ success: false, message: '添加失败：' + error.message });
+  }
+});
+
+// 更新额外公众号（用户只能更新自己创建的，管理员可以更新所有）
+router.put('/:id', checkAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { account_name, wechat_account_id, status, industry_tag_code } = req.body;
+
+    if (!account_name || !wechat_account_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '公众号名称和账号ID不能为空' 
+      });
+    }
+
+    // 检查记录是否存在并获取旧数据
+    const existing = await db.query(
+      'SELECT * FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '记录不存在' 
+      });
+    }
+
+    const oldData = existing[0];
+    
+    // 权限检查：普通用户只能更新自己创建的
+    if (!req.isAdmin && oldData.F_CreatorUserId !== req.currentUserId) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '无权更新此记录' 
+      });
+    }
+
+    // 检查微信账号ID是否重复（排除当前记录，按被编辑记录所属用户维度校验）
+    // 管理员编辑他人记录时，仍应沿用该记录 creator_user_id 的唯一约束范围
+    const duplicateScopeUserId = oldData.F_CreatorUserId || req.currentUserId;
+    const duplicate = await db.query(
+      'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_Id != ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
+      [wechat_account_id, id, duplicateScopeUserId]
+    );
+
+    if (duplicate.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '您已经创建过该微信账号ID' 
+      });
+    }
+
+    const tagNorm = await normalizeIndustryTagCode(industry_tag_code);
+    if (!tagNorm.ok) {
+      return res.status(400).json({ success: false, message: tagNorm.message });
+    }
+
+    await db.execute(
+      `UPDATE additional_wechat_accounts 
+       SET account_name = ?, wechat_account_id = ?, status = ?, industry_tag_code = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [account_name, wechat_account_id, status, tagNorm.value, req.currentUserId, id]
+    );
+
+    // 记录变更日志
+    const newData = {
+      account_name,
+      wechat_account_id,
+      status,
+      industry_tag_code: tagNorm.value
+    };
+    await logDataChange('additional_wechat_accounts', id, oldData, newData, req.currentUserId);
+
+    res.json({
+      success: true,
+      message: '更新成功'
+    });
+  } catch (error) {
+    console.error('更新额外公众号失败：', error);
+    res.status(500).json({ success: false, message: '更新失败：' + error.message });
+  }
+});
+
+// 删除额外公众号（软删除，用户只能删除自己创建的，管理员可以删除所有）
+router.delete('/:id', checkAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // 检查记录是否存在
+    const existing = await db.query(
+      'SELECT F_Id, F_CreatorUserId FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
+      [id]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: '记录不存在' 
+      });
+    }
+    
+    // 权限检查：普通用户只能删除自己创建的
+    if (!req.isAdmin && existing[0].F_CreatorUserId !== req.currentUserId) {
+      return res.status(403).json({ 
+        success: false, 
+        message: '无权删除此记录' 
+      });
+    }
+
+    await db.execute(
+      `UPDATE additional_wechat_accounts 
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+       WHERE F_Id = ?`,
+      [req.currentUserId, id]
+    );
+
+    res.json({
+      success: true,
+      message: '删除成功'
+    });
+  } catch (error) {
+    console.error('删除额外公众号失败：', error);
+    res.status(500).json({ success: false, message: '删除失败：' + error.message });
+  }
+});
+
+// 批量导入额外公众号（所有用户都可以导入）
+router.post('/batch-import', checkAuth, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '请选择要导入的文件' 
+      });
+    }
+
+    // 解析Excel文件
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(worksheet);
+
+    if (data.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '文件中没有有效数据' 
+      });
+    }
+
+    // 会员额度检查：管理员不受限；普通用户按 membership_levels 计算剩余可创建数量
+    let remainingQuota = Number.MAX_SAFE_INTEGER;
+    if (!req.isAdmin) {
+      const limit = await getUserAdditionalAccountLimit(req.currentUserId);
+      if (limit <= 0) {
+        return res.status(403).json({
+          success: false,
+          message: '当前会员等级暂不支持创建额外公众号，请联系管理员升级为新闻舆情会员'
+        });
+      }
+
+      const used = await getUserAdditionalAccountCount(req.currentUserId);
+      remainingQuota = limit - used;
+      if (remainingQuota <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: `您已创建 ${used} 个额外公众号，已达到当前会员等级的上限（${limit} 个），无法继续导入`
+        });
+      }
+    }
+
+    let successCount = 0;
+    let skipCount = 0;
+    const errors = [];
+    const MAX_RETURN_ERRORS = 1000;
+
+    const pushImportError = (rowNum, message, row = {}) => {
+      const item = {
+        rowNum,
+        message: String(message || '未知错误'),
+        account_name: row['公众号名称'] || row['account_name'] || '',
+        wechat_account_id: row['账号ID'] || row['wechat_account_id'] || '',
+        industry_tag_code: row['行业标签'] || row['industry_tag_code'] || ''
+      };
+      errors.push(item);
+      // 写入服务端日志，便于生产环境排查
+      console.error('[additional-accounts][batch-import][row-error]', {
+        userId: req.currentUserId,
+        rowNum,
+        message: item.message,
+        account_name: item.account_name,
+        wechat_account_id: item.wechat_account_id,
+        industry_tag_code: item.industry_tag_code
+      });
+    };
+
+    for (let i = 0; i < data.length; i++) {
+      // 若达到本次导入可用额度，则停止后续导入
+      if (successCount >= remainingQuota) {
+        pushImportError(
+          i + 2,
+          `已成功导入 ${successCount} 条记录，达到当前会员等级允许的最大新增数量（本次最多可新增 ${remainingQuota} 条），其余记录未导入`
+        );
+        break;
+      }
+
+      const row = data[i];
+      const rowNum = i + 2; // Excel行号（从第2行开始）
+
+      try {
+        const account_name = row['公众号名称'] || row['account_name'];
+        const wechat_account_id = row['账号ID'] || row['wechat_account_id'];
+        const rawIndustryTag = row['行业标签'] || row['industry_tag_code'];
+
+        if (!account_name || !wechat_account_id) {
+          pushImportError(rowNum, '公众号名称和账号ID不能为空', row);
+          continue;
+        }
+
+        const tagNorm = await normalizeIndustryTagCode(rawIndustryTag);
+        if (!tagNorm.ok) {
+          pushImportError(rowNum, tagNorm.message, row);
+          continue;
+        }
+
+        // 检查当前用户是否已创建过该公众号ID
+        const existing = await db.query(
+          'SELECT F_Id FROM additional_wechat_accounts WHERE wechat_account_id = ? AND F_CreatorUserId = ? AND F_DeleteMark = 0',
+          [wechat_account_id, req.currentUserId]
+        );
+
+        if (existing.length > 0) {
+          skipCount++;
+          continue;
+        }
+
+        // 插入数据
+        const accountId = await generateId('additional_wechat_accounts');
+        await db.execute(
+          `INSERT INTO additional_wechat_accounts 
+           (F_Id, account_name, wechat_account_id, status, industry_tag_code, F_CreatorUserId) 
+           VALUES (?, ?, ?, 'active', ?, ?)`,
+          [accountId, account_name, wechat_account_id, tagNorm.value, req.currentUserId]
+        );
+
+        successCount++;
+      } catch (error) {
+        pushImportError(rowNum, error.message, row);
+      }
+    }
+
+    if (errors.length > 0) {
+      console.error('[additional-accounts][batch-import][summary]', {
+        userId: req.currentUserId,
+        totalRows: data.length,
+        successCount,
+        skipCount,
+        errorCount: errors.length
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `导入完成：成功${successCount}条，跳过${skipCount}条，错误${errors.length}条`,
+      data: {
+        successCount,
+        skipCount,
+        errorCount: errors.length,
+        errors: errors.slice(0, MAX_RETURN_ERRORS),
+        returnedErrorCount: Math.min(errors.length, MAX_RETURN_ERRORS),
+        hasMoreErrors: errors.length > MAX_RETURN_ERRORS
+      }
+    });
+  } catch (error) {
+    console.error('批量导入失败：', error);
+    res.status(500).json({ success: false, message: '导入失败：' + error.message });
+  }
+});
+
+// 下载导入模板（所有用户都可以下载）
+router.get('/download-template', checkAuth, async (req, res) => {
+  try {
+    const industryRows = await db.query(
+      `SELECT c.item_code, c.item_name, c.sort_order
+       FROM base_dictionary p
+       INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+       WHERE p.F_DeleteMark = 0
+         AND p.parent_id IS NULL
+         AND p.dict_code = ?
+         AND p.is_enabled = 1
+         AND c.is_enabled = 1
+       ORDER BY c.sort_order ASC, c.F_CreatorTime DESC`,
+      [INDUSTRY_DICT_CODE]
+    );
+    const firstIndustryName = industryRows[0]?.item_name || '人工智能';
+
+    // 创建模板数据
+    const templateData = [
+      {
+        '公众号名称': '示例公众号',
+        '账号ID': 'example_account',
+        '行业标签': firstIndustryName
+      },
+      {
+        '公众号名称': '测试公众号',
+        '账号ID': 'test_account',
+        '行业标签': firstIndustryName
+      }
+    ];
+
+    const industryExampleData = (industryRows || []).map((item, index) => ({
+      '序号': index + 1,
+      '标签中文名称': item.item_name,
+      '标签编码': item.item_code
+    }));
+
+    // 创建工作簿
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wsIndustry = XLSX.utils.json_to_sheet(
+      industryExampleData.length > 0
+        ? industryExampleData
+        : [{ '序号': 1, '标签中文名称': '暂无可用行业标签，请先在数据字典维护后再导入', '标签编码': '' }]
+    );
+
+    // 设置列宽
+    ws['!cols'] = [
+      { wch: 20 }, // 公众号名称
+      { wch: 20 }, // 账号ID
+      { wch: 24 } // 行业标签：优先填写数据字典「行业」中的中文标签名，也可填编码
+    ];
+    wsIndustry['!cols'] = [
+      { wch: 10 },
+      { wch: 28 },
+      { wch: 24 }
+    ];
+
+    // 设置表头样式
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    for (let colNum = 0; colNum <= range.e.c; colNum++) {
+      const headerCell = XLSX.utils.encode_cell({ r: 0, c: colNum });
+      if (ws[headerCell]) {
+        ws[headerCell].s = {
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          fill: { fgColor: { rgb: "4472C4" } },
+          alignment: { horizontal: "center", vertical: "center" }
+        };
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, '公众号导入模板');
+    XLSX.utils.book_append_sheet(wb, wsIndustry, '行业标签示例');
+
+    // 生成Excel文件
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    // 设置响应头
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename*=UTF-8\'\'%E5%85%AC%E4%BC%97%E5%8F%B7%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx');
+    
+    res.send(buffer);
+  } catch (error) {
+    console.error('下载模板失败：', error);
+    res.status(500).json({ success: false, message: '下载失败：' + error.message });
+  }
+});
+
+// 导出额外公众号（按筛选条件导出）
+router.get('/export', checkAuth, async (req, res) => {
+  try {
+    const { search, status, userId } = req.query;
+    const isAdmin = req.isAdmin === true;
+
+    let condition = 'WHERE a.F_DeleteMark = 0';
+    const params = [];
+
+    // 权限控制：普通用户仅导出自己创建的数据；管理员可按用户筛选导出
+    if (isAdmin && userId) {
+      condition += ' AND a.F_CreatorUserId = ?';
+      params.push(userId);
+    } else if (!isAdmin) {
+      condition += ' AND a.F_CreatorUserId = ?';
+      params.push(req.currentUserId);
+    }
+
+    if (search) {
+      condition += ' AND (a.account_name LIKE ? OR a.wechat_account_id LIKE ?)';
+      const searchTerm = `%${search}%`;
+      params.push(searchTerm, searchTerm);
+    }
+
+    if (status) {
+      condition += ' AND a.status = ?';
+      params.push(status);
+    }
+
+    const rows = await db.query(
+      `SELECT 
+        a.account_name,
+        a.wechat_account_id,
+        a.industry_tag_code,
+        tag.item_name AS industry_tag_name,
+        a.status
+       FROM additional_wechat_accounts a
+       LEFT JOIN base_dictionary ind_parent ON ind_parent.F_DeleteMark = 0
+         AND ind_parent.parent_id IS NULL AND ind_parent.dict_code = ?
+       LEFT JOIN base_dictionary tag ON tag.F_DeleteMark = 0
+         AND tag.parent_id = ind_parent.F_Id AND tag.item_code = a.industry_tag_code
+       ${condition}
+       ORDER BY a.F_CreatorTime DESC`,
+      [INDUSTRY_DICT_CODE, ...params]
+    );
+
+    const exportData = (rows || []).map((item) => ({
+      '公众号名称': item.account_name || '',
+      '账号ID': item.wechat_account_id || '',
+      '标签': item.industry_tag_name || item.industry_tag_code || '',
+      '状态': item.status === 'active' ? '生效' : '失效'
+    }));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    ws['!cols'] = [
+      { wch: 28 },
+      { wch: 28 },
+      { wch: 20 },
+      { wch: 12 }
+    ];
+    XLSX.utils.book_append_sheet(wb, ws, '第三方公众号');
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const dateText = new Date().toISOString().slice(0, 10);
+    const fileName = `第三方公众号导出_${dateText}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出额外公众号失败：', error);
+    res.status(500).json({ success: false, message: '导出失败：' + error.message });
+  }
+});
+
+// 获取额外公众号变更日志（用户只能查看自己创建的，管理员可以查看所有）
+router.get('/:id/logs', checkAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 检查记录是否存在并验证权限
+    const existing = await db.query(
+      'SELECT F_CreatorUserId FROM additional_wechat_accounts WHERE F_Id = ? AND F_DeleteMark = 0',
+      [id]
+    );
+    
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '记录不存在' });
+    }
+    
+    // 权限检查：普通用户只能查看自己创建的
+    if (!req.isAdmin && existing[0].F_CreatorUserId !== req.currentUserId) {
+      return res.status(403).json({ success: false, message: '无权查看此记录的日志' });
+    }
+    
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'additional_wechat_accounts' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('获取额外公众号日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+module.exports = router;

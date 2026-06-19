@@ -1,0 +1,24 @@
+.cron-schedule {
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.cron-schedule-title {
+  font-weight: 500;
+  margin-bottom: 12px;
+}
+
+.cron-schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cron-schedule-item {
+  padding: 8px 12px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+  font-family: 'Courier New', monospace;
+  font-size: 14px;
+}

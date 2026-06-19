@@ -1,0 +1,156 @@
+const db = require('../db');
+
+/**
+ * 生成年月日时分秒+5位自增序列的ID
+ * 格式：YYYYMMDDHHmmss + 5位自增序列（例如：2025112015304500001）
+ * @param {string} tableName - 表名
+ * @param {object} [connection] - 可选，mysql2 连接/连接池/事务连接。在 db.js 初始化阶段必须传入，否则内部 db.query 会 await init 完成而造成死锁
+ * @returns {Promise<string>} 生成的ID
+ */
+async function generateId(tableName, connection) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const seconds = String(now.getSeconds()).padStart(2, '0');
+  
+  const prefix = `${year}${month}${day}${hours}${minutes}${seconds}`;
+  
+  // 查询当天该表的最大ID（使用字符串比较，因为ID是VARCHAR类型）
+  const todayStart = `${year}${month}${day}00000000000`;
+  const todayEnd = `${year}${month}${day}23595999999`;
+  
+  try {
+    // 使用参数化查询防止SQL注入，但表名不能参数化，所以需要验证表名
+    const validTableNames = [
+      'applications', 'membership_levels', 'users', 'invested_enterprises',
+      'company', 'system_config', 'data_change_log', 'news_interface_config', 'news_detail',
+      'email_config', 'additional_wechat_accounts', 'ai_model_config', 'qichacha_config',
+      'shanghai_international_group_config', 'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage',
+      'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log',
+      'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled',
+      // 业绩看板相关表
+      'b_version', 'b_indicator_describe', 'b_sql', 'b_sql_change_log',
+      'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',
+      'b_all_indicator', 'b_investment', 'b_investment_spv', 'b_investment_sum', 'b_investor_list',
+      'b_transaction', 'b_project', 'b_project_a', 'b_project_all',
+      'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a',
+      'performance_scheduled',
+      'listing_data_config',
+      'ipo_project_sql_sync_setting',
+      'base_dictionary',
+      'competitor_match_supplement',
+      'pre_investment_project',
+      'sourcing_competitor_run',
+      'sourcing_competitor_relation',
+      'sourcing_competitor_run_step_log',
+      'sourcing_competitor_comparable_pref',
+      'sourcing_pre_investment_competitor_run',
+    ];
+    
+    if (!validTableNames.includes(tableName)) {
+      throw new Error(`无效的表名: ${tableName}`);
+    }
+
+    // 所有表的主键已统一为 F_Id
+    const idColumn = 'F_Id';
+
+    // 简化逻辑：直接查询表的最大ID；传入 connection 时用其查询，可看到本事务未提交行，避免重复
+    let result = [];
+    try {
+      if (connection && typeof connection.query === 'function') {
+        const [rows] = await connection.query(
+          `SELECT \`${idColumn}\` as id
+           FROM \`${tableName}\`
+           WHERE \`${idColumn}\` >= ? AND \`${idColumn}\` <= ?
+           ORDER BY \`${idColumn}\` DESC
+           LIMIT 1`,
+          [todayStart, todayEnd]
+        );
+        result = Array.isArray(rows) ? rows : [];
+      } else {
+        result = await db.query(
+          `SELECT \`${idColumn}\` as id
+           FROM \`${tableName}\`
+           WHERE \`${idColumn}\` >= ? AND \`${idColumn}\` <= ?
+           ORDER BY \`${idColumn}\` DESC
+           LIMIT 1`,
+          [todayStart, todayEnd]
+        );
+        result = Array.isArray(result) ? result : [];
+      }
+    } catch (err) {
+      // 如果查询失败（表不存在、查询超时等），使用初始序列号
+      if (err.message === '查询超时' || err.code === 'ER_NO_SUCH_TABLE' || err.message.includes("doesn't exist")) {
+        console.log(`  表 ${tableName} 查询失败或不存在，使用初始序列号`);
+        result = [];
+      } else {
+        // 其他错误也使用初始序列号，但记录警告
+        console.warn(`  查询表 ${tableName} 时出错，使用初始序列号:`, err.message);
+        result = [];
+      }
+    }
+    
+    let sequence = 1;
+    if (result.length > 0 && result[0].id) {
+      const maxId = result[0].id.toString();
+      // 检查是否是同一天同一秒的ID
+      if (maxId.startsWith(prefix)) {
+        // 提取最后5位序列号
+        const lastSequence = parseInt(maxId.slice(-5), 10);
+        if (lastSequence < 99999) {
+          sequence = lastSequence + 1;
+        } else {
+          // 如果序列号已满，等待下一秒
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return generateId(tableName, connection);
+        }
+      }
+    }
+    
+    // 生成5位序列号
+    const sequenceStr = String(sequence).padStart(5, '0');
+    return `${prefix}${sequenceStr}`;
+  } catch (error) {
+    console.error(`生成ID失败（表：${tableName}）：`, error);
+    // 如果查询失败，使用时间戳+随机数作为后备方案
+    const random = Math.floor(Math.random() * 10000);
+    return `${prefix}${String(random).padStart(5, '0')}`;
+  }
+}
+
+/**
+ * 一次分配 count 个连续 ID（同一秒内本地递增序列，避免循环 generateId 重复）。
+ * @param {string} tableName
+ * @param {number} count
+ * @param {object} [connection]
+ * @returns {Promise<string[]>}
+ */
+async function generateSequentialIds(tableName, count, connection) {
+  const n = Math.max(0, parseInt(count, 10) || 0);
+  if (n === 0) return [];
+  const ids = [];
+  let current = await generateId(tableName, connection);
+  ids.push(current);
+  for (let i = 1; i < n; i++) {
+    const prefix = current.slice(0, -5);
+    let seq = parseInt(current.slice(-5), 10);
+    seq += 1;
+    if (seq > 99999) {
+      current = await generateId(tableName, connection);
+      ids.push(current);
+      continue;
+    }
+    current = `${prefix}${String(seq).padStart(5, '0')}`;
+    ids.push(current);
+  }
+  return ids;
+}
+
+module.exports = {
+  generateId,
+  generateSequentialIds,
+};
+

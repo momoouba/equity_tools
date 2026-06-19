@@ -1,0 +1,282 @@
+/* NewsInfo 页面样式 - Arco Design 规范 */
+
+.news-info {
+  width: 100%;
+}
+
+/* 表头居中对齐 */
+.news-info .arco-table-th {
+  text-align: center;
+}
+
+.news-card {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.news-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.news-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stats-card {
+  background: #f7f8fa;
+  border: 1px solid #e5e6eb;
+  margin-bottom: 16px;
+}
+
+.stats-label {
+  font-size: 12px;
+  color: #86909c;
+  margin-bottom: 4px;
+}
+
+.stats-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #165dff;
+}
+
+.stats-value.highlight {
+  color: #165dff;
+}
+
+.stats-value.highlight-blue {
+  color: #00b42a;
+}
+
+.admin-tabs {
+  margin-bottom: 16px;
+}
+
+.time-range-tabs {
+  margin-bottom: 16px;
+}
+
+
+.toolbar {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #f7f8fa;
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.progress-card {
+  background: #e8f3ff;
+  border: 1px solid #b3d8ff;
+}
+
+.completed-card {
+  background: #f0f9ff;
+  border: 1px solid #91d5ff;
+}
+
+.table-container {
+  margin-bottom: 16px;
+  width: 100%;
+  overflow-x: auto;
+}
+
+/* 确保表格容器和内容区域正确对齐 */
+.news-info .arco-table-container {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
+.news-info .arco-table-content {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+
+.news-info .arco-table-content-inner {
+  min-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+}
+
+/* 确保表格的最后一列（操作列）与表格内容区域的最右侧对齐 */
+.news-info .arco-table {
+  min-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保表格内容区域的table元素使用固定布局，让列宽设置生效 */
+.news-info .arco-table-content-inner table {
+  table-layout: fixed !important;
+  box-sizing: border-box;
+  min-width: 100%;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-size-label {
+  font-size: 14px;
+  color: #4e5969;
+}
+
+.page-size-unit {
+  font-size: 14px;
+  color: #86909c;
+}
+
+.detail-content {
+  padding: 8px 0;
+}
+
+.detail-row {
+  display: flex;
+  margin-bottom: 16px;
+  align-items: flex-start;
+}
+
+.detail-row label {
+  min-width: 100px;
+  font-weight: 500;
+  color: #1d2129;
+}
+
+.detail-row span {
+  flex: 1;
+  color: #4e5969;
+  word-break: break-word;
+}
+
+.export-options {
+  padding: 8px 0;
+}
+
+/* 操作按钮样式优化 */
+.news-info .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.news-info .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.news-info .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.news-info .arco-btn-outline {
+  border-width: 1px;
+}
+
+.news-info .arco-btn-outline:hover {
+  border-color: currentColor;
+}
+
+/* 表格单元格样式 - 默认不换行，只有特定列换行 */
+.news-info .arco-table-cell {
+  vertical-align: top;
+  white-space: nowrap !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.5 !important;
+}
+
+/* 被投企业全称、标题、新闻摘要列支持换行显示 */
+.news-info .arco-table-cell[data-col-key="enterprise_full_name"],
+.news-info .arco-table-cell[data-col-key="title"],
+.news-info .arco-table-cell[data-col-key="news_abstract"] {
+  white-space: normal !important;
+  word-wrap: break-word !important;
+  word-break: break-word !important;
+}
+
+/* 操作列除外，保持原有样式 */
+.news-info .arco-table-td:last-child .arco-table-cell {
+  white-space: normal !important;
+}
+
+/* 操作列样式 - 3个按钮居中，两侧各留4px，底纹与表格右侧对齐 */
+.news-info .arco-table-th:last-child,
+.news-info .arco-table-td:last-child {
+  padding: 12px 4px !important;
+  box-sizing: border-box;
+}
+
+.news-info .arco-table-th:last-child .arco-table-cell,
+.news-info .arco-table-td:last-child .arco-table-cell {
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.news-info .arco-table-td:last-child > div {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的斑马纹背景与表格右侧对齐 - 继承行的背景色并延伸到边框 */
+.news-info .arco-table-tr-stripe .arco-table-td:last-child {
+  background-color: inherit !important;
+}
+
+/* 确保操作列单元格的背景色延伸到右侧边框 */
+.news-info .arco-table-td:last-child,
+.news-info .arco-table-th:last-child {
+  background-clip: padding-box;
+}
+
+/* 确保操作列的所有内容（包括按钮）都在单元格padding范围内 */
+.news-info .arco-table-td:last-child > * {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* 确保操作列的表头和数据单元格的右侧边框与表格内容区域对齐 */
+.news-info .arco-table-thead .arco-table-th:last-child,
+.news-info .arco-table-tbody .arco-table-td:last-child {
+  border-right: 1px solid #e5e6eb;
+}
+
+/* 操作列表头样式 - 确保与右侧表框对齐，背景色正确 */
+.news-info .arco-table-th:last-child {
+  background-color: #f7f8fa !important;
+}
+

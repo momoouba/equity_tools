@@ -1,0 +1,148 @@
+.dashboard-container {
+  min-height: 100vh;
+  background: #f5f7fa;
+}
+
+.dashboard-container .dashboard-header {
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  padding: 20px 0;
+}
+
+.dashboard-container .header-content {
+  width: 100%;
+  padding: 0 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.dashboard-container .header-content > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.dashboard-container .header-content h1 {
+  font-size: 24px;
+  color: #1a1a1a;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.dashboard-container .user-info {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.dashboard-container .user-info span {
+  color: #666;
+  font-size: 14px;
+}
+
+.dashboard-container .user-info .user-account-link {
+  color: #357abd;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: all 0.3s ease;
+}
+
+.dashboard-container .user-info .user-account-link:hover {
+  color: #2c5f8f;
+  text-decoration: none;
+}
+
+.dashboard-container .logout-button {
+  padding: 8px 16px;
+  background: #e74c3c;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.dashboard-container .logout-button:hover {
+  background: #c0392b;
+}
+
+.dashboard-container .dashboard-body {
+  display: flex;
+  min-height: calc(100vh - 80px);
+}
+
+.dashboard-container .dashboard-sidebar {
+  width: 200px;
+  background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+  padding: 20px 0;
+}
+
+.dashboard-container .sidebar-nav {
+  display: flex;
+  flex-direction: column;
+}
+
+.dashboard-container .nav-item {
+  padding: 12px 24px;
+  background: transparent;
+  border: none;
+  color: white;
+  text-align: left;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s ease;
+  border-left: 3px solid transparent;
+}
+
+.dashboard-container .nav-item:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.dashboard-container .nav-item.active {
+  background: rgba(255, 255, 255, 0.25);
+  border-left-color: #ffffff;
+  color: white;
+  font-weight: 600;
+}
+
+.dashboard-container .dashboard-main {
+  flex: 1;
+  padding: 20px;
+  background: #f5f7fa;
+  overflow-y: auto;
+}
+
+.dashboard-container .dashboard-content {
+  background: white;
+  border-radius: 12px;
+  padding: 40px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.dashboard-container .welcome-card {
+  text-align: center;
+}
+
+.dashboard-container .welcome-card h2 {
+  font-size: 28px;
+  color: #1a1a1a;
+  margin-bottom: 16px;
+}
+
+.dashboard-container .welcome-card p {
+  font-size: 16px;
+  color: #666;
+  margin-bottom: 12px;
+}
+
+.dashboard-container .company-info,
+.dashboard-container .membership-info {
+  font-size: 14px;
+  color: #4a90e2;
+  margin-top: 8px;
+}

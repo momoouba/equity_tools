@@ -1,0 +1,32 @@
+/* UserEmailRecords 页面样式 - Arco Design 规范 */
+
+.user-email-records {
+  width: 100%;
+}
+
+.management-card {
+  background: #ffffff;
+  border-radius: 4px;
+}
+
+.empty-card {
+  margin-top: 24px;
+  padding: 20px;
+  text-align: center;
+}
+
+.email-tabs {
+  margin-top: 0;
+}
+
+.table-container {
+  margin-bottom: 16px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+

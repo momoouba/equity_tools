@@ -1,0 +1,122 @@
+/* HolidayConfig 页面样式 - Arco Design 规范 */
+
+.holiday-config {
+  width: 100%;
+}
+
+.config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.config-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+}
+
+.filter-collapse {
+  margin-bottom: 16px;
+}
+
+.filter-collapse .arco-collapse-item-content-box {
+  padding: 16px;
+  background: #f7f8fa;
+  border-radius: 4px;
+}
+
+.filter-content {
+  padding: 8px 0;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.filter-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-item label {
+  font-size: 14px;
+  color: #1d2129;
+  font-weight: 500;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.table-container {
+  margin-bottom: 16px;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
+/* 操作按钮样式优化 */
+.holiday-config .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.holiday-config .arco-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.holiday-config .arco-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.holiday-config .arco-btn-outline {
+  border-width: 1px;
+}
+
+.holiday-config .arco-btn-outline:hover {
+  border-color: currentColor;
+}
+
+/* 表单样式 */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+

@@ -1,0 +1,4332 @@
+const express = require('express');
+const { body, validationResult } = require('express-validator');
+const axios = require('axios');
+const db = require('../db');
+const { generateId } = require('../utils/idGenerator');
+const { logEmailConfigChange, logQichachaConfigChange, logShanghaiInternationalGroupConfigChange, logNewsConfigChange } = require('../utils/logger');
+const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
+const xlsx = require('xlsx');
+const multer = require('multer');
+const { logWithTag, errorWithTag, warnWithTag } = require('../utils/logUtils');
+const psNewsIf = require('./项目挖掘/newsInterfaceConfigHelpers');
+
+// 配置multer用于Excel文件上传
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  },
+  fileFilter: function (req, file, cb) {
+    const allowed = [
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel'
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只支持Excel文件'));
+    }
+  }
+});
+
+const router = express.Router();
+const HOLIDAY_TYPES = ['周末', '调休', '法定节假日', '工作日'];
+
+// 获取企查查配置列表（支持分页）
+router.get('/qichacha-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    // 获取总数
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM qichacha_config WHERE F_DeleteMark = 0');
+    const total = totalResult[0].total;
+
+    // 获取分页数据
+    const configs = await db.query(`
+      SELECT qc.F_Id AS id, qc.app_id, a.app_name, qc.qichacha_app_key, qc.qichacha_daily_limit, qc.interface_type, qc.is_active, qc.F_CreatorTime, qc.F_LastModifyTime
+      FROM qichacha_config qc
+      LEFT JOIN applications a ON qc.app_id = a.F_Id
+      WHERE qc.F_DeleteMark = 0
+      ORDER BY qc.F_CreatorTime DESC
+      LIMIT ? OFFSET ?
+    `, [pageSize, offset]);
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取企查查配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取单个企查查配置（不包含密钥）
+router.get('/qichacha-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query(`
+      SELECT qc.F_Id AS id, qc.app_id, a.app_name, qc.qichacha_app_key, qc.qichacha_daily_limit, qc.interface_type, qc.is_active, qc.F_CreatorTime, qc.F_LastModifyTime
+      FROM qichacha_config qc
+      LEFT JOIN applications a ON qc.app_id = a.F_Id
+      WHERE qc.F_Id = ? AND qc.F_DeleteMark = 0
+    `, [id]);
+    if (configs.length > 0) {
+      res.json({ success: true, data: configs[0] });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取企查查配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 获取系统配置（兼容旧接口，返回企查查配置）
+router.get('/config', async (req, res) => {
+  try {
+    const configs = await db.query('SELECT * FROM qichacha_config WHERE F_DeleteMark = 0 ORDER BY F_Id DESC LIMIT 1');
+    const configMap = {
+      qichacha_app_key: '',
+      qichacha_secret_key: '',
+      qichacha_daily_limit: '100'
+    };
+    
+    if (configs.length > 0) {
+      const config = configs[0];
+      configMap.qichacha_app_key = config.qichacha_app_key || '';
+      configMap.qichacha_secret_key = config.qichacha_secret_key || '';
+      configMap.qichacha_daily_limit = String(config.qichacha_daily_limit || 100);
+    }
+
+    res.json({
+      success: true,
+      data: configMap
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取系统配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 获取新闻接口配置列表（支持分页）
+router.get('/news-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+    const appId = req.query.app_id ? String(req.query.app_id).trim() : '';
+
+    const whereSql = appId ? 'WHERE nic.app_id = ?' : '';
+    const countParams = appId ? [appId] : [];
+    const listParams = appId ? [appId, pageSize, offset] : [pageSize, offset];
+
+    const totalResult = await db.query(
+      `SELECT COUNT(*) as total FROM news_interface_config nic ${whereSql}`,
+      countParams
+    );
+    const total = totalResult[0].total;
+
+    const configs = await db.query(`
+      SELECT nic.F_Id AS id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.skip_holiday, nic.last_sync_time, nic.is_active, nic.F_CreatorTime AS created_at, nic.F_LastModifyTime AS updated_at, nic.entity_type
+      FROM news_interface_config nic
+      LEFT JOIN applications a ON nic.app_id = a.F_Id
+      ${whereSql}
+      ORDER BY nic.F_CreatorTime DESC
+      LIMIT ? OFFSET ?
+    `, listParams);
+    
+    // 处理 entity_type 字段（JSON格式转换为数组）
+    configs.forEach(config => {
+      if (config.entity_type) {
+        try {
+          if (typeof config.entity_type === 'string') {
+            config.entity_type = JSON.parse(config.entity_type);
+          }
+        } catch (e) {
+          console.warn(`解析 entity_type 失败: ${e.message}`);
+          config.entity_type = null;
+        }
+      }
+    });
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取新闻接口配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取单个新闻接口配置（不包含密钥）
+router.get('/news-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query(`
+      SELECT nic.F_Id AS id, nic.app_id, a.app_name, nic.interface_type, nic.news_type, nic.request_url, nic.content_type, nic.api_key, nic.frequency_type, nic.frequency_value, nic.cron_expression, nic.send_frequency, nic.send_time, nic.weekday, nic.month_day, nic.skip_holiday, nic.last_sync_time, nic.is_active, nic.F_CreatorTime AS created_at, nic.F_LastModifyTime AS updated_at, nic.entity_type
+      FROM news_interface_config nic
+      LEFT JOIN applications a ON nic.app_id = a.F_Id
+      WHERE nic.F_Id = ?
+    `, [id]);
+    if (configs.length > 0) {
+      const config = configs[0];
+      // 处理 entity_type 字段（JSON格式转换为数组）
+      if (config.entity_type) {
+        try {
+          if (typeof config.entity_type === 'string') {
+            config.entity_type = JSON.parse(config.entity_type);
+          }
+        } catch (e) {
+          console.warn(`解析 entity_type 失败: ${e.message}`);
+          config.entity_type = null;
+        }
+      }
+      res.json({ success: true, data: config });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取新闻接口配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 获取新闻类型选项（根据接口类型返回可用及禁用的选项）
+// 新榜：仅返回新闻舆情；企查查/上海国际集团：返回全部选项，未开发的置为disabled；上海国际集团/企查查不返回「破产重组」选项
+router.get('/news-type-options', async (req, res) => {
+  try {
+    const { interface_type } = req.query;
+    const interfaceType = interface_type || '新榜';
+    const orderSql = psNewsIf.getNewsTypeOptionsOrderSql(interfaceType);
+    const rows = await db.query(
+      `SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? ${orderSql}`,
+      [interfaceType]
+    );
+    let filteredRows = psNewsIf.filterBankruptcyNewsTypes(interfaceType, rows);
+    let options;
+    if (interfaceType === '新榜') {
+      options = filteredRows.filter(r => r.is_enabled === 1).map(r => ({ value: r.news_type, label: r.news_type, disabled: false }));
+    } else {
+      options = filteredRows.map(r => ({
+        value: r.news_type,
+        label: r.news_type,
+        disabled: r.is_enabled !== 1
+      }));
+    }
+    res.json({ success: true, data: options });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取新闻类型选项失败：', error);
+    res.status(500).json({ success: false, message: '获取新闻类型选项失败' });
+  }
+});
+
+// 创建新闻接口配置
+router.post('/news-config', [
+  body('app_id').notEmpty().withMessage('应用ID不能为空'),
+  body('request_url').notEmpty().withMessage('请求地址不能为空'),
+  body('content_type').optional(), // Content-Type为非必填字段
+  body('api_key').optional(), // 企查查接口不需要api_key，从qichacha_config获取
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
+  body('frequency_type').optional().isIn(['day', 'week', 'month']).withMessage('频次类型必须是day、week或month'),
+  body('frequency_value').optional().isInt({ min: 1 }).withMessage('频次值必须大于0'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, entity_type } = req.body;
+    const skip_holiday_create = req.body.skip_holiday === true || req.body.skip_holiday === 1 || req.body.skip_holiday === '1' || req.body.skip_holiday === 'true';
+    
+    // 验证：必须提供 cron_expression（frequency_type 和 frequency_value 已废弃）
+    if (!cron_expression) {
+      return res.status(400).json({ success: false, message: '必须提供Cron表达式' });
+    }
+
+    // 检查应用是否存在
+    const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+    if (appExists.length === 0) {
+      return res.status(400).json({ success: false, message: '应用不存在' });
+    }
+
+    const interfaceType = interface_type || '新榜';
+    const finalNewsType = news_type || '新闻舆情';
+
+    // 验证 news_type 是否对当前接口类型有效
+    const enabledRows = await db.query(
+      'SELECT news_type, is_enabled FROM interface_news_type_enabled WHERE interface_type = ? AND news_type = ?',
+      [interfaceType, finalNewsType]
+    );
+    if (enabledRows.length === 0) {
+      return res.status(400).json({ success: false, message: `新闻类型"${finalNewsType}"在该接口类型下不可用` });
+    }
+    if (enabledRows[0].is_enabled !== 1) {
+      return res.status(400).json({ success: false, message: `新闻类型"${finalNewsType}"尚未开发，暂不可选` });
+    }
+
+    // 根据frequency_type设置默认的send_frequency和send_time
+    let finalSendFrequency = send_frequency;
+    if (!finalSendFrequency && frequency_type) {
+      if (frequency_type === 'week') {
+        finalSendFrequency = 'weekly';
+      } else if (frequency_type === 'month') {
+        finalSendFrequency = 'monthly';
+      } else {
+        finalSendFrequency = 'daily';
+      }
+    }
+    const finalSendTime = send_time || '00:00:00';
+    const finalIsActive = is_active !== undefined ? (is_active ? 1 : 0) : 1;
+    
+    // 检查是否存在完全相同的配置（所有字段都相同）
+    const existingConfigs = await db.query(
+      `SELECT *, F_Id AS id FROM news_interface_config 
+       WHERE app_id = ? AND interface_type = ?`,
+      [app_id, interfaceType]
+    );
+    
+    // 遍历所有现有配置，检查是否所有字段都相同
+    for (const existing of existingConfigs) {
+      const existingSendFreq = existing.send_frequency || (existing.frequency_type === 'week' ? 'weekly' : (existing.frequency_type === 'month' ? 'monthly' : 'daily'));
+      // 处理时间格式：将 TIME 类型转换为 HH:mm:ss 格式字符串
+      let existingSendTime = '00:00:00';
+      if (existing.send_time) {
+        const timeStr = existing.send_time.toString();
+        // 处理 TIME 类型可能返回的格式（如 "00:00:00" 或 "00:00:00.000"）
+        existingSendTime = timeStr.length >= 8 ? timeStr.substring(0, 8) : timeStr;
+      }
+      const existingIsActive = existing.is_active !== undefined ? existing.is_active : 1;
+      const existingWeekday = existing.weekday || null;
+      const existingMonthDay = existing.month_day || null;
+      
+      // 标准化新配置的时间格式
+      let normalizedNewTime = finalSendTime;
+      if (normalizedNewTime && normalizedNewTime.length >= 8) {
+        normalizedNewTime = normalizedNewTime.substring(0, 8);
+      }
+      
+      // 比较所有字段（包括应用ID、接口类型、请求地址、同步频率、同步时间、星期/日期、启用状态）
+      const isIdentical = 
+        existing.app_id === app_id &&
+        existing.interface_type === interfaceType &&
+        existing.request_url === request_url &&
+        existingSendFreq === finalSendFrequency &&
+        existingSendTime === normalizedNewTime &&
+        existingIsActive === finalIsActive &&
+        existingWeekday === (weekday || null) &&
+        existingMonthDay === (month_day || null);
+      
+      if (isIdentical) {
+        return res.status(400).json({ 
+          success: false, 
+          message: '已存在完全相同的新闻接口配置，所有字段都相同，不允许重复创建' 
+        });
+      }
+    }
+
+    // 企查查接口不需要api_key，但需要验证是否配置了企查查应用凭证
+    if (interfaceType === '企查查') {
+      const qichachaConfigs = await db.query(
+        `SELECT F_Id FROM qichacha_config WHERE interface_type = '新闻舆情' AND is_active = 1 AND F_DeleteMark = 0 LIMIT 1`
+      );
+      if (qichachaConfigs.length === 0) {
+        return res.status(400).json({ success: false, message: '请先配置企查查新闻舆情接口的应用凭证和秘钥' });
+      }
+    } else if (interfaceType === '上海国际集团') {
+      const sigConfigs = await db.query(
+        `SELECT F_Id FROM shanghai_international_group_config WHERE is_active = 1 AND F_DeleteMark = 0 LIMIT 1`
+      );
+      if (sigConfigs.length === 0) {
+        return res.status(400).json({ success: false, message: '请先配置上海国际集团接口的X-App-Id、APIkey等凭证' });
+      }
+    } else if (interfaceType === psNewsIf.INTERFACE_TYPE_FINANCING) {
+      const finSig = await psNewsIf.validateFinancingSigByApp(db, app_id);
+      if (!finSig.ok) {
+        return res.status(400).json({ success: false, message: finSig.message });
+      }
+    } else if (!api_key) {
+      return res.status(400).json({ success: false, message: 'Key不能为空' });
+    }
+
+    const configId = await generateId('news_interface_config');
+    const finalContentType = psNewsIf.isNewsInterfaceUsingNullContentType(interfaceType)
+      ? null
+      : content_type || 'application/x-www-form-urlencoded;charset=utf-8';
+    
+    // 如果没有提供send_frequency，根据frequency_type设置默认值
+    if (!finalSendFrequency) {
+      if (frequency_type === 'week') {
+        finalSendFrequency = 'weekly';
+      } else if (frequency_type === 'month') {
+        finalSendFrequency = 'monthly';
+      } else {
+        finalSendFrequency = 'daily';
+      }
+    }
+    
+    const retry_count = req.body.retry_count !== undefined ? parseInt(req.body.retry_count) : 0;
+    const retry_interval = req.body.retry_interval !== undefined ? parseInt(req.body.retry_interval) : 0;
+    
+    // 处理 entity_type 字段（验证并转换为JSON格式）
+    const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+    let entityTypeJson = null;
+    if (entity_type !== null && entity_type !== undefined && entity_type !== '') {
+      let entityTypes = entity_type;
+      // 如果是字符串，尝试解析为JSON
+      if (typeof entityTypes === 'string') {
+        try {
+          entityTypes = JSON.parse(entityTypes);
+        } catch (e) {
+          // 如果不是JSON，可能是单个值，转换为数组
+          entityTypes = [entityTypes];
+        }
+      }
+      // 确保是数组
+      if (!Array.isArray(entityTypes)) {
+        entityTypes = [entityTypes];
+      }
+      
+      if (psNewsIf.shouldRestrictEntityExtraWechat(interfaceType)) {
+        entityTypes = entityTypes.filter(type => type !== '额外公众号');
+        if (entityTypes.length === 0) {
+          entityTypes = []; // 如果过滤后为空，设置为空数组
+        }
+      }
+      
+      // 验证所有值是否有效
+      const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+      if (invalidTypes.length > 0) {
+        return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
+      }
+      
+      if (psNewsIf.shouldRestrictEntityExtraWechat(interfaceType) && entityTypes.includes('额外公众号')) {
+        return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
+      }
+      
+      // 去重并排序
+      entityTypes = [...new Set(entityTypes)].sort();
+      if (entityTypes.length > 0) {
+        entityTypeJson = JSON.stringify(entityTypes);
+      }
+    }
+
+    // 如果使用 cron_expression，frequency_type 和 frequency_value 应该为 NULL（已废弃）
+    // 如果使用 frequency_type（旧方式），则设置这些字段
+    const finalFrequencyType = cron_expression ? null : (frequency_type || null);
+    const finalFrequencyValue = cron_expression ? null : (frequency_value || null);
+    
+    await db.execute(
+      `INSERT INTO news_interface_config 
+       (F_Id, app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, retry_count, retry_interval, is_active, skip_holiday, entity_type) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        configId,
+        app_id,
+        interfaceType,
+        finalNewsType,
+        request_url,
+        finalContentType,
+        api_key || '', // 企查查接口可以为空
+        cron_expression || null,
+        finalFrequencyType,
+        finalFrequencyValue,
+        finalSendFrequency,
+        finalSendTime,
+        weekday || null,
+        month_day || null,
+        retry_count,
+        retry_interval,
+        finalIsActive,
+        skip_holiday_create ? 1 : 0,
+        entityTypeJson
+      ]
+    );
+
+    // 记录创建日志
+    const userId = req.headers['x-user-id'] || null;
+    if (userId) {
+      await logNewsConfigChange(
+        configId,
+        {},
+        {
+          app_id,
+          request_url,
+          content_type: content_type || 'application/x-www-form-urlencoded;charset=utf-8',
+          cron_expression: cron_expression || '',
+          frequency_type: frequency_type || '',
+          frequency_value: frequency_value ? frequency_value.toString() : '',
+          is_active: '1'
+        },
+        userId
+      );
+    }
+
+    // 如果新配置是启用的，更新新闻同步定时任务
+    if (finalIsActive === 1) {
+      try {
+        const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
+        await updateNewsSyncScheduledTasks();
+        logWithTag('[新闻接口配置创建]', '新配置已启用，新闻同步定时任务调度已更新');
+      } catch (taskError) {
+        warnWithTag('[新闻接口配置创建]', `更新新闻同步定时任务调度失败:`, taskError.message);
+        // 不阻断主流程，只记录警告
+      }
+    }
+
+    res.json({ success: true, message: '新闻接口配置创建成功', data: { id: configId } });
+  } catch (error) {
+    errorWithTag('[系统配置]', '创建新闻接口配置失败：', error);
+    
+    // 如果是唯一约束错误，提供更友好的提示
+    if (error.code === 'ER_DUP_ENTRY' && error.message.includes('uk_app_interface')) {
+      return res.status(400).json({ 
+        success: false, 
+        message: '数据库唯一约束仍然存在，请重启服务器以执行迁移脚本，或手动执行 fix_unique_constraint_manual.sql 文件中的SQL来修复' 
+      });
+    }
+    
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新新闻接口配置
+router.put('/news-config/:id', [
+  body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
+  body('request_url').optional().notEmpty().withMessage('请求地址不能为空'),
+  body('content_type').optional(), // Content-Type为非必填字段
+  body('api_key').optional(), // 企查查接口不需要api_key
+  body('cron_expression').optional().isString().withMessage('Cron表达式必须是字符串'),
+  body('frequency_type').optional().isIn(['day', 'week', 'month']).withMessage('频次类型必须是day、week或month'),
+  body('frequency_value').optional().isInt({ min: 1 }).withMessage('频次值必须大于0'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { app_id, interface_type, news_type, request_url, content_type, api_key, cron_expression, frequency_type, frequency_value, send_frequency, send_time, weekday, month_day, is_active, retry_count, retry_interval, entity_type } = req.body;
+    const skip_holiday_raw = req.body.skip_holiday;
+    const skip_holiday = skip_holiday_raw === true || skip_holiday_raw === 1 || skip_holiday_raw === '1' || skip_holiday_raw === 'true';
+
+    // 检查配置是否存在，并获取旧数据用于日志记录
+    const existingConfigs = await db.query('SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ?', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const oldConfig = existingConfigs[0];
+
+    // 如果更新应用ID，检查应用是否存在（不再限制同一应用不能有多个相同接口类型的配置）
+    if (app_id) {
+      const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
+      }
+    }
+
+    // 构建更新字段
+    const updateFields = [];
+    const updateValues = [];
+
+    if (app_id !== undefined) {
+      updateFields.push('app_id = ?');
+      updateValues.push(app_id);
+    }
+    if (interface_type !== undefined) {
+      updateFields.push('interface_type = ?');
+      updateValues.push(interface_type);
+    }
+    if (news_type !== undefined) {
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      const enabledRows = await db.query(
+        'SELECT is_enabled FROM interface_news_type_enabled WHERE interface_type = ? AND news_type = ?',
+        [currentInterfaceType, news_type]
+      );
+      if (enabledRows.length === 0 || enabledRows[0].is_enabled !== 1) {
+        return res.status(400).json({ success: false, message: `新闻类型"${news_type}"在该接口类型下不可选或尚未开发` });
+      }
+      updateFields.push('news_type = ?');
+      updateValues.push(news_type);
+    }
+    if (request_url !== undefined) {
+      updateFields.push('request_url = ?');
+      updateValues.push(request_url);
+    }
+    if (content_type !== undefined) {
+      updateFields.push('content_type = ?');
+      updateValues.push(content_type);
+    }
+    if (api_key !== undefined) {
+      updateFields.push('api_key = ?');
+      updateValues.push(api_key);
+    }
+    if (frequency_type !== undefined) {
+      updateFields.push('frequency_type = ?');
+      updateValues.push(frequency_type);
+      
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      if (psNewsIf.shouldSyncSendFrequencyFromFrequencyType(currentInterfaceType)) {
+        let sendFrequency = 'daily';
+        if (frequency_type === 'week') {
+          sendFrequency = 'weekly';
+        } else if (frequency_type === 'month') {
+          sendFrequency = 'monthly';
+        }
+        
+        updateFields.push('send_frequency = ?');
+        updateValues.push(sendFrequency);
+        
+        logWithTag('[新闻接口配置更新]', `企查查接口frequency_type更新为${frequency_type}，同步更新send_frequency为${sendFrequency}`);
+      }
+    }
+    if (cron_expression !== undefined) {
+      updateFields.push('cron_expression = ?');
+      updateValues.push(cron_expression);
+    }
+    if (frequency_value !== undefined) {
+      updateFields.push('frequency_value = ?');
+      updateValues.push(frequency_value);
+    }
+    if (send_frequency !== undefined) {
+      updateFields.push('send_frequency = ?');
+      updateValues.push(send_frequency);
+    }
+    if (send_time !== undefined) {
+      updateFields.push('send_time = ?');
+      updateValues.push(send_time);
+    }
+    if (weekday !== undefined) {
+      updateFields.push('weekday = ?');
+      updateValues.push(weekday);
+    }
+    if (month_day !== undefined) {
+      updateFields.push('month_day = ?');
+      updateValues.push(month_day);
+    }
+    if (retry_count !== undefined) {
+      updateFields.push('retry_count = ?');
+      updateValues.push(retry_count);
+    }
+    if (retry_interval !== undefined) {
+      updateFields.push('retry_interval = ?');
+      updateValues.push(retry_interval);
+    }
+    if (is_active !== undefined) {
+      updateFields.push('is_active = ?');
+      updateValues.push(is_active ? 1 : 0);
+    }
+    if (req.body.skip_holiday !== undefined) {
+      updateFields.push('skip_holiday = ?');
+      updateValues.push(skip_holiday ? 1 : 0);
+    }
+    
+    // 处理 entity_type 字段（验证并转换为JSON格式）
+    if (entity_type !== undefined) {
+      const validEntityTypes = ['被投企业', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '额外公众号'];
+      let entityTypeJson = null;
+      
+      // 获取当前接口类型（用于验证）
+      const currentInterfaceType = interface_type !== undefined ? interface_type : oldConfig.interface_type;
+      
+      if (entity_type !== null && entity_type !== '') {
+        let entityTypes = entity_type;
+        // 如果是字符串，尝试解析为JSON
+        if (typeof entityTypes === 'string') {
+          try {
+            entityTypes = JSON.parse(entityTypes);
+          } catch (e) {
+            // 如果不是JSON，可能是单个值，转换为数组
+            entityTypes = [entityTypes];
+          }
+        }
+        // 确保是数组
+        if (!Array.isArray(entityTypes)) {
+          entityTypes = [entityTypes];
+        }
+        
+        if (psNewsIf.shouldRestrictEntityExtraWechat(currentInterfaceType)) {
+          entityTypes = entityTypes.filter(type => type !== '额外公众号');
+          if (entityTypes.length === 0) {
+            entityTypes = []; // 如果过滤后为空，设置为空数组
+          }
+        }
+        
+        // 验证所有值是否有效
+        const invalidTypes = entityTypes.filter(type => !validEntityTypes.includes(type));
+        if (invalidTypes.length > 0) {
+          return res.status(400).json({ success: false, message: `企业类型值无效: ${invalidTypes.join(', ')}。有效值: ${validEntityTypes.join(', ')}` });
+        }
+        
+        if (psNewsIf.shouldRestrictEntityExtraWechat(currentInterfaceType) && entityTypes.includes('额外公众号')) {
+          return res.status(400).json({ success: false, message: '该接口类型不支持"额外公众号"选项' });
+        }
+        
+        // 去重并排序
+        entityTypes = [...new Set(entityTypes)].sort();
+        if (entityTypes.length > 0) {
+          entityTypeJson = JSON.stringify(entityTypes);
+        }
+      }
+      
+      updateFields.push('entity_type = ?');
+      updateValues.push(entityTypeJson);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE news_interface_config SET ${updateFields.join(', ')} WHERE F_Id = ?`,
+        updateValues
+      );
+      
+      // 如果更新了定时任务相关字段（cron_expression, send_frequency, send_time, weekday, month_day, is_active），需要更新定时任务调度
+      const shouldUpdateScheduledTasks = 
+        cron_expression !== undefined ||
+        send_frequency !== undefined || 
+        send_time !== undefined || 
+        weekday !== undefined || 
+        month_day !== undefined || 
+        is_active !== undefined ||
+        frequency_type !== undefined || // frequency_type变更可能影响send_frequency的默认值
+        req.body.skip_holiday !== undefined;
+      
+      if (shouldUpdateScheduledTasks) {
+        try {
+          const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
+          await updateNewsSyncScheduledTasks();
+          logWithTag('[新闻接口配置更新]', '定时任务相关字段已更新，新闻同步定时任务调度已同步更新');
+        } catch (taskError) {
+          warnWithTag('[新闻接口配置更新]', `更新新闻同步定时任务调度失败:`, taskError.message);
+          // 不阻断主流程，只记录警告
+        }
+      }
+
+      // 记录更新日志
+      const userId = req.headers['x-user-id'] || null;
+      if (userId) {
+        // 获取更新后的数据
+        const updatedConfigs = await db.query('SELECT *, F_Id AS id FROM news_interface_config WHERE F_Id = ?', [id]);
+        const newConfig = updatedConfigs[0];
+        
+        // 构建新旧数据对比（只记录变更的字段）
+        const oldData = {
+          app_id: oldConfig.app_id || '',
+          request_url: oldConfig.request_url || '',
+          content_type: oldConfig.content_type || '',
+          cron_expression: oldConfig.cron_expression || '',
+          frequency_type: oldConfig.frequency_type || '',
+          frequency_value: oldConfig.frequency_value ? oldConfig.frequency_value.toString() : '',
+          is_active: oldConfig.is_active ? '1' : '0'
+        };
+        
+        const newData = {
+          app_id: newConfig.app_id || '',
+          request_url: newConfig.request_url || '',
+          content_type: newConfig.content_type || '',
+          cron_expression: newConfig.cron_expression || '',
+          frequency_type: newConfig.frequency_type || '',
+          frequency_value: newConfig.frequency_value ? newConfig.frequency_value.toString() : '',
+          is_active: newConfig.is_active ? '1' : '0'
+        };
+        
+        await logNewsConfigChange(id, oldData, newData, userId);
+      }
+    }
+
+    res.json({ success: true, message: '新闻接口配置更新成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '更新新闻接口配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 获取新闻接口配置的变更日志
+router.get('/news-config/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'news_interface_config' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取新闻接口配置日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 删除新闻接口配置（逻辑删除）
+router.delete('/news-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT F_Id FROM news_interface_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+
+    await db.execute(
+      'UPDATE news_interface_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
+      [userId, id]
+    );
+    res.json({ success: true, message: '新闻接口配置删除成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '删除新闻接口配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 创建企查查配置
+router.post('/qichacha-config', [
+  body('app_id').notEmpty().withMessage('应用ID不能为空'),
+  body('qichacha_app_key').notEmpty().withMessage('应用凭证不能为空'),
+  body('qichacha_secret_key').notEmpty().withMessage('凭证秘钥不能为空'),
+  body('qichacha_daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+  body('interface_type').optional().isIn(['企业信息', '新闻舆情']).withMessage('接口类型必须是"企业信息"或"新闻舆情"'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type } = req.body;
+
+    // 检查应用是否存在
+    const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+    if (appExists.length === 0) {
+      return res.status(400).json({ success: false, message: '应用不存在' });
+    }
+
+    // 检查该应用是否已有相同接口类型的配置
+    const interfaceType = req.body.interface_type || '企业信息';
+    const existing = await db.query(
+      'SELECT F_Id FROM qichacha_config WHERE app_id = ? AND interface_type = ? AND F_DeleteMark = 0',
+      [app_id, interfaceType]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `该应用已存在接口类型为"${interfaceType}"的企查查配置` 
+      });
+    }
+
+    const configId = await generateId('qichacha_config');
+    await db.execute(
+      'INSERT INTO qichacha_config (F_Id, app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        configId,
+        app_id,
+        qichacha_app_key,
+        qichacha_secret_key,
+        qichacha_daily_limit || 100,
+        interface_type || '企业信息'
+      ]
+    );
+
+    // 记录创建日志
+    const userId = req.headers['x-user-id'] || null;
+    if (userId) {
+      await logQichachaConfigChange(
+        configId,
+        {},
+        {
+          app_id,
+          qichacha_app_key,
+          qichacha_daily_limit: (qichacha_daily_limit || 100).toString(),
+          interface_type: interface_type || '企业信息',
+          is_active: '1'
+        },
+        userId
+      );
+    }
+
+    res.json({ success: true, message: '企查查配置创建成功', data: { id: configId } });
+  } catch (error) {
+    console.error('创建企查查配置失败：', error);
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新企查查配置
+router.put('/qichacha-config/:id', [
+  body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
+  body('qichacha_app_key').optional().notEmpty().withMessage('应用凭证不能为空'),
+  body('qichacha_secret_key').optional().notEmpty().withMessage('凭证秘钥不能为空'),
+  body('qichacha_daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+  body('interface_type').optional().isIn(['企业信息', '新闻舆情']).withMessage('接口类型必须是"企业信息"或"新闻舆情"'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { app_id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit, interface_type, is_active } = req.body;
+
+    // 检查配置是否存在，并获取旧数据用于日志记录
+    const existingConfigs = await db.query('SELECT * FROM qichacha_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const oldConfig = existingConfigs[0];
+
+    // 如果更新应用ID，检查应用是否存在，以及是否重复
+    if (app_id) {
+      const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
+      }
+      
+      // 如果更新了接口类型，检查新接口类型是否已存在
+      if (interface_type !== undefined) {
+        const duplicate = await db.query(
+          'SELECT F_Id FROM qichacha_config WHERE app_id = ? AND interface_type = ? AND F_Id != ? AND F_DeleteMark = 0',
+          [app_id, interface_type, id]
+        );
+        if (duplicate.length > 0) {
+          return res.status(400).json({ 
+            success: false, 
+            message: `该应用已存在接口类型为"${interface_type}"的企查查配置` 
+          });
+        }
+      }
+    }
+
+    // 构建更新字段
+    const updateFields = [];
+    const updateValues = [];
+
+    if (app_id !== undefined) {
+      updateFields.push('app_id = ?');
+      updateValues.push(app_id);
+    }
+    if (qichacha_app_key !== undefined) {
+      updateFields.push('qichacha_app_key = ?');
+      updateValues.push(qichacha_app_key);
+    }
+    if (qichacha_secret_key !== undefined) {
+      updateFields.push('qichacha_secret_key = ?');
+      updateValues.push(qichacha_secret_key);
+    }
+    if (qichacha_daily_limit !== undefined) {
+      updateFields.push('qichacha_daily_limit = ?');
+      updateValues.push(qichacha_daily_limit);
+    }
+    if (interface_type !== undefined) {
+      updateFields.push('interface_type = ?');
+      updateValues.push(interface_type);
+    }
+    if (is_active !== undefined) {
+      updateFields.push('is_active = ?');
+      updateValues.push(is_active ? 1 : 0);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+        updateValues
+      );
+
+      // 记录更新日志
+      const userId = req.headers['x-user-id'] || null;
+      if (userId) {
+        // 获取更新后的数据
+        const updatedConfigs = await db.query('SELECT * FROM qichacha_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+        const newConfig = updatedConfigs[0];
+        
+        // 构建新旧数据对比（只记录变更的字段）
+        const oldData = {
+          app_id: oldConfig.app_id || '',
+          qichacha_app_key: oldConfig.qichacha_app_key || '',
+          qichacha_daily_limit: oldConfig.qichacha_daily_limit ? oldConfig.qichacha_daily_limit.toString() : '',
+          interface_type: oldConfig.interface_type || '企业信息',
+          is_active: oldConfig.is_active ? '1' : '0'
+        };
+        
+        const newData = {
+          app_id: newConfig.app_id || '',
+          qichacha_app_key: newConfig.qichacha_app_key || '',
+          qichacha_daily_limit: newConfig.qichacha_daily_limit ? newConfig.qichacha_daily_limit.toString() : '',
+          interface_type: newConfig.interface_type || '企业信息',
+          is_active: newConfig.is_active ? '1' : '0'
+        };
+        
+        await logQichachaConfigChange(id, oldData, newData, userId);
+      }
+    }
+
+    res.json({ success: true, message: '企查查配置更新成功' });
+  } catch (error) {
+    console.error('更新企查查配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 获取企查查配置的变更日志
+router.get('/qichacha-config/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'qichacha_config' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('获取企查查配置日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 删除企查查配置（逻辑删除）
+router.delete('/qichacha-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT F_Id FROM qichacha_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+
+    await db.execute(
+      'UPDATE qichacha_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
+      [userId, id]
+    );
+    res.json({ success: true, message: '企查查配置删除成功' });
+  } catch (error) {
+    console.error('删除企查查配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 测试企查查接口连通性
+router.post('/qichacha-config/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query('SELECT * FROM qichacha_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const config = configs[0];
+    const appKey = config.qichacha_app_key || '';
+    const secretKey = config.qichacha_secret_key || '';
+    const interfaceType = config.interface_type || '企业信息';
+
+    if (!appKey || !secretKey) {
+      return res.status(400).json({ success: false, message: '应用凭证或密钥未配置' });
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const token = require('crypto')
+      .createHash('md5')
+      .update(appKey + timestamp + secretKey)
+      .digest('hex')
+      .toUpperCase();
+
+    if (interfaceType === '新闻舆情') {
+      const today = new Date();
+      const endDate = today.toISOString().slice(0, 10);
+      const startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const params = new URLSearchParams({
+        key: appKey,
+        searchKey: '91511500MA62A0WM8P',
+        startDate,
+        endDate,
+        pageSize: '1',
+        pageIndex: '1'
+      });
+      const response = await axios.get(`https://api.qichacha.com/CompanyNews/SearchNews?${params.toString()}`, {
+        headers: { Token: token, Timespan: timestamp },
+        timeout: 15000
+      });
+      const status = response.data?.Status || response.data?.status;
+      if (status === '200') {
+        return res.json({ success: true, message: '接口连接成功' });
+      }
+      return res.json({ success: false, message: response.data?.Message || response.data?.message || '接口返回异常' });
+    } else {
+      const response = await axios.get('https://api.qichacha.com/FuzzySearch/GetList', {
+        params: { key: appKey, searchKey: '测试', pageIndex: 1 },
+        headers: { Token: token, Timespan: timestamp },
+        timeout: 15000
+      });
+      const status = response.data?.Status || response.data?.status;
+      if (status === '200') {
+        return res.json({ success: true, message: '接口连接成功' });
+      }
+      return res.json({ success: false, message: response.data?.Message || response.data?.message || '接口返回异常' });
+    }
+  } catch (error) {
+    const msg = error.response?.data?.Message || error.response?.data?.message || error.message || '网络或接口异常';
+    errorWithTag('[系统配置]', '企查查接口测试失败：', error);
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+// ========== 上海国际集团接口配置 API ==========
+
+// 获取上海国际集团配置列表（支持分页）
+router.get('/shanghai-international-group-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM shanghai_international_group_config WHERE F_DeleteMark = 0');
+    const total = totalResult[0].total;
+
+    const configs = await db.query(`
+      SELECT sigc.F_Id AS id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.daily_limit, sigc.is_active, sigc.F_CreatorTime, sigc.F_LastModifyTime
+      FROM shanghai_international_group_config sigc
+      LEFT JOIN applications a ON sigc.app_id = a.F_Id
+      WHERE sigc.F_DeleteMark = 0
+      ORDER BY sigc.F_CreatorTime DESC
+      LIMIT ? OFFSET ?
+    `, [pageSize, offset]);
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取单个上海国际集团配置（不包含api_key）
+router.get('/shanghai-international-group-config/:F_Id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query(`
+      SELECT sigc.F_Id AS id, sigc.app_id, a.app_name, sigc.x_app_id, sigc.api_key, sigc.daily_limit, sigc.is_active, sigc.F_CreatorTime, sigc.F_LastModifyTime
+      FROM shanghai_international_group_config sigc
+      LEFT JOIN applications a ON sigc.app_id = a.F_Id
+      WHERE sigc.F_Id = ? AND sigc.F_DeleteMark = 0
+    `, [id]);
+    if (configs.length > 0) {
+      res.json({ success: true, data: configs[0] });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 创建上海国际集团配置
+router.post('/shanghai-international-group-config', [
+  body('app_id').notEmpty().withMessage('应用ID不能为空'),
+  body('x_app_id').notEmpty().withMessage('X-App-Id不能为空'),
+  body('api_key').notEmpty().withMessage('APIkey不能为空'),
+  body('daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { app_id, x_app_id, api_key, daily_limit } = req.body;
+
+    const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+    if (appExists.length === 0) {
+      return res.status(400).json({ success: false, message: '应用不存在' });
+    }
+
+    const existing = await db.query('SELECT F_Id FROM shanghai_international_group_config WHERE app_id = ? AND F_DeleteMark = 0', [app_id]);
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, message: '该应用已存在上海国际集团配置' });
+    }
+
+    const configId = await generateId('shanghai_international_group_config');
+    await db.execute(
+      'INSERT INTO shanghai_international_group_config (F_Id, app_id, x_app_id, api_key, daily_limit) VALUES (?, ?, ?, ?, ?)',
+      [configId, app_id, x_app_id, api_key, daily_limit || 100]
+    );
+
+    const userId = req.headers['x-user-id'] || null;
+    if (userId) {
+      await logShanghaiInternationalGroupConfigChange(
+        configId,
+        {},
+        {
+          app_id,
+          x_app_id,
+          daily_limit: (daily_limit || 100).toString(),
+          is_active: '1'
+        },
+        userId
+      );
+    }
+
+    res.json({ success: true, message: '上海国际集团配置创建成功', data: { id: configId } });
+  } catch (error) {
+    errorWithTag('[系统配置]', '创建上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新上海国际集团配置
+router.put('/shanghai-international-group-config/:F_Id', [
+  body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
+  body('x_app_id').optional().notEmpty().withMessage('X-App-Id不能为空'),
+  body('api_key').optional().notEmpty().withMessage('APIkey不能为空'),
+  body('daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { app_id, x_app_id, api_key, daily_limit, is_active } = req.body;
+
+    const existingConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const oldConfig = existingConfigs[0];
+
+    if (app_id) {
+      const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
+      }
+      const duplicate = await db.query(
+        'SELECT F_Id FROM shanghai_international_group_config WHERE app_id = ? AND F_Id != ? AND F_DeleteMark = 0',
+        [app_id, id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({ success: false, message: '该应用已存在上海国际集团配置' });
+      }
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+
+    if (app_id !== undefined) {
+      updateFields.push('app_id = ?');
+      updateValues.push(app_id);
+    }
+    if (x_app_id !== undefined) {
+      updateFields.push('x_app_id = ?');
+      updateValues.push(x_app_id);
+    }
+    if (api_key !== undefined) {
+      updateFields.push('api_key = ?');
+      updateValues.push(api_key);
+    }
+    if (daily_limit !== undefined) {
+      updateFields.push('daily_limit = ?');
+      updateValues.push(daily_limit);
+    }
+    if (is_active !== undefined) {
+      updateFields.push('is_active = ?');
+      updateValues.push(is_active ? 1 : 0);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE shanghai_international_group_config SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+        updateValues
+      );
+
+      const userId = req.headers['x-user-id'] || null;
+      if (userId) {
+        const updatedConfigs = await db.query('SELECT * FROM shanghai_international_group_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+        const newConfig = updatedConfigs[0];
+        const oldData = {
+          app_id: oldConfig.app_id || '',
+          x_app_id: oldConfig.x_app_id || '',
+          daily_limit: oldConfig.daily_limit ? oldConfig.daily_limit.toString() : '',
+          is_active: oldConfig.is_active ? '1' : '0'
+        };
+        const newData = {
+          app_id: newConfig.app_id || '',
+          x_app_id: newConfig.x_app_id || '',
+          daily_limit: newConfig.daily_limit ? newConfig.daily_limit.toString() : '',
+          is_active: newConfig.is_active ? '1' : '0'
+        };
+        await logShanghaiInternationalGroupConfigChange(id, oldData, newData, userId);
+      }
+    }
+
+    res.json({ success: true, message: '上海国际集团配置更新成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '更新上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败' });
+  }
+});
+
+// 获取上海国际集团配置的变更日志
+router.get('/shanghai-international-group-config/:F_Id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'shanghai_international_group_config' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    errorWithTag('[系统配置]', '获取上海国际集团配置日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 删除上海国际集团配置（逻辑删除）
+router.delete('/shanghai-international-group-config/:F_Id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT F_Id FROM shanghai_international_group_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    await db.execute(
+      'UPDATE shanghai_international_group_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
+      [userId, id]
+    );
+    res.json({ success: true, message: '上海国际集团配置删除成功' });
+  } catch (error) {
+    errorWithTag('[系统配置]', '删除上海国际集团配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 测试上海国际集团接口连通性
+router.post('/shanghai-international-group-config/:F_Id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { request_url } = req.body || {};
+    const configs = await db.query('SELECT * FROM shanghai_international_group_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const config = configs[0];
+    const xAppId = config.x_app_id || '';
+    const apiKey = config.api_key || '';
+    const apiUrl = request_url || 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote';
+
+    if (!xAppId || !apiKey) {
+      return res.status(400).json({ success: false, message: 'X-App-Id或APIkey未配置' });
+    }
+
+    const today = new Date();
+    const endDate = today.toISOString().slice(0, 10);
+    const startDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const uuid = require('crypto').randomUUID();
+    const timestamp = Date.now().toString();
+
+    const response = await axios.post(
+      apiUrl,
+      { instn_idtfn_cd: '91511500MA62A0WM8P', start_time: startDate, end_time: endDate },
+      {
+        headers: {
+          'Content-Type': 'application/json; charset=UTF-8',
+          'X-App-Id': xAppId,
+          'X-Sequence-No': uuid,
+          'X-Timestamp': timestamp,
+          'APIkey': apiKey
+        },
+        timeout: 15000
+      }
+    );
+
+    if (response.data && response.data.Code === '200') {
+      return res.json({ success: true, message: '接口连接成功' });
+    }
+    return res.json({
+      success: false,
+      message: response.data?.Desc || response.data?.message || '接口返回异常'
+    });
+  } catch (error) {
+    const msg = error.response?.data?.Desc || error.response?.data?.message || error.message || '网络或接口异常';
+    errorWithTag('[系统配置]', '上海国际集团接口测试失败：', error);
+    res.status(500).json({ success: false, message: msg });
+  }
+});
+
+// ========== 企查查新闻类别管理 API ==========
+
+// 获取企查查新闻类别列表
+router.get('/qichacha-news-categories', async (req, res) => {
+  try {
+    const { page = 1, pageSize = 1000, search } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(pageSize);
+    
+    let query = 'SELECT *, F_Id AS id FROM qichacha_news_categories WHERE F_DeleteMark = 0';
+    let countQuery = 'SELECT COUNT(*) as total FROM qichacha_news_categories WHERE F_DeleteMark = 0';
+    const params = [];
+    
+    if (search) {
+      query += ' AND (category_code LIKE ? OR category_name LIKE ?)';
+      countQuery += ' AND (category_code LIKE ? OR category_name LIKE ?)';
+      const searchPattern = `%${search}%`;
+      params.push(searchPattern, searchPattern);
+    }
+    
+    query += ' ORDER BY category_code ASC LIMIT ? OFFSET ?';
+    params.push(parseInt(pageSize), offset);
+    
+    const categories = await db.query(query, params);
+    const [totalResult] = await db.query(countQuery, search ? [params[0], params[1]] : []);
+    const total = totalResult.total;
+    
+    res.json({ 
+      success: true, 
+      data: categories, 
+      total: total,
+      page: parseInt(page),
+      pageSize: parseInt(pageSize)
+    });
+  } catch (error) {
+    console.error('获取企查查新闻类别列表失败：', error);
+    res.status(500).json({ success: false, message: '获取类别列表失败' });
+  }
+});
+
+// 获取单个企查查新闻类别
+router.get('/qichacha-news-category/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const categories = await db.query('SELECT *, F_Id AS id FROM qichacha_news_categories WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (categories.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+    res.json({ success: true, data: categories[0] });
+  } catch (error) {
+    console.error('获取企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '获取类别失败' });
+  }
+});
+
+// 创建企查查新闻类别
+router.post('/qichacha-news-category', [
+  body('category_code').notEmpty().withMessage('类别编码不能为空'),
+  body('category_name').notEmpty().withMessage('类别描述不能为空'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { category_code, category_name } = req.body;
+
+    // 检查类别编码是否已存在
+    const existing = await db.query(
+      'SELECT F_Id FROM qichacha_news_categories WHERE category_code = ? AND F_DeleteMark = 0',
+      [category_code]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `类别编码"${category_code}"已存在` 
+      });
+    }
+
+    const categoryId = await generateId('qichacha_news_categories');
+    await db.execute(
+      'INSERT INTO qichacha_news_categories (F_Id, category_code, category_name) VALUES (?, ?, ?)',
+      [categoryId, category_code, category_name]
+    );
+
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+
+    res.json({ success: true, message: '企查查新闻类别创建成功', data: { id: categoryId } });
+  } catch (error) {
+    console.error('创建企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '创建类别失败：' + error.message });
+  }
+});
+
+// 更新企查查新闻类别
+router.put('/qichacha-news-category/:id', [
+  body('category_code').optional().notEmpty().withMessage('类别编码不能为空'),
+  body('category_name').optional().notEmpty().withMessage('类别描述不能为空'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { category_code, category_name } = req.body;
+
+    // 检查类别是否存在
+    const existing = await db.query('SELECT * FROM qichacha_news_categories WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+
+    // 如果更新类别编码，检查是否与其他记录重复
+    if (category_code && category_code !== existing[0].category_code) {
+      const duplicate = await db.query(
+        'SELECT F_Id FROM qichacha_news_categories WHERE category_code = ? AND F_Id != ? AND F_DeleteMark = 0',
+        [category_code, id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({ 
+          success: false, 
+          message: `类别编码"${category_code}"已存在` 
+        });
+      }
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+    
+    if (category_code !== undefined) {
+      updateFields.push('category_code = ?');
+      updateValues.push(category_code);
+    }
+    if (category_name !== undefined) {
+      updateFields.push('category_name = ?');
+      updateValues.push(category_name);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ success: false, message: '没有要更新的字段' });
+    }
+    
+    updateValues.push(id);
+    await db.execute(
+      `UPDATE qichacha_news_categories SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+      updateValues
+    );
+
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+
+    res.json({ success: true, message: '企查查新闻类别更新成功' });
+  } catch (error) {
+    console.error('更新企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '更新类别失败：' + error.message });
+  }
+});
+
+// 删除企查查新闻类别（逻辑删除）
+router.delete('/qichacha-news-category/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT F_Id FROM qichacha_news_categories WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '类别不存在' });
+    }
+
+    await db.execute(
+      'UPDATE qichacha_news_categories SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
+      [userId, id]
+    );
+    
+    // 清除类别映射缓存
+    clearCategoryMapCache();
+    
+    res.json({ success: true, message: '企查查新闻类别删除成功' });
+  } catch (error) {
+    console.error('删除企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '删除类别失败' });
+  }
+});
+
+// 下载企查查新闻类别导入模板
+router.get('/qichacha-news-categories/template', async (req, res) => {
+  try {
+    const workbook = xlsx.utils.book_new();
+    const worksheet = xlsx.utils.aoa_to_sheet([
+      ['类别编号', '类别描述'],
+      ['10000', '信用预警'],
+      ['10001', '承诺失信']
+    ]);
+    
+    // 设置列宽
+    worksheet['!cols'] = [
+      { wch: 15 }, // 类别编号
+      { wch: 30 }  // 类别描述
+    ];
+    
+    xlsx.utils.book_append_sheet(workbook, worksheet, '企查查新闻类别');
+    const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent('企查查新闻类别导入模板.xlsx')}"`);
+    res.send(buffer);
+  } catch (error) {
+    console.error('生成企查查新闻类别模板失败：', error);
+    res.status(500).json({ success: false, message: '模板生成失败' });
+  }
+});
+
+// 批量导入企查查新闻类别（Excel文件）
+router.post('/qichacha-news-categories/import', excelUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: '请上传Excel文件' });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      return res.status(400).json({ success: false, message: '未检测到数据工作表' });
+    }
+
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'Excel内容为空' });
+    }
+
+    // 验证表头
+    const headers = rows[0].map((cell) => String(cell || '').trim());
+    if (headers[0] !== '类别编号' || headers[1] !== '类别描述') {
+      return res.status(400).json({ success: false, message: '模板表头不匹配，请下载最新模板' });
+    }
+
+    // 获取数据行（跳过表头）
+    const dataRows = rows.slice(1).filter((row) => {
+      const code = String(row[0] || '').trim();
+      const name = String(row[1] || '').trim();
+      return code !== '' || name !== '';
+    });
+
+    if (!dataRows.length) {
+      return res.status(400).json({ success: false, message: '未检测到可导入的数据' });
+    }
+
+    const results = {
+      success: 0,
+      duplicate: [],
+      failed: 0,
+      errors: []
+    };
+
+    // 批量查询所有已存在的类别编码（提高性能）
+    const allExistingCategories = await db.query('SELECT category_code FROM qichacha_news_categories');
+    const existingCodesSet = new Set(allExistingCategories.map(cat => cat.category_code));
+
+    for (let i = 0; i < dataRows.length; i++) {
+      const rowNumber = i + 2; // Excel行号（从第2行开始，因为第1行是表头）
+      const [codeCell, nameCell] = dataRows[i];
+      
+      const category_code = String(codeCell || '').trim();
+      const category_name = String(nameCell || '').trim();
+
+      // 验证必填字段
+      if (!category_code) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code || '(空)',
+          message: '类别编号不能为空'
+        });
+        continue;
+      }
+
+      if (!category_name) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code,
+          message: '类别描述不能为空'
+        });
+        continue;
+      }
+
+      // 检查类别编码是否已存在
+      if (existingCodesSet.has(category_code)) {
+        results.duplicate.push({
+          row: rowNumber,
+          category_code: category_code,
+          category_name: category_name
+        });
+        continue;
+      }
+
+      // 导入新类别
+      try {
+        const categoryId = await generateId('qichacha_news_categories');
+        await db.execute(
+          'INSERT INTO qichacha_news_categories (F_Id, category_code, category_name) VALUES (?, ?, ?)',
+          [categoryId, category_code, category_name]
+        );
+        results.success++;
+        // 添加到已存在集合，避免同一批导入中重复
+        existingCodesSet.add(category_code);
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          row: rowNumber,
+          category_code: category_code,
+          message: error.message || '导入失败'
+        });
+      }
+    }
+
+    // 清除类别映射缓存
+    if (results.success > 0) {
+      clearCategoryMapCache();
+    }
+
+    res.json({ 
+      success: true, 
+      message: `导入完成：成功 ${results.success} 条，重复 ${results.duplicate.length} 条，失败 ${results.failed} 条`,
+      data: results
+    });
+  } catch (error) {
+    console.error('批量导入企查查新闻类别失败：', error);
+    res.status(500).json({ success: false, message: '导入失败：' + error.message });
+  }
+});
+
+// 更新系统配置（兼容旧接口）
+router.put('/config', [
+  body('qichacha_app_key').optional(),
+  body('qichacha_secret_key').optional(),
+  body('qichacha_daily_limit').optional().isInt({ min: 0 }).withMessage('每日查询限制必须是非负整数'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { qichacha_app_key, qichacha_secret_key, qichacha_daily_limit } = req.body;
+
+    // 检查是否已存在配置
+    const existing = await db.query('SELECT F_Id FROM qichacha_config WHERE F_DeleteMark = 0 ORDER BY F_Id DESC LIMIT 1');
+    
+    if (existing.length > 0) {
+      // 更新现有配置
+      const updateFields = [];
+      const updateValues = [];
+      
+      if (qichacha_app_key !== undefined) {
+        updateFields.push('qichacha_app_key = ?');
+        updateValues.push(qichacha_app_key);
+      }
+      
+      if (qichacha_secret_key !== undefined) {
+        updateFields.push('qichacha_secret_key = ?');
+        updateValues.push(qichacha_secret_key);
+      }
+      
+      if (qichacha_daily_limit !== undefined) {
+        updateFields.push('qichacha_daily_limit = ?');
+        updateValues.push(qichacha_daily_limit);
+      }
+      
+      if (updateFields.length > 0) {
+        updateValues.push(existing[0].F_Id);
+        await db.execute(
+          `UPDATE qichacha_config SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+          updateValues
+        );
+      }
+    } else {
+      // 创建新配置
+      const configId = await generateId('qichacha_config');
+      await db.execute(
+        'INSERT INTO qichacha_config (F_Id, qichacha_app_key, qichacha_secret_key, qichacha_daily_limit) VALUES (?, ?, ?, ?)',
+        [
+          configId,
+          qichacha_app_key || '',
+          qichacha_secret_key || '',
+          qichacha_daily_limit || 100
+        ]
+      );
+    }
+
+    res.json({ success: true, message: '配置更新成功' });
+  } catch (error) {
+    console.error('更新系统配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败' });
+  }
+});
+
+// 邮件配置相关路由
+const nodemailer = require('nodemailer');
+
+// 获取所有邮件配置
+router.get('/email-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+
+    // 获取总数
+    const totalResult = await db.query('SELECT COUNT(*) as total FROM email_config WHERE F_DeleteMark = 0');
+    const total = totalResult[0].total;
+
+    // 获取分页数据
+    const configs = await db.query(`
+      SELECT ec.F_Id AS id, ec.app_id, a.app_name, ec.smtp_host, ec.pop_host, ec.from_email, ec.from_name, ec.pop_user, ec.is_active, ec.F_CreatorTime AS created_at, ec.F_LastModifyTime AS updated_at 
+      FROM email_config ec
+      LEFT JOIN applications a ON ec.app_id = a.F_Id
+      WHERE ec.F_DeleteMark = 0
+      ORDER BY ec.F_CreatorTime DESC
+      LIMIT ? OFFSET ?
+    `, [pageSize, offset]);
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    console.error('获取邮件配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取应用列表
+router.get('/applications', async (req, res) => {
+  try {
+    const apps = await db.query('SELECT F_Id AS id, app_name FROM applications ORDER BY app_name');
+    res.json({
+      success: true,
+      data: apps
+    });
+  } catch (error) {
+    console.error('获取应用列表失败：', error);
+    res.status(500).json({ success: false, message: '获取应用列表失败' });
+  }
+});
+
+// 获取单个邮件配置（不包含密码）
+router.get('/email-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query(
+      `SELECT ec.F_Id AS id, ec.app_id, a.app_name, ec.smtp_host, ec.smtp_port, ec.smtp_secure, ec.smtp_user, ec.from_email, ec.from_name, 
+       ec.pop_host, ec.pop_port, ec.pop_secure, ec.pop_user, ec.is_active 
+       FROM email_config ec
+       LEFT JOIN applications a ON ec.app_id = a.F_Id
+       WHERE ec.F_Id = ? AND ec.F_DeleteMark = 0`,
+      [id]
+    );
+    if (configs.length > 0) {
+      res.json({
+        success: true,
+        data: configs[0]
+      });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    console.error('获取邮件配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 创建邮件配置
+router.post('/email-config', [
+  body('app_id').notEmpty().withMessage('应用ID不能为空'),
+  body('smtp_host').notEmpty().withMessage('SMTP服务器地址不能为空'),
+  body('smtp_port').isInt({ min: 1, max: 65535 }).withMessage('SMTP端口必须是1-65535之间的整数'),
+  body('smtp_secure').optional().isBoolean().withMessage('smtp_secure必须是布尔值'),
+  body('smtp_user').notEmpty().withMessage('SMTP用户名不能为空'),
+  body('smtp_password').notEmpty().withMessage('SMTP密码不能为空'),
+  body('from_email').isEmail().withMessage('发件人邮箱格式不正确'),
+  body('from_name').optional(),
+  body('pop_host').optional(),
+  body('pop_port').optional().isInt({ min: 1, max: 65535 }).withMessage('POP端口必须是1-65535之间的整数'),
+  body('pop_secure').optional().isBoolean().withMessage('pop_secure必须是布尔值'),
+  body('pop_user').optional(),
+  body('pop_password').optional(),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password, from_email, from_name,
+            pop_host, pop_port, pop_secure, pop_user, pop_password } = req.body;
+
+    // 检查应用是否存在
+    const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+    if (appExists.length === 0) {
+      return res.status(400).json({ success: false, message: '应用不存在' });
+    }
+
+    // 检查该应用是否已有邮件配置
+    const existing = await db.query('SELECT F_Id FROM email_config WHERE app_id = ? AND F_DeleteMark = 0', [app_id]);
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, message: '该应用已存在邮件配置' });
+    }
+
+    const configId = await generateId('email_config');
+    await db.execute(
+      `INSERT INTO email_config 
+       (F_Id, app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password, from_email, from_name,
+        pop_host, pop_port, pop_secure, pop_user, pop_password) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        configId,
+        app_id,
+        smtp_host,
+        smtp_port,
+        smtp_secure ? 1 : 0,
+        smtp_user,
+        smtp_password,
+        from_email,
+        from_name || '',
+        pop_host || null,
+        pop_port || null,
+        pop_secure ? 1 : 0,
+        pop_user || null,
+        pop_password || null
+      ]
+    );
+
+    // 记录创建日志
+    const userId = req.headers['x-user-id'] || null;
+    if (userId) {
+      await logEmailConfigChange(
+        configId,
+        {},
+        {
+          app_id,
+          smtp_host,
+          smtp_port: smtp_port.toString(),
+          smtp_secure: smtp_secure ? '1' : '0',
+          smtp_user,
+          from_email,
+          from_name: from_name || '',
+          pop_host: pop_host || '',
+          pop_port: pop_port ? pop_port.toString() : '',
+          pop_secure: pop_secure ? '1' : '0',
+          pop_user: pop_user || '',
+          is_active: '1'
+        },
+        userId
+      );
+    }
+
+    res.json({ success: true, message: '邮件配置创建成功', data: { id: configId } });
+  } catch (error) {
+    console.error('创建邮件配置失败：', error);
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新邮件配置
+router.put('/email-config/:id', [
+  body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
+  body('smtp_host').optional().notEmpty().withMessage('SMTP服务器地址不能为空'),
+  body('smtp_port').optional().isInt({ min: 1, max: 65535 }).withMessage('SMTP端口必须是1-65535之间的整数'),
+  body('smtp_secure').optional().isBoolean().withMessage('smtp_secure必须是布尔值'),
+  body('smtp_user').optional().notEmpty().withMessage('SMTP用户名不能为空'),
+  body('smtp_password').optional().notEmpty().withMessage('SMTP密码不能为空'),
+  body('from_email').optional().isEmail().withMessage('发件人邮箱格式不正确'),
+  body('from_name').optional(),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { app_id, smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password, from_email, from_name,
+            pop_host, pop_port, pop_secure, pop_user, pop_password } = req.body;
+
+    // 检查配置是否存在，并获取旧数据用于日志记录
+    const existingConfigs = await db.query('SELECT * FROM email_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    const oldConfig = existingConfigs[0];
+
+    // 如果更新应用ID，检查应用是否存在，以及是否重复
+    if (app_id) {
+      const appExists = await db.query('SELECT F_Id FROM applications WHERE F_Id = ?', [app_id]);
+      if (appExists.length === 0) {
+        return res.status(400).json({ success: false, message: '应用不存在' });
+      }
+      
+      const duplicate = await db.query('SELECT F_Id FROM email_config WHERE app_id = ? AND F_Id != ? AND F_DeleteMark = 0', [app_id, id]);
+      if (duplicate.length > 0) {
+        return res.status(400).json({ success: false, message: '该应用已存在邮件配置' });
+      }
+    }
+
+    // 构建更新字段
+    const updateFields = [];
+    const updateValues = [];
+
+    if (app_id !== undefined) {
+      updateFields.push('app_id = ?');
+      updateValues.push(app_id);
+    }
+    if (smtp_host !== undefined) {
+      updateFields.push('smtp_host = ?');
+      updateValues.push(smtp_host);
+    }
+    if (smtp_port !== undefined) {
+      updateFields.push('smtp_port = ?');
+      updateValues.push(smtp_port);
+    }
+    if (smtp_secure !== undefined) {
+      updateFields.push('smtp_secure = ?');
+      updateValues.push(smtp_secure ? 1 : 0);
+    }
+    if (smtp_user !== undefined) {
+      updateFields.push('smtp_user = ?');
+      updateValues.push(smtp_user);
+    }
+    // 只有明确提供了非空密码时才更新
+    if (smtp_password !== undefined && smtp_password !== null && smtp_password !== '') {
+      updateFields.push('smtp_password = ?');
+      updateValues.push(smtp_password);
+    }
+    if (from_email !== undefined) {
+      updateFields.push('from_email = ?');
+      updateValues.push(from_email);
+    }
+    if (from_name !== undefined) {
+      updateFields.push('from_name = ?');
+      updateValues.push(from_name);
+    }
+    if (pop_host !== undefined) {
+      updateFields.push('pop_host = ?');
+      updateValues.push(pop_host || null);
+    }
+    if (pop_port !== undefined) {
+      updateFields.push('pop_port = ?');
+      updateValues.push(pop_port || null);
+    }
+    if (pop_secure !== undefined) {
+      updateFields.push('pop_secure = ?');
+      updateValues.push(pop_secure ? 1 : 0);
+    }
+    if (pop_user !== undefined) {
+      updateFields.push('pop_user = ?');
+      updateValues.push(pop_user || null);
+    }
+    if (pop_password !== undefined && pop_password !== '') {
+      updateFields.push('pop_password = ?');
+      updateValues.push(pop_password);
+    }
+
+    if (updateFields.length > 0) {
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE email_config SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+        updateValues
+      );
+
+      // 记录更新日志
+      const userId = req.headers['x-user-id'] || null;
+      if (userId) {
+        // 获取更新后的数据
+        const updatedConfigs = await db.query('SELECT * FROM email_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+        const newConfig = updatedConfigs[0];
+        
+        // 构建新旧数据对比（只记录变更的字段）
+        const oldData = {
+          app_id: oldConfig.app_id || '',
+          smtp_host: oldConfig.smtp_host || '',
+          smtp_port: oldConfig.smtp_port ? oldConfig.smtp_port.toString() : '',
+          smtp_secure: oldConfig.smtp_secure ? '1' : '0',
+          smtp_user: oldConfig.smtp_user || '',
+          from_email: oldConfig.from_email || '',
+          from_name: oldConfig.from_name || '',
+          pop_host: oldConfig.pop_host || '',
+          pop_port: oldConfig.pop_port ? oldConfig.pop_port.toString() : '',
+          pop_secure: oldConfig.pop_secure ? '1' : '0',
+          pop_user: oldConfig.pop_user || '',
+          is_active: oldConfig.is_active ? '1' : '0'
+        };
+        
+        const newData = {
+          app_id: newConfig.app_id || '',
+          smtp_host: newConfig.smtp_host || '',
+          smtp_port: newConfig.smtp_port ? newConfig.smtp_port.toString() : '',
+          smtp_secure: newConfig.smtp_secure ? '1' : '0',
+          smtp_user: newConfig.smtp_user || '',
+          from_email: newConfig.from_email || '',
+          from_name: newConfig.from_name || '',
+          pop_host: newConfig.pop_host || '',
+          pop_port: newConfig.pop_port ? newConfig.pop_port.toString() : '',
+          pop_secure: newConfig.pop_secure ? '1' : '0',
+          pop_user: newConfig.pop_user || '',
+          is_active: newConfig.is_active ? '1' : '0'
+        };
+        
+        await logEmailConfigChange(id, oldData, newData, userId);
+      }
+    }
+
+    res.json({ success: true, message: '邮件配置更新成功' });
+  } catch (error) {
+    console.error('更新邮件配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 删除邮件配置（逻辑删除）
+router.delete('/email-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
+    const existing = await db.query('SELECT F_Id FROM email_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+
+    await db.execute(
+      'UPDATE email_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ? AND F_DeleteMark = 0',
+      [userId, id]
+    );
+    res.json({ success: true, message: '邮件配置删除成功' });
+  } catch (error) {
+    console.error('删除邮件配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 获取邮件配置的变更日志
+router.get('/email-config/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'email_config' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('获取邮件配置日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 测试邮件连接（使用表单数据，用于新增配置时测试）
+router.post('/email-config/test', async (req, res) => {
+  try {
+    const { smtp_host, smtp_port, smtp_secure, smtp_user, smtp_password, from_email, from_name, test_email } = req.body;
+
+    if (!test_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(test_email)) {
+      return res.status(400).json({ success: false, message: '请输入有效的测试邮箱地址' });
+    }
+
+    if (!smtp_host || !smtp_port || !smtp_user || !smtp_password || !from_email) {
+      return res.status(400).json({ success: false, message: '请填写完整的SMTP配置信息' });
+    }
+
+    // 创建邮件传输器
+    const port = parseInt(smtp_port, 10);
+    const useSecure = smtp_secure === true || smtp_secure === 1;
+    
+    // 根据端口和配置自动调整SSL/TLS设置
+    // 端口465通常使用SSL（secure: true）
+    // 端口587通常使用TLS/STARTTLS（secure: false, requireTLS: true）
+    const transporterConfig = {
+      host: smtp_host,
+      port: port,
+      auth: {
+        user: smtp_user,
+        pass: smtp_password
+      }
+    };
+
+    // 对于端口465，使用SSL
+    if (port === 465) {
+      transporterConfig.secure = true;
+    } else if (port === 587) {
+      // 对于端口587，使用STARTTLS
+      transporterConfig.secure = false;
+      transporterConfig.requireTLS = true;
+    } else {
+      // 其他端口，根据用户配置
+      transporterConfig.secure = useSecure;
+      if (useSecure && port !== 465) {
+        transporterConfig.requireTLS = true;
+      }
+    }
+
+    const transporter = nodemailer.createTransport(transporterConfig);
+
+    // 测试连接
+    try {
+      await transporter.verify();
+    } catch (verifyError) {
+      return res.status(400).json({
+        success: false,
+        message: 'SMTP连接失败：' + verifyError.message
+      });
+    }
+
+    // 发送测试邮件
+    const mailOptions = {
+      from: `"${from_name || from_email}" <${from_email}>`,
+      to: test_email,
+      subject: '邮件配置测试',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h2>邮件配置测试</h2>
+          <p>这是一封测试邮件，用于验证邮件配置是否正确。</p>
+          <p><strong>SMTP服务器：</strong>${smtp_host}:${smtp_port}</p>
+          <p><strong>发件人：</strong>${from_email}</p>
+          <p>如果您收到这封邮件，说明邮件配置已成功！</p>
+          <hr>
+          <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿回复。</p>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({
+      success: true,
+      message: `测试邮件已发送到 ${test_email}，请查收`
+    });
+  } catch (error) {
+    console.error('测试邮件发送失败：', error);
+    res.status(500).json({
+      success: false,
+      message: '测试邮件发送失败：' + error.message
+    });
+  }
+});
+
+// 测试邮件连接（使用已保存的配置）
+router.post('/email-config/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { test_email } = req.body;
+
+    if (!test_email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(test_email)) {
+      return res.status(400).json({ success: false, message: '请输入有效的测试邮箱地址' });
+    }
+
+    const configs = await db.query('SELECT * FROM email_config WHERE F_Id = ?', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+
+    const config = configs[0];
+
+    // 创建邮件传输器
+    const port = parseInt(config.smtp_port, 10);
+    const useSecure = config.smtp_secure === 1;
+    
+    // 根据端口和配置自动调整SSL/TLS设置
+    const transporterConfig = {
+      host: config.smtp_host,
+      port: port,
+      auth: {
+        user: config.smtp_user,
+        pass: config.smtp_password
+      }
+    };
+
+    // 对于端口465，使用SSL
+    if (port === 465) {
+      transporterConfig.secure = true;
+    } else if (port === 587) {
+      // 对于端口587，使用STARTTLS
+      transporterConfig.secure = false;
+      transporterConfig.requireTLS = true;
+    } else {
+      // 其他端口，根据用户配置
+      transporterConfig.secure = useSecure;
+      if (useSecure && port !== 465) {
+        transporterConfig.requireTLS = true;
+      }
+    }
+
+    const transporter = nodemailer.createTransport(transporterConfig);
+
+    // 测试连接
+    try {
+      await transporter.verify();
+    } catch (verifyError) {
+      return res.status(400).json({
+        success: false,
+        message: 'SMTP连接失败：' + verifyError.message
+      });
+    }
+
+    // 发送测试邮件
+    const mailOptions = {
+      from: `"${config.from_name || config.from_email}" <${config.from_email}>`,
+      to: test_email,
+      subject: '邮件配置测试',
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+          <h2>邮件配置测试</h2>
+          <p>这是一封测试邮件，用于验证邮件配置是否正确。</p>
+          <p><strong>应用名称：</strong>${config.app_name}</p>
+          <p><strong>SMTP服务器：</strong>${config.smtp_host}:${config.smtp_port}</p>
+          <p><strong>发件人：</strong>${config.from_email}</p>
+          <p>如果您收到这封邮件，说明邮件配置已成功！</p>
+          <hr>
+          <p style="color: #999; font-size: 12px;">此邮件由系统自动发送，请勿回复。</p>
+        </div>
+      `
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({
+      success: true,
+      message: `测试邮件已发送到 ${test_email}，请查收`
+    });
+  } catch (error) {
+    console.error('测试邮件发送失败：', error);
+    res.status(500).json({
+      success: false,
+      message: '测试邮件发送失败：' + error.message
+    });
+  }
+});
+
+// 系统基础配置相关路由
+const path = require('path');
+const fs = require('fs');
+const sharp = require('sharp');
+const { ensureUploadsDir } = require('../utils/uploadsPath');
+
+const uploadsDir = ensureUploadsDir();
+
+// 配置multer用于文件上传
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = path.extname(file.originalname);
+    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB
+  },
+  fileFilter: function (req, file, cb) {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('只允许上传图片文件'));
+    }
+  }
+});
+
+const formatDateToYMD = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeHolidayDate = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatDateToYMD(value);
+  }
+  if (typeof value === 'number' && !Number.isNaN(value)) {
+    if (xlsx?.SSF?.parse_date_code) {
+      const parsed = xlsx.SSF.parse_date_code(value);
+      if (parsed && parsed.y && parsed.m && parsed.d) {
+        const jsDate = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+        return formatDateToYMD(jsDate);
+      }
+    }
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed
+      .replace(/[年\/\\.]/g, '-')
+      .replace(/月/g, '-')
+      .replace(/日/g, '')
+      .replace(/--+/g, '-');
+    const parsedDate = new Date(normalized);
+    if (!Number.isNaN(parsedDate.getTime())) {
+      return formatDateToYMD(parsedDate);
+    }
+  }
+  return null;
+};
+
+const normalizeIsWorkdayValue = (value) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 1 : 0;
+  }
+  if (typeof value === 'number') {
+    if (value === 1) return 1;
+    if (value === 0) return 0;
+  }
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+  const lower = text.toLowerCase();
+  if (
+    ['1', 'true', 'yes', 'y', 'workday'].includes(lower) ||
+    ['是', '上班', '工作日', '班'].some((token) => text.includes(token))
+  ) {
+    return 1;
+  }
+  if (
+    ['0', 'false', 'no', 'n', 'holiday', 'weekend'].includes(lower) ||
+    ['否', '休', '休息', '放假', '假', '周末'].some((token) => text.includes(token))
+  ) {
+    return 0;
+  }
+  return null;
+};
+
+const normalizeHolidayType = (value, isWorkday) => {
+  const trimmed = (value || '').trim();
+  if (HOLIDAY_TYPES.includes(trimmed)) {
+    return trimmed;
+  }
+  return isWorkday ? '工作日' : '法定节假日';
+};
+
+const upsertHolidayRecord = async ({ holidayDate, isWorkday, workdayType, holidayName, userId }) => {
+  const existing = await db.query(
+    'SELECT F_Id, F_DeleteMark FROM holiday_calendar WHERE holiday_date = ?',
+    [holidayDate]
+  );
+
+  if (existing.length === 0) {
+    const newId = await generateId('holiday_calendar');
+    await db.execute(
+      `INSERT INTO holiday_calendar
+       (F_Id, holiday_date, is_workday, workday_type, holiday_name, F_CreatorUserId, F_LastModifyUserId)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [newId, holidayDate, isWorkday, workdayType, holidayName, userId, userId]
+    );
+    return newId;
+  }
+
+  const record = existing[0];
+  await db.execute(
+    `UPDATE holiday_calendar
+     SET F_DeleteMark = 0,
+         F_DeleteTime = NULL,
+         F_DeleteUserId = NULL,
+         is_workday = ?,
+         workday_type = ?,
+         holiday_name = ?,
+         F_LastModifyUserId = ?,
+         F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_Id = ?`,
+    [isWorkday, workdayType, holidayName, userId, record.F_Id]
+  );
+  return record.F_Id;
+};
+
+const logHolidayChange = async (recordId, oldData, newData, userId) => {
+  if (!userId) {
+    return;
+  }
+  const fields = ['holiday_date', 'is_workday', 'workday_type', 'holiday_name'];
+  for (const field of fields) {
+    const oldValue = oldData[field] !== undefined && oldData[field] !== null ? String(oldData[field]) : '';
+    const newValue = newData[field] !== undefined && newData[field] !== null ? String(newData[field]) : '';
+    if (oldValue !== newValue) {
+      const logId = await generateId('data_change_log');
+      await db.execute(
+        `INSERT INTO data_change_log
+         (F_Id, table_name, record_id, changed_field, old_value, new_value, F_CreatorUserId)
+         VALUES (?, 'holiday_calendar', ?, ?, ?, ?, ?)`,
+        [logId, recordId, field, oldValue, newValue, userId]
+      );
+    }
+  }
+};
+
+const getMimeTypeByExtension = (filename) => {
+  const ext = path.extname(filename).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+};
+
+const storeConfigFile = async (configKey, filename, mimeType) => {
+  try {
+    if (!filename) return;
+    const filePath = path.join(uploadsDir, filename);
+    if (!fs.existsSync(filePath)) {
+      console.error(
+        `[系统配置] 无法写入 system_file_storage：磁盘上不存在文件 ${filePath}（重启后可能无法从数据库恢复 Logo）`
+      );
+      return;
+    }
+    const fileData = fs.readFileSync(filePath);
+    const fileSize = fileData.length;
+    const existing = await db.query(
+      'SELECT F_Id FROM system_file_storage WHERE config_key = ?',
+      [configKey]
+    );
+    if (existing.length > 0) {
+      await db.execute(
+        'UPDATE system_file_storage SET filename = ?, mime_type = ?, file_size = ?, file_data = ? WHERE config_key = ?',
+        [filename, mimeType, fileSize, fileData, configKey]
+      );
+    } else {
+      const fileId = await generateId('system_file_storage');
+      await db.execute(
+        'INSERT INTO system_file_storage (F_Id, config_key, filename, mime_type, file_size, file_data) VALUES (?, ?, ?, ?, ?, ?)',
+        [fileId, configKey, filename, mimeType, fileSize, fileData]
+      );
+    }
+  } catch (error) {
+    console.error(
+      `[系统配置] 存储配置文件 ${configKey} 到 system_file_storage 失败（Logo/背景在仅删磁盘时可能丢失）：`,
+      error.message || error
+    );
+  }
+};
+
+const restoreConfigFile = async (configKey, filename) => {
+  if (!filename) return '';
+  const filePath = path.join(uploadsDir, filename);
+  if (fs.existsSync(filePath)) {
+    return filename;
+  }
+  try {
+    const rows = await db.query(
+      'SELECT filename, file_data FROM system_file_storage WHERE config_key = ?',
+      [configKey]
+    );
+    if (rows.length === 0 || !rows[0].file_data) {
+      return '';
+    }
+    const effectiveFilename = rows[0].filename || filename;
+    const targetPath = path.join(uploadsDir, effectiveFilename);
+    fs.writeFileSync(targetPath, rows[0].file_data);
+    return effectiveFilename;
+  } catch (error) {
+    console.error(`恢复配置文件 ${configKey} 失败：`, error);
+    return '';
+  }
+};
+
+// 获取系统基础配置
+router.get('/basic-config', async (req, res) => {
+  try {
+    const configs = await db.query('SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?, ?)', 
+      ['system_name', 'logo', 'login_background']);
+    
+    const result = {
+      system_name: '',
+      logo: '',
+      login_background: ''
+    };
+
+    for (const config of configs) {
+      if (config.config_key === 'system_name') {
+        result.system_name = config.config_value || '';
+      } else if (config.config_key === 'logo') {
+        const filename = await restoreConfigFile('logo', config.config_value);
+        result.logo = filename;
+      } else if (config.config_key === 'login_background') {
+        const filename = await restoreConfigFile('login_background', config.config_value);
+        result.login_background = filename;
+      }
+    }
+    
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.json({ success: true, data: result });
+  } catch (error) {
+    console.error('获取系统基础配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 更新系统基础配置
+router.put('/basic-config', async (req, res) => {
+  try {
+    const { system_name, logo, login_background } = req.body;
+    
+    const configs = [];
+    if (system_name !== undefined) {
+      configs.push({ key: 'system_name', value: system_name });
+    }
+    if (logo !== undefined) {
+      configs.push({ key: 'logo', value: logo });
+    }
+    if (login_background !== undefined) {
+      configs.push({ key: 'login_background', value: login_background });
+    }
+
+    if (configs.length === 0) {
+      return res.json({ success: true, message: '无可更新的配置' });
+    }
+    
+    for (const config of configs) {
+      const existing = await db.query('SELECT F_Id FROM system_config WHERE config_key = ?', [config.key]);
+      const value = config.value ?? '';
+
+      if (existing.length > 0) {
+        await db.execute('UPDATE system_config SET config_value = ? WHERE config_key = ?', 
+          [value, config.key]);
+      } else {
+        const configId = await generateId('system_config');
+        await db.execute(
+          'INSERT INTO system_config (F_Id, config_key, config_value, config_desc) VALUES (?, ?, ?, ?)',
+          [configId, config.key, value, `系统${config.key === 'system_name' ? '名称' : config.key === 'logo' ? 'Logo' : '登录页底图'}`]
+        );
+      }
+    }
+
+    const latestConfigs = await db.query(
+      'SELECT config_key, config_value FROM system_config WHERE config_key IN (?, ?, ?)',
+      ['system_name', 'logo', 'login_background']
+    );
+
+    const result = {
+      system_name: '',
+      logo: '',
+      login_background: ''
+    };
+
+    for (const config of latestConfigs) {
+      if (config.config_key === 'system_name') {
+        result.system_name = config.config_value || '';
+      } else if (config.config_key === 'logo') {
+        result.logo = config.config_value || '';
+      } else if (config.config_key === 'login_background') {
+        result.login_background = config.config_value || '';
+      }
+    }
+
+    res.json({ success: true, message: '系统配置更新成功', data: result });
+  } catch (error) {
+    console.error('更新系统基础配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 文件上传
+router.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: '请选择要上传的文件' });
+    }
+    
+    const fileType = req.body.type; // 'logo' 或 'background'
+    console.log('========== 文件上传开始 ==========');
+    console.log('接收到的 fileType:', fileType, '类型:', typeof fileType);
+    console.log('req.body:', JSON.stringify(req.body));
+    
+    const configKey = fileType === 'logo' ? 'logo' : 'login_background';
+    const originalPath = req.file.path;
+    const originalExt = path.extname(req.file.originalname).toLowerCase();
+    // 从req.file.filename中提取基础名称（不包含扩展名）
+    const uploadedFilename = req.file.filename;
+    const uploadedExt = path.extname(uploadedFilename);
+    const baseName = path.basename(uploadedFilename, uploadedExt);
+    
+    // 调试日志
+    console.log('文件上传信息:', {
+      fileType,
+      configKey,
+      originalPath,
+      originalExt,
+      uploadedFilename,
+      uploadedExt,
+      baseName
+    });
+    
+    // 根据文件类型选择输出格式：logo 使用 PNG（支持透明），背景图使用 JPEG
+    const finalExt = fileType === 'logo' ? '.png' : '.jpg';
+    const compressedPath = path.join(uploadsDir, `${baseName}${finalExt}`);
+    
+    console.log('========== 文件处理配置 ==========');
+    console.log('finalExt:', finalExt);
+    console.log('compressedPath:', compressedPath);
+    console.log('fileType === "logo":', fileType === 'logo');
+    console.log('fileType === "background":', fileType === 'background');
+    console.log('will use PNG:', fileType === 'logo');
+    console.log('===================================');
+    
+    try {
+      // 根据文件类型设置压缩参数
+      let sharpInstance = sharp(originalPath);
+      
+      if (fileType === 'logo') {
+        // Logo: 压缩为120x120，保留透明背景，使用 PNG 格式
+        console.log('========== 处理 Logo 文件 ==========');
+        console.log('将输出为 PNG 格式:', compressedPath);
+        // 不设置背景色，让 sharp 自动保留透明通道
+        sharpInstance = sharpInstance.resize(120, 120, {
+          fit: 'contain'
+        });
+        // 输出为 PNG 格式以保留透明度
+        await sharpInstance.png({ 
+          quality: 90,
+          compressionLevel: 9,
+          adaptiveFiltering: true,
+          palette: false // 不使用调色板，保持真彩色和透明
+        }).toFile(compressedPath);
+        console.log('Logo PNG 文件生成成功:', compressedPath);
+        console.log('文件是否存在:', fs.existsSync(compressedPath));
+        console.log('===================================');
+      } else if (fileType === 'background') {
+        // 背景图: 压缩为1920x1080，使用 JPEG 格式
+        sharpInstance = sharpInstance.resize(1920, 1080, {
+          fit: 'cover',
+          position: 'center'
+        });
+        // 输出为 JPEG 格式
+        await sharpInstance.jpeg({ quality: 75 }).toFile(compressedPath);
+      } else {
+        // 其他类型，默认使用原格式
+        await sharpInstance.toFile(compressedPath);
+      }
+      
+      // 删除原始文件，使用压缩后的文件
+      if (fs.existsSync(originalPath)) {
+        fs.unlinkSync(originalPath);
+      }
+      const finalFilename = path.basename(compressedPath);
+      
+      console.log('文件压缩成功:', {
+        original: originalPath,
+        compressed: compressedPath,
+        finalFilename: finalFilename,
+        exists: fs.existsSync(compressedPath)
+      });
+      
+      // 如果是更新logo或背景，删除旧文件
+      if (fileType === 'logo' || fileType === 'background') {
+        const existing = await db.query('SELECT config_value FROM system_config WHERE config_key = ?', [configKey]);
+        
+        if (existing.length > 0 && existing[0].config_value) {
+          const oldFilePath = path.join(uploadsDir, existing[0].config_value);
+          if (fs.existsSync(oldFilePath)) {
+            try {
+              fs.unlinkSync(oldFilePath);
+            } catch (err) {
+              console.warn('删除旧文件失败:', err.message);
+            }
+          }
+        }
+      }
+      
+      const mimeType = fileType === 'logo' ? 'image/png' : 'image/jpeg';
+      await storeConfigFile(configKey, finalFilename, mimeType);
+      res.json({ 
+        success: true, 
+        message: '文件上传并压缩成功',
+        filename: finalFilename
+      });
+    } catch (compressError) {
+      console.error('图片压缩失败，使用原文件:', compressError);
+      console.error('压缩错误详情:', {
+        fileType,
+        originalPath,
+        compressedPath,
+        error: compressError.message,
+        stack: compressError.stack
+      });
+      
+      // 如果压缩失败，对于 logo 类型，尝试直接将原文件转换为 PNG
+      if (fileType === 'logo') {
+        try {
+          console.log('压缩失败，尝试直接转换原文件为 PNG 格式...');
+          const pngPath = path.join(uploadsDir, `${baseName}.png`);
+          await sharp(originalPath)
+            .resize(120, 120, { fit: 'contain' })
+            .png({ quality: 90, compressionLevel: 9, adaptiveFiltering: true, palette: false })
+            .toFile(pngPath);
+          
+          const finalFilename = path.basename(pngPath);
+          if (fs.existsSync(originalPath)) {
+            fs.unlinkSync(originalPath);
+          }
+          
+          // 删除旧文件
+          const existing = await db.query('SELECT config_value FROM system_config WHERE config_key = ?', [configKey]);
+          if (existing.length > 0 && existing[0].config_value) {
+            const oldFilePath = path.join(uploadsDir, existing[0].config_value);
+            if (fs.existsSync(oldFilePath)) {
+              try {
+                fs.unlinkSync(oldFilePath);
+              } catch (err) {
+                console.warn('删除旧文件失败:', err.message);
+              }
+            }
+          }
+          
+          await storeConfigFile(configKey, finalFilename, 'image/png');
+          res.json({ 
+            success: true, 
+            message: '文件上传成功（已转换为 PNG 格式）',
+            filename: finalFilename
+          });
+          return;
+        } catch (retryError) {
+          console.error('PNG 转换也失败:', retryError);
+        }
+      }
+      
+      // 如果都失败了，使用原文件
+      const finalFilename = req.file.filename;
+      
+      // 如果是更新logo或背景，删除旧文件
+      if (fileType === 'logo' || fileType === 'background') {
+        const existing = await db.query('SELECT config_value FROM system_config WHERE config_key = ?', [configKey]);
+        
+        if (existing.length > 0 && existing[0].config_value) {
+          const oldFilePath = path.join(uploadsDir, existing[0].config_value);
+          if (fs.existsSync(oldFilePath)) {
+            try {
+              fs.unlinkSync(oldFilePath);
+            } catch (err) {
+              console.warn('删除旧文件失败:', err.message);
+            }
+          }
+        }
+      }
+      
+      const mimeType = req.file?.mimetype || getMimeTypeByExtension(finalFilename);
+      await storeConfigFile(configKey, finalFilename, mimeType);
+      res.json({ 
+        success: true, 
+        message: '文件上传成功（压缩失败，使用原文件）',
+        filename: finalFilename
+      });
+    }
+  } catch (error) {
+    console.error('文件上传失败：', error);
+    res.status(500).json({ success: false, message: '文件上传失败：' + error.message });
+  }
+});
+
+// 注意：静态文件访问由 server/index.js 中的 express.static 处理
+// 此路由保留作为备用，但通常不会被调用（因为静态文件服务会优先匹配）
+router.get('/uploads/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(uploadsDir, filename);
+  
+  console.log('尝试访问文件:', { filename, filePath, exists: fs.existsSync(filePath) });
+  
+  if (fs.existsSync(filePath)) {
+    // 设置正确的Content-Type
+    const ext = path.extname(filename).toLowerCase();
+    const contentTypeMap = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+    const contentType = contentTypeMap[ext] || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.sendFile(path.resolve(filePath));
+  } else {
+    console.error('文件不存在:', filePath);
+    res.status(404).json({ success: false, message: '文件不存在: ' + filename });
+  }
+});
+
+// 节假日数据维护
+router.get('/holidays', async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const pageSize = Math.min(Math.max(parseInt(req.query.pageSize, 10) || 10, 1), 100);
+    const offset = (page - 1) * pageSize;
+    const { year, month, keyword, workdayType, isWorkday } = req.query;
+
+    const conditions = ['hc.F_DeleteMark = 0'];
+    const params = [];
+
+    if (year) {
+      conditions.push('YEAR(hc.holiday_date) = ?');
+      params.push(year);
+    }
+    if (month) {
+      conditions.push('MONTH(hc.holiday_date) = ?');
+      params.push(month);
+    }
+    if (keyword && keyword.trim() !== '') {
+      conditions.push('(hc.holiday_name LIKE ? OR DATE_FORMAT(hc.holiday_date, "%Y-%m-%d") LIKE ?)');
+      const kw = `%${keyword.trim()}%`;
+      params.push(kw, kw);
+    }
+    if (workdayType && HOLIDAY_TYPES.includes(workdayType)) {
+      conditions.push('hc.workday_type = ?');
+      params.push(workdayType);
+    }
+    if (isWorkday === '0' || isWorkday === '1') {
+      conditions.push('hc.is_workday = ?');
+      params.push(parseInt(isWorkday, 10));
+    }
+
+    const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const totalResult = await db.query(
+      `SELECT COUNT(*) as total FROM holiday_calendar hc ${whereClause}`,
+      params
+    );
+
+    const holidays = await db.query(
+      `SELECT hc.*, hc.F_Id AS id,
+              DATE_FORMAT(hc.holiday_date, '%Y-%m-%d') as holiday_date_text,
+              u1.account AS created_by_account,
+              u2.account AS updated_by_account,
+              u3.account AS delete_user_account
+       FROM holiday_calendar hc
+       LEFT JOIN users u1 ON hc.F_CreatorUserId = u1.F_Id
+       LEFT JOIN users u2 ON hc.F_LastModifyUserId = u2.F_Id
+       LEFT JOIN users u3 ON hc.F_DeleteUserId = u3.F_Id
+       ${whereClause}
+       ORDER BY hc.holiday_date ASC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
+    );
+
+    res.json({
+      success: true,
+      data: holidays.map((item) => ({
+        ...item,
+        holiday_date: item.holiday_date_text || item.holiday_date
+      })),
+      total: totalResult[0]?.total || 0,
+      page,
+      pageSize
+    });
+  } catch (error) {
+    console.error('获取节假日数据失败：', error);
+    res.status(500).json({ success: false, message: '获取节假日数据失败' });
+  }
+});
+
+router.get('/holidays/years', async (req, res) => {
+  try {
+    const rows = await db.query(
+      `SELECT DISTINCT YEAR(holiday_date) as year
+       FROM holiday_calendar
+       WHERE F_DeleteMark = 0
+       ORDER BY year DESC`
+    );
+    const years = rows
+      .map((row) => row.year)
+      .filter((year) => year !== null && year !== undefined);
+    res.json({ success: true, data: years });
+  } catch (error) {
+    console.error('获取节假年列表失败：', error);
+    res.status(500).json({ success: false, message: '获取年份列表失败' });
+  }
+});
+
+router.post('/holidays', [
+  body('holiday_date').notEmpty().withMessage('日期不能为空'),
+  body('is_workday').custom((value) => normalizeIsWorkdayValue(value) !== null).withMessage('是否工作日只能填写是/否'),
+  body('workday_type').optional().isIn(HOLIDAY_TYPES).withMessage('工作日类型不合法'),
+  body('holiday_name').optional().isLength({ max: 100 }).withMessage('节日名称长度不能超过100个字符')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, errors: errors.array() });
+  }
+
+  try {
+    const holidayDate = normalizeHolidayDate(req.body.holiday_date);
+    if (!holidayDate) {
+      return res.status(400).json({ success: false, message: '日期格式不正确' });
+    }
+
+    const isWorkday = normalizeIsWorkdayValue(req.body.is_workday);
+    if (isWorkday === null) {
+      return res.status(400).json({ success: false, message: '是否工作日只能填写是/否' });
+    }
+
+    const workdayType = normalizeHolidayType(req.body.workday_type, isWorkday);
+    const holidayName = (req.body.holiday_name || '').trim();
+    const userId = req.headers['x-user-id'] || req.body.userId || null;
+
+    const existing = await db.query(
+      'SELECT F_Id, F_DeleteMark FROM holiday_calendar WHERE holiday_date = ?',
+      [holidayDate]
+    );
+
+    if (existing.length > 0 && !existing[0].F_DeleteMark) {
+      return res.status(400).json({ success: false, message: '该日期已存在节假日配置' });
+    }
+
+    if (existing.length > 0 && existing[0].F_DeleteMark) {
+      await db.execute(
+        `UPDATE holiday_calendar
+         SET F_DeleteMark = 0,
+             F_DeleteUserId = NULL,
+             F_DeleteTime = NULL,
+             is_workday = ?,
+             workday_type = ?,
+             holiday_name = ?,
+             F_LastModifyUserId = ?,
+             F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ?`,
+        [isWorkday, workdayType, holidayName, userId, existing[0].F_Id]
+      );
+
+      return res.json({
+        success: true,
+        message: '节假日记录已恢复并更新',
+        data: { id: existing[0].F_Id }
+      });
+    }
+
+    const holidayId = await generateId('holiday_calendar');
+    await db.execute(
+      `INSERT INTO holiday_calendar
+       (F_Id, holiday_date, is_workday, workday_type, holiday_name, F_CreatorUserId, F_LastModifyUserId)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [holidayId, holidayDate, isWorkday, workdayType, holidayName, userId, userId]
+    );
+
+    res.json({ success: true, message: '节假日记录创建成功', data: { id: holidayId } });
+  } catch (error) {
+    console.error('创建节假日记录失败：', error);
+    res.status(500).json({ success: false, message: '创建节假日记录失败' });
+  }
+});
+
+router.put('/holidays/:id', [
+  body('holiday_date').optional(),
+  body('is_workday').optional().custom((value) => normalizeIsWorkdayValue(value) !== null).withMessage('是否工作日只能填写是/否'),
+  body('workday_type').optional().isIn(HOLIDAY_TYPES).withMessage('工作日类型不合法'),
+  body('holiday_name').optional().isLength({ max: 100 }).withMessage('节日名称长度不能超过100个字符')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, errors: errors.array() });
+  }
+
+  try {
+    const { id } = req.params;
+    const existingRows = await db.query(
+      `SELECT *, DATE_FORMAT(holiday_date, '%Y-%m-%d') as holiday_date_text
+       FROM holiday_calendar WHERE F_Id = ? AND F_DeleteMark = 0`,
+      [id]
+    );
+
+    if (existingRows.length === 0) {
+      return res.status(404).json({ success: false, message: '节假日记录不存在' });
+    }
+
+    const existing = existingRows[0];
+    const updateFields = [];
+    const updateValues = [];
+    const userId = req.headers['x-user-id'] || req.body.userId || null;
+
+    if (req.body.holiday_date !== undefined) {
+      const newDate = normalizeHolidayDate(req.body.holiday_date);
+      if (!newDate) {
+        return res.status(400).json({ success: false, message: '日期格式不正确' });
+      }
+      if (newDate !== existing.holiday_date) {
+        const duplicate = await db.query(
+          'SELECT F_Id FROM holiday_calendar WHERE holiday_date = ? AND F_Id != ? AND F_DeleteMark = 0',
+          [newDate, id]
+        );
+        if (duplicate.length > 0) {
+          return res.status(400).json({ success: false, message: '该日期已存在节假日配置' });
+        }
+      }
+      updateFields.push('holiday_date = ?');
+      updateValues.push(newDate);
+    }
+
+    let resolvedIsWorkday = null;
+    if (req.body.is_workday !== undefined) {
+      const normalizedIsWorkday = normalizeIsWorkdayValue(req.body.is_workday);
+      if (normalizedIsWorkday === null) {
+        return res.status(400).json({ success: false, message: '是否工作日只能填写是/否' });
+      }
+      resolvedIsWorkday = normalizedIsWorkday;
+      updateFields.push('is_workday = ?');
+      updateValues.push(normalizedIsWorkday);
+    }
+
+    if (req.body.workday_type !== undefined) {
+      const typeBase = resolvedIsWorkday !== null ? resolvedIsWorkday : existing.is_workday;
+      const normalizedType = normalizeHolidayType(req.body.workday_type, typeBase);
+      updateFields.push('workday_type = ?');
+      updateValues.push(normalizedType);
+    }
+
+    if (req.body.holiday_name !== undefined) {
+      updateFields.push('holiday_name = ?');
+      updateValues.push((req.body.holiday_name || '').trim());
+    }
+
+    if (updateFields.length === 0) {
+      return res.json({ success: true, message: '未检测到变更' });
+    }
+
+    updateFields.push('F_LastModifyUserId = ?');
+    updateValues.push(userId);
+    updateFields.push('F_LastModifyTime = CURRENT_TIMESTAMP');
+
+    updateValues.push(id);
+
+    await db.execute(
+      `UPDATE holiday_calendar SET ${updateFields.join(', ')} WHERE F_Id = ? AND F_DeleteMark = 0`,
+      updateValues
+    );
+
+    const updatedRows = await db.query(
+      `SELECT holiday_date, DATE_FORMAT(holiday_date, '%Y-%m-%d') as holiday_date_text,
+              is_workday, workday_type, holiday_name
+       FROM holiday_calendar WHERE F_Id = ?`,
+      [id]
+    );
+    if (updatedRows.length > 0) {
+      const newData = updatedRows[0];
+      await logHolidayChange(
+        id,
+        {
+          holiday_date: existing.holiday_date_text || existing.holiday_date,
+          is_workday: existing.is_workday,
+          workday_type: existing.workday_type,
+          holiday_name: existing.holiday_name
+        },
+        newData,
+        userId
+      );
+    }
+
+    res.json({ success: true, message: '节假日记录更新成功' });
+  } catch (error) {
+    console.error('更新节假日记录失败：', error);
+    res.status(500).json({ success: false, message: '更新节假日记录失败' });
+  }
+});
+
+router.delete('/holidays/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] || req.body.userId || null;
+    const result = await db.execute(
+      `UPDATE holiday_calendar
+       SET F_DeleteMark = 1,
+           F_DeleteUserId = ?,
+           F_DeleteTime = CURRENT_TIMESTAMP
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
+      [userId, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: '节假日记录不存在或已删除' });
+    }
+
+    res.json({ success: true, message: '节假日记录删除成功' });
+  } catch (error) {
+    console.error('删除节假日记录失败：', error);
+    res.status(500).json({ success: false, message: '删除节假日记录失败' });
+  }
+});
+
+router.get('/holidays/template', (req, res) => {
+  try {
+    const workbook = xlsx.utils.book_new();
+    const worksheet = xlsx.utils.aoa_to_sheet([
+      ['日期', '是否工作日(是/否)', '工作日类型', '节日名称']
+    ]);
+    xlsx.utils.book_append_sheet(workbook, worksheet, '节假日模板');
+    const buffer = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+    const filename = encodeURIComponent('节假日维护模板.xlsx');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"; filename*=UTF-8''${filename}`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buffer);
+  } catch (error) {
+    console.error('生成节假日模板失败：', error);
+    res.status(500).json({ success: false, message: '模板生成失败' });
+  }
+});
+
+router.post('/holidays/import', excelUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: '请上传Excel文件' });
+    }
+
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) {
+      return res.status(400).json({ success: false, message: '未检测到数据工作表' });
+    }
+
+    const worksheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: '' });
+    if (!rows.length) {
+      return res.status(400).json({ success: false, message: 'Excel内容为空' });
+    }
+
+    const headers = rows[0].map((cell) => String(cell || '').trim());
+    if (
+      headers[0] !== '日期' ||
+      !(headers[1]?.startsWith('是否工作日')) ||
+      headers[2] !== '工作日类型' ||
+      headers[3] !== '节日名称'
+    ) {
+      return res.status(400).json({ success: false, message: '模板表头不匹配，请下载最新模板' });
+    }
+
+    const dataRows = rows.slice(1).filter((row) =>
+      row.some((cell) => String(cell || '').trim() !== '')
+    );
+
+    if (!dataRows.length) {
+      return res.status(400).json({ success: false, message: '未检测到可导入的数据' });
+    }
+
+    const errors = [];
+    let successCount = 0;
+    const userId = req.headers['x-user-id'] || req.body.userId || null;
+
+    for (let i = 0; i < dataRows.length; i += 1) {
+      const rowNumber = i + 2;
+      const [dateCell, workdayCell, typeCell, nameCell] = dataRows[i];
+      const normalizedDate = normalizeHolidayDate(dateCell);
+      const normalizedWorkday = normalizeIsWorkdayValue(workdayCell);
+      const normalizedType = normalizeHolidayType(typeCell, normalizedWorkday ?? 0);
+      const holidayName = (nameCell || '').toString().trim();
+
+      if (!normalizedDate) {
+        errors.push({ row: rowNumber, message: '日期格式不正确' });
+        continue;
+      }
+      if (normalizedWorkday === null) {
+        errors.push({ row: rowNumber, message: '是否工作日列只能填写是/否' });
+        continue;
+      }
+      if (!HOLIDAY_TYPES.includes(normalizedType)) {
+        errors.push({ row: rowNumber, message: '工作日类型不合法' });
+        continue;
+      }
+
+      try {
+        await upsertHolidayRecord({
+          holidayDate: normalizedDate,
+          isWorkday: normalizedWorkday,
+          workdayType: normalizedType,
+          holidayName,
+          userId
+        });
+        successCount += 1;
+      } catch (err) {
+        errors.push({ row: rowNumber, message: err.message || '导入失败' });
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `成功导入 ${successCount} 条记录`,
+      errors
+    });
+  } catch (error) {
+    console.error('导入节假日数据失败：', error);
+    res.status(500).json({ success: false, message: '导入节假日数据失败：' + error.message });
+  }
+});
+
+router.post('/holidays/generate', [
+  body('year')
+    .notEmpty().withMessage('年份不能为空')
+    .isInt({ min: 2000, max: 2100 }).withMessage('年份需在2000-2100之间')
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ success: false, errors: errors.array() });
+  }
+
+  try {
+    const year = parseInt(req.body.year, 10);
+    if (Number.isNaN(year)) {
+      return res.status(400).json({ success: false, message: '年份格式不正确' });
+    }
+
+    const userId = req.headers['x-user-id'] || req.body.userId || null;
+    const startDate = new Date(Date.UTC(year, 0, 1));
+    const endDate = new Date(Date.UTC(year + 1, 0, 1));
+    const existingRows = await db.query(
+      `SELECT holiday_date, F_DeleteMark FROM holiday_calendar 
+       WHERE holiday_date >= ? AND holiday_date < ?`,
+      [formatDateToYMD(startDate), formatDateToYMD(endDate)]
+    );
+
+    const existingMap = new Map();
+    existingRows.forEach((row) => {
+      const key = formatDateToYMD(new Date(row.holiday_date));
+      existingMap.set(key, row.F_DeleteMark === 0);
+    });
+
+    let created = 0;
+    let skipped = 0;
+    for (let date = new Date(startDate); date < endDate; date.setUTCDate(date.getUTCDate() + 1)) {
+      const weekday = date.getUTCDay(); // 0 Sunday
+      if (weekday === 0 || weekday === 6) {
+        const dateStr = formatDateToYMD(date);
+        if (existingMap.get(dateStr) === true) {
+          skipped += 1;
+          continue;
+        }
+        await upsertHolidayRecord({
+          holidayDate: dateStr,
+          isWorkday: 0,
+          workdayType: '周末',
+          holidayName: '',
+          userId
+        });
+        existingMap.set(dateStr, true);
+        created += 1;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `生成完成，新增 ${created} 条周末记录，跳过 ${skipped} 条已存在记录`
+    });
+  } catch (error) {
+    console.error('批量生成周末节假日失败：', error);
+    res.status(500).json({ success: false, message: '生成失败：' + error.message });
+  }
+});
+
+router.get('/holidays/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.F_Id, l.changed_field, l.old_value, l.new_value, l.F_CreatorTime,
+              u.account AS change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'holiday_calendar' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('获取节假日日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+router.get('/holidays/:id/logs', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const logs = await db.query(
+      `SELECT l.*, u.account as change_user_account
+       FROM data_change_log l
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
+       WHERE l.table_name = 'holiday_calendar' AND l.record_id = ?
+       ORDER BY l.F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error('获取节假日操作日志失败：', error);
+    res.status(500).json({ success: false, message: '获取日志失败' });
+  }
+});
+
+// 数据库连接配置相关路由
+function buildExternalDbWhere(isAdmin, userId) {
+  const parts = ['F_DeleteMark = 0'];
+  const params = [];
+  if (!isAdmin) {
+    parts.push('F_CreatorUserId = ?');
+    params.push(userId);
+  }
+  return { clause: `WHERE ${parts.join(' AND ')}`, params };
+}
+
+// 获取数据库配置列表（支持分页）。管理员看全部，普通用户只看自己创建的
+router.get('/database-configs', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const pageSize = parseInt(req.query.pageSize) || 10;
+    const offset = (page - 1) * pageSize;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+
+    const isAdmin = userRole === 'admin';
+    const { clause: whereClause, params: whereParams } = buildExternalDbWhere(isAdmin, userId);
+    const countParams = [...whereParams];
+    const listParams = [...whereParams, pageSize, offset];
+
+    const totalResult = await db.query(
+      `SELECT COUNT(*) as total FROM external_db_config ${whereClause}`,
+      countParams
+    );
+    const total = totalResult[0].total;
+
+    const configs = await db.query(
+      `SELECT F_Id AS id, name, db_type, host, port, \`user\`, \`database\`, is_active, F_CreatorTime, F_LastModifyTime
+       FROM external_db_config
+       ${whereClause}
+       ORDER BY F_CreatorTime DESC
+       LIMIT ? OFFSET ?`,
+      listParams
+    );
+
+    res.json({
+      success: true,
+      data: configs,
+      total: total,
+      page: page,
+      pageSize: pageSize
+    });
+  } catch (error) {
+    console.error('获取数据库配置列表失败：', error);
+    res.status(500).json({ success: false, message: '获取配置列表失败' });
+  }
+});
+
+// 获取单个数据库配置（不包含密码）。普通用户只能查看自己创建的
+router.get('/database-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    const configs = await db.query(
+      `SELECT F_Id AS id, name, db_type, host, port, \`user\`, \`database\`, is_active, F_CreatorTime, F_LastModifyTime
+       FROM external_db_config
+       WHERE F_Id = ? AND F_DeleteMark = 0 ${isAdmin ? '' : 'AND F_CreatorUserId = ?'}`,
+      isAdmin ? [id] : [id, userId]
+    );
+    if (configs.length > 0) {
+      res.json({ success: true, data: configs[0] });
+    } else {
+      res.status(404).json({ success: false, message: '配置不存在' });
+    }
+  } catch (error) {
+    console.error('获取数据库配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+// 创建数据库配置
+router.post('/database-config', [
+  body('name').notEmpty().withMessage('配置名称不能为空'),
+  body('db_type').isIn(['mysql']).withMessage('数据库类型必须是mysql'),
+  body('host').notEmpty().withMessage('主机地址不能为空'),
+  body('port').isInt({ min: 1, max: 65535 }).withMessage('端口必须是1-65535之间的整数'),
+  body('user').notEmpty().withMessage('用户名不能为空'),
+  body('password').notEmpty().withMessage('密码不能为空'),
+  body('database').notEmpty().withMessage('数据库名不能为空'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { name, db_type, host, port, user, password, database, is_active } = req.body;
+
+    // 检查配置名称是否已存在
+    const existing = await db.query(
+      'SELECT F_Id FROM external_db_config WHERE name = ? AND F_DeleteMark = 0',
+      [name]
+    );
+    if (existing.length > 0) {
+      return res.status(400).json({ success: false, message: '配置名称已存在' });
+    }
+
+    const configId = await generateId('external_db_config');
+    const userId = req.headers['x-user-id'] || null;
+    const finalIsActive = is_active !== undefined ? (is_active ? 1 : 0) : 1;
+
+    await db.execute(
+      `INSERT INTO external_db_config 
+       (F_Id, name, db_type, host, port, \`user\`, password, \`database\`, is_active, F_CreatorUserId, F_LastModifyUserId) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        configId,
+        name,
+        db_type || 'mysql',
+        host,
+        port,
+        user,
+        password,
+        database,
+        finalIsActive,
+        userId,
+        userId
+      ]
+    );
+
+    res.json({ success: true, message: '数据库配置创建成功', data: { id: configId } });
+  } catch (error) {
+    console.error('创建数据库配置失败：', error);
+    res.status(500).json({ success: false, message: '创建配置失败：' + error.message });
+  }
+});
+
+// 更新数据库配置
+router.put('/database-config/:id', [
+  body('name').optional().notEmpty().withMessage('配置名称不能为空'),
+  body('host').optional().notEmpty().withMessage('主机地址不能为空'),
+  body('port').optional().isInt({ min: 1, max: 65535 }).withMessage('端口必须是1-65535之间的整数'),
+  body('user').optional().notEmpty().withMessage('用户名不能为空'),
+  body('database').optional().notEmpty().withMessage('数据库名不能为空'),
+  body('is_active').optional().isBoolean().withMessage('is_active必须是布尔值'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+
+    const { id } = req.params;
+    const { name, host, port, user, password, database, is_active } = req.body;
+
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    const existingConfigs = await db.query('SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existingConfigs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    if (!isAdmin && existingConfigs[0].F_CreatorUserId !== userId) {
+      return res.status(403).json({ success: false, message: '无权修改该配置' });
+    }
+
+    // 如果更新配置名称，检查是否重复
+    if (name) {
+      const duplicate = await db.query(
+        'SELECT F_Id FROM external_db_config WHERE name = ? AND F_Id != ? AND F_DeleteMark = 0',
+        [name, id]
+      );
+      if (duplicate.length > 0) {
+        return res.status(400).json({ success: false, message: '配置名称已存在' });
+      }
+    }
+
+    // 构建更新字段
+    const updateFields = [];
+    const updateValues = [];
+
+    if (name !== undefined) {
+      updateFields.push('name = ?');
+      updateValues.push(name);
+    }
+    if (host !== undefined) {
+      updateFields.push('host = ?');
+      updateValues.push(host);
+    }
+    if (port !== undefined) {
+      updateFields.push('port = ?');
+      updateValues.push(port);
+    }
+    if (user !== undefined) {
+      updateFields.push('`user` = ?');
+      updateValues.push(user);
+    }
+    if (password !== undefined && password !== null && password !== '') {
+      updateFields.push('password = ?');
+      updateValues.push(password);
+    }
+    if (database !== undefined) {
+      updateFields.push('`database` = ?');
+      updateValues.push(database);
+    }
+    if (is_active !== undefined) {
+      updateFields.push('is_active = ?');
+      updateValues.push(is_active ? 1 : 0);
+    }
+
+    if (updateFields.length > 0) {
+      updateFields.push('F_LastModifyUserId = ?');
+      updateValues.push(userId);
+      updateValues.push(id);
+      await db.execute(
+        `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE F_Id = ?`,
+        updateValues
+      );
+    }
+
+    res.json({ success: true, message: '数据库配置更新成功' });
+  } catch (error) {
+    console.error('更新数据库配置失败：', error);
+    res.status(500).json({ success: false, message: '更新配置失败：' + error.message });
+  }
+});
+
+// 删除数据库配置。普通用户只能删除自己创建的
+router.delete('/database-config/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userRole = req.headers['x-user-role'] || 'user';
+    const userId = req.headers['x-user-id'] || null;
+    const isAdmin = userRole === 'admin';
+
+    const existing = await db.query('SELECT F_Id, F_CreatorUserId FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+    if (!isAdmin && existing[0].F_CreatorUserId !== userId) {
+      return res.status(403).json({ success: false, message: '无权删除该配置' });
+    }
+
+    await db.execute(
+      `UPDATE external_db_config 
+       SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = CURRENT_TIMESTAMP 
+       WHERE F_Id = ?`,
+      [userId, id]
+    );
+    res.json({ success: true, message: '数据库配置删除成功' });
+  } catch (error) {
+    console.error('删除数据库配置失败：', error);
+    res.status(500).json({ success: false, message: '删除配置失败' });
+  }
+});
+
+// 测试数据库连接（使用表单数据）
+router.post('/database-config/test', async (req, res) => {
+  try {
+    const { db_type, host, port, user, password, database } = req.body;
+
+    if (!host || !port || !user || !password || !database) {
+      return res.status(400).json({ success: false, message: '请填写完整的数据库配置信息' });
+    }
+
+    if (db_type !== 'mysql') {
+      return res.status(400).json({ success: false, message: '当前仅支持MySQL数据库' });
+    }
+
+    // 尝试连接数据库
+    const mysql = require('mysql2/promise');
+    let connection;
+    try {
+      connection = await mysql.createConnection({
+        host: host,
+        port: parseInt(port, 10),
+        user: user,
+        password: password,
+        database: database,
+        connectTimeout: 5000
+      });
+
+      // 测试查询
+      await connection.query('SELECT 1');
+      await connection.end();
+
+      res.json({
+        success: true,
+        message: '数据库连接测试成功'
+      });
+    } catch (connectError) {
+      if (connection) {
+        await connection.end().catch(() => {});
+      }
+      return res.status(400).json({
+        success: false,
+        message: '数据库连接失败：' + connectError.message
+      });
+    }
+  } catch (error) {
+    console.error('测试数据库连接失败：', error);
+    res.status(500).json({
+      success: false,
+      message: '测试失败：' + error.message
+    });
+  }
+});
+
+// 测试数据库连接（使用已保存的配置）
+router.post('/database-config/:id/test', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const configs = await db.query('SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0', [id]);
+    if (configs.length === 0) {
+      return res.status(404).json({ success: false, message: '配置不存在' });
+    }
+
+    const config = configs[0];
+
+    if (config.db_type !== 'mysql') {
+      return res.status(400).json({ success: false, message: '当前仅支持MySQL数据库' });
+    }
+
+    // 尝试连接数据库
+    const mysql = require('mysql2/promise');
+    let connection;
+    try {
+      connection = await mysql.createConnection({
+        host: config.host,
+        port: config.port,
+        user: config.user,
+        password: config.password,
+        database: config.database,
+        connectTimeout: 5000
+      });
+
+      // 测试查询
+      await connection.query('SELECT 1');
+      await connection.end();
+
+      res.json({
+        success: true,
+        message: '数据库连接测试成功'
+      });
+    } catch (connectError) {
+      if (connection) {
+        await connection.end().catch(() => {});
+      }
+      return res.status(400).json({
+        success: false,
+        message: '数据库连接失败：' + connectError.message
+      });
+    }
+  } catch (error) {
+    console.error('测试数据库连接失败：', error);
+    res.status(500).json({
+      success: false,
+      message: '测试失败：' + error.message
+    });
+  }
+});
+
+// 解析 Cron 表达式并返回执行时间
+router.post('/cron/parse', async (req, res) => {
+  try {
+    const { cronExpression, count = 5, isSkipHoliday = false } = req.body;
+
+    if (!cronExpression || typeof cronExpression !== 'string') {
+      return res.status(400).json({ success: false, message: 'Cron表达式不能为空' });
+    }
+
+    // 使用 cron-parser 解析（后端可以使用 Node.js 库）
+    // cron-parser v5.x 的用法：使用 CronExpressionParser.parse()
+    let parseExpression;
+    try {
+      const cronParser = require('cron-parser');
+      
+      // cron-parser v5.x 导出 CronExpressionParser 类，使用静态方法 parse()
+      if (cronParser.CronExpressionParser && typeof cronParser.CronExpressionParser.parse === 'function') {
+        parseExpression = cronParser.CronExpressionParser.parse.bind(cronParser.CronExpressionParser);
+      } else if (cronParser.default && cronParser.default.CronExpressionParser && typeof cronParser.default.CronExpressionParser.parse === 'function') {
+        parseExpression = cronParser.default.CronExpressionParser.parse.bind(cronParser.default.CronExpressionParser);
+      } else if (typeof cronParser.parseExpression === 'function') {
+        // 向后兼容：某些版本可能直接导出 parseExpression
+        parseExpression = cronParser.parseExpression;
+      } else {
+        throw new Error(`cron-parser 模块导出格式不正确。模块类型: ${typeof cronParser}, 可用属性: ${Object.keys(cronParser).join(', ')}`);
+      }
+    } catch (requireError) {
+      errorWithTag('[系统配置]', '加载 cron-parser 模块失败：', requireError);
+      return res.status(500).json({
+        success: false,
+        message: `无法加载 cron-parser 模块：${requireError.message}`
+      });
+    }
+
+    // 将7位表达式转换为6位（cron-parser只支持6位）
+    const parts = cronExpression.trim().split(/\s+/);
+    let cron6Field = null;
+    
+    if (parts.length === 7) {
+      // 去掉最后一个字段（年份），返回前6位
+      cron6Field = parts.slice(0, 6).join(' ');
+    } else if (parts.length === 6) {
+      cron6Field = cronExpression.trim();
+    } else {
+      return res.status(400).json({ success: false, message: 'Cron表达式格式错误：必须是6位或7位' });
+    }
+
+    // 转换星期字段：Quartz Cron使用1-7（1=周日），cron-parser使用0-6（0=周日）
+    const cron6Parts = cron6Field.split(/\s+/);
+    if (cron6Parts.length === 6) {
+      const weekdayField = cron6Parts[5];
+      if (weekdayField && weekdayField !== '*' && weekdayField !== '?') {
+        // 处理逗号分隔的多个值
+        if (weekdayField.includes(',')) {
+          const values = weekdayField.split(',').map(v => {
+            const trimmed = v.trim();
+            const num = parseInt(trimmed, 10);
+            if (!isNaN(num) && num >= 1 && num <= 7) {
+              return (num - 1) % 7;
+            }
+            return trimmed;
+          });
+          cron6Parts[5] = values.join(',');
+        } else if (weekdayField.includes('-')) {
+          // 处理范围
+          const [startStr, endStr] = weekdayField.split('-');
+          const start = parseInt(startStr.trim(), 10);
+          const end = parseInt(endStr.trim(), 10);
+          if (!isNaN(start) && !isNaN(end) && start >= 1 && start <= 7 && end >= 1 && end <= 7) {
+            cron6Parts[5] = `${(start - 1) % 7}-${(end - 1) % 7}`;
+          }
+        } else {
+          // 处理单个数字
+          const num = parseInt(weekdayField, 10);
+          if (!isNaN(num) && num >= 1 && num <= 7) {
+            cron6Parts[5] = String((num - 1) % 7);
+          }
+        }
+      }
+      cron6Field = cron6Parts.join(' ');
+    }
+
+    // 解析 cron 表达式
+    let interval;
+    try {
+      interval = parseExpression(cron6Field, {
+        currentDate: new Date()
+      });
+    } catch (parseError) {
+      errorWithTag('[系统配置]', '解析 Cron 表达式失败：', parseError);
+      return res.status(400).json({
+        success: false,
+        message: `表达式格式错误：${parseError.message}`
+      });
+    }
+
+    // 生成执行时间列表：跳过节假日时先生成更多候选再过滤，否则只生成 count 个
+    const executionTimes = [];
+    const candidateCount = isSkipHoliday ? count * 4 : count; // 跳过节假日时多取候选，过滤后再取前 count 个
+    
+    for (let i = 0; i < candidateCount; i++) {
+      try {
+        // cron-parser v5.x: next() 返回 CronDate 对象，调用 toDate() 或 toString() 获取日期
+        const nextResult = interval.next();
+        const nextDate = nextResult && typeof nextResult.toDate === 'function' 
+          ? nextResult.toDate() 
+          : (nextResult instanceof Date ? nextResult : new Date(nextResult));
+        executionTimes.push(nextDate.toISOString());
+      } catch (e) {
+        break; // 如果超出范围，停止
+      }
+    }
+
+    // 如果跳过节假日，过滤掉节假日（使用北京时区）
+    let filteredTimes = executionTimes;
+    if (isSkipHoliday && executionTimes.length > 0) {
+      try {
+        // 格式化日期为 YYYY-MM-DD，使用北京时区
+        const formatDateOnly = (date) => {
+          // 使用北京时区格式化日期，确保日期计算基于北京时间
+          const beijingDateStr = date.toLocaleString('zh-CN', {
+            timeZone: 'Asia/Shanghai',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          });
+          // 解析格式：2024/12/8 或 2024-12-8
+          const datePart = beijingDateStr.split(' ')[0];
+          const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
+          return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        };
+        
+        // 获取节假日列表（使用北京时区）
+        const currentYear = new Date().getFullYear();
+        const years = [currentYear, currentYear + 1, currentYear + 2];
+        const allHolidays = [];
+        
+        for (const year of years) {
+          const holidays = await db.query(
+            'SELECT holiday_date FROM holiday_calendar WHERE YEAR(holiday_date) = ? AND is_workday = 0',
+            [year]
+          );
+          // 使用北京时区格式化节假日日期
+          allHolidays.push(...holidays.map(h => {
+            // holiday_date 可能是 Date 对象或字符串
+            const holidayDate = h.holiday_date instanceof Date ? h.holiday_date : new Date(h.holiday_date);
+            return formatDateOnly(holidayDate);
+          }));
+        }
+        
+        const holidaySet = new Set(allHolidays);
+        filteredTimes = executionTimes.filter(dateStr => {
+          const date = new Date(dateStr);
+          // 使用北京时区格式化执行时间日期
+          const dateOnly = formatDateOnly(date);
+          return !holidaySet.has(dateOnly);
+        });
+      } catch (holidayError) {
+        console.warn('获取节假日列表失败:', holidayError);
+        // 如果获取节假日失败，返回未过滤的结果
+      }
+    }
+
+    // 格式化时间并返回前 count 个
+    const formattedTimes = filteredTimes.slice(0, count).map(dateStr => {
+      const date = new Date(dateStr);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    });
+
+    res.json({
+      success: true,
+      data: formattedTimes
+    });
+  } catch (error) {
+    errorWithTag('[系统配置]', '解析Cron表达式失败：', error);
+    res.status(400).json({
+      success: false,
+      message: `表达式格式错误：${error.message}`
+    });
+  }
+});
+
+// ==================== 数据字典（base_dictionary） ====================
+
+// 获取字典类型列表（parent_id IS NULL）
+router.get('/base-dictionaries', async (req, res) => {
+  try {
+    const rows = await db.query(
+      `SELECT
+        d.F_Id, d.dict_code, d.dict_name, d.sort_order, d.is_enabled, d.F_CreatorTime, d.F_LastModifyTime,
+        (
+          SELECT COUNT(1)
+          FROM base_dictionary c
+          WHERE c.parent_id = d.F_Id AND c.F_DeleteMark = 0
+        ) AS item_count
+       FROM base_dictionary d
+       WHERE d.F_DeleteMark = 0 AND d.parent_id IS NULL
+       ORDER BY d.sort_order ASC, d.F_CreatorTime DESC`
+    );
+    res.json({ success: true, data: rows || [] });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '获取字典类型列表失败：', error);
+    res.status(500).json({ success: false, message: '获取字典类型列表失败' });
+  }
+});
+
+// 新增字典类型
+router.post('/base-dictionaries', async (req, res) => {
+  try {
+    const { dict_code, dict_name, sort_order = 0, is_enabled = 1 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!dict_code || !String(dict_code).trim() || !dict_name || !String(dict_name).trim()) {
+      return res.status(400).json({ success: false, message: '字典编码和字典名称不能为空' });
+    }
+    const code = String(dict_code).trim();
+    const name = String(dict_name).trim();
+    const dup = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_DeleteMark = 0 AND parent_id IS NULL AND dict_code = ?
+       LIMIT 1`,
+      [code]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '字典编码已存在' });
+    }
+    const id = await generateId('base_dictionary');
+    await db.execute(
+      `INSERT INTO base_dictionary
+       (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_CreatorUserId, F_LastModifyUserId)
+       VALUES (?, NULL, ?, ?, NULL, NULL, ?, ?, ?, ?)`,
+      [id, code, name, Number(sort_order || 0), Number(is_enabled) === 0 ? 0 : 1, userId, userId]
+    );
+    res.json({ success: true, message: '新增字典类型成功', data: { id } });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '新增字典类型失败：', error);
+    res.status(500).json({ success: false, message: '新增字典类型失败' });
+  }
+});
+
+// 更新字典类型
+router.put('/base-dictionaries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { dict_code, dict_name, sort_order = 0 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!dict_code || !String(dict_code).trim() || !dict_name || !String(dict_name).trim()) {
+      return res.status(400).json({ success: false, message: '字典编码和字典名称不能为空' });
+    }
+    const oldRows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!oldRows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const code = String(dict_code).trim();
+    const name = String(dict_name).trim();
+    const dup = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_DeleteMark = 0 AND parent_id IS NULL AND dict_code = ? AND F_Id != ?
+       LIMIT 1`,
+      [code, id]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '字典编码已存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET dict_code = ?, dict_name = ?, sort_order = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [code, name, Number(sort_order || 0), userId, id]
+    );
+    // 同步更新子项的 dict_code、dict_name，保持单表语义一致
+    await db.execute(
+      `UPDATE base_dictionary
+       SET dict_code = ?, dict_name = ?, F_LastModifyUserId = ?
+       WHERE parent_id = ? AND F_DeleteMark = 0`,
+      [code, name, userId, id]
+    );
+    res.json({ success: true, message: '更新字典类型成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典类型失败：', error);
+    res.status(500).json({ success: false, message: '更新字典类型失败' });
+  }
+});
+
+// 启用/停用字典类型
+router.put('/base-dictionaries/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_enabled } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    const enabled = Number(is_enabled) === 0 ? 0 : 1;
+    const rows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET is_enabled = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [enabled, userId, id]
+    );
+    // 字典类型停用时，子项同步停用；启用时不强制开启子项（保留子项独立状态）
+    if (enabled === 0) {
+      await db.execute(
+        `UPDATE base_dictionary
+         SET is_enabled = 0, F_LastModifyUserId = ?
+         WHERE parent_id = ? AND F_DeleteMark = 0`,
+        [userId, id]
+      );
+    }
+    res.json({ success: true, message: enabled ? '启用成功' : '停用成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典类型状态失败：', error);
+    res.status(500).json({ success: false, message: '更新字典类型状态失败' });
+  }
+});
+
+// 删除字典类型（软删除，连带子项）
+router.delete('/base-dictionaries/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] || null;
+    const rows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ? OR parent_id = ?`,
+      [userId, userId, id, id]
+    );
+    res.json({ success: true, message: '删除字典类型成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '删除字典类型失败：', error);
+    res.status(500).json({ success: false, message: '删除字典类型失败' });
+  }
+});
+
+// 获取指定字典类型下的选项
+router.get('/base-dictionaries/:id/items', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const parentRows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!parentRows.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const rows = await db.query(
+      `SELECT F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_CreatorTime, F_LastModifyTime
+       FROM base_dictionary
+       WHERE parent_id = ? AND F_DeleteMark = 0
+       ORDER BY sort_order ASC, F_CreatorTime DESC`,
+      [id]
+    );
+    res.json({ success: true, data: rows || [] });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '获取字典选项失败：', error);
+    res.status(500).json({ success: false, message: '获取字典选项失败' });
+  }
+});
+
+// 新增字典选项
+router.post('/base-dictionaries/:id/items', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { item_code, item_name, sort_order = 0, is_enabled = 1 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!item_code || !String(item_code).trim() || !item_name || !String(item_name).trim()) {
+      return res.status(400).json({ success: false, message: '选项编码和选项名称不能为空' });
+    }
+    const parents = await db.query(
+      `SELECT F_Id, dict_code, dict_name FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!parents.length) {
+      return res.status(404).json({ success: false, message: '字典类型不存在' });
+    }
+    const parent = parents[0];
+    const code = String(item_code).trim();
+    const name = String(item_name).trim();
+    const dup = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE parent_id = ? AND F_DeleteMark = 0 AND item_code = ?
+       LIMIT 1`,
+      [id, code]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '选项编码已存在' });
+    }
+    const newId = await generateId('base_dictionary');
+    await db.execute(
+      `INSERT INTO base_dictionary
+       (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_CreatorUserId, F_LastModifyUserId)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        id,
+        parent.dict_code,
+        parent.dict_name,
+        code,
+        name,
+        Number(sort_order || 0),
+        Number(is_enabled) === 0 ? 0 : 1,
+        userId,
+        userId,
+      ]
+    );
+    res.json({ success: true, message: '新增字典选项成功', data: { id: newId } });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '新增字典选项失败：', error);
+    res.status(500).json({ success: false, message: '新增字典选项失败' });
+  }
+});
+
+// 更新字典选项
+router.put('/base-dictionary-items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { item_code, item_name, sort_order = 0 } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    if (!item_code || !String(item_code).trim() || !item_name || !String(item_name).trim()) {
+      return res.status(400).json({ success: false, message: '选项编码和选项名称不能为空' });
+    }
+    const rows = await db.query(
+      `SELECT F_Id, parent_id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    const row = rows[0];
+    const code = String(item_code).trim();
+    const name = String(item_name).trim();
+    const dup = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE parent_id = ? AND F_DeleteMark = 0 AND item_code = ? AND F_Id != ?
+       LIMIT 1`,
+      [row.parent_id, code, id]
+    );
+    if (dup.length > 0) {
+      return res.status(400).json({ success: false, message: '选项编码已存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET item_code = ?, item_name = ?, sort_order = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [code, name, Number(sort_order || 0), userId, id]
+    );
+    res.json({ success: true, message: '更新字典选项成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典选项失败：', error);
+    res.status(500).json({ success: false, message: '更新字典选项失败' });
+  }
+});
+
+// 启用/停用字典选项
+router.put('/base-dictionary-items/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_enabled } = req.body || {};
+    const userId = req.headers['x-user-id'] || null;
+    const enabled = Number(is_enabled) === 0 ? 0 : 1;
+    const rows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET is_enabled = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [enabled, userId, id]
+    );
+    res.json({ success: true, message: enabled ? '启用成功' : '停用成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '更新字典选项状态失败：', error);
+    res.status(500).json({ success: false, message: '更新字典选项状态失败' });
+  }
+});
+
+// 删除字典选项（软删除）
+router.delete('/base-dictionary-items/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.headers['x-user-id'] || null;
+    const rows = await db.query(
+      `SELECT F_Id FROM base_dictionary
+       WHERE F_Id = ? AND F_DeleteMark = 0 AND parent_id IS NOT NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ success: false, message: '字典选项不存在' });
+    }
+    await db.execute(
+      `UPDATE base_dictionary
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
+      [userId, userId, id]
+    );
+    res.json({ success: true, message: '删除字典选项成功' });
+  } catch (error) {
+    errorWithTag('[系统配置][数据字典]', '删除字典选项失败：', error);
+    res.status(500).json({ success: false, message: '删除字典选项失败' });
+  }
+});
+
+// 竞品分析 — 三源召回开关（管理员）
+router.get('/competitor-recall-source-config', async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || 'user';
+    if (userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: '仅管理员可查看竞品三源召回配置' });
+    }
+    const { getCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const flags = await getCompetitorRecallSourceFlags();
+    res.json({ success: true, data: flags });
+  } catch (error) {
+    console.error('获取竞品三源召回配置失败：', error);
+    res.status(500).json({ success: false, message: '获取配置失败' });
+  }
+});
+
+router.put('/competitor-recall-source-config', [
+  body('enable_ipo_project').optional().isBoolean(),
+  body('enable_financing_event').optional().isBoolean(),
+  body('enable_ai_web').optional().isBoolean(),
+], async (req, res) => {
+  try {
+    const userRole = req.headers['x-user-role'] || 'user';
+    if (userRole !== 'admin') {
+      return res.status(403).json({ success: false, message: '仅管理员可修改竞品三源召回配置' });
+    }
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array() });
+    }
+    const { saveCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const data = await saveCompetitorRecallSourceFlags(req.body);
+    res.json({ success: true, message: '保存成功', data });
+  } catch (error) {
+    console.error('保存竞品三源召回配置失败：', error);
+    res.status(500).json({ success: false, message: '保存配置失败' });
+  }
+});
+
+module.exports = router;
+

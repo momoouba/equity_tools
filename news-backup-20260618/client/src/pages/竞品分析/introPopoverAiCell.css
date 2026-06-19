@@ -1,0 +1,16 @@
+/* Popover 内正文可选中复制：融资列表 / 被投企业列表共用 */
+.financing-events-intro-selectable {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* 被投企业管理页等 table-layout:auto 场景：约束触发区域宽度，使单行省略生效 */
+.intro-popover-ai-cell-wrap {
+  box-sizing: border-box;
+}
+
+.intro-popover-ai-cell-wrap .arco-trigger {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
+}

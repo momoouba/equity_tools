@@ -1,0 +1,68 @@
+/* ShanghaiInternationalGroupConfig 页面样式 - Arco Design 规范 */
+
+.shanghai-international-group-config {
+  width: 100%;
+}
+
+.shanghai-international-group-config .config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.shanghai-international-group-config .config-header h3 {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d2129;
+  margin: 0;
+}
+
+.shanghai-international-group-config .table-container {
+  margin-bottom: 16px;
+}
+
+.shanghai-international-group-config .pagination-wrapper {
+  display: flex;
+  justify-content: center;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+
+.shanghai-international-group-config .arco-btn {
+  min-width: 64px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 14px;
+  border-radius: 4px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.shanghai-international-group-config .form-group {
+  margin-bottom: 16px;
+}
+
+.shanghai-international-group-config .form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #1d2129;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.shanghai-international-group-config .form-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #86909c;
+}
+
+.shanghai-international-group-config .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}

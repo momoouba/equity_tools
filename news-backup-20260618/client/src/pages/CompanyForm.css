@@ -1,0 +1,11 @@
+/* CompanyForm 页面样式 - Arco Design 规范 */
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e6eb;
+}
+

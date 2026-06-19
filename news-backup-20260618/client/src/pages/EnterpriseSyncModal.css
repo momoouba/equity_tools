@@ -1,0 +1,169 @@
+.enterprise-sync-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.enterprise-sync-modal-content {
+  background: white;
+  border-radius: 8px;
+  width: 90%;
+  max-width: 700px;
+  max-height: 90vh;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+}
+
+.enterprise-sync-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #f5f7fa;
+}
+
+.enterprise-sync-modal-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #1a1a1a;
+}
+
+.enterprise-sync-modal-header .close-btn {
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.3s ease;
+}
+
+.enterprise-sync-modal-header .close-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+.enterprise-sync-modal-body {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.enterprise-sync-modal-body .form-group {
+  margin-bottom: 20px;
+}
+
+.enterprise-sync-modal-body .form-group label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 500;
+  color: #333;
+  font-size: 14px;
+}
+
+.enterprise-sync-modal-body .form-select,
+.enterprise-sync-modal-body .form-input,
+.enterprise-sync-modal-body .form-time {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.enterprise-sync-modal-body .form-textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 4px;
+  font-size: 14px;
+  box-sizing: border-box;
+  font-family: 'Courier New', monospace;
+  resize: vertical;
+}
+
+.enterprise-sync-modal-body .form-textarea:focus,
+.enterprise-sync-modal-body .form-select:focus,
+.enterprise-sync-modal-body .form-input:focus,
+.enterprise-sync-modal-body .form-time:focus {
+  outline: none;
+  border-color: #357abd;
+  box-shadow: 0 0 0 2px rgba(53, 122, 189, 0.1);
+}
+
+.enterprise-sync-modal-body .form-hint {
+  margin: 6px 0 0 0;
+  font-size: 12px;
+  color: #999;
+  line-height: 1.5;
+}
+
+.enterprise-sync-modal-body .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid #e0e0e0;
+}
+
+.enterprise-sync-modal-body .form-actions button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  min-width: 100px;
+}
+
+.enterprise-sync-modal-body .form-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-cancel {
+  background: #6c757d;
+  color: white;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-cancel:hover:not(:disabled) {
+  background: #5a6268;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-execute {
+  background: #28a745;
+  color: white;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-execute:hover:not(:disabled) {
+  background: #218838;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-save {
+  background: #357abd;
+  color: white;
+}
+
+.enterprise-sync-modal-body .form-actions .btn-save:hover:not(:disabled) {
+  background: #2c5f8f;
+}
+

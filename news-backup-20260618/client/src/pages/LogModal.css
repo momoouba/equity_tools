@@ -1,0 +1,13 @@
+/* LogModal 页面样式 - Arco Design 规范 */
+
+.log-content {
+  max-height: 500px;
+  overflow-y: auto;
+}
+
+.empty-logs {
+  text-align: center;
+  padding: 40px;
+  color: #86909c;
+}
+
