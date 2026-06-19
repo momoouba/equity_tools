@@ -4,7 +4,7 @@
     :title="`底层企业明细【${type === 'cumulative' ? '累计' : '当前'}】`"
     :width="1125"
     :footer="false"
-    :body-style="{ maxHeight: 'calc(75vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0 }"
+    :body-style="{ height: 'calc(85vh - 56px)', maxHeight: 'calc(85vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }"
     @cancel="handleClose"
   >
     <div class="modal-header">
@@ -51,7 +51,10 @@
               <td class="col-amount">{{ row.ipo_num }}</td>
               <td class="col-amount">{{ formatAmount(row.ipo_amount) }}</td>
             </tr>
-            <tr v-if="tableData.length > 0" class="row-summary">
+          </tbody>
+          <!-- 合计（吸底） -->
+          <tfoot v-if="tableData.length > 0">
+            <tr class="row-summary">
               <td class="col-index" colspan="2">合计</td>
               <td class="col-amount">{{ sumTotal.project_num }}</td>
               <td class="col-amount">{{ sumTotal.company_num }}</td>
@@ -60,7 +63,7 @@
               <td class="col-amount">{{ sumTotal.ipo_num }}</td>
               <td class="col-amount">{{ formatAmount(sumTotal.ipo_amount) }}</td>
             </tr>
-            <tr v-if="tableData.length > 0 && sumDedup" class="row-summary">
+            <tr v-if="sumDedup" class="row-summary">
               <td class="col-index" colspan="2">合计(去重)</td>
               <td class="col-amount">{{ sumDedup.project_num }}</td>
               <td class="col-amount">{{ sumDedup.company_num }}</td>
@@ -69,7 +72,7 @@
               <td class="col-amount">{{ sumDedup.ipo_num }}</td>
               <td class="col-amount">{{ formatAmount(sumDedup.ipo_amount) }}</td>
             </tr>
-          </tbody>
+          </tfoot>
         </table>
       </div>
     </a-spin>
@@ -211,12 +214,26 @@ watch(() => props.visible, (val) => { if (val) loadData(); });
 .underlying-table tbody tr:hover {
   background: #f2f3f5;
 }
-.underlying-table .row-summary {
+.underlying-table tbody .row-summary {
   background: #e8f3ff;
   font-weight: 500;
 }
-.underlying-table .row-summary td {
+.underlying-table tbody .row-summary td {
   border-bottom: 1px solid #b3d8ff;
+}
+
+/* 合计行（tfoot）吸底 */
+.underlying-scroll .underlying-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #1AA8E9;
+  color: #fff;
+  font-weight: 500;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+.underlying-scroll .underlying-table tfoot tr:first-child:not(:last-child) td {
+  bottom: 38px;
 }
 
 </style>

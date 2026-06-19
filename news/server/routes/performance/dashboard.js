@@ -278,7 +278,7 @@ router.get('/project-cashflow', async (req, res) => {
     
     // 获取项目现金流
     const cashflowRows = await db.query(
-      `SELECT spv, sub_fund, company, transaction_type, transaction_date, transaction_amount
+      `SELECT fund, spv, sub_fund, company, transaction_type, transaction_date, transaction_amount
        FROM b_transaction
        WHERE version = ? AND fund = ? AND lp IS NULL AND F_DeleteMark = 0
        ORDER BY transaction_date DESC`,
@@ -386,9 +386,10 @@ router.get('/spv-detail', async (req, res) => {
     
     const rows = await db.query(
       `SELECT fund, fund_type, set_up_date, transaction_type, project,
-              acc_sub, acc_paidin, acc_exit, acc_receive
+              acc_sub, acc_paidin, acc_exit, acc_receive, fund_paid, lp_paid
        FROM b_investment_spv
        WHERE version = ? AND F_DeleteMark = 0
+         AND (lp_paid IS NOT NULL AND lp_paid > 0)
        ORDER BY fund, transaction_type, first_date ASC`,
       [version]
     );

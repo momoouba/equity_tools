@@ -726,6 +726,26 @@ function PerformanceApp() {
     loadModalData()
   }, [modal, selectedVersion])
 
+  // 补偿滚动条宽度，确保表头/合计表与数据表列线对齐
+  // 原理：数据表在 scroll 容器内，宽度受滚动条扣减；表头/合计表在外部，
+  // 需将 width 缩至 (100% - scrollbarWidth) 使 content area 与数据表一致。
+  // 注意：不能用 paddingRight（box-sizing: content-box 下 padding 加在 content 外侧，不会缩小 content area）。
+  useEffect(() => {
+    if (!modal.type || !modalData) return
+    const timer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        const scrollEl = document.querySelector('.perf-mgr-data-scroll')
+        if (!scrollEl) return
+        const scrollbarWidth = scrollEl.offsetWidth - scrollEl.clientWidth
+        const header = scrollEl.parentElement?.querySelector('.perf-mgr-header-table')
+        const footer = scrollEl.parentElement?.querySelector('.perf-mgr-footer-table')
+        if (header) header.style.width = scrollbarWidth > 0 ? `calc(100% - ${scrollbarWidth}px)` : ''
+        if (footer) footer.style.width = scrollbarWidth > 0 ? `calc(100% - ${scrollbarWidth}px)` : ''
+      })
+    }, 80)
+    return () => clearTimeout(timer)
+  }, [modal.type, modalData])
+
   useEffect(() => {
     loadDates()
     loadSystemConfig()
@@ -842,15 +862,71 @@ function PerformanceApp() {
     }
   }
 
+  // 根据数据量动态计算弹窗高度，数据少时缩小弹窗减少留白
+  const getModalHeight = () => {
+    if (!modalData) return '90vh'
+    let rows = 0
+    if (Array.isArray(modalData.list)) rows = modalData.list.length
+    else if (Array.isArray(modalData.cashflow)) rows = modalData.cashflow.length
+    else if (Array.isArray(modalData.indicator)) rows = modalData.indicator.length
+    else if (modalData.indicator) rows = 1
+
+    // 三段式布局（header table + scroll + footer table）开销更大
+    // fundPerformance / projectCashflow 额外有指标表(~105px)在现金流表上方
+    const threeSectionTypes = ['managerFunds', 'spvDetail', 'fundPerformance', 'projectCashflow']
+    const hasIndicatorAbove = ['fundPerformance', 'projectCashflow'].includes(modal.type)
+    const CHROME = hasIndicatorAbove ? 430
+      : threeSectionTypes.includes(modal.type) ? 320
+      : ['underlyingCompanies', 'regionCompanies'].includes(modal.type) ? 350
+      : 250
+
+    // 有分组小计/合计的弹窗额外预留行数；投资人名录+3(合计行+冗余高度避免滚动条)
+    const extraRows = (modal.type === 'investors') ? 3
+      : ['fundPortfolio', 'portfolioDetail', 'spvDetail'].includes(modal.type) ? 3
+      : ['underlyingCompanies', 'regionCompanies'].includes(modal.type) ? 3
+      : 0
+    const ROW_H = 38
+    // 现金流弹窗保证最小高度，确保不同基金显示一致（projectCashflow~10行, fundPerformance~8行）
+    const MIN_H = (modal.type === 'projectCashflow') ? 650
+      : (modal.type === 'fundPerformance') ? 550
+      : 280
+    const content = (rows + extraRows) * ROW_H + CHROME
+    const max = window.innerHeight * 0.9
+    return Math.max(Math.min(content, max), MIN_H) + 'px'
+  }
+
   // 渲染弹窗内容
   const renderModalContent = () => {
     if (modalLoading) return <Spin />
     if (!modalData) return <div>暂无数据</div>
     
     switch (modal.type) {
-      case 'managerFunds':
+      case 'managerFunds': {
+        const mgrList = modalData.list || []
+        const mgrSum = { sub_amount: 0, sub_add: 0, paid_in_amount: 0, paid_in_add: 0, dis_amount: 0, dis_add: 0 }
+        mgrList.forEach((r) => {
+          mgrSum.sub_amount += toNum(r.sub_amount) || 0
+          mgrSum.sub_add += toNum(r.sub_add) || 0
+          mgrSum.paid_in_amount += toNum(r.paid_in_amount) || 0
+          mgrSum.paid_in_add += toNum(r.paid_in_add) || 0
+          mgrSum.dis_amount += toNum(r.dis_amount) || 0
+          mgrSum.dis_add += toNum(r.dis_add) || 0
+        })
+        const mgrColgroup = (
+          <colgroup>
+            <col style={{ width: 48 }} />
+            <col style={{ width: 180 }} />
+            <col style={{ width: 100 }} />
+            <col style={{ width: 130 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 130 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 140 }} />
+            <col style={{ width: 120 }} />
+          </colgroup>
+        )
         return (
-          <>
+          <div className="perf-modal-fundperf-wrap">
             <div className="perf-modal-header perf-modal-header-with-action">
               <span>单位：人民币元</span>
               <span>数据截至日期：{formatVersionDate(selectedVersion)}</span>
@@ -865,7 +941,8 @@ function PerformanceApp() {
                 导出底稿
               </Button>
             </div>
-            <table className="perf-table perf-table-bordered">
+            <table className="perf-table perf-table-bordered perf-mgr-header-table">
+              {mgrColgroup}
               <thead>
                 <tr>
                   <th>序号</th>
@@ -879,45 +956,49 @@ function PerformanceApp() {
                   <th>本年新增分配</th>
                 </tr>
               </thead>
-              <tbody>
-                {(modalData.list || []).map((row, i) => (
-                  <tr key={i}>
-                    <td>{i + 1}</td>
-                    <td>{row.fund}</td><td>{row.fund_type}</td>
-                    <td>{formatAmountYuan(row.sub_amount)}</td><td>{formatAmountYuan(row.sub_add)}</td>
-                    <td>{formatAmountYuan(row.paid_in_amount)}</td><td>{formatAmountYuan(row.paid_in_add)}</td>
-                    <td>{formatAmountYuan(row.dis_amount)}</td><td>{formatAmountYuan(row.dis_add)}</td>
-                  </tr>
-                ))}
-                {(() => {
-                  const list = modalData.list || []
-                  const sum = { sub_amount: 0, sub_add: 0, paid_in_amount: 0, paid_in_add: 0, dis_amount: 0, dis_add: 0 }
-                  list.forEach((r) => {
-                    sum.sub_amount += toNum(r.sub_amount) || 0
-                    sum.sub_add += toNum(r.sub_add) || 0
-                    sum.paid_in_amount += toNum(r.paid_in_amount) || 0
-                    sum.paid_in_add += toNum(r.paid_in_add) || 0
-                    sum.dis_amount += toNum(r.dis_amount) || 0
-                    sum.dis_add += toNum(r.dis_add) || 0
-                  })
-                  return list.length > 0 ? (
-                    <tr className="perf-table-summary">
-                      <td>合计</td>
-                      <td>-</td>
-                      <td>-</td>
-                      <td>{formatAmountYuan(sum.sub_amount)}</td>
-                      <td>{formatAmountYuan(sum.sub_add)}</td>
-                      <td>{formatAmountYuan(sum.paid_in_amount)}</td>
-                      <td>{formatAmountYuan(sum.paid_in_add)}</td>
-                      <td>{formatAmountYuan(sum.dis_amount)}</td>
-                      <td>{formatAmountYuan(sum.dis_add)}</td>
-                    </tr>
-                  ) : null
-                })()}
-              </tbody>
             </table>
-          </>
+            <div className="perf-mgr-data-scroll">
+              <table className="perf-table perf-table-bordered perf-mgr-data-table">
+                {mgrColgroup}
+                <tbody>
+                  {mgrList.map((row, i) => (
+                    <tr key={i}>
+                      <td>{i + 1}</td>
+                      <td>{row.fund}</td><td>{row.fund_type}</td>
+                      <td>{formatAmountYuan(row.sub_amount)}</td><td>{formatAmountYuan(row.sub_add)}</td>
+                      <td>{formatAmountYuan(row.paid_in_amount)}</td><td>{formatAmountYuan(row.paid_in_add)}</td>
+                      <td>{formatAmountYuan(row.dis_amount)}</td><td>{formatAmountYuan(row.dis_add)}</td>
+                    </tr>
+                  ))}
+                  {mgrList.length === 0 && (
+                    <tr>
+                      <td colSpan={9} style={{ textAlign: 'center' }}>暂无数据</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {mgrList.length > 0 && (
+              <table className="perf-table perf-table-bordered perf-mgr-footer-table">
+                {mgrColgroup}
+                <tbody>
+                  <tr className="perf-table-summary">
+                    <td>合计</td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>{formatAmountYuan(mgrSum.sub_amount)}</td>
+                    <td>{formatAmountYuan(mgrSum.sub_add)}</td>
+                    <td>{formatAmountYuan(mgrSum.paid_in_amount)}</td>
+                    <td>{formatAmountYuan(mgrSum.paid_in_add)}</td>
+                    <td>{formatAmountYuan(mgrSum.dis_amount)}</td>
+                    <td>{formatAmountYuan(mgrSum.dis_add)}</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </div>
         )
+      }
       case 'investors': {
         const invList = modalData.list || []
         const firstRow = invList[0]
@@ -1011,6 +1092,16 @@ function PerformanceApp() {
       case 'fundPerformance': {
         const indList = modalData.indicator || []
         const cashList = modalData.cashflow || []
+        const fpCashColgroup = (
+          <colgroup>
+            <col style={{ width: 48 }} />
+            <col style={{ width: 140 }} />
+            <col style={{ width: 200 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 130 }} />
+            <col style={{ width: 150 }} />
+          </colgroup>
+        )
         return (
           <div className="perf-modal-fundperf-wrap">
             <div className="perf-modal-header perf-modal-header-with-action">
@@ -1062,20 +1153,24 @@ function PerformanceApp() {
               </table>
             </div>
 
-            {/* 下半部分：现金流明细表，单独滚动，表头固定 */}
+            {/* 下半部分：现金流明细表，三段式布局（表头固定 + 数据滚动） */}
             <div className="perf-fundperf-section-title">现金流明细表</div>
-            <div className="perf-modal-fundperf-scroll-cashflow">
-              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow">
-                <thead>
-                  <tr>
-                    <th className="perf-col-index">序号</th>
-                    <th>基金名称</th>
-                    <th className="perf-th-lp">投资人名称</th>
-                    <th className="perf-td-center">交易类型</th>
-                    <th>交易时间</th>
-                    <th>交易金额</th>
-                  </tr>
-                </thead>
+            <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow perf-mgr-header-table">
+              {fpCashColgroup}
+              <thead>
+                <tr>
+                  <th className="perf-col-index">序号</th>
+                  <th>基金名称</th>
+                  <th className="perf-th-lp">投资人名称</th>
+                  <th className="perf-td-center">交易类型</th>
+                  <th>交易时间</th>
+                  <th>交易金额</th>
+                </tr>
+              </thead>
+            </table>
+            <div className="perf-modal-fundperf-scroll-cashflow perf-mgr-data-scroll">
+              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow perf-mgr-data-table">
+                {fpCashColgroup}
                 <tbody>
                   {cashList.map((row, i) => (
                     <tr key={i}>
@@ -1087,6 +1182,11 @@ function PerformanceApp() {
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.transaction_amount)}</td>
                     </tr>
                   ))}
+                  {cashList.length === 0 && (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center' }}>暂无数据</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -1158,6 +1258,44 @@ function PerformanceApp() {
           </tr>
         )
 
+        const fpColgroup = (
+          <colgroup>
+            <col style={{ width: 48 }} />
+            <col style={{ width: 90 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 75 }} /><col style={{ width: 75 }} />
+          </colgroup>
+        )
+
+        const renderSummaryRow = (sum, label, count, colSpanFirst) => (
+          <tr className="perf-table-summary">
+            <td className="perf-col-index">{label}</td>
+            <td className="perf-col-type">{count}</td>
+            <td className="perf-col-project" />
+            <td className="perf-col-date" />
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_sub)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_sub)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_paidin)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_paidin)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_exit)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_exit)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_receive)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_receive)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.unrealized)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_unrealized)}</td>
+            <td className="perf-td-num perf-col-total-value">{formatAmountYuan(sum.total_value)}</td>
+            <td className="perf-td-num perf-col-ratio">{formatRatio(sum.moc)}</td>
+            <td className="perf-td-num perf-col-ratio">{formatRatio(sum.dpi)}</td>
+          </tr>
+        )
+
         return (
           <div className="perf-modal-fundperf-wrap">
             <div className="perf-modal-header perf-modal-header-with-action">
@@ -1175,21 +1313,10 @@ function PerformanceApp() {
               </Button>
             </div>
             <div className="perf-fundperf-section-title">基金投资组合明细</div>
-            <div className="perf-modal-fundperf-scroll">
-              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundportfolio">
-                <colgroup>
-                  <col style={{ width: 48 }} />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 160 }} />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} />
-                  <col style={{ width: 60 }} /><col style={{ width: 60 }} />
-                </colgroup>
+            {/* 单一滚动容器：横向+纵向，单表+sticky thead 确保列对齐和固定列 */}
+            <div className="perf-fp-scroll">
+              <table className="perf-table perf-table-bordered perf-table-fundportfolio perf-fp-table" style={{ tableLayout: 'fixed' }}>
+                {fpColgroup}
                 <thead>
                   <tr>
                     <th className="perf-col-index" rowSpan={2}>序号</th>
@@ -1219,78 +1346,18 @@ function PerformanceApp() {
                   </tr>
                 </thead>
                 <tbody>
-                  {/* 子基金明细 + 小计 */}
-                  {subFundRows.length > 0 && (
-                    <>
-                      {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
-                      <tr className="perf-table-summary">
-                        <td className="perf-col-index" colSpan={2}>小计（子基金）</td>
-                        <td className="perf-col-project">{`子基金个数：${subFundRows.length} 个`}</td>
-                        <td className="perf-col-date" />
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.unrealized)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_unrealized)}</td>
-                        <td className="perf-td-num perf-col-total-value">{formatAmountYuan(subFundSum.total_value)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(subFundSum.moc)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(subFundSum.dpi)}</td>
-                      </tr>
-                    </>
-                  )}
-
-                  {/* 直投项目明细 + 小计（序号重新从 1 开始） */}
-                  {directRows.length > 0 && (
-                    <>
-                      {directRows.map((row, idx) => renderDataRow(row, idx + 1))}
-                      <tr className="perf-table-summary">
-                        <td className="perf-col-index" colSpan={2}>小计（直投项目）</td>
-                        <td className="perf-col-project">{`直投项目个数：${directRows.length} 个`}</td>
-                        <td className="perf-col-date" />
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.unrealized)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_unrealized)}</td>
-                        <td className="perf-td-num perf-col-total-value">{formatAmountYuan(directSum.total_value)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(directSum.moc)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(directSum.dpi)}</td>
-                      </tr>
-                    </>
-                  )}
-
-                  {/* 总合计 */}
-                  {list.length > 0 && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计</td>
-                      <td className="perf-col-project">{`总项目个数：${list.length} 个`}</td>
-                      <td className="perf-col-date" />
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_sub)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_sub)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_exit)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_exit)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_receive)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_receive)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.unrealized)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_unrealized)}</td>
-                      <td className="perf-td-num perf-col-total-value">{formatAmountYuan(allSum.total_value)}</td>
-                      <td className="perf-td-num perf-col-ratio">{formatRatio(allSum.moc)}</td>
-                      <td className="perf-td-num perf-col-ratio">{formatRatio(allSum.dpi)}</td>
-                    </tr>
-                  )}
+                  {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
+                  {subFundRows.length > 0 && renderSummaryRow(subFundSum, '小计（子基金）', `子基金个数：${subFundRows.length} 个`, 2)}
                 </tbody>
+                <tbody>
+                  {directRows.map((row, idx) => renderDataRow(row, subFundRows.length + idx + 1))}
+                  {directRows.length > 0 && renderSummaryRow(directSum, '小计（直投项目）', `直投项目个数：${directRows.length} 个`, 2)}
+                </tbody>
+                {list.length > 0 && (
+                  <tbody>
+                    {renderSummaryRow(allSum, '合计', `总项目个数：${list.length} 个`, 2)}
+                  </tbody>
+                )}
               </table>
             </div>
           </div>
@@ -1342,8 +1409,8 @@ function PerformanceApp() {
         const renderDataRow = (row, index) => (
           <tr key={`${row.transaction_type || ''}-${row.project || ''}-${index}`}>
             <td className="perf-col-index">{index}</td>
-            <td>{row.transaction_type}</td>
-            <td>{row.project}</td>
+            <td className="perf-col-type">{row.transaction_type}</td>
+            <td className="perf-col-project">{row.project}</td>
             <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_sub)}</td>
             <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.change_sub)}</td>
             <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_paidin)}</td>
@@ -1357,6 +1424,41 @@ function PerformanceApp() {
             <td className="perf-td-num perf-col-total-value">{formatAmountYuan(row.total_value)}</td>
             <td className="perf-td-num perf-col-ratio">{formatRatio(row.moc)}</td>
             <td className="perf-td-num perf-col-ratio">{formatRatio(row.dpi)}</td>
+          </tr>
+        )
+
+        const pdColgroup = (
+          <colgroup>
+            <col style={{ width: 48 }} />
+            <col style={{ width: 90 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} /><col style={{ width: 120 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 75 }} /><col style={{ width: 75 }} />
+          </colgroup>
+        )
+
+        const renderSummaryRow = (sum, label, count) => (
+          <tr className="perf-table-summary">
+            <td className="perf-col-index" colSpan={2}>{label}</td>
+            <td className="perf-col-project">{count}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_sub)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_sub)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_paidin)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_paidin)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_exit)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_exit)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_receive)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_receive)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.unrealized)}</td>
+            <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_unrealized)}</td>
+            <td className="perf-td-num perf-col-total-value">{formatAmountYuan(sum.total_value)}</td>
+            <td className="perf-td-num perf-col-ratio">{formatRatio(sum.moc)}</td>
+            <td className="perf-td-num perf-col-ratio">{formatRatio(sum.dpi)}</td>
           </tr>
         )
 
@@ -1377,20 +1479,10 @@ function PerformanceApp() {
               </Button>
             </div>
             <div className="perf-fundperf-section-title">整体基金投资组合明细</div>
-            <div className="perf-modal-fundperf-scroll">
-              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundportfolio perf-table-portfolio-detail">
-                <colgroup>
-                  <col style={{ width: 48 }} />
-                  <col style={{ width: 90 }} />
-                  <col style={{ width: 160 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} /><col style={{ width: 120 }} />
-                  <col style={{ width: 120 }} />
-                  <col style={{ width: 60 }} /><col style={{ width: 60 }} />
-                </colgroup>
+            {/* 单一滚动容器：横向+纵向，单表+sticky thead */}
+            <div className="perf-pd-scroll">
+              <table className="perf-table perf-table-bordered perf-table-portfolio-detail perf-pd-table" style={{ tableLayout: 'fixed' }}>
+                {pdColgroup}
                 <thead>
                   <tr>
                     <th className="perf-col-index" rowSpan={2}>序号</th>
@@ -1419,70 +1511,18 @@ function PerformanceApp() {
                   </tr>
                 </thead>
                 <tbody>
-                  {subFundRows.length > 0 && (
-                    <>
-                      {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
-                      <tr className="perf-table-summary">
-                        <td className="perf-col-index" colSpan={2}>小计（子基金）</td>
-                        <td className="perf-col-project">{`子基金个数：${subFundRows.length} 个`}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.acc_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.unrealized)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(subFundSum.change_unrealized)}</td>
-                        <td className="perf-td-num perf-col-total-value">{formatAmountYuan(subFundSum.total_value)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(subFundSum.moc)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(subFundSum.dpi)}</td>
-                      </tr>
-                    </>
-                  )}
-                  {directRows.length > 0 && (
-                    <>
-                      {directRows.map((row, idx) => renderDataRow(row, idx + 1))}
-                      <tr className="perf-table-summary">
-                        <td className="perf-col-index" colSpan={2}>小计（直投项目）</td>
-                        <td className="perf-col-project">{`直投项目个数：${directRows.length} 个`}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_sub)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_paidin)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_exit)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.acc_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_receive)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.unrealized)}</td>
-                        <td className="perf-td-num perf-col-amount">{formatAmountYuan(directSum.change_unrealized)}</td>
-                        <td className="perf-td-num perf-col-total-value">{formatAmountYuan(directSum.total_value)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(directSum.moc)}</td>
-                        <td className="perf-td-num perf-col-ratio">{formatRatio(directSum.dpi)}</td>
-                      </tr>
-                    </>
-                  )}
-                  {list.length > 0 && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计</td>
-                      <td className="perf-col-project">{`总项目个数：${list.length} 个`}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_sub)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_sub)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_exit)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_exit)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_receive)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_receive)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.unrealized)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.change_unrealized)}</td>
-                      <td className="perf-td-num perf-col-total-value">{formatAmountYuan(allSum.total_value)}</td>
-                      <td className="perf-td-num perf-col-ratio">{formatRatio(allSum.moc)}</td>
-                      <td className="perf-td-num perf-col-ratio">{formatRatio(allSum.dpi)}</td>
-                    </tr>
-                  )}
+                  {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
+                  {subFundRows.length > 0 && renderSummaryRow(subFundSum, '小计（子基金）', `子基金个数：${subFundRows.length} 个`)}
                 </tbody>
+                <tbody>
+                  {directRows.map((row, idx) => renderDataRow(row, subFundRows.length + idx + 1))}
+                  {directRows.length > 0 && renderSummaryRow(directSum, '小计（直投项目）', `直投项目个数：${directRows.length} 个`)}
+                </tbody>
+                {list.length > 0 && (
+                  <tfoot>
+                    {renderSummaryRow(allSum, '合计', `总项目个数：${list.length} 个`)}
+                  </tfoot>
+                )}
               </table>
             </div>
           </div>
@@ -1497,12 +1537,16 @@ function PerformanceApp() {
             acc_paidin: 0,
             acc_exit: 0,
             acc_receive: 0,
+            fund_paid: 0,
+            lp_paid: 0,
           }
           rows.forEach((r) => {
             sum.acc_sub += toNum(r.acc_sub) || 0
             sum.acc_paidin += toNum(r.acc_paidin) || 0
             sum.acc_exit += toNum(r.acc_exit) || 0
             sum.acc_receive += toNum(r.acc_receive) || 0
+            sum.fund_paid += toNum(r.fund_paid) || 0
+            sum.lp_paid += toNum(r.lp_paid) || 0
           })
           return sum
         }
@@ -1527,7 +1571,7 @@ function PerformanceApp() {
             </div>
             <div className="perf-fundperf-section-title">SPV投资组合明细</div>
             <div className="perf-modal-fundperf-scroll">
-              <table className="perf-table perf-table-bordered perf-table-fundportfolio perf-table-portfolio-detail">
+              <table className="perf-table perf-table-bordered perf-table-fundportfolio perf-table-spv-detail">
                 <colgroup>
                   <col style={{ width: 48 }} />
                   <col style={{ width: 160 }} />
@@ -1535,6 +1579,7 @@ function PerformanceApp() {
                   <col style={{ width: 120 }} />
                   <col style={{ width: 100 }} />
                   <col style={{ width: 160 }} />
+                  <col style={{ width: 130 }} /><col style={{ width: 130 }} />
                   <col style={{ width: 130 }} /><col style={{ width: 130 }} />
                   <col style={{ width: 130 }} /><col style={{ width: 130 }} />
                 </colgroup>
@@ -1550,6 +1595,8 @@ function PerformanceApp() {
                     <th className="perf-col-amount">实缴金额累计</th>
                     <th className="perf-col-amount">退出金额累计</th>
                     <th className="perf-col-amount">回款金额累计</th>
+                    <th className="perf-col-amount">基金实缴累计</th>
+                    <th className="perf-col-amount">LP实缴累计</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1565,22 +1612,24 @@ function PerformanceApp() {
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_paidin)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_exit)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_receive)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.fund_paid)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.lp_paid)}</td>
                     </tr>
                   ))}
                   {list.length > 0 && (
                     <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计</td>
-                      <td>{`项目个数：${list.length} 个`}</td>
-                      <td colSpan={3}></td>
+                      <td className="perf-col-index" colSpan={6}>合计</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_sub)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_paidin)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_exit)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_receive)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.fund_paid)}</td>
+                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.lp_paid)}</td>
                     </tr>
                   )}
                   {list.length === 0 && (
                     <tr>
-                      <td colSpan={10} style={{ textAlign: 'center', color: '#86909c', padding: '24px 0' }}>暂无数据</td>
+                      <td colSpan={12} style={{ textAlign: 'center', color: '#86909c', padding: '24px 0' }}>暂无数据</td>
                     </tr>
                   )}
                 </tbody>
@@ -1591,7 +1640,28 @@ function PerformanceApp() {
       }
       case 'projectCashflow': {
         const indicator = modalData.indicator || null
-        const list = modalData.cashflow || []
+        const rawList = modalData.cashflow || []
+        // 排序：SPV/子基金/企业名称全为空的行（未实现价值汇总）排在最前面
+        const isEmpty = (v) => !v || String(v).trim() === ''
+        const list = [...rawList].sort((a, b) => {
+          const aEmpty = isEmpty(a.spv) && isEmpty(a.sub_fund) && isEmpty(a.company)
+          const bEmpty = isEmpty(b.spv) && isEmpty(b.sub_fund) && isEmpty(b.company)
+          if (aEmpty && !bEmpty) return -1
+          if (!aEmpty && bEmpty) return 1
+          return 0
+        })
+        const pcCashColgroup = (
+          <colgroup>
+            <col style={{ width: 48 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 180 }} />
+            <col style={{ width: 110 }} />
+            <col style={{ width: 130 }} />
+            <col style={{ width: 150 }} />
+          </colgroup>
+        )
         return (
           <div className="perf-modal-fundperf-wrap">
             <div className="perf-modal-header perf-modal-header-with-action">
@@ -1643,22 +1713,26 @@ function PerformanceApp() {
               </table>
             </div>
 
-            {/* 下半部分现金流明细表独立滚动，从第一条数据开始 */}
+            {/* 下半部分现金流明细表，三段式布局（表头固定 + 数据滚动） */}
             <div className="perf-fundperf-section-title">现金流明细表</div>
-            <div className="perf-modal-fundperf-scroll-cashflow">
-              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow">
-                <thead>
-                  <tr>
-                    <th className="perf-col-index">序号</th>
-                    <th>基金名称</th>
-                    <th>SPV名称</th>
-                    <th>子基金名称</th>
-                    <th>被投企业名称</th>
-                    <th className="perf-td-center">交易类型</th>
-                    <th>交易时间</th>
-                    <th>交易金额</th>
-                  </tr>
-                </thead>
+            <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow perf-mgr-header-table">
+              {pcCashColgroup}
+              <thead>
+                <tr>
+                  <th className="perf-col-index">序号</th>
+                  <th>基金名称</th>
+                  <th>SPV名称</th>
+                  <th>子基金名称</th>
+                  <th>被投企业名称</th>
+                  <th className="perf-td-center">交易类型</th>
+                  <th>交易时间</th>
+                  <th>交易金额</th>
+                </tr>
+              </thead>
+            </table>
+            <div className="perf-modal-fundperf-scroll-cashflow perf-mgr-data-scroll">
+              <table className="perf-table perf-table-bordered perf-table-fundperf perf-table-fundperf-cashflow perf-mgr-data-table">
+                {pcCashColgroup}
                 <tbody>
                   {list.map((row, i) => (
                     <tr key={i}>
@@ -1791,29 +1865,33 @@ function PerformanceApp() {
                       <td className="perf-td-num perf-col-amount">{formatAmount(row.ipo_amount)}</td>
                     </tr>
                   ))}
-                  {sumTotal && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.project_num}</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.company_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.total_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.project_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.ipo_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.ipo_amount)}</td>
-                    </tr>
-                  )}
-                  {sumDedup && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计(去重)</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.project_num}</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.company_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.total_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.project_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.ipo_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.ipo_amount)}</td>
-                    </tr>
-                  )}
                 </tbody>
+                {(sumTotal || sumDedup) && (
+                  <tfoot>
+                    {sumTotal && (
+                      <tr className="perf-table-summary">
+                        <td className="perf-col-index" colSpan={2}>合计</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.project_num}</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.company_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.total_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.project_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.ipo_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.ipo_amount)}</td>
+                      </tr>
+                    )}
+                    {sumDedup && (
+                      <tr className="perf-table-summary">
+                        <td className="perf-col-index" colSpan={2}>合计(去重)</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.project_num}</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.company_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.total_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.project_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.ipo_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.ipo_amount)}</td>
+                      </tr>
+                    )}
+                  </tfoot>
+                )}
               </table>
             </div>
             {systemConfig.redirectUrl && (
@@ -1881,29 +1959,33 @@ function PerformanceApp() {
                       <td className="perf-td-num perf-col-amount">{formatAmount(row.pd_amount)}</td>
                     </tr>
                   ))}
-                  {sumTotal && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.csj_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.csj_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.sh_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.sh_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumTotal.pd_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.pd_amount)}</td>
-                    </tr>
-                  )}
-                  {sumDedup && (
-                    <tr className="perf-table-summary">
-                      <td className="perf-col-index" colSpan={2}>合计(去重)</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.csj_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.csj_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.sh_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.sh_amount)}</td>
-                      <td className="perf-td-num perf-col-amount">{sumDedup.pd_num}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.pd_amount)}</td>
-                    </tr>
-                  )}
                 </tbody>
+                {(sumTotal || sumDedup) && (
+                  <tfoot>
+                    {sumTotal && (
+                      <tr className="perf-table-summary">
+                        <td className="perf-col-index" colSpan={2}>合计</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.csj_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.csj_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.sh_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.sh_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumTotal.pd_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumTotal.pd_amount)}</td>
+                      </tr>
+                    )}
+                    {sumDedup && (
+                      <tr className="perf-table-summary">
+                        <td className="perf-col-index" colSpan={2}>合计(去重)</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.csj_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.csj_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.sh_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.sh_amount)}</td>
+                        <td className="perf-td-num perf-col-amount">{sumDedup.pd_num}</td>
+                        <td className="perf-td-num perf-col-amount">{formatAmount(sumDedup.pd_amount)}</td>
+                      </tr>
+                    )}
+                  </tfoot>
+                )}
               </table>
             </div>
             {systemConfig.redirectUrl && (
@@ -2091,10 +2173,11 @@ function PerformanceApp() {
           footer={null}
           style={{
             width: ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
-            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? { maxHeight: '75vh', paddingBottom: 0, overflow: 'hidden' } : {})
+            '--perf-modal-h': getModalHeight(),
+            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? { paddingBottom: 0, overflow: 'hidden' } : {})
           }}
           bodyStyle={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type)
-            ? { height: 'calc(75vh - 56px)', maxHeight: 'calc(75vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }
+            ? { overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }
             : undefined}
         >
           {renderModalContent()}

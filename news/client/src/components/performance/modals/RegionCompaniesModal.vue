@@ -4,7 +4,7 @@
     :title="`区域企业明细【${type === 'cumulative' ? '累计' : '当前'}】`"
     :width="1125"
     :footer="false"
-    :body-style="{ height: 'calc(75vh - 56px)', maxHeight: 'calc(75vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }"
+    :body-style="{ height: 'calc(85vh - 56px)', maxHeight: 'calc(85vh - 56px)', overflow: 'hidden', display: 'flex', flexDirection: 'column', paddingBottom: 0, minHeight: 0 }"
     @cancel="handleClose"
   >
     <div class="modal-header">
@@ -52,26 +52,29 @@
             <td class="col-amount td-num">{{ row.pd_num }}</td>
             <td class="col-amount td-num">{{ formatAmount(row.pd_amount) }}</td>
           </tr>
-          <tr v-if="sumTotal" class="summary-row">
-            <td class="col-index" colspan="2">合计</td>
-            <td class="col-amount td-num">{{ sumTotal.csj_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(sumTotal.csj_amount) }}</td>
-            <td class="col-amount td-num">{{ sumTotal.sh_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(sumTotal.sh_amount) }}</td>
-            <td class="col-amount td-num">{{ sumTotal.pd_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(sumTotal.pd_amount) }}</td>
-          </tr>
-          <tr v-if="totalDedup" class="summary-row">
-            <td class="col-index" colspan="2">合计(去重)</td>
-            <td class="col-amount td-num">{{ totalDedup.csj_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(totalDedup.csj_amount) }}</td>
-            <td class="col-amount td-num">{{ totalDedup.sh_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(totalDedup.sh_amount) }}</td>
-            <td class="col-amount td-num">{{ totalDedup.pd_num }}</td>
-            <td class="col-amount td-num">{{ formatAmount(totalDedup.pd_amount) }}</td>
-          </tr>
-        </tbody>
-      </table>
+          </tbody>
+          <!-- 合计（吸底） -->
+          <tfoot v-if="tableData.length > 0">
+            <tr class="summary-row">
+              <td class="col-index" colspan="2">合计</td>
+              <td class="col-amount td-num">{{ sumTotal.csj_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(sumTotal.csj_amount) }}</td>
+              <td class="col-amount td-num">{{ sumTotal.sh_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(sumTotal.sh_amount) }}</td>
+              <td class="col-amount td-num">{{ sumTotal.pd_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(sumTotal.pd_amount) }}</td>
+            </tr>
+            <tr v-if="totalDedup" class="summary-row">
+              <td class="col-index" colspan="2">合计(去重)</td>
+              <td class="col-amount td-num">{{ totalDedup.csj_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(totalDedup.csj_amount) }}</td>
+              <td class="col-amount td-num">{{ totalDedup.sh_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(totalDedup.sh_amount) }}</td>
+              <td class="col-amount td-num">{{ totalDedup.pd_num }}</td>
+              <td class="col-amount td-num">{{ formatAmount(totalDedup.pd_amount) }}</td>
+            </tr>
+          </tfoot>
+        </table>
     </div>
   </a-modal>
 </template>
@@ -219,6 +222,16 @@ watch(() => props.visible, (val) => { if (val) loadData(); });
   color: #fff;
   font-weight: 500;
   border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+/* 合计行（tfoot）吸底 */
+.region-scroll .region-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+.region-scroll .region-table tfoot tr:first-child:not(:last-child) td {
+  bottom: 38px;
 }
 
 </style>

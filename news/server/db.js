@@ -3536,10 +3536,48 @@ async function initializeTables(dbPool) {
       acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-10',
       acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-11',
       acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-12',
+      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月认缴变动-13',
+      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月实缴变动-14',
+      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月退出变动-15',
+      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月回收变动-16',
+      fund_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '基金实缴金额累计-17',
+      lp_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'LP实缴金额累计-18',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-SPV投资组合明细';
   `);
+  // 为已存在的 b_investment_spv 表添加 change_*、fund_paid、lp_paid 字段
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_investment_spv'
+      AND COLUMN_NAME IN ('change_sub', 'change_paidin', 'change_exit', 'change_receive', 'fund_paid', 'lp_paid')
+    `);
+    const existing = new Set(cols.map(c => c.COLUMN_NAME));
+    if (!existing.has('change_sub')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月认缴变动-13' AFTER acc_receive`);
+    }
+    if (!existing.has('change_paidin')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月实缴变动-14' AFTER change_sub`);
+    }
+    if (!existing.has('change_exit')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月退出变动-15' AFTER change_paidin`);
+    }
+    if (!existing.has('change_receive')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本月回收变动-16' AFTER change_exit`);
+    }
+    if (!existing.has('fund_paid')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN fund_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '基金实缴金额累计-17' AFTER change_receive`);
+    }
+    if (!existing.has('lp_paid')) {
+      await dbPool.query(`ALTER TABLE b_investment_spv ADD COLUMN lp_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'LP实缴金额累计-18' AFTER fund_paid`);
+    }
+    // 修正已有列的 COMMENT 序号
+    await dbPool.query(`ALTER TABLE b_investment_spv MODIFY COLUMN fund_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT '基金实缴金额累计-17'`);
+    await dbPool.query(`ALTER TABLE b_investment_spv MODIFY COLUMN lp_paid DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'LP实缴金额累计-18'`);
+  } catch (err) {
+    console.warn('检查/添加 b_investment_spv 字段时出现了警告:', err.message);
+  }
   // b_investment_indicator
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS b_investment_indicator (

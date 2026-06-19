@@ -125,22 +125,26 @@ async function getTableColumns(tableName, connection) {
     `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`,
     [tableName]
   );
-  const set = new Set(cols.map(c => c.COLUMN_NAME));
-  tableColumnCache.set(tableName, set);
-  return set;
+  // 使用 Map（小写→实际列名）支持大小写不敏感匹配
+  const map = new Map();
+  cols.forEach(c => map.set(c.COLUMN_NAME.toLowerCase(), c.COLUMN_NAME));
+  tableColumnCache.set(tableName, map);
+  return map;
 }
 
 /**
  * 过滤行对象，只保留目标表中实际存在的列。
  * 向下兼容：SQL 查询返回的字段多于数据库表字段时，不阻断流程，只写入匹配字段。
+ * 大小写不敏感：SQL 别名 MOC 可匹配表列 moc，写入时使用表的实际列名。
  */
 async function filterColumnsForInsert(rows, targetTable, connection) {
-  const validCols = await getTableColumns(targetTable, connection);
+  const colMap = await getTableColumns(targetTable, connection);
   return rows.map(r => {
     const filtered = {};
     for (const key of Object.keys(r)) {
-      if (validCols.has(key)) {
-        filtered[key] = r[key];
+      const actualCol = colMap.get(key.toLowerCase());
+      if (actualCol !== undefined) {
+        filtered[actualCol] = r[key];
       }
     }
     return filtered;

@@ -24,7 +24,7 @@
             <col style="width: 120px" /><col style="width: 120px" />
             <col style="width: 120px" /><col style="width: 120px" />
             <col style="width: 120px" />
-            <col style="width: 60px" /><col style="width: 60px" />
+            <col style="width: 75px" /><col style="width: 75px" />
           </colgroup>
           <thead>
             <tr>
@@ -92,7 +92,7 @@
             </tr>
             <!-- 直投项目明细 -->
             <tr v-for="(row, idx) in directRows" :key="'dir-' + idx">
-              <td class="col-index">{{ idx + 1 }}</td>
+              <td class="col-index">{{ subFundRows.length + idx + 1 }}</td>
               <td class="col-type">{{ row.transaction_type || '-' }}</td>
               <td class="col-project">{{ row.project || '-' }}</td>
               <td class="td-num col-amount">{{ formatAmount(row.acc_sub) }}</td>
@@ -126,8 +126,10 @@
               <td class="td-num col-ratio">{{ formatRatio(directSum.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(directSum.dpi) }}</td>
             </tr>
-            <!-- 合计 -->
-            <tr class="row-summary">
+          </tbody>
+          <!-- 合计（吸底） -->
+          <tfoot v-if="tableData.length > 0">
+            <tr class="row-summary row-total">
               <td class="col-index" colspan="2">合计</td>
               <td>总项目个数：{{ tableData.length }} 个</td>
               <td class="td-num col-amount">{{ formatAmount(allSum.acc_sub) }}</td>
@@ -144,7 +146,7 @@
               <td class="td-num col-ratio">{{ formatRatio(allSum.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(allSum.dpi) }}</td>
             </tr>
-          </tbody>
+          </tfoot>
         </table>
       </div>
     </a-spin>
@@ -276,8 +278,8 @@ watch(() => props.visible, (val) => { if (val) loadData(); });
 }
 
 .portfolio-detail-table {
-  width: 1738px;
-  min-width: 1738px;
+  width: 1768px;
+  min-width: 1768px;
   border-collapse: collapse;
   font-size: 13px;
   table-layout: fixed;
@@ -326,13 +328,93 @@ watch(() => props.visible, (val) => { if (val) loadData(); });
 }
 
 .portfolio-detail-table .col-ratio {
-  min-width: 60px;
-  width: 60px;
-  max-width: 60px;
+  min-width: 75px;
+  width: 75px;
+  max-width: 75px;
 }
 
 .portfolio-detail-table .row-summary td {
   background: #f7f8fa;
   font-weight: 500;
+}
+
+/* 合计行（tfoot）蓝色背景 */
+.portfolio-detail-table tfoot .row-summary td {
+  background: #1AA8E9;
+  color: #fff;
+}
+
+/* sticky thead */
+.portfolio-detail-scroll .portfolio-detail-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f5f7fa;
+}
+.portfolio-detail-scroll .portfolio-detail-table thead tr:first-child th {
+  top: 0;
+}
+.portfolio-detail-scroll .portfolio-detail-table thead tr:nth-child(2) th {
+  top: 38px;
+}
+
+/* 前3列横向滚动时固定 */
+.portfolio-detail-scroll .portfolio-detail-table th.col-index,
+.portfolio-detail-scroll .portfolio-detail-table td.col-index {
+  position: sticky; left: 0; z-index: 1; background: #fff;
+}
+.portfolio-detail-scroll .portfolio-detail-table th.col-type,
+.portfolio-detail-scroll .portfolio-detail-table td.col-type {
+  position: sticky; left: 48px; z-index: 1; background: #fff;
+}
+.portfolio-detail-scroll .portfolio-detail-table th.col-project,
+.portfolio-detail-scroll .portfolio-detail-table td.col-project {
+  position: sticky; left: 138px; z-index: 1; background: #fff;
+}
+
+/* thead 冻结列 z-index 更高 */
+.portfolio-detail-scroll .portfolio-detail-table thead th.col-index,
+.portfolio-detail-scroll .portfolio-detail-table thead th.col-type,
+.portfolio-detail-scroll .portfolio-detail-table thead th.col-project {
+  z-index: 3; background: #f5f7fa;
+}
+
+/* 小计行（tbody）冻结列背景 */
+.portfolio-detail-scroll .portfolio-detail-table tbody .row-summary td.col-index,
+.portfolio-detail-scroll .portfolio-detail-table tbody .row-summary td.col-project {
+  background: #f7f8fa;
+}
+
+/* 冻结列右侧阴影 */
+.portfolio-detail-scroll .portfolio-detail-table td.col-project::after,
+.portfolio-detail-scroll .portfolio-detail-table th.col-project::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; right: -6px;
+  width: 6px;
+  background: linear-gradient(to right, rgba(0, 0, 0, 0.06), transparent);
+}
+
+/* 合计行（tfoot）吸底 */
+.portfolio-detail-scroll .portfolio-detail-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: #1AA8E9;
+  color: #fff;
+  font-weight: 500;
+}
+/* tfoot 冻结列：同时吸底+吸左 */
+.portfolio-detail-scroll .portfolio-detail-table tfoot td.col-index {
+  left: 0;
+  z-index: 4;
+}
+.portfolio-detail-scroll .portfolio-detail-table tfoot td.col-type {
+  left: 48px;
+  z-index: 4;
+}
+.portfolio-detail-scroll .portfolio-detail-table tfoot td.col-project {
+  left: 138px;
+  z-index: 4;
 }
 </style>

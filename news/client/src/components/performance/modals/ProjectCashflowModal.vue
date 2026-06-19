@@ -16,19 +16,19 @@
     <a-table :data="indicatorList" :loading="loading" :pagination="false">
       <template #columns>
         <a-table-column title="基金名称" data-index="fund" />
-        <a-table-column title="投资金额/认缴" data-index="sub_amount">
+        <a-table-column title="投资金额/认缴" data-index="sub_amount" align="right">
           <template #cell="{ record }">{{ formatAmount(record.sub_amount) }}</template>
         </a-table-column>
-        <a-table-column title="投资金额/实缴" data-index="inv_amount">
+        <a-table-column title="投资金额/实缴" data-index="inv_amount" align="right">
           <template #cell="{ record }">{{ formatAmount(record.inv_amount) }}</template>
         </a-table-column>
-        <a-table-column title="项目分配" data-index="exit_amount">
+        <a-table-column title="项目分配" data-index="exit_amount" align="right">
           <template #cell="{ record }">{{ formatAmount(record.exit_amount) }}</template>
         </a-table-column>
-        <a-table-column title="GIRR" data-index="girr">
+        <a-table-column title="GIRR" data-index="girr" align="right">
           <template #cell="{ record }">{{ formatPercent(record.girr) }}</template>
         </a-table-column>
-        <a-table-column title="MOC" data-index="moc">
+        <a-table-column title="MOC" data-index="moc" align="right">
           <template #cell="{ record }">{{ formatRatio(record.moc) }}</template>
         </a-table-column>
       </template>
@@ -43,7 +43,7 @@
         <a-table-column title="被投企业" data-index="company" />
         <a-table-column title="交易类型" data-index="transaction_type" />
         <a-table-column title="交易时间" data-index="transaction_date" />
-        <a-table-column title="交易金额" data-index="transaction_amount">
+        <a-table-column title="交易金额" data-index="transaction_amount" align="right">
           <template #cell="{ record }">{{ formatAmount(record.transaction_amount) }}</template>
         </a-table-column>
       </template>
