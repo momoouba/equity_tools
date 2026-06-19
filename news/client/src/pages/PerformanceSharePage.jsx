@@ -8,7 +8,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from '../utils/axios'
 import { Spin, Card, Typography, Message, Button, Input, Tooltip } from '@arco-design/web-react'
 import { IconDownload, IconLock, IconRefresh } from '@arco-design/web-react/icon'
-import '../pages/业绩看板应用/PerformanceApp.css'
+import '../pages/performance/PerformanceApp.css'
 
 const { Title, Text } = Typography
 

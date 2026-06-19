@@ -30,10 +30,10 @@ import {
   postInvestedEnterpriseBatchQccCompanyBrief,
   fetchInvestedEnterpriseCompetitorReadiness,
   postInvestedEnterpriseCompetitorAnalysisRun,
-} from '../api/竞品分析'
-import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './竞品分析/financingDateUtils'
-import { IntroPopoverCell } from './竞品分析/introPopoverAiCell'
-import CompetitorMatchSupplementModal from './竞品分析/CompetitorMatchSupplementModal'
+} from '../api/competitor-analysis'
+import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './competitor-analysis/financingDateUtils'
+import { IntroPopoverCell } from './competitor-analysis/introPopoverAiCell'
+import CompetitorMatchSupplementModal from './competitor-analysis/CompetitorMatchSupplementModal'
 import './EnterpriseManagement.css'
 
 const Option = Select.Option

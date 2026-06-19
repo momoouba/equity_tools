@@ -11,7 +11,7 @@ const {
   LISTING_LEVEL,
   getUserFromHeader,
   getListingMembershipLevelName,
-} = require('../utils/上市进展/listingAuth');
+} = require('../utils/listing/listingAuth');
 
 const router = express.Router();
 

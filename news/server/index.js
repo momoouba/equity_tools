@@ -31,15 +31,15 @@ const scheduledTasksRoutes = require('./routes/scheduledTasks');
 const externalDbRoutes = require('./routes/externalDb');
 const newsShareRoutes = require('./routes/newsShare');
 const newsDetailRoutes = require('./routes/newsDetail');
-const performanceRoutes = require('./routes/业绩看板应用');
-const listingRoutes = require('./routes/上市进展');
+const performanceRoutes = require('./routes/performance');
+const listingRoutes = require('./routes/listing');
 const listingShareRoutes = require('./routes/listingShare');
-const projectSourcingRoutes = require('./routes/项目挖掘');
+const projectSourcingRoutes = require('./routes/project-sourcing');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
-const { initializeListingScheduledTasks } = require('./utils/上市进展/scheduledListingTasks');
+const { initializeListingScheduledTasks } = require('./utils/listing/scheduledListingTasks');
 const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
 const { ensureUploadsDir } = require('./utils/uploadsPath');
 
@@ -205,7 +205,7 @@ app.use('/api/performance', performanceRoutes);
 app.use('/api/listing', listingRoutes);
 app.use('/api/listing-share', listingShareRoutes);
 app.use('/api/project-sourcing', projectSourcingRoutes);
-const competitorAnalysisRoutes = require('./routes/竞品分析');
+const competitorAnalysisRoutes = require('./routes/competitor-analysis');
 app.use('/api/competitor-analysis', competitorAnalysisRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
@@ -448,7 +448,7 @@ async function startServer() {
           });
 
           console.log('正在执行竞品数据关联修复（按统一社会信用代码重挂孤儿记录）...');
-          const { runCompetitorRelinkOnStartup } = require('./utils/竞品分析/competitorRelinkStartup');
+          const { runCompetitorRelinkOnStartup } = require('./utils/competitor-analysis/competitorRelinkStartup');
           runCompetitorRelinkOnStartup().catch((error) => {
             console.error('竞品数据关联修复失败:', error);
           });

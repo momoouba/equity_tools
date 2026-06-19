@@ -58,7 +58,7 @@ const TABLES = [
   await conn.end();
 
   const out = `/** 自动生成：同步业绩看板导出表字段 COMMENT（含 -数字 排序标记） */\nmodule.exports = ${JSON.stringify(alters, null, 2)};\n`;
-  fs.writeFileSync(path.join(__dirname, '../server/utils/业绩看板/performanceExportColumnComments.js'), out, 'utf8');
+  fs.writeFileSync(path.join(__dirname, '../server/utils/performance/performanceExportColumnComments.js'), out, 'utf8');
   console.log('Wrote', alters.length, 'ALTER statements');
 })().catch((e) => {
   console.error(e);

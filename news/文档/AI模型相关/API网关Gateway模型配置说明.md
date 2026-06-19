@@ -202,8 +202,8 @@ LLM_GATEWAY_ASYNC_RESPONSES=0
 | Gateway 并发池 | `news/server/utils/llm/gatewayConcurrency.js` |
 | 异步开关 | `news/server/utils/llm/gatewayAsync.js` |
 | 配置测试 | `news/server/utils/testLlmConfig.js` |
-| 融资补齐 | `news/server/utils/项目挖掘/financingAiEnrichService.js` |
-| 竞品 AI | `news/server/utils/竞品分析/competitorAnalysisAi.js` |
+| 融资补齐 | `news/server/utils/project-sourcing/financingAiEnrichService.js` |
+| 竞品 AI | `news/server/utils/competitor-analysis/competitorAnalysisAi.js` |
 | 前端配置 | `news/client/src/pages/AIConfig.jsx` |
 | 数据字典 | `ai_model_gateway` 及子项模型名 |
 

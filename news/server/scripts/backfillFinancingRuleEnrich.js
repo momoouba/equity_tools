@@ -12,8 +12,8 @@
  */
 
 const db = require('../db');
-const { parseFundingAmountFields } = require('../utils/项目挖掘/financingAmountParse');
-const { mapIndustryToStd } = require('../utils/项目挖掘/financingIndustryMap');
+const { parseFundingAmountFields } = require('../utils/project-sourcing/financingAmountParse');
+const { mapIndustryToStd } = require('../utils/project-sourcing/financingIndustryMap');
 
 const RULE_ENRICH_VERSION = 'rule_enrich_v1';
 

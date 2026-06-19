@@ -2491,7 +2491,7 @@ async function executeEmailTask(recipientId) {
     );
     const listingAppId = listingAppRows.length ? listingAppRows[0].id : null;
     if (listingAppId && recipient.app_id === listingAppId) {
-      const { executeListingEmailDigest } = require('./上市进展/listingEmailDigest');
+      const { executeListingEmailDigest } = require('./listing/listingEmailDigest');
       await executeListingEmailDigest(recipient);
       return;
     }

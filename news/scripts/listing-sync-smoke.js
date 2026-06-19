@@ -2,9 +2,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { syncNewShareCalendar } = require('../server/utils/上市进展/newShareService');
-const { syncGuidanceProgress } = require('../server/utils/上市进展/guidanceProgressService');
-const { syncOverseasFiling } = require('../server/utils/上市进展/overseasFilingService');
+const { syncNewShareCalendar } = require('../server/utils/listing/newShareService');
+const { syncGuidanceProgress } = require('../server/utils/listing/guidanceProgressService');
+const { syncOverseasFiling } = require('../server/utils/listing/overseasFilingService');
 const db = require('../server/db');
 
 async function main() {

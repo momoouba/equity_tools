@@ -260,7 +260,7 @@ docker compose logs nginx
 
 ## 上市进展与 Playwright 辅导备案
 
-**背景**：上市进展中的 **证监会辅导备案** 抓取（`server/utils/上市进展/guidance_progress_fetch.py`）在访问 **`https://eid.csrc.gov.cn/`** 时，默认通过 **Playwright** 模拟点击「备案时间」表头，使列表按备案时间 **降序**；未安装 Chromium 二进制时会 **自动回退** 为纯 HTTP（无点击排序）。
+**背景**：上市进展中的 **证监会辅导备案** 抓取（`server/utils/listing/guidance_progress_fetch.py`）在访问 **`https://eid.csrc.gov.cn/`** 时，默认通过 **Playwright** 模拟点击「备案时间」表头，使列表按备案时间 **降序**；未安装 Chromium 二进制时会 **自动回退** 为纯 HTTP（无点击排序）。
 
 **首次部署或更新 `server/utils/requirements.txt` 后**，在应用项目目录执行（与 `docker-compose.yml` 同级）：
 

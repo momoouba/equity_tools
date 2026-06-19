@@ -9,9 +9,9 @@ import {
   fetchListingIpoProgressShareData,
   downloadListingIpoProgressShareExport,
   downloadListingProjectProgressShareExport,
-} from '../api/上市进展'
+} from '../api/listing'
 import { normalizeRecordList, resolveRecordId } from '../utils/recordId'
-import './上市进展/ListingIpoProgressPage.css'
+import './listing/ListingIpoProgressPage.css'
 
 const TabPane = Tabs.TabPane
 

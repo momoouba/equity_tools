@@ -26,7 +26,7 @@ function loadPerformanceComments() {
   if (performanceCommentsCache) return performanceCommentsCache;
   performanceCommentsCache = {};
   try {
-    const sqlPath = path.join(__dirname, '../业绩看板应用/performance.sql');
+    const sqlPath = path.join(__dirname, '../performance/performance.sql');
     const content = fs.readFileSync(sqlPath, 'utf8');
     const tableRegex = /CREATE TABLE\s+`(b_[^`]+)`\s*\(([\s\S]*?)\)\s*ENGINE/gi;
     let tMatch;
@@ -2235,7 +2235,7 @@ async function initializeTables(dbPool) {
       );
       console.log('已为上海国际集团启用「同花顺订阅」新闻类型');
     }
-    const { seedInterfaceNewsTypeFinancing } = require('./utils/项目挖掘/dbSeedFinancing');
+    const { seedInterfaceNewsTypeFinancing } = require('./utils/project-sourcing/dbSeedFinancing');
     await seedInterfaceNewsTypeFinancing(dbPool);
   } catch (err) {
     console.warn('初始化 interface_news_type_enabled 表时出现警告:', err.message);
@@ -4699,8 +4699,8 @@ async function initializeTables(dbPool) {
   console.log('  开始初始化基础数据...');
   try {
     const { generateId } = require('./utils/idGenerator');
-    const PS_C = require('./utils/项目挖掘/constants');
-    const CA_C = require('./utils/竞品分析/constants');
+    const PS_C = require('./utils/project-sourcing/constants');
+    const CA_C = require('./utils/competitor-analysis/constants');
     const APPS = {
       performance: { id: '2026031616180010001', name: '业绩看板', created_at: '2026-03-16 16:18:00' },
       news: { id: '2025112019132600001', name: '新闻舆情', created_at: '2025-11-20 19:13:31' },
@@ -4904,7 +4904,7 @@ async function initializeTables(dbPool) {
       if (dedupeFlag.length > 0 && String(dedupeFlag[0].config_value) === '1') {
         console.log('  ✓ 竞品分析被投企业去重已跳过（此前已完成）');
       } else {
-        const { dedupeCompetitorInvestedEnterprises } = require('./utils/竞品分析/investedEnterpriseDedupe');
+        const { dedupeCompetitorInvestedEnterprises } = require('./utils/competitor-analysis/investedEnterpriseDedupe');
         const deduped = await dedupeCompetitorInvestedEnterprises(dbPool);
         const flagId = await generateId('system_config', dbPool);
         await dbPool.execute(
@@ -7163,7 +7163,7 @@ async function initializeTables(dbPool) {
         CONSTRAINT fk_ca_recall_app FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析—三源召回配置';
     `);
-    const CA_C = require('./utils/竞品分析/constants');
+    const CA_C = require('./utils/competitor-analysis/constants');
     const [existRecall] = await dbPool.query(
       'SELECT F_Id AS id FROM competitor_recall_source_config WHERE app_id = ? AND F_DeleteMark = 0 LIMIT 1',
       [CA_C.COMPETITOR_ANALYSIS_APP_ID]
@@ -7199,8 +7199,8 @@ async function initializeTables(dbPool) {
       `);
       console.log('✓ external_db_config 已添加 app_id');
     }
-    const CA_C_EDB = require('./utils/竞品分析/constants');
-    const PS_C_EDB = require('./utils/项目挖掘/constants');
+    const CA_C_EDB = require('./utils/competitor-analysis/constants');
+    const PS_C_EDB = require('./utils/project-sourcing/constants');
     const LISTING_APP_ID = '2026033000000000001';
     await dbPool.execute(
       `UPDATE external_db_config e
@@ -7794,7 +7794,7 @@ async function initializeTables(dbPool) {
   }
 
   try {
-    const { seedDefaultSourcingTracks } = require('./utils/项目挖掘/dbSeedTrackDefaults');
+    const { seedDefaultSourcingTracks } = require('./utils/project-sourcing/dbSeedTrackDefaults');
     await seedDefaultSourcingTracks(dbPool);
   } catch (err) {
     console.warn('写入默认赛道种子（人工智能/生物医药/半导体）时出现警告:', err.message);
@@ -8030,7 +8030,7 @@ async function initializeTables(dbPool) {
     console.warn('上市进展会员等级或邮件配置初始化时出现警告:', err.message);
   }
 
-  const { seedApplicationsAndEmailFallback } = require('./utils/项目挖掘/dbSeedFinancing');
+  const { seedApplicationsAndEmailFallback } = require('./utils/project-sourcing/dbSeedFinancing');
   await seedApplicationsAndEmailFallback(dbPool);
 
   console.log('✓ 所有数据库表结构初始化完成');
@@ -8202,7 +8202,7 @@ async function runPendingMigrations() {
   await ready;
   const { ensureAiEnrichLogSearchColumns } = require('./utils/migrateAiEnrichLogColumns');
   const { ensureAiModelConfigEnrichFlags } = require('./utils/migrateAiModelConfigEnrichFlags');
-  const { migrateOverseasNameNormalization } = require('./utils/上市进展/migrateOverseasNameNormalization');
+  const { migrateOverseasNameNormalization } = require('./utils/listing/migrateOverseasNameNormalization');
   const n1 = await ensureAiEnrichLogSearchColumns(pool);
   const n2 = await ensureAiModelConfigEnrichFlags(pool);
   const n3 = await migrateOverseasNameNormalization(pool);

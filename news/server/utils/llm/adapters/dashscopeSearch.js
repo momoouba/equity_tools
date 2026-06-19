@@ -3,7 +3,7 @@
 const {
   postDashScopeChatWithSearchAndThinking,
   resolveEnrichWantThinking,
-} = require('../../项目挖掘/financingAiEnrichDashScopeChat');
+} = require('../../project-sourcing/financingAiEnrichDashScopeChat');
 const { resolveEndpoint } = require('../llmEndpoint');
 const { WIRE_PROTOCOL } = require('../llmConstants');
 

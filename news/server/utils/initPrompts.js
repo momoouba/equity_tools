@@ -7,7 +7,7 @@ const { generateId } = require('./idGenerator');
 async function initPrompts() {
   try {
     console.log('开始初始化提示词配置...');
-    const { buildBuiltinPromptContentForDb } = require('./项目挖掘/financingAiEnrichService');
+    const { buildBuiltinPromptContentForDb } = require('./project-sourcing/financingAiEnrichService');
 
     // 获取默认的AI模型配置（优先选择 news_analysis 类型且启用的配置）
     let defaultAiModelConfigId = null;
@@ -325,7 +325,7 @@ async function initPrompts() {
     const sigEnterpriseRelevancePrompt = qichachaEnterpriseRelevancePrompt;
     const sigValidationPrompt = qichachaValidationPrompt;
 
-    const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./上市进展/newShareEnterpriseFullNamePrompt');
+    const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./listing/newShareEnterpriseFullNamePrompt');
 
     const prompts = [
       {

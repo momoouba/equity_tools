@@ -8,9 +8,9 @@ import ShanghaiInternationalGroupConfig from './ShanghaiInternationalGroupConfig
 import NewsConfig from './NewsConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
-import ListingDataConfig from './上市进展/ListingDataConfig'
-import FinancingSourceConfig from './项目挖掘/FinancingSourceConfig'
-import CompetitorRecallSourceConfig from './竞品分析/CompetitorRecallSourceConfig'
+import ListingDataConfig from './listing/ListingDataConfig'
+import FinancingSourceConfig from './project-sourcing/FinancingSourceConfig'
+import CompetitorRecallSourceConfig from './competitor-analysis/CompetitorRecallSourceConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 

@@ -5,7 +5,7 @@ import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
 import dayjs from 'dayjs'
 import './NewsConfig.css'
-import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './项目挖掘/financingConstants'
+import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './project-sourcing/financingConstants'
 
 const Option = Select.Option
 

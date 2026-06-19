@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const db = require('../db');
 const { convertQuartzCronToNodeCron } = require('./cronQuartzToNode');
-const { isFinancingNewsInterface } = require('./项目挖掘/newsScheduledSyncFinancing');
+const { isFinancingNewsInterface } = require('./project-sourcing/newsScheduledSyncFinancing');
 
 // 存储所有定时任务的Map
 const scheduledTasks = new Map();
@@ -139,7 +139,7 @@ async function executeNewsSyncTask(configId) {
         throw new Error('上海国际集团同步功能未实现');
       }
     } else if (isFinancingNewsInterface(interfaceType)) {
-      const { runFinancingScheduledSync } = require('./项目挖掘/financingScheduledSync');
+      const { runFinancingScheduledSync } = require('./project-sourcing/financingScheduledSync');
       await runFinancingScheduledSync(configId);
     } else {
       // 新榜接口同步

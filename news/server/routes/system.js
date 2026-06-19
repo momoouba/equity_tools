@@ -8,7 +8,7 @@ const { clearCategoryMapCache } = require('../utils/qichachaCategoryMapper');
 const xlsx = require('xlsx');
 const multer = require('multer');
 const { logWithTag, errorWithTag, warnWithTag } = require('../utils/logUtils');
-const psNewsIf = require('./项目挖掘/newsInterfaceConfigHelpers');
+const psNewsIf = require('./project-sourcing/newsInterfaceConfigHelpers');
 
 // 配置multer用于Excel文件上传
 const excelUpload = multer({
@@ -1122,7 +1122,7 @@ router.get('/shanghai-international-group-configs', async (req, res) => {
 });
 
 // 获取单个上海国际集团配置（不包含api_key）
-router.get('/shanghai-international-group-config/:F_Id', async (req, res) => {
+router.get('/shanghai-international-group-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const configs = await db.query(`
@@ -1196,7 +1196,7 @@ router.post('/shanghai-international-group-config', [
 });
 
 // 更新上海国际集团配置
-router.put('/shanghai-international-group-config/:F_Id', [
+router.put('/shanghai-international-group-config/:id', [
   body('app_id').optional().notEmpty().withMessage('应用ID不能为空'),
   body('x_app_id').optional().notEmpty().withMessage('X-App-Id不能为空'),
   body('api_key').optional().notEmpty().withMessage('APIkey不能为空'),
@@ -1291,7 +1291,7 @@ router.put('/shanghai-international-group-config/:F_Id', [
 });
 
 // 获取上海国际集团配置的变更日志
-router.get('/shanghai-international-group-config/:F_Id/logs', async (req, res) => {
+router.get('/shanghai-international-group-config/:id/logs', async (req, res) => {
   try {
     const { id } = req.params;
     const logs = await db.query(
@@ -1310,7 +1310,7 @@ router.get('/shanghai-international-group-config/:F_Id/logs', async (req, res) =
 });
 
 // 删除上海国际集团配置（逻辑删除）
-router.delete('/shanghai-international-group-config/:F_Id', async (req, res) => {
+router.delete('/shanghai-international-group-config/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.headers['x-user-id'] != null ? String(req.headers['x-user-id']).trim() || null : null;
@@ -1330,7 +1330,7 @@ router.delete('/shanghai-international-group-config/:F_Id', async (req, res) => 
 });
 
 // 测试上海国际集团接口连通性
-router.post('/shanghai-international-group-config/:F_Id/test', async (req, res) => {
+router.post('/shanghai-international-group-config/:id/test', async (req, res) => {
   try {
     const { id } = req.params;
     const { request_url } = req.body || {};
@@ -4296,7 +4296,7 @@ router.get('/competitor-recall-source-config', async (req, res) => {
     if (userRole !== 'admin') {
       return res.status(403).json({ success: false, message: '仅管理员可查看竞品三源召回配置' });
     }
-    const { getCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const { getCompetitorRecallSourceFlags } = require('../utils/competitor-analysis/competitorRecallSourceConfig');
     const flags = await getCompetitorRecallSourceFlags();
     res.json({ success: true, data: flags });
   } catch (error) {
@@ -4319,7 +4319,7 @@ router.put('/competitor-recall-source-config', [
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, errors: errors.array() });
     }
-    const { saveCompetitorRecallSourceFlags } = require('../utils/竞品分析/competitorRecallSourceConfig');
+    const { saveCompetitorRecallSourceFlags } = require('../utils/competitor-analysis/competitorRecallSourceConfig');
     const data = await saveCompetitorRecallSourceFlags(req.body);
     res.json({ success: true, message: '保存成功', data });
   } catch (error) {

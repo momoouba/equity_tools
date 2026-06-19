@@ -7,7 +7,7 @@ const db = require('../db');
 const { logEnterpriseChange } = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission, checkProjectSourcingPermission } = require('../utils/permissionChecker');
-const { checkCompetitorAnalysisPermission } = require('../utils/竞品分析/competitorAnalysisPermission');
+const { checkCompetitorAnalysisPermission } = require('../utils/competitor-analysis/competitorAnalysisPermission');
 const {
   DATA_APP_NEWS_SENTIMENT,
   DATA_APP_PROJECT_SOURCING,
@@ -340,7 +340,7 @@ async function pruneOldInvestedEnterpriseAiSnapshots() {
     console.warn('[企业同步任务] 清理 AI 快照表失败', e.message);
   }
   try {
-    const { pruneOldCompetitorSyncSnapshots } = require('../utils/竞品分析/competitorSyncSnapshot');
+    const { pruneOldCompetitorSyncSnapshots } = require('../utils/competitor-analysis/competitorSyncSnapshot');
     await pruneOldCompetitorSyncSnapshots();
   } catch (e) {
     console.warn('[企业同步任务] 清理竞品快照表失败', e.message);
@@ -1740,7 +1740,7 @@ async function executeSyncTask(
         const {
           supportsCompetitorSyncSnapshot,
           backupCompetitorDataBeforeHardDelete,
-        } = require('../utils/竞品分析/competitorSyncSnapshot');
+        } = require('../utils/competitor-analysis/competitorSyncSnapshot');
         if (supportsCompetitorSyncSnapshot(targetDataAppName)) {
           competitorSnapshotBatchIdEmpty = await backupCompetitorDataBeforeHardDelete(
             syncOwnerUserId,
@@ -1793,7 +1793,7 @@ async function executeSyncTask(
       const {
         supportsCompetitorSyncSnapshot,
         backupCompetitorDataBeforeHardDelete,
-      } = require('../utils/竞品分析/competitorSyncSnapshot');
+      } = require('../utils/competitor-analysis/competitorSyncSnapshot');
       if (supportsCompetitorSyncSnapshot(targetDataAppName)) {
         competitorSnapshotBatchId = await backupCompetitorDataBeforeHardDelete(
           syncOwnerUserId,
@@ -2234,7 +2234,7 @@ async function executeSyncTask(
       const {
         restoreCompetitorDataAfterInsert,
         relinkOrphanCompetitorDataBySubjectMatch,
-      } = require('../utils/竞品分析/competitorSyncSnapshot');
+      } = require('../utils/competitor-analysis/competitorSyncSnapshot');
       try {
         competitorRelinkStats = await relinkOrphanCompetitorDataBySubjectMatch({
           creatorUserId: syncOwnerUserId,
@@ -2259,7 +2259,7 @@ async function executeSyncTask(
 
   if (targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) {
     try {
-      const { dedupeCompetitorInvestedEnterprises } = require('../utils/竞品分析/investedEnterpriseDedupe');
+      const { dedupeCompetitorInvestedEnterprises } = require('../utils/competitor-analysis/investedEnterpriseDedupe');
       const dedupedAfterSync = await dedupeCompetitorInvestedEnterprises();
       if (dedupedAfterSync > 0) {
         console.log(`[企业同步任务] 竞品分析去重：已删除重复行 ${dedupedAfterSync} 条`);
