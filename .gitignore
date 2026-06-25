@@ -4,3 +4,13 @@ news/server/routes/performance/nul
 
 # Local news snapshots — commit only on branch `backup` (see docs/agents/backup-branch.md)
 news-backup-*/
+
+# Visual Studio workspace (local IDE state)
+.vs/
+
+# One-off golden-set export analysis (local only)
+scripts/analyze_golden_export.py
+scripts/golden_export_analysis.json
+
+# Exported PDF (source of truth is markdown in repo)
+需求文档/竞品分析/竞品分析Agent模型与维度建议.pdf
