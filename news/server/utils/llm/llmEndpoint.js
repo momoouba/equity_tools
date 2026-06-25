@@ -6,6 +6,10 @@ const {
   normalizeAnthropicMessagesEndpoint,
   normalizeGeminiGenerateContentEndpoint,
 } = require('./gatewayNativeEndpoint');
+const {
+  isVolcengineEndpoint,
+  normalizeVolcengineEndpoint,
+} = require('./volcengineEndpoint');
 
 const DEFAULT_GATEWAY_V1 = 'https://gateway.di-matrix.ai/v1';
 

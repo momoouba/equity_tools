@@ -169,6 +169,12 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
 }
 
 /** 合并双源候选（同键保留双源标记）。 */
+function parseRecallEventDate(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 function mergeRecalledCandidates(ipoList, finList) {
   const map = new Map();
   const add = (item) => {
@@ -199,6 +205,11 @@ function mergeRecalledCandidates(ipoList, finList) {
     if (!prev.industry_l2 && item.industry_l2) prev.industry_l2 = item.industry_l2;
     if (!prev.financing_amount_text && item.financing_amount_text) {
       prev.financing_amount_text = item.financing_amount_text;
+    }
+    const prevDt = parseRecallEventDate(prev.event_date);
+    const itemDt = parseRecallEventDate(item.event_date);
+    if (itemDt && (!prevDt || itemDt > prevDt)) {
+      prev.event_date = item.event_date;
     }
   };
   for (const x of ipoList) add(x);

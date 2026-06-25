@@ -1,7 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { Button, Space, Select, Table, Typography } from '@arco-design/web-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Button, Checkbox, Link, Space, Select, Table, Typography } from '@arco-design/web-react'
 import { AiIntroFullText } from './introPopoverAiCell'
-import { COMPETITOR_RELATION_TABLE_SCROLL_X, CR_REL_CSS } from './competitorRelationColumns'
+import { COMPETITOR_RELATION_TABLE_SCROLL_X, CR_REL_CSS, isDefaultComparableVisible } from './competitorRelationColumns'
+import {
+  countHiddenSameTrack,
+  countPendingReview,
+  filterRelationsForDisplay,
+  shouldAutoShowSameTrack,
+} from './competitorRelationDisplayUtils'
 import './competitorRelationDetailBlock.css'
 
 const PRIMARY_OUTLINE_BTN = {
@@ -17,6 +23,7 @@ const REL_PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 export default function CompetitorRelationDetailBlock({
   embedded = false,
   aiProductIntro,
+  industryTags,
   runs = [],
   selectedRunId,
   runLoading = false,
@@ -30,13 +37,52 @@ export default function CompetitorRelationDetailBlock({
   relationData = [],
   relationLoading = false,
   stopPropagation = false,
+  onReview,
+  reviewReadOnly = false,
 }) {
   const [relPage, setRelPage] = useState(1)
   const [relPageSize, setRelPageSize] = useState(20)
+  const [showAllComparable, setShowAllComparable] = useState(false)
+  const [reviewFilter, setReviewFilter] = useState('all')
+  const autoSameTrackExpandedRef = useRef(false)
+
+  const effectiveRunId = selectedRunId || (runs[0]?.id ?? undefined)
+
+  const hiddenSameTrackCount = useMemo(
+    () => countHiddenSameTrack(relationData),
+    [relationData]
+  )
+
+  useEffect(() => {
+    autoSameTrackExpandedRef.current = false
+    setShowAllComparable(false)
+  }, [effectiveRunId])
+
+  useEffect(() => {
+    if (autoSameTrackExpandedRef.current || relationLoading) return
+    if (
+      shouldAutoShowSameTrack({
+        aiProductIntro,
+        industryTags,
+        relationData,
+      })
+    ) {
+      setShowAllComparable(true)
+      autoSameTrackExpandedRef.current = true
+    }
+  }, [aiProductIntro, industryTags, relationData, relationLoading, effectiveRunId])
 
   useEffect(() => {
     setRelPage(1)
-  }, [relationData])
+  }, [relationData, showAllComparable, reviewFilter])
+
+  const pendingReviewCount = useMemo(() => countPendingReview(relationData), [relationData])
+
+  const filteredRelationData = useMemo(() => {
+    let list = filterRelationsForDisplay(relationData, { reviewFilter })
+    if (showAllComparable) return list
+    return list.filter(isDefaultComparableVisible)
+  }, [relationData, showAllComparable, reviewFilter])
 
   const guardClick = (e) => {
     if (stopPropagation) e.stopPropagation()
@@ -49,12 +95,10 @@ export default function CompetitorRelationDetailBlock({
       value: run.id,
     }))
 
-  const effectiveRunId = selectedRunId || (runs[0]?.id ?? undefined)
-
   const pagedRelationData = useMemo(() => {
     const start = (relPage - 1) * relPageSize
-    return relationData.slice(start, start + relPageSize)
-  }, [relationData, relPage, relPageSize])
+    return filteredRelationData.slice(start, start + relPageSize)
+  }, [filteredRelationData, relPage, relPageSize])
 
   return (
     <section
@@ -111,8 +155,44 @@ export default function CompetitorRelationDetailBlock({
 
       <div className="cr-rel-table-section">
         <div className="cr-rel-toolbar">
-          <span className="cr-rel-toolbar-title">竞品明细</span>
+          <Space size={12} align="center" className="cr-rel-toolbar-title-wrap">
+            <span className="cr-rel-toolbar-title">竞品明细</span>
+            {hiddenSameTrackCount > 0 && !showAllComparable ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                另有 {hiddenSameTrackCount} 家同赛道未显示，
+                <Link
+                  style={{ fontSize: 12 }}
+                  onClick={() => setShowAllComparable(true)}
+                >
+                  点击展开
+                </Link>
+              </Typography.Text>
+            ) : null}
+          </Space>
           <Space size={8} className="cr-rel-toolbar-actions">
+            {pendingReviewCount > 0 ? (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                待复核 {pendingReviewCount}
+              </Typography.Text>
+            ) : null}
+            <Select
+              size="small"
+              style={{ width: 120 }}
+              value={reviewFilter}
+              onChange={setReviewFilter}
+              options={[
+                { label: '全部', value: 'all' },
+                { label: '待复核', value: 'pending' },
+                { label: '已确认', value: 'confirmed' },
+                { label: '已驳回', value: 'dismissed' },
+              ]}
+            />
+            <Checkbox
+              checked={showAllComparable}
+              onChange={setShowAllComparable}
+            >
+              显示全部（含同赛道）
+            </Checkbox>
             <Button
               type="outline"
               size="small"
@@ -151,7 +231,7 @@ export default function CompetitorRelationDetailBlock({
           pagination={{
             current: relPage,
             pageSize: relPageSize,
-            total: relationData.length,
+            total: filteredRelationData.length,
             showTotal: true,
             showJumper: true,
             sizeCanChange: true,

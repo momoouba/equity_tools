@@ -1,0 +1,52 @@
+[
+  {
+    "id": "sample-1-ailios",
+    "subject_short_name": "艾里奥斯",
+    "subject_id": "2026061614420000001",
+    "label_keywords": {
+      "direct": ["科百特", "赛普", "碧途", "品善", "成器"],
+      "same_track": ["关怀"],
+      "not_competitor": ["东富龙", "多宁"]
+    }
+  },
+  {
+    "id": "sample-2-bituo",
+    "subject_short_name": "碧途生物",
+    "subject_id": "2026062414483000001",
+    "label_keywords": {
+      "direct": ["艾里奥斯", "赛普", "科百特", "品善", "成器"],
+      "same_track": ["关怀"],
+      "not_competitor": ["多宁", "东富龙"]
+    }
+  },
+  {
+    "id": "sample-3-saipu",
+    "subject_short_name": "赛普过滤",
+    "subject_id": "2026062413465200001",
+    "label_keywords": {
+      "direct": ["科百特", "碧途", "艾里奥斯", "品善", "成器"],
+      "same_track": ["关怀"],
+      "not_competitor": ["东富龙", "多宁"]
+    }
+  },
+  {
+    "id": "sample-4-chengqi",
+    "subject_short_name": "成器智造",
+    "subject_id": "2026062414014700001",
+    "label_keywords": {
+      "direct": ["科百特", "艾里奥斯", "赛普", "碧途", "品善"],
+      "same_track": ["关怀"],
+      "not_competitor": ["东富龙", "多宁"]
+    }
+  },
+  {
+    "id": "sample-5-guanhuai",
+    "subject_short_name": "关怀医疗",
+    "subject_id": "2026062414280300001",
+    "label_keywords": {
+      "direct": [],
+      "same_track": ["艾里奥斯", "赛普", "碧途", "品善", "科百特", "成器"],
+      "not_competitor": ["东富龙"]
+    }
+  }
+]

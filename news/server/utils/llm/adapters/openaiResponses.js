@@ -41,13 +41,28 @@ function extractResponsesText(data) {
 }
 
 function errorBlob(err) {
-  return String(
-    err?.response?.data?.error?.message ||
-      err?.response?.data?.message ||
-      err?.response?.data ||
-      err?.message ||
-      ''
-  );
+  const pick = (v) => {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'object') {
+      try {
+        return JSON.stringify(v);
+      } catch {
+        return String(v);
+      }
+    }
+    return String(v);
+  };
+  const status = err?.response?.status;
+  const body =
+    pick(err?.response?.data?.error?.message) ||
+    pick(err?.response?.data?.message) ||
+    pick(err?.response?.data?.error) ||
+    pick(err?.response?.data);
+  const code = err?.code || '';
+  const prefix = status ? `HTTP ${status}` : code ? String(code) : '';
+  const msg = body || pick(err?.message);
+  return prefix && msg ? `${prefix}: ${msg}` : prefix || msg || 'unknown error';
 }
 
 function responsesPollUrl(endpoint, responseId) {
@@ -72,7 +87,9 @@ async function pollResponsesUntilDone({
   pollIntervalMs,
   pollMaxMs,
   logPrefix,
+  requestTimeoutMs,
 }) {
+  const getTimeout = Math.max(30000, requestTimeoutMs || 120000);
   const start = Date.now();
   let round = 0;
   while (Date.now() - start < pollMaxMs) {
@@ -82,7 +99,7 @@ async function pollResponsesUntilDone({
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      timeout: 120000,
+      timeout: getTimeout,
     });
     const data = res.data || {};
     const status = data.status;
@@ -139,7 +156,9 @@ async function invokeOpenAiResponses({
       (reasoningEffort ? ` reasoning=${reasoningEffort}` : '')
   );
 
-  const submitTimeout = asyncMode ? 120000 : timeout || 120000;
+  const requestTimeoutMs = Math.max(30000, timeout || 120000);
+  const submitTimeout = requestTimeoutMs;
+
   const response = await axios.post(endpoint, body, {
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -157,6 +176,7 @@ async function invokeOpenAiResponses({
       pollIntervalMs: getResponsesPollIntervalMs(),
       pollMaxMs: getResponsesPollMaxMs(),
       logPrefix,
+      requestTimeoutMs,
     });
   }
 

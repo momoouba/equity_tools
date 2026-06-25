@@ -9,7 +9,9 @@ const EXPORT_HEADERS = [
   '统一社会信用代码',
   '是否上市',
   '等级',
+  '竞品类型',
   '综合分',
+  '判断依据',
   '产品介绍',
   '企业标签',
   '子基金名称',
@@ -56,13 +58,38 @@ function formatSources(v) {
   return '';
 }
 
+const COMPETITOR_TYPE_LABELS = {
+  direct: '直接竞品',
+  indirect: '间接竞品',
+  substitute: '替代品',
+  same_track: '同赛道',
+  upstream_downstream: '上下游',
+  not_competitor: '非竞品',
+};
+
 function relationToRow(rel, versionLabel) {
+  let bd = rel.evidence_breakdown_json;
+  if (bd && typeof bd === 'string') {
+    try {
+      bd = JSON.parse(bd);
+    } catch {
+      bd = null;
+    }
+  }
   const base = {
     竞品名称: rel.competitor_display_name || '',
     统一社会信用代码: rel.unified_credit_code || '',
     是否上市: Number(rel.is_listed) === 1 ? '是' : '否',
     等级: rel.confidence_grade || '',
+    竞品类型: COMPETITOR_TYPE_LABELS[rel.competitor_type] || rel.competitor_type || '',
     综合分: rel.relevance_score != null ? rel.relevance_score : '',
+    判断依据: rel.evidence_summary || '',
+    证据可信: rel.evidence_confidence != null ? rel.evidence_confidence : '',
+    待复核: Number(rel.needs_review) === 1 ? '是' : '否',
+    来源覆盖分: bd?.source_coverage_score ?? '',
+    新鲜度分: bd?.freshness_score ?? '',
+    一致性分: bd?.consistency_score ?? '',
+    判断强度分: bd?.judgment_strength_score ?? '',
     产品介绍: rel.competitor_product_intro || '',
     企业标签: rel.competitor_tags_display || '',
     子基金名称: rel.sub_fund_names || '',
@@ -142,6 +169,8 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+                r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
+                r.evidence_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
                 r.data_sources_json, r.financing_amount_text, r.financing_history_text,
                 r.is_listed, r.include_in_comparable, r.F_CreatorTime, r.run_id,
@@ -163,6 +192,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+                competitor_type, evidence_summary,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
                 data_sources_json, financing_amount_text, financing_history_text,
                 is_listed, include_in_comparable, F_CreatorTime
@@ -280,6 +310,8 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+                r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
+                r.evidence_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
                 r.data_sources_json, r.financing_amount_text, r.financing_history_text,
                 r.is_listed, r.include_in_comparable, r.F_CreatorTime, r.pre_investment_run_id,
@@ -303,6 +335,7 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+                competitor_type, evidence_summary,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
                 data_sources_json, financing_amount_text, financing_history_text,
                 is_listed, include_in_comparable, F_CreatorTime

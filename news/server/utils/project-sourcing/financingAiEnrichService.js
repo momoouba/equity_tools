@@ -135,6 +135,11 @@ function normalizedCreditCode(code) {
   return c.length ? c : '';
 }
 
+/** 手动 AI 取数：强制联网调用模型，不复用库内已有 AI 字段 */
+function isManualFinancingAiEnrichTrigger(triggerType) {
+  return String(triggerType || '').trim() === 'manual_api';
+}
+
 /**
  * 同一企业在库内多条融资记录：有信用代码则按代码批量更新；无代码则按企业全称批量更新；否则仅当前 id。
  */
@@ -393,6 +398,7 @@ async function persistFinancingAiLlmSuccess({
   started,
   taskLog = null,
   searchMeta = null,
+  syncProjectDesc = false,
 }) {
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);
@@ -407,9 +413,11 @@ async function persistFinancingAiLlmSuccess({
   const display = norm.tags.join('、');
 
   const fan = buildEnterpriseFanOutWhere(row, financingEventId);
+  const projectDescStored = syncProjectDesc ? productIntroStored : null;
   const updHdr = await db.execute(
     `UPDATE sourcing_financing_event SET
          ai_product_intro = ?,
+         ${syncProjectDesc ? 'project_desc = ?,' : ''}
          ai_company_tags_display = ?,
          ai_company_tags_json = ?,
          ai_enrich_status = 'success',
@@ -421,6 +429,7 @@ async function persistFinancingAiLlmSuccess({
        WHERE ${fan.clause}`,
     [
       productIntroStored || null,
+      ...(syncProjectDesc ? [projectDescStored || null] : []),
       display || null,
       tagsJson,
       String(config.model_name || ''),
@@ -1814,7 +1823,8 @@ async function runFinancingAiEnrichTask({
     );
 
     const events = await db.query(
-      `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
+      `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, project_desc,
+              F_DeleteMark AS delete_mark,
               ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
        FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
       [financingEventId]
@@ -1823,70 +1833,77 @@ async function runFinancingAiEnrichTask({
       throw new Error('融资事件不存在或已删除');
     }
     row = events[0];
+    const forceLlmRefresh = isManualFinancingAiEnrichTrigger(triggerType);
 
-    const donorRow = await findFinancingAiDonorRow({
-      credit: row.company_credit_code,
-      name: row.company_name,
-      excludeId: financingEventId,
-    });
-    if (donorRow) {
-      await applyFinancingAiReuseFromDonor(donorRow, row, financingEventId);
-      const introLog =
-        donorRow.ai_product_intro != null ? String(donorRow.ai_product_intro).trim() : '';
-      const dispLog =
-        donorRow.ai_company_tags_display != null ? String(donorRow.ai_company_tags_display).trim() : '';
-      await markFinancingAiEnrichLogSuccess({
-        logId,
-        started,
-        llmModelConfigId: null,
-        promptConfigId: null,
-        productIntroStored: introLog,
-        display: dispLog,
-        searchMeta: searchMetaForReuseDonor(),
+    if (!forceLlmRefresh) {
+      const donorRow = await findFinancingAiDonorRow({
+        credit: row.company_credit_code,
+        name: row.company_name,
+        excludeId: financingEventId,
       });
-      const duration = Date.now() - started;
-      if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
-        financingAiJobLog(
-          taskLog.batchId,
-          taskLog.mode || 'batch',
-          'reuse_from_db',
-          `donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-        );
-      } else {
-        console.log(
-          `[financingAiEnrich] reused_from_db donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-        );
+      if (donorRow) {
+        await applyFinancingAiReuseFromDonor(donorRow, row, financingEventId);
+        const introLog =
+          donorRow.ai_product_intro != null ? String(donorRow.ai_product_intro).trim() : '';
+        const dispLog =
+          donorRow.ai_company_tags_display != null ? String(donorRow.ai_company_tags_display).trim() : '';
+        await markFinancingAiEnrichLogSuccess({
+          logId,
+          started,
+          llmModelConfigId: null,
+          promptConfigId: null,
+          productIntroStored: introLog,
+          display: dispLog,
+          searchMeta: searchMetaForReuseDonor(),
+        });
+        const duration = Date.now() - started;
+        if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
+          financingAiJobLog(
+            taskLog.batchId,
+            taskLog.mode || 'batch',
+            'reuse_from_db',
+            `donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+          );
+        } else {
+          console.log(
+            `[financingAiEnrich] reused_from_db donor_id=${donorRow.id} event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+          );
+        }
+        return;
       }
-      return;
-    }
 
-    if (eventHasCompleteAiContent(row)) {
-      await restoreFanOutAiSuccessWithoutLlm(row, financingEventId);
-      const introLog = String(row.ai_product_intro ?? '').trim();
-      const dispLog = String(row.ai_company_tags_display ?? '').trim();
-      await markFinancingAiEnrichLogSuccess({
-        logId,
-        started,
-        llmModelConfigId: null,
-        promptConfigId: null,
-        productIntroStored: introLog,
-        display: dispLog,
-        searchMeta: searchMetaForReuseExisting(),
-      });
-      const duration = Date.now() - started;
-      if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
-        financingAiJobLog(
-          taskLog.batchId,
-          taskLog.mode || 'batch',
-          'reuse_existing_row',
-          `event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-        );
-      } else {
-        console.log(
-          `[financingAiEnrich] reused_existing_row_content event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
-        );
+      if (eventHasCompleteAiContent(row)) {
+        await restoreFanOutAiSuccessWithoutLlm(row, financingEventId);
+        const introLog = String(row.ai_product_intro ?? '').trim();
+        const dispLog = String(row.ai_company_tags_display ?? '').trim();
+        await markFinancingAiEnrichLogSuccess({
+          logId,
+          started,
+          llmModelConfigId: null,
+          promptConfigId: null,
+          productIntroStored: introLog,
+          display: dispLog,
+          searchMeta: searchMetaForReuseExisting(),
+        });
+        const duration = Date.now() - started;
+        if (taskLog && taskLog.batchId && taskLog.suppressSuccessConsole) {
+          financingAiJobLog(
+            taskLog.batchId,
+            taskLog.mode || 'batch',
+            'reuse_existing_row',
+            `event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+          );
+        } else {
+          console.log(
+            `[financingAiEnrich] reused_existing_row_content event_id=${financingEventId} log_id=${logId} duration_ms=${duration}`
+          );
+        }
+        return;
       }
-      return;
+    } else {
+      console.log(
+        `[financingAiEnrich] manual_force_llm_refresh event_id=${financingEventId} log_id=${logId} company=${String(row.company_name || '').slice(0, 40)} credit=${String(row.company_credit_code || '').slice(0, 18)}`
+      );
     }
 
     promptMeta = await loadActivePromptMeta();
@@ -1937,6 +1954,7 @@ async function runFinancingAiEnrichTask({
       started,
       taskLog,
       searchMeta: searchMetaFromLlmCall(llmOut),
+      syncProjectDesc: forceLlmRefresh,
     });
   } catch (err) {
     await markFinancingAiEnrichFailed({

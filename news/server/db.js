@@ -7626,6 +7626,80 @@ async function initializeTables(dbPool) {
     'F_CreatorUserId',
     `ADD COLUMN F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人ID（NULL为AI创建）' AFTER include_in_comparable`
   );
+  await addScrCol(
+    'competitor_type',
+    `ADD COLUMN competitor_type VARCHAR(32) NULL COMMENT '竞品类型：direct/indirect/substitute/upstream_downstream/same_track/not_competitor' AFTER score_breakdown_json`
+  );
+  await addScrCol(
+    'dimension_scores',
+    `ADD COLUMN dimension_scores JSON NULL COMMENT 'S5三维度子分 substitutability/customer_overlap/scenario_overlap' AFTER competitor_type`
+  );
+  await addScrCol(
+    'evidence_summary',
+    `ADD COLUMN evidence_summary TEXT NULL COMMENT 'S5竞品判断依据摘要' AFTER dimension_scores`
+  );
+  await addScrCol(
+    'evidence_confidence',
+    `ADD COLUMN evidence_confidence INT NULL COMMENT '证据可信度 0-100（系统计算）' AFTER evidence_summary`
+  );
+  await addScrCol(
+    'needs_review',
+    `ADD COLUMN needs_review TINYINT(1) NOT NULL DEFAULT 0 COMMENT '待人工复核：1是0否' AFTER evidence_confidence`
+  );
+  await addScrCol(
+    'evidence_breakdown_json',
+    `ADD COLUMN evidence_breakdown_json JSON NULL COMMENT '证据可信度四维子分 JSON' AFTER needs_review`
+  );
+  await addScrCol(
+    'review_status',
+    `ADD COLUMN review_status VARCHAR(32) NULL COMMENT '复核状态 pending/confirmed/dismissed/corrected' AFTER evidence_breakdown_json`
+  );
+  await addScrCol(
+    'review_disposition',
+    `ADD COLUMN review_disposition VARCHAR(32) NULL COMMENT '最近复核处置 confirm/reject/corrected/refresh' AFTER review_status`
+  );
+  await addScrCol(
+    'reviewed_by_user_id',
+    `ADD COLUMN reviewed_by_user_id VARCHAR(19) NULL COMMENT '复核人 users.F_Id' AFTER review_disposition`
+  );
+  await addScrCol(
+    'reviewed_at',
+    `ADD COLUMN reviewed_at DATETIME NULL COMMENT '复核时间' AFTER reviewed_by_user_id`
+  );
+  await addScrCol(
+    'review_note',
+    `ADD COLUMN review_note VARCHAR(500) NULL COMMENT '复核备注' AFTER reviewed_at`
+  );
+  await addScrCol(
+    'human_locked',
+    `ADD COLUMN human_locked TINYINT(1) NOT NULL DEFAULT 0 COMMENT '人工锁定：重跑不覆盖 1是0否' AFTER review_note`
+  );
+  try {
+    await dbPool.query(
+      `UPDATE sourcing_competitor_relation
+       SET review_status = 'pending', F_LastModifyTime = NOW()
+       WHERE F_DeleteMark = 0 AND needs_review = 1 AND (review_status IS NULL OR review_status = '')`
+    );
+  } catch (err) {
+    console.warn('回填 sourcing_competitor_relation.review_status 时出现警告:', err.message);
+  }
+  try {
+    const [backfillResult] = await dbPool.query(
+      `UPDATE sourcing_competitor_relation
+       SET include_in_comparable = 1, F_LastModifyTime = NOW()
+       WHERE F_DeleteMark = 0
+         AND competitor_type IS NULL
+         AND include_in_comparable = 0
+         AND F_CreatorUserId IS NULL`
+    );
+    if (backfillResult.affectedRows > 0) {
+      console.log(
+        `  ✓ sourcing_competitor_relation 已回填 ${backfillResult.affectedRows} 条历史 AI 落库 include_in_comparable=1`
+      );
+    }
+  } catch (err) {
+    console.warn('回填 sourcing_competitor_relation.include_in_comparable 时出现警告:', err.message);
+  }
   try {
     const [fkRows] = await dbPool.query(
       `SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS

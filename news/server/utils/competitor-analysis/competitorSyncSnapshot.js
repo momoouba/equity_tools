@@ -322,10 +322,12 @@ async function restoreSubjectPayload(newIeId, payload) {
          run_id, pre_investment_run_id, subject_display_name,
          competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
          relevance_score, confidence_grade, score_breakdown_json,
+         competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+         evidence_breakdown_json,
          data_sources_json, financing_amount_text, financing_history_text,
          competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
          include_in_comparable, F_CreatorTime, F_LastModifyTime, F_DeleteMark, F_DeleteTime, F_DeleteUserId
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         newRelId,
         rel.subject_type || 'invested_enterprise',
@@ -344,6 +346,20 @@ async function restoreSubjectPayload(newIeId, payload) {
           ? typeof rel.score_breakdown_json === 'string'
             ? rel.score_breakdown_json
             : JSON.stringify(rel.score_breakdown_json)
+          : null,
+        rel.competitor_type || null,
+        rel.dimension_scores != null
+          ? typeof rel.dimension_scores === 'string'
+            ? rel.dimension_scores
+            : JSON.stringify(rel.dimension_scores)
+          : null,
+        rel.evidence_summary || null,
+        rel.evidence_confidence != null ? Number(rel.evidence_confidence) : null,
+        rel.needs_review != null ? Number(rel.needs_review) : 0,
+        rel.evidence_breakdown_json != null
+          ? typeof rel.evidence_breakdown_json === 'string'
+            ? rel.evidence_breakdown_json
+            : JSON.stringify(rel.evidence_breakdown_json)
           : null,
         rel.data_sources_json != null
           ? typeof rel.data_sources_json === 'string'

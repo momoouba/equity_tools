@@ -1,9 +1,59 @@
-import { Button, Checkbox, Space, Tooltip } from '@arco-design/web-react'
+import { Button, Checkbox, Space, Tag, Tooltip } from '@arco-design/web-react'
 
 import { IntroPopoverCell } from './introPopoverAiCell'
 import { formatFinancingDateTime } from './financingDateUtils'
+import { isReviewPending } from './competitorRelationDisplayUtils'
 
 const SOURCE_LABELS = { ipo_project: '底层', sourcing_financing_event: '融资', ai_web: '联网', user_added: '用户新增' }
+
+export function evidenceConfidenceLabel(score) {
+  const n = Number(score)
+  if (!Number.isFinite(n)) return null
+  if (n >= 80) return '高'
+  if (n >= 60) return '中'
+  return '低'
+}
+
+/** 与后端 evidenceTierFromScore 一致，供复核表单默认值 */
+export function evidenceTierFromScore(score) {
+  const n = Number(score)
+  if (!Number.isFinite(n)) return 'medium'
+  if (n >= 80) return 'high'
+  if (n >= 60) return 'medium'
+  return 'low'
+}
+
+export const EVIDENCE_TIER_OPTIONS = [
+  { value: 'high', label: '高' },
+  { value: 'medium', label: '中' },
+  { value: 'low', label: '低' },
+]
+
+function parseEvidenceBreakdown(raw) {
+  if (!raw) return null
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw
+  } catch {
+    return null
+  }
+}
+
+/** 证据可信 Tooltip：来源 / 新鲜度 / 一致性 / 判断强度 */
+export function formatEvidenceBreakdownTooltip(record) {
+  const bd =
+    parseEvidenceBreakdown(record?.evidence_breakdown_json) ||
+    parseEvidenceBreakdown(record?.score_breakdown_json?.evidence_breakdown)
+  if (!bd) return null
+  const months = bd.freshness_months_ago
+  const freshnessHint =
+    months == null ? '日期未知' : months <= 12 ? `${months} 月前` : `${months} 月前（可能滞后）`
+  return [
+    `来源覆盖：${bd.source_coverage_score ?? '—'}`,
+    `数据新鲜度：${bd.freshness_score ?? '—'}（${freshnessHint}）`,
+    `多源一致性：${bd.consistency_score ?? '—'}`,
+    `判断强度：${bd.judgment_strength_score ?? '—'}`,
+  ].join('\n')
+}
 
 /** 竞品明细：长文本列（除竞品名称外）左对齐；竞品名称表头居中、内容左对齐由 cr-rel-col-name 控制 */
 const LEFT_ALIGN_FIELDS = new Set([
@@ -12,7 +62,62 @@ const LEFT_ALIGN_FIELDS = new Set([
 ])
 
 /** 各列 width 之和，供 Table scroll.x 使用 */
-export const COMPETITOR_RELATION_TABLE_SCROLL_X = 1400
+export const COMPETITOR_RELATION_TABLE_SCROLL_X = 1800
+
+export const COMPETITOR_TYPE_META = {
+  direct: { label: '直接竞品', color: 'red' },
+  indirect: { label: '间接竞品', color: 'orangered' },
+  substitute: { label: '替代品', color: 'gold' },
+  same_track: { label: '同赛道', color: 'arcoblue' },
+  upstream_downstream: { label: '上下游', color: 'purple' },
+  not_competitor: { label: '非竞品', color: 'gray' },
+}
+
+/** 默认列表是否展示该行（兼容 Step 2 前 include_in_comparable 未写入的历史落库） */
+export function isDefaultComparableVisible(row) {
+  const type = String(row?.competitor_type || '').trim().toLowerCase()
+  if (!type) return true
+  if (type === 'same_track') return false
+  return Number(row?.include_in_comparable) === 1
+}
+
+/** 列表排序：类型优先（direct → substitute → …）再综合分 */
+export const COMPETITOR_TYPE_SORT_ORDER = {
+  direct: 0,
+  indirect: 1,
+  substitute: 2,
+  same_track: 3,
+  upstream_downstream: 4,
+  not_competitor: 5,
+}
+
+export function sortRelationsForDisplay(list) {
+  return [...(list || [])].sort((a, b) => {
+    const ta =
+      COMPETITOR_TYPE_SORT_ORDER[String(a?.competitor_type || '').trim().toLowerCase()] ?? 6
+    const tb =
+      COMPETITOR_TYPE_SORT_ORDER[String(b?.competitor_type || '').trim().toLowerCase()] ?? 6
+    if (ta !== tb) return ta - tb
+    const ca = Number(a.include_in_comparable) === 1 ? 1 : 0
+    const cb = Number(b.include_in_comparable) === 1 ? 1 : 0
+    if (cb !== ca) return cb - ca
+    const sa = Number(a.relevance_score) || 0
+    const sb = Number(b.relevance_score) || 0
+    if (sb !== sa) return sb - sa
+    return String(b.created_at || '').localeCompare(String(a.created_at || ''))
+  })
+}
+
+function renderCompetitorTypeTag(type) {
+  const key = String(type || '').trim().toLowerCase()
+  const meta = COMPETITOR_TYPE_META[key]
+  if (!meta) return '-'
+  return (
+    <Tag color={meta.color} size="small">
+      {meta.label}
+    </Tag>
+  )
+}
 
 /** 长文本 Popover 触发区最大宽度（px），与列宽 - 左右 padding 对齐 */
 export const CR_REL_COL_WIDTH = {
@@ -96,7 +201,7 @@ export function formatCompetitorDataSources(v) {
 
  * @param {object} [opts]
 
- * @param {(record: object, checked: boolean) => void} [opts.onComparableToggle]
+ * @param {(record: object) => void} [opts.onReview]
 
  * @param {string|null} [opts.comparableSavingId]
  * @param {boolean} [opts.comparableReadOnly]
@@ -111,6 +216,7 @@ export function getCompetitorRelationColumns(opts = {}) {
     comparableReadOnly,
     onEdit,
     onDelete,
+    onReview,
     actionReadOnly,
   } = opts
 
@@ -140,7 +246,25 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     { title: '等级', dataIndex: 'confidence_grade', width: 56, render: (t) => t || '-' },
 
+    {
+      title: '竞品类型',
+      dataIndex: 'competitor_type',
+      width: 88,
+      render: (t) => renderCompetitorTypeTag(t),
+    },
+
     { title: '综合分', dataIndex: 'relevance_score', width: 70, className: CR_REL_CSS.colNumeric, render: (v) => (v == null ? '-' : String(v)) },
+
+    {
+      title: '判断依据',
+      dataIndex: 'evidence_summary',
+      width: 120,
+      render: (t) => (
+        <div className={CR_REL_CSS.introCell}>
+          <IntroPopoverCell columnTitle="判断依据" raw={t} triggerMaxWidth={96} />
+        </div>
+      ),
+    },
 
     {
 
@@ -212,6 +336,56 @@ export function getCompetitorRelationColumns(opts = {}) {
     },
 
     {
+      title: '证据可信',
+      dataIndex: 'evidence_confidence',
+      width: 128,
+      ellipsis: false,
+      render: (v, record) => {
+        const label = evidenceConfidenceLabel(v)
+        if (!label) return '-'
+        const needsReview = Number(record?.needs_review) === 1 || isReviewPending(record)
+        const tip = formatEvidenceBreakdownTooltip(record)
+        const body = (
+          <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>
+            <Tag size="small" color={label === '高' ? 'green' : label === '中' ? 'arcoblue' : 'orangered'}>
+              {label}
+            </Tag>
+            {needsReview ? (
+              onReview ? (
+                <Tag
+                  size="small"
+                  color="red"
+                  style={{ cursor: 'pointer' }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onReview(record)
+                  }}
+                >
+                  待复核
+                </Tag>
+              ) : (
+                <Tag size="small" color="red">
+                  待复核
+                </Tag>
+              )
+            ) : null}
+            {record.review_status === 'confirmed' || record.review_status === 'corrected' ? (
+              <Tag size="small" color="green">
+                已确认
+              </Tag>
+            ) : null}
+          </Space>
+        )
+        if (!tip) return body
+        return (
+          <Tooltip content={<pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{tip}</pre>}>
+            <span tabIndex={0}>{body}</span>
+          </Tooltip>
+        )
+      },
+    },
+
+    {
 
       title: '融资',
 
@@ -273,18 +447,41 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     {
       title: '操作',
-      width: 140,
+      width: 168,
       fixed: 'right',
       render: (_, record) => {
-        if (actionReadOnly || !record.creator_user_id) return '-'
+        if (actionReadOnly) {
+          return onReview ? (
+            <Button type="outline" size="small" onClick={() => onReview(record, { readOnly: true })}>
+              查看
+            </Button>
+          ) : (
+            '-'
+          )
+        }
+        const userRow = !!record.creator_user_id
+        const pending = isReviewPending(record)
         return (
-          <Space size={8} style={{ padding: '0 10px' }} wrap={false}>
-            <Button type="primary" size="small" aria-label={`编辑竞品 ${record.competitor_display_name || ''}`} onClick={() => onEdit?.(record)}>
-              编辑
-            </Button>
-            <Button type="outline" size="small" status="danger" aria-label={`删除竞品 ${record.competitor_display_name || ''}`} onClick={() => onDelete?.(record)}>
-              删除
-            </Button>
+          <Space size={8} style={{ padding: '0 4px' }} wrap={false}>
+            {onReview ? (
+              <Button
+                type={pending ? 'primary' : 'outline'}
+                size="small"
+                onClick={() => onReview(record)}
+              >
+                {pending ? '复核' : '复核'}
+              </Button>
+            ) : null}
+            {userRow ? (
+              <>
+                <Button type="outline" size="small" onClick={() => onEdit?.(record)}>
+                  编辑
+                </Button>
+                <Button type="outline" size="small" status="danger" onClick={() => onDelete?.(record)}>
+                  删除
+                </Button>
+              </>
+            ) : null}
           </Space>
         )
       },

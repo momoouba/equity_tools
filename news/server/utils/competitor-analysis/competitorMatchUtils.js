@@ -129,14 +129,23 @@ function fuseConfidence(internalScore, aiScore) {
 /** 规则分偏低但 LLM 对标≥该值时，提高 AI 权重（与 §3.5.2 默认 6:4 区分）。 */
 const LLM_HIGH_TRUST_THRESHOLD = 80;
 
-/** 从候选行取 AI 侧得分（对标 / 校验 / 联网初分）。 */
+/**
+ * 从候选行取 AI 侧得分（落库综合分用）。
+ * S5 校验完成后以 validated_score 为准；无校验结果时回退 S3 llmProductScore。
+ */
 function getCandidateAiPart(c) {
   if (!c || typeof c !== 'object') return 0;
+  const v = c.validation;
+  if (
+    v &&
+    v.ai_failed !== true &&
+    v.validated_score != null &&
+    Number.isFinite(Number(v.validated_score))
+  ) {
+    return Number(v.validated_score);
+  }
   if (c.llmProductScore != null && Number.isFinite(Number(c.llmProductScore))) {
     return Number(c.llmProductScore);
-  }
-  if (c.validation?.validated_score != null && Number.isFinite(Number(c.validation.validated_score))) {
-    return Number(c.validation.validated_score);
   }
   return Number(c.productScore) || 0;
 }
@@ -144,8 +153,15 @@ function getCandidateAiPart(c) {
 /**
  * 综合置信度（落库用）。
  * - 有内部源：默认 内部×0.6+AI×0.4；LLM≥80 时用 内部×0.2+AI×0.8。
- * - 仅 AI 联网源：综合分 = AI 分（不再因 internal=0 被压到 ≤40）。
+ * - 专业赛道内部池（_trackInternalPeer）：S5 校验通过且 AI≥52 时综合分=校验分；否则 LLM≥68 时用 内部×0.25+AI×0.75。
+ * - 仅 AI 联网源：综合分 = AI 分。
  */
+/** 专业赛道内部池：S5 可信但规则分偏低时，避免综合分被 internal 拖死 */
+const TRACK_INTERNAL_AI_FLOOR = 68;
+
+/** 专业赛道内部池：S5 校验通过后，落库综合分以校验分为准（避免规则分拖累） */
+const TRACK_INTERNAL_PERSIST_AI_MIN = 52;
+
 function computeComprehensiveScore(c) {
   const ai = getCandidateAiPart(c);
   const internal = Number(c.internalScore) || 0;
@@ -153,8 +169,18 @@ function computeComprehensiveScore(c) {
   if (!hasInternal) {
     return Math.round(Math.min(100, Math.max(0, ai)));
   }
+  if (
+    c._trackInternalPeer &&
+    ai >= TRACK_INTERNAL_PERSIST_AI_MIN &&
+    isPersistValidationPassed(c)
+  ) {
+    return Math.round(Math.min(100, Math.max(0, ai)));
+  }
   if (ai >= LLM_HIGH_TRUST_THRESHOLD) {
     return Math.round(Math.min(100, Math.max(0, internal * 0.2 + ai * 0.8)));
+  }
+  if (c._trackInternalPeer && ai >= TRACK_INTERNAL_AI_FLOOR) {
+    return Math.round(Math.min(100, Math.max(0, internal * 0.25 + ai * 0.75)));
   }
   return fuseConfidence(internal, ai);
 }
@@ -162,6 +188,36 @@ function computeComprehensiveScore(c) {
 const SCORE_THRESHOLD_PERSIST = 60;
 /** LLM 高信任且校验为竞品时，允许略低于默认阈值的综合分落库 */
 const SCORE_THRESHOLD_HIGH_LLM = 55;
+const VALIDATE_INTERNAL_MIN_DEFAULT = 45;
+
+/** 落库/校验阈值（投前与投后暂同值，待黄金集验证后再分化 pre 侧）。 */
+const THRESHOLDS_BY_SUBJECT = {
+  invested_enterprise: {
+    persist: SCORE_THRESHOLD_PERSIST,
+    highLlm: SCORE_THRESHOLD_HIGH_LLM,
+    validateInternalMin: VALIDATE_INTERNAL_MIN_DEFAULT,
+  },
+  pre_investment_project: {
+    persist: SCORE_THRESHOLD_PERSIST,
+    highLlm: SCORE_THRESHOLD_HIGH_LLM,
+    validateInternalMin: VALIDATE_INTERNAL_MIN_DEFAULT,
+  },
+};
+
+function getThresholds(subjectType) {
+  return THRESHOLDS_BY_SUBJECT[subjectType] || THRESHOLDS_BY_SUBJECT.invested_enterprise;
+}
+
+/** 是否已通过 S5 校验且可参与落库（非 ai_failed / 非竞品 / 非上下游）。 */
+function isPersistValidationPassed(c) {
+  const v = c?.validation;
+  if (!v || v.ai_failed) return false;
+  const type = v.competitor_type;
+  if (type === 'not_competitor' || type === 'upstream_downstream') return false;
+  if (v.is_competitor === false) return false;
+  if (v.is_upstream_downstream) return false;
+  return true;
+}
 
 /**
  * 是否达到落库分数门槛。
@@ -172,8 +228,21 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   const th = opts.threshold ?? SCORE_THRESHOLD_PERSIST;
   const thHigh = opts.thresholdHighLlm ?? SCORE_THRESHOLD_HIGH_LLM;
   const score = Number(finalScore);
+  if (c.validation?.competitor_type === 'same_track') {
+    const vs = Number(c.validation?.validated_score);
+    if (Number.isFinite(vs) && vs >= 35) return true;
+  }
   if (Number.isFinite(score) && score >= th) return true;
   const ai = getCandidateAiPart(c);
+  if (
+    c._trackInternalPeer &&
+    c.validation?.competitor_type === 'direct' &&
+    Number.isFinite(ai) &&
+    ai >= thHigh &&
+    isPersistValidationPassed(c)
+  ) {
+    return true;
+  }
   if (ai < LLM_HIGH_TRUST_THRESHOLD) return false;
   if (c.validation?.is_competitor === false || c.validation?.is_upstream_downstream) return false;
   return Number.isFinite(score) && score >= thHigh;
@@ -218,9 +287,14 @@ module.exports = {
   computeComprehensiveScore,
   meetsPersistThreshold,
   getCandidateAiPart,
+  getThresholds,
+  isPersistValidationPassed,
   LLM_HIGH_TRUST_THRESHOLD,
+  TRACK_INTERNAL_AI_FLOOR,
+  TRACK_INTERNAL_PERSIST_AI_MIN,
   SCORE_THRESHOLD_PERSIST,
   SCORE_THRESHOLD_HIGH_LLM,
+  VALIDATE_INTERNAL_MIN_DEFAULT,
   weightedScore,
   extractJsonObject,
 };

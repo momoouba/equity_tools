@@ -1,3 +1,8 @@
+const {
+  applyRelationReview,
+  loadRelationRowFull,
+} = require('../../utils/competitor-analysis/competitorRelationReviewService');
+const { buildEvidenceMeta } = require('../../utils/competitor-analysis/competitorEvidenceUtils');
 const { generateId } = require('../../utils/idGenerator');
 const db = require('../../db');
 const {
@@ -170,6 +175,26 @@ async function loadCompetitorRelationForWrite(req, relationId) {
   return rel;
 }
 
+async function loadCompetitorRelationForReview(req, relationId) {
+  const rel = await loadRelationRowFull(relationId);
+  if (!rel || Number(rel.delete_mark) !== 0) {
+    const e = new Error('竞品记录不存在');
+    e.code = 404;
+    throw e;
+  }
+  if (rel.invested_enterprise_id) {
+    const row = await getInvestedEnterpriseRowForCompetitor(rel.invested_enterprise_id);
+    assertInvestedEnterpriseCompetitorOwner(req, row);
+  } else if (rel.pre_investment_project_id) {
+    await loadPreInvestmentProjectForWrite(req, rel.pre_investment_project_id);
+  } else {
+    const e = new Error('无效的主体');
+    e.code = 400;
+    throw e;
+  }
+  return rel;
+}
+
 function buildManualRelationFieldValues(body) {
   const displayName = strTrim(body?.competitor_display_name);
   if (!displayName) {
@@ -211,6 +236,8 @@ async function selectHydratedRelation(relationId) {
     `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
             pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
             relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
             data_sources_json, financing_amount_text, financing_history_text,
             competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
             include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
@@ -520,19 +547,45 @@ function registerCompetitorMatchRoutes(router) {
         }
       }
 
+      const latestRunId = ieId
+        ? await getLatestRunIdForInvestedEnterprise(ieId)
+        : await getLatestRunIdForPreInvestmentProject(pipId);
+      /** 新跑批会软删旧批次关系；查历史版本须包含该 run 下已归档行 */
+      const isHistoricalView = !!(runId && latestRunId && runId !== latestRunId);
+
       let list;
       if (ieId) {
-        if (runId) {
+        if (isHistoricalView) {
           list = await db.query(
             `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                     competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
+                    data_sources_json, financing_amount_text, financing_history_text,
+                    competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                    include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
+             FROM sourcing_competitor_relation
+             WHERE invested_enterprise_id = ?
+               AND run_id = ?
+               AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+             ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
+             LIMIT 200`,
+            [ieId, runId]
+          );
+        } else if (runId) {
+          list = await db.query(
+            `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+                    competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
+                    relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
                     data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                     include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
              FROM sourcing_competitor_relation
              WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
-               AND (run_id = ? OR F_CreatorUserId IS NOT NULL)
+               AND (run_id = ? OR F_CreatorUserId IS NOT NULL OR COALESCE(human_locked, 0) = 1)
                AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
              ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
              LIMIT 200`,
@@ -543,6 +596,8 @@ function registerCompetitorMatchRoutes(router) {
             `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                     competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                     relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
                     data_sources_json, financing_amount_text, financing_history_text,
                     competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                     include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
@@ -554,18 +609,38 @@ function registerCompetitorMatchRoutes(router) {
             [ieId]
           );
         }
+      } else if (isHistoricalView) {
+        list = await db.query(
+          `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
+                  pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
+                  relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
+                  data_sources_json, financing_amount_text, financing_history_text,
+                  competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
+                  include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
+           FROM sourcing_competitor_relation
+           WHERE pre_investment_project_id = ?
+             AND subject_type = 'pre_investment_project'
+             AND pre_investment_run_id = ?
+           ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
+           LIMIT 200`,
+          [pipId, runId]
+        );
       } else if (runId) {
         list = await db.query(
           `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                   pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                   relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
                   data_sources_json, financing_amount_text, financing_history_text,
                   competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                   include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
            FROM sourcing_competitor_relation
            WHERE pre_investment_project_id = ? AND F_DeleteMark = 0
              AND subject_type = 'pre_investment_project'
-             AND (pre_investment_run_id = ? OR F_CreatorUserId IS NOT NULL)
+             AND (pre_investment_run_id = ? OR F_CreatorUserId IS NOT NULL OR COALESCE(human_locked, 0) = 1)
            ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC
            LIMIT 200`,
           [pipId, runId]
@@ -575,6 +650,8 @@ function registerCompetitorMatchRoutes(router) {
           `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                   pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                   relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
                   data_sources_json, financing_amount_text, financing_history_text,
                   competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                   include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
@@ -590,15 +667,13 @@ function registerCompetitorMatchRoutes(router) {
       for (const row of deduped) {
         hydrated.push(await hydrateRelationRow(row));
       }
-      const latestRunId = ieId
-        ? await getLatestRunIdForInvestedEnterprise(ieId)
-        : await getLatestRunIdForPreInvestmentProject(pipId);
       res.json({
         success: true,
         data: {
           list: hydrated,
           run_id: runId || latestRunId,
           latest_run_id: latestRunId,
+          is_historical_view: isHistoricalView,
         },
       });
     } catch (e) {
@@ -682,6 +757,7 @@ function registerCompetitorMatchRoutes(router) {
         : nullableLongText(req.body?.financing_amount_text);
       const includeComparable = req.body?.include_in_comparable ? 1 : 0;
       const dataSourcesJson = JSON.stringify(['user_added']);
+      const manualEvidence = buildEvidenceMeta(['user_added'], { event_date: new Date() }, null);
 
       const relId = await generateId('sourcing_competitor_relation');
       await db.execute(
@@ -690,10 +766,11 @@ function registerCompetitorMatchRoutes(router) {
            run_id, pre_investment_run_id, subject_display_name,
            competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
            relevance_score, confidence_grade,
+           evidence_confidence, needs_review, evidence_breakdown_json,
            data_sources_json, financing_amount_text, financing_history_text,
            competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
            include_in_comparable, F_CreatorUserId, F_CreatorTime, F_LastModifyTime, F_DeleteMark
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
         [
           relId,
           subjectType,
@@ -708,6 +785,11 @@ function registerCompetitorMatchRoutes(router) {
           weakKey,
           score,
           grade,
+          manualEvidence.evidenceConfidence,
+          manualEvidence.needsReview,
+          manualEvidence.evidenceBreakdown
+            ? JSON.stringify(manualEvidence.evidenceBreakdown)
+            : null,
           dataSourcesJson,
           financingAmount,
           financingHistory,
@@ -736,6 +818,8 @@ function registerCompetitorMatchRoutes(router) {
         `SELECT F_Id AS id, subject_type, invested_enterprise_id, pre_investment_project_id, run_id,
                 pre_investment_run_id, competitor_display_name, unified_credit_code, is_listed, competitor_weak_key,
                 relevance_score, confidence_grade, score_breakdown_json,
+            competitor_type, dimension_scores, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, review_status, review_disposition, reviewed_at, review_note, human_locked,
                 data_sources_json, financing_amount_text, financing_history_text,
                 competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
                 include_in_comparable, F_CreatorUserId AS creator_user_id, F_CreatorTime AS created_at
@@ -748,6 +832,64 @@ function registerCompetitorMatchRoutes(router) {
       const code = e.code === 400 || e.code === 401 || e.code === 403 || e.code === 404 ? e.code : 500;
       console.error('[competitor-analysis/relations POST]', e);
       res.status(code).json({ success: false, message: e.message || '新增失败' });
+    }
+  });
+
+  /** 竞品关系复核闭环（确认 / 驳回 / 修正 / 刷新证据） */
+  router.patch('/competitor-analysis/relations/:relationId/review', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const relationId = String(req.params.relationId || '').trim();
+      await loadCompetitorRelationForReview(req, relationId);
+      const userId = req.psUser?.id ? String(req.psUser.id) : null;
+      const disposition = String(req.body?.disposition || '').trim();
+      const note = req.body?.note;
+      const competitorType = req.body?.competitor_type;
+      const competitorProductIntro = req.body?.competitor_product_intro;
+      const evidenceConfidenceTier = req.body?.evidence_confidence_tier;
+
+      await applyRelationReview({
+        relationId,
+        userId,
+        disposition,
+        note,
+        competitorType,
+        competitorProductIntro,
+        evidenceConfidenceTier,
+      });
+
+      const rel = await loadRelationRowFull(relationId);
+      if (disposition === 'reject_not_competitor' || disposition === 'corrected') {
+        await upsertComparablePrefForRelation(
+          {
+            subject_type: rel.subject_type,
+            invested_enterprise_id: rel.invested_enterprise_id,
+            pre_investment_project_id: rel.pre_investment_project_id,
+            competitor_display_name: rel.competitor_display_name,
+            unified_credit_code: rel.unified_credit_code,
+            competitor_weak_key: rel.competitor_weak_key,
+          },
+          Number(rel.include_in_comparable) === 1,
+          userId
+        );
+      }
+
+      const hydrated = await selectHydratedRelation(relationId);
+      res.json({
+        success: true,
+        data: hydrated,
+        message:
+          disposition === 'refresh_evidence'
+            ? '证据已刷新'
+            : disposition === 'confirm'
+              ? '已确认竞品关系'
+              : disposition === 'reject_not_competitor'
+                ? '已标为非竞品'
+                : '复核结果已保存',
+      });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 401 || e.code === 403 || e.code === 404 ? e.code : 500;
+      console.error('[competitor-analysis/relations/review PATCH]', e);
+      res.status(code).json({ success: false, message: e.message || '复核失败' });
     }
   });
 

@@ -34,10 +34,12 @@ import { IntroPopoverCell } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
 import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
 import CompetitorRelationDetailBlock from './CompetitorRelationDetailBlock'
+import CompetitorRelationReviewDrawer from './CompetitorRelationReviewDrawer'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
   parseExportFilename,
+  sortRelationsForDisplay,
 } from './competitorRelationColumns'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
@@ -66,15 +68,7 @@ function projectYear(projectNo) {
 }
 
 function sortRelationsByComparable(list) {
-  return [...(list || [])].sort((a, b) => {
-    const ca = Number(a.include_in_comparable) === 1 ? 1 : 0
-    const cb = Number(b.include_in_comparable) === 1 ? 1 : 0
-    if (cb !== ca) return cb - ca
-    const sa = Number(a.relevance_score) || 0
-    const sb = Number(b.relevance_score) || 0
-    if (sb !== sa) return sb - sa
-    return String(b.created_at || '').localeCompare(String(a.created_at || ''))
-  })
+  return sortRelationsForDisplay(list)
 }
 
 const AI_ENRICH_POLL_MS = 2500
@@ -152,6 +146,29 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [manualAddVisible, setManualAddVisible] = useState(false)
   const [manualAddSubject, setManualAddSubject] = useState(null)
   const [editingRelation, setEditingRelation] = useState(null)
+  const [reviewDrawer, setReviewDrawer] = useState({ visible: false, record: null, readOnly: false })
+
+  const openReviewDrawer = useCallback((record, opts = {}) => {
+    setReviewDrawer({ visible: true, record, readOnly: !!opts.readOnly })
+  }, [])
+
+  const handleReviewSubmitted = useCallback(
+    async (updated, meta) => {
+      if (!updated?.id) return
+      const subjectId = updated.pre_investment_project_id
+      if (!subjectId) return
+      if (meta?.refreshOnly) {
+        setRelMap((m) => ({
+          ...m,
+          [subjectId]: (m[subjectId] || []).map((r) => (r.id === updated.id ? { ...r, ...updated } : r)),
+        }))
+        setReviewDrawer((d) => ({ ...d, record: updated }))
+        return
+      }
+      await loadRelations(subjectId, selectedRunMap[subjectId] || latestRunMap[subjectId], true)
+    },
+    [latestRunMap, selectedRunMap]
+  )
 
   const handleComparableToggle = useCallback(async (record, checked) => {
     const subjectId = record.pre_investment_project_id
@@ -237,8 +254,9 @@ export default function ProjectSourcingPreInvestmentPage() {
         comparableSavingId,
         onEdit: handleEditRelation,
         onDelete: handleDeleteRelation,
+        onReview: openReviewDrawer,
       }),
-    [handleComparableToggle, comparableSavingId, handleEditRelation, handleDeleteRelation]
+    [handleComparableToggle, comparableSavingId, handleEditRelation, handleDeleteRelation, openReviewDrawer]
   )
 
   const loadRuns = async (projectId) => {
@@ -919,7 +937,11 @@ export default function ProjectSourcingPreInvestmentPage() {
             const isHistorical =
               selectedRunId && latestRunId && String(selectedRunId) !== String(latestRunId)
             const columns = isHistorical
-              ? getCompetitorRelationColumns({ comparableReadOnly: true, actionReadOnly: true })
+              ? getCompetitorRelationColumns({
+                  comparableReadOnly: true,
+                  actionReadOnly: true,
+                  onReview: (record) => openReviewDrawer(record, { readOnly: true }),
+                })
               : relColumns
 
             return (
@@ -927,6 +949,7 @@ export default function ProjectSourcingPreInvestmentPage() {
                 embedded
                 stopPropagation
                 aiProductIntro={row.ai_product_intro}
+                industryTags={row.ai_industry_tags_display}
                 runs={runs}
                 selectedRunId={selectedRunId}
                 runLoading={!!runMap[row.id]?.loading}
@@ -1217,6 +1240,13 @@ export default function ProjectSourcingPreInvestmentPage() {
         }}
         summaryParams={summaryParams}
         subjectTitle={summaryTitle}
+      />
+      <CompetitorRelationReviewDrawer
+        visible={reviewDrawer.visible}
+        record={reviewDrawer.record}
+        readOnly={reviewDrawer.readOnly}
+        onClose={() => setReviewDrawer({ visible: false, record: null, readOnly: false })}
+        onSubmitted={handleReviewSubmitted}
       />
       <CompetitorRelationManualAddModal
         visible={manualAddVisible}

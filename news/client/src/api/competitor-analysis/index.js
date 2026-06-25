@@ -135,6 +135,10 @@ export function patchCompetitorRelationComparable(relationId, includeInComparabl
   })
 }
 
+export function patchCompetitorRelationReview(relationId, body) {
+  return axios.patch(`${BASE}/competitor-analysis/relations/${encodeURIComponent(relationId)}/review`, body)
+}
+
 export function fetchCompetitorExportYears(params) {
   return axios.get(`${BASE}/competitor-analysis/export/years`, { params })
 }

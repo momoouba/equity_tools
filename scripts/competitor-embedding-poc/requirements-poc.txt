@@ -1,0 +1,4 @@
+# Step 4 Embedding POC（可选依赖）
+# 安装: pip install -r requirements-poc.txt
+sentence-transformers>=2.7.0
+torch>=2.0.0
