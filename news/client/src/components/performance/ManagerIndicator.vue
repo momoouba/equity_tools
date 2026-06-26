@@ -15,7 +15,7 @@
       </div>
       <div class="indicator-item">
         <div class="indicator-label">
-          <span class="indicator-label-wrap">SPV数量（备案）<a-tooltip v-if="config?.spvNumDesc" :content="config.spvNumDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          <span class="indicator-label-wrap">备案SPV数量<a-tooltip v-if="config?.spvNumDesc" :content="config.spvNumDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
         </div>
         <div class="indicator-value">{{ formatNumber(data.spvNum) }}</div>
       </div>
@@ -113,7 +113,7 @@ const formatAmount = (val) => {
 }
 
 .indicator-item {
-  text-align: center;
+  text-align: left;
   padding: 16px;
   background: #f7f8fa;
   border-radius: 6px;

@@ -159,7 +159,7 @@
 .perf-indicator-sub .negative { color: #f53f3f; }
 
 .perf-indicator-item {
-  text-align: center;
+  text-align: left;
   padding: 16px;
   background: #f7f8fa;
   border-radius: 6px;
@@ -831,6 +831,13 @@
 
 /* 在管产品清单合计行：浅蓝底 #1AA8E9 白字 */
 .perf-table-summary td {
+  background: #1AA8E9;
+  color: #fff;
+  font-weight: 500;
+}
+
+/* 在管产品清单分组小计行：浅蓝底 #1AA8E9 白字 */
+.perf-table-group-summary td {
   background: #1AA8E9;
   color: #fff;
   font-weight: 500;

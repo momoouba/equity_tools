@@ -3719,16 +3719,19 @@ async function initializeTables(dbPool) {
       F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
       fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称-04',
       fund_type VARCHAR(300) NULL DEFAULT NULL COMMENT '基金类型-03',
-      sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴规模-06',
-      paid_in_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴规模-08',
-      dis_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计分配金额-10',
       version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-02',
       b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-01',
       set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立时间-05',
+      inv_start DATETIME NULL DEFAULT NULL COMMENT '投资期开始日-06',
+      ba_date DATETIME NULL DEFAULT NULL COMMENT '备案时间-07',
+      ba_num VARCHAR(300) NULL DEFAULT NULL COMMENT '备案编号-08',
+      sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴规模-09',
+      sub_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增认缴-10',
+      paid_in_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴规模-11',
+      paid_in_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增实缴-12',
+      dis_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计分配金额-13',
+      dis_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增分配-14',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
-      sub_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增认缴-07',
-      paid_in_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增实缴-09',
-      dis_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增分配-11',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理规模';
   `);
@@ -4282,6 +4285,31 @@ async function initializeTables(dbPool) {
     if (cols.length === 0) {
       await dbPool.query(`ALTER TABLE b_manage_indicator ADD COLUMN spv_num INT NULL DEFAULT NULL COMMENT 'SPV数量_备案'`);
     }
+  } catch (e) { /* ignore */ }
+
+  // b_manage 表：若已存在则补充 inv_start/ba_date/ba_num 列（若缺失），并修正原有字段注释编号
+  try {
+    const [cols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_manage' AND COLUMN_NAME IN ('inv_start', 'ba_date', 'ba_num')
+    `);
+    const existing = new Set(cols.map(c => c.COLUMN_NAME));
+    if (!existing.has('inv_start')) {
+      await dbPool.query(`ALTER TABLE b_manage ADD COLUMN inv_start DATETIME NULL DEFAULT NULL COMMENT '投资期开始日-06' AFTER set_up_date`);
+    }
+    if (!existing.has('ba_date')) {
+      await dbPool.query(`ALTER TABLE b_manage ADD COLUMN ba_date DATETIME NULL DEFAULT NULL COMMENT '备案时间-07' AFTER inv_start`);
+    }
+    if (!existing.has('ba_num')) {
+      await dbPool.query(`ALTER TABLE b_manage ADD COLUMN ba_num VARCHAR(300) NULL DEFAULT NULL COMMENT '备案编号-08' AFTER ba_date`);
+    }
+    // 修正原有字段注释编号
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN sub_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴规模-09'`);
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN sub_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增认缴-10'`);
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN paid_in_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴规模-11'`);
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN paid_in_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增实缴-12'`);
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN dis_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计分配金额-13'`);
+    await dbPool.query(`ALTER TABLE b_manage MODIFY COLUMN dis_add DECIMAL(30,10) NULL DEFAULT NULL COMMENT '本年新增分配-14'`);
   } catch (e) { /* ignore */ }
 
   // b_all_indicator 表：若已存在则补充 SPV 相关列（若缺失）

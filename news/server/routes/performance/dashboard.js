@@ -104,12 +104,20 @@ router.get('/manager-funds', async (req, res) => {
     }
     
     const rows = await db.query(
-      `SELECT fund, fund_type, sub_amount, sub_add, 
-              paid_in_amount, paid_in_add, dis_amount, dis_add
+      `SELECT fund, fund_type, sub_amount, sub_add,
+              paid_in_amount, paid_in_add, dis_amount, dis_add,
+              inv_start, ba_date, ba_num, set_up_date
        FROM b_manage
        WHERE version = ? AND F_DeleteMark = 0
-         AND fund_type NOT IN ('内部非备案SPV', '外部非备案SPV', '外部备案SPV')
-       ORDER BY CASE fund_type WHEN '母基金' THEN 1 WHEN '直投基金' THEN 2 WHEN '内部备案SPV' THEN 3 ELSE 4 END, set_up_date DESC`,
+       ORDER BY CASE fund_type
+         WHEN '母基金' THEN 1
+         WHEN '直投基金' THEN 2
+         WHEN '内部备案SPV' THEN 3
+         WHEN '内部非备案SPV' THEN 4
+         WHEN '外部备案SPV' THEN 5
+         WHEN '外部非备案SPV' THEN 6
+         ELSE 7
+       END, set_up_date ASC`,
       [version]
     );
     
@@ -390,7 +398,8 @@ router.get('/spv-detail', async (req, res) => {
        FROM b_investment_spv
        WHERE version = ? AND F_DeleteMark = 0
          AND (lp_paid IS NOT NULL AND lp_paid > 0)
-       ORDER BY fund, transaction_type, first_date ASC`,
+         AND fund_type = '内部备案SPV'
+       ORDER BY set_up_date ASC`,
       [version]
     );
     

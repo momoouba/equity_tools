@@ -198,7 +198,15 @@ router.post('/manager-funds', checkExportPermission, async (req, res) => {
     const manageRows = await db.query(
       `SELECT * FROM b_manage
        WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY fund_type, set_up_date`,
+       ORDER BY CASE fund_type
+         WHEN '母基金' THEN 1
+         WHEN '直投基金' THEN 2
+         WHEN '内部备案SPV' THEN 3
+         WHEN '内部非备案SPV' THEN 4
+         WHEN '外部备案SPV' THEN 5
+         WHEN '外部非备案SPV' THEN 6
+         ELSE 7
+       END, set_up_date ASC`,
       [version]
     );
     

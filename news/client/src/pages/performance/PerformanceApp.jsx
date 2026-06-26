@@ -261,7 +261,7 @@ function ManagerCard({ data, config, onClick }) {
   const items = [
     { label: '母基金数量', value: formatNumber(data?.fofNum), sub: (data?.fofSinceYear != null && data?.fofSinceYear !== '') ? `自${data.fofSinceYear}年起` : (config?.fofNumDesc || ''), descKey: 'fofNumDesc' },
     { label: '直投基金数量', value: formatNumber(data?.directNum), sub: (data?.directSinceYear != null && data?.directSinceYear !== '') ? `自${data.directSinceYear}年起` : (config?.directNumDesc || ''), descKey: 'directNumDesc' },
-    { label: 'SPV数量（备案）', value: formatNumber(data?.spvNum), sub: config?.spvNumDesc || '', descKey: 'spvNumDesc' },
+    { label: '备案SPV数量', value: formatNumber(data?.spvNum), sub: config?.spvNumDesc || '', descKey: 'spvNumDesc' },
     { label: '认缴管理规模', value: formatAmount(data?.subAmount), change: data?.subAdd, subLabel: '较上月增加', valueRed: true, descKey: 'subAmountDesc' },
     { label: '实缴管理规模', value: formatAmount(data?.paidInAmount), change: data?.paidInAdd, subLabel: '较上月增加', valueRed: true, descKey: 'paidInAmountDesc' },
     { label: '累计分配总额', value: formatAmount(data?.disAmount), change: data?.disAdd, subLabel: '较上月增加', valueRed: true, descKey: 'disAmountDesc' },
@@ -903,28 +903,51 @@ function PerformanceApp() {
     switch (modal.type) {
       case 'managerFunds': {
         const mgrList = modalData.list || []
-        const mgrSum = { sub_amount: 0, sub_add: 0, paid_in_amount: 0, paid_in_add: 0, dis_amount: 0, dis_add: 0 }
+
+        // 按 fund_type 分组（仅显示指定类型）
+        const ALLOWED_FUND_TYPES = ['母基金', '直投基金', '内部备案SPV']
+        const mgrGroups = {}
         mgrList.forEach((r) => {
-          mgrSum.sub_amount += toNum(r.sub_amount) || 0
-          mgrSum.sub_add += toNum(r.sub_add) || 0
-          mgrSum.paid_in_amount += toNum(r.paid_in_amount) || 0
-          mgrSum.paid_in_add += toNum(r.paid_in_add) || 0
-          mgrSum.dis_amount += toNum(r.dis_amount) || 0
-          mgrSum.dis_add += toNum(r.dis_add) || 0
+          const type = r.fund_type || '其他'
+          if (!ALLOWED_FUND_TYPES.includes(type)) return
+          if (!mgrGroups[type]) mgrGroups[type] = []
+          mgrGroups[type].push(r)
         })
+        const typeOrder = ['母基金', '直投基金', '内部备案SPV']
+        const sortedMgrTypes = Object.keys(mgrGroups).sort((a, b) => {
+          const ia = typeOrder.indexOf(a)
+          const ib = typeOrder.indexOf(b)
+          if (ia !== -1 && ib !== -1) return ia - ib
+          if (ia !== -1) return -1
+          if (ib !== -1) return 1
+          return a.localeCompare(b)
+        })
+
+        const mgrSum = { sub_amount: 0, sub_add: 0, paid_in_amount: 0, paid_in_add: 0, dis_amount: 0, dis_add: 0 }
         const mgrColgroup = (
           <colgroup>
             <col style={{ width: 48 }} />
-            <col style={{ width: 180 }} />
-            <col style={{ width: 100 }} />
-            <col style={{ width: 130 }} />
+            <col style={{ width: 160 }} />
+            <col style={{ width: 110 }} />
+            <col style={{ width: 120 }} />
             <col style={{ width: 120 }} />
             <col style={{ width: 130 }} />
             <col style={{ width: 120 }} />
-            <col style={{ width: 140 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 120 }} />
+            <col style={{ width: 120 }} />
             <col style={{ width: 120 }} />
           </colgroup>
         )
+
+        const formatDateCell = (val) => {
+          if (!val) return '-'
+          const s = String(val)
+          if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.substring(0, 10)
+          return s
+        }
+
         return (
           <div className="perf-modal-fundperf-wrap">
             <div className="perf-modal-header perf-modal-header-with-action">
@@ -948,6 +971,9 @@ function PerformanceApp() {
                   <th>序号</th>
                   <th>基金名称</th>
                   <th>基金类型</th>
+                  <th>投资期开始日</th>
+                  <th>备案时间</th>
+                  <th>备案编号</th>
                   <th>认缴规模</th>
                   <th>本年新增认缴</th>
                   <th>实缴规模</th>
@@ -961,18 +987,56 @@ function PerformanceApp() {
               <table className="perf-table perf-table-bordered perf-mgr-data-table">
                 {mgrColgroup}
                 <tbody>
-                  {mgrList.map((row, i) => (
-                    <tr key={i}>
-                      <td>{i + 1}</td>
-                      <td>{row.fund}</td><td>{row.fund_type}</td>
-                      <td>{formatAmountYuan(row.sub_amount)}</td><td>{formatAmountYuan(row.sub_add)}</td>
-                      <td>{formatAmountYuan(row.paid_in_amount)}</td><td>{formatAmountYuan(row.paid_in_add)}</td>
-                      <td>{formatAmountYuan(row.dis_amount)}</td><td>{formatAmountYuan(row.dis_add)}</td>
-                    </tr>
-                  ))}
+                  {sortedMgrTypes.map((type) => {
+                    const rows = mgrGroups[type]
+                    const groupSum = { sub_amount: 0, sub_add: 0, paid_in_amount: 0, paid_in_add: 0, dis_amount: 0, dis_add: 0 }
+                    rows.forEach((r) => {
+                      groupSum.sub_amount += toNum(r.sub_amount) || 0
+                      groupSum.sub_add += toNum(r.sub_add) || 0
+                      groupSum.paid_in_amount += toNum(r.paid_in_amount) || 0
+                      groupSum.paid_in_add += toNum(r.paid_in_add) || 0
+                      groupSum.dis_amount += toNum(r.dis_amount) || 0
+                      groupSum.dis_add += toNum(r.dis_add) || 0
+                    })
+                    mgrSum.sub_amount += groupSum.sub_amount
+                    mgrSum.sub_add += groupSum.sub_add
+                    mgrSum.paid_in_amount += groupSum.paid_in_amount
+                    mgrSum.paid_in_add += groupSum.paid_in_add
+                    mgrSum.dis_amount += groupSum.dis_amount
+                    mgrSum.dis_add += groupSum.dis_add
+                    return (
+                      <React.Fragment key={type}>
+                        {rows.map((row, i) => (
+                          <tr key={`${type}-${i}`}>
+                            <td>{i + 1}</td>
+                            <td>{row.fund}</td>
+                            <td>{row.fund_type}</td>
+                            <td>{formatDateCell(row.inv_start)}</td>
+                            <td>{formatDateCell(row.ba_date)}</td>
+                            <td>{row.ba_num || '-'}</td>
+                            <td>{formatAmountYuan(row.sub_amount)}</td>
+                            <td>{formatAmountYuan(row.sub_add)}</td>
+                            <td>{formatAmountYuan(row.paid_in_amount)}</td>
+                            <td>{formatAmountYuan(row.paid_in_add)}</td>
+                            <td>{formatAmountYuan(row.dis_amount)}</td>
+                            <td>{formatAmountYuan(row.dis_add)}</td>
+                          </tr>
+                        ))}
+                        <tr className="perf-table-group-summary">
+                          <td colSpan={6} style={{ fontWeight: 500 }}>小计（{type}）</td>
+                          <td>{formatAmountYuan(groupSum.sub_amount)}</td>
+                          <td>{formatAmountYuan(groupSum.sub_add)}</td>
+                          <td>{formatAmountYuan(groupSum.paid_in_amount)}</td>
+                          <td>{formatAmountYuan(groupSum.paid_in_add)}</td>
+                          <td>{formatAmountYuan(groupSum.dis_amount)}</td>
+                          <td>{formatAmountYuan(groupSum.dis_add)}</td>
+                        </tr>
+                      </React.Fragment>
+                    )
+                  })}
                   {mgrList.length === 0 && (
                     <tr>
-                      <td colSpan={9} style={{ textAlign: 'center' }}>暂无数据</td>
+                      <td colSpan={12} style={{ textAlign: 'center' }}>暂无数据</td>
                     </tr>
                   )}
                 </tbody>
@@ -984,6 +1048,9 @@ function PerformanceApp() {
                 <tbody>
                   <tr className="perf-table-summary">
                     <td>合计</td>
+                    <td>-</td>
+                    <td>-</td>
+                    <td>-</td>
                     <td>-</td>
                     <td>-</td>
                     <td>{formatAmountYuan(mgrSum.sub_amount)}</td>
@@ -1535,7 +1602,6 @@ function PerformanceApp() {
           const sum = {
             acc_sub: 0,
             acc_paidin: 0,
-            acc_exit: 0,
             acc_receive: 0,
             fund_paid: 0,
             lp_paid: 0,
@@ -1543,7 +1609,6 @@ function PerformanceApp() {
           rows.forEach((r) => {
             sum.acc_sub += toNum(r.acc_sub) || 0
             sum.acc_paidin += toNum(r.acc_paidin) || 0
-            sum.acc_exit += toNum(r.acc_exit) || 0
             sum.acc_receive += toNum(r.acc_receive) || 0
             sum.fund_paid += toNum(r.fund_paid) || 0
             sum.lp_paid += toNum(r.lp_paid) || 0
@@ -1581,7 +1646,7 @@ function PerformanceApp() {
                   <col style={{ width: 160 }} />
                   <col style={{ width: 130 }} /><col style={{ width: 130 }} />
                   <col style={{ width: 130 }} /><col style={{ width: 130 }} />
-                  <col style={{ width: 130 }} /><col style={{ width: 130 }} />
+                  <col style={{ width: 130 }} />
                 </colgroup>
                 <thead>
                   <tr>
@@ -1591,12 +1656,11 @@ function PerformanceApp() {
                     <th>成立时间</th>
                     <th>投资类别</th>
                     <th>项目名称</th>
-                    <th className="perf-col-amount">认缴金额累计</th>
-                    <th className="perf-col-amount">实缴金额累计</th>
-                    <th className="perf-col-amount">退出金额累计</th>
-                    <th className="perf-col-amount">回款金额累计</th>
+                    <th className="perf-col-amount">项目认缴金额累计</th>
+                    <th className="perf-col-amount">项目实缴金额累计</th>
+                    <th className="perf-col-amount">项目回款金额累计</th>
                     <th className="perf-col-amount">基金实缴累计</th>
-                    <th className="perf-col-amount">LP实缴累计</th>
+                    <th className="perf-col-amount">外部LP实缴累计</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1610,7 +1674,6 @@ function PerformanceApp() {
                       <td>{row.project || '-'}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_sub)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_exit)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.acc_receive)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.fund_paid)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(row.lp_paid)}</td>
@@ -1621,7 +1684,6 @@ function PerformanceApp() {
                       <td className="perf-col-index" colSpan={6}>合计</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_sub)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_paidin)}</td>
-                      <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_exit)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.acc_receive)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.fund_paid)}</td>
                       <td className="perf-td-num perf-col-amount">{formatAmountYuan(allSum.lp_paid)}</td>
@@ -1629,7 +1691,7 @@ function PerformanceApp() {
                   )}
                   {list.length === 0 && (
                     <tr>
-                      <td colSpan={12} style={{ textAlign: 'center', color: '#86909c', padding: '24px 0' }}>暂无数据</td>
+                      <td colSpan={11} style={{ textAlign: 'center', color: '#86909c', padding: '24px 0' }}>暂无数据</td>
                     </tr>
                   )}
                 </tbody>
