@@ -75,7 +75,8 @@ function pickPositiveOrNullFromRow(rowVal, oldVal) {
 async function upsertNewShareRow(row) {
   const rowIssueSlice = String(row.issue_date || '').slice(0, 10);
   const existing = await db.query(
-    `SELECT F_Id, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares,
+    `SELECT F_Id, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares,
+            issue_total_wan, expected_raise_amount, total_issued_shares,
             public_date, win_rate, first_day_close, first_day_chg_pct, first_day_market_cap
      FROM ipo_new_share
      WHERE stock_code = ? AND exchange = ?
@@ -86,19 +87,25 @@ async function upsertNewShareRow(row) {
   if (!existing.length) {
     const issueDate = isYmd(rowIssueSlice) ? rowIssueSlice : '';
     const issueWeekday = weekdayZh(issueDate);
+    const insertIssuePrice = row.issue_price ?? null;
+    const insertIssueTotalWan = normalizePositiveOrNull(row.issue_total_wan);
+    const insertExpectedRaise = calcExpectedRaiseAmountYi(insertIssuePrice, insertIssueTotalWan);
     await db.execute(
       `INSERT INTO ipo_new_share
-      (stock_code, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares, total_issued_shares, exchange, public_date, win_rate,
+      (stock_code, stock_name, issue_date, issue_weekday, issue_price, offer_pe, limit_shares,
+       issue_total_wan, expected_raise_amount, total_issued_shares, exchange, public_date, win_rate,
        first_day_close, first_day_chg_pct, first_day_market_cap)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         row.stock_code,
         row.stock_name,
         issueDate,
         issueWeekday,
-        row.issue_price ?? null,
+        insertIssuePrice,
         row.offer_pe ?? null,
         row.limit_shares ?? null,
+        insertIssueTotalWan,
+        insertExpectedRaise,
         row.total_issued_shares ?? null,
         row.exchange,
         row.public_date || null,
@@ -123,6 +130,8 @@ async function upsertNewShareRow(row) {
   const nextIssuePrice = pickFiniteNumberOrNull(row.issue_price, old.issue_price);
   const nextOfferPe = pickFiniteNumberOrNull(row.offer_pe, old.offer_pe);
   const nextLimitShares = pickFiniteNumberOrNull(row.limit_shares, old.limit_shares);
+  const nextIssueTotalWan = pickPositiveOrNullFromRow(row.issue_total_wan, old.issue_total_wan);
+  const nextExpectedRaiseAmount = calcExpectedRaiseAmountYi(nextIssuePrice, nextIssueTotalWan);
   const nextTotalIssuedShares = pickPositiveOrNullFromRow(row.total_issued_shares, old.total_issued_shares);
 
   const rowPubSlice = String(row.public_date || '').trim().slice(0, 10);
@@ -144,6 +153,8 @@ async function upsertNewShareRow(row) {
     !numClose(old.issue_price, nextIssuePrice) ||
     !numClose(old.offer_pe, nextOfferPe) ||
     !numClose(old.limit_shares, nextLimitShares) ||
+    !numClose(old.issue_total_wan, nextIssueTotalWan) ||
+    !numClose(old.expected_raise_amount, nextExpectedRaiseAmount) ||
     !numClose(old.total_issued_shares, nextTotalIssuedShares) ||
     toYmdDb(old.public_date) !== (nextPublicDate || '') ||
     !numClose(old.win_rate, nextWinRate) ||
@@ -156,7 +167,8 @@ async function upsertNewShareRow(row) {
   await db.execute(
     `UPDATE ipo_new_share
       SET stock_name = ?, issue_date = ?, issue_weekday = ?, issue_price = ?, offer_pe = ?,
-          limit_shares = ?, total_issued_shares = ?, public_date = ?, win_rate = ?,
+          limit_shares = ?, issue_total_wan = ?, expected_raise_amount = ?, total_issued_shares = ?,
+          public_date = ?, win_rate = ?,
           first_day_close = ?, first_day_chg_pct = ?, first_day_market_cap = ?
       WHERE F_Id = ?`,
     [
@@ -166,6 +178,8 @@ async function upsertNewShareRow(row) {
       nextIssuePrice,
       nextOfferPe,
       nextLimitShares,
+      nextIssueTotalWan,
+      nextExpectedRaiseAmount,
       nextTotalIssuedShares,
       nextPublicDate,
       nextWinRate,
@@ -196,6 +210,14 @@ function calcFirstDayMarketCap(close, totalIssuedShares) {
   if (!Number.isFinite(c) || !Number.isFinite(ts)) return null;
   if (c <= 0 || ts <= 0) return null;
   return Math.round(c * ts * 100) / 100;
+}
+
+/** 预计募资规模（亿元）= 发行价 × 发行总数（万股） / 10000 */
+function calcExpectedRaiseAmountYi(issuePrice, issueTotalWan) {
+  const p = Number(issuePrice);
+  const w = Number(issueTotalWan);
+  if (!Number.isFinite(p) || !Number.isFinite(w) || p <= 0 || w <= 0) return null;
+  return Math.round((p * w / 10000) * 100) / 100;
 }
 
 function normalizePositiveOrNull(v) {

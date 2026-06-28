@@ -66,6 +66,7 @@ async function listNewShare(req, res) {
               enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display,
               DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
               issue_weekday, issue_price, offer_pe, limit_shares,
+              issue_total_wan, expected_raise_amount,
               exchange, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
               win_rate, total_issued_shares, first_day_close, first_day_chg_pct, first_day_market_cap,
               DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at,
@@ -92,7 +93,8 @@ async function exportNewShare(req, res) {
       `SELECT stock_code, stock_name,
               enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display,
               DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
-              issue_weekday, issue_price, offer_pe, limit_shares, exchange,
+              issue_weekday, issue_price, offer_pe, limit_shares, issue_total_wan, expected_raise_amount,
+              exchange,
               DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
               win_rate, total_issued_shares, first_day_close, first_day_chg_pct, first_day_market_cap
        FROM ipo_new_share ${whereSql}
@@ -111,6 +113,8 @@ async function exportNewShare(req, res) {
       { label: '发行价', key: 'issue_price' },
       { label: '发行市盈率', key: 'offer_pe' },
       { label: '申购上限', key: 'limit_shares' },
+      { label: '发行总数(万股)', key: 'issue_total_wan' },
+      { label: '预计募资规模(亿)', key: 'expected_raise_amount' },
       { label: '交易所', key: 'exchange' },
       { label: '上市日期', key: 'public_date' },
       { label: '中签率', key: 'win_rate' },

@@ -29,6 +29,13 @@ export function formatListingAmount(value) {
     : '-'
 }
 
+/** 金额以亿元展示（库内已存亿元，保留 2 位小数） */
+export function formatListingYi(value) {
+  if (value === null || value === undefined || value === '') return '-'
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? `${n.toFixed(2)}亿` : '-'
+}
+
 export function formatListingPercent(value, scale100 = false) {
   if (value === null || value === undefined || value === '') return '-'
   const n = Number(value)

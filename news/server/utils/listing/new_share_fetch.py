@@ -75,6 +75,14 @@ def _pick(row, candidates):
     return None
 
 
+def _calc_expected_raise_amount_yi(issue_price, issue_total_wan):
+    price = _to_float(issue_price)
+    wan = _to_float(issue_total_wan)
+    if price is None or wan is None or price <= 0 or wan <= 0:
+        return None
+    return round(price * wan / 10000, 2)
+
+
 def _extract_rows(df, start_date, end_date, issue_date_after_exclusive=None):
     rows = []
     start = start_date
@@ -103,15 +111,19 @@ def _extract_rows(df, start_date, end_date, issue_date_after_exclusive=None):
         else:
             exchange = "上交所"
 
+        issue_price = _to_float(_pick(d, ["发行价格", "发行价"]))
+        issue_total_wan = _to_float(_pick(d, ["发行总数", "发行总股数", "总发行数量", "实际发行总数"]))
         rows.append(
             {
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "issue_date": issue_date,
                 "issue_weekday": str(_pick(d, ["申购日期星期几", "星期"]) or "").strip() or None,
-                "issue_price": _to_float(_pick(d, ["发行价格", "发行价"])),
+                "issue_price": issue_price,
                 "offer_pe": _to_float(_pick(d, ["发行市盈率", "市盈率"])),
                 "limit_shares": _to_float(_pick(d, ["申购上限", "网上申购上限"])),
+                "issue_total_wan": issue_total_wan,
+                "expected_raise_amount": _calc_expected_raise_amount_yi(issue_price, issue_total_wan),
                 "total_issued_shares": _to_share_count(_pick(d, ["发行总数", "发行总股数", "总发行数量", "实际发行总数"])),
                 "exchange": exchange,
                 "public_date": _to_date_text(_pick(d, ["上市日期"])),
@@ -192,11 +204,11 @@ def _extract_a_rows_from_ipoapply(
             exchange = "深交所"
         else:
             exchange = "上交所"
+        issue_price = _to_float(d.get("ISSUE_PRICE"))
+        issue_total_wan = _to_float(d.get("ISSUE_NUM"))
         total_issued_shares = _to_share_count(d.get("TOTAL_ISSUE_NUM"))
-        if total_issued_shares is None:
-            issue_num = _to_share_count(d.get("ISSUE_NUM"))
-            if issue_num is not None:
-                total_issued_shares = issue_num * 10000
+        if total_issued_shares is None and issue_total_wan is not None:
+            total_issued_shares = issue_total_wan * 10000
         wr = _to_float(d.get("ONLINE_ISSUE_LWR"))
         if wr is not None and wr <= 1:
             wr = wr * 100
@@ -206,9 +218,11 @@ def _extract_a_rows_from_ipoapply(
                 "stock_name": stock_name,
                 "issue_date": issue_date,
                 "issue_weekday": None,
-                "issue_price": _to_float(d.get("ISSUE_PRICE")),
+                "issue_price": issue_price,
                 "offer_pe": _to_float(d.get("AFTER_ISSUE_PE")),
                 "limit_shares": _to_float(d.get("ONLINE_APPLY_UPPER")),
+                "issue_total_wan": issue_total_wan,
+                "expected_raise_amount": _calc_expected_raise_amount_yi(issue_price, issue_total_wan),
                 "total_issued_shares": total_issued_shares,
                 "exchange": exchange,
                 "public_date": _to_date_text(d.get("LISTING_DATE")),

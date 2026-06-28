@@ -6047,6 +6047,8 @@ async function initializeTables(dbPool) {
         issue_price DECIMAL(12,4) NULL COMMENT '发行价',
         offer_pe DECIMAL(12,4) NULL COMMENT '发行市盈率',
         limit_shares DECIMAL(20,2) NULL COMMENT '申购上限',
+        issue_total_wan DECIMAL(20,2) NULL COMMENT '发行总数（万股，东财 ISSUE_NUM）',
+        expected_raise_amount DECIMAL(12,2) NULL COMMENT '预计募资规模（亿元，发行价×发行总数万股/10000）',
         total_issued_shares DECIMAL(20,2) NULL COMMENT '总发行数量（股）',
         exchange VARCHAR(20) NOT NULL COMMENT '交易所',
         public_date DATE NULL COMMENT '上市日期（北京时间）',
@@ -6136,6 +6138,47 @@ async function initializeTables(dbPool) {
     if (!String(err.message || '').includes('Duplicate column name')) {
       console.warn('为 ipo_new_share 增加 first_day_market_cap 时出现警告:', err.message);
     }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN issue_total_wan DECIMAL(20,2) NULL COMMENT '发行总数（万股，东财 ISSUE_NUM）' AFTER limit_shares`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 issue_total_wan 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `ALTER TABLE ipo_new_share
+         ADD COLUMN expected_raise_amount DECIMAL(12,2) NULL COMMENT '预计募资规模（亿元，发行价×发行总数万股/10000）' AFTER issue_total_wan`
+    );
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate column name')) {
+      console.warn('为 ipo_new_share 增加 expected_raise_amount 时出现警告:', err.message);
+    }
+  }
+  try {
+    await dbPool.query(
+      `UPDATE ipo_new_share
+       SET issue_total_wan = ROUND(total_issued_shares / 10000, 2)
+       WHERE issue_total_wan IS NULL
+         AND total_issued_shares IS NOT NULL AND total_issued_shares > 0`
+    );
+  } catch (err) {
+    console.warn('回填 ipo_new_share.issue_total_wan 时出现警告:', err.message);
+  }
+  try {
+    await dbPool.query(
+      `UPDATE ipo_new_share
+       SET expected_raise_amount = ROUND(issue_price * issue_total_wan / 10000, 2)
+       WHERE issue_total_wan IS NOT NULL AND issue_total_wan > 0
+         AND issue_price IS NOT NULL AND issue_price > 0
+         AND expected_raise_amount IS NULL`
+    );
+  } catch (err) {
+    console.warn('回填 ipo_new_share.expected_raise_amount 时出现警告:', err.message);
   }
 
   // 境外备案：已并入 ipo_progress（board=境外发行备案），不再创建 ipo_overseas_filing

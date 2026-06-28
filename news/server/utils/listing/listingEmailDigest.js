@@ -106,6 +106,14 @@ function formatAmountForEmail(val) {
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** 预计募资规模（库内为亿元） */
+function formatExpectedRaiseYiForEmail(val) {
+  if (val === null || val === undefined || val === '') return '-';
+  const n = Number(val);
+  if (!Number.isFinite(n) || n <= 0) return '-';
+  return `${n.toFixed(2)}亿`;
+}
+
 function formatPercentForEmail(val) {
   if (val === null || val === undefined || val === '') return '-';
   const n = Number(val);
@@ -358,7 +366,8 @@ async function executeListingEmailDigest(recipient, options = {}) {
   if (includeNewShareUpcoming) {
     nsUpcomingListRows = await db.query(
       `SELECT stock_code, stock_name,
-              DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date, exchange, issue_price
+              DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date, exchange, issue_price,
+              expected_raise_amount
        FROM ipo_new_share
        WHERE public_date IS NOT NULL
          AND DATE(public_date) >= ?
@@ -468,12 +477,12 @@ async function executeListingEmailDigest(recipient, options = {}) {
       ? '<p style="margin:0 0 12px;color:#4e5969;">（无上市日期大于等于今日的数据）</p>'
       : `<table cellpadding="0" cellspacing="0" style="${tableBaseStyle}">
           <tr>
-            <th style="${thStyle}">股票代码</th><th style="${thStyle}">股票简称</th><th style="${thStyle}">上市日期</th><th style="${thStyle}">交易所</th><th style="${thStyle}">发行价</th>
+            <th style="${thStyle}">股票代码</th><th style="${thStyle}">股票简称</th><th style="${thStyle}">上市日期</th><th style="${thStyle}">交易所</th><th style="${thStyle}">发行价</th><th style="${thStyle}">预计募资规模</th>
           </tr>
           ${nsUpcomingListRows
             .map(
               (r, i) =>
-                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.stock_code)}</td><td style="${tdStyle}">${escapeHtml(r.stock_name)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.public_date))}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.issue_price))}</td></tr>`
+                `<tr style="background:${i % 2 === 0 ? '#ffffff' : '#fafafa'};"><td style="${tdStyle}">${escapeHtml(r.stock_code)}</td><td style="${tdStyle}">${escapeHtml(r.stock_name)}</td><td style="${tdStyle}">${escapeHtml(formatDateYmdForEmail(r.public_date))}</td><td style="${tdStyle}">${escapeHtml(r.exchange)}</td><td style="${tdNumStyle}">${escapeHtml(formatAmountForEmail(r.issue_price))}</td><td style="${tdNumStyle}">${escapeHtml(formatExpectedRaiseYiForEmail(r.expected_raise_amount))}</td></tr>`
             )
             .join('')}
         </table>`;

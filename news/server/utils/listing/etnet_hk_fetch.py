@@ -4,18 +4,21 @@
 经济通 etnet.com.hk 港股新股数据（简体站 stocks.etnetchina.cn 内嵌 iframe 同源页）：
 - ci_ipo.php 内嵌 var listing.listingipos → 仅少量「预告」新股；打新日历须与 ci_ipo_info 新股信息全表合并，否则会漏掉已上市但未进 listingipos 的股票
 - ci_ipo_info.php 表格「新股信息」→ 打新日历主列表 + 一手中签率、首日开市价、按盘价、累积升跌（分页）
+- ci_ipo_detail.php?code=XXXXX&type=listing → 「全球发售」区块「发售股份数目」（万股），补全 issue_total_wan / expected_raise_amount
 
 环境变量：
 - HK_NEW_SHARE_SOURCE=etnet（默认）| hkex  —— 由 new_share_fetch 读取
-- HK_NEW_SHARE_SOURCE=etnet（默认）| hkex —— 由打新日历同步读取
+- HK_IPO_DETAIL_INTERVAL_MS — 详情页逐股请求间隔（默认 150ms）
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -30,6 +33,7 @@ UA = (
 )
 URL_IPO_CAL = "https://www.etnet.com.hk/www/sc/stocks/ci_ipo.php"
 URL_IPO_INFO = "https://www.etnet.com.hk/www/sc/stocks/ci_ipo_info.php"
+URL_IPO_DETAIL = "https://www.etnet.com.hk/www/sc/stocks/ci_ipo_detail.php"
 
 
 def _http_get(url: str, params: Optional[dict] = None) -> str:
@@ -110,6 +114,122 @@ def _parse_pct_cell(s: str) -> Optional[float]:
         return float(t)
     except Exception:
         return None
+
+
+def _norm_table_label(s: str) -> str:
+    return re.sub(r"\s+", "", str(s or ""))
+
+
+def _parse_share_volume_to_wan(s: str) -> Optional[float]:
+    """解析详情页发售规模：「9,469.05万股」「1,283.87万 H股」「8.12亿 H股」等 → 万股。"""
+    t = str(s or "").strip().replace(",", "").replace("，", "")
+    if not t or t in ("--", "-"):
+        return None
+    m_yi = re.match(r"^([\d.]+)\s*亿\s*(?:H\s*股|h\s*股|股)?\s*$", t, flags=re.I)
+    if m_yi:
+        try:
+            v = float(m_yi.group(1))
+            # 1 亿股 = 10,000 万股
+            return round(v * 10000, 2) if v > 0 else None
+        except Exception:
+            return None
+    t_wan = re.sub(r"万\s*(?:股|H\s*股|h\s*股)?\s*$", "", t, flags=re.I).strip()
+    if not t_wan:
+        return None
+    try:
+        v = float(t_wan)
+        return round(v, 2) if v > 0 else None
+    except Exception:
+        return None
+
+
+def _parse_wan_shares_text(s: str) -> Optional[float]:
+    """兼容旧名：解析为万股。"""
+    return _parse_share_volume_to_wan(s)
+
+
+def _calc_expected_raise_amount_yi(issue_price: Any, issue_total_wan: Any) -> Optional[float]:
+    price = _parse_price(issue_price)
+    wan: Optional[float] = None
+    if issue_total_wan is not None:
+        if isinstance(issue_total_wan, (int, float)):
+            wan = float(issue_total_wan) if float(issue_total_wan) > 0 else None
+        else:
+            wan = _parse_wan_shares_text(str(issue_total_wan))
+    if price is None or wan is None or price <= 0 or wan <= 0:
+        return None
+    return round(price * wan / 10000, 2)
+
+
+def _hk_share_fields_from_wan(issue_price: Any, issue_total_wan: float) -> Dict[str, Any]:
+    out: Dict[str, Any] = {
+        "issue_total_wan": round(issue_total_wan, 2),
+        "total_issued_shares": round(issue_total_wan * 10000, 2),
+    }
+    era = _calc_expected_raise_amount_yi(issue_price, issue_total_wan)
+    if era is not None:
+        out["expected_raise_amount"] = era
+    return out
+
+
+_ISSUE_TOTAL_DETAIL_LABELS = (
+    "发售股份数目",
+    "發售股份數目",
+    "发售预托证券数目",
+    "發售預託證券數目",
+)
+
+
+def parse_ipo_detail_issue_total_wan(html: str) -> Optional[float]:
+    """从 ci_ipo_detail.php HTML 解析全球发售合计股数（统一为万股）。"""
+    from bs4 import BeautifulSoup  # noqa: PLC0415
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tr in soup.select("table tr"):
+        cells = [c.get_text(strip=True) for c in tr.find_all(["td", "th"])]
+        if len(cells) < 2:
+            continue
+        label = _norm_table_label(cells[0])
+        if label not in _ISSUE_TOTAL_DETAIL_LABELS:
+            continue
+        wan = _parse_share_volume_to_wan(cells[1])
+        if wan is not None:
+            return wan
+    return None
+
+
+def fetch_ipo_detail_issue_total_wan(stock_code: str) -> Optional[float]:
+    code = str(stock_code or "").strip().zfill(5)
+    if not code or code == "00000":
+        return None
+    html = _http_get(URL_IPO_DETAIL, {"code": code, "type": "listing"})
+    return parse_ipo_detail_issue_total_wan(html)
+
+
+def _enrich_hk_rows_with_detail_shares(rows: List[dict]) -> None:
+    """对港交所打新日历行逐只补抓 ci_ipo_detail「发售股份数目」。"""
+    cache: Dict[str, Optional[float]] = {}
+    interval_ms = max(0, int(os.environ.get("HK_IPO_DETAIL_INTERVAL_MS", "150") or "150"))
+    interval_s = interval_ms / 1000.0
+    fetched = 0
+    for i, row in enumerate(rows):
+        if str(row.get("exchange") or "").strip() != "港交所":
+            continue
+        code = str(row.get("stock_code") or "").strip().zfill(5)
+        if not code or code == "00000":
+            continue
+        if code not in cache:
+            if fetched > 0 and interval_s > 0:
+                time.sleep(interval_s)
+            try:
+                cache[code] = fetch_ipo_detail_issue_total_wan(code)
+            except Exception:
+                cache[code] = None
+            fetched += 1
+        wan = cache.get(code)
+        if wan is None:
+            continue
+        row.update(_hk_share_fields_from_wan(row.get("issue_price"), wan))
 
 
 def fetch_listing_ipos() -> List[dict]:
@@ -286,6 +406,7 @@ def hk_calendar_rows_from_etnet(
             continue
         rows.append(row)
 
+    _enrich_hk_rows_with_detail_shares(rows)
     return rows
 
 
@@ -366,13 +487,36 @@ def fetch_ipo_info_all_pages(max_pages: int = 25) -> List[dict]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="经济通港股新股抓取辅助")
-    ap.add_argument("command", choices=["ipo-info", "calendar-json"], help="ipo-info=新股信息全表；calendar-json=打新日历行")
+    ap.add_argument(
+        "command",
+        choices=["ipo-info", "calendar-json", "ipo-detail"],
+        help="ipo-info=新股信息全表；calendar-json=打新日历行；ipo-detail=单股详情发售股份数目",
+    )
     ap.add_argument("--start-date", default="", help="calendar-json 用")
     ap.add_argument("--end-date", default="", help="calendar-json 用")
     ap.add_argument("--issue-date-after", default="", help="calendar-json 用")
+    ap.add_argument("--code", default="", help="ipo-detail 用，5位股票代码")
     args = ap.parse_args()
 
     try:
+        if args.command == "ipo-detail":
+            code = str(args.code or "").strip().zfill(5)
+            if not code:
+                print(json.dumps({"ok": False, "message": "ipo-detail 需要 --code"}, ensure_ascii=False))
+                raise SystemExit(1)
+            wan = fetch_ipo_detail_issue_total_wan(code)
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "source": "etnet.ci_ipo_detail",
+                        "stockCode": code,
+                        "issueTotalWan": wan,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
         if args.command == "ipo-info":
             rows = fetch_ipo_info_all_pages()
             print(
