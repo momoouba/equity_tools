@@ -19,7 +19,7 @@ async function requireApiToken(req, res, next) {
 
   try {
     const users = await db.query(
-      "SELECT id, account FROM users WHERE api_token = ? AND account_status = 'active'",
+      "SELECT F_Id AS id, account FROM users WHERE api_token = ? AND account_status = 'active'",
       [raw]
     );
     if (!users || users.length === 0) {

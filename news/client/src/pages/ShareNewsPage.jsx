@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import axios from '../utils/axios'
+import { DEV_API_PORT } from '../config/devApiPort'
 import Pagination from '../components/Pagination'
 import './ShareNewsPage.css'
 
@@ -73,6 +74,8 @@ function ShareNewsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
+  const [searchTags, setSearchTags] = useState([])  // 多标签搜索
+  const [searchInputValue, setSearchInputValue] = useState('')  // 搜索输入框值
   const [activeTab, setActiveTab] = useState('yesterday')
   const [pageSize, setPageSize] = useState(10)
   const [enterpriseFilter, setEnterpriseFilter] = useState('enterprise')
@@ -134,7 +137,7 @@ function ShareNewsPage() {
         if (error.response) {
           setError(error.response.data?.message || `服务器错误 (${error.response.status})`)
         } else if (error.code === 'ECONNREFUSED' || error.message?.includes('ECONNREFUSED')) {
-          setError('无法连接到服务器，请确保后端服务正在运行 (localhost:3001)')
+          setError(`无法连接到服务器，请确保后端服务正在运行 (localhost:${DEV_API_PORT})`)
         } else {
           setError(error.message || '分享链接无效或已过期')
         }
@@ -177,16 +180,19 @@ function ShareNewsPage() {
     }
   }
 
-  // 获取舆情信息
-  const fetchNews = useCallback(async () => {
+  // 获取舆情信息 - 使用当前最新的searchTags
+  const fetchNews = useCallback(async (currentSearchTags = searchTags) => {
     setLoading(true)
     try {
       const params = {
         page: 1,
         pageSize: 100000,
-        timeRange: activeTab
+        timeRange: activeTab,
+        enterpriseFilter
       }
-      if (search) {
+      if (currentSearchTags.length > 0) {
+        params.searchTags = currentSearchTags.join(',')
+      } else if (search) {
         params.search = search
       }
 
@@ -231,6 +237,9 @@ function ShareNewsPage() {
           allNewsData = allNewsData.filter(news => 
             news.entity_type === '子基金' || news.entity_type === '子基金管理人' || news.entity_type === '子基金GP'
           )
+        } else if (enterpriseFilter === 'third_party') {
+          // 第三方公众号：只显示企业类型为第三方公众号的数据
+          allNewsData = allNewsData.filter(news => news.entity_type === '第三方公众号')
         }
 
         // 排序
@@ -289,6 +298,40 @@ function ShareNewsPage() {
     fetchNews()
   }
 
+  // 处理搜索标签输入
+  const handleSearchInputKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const value = searchInputValue.trim()
+      if (value && !searchTags.includes(value)) {
+        const newTags = [...searchTags, value]
+        setSearchTags(newTags)
+        setSearchInputValue('')
+        setCurrentPage(1)
+        // 使用新的标签列表立即触发搜索
+        fetchNews(newTags)
+      }
+    }
+  }
+
+  // 删除搜索标签
+  const handleRemoveSearchTag = (tagToRemove) => {
+    const newTags = searchTags.filter(tag => tag !== tagToRemove)
+    setSearchTags(newTags)
+    setCurrentPage(1)
+    // 使用新的标签列表立即触发搜索
+    fetchNews(newTags)
+  }
+
+  // 清空所有搜索标签
+  const handleClearSearchTags = () => {
+    setSearchTags([])
+    setSearchInputValue('')
+    setCurrentPage(1)
+    // 使用空的标签列表立即触发搜索
+    fetchNews([])
+  }
+
   // Tab切换
   const handleTabChange = (tab) => {
     setActiveTab(tab)
@@ -301,7 +344,7 @@ function ShareNewsPage() {
   useEffect(() => {
     setSelectedNewsIds([])
     setSelectAll(false)
-  }, [currentPage, activeTab, enterpriseFilter, search])
+  }, [currentPage, activeTab, enterpriseFilter, search, searchTags])
 
   // 处理单个新闻选择
   const handleSelectNews = (newsId) => {
@@ -562,7 +605,7 @@ function ShareNewsPage() {
         <div className="loading-container">
           <div className="loading">验证分享链接中...</div>
           <div style={{ marginTop: '10px', fontSize: '12px', color: '#86909c' }}>
-            如果长时间无响应，请检查后端服务是否运行 (localhost:3001)
+            {`如果长时间无响应，请检查后端服务是否运行 (localhost:${DEV_API_PORT})`}
           </div>
         </div>
       </div>
@@ -583,7 +626,7 @@ function ShareNewsPage() {
             </ul>
             <p style={{ marginTop: '10px' }}>
               请检查：
-              <br />1. 后端服务是否正在运行 (localhost:3001)
+              <br />1. {`后端服务是否正在运行 (localhost:${DEV_API_PORT})`}
               <br />2. 分享链接是否有效
               <br />3. 浏览器控制台是否有错误信息
             </p>
@@ -635,18 +678,50 @@ function ShareNewsPage() {
       {/* 主要内容 */}
       <div className="share-header">
         <h2>舆情信息</h2>
-        <form onSubmit={handleSearch} className="search-form">
-          <input
-            type="text"
-            placeholder="搜索标题、公众号名称或微信号..."
-            value={search}
-            onChange={handleSearchChange}
-            className="search-input"
-          />
-          <button type="submit" className="search-button">
+        <div className="search-form">
+          <div className="multi-search-container">
+            {searchTags.map((tag, index) => (
+              <span key={index} className="search-tag">
+                {tag}
+                <button
+                  type="button"
+                  className="tag-remove-btn"
+                  onClick={() => handleRemoveSearchTag(tag)}
+                  title="删除"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <input
+              type="text"
+              placeholder={searchTags.length === 0 ? "搜索标题、公众号名称或微信号，回车添加..." : "继续输入..."}
+              value={searchInputValue}
+              onChange={(e) => setSearchInputValue(e.target.value)}
+              onKeyDown={handleSearchInputKeyDown}
+              className="multi-search-input"
+            />
+            {searchTags.length > 0 && (
+              <button
+                type="button"
+                className="clear-tags-btn"
+                onClick={handleClearSearchTags}
+              >
+                清空
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            className="search-button"
+            onClick={() => {
+              setCurrentPage(1)
+              fetchNews()
+            }}
+          >
             搜索
           </button>
-        </form>
+        </div>
       </div>
 
       {/* 统计信息 */}
@@ -776,6 +851,17 @@ function ShareNewsPage() {
           }}
         >
           子基金
+        </button>
+        <button
+          className={`enterprise-filter-btn ${enterpriseFilter === 'third_party' ? 'active' : ''}`}
+          onClick={() => {
+            setEnterpriseFilter('third_party')
+            setCurrentPage(1)
+            setSelectedNewsIds([])
+            setSelectAll(false)
+          }}
+        >
+          第三方公众号
         </button>
         <button
           className={`enterprise-filter-btn ${enterpriseFilter === 'all' ? 'active' : ''}`}

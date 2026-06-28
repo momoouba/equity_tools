@@ -37,7 +37,7 @@ router.get('/', async (req, res) => {
     const startTime = (req.query.startTime || '').trim();
     const endTime = (req.query.endTime || '').trim();
 
-    const conditions = ['delete_mark = 0'];
+    const conditions = ['F_DeleteMark = 0'];
     const params = [];
 
     if (keyword) {
@@ -70,7 +70,7 @@ router.get('/', async (req, res) => {
 
     // 列表字段与 OpenAPI NewsDetailListItem 一致（表中可能无 fund/sub_fund 则选不到会为 null）
     const listFields = [
-      'id', 'account_name', 'wechat_account', 'enterprise_full_name', 'enterprise_abbreviation',
+      'F_Id', 'account_name', 'wechat_account', 'enterprise_full_name', 'enterprise_abbreviation',
       'entity_type', 'public_time', 'title', 'source_url', 'keywords',
       'fund', 'sub_fund', 'news_abstract', 'news_sentiment'
     ].join(', ');
@@ -80,7 +80,7 @@ router.get('/', async (req, res) => {
       `SELECT ${listFields}
        FROM news_detail
        ${whereClause}
-       ORDER BY public_time DESC, created_at DESC
+       ORDER BY public_time DESC, F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -92,7 +92,7 @@ router.get('/', async (req, res) => {
     const total = totalRows[0]?.total ?? 0;
 
     const formattedData = data.map((item) => ({
-      id: item.id,
+      id: item.F_Id,
       account_name: item.account_name || '',
       wechat_account: item.wechat_account || '',
       enterprise_full_name: item.enterprise_full_name || null,
@@ -136,8 +136,8 @@ router.get('/:id', async (req, res) => {
     }
 
     const detailFields = [
-      'id', 'account_name', 'wechat_account', 'enterprise_full_name', 'enterprise_abbreviation',
-      'entity_type', 'created_at', 'source_url', 'title', 'summary', 'public_time',
+      'F_Id', 'account_name', 'wechat_account', 'enterprise_full_name', 'enterprise_abbreviation',
+      'entity_type', 'F_CreatorTime', 'source_url', 'title', 'summary', 'public_time',
       'content', 'keywords', 'news_abstract', 'news_sentiment', 'APItype', 'news_category',
       'fund', 'sub_fund'
     ].join(', ');
@@ -145,7 +145,7 @@ router.get('/:id', async (req, res) => {
     const rows = await db.query(
       `SELECT ${detailFields}
        FROM news_detail
-       WHERE id = ? AND delete_mark = 0`,
+       WHERE F_Id = ? AND F_DeleteMark = 0`,
       [id]
     );
 
@@ -158,13 +158,13 @@ router.get('/:id', async (req, res) => {
 
     const item = rows[0];
     const data = {
-      id: item.id,
+      id: item.F_Id,
       account_name: item.account_name || '',
       wechat_account: item.wechat_account || '',
       enterprise_full_name: item.enterprise_full_name || null,
       enterprise_abbreviation: item.enterprise_abbreviation || null,
       entity_type: item.entity_type || null,
-      created_at: item.created_at || null,
+      created_at: item.F_CreatorTime || null,
       source_url: item.source_url || null,
       title: item.title || null,
       summary: item.summary || null,

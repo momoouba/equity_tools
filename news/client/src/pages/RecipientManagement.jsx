@@ -8,6 +8,8 @@ import './RecipientManagement.css'
 const Option = Select.Option
 const FormItem = Form.Item
 const TextArea = Input.TextArea
+/** 与数据字典行业标签及后端 scheduledEmailTasks 中 __NONE__ 一致 */
+const ADDITIONAL_TAG_NONE = '__NONE__'
 
 function RecipientManagement() {
   const [recipients, setRecipients] = useState([])
@@ -19,6 +21,7 @@ function RecipientManagement() {
   const [editingRecipient, setEditingRecipient] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
   const [form] = Form.useForm()
+
   const [formData, setFormData] = useState({
     recipient_email: '',
     email_subject: '',
@@ -26,14 +29,33 @@ function RecipientManagement() {
     skip_holiday: false,
     is_active: true,
     qichacha_category_codes: null,
-    entity_type: null
+    entity_type: null,
+    additional_account_tag_codes: []
   })
+  const [industryTagOptions, setIndustryTagOptions] = useState([])
   const [showLogModal, setShowLogModal] = useState(false)
   const [logRecipientId, setLogRecipientId] = useState(null)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
   const [selectedCategories, setSelectedCategories] = useState([])
   const [categoryMap, setCategoryMap] = useState({})
   const [showCronModal, setShowCronModal] = useState(false)
+
+  const fetchIndustryTagOptions = async () => {
+    try {
+      const res = await axios.get('/api/additional-accounts/industry-tag-options')
+      if (res.data?.success) {
+        setIndustryTagOptions(res.data.data || [])
+      }
+    } catch (e) {
+      console.error('获取行业标签失败:', e)
+    }
+  }
+
+  useEffect(() => {
+    if (showForm) {
+      fetchIndustryTagOptions()
+    }
+  }, [showForm])
 
   useEffect(() => {
     if (showCategoryModal) {
@@ -146,8 +168,11 @@ function RecipientManagement() {
       }
     }
     
+    const loadIndustryTags = () => fetchIndustryTagOptions()
+
     loadData()
     loadCategoryMap()
+    loadIndustryTags()
     
     return () => {
       isMounted = false
@@ -207,7 +232,8 @@ function RecipientManagement() {
       cron_expression: '0 0 9 * * ? *', // 默认每天9点执行
       is_active: true,
       qichacha_category_codes: null,
-      entity_type: null
+      entity_type: null,
+      additional_account_tag_codes: []
     }
     setFormData(defaultData)
     form.setFieldsValue(defaultData)
@@ -252,6 +278,20 @@ function RecipientManagement() {
           // 如果是单个值，转换为数组
           entityTypes = [entityTypes]
         }
+
+        let additionalTags = recipient.additional_account_tag_codes
+        if (additionalTags == null || additionalTags === undefined) {
+          additionalTags = []
+        } else if (typeof additionalTags === 'string') {
+          try {
+            additionalTags = JSON.parse(additionalTags)
+          } catch (e) {
+            additionalTags = []
+          }
+        }
+        if (!Array.isArray(additionalTags)) {
+          additionalTags = []
+        }
         
         // 优先使用 cron_expression，如果没有则从 send_frequency 和 send_time 转换
         let cronExpression = recipient.cron_expression
@@ -269,7 +309,8 @@ function RecipientManagement() {
           skip_holiday: recipient.skip_holiday === 1,
           is_active: recipient.is_active === 1,
           qichacha_category_codes: categoryCodes,
-          entity_type: entityTypes
+          entity_type: entityTypes,
+          additional_account_tag_codes: additionalTags
         }
         setFormData(editData)
         form.setFieldsValue(editData)
@@ -333,9 +374,15 @@ function RecipientManagement() {
       
       const submitData = {
         ...values,
-        cron_expression: formData.cron_expression, // 从 formData 中获取 cron_expression
-        skip_holiday: formData.skip_holiday, // 从 formData 中获取（在 Cron 弹窗中设置）
-        qichacha_category_codes: categoryCodes
+        cron_expression: formData.cron_expression,
+        skip_holiday: formData.skip_holiday,
+        qichacha_category_codes: categoryCodes,
+        // 企业类型、第三方标签、启用 为受控组件，需从 formData 合并，否则提交时丢失导致保存失败或入库为 null/[] 错误
+        entity_type: formData.entity_type,
+        additional_account_tag_codes: Array.isArray(formData.additional_account_tag_codes)
+          ? formData.additional_account_tag_codes
+          : [],
+        is_active: formData.is_active
       }
       
       let response
@@ -356,7 +403,8 @@ function RecipientManagement() {
           skip_holiday: false,
           is_active: true,
           qichacha_category_codes: null,
-          entity_type: null
+          entity_type: null,
+          additional_account_tag_codes: []
         })
         setSelectedCategories([])
         setTimeout(() => {
@@ -365,12 +413,22 @@ function RecipientManagement() {
           })
         }, 100)
       } else {
-        const errorMsg = response?.data?.message || '响应格式错误'
+        const data = response?.data
+        let errorMsg = data?.message || '响应格式错误'
+        if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+          const fromValidator = data.errors.map((e) => e.msg || e.message).filter(Boolean).join('；')
+          if (fromValidator) errorMsg = fromValidator
+        }
         Message.error('保存失败：' + errorMsg)
       }
     } catch (error) {
       console.error('保存失败:', error)
-      const errorMsg = error.response?.data?.message || error.message || '未知错误'
+      const data = error.response?.data
+      let errorMsg = data?.message || error.message || '未知错误'
+      if (data?.errors && Array.isArray(data.errors) && data.errors.length > 0) {
+        const fromValidator = data.errors.map((e) => e.msg || e.message).filter(Boolean).join('；')
+        if (fromValidator) errorMsg = fromValidator
+      }
       Message.error('保存失败：' + errorMsg)
     }
   }
@@ -399,16 +457,6 @@ function RecipientManagement() {
     } catch (e) {
       return timeString
     }
-  }
-
-  // 格式化 Cron 表达式显示
-  const formatCronExpression = (cron) => {
-    if (!cron) return '-'
-    // 简化显示：如果是常见的表达式，显示友好文本
-    if (cron === '0 0 9 * * ? *') return '每天 09:00:00'
-    if (cron === '0 0 9 ? * 2 *') return '每周一 09:00:00'
-    if (cron === '0 0 9 1 * ? *') return '每月1号 09:00:00'
-    return cron
   }
 
   const columns = [
@@ -450,7 +498,28 @@ function RecipientManagement() {
           const typeMap = { 'daily': '每天', 'weekly': '每周', 'monthly': '每月' }
           return `${typeMap[record.send_frequency] || record.send_frequency} - ${formatTime(record.send_time || '')}`
         }
-        return formatCronExpression(text)
+        // 与后端配置保持一致：直接展示后端返回的 Quartz Cron
+        return text || '-'
+      }
+    },
+    {
+      title: '第三方公众号',
+      dataIndex: 'additional_account_tag_codes',
+      width: 160,
+      ellipsis: true,
+      render: (val) => {
+        if (val === null || val === undefined) return <span style={{ color: '#86909c' }}>未配置</span>
+        let tags = val
+        if (typeof tags === 'string') {
+          try {
+            tags = JSON.parse(tags)
+          } catch (e) {
+            return '-'
+          }
+        }
+        if (!Array.isArray(tags)) return '-'
+        if (tags.length === 0) return '不发送'
+        return `已选 ${tags.length} 项`
       }
     },
     {
@@ -599,7 +668,7 @@ function RecipientManagement() {
           setEditingRecipient(null)
         }}
         footer={null}
-        style={{ width: 600 }}
+        style={{ width: 640 }}
       >
         <Form
           form={form}
@@ -651,11 +720,11 @@ function RecipientManagement() {
           <FormItem
             label="企业类型"
             field="entity_type"
-            extra="选择要发送的企业类型数据，可多选，不选择则发送所有类型"
+            extra="选择要发送的企业类型数据，可多选；不选择时不发送企业端信息（仅按第三方公众号配置发送）"
           >
             <Select
               mode="multiple"
-              placeholder="请选择企业类型（可多选，不选择则发送所有类型）"
+              placeholder="请选择企业类型（可多选，不选择则不发送企业端信息）"
               allowClear
               value={formData.entity_type}
               onChange={(value) => {
@@ -674,10 +743,39 @@ function RecipientManagement() {
           </FormItem>
 
           <FormItem
+            label="第三方公众号"
+            field="additional_account_tag_codes"
+            extra="按第三方公众号的「行业」标签筛选（与公众号管理中标签一致）。不选任何项时，邮件中不附带第三方公众号来源的新闻；选「无」可包含未设置标签的账号。历史「未配置」行保存一次后即按本规则生效。"
+          >
+            <Select
+              mode="multiple"
+              placeholder="不选择则不发送第三方公众号相关新闻"
+              allowClear
+              value={formData.additional_account_tag_codes}
+              onChange={(value) => {
+                setFormData({
+                  ...formData,
+                  additional_account_tag_codes: value && value.length > 0 ? value : []
+                })
+              }}
+            >
+              <Option value={ADDITIONAL_TAG_NONE} key="__none__">
+                无（未打标签的公众号）
+              </Option>
+              {industryTagOptions.map((o) => (
+                <Option key={o.value} value={o.value}>{o.label}</Option>
+              ))}
+            </Select>
+          </FormItem>
+
+          <FormItem
             label="启用"
             field="is_active"
           >
-            <Switch checked={formData.is_active} />
+            <Switch
+              checked={formData.is_active}
+              onChange={(checked) => setFormData((prev) => ({ ...prev, is_active: checked }))}
+            />
           </FormItem>
 
           <FormItem

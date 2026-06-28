@@ -34,11 +34,12 @@ function DatabaseConfig() {
   const fetchConfigs = async () => {
     setLoading(true)
     try {
+      const params = {
+        page: currentPage,
+        pageSize: pageSize,
+      }
       const response = await axios.get('/api/system/database-configs', {
-        params: {
-          page: currentPage,
-          pageSize: pageSize
-        }
+        params,
       })
       if (response.data.success) {
         setConfigs(response.data.data)
@@ -143,7 +144,8 @@ function DatabaseConfig() {
         }
         response = await axios.put(`/api/system/database-config/${editingConfig.id}`, updateData)
       } else {
-        response = await axios.post('/api/system/database-config', formData)
+        const createBody = { ...formData }
+        response = await axios.post('/api/system/database-config', createBody)
       }
 
       if (response.data.success) {

@@ -4,9 +4,10 @@ const db = require('../db');
  * 生成年月日时分秒+5位自增序列的ID
  * 格式：YYYYMMDDHHmmss + 5位自增序列（例如：2025112015304500001）
  * @param {string} tableName - 表名
+ * @param {object} [connection] - 可选，mysql2 连接/连接池/事务连接。在 db.js 初始化阶段必须传入，否则内部 db.query 会 await init 完成而造成死锁
  * @returns {Promise<string>} 生成的ID
  */
-async function generateId(tableName) {
+async function generateId(tableName, connection) {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -31,36 +32,55 @@ async function generateId(tableName) {
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log',
       'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled',
       // 业绩看板相关表
-      'b_version', 'b_indicator_describe', 'b_sql',
+      'b_version', 'b_indicator_describe', 'b_sql', 'b_sql_change_log',
       'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',
-      'b_all_indicator', 'b_investment', 'b_investment_sum', 'b_investor_list',
+      'b_all_indicator', 'b_investment', 'b_investment_spv', 'b_investment_sum', 'b_investor_list',
       'b_transaction', 'b_project', 'b_project_a', 'b_project_all',
-      'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a'
+      'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a',
+      'performance_scheduled',
+      'listing_data_config',
+      'ipo_project_sql_sync_setting',
+      'base_dictionary',
+      'competitor_match_supplement',
+      'pre_investment_project',
+      'sourcing_competitor_run',
+      'sourcing_competitor_relation',
+      'sourcing_competitor_run_step_log',
+      'sourcing_competitor_comparable_pref',
+      'sourcing_pre_investment_competitor_run',
     ];
     
     if (!validTableNames.includes(tableName)) {
       throw new Error(`无效的表名: ${tableName}`);
     }
 
-    // 简化逻辑：直接查询表的最大ID，如果表不存在或为空，查询会返回空数组
+    // 所有表的主键已统一为 F_Id
+    const idColumn = 'F_Id';
+
+    // 简化逻辑：直接查询表的最大ID；传入 connection 时用其查询，可看到本事务未提交行，避免重复
     let result = [];
     try {
-      // 使用超时机制，避免长时间等待
-      const queryPromise = db.query(
-        `SELECT id 
-         FROM \`${tableName}\` 
-         WHERE id >= ? AND id <= ?
-         ORDER BY id DESC 
-         LIMIT 1`,
-        [todayStart, todayEnd]
-      );
-      
-      // 设置5秒超时
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('查询超时')), 5000)
-      );
-      
-      result = await Promise.race([queryPromise, timeoutPromise]);
+      if (connection && typeof connection.query === 'function') {
+        const [rows] = await connection.query(
+          `SELECT \`${idColumn}\` as id
+           FROM \`${tableName}\`
+           WHERE \`${idColumn}\` >= ? AND \`${idColumn}\` <= ?
+           ORDER BY \`${idColumn}\` DESC
+           LIMIT 1`,
+          [todayStart, todayEnd]
+        );
+        result = Array.isArray(rows) ? rows : [];
+      } else {
+        result = await db.query(
+          `SELECT \`${idColumn}\` as id
+           FROM \`${tableName}\`
+           WHERE \`${idColumn}\` >= ? AND \`${idColumn}\` <= ?
+           ORDER BY \`${idColumn}\` DESC
+           LIMIT 1`,
+          [todayStart, todayEnd]
+        );
+        result = Array.isArray(result) ? result : [];
+      }
     } catch (err) {
       // 如果查询失败（表不存在、查询超时等），使用初始序列号
       if (err.message === '查询超时' || err.code === 'ER_NO_SUCH_TABLE' || err.message.includes("doesn't exist")) {
@@ -85,7 +105,7 @@ async function generateId(tableName) {
         } else {
           // 如果序列号已满，等待下一秒
           await new Promise(resolve => setTimeout(resolve, 1000));
-          return generateId(tableName); // 递归调用，使用新的时间前缀
+          return generateId(tableName, connection);
         }
       }
     }
@@ -101,7 +121,36 @@ async function generateId(tableName) {
   }
 }
 
+/**
+ * 一次分配 count 个连续 ID（同一秒内本地递增序列，避免循环 generateId 重复）。
+ * @param {string} tableName
+ * @param {number} count
+ * @param {object} [connection]
+ * @returns {Promise<string[]>}
+ */
+async function generateSequentialIds(tableName, count, connection) {
+  const n = Math.max(0, parseInt(count, 10) || 0);
+  if (n === 0) return [];
+  const ids = [];
+  let current = await generateId(tableName, connection);
+  ids.push(current);
+  for (let i = 1; i < n; i++) {
+    const prefix = current.slice(0, -5);
+    let seq = parseInt(current.slice(-5), 10);
+    seq += 1;
+    if (seq > 99999) {
+      current = await generateId(tableName, connection);
+      ids.push(current);
+      continue;
+    }
+    current = `${prefix}${String(seq).padStart(5, '0')}`;
+    ids.push(current);
+  }
+  return ids;
+}
+
 module.exports = {
-  generateId
+  generateId,
+  generateSequentialIds,
 };
 

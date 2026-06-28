@@ -1,5 +1,10 @@
-import { defineConfig } from 'vite'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const newsRoot = path.resolve(__dirname, '..')
 
 // 在启动阶段临时抑制ECONNREFUSED错误输出（仅针对Vite代理错误）
 let startupPhase = true
@@ -42,11 +47,18 @@ if (process.env.NODE_ENV === 'development') {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, newsRoot, '')
+  const devApiPort = env.VITE_DEV_API_PORT || env.PORT || '3001'
+  const devApiTarget = `http://localhost:${devApiPort}`
+
+  return {
+  // 与 loadEnv(newsRoot) 一致：否则 Vite 默认只读 client/ 下的 .env，axios 拿不到 VITE_DEV_API_PORT，会退回 3001
+  envDir: newsRoot,
   plugins: [react()],
   build: {
-    // 优化构建配置，减少内存占用
-    chunkSizeWarningLimit: 1000,
+    // 单入口 SPA 压缩后主包常超过 500k；拆分 vendor 后通常低于阈值；仍偏大时再调高避免误报
+    chunkSizeWarningLimit: 1600,
     // 限制构建时的并发数，减少CPU和内存占用
     rollupOptions: {
       // 限制并发处理，避免一次性处理太多文件（降低到1，进一步减少内存占用）
@@ -58,13 +70,17 @@ export default defineConfig({
         moduleSideEffects: 'no-external'
       },
       output: {
-        // 移除手动分包，让 Vite 自动处理 chunk 分离
-        // 这样可以确保正确的依赖顺序，避免循环依赖和加载顺序问题
-        // 减少内联资源，降低内存占用
         inlineDynamicImports: false,
-        // 优化输出格式
-        format: 'es'
-      }
+        format: 'es',
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@arco-design')) return 'arco-vendor';
+          if (id.includes('react-router')) return 'react-router-vendor';
+          if (id.includes('react-dom') || id.includes('scheduler')) return 'react-dom-vendor';
+          if (/[/\\]node_modules[/\\]react[/\\]/.test(id)) return 'react-vendor';
+          return 'vendor';
+        },
+      },
     },
     // 使用 esbuild 压缩（默认，更快，内存占用更少）
     // 如果需要更小的文件大小，可以安装 terser 并使用 minify: 'terser'
@@ -89,41 +105,44 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: devApiTarget,
         changeOrigin: true,
         secure: false,
         ws: true,
         configure: (proxy, _options) => {
-          // 使用闭包保持状态，记录是否已经显示过启动提示
+          const proxyStartTime = Date.now()
           let lastWarningTime = 0
-          let errorCount = 0
-          
+          let startupLogged = false
+
           proxy.on('error', (err, req, _res) => {
-            // ECONNREFUSED 错误通常发生在服务器启动时，前端在服务器完全启动之前尝试连接
-            // 这是正常情况，完全抑制这些错误，避免刷屏
-            const isConnectionRefused = 
-              err.code === 'ECONNREFUSED' || 
+            const isConnectionRefused =
+              err.code === 'ECONNREFUSED' ||
               err.message?.includes('ECONNREFUSED') ||
               err.message?.includes('connect ECONNREFUSED') ||
               (err.cause && (err.cause.code === 'ECONNREFUSED' || err.cause.message?.includes('ECONNREFUSED'))) ||
-              (err.name === 'AggregateError' && err.errors?.some(e => 
+              (err.name === 'AggregateError' && err.errors?.some(e =>
                 e.code === 'ECONNREFUSED' || e.message?.includes('ECONNREFUSED')
               ))
-            
+
             if (isConnectionRefused) {
-              errorCount++
-              // 显示连接错误，不要抑制
               const now = Date.now()
-              if (process.env.NODE_ENV === 'development' && (now - lastWarningTime > 10000)) {
-                console.error('[Vite代理] ❌ 无法连接到后端服务器 (localhost:3001)，请确保后端服务正在运行')
+              const isStartupPhase = now - proxyStartTime < 20000
+              // 启动阶段（20 秒内）：只打一次友好提示，避免刷屏
+              if (isStartupPhase) {
+                if (!startupLogged) {
+                  console.warn(`[Vite代理] 后端正在启动 (${devApiTarget})，API 请求将自动重试…`)
+                  startupLogged = true
+                }
+                return
+              }
+              // 启动阶段过后仍连不上：提示检查后端
+              if (now - lastWarningTime > 10000) {
+                console.error(`[Vite代理] ❌ 无法连接到后端 (${devApiTarget})，请确认已执行 npm run server 或后端服务已启动`)
                 console.error('[Vite代理] 错误详情:', err.message, err.code)
                 lastWarningTime = now
-                errorCount = 0
               }
-              // 不再抑制错误，让错误传播
               return
             }
-            // 其他错误显示
             console.error('[Vite代理] ❌ 代理错误:', err.message, err.code)
           })
           
@@ -135,5 +154,6 @@ export default defineConfig({
   // 自定义日志级别，减少错误输出
   logLevel: 'info', // 显示所有日志，便于调试
   clearScreen: false // 不清屏，保持日志连续性
+  }
 })
 

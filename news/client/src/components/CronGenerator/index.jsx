@@ -136,6 +136,7 @@ function CronGenerator({ visible, value, skipHoliday: initialSkipHoliday, onChan
       footer={null}
       style={{ width: 900 }}
       className="cron-generator-modal"
+      zIndex={2000}
     >
       <div className="cron-generator">
         <CronConfig

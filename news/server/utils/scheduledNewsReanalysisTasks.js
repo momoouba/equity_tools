@@ -1,6 +1,7 @@
 const cron = require('node-cron');
 const db = require('../db');
 const newsAnalysis = require('./newsAnalysis');
+const aiAnalysisCache = require('./aiAnalysisCache');
 
 // 存储定时任务
 let scheduledTask = null;
@@ -60,8 +61,8 @@ async function getNewsWithEmptyAbstract(limit = 50) {
     // 4. created_at在当天的00:00:00到23:59:59之间
     // 使用DATE函数确保只查询当天的数据，避免时区问题
     let query = `
-      SELECT id, title, content, source_url, enterprise_full_name,
-              wechat_account, account_name, APItype, news_abstract, keywords, created_at
+      SELECT F_Id AS id, title, content, source_url, enterprise_full_name,
+              wechat_account, account_name, APItype, news_abstract, keywords, F_CreatorTime
        FROM news_detail
        WHERE (news_abstract IS NULL OR news_abstract = '')
        AND (
@@ -70,9 +71,9 @@ async function getNewsWithEmptyAbstract(limit = 50) {
          (source_url IS NOT NULL AND source_url != '' 
           AND APItype IN ('企查查', 'qichacha', '上海国际集团'))
        )
-       AND delete_mark = 0
-       AND DATE(created_at) = DATE(?)
-       ORDER BY created_at DESC
+       AND F_DeleteMark = 0
+       AND DATE(F_CreatorTime) = DATE(?)
+       ORDER BY F_CreatorTime DESC
     `;
     
     // 使用当天的日期字符串（YYYY-MM-DD格式）
@@ -93,12 +94,12 @@ async function getNewsWithEmptyAbstract(limit = 50) {
     // 如果查询结果为空，输出调试信息
     if (newsList.length === 0) {
       // 先查询当天是否有任何新闻（不限制摘要）
-      const debugQuery = `SELECT COUNT(*) as total FROM news_detail WHERE DATE(created_at) = DATE(?) AND delete_mark = 0`;
+      const debugQuery = `SELECT COUNT(*) as total FROM news_detail WHERE DATE(F_CreatorTime) = DATE(?) AND F_DeleteMark = 0`;
       const debugResult = await db.query(debugQuery, [todayDateStr]);
       console.log(`[空摘要重新分析定时任务] 调试信息: 当天共有 ${debugResult[0]?.total || 0} 条新闻（不限制摘要）`);
       
       // 再查询当天摘要为空的新闻数量（不限制其他条件）
-      const debugQuery2 = `SELECT COUNT(*) as total FROM news_detail WHERE DATE(created_at) = DATE(?) AND (news_abstract IS NULL OR news_abstract = '') AND delete_mark = 0`;
+      const debugQuery2 = `SELECT COUNT(*) as total FROM news_detail WHERE DATE(F_CreatorTime) = DATE(?) AND (news_abstract IS NULL OR news_abstract = '') AND F_DeleteMark = 0`;
       const debugResult2 = await db.query(debugQuery2, [todayDateStr]);
       console.log(`[空摘要重新分析定时任务] 调试信息: 当天共有 ${debugResult2[0]?.total || 0} 条摘要为空的新闻（不限制内容长度）`);
     }
@@ -157,10 +158,10 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
         if (news.wechat_account) {
           try {
             const additionalResult = await db.query(
-              `SELECT id FROM additional_wechat_accounts 
+              `SELECT F_Id FROM additional_wechat_accounts 
                WHERE wechat_account_id = ? 
                AND status = 'active' 
-               AND delete_mark = 0`,
+               AND F_DeleteMark = 0`,
               [news.wechat_account]
             );
             isAdditionalAccount = additionalResult.length > 0;
@@ -202,12 +203,14 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
         if (analysisResult && analysisResult.success) {
           // 验证分析结果中是否有摘要
           const updatedNews = await db.query(
-            'SELECT news_abstract FROM news_detail WHERE id = ?',
+            'SELECT news_abstract FROM news_detail WHERE F_Id = ?',
             [news.id]
           );
 
           if (updatedNews.length > 0 && updatedNews[0].news_abstract) {
             console.log(`[空摘要重新分析定时任务] ✓ 新闻 ${news.id} 分析成功，已生成摘要`);
+            // 与邮件发送前重分析共用去重缓存，避免2小时内重复分析同一条新闻
+            await aiAnalysisCache.recordAnalysis(news.id);
             successCount++;
             processedNews.push({
               id: news.id,

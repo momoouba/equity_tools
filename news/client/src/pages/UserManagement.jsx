@@ -66,7 +66,14 @@ function UserManagement() {
           try {
             const levelsResponse = await axios.get(`/api/auth/membership-levels/${app.id}`)
             if (levelsResponse.data.success) {
-              levelsMap[app.id] = levelsResponse.data.data || []
+              const rawLevels = levelsResponse.data.data || []
+              const dedupMap = new Map()
+              rawLevels
+                .sort((a, b) => (a.validity_days || 0) - (b.validity_days || 0))
+                .forEach((level) => {
+                  if (!dedupMap.has(level.level_name)) dedupMap.set(level.level_name, level)
+                })
+              levelsMap[app.id] = Array.from(dedupMap.values())
             }
           } catch (error) {
             console.error(`获取应用 ${app.app_name} 的会员等级失败:`, error)
@@ -178,16 +185,6 @@ function UserManagement() {
       dataIndex: 'company_name',
       width: 200,
       render: (text) => text || '-'
-    },
-    {
-      title: '主会员等级',
-      width: 200,
-      render: (_, record) => {
-        if (record.membership_level_name) {
-          return `${record.membership_level_name} (${record.membership_app_name || '-'})`
-        }
-        return '-'
-      }
     },
     {
       title: '应用会员等级',
@@ -317,7 +314,6 @@ function UserManagement() {
             <div style={{ marginBottom: '24px', padding: '16px', background: '#f7f8fa', borderRadius: '4px' }}>
               <p><strong>账号：</strong>{editingUser.account}</p>
               <p><strong>邮箱：</strong>{editingUser.email || '-'}</p>
-              <p><strong>主会员等级：</strong>{editingUser.membership_level_name || '-'}</p>
             </div>
 
             <div style={{ marginBottom: '24px' }}>
@@ -325,11 +321,17 @@ function UserManagement() {
               {applications.map((app) => {
                 const levels = membershipLevels[app.id] || []
                 const currentLevelId = userMembershipConfig[app.id] || null
+                const displayAppName =
+                  app.app_name === '业绩看板应用'
+                    ? '业绩看板'
+                    : app.app_name === '上市进展'
+                      ? '上市进展'
+                      : app.app_name
                 
                 return (
                   <div key={app.id} style={{ marginBottom: '16px', padding: '16px', border: '1px solid #e5e6eb', borderRadius: '4px' }}>
                     <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>
-                      {app.app_name}
+                      {displayAppName}
                     </label>
                     <Select
                       value={currentLevelId || ''}

@@ -8,6 +8,10 @@ import ShanghaiInternationalGroupConfig from './ShanghaiInternationalGroupConfig
 import NewsConfig from './NewsConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
+import ListingDataConfig from './listing/ListingDataConfig'
+import FinancingSourceConfig from './project-sourcing/FinancingSourceConfig'
+import CompetitorRecallSourceConfig from './competitor-analysis/CompetitorRecallSourceConfig'
+import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
@@ -81,6 +85,30 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="database" title="数据库连接">
             <div className="config-content">
               <DatabaseConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="competitor-recall" title="竞品三源召回">
+            <div className="config-content">
+              <CompetitorRecallSourceConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="dictionary" title="数据字典">
+            <div className="config-content">
+              <BaseDictionaryConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="listing-data" title="上市数据配置">
+            <div className="config-content">
+              <ListingDataConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="financing-source" title="融资信息源配置">
+            <div className="config-content">
+              <FinancingSourceConfig />
             </div>
           </TabPane>
         </Tabs>

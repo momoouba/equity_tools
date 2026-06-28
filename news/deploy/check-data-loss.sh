@@ -102,7 +102,7 @@ SELECT
     last_sync_date,
     created_at
 FROM news_interface_config
-WHERE is_deleted = 0
+WHERE delete_mark = 0
 ORDER BY last_sync_time DESC;
 "
 

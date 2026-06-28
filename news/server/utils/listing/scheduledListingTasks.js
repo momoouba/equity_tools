@@ -1,0 +1,638 @@
+const cron = require('node-cron');
+const db = require('../../db');
+const { convertQuartzCronToNodeCron } = require('../cronQuartzToNode');
+const { runListingExchangeCrawler } = require('./listingExchangeCrawler');
+const { runListingMatchBatch } = require('./listingMatchRunner');
+const {
+  runIpoProjectSqlSyncForUser,
+  IPO_SQL_WRITE_TARGET_LISTING,
+  IPO_SQL_WRITE_TARGET_PROJECT_SOURCING,
+  IPO_SQL_WRITE_TARGET_COMPETITOR,
+} = require('./ipoProjectSqlSyncRunner');
+const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+const { syncNewShareCalendar } = require('./newShareService');
+const { syncGuidanceProgress } = require('./guidanceProgressService');
+const { syncOverseasFiling } = require('./overseasFilingService');
+const { normalizeSourceType, buildTaskKey } = require('./listingSourceType');
+const { executeWithRetry } = require('./listingRetry');
+const { createExecutionLog, finishExecutionLog, appendExecutionLogProgress } = require('./listingSyncExecutionLog');
+const { cleanupIpoProgress, cleanupIpoNewShare, cleanupOrphanedProgressLinks } = require('./cleanupTraditionalDuplicates');
+
+const scheduledTasks = new Map();
+const sqlSyncScheduledTasks = new Map();
+// #13: 互斥锁改用 DB 持久化（替代原内存 Set），PM2 等进程重启后不会丢失
+const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
+
+/**
+ * #13: 尝试获取 DB 持久化任务锁（替代内存 Set，进程重启后不丢失）。
+ * - 先清理超过 2 小时的过期锁（防止崩溃后死锁）
+ * - 再 INSERT IGNORE 尝试获取锁
+ * @returns {Promise<boolean>} 是否成功获取锁
+ */
+async function tryAcquireTaskLock(taskKey) {
+  try {
+    await db.execute(
+      `DELETE FROM listing_sync_task_lock WHERE task_key = ? AND F_CreatorTime < DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
+      [taskKey]
+    );
+    const [res] = await db.execute(
+      `INSERT IGNORE INTO listing_sync_task_lock (task_key, F_CreatorTime) VALUES (?, NOW())`,
+      [taskKey]
+    );
+    return res.affectedRows > 0;
+  } catch (e) {
+    // 表不存在时自动降级为允许执行（首次运行需手动建表或由 migration 创建）
+    console.warn('[上市进展定时] 任务锁表异常，降级为允许执行:', e.message);
+    return true;
+  }
+}
+
+/**
+ * #13: 释放 DB 持久化任务锁
+ */
+async function releaseTaskLock(taskKey) {
+  try {
+    await db.execute(`DELETE FROM listing_sync_task_lock WHERE task_key = ?`, [taskKey]);
+  } catch (e) {
+    console.warn('[上市进展定时] 释放任务锁异常:', e.message);
+  }
+}
+
+function normalizeYmd(v) {
+  const s = String(v || '').trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+}
+
+function maxYmd(a, b) {
+  const aa = normalizeYmd(a);
+  const bb = normalizeYmd(b);
+  if (!aa) return bb;
+  if (!bb) return aa;
+  return aa >= bb ? aa : bb;
+}
+
+function logNextListingCronRun(nodeCron, label) {
+  try {
+    const cronParser = require('cron-parser');
+    let parseExpression;
+    if (cronParser.CronExpressionParser && typeof cronParser.CronExpressionParser.parse === 'function') {
+      parseExpression = cronParser.CronExpressionParser.parse.bind(cronParser.CronExpressionParser);
+    } else if (
+      cronParser.default &&
+      cronParser.default.CronExpressionParser &&
+      typeof cronParser.default.CronExpressionParser.parse === 'function'
+    ) {
+      parseExpression = cronParser.default.CronExpressionParser.parse.bind(cronParser.default.CronExpressionParser);
+    } else if (typeof cronParser.parseExpression === 'function') {
+      parseExpression = cronParser.parseExpression;
+    }
+    if (!parseExpression) return;
+    const interval = parseExpression(nodeCron, { tz: 'Asia/Shanghai', currentDate: new Date() });
+    const nextResult = interval.next();
+    const nextExecution =
+      nextResult && typeof nextResult.toDate === 'function'
+        ? nextResult.toDate()
+        : nextResult instanceof Date
+          ? nextResult
+          : new Date(nextResult);
+    console.log(
+      `${label} 下次执行（北京时间）: ${nextExecution.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`
+    );
+  } catch (e) {
+    console.warn(`${label} 无法计算下次执行时间:`, e.message);
+  }
+}
+
+async function isWorkdayBeijing(date) {
+  const dateStr = formatDateOnly(date);
+  try {
+    const rows = await db.query(
+      'SELECT is_workday FROM holiday_calendar WHERE holiday_date = ? AND F_DeleteMark = 0 LIMIT 1',
+      [dateStr]
+    );
+    if (rows.length > 0) {
+      return rows[0].is_workday === 1;
+    }
+  } catch (e) {
+    console.warn('[上市进展定时] 查询节假日失败:', e.message);
+  }
+  const bj = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const dow = bj.getDay();
+  return dow !== 0 && dow !== 6;
+}
+
+/**
+ * 计算本次定时同步的闭区间 [startDate, endDate]（YYYY-MM-DD，北京时间）
+ * - endDate：执行日的前一自然日（「昨日」）
+ * - 有缺口：从 last_sync_range_end 的次日 补到 endDate
+ * - 无缺口（已追到昨日）：仍对 [昨日,昨日] 再拉一次，与库内 exchange+公司+f_update_time 比对，已有则跳过、新增则追加（避免交易所晚更新导致遗漏）
+ */
+function computeScheduledSyncRange(config, baseRunDate) {
+  const endDateObj = addDaysCalendar(baseRunDate, -1);
+  const endDate = formatDateOnly(endDateObj);
+
+  let startDate = endDate;
+  if (config.last_sync_range_end) {
+    const le = String(config.last_sync_range_end).slice(0, 10);
+    const lastNext = addDaysCalendar(new Date(`${le}T12:00:00+08:00`), 1);
+    const gapStart = formatDateOnly(lastNext);
+    if (gapStart <= endDate) {
+      startDate = gapStart;
+    }
+  } else {
+    // 首次运行（无 last_sync_range_end）：从 min_sync_date 回填历史数据，而非仅同步昨天
+    if (config.min_sync_date) {
+      const minDate = String(config.min_sync_date).slice(0, 10);
+      if (minDate < endDate) {
+        startDate = minDate;
+      }
+    }
+  }
+  if (startDate > endDate) {
+    startDate = endDate;
+  }
+  return { startDate, endDate, reason: null };
+}
+
+/**
+ * 境外备案定时区间：每日查询本周最近工作日的发文日期数据。
+ * 从昨日起往回找第一个工作日（最多回看 7 天），处理节假日提前发布、补班日延后发布的情况。
+ * - 正常周五发布 → 周一运行时回退到周五
+ * - 周四提前发布（周五放假）→ 周五运行时直接命中周四
+ * - 周六补班发布 → 周一运行时回退到周六（holiday_calendar 中 is_workday=1）
+ */
+async function computeOverseasScheduledSyncRange(config, baseRunDate) {
+  const MAX_LOOKBACK = 7;
+  let targetDate = null;
+
+  for (let i = 1; i <= MAX_LOOKBACK; i++) {
+    const d = addDaysCalendar(baseRunDate, -i);
+    const isWorkday = await isWorkdayBeijing(d);
+    if (isWorkday) {
+      targetDate = formatDateOnly(d);
+      break;
+    }
+  }
+
+  if (!targetDate) {
+    // 7天内无工作日（极端情况），降级为昨日
+    targetDate = formatDateOnly(addDaysCalendar(baseRunDate, -1));
+    console.warn(`[境外备案定时] 过去${MAX_LOOKBACK}天内无工作日记录，降级使用昨日 ${targetDate}`);
+  }
+
+  return { startDate: targetDate, endDate: targetDate, reason: 'daily_latest_workday', gapDays: 0 };
+}
+
+async function executeListingSyncTask(configId) {
+  console.log(`[上市进展定时] 开始执行 配置 id=${configId}`);
+  const rows = await db.query(
+    `SELECT *, F_Id AS id FROM listing_data_config WHERE F_Id = ? AND is_active = 1`,
+    [configId]
+  );
+  if (!rows.length) {
+    console.log(`[上市进展定时] 配置 id=${configId} 不存在或未启用，跳过`);
+    return;
+  }
+  const cfg = rows[0];
+  const cfgLabel = cfg.name ? `${cfg.name}(${configId})` : String(configId);
+  const baseRunDate = createShanghaiDate();
+
+  const skipHoliday = cfg.skip_holiday === 1 || cfg.skip_holiday === true;
+  if (skipHoliday) {
+    const workday = await isWorkdayBeijing(baseRunDate);
+    if (!workday) {
+      const ds = formatDateOnly(baseRunDate);
+      console.log(`[上市进展定时] ${ds} 为节假日且已开启跳过，本次不执行`);
+      return;
+    }
+  }
+
+  const sourceType = normalizeSourceType(cfg);
+  const minSyncDate = normalizeYmd(cfg.min_sync_date) || DEFAULT_MIN_SYNC_DATE;
+  let startDate;
+  let endDate;
+  // 打新日历：仅保留申购日期（A 股）/ 上市日期（港股）严格大于该自然日（不含当日）
+  let newShareIssueAfterExclusive = null;
+  // 打新日历（A股）：补抓最近由东财 UP_DATE 更新的数据，避免申购日较早但次日补齐上市日期时被漏掉
+  let newShareUpdateAfterExclusive = null;
+  if (sourceType === 'new_share') {
+    const todayYmd = formatDateOnly(baseRunDate);
+    startDate = todayYmd;
+    endDate = formatDateOnly(addDaysCalendar(baseRunDate, 730));
+    // 与需求「上市日/申购日 严格大于该日」配合：用「昨日」为界，才能纳入「今日上市」的港股与「今日申购」的 A 股；若用当日则永远漏掉当天对应日程
+    newShareIssueAfterExclusive = formatDateOnly(addDaysCalendar(baseRunDate, -1));
+    // 与 A 股 UP_DATE 回看对齐：含「昨日」及之后有更新的东财行（避免上市日补齐被漏抓）
+    newShareUpdateAfterExclusive = formatDateOnly(addDaysCalendar(baseRunDate, -1));
+  } else if (sourceType === 'overseas_filing') {
+    const r = await computeOverseasScheduledSyncRange(cfg, baseRunDate);
+    startDate = r.startDate;
+    endDate = r.endDate;
+  } else {
+    const r = computeScheduledSyncRange(cfg, baseRunDate);
+    startDate = r.startDate;
+    endDate = r.endDate;
+  }
+  if (!startDate || !endDate) {
+    console.warn(`[上市进展定时] 配置「${cfg.name || configId}」日期区间无效，跳过`);
+    return;
+  }
+  startDate = maxYmd(startDate, minSyncDate);
+  if (startDate > endDate) {
+    console.log(`[上市进展定时] 配置「${cfg.name || configId}」区间早于最早同步日期(${minSyncDate})，跳过`);
+    return;
+  }
+
+  console.log(
+    sourceType === 'new_share'
+      ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：A股申购日/港股上市日 > ${newShareIssueAfterExclusive}（昨日本地日，不含）且 ≤ ${endDate}；A股补抓 UP_DATE >= ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
+      : sourceType === 'overseas_filing'
+        ? `[上市进展定时] 配置「${cfg.name || configId}」境外备案区间 ${startDate} ~ ${endDate}（策略=每日查询最近工作日，minSyncDate=${minSyncDate}，北京时间闭区间）interface=${cfg.interface_type || '-'}`
+      : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
+  );
+  const taskKey = buildTaskKey(cfg, startDate, endDate);
+  // #13: 使用 DB 持久化锁替代内存 Set，避免 PM2 重启后丢失互斥状态
+  const lockAcquired = await tryAcquireTaskLock(taskKey);
+  if (!lockAcquired) {
+    console.warn(`[上市进展定时] 命中并发互斥，跳过 task=${taskKey}`);
+    const logId = await createExecutionLog({
+      configId: cfg.id,
+      configName: cfg.name,
+      sourceType,
+      triggerType: 'scheduled',
+      windowStart: startDate,
+      windowEnd: endDate,
+      taskKey,
+      status: 'skipped',
+    });
+    await finishExecutionLog(logId, { status: 'skipped', errorMessage: '同源同窗口任务运行中，已跳过' });
+    return;
+  }
+  let logId = null;
+  let syncResult = null;
+  let syncError = null;
+  let matchResult = null;
+  let matchError = null;
+
+  try {
+    logId = await createExecutionLog({
+      configId: cfg.id,
+      configName: cfg.name,
+      sourceType,
+      triggerType: 'scheduled',
+      windowStart: startDate,
+      windowEnd: endDate,
+      taskKey,
+    });
+
+    // 数据入库阶段（独立处理，异常不影响后续项目匹配）
+    console.log(`[上市进展定时] 开始数据入库 sourceType=${sourceType} cfg=${cfg.id}`);
+    try {
+      if (sourceType === 'new_share') {
+        syncResult = await syncNewShareCalendar({
+          from: startDate,
+          to: endDate,
+          issueDateAfterExclusive: newShareIssueAfterExclusive,
+          updateDateAfterExclusive: newShareUpdateAfterExclusive,
+          minSyncDate,
+          triggerType: 'scheduled',
+          logTag: `[上市进展定时][${cfg.name || configId}][打新日历]`,
+        });
+      } else if (sourceType === 'guidance_progress') {
+        syncResult = await syncGuidanceProgress({
+          from: startDate,
+          to: endDate,
+          triggerType: 'scheduled',
+          source: 'html',
+          sourceUrl: String(cfg.request_url || '').trim(),
+          logTag: `[上市进展定时][${cfg.name || configId}][辅导备案]`,
+        });
+      } else if (sourceType === 'overseas_filing') {
+        syncResult = await syncOverseasFiling({
+          from: startDate,
+          to: endDate,
+          triggerType: 'scheduled',
+          source: 'url',
+          sourceUrl: String(cfg.request_url || '').trim(),
+          logTag: `[上市进展定时][${cfg.name || configId}][境外备案审核]`,
+        });
+      } else if (sourceType === 'exchange_crawler') {
+        await appendExecutionLogProgress(
+          logId,
+          '交易所爬虫（定时）：阶段日志写入本执行记录；Python 全量明细见 Node 服务终端。'
+        );
+        syncResult = await runListingExchangeCrawler({
+          startDate,
+          endDate,
+          logTag: `[上市进展定时][${cfg.name || configId}][交易所爬虫]`,
+          config: cfg,
+          progressReporter: async (msg) => {
+            await appendExecutionLogProgress(logId, msg);
+          },
+        });
+      } else {
+        throw new Error(`未识别来源类型: ${sourceType}`);
+      }
+      console.log(`[上市进展定时] 数据入库完成 sourceType=${sourceType}`, syncResult);
+
+      // 港股繁简体清理（入库后）：繁体记录一律转简体或删除，不保留繁体；同书写重复行仅保留最早一条
+      if (sourceType === 'new_share' || sourceType === 'exchange_crawler') {
+        console.log(`[上市进展定时] 开始港股繁简体重复数据清理 sourceType=${sourceType}`);
+        try {
+          const cleanupProgress = await cleanupIpoProgress(false);
+          const cleanupNewShare = await cleanupIpoNewShare(false);
+          console.log(
+            `[上市进展定时] 港股繁简体清理完成: ipo_progress(转换=${cleanupProgress.converted}, 删除=${cleanupProgress.cleaned}, 保留简体=${cleanupProgress.keptSimplified}), ipo_new_share(转换=${cleanupNewShare.converted}, 删除=${cleanupNewShare.cleaned}, 保留简体=${cleanupNewShare.keptSimplified})`
+          );
+        } catch (cleanupErr) {
+          console.warn(`[上市进展定时] 港股繁简体清理异常（不影响主流程）:`, cleanupErr.message);
+        }
+      }
+    } catch (e) {
+      syncError = e;
+      console.error(`[上市进展定时] 数据入库异常 sourceType=${sourceType}:`, e.message);
+    }
+
+    // 项目匹配阶段（独立处理，交易所爬虫/境外备案/辅导备案都执行）
+    // 即使数据入库有异常，也执行项目匹配（已入库的数据需要匹配）
+    const needMatch = ['guidance_progress', 'overseas_filing', 'exchange_crawler'].includes(sourceType);
+    if (needMatch) {
+      console.log(`[上市进展定时] 开始底层项目匹配 sourceType=${sourceType}`);
+      try {
+        matchResult = await runListingMatchBatch({
+          startDate,
+          endDate,
+          restrictProjectUserId: null,
+        });
+        console.log(`[上市进展定时] 底层项目匹配完成`, matchResult);
+      } catch (e) {
+        matchError = e;
+        console.error(`[上市进展定时] 底层项目匹配异常:`, e.message);
+      }
+    }
+
+    // 合并结果
+    const result = { ...syncResult, matchResult };
+    const hasSyncError = syncError !== null;
+    const hasMatchError = matchError !== null;
+    // 仅在同步无错误时推进 last_sync_range_end，否则下次运行会重试该日期区间
+    if (!hasSyncError) {
+      const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
+      await db.execute(
+        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
+        [rangeEndStored, cfg.id]
+      );
+    } else {
+      // 同步出错时仅更新 last_sync_time（方便排查），不推进 range_end
+      await db.execute(
+        `UPDATE listing_data_config SET last_sync_time = NOW() WHERE F_Id = ?`,
+        [cfg.id]
+      );
+    }
+
+    // 判断整体状态：如果数据入库或项目匹配有异常，记录为 partial_success 或 failed
+    const overallStatus = (hasSyncError || hasMatchError)
+      ? (syncResult ? 'partial_success' : 'failed')
+      : 'success';
+
+    await finishExecutionLog(logId, {
+      insertedCount: Number(syncResult?.inserted || 0),
+      updatedCount: Number(syncResult?.updated || syncResult?.updatedEarlier || 0),
+      skippedCount: Number(syncResult?.skipped || 0),
+      dedupHits: Number(syncResult?.skipped || 0),
+      matchedCount: Number(matchResult?.matched || 0),
+      status: overallStatus,
+      errorMessage: hasSyncError ? `入库异常: ${syncError.message}` : (hasMatchError ? `匹配异常: ${matchError.message}` : null),
+    });
+
+    // 如果数据入库有严重错误（无任何数据入库），抛出异常触发告警
+    if (hasSyncError && !syncResult) {
+      throw syncError;
+    }
+  } catch (e) {
+    console.error(`[上市进展定时] 执行失败:`, e);
+    if (logId) {
+      await finishExecutionLog(logId, {
+        status: 'failed',
+        retryCount: Number(e.attemptCount || 5),
+        errorMessage: String(e.message || e),
+      });
+    }
+    try {
+      const admins = await db.query(
+        `SELECT F_Id AS id, email FROM users WHERE account = 'admin' LIMIT 1`
+      );
+      const to = process.env.LISTING_ALERT_EMAIL || admins[0]?.email;
+      const ec = await db.query(
+        `SELECT ec.F_Id AS id FROM email_config ec
+         INNER JOIN applications a ON ec.app_id = a.F_Id
+         WHERE BINARY a.app_name = BINARY ? LIMIT 1`,
+        ['上市进展']
+      );
+      if (to && ec.length) {
+        const { sendMailWithConfig } = require('../sendMailWithConfig');
+        await sendMailWithConfig({
+          emailConfigId: ec[0].id,
+          toEmail: to,
+          subject: '[上市进展] 定时同步失败',
+          html: `<p>配置 ID: ${configId}</p><pre>${String(e.message || e)}</pre>`,
+          userId: admins[0]?.id || null,
+        });
+      }
+    } catch (alertErr) {
+      console.warn('[上市进展定时] 告警邮件未发送:', alertErr.message);
+    }
+  } finally {
+    // #13: 释放 DB 持久化锁
+    await releaseTaskLock(taskKey);
+  }
+}
+
+async function updateListingScheduledTasks() {
+  try {
+    console.log('[上市进展定时] 更新定时任务...');
+    scheduledTasks.forEach((task) => {
+      if (task && task.destroy) task.destroy();
+    });
+    scheduledTasks.clear();
+    sqlSyncScheduledTasks.forEach((task) => {
+      if (task && task.destroy) task.destroy();
+    });
+    sqlSyncScheduledTasks.clear();
+
+    const configs = await db.query(
+      `SELECT *, F_Id AS id FROM listing_data_config
+       WHERE is_active = 1
+         AND cron_expression IS NOT NULL
+         AND TRIM(cron_expression) != ''`
+    );
+    console.log(
+      `[上市进展定时] 扫描 listing_data_config（对应后台「系统设置 → 上市数据配置」列表）符合条件的配置: ${configs.length} 条`
+    );
+
+    for (const config of configs) {
+      const nodeCron = convertQuartzCronToNodeCron(config.cron_expression);
+      if (!nodeCron || !cron.validate(nodeCron)) {
+        console.warn(`[上市进展定时] 配置 ${config.id} Cron 无效: ${config.cron_expression}`);
+        continue;
+      }
+      const task = cron.schedule(
+        nodeCron,
+        async () => {
+          const nm = config.name ? `「${config.name}」` : '';
+          console.log(
+            `[上市进展定时] Cron 触发 配置 id=${config.id} ${nm}类型=${config.interface_type || '-'}`.trim()
+          );
+          await executeListingSyncTask(config.id);
+        },
+        { scheduled: true, timezone: 'Asia/Shanghai' }
+      );
+      scheduledTasks.set(config.id, task);
+      const dispName = config.name ? ` name=${config.name}` : '';
+      console.log(
+        `[上市进展定时] 已注册 表=listing_data_config id=${config.id}${dispName} node-cron=${nodeCron}（Quartz=${config.cron_expression}）`
+      );
+      logNextListingCronRun(nodeCron, `[上市进展定时] listing_data_config id=${config.id}`);
+    }
+
+    const sqlSettings = await db.query(
+      `SELECT F_Id AS id, user_id, external_db_config_id, sql_text, is_enabled, cron_expression,
+              COALESCE(qcc_brief_after_sync_enabled, 0) AS qcc_brief_after_sync_enabled,
+              COALESCE(NULLIF(TRIM(write_target), ''), ?) AS write_target
+       FROM ipo_project_sql_sync_setting
+       WHERE is_enabled = 1
+         AND external_db_config_id IS NOT NULL
+         AND sql_text IS NOT NULL
+         AND TRIM(sql_text) != ''
+         AND cron_expression IS NOT NULL
+         AND TRIM(cron_expression) != ''`,
+      [IPO_SQL_WRITE_TARGET_LISTING]
+    );
+    console.log(
+      `[底层项目同步] 扫描 ipo_project_sql_sync_setting（外部库→ipo_project）符合条件的配置: ${sqlSettings.length} 条`
+    );
+    for (const cfg of sqlSettings) {
+      const nodeCron = convertQuartzCronToNodeCron(cfg.cron_expression);
+      if (!nodeCron || !cron.validate(nodeCron)) {
+        console.warn(`[底层项目同步] 配置 ${cfg.id} Cron 无效: ${cfg.cron_expression}`);
+        continue;
+      }
+      const task = cron.schedule(
+        nodeCron,
+        async () => {
+          try {
+            let dbLabel = String(cfg.external_db_config_id || '');
+            try {
+              const dbRows = await db.query(
+                'SELECT name, host FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1',
+                [cfg.external_db_config_id]
+              );
+              if (dbRows[0]) {
+                dbLabel = dbRows[0].name || dbRows[0].host || dbLabel;
+              }
+            } catch (e) {
+              /* ignore */
+            }
+            console.log(
+              `[底层项目同步] Cron 触发 配置=${cfg.id} 用户=${cfg.user_id} 外部库=${dbLabel} write_target=${cfg.write_target || IPO_SQL_WRITE_TARGET_LISTING}`
+            );
+            const wtRaw = String(cfg.write_target || '').trim();
+            const wt =
+              wtRaw === IPO_SQL_WRITE_TARGET_COMPETITOR
+                ? IPO_SQL_WRITE_TARGET_COMPETITOR
+                : wtRaw === IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                  ? IPO_SQL_WRITE_TARGET_PROJECT_SOURCING
+                  : IPO_SQL_WRITE_TARGET_LISTING;
+            const result = await runIpoProjectSqlSyncForUser({
+              userId: cfg.user_id,
+              external_db_config_id: cfg.external_db_config_id,
+              sql_text: cfg.sql_text,
+              is_enabled: cfg.is_enabled,
+              writeTarget: wt,
+              qccBriefAfterSync: Number(cfg.qcc_brief_after_sync_enabled) === 1,
+            });
+            console.log(
+              `[底层项目同步] 执行完成 配置=${cfg.id} write_target=${wt} 外部库=${dbLabel} 查询行=${result.total ?? 0} ` +
+                `清空旧项目=${result.deletedPrevious ?? '-'} 写入=${result.inserted ?? 0} 跳过=${result.skipped ?? 0} ` +
+                `进展重挂=${result.progress_relinked ?? 0} 进展孤儿=${result.progress_orphaned ?? 0}（底层项目全量替换；上市进展匹配行按 fund+sub+company+project_name 重关联）` +
+                (result.qcc_post_sync
+                  ? `；同步后企查查=${JSON.stringify(result.qcc_post_sync).slice(0, 200)}`
+                  : '')
+            );
+          } catch (err) {
+            console.error(`[底层项目同步] 执行失败 配置=${cfg.id}:`, err.message || err);
+          }
+        },
+        { scheduled: true, timezone: 'Asia/Shanghai' }
+      );
+      sqlSyncScheduledTasks.set(cfg.id, task);
+      console.log(
+        `[底层项目同步] 已注册 表=ipo_project_sql_sync_setting id=${cfg.id} user=${cfg.user_id} node-cron=${nodeCron}（Quartz=${cfg.cron_expression}）`
+      );
+      logNextListingCronRun(nodeCron, `[底层项目同步] id=${cfg.id}`);
+    }
+
+    console.log(
+      `[上市进展定时] 调度汇总：上市数据配置 listing_data_config（交易所爬虫）=${scheduledTasks.size} 个；` +
+        `底层项目同步 ipo_project_sql_sync_setting=${sqlSyncScheduledTasks.size} 个（与爬虫独立调度）。`
+    );
+  } catch (e) {
+    console.error('[上市进展定时] 更新失败:', e);
+  }
+}
+
+async function initializeListingScheduledTasks() {
+  await updateListingScheduledTasks();
+
+  // 启动时立即执行一次繁体数据清理（处理历史存量数据）
+  console.log('[上市进展定时] 启动时执行一次港股繁简体历史数据清理...');
+  try {
+    const progressResult = await cleanupIpoProgress(false);
+    const newShareResult = await cleanupIpoNewShare(false);
+    console.log(
+      `[上市进展定时] 启动清理完成: ipo_progress(转换=${progressResult.converted}, 删除=${progressResult.cleaned}, 保留简体=${progressResult.keptSimplified}), ipo_new_share(转换=${newShareResult.converted}, 删除=${newShareResult.cleaned}, 保留简体=${newShareResult.keptSimplified})`
+    );
+  } catch (cleanupErr) {
+    console.warn('[上市进展定时] 启动繁体清理异常（不影响后续流程）:', cleanupErr.message);
+  }
+
+  // 清理 ipo_project_progress 中的孤立记录（ipo_progress_row_id 指向已不存在的行）
+  try {
+    const orphanCount = await cleanupOrphanedProgressLinks(false);
+    console.log(`[上市进展定时] 孤立记录清理完成: ${orphanCount} 条`);
+  } catch (orphanErr) {
+    console.warn('[上市进展定时] 孤立记录清理异常（不影响后续流程）:', orphanErr.message);
+  }
+
+  // 启动时运行一次底层项目匹配（近 1 个月窗口，避免全量匹配拖慢启动）
+  try {
+    const today = createShanghaiDate();
+    const endYmd = formatDateOnly(today);
+    // 往前推 1 个日历月：保留原始"日"，若目标月没有该日（如 3/31→2 月），自动截到该月最后一天
+    const [ty, tm, td] = endYmd.split('-').map(Number);
+    const targetMonthZero = tm - 1 - 1; // 上月（0-indexed）
+    const clamped = new Date(Date.UTC(ty, targetMonthZero, td));
+    // Date.UTC 在日溢出时会进位（如 2/31→3/3），再用 setUTCDate(1) 月底截断技巧：
+    if (clamped.getUTCMonth() !== ((targetMonthZero % 12) + 12) % 12) {
+      // 进位了 → 说明目标月没这一天，取目标月最后一天
+      clamped.setUTCMonth(((targetMonthZero % 12) + 12) % 12 + 1, 0);
+    }
+    const startYmd = formatDateOnly(clamped);
+    console.log(`[上市进展定时] 启动时执行近 1 个月底层项目匹配（${startYmd} ~ ${endYmd}）...`);
+    const matchResult = await runListingMatchBatch({
+      startDate: startYmd,
+      endDate: endYmd,
+      restrictProjectUserId: null,
+    });
+    console.log('[上市进展定时] 启动近 1 个月匹配完成:', JSON.stringify(matchResult));
+  } catch (matchErr) {
+    console.warn('[上市进展定时] 启动近 1 个月匹配异常（不影响定时任务）:', matchErr.message);
+  }
+}
+
+module.exports = {
+  initializeListingScheduledTasks,
+  updateListingScheduledTasks,
+  executeListingSyncTask,
+  tryAcquireTaskLock,
+  releaseTaskLock,
+};

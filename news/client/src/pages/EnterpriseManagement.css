@@ -9,6 +9,13 @@
   border-radius: 4px;
 }
 
+/* 项目挖掘-被投企业宽表：容器层横向滚动条，便于发现可左右滑动 */
+.enterprise-management .table-container.invested-enterprises-horizontal-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
 .management-header {
   display: flex;
   justify-content: space-between;
@@ -111,8 +118,14 @@
   text-overflow: ellipsis;
 }
 
-/* 表格列宽自适应 */
+/* 表格列宽
+ * Arco 在 scroll.x / scroll.y 时会加 arco-table-layout-fixed，依赖 table-layout:fixed 与 colgroup 同步表头/表体（含勾选列）。
+ * 若全局覆盖为 table-layout:auto 或 width:100%!important，会出现表头与内容列整体错位。 */
 .enterprise-management .arco-table-content-inner table {
+  box-sizing: border-box;
+}
+
+.enterprise-management .arco-table:not(.arco-table-layout-fixed) .arco-table-content-inner table {
   table-layout: auto;
   width: 100%;
 }
@@ -121,6 +134,22 @@
 .enterprise-management .arco-table-th,
 .enterprise-management .arco-table-td {
   vertical-align: middle;
+}
+
+/* 表头与数据列水平对齐：Arco 表头单元格为 flex，默认易与左对齐的 tbody 错位 */
+.enterprise-management .arco-table-th {
+  text-align: left;
+}
+
+.enterprise-management .arco-table-th .arco-table-cell,
+.enterprise-management .arco-table-td .arco-table-cell {
+  text-align: left;
+}
+
+.enterprise-management .arco-table-th .arco-table-th-item,
+.enterprise-management .arco-table-th .arco-table-th-content {
+  justify-content: flex-start;
+  text-align: left;
 }
 
 /* 操作列保持固定宽度 */
@@ -212,13 +241,6 @@
   box-sizing: border-box;
 }
 
-/* 确保表格内容区域的table元素宽度100% */
-.enterprise-management .arco-table-content-inner table {
-  width: 100% !important;
-  table-layout: auto;
-  box-sizing: border-box;
-}
-
 /* 确保操作列的单元格有正确的padding，包含所有按钮，最后一个按钮与右侧保持间距 */
 .enterprise-management .arco-table-td:last-child {
   padding: 12px 16px !important;
@@ -275,3 +297,85 @@
   border-right: 1px solid #e5e6eb;
 }
 
+/* 投前项目主列表：列分隔线（与 frontend-list-standards 一致；勿作用于展开区内竞品明细表） */
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-th:last-child,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table .arco-table-td:last-child {
+  border-right: none !important;
+}
+
+/* 投前/投后主列表：fixed 列 + scroll 时表头/表体同步（避免横向滚动错列） */
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td {
+  padding: 0 !important;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th .arco-table-cell,
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td .arco-table-cell {
+  padding: 12px 16px;
+  box-sizing: border-box;
+}
+
+/* 竞品分析-被投企业：fixed 列 + scroll 时保持表头/表体竖线对齐 */
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: auto !important;
+  max-width: none !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-th,
+.enterprise-management.invested-enterprises-table-page .arco-table.arco-table-layout-fixed .arco-table-td {
+  box-sizing: border-box;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col,
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-cell {
+  text-align: center;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-th-item,
+.enterprise-management.invested-enterprises-table-page .arco-table-th.invested-enterprises-num-col .arco-table-th-content {
+  justify-content: center;
+  text-align: center;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-td.invested-enterprises-num-col,
+.enterprise-management.invested-enterprises-table-page .arco-table-td.invested-enterprises-num-col .arco-table-cell {
+  text-align: right;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-col-fixed-right-last .arco-table-cell,
+.enterprise-management.invested-enterprises-table-page .arco-table-col-fixed-right .arco-table-cell {
+  white-space: nowrap;
+}
+
+.enterprise-management.invested-enterprises-table-page .arco-table-td:last-child .arco-space {
+  width: auto !important;
+  max-width: 100%;
+  display: inline-flex !important;
+  flex-wrap: nowrap !important;
+}
+
+.enterprise-management.invested-enterprises-table-page .invested-enterprises-table-container {
+  overflow: hidden !important;
+}

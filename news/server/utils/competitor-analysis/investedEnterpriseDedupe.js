@@ -1,0 +1,194 @@
+'use strict';
+
+const CA_C = require('./constants');
+const { migrateCompetitorEnterpriseIds } = require('./competitorSyncSnapshot');
+
+const MERGE_FIELDS = [
+  'ai_product_intro',
+  'ai_industry_tags_display',
+  'ai_industry_tags_json',
+  'ai_enrich_status',
+  'ai_enrich_at',
+  'ai_enrich_model',
+  'ai_enrich_version',
+  'qcc_company_intro',
+  'wechat_official_account_id',
+  'official_website',
+];
+
+const ENRICH_ORDER = `(CASE WHEN NULLIF(TRIM(ai_product_intro),'') IS NOT NULL THEN 4 ELSE 0 END
+  + CASE WHEN NULLIF(TRIM(qcc_company_intro),'') IS NOT NULL THEN 2 ELSE 0 END
+  + CASE WHEN NULLIF(TRIM(ai_industry_tags_display),'') IS NOT NULL THEN 1 ELSE 0 END) DESC, F_Id DESC`;
+
+const NORM_UCC = `UPPER(REPLACE(TRIM(IFNULL(unified_credit_code,'')),' ',''))`;
+const NORM_NAME = `LOWER(TRIM(IFNULL(enterprise_full_name,'')))`;
+const NORM_ABBR = `LOWER(TRIM(IFNULL(project_abbreviation,'')))`;
+
+async function queryRows(executor, sql, params) {
+  const result = await executor.query(sql, params);
+  if (Array.isArray(result) && result.length === 2 && Array.isArray(result[0])) {
+    return result[0];
+  }
+  return result;
+}
+
+function mergeWechatIds(a, b) {
+  const oldStr = (a || '').trim();
+  const newStr = (b || '').trim();
+  if (!oldStr && !newStr) return null;
+  if (!oldStr) return newStr;
+  if (!newStr) return oldStr;
+  const merged = new Set([
+    ...oldStr.split(',').map((s) => s.trim()).filter(Boolean),
+    ...newStr.split(',').map((s) => s.trim()).filter(Boolean),
+  ]);
+  return merged.size ? [...merged].join(',') : null;
+}
+
+async function mergeKeeperAndDeleteExtras(executor, keeperRow, extraRows, caName) {
+  const keeper = { ...keeperRow };
+  for (const row of extraRows) {
+    for (const f of MERGE_FIELDS) {
+      if (f === 'wechat_official_account_id') {
+        keeper[f] = mergeWechatIds(keeper[f], row[f]);
+        continue;
+      }
+      const kv = keeper[f];
+      const rv = row[f];
+      const keeperEmpty = kv == null || String(kv).trim() === '';
+      const rowHas = rv != null && String(rv).trim() !== '';
+      if (keeperEmpty && rowHas) keeper[f] = rv;
+    }
+    await migrateCompetitorEnterpriseIds(row.F_Id, keeper.F_Id, executor);
+    await executor.execute('DELETE FROM invested_enterprises WHERE F_Id = ?', [row.F_Id]);
+  }
+  await executor.execute(
+    `UPDATE invested_enterprises SET
+       ai_product_intro = ?, ai_industry_tags_display = ?, ai_industry_tags_json = ?,
+       ai_enrich_status = ?, ai_enrich_at = ?, ai_enrich_model = ?, ai_enrich_version = ?,
+       qcc_company_intro = ?, wechat_official_account_id = ?, official_website = ?,
+       data_app_name = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_Id = ?`,
+    [
+      keeper.ai_product_intro,
+      keeper.ai_industry_tags_display,
+      keeper.ai_industry_tags_json,
+      keeper.ai_enrich_status,
+      keeper.ai_enrich_at,
+      keeper.ai_enrich_model,
+      keeper.ai_enrich_version,
+      keeper.qcc_company_intro,
+      keeper.wechat_official_account_id,
+      keeper.official_website,
+      caName,
+      keeper.F_Id,
+    ]
+  );
+  return extraRows.length;
+}
+
+/**
+ * 竞品分析被投企业去重：同用户 +（信用代码 / 企业全称 / 项目简称）多行合并 AI、企查查、公众号与官网后删余行。
+ * @param {import('mysql2/promise').Pool|object} [executor] 默认 db；传 dbPool 用于 initializeTables
+ * @returns {Promise<number>} 删除的重复行数
+ */
+async function dedupeCompetitorInvestedEnterprises(executor) {
+  if (!executor) {
+    const db = require('../../db');
+    executor = db;
+  }
+  const caId = CA_C.COMPETITOR_ANALYSIS_APP_ID;
+  const caName = CA_C.APP_NAME_COMPETITOR_ANALYSIS;
+  let deduped = 0;
+
+  const selectCols = `F_Id, ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
+    ai_enrich_status, ai_enrich_at, ai_enrich_model, ai_enrich_version, qcc_company_intro,
+    wechat_official_account_id, official_website`;
+
+  console.log('  → 竞品分析被投企业去重：按统一社会信用代码…');
+  const byUcc = await queryRows(
+    executor,
+    `SELECT F_CreatorUserId, ${NORM_UCC} AS ucc, COUNT(*) AS cnt
+     FROM invested_enterprises
+     WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+       AND unified_credit_code IS NOT NULL AND TRIM(unified_credit_code) != ''
+     GROUP BY F_CreatorUserId, ${NORM_UCC}
+     HAVING cnt > 1`,
+    [caId]
+  );
+  for (const g of byUcc) {
+    const rows = await queryRows(
+      executor,
+      `SELECT ${selectCols}
+       FROM invested_enterprises
+       WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+         AND F_CreatorUserId <=> ? AND ${NORM_UCC} = ?
+       ORDER BY ${ENRICH_ORDER}`,
+      [caId, g.F_CreatorUserId, g.ucc]
+    );
+    if (rows.length < 2) continue;
+    deduped += await mergeKeeperAndDeleteExtras(executor, rows[0], rows.slice(1), caName);
+  }
+
+  console.log('  → 竞品分析被投企业去重：按企业全称…');
+  const byName = await queryRows(
+    executor,
+    `SELECT F_CreatorUserId, ${NORM_NAME} AS ename, COUNT(*) AS cnt
+     FROM invested_enterprises
+     WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+       AND (${NORM_UCC} = '' OR unified_credit_code IS NULL OR TRIM(unified_credit_code) = '')
+       AND ${NORM_NAME} != ''
+     GROUP BY F_CreatorUserId, ${NORM_NAME}
+     HAVING cnt > 1`,
+    [caId]
+  );
+  for (const g of byName) {
+    const rows = await queryRows(
+      executor,
+      `SELECT ${selectCols}
+       FROM invested_enterprises
+       WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+         AND F_CreatorUserId <=> ? AND ${NORM_NAME} = ?
+         AND (${NORM_UCC} = '' OR unified_credit_code IS NULL OR TRIM(unified_credit_code) = '')
+       ORDER BY ${ENRICH_ORDER}`,
+      [caId, g.F_CreatorUserId, g.ename]
+    );
+    if (rows.length < 2) continue;
+    deduped += await mergeKeeperAndDeleteExtras(executor, rows[0], rows.slice(1), caName);
+  }
+
+  console.log('  → 竞品分析被投企业去重：按项目简称…');
+  const byAbbr = await queryRows(
+    executor,
+    `SELECT F_CreatorUserId, ${NORM_ABBR} AS abbr, COUNT(*) AS cnt
+     FROM invested_enterprises
+     WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+       AND (${NORM_UCC} = '' OR unified_credit_code IS NULL OR TRIM(unified_credit_code) = '')
+       AND ${NORM_NAME} = ''
+       AND ${NORM_ABBR} != ''
+     GROUP BY F_CreatorUserId, ${NORM_ABBR}
+     HAVING cnt > 1`,
+    [caId]
+  );
+  for (const g of byAbbr) {
+    const rows = await queryRows(
+      executor,
+      `SELECT ${selectCols}
+       FROM invested_enterprises
+       WHERE F_DeleteMark = 0 AND data_app_id <=> ?
+         AND F_CreatorUserId <=> ? AND ${NORM_ABBR} = ?
+         AND (${NORM_UCC} = '' OR unified_credit_code IS NULL OR TRIM(unified_credit_code) = '')
+         AND ${NORM_NAME} = ''
+       ORDER BY ${ENRICH_ORDER}`,
+      [caId, g.F_CreatorUserId, g.abbr]
+    );
+    if (rows.length < 2) continue;
+    deduped += await mergeKeeperAndDeleteExtras(executor, rows[0], rows.slice(1), caName);
+  }
+
+  return deduped;
+}
+
+module.exports = {
+  dedupeCompetitorInvestedEnterprises,
+};

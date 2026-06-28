@@ -3,8 +3,10 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
+const { IE_NEWS_APP_FILTER_SQL_IE } = require('../utils/investedEnterpriseNewsAppSql');
 
 const router = express.Router();
+const { shouldUseViteFrontendHost } = require('../utils/devHost');
 
 /**
  * 生成分享链接token
@@ -37,10 +39,10 @@ router.post('/create', checkAuth, async (req, res) => {
 
     // 检查是否已有活跃的分享链接
     const existingLinks = await db.query(
-      `SELECT id, share_token, status
+      `SELECT F_Id, share_token, status
        FROM news_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC
+       ORDER BY F_CreatorTime DESC
        LIMIT 1`,
       [userId]
     );
@@ -61,14 +63,14 @@ router.post('/create', checkAuth, async (req, res) => {
 
     if (existingLinks.length > 0) {
       // 更新已有链接
-      shareId = existingLinks[0].id;
+      shareId = existingLinks[0].F_Id;
       shareToken = existingLinks[0].share_token;
 
       // 更新数据库
       await db.execute(
         `UPDATE news_share_links 
-         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND user_id = ?`,
+         SET has_expiry = ?, expiry_time = ?, has_password = ?, password_hash = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ? AND user_id = ?`,
         [
           hasExpiry ? 1 : 0,
           expiryTimeValue,
@@ -86,7 +88,7 @@ router.post('/create', checkAuth, async (req, res) => {
       // 插入数据库
       await db.execute(
         `INSERT INTO news_share_links 
-         (id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
+         (F_Id, user_id, share_token, status, has_expiry, expiry_time, has_password, password_hash)
          VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`,
         [
           shareId,
@@ -103,11 +105,7 @@ router.post('/create', checkAuth, async (req, res) => {
     // 生成分享链接URL（前端路由）
     // 开发环境使用前端端口5173，生产环境使用环境变量或默认前端域名
     let frontendHost;
-    const requestHost = req.get('host') || '';
-    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
-    if (process.env.NODE_ENV === 'development' || 
-        requestHost.includes('localhost:3001') || 
-        requestHost.includes('127.0.0.1:3001')) {
+    if (shouldUseViteFrontendHost(req)) {
       // 开发环境：使用localhost:5173（Vite默认端口）
       frontendHost = 'localhost:5173';
     } else {
@@ -146,10 +144,10 @@ router.get('/current', checkAuth, async (req, res) => {
     const userId = req.currentUserId;
 
     const links = await db.query(
-      `SELECT id, share_token, status, has_expiry, expiry_time, has_password, created_at, updated_at
+      `SELECT F_Id, share_token, status, has_expiry, expiry_time, has_password, F_CreatorTime, F_LastModifyTime
        FROM news_share_links
        WHERE user_id = ? AND status = 'active'
-       ORDER BY created_at DESC
+       ORDER BY F_CreatorTime DESC
        LIMIT 1`,
       [userId]
     );
@@ -175,11 +173,7 @@ router.get('/current', checkAuth, async (req, res) => {
 
     // 生成完整URL（前端路由）
     let frontendHost;
-    const requestHost = req.get('host') || '';
-    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
-    if (process.env.NODE_ENV === 'development' || 
-        requestHost.includes('localhost:3001') || 
-        requestHost.includes('127.0.0.1:3001')) {
+    if (shouldUseViteFrontendHost(req)) {
       frontendHost = 'localhost:5173';
     } else {
       frontendHost = process.env.FRONTEND_HOST || req.get('host');
@@ -188,7 +182,7 @@ router.get('/current', checkAuth, async (req, res) => {
     res.json({
       success: true,
       data: {
-        id: link.id,
+        id: link.F_Id,
         shareToken: link.share_token,
         shareUrl: `${req.protocol}://${frontendHost}/share/${link.share_token}`,
         status: link.status,
@@ -216,20 +210,16 @@ router.get('/list', checkAuth, async (req, res) => {
     const userId = req.currentUserId;
 
     const links = await db.query(
-      `SELECT id, share_token, status, has_expiry, expiry_time, has_password, created_at, updated_at
+      `SELECT F_Id, share_token, status, has_expiry, expiry_time, has_password, F_CreatorTime, F_LastModifyTime
        FROM news_share_links
        WHERE user_id = ?
-       ORDER BY created_at DESC`,
+       ORDER BY F_CreatorTime DESC`,
       [userId]
     );
 
     // 生成完整URL（前端路由）
     let frontendHost;
-    const requestHost = req.get('host') || '';
-    // 判断是否为本地开发环境：检查是否为 localhost:3001 或 127.0.0.1:3001
-    if (process.env.NODE_ENV === 'development' || 
-        requestHost.includes('localhost:3001') || 
-        requestHost.includes('127.0.0.1:3001')) {
+    if (shouldUseViteFrontendHost(req)) {
       frontendHost = 'localhost:5173';
     } else {
       frontendHost = process.env.FRONTEND_HOST || req.get('host');
@@ -264,7 +254,7 @@ router.put('/:id', checkAuth, async (req, res) => {
 
     // 检查链接是否存在且属于当前用户
     const existingLinks = await db.query(
-      'SELECT * FROM news_share_links WHERE id = ? AND user_id = ?',
+      'SELECT *, F_Id AS id FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -326,7 +316,7 @@ router.put('/:id', checkAuth, async (req, res) => {
     await db.execute(
       `UPDATE news_share_links 
        SET ${updateFields.join(', ')}
-       WHERE id = ? AND user_id = ?`,
+       WHERE F_Id = ? AND user_id = ?`,
       updateValues
     );
 
@@ -354,7 +344,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
 
     // 检查链接是否存在且属于当前用户
     const existingLinks = await db.query(
-      'SELECT * FROM news_share_links WHERE id = ? AND user_id = ?',
+      'SELECT *, F_Id AS id FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -366,7 +356,7 @@ router.delete('/:id', checkAuth, async (req, res) => {
     }
 
     await db.execute(
-      'DELETE FROM news_share_links WHERE id = ? AND user_id = ?',
+      'DELETE FROM news_share_links WHERE F_Id = ? AND user_id = ?',
       [shareId, userId]
     );
 
@@ -392,7 +382,7 @@ router.get('/verify/:token', async (req, res) => {
     const token = req.params.token;
 
     const links = await db.query(
-      `SELECT id, user_id, status, has_expiry, expiry_time, has_password
+      `SELECT F_Id, user_id, status, has_expiry, expiry_time, has_password
        FROM news_share_links
        WHERE share_token = ?`,
       [token]
@@ -453,7 +443,7 @@ router.post('/verify-password/:token', async (req, res) => {
     const { password } = req.body;
 
     const links = await db.query(
-      `SELECT id, user_id, password_hash, status, has_expiry, expiry_time, has_password
+      `SELECT F_Id, user_id, password_hash, status, has_expiry, expiry_time, has_password
        FROM news_share_links
        WHERE share_token = ?`,
       [token]
@@ -578,7 +568,7 @@ router.get('/news/:token', async (req, res) => {
 
     // 获取用户信息以判断是否为管理员
     const users = await db.query(
-      'SELECT role FROM users WHERE id = ?',
+      'SELECT role FROM users WHERE F_Id = ?',
       [userId]
     );
 
@@ -617,7 +607,7 @@ router.get('/news/:token', async (req, res) => {
           todayStart.setHours(0, 0, 0, 0);
           const todayEnd = new Date(beijingNow);
           todayEnd.setHours(23, 59, 59, 999);
-          whereConditions.push('nd.created_at >= ? AND nd.created_at <= ?');
+          whereConditions.push('nd.F_CreatorTime >= ? AND nd.F_CreatorTime <= ?');
           queryParams.push(todayStart, todayEnd);
           break;
         case 'thisWeek':
@@ -657,20 +647,54 @@ router.get('/news/:token', async (req, res) => {
     if (!isAdmin) {
       whereConditions.push(`EXISTS (
         SELECT 1 FROM invested_enterprises ie
-        WHERE ie.creator_user_id = ? AND ie.enterprise_full_name = nd.enterprise_full_name
+        WHERE ${IE_NEWS_APP_FILTER_SQL_IE} AND  ie.F_CreatorUserId = ? AND ie.enterprise_full_name = nd.enterprise_full_name
       )`);
       queryParams.push(userId);
     }
 
-    // 搜索条件
-    if (search) {
+    // 搜索条件（支持多标签搜索）
+    const searchTags = req.query.searchTags ? req.query.searchTags.split(',').filter(tag => tag.trim()) : [];
+    if (searchTags.length > 0) {
+      // 多标签搜索：任一标签匹配即可（OR关系）
+      const tagConditions = searchTags.map(() => `(
+        nd.title LIKE ? OR 
+        nd.news_abstract LIKE ? OR 
+        nd.enterprise_full_name LIKE ? OR 
+        nd.fund LIKE ? OR 
+        nd.sub_fund LIKE ? OR 
+        nd.enterprise_abbreviation LIKE ? OR 
+        nd.account_name LIKE ? OR 
+        nd.wechat_account LIKE ?
+      )`).join(' OR ');
+      whereConditions.push(`(${tagConditions})`);
+      searchTags.forEach(tag => {
+        const searchPattern = `%${tag.trim()}%`;
+        queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+      });
+    } else if (search) {
       whereConditions.push(`(
         nd.title LIKE ? OR 
+        nd.news_abstract LIKE ? OR 
+        nd.enterprise_full_name LIKE ? OR 
+        nd.fund LIKE ? OR 
+        nd.sub_fund LIKE ? OR 
+        nd.enterprise_abbreviation LIKE ? OR 
         nd.account_name LIKE ? OR 
         nd.wechat_account LIKE ?
       )`);
       const searchPattern = `%${search}%`;
-      queryParams.push(searchPattern, searchPattern, searchPattern);
+      queryParams.push(searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern);
+    }
+
+    // 企业相关过滤（客户端过滤，这里先获取所有数据）
+    if (enterpriseFilter === 'third_party') {
+      // 第三方公众号：按公众号ID映射 additional_wechat_accounts 判定
+      whereConditions.push(`EXISTS (
+        SELECT 1
+        FROM additional_wechat_accounts awa
+        WHERE awa.F_DeleteMark = 0
+          AND awa.wechat_account_id = nd.wechat_account
+      )`);
     }
 
     // 企业相关过滤（客户端过滤，这里先获取所有数据）
@@ -690,12 +714,12 @@ router.get('/news/:token', async (req, res) => {
     // 查询数据
     const dataQuery = `
       SELECT 
-        nd.id,
+        nd.F_Id AS id,
         nd.title,
         nd.content,
         nd.source_url,
         nd.public_time,
-        nd.created_at,
+        nd.F_CreatorTime,
         nd.account_name,
         nd.wechat_account,
         nd.enterprise_full_name,
@@ -757,15 +781,22 @@ router.get('/news/:token', async (req, res) => {
     // 应用企业相关过滤
     let filteredNews = processedNews;
     if (enterpriseFilter === 'enterprise') {
-      filteredNews = processedNews.filter(news => 
-        news.enterprise_full_name && news.enterprise_full_name.trim() !== ''
+      filteredNews = processedNews.filter(news => news.entity_type === '被投企业');
+    } else if (enterpriseFilter === 'fund') {
+      filteredNews = processedNews.filter(news => news.entity_type === '基金相关主体');
+    } else if (enterpriseFilter === 'sub_fund') {
+      filteredNews = processedNews.filter(
+        news => news.entity_type === '子基金' || news.entity_type === '子基金管理人' || news.entity_type === '子基金GP'
       );
+    } else if (enterpriseFilter === 'third_party') {
+      // third_party 已在 SQL 层按 wechat_account 映射过滤，这里不再依赖 entity_type 文本
+      filteredNews = processedNews;
     }
 
     res.json({
       success: true,
       data: filteredNews,
-      total: enterpriseFilter === 'enterprise' ? filteredNews.length : total,
+      total: enterpriseFilter === 'all' ? total : filteredNews.length,
       page: pageNum,
       pageSize: pageSizeNum
     });

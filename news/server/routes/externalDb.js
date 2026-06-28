@@ -7,38 +7,63 @@ const {
   initializeExternalDatabases,
   closeExternalPool
 } = require('../utils/externalDb');
+const {
+  LISTING_LEVEL,
+  getUserFromHeader,
+  getListingMembershipLevelName,
+} = require('../utils/listing/listingAuth');
 
 const router = express.Router();
 
-// 权限检查中间件
-const checkAdminPermission = (req, res, next) => {
+async function resolveDbConfigAccess(req) {
+  const user = await getUserFromHeader(req);
+  if (!user) return { ok: false, status: 401, message: '未登录' };
   const userRole = req.headers['x-user-role'] || 'user';
-  const userId = req.headers['x-user-id'] || null;
-
-  if (!userId) {
-    return res.status(401).json({ success: false, message: '未登录' });
+  if (userRole === 'admin' || user.account === 'admin') {
+    return { ok: true, userId: user.id, scope: 'admin' };
   }
-
-  if (userRole !== 'admin') {
-    return res.status(403).json({ success: false, message: '权限不足，只有管理员可以管理外部数据库配置' });
+  const listingLevelName = await getListingMembershipLevelName(user.id);
+  if (listingLevelName === LISTING_LEVEL.VIP) {
+    return { ok: true, userId: user.id, scope: 'vip' };
   }
+  if (listingLevelName === LISTING_LEVEL.ADVANCED) {
+    return { ok: true, userId: user.id, scope: 'advanced' };
+  }
+  return { ok: false, status: 403, message: '权限不足：仅上市进展高级会员/VIP会员或管理员可访问数据库连接配置' };
+}
 
-  req.currentUserId = userId;
-  next();
-};
+function checkDatabaseConfigPermission(mode = 'read') {
+  return async (req, res, next) => {
+    try {
+      const access = await resolveDbConfigAccess(req);
+      if (!access.ok) {
+        return res.status(access.status || 403).json({ success: false, message: access.message || '无权限' });
+      }
+      if (mode === 'write' && access.scope === 'advanced') {
+        return res.status(403).json({ success: false, message: '权限不足：仅上市进展VIP会员或管理员可修改数据库连接配置' });
+      }
+      req.currentUserId = access.userId;
+      req.dbConfigAccessScope = access.scope;
+      next();
+    } catch (error) {
+      console.error('数据库配置权限校验失败：', error);
+      return res.status(500).json({ success: false, message: '权限校验失败' });
+    }
+  };
+}
 
 // 获取所有外部数据库配置
-router.get('/', checkAdminPermission, async (req, res) => {
+router.get('/', checkDatabaseConfigPermission('read'), async (req, res) => {
   try {
     const { page = 1, pageSize = 10 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(pageSize);
 
     const configs = await db.query(
-      `SELECT id, name, db_type, host, port, user, database, is_active, is_deleted, 
-              created_at, updated_at, created_by, updated_by
+      `SELECT F_Id AS id, name, db_type, host, port, user, database, is_active, F_DeleteMark, 
+              F_CreatorTime, F_LastModifyTime, F_CreatorUserId, F_LastModifyUserId
        FROM external_db_config 
-       WHERE is_deleted = 0
-       ORDER BY created_at DESC
+       WHERE F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [parseInt(pageSize), offset]
     );
@@ -49,7 +74,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
       password: '***' // 不返回真实密码
     }));
 
-    const [totalResult] = await db.query('SELECT COUNT(*) as total FROM external_db_config WHERE is_deleted = 0');
+    const [totalResult] = await db.query('SELECT COUNT(*) as total FROM external_db_config WHERE F_DeleteMark = 0');
     const total = totalResult.total || 0;
 
     res.json({
@@ -66,12 +91,12 @@ router.get('/', checkAdminPermission, async (req, res) => {
 });
 
 // 获取单个外部数据库配置
-router.get('/:id', checkAdminPermission, async (req, res) => {
+router.get('/:id', checkDatabaseConfigPermission('read'), async (req, res) => {
   try {
     const { id } = req.params;
 
     const configs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0',
+      'SELECT *, F_Id AS id FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -95,7 +120,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
 
 // 新增外部数据库配置
 router.post('/', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('name').notEmpty().withMessage('配置名称不能为空'),
   body('db_type').isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').notEmpty().withMessage('数据库主机不能为空'),
@@ -114,7 +139,7 @@ router.post('/', [
 
     // 检查配置名称是否重复
     const existing = await db.query(
-      'SELECT id FROM external_db_config WHERE name = ? AND is_deleted = 0',
+      'SELECT F_Id FROM external_db_config WHERE name = ? AND F_DeleteMark = 0',
       [name]
     );
 
@@ -126,7 +151,7 @@ router.post('/', [
 
     await db.execute(
       `INSERT INTO external_db_config 
-       (id, name, db_type, host, port, user, password, database, is_active, created_by) 
+       (F_Id, name, db_type, host, port, user, password, database, is_active, F_CreatorUserId) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [configId, name, db_type, host, port, user, password, database, is_active ? 1 : 0, req.currentUserId]
     );
@@ -134,7 +159,7 @@ router.post('/', [
     // 如果配置是启用状态，立即初始化连接
     if (is_active) {
       const configs = await db.query(
-        'SELECT * FROM external_db_config WHERE is_deleted = 0 AND is_active = 1'
+        'SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1'
       );
       await initializeExternalDatabases(configs);
     }
@@ -152,7 +177,7 @@ router.post('/', [
 
 // 更新外部数据库配置
 router.put('/:id', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('name').optional().notEmpty().withMessage('配置名称不能为空'),
   body('db_type').optional().isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').optional().notEmpty().withMessage('数据库主机不能为空'),
@@ -171,7 +196,7 @@ router.put('/:id', [
 
     // 检查配置是否存在
     const existing = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0',
+      'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -182,7 +207,7 @@ router.put('/:id', [
     // 如果修改了配置名称，检查是否重复
     if (name && name !== existing[0].name) {
       const duplicate = await db.query(
-        'SELECT id FROM external_db_config WHERE name = ? AND id != ? AND is_deleted = 0',
+        'SELECT F_Id FROM external_db_config WHERE name = ? AND F_Id != ? AND F_DeleteMark = 0',
         [name, id]
       );
 
@@ -229,18 +254,18 @@ router.put('/:id', [
     }
 
     if (updateFields.length > 0) {
-      updateFields.push('updated_by = ?');
+      updateFields.push('F_LastModifyUserId = ?');
       updateValues.push(req.currentUserId);
       updateValues.push(id);
 
       await db.execute(
-        `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE id = ?`,
+        `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE F_Id = ?`,
         updateValues
       );
 
       // 重新初始化所有启用的外部数据库连接
       const configs = await db.query(
-        'SELECT * FROM external_db_config WHERE is_deleted = 0 AND is_active = 1'
+        'SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1'
       );
       await initializeExternalDatabases(configs);
     }
@@ -256,12 +281,12 @@ router.put('/:id', [
 });
 
 // 删除外部数据库配置（软删除）
-router.delete('/:id', checkAdminPermission, async (req, res) => {
+router.delete('/:id', checkDatabaseConfigPermission('write'), async (req, res) => {
   try {
     const { id } = req.params;
 
     const existing = await db.query(
-      'SELECT id FROM external_db_config WHERE id = ? AND is_deleted = 0',
+      'SELECT F_Id FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -270,7 +295,7 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
     }
 
     await db.execute(
-      'UPDATE external_db_config SET is_deleted = 1, deleted_at = NOW(), deleted_by = ? WHERE id = ?',
+      'UPDATE external_db_config SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ? WHERE F_Id = ?',
       [req.currentUserId, id]
     );
 
@@ -288,12 +313,12 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 });
 
 // 测试外部数据库连接
-router.post('/:id/test', checkAdminPermission, async (req, res) => {
+router.post('/:id/test', checkDatabaseConfigPermission('write'), async (req, res) => {
   try {
     const { id } = req.params;
 
     const configs = await db.query(
-      'SELECT * FROM external_db_config WHERE id = ? AND is_deleted = 0',
+      'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -316,7 +341,7 @@ router.post('/:id/test', checkAdminPermission, async (req, res) => {
 
 // 测试新配置的连接（不保存）
 router.post('/test', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('db_type').isIn(['mysql', 'postgresql']).withMessage('数据库类型必须是mysql或postgresql'),
   body('host').notEmpty().withMessage('数据库主机不能为空'),
   body('port').isInt({ min: 1, max: 65535 }).withMessage('端口号必须在1-65535之间'),
@@ -345,7 +370,7 @@ router.post('/test', [
 
 // 查询外部数据库（通用查询接口）
 router.post('/:id/query', [
-  checkAdminPermission,
+  checkDatabaseConfigPermission('write'),
   body('sql').notEmpty().withMessage('SQL语句不能为空')
 ], async (req, res) => {
   try {

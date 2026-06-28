@@ -23,31 +23,38 @@ router.post('/register', [
 
     const { account, phone, email, password, company_name } = req.body;
 
-    const accountRows = await db.query('SELECT id FROM users WHERE account = ?', [account]);
+    const accountRows = await db.query('SELECT F_Id FROM users WHERE account = ?', [account]);
     if (accountRows.length > 0) {
       return res.status(400).json({ success: false, message: '账号已存在' });
     }
 
-    const phoneRows = await db.query('SELECT id FROM users WHERE phone = ?', [phone]);
+    const phoneRows = await db.query('SELECT F_Id FROM users WHERE phone = ?', [phone]);
     if (phoneRows.length > 0) {
       return res.status(400).json({ success: false, message: '手机号已存在' });
     }
 
-    const emailRows = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    const emailRows = await db.query('SELECT F_Id FROM users WHERE email = ?', [email]);
     if (emailRows.length > 0) {
       return res.status(400).json({ success: false, message: '邮箱已存在' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    // 查询普通会员等级，如果不存在则使用null（允许注册）
+    // 查询新闻舆情应用的普通会员等级，作为新用户的默认会员等级
     let membershipLevelId = null;
     try {
-      const levelRows = await db.query('SELECT id FROM membership_levels WHERE level_name = ? LIMIT 1', ['普通会员']);
+      const levelRows = await db.query(
+        `SELECT ml.F_Id AS id FROM membership_levels ml
+         JOIN applications a ON ml.app_id = a.F_Id
+         WHERE a.app_name = '新闻舆情'
+         AND ml.level_name = '普通会员'
+         LIMIT 1`
+      );
       if (levelRows.length > 0) {
         membershipLevelId = levelRows[0].id;
+        console.log(`  ✓ 新用户将注册为：新闻舆情 - 普通会员 (ID: ${membershipLevelId})`);
       } else {
-        console.warn('警告：未找到"普通会员"等级，用户将注册为无会员等级');
+        console.warn('警告：未找到"新闻舆情-普通会员"等级，用户将注册为无会员等级');
       }
     } catch (err) {
       console.warn('查询会员等级时出错（将使用null）：', err.message);
@@ -57,14 +64,14 @@ router.post('/register', [
     const userId = await generateId('users');
 
     await db.execute(
-      'INSERT INTO users (id, account, phone, email, password, company_name, membership_level_id, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (F_Id, account, phone, email, password, company_name, membership_level_id, account_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
       [userId, account, phone, email, hashedPassword, company_name || '', membershipLevelId, 'active']
     );
 
     // 注册时生成 API Token 并写入 user 表（用于对外接口鉴权）
     const apiToken = crypto.randomBytes(32).toString('hex');
     await db.execute(
-      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
       [apiToken, userId]
     );
 
@@ -128,10 +135,13 @@ router.post('/login', [
     const { account, password } = req.body;
 
     const users = await db.query(
-      `SELECT u.*, ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.id as application_id
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.password, u.company_name,
+              u.role, u.membership_level_id, u.app_permissions, u.account_status,
+              u.api_token, u.F_CreatorTime AS created_at, u.F_LastModifyTime AS updated_at,
+              ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.F_Id as application_id
        FROM users u 
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id 
-       LEFT JOIN applications a ON ml.app_id = a.id
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id 
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
        WHERE u.account = ?`,
       [account]
     );
@@ -154,29 +164,58 @@ router.post('/login', [
     if (!user.api_token) {
       const apiToken = crypto.randomBytes(32).toString('hex');
       await db.execute(
-        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
         [apiToken, user.id]
       );
       user.api_token = apiToken;
     }
 
-    // 获取用户的应用权限（通过membership_levels关联applications）
+    // 获取用户的应用权限（通过 membership_levels 关联 applications）
     const appPermissions = [];
     if (user.app_id && user.app_name) {
       appPermissions.push({
         app_id: user.app_id,
-        app_name: user.app_name
+        app_name: user.app_name,
+        membership_level_id: user.membership_level_id || null
       });
     }
 
-    // 如果app_permissions字段有值，也解析它（JSON格式）
+    // 如果 app_permissions 字段有值，也解析它（JSON 格式），并补全 app_name
     if (user.app_permissions) {
       try {
         const parsedPermissions = JSON.parse(user.app_permissions);
         if (Array.isArray(parsedPermissions)) {
+          const missingName = parsedPermissions.filter(
+            p => p.membership_level_id && !p.app_name
+          );
+          let levelRows = [];
+          if (missingName.length > 0) {
+            const levelIds = missingName.map(p => p.membership_level_id);
+            levelRows = await db.query(
+              `SELECT ml.F_Id AS membership_level_id, a.F_Id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+          }
+
           parsedPermissions.forEach(perm => {
-            if (perm.app_id && !appPermissions.find(p => p.app_id === perm.app_id)) {
-              appPermissions.push(perm);
+            let enriched = { ...perm };
+            if (perm.membership_level_id && !perm.app_name && levelRows.length) {
+              const match = levelRows.find(
+                r => r.membership_level_id === perm.membership_level_id
+              );
+              if (match) {
+                enriched.app_name = match.app_name;
+                enriched.app_id = match.app_id;
+              }
+            }
+            if (
+              enriched.app_id &&
+              !appPermissions.find(p => p.app_id === enriched.app_id)
+            ) {
+              appPermissions.push(enriched);
             }
           });
         }
@@ -200,6 +239,102 @@ router.post('/login', [
   }
 });
 
+// 获取当前登录用户最新信息（含应用会员权限）
+// 需在请求头携带 x-user-id，由前端 axios 拦截器自动注入
+router.get('/me', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ success: false, message: '未登录' });
+    }
+
+    const users = await db.query(
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.password, u.company_name,
+              u.role, u.membership_level_id, u.app_permissions, u.account_status,
+              u.api_token, u.F_CreatorTime AS created_at, u.F_LastModifyTime AS updated_at,
+              ml.level_name, ml.validity_days, ml.app_id, a.app_name, a.F_Id as application_id
+       FROM users u 
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id 
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
+       WHERE u.F_Id = ?`,
+      [userId]
+    );
+
+    if (!users.length) {
+      return res.status(404).json({ success: false, message: '用户不存在' });
+    }
+
+    const user = users[0];
+    if (user.account_status !== 'active') {
+      return res.status(403).json({ success: false, message: '账号已被禁用' });
+    }
+
+    const appPermissions = [];
+    if (user.app_id && user.app_name) {
+      appPermissions.push({
+        app_id: user.app_id,
+        app_name: user.app_name,
+        membership_level_id: user.membership_level_id || null
+      });
+    }
+
+    if (user.app_permissions) {
+      try {
+        const parsedPermissions = JSON.parse(user.app_permissions);
+        if (Array.isArray(parsedPermissions)) {
+          const missingName = parsedPermissions.filter(
+            p => p.membership_level_id && !p.app_name
+          );
+          let levelRows = [];
+          if (missingName.length > 0) {
+            const levelIds = missingName.map(p => p.membership_level_id);
+            levelRows = await db.query(
+              `SELECT ml.F_Id AS membership_level_id, a.F_Id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+          }
+
+          parsedPermissions.forEach(perm => {
+            let enriched = { ...perm };
+            if (perm.membership_level_id && !perm.app_name && levelRows.length) {
+              const match = levelRows.find(
+                r => r.membership_level_id === perm.membership_level_id
+              );
+              if (match) {
+                enriched.app_name = match.app_name;
+                enriched.app_id = match.app_id;
+              }
+            }
+            if (
+              enriched.app_id &&
+              !appPermissions.find(p => p.app_id === enriched.app_id)
+            ) {
+              appPermissions.push(enriched);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('解析app_permissions失败:', e);
+      }
+    }
+
+    const { password, app_id, app_name, application_id, ...userInfo } = user;
+    return res.json({
+      success: true,
+      user: {
+        ...userInfo,
+        app_permissions: appPermissions
+      }
+    });
+  } catch (error) {
+    console.error('获取当前用户信息失败：', error);
+    return res.status(500).json({ success: false, message: '获取当前用户信息失败' });
+  }
+});
+
 // 查询当前用户的 API Token（用于对外接口鉴权，如 /api/news-detail）
 // Token 已在注册时生成、登录时若无则补生成，后续不自动更新。本接口用于查询或兼容历史无 token 用户
 // 需已登录（请求头带 x-user-id）
@@ -210,7 +345,7 @@ router.get('/api-token', async (req, res) => {
       return res.status(401).json({ success: false, message: '未登录，请先登录后获取 API Token' });
     }
     const users = await db.query(
-      'SELECT id, account, api_token, account_status FROM users WHERE id = ?',
+      'SELECT F_Id, account, api_token, account_status FROM users WHERE F_Id = ?',
       [userId]
     );
     if (!users.length) {
@@ -224,7 +359,7 @@ router.get('/api-token', async (req, res) => {
     if (!token) {
       token = crypto.randomBytes(32).toString('hex');
       await db.execute(
-        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+        'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
         [token, userId]
       );
     }
@@ -247,7 +382,7 @@ router.post('/api-token/regenerate', async (req, res) => {
       return res.status(401).json({ success: false, message: '未登录' });
     }
     const users = await db.query(
-      'SELECT id, account_status FROM users WHERE id = ?',
+      'SELECT F_Id, account_status FROM users WHERE F_Id = ?',
       [userId]
     );
     if (!users.length) {
@@ -258,7 +393,7 @@ router.post('/api-token/regenerate', async (req, res) => {
     }
     const token = crypto.randomBytes(32).toString('hex');
     await db.execute(
-      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET api_token = ?, api_token_updated_at = NOW() WHERE F_Id = ?',
       [token, userId]
     );
     return res.json({
@@ -291,14 +426,14 @@ router.get('/users', async (req, res) => {
 
     // 获取用户列表，包含会员等级和应用信息
     const users = await db.query(
-      `SELECT u.id, u.account, u.phone, u.email, u.company_name, u.account_status, 
-              u.membership_level_id, u.app_permissions, u.created_at,
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.company_name, u.account_status,
+              u.role, u.membership_level_id, u.app_permissions, u.F_CreatorTime AS created_at,
               ml.level_name as membership_level_name, ml.app_id as membership_app_id,
               a.app_name as membership_app_name
        FROM users u
-       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.id
-       LEFT JOIN applications a ON ml.app_id = a.id
-       ORDER BY u.created_at DESC
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       LEFT JOIN applications a ON ml.app_id = a.F_Id
+       ORDER BY u.F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [parseInt(pageSize), offset]
     );
@@ -335,7 +470,7 @@ router.get('/users', async (req, res) => {
 // 获取所有应用列表
 router.get('/applications', async (req, res) => {
   try {
-    const applications = await db.query('SELECT id, app_name FROM applications ORDER BY app_name');
+    const applications = await db.query('SELECT F_Id AS id, app_name FROM applications ORDER BY app_name');
     res.json({
       success: true,
       data: applications
@@ -351,7 +486,7 @@ router.get('/membership-levels/:appId', async (req, res) => {
   try {
     const { appId } = req.params;
     const levels = await db.query(
-      'SELECT id, level_name, validity_days, app_id FROM membership_levels WHERE app_id = ? ORDER BY level_name',
+      'SELECT F_Id AS id, level_name, validity_days, app_id FROM membership_levels WHERE app_id = ? ORDER BY level_name',
       [appId]
     );
     res.json({
@@ -383,7 +518,7 @@ router.put('/users/:id/memberships', [
     const { memberships } = req.body; // [{app_id, membership_level_id}, ...]
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id, app_permissions FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id, app_permissions FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -433,7 +568,7 @@ router.put('/users/:id/memberships', [
 
     // 更新数据库
     await db.execute(
-      'UPDATE users SET app_permissions = ? WHERE id = ?',
+      'UPDATE users SET app_permissions = ? WHERE F_Id = ?',
       [JSON.stringify(updatedPermissions), id]
     );
 
@@ -461,14 +596,14 @@ router.put('/users/:id/main-membership', [
     const { membership_level_id } = req.body;
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
 
     // 更新主会员等级
     await db.execute(
-      'UPDATE users SET membership_level_id = ? WHERE id = ?',
+      'UPDATE users SET membership_level_id = ? WHERE F_Id = ?',
       [membership_level_id || null, id]
     );
 
@@ -491,7 +626,12 @@ router.get('/profile', async (req, res) => {
     }
 
     const users = await db.query(
-      'SELECT id, account, phone, email, company_name FROM users WHERE id = ?',
+      `SELECT u.F_Id AS id, u.account, u.phone, u.email, u.company_name,
+              u.membership_level_id, ml.level_name AS main_membership_level,
+              u.app_permissions, u.account_status
+       FROM users u
+       LEFT JOIN membership_levels ml ON u.membership_level_id = ml.F_Id
+       WHERE u.F_Id = ?`,
       [userId]
     );
 
@@ -499,9 +639,46 @@ router.get('/profile', async (req, res) => {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
 
+    const user = users[0];
+
+    // 解析应用会员配置，拼出「应用名称 + 会员等级名称」
+    let appMemberships = [];
+    if (user.app_permissions) {
+      try {
+        const parsed = JSON.parse(user.app_permissions);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const levelIds = parsed
+            .map(p => p.membership_level_id)
+            .filter(Boolean);
+          if (levelIds.length > 0) {
+            const levelRows = await db.query(
+              `SELECT ml.F_Id AS membership_level_id, ml.level_name, a.F_Id AS app_id, a.app_name
+               FROM membership_levels ml
+               JOIN applications a ON ml.app_id = a.F_Id
+               WHERE ml.F_Id IN (${levelIds.map(() => '?').join(',')})`,
+              levelIds
+            );
+            appMemberships = parsed.map(p => {
+              const match = levelRows.find(r => r.membership_level_id === p.membership_level_id);
+              return {
+                app_id: match?.app_id || p.app_id,
+                app_name: match?.app_name || p.app_id,
+                level_name: match?.level_name || ''
+              };
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('解析用户 app_permissions 失败：', e);
+      }
+    }
+
     res.json({
       success: true,
-      data: users[0]
+      data: {
+        ...user,
+        app_memberships: appMemberships
+      }
     });
   } catch (error) {
     console.error('获取用户信息失败：', error);
@@ -529,7 +706,7 @@ router.put('/profile', [
 
     // 检查手机号是否已被其他用户使用
     const existingUsers = await db.query(
-      'SELECT id FROM users WHERE phone = ? AND id != ?',
+      'SELECT F_Id FROM users WHERE phone = ? AND F_Id != ?',
       [phone, userId]
     );
 
@@ -540,7 +717,7 @@ router.put('/profile', [
     // 如果提供了邮箱，检查邮箱是否已被其他用户使用
     if (email) {
       const existingEmailUsers = await db.query(
-        'SELECT id FROM users WHERE email = ? AND id != ?',
+        'SELECT F_Id FROM users WHERE email = ? AND F_Id != ?',
         [email, userId]
       );
 
@@ -552,12 +729,12 @@ router.put('/profile', [
     // 更新用户信息
     if (email) {
       await db.execute(
-        'UPDATE users SET phone = ?, email = ? WHERE id = ?',
+        'UPDATE users SET phone = ?, email = ? WHERE F_Id = ?',
         [phone, email, userId]
       );
     } else {
       await db.execute(
-        'UPDATE users SET phone = ? WHERE id = ?',
+        'UPDATE users SET phone = ? WHERE F_Id = ?',
         [phone, userId]
       );
     }
@@ -591,7 +768,7 @@ router.put('/change-password', [
     const { oldPassword, newPassword } = req.body;
 
     // 获取用户信息
-    const users = await db.query('SELECT id, password FROM users WHERE id = ?', [userId]);
+    const users = await db.query('SELECT F_Id, password FROM users WHERE F_Id = ?', [userId]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -615,7 +792,7 @@ router.put('/change-password', [
 
     // 更新密码
     await db.execute(
-      'UPDATE users SET password = ? WHERE id = ?',
+      'UPDATE users SET password = ? WHERE F_Id = ?',
       [hashedPassword, userId]
     );
 
@@ -640,7 +817,7 @@ router.put('/users/:id/reset-password', async (req, res) => {
     const { id } = req.params;
 
     // 检查用户是否存在
-    const users = await db.query('SELECT id, account FROM users WHERE id = ?', [id]);
+    const users = await db.query('SELECT F_Id, account FROM users WHERE F_Id = ?', [id]);
     if (users.length === 0) {
       return res.status(404).json({ success: false, message: '用户不存在' });
     }
@@ -651,7 +828,7 @@ router.put('/users/:id/reset-password', async (req, res) => {
 
     // 更新密码
     await db.execute(
-      'UPDATE users SET password = ? WHERE id = ?',
+      'UPDATE users SET password = ? WHERE F_Id = ?',
       [hashedPassword, id]
     );
 

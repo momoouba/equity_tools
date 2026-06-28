@@ -1,0 +1,11 @@
+.listing-project-progress-page {
+  padding: 0 16px 16px;
+}
+
+.listing-project-progress-page .arco-table .arco-table-td {
+  border-right: 1px solid #e5e6eb !important;
+}
+
+.listing-project-progress-page .arco-table .arco-table-th {
+  border-right: 1px solid #e5e6eb !important;
+}

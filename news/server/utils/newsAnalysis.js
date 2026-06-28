@@ -2,6 +2,7 @@ const axios = require('axios');
 const iconv = require('iconv-lite');
 const db = require('../db');
 const { logWithTag, errorWithTag, warnWithTag } = require('./logUtils');
+const { IE_NEWS_APP_FILTER_SQL } = require('./investedEnterpriseNewsAppSql');
 
 /** 编码敏感站点（格隆汇、新浪、21经济网、新浪财经、腾讯科技、中新经纬等），抓取时需尝试 UTF-8 / GBK 解码 */
 const ENCODING_SENSITIVE_DOMAINS = [
@@ -61,7 +62,7 @@ class NewsAnalysis {
       const existingFullName = existingFormatMatch[2];
       // 使用传入的参数重新格式化，如果没有传入则使用现有的
       const abbreviation = projectAbbreviation || existingAbbreviation;
-      const fullName = enterpriseFullName || existingFullName;
+      const fullName = existingFullName; // 使用解析出的纯全称，而非原始传入值（避免嵌套格式）
       return `${abbreviation}【${fullName}】`;
     }
 
@@ -400,6 +401,57 @@ class NewsAnalysis {
       return null;
     }
 
+    // 特殊处理：人民网（people.com.cn）正文从 <div id="rm_txt_zw"> 中提取
+    if (url && /people\.com\.cn/i.test(url)) {
+      logWithTag('[extractArticleContent]', `检测到人民网URL，使用 div#rm_txt_zw 提取`);
+      const divStartRegex = /<div[^>]*id\s*=\s*["']rm_txt_zw["'][^>]*>/i;
+      const startMatch = html.match(divStartRegex);
+      if (startMatch) {
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+        while (pos < html.length && depth > 0) {
+          const nextOpen = html.indexOf('<div', pos);
+          const nextClose = html.indexOf('</div>', pos);
+          if (nextClose === -1) {
+            endPos = html.length;
+            break;
+          }
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+        if (endPos !== -1) {
+          let raw = html.substring(tagEnd, endPos);
+          raw = raw
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+            .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+            .replace(/<!--[\s\S]*?-->/g, '');
+          const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+          if (textOnly.length > 100) {
+            logWithTag('[extractArticleContent]', `✓ 人民网 div#rm_txt_zw 提取成功，长度: ${textOnly.length}字符`);
+            return textOnly;
+          }
+          logWithTag('[extractArticleContent]', `⚠️ 人民网 div#rm_txt_zw 提取过短（${textOnly.length}字符），走通用逻辑`);
+        } else {
+          logWithTag('[extractArticleContent]', '⚠️ 未找到人民网 rm_txt_zw 的闭合标签，走通用逻辑');
+        }
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到人民网 div#rm_txt_zw，走通用逻辑');
+      }
+    }
+
     // 特殊处理：21经济网（21jingji.com，account_name: 21经济网）
     // 正文仅从 <div class="content"> 中提取，并剔除页脚（分享、扫码、公告、备案等）
     const is21Jingji = (url && /21jingji\.com/i.test(url)) ||
@@ -636,6 +688,106 @@ class NewsAnalysis {
       }
     }
     
+    // 特殊处理：财中社（caizhongshe.cn）
+    // 正文在 <div class="detail-content"> 中
+    const isCaizhongshe = (url && /caizhongshe\.cn/i.test(url)) ||
+                          (accountName && accountName.includes('财中社'));
+    if (isCaizhongshe) {
+      logWithTag('[extractArticleContent]', `检测到财中社（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用 div.detail-content 提取`);
+
+      const findCaizhongsheContentDiv = (h) => {
+        // 查找class="detail-content"的div开始标签
+        const divStartRegex = /<div[^>]*class\s*=\s*["'][^"']*\bdetail-content\b[^"']*["'][^>]*>/i;
+        const startMatch = h.match(divStartRegex);
+        if (!startMatch) return null;
+
+        const startPos = startMatch.index;
+        const tagEnd = startPos + startMatch[0].length;
+
+        // 从开始标签后查找对应的结束标签（处理嵌套div）
+        let depth = 1;
+        let pos = tagEnd;
+        let endPos = -1;
+
+        while (pos < h.length && depth > 0) {
+          const nextOpen = h.indexOf('<div', pos);
+          const nextClose = h.indexOf('</div>', pos);
+
+          if (nextClose === -1) {
+            endPos = h.length;
+            break;
+          }
+
+          // 检查是否有嵌套的div
+          if (nextOpen !== -1 && nextOpen < nextClose) {
+            // 检查这个<div是否在script标签内
+            const scriptBeforeDiv = h.lastIndexOf('<script', nextOpen);
+            const scriptAfterDiv = h.indexOf('</script>', nextOpen);
+            if (scriptBeforeDiv !== -1 && scriptAfterDiv !== -1 && scriptAfterDiv > nextOpen) {
+              pos = scriptAfterDiv + 9;
+              continue;
+            }
+            depth++;
+            pos = nextOpen + 4;
+          } else {
+            // 检查这个</div>是否在script标签内
+            const scriptBeforeClose = h.lastIndexOf('<script', nextClose);
+            const scriptAfterClose = h.indexOf('</script>', nextClose);
+            if (scriptBeforeClose !== -1 && scriptAfterClose !== -1 && scriptAfterClose > nextClose) {
+              pos = scriptAfterClose + 9;
+              continue;
+            }
+            depth--;
+            if (depth === 0) {
+              endPos = nextClose;
+              break;
+            }
+            pos = nextClose + 6;
+          }
+        }
+
+        if (endPos === -1) return null;
+        return h.substring(tagEnd, endPos);
+      };
+
+      let raw = findCaizhongsheContentDiv(html);
+      if (raw) {
+        raw = raw
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+          .replace(/<!--[\s\S]*?-->/g, '');
+
+        // 移除页脚相关的内容
+        const footerPatterns = [
+          /重要提示：本文著作权归财中社所有[\s\S]*/i,
+          /相关推荐[\s\S]*/i,
+          /最新文章推荐[\s\S]*/i,
+          /财中社公众号[\s\S]*/i,
+          /官方声明：[\s\S]*/i,
+          /©2026 北京光刻智慧传媒科技有限公司[\s\S]*/i,
+          /京ICP备[\s\S]*/i,
+          /分享[\s\S]*长按保存图片[\s\S]*/i,
+        ];
+        for (const p of footerPatterns) {
+          const m = raw.match(p);
+          if (m && m.index > raw.length * 0.5) {
+            raw = raw.substring(0, m.index).trim();
+            break;
+          }
+        }
+
+        const textOnly = raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        if (textOnly.length > 100) {
+          logWithTag('[extractArticleContent]', `✓ 财中社 div.detail-content 提取成功，长度: ${textOnly.length}字符`);
+          return textOnly;
+        }
+        logWithTag('[extractArticleContent]', `⚠️ 财中社 div.detail-content 提取过短（${textOnly.length}字符），走通用逻辑`);
+      } else {
+        logWithTag('[extractArticleContent]', '⚠️ 未找到财中社 div.detail-content，走通用逻辑');
+      }
+    }
+
     // 特殊处理：新浪新闻（统一处理 cj.sina.com.cn 和 finance.sina.com.cn）
     // 这两类新闻的正文都在 <div class="article" id="artibody"> 中，使用相同的提取方法
     // cj.sina.com.cn（account_name: 新浪）
@@ -644,7 +796,7 @@ class NewsAnalysis {
                      (accountName && accountName.includes('新浪') && !accountName.includes('新浪财经'));
     const isSinaFinance = (url && url.includes('finance.sina.com.cn')) || 
                           (accountName && accountName.includes('新浪财经'));
-    
+
     if (isSinaCj || isSinaFinance) {
       const sourceType = isSinaCj ? '新浪财经头条(cj.sina.com.cn)' : '新浪财经(finance.sina.com.cn)';
       logWithTag('[extractArticleContent]', `检测到${sourceType}（URL: ${url ? '是' : '否'}, account_name: ${accountName || '否'}），使用特殊提取逻辑`);
@@ -2622,7 +2774,13 @@ class NewsAnalysis {
       /\s*-\s*21经济网\s+21财经APP\s*>\s*[^\n]+/g,
       /\s*-\s*[^\n]{0,24}网\s+[^\n]{0,24}APP\s*>\s*[^\n]+/g,
       /\s*\d{4}年\d{1,2}月\d{1,2}日\s+\d{1,2}:\d{2}\s+[^\n。！？]{0,50}/g,
-      /_\s*腾讯新闻\s*/g,
+      // 版头整行：如 2026年03月17日08:21 | 来源：成都商报电子版 订阅 已订阅 已收藏 收藏 小字号 原标题：xxx
+      /^\s*\d{4}年\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}\s*\|\s*来源[：:][^\n]+$/gm,
+      /^\s*\d{4}年\d{1,2}月\d{1,2}日\s*\|\s*来源[：:][^\n]+$/gm,
+      // 正文开头的「订阅 已订阅 已收藏 收藏 小字号 原标题：xxx」等版头信息块
+      /^\s*(订阅\s*已订阅\s*已收藏\s*收藏\s*小字号\s*原标题[：:]\s*[^\n]*)\s*/gm,
+      /^\s*(已订阅\s*已收藏\s*收藏\s*小字号\s*原标题[：:]\s*[^\n]*)\s*/gm,
+      /\s*腾讯新闻\s*/g,
       /_\s*[^\n_\s]{0,20}新闻\s*/g,
       /\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g,
       /\s*[^\n。]{0,12}领域创作者\s*/g,
@@ -3215,7 +3373,7 @@ class NewsAnalysis {
           // 将清理后的内容更新到数据库
           try {
             await db.execute(
-              'UPDATE news_detail SET content = ? WHERE id = ?',
+              'UPDATE news_detail SET content = ? WHERE F_Id = ?',
               [cleanedContent, newsItem.id]
             );
             console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库，新闻ID: ${newsItem.id}`);
@@ -3264,7 +3422,7 @@ class NewsAnalysis {
             newsItem.content = cleanedContent;
             // 更新数据库
             try {
-              await db.execute('UPDATE news_detail SET content = ? WHERE id = ?', [cleanedContent, newsItem.id]);
+              await db.execute('UPDATE news_detail SET content = ? WHERE F_Id = ?', [cleanedContent, newsItem.id]);
             } catch (error) {
               console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
             }
@@ -3276,7 +3434,7 @@ class NewsAnalysis {
           newsItem.content = cleanedContent;
           // 更新数据库
           try {
-            await db.execute('UPDATE news_detail SET content = ? WHERE id = ?', [cleanedContent, newsItem.id]);
+            await db.execute('UPDATE news_detail SET content = ? WHERE F_Id = ?', [cleanedContent, newsItem.id]);
             console.log(`[ensureNewsContent] ✓ 已将清理后的内容更新到数据库`);
           } catch (error) {
             console.error(`[ensureNewsContent] 更新数据库失败: ${error.message}`);
@@ -3306,8 +3464,8 @@ class NewsAnalysis {
     try {
       const result = await db.query(
         `SELECT * FROM ai_model_config 
-         WHERE model_name = ? AND is_active = 1 AND delete_mark = 0
-         ORDER BY id DESC
+         WHERE model_name = ? AND is_active = 1 AND F_DeleteMark = 0
+         ORDER BY F_Id DESC
          LIMIT 1`,
         [modelName]
       );
@@ -3338,8 +3496,8 @@ class NewsAnalysis {
         `SELECT * FROM ai_model_config 
          WHERE application_type = 'news_analysis' 
          AND is_active = 1 
-         AND delete_mark = 0 
-         ORDER BY created_at DESC 
+         AND F_DeleteMark = 0 
+         ORDER BY F_CreatorTime DESC 
          LIMIT 1`
       );
       
@@ -3459,7 +3617,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : (config.temperature || 0.7),
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : (config.max_tokens || 2000),
+      max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : (config.top_p || 0.9)
     };
     
@@ -3504,7 +3662,7 @@ class NewsAnalysis {
       },
       parameters: {
         temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-        max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+        max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
         top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
       }
     };
@@ -3538,7 +3696,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      max_tokens: (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })(),
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
     };
 
@@ -3661,6 +3819,7 @@ class NewsAnalysis {
    * 调用OpenAI模型
    */
   async callOpenAIModel(prompt, config) {
+    const safeMaxTokens = (() => { const v = typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens; return Number.isFinite(v) && v >= 10 ? v : 2000; })();
     const requestData = {
       model: config.model_name,
       messages: [
@@ -3670,7 +3829,7 @@ class NewsAnalysis {
         }
       ],
       temperature: typeof config.temperature === 'string' ? parseFloat(config.temperature) : config.temperature,
-      max_tokens: typeof config.max_tokens === 'string' ? parseInt(config.max_tokens, 10) : config.max_tokens,
+      max_tokens: safeMaxTokens,
       top_p: typeof config.top_p === 'string' ? parseFloat(config.top_p) : config.top_p
     };
 
@@ -3695,29 +3854,30 @@ class NewsAnalysis {
       const prompts = await db.query(
         `SELECT 
           p.*, 
-          m.id as ai_model_config_id_full,
+          m.F_Id as ai_model_config_id_full,
           m.config_name, m.provider, m.model_name, m.api_type, 
-          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p
+          m.api_key, m.api_endpoint, m.temperature, m.max_tokens, m.top_p, m.enable_thinking,
+          m.wire_protocol, m.web_search_mode, m.reasoning_effort
          FROM ai_prompt_config p
-         LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.is_active = 1 AND m.delete_mark = 0
+         LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.F_Id AND m.is_active = 1 AND m.F_DeleteMark = 0
          WHERE p.interface_type = ? 
          AND p.prompt_type = ? 
          AND p.is_active = 1 
-         AND p.delete_mark = 0 
-         ORDER BY p.created_at DESC`,
+         AND p.F_DeleteMark = 0 
+         ORDER BY p.F_CreatorTime DESC`,
         [interfaceType, promptType]
       );
 
       if (prompts.length > 0) {
         // 记录找到的配置数量
         if (prompts.length === 1) {
-          console.log(`✓ 找到 1 条匹配的提示词配置：${interfaceType} - ${promptType} (ID: ${prompts[0].id}, 名称: ${prompts[0].prompt_name || '未命名'})`);
+          console.log(`✓ 找到 1 条匹配的提示词配置：${interfaceType} - ${promptType} (ID: ${prompts[0].F_Id}, 名称: ${prompts[0].prompt_name || '未命名'})`);
         } else {
           console.log(`✓ 找到 ${prompts.length} 条匹配的提示词配置：${interfaceType} - ${promptType}`);
           prompts.forEach((p, index) => {
-            console.log(`  ${index === 0 ? '→' : ' '} [${index + 1}] ID: ${p.id}, 名称: ${p.prompt_name || '未命名'}, 创建时间: ${p.created_at}`);
+            console.log(`  ${index === 0 ? '→' : ' '} [${index + 1}] ID: ${p.F_Id}, 名称: ${p.prompt_name || '未命名'}, 创建时间: ${p.F_CreatorTime}`);
           });
-          console.log(`  使用最新配置: ${prompts[0].id}(${prompts[0].prompt_name || '未命名'})`);
+          console.log(`  使用最新配置: ${prompts[0].F_Id}(${prompts[0].prompt_name || '未命名'})`);
         }
         
         // 如果有多个配置，使用最新的（第一个）
@@ -3736,15 +3896,19 @@ class NewsAnalysis {
             api_endpoint: promptConfig.api_endpoint,
             temperature: promptConfig.temperature,
             max_tokens: promptConfig.max_tokens,
-            top_p: promptConfig.top_p
+            top_p: promptConfig.top_p,
+            enable_thinking: promptConfig.enable_thinking,
+            wire_protocol: promptConfig.wire_protocol,
+            web_search_mode: promptConfig.web_search_mode,
+            reasoning_effort: promptConfig.reasoning_effort,
           } : null,
           // 返回所有匹配的配置，供调用方选择使用
           all_prompts: prompts.map(p => ({
-            id: p.id,
+            id: p.F_Id,
             prompt_name: p.prompt_name,
             prompt_content: p.prompt_content,
             ai_model_config_id: p.ai_model_config_id_full,
-            created_at: p.created_at
+            created_at: p.F_CreatorTime
           }))
         };
       }
@@ -3966,14 +4130,14 @@ class NewsAnalysis {
    - 标签应该准确反映新闻的核心主题和内容类型
    - 如果新闻涉及多个方面，可以包含多个标签（最多3-4个）
    - **标签选择规则（按优先级判断）**：
-     * **优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等（如国家公祭日、春节、国庆节、清明节、中秋节、劳动节等），应选择"节假日"标签。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签，即使内容中包含企业介绍、产品信息等附加内容。
+     * **优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等（如国家公祭日、春节、国庆节、清明节、中秋节、劳动节，以及母亲节、父亲节、情人节、七夕、三八妇女节、圣诞节、感恩节等），应选择"节假日"标签。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签，即使内容中包含企业介绍、产品信息等附加内容。
      * 如果新闻涉及企业活动、业务发展 → 选择"企业发展"、"市场拓展"等
      * 如果新闻涉及获奖、荣誉、认证 → **严格判断**：只有明确在标题或正文中描述对应的企业获得**具体的**奖项、荣誉、认证时（如"获得XX奖"、"荣获XX奖"），才选择"获奖"、"企业荣誉"标签。**必须排除**：①论坛、座谈会、会诊、会议、分享会、研讨会、读图会、病例分享等活动；②泛泛而谈的表述（如"获得了众多荣誉"、"获得了荣誉"等，没有具体奖项名称）；③参与性表述（如"成为XX供应商"、"成为XX协办方"等，不是获奖）。如果不符合上述条件，应该根据活动性质选择其他标签（如"行业分析"、"产品能力"等）
      * 如果新闻涉及产品发布、技术突破 → 选择"产品发布"、"技术创新"等
      * 如果新闻涉及融资、投资 → 选择"融资消息"
      * 如果新闻涉及合作、伙伴关系 → 选择"合作伙伴"
      * 如果新闻涉及榜单 → **严格判断**：只有明确由某家企业发布的榜单信息，或标题中包含"榜单"字样时，才选择"榜单"标签。行业分享会、企业单独获奖信息不应标记为"榜单"
-     * 如果新闻涉及广告、推广 → **仅限节假日类官方营销**：仅当内容属于节假日庆祝、节日工作安排、节日放假安排（如春节、元旦、中秋节、国庆节、劳动节等）的官方节日营销、祝福、放假通知时，才选择"广告推广"、"商业广告"或"营销推广"。**企业推介自家产品、服务、品牌的发展类内容不要标这三种标签**（股权投资关注企业发展，此类新闻应保留）
+     * 如果新闻涉及广告、推广 → **仅限节假日类官方营销**：仅当内容属于节假日庆祝、节日工作安排、节日放假安排（如春节、元旦、中秋节、国庆节、劳动节，以及母亲节、父亲节、情人节、七夕、三八妇女节、圣诞节、感恩节等）的官方节日营销、祝福、放假通知时，才选择"广告推广"、"商业广告"或"营销推广"。**企业推介自家产品、服务、品牌的发展类内容不要标这三种标签**（股权投资关注企业发展，此类新闻应保留）
      * 如果新闻涉及纪念活动、社会事件、行业分享会（但不是节假日） → 根据内容选择合适标签，如"行业分析"等
    - **只有当新闻内容确实无法归类到任何具体类别时，才使用"其他"标签，且必须作为最后一个补充标签，前面要有至少1-2个具体标签**
    - **绝对禁止**：只返回["其他"]，必须至少包含1个具体标签
@@ -4022,17 +4186,17 @@ class NewsAnalysis {
 - 行业分析
 - 安全防护（企业提供安全防护、漏洞修复等）
 - 产品能力（展示产品功能、技术实力等）
-- 节假日（**优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等，如国家公祭日、春节、国庆节、清明节等，应标记为"节假日"。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签）
+- 节假日（**优先判断**：如果标题或内容主要是关于节假日、纪念日、节日等，如国家公祭日、春节、国庆节、清明节，以及母亲节、父亲节、情人节、七夕、三八妇女节、圣诞节、感恩节等，应标记为"节假日"。如果文章以节假日内容为主要主题，则只标记"节假日"即可，不需要其他标签）
 - 榜单（**严格使用**：仅用于明确由某家企业发布的榜单信息，或标题中包含"榜单"字样的新闻。行业分享会、企业单独获奖信息不应使用此标签）
 - 获奖（**严格使用**：仅用于明确在标题或正文中描述对应的企业获得**具体的**奖项、荣誉、认证时（如"获得XX奖"、"荣获XX奖"）。**必须排除**：①论坛、座谈会、会诊、会议、分享会、研讨会、读图会、病例分享等活动；②泛泛而谈的表述（如"获得了众多荣誉"，没有具体奖项名称）；③参与性表述（如"成为XX供应商"、"成为XX协办方"等）。注意：企业单独的获奖信息应使用"获奖"标签，不是"榜单"标签）
-- 广告推广、商业广告、营销推广（**仅限节假日类官方营销**：仅用于春节、元旦、中秋节、国庆节、劳动节等的节日庆祝、节日工作安排、节日放假安排等官方节日营销内容；**企业推介自家产品、服务、品牌的发展类内容不要使用**）
+- 广告推广、商业广告、营销推广（**仅限节假日类官方营销**：仅用于春节、元旦、中秋节、国庆节、劳动节及母亲节、父亲节、情人节、七夕、三八妇女节、圣诞节、感恩节等的节日庆祝、节日工作安排、节日放假安排等官方节日营销内容；**企业推介自家产品、服务、品牌的发展类内容不要使用**）
 - 其他（仅在确实无法归类时使用，且应作为补充标签）
 
 **标签选择要求（非常重要）**：
 - 每个类型标签必须控制在4个字符以内，超过4个字符的标签将被截断
 - 必须根据新闻的实际内容选择最贴切的标签，不能简单地使用"其他"
 - 仔细阅读新闻内容，识别新闻的核心主题和类型
-- 如果新闻涉及节假日、纪念日、节日等（如国家公祭日、春节、国庆节等），应优先标记为"节假日"标签
+- 如果新闻涉及节假日、纪念日、节日等（如国家公祭日、春节、国庆节、母亲节、父亲节、情人节、圣诞节等），应优先标记为"节假日"标签
 - 如果新闻涉及纪念活动、历史事件、社会关注等，应该选择合适的标签，不能随意归类为"其他"
 - 标签应该具体、准确，反映新闻的核心信息
 
@@ -4048,7 +4212,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 ` : ''}
 
 **广告识别重要提示（仅限节假日类官方营销）：**
-- **仅当**内容属于节假日类官方营销时才使用"广告推广"、"商业广告"或"营销推广"：如春节、元旦、中秋节、国庆节、劳动节等的**节日庆祝、节日工作安排、节日放假安排**等官方节日祝福、放假通知、节日营销文案
+- **仅当**内容属于节假日类官方营销时才使用"广告推广"、"商业广告"或"营销推广"：如春节、元旦、中秋节、国庆节、劳动节及母亲节、父亲节、情人节、七夕、三八妇女节、圣诞节、感恩节等的**节日庆祝、节日工作安排、节日放假安排**等官方节日祝福、放假通知、节日营销文案
 - **不要**对以下内容使用这三种标签：企业推介自家产品、服务、品牌的发展类新闻；企业产品发布、市场拓展、合作推广等（股权投资关注企业发展，此类新闻应保留并正常推送）
 
 请确保返回的是有效的JSON格式。
@@ -4432,6 +4596,21 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         .replace(/_[^\n_]{0,20}新闻\s*/g, '')
         .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
         .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+        // 财中社特有的清理规则
+        .replace(/\s*\d+%\s*阅读\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*/g, '') // 移除"2.3w阅读 2026-03-27 17:31"
+        .replace(/\s*财中社\s+[^\n]{0,20}\s+\d+[\w\.]*w?阅读\s*/g, '') // 移除"财中社 李熹 2.3w阅读"
+        .replace(/\s*当前位置：[^\n]*\s*/g, '') // 移除"当前位置：北京"
+        .replace(/\s*历史搜索[^\n]*\s*/g, '') // 移除"历史搜索"
+        .replace(/\s*热门搜索[^\n]*\s*/g, '') // 移除"热门搜索"
+        .replace(/\s*数据查询\s+行情分析\s+公司分析\s*/g, '') // 移除"数据查询 行情分析 公司分析"
+        .replace(/\s*\*\s*推荐\s*\*\s*A股\s*\*\s*港美股[^\n]*\s*/g, '') // 移除导航标签
+        .replace(/\s*\d+\s+["']?[^"'\n]{10,100}["']?\s*/g, '') // 移除热门新闻列表（如"1 \"宁智毋庸...\""）
+        .replace(/\s*相关推荐[^\n]*\s*/g, '') // 移除"相关推荐"
+        .replace(/\s*最新文章推荐[^\n]*\s*/g, '') // 移除"最新文章推荐"
+        .replace(/\s*分享\s*长按保存图片[^\n]*\s*/g, '') // 移除分享按钮
+        .replace(/\s*官方声明：[^\n]*\s*/g, '') // 移除官方声明
+        .replace(/\s*©\d{4}\s+[^\n]{0,30}科技有限公司[^\n]*\s*/g, '') // 移除版权信息
+        .replace(/\s*京ICP备[^\n]*\s*/g, '') // 移除ICP备案
         .replace(/\s*[。\.]\s*[。\.]+/g, '。')
         .replace(/\s+/g, ' ')
         .trim();
@@ -4898,15 +5077,81 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
     const s2 = str2.trim();
     if (!s1 || !s2) return false;
     
+    // 精确匹配始终有效
+    if (s1 === s2) return true;
+    
+    // 子串匹配要求较短字符串至少有3个字符，防止短名称误匹配
+    // 例如："华科" 不应匹配 "东华科技"，"博瑞" 不应匹配 "博瑞医药"
+    const shorter = s1.length <= s2.length ? s1 : s2;
+    const longer = s1.length <= s2.length ? s2 : s1;
+    if (shorter.length < 3) return false; // 太短的名称只做精确匹配
+    
     // 如果包含英文字符，进行大小写不敏感匹配
     if (/[a-zA-Z]/.test(s1) || /[a-zA-Z]/.test(s2)) {
-      return s1.toLowerCase() === s2.toLowerCase() ||
-        s1.toLowerCase().includes(s2.toLowerCase()) ||
-        s2.toLowerCase().includes(s1.toLowerCase());
+      return longer.toLowerCase().includes(shorter.toLowerCase());
     }
     
-    // 纯中文，直接匹配
-    return s1 === s2 || s1.includes(s2) || s2.includes(s1);
+    // 纯中文，子串匹配
+    return longer.includes(shorter);
+  }
+
+  /**
+   * 检测企业名称是否仅为新闻中的弱提及（列举式/顺带提及）
+   * 从 validateExistingAssociation 中提取为独立方法，供所有处理路径共用
+   * @param {string} title - 新闻标题
+   * @param {string} content - 新闻内容
+   * @param {string} enterpriseName - 企业名称（AI返回的或数据库中的）
+   * @param {string} projectAbbreviation - 项目简称（可选）
+   * @param {string} enterpriseFullName - 企业全称（可选）
+   * @returns {boolean} true = 弱提及/未提及（应解除关联），false = 非弱提及（保留关联）
+   */
+  detectWeakMention(title, content, enterpriseName, projectAbbreviation = null, enterpriseFullName = null) {
+    const fullText = ((title || '') + ' ' + (content || '')).toLowerCase();
+    const titleLower = (title || '').toLowerCase();
+    const contentLower = (content || '').toLowerCase();
+    const contentLength = contentLower.length;
+
+    // 确定核心关键词（优先级：项目简称 > 企业名称去掉后缀 > 企业全称去掉后缀 > 原始名称）
+    const coreKeyword = (
+      projectAbbreviation ||
+      (enterpriseName || '').split(/有限公司|股份有限公司|集团/)[0] ||
+      (enterpriseFullName || '').split(/有限公司|股份有限公司|集团/)[0] ||
+      enterpriseName ||
+      ''
+    ).toLowerCase().trim();
+
+    if (!coreKeyword || coreKeyword.length < 2) return true;
+
+    // 统计核心关键词在全文中的出现次数
+    let mentionCount = 0;
+    let searchIdx = 0;
+    while (true) {
+      const foundIdx = fullText.indexOf(coreKeyword, searchIdx);
+      if (foundIdx === -1) break;
+      mentionCount++;
+      searchIdx = foundIdx + coreKeyword.length;
+    }
+
+    // 检查关键词是否出现在标题中
+    const inTitle = titleLower.includes(coreKeyword);
+
+    // 检查关键词是否出现在正文前300字（主体段落）中
+    const inOpening = contentLower.substring(0, 300).includes(coreKeyword);
+
+    logWithTag('[detectWeakMention]',
+      `企业"${enterpriseName}"(核心词: "${coreKeyword}") - 提及次数: ${mentionCount}, 标题:${inTitle ? '是' : '否'}, 开头:${inOpening ? '是' : '否'}, 文章长度: ${contentLength}`);
+
+    // 弱提及判定：仅出现1次 + 不在标题 + 不在开头 + 文章较长 → 大概率是顺带提及/列举提及
+    if (mentionCount <= 1 && !inTitle && !inOpening && contentLength > 1500) {
+      return true;
+    }
+
+    // 未提及：企业名称在全文中完全未出现
+    if (mentionCount === 0) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -4938,7 +5183,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
 **重要：您只能从以下被投企业列表中选择企业，不得返回列表之外的任何企业名称！**
 
 新闻标题：${title}
-新闻内容：${content.substring(0, 3000)}...
+新闻内容：${content.substring(0, 5000)}${content.length > 5000 ? '...' : ''}
 
 被投企业列表（您只能从这些企业中选择）：
 ${enterpriseList}
@@ -4989,13 +5234,19 @@ ${enterpriseList}
     // 替换变量
     const prompt = this.replacePromptVariables(promptTemplate, {
       title: title || '',
-      content: (content || '').substring(0, 3000) + ((content || '').length > 3000 ? '...' : ''),
+      content: (content || '').substring(0, 5000) + ((content || '').length > 5000 ? '...' : ''),
       enterpriseList: enterpriseList || ''
     });
 
     try {
       // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
       const response = await this.callAIModel(prompt, aiModelConfig);
+      
+      // 检查AI响应是否为空
+      if (!response || typeof response !== 'string' || response.trim().length === 0) {
+        console.warn('企业关联性分析：AI模型返回空响应');
+        return [];
+      }
       
       // 尝试解析JSON响应
       let result;
@@ -5175,6 +5426,18 @@ ${enterpriseList}
           enterprise.relevance_score = Math.max(enterprise.relevance_score - 40, 0);
         }
         
+        // 弱提及检测：即使名称在全文中出现，如果只是列举式提及（仅出现1次、不在标题和开头），也大幅降低相关度
+        const isWeak = this.detectWeakMention(
+          title, content,
+          enterprise.enterprise_name,
+          matchedEnterprise.project_abbreviation || null,
+          matchedEnterprise.enterprise_full_name || null
+        );
+        if (isWeak && enterprise.relevance_score >= 30) {
+          console.log(`二次验证弱提及检测：企业"${enterprise.enterprise_name}"在长文(${content.length}字)中仅为列举式/顺带提及，相关度从${enterprise.relevance_score}%降低到10%`);
+          enterprise.relevance_score = 10;
+        }
+        
         return enterprise;
       }).filter(enterprise => {
         // 如果相关度仍然大于等于30%，则保留
@@ -5229,7 +5492,7 @@ ${enterpriseList}
     if (abbreviation && fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
            -- 精确匹配project_abbreviation（简称）
            project_abbreviation = ?
            OR
@@ -5243,7 +5506,7 @@ ${enterpriseList}
            -- 匹配enterprise_full_name中的简称部分（如果数据库中是"简称【全称】"格式）
            (enterprise_full_name LIKE '%【%】%' 
             AND TRIM(SUBSTRING_INDEX(enterprise_full_name, '【', 1)) = ?)
-         ) AND delete_mark = 0
+         ) AND F_DeleteMark = 0
          LIMIT 1`,
         [abbreviation, fullName, fullName, abbreviation]
       );
@@ -5256,11 +5519,11 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && abbreviation && fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
            enterprise_full_name LIKE ? 
            OR enterprise_full_name LIKE ?
            OR project_abbreviation LIKE ?
-         ) AND delete_mark = 0
+         ) AND F_DeleteMark = 0
          LIMIT 1`,
         [`%${fullName}%`, `%${abbreviation}%`, `%${abbreviation}%`]
       );
@@ -5273,13 +5536,13 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && enterpriseFullName && !fullName) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
            enterprise_full_name = ?
            OR
            -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
            (enterprise_full_name LIKE '%【%】%' 
             AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
-         ) AND delete_mark = 0
+         ) AND F_DeleteMark = 0
          LIMIT 1`,
         [enterpriseFullName, enterpriseFullName]
       );
@@ -5287,7 +5550,7 @@ ${enterpriseList}
         // 如果精确匹配失败，尝试模糊匹配
         enterpriseExists = await db.query(
           `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-           WHERE enterprise_full_name LIKE ? AND delete_mark = 0
+           WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name LIKE ? AND F_DeleteMark = 0
            LIMIT 1`,
           [`%${enterpriseFullName}%`]
         );
@@ -5298,14 +5561,14 @@ ${enterpriseList}
     if (enterpriseExists.length === 0 && projectAbbreviation) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
            project_abbreviation = ?
            OR enterprise_full_name = ?
            OR
            -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
            (enterprise_full_name LIKE '%【%】%' 
             AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) = ?)
-         ) AND delete_mark = 0
+         ) AND F_DeleteMark = 0
          LIMIT 1`,
         [projectAbbreviation, enterpriseFullName, enterpriseFullName]
       );
@@ -5313,7 +5576,7 @@ ${enterpriseList}
         // 如果精确匹配失败，尝试模糊匹配
         enterpriseExists = await db.query(
           `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-           WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) AND delete_mark = 0
+           WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) AND F_DeleteMark = 0
            LIMIT 1`,
           [`%${projectAbbreviation}%`, `%${projectAbbreviation}%`]
         );
@@ -5324,14 +5587,14 @@ ${enterpriseList}
     if (enterpriseExists.length === 0) {
       enterpriseExists = await db.query(
         `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-         WHERE (
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
            enterprise_full_name LIKE ? 
            OR project_abbreviation LIKE ?
            OR
            -- 匹配enterprise_full_name中的全称部分（如果数据库中是"简称【全称】"格式）
            (enterprise_full_name LIKE '%【%】%' 
             AND TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1)) LIKE ?)
-         ) AND delete_mark = 0
+         ) AND F_DeleteMark = 0
          LIMIT 1`,
         [`%${enterpriseName.trim()}%`, `%${enterpriseName.trim()}%`, `%${enterpriseName.trim()}%`]
       );
@@ -5356,8 +5619,12 @@ ${enterpriseList}
     ];
     
     // 如果提取到了简称，也加入关键词列表
+    // projectAbbreviation 来自 "全称(简称)" 格式，abbreviation 来自 "简称【全称】" 格式
     if (projectAbbreviation) {
       enterpriseKeywords.push(projectAbbreviation.toLowerCase());
+    }
+    if (abbreviation) {
+      enterpriseKeywords.push(abbreviation.toLowerCase());
     }
     
     // 如果匹配到了企业记录，也使用数据库中的简称
@@ -5379,6 +5646,47 @@ ${enterpriseList}
       logWithTag('[validateExistingAssociation]', `文本检查：企业"${enterpriseName}"（全称: "${enterpriseFullName}", 简称: "${projectAbbreviation || enterpriseName}"）未在新闻内容中出现，解除关联`);
       return false;
     }
+
+    // 第二步半：提及权重分析 — 判断企业名称是否为新闻主体，还是仅在列举中被一笔带过
+    const titleLower = (title || '').toLowerCase();
+    const contentLower = (content || '').toLowerCase();
+    const contentLength = contentLower.length;
+
+    // 取最核心的关键词（简称优先，其次是全称，用于统计提及质量）
+    const coreKeyword = (projectAbbreviation
+      || abbreviation  // "简称【全称】" 格式的简称
+      || (enterpriseExists.length > 0 && enterpriseExists[0].project_abbreviation ? enterpriseExists[0].project_abbreviation : null)
+      || enterpriseName.split(/有限公司|股份有限公司|集团/)[0]
+      || enterpriseName
+    ).toLowerCase();
+
+    // 统计核心关键词在全文中的出现次数
+    let mentionCount = 0;
+    let searchIdx = 0;
+    while (true) {
+      const foundIdx = fullText.indexOf(coreKeyword, searchIdx);
+      if (foundIdx === -1) break;
+      mentionCount++;
+      searchIdx = foundIdx + coreKeyword.length;
+    }
+
+    // 检查关键词是否出现在标题中
+    const inTitle = titleLower.includes(coreKeyword);
+
+    // 检查关键词是否出现在正文前 300 字（主体段落）中
+    const inOpening = contentLower.substring(0, 300).includes(coreKeyword);
+
+    // 弱提及判定：仅出现 1 次 + 不在标题 + 不在开头 + 文章较长 → 大概率是顺带提及
+    const isWeakMention = mentionCount <= 1 && !inTitle && !inOpening && contentLength > 1500;
+
+    if (isWeakMention) {
+      logWithTag('[validateExistingAssociation]',
+        `提及权重分析：企业"${enterpriseName}"在全文(长度${contentLength})中仅出现${mentionCount}次，不在标题和开头，判定为顺带提及/列举式提及，解除关联`);
+      return false;
+    }
+
+    logWithTag('[validateExistingAssociation]',
+      `提及权重分析通过：企业"${enterpriseName}"出现${mentionCount}次，标题:${inTitle ? '是' : '否'}，开头:${inOpening ? '是' : '否'}，进入AI校验`);
 
     // 获取提示词配置（包含关联的AI模型配置）
     let promptConfig = await this.getPrompt(interfaceType, 'validation');
@@ -5423,6 +5731,7 @@ ${enterpriseList}
 - 科技行业新闻不等于与科技企业相关
 - 宁可错误地解除关联，也不要错误地保持关联
 - **信息源企业识别**：**极其重要** - 信息源企业（如"企查查消息"、"据企查查"、"格隆汇消息"等中的"企查查"、"格隆汇"）**不作为企业关联的直接依据**。这些只是新闻的信息来源，不是新闻的主体企业。必须根据正文内容实际的主要信息判断是否与企业相关。例如，如果新闻开头是"企查查消息，珠海博瑞晶芯完成融资"，那么新闻主体企业是"珠海博瑞晶芯"，而不是"企查查"。只有当信息源企业本身是新闻的主体内容时（如"企查查获得融资"），才应该关联信息源企业。
+- **列举式提及排除**：**极其重要** - 如果指定企业仅在投资清单、合作伙伴列表、被投企业名录、供应链名单等列举段落中被一笔带过（例如"先后投资了A公司、B公司、C公司"中的B公司），而新闻的讨论主体是其他机构或话题，**必须判断为不合理关联**。判断标准：企业新闻主体应有独立的段落或事件描述，而非仅作为枚举列表中的一个条目出现。
 
 **示例**：
 - "安谋科技发布NPU芯片" 与 "浙江太美医疗" → 不合理（完全不同的公司和业务）
@@ -5430,6 +5739,9 @@ ${enterpriseList}
 - "AI技术发展趋势" 与 "AI企业" → 不合理（行业趋势，非企业特定）
 - "企查查消息，珠海博瑞晶芯完成融资" 与 "企查查" → 不合理（企查查只是信息源，新闻主体是珠海博瑞晶芯）
 - "企查查消息，珠海博瑞晶芯完成融资" 与 "珠海博瑞晶芯" → 合理（珠海博瑞晶芯是新闻主体）
+- "某基金投资了A公司、B公司、C公司" 与 "B公司" → 不合理（B公司仅在投资列表中被列举提及，不是新闻主体）
+- "成都商业航天产业布局，包括星际荣耀、星河动力、九州云箭等企业" 与 "九州云箭" → 不合理（九州云箭仅在企业名录中被一笔带过，新闻主体是成都商业航天产业）
+- "三角防务入股液体火箭发动机研发商九州云箭" 与 "九州云箭" → 合理（九州云箭是新闻的核心主体，有独立的事件描述）
 
 请返回JSON格式：
 {
@@ -5445,13 +5757,49 @@ ${enterpriseList}
     // 替换变量
     const prompt = this.replacePromptVariables(promptTemplate, {
       title: title || '',
-      content: (content || '').substring(0, 3000),
+      content: (content || '').substring(0, 5000) + ((content || '').length > 5000 ? '...' : ''),
       enterpriseName: enterpriseName || ''
     });
 
     try {
       // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
-      const response = await this.callAIModel(prompt, aiModelConfig);
+      let response = null;
+      const maxAttempts = 2; // 最多重试1次（共2次尝试）
+      
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          response = await this.callAIModel(prompt, aiModelConfig);
+          break; // 成功获取响应，退出重试循环
+        } catch (callError) {
+          // 最后一次尝试仍然失败，向外抛出
+          if (attempt === maxAttempts) throw callError;
+          
+          // 判断是否为瞬时错误（超时、网络错误），可以重试
+          const isTransient = callError.code === 'ECONNABORTED' || 
+                             callError.code === 'ETIMEDOUT' ||
+                             callError.code === 'ECONNRESET' ||
+                             callError.code === 'ENOTFOUND' ||
+                             (callError.message && (
+                               callError.message.includes('timeout') ||
+                               callError.message.includes('Timeout') ||
+                               callError.message.includes('ECONNREFUSED')
+                             ));
+          
+          if (isTransient) {
+            logWithTag('[validateExistingAssociation]', `AI调用瞬时错误(${callError.code || callError.message})，第${attempt}次尝试失败，等待1秒后重试...`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            // 非瞬时错误（如配额超限、400错误），不重试
+            throw callError;
+          }
+        }
+      }
+      
+      // 检查AI响应是否为空（空响应也重试一次）
+      if (!response || typeof response !== 'string' || response.trim().length === 0) {
+        logWithTag('[validateExistingAssociation]', `AI模型返回空响应，解除企业"${enterpriseName}"的关联`);
+        return false;
+      }
       
       // 尝试解析JSON响应
       let result;
@@ -5488,8 +5836,9 @@ ${enterpriseList}
         console.warn('企业关联验证解析失败:', parseError.message);
         console.warn('AI响应内容（前500字符）:', response.substring(0, 500));
         console.warn('AI响应内容（后500字符）:', response.substring(Math.max(0, response.length - 500)));
-        // 如果解析失败，默认保持关联（保守策略）
-        return true;
+        // 解析失败时解除关联（避免因AI输出格式异常而保留误关联）
+        logWithTag('[validateExistingAssociation]', `AI响应解析失败，解除企业"${enterpriseName}"的关联`);
+        return false;
       }
 
       const isReasonable = result.is_reasonable === true;
@@ -5517,8 +5866,9 @@ ${enterpriseList}
 
     } catch (error) {
       console.error('企业关联验证失败:', error);
-      // 出错时保持关联（保守策略）
-      return true;
+      // AI调用异常时解除关联（避免因超时/限流等偶发故障保留误关联）
+      logWithTag('[validateExistingAssociation]', `AI校验异常(${error.message})，解除企业"${enterpriseName}"的关联`);
+      return false;
     }
   }
 
@@ -5537,6 +5887,21 @@ ${enterpriseList}
       .replace(/_[^\n_]{0,20}新闻\s*/g, '')
       .replace(/\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s+发布于[^\n。！？]{0,30}/g, '')
       .replace(/\s*[^\n。]{0,12}领域创作者\s*/g, '')
+      // 财中社特有的清理规则
+      .replace(/\s*\d+%\s*阅读\s*\d{4}-\d{2}-\d{2}\s+\d{1,2}:\d{2}\s*/g, '') // 移除"2.3w阅读 2026-03-27 17:31"
+      .replace(/\s*财中社\s+[^\n]{0,20}\s+\d+[\w\.]*w?阅读\s*/g, '') // 移除"财中社 李熹 2.3w阅读"
+      .replace(/\s*当前位置：[^\n]*\s*/g, '') // 移除"当前位置：北京"
+      .replace(/\s*历史搜索[^\n]*\s*/g, '') // 移除"历史搜索"
+      .replace(/\s*热门搜索[^\n]*\s*/g, '') // 移除"热门搜索"
+      .replace(/\s*数据查询\s+行情分析\s+公司分析\s*/g, '') // 移除"数据查询 行情分析 公司分析"
+      .replace(/\s*\*\s*推荐\s*\*\s*A股\s*\*\s*港美股[^\n]*\s*/g, '') // 移除导航标签
+      .replace(/\s*\d+\s+["']?[^"'\n]{10,100}["']?\s*/g, '') // 移除热门新闻列表（如"1 \"宁智毋庸...\""）
+      .replace(/\s*相关推荐[^\n]*\s*/g, '') // 移除"相关推荐"
+      .replace(/\s*最新文章推荐[^\n]*\s*/g, '') // 移除"最新文章推荐"
+      .replace(/\s*分享\s*长按保存图片[^\n]*\s*/g, '') // 移除分享按钮
+      .replace(/\s*官方声明：[^\n]*\s*/g, '') // 移除官方声明
+      .replace(/\s*©\d{4}\s+[^\n]{0,30}科技有限公司[^\n]*\s*/g, '') // 移除版权信息
+      .replace(/\s*京ICP备[^\n]*\s*/g, '') // 移除ICP备案
       .replace(/\s*[。\.]\s*[。\.]+/g, '。')
       .replace(/\s+/g, ' ')
       .trim();
@@ -5878,10 +6243,36 @@ ${enterpriseList}
       logWithTag('[processNewsWithEnterprise]', `接口类型: ${interfaceType}`);
       
       try {
-        // 对于企查查接口的数据，需要进行二次校验；上海国际集团企业名称来自接口，不做关联性判断
+        // 对于企查查接口的数据，需要进行二次校验
+        // 对于上海国际集团接口的数据，企业名称来自接口参数，但仍需验证内容与企业的关联度（避免关联度低的新闻出现）
         if (interfaceType === '企查查' || interfaceType === 'qichacha') {
           logWithTag('[processNewsWithEnterprise]', '企查查接口数据，需要进行二次校验关联性');
           shouldValidate = true;
+        } else if (interfaceType === '上海国际集团' || interfaceType === '上海国际') {
+          // 上海国际集团接口：企业名称来自接口参数，但仍需验证内容与企业的关联度
+          // 检查企业是否在invested_enterprises表中，获取简称和entity_type，但保持shouldValidate=true
+          logWithTag('[processNewsWithEnterprise]', '上海国际集团接口数据，需要验证内容与企业的关联度');
+          shouldValidate = true;
+          
+          // 查询企业信息（获取简称和entity_type）
+          const enterpriseCheck = await db.query(
+            `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, F_DeleteMark
+             FROM invested_enterprises 
+             WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+             AND F_DeleteMark = 0 
+             LIMIT 1`,
+            [newsItem.enterprise_full_name]
+          );
+          
+          if (enterpriseCheck.length > 0) {
+            finalEnterpriseName = enterpriseCheck[0].enterprise_full_name;
+            enterpriseAbbreviation = enterpriseCheck[0].project_abbreviation || null;
+            entityTypeFromEnterpriseCheck = enterpriseCheck[0].entity_type || null;
+            logWithTag('[processNewsWithEnterprise]', `上海国际集团企业来自invested_enterprises表，获取简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityTypeFromEnterpriseCheck || 'NULL'}，但仍需AI验证关联度`);
+          } else {
+            logWithTag('[processNewsWithEnterprise]', `上海国际集团企业不在invested_enterprises表中，需要AI验证关联性`);
+          }
         } else {
           // 对于新榜接口的数据，检查企业是否在invested_enterprises表中
           // 如果enterprise_full_name是"简称【全称】"格式，需要拆成简称和全称分别进行匹配
@@ -5906,9 +6297,9 @@ ${enterpriseList}
             // 用简称匹配project_abbreviation或enterprise_full_name中的简称部分
             // 用全称匹配enterprise_full_name或enterprise_full_name中的全称部分
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, F_DeleteMark
                FROM invested_enterprises 
-               WHERE (
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
                  -- 匹配project_abbreviation（简称）
                  project_abbreviation = ?
                  OR
@@ -5928,7 +6319,7 @@ ${enterpriseList}
                  OR enterprise_full_name LIKE ?
                )
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-               AND delete_mark = 0 
+               AND F_DeleteMark = 0 
                LIMIT 1`,
               [
                 abbreviation,           // project_abbreviation = 简称
@@ -5945,9 +6336,9 @@ ${enterpriseList}
           // 方式2：如果只解析出了全称（非"简称【全称】"格式），用全称进行匹配
           if (enterpriseCheck.length === 0 && fullName && !abbreviation) {
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, F_DeleteMark
                FROM invested_enterprises 
-               WHERE (
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (
                  -- 精确匹配enterprise_full_name
                  enterprise_full_name = ?
                  OR
@@ -5959,7 +6350,7 @@ ${enterpriseList}
                  enterprise_full_name LIKE ?
                )
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-               AND delete_mark = 0 
+               AND F_DeleteMark = 0 
                LIMIT 1`,
               [fullName, fullName, `%${fullName}%`]
             );
@@ -5969,11 +6360,11 @@ ${enterpriseList}
           // 方式3：如果还是没找到，尝试匹配整个enterprise_full_name（兼容旧数据）
           if (enterpriseCheck.length === 0) {
             enterpriseCheck = await db.query(
-              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, delete_mark
+              `SELECT enterprise_full_name, project_abbreviation, entity_type, exit_status, F_DeleteMark
                FROM invested_enterprises 
-               WHERE enterprise_full_name = ?
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
                AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
-               AND delete_mark = 0 
+               AND F_DeleteMark = 0 
                LIMIT 1`,
               [newsItem.enterprise_full_name]
             );
@@ -5995,9 +6386,9 @@ ${enterpriseList}
             logWithTag('[processNewsWithEnterprise]', '⚠️ 企业不在invested_enterprises表中或状态为"完全退出"，需要AI验证关联性');
             // 查询所有相关记录以便调试
             const allResults = await db.query(
-              `SELECT enterprise_full_name, exit_status, delete_mark
+              `SELECT enterprise_full_name, exit_status, F_DeleteMark
                FROM invested_enterprises 
-               WHERE enterprise_full_name = ?`,
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?`,
               [newsItem.enterprise_full_name]
             );
             logWithTag('[processNewsWithEnterprise]', '所有相关记录（不限制状态）:', allResults);
@@ -6033,12 +6424,56 @@ ${enterpriseList}
         logWithTag('[processNewsWithEnterprise]', '跳过AI验证，直接保持企业关联');
       }
 
+      // === 弱提及检测（仅在shouldValidate=false的新榜"免检通道"执行） ===
+      // 修复：新榜接口跳过AI验证时，列举式提及的企业也会被保留的问题
+      // 注意：shouldValidate=true的路径已经在validateExistingAssociation中完成了提及权重分析，不需要重复检测
+      if (!shouldValidate && shouldKeepAssociation && finalEnterpriseName) {
+        // 确保内容有值（新榜免检通道可能未调用ensureNewsContent）
+        let weakMentionContent = newsItem.content || '';
+        if (weakMentionContent.trim().length < 50 && newsItem.source_url) {
+          try {
+            const fetchedContent = await this.ensureNewsContent(newsItem);
+            if (fetchedContent && fetchedContent.trim().length > weakMentionContent.trim().length) {
+              weakMentionContent = fetchedContent;
+            }
+          } catch (e) {
+            logWithTag('[processNewsWithEnterprise]', `弱提及检测前抓取内容失败: ${e.message}，使用原始内容`);
+          }
+        }
+
+        // 解析企业名称格式（"简称【全称】"格式需拆分）
+        let wmEnterpriseName = finalEnterpriseName;
+        let wmFullName = finalEnterpriseName;
+        const wmFormatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
+        if (wmFormatMatch) {
+          wmEnterpriseName = wmFormatMatch[1].trim();
+          wmFullName = wmFormatMatch[2].trim();
+        }
+
+        const isWeakMention = this.detectWeakMention(
+          newsItem.title,
+          weakMentionContent,
+          wmEnterpriseName,
+          enterpriseAbbreviation || null,
+          wmFullName
+        );
+
+        if (isWeakMention) {
+          logWithTag('[processNewsWithEnterprise]',
+            `🚫 弱提及检测：企业"${finalEnterpriseName}"在新闻中仅为顺带提及/列举提及（出现次数少、不在标题和开头），解除关联`);
+          shouldKeepAssociation = false;
+          finalEnterpriseName = null;
+          enterpriseAbbreviation = null;
+          entityTypeFromEnterpriseCheck = null;
+        }
+      }
+
       // 检查是否是额外公众号的新闻
       const isAdditionalAccount = await db.query(
-        `SELECT id FROM additional_wechat_accounts 
+        `SELECT F_Id FROM additional_wechat_accounts 
          WHERE wechat_account_id = ? 
          AND status = 'active' 
-         AND delete_mark = 0`,
+         AND F_DeleteMark = 0`,
         [newsItem.wechat_account]
       );
 
@@ -6149,8 +6584,8 @@ ${enterpriseList}
         try {
           const fromEnterpriseAccount = await db.query(
             `SELECT 1 FROM invested_enterprises 
-             WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
-             AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+             WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+             AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND F_DeleteMark = 0 LIMIT 1`,
             [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
           );
           if (fromEnterpriseAccount.length > 0) {
@@ -6193,8 +6628,8 @@ ${enterpriseList}
           enterpriseInfo = await db.query(
             `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
              FROM invested_enterprises
-             WHERE enterprise_full_name = ?
-             AND delete_mark = 0
+             WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
+             AND F_DeleteMark = 0
              LIMIT 1`,
             [finalEnterpriseName]
           );
@@ -6204,8 +6639,8 @@ ${enterpriseList}
             enterpriseInfo = await db.query(
               `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
                FROM invested_enterprises
-               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?)
-               AND delete_mark = 0
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?)
+               AND F_DeleteMark = 0
                LIMIT 1`,
               [`%${finalEnterpriseName}%`, finalEnterpriseName]
             );
@@ -6219,8 +6654,8 @@ ${enterpriseList}
               enterpriseInfo = await db.query(
                 `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation
                  FROM invested_enterprises
-                 WHERE enterprise_full_name = ?
-                 AND delete_mark = 0
+                 WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ?
+                 AND F_DeleteMark = 0
                  LIMIT 1`,
                 [extractedFullName]
               );
@@ -6252,13 +6687,13 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] 从invested_enterprises表获取fund和sub_fund: fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
       }
       
-      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ? WHERE id = ?`);
+      console.log(`[processNewsWithEnterprise] 执行SQL: UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ? WHERE F_Id = ?`);
       console.log(`[processNewsWithEnterprise] 更新参数: enterprise_full_name="${finalEnterpriseName || 'NULL'}", enterprise_abbreviation="${enterpriseAbbreviation || 'NULL'}", entity_type="${entityType || 'NULL'}", sentiment="${validatedAnalysis.sentiment}", fund="${fund || 'NULL'}", sub_fund="${sub_fund || 'NULL'}"`);
       
       await db.execute(
         `UPDATE news_detail 
          SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
-         WHERE id = ?`,
+         WHERE F_Id = ?`,
         [
           finalEnterpriseName,
           enterpriseAbbreviation,
@@ -6269,15 +6704,15 @@ ${enterpriseList}
           contentToSave,
           fund,
           sub_fund,
-          newsItem.id
+          newsItem.F_Id
         ]
       );
       
       // 验证更新是否成功
       console.log(`[processNewsWithEnterprise] 验证更新结果...`);
       const verifyResult = await db.query(
-        'SELECT enterprise_full_name, entity_type, news_sentiment FROM news_detail WHERE id = ?',
-        [newsItem.id]
+        'SELECT enterprise_full_name, entity_type, news_sentiment FROM news_detail WHERE F_Id = ?',
+        [newsItem.F_Id]
       );
       if (verifyResult.length > 0) {
         console.log(`[processNewsWithEnterprise] ✓ 更新成功！`);
@@ -6288,10 +6723,10 @@ ${enterpriseList}
         console.log(`[processNewsWithEnterprise] ❌ 更新失败！无法验证更新结果`);
       }
 
-      logWithTag('[processNewsWithEnterprise]', `✓ 已完成新闻分析: ${newsItem.id}${shouldValidate && !shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
+      logWithTag('[processNewsWithEnterprise]', `✓ 已完成新闻分析: ${newsItem.F_Id}${!shouldKeepAssociation ? ' (已解除企业关联)' : ''}`);
       return true;
     } catch (error) {
-      errorWithTag('[processNewsWithEnterprise]', `新闻分析失败 ${newsItem.id}:`, error);
+      errorWithTag('[processNewsWithEnterprise]', `新闻分析失败 ${newsItem.F_Id}:`, error);
       return false;
     }
   }
@@ -6312,7 +6747,7 @@ ${enterpriseList}
       const enterprises = await db.query(
         `SELECT enterprise_full_name, project_abbreviation 
          FROM invested_enterprises 
-         WHERE delete_mark = 0 
+         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 
          AND exit_status NOT IN ('完全退出', '已上市')`
       );
 
@@ -6351,10 +6786,10 @@ ${enterpriseList}
 
       // 检查是否是额外公众号的新闻
       const isAdditionalAccount = await db.query(
-        `SELECT id FROM additional_wechat_accounts 
+        `SELECT F_Id FROM additional_wechat_accounts 
          WHERE wechat_account_id = ? 
          AND status = 'active' 
-         AND delete_mark = 0`,
+         AND F_DeleteMark = 0`,
         [newsItem.wechat_account]
       );
 
@@ -6471,8 +6906,8 @@ ${enterpriseList}
           try {
             const fromEnterpriseAccount = await db.query(
               `SELECT 1 FROM invested_enterprises 
-               WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
-               AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND F_DeleteMark = 0 LIMIT 1`,
               [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
             );
             if (fromEnterpriseAccount.length > 0) {
@@ -6501,17 +6936,17 @@ ${enterpriseList}
         await db.execute(
           `UPDATE news_detail 
            SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
-           WHERE id = ?`,
+           WHERE F_Id = ?`,
           [
             validatedAnalysis.sentiment,
             JSON.stringify(validatedAnalysis.keywords),
             validatedAnalysis.news_abstract,
             contentToSave,
-            newsItem.id
+            newsItem.F_Id
           ]
         );
         const reason = isAdvertisement ? '广告类型' : '无关联企业';
-        logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（${reason}): ${newsItem.id}`);
+        logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（${reason}): ${newsItem.F_Id}`);
       } else {
         // 有相关企业且非广告类型，需要复制数据
         // 最终验证：确保所有企业名称都在被投企业表中存在（检查企业全称或项目简称，大小写不敏感）
@@ -6535,8 +6970,8 @@ ${enterpriseList}
           if (itemFullName) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
-               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name LIKE ? OR enterprise_full_name LIKE ?) 
+               AND F_DeleteMark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${itemFullName}%`, itemAbbreviation ? `%${itemAbbreviation}%` : `%${itemFullName}%`]
             );
@@ -6546,8 +6981,8 @@ ${enterpriseList}
           if (existsInDB.length === 0 && itemAbbreviation) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
-               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               AND F_DeleteMark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${itemAbbreviation}%`, `%${itemAbbreviation}%`]
             );
@@ -6557,8 +6992,8 @@ ${enterpriseList}
           if (existsInDB.length === 0) {
             existsInDB = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
-               AND delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name LIKE ? OR project_abbreviation LIKE ?) 
+               AND F_DeleteMark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
                LIMIT 1`,
               [`%${enterprise.enterprise_name}%`, `%${enterprise.enterprise_name}%`]
             );
@@ -6568,7 +7003,7 @@ ${enterpriseList}
           if (existsInDB.length === 0) {
             const allEnterprises = await db.query(
               `SELECT enterprise_full_name, project_abbreviation FROM invested_enterprises 
-               WHERE delete_mark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND exit_status NOT IN ('完全退出', '已上市', '不再观察')`
             );
             
             // 使用大小写不敏感匹配，支持"简称【全称】"格式
@@ -6632,8 +7067,8 @@ ${enterpriseList}
             try {
               const fromEnterpriseAccount = await db.query(
                 `SELECT 1 FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
-                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+                 WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND F_DeleteMark = 0 LIMIT 1`,
                 [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
               );
               if (fromEnterpriseAccount.length > 0) {
@@ -6661,16 +7096,16 @@ ${enterpriseList}
           await db.execute(
             `UPDATE news_detail 
              SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
-             WHERE id = ?`,
+             WHERE F_Id = ?`,
             [
               validatedAnalysis.sentiment,
               JSON.stringify(validatedAnalysis.keywords),
               validatedAnalysis.news_abstract,
               contentToSave2,
-              newsItem.id
+              newsItem.F_Id
             ]
           );
-          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（无有效企业关联): ${newsItem.id}`);
+          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（无有效企业关联): ${newsItem.F_Id}`);
         } else {
           // 处理有效的企业关联
           // 在更新数据库之前，先校验分析结果（摘要和关键词），所有记录使用相同的校验结果
@@ -6681,8 +7116,8 @@ ${enterpriseList}
             try {
               const fromEnterpriseAccount = await db.query(
                 `SELECT 1 FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
-                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND delete_mark = 0 LIMIT 1`,
+                 WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ? OR wechat_official_account_id LIKE ?)
+                 AND exit_status NOT IN ('完全退出', '已上市', '不再观察') AND F_DeleteMark = 0 LIMIT 1`,
                 [newsItem.wechat_account, `${newsItem.wechat_account},%`, `%,${newsItem.wechat_account},%`, `%,${newsItem.wechat_account}`]
               );
               if (fromEnterpriseAccount.length > 0) {
@@ -6730,7 +7165,7 @@ ${enterpriseList}
                 // 直接使用enterprise_full_name进行匹配（不再解析"简称【全称】"格式）
                 let enterpriseInfo = await db.query(
                   `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                   WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                   [enterpriseFullName]
                 );
                 console.log(`[processNewsWithoutEnterprise] 精确匹配结果: ${enterpriseInfo.length} 条记录`);
@@ -6739,7 +7174,7 @@ ${enterpriseList}
                 if (enterpriseInfo.length === 0) {
                   enterpriseInfo = await db.query(
                     `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name LIKE ? AND F_DeleteMark = 0 LIMIT 1`,
                     [`%${enterpriseFullName}%`]
                   );
                   console.log(`[processNewsWithoutEnterprise] 模糊匹配结果: ${enterpriseInfo.length} 条记录`);
@@ -6752,12 +7187,12 @@ ${enterpriseList}
                     const extractedFullName = formatMatch[2].trim();
                     enterpriseInfo = await db.query(
                       `SELECT entity_type, enterprise_full_name, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE (CASE 
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (CASE 
                          WHEN enterprise_full_name LIKE '%【%】%' THEN 
                            TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
                          ELSE 
                            enterprise_full_name
-                       END) = ? AND delete_mark = 0 LIMIT 1`,
+                       END) = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [extractedFullName]
                     );
                     console.log(`[processNewsWithoutEnterprise] 提取全称匹配结果: ${enterpriseInfo.length} 条记录`);
@@ -6783,7 +7218,7 @@ ${enterpriseList}
               await db.execute(
                 `UPDATE news_detail 
                  SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?, fund = ?, sub_fund = ?
-                 WHERE id = ?`,
+                 WHERE F_Id = ?`,
                 [
                   enterpriseFullName,
                   enterpriseAbbreviation,
@@ -6794,14 +7229,14 @@ ${enterpriseList}
                   contentToSave3,
                   fund,
                   sub_fund,
-                  newsItem.id
+                  newsItem.F_Id
                 ]
               );
               
               // 验证更新结果
               const verifyResult = await db.query(
-                `SELECT enterprise_full_name, entity_type FROM news_detail WHERE id = ?`,
-                [newsItem.id]
+                `SELECT enterprise_full_name, entity_type FROM news_detail WHERE F_Id = ?`,
+                [newsItem.F_Id]
               );
               if (verifyResult.length > 0) {
                 console.log(`[processNewsWithoutEnterprise] ✓ 更新成功！`);
@@ -6827,7 +7262,7 @@ ${enterpriseList}
                 // 直接使用enterprise_full_name进行匹配
                 let enterpriseInfo = await db.query(
                   `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                   WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                   [enterpriseFullName]
                 );
                 
@@ -6835,7 +7270,7 @@ ${enterpriseList}
                 if (enterpriseInfo.length === 0) {
                   enterpriseInfo = await db.query(
                     `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name LIKE ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name LIKE ? AND F_DeleteMark = 0 LIMIT 1`,
                     [`%${enterpriseFullName}%`]
                   );
                 }
@@ -6847,12 +7282,12 @@ ${enterpriseList}
                     const extractedFullName = formatMatch[2].trim();
                     enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE (CASE 
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (CASE 
                          WHEN enterprise_full_name LIKE '%【%】%' THEN 
                            TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
                          ELSE 
                            enterprise_full_name
-                       END) = ? AND delete_mark = 0 LIMIT 1`,
+                       END) = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [extractedFullName]
                     );
                   }
@@ -6874,11 +7309,11 @@ ${enterpriseList}
               
               await db.execute(
                 `INSERT INTO news_detail 
-                 (id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, 
+                 (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, 
                   title, summary, public_time, content, keywords, news_abstract, news_sentiment, fund, sub_fund)
                  SELECT ?, account_name, wechat_account, ?, ?, ?, source_url, 
                         title, summary, public_time, content, ?, ?, ?, ?, ?
-                 FROM news_detail WHERE id = ?`,
+                 FROM news_detail WHERE F_Id = ?`,
                 [
                   newId,
                   enterpriseFullName,
@@ -6889,18 +7324,18 @@ ${enterpriseList}
                   validatedAnalysis.sentiment,
                   fund,
                   sub_fund,
-                  newsItem.id
+                  newsItem.F_Id
                 ]
               );
             }
           }
-          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（关联${validEnterprises.length}家有效企业): ${newsItem.id}`);
+          logWithTag('[processNewsWithoutEnterprise]', `✓ 已完成新闻分析（关联${validEnterprises.length}家有效企业): ${newsItem.F_Id}`);
         }
       }
 
       return true;
     } catch (error) {
-      errorWithTag('[processNewsWithoutEnterprise]', `新闻分析失败 ${newsItem.id}:`, error);
+      errorWithTag('[processNewsWithoutEnterprise]', `新闻分析失败 ${newsItem.F_Id}:`, error);
       return false;
     }
   }
@@ -6919,14 +7354,14 @@ ${enterpriseList}
       
       // 查询新榜接口中content不为空但摘要或关键词为空的记录
       const newsToSupplement = await db.query(
-        `SELECT id, title, content, source_url, wechat_account, enterprise_full_name, account_name
+        `SELECT F_Id, title, content, source_url, wechat_account, enterprise_full_name, account_name
          FROM news_detail 
          WHERE APItype = '新榜'
          AND content IS NOT NULL 
          AND content != ''
          AND (news_abstract IS NULL OR news_abstract = '' OR keywords IS NULL OR keywords = '[]' OR keywords = '')
-         AND delete_mark = 0
-         ORDER BY created_at DESC
+         AND F_DeleteMark = 0
+         ORDER BY F_CreatorTime DESC
          LIMIT 100`,
         []
       );
@@ -6945,10 +7380,10 @@ ${enterpriseList}
         try {
           // 检查是否是额外公众号
           const isAdditionalAccountResult = await db.query(
-            `SELECT id FROM additional_wechat_accounts 
+            `SELECT F_Id FROM additional_wechat_accounts 
              WHERE wechat_account_id = ? 
              AND status = 'active' 
-             AND delete_mark = 0`,
+             AND F_DeleteMark = 0`,
             [newsItem.wechat_account]
           );
           const isAdditionalAccount = isAdditionalAccountResult.length > 0;
@@ -6963,7 +7398,7 @@ ${enterpriseList}
             // 内容被污染，尝试从source_url提取内容
             if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
               try {
-                logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 内容被污染，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
+                logWithTag('[补充新榜分析]', `新闻ID ${newsItem.F_Id} 内容被污染，尝试从微信公众号URL提取内容: ${newsItem.source_url}`);
                 const extractResult = await this.extractWeChatArticleContent(newsItem.source_url);
                 
                 if (extractResult.success && extractResult.content && extractResult.content.trim().length > 0) {
@@ -6972,8 +7407,8 @@ ${enterpriseList}
                   
                   // 更新数据库中的content
                   await db.execute(
-                    'UPDATE news_detail SET content = ? WHERE id = ?',
-                    [finalContent, newsItem.id]
+                    'UPDATE news_detail SET content = ? WHERE F_Id = ?',
+                    [finalContent, newsItem.F_Id]
                   );
                   
                   // 使用提取的内容进行AI分析
@@ -7014,7 +7449,7 @@ ${enterpriseList}
               }
             } else {
               // 不是微信公众号URL或没有source_url，使用默认处理
-              logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 内容被污染，且不是微信公众号URL，使用默认处理`);
+              logWithTag('[补充新榜分析]', `新闻ID ${newsItem.F_Id} 内容被污染，且不是微信公众号URL，使用默认处理`);
               const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
               const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
               const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
@@ -7028,7 +7463,7 @@ ${enterpriseList}
             }
           } else {
             // 内容有效，调用AI分析
-            logWithTag('[补充新榜分析]', `新闻ID ${newsItem.id} 调用AI分析，内容长度: ${newsItem.content.length}字符`);
+            logWithTag('[补充新榜分析]', `新闻ID ${newsItem.F_Id} 调用AI分析，内容长度: ${newsItem.content.length}字符`);
             analysisResult = await this.analyzeNewsSentimentAndType(
               newsItem.title,
               newsItem.content,
@@ -7043,28 +7478,28 @@ ${enterpriseList}
             await db.execute(
               `UPDATE news_detail 
                SET news_sentiment = ?, keywords = ?, news_abstract = ?
-               WHERE id = ?`,
+               WHERE F_Id = ?`,
               [
                 analysisResult.sentiment || 'neutral',
                 JSON.stringify(analysisResult.keywords || []),
                 analysisResult.news_abstract || '',
-                newsItem.id
+                newsItem.F_Id
               ]
             );
             supplementCount++;
-            logWithTag('[补充新榜分析]', `✓ 已补充新闻ID: ${newsItem.id}`);
+            logWithTag('[补充新榜分析]', `✓ 已补充新闻ID: ${newsItem.F_Id}`);
           }
 
           // 如果是额外公众号，执行企业关联分析和关联验证
           if (isAdditionalAccount && finalContent && finalContent.trim().length > 0) {
             try {
-              logWithTag('[补充新榜分析]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+              logWithTag('[补充新榜分析]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.F_Id}`);
               
               // 获取所有被投企业信息
               const enterprises = await db.query(
                 `SELECT enterprise_full_name, project_abbreviation 
                  FROM invested_enterprises 
-                 WHERE delete_mark = 0 
+                 WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 
                  AND exit_status NOT IN ('完全退出', '已上市')`
               );
 
@@ -7101,7 +7536,7 @@ ${enterpriseList}
                     try {
                       const enterpriseInfo = await db.query(
                         `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                         [enterpriseFullName]
                       );
                       if (enterpriseInfo.length > 0) {
@@ -7117,10 +7552,10 @@ ${enterpriseList}
                       console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                      [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
+                      [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.F_Id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.F_Id}`);
                   } else {
                     // 如果找不到匹配的企业，使用原始名称
                     // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund、project_abbreviation
@@ -7131,7 +7566,7 @@ ${enterpriseList}
                     try {
                       const enterpriseInfo = await db.query(
                         `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                         WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                         WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                         [firstEnterprise.enterprise_name]
                       );
                       if (enterpriseInfo.length > 0) {
@@ -7144,22 +7579,22 @@ ${enterpriseList}
                       console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                     }
                     await db.execute(
-                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                      [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
+                      'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
+                      [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.F_Id]
                     );
-                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                    logWithTag('[补充新榜分析]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.F_Id}`);
                   }
                 }
               }
             } catch (enterpriseError) {
-              errorWithTag('[补充新榜分析]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+              errorWithTag('[补充新榜分析]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.F_Id}, 错误: ${enterpriseError.message}`);
             }
           }
 
           // 添加延迟避免API频率限制
           await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          errorWithTag('[补充新榜分析]', `处理新闻 ${newsItem.id} 时出错:`, error);
+          errorWithTag('[补充新榜分析]', `处理新闻 ${newsItem.F_Id} 时出错:`, error);
         }
       }
 
@@ -7203,8 +7638,8 @@ ${enterpriseList}
       //   `SELECT * FROM ai_model_config 
       //    WHERE usage_type = 'image_recognition' 
       //    AND is_active = 1 
-      //    AND delete_mark = 0 
-      //    ORDER BY created_at DESC 
+      //    AND F_DeleteMark = 0 
+      //    ORDER BY F_CreatorTime DESC 
       //    LIMIT 1`
       // );
       const imageModelConfig = []; // 图片识别功能已禁用
@@ -7312,7 +7747,7 @@ ${enterpriseList}
    */
   async analyzeXinbangNewsImmediately(newsItem, isAdditionalAccount = false) {
     try {
-      logWithTag('[立即分析新榜新闻]', `开始分析新闻ID: ${newsItem.id}, 标题: ${newsItem.title.substring(0, 50)}...`);
+      logWithTag('[立即分析新榜新闻]', `开始分析新闻ID: ${newsItem.F_Id}, 标题: ${newsItem.title.substring(0, 50)}...`);
       
       const interfaceType = '新榜';
       const hasContent = newsItem.content && newsItem.content.trim().length > 0;
@@ -7334,8 +7769,8 @@ ${enterpriseList}
               
               // 更新数据库中的content
               await db.execute(
-                'UPDATE news_detail SET content = ? WHERE id = ?',
-                [finalContent, newsItem.id]
+                'UPDATE news_detail SET content = ? WHERE F_Id = ?',
+                [finalContent, newsItem.F_Id]
               );
               
               // 使用提取的内容进行AI分析
@@ -7410,8 +7845,8 @@ ${enterpriseList}
             let enterpriseInfo = await db.query(
               `SELECT entity_type, enterprise_full_name
                FROM invested_enterprises 
-               WHERE (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
-               AND delete_mark = 0 
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (enterprise_full_name = ? OR enterprise_full_name LIKE ?)
+               AND F_DeleteMark = 0 
                LIMIT 1`,
               [newsItem.enterprise_full_name, `%【${newsItem.enterprise_full_name}】`]
             );
@@ -7424,8 +7859,8 @@ ${enterpriseList}
                 enterpriseInfo = await db.query(
                   `SELECT entity_type, enterprise_full_name
                    FROM invested_enterprises 
-                   WHERE enterprise_full_name = ? 
-                   AND delete_mark = 0 
+                   WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? 
+                   AND F_DeleteMark = 0 
                    LIMIT 1`,
                   [extractedFullName]
                 );
@@ -7444,34 +7879,34 @@ ${enterpriseList}
         await db.execute(
           `UPDATE news_detail 
            SET news_sentiment = ?, keywords = ?, news_abstract = ?${entityTypeUpdate !== null ? ', entity_type = ?' : ''}
-           WHERE id = ?`,
+           WHERE F_Id = ?`,
           entityTypeUpdate !== null
             ? [
                 analysisResult.sentiment || 'neutral',
                 JSON.stringify(analysisResult.keywords || []),
                 analysisResult.news_abstract || '',
                 entityTypeUpdate,
-                newsItem.id
+                newsItem.F_Id
               ]
             : [
                 analysisResult.sentiment || 'neutral',
                 JSON.stringify(analysisResult.keywords || []),
                 analysisResult.news_abstract || '',
-                newsItem.id
+                newsItem.F_Id
               ]
         );
-        logWithTag('[立即分析新榜新闻]', `✓ 已更新数据库，新闻ID: ${newsItem.id}${entityTypeUpdate !== null ? `, entity_type: ${entityTypeUpdate}` : ''}`);
+        logWithTag('[立即分析新榜新闻]', `✓ 已更新数据库，新闻ID: ${newsItem.F_Id}${entityTypeUpdate !== null ? `, entity_type: ${entityTypeUpdate}` : ''}`);
         
         // 如果是额外公众号，执行企业关联分析和关联验证
         if (isAdditionalAccount && hasContent && !isContentDirty) {
           try {
-            logWithTag('[立即分析新榜新闻]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.id}`);
+            logWithTag('[立即分析新榜新闻]', `额外公众号新闻，执行企业关联分析，新闻ID: ${newsItem.F_Id}`);
             
             // 获取所有被投企业信息
             const enterprises = await db.query(
               `SELECT enterprise_full_name, project_abbreviation 
                FROM invested_enterprises 
-               WHERE delete_mark = 0 
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 
                AND exit_status NOT IN ('完全退出', '已上市')`
             );
 
@@ -7508,7 +7943,7 @@ ${enterpriseList}
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [enterpriseFullName]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -7524,10 +7959,10 @@ ${enterpriseList}
                     console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                    [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
+                    [enterpriseFullName, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.F_Id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${enterpriseFullName}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.F_Id}`);
                 } else {
                   // 如果找不到匹配的企业，使用原始名称
                   // 尝试从invested_enterprises表中获取entity_type、fund和sub_fund、project_abbreviation
@@ -7538,7 +7973,7 @@ ${enterpriseList}
                   try {
                     const enterpriseInfo = await db.query(
                       `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                       WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                       WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                       [firstEnterprise.enterprise_name]
                     );
                     if (enterpriseInfo.length > 0) {
@@ -7551,15 +7986,15 @@ ${enterpriseList}
                     console.warn(`获取entity_type、fund和sub_fund时出错: ${err.message}`);
                   }
                   await db.execute(
-                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                    [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.id]
+                    'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
+                    [firstEnterprise.enterprise_name, enterpriseAbbreviation, entityType, fund, sub_fund, newsItem.F_Id]
                   );
-                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.id}`);
+                  logWithTag('[立即分析新榜新闻]', `✓ 额外公众号新闻已关联企业: ${firstEnterprise.enterprise_name}, 简称: ${enterpriseAbbreviation || 'NULL'}, entity_type: ${entityType || 'NULL'}, fund: ${fund || 'NULL'}, sub_fund: ${sub_fund || 'NULL'}, 新闻ID: ${newsItem.F_Id}`);
                 }
               }
             }
           } catch (enterpriseError) {
-            errorWithTag('[立即分析新榜新闻]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.id}, 错误: ${enterpriseError.message}`);
+            errorWithTag('[立即分析新榜新闻]', `额外公众号企业关联分析失败，新闻ID: ${newsItem.F_Id}, 错误: ${enterpriseError.message}`);
           }
         }
         
@@ -7568,7 +8003,7 @@ ${enterpriseList}
       
       return false;
     } catch (error) {
-      errorWithTag('[立即分析新榜新闻]', `✗ 分析失败，新闻ID: ${newsItem.id}, 错误: ${error.message}`);
+      errorWithTag('[立即分析新榜新闻]', `✗ 分析失败，新闻ID: ${newsItem.F_Id}, 错误: ${error.message}`);
       return false;
     }
   }
@@ -7579,12 +8014,12 @@ ${enterpriseList}
       
       // 获取需要分析的新闻（news_abstract为空的记录），包括公众号信息和接口类型
       const newsItems = await db.query(
-        `SELECT id, title, content, source_url, enterprise_full_name, wechat_account, account_name, created_at, APItype
+        `SELECT F_Id, title, content, source_url, enterprise_full_name, wechat_account, account_name, F_CreatorTime, APItype
          FROM news_detail 
          WHERE news_abstract IS NULL 
          AND content IS NOT NULL 
          AND content != ''
-         ORDER BY created_at DESC 
+         ORDER BY F_CreatorTime DESC 
          LIMIT ?`,
         [limit]
       );
@@ -7604,7 +8039,7 @@ ${enterpriseList}
           // 不再跳过乱码：乱码时 processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
           const interfaceType = newsItem.APItype || '新榜';
           if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content && newsItem.content.trim().length < 20) {
-            warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.id} - ${newsItem.title.substring(0, 50)}`);
+            warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.F_Id} - ${newsItem.title.substring(0, 50)}`);
             errorCount++;
             continue;
           }
@@ -7618,12 +8053,12 @@ ${enterpriseList}
                 // 支持逗号分隔的多个公众号ID
                 `SELECT enterprise_full_name, project_abbreviation 
                  FROM invested_enterprises 
-                 WHERE (wechat_official_account_id = ? 
+                 WHERE ${IE_NEWS_APP_FILTER_SQL} AND  (wechat_official_account_id = ? 
                    OR wechat_official_account_id LIKE ?
                    OR wechat_official_account_id LIKE ?
                    OR wechat_official_account_id LIKE ?)
                  AND exit_status NOT IN ('完全退出', '已上市')
-                 AND delete_mark = 0 
+                 AND F_DeleteMark = 0 
                  LIMIT 1`,
                 [
                   newsItem.wechat_account,
@@ -7646,7 +8081,7 @@ ${enterpriseList}
                 try {
                   const enterpriseInfo = await db.query(
                     `SELECT entity_type, fund, sub_fund, project_abbreviation FROM invested_enterprises 
-                     WHERE enterprise_full_name = ? AND delete_mark = 0 LIMIT 1`,
+                     WHERE ${IE_NEWS_APP_FILTER_SQL} AND  enterprise_full_name = ? AND F_DeleteMark = 0 LIMIT 1`,
                     [enterpriseResult[0].enterprise_full_name]
                   );
                   if (enterpriseInfo.length > 0) {
@@ -7663,8 +8098,8 @@ ${enterpriseList}
                 }
                 // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund
                 await db.execute(
-                  'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE id = ?',
-                  [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, newsItem.id]
+                  'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
+                  [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, newsItem.F_Id]
                 );
               }
             } catch (e) {
@@ -7689,7 +8124,7 @@ ${enterpriseList}
           // 添加延迟避免API频率限制
           await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          console.error(`处理新闻 ${newsItem.id} 时出错:`, error);
+          console.error(`处理新闻 ${newsItem.F_Id} 时出错:`, error);
           errorCount++;
         }
       }
@@ -7740,7 +8175,7 @@ ${enterpriseList}
       let duplicateCount = 0;
 
       // 按创建时间正序排列，确保先处理早期文章
-      const sortedNews = newsItems.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+      const sortedNews = newsItems.sort((a, b) => new Date(a.F_CreatorTime) - new Date(b.F_CreatorTime));
       
       console.log(`开始对 ${sortedNews.length} 条新闻进行去重检查...`);
 
@@ -7753,14 +8188,14 @@ ${enterpriseList}
             currentNews.title,
             currentNews.content,
             currentNews.source_url,
-            currentNews.created_at
+            currentNews.F_CreatorTime
           );
 
           if (duplicateResult.isDuplicate) {
             // 标记当前文章（后遇到的）为删除状态
             await db.execute(
-              'UPDATE news_detail SET delete_mark = 1 WHERE id = ?',
-              [currentNews.id]
+              'UPDATE news_detail SET F_DeleteMark = 1 WHERE F_Id = ?',
+              [currentNews.F_Id]
             );
             
             duplicateCount++;
@@ -7775,7 +8210,7 @@ ${enterpriseList}
           }
 
         } catch (error) {
-          console.error(`检查文章 ${currentNews.id} 重复时出错:`, error);
+          console.error(`检查文章 ${currentNews.F_Id} 重复时出错:`, error);
         }
       }
 
@@ -7797,7 +8232,11 @@ ${enterpriseList}
     const keywordRules = [
       // 节假日标签优先判断（如果是节假日内容，只返回节假日标签）
       { 
-        keywords: ['公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日'],
+        keywords: [
+          '公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日',
+          '母亲节', '父亲节', '情人节', '七夕', '妇女节', '三八', '女神节', '女王节',
+          '圣诞', '感恩节', '万圣节', '愚人节', '护士节', '教师节', '儿童节', '六一'
+        ],
         tag: '节假日',
         // 验证是否为节假日内容：标题或内容主要是节假日相关
         validate: (title, content) => {
@@ -7805,8 +8244,12 @@ ${enterpriseList}
           const contentLower = (content || '').toLowerCase();
           const fullText = titleLower + ' ' + contentLower;
           
-          // 节假日关键词
-          const holidayKeywords = ['公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日'];
+          // 节假日关键词（含国际/公历及常见商业节日，与中国传统节日一并识别）
+          const holidayKeywords = [
+            '公祭日', '清明节', '春节', '国庆节', '中秋节', '劳动节', '端午节', '元旦', '纪念日', '节日', '节假日',
+            '母亲节', '父亲节', '情人节', '七夕', '妇女节', '三八', '女神节', '女王节',
+            '圣诞', '感恩节', '万圣节', '愚人节', '护士节', '教师节', '儿童节', '六一'
+          ];
           
           // 检查标题是否包含节假日关键词
           const titleHasHoliday = holidayKeywords.some(kw => titleLower.includes(kw));
@@ -7819,7 +8262,7 @@ ${enterpriseList}
           if (holidayCount >= 2) return true;
           
           // 检查是否明确提到节假日相关的活动（国家公祭日、缅怀、悼念等）
-          if (/国家.*公祭|公祭.*日|缅怀.*遇难|悼念.*同胞|纪念.*日|节日.*活动|节假日/.test(fullText)) {
+          if (/国家.*公祭|公祭.*日|缅怀.*遇难|悼念.*同胞|纪念.*日|节日.*活动|节假日|母亲节|父亲节|情人节|七夕|妇女节|女神节|女王节|圣诞|感恩节|万圣节|愚人节|护士节|教师节|儿童节|六一/.test(fullText)) {
             return true;
           }
           
@@ -8076,11 +8519,19 @@ ${enterpriseList}
       { keywords: ['财务', '财报', '营收', '利润', '业绩'], tag: '财务报告' },
       // 仅节假日类官方营销（节日庆祝、节日工作安排、节日放假安排）才推断为广告推广；企业推介产品不标
       { 
-        keywords: ['春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销'],
+        keywords: [
+          '春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销',
+          '母亲节', '父亲节', '情人节', '七夕', '妇女节', '三八', '女神节', '女王节', '圣诞', '感恩节', '万圣节', '愚人节',
+          '护士节', '教师节', '儿童节', '六一'
+        ],
         tag: '广告推广',
         validate: (title, content) => {
           const full = ((title || '') + ' ' + (content || '')).toLowerCase();
-          const holidayKw = ['春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销'];
+          const holidayKw = [
+            '春节', '元旦', '中秋', '国庆', '劳动节', '端午', '节日', '放假', '庆祝', '节日安排', '节日祝福', '节日营销',
+            '母亲节', '父亲节', '情人节', '七夕', '妇女节', '三八', '女神节', '女王节', '圣诞', '感恩节', '万圣节', '愚人节',
+            '护士节', '教师节', '儿童节', '六一'
+          ];
           const marketingKw = ['推广', '营销', '广告', '宣传', '促销', '祝福', '放假通知', '工作安排'];
           const hasHoliday = holidayKw.some(k => full.includes(k));
           const hasMarketing = marketingKw.some(k => full.includes(k));

@@ -1,3 +1,15 @@
+// 全系统默认北京时间（Docker 等环境常为 UTC，避免落库/日志/定时任务偏差）
+process.env.TZ = 'Asia/Shanghai';
+
+// Express/parseurl、axios/follow-redirects 等仍会触发对 legacy url.parse() 的 DEP0169。
+// 推荐用 npm scripts（已带 node --disable-warning=DEP0169）；若直接执行 node server/index.js，由此处兜底。
+process.on('warning', (w) => {
+  if (!w) return;
+  if (w.code === 'DEP0169') return;
+  if (typeof w.message === 'string' && w.message.includes('url.parse')) return;
+  console.warn(w.stack || w);
+});
+
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
@@ -19,14 +31,35 @@ const scheduledTasksRoutes = require('./routes/scheduledTasks');
 const externalDbRoutes = require('./routes/externalDb');
 const newsShareRoutes = require('./routes/newsShare');
 const newsDetailRoutes = require('./routes/newsDetail');
+const performanceRoutes = require('./routes/performance');
+const listingRoutes = require('./routes/listing');
+const listingShareRoutes = require('./routes/listingShare');
+const projectSourcingRoutes = require('./routes/project-sourcing');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
+const { initializeListingScheduledTasks } = require('./utils/listing/scheduledListingTasks');
 const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
+const { ensureUploadsDir } = require('./utils/uploadsPath');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+/** mysql2 等连接错误下 message 可能为空，避免日志只显示「Error」而无原因 */
+function formatStartupError(err) {
+  if (!err) return String(err);
+  const parts = [
+    err.code,
+    err.errno,
+    err.sqlState,
+    err.sqlMessage,
+    err.syscall,
+    err.address != null && err.port != null ? `${err.address}:${err.port}` : null,
+    err.message
+  ].filter(Boolean);
+  return parts.length ? parts.join(' | ') : String(err);
+}
 
 // 服务器就绪标志（在服务器完全初始化前为false）
 let serverReady = false;
@@ -55,12 +88,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// 静态文件服务 - 提供uploads目录的访问
-// 注意：必须在所有路由之前配置，以确保静态文件请求不会被其他路由拦截
-const uploadsDir = path.join(__dirname, '../uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+// 静态文件服务 - 提供 uploads 目录（与 system 路由上传落盘目录一致，可用 UPLOADS_DIR 覆盖）
+const uploadsDir = ensureUploadsDir();
 
 // 添加调试中间件（记录静态文件请求）
 app.use('/api/uploads', (req, res, next) => {
@@ -94,6 +123,41 @@ app.use('/api/uploads', express.static(uploadsDir, {
   dotfiles: 'ignore',
   index: false
 }));
+
+// 磁盘无文件时从 system_file_storage 读取（避免容器重建、误删 uploads 后 Logo 丢失）
+app.use('/api/uploads', async (req, res, next) => {
+  const name = path.basename(req.path || '');
+  if (!name || name === '.' || name === '..') {
+    return res.status(404).end();
+  }
+  try {
+    const rows = await db.query(
+      'SELECT mime_type, file_data FROM system_file_storage WHERE filename = ? AND file_data IS NOT NULL LIMIT 1',
+      [name]
+    );
+    if (!rows.length) {
+      return res.status(404).end();
+    }
+    const row = rows[0];
+    const buf = Buffer.isBuffer(row.file_data) ? row.file_data : Buffer.from(row.file_data);
+    const targetPath = path.join(uploadsDir, name);
+    try {
+      if (!fs.existsSync(targetPath)) {
+        fs.writeFileSync(targetPath, buf);
+      }
+    } catch (w) {
+      console.warn('[uploads] 从数据库恢复文件写入磁盘失败:', name, w.message);
+    }
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Content-Type', row.mime_type || 'application/octet-stream');
+    return res.send(buf);
+  } catch (err) {
+    if (err.message?.includes('system_file_storage')) {
+      return res.status(404).end();
+    }
+    return next(err);
+  }
+});
 
 async function restoreStoredConfigFiles() {
   try {
@@ -137,6 +201,12 @@ app.use('/api/scheduled-tasks', scheduledTasksRoutes);
 app.use('/api/external-db', externalDbRoutes);
 app.use('/api/news-share', newsShareRoutes);
 app.use('/api/news-detail', newsDetailRoutes);
+app.use('/api/performance', performanceRoutes);
+app.use('/api/listing', listingRoutes);
+app.use('/api/listing-share', listingShareRoutes);
+app.use('/api/project-sourcing', projectSourcingRoutes);
+const competitorAnalysisRoutes = require('./routes/competitor-analysis');
+app.use('/api/competitor-analysis', competitorAnalysisRoutes);
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
@@ -293,7 +363,11 @@ app.get('/api/health', async (req, res) => {
     }
     res.json({ status: 'ok', message: '服务器运行正常', database: 'connected' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: '数据库连接失败', error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: '数据库连接失败',
+      error: formatStartupError(error)
+    });
   }
 });
 
@@ -316,13 +390,16 @@ app.get('/api/test-upload-file/:filename', (req, res) => {
 async function startServer() {
   try {
     // 等待数据库初始化（通过执行一个查询来确保数据库已就绪）
-    console.log('正在初始化数据库...');
+    console.log('正在等待数据库表结构初始化完成（与上方「正在初始化数据库」为同一流程，请勿关闭）…');
     try {
       await db.query('SELECT 1');
       console.log('✓ 数据库连接已就绪');
+      if (typeof db.runPendingMigrations === 'function') {
+        await db.runPendingMigrations();
+      }
       await restoreStoredConfigFiles();
     } catch (dbError) {
-      console.error('✗ 数据库初始化失败:', dbError.message);
+      console.error('✗ 数据库初始化失败:', formatStartupError(dbError));
       console.error('错误堆栈:', dbError.stack);
       console.error('请检查：');
       console.error('1. MySQL 服务是否已启动');
@@ -335,6 +412,7 @@ async function startServer() {
     // 启动服务器
     console.log(`正在启动服务器，监听端口 ${PORT}...`);
     const server = app.listen(PORT, '0.0.0.0', async () => {
+      console.log(`✓ 上传文件目录: ${uploadsDir}`);
       console.log(`✓ 服务器运行在 http://localhost:${PORT}`);
       console.log(`✓ 服务器正在初始化，健康检查端点已可用`);
       
@@ -351,6 +429,11 @@ async function startServer() {
           initializeNewsSyncScheduledTasks().catch(error => {
             console.error('初始化新闻同步定时任务失败:', error);
           });
+
+          console.log('正在初始化上市进展定时任务...');
+          initializeListingScheduledTasks().catch((error) => {
+            console.error('初始化上市进展定时任务失败:', error);
+          });
           
           // 初始化空摘要新闻重新分析定时任务
           console.log('正在初始化空摘要新闻重新分析定时任务...');
@@ -364,9 +447,15 @@ async function startServer() {
             console.error('初始化邮件发送定时任务失败:', error);
           });
 
+          console.log('正在执行竞品数据关联修复（按统一社会信用代码重挂孤儿记录）...');
+          const { runCompetitorRelinkOnStartup } = require('./utils/competitor-analysis/competitorRelinkStartup');
+          runCompetitorRelinkOnStartup().catch((error) => {
+            console.error('竞品数据关联修复失败:', error);
+          });
+
           // 初始化外部数据库连接（异步，不阻塞）
           console.log('正在初始化外部数据库连接...');
-          db.query('SELECT * FROM external_db_config WHERE is_deleted = 0 AND is_active = 1')
+          db.query('SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1')
             .then(configs => {
               if (configs && configs.length > 0) {
                 return initializeExternalDatabases(configs);
@@ -399,13 +488,13 @@ async function startServer() {
         console.error(`  Windows: netstat -ano | findstr :${PORT}`);
         console.error(`  然后使用 taskkill /F /PID <进程ID> 结束进程`);
       } else {
-        console.error('✗ 服务器启动失败:', error.message);
+        console.error('✗ 服务器启动失败:', formatStartupError(error));
         console.error('错误详情:', error);
       }
       process.exit(1);
     });
   } catch (error) {
-    console.error('✗ 服务器启动失败:', error.message);
+    console.error('✗ 服务器启动失败:', formatStartupError(error));
     console.error('错误堆栈:', error.stack);
     console.error('请检查：');
     console.error('1. MySQL 服务是否已启动');

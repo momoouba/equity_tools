@@ -33,15 +33,14 @@ function AIConfig() {
     top_p: 1.0,
     application_type: 'news_analysis',
     usage_type: 'content_analysis',
-    is_active: 1
+    is_active: 1,
+    enable_thinking: 0,
+    wire_protocol: '',
+    web_search_mode: '',
+    reasoning_effort: '',
   })
 
-  const providers = [
-    { value: 'alibaba', label: '阿里云（千问）' },
-    { value: 'openai', label: 'OpenAI' },
-    { value: 'baidu', label: '百度（文心一言）' },
-    { value: 'tencent', label: '腾讯（混元）' }
-  ]
+  const [providers, setProviders] = useState([])
 
   const apiTypes = [
     { value: 'chat', label: 'Chat API' },
@@ -49,20 +48,51 @@ function AIConfig() {
     { value: 'chat_completion', label: 'Chat Completion API' }
   ]
 
-  const applicationTypes = [
-    { value: 'news_analysis', label: '新闻分析' },
-    { value: 'general', label: '通用' }
+  const wireProtocols = [
+    { value: '', label: '自动推断' },
+    { value: 'chat_completions', label: 'Chat Completions (/v1/chat/completions)' },
+    { value: 'responses', label: 'Responses API (/v1/responses，GPT 联网推荐)' },
+    { value: 'anthropic_messages', label: 'Anthropic Messages (/v1/messages，Claude)' },
+    { value: 'gemini_generate_content', label: 'Gemini generateContent (Google 原生)' },
+    { value: 'volcengine_bot', label: '火山 Bot 应用 (bots/chat/completions，bot-xxx)' },
+    { value: 'alibaba_native', label: '阿里云原生 Chat' },
   ]
 
-  const usageTypes = [
-    { value: 'content_analysis', label: '情绪分析' },
-    { value: 'image_recognition', label: '图片识别' }
+  const webSearchModes = [
+    { value: '', label: '自动推断' },
+    { value: 'off', label: '不联网' },
+    { value: 'dashscope_enable_search', label: 'DashScope enable_search' },
+    { value: 'openai_web_search_tool', label: 'OpenAI web_search 工具（Responses）' },
+    { value: 'openai_web_search_options', label: 'OpenAI web_search_options（Chat）' },
+    { value: 'anthropic_web_search', label: 'Anthropic web_search（Messages）' },
+    { value: 'gemini_google_search', label: 'Gemini google_search（Grounding）' },
+    { value: 'volcengine_web_search_tool', label: '火山 web_search 工具（Responses/Chat）' },
+    { value: 'volcengine_bot', label: '火山 Bot 应用联网（控制台配置）' },
   ]
+
+  const reasoningEfforts = [
+    { value: '', label: '默认' },
+    { value: 'low', label: 'low' },
+    { value: 'medium', label: 'medium' },
+    { value: 'high', label: 'high' },
+    { value: 'xhigh', label: 'xhigh' },
+  ]
+
+  const [applicationTypes, setApplicationTypes] = useState([])
+  const [usageTypes, setUsageTypes] = useState([])
 
   useEffect(() => {
     fetchConfigs()
     fetchAvailableModels()
+    fetchMetaOptions()
   }, [pagination.page, pagination.pageSize])
+
+  useEffect(() => {
+    if (showModal) {
+      fetchMetaOptions()
+      fetchAvailableModels()
+    }
+  }, [showModal])
 
   const fetchConfigs = async () => {
     setLoading(true)
@@ -99,11 +129,26 @@ function AIConfig() {
     }
   }
 
+  const fetchMetaOptions = async () => {
+    try {
+      const response = await axios.get('/api/ai-config/meta/options')
+      if (response.data.success) {
+        const data = response.data.data || {}
+        setApplicationTypes(data.applicationTypes || [])
+        setUsageTypes(data.usageTypes || [])
+        setProviders(data.providers || [])
+      }
+    } catch (err) {
+      console.error('获取应用/使用类型字典失败:', err)
+    }
+  }
+
   const handleAdd = () => {
     setCurrentConfig(null)
-    setFormData({
+    const defaultProvider = providers[0]?.value || 'alibaba'
+    const initial = {
       config_name: '',
-      provider: 'alibaba',
+      provider: defaultProvider,
       model_name: '',
       api_type: 'chat',
       api_key: '',
@@ -113,10 +158,87 @@ function AIConfig() {
       top_p: 1.0,
       application_type: 'news_analysis',
       usage_type: 'content_analysis',
-      is_active: 1
-    })
+      is_active: 1,
+      enable_thinking: 0,
+      wire_protocol: '',
+      web_search_mode: '',
+      reasoning_effort: '',
+    }
+    initial.api_endpoint = getDefaultEndpoint(initial.provider, initial.usage_type, initial.model_name)
+    setFormData(initial)
     setTestResult(null)
     setShowModal(true)
+  }
+
+  const normalizeConfigForm = (row) => ({
+    config_name: row.config_name || '',
+    provider: row.provider || 'alibaba',
+    model_name: row.model_name || '',
+    api_type: row.api_type || 'chat',
+    api_key: row.api_key || '',
+    api_endpoint: row.api_endpoint != null ? String(row.api_endpoint) : '',
+    temperature: row.temperature != null ? Number(row.temperature) : 0.7,
+    max_tokens: row.max_tokens != null ? Number(row.max_tokens) : 2000,
+    top_p: row.top_p != null ? Number(row.top_p) : 1,
+    application_type: row.application_type || 'news_analysis',
+    usage_type: row.usage_type || 'content_analysis',
+    is_active: row.is_active === 0 || row.is_active === false ? 0 : 1,
+    enable_thinking:
+      row.enable_thinking === 1 || row.enable_thinking === true
+        ? 1
+        : row.enable_thinking === 0 || row.enable_thinking === false
+          ? 0
+          : null,
+    wire_protocol: row.wire_protocol || '',
+    web_search_mode: row.web_search_mode || '',
+    reasoning_effort: row.reasoning_effort || '',
+  })
+
+  const syncGatewayFormFromModel = (form) => {
+    if (form.provider !== 'gateway') return form
+    const model = String(form.model_name || '').trim()
+    const next = { ...form, api_type: 'chat_completion' }
+    if (/claude/i.test(model)) {
+      next.wire_protocol = 'anthropic_messages'
+      next.web_search_mode = 'anthropic_web_search'
+    } else if (/gemini/i.test(model)) {
+      next.wire_protocol = 'gemini_generate_content'
+      next.web_search_mode = 'gemini_google_search'
+    } else if (
+      /^gpt-|^o[1-9]|^chatgpt-/i.test(model) ||
+      model.toLowerCase().includes('search-api')
+    ) {
+      next.wire_protocol = 'responses'
+      next.web_search_mode = 'openai_web_search_tool'
+    }
+    next.api_endpoint = getDefaultEndpoint('gateway', next.usage_type, model)
+    return next
+  }
+
+  const applyDefaultEndpointForCreate = (prev, patch) => {
+    const next = { ...prev, ...patch }
+    next.api_endpoint = getDefaultEndpoint(next.provider, next.usage_type, next.model_name)
+    if (next.provider === 'gateway') {
+      if (patch.provider === 'gateway' || patch.model_name) {
+        return syncGatewayFormFromModel(next)
+      }
+      next.api_type = 'chat_completion'
+    }
+    if (next.provider === 'volcengine') {
+      next.api_type = 'chat_completion'
+      const model = String(next.model_name || '').trim()
+      if (model.toLowerCase().startsWith('bot-')) {
+        if (!next.wire_protocol) next.wire_protocol = 'volcengine_bot'
+        if (!next.web_search_mode) next.web_search_mode = 'volcengine_bot'
+      } else {
+        if (!next.wire_protocol) next.wire_protocol = 'responses'
+        if (!next.web_search_mode) next.web_search_mode = 'volcengine_web_search_tool'
+      }
+    }
+    if (next.provider === 'alibaba') {
+      next.api_type = 'chat_completion'
+    }
+    return next
   }
 
   const handleEdit = async (config) => {
@@ -124,7 +246,7 @@ function AIConfig() {
       const response = await axios.get(`/api/ai-config/${config.id}`)
       if (response.data.success) {
         setCurrentConfig(config)
-        setFormData(response.data.data)
+        setFormData(syncGatewayFormFromModel(normalizeConfigForm(response.data.data)))
         setTestResult(null)
         setShowModal(true)
       }
@@ -213,12 +335,14 @@ function AIConfig() {
                          (modelName && (modelName.toLowerCase().includes('vl') || modelName.toLowerCase().includes('vision')))
     
     const endpoints = {
-      alibaba: isVisionModel 
+      alibaba: isVisionModel
         ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
-        : 'https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation',
-      openai: 'https://api.openai.com/v1/chat/completions',
+        : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+      gateway: 'https://gateway.di-matrix.ai/v1',
+      openai: 'https://api.openai.com/v1',
       baidu: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions',
-      tencent: 'https://hunyuan.tencentcloudapi.com/'
+      tencent: 'https://hunyuan.tencentcloudapi.com/',
+      volcengine: 'https://ark.cn-beijing.volces.com/api/v3/chat/completions',
     }
     return endpoints[provider] || ''
   }
@@ -310,7 +434,11 @@ function AIConfig() {
             <h3>AI模型配置管理</h3>
             <Space>
               <Button
-                onClick={fetchConfigs}
+                onClick={() => {
+                  fetchConfigs()
+                  fetchMetaOptions()
+                  fetchAvailableModels()
+                }}
                 loading={loading}
               >
                 刷新
@@ -361,6 +489,7 @@ function AIConfig() {
           )}
 
           <Modal
+            key={currentConfig?.id || 'new'}
             visible={showModal}
             title={currentConfig ? '编辑AI模型配置' : '新增AI模型配置'}
             onCancel={() => {
@@ -386,8 +515,14 @@ function AIConfig() {
                 <Select
                   value={formData.provider}
                   onChange={(value) => {
-                    handleChange('provider', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(value, formData.usage_type, formData.model_name))
+                    if (currentConfig) {
+                      if (value === formData.provider) return
+                      handleChange('provider', value)
+                      return
+                    }
+                    setFormData((prev) =>
+                      applyDefaultEndpointForCreate(prev, { provider: value, model_name: '' })
+                    )
                   }}
                 >
                   {providers.map(p => (
@@ -401,14 +536,22 @@ function AIConfig() {
                 <Select
                   value={formData.model_name}
                   onChange={(value) => {
-                    handleChange('model_name', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(formData.provider, formData.usage_type, value))
+                    if (value === formData.model_name) return
+                    if (currentConfig) {
+                      handleChange('model_name', value)
+                      return
+                    }
+                    setFormData((prev) => applyDefaultEndpointForCreate(prev, { model_name: value }))
                   }}
                   placeholder="请选择模型"
                 >
-                  {availableModels[formData.provider]?.map(model => (
-                    <Option key={model} value={model}>{model}</Option>
-                  ))}
+                  {(availableModels[formData.provider] || []).map((model) => {
+                    const value = typeof model === 'string' ? model : model.value
+                    const label = typeof model === 'string' ? model : (model.label || model.value)
+                    return (
+                      <Option key={value} value={value}>{label}</Option>
+                    )
+                  })}
                 </Select>
               </div>
 
@@ -438,8 +581,50 @@ function AIConfig() {
                 <Input
                   value={formData.api_endpoint}
                   onChange={(value) => handleChange('api_endpoint', value)}
-                  placeholder="请输入API端点"
+                  placeholder="网关填 https://gateway.di-matrix.ai/v1；阿里填 compatible-mode 地址"
                 />
+              </div>
+
+              <div className="form-group">
+                <label>API 协议</label>
+                <Select
+                  value={formData.wire_protocol || ''}
+                  onChange={(value) => handleChange('wire_protocol', value)}
+                  placeholder="自动推断"
+                  allowClear
+                >
+                  {wireProtocols.map((t) => (
+                    <Option key={t.value || 'auto'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="form-group">
+                <label>联网模式</label>
+                <Select
+                  value={formData.web_search_mode || ''}
+                  onChange={(value) => handleChange('web_search_mode', value)}
+                  placeholder="自动推断"
+                  allowClear
+                >
+                  {webSearchModes.map((t) => (
+                    <Option key={t.value || 'auto'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="form-group">
+                <label>Reasoning Effort（Responses）</label>
+                <Select
+                  value={formData.reasoning_effort || ''}
+                  onChange={(value) => handleChange('reasoning_effort', value)}
+                  placeholder="默认"
+                  allowClear
+                >
+                  {reasoningEfforts.map((t) => (
+                    <Option key={t.value || 'default'} value={t.value}>{t.label}</Option>
+                  ))}
+                </Select>
               </div>
 
               <div className="form-group">
@@ -488,13 +673,34 @@ function AIConfig() {
                 </Select>
               </div>
 
+              {formData.provider === 'alibaba' && (
+                <div className="form-group">
+                  <label>
+                    <Switch
+                      checked={formData.enable_thinking === 1}
+                      onChange={(checked) => handleChange('enable_thinking', checked ? 1 : 0)}
+                      style={{ marginRight: 8 }}
+                    />
+                    深度思考（仅联网 AI 补齐）
+                  </label>
+                  <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-3)' }}>
+                    被投企业、投前、IPO、融资事件等「AI 补齐」会读取本配置；竞品匹配跑批不走此开关。
+                    请在「模型提示词」中确认「融资联网 AI 增强」绑定的模型行。
+                  </div>
+                </div>
+              )}
+
               <div className="form-group">
                 <label>使用类型 *</label>
                 <Select
                   value={formData.usage_type}
                   onChange={(value) => {
-                    handleChange('usage_type', value)
-                    handleChange('api_endpoint', getDefaultEndpoint(formData.provider, value, formData.model_name))
+                    if (value === formData.usage_type) return
+                    if (currentConfig) {
+                      handleChange('usage_type', value)
+                      return
+                    }
+                    setFormData((prev) => applyDefaultEndpointForCreate(prev, { usage_type: value }))
                   }}
                 >
                   {usageTypes.map(t => (

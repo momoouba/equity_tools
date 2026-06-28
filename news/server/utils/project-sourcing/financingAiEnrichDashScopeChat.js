@@ -1,0 +1,316 @@
+'use strict';
+
+const axios = require('axios');
+
+/** 是否开启深度思考（默认关；设 FINANCING_AI_ENABLE_THINKING=1 开启） */
+function isFinancingAiThinkingEnabled() {
+  const v = String(process.env.FINANCING_AI_ENABLE_THINKING ?? '0')
+    .trim()
+    .toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes';
+}
+
+/** 联网 AI 补齐：模型配置优先，其次环境变量 */
+function resolveEnrichWantThinking(config) {
+  if (config != null && config.enable_thinking != null && config.enable_thinking !== '') {
+    const n = Number(config.enable_thinking);
+    if (n === 0 || n === 1) return n === 1;
+    const s = String(config.enable_thinking).trim().toLowerCase();
+    if (s === '0' || s === 'false' || s === 'no') return false;
+    if (s === '1' || s === 'true' || s === 'yes') return true;
+  }
+  return isFinancingAiThinkingEnabled();
+}
+
+function getFinancingAiThinkingBudget() {
+  const n = parseInt(process.env.FINANCING_AI_THINKING_BUDGET || '8192', 10);
+  return Number.isFinite(n) ? Math.min(32768, Math.max(512, n)) : 8192;
+}
+
+/** DashScope 联网检索参数（与豆包类「必搜再答」对齐：默认强制检索 + max 策略） */
+function getFinancingAiSearchOptions() {
+  const strategyRaw = String(process.env.FINANCING_AI_SEARCH_STRATEGY || 'max')
+    .trim()
+    .toLowerCase();
+  const allowed = new Set(['turbo', 'max', 'agent']);
+  const search_strategy = allowed.has(strategyRaw) ? strategyRaw : 'max';
+  const forcedRaw = String(process.env.FINANCING_AI_FORCED_SEARCH ?? '1')
+    .trim()
+    .toLowerCase();
+  const forced_search = forcedRaw !== '0' && forcedRaw !== 'false' && forcedRaw !== 'no';
+  return { search_strategy, forced_search };
+}
+
+function getFinancingAiChatTimeoutMs(withThinking) {
+  const base = parseInt(process.env.FINANCING_AI_CHAT_TIMEOUT_MS || '120000', 10) || 120000;
+  if (!withThinking) return base;
+  const thinkingMs = parseInt(process.env.FINANCING_AI_CHAT_TIMEOUT_THINKING_MS || '240000', 10) || 240000;
+  return Math.max(base, thinkingMs);
+}
+
+function errorBlob(err) {
+  return String(
+    err?.response?.data?.error?.message ||
+      err?.response?.data?.message ||
+      err?.response?.data ||
+      err?.message ||
+      ''
+  );
+}
+
+function isHttp400(err) {
+  return err?.response?.status === 400;
+}
+
+/** 判断是否为瞬时错误（限流 429、服务端 5xx、网络超时等），应重试而非降级 */
+function isTransientError(err) {
+  const status = err?.response?.status;
+  if (status === 429 || (status >= 500 && status < 600)) return true;
+  const code = err?.code;
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || code === 'ECONNRESET' || code === 'ENOTFOUND') return true;
+  const msg = err?.message || '';
+  if (/timeout|ECONNREFUSED|socket hang up/i.test(msg)) return true;
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function looksLikeWrongChatUrl(detail) {
+  return (
+    /no static resource/i.test(detail) ||
+    /invalid.*url/i.test(detail) ||
+    /unknown path/i.test(detail)
+  );
+}
+
+function isThinkingParamRejected(detail) {
+  return /enable_thinking|thinking_budget|深度思考|does not support.*think|unsupported.*think/i.test(
+    detail
+  );
+}
+
+function isSearchParamRejected(detail) {
+  return /enable_search|does not support.*search|不支持.*联网|invalidparameter.*search/i.test(detail);
+}
+
+/**
+ * @param {import('axios').AxiosResponse} response
+ */
+function extractAssistantContent(response) {
+  const msg = response?.data?.choices?.[0]?.message;
+  const content = msg?.content;
+  if (content == null || (typeof content === 'string' && !content.trim())) return '';
+  return String(content);
+}
+
+function extractReasoningLen(response) {
+  try {
+    const msg = response?.data?.choices?.[0]?.message;
+    const rc = msg?.reasoning_content;
+    return rc == null ? 0 : String(rc).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * DashScope OpenAI 兼容 Chat：联网 + 深度思考，按 400 自动降级。
+ * @returns {Promise<{
+ *   content: string,
+ *   used_enable_search: boolean,
+ *   search_degraded: boolean,
+ *   used_enable_thinking: boolean,
+ *   thinking_degraded: boolean,
+ * }>}
+ */
+async function postDashScopeChatWithSearchAndThinking({
+  endpoint,
+  apiKey,
+  bodyBase,
+  wantThinking,
+  logPrefix = '[financingAiEnrich]',
+}) {
+  const thinkingBudget = getFinancingAiThinkingBudget();
+
+  const buildBody = ({ withSearch, withThinking }) => {
+    const body = { ...bodyBase };
+    if (withSearch) {
+      body.enable_search = true;
+      body.search_options = getFinancingAiSearchOptions();
+    }
+    if (withThinking) {
+      body.enable_thinking = true;
+      body.thinking_budget = thinkingBudget;
+    }
+    return body;
+  };
+
+  const post = async ({ withSearch, withThinking }) => {
+    return axios.post(endpoint, buildBody({ withSearch, withThinking }), {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      timeout: getFinancingAiChatTimeoutMs(withThinking),
+    });
+  };
+
+  const logOk = (response, note) => {
+    try {
+      const ch0 = response?.data?.choices?.[0];
+      const len = extractAssistantContent(response).length;
+      const reasoningLen = extractReasoningLen(response);
+      console.log(
+        `${logPrefix} chat_response_ok model=${bodyBase.model} finish_reason=${ch0?.finish_reason ?? 'n/a'} content_len=${len} reasoning_len=${reasoningLen} id=${response?.data?.id ?? 'n/a'}${note ? ` ${note}` : ''}`
+      );
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const wrapResult = (response, meta) => ({
+    content: extractAssistantContent(response),
+    used_enable_search: !!meta.used_enable_search,
+    search_degraded: !!meta.search_degraded,
+    used_enable_thinking: !!meta.used_enable_thinking,
+    thinking_degraded: !!meta.thinking_degraded,
+  });
+
+  const attempt = async ({ withSearch, withThinking }) => {
+    const response = await post({ withSearch, withThinking });
+    const parts = [];
+    if (withSearch) {
+      const so = getFinancingAiSearchOptions();
+      parts.push(`enable_search=1 search_strategy=${so.search_strategy} forced_search=${so.forced_search ? 1 : 0}`);
+    } else parts.push('enable_search=0');
+    if (withThinking) parts.push('enable_thinking=1');
+    else parts.push('enable_thinking=0');
+    logOk(response, parts.join(' '));
+    return response;
+  };
+
+  const wantSearch = true;
+  const tryThinking = wantThinking && isFinancingAiThinkingEnabled();
+
+  // 首次调用：支持瞬时错误（429/5xx/超时）自动重试，最多重试 2 次
+  const maxRetries = 2;
+  let lastTransientErr = null;
+  for (let retryAttempt = 0; retryAttempt <= maxRetries; retryAttempt++) {
+    try {
+      const response = await attempt({ withSearch: wantSearch, withThinking: tryThinking });
+      const result = wrapResult(response, {
+        used_enable_search: wantSearch,
+        search_degraded: false,
+        used_enable_thinking: tryThinking,
+        thinking_degraded: false,
+      });
+      if (!result.content && retryAttempt < maxRetries) {
+        console.warn(`${logPrefix} HTTP 200 空 content，${(retryAttempt + 1) * 2000}ms 后重试 (${retryAttempt + 1}/${maxRetries})`);
+        await sleep((retryAttempt + 1) * 2000);
+        continue;
+      }
+      return result;
+    } catch (err) {
+      // 瞬时错误（限流 429、服务端 5xx、网络超时）：等待后重试
+      if (isTransientError(err) && retryAttempt < maxRetries) {
+        const delayMs = (retryAttempt + 1) * 2000; // 2s, 4s 指数退避
+        console.warn(`${logPrefix} 瞬时错误 (${err?.response?.status || err?.code || err?.message})，${delayMs}ms 后第 ${retryAttempt + 1} 次重试…`);
+        await sleep(delayMs);
+        lastTransientErr = err;
+        continue;
+      }
+      // 重试耗尽或非瞬时错误，进入降级逻辑
+      const firstDetail = errorBlob(err);
+      if (isHttp400(err) && looksLikeWrongChatUrl(firstDetail)) {
+        throw new Error(
+          `${firstDetail} 请检查「AI 模型配置」中的接口地址是否为 OpenAI 兼容地址：` +
+            `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions（国际域用 dashscope-intl 等）。` +
+            `勿使用 …/aigc/text-generation/generation 等原生路径。`
+        );
+      }
+      if (!isHttp400(err)) {
+        throw err;
+      }
+
+    const thinkingRejected = tryThinking && isThinkingParamRejected(firstDetail);
+    const searchRejected = isSearchParamRejected(firstDetail);
+
+    if (tryThinking && (thinkingRejected || !searchRejected)) {
+      console.warn(
+        `${logPrefix} DashScope 400（含 enable_thinking），将关闭深度思考并保留联网重试。详情: ${firstDetail}`
+      );
+      try {
+        const response2 = await attempt({ withSearch: true, withThinking: false });
+        return wrapResult(response2, {
+          used_enable_search: true,
+          search_degraded: false,
+          used_enable_thinking: false,
+          thinking_degraded: true,
+        });
+      } catch (err2) {
+        if (!isHttp400(err2)) throw err2;
+        const d2 = errorBlob(err2);
+        if (!isSearchParamRejected(d2)) {
+          throw new Error(d2);
+        }
+        console.warn(
+          `${logPrefix} DashScope 400（联网），将关闭 enable_search 重试。详情: ${d2}`
+        );
+        const response3 = await attempt({ withSearch: false, withThinking: false });
+        return wrapResult(response3, {
+          used_enable_search: false,
+          search_degraded: true,
+          used_enable_thinking: false,
+          thinking_degraded: true,
+        });
+      }
+    }
+
+    if (searchRejected || wantSearch) {
+      console.warn(
+        `${logPrefix} DashScope 400（含 enable_search），将不带联网参数重试。详情: ${firstDetail}`
+      );
+      try {
+        const response4 = await attempt({
+          withSearch: false,
+          withThinking: tryThinking && !thinkingRejected,
+        });
+        return wrapResult(response4, {
+          used_enable_search: false,
+          search_degraded: true,
+          used_enable_thinking: tryThinking && !thinkingRejected,
+          thinking_degraded: thinkingRejected,
+        });
+      } catch (err4) {
+        if (isHttp400(err4) && tryThinking && !thinkingRejected) {
+          const d4 = errorBlob(err4);
+          console.warn(
+            `${logPrefix} 联网关闭后仍 400，再关闭深度思考重试。详情: ${d4}`
+          );
+          const response5 = await attempt({ withSearch: false, withThinking: false });
+          return wrapResult(response5, {
+            used_enable_search: false,
+            search_degraded: true,
+            used_enable_thinking: false,
+            thinking_degraded: true,
+          });
+        }
+        throw err4;
+      }
+    }
+
+    throw new Error(firstDetail);
+    }
+    // for 循环正常结束不应到达此处（try 内 return 或 catch 内 throw/return）
+    if (lastTransientErr) throw lastTransientErr;
+  }
+}
+
+module.exports = {
+  isFinancingAiThinkingEnabled,
+  resolveEnrichWantThinking,
+  getFinancingAiThinkingBudget,
+  postDashScopeChatWithSearchAndThinking,
+};

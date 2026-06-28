@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import axios from '../utils/axios'
 import './EnterpriseSyncModal.css'
 
-function EnterpriseSyncModal({ onClose, onSuccess }) {
+function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' }) {
   const [databases, setDatabases] = useState([])
   const [formData, setFormData] = useState({
     db_config_id: '',
@@ -14,10 +14,17 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
   const [loading, setLoading] = useState(false)
   const [executing, setExecuting] = useState(false)
   const [savedTask, setSavedTask] = useState(null) // 已保存的任务信息
+  const [loadedFromApp, setLoadedFromApp] = useState(null) // 从其他应用回退加载的历史 SQL
 
   useEffect(() => {
     fetchDatabases()
   }, [])
+
+  useEffect(() => {
+    if (formData.db_config_id) {
+      fetchSavedTask(formData.db_config_id)
+    }
+  }, [dataAppName, formData.db_config_id])
 
   const fetchDatabases = async () => {
     try {
@@ -56,6 +63,7 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
     } else if (name === 'db_config_id' && !value) {
       // 清空选择时，清空已保存的任务
       setSavedTask(null)
+      setLoadedFromApp(null)
       setFormData({
         ...newFormData,
         sql_query: '',
@@ -69,10 +77,13 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
   // 获取已保存的任务
   const fetchSavedTask = async (dbConfigId) => {
     try {
-      const response = await axios.get(`/api/enterprises/sync-task/by-db/${dbConfigId}`)
+      const response = await axios.get(`/api/enterprises/sync-task/by-db/${dbConfigId}`, {
+        params: { data_app_name: dataAppName },
+      })
       if (response.data.success && response.data.data) {
         const task = response.data.data
         setSavedTask(task)
+        setLoadedFromApp(task.loaded_from_app || null)
         // 自动填充已保存的SQL和时间
         const cron = task.cron_expression || '0 0 * * *'
         const [minutes, hours] = cron.split(' ')
@@ -87,10 +98,15 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
         }))
       } else {
         setSavedTask(null)
+        setLoadedFromApp(null)
       }
     } catch (error) {
-      // 如果没有找到任务，不显示错误，只是清空已保存的任务
       setSavedTask(null)
+      setLoadedFromApp(null)
+      const msg = error.response?.data?.message
+      if (error.response?.status === 403 && msg) {
+        console.warn('加载定时任务失败:', msg)
+      }
     }
   }
 
@@ -137,7 +153,8 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
         db_config_id: formData.db_config_id,
         sql_query: formData.sql_query,
         cron_expression: formData.cron_expression,
-        description: formData.description || '被投企业数据同步任务'
+        description: formData.description || '被投企业数据同步任务',
+        data_app_name: dataAppName,
       })
 
       if (response.data.success) {
@@ -192,7 +209,8 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
       // 如果使用已保存的SQL，可以不传sql_query，后端会自动从数据库读取
       const response = await axios.post('/api/enterprises/sync-task/execute', {
         db_config_id: formData.db_config_id,
-        sql_query: sqlToExecute // 如果为空，后端会从数据库读取
+        sql_query: sqlToExecute,
+        data_app_name: dataAppName,
       })
 
       if (response.data.success) {
@@ -213,7 +231,10 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
     <div className="enterprise-sync-modal-overlay">
       <div className="enterprise-sync-modal-content">
         <div className="enterprise-sync-modal-header">
-          <h3>定时更新配置</h3>
+          <div>
+            <h3>定时更新配置</h3>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#86909c' }}>当前应用：{dataAppName}（SQL 与定时按应用分别保存）</p>
+          </div>
           <button className="close-btn" onClick={onClose}>×</button>
         </div>
         <div className="enterprise-sync-modal-body">
@@ -244,6 +265,11 @@ function EnterpriseSyncModal({ onClose, onSuccess }) {
             {savedTask && (
               <div style={{ marginTop: '8px', padding: '8px', background: '#e7f3ff', borderRadius: '4px', fontSize: '12px', color: '#0066cc' }}>
                 ✓ 已加载已保存的任务：{savedTask.description || '无描述'}
+                {loadedFromApp ? (
+                  <span style={{ display: 'block', marginTop: 4, color: '#d48806' }}>
+                    已从「{loadedFromApp}」读取历史 SQL；点击保存后将写入「{dataAppName}」
+                  </span>
+                ) : null}
               </div>
             )}
           </div>

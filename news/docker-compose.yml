@@ -1,3 +1,4 @@
+# 基础镜像使用阿里云公开镜像（国内拉取更快）；若镜像不可用可改回 mysql:8.0 / nginx:alpine
 services:
   # MySQL 数据库服务
   mysql:
@@ -46,10 +47,26 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-NewsApp@2024}
       DB_NAME: ${DB_NAME:-investment_tools}
       TZ: Asia/Shanghai
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      # 不设 CSRC_GUIDANCE_PLAYWRIGHT_EXECUTABLE 时使用镜像构建阶段安装的 Playwright Chromium
+      CSRC_GUIDANCE_USE_PLAYWRIGHT: ${CSRC_GUIDANCE_USE_PLAYWRIGHT:-1}
+      # 生产建议强制 Playwright，避免 silently fallback 到 requests 导致取到旧页 0 条
+      CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT: ${CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT:-1}
+      CSRC_GUIDANCE_TLS_VERIFY: ${CSRC_GUIDANCE_TLS_VERIFY:-0}
+      # 代理配置 - 用于访问被墙的网站(证监会等)
+      # 格式: http://<Mac局域网IP>:<代理端口>
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql}
+      ALL_PROXY: ${ALL_PROXY:-}
+      # 竞品分析 S4 联网（从宿主机 .env 注入）
+      COMPETITOR_WEB_TIMEOUT_MS: ${COMPETITOR_WEB_TIMEOUT_MS:-180000}
+      COMPETITOR_WEB_RETRIES: ${COMPETITOR_WEB_RETRIES:-3}
+      COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS: ${COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS:-300000}
     ports:
       - "${APP_PORT:-3001}:3001"
     volumes:
-      - ./uploads:/app/uploads
+      - app_uploads:/app/uploads
       - ./logs:/app/logs
       # 注释掉 .env 文件挂载，使用 docker-compose.yml 的环境变量
       # - ./.env:/app/.env:ro
@@ -96,6 +113,8 @@ volumes:
   mysql_data:
     driver: local
   app_frontend:
+    driver: local
+  app_uploads:
     driver: local
 
 networks:

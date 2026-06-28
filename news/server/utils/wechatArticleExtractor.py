@@ -17,6 +17,8 @@ import io
 import os
 from typing import Dict, List, Optional, Tuple
 
+from playwright_host import ensure_playwright_browser_path
+
 class WeChatArticleExtractor:
     def __init__(self, image_model_config: Optional[Dict] = None):
         """
@@ -615,7 +617,7 @@ class WeChatArticleExtractor:
             from playwright.sync_api import sync_playwright
             
             print(f"[Playwright] 开始使用无头浏览器获取页面内容: {url[:100]}...", file=sys.stderr)
-            
+            ensure_playwright_browser_path()
             with sync_playwright() as p:
                 # 启动浏览器（无头模式）
                 # 如果默认路径失败，尝试使用系统Chromium

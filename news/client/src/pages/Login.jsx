@@ -9,6 +9,7 @@ const FormItem = Form.Item
 function Login() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [systemName, setSystemName] = useState('')
   const [backgroundImage, setBackgroundImage] = useState('')
   const navigate = useNavigate()
   const canvasRef = useRef(null)
@@ -22,14 +23,21 @@ function Login() {
 
   const fetchSystemConfig = async () => {
     try {
-      const response = await axios.get('/api/system/basic-config')
-      if (response.data.success && response.data.data.login_background) {
-        setBackgroundImage(`/api/uploads/${response.data.data.login_background}`)
-      } else {
-        setBackgroundImage('')
+      const response = await axios.get('/api/system/basic-config', {
+        params: { _t: Date.now() }
+      })
+      if (response.data.success) {
+        const config = response.data.data || {}
+        setSystemName(config.system_name || '')
+        if (config.login_background) {
+          setBackgroundImage(`/api/uploads/${config.login_background}`)
+        } else {
+          setBackgroundImage('')
+        }
       }
     } catch (error) {
       console.error('获取系统配置失败:', error)
+      setSystemName('')
       setBackgroundImage('')
     }
   }
@@ -248,7 +256,7 @@ function Login() {
       />
       
       <div className="login-card">
-        <h1 className="login-title">股权投资小工具锦集</h1>
+        <h1 className="login-title">{systemName || '股权投资小工具锦集'}</h1>
         <Form
           form={form}
           onSubmit={handleSubmit}

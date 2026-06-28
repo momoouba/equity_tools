@@ -14,6 +14,7 @@ function AdditionalAccounts() {
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
+  const [quota, setQuota] = useState(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
@@ -25,10 +26,21 @@ function AdditionalAccounts() {
   const [formData, setFormData] = useState({
     account_name: '',
     wechat_account_id: '',
-    status: 'active'
+    status: 'active',
+    industry_tag_code: undefined
   })
+  const [industryTagOptions, setIndustryTagOptions] = useState([])
   const [importFile, setImportFile] = useState(null)
   const [importLoading, setImportLoading] = useState(false)
+  const [exportLoading, setExportLoading] = useState(false)
+  const [showImportErrorModal, setShowImportErrorModal] = useState(false)
+  const [importErrors, setImportErrors] = useState([])
+  const [importSummary, setImportSummary] = useState({
+    successCount: 0,
+    skipCount: 0,
+    errorCount: 0,
+    hasMoreErrors: false
+  })
   const [userRole, setUserRole] = useState('user')
   const [selectedUserId, setSelectedUserId] = useState('')
   const [usersList, setUsersList] = useState([])
@@ -49,6 +61,27 @@ function AdditionalAccounts() {
       }
     }
   }, [])
+
+  const fetchIndustryTagOptions = async () => {
+    try {
+      const res = await axios.get('/api/additional-accounts/industry-tag-options')
+      if (res.data?.success) {
+        setIndustryTagOptions(res.data.data || [])
+      }
+    } catch (e) {
+      console.error('获取行业标签选项失败:', e)
+    }
+  }
+
+  useEffect(() => {
+    fetchIndustryTagOptions()
+  }, [])
+
+  useEffect(() => {
+    if (showAddModal || showEditModal || showImportModal) {
+      fetchIndustryTagOptions()
+    }
+  }, [showAddModal, showEditModal, showImportModal])
 
   const fetchUsers = async () => {
     try {
@@ -87,6 +120,10 @@ function AdditionalAccounts() {
       if (!abortSignal?.aborted && response.data.success) {
         setAccountsList(response.data.data)
         setTotal(response.data.total)
+        // 仅当后端返回quota字段时更新额度信息
+        if (Object.prototype.hasOwnProperty.call(response.data, 'quota')) {
+          setQuota(response.data.quota)
+        }
       }
     } catch (error) {
       if (error.name === 'CanceledError' || error.name === 'AbortError') {
@@ -123,10 +160,16 @@ function AdditionalAccounts() {
   }
 
   const handleAdd = () => {
+    // 如果有额度信息且已用完，则不弹出新增窗口
+    if (quota && typeof quota.remaining === 'number' && quota.remaining <= 0) {
+      Message.warning('当前会员等级的额外公众号数量已用完，如需增加请联系管理员升级会员等级')
+      return
+    }
     setFormData({
       account_name: '',
       wechat_account_id: '',
-      status: 'active'
+      status: 'active',
+      industry_tag_code: undefined
     })
     setShowAddModal(true)
   }
@@ -136,7 +179,8 @@ function AdditionalAccounts() {
     setFormData({
       account_name: account.account_name,
       wechat_account_id: account.wechat_account_id,
-      status: account.status
+      status: account.status,
+      industry_tag_code: account.industry_tag_code || undefined
     })
     setShowEditModal(true)
   }
@@ -212,7 +256,12 @@ function AdditionalAccounts() {
   }
 
   const handleImport = async () => {
+    if (quota && typeof quota.remaining === 'number' && quota.remaining <= 0) {
+      Message.warning('当前会员等级的额外公众号数量已用完，无法继续导入，如需增加请联系管理员升级会员等级')
+      return
+    }
     if (!importFile) {
+      console.warn('[AdditionalAccounts] handleImport called without importFile')
       Message.warning('请选择要导入的文件')
       return
     }
@@ -232,6 +281,18 @@ function AdditionalAccounts() {
         Message.success(response.data.message)
         setShowImportModal(false)
         setImportFile(null)
+        const importData = response.data.data || {}
+        const errors = Array.isArray(importData.errors) ? importData.errors : []
+        setImportErrors(errors)
+        setImportSummary({
+          successCount: importData.successCount || 0,
+          skipCount: importData.skipCount || 0,
+          errorCount: importData.errorCount || 0,
+          hasMoreErrors: importData.hasMoreErrors === true
+        })
+        if (errors.length > 0) {
+          setShowImportErrorModal(true)
+        }
         fetchAccounts(new AbortController().signal)
       }
     } catch (error) {
@@ -239,6 +300,110 @@ function AdditionalAccounts() {
       Message.error(error.response?.data?.message || '导入失败，请重试')
     } finally {
       setImportLoading(false)
+    }
+  }
+
+  const handleDownloadImportErrors = () => {
+    if (!importErrors.length) {
+      Message.warning('暂无可导出的错误明细')
+      return
+    }
+    const header = ['行号', '错误原因', '公众号名称', '账号ID', '行业标签']
+    const escapeCsv = (value) => {
+      const text = String(value ?? '')
+      if (text.includes('"') || text.includes(',') || text.includes('\n')) {
+        return `"${text.replace(/"/g, '""')}"`
+      }
+      return text
+    }
+    const rows = importErrors.map((item) => [
+      item.rowNum || '',
+      item.message || '',
+      item.account_name || '',
+      item.wechat_account_id || '',
+      item.industry_tag_code || ''
+    ])
+    const csvContent = [header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `公众号导入错误明细_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    Message.success('错误明细导出成功')
+  }
+
+  const handleDownloadRetryTemplate = () => {
+    if (!importErrors.length) {
+      Message.warning('暂无可导出的失败数据')
+      return
+    }
+    const header = ['公众号名称', '账号ID', '行业标签', '错误原因']
+    const escapeCsv = (value) => {
+      const text = String(value ?? '')
+      if (text.includes('"') || text.includes(',') || text.includes('\n')) {
+        return `"${text.replace(/"/g, '""')}"`
+      }
+      return text
+    }
+    const rows = importErrors.map((item) => [
+      item.account_name || '',
+      item.wechat_account_id || '',
+      item.industry_tag_code || '',
+      item.message || ''
+    ])
+    const csvContent = [header, ...rows].map((row) => row.map(escapeCsv).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `公众号导入失败重试模板_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    window.URL.revokeObjectURL(url)
+    Message.success('失败数据模板导出成功')
+  }
+
+  const handleExport = async () => {
+    setExportLoading(true)
+    try {
+      const params = {}
+      if (search) {
+        params.search = search
+      }
+      if (statusFilter) {
+        params.status = statusFilter
+      }
+      if (userRole === 'admin' && selectedUserId) {
+        params.userId = selectedUserId
+      }
+
+      const response = await axios.get('/api/additional-accounts/export', {
+        params,
+        responseType: 'blob'
+      })
+
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `第三方公众号导出_${new Date().toISOString().slice(0, 10)}.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      Message.success('导出成功')
+    } catch (error) {
+      console.error('导出失败:', error)
+      Message.error('导出失败，请重试')
+    } finally {
+      setExportLoading(false)
     }
   }
 
@@ -273,6 +438,16 @@ function AdditionalAccounts() {
       title: '账号ID',
       dataIndex: 'wechat_account_id',
       width: 200
+    },
+    {
+      title: '标签',
+      dataIndex: 'industry_tag_name',
+      width: 140,
+      render: (_, record) => {
+        if (record.industry_tag_name) return record.industry_tag_name
+        if (record.industry_tag_code) return record.industry_tag_code
+        return '-'
+      }
     },
     {
       title: '状态',
@@ -333,19 +508,35 @@ function AdditionalAccounts() {
     <div className="additional-accounts">
       <Card className="management-card" bordered={false}>
         <div className="management-header">
-          <h2 className="management-title">额外公众号管理</h2>
+          <h2 className="management-title">第三方公众号管理</h2>
+          {userRole !== 'admin' && quota && typeof quota.totalLimit === 'number' && (
+            <div style={{ marginRight: 16, color: '#666', fontSize: 13 }}>
+              已用额度：{quota.usedCount || 0} / {quota.totalLimit}（剩余 {Math.max(0, quota.remaining || 0)}）
+            </div>
+          )}
           <Space>
             <Button
               onClick={handleAdd}
               type="primary"
+              disabled={userRole !== 'admin' && quota && typeof quota.remaining === 'number' && quota.remaining <= 0}
             >
               新增公众号
             </Button>
             <Button
-              onClick={() => setShowImportModal(true)}
+              onClick={() => {
+                setImportFile(null)
+                setShowImportModal(true)
+              }}
               type="outline"
+              disabled={userRole !== 'admin' && quota && typeof quota.remaining === 'number' && quota.remaining <= 0}
             >
               批量导入
+            </Button>
+            <Button
+              onClick={handleExport}
+              loading={exportLoading}
+            >
+              导出
             </Button>
             <Button
               onClick={() => fetchAccounts(new AbortController().signal)}
@@ -474,6 +665,7 @@ function AdditionalAccounts() {
         style={{ width: 500 }}
       >
         <Form
+          key={showAddModal ? 'account-form-add' : `account-form-edit-${selectedAccount?.id || ''}`}
           initialValues={formData}
           onSubmit={handleSubmit}
           layout="vertical"
@@ -499,6 +691,19 @@ function AdditionalAccounts() {
             <Select>
               <Option value="active">生效</Option>
               <Option value="inactive">失效</Option>
+            </Select>
+          </FormItem>
+          <FormItem
+            label="标签"
+            field="industry_tag_code"
+            extra="行业分类，选项来自管理员设置中的数据字典「行业」"
+          >
+            <Select placeholder="请选择行业标签" allowClear>
+              {industryTagOptions.map((o) => (
+                <Option key={o.value} value={o.value}>
+                  {o.label}
+                </Option>
+              ))}
             </Select>
           </FormItem>
           <div className="form-actions">
@@ -543,11 +748,15 @@ function AdditionalAccounts() {
             <h4 style={{ marginBottom: '12px' }}>第二步：填写数据并上传</h4>
             <Upload
               accept=".xlsx,.xls"
-              fileList={importFile ? [importFile] : []}
-              onChange={(fileList) => {
-                setImportFile(fileList[0]?.originFile || null)
+              showUploadList={false}
+              beforeUpload={(file) => {
+                setImportFile(file || null)
+                if (!file) {
+                  console.warn('[AdditionalAccounts] beforeUpload got empty file')
+                }
+                // 阻止自动上传，改为点击“开始导入”后手动提交 FormData
+                return false
               }}
-              beforeUpload={() => false}
             >
               <Button>选择文件</Button>
             </Upload>
@@ -562,6 +771,7 @@ function AdditionalAccounts() {
             <ul style={{ margin: 0, paddingLeft: '20px' }}>
               <li>支持Excel格式文件（.xlsx, .xls）</li>
               <li>必填字段：公众号名称、账号ID</li>
+              <li>选填字段：行业标签，优先填写数据字典「行业」中的中文标签名（也支持填写编码），留空表示不设置</li>
               <li>重复的账号ID将被跳过，不会导入</li>
               <li>导入后默认状态为"生效"</li>
             </ul>
@@ -599,6 +809,46 @@ function AdditionalAccounts() {
           }}
         />
       )}
+
+      {/* 导入错误明细 */}
+      <Modal
+        visible={showImportErrorModal}
+        title="导入错误明细"
+        onCancel={() => setShowImportErrorModal(false)}
+        footer={null}
+        style={{ width: 900 }}
+      >
+        <div style={{ marginBottom: 12, color: '#4e5969' }}>
+          导入结果：成功 {importSummary.successCount} 条，跳过 {importSummary.skipCount} 条，错误 {importSummary.errorCount} 条
+          {importSummary.hasMoreErrors ? '（错误较多，仅展示/导出前1000条）' : ''}
+        </div>
+        <div style={{ maxHeight: 360, overflow: 'auto', border: '1px solid #e5e6eb', borderRadius: 4 }}>
+          <Table
+            columns={[
+              { title: '行号', dataIndex: 'rowNum', width: 90 },
+              { title: '错误原因', dataIndex: 'message', width: 360 },
+              { title: '公众号名称', dataIndex: 'account_name', width: 180 },
+              { title: '账号ID', dataIndex: 'wechat_account_id', width: 180 },
+              { title: '行业标签', dataIndex: 'industry_tag_code', width: 140 }
+            ]}
+            data={importErrors}
+            pagination={false}
+            rowKey={(record, index) => `${record.rowNum || 'unknown'}-${index}`}
+            border={{ cell: true, wrapper: false }}
+          />
+        </div>
+        <div className="form-actions" style={{ marginTop: 16 }}>
+          <Button type="secondary" onClick={() => setShowImportErrorModal(false)}>
+            关闭
+          </Button>
+          <Button type="outline" onClick={handleDownloadRetryTemplate}>
+            导出失败重试模板
+          </Button>
+          <Button type="primary" onClick={handleDownloadImportErrors}>
+            导出错误原因
+          </Button>
+        </div>
+      </Modal>
     </div>
   )
 }

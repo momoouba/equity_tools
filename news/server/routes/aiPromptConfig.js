@@ -27,7 +27,7 @@ async function logPromptChange(promptConfigId, changeType, oldValue, newValue, u
     const logId = await generateId('ai_prompt_change_log');
     await db.execute(
       `INSERT INTO ai_prompt_change_log 
-       (id, prompt_config_id, change_type, old_value, new_value, change_user_id, change_reason) 
+       (F_Id, prompt_config_id, change_type, old_value, new_value, F_CreatorUserId, change_reason) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         logId,
@@ -50,7 +50,7 @@ router.get('/', checkAdminPermission, async (req, res) => {
     const { page = 1, pageSize = 10, interface_type, prompt_type, is_active } = req.query;
     const offset = (page - 1) * pageSize;
 
-    let condition = 'WHERE p.delete_mark = 0';
+    let condition = 'WHERE p.F_DeleteMark = 0';
     const params = [];
 
     if (interface_type) {
@@ -72,14 +72,14 @@ router.get('/', checkAdminPermission, async (req, res) => {
     // 使用 LEFT JOIN 关联AI模型配置，确保即使没有关联也能正常查询
     const data = await db.query(
       `SELECT 
-        p.id, p.prompt_name, p.interface_type, p.prompt_type, 
+        p.F_Id AS id, p.prompt_name, p.interface_type, p.prompt_type, 
         LEFT(p.prompt_content, 100) as prompt_content_preview,
-        p.ai_model_config_id, p.is_active, p.creator_user_id, p.created_at, p.updated_at,
+        p.ai_model_config_id, p.is_active, p.F_CreatorUserId, p.F_CreatorTime, p.F_LastModifyTime,
         m.config_name as ai_model_config_name, m.provider, m.model_name
        FROM ai_prompt_config p
-       LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.id AND m.delete_mark = 0
+       LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.F_Id AND m.F_DeleteMark = 0
        ${condition} 
-       ORDER BY p.created_at DESC 
+       ORDER BY p.F_CreatorTime DESC 
        LIMIT ? OFFSET ?`,
       [...params, parseInt(pageSize), offset]
     );
@@ -114,7 +114,7 @@ router.get('/:id', checkAdminPermission, async (req, res) => {
     const { id } = req.params;
     
     const data = await db.query(
-      'SELECT * FROM ai_prompt_config WHERE id = ? AND delete_mark = 0',
+      'SELECT *, F_Id AS id FROM ai_prompt_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -152,27 +152,34 @@ router.post('/', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 验证接口类型
-    if (!['新榜', '企查查'].includes(interface_type)) {
+    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
+    if (!validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是"新榜"或"企查查"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
       });
     }
 
     // 验证提示词类型
-    const validPromptTypes = ['sentiment_analysis', 'enterprise_relevance', 'validation'];
+    const validPromptTypes = [
+      'sentiment_analysis',
+      'enterprise_relevance',
+      'validation',
+      'enterprise_full_name',
+      'project_sourcing_financing_web_enrich',
+    ];
     if (!validPromptTypes.includes(prompt_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '提示词类型必须是：sentiment_analysis、enterprise_relevance 或 validation' 
+        message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
       });
     }
 
     const configId = await generateId('ai_prompt_config');
     await db.execute(
       `INSERT INTO ai_prompt_config 
-       (id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, creator_user_id) 
+       (F_Id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, F_CreatorUserId) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         configId, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id || null, is_active, req.currentUserId
@@ -215,7 +222,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT * FROM ai_prompt_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM ai_prompt_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -233,21 +240,28 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       is_active: existing[0].is_active
     };
 
-    // 验证接口类型
-    if (interface_type && !['新榜', '企查查'].includes(interface_type)) {
+    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
+    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
+    if (interface_type && !validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是"新榜"或"企查查"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
       });
     }
 
     // 验证提示词类型
     if (prompt_type) {
-      const validPromptTypes = ['sentiment_analysis', 'enterprise_relevance', 'validation'];
+      const validPromptTypes = [
+        'sentiment_analysis',
+        'enterprise_relevance',
+        'validation',
+        'enterprise_full_name',
+        'project_sourcing_financing_web_enrich',
+      ];
       if (!validPromptTypes.includes(prompt_type)) {
         return res.status(400).json({ 
           success: false, 
-          message: '提示词类型必须是：sentiment_analysis、enterprise_relevance 或 validation' 
+          message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
         });
       }
     }
@@ -255,8 +269,8 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
     await db.execute(
       `UPDATE ai_prompt_config 
        SET prompt_name = ?, interface_type = ?, prompt_type = ?, 
-           prompt_content = ?, ai_model_config_id = ?, is_active = ?, updater_user_id = ?
-       WHERE id = ?`,
+           prompt_content = ?, ai_model_config_id = ?, is_active = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
       [
         prompt_name || existing[0].prompt_name,
         interface_type || existing[0].interface_type,
@@ -271,7 +285,7 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
     // 获取更新后的值
     const updated = await db.query(
-      'SELECT * FROM ai_prompt_config WHERE id = ?',
+      'SELECT * FROM ai_prompt_config WHERE F_Id = ?',
       [id]
     );
 
@@ -304,7 +318,7 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT * FROM ai_prompt_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM ai_prompt_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -323,8 +337,8 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     await db.execute(
       `UPDATE ai_prompt_config 
-       SET delete_mark = 1, delete_time = NOW(), delete_user_id = ?
-       WHERE id = ?`,
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+       WHERE F_Id = ?`,
       [req.currentUserId, id]
     );
 
@@ -348,7 +362,7 @@ router.patch('/:id/toggle-active', checkAdminPermission, async (req, res) => {
 
     // 检查记录是否存在
     const existing = await db.query(
-      'SELECT * FROM ai_prompt_config WHERE id = ? AND delete_mark = 0',
+      'SELECT * FROM ai_prompt_config WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
 
@@ -361,8 +375,8 @@ router.patch('/:id/toggle-active', checkAdminPermission, async (req, res) => {
 
     await db.execute(
       `UPDATE ai_prompt_config 
-       SET is_active = ?, updater_user_id = ?
-       WHERE id = ?`,
+       SET is_active = ?, F_LastModifyUserId = ?
+       WHERE F_Id = ?`,
       [newIsActive, req.currentUserId, id]
     );
 
@@ -398,7 +412,7 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
 
     // 检查配置是否存在
     const existing = await db.query(
-      'SELECT id FROM ai_prompt_config WHERE id = ?',
+      'SELECT F_Id FROM ai_prompt_config WHERE F_Id = ?',
       [id]
     );
 
@@ -409,13 +423,13 @@ router.get('/:id/logs', checkAdminPermission, async (req, res) => {
     // 查询日志
     const logs = await db.query(
       `SELECT 
-        l.id, l.change_type, l.old_value, l.new_value, 
-        l.change_time, l.change_reason,
+        l.F_Id, l.change_type, l.old_value, l.new_value, 
+        l.F_CreatorTime, l.change_reason,
         u.account as change_user_name
        FROM ai_prompt_change_log l
-       LEFT JOIN users u ON l.change_user_id = u.id
+       LEFT JOIN users u ON l.F_CreatorUserId = u.F_Id
        WHERE l.prompt_config_id = ?
-       ORDER BY l.change_time DESC
+       ORDER BY l.F_CreatorTime DESC
        LIMIT ? OFFSET ?`,
       [id, parseInt(pageSize), offset]
     );
@@ -449,8 +463,8 @@ router.get('/active/:interface_type/:prompt_type', async (req, res) => {
        WHERE interface_type = ? 
        AND prompt_type = ? 
        AND is_active = 1 
-       AND delete_mark = 0 
-       ORDER BY created_at DESC 
+       AND F_DeleteMark = 0 
+       ORDER BY F_CreatorTime DESC 
        LIMIT 1`,
       [interface_type, prompt_type]
     );

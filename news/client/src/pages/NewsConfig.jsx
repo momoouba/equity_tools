@@ -5,6 +5,7 @@ import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
 import dayjs from 'dayjs'
 import './NewsConfig.css'
+import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './project-sourcing/financingConstants'
 
 const Option = Select.Option
 
@@ -35,9 +36,15 @@ function toDatetimeLocalValue(apiValue) {
   return base.length >= 16 ? base : s
 }
 
-function NewsConfig() {
+function formatInterfaceTypeColumn(text) {
+  if (text === FINANCING_INTERFACE_TYPE) return '上海国际集团-投融资'
+  return text || '新榜'
+}
+
+function NewsConfig({ financingSourceMode = false }) {
   const [configs, setConfigs] = useState([])
   const [applications, setApplications] = useState([])
+  const [sourcingAppId, setSourcingAppId] = useState('')
   const [loading, setLoading] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [total, setTotal] = useState(0)
@@ -50,6 +57,8 @@ function NewsConfig() {
   const [logConfigId, setLogConfigId] = useState(null)
   const [showSyncModal, setShowSyncModal] = useState(false)
   const [syncConfigId, setSyncConfigId] = useState(null)
+  /** 系统配置页：投融资行同步走 project-sourcing 接口 */
+  const [syncInterfaceType, setSyncInterfaceType] = useState(null)
   const [syncStartTime, setSyncStartTime] = useState('')
   const [syncEndTime, setSyncEndTime] = useState('')
   const [formData, setFormData] = useState({
@@ -68,9 +77,12 @@ function NewsConfig() {
   const [showCronModal, setShowCronModal] = useState(false)
 
   useEffect(() => {
-    fetchConfigs()
     fetchApplications()
-  }, [currentPage])
+  }, [financingSourceMode])
+
+  useEffect(() => {
+    fetchConfigs()
+  }, [currentPage, financingSourceMode, sourcingAppId])
 
   useEffect(() => {
     if (formData.interface_type === '企查查' && !editingConfig) {
@@ -87,6 +99,14 @@ function NewsConfig() {
         news_type: '新闻舆情',
         request_url: prev.request_url || 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote',
         cron_expression: prev.cron_expression || '0 0 0 ? * 1 *' // 默认每周一0点执行
+      }))
+    }
+    if (formData.interface_type === FINANCING_INTERFACE_TYPE && !editingConfig) {
+      setFormData(prev => ({
+        ...prev,
+        news_type: '融资信息',
+        content_type: 'application/json;charset=utf-8',
+        cron_expression: prev.cron_expression || '0 0 8 * * ? *'
       }))
     }
   }, [formData.interface_type, editingConfig])
@@ -111,12 +131,18 @@ function NewsConfig() {
   }, [formData.interface_type, showForm])
 
   const fetchConfigs = async () => {
+    if (financingSourceMode && !sourcingAppId) {
+      setConfigs([])
+      setTotal(0)
+      return
+    }
     setLoading(true)
     try {
       const response = await axios.get('/api/system/news-configs', {
         params: {
           page: currentPage,
-          pageSize: pageSize
+          pageSize: pageSize,
+          ...(financingSourceMode && sourcingAppId ? { app_id: sourcingAppId } : {})
         }
       })
       if (response.data.success) {
@@ -135,7 +161,12 @@ function NewsConfig() {
     try {
       const response = await axios.get('/api/system/applications')
       if (response.data.success) {
-        setApplications(response.data.data)
+        const apps = response.data.data || []
+        setApplications(apps)
+        if (financingSourceMode) {
+          const row = apps.find((a) => a.app_name === PROJECT_SOURCING_APP_NAME)
+          setSourcingAppId(row?.id || '')
+        }
       }
     } catch (error) {
       console.error('获取应用列表失败:', error)
@@ -145,6 +176,22 @@ function NewsConfig() {
   const handleAdd = () => {
     setEditingConfig(null)
     setHasApiKey(false)
+    if (financingSourceMode) {
+      setFormData({
+        app_id: sourcingAppId || '',
+        interface_type: FINANCING_INTERFACE_TYPE,
+        news_type: '融资信息',
+        request_url: '',
+        content_type: 'application/json;charset=utf-8',
+        api_key: '',
+        cron_expression: '0 0 8 * * ? *',
+        skip_holiday: false,
+        is_active: true,
+        entity_type: []
+      })
+      setShowForm(true)
+      return
+    }
     setFormData({
       app_id: '',
       interface_type: '新榜',
@@ -300,9 +347,10 @@ function NewsConfig() {
     })
   }
 
-  const handleSync = (id) => {
+  const handleSync = (id, interfaceType = null) => {
     const def = getDefaultSyncRange()
     setSyncConfigId(id)
+    setSyncInterfaceType(interfaceType || null)
     setSyncStartTime(def.start)
     setSyncEndTime(def.end)
     setShowSyncModal(true)
@@ -327,21 +375,40 @@ function NewsConfig() {
       return
     }
     setSyncing(syncConfigId)
+    const useFinancingSync =
+      financingSourceMode || syncInterfaceType === FINANCING_INTERFACE_TYPE
     try {
-      // 同步可能较久（如裁判文书、舆情按企业逐个请求），使用 10 分钟超时，避免提前断开
-      const response = await axios.post(
-        '/api/news/sync',
-        {
-          config_id: syncConfigId,
-          start_time: start,
-          end_time: end
-        },
-        { timeout: 600000 }
-      )
+      let response
+      if (useFinancingSync) {
+        response = await axios.post(
+          '/api/project-sourcing/sync',
+          {
+            config_id: syncConfigId,
+            start_date: start.slice(0, 10),
+            end_date: end.slice(0, 10),
+          },
+          { timeout: 600000 }
+        )
+      } else {
+        response = await axios.post(
+          '/api/news/sync',
+          {
+            config_id: syncConfigId,
+            start_time: start,
+            end_time: end
+          },
+          { timeout: 600000 }
+        )
+      }
       if (response.data.success) {
-        Message.success(`同步完成：${response.data.message}`)
+        Message.success(
+          useFinancingSync
+            ? response.data.message || '同步完成'
+            : `同步完成：${response.data.message}`
+        )
         setShowSyncModal(false)
         setSyncConfigId(null)
+        setSyncInterfaceType(null)
         fetchConfigs()
       } else {
         Message.error('同步失败：' + (response.data.message || '未知错误'))
@@ -352,6 +419,7 @@ function NewsConfig() {
         Message.warning('同步请求已超时，任务可能仍在后台执行，请稍后在「日志」中查看结果')
         setShowSyncModal(false)
         setSyncConfigId(null)
+        setSyncInterfaceType(null)
         fetchConfigs()
       } else {
         Message.error('同步失败：' + (error.response?.data?.message || error.message || '网络错误'))
@@ -364,17 +432,20 @@ function NewsConfig() {
   const handleChange = (name, value) => {
     if (name === 'interface_type') {
       const currentEntityTypes = formData.entity_type || []
-      const filteredEntityTypes = (value === '企查查' || value === '上海国际集团') ? currentEntityTypes.filter(type => type !== '额外公众号') : currentEntityTypes
+      const filteredEntityTypes = (value === '企查查' || value === '上海国际集团' || value === FINANCING_INTERFACE_TYPE)
+        ? currentEntityTypes.filter(type => type !== '额外公众号')
+        : currentEntityTypes
+      const nextNewsType = value === FINANCING_INTERFACE_TYPE ? '融资信息' : '新闻舆情'
       setFormData(prev => ({
         ...prev,
         [name]: value,
-        news_type: '新闻舆情',
+        news_type: nextNewsType,
         entity_type: filteredEntityTypes
       }))
     } else if (name === 'news_type' && value === '同花顺订阅') {
       // 同花顺订阅：企业类型默认为空，不参与接口参数
       setFormData(prev => ({ ...prev, [name]: value, entity_type: [] }))
-    } else if (name === 'entity_type' && (formData.interface_type === '企查查' || formData.interface_type === '上海国际集团')) {
+    } else if (name === 'entity_type' && (formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE)) {
       const currentEntityTypes = value || []
       const filteredEntityTypes = Array.isArray(currentEntityTypes) ? currentEntityTypes.filter(type => type !== '额外公众号') : []
       setFormData(prev => ({ ...prev, [name]: filteredEntityTypes }))
@@ -391,7 +462,8 @@ function NewsConfig() {
     
     const isQichacha = formData.interface_type === '企查查'
     const isShanghaiInternationalGroup = formData.interface_type === '上海国际集团'
-    const useGroupConfig = isQichacha || isShanghaiInternationalGroup
+    const isFinancingIface = formData.interface_type === FINANCING_INTERFACE_TYPE
+    const useGroupConfig = isQichacha || isShanghaiInternationalGroup || isFinancingIface
     
     if (editingConfig) {
       if (!formData.app_id || !formData.request_url || 
@@ -469,10 +541,10 @@ function NewsConfig() {
       render: (text) => text || '-'
     },
     {
-      title: '新闻接口类型',
+      title: financingSourceMode ? '接口类型' : '新闻接口类型',
       dataIndex: 'interface_type',
-      width: 130,
-      render: (text) => text || '新榜'
+      width: 160,
+      render: (text) => formatInterfaceTypeColumn(text)
     },
     {
       title: '新闻类型',
@@ -501,24 +573,28 @@ function NewsConfig() {
         return formatCronExpression(text)
       }
     },
-    {
-      title: '企业类型',
-      dataIndex: 'entity_type',
-      width: 200,
-      render: (entityType) => {
-        if (!entityType) return '-';
-        let types = entityType;
-        if (typeof types === 'string') {
-          try {
-            types = JSON.parse(types);
-          } catch (e) {
-            return entityType;
+    ...(financingSourceMode
+      ? []
+      : [
+          {
+            title: '企业类型',
+            dataIndex: 'entity_type',
+            width: 200,
+            render: (entityType) => {
+              if (!entityType) return '-';
+              let types = entityType;
+              if (typeof types === 'string') {
+                try {
+                  types = JSON.parse(types);
+                } catch (e) {
+                  return entityType;
+                }
+              }
+              if (!Array.isArray(types) || types.length === 0) return '-';
+              return types.join('、');
+            }
           }
-        }
-        if (!Array.isArray(types) || types.length === 0) return '-';
-        return types.join('、');
-      }
-    },
+        ]),
     {
       title: '最后同步时间',
       dataIndex: 'last_sync_time',
@@ -565,7 +641,7 @@ function NewsConfig() {
             size="small"
             status="warning"
             loading={syncing === record.id}
-            onClick={() => handleSync(record.id)}
+            onClick={() => handleSync(record.id, record.interface_type)}
           >
             同步
           </Button>
@@ -596,7 +672,7 @@ function NewsConfig() {
   return (
     <div className="news-config">
       <div className="config-header">
-        <h3>新闻接口配置</h3>
+        <h3>{financingSourceMode ? '融资信息源 · 接口类型' : '新闻接口配置'}</h3>
         <Space>
           <Button
             onClick={fetchConfigs}
@@ -653,13 +729,18 @@ function NewsConfig() {
       {/* 新增/编辑表单 */}
       <Modal
         visible={showForm}
-        title={editingConfig ? '编辑新闻接口配置' : '新增新闻接口配置'}
+        title={
+          financingSourceMode
+            ? (editingConfig ? '编辑融资接口配置' : '新增融资接口配置')
+            : (editingConfig ? '编辑新闻接口配置' : '新增新闻接口配置')
+        }
         onCancel={() => {
           setShowForm(false)
           setEditingConfig(null)
         }}
         footer={null}
         style={{ width: 600 }}
+        getChildrenPopupContainer={() => document.body}
       >
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -669,28 +750,54 @@ function NewsConfig() {
               onChange={(value) => handleChange('app_id', value)}
               placeholder="请选择应用"
               disabled={!!editingConfig}
+              getPopupContainer={() => document.body}
+              dropdownMenuStyle={{ zIndex: 1052 }}
             >
-              {applications.map(app => (
+              {(financingSourceMode
+                ? applications.filter((a) => a.app_name === PROJECT_SOURCING_APP_NAME)
+                : applications
+              ).map(app => (
                 <Option key={app.id} value={app.id}>
                   {app.app_name}
                 </Option>
               ))}
             </Select>
-            <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置新闻接口的应用'}</p>
+            <p className="form-hint">
+              {editingConfig
+                ? '编辑时不能修改应用'
+                : financingSourceMode
+                  ? '项目挖掘应用下的融资数据接口（凭证见「上海国际集团接口配置」）'
+                  : '选择要配置新闻接口的应用'}
+            </p>
           </div>
 
           <div className="form-group">
-            <label>新闻接口类型 *</label>
+            <label>{financingSourceMode ? '接口类型 *' : '新闻接口类型 *'}</label>
             <Select
               value={formData.interface_type}
               onChange={(value) => handleChange('interface_type', value)}
-              disabled={!!editingConfig}
+              disabled={!!editingConfig || financingSourceMode}
+              getPopupContainer={() => document.body}
+              dropdownMenuStyle={{ zIndex: 1052 }}
             >
-              <Option value="新榜">新榜</Option>
-              <Option value="企查查">企查查</Option>
-              <Option value="上海国际集团">上海国际集团</Option>
+              {financingSourceMode ? (
+                <Option value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>
+              ) : (
+                [
+                  <Option key="iface-xinbang" value="新榜">新榜</Option>,
+                  <Option key="iface-qcc" value="企查查">企查查</Option>,
+                  <Option key="iface-shft" value="上海国际集团">上海国际集团</Option>,
+                  <Option key="iface-fin" value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>,
+                ]
+              )}
             </Select>
-            <p className="form-hint">{editingConfig ? '编辑时不能修改接口类型' : '选择新闻接口类型'}</p>
+            <p className="form-hint">
+              {editingConfig
+                ? '编辑时不能修改接口类型'
+                : financingSourceMode
+                  ? '国际集团投融资接口（interface_type：shanghai_international_financing）'
+                  : '选择新闻接口类型；投融资请选「上海国际集团-投融资」，建议应用选「项目挖掘」'}
+            </p>
           </div>
 
           <div className="form-group">
@@ -699,6 +806,8 @@ function NewsConfig() {
               value={formData.news_type}
               onChange={(value) => handleChange('news_type', value)}
               placeholder="请选择新闻类型"
+              getPopupContainer={() => document.body}
+              dropdownMenuStyle={{ zIndex: 1052 }}
             >
               {newsTypeOptions.map((opt) => (
                 <Option key={opt.value} value={opt.value} disabled={opt.disabled}>
@@ -713,7 +822,9 @@ function NewsConfig() {
             <p className="form-hint">
               {formData.interface_type === '新榜'
                 ? '新榜接口仅支持新闻舆情类型'
-                : '灰色选项为尚未开发的类型，后续开发完成后可选用'}
+                : formData.interface_type === FINANCING_INTERFACE_TYPE
+                  ? '融资信息类型对应项目挖掘数据入库'
+                  : '灰色选项为尚未开发的类型，后续开发完成后可选用'}
             </p>
           </div>
 
@@ -727,7 +838,9 @@ function NewsConfig() {
                   ? 'https://api.qichacha.com/CompanyNews/SearchNews'
                   : formData.interface_type === '上海国际集团'
                     ? 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote'
-                    : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'
+                    : formData.interface_type === FINANCING_INTERFACE_TYPE
+                      ? '请填写国际集团投融资查询接口 URL（见接口文档）'
+                      : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'
               }
             />
             <p className="form-hint">
@@ -735,27 +848,29 @@ function NewsConfig() {
                 ? '企查查舆情接口地址'
                 : formData.interface_type === '上海国际集团'
                   ? '上海国际集团舆情和公司公告查询接口地址'
-                  : '新榜接口地址'}
+                  : formData.interface_type === FINANCING_INTERFACE_TYPE
+                    ? '投融资接口地址；鉴权与「上海国际集团接口配置」一致（按应用维度）'
+                    : '新榜接口地址'}
             </p>
           </div>
 
           <div className="form-group">
-            <label>Content-Type {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') ? '' : '*'}</label>
+            <label>Content-Type {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
             <Input
               value={formData.content_type}
               onChange={(value) => handleChange('content_type', value)}
               placeholder="application/x-www-form-urlencoded;charset=utf-8"
-              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团'}
+              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
             />
             <p className="form-hint">
-              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团')
-                ? '该接口类型使用application/json，无需单独配置Content-Type'
+              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE)
+                ? '该接口类型使用 application/json，无需单独配置 Content-Type'
                 : '请求的Content-Type'}
             </p>
           </div>
 
           <div className="form-group">
-            <label>Key {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') ? '' : '*'}</label>
+            <label>Key {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
             <Input.Password
               value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
               onChange={(value) => handleChange('api_key', value)}
@@ -770,17 +885,17 @@ function NewsConfig() {
                   ? (hasApiKey ? '****' : '留空则不更新密钥')
                   : formData.interface_type === '企查查'
                     ? '企查查接口使用企查查配置中的凭证'
-                    : formData.interface_type === '上海国际集团'
-                      ? '上海国际集团接口使用上海国际集团配置中的凭证'
+                    : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
+                      ? '上海国际集团接口使用「上海国际集团接口配置」中的凭证'
                       : '请输入Key'
               }
-              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团'}
+              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
             />
             <p className="form-hint">
               {formData.interface_type === '企查查'
                 ? '企查查接口使用"企查查接口配置"中的新闻舆情接口凭证，无需在此填写'
-                : formData.interface_type === '上海国际集团'
-                  ? '上海国际集团接口使用"上海国际集团接口配置"中的X-App-Id、APIkey等凭证，无需在此填写'
+                : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
+                  ? '请在「上海国际集团接口配置」中为对应应用维护 X-App-Id、APIkey；此处无需填写'
                   : editingConfig
                     ? '留空则不更新密钥'
                     : '在控制台获取的Key'}
@@ -805,7 +920,7 @@ function NewsConfig() {
             </div>
             <p className="form-hint">
               点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置
-              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团') && (
+              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) && (
                 <span style={{ display: 'block', marginTop: '4px' }}>
                   该接口定时规则可编辑，编辑后将同步更新到定时任务配置
                 </span>
@@ -813,6 +928,7 @@ function NewsConfig() {
             </p>
           </div>
 
+          {formData.interface_type !== FINANCING_INTERFACE_TYPE && (
           <div className="form-group">
             <label>企业类型</label>
             <Select
@@ -826,6 +942,8 @@ function NewsConfig() {
               }
               allowClear
               disabled={formData.news_type === '同花顺订阅'}
+              getPopupContainer={() => document.body}
+              dropdownMenuStyle={{ zIndex: 1052 }}
             >
               <Option value="被投企业">被投企业</Option>
               <Option value="基金相关主体">基金相关主体</Option>
@@ -852,6 +970,7 @@ function NewsConfig() {
               )}
             </p>
           </div>
+          )}
 
           <div className="form-group">
             <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 0 }}>
@@ -905,6 +1024,7 @@ function NewsConfig() {
             if (e.target.id === 'news-config-sync-modal-overlay') {
               setShowSyncModal(false)
               setSyncConfigId(null)
+              setSyncInterfaceType(null)
             }
           }}
         >
@@ -957,6 +1077,7 @@ function NewsConfig() {
                 onClick={() => {
                   setShowSyncModal(false)
                   setSyncConfigId(null)
+                  setSyncInterfaceType(null)
                 }}
               >
                 取消

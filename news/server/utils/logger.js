@@ -87,9 +87,9 @@ async function logDataChange(tableName, recordId, oldData, newData, userId) {
         'send_frequency',
         'send_time',
         'is_active',
-        'is_deleted',
-        'deleted_at',
-        'deleted_by'
+        'F_DeleteMark',
+        'F_DeleteTime',
+        'F_DeleteUserId'
       ];
     } else {
       console.warn(`未知的表名: ${tableName}`);
@@ -119,7 +119,7 @@ async function logDataChange(tableName, recordId, oldData, newData, userId) {
         const logId = await generateId('data_change_log');
         await db.execute(
           `INSERT INTO data_change_log 
-           (id, table_name, record_id, changed_field, old_value, new_value, change_user_id) 
+           (F_Id, table_name, record_id, changed_field, old_value, new_value, F_CreatorUserId) 
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             logId,
