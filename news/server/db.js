@@ -6172,10 +6172,20 @@ async function initializeTables(dbPool) {
   try {
     await dbPool.query(
       `UPDATE ipo_new_share
+       SET total_issued_shares = ROUND(issue_total_wan * 10000, 2)
+       WHERE issue_total_wan IS NOT NULL AND issue_total_wan > 0
+         AND (total_issued_shares IS NULL OR total_issued_shares <= 0 OR total_issued_shares <= issue_total_wan * 100)`
+    );
+  } catch (err) {
+    console.warn('修正 ipo_new_share.total_issued_shares 股数单位时出现警告:', err.message);
+  }
+  try {
+    await dbPool.query(
+      `UPDATE ipo_new_share
        SET expected_raise_amount = ROUND(issue_price * issue_total_wan / 10000, 2)
        WHERE issue_total_wan IS NOT NULL AND issue_total_wan > 0
          AND issue_price IS NOT NULL AND issue_price > 0
-         AND expected_raise_amount IS NULL`
+         AND (expected_raise_amount IS NULL OR expected_raise_amount <= 0)`
     );
   } catch (err) {
     console.warn('回填 ipo_new_share.expected_raise_amount 时出现警告:', err.message);

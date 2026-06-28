@@ -221,7 +221,8 @@ async function executeListingSyncTask(configId) {
     endDate = formatDateOnly(addDaysCalendar(baseRunDate, 730));
     // 与需求「上市日/申购日 严格大于该日」配合：用「昨日」为界，才能纳入「今日上市」的港股与「今日申购」的 A 股；若用当日则永远漏掉当天对应日程
     newShareIssueAfterExclusive = formatDateOnly(addDaysCalendar(baseRunDate, -1));
-    newShareUpdateAfterExclusive = todayYmd;
+    // 与 A 股 UP_DATE 回看对齐：含「昨日」及之后有更新的东财行（避免上市日补齐被漏抓）
+    newShareUpdateAfterExclusive = formatDateOnly(addDaysCalendar(baseRunDate, -1));
   } else if (sourceType === 'overseas_filing') {
     const r = await computeOverseasScheduledSyncRange(cfg, baseRunDate);
     startDate = r.startDate;
@@ -243,7 +244,7 @@ async function executeListingSyncTask(configId) {
 
   console.log(
     sourceType === 'new_share'
-      ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：A股申购日/港股上市日 > ${newShareIssueAfterExclusive}（昨日本地日，不含）且 ≤ ${endDate}；A股补抓 UP_DATE > ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
+      ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：A股申购日/港股上市日 > ${newShareIssueAfterExclusive}（昨日本地日，不含）且 ≤ ${endDate}；A股补抓 UP_DATE >= ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
       : sourceType === 'overseas_filing'
         ? `[上市进展定时] 配置「${cfg.name || configId}」境外备案区间 ${startDate} ~ ${endDate}（策略=每日查询最近工作日，minSyncDate=${minSyncDate}，北京时间闭区间）interface=${cfg.interface_type || '-'}`
       : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`

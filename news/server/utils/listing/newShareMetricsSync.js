@@ -51,40 +51,92 @@ async function fetchIpoApplySnapshot(force = false) {
   if (!force && ipoApplyCache.expireAt > now && ipoApplyCache.byCode.size > 0) {
     return ipoApplyCache.byCode;
   }
-  const u = new URL('https://datacenter-web.eastmoney.com/api/data/v1/get');
-  u.searchParams.set('sortColumns', 'APPLY_DATE,SECURITY_CODE');
-  u.searchParams.set('sortTypes', '-1,-1');
-  u.searchParams.set('pageSize', '5000');
-  u.searchParams.set('pageNumber', '1');
-  u.searchParams.set('reportName', 'RPTA_APP_IPOAPPLY');
-  u.searchParams.set(
-    'columns',
-    'SECURITY_CODE,SECURITY_NAME,LISTING_DATE,ISSUE_PRICE,ISSUE_NUM,TOTAL_ISSUE_NUM,ONLINE_ISSUE_LWR,CLOSE_PRICE,LD_CLOSE_CHANGE,MARKET_TYPE_NEW',
-  );
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  let resp;
-  try {
-    resp = await fetch(u.toString(), { headers: { 'user-agent': 'Mozilla/5.0' }, signal: ctrl.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (!resp.ok) throw new Error(`ipoapply http ${resp.status}`);
-  const payload = await resp.json();
-  const data = payload?.result?.data || [];
   const byCode = new Map();
-  for (const r of data) {
-    const code = String(r?.SECURITY_CODE || '').trim();
-    if (code) byCode.set(code, r);
+  const pageSize = 5000;
+  let page = 1;
+  let totalCount = null;
+  while (page <= 20) {
+    const u = new URL('https://datacenter-web.eastmoney.com/api/data/v1/get');
+    u.searchParams.set('sortColumns', 'APPLY_DATE,SECURITY_CODE');
+    u.searchParams.set('sortTypes', '-1,-1');
+    u.searchParams.set('pageSize', String(pageSize));
+    u.searchParams.set('pageNumber', String(page));
+    u.searchParams.set('reportName', 'RPTA_APP_IPOAPPLY');
+    u.searchParams.set(
+      'columns',
+      'SECURITY_CODE,SECURITY_NAME,LISTING_DATE,ISSUE_PRICE,ISSUE_NUM,TOTAL_ISSUE_NUM,ONLINE_ISSUE_LWR,CLOSE_PRICE,LD_CLOSE_CHANGE,MARKET_TYPE_NEW',
+    );
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    let resp;
+    try {
+      resp = await fetch(u.toString(), { headers: { 'user-agent': 'Mozilla/5.0' }, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!resp.ok) throw new Error(`ipoapply http ${resp.status}`);
+    const payload = await resp.json();
+    const result = payload?.result || {};
+    const data = result.data || [];
+    if (totalCount == null && result.count != null) totalCount = Number(result.count);
+    for (const r of data) {
+      const code = String(r?.SECURITY_CODE || '').trim();
+      if (code) byCode.set(code, r);
+      if (code && /^\d+$/.test(code)) byCode.set(code.padStart(6, '0'), r);
+    }
+    if (!data.length) break;
+    if (totalCount != null && byCode.size >= totalCount) break;
+    if (data.length < pageSize) break;
+    page += 1;
   }
   ipoApplyCache = { expireAt: now + IPOAPPLY_CACHE_TTL_MS, byCode };
   return byCode;
 }
 
-async function fetchMetricsFromIpoApplyFast({ stockCode, listDate }) {
-  const byCode = await fetchIpoApplySnapshot(false);
+async function fetchIpoApplyRowByCode(stockCode) {
   const cands = normalizeACodeCandidates(stockCode).map((c) => c.padStart(6, '0'));
-  const row = cands.map((c) => byCode.get(c)).find(Boolean);
+  try {
+    const byCode = await fetchIpoApplySnapshot(false);
+    const hit = cands.map((c) => byCode.get(c)).find(Boolean);
+    if (hit) return hit;
+  } catch (_) {
+    // fall through to filter API
+  }
+  for (const cand of cands) {
+    const u = new URL('https://datacenter-web.eastmoney.com/api/data/v1/get');
+    u.searchParams.set('reportName', 'RPTA_APP_IPOAPPLY');
+    u.searchParams.set('filter', `(SECURITY_CODE='${cand}')`);
+    u.searchParams.set('pageSize', '10');
+    u.searchParams.set('pageNumber', '1');
+    u.searchParams.set(
+      'columns',
+      'SECURITY_CODE,SECURITY_NAME,LISTING_DATE,ISSUE_PRICE,ISSUE_NUM,TOTAL_ISSUE_NUM,ONLINE_ISSUE_LWR,CLOSE_PRICE,LD_CLOSE_CHANGE,MARKET_TYPE_NEW,APPLY_DATE,UP_DATE,AFTER_ISSUE_PE,ONLINE_APPLY_UPPER',
+    );
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const resp = await fetch(u.toString(), { headers: { 'user-agent': 'Mozilla/5.0' }, signal: ctrl.signal });
+      if (!resp.ok) continue;
+      const payload = await resp.json();
+      const row = (payload?.result?.data || [])[0];
+      if (row) return row;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
+async function fetchMetricsFromIpoApplyFast({ stockCode, listDate }) {
+  const cands = normalizeACodeCandidates(stockCode).map((c) => c.padStart(6, '0'));
+  let row = null;
+  try {
+    const byCode = await fetchIpoApplySnapshot(false);
+    row = cands.map((c) => byCode.get(c)).find(Boolean) || null;
+  } catch (_) {
+    row = null;
+  }
+  if (!row) row = await fetchIpoApplyRowByCode(stockCode);
   if (!row) return null;
   const ld = ymd(row.LISTING_DATE);
   if (ld && ld < ymd(listDate)) return null;
@@ -309,5 +361,5 @@ async function runNewShareMetricsSyncWithFallback(opts) {
   return pyResult;
 }
 
-module.exports = { runNewShareMetricsSync, runNewShareMetricsSyncWithFallback };
+module.exports = { runNewShareMetricsSync, runNewShareMetricsSyncWithFallback, fetchIpoApplyRowByCode };
 

@@ -2,7 +2,7 @@ const db = require('../../db');
 const axios = require('axios');
 const { normalizeDashScopeChatEndpoint, formatDashScopeHttpError } = require('../dashScopeOpenAICompat');
 const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
-const { runNewShareAkSync } = require('./newShareAkSync');
+const { runNewShareAkSync, runIpoApplyBackfillByCode, runHkIssueTotalWanFetch } = require('./newShareAkSync');
 const { runNewShareMetricsSyncWithFallback } = require('./newShareMetricsSync');
 const { warmEtnetHkIpoInfoCache } = require('./etnetHkIpoInfoMetrics');
 const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./newShareEnterpriseFullNamePrompt');
@@ -88,7 +88,9 @@ async function upsertNewShareRow(row) {
     const issueDate = isYmd(rowIssueSlice) ? rowIssueSlice : '';
     const issueWeekday = weekdayZh(issueDate);
     const insertIssuePrice = row.issue_price ?? null;
-    const insertIssueTotalWan = normalizePositiveOrNull(row.issue_total_wan);
+    const resolvedShares = resolveIssueTotalWanAndShares(row.issue_total_wan, row.total_issued_shares);
+    const insertIssueTotalWan = resolvedShares.issueTotalWan;
+    const insertTotalIssuedShares = resolvedShares.totalIssuedShares;
     const insertExpectedRaise = calcExpectedRaiseAmountYi(insertIssuePrice, insertIssueTotalWan);
     await db.execute(
       `INSERT INTO ipo_new_share
@@ -106,7 +108,7 @@ async function upsertNewShareRow(row) {
         row.limit_shares ?? null,
         insertIssueTotalWan,
         insertExpectedRaise,
-        row.total_issued_shares ?? null,
+        insertTotalIssuedShares,
         row.exchange,
         row.public_date || null,
         row.win_rate ?? null,
@@ -130,9 +132,13 @@ async function upsertNewShareRow(row) {
   const nextIssuePrice = pickFiniteNumberOrNull(row.issue_price, old.issue_price);
   const nextOfferPe = pickFiniteNumberOrNull(row.offer_pe, old.offer_pe);
   const nextLimitShares = pickFiniteNumberOrNull(row.limit_shares, old.limit_shares);
-  const nextIssueTotalWan = pickPositiveOrNullFromRow(row.issue_total_wan, old.issue_total_wan);
+  const resolvedShares = resolveIssueTotalWanAndShares(
+    pickPositiveOrNullFromRow(row.issue_total_wan, old.issue_total_wan),
+    pickPositiveOrNullFromRow(row.total_issued_shares, old.total_issued_shares)
+  );
+  const nextIssueTotalWan = resolvedShares.issueTotalWan;
+  const nextTotalIssuedShares = resolvedShares.totalIssuedShares;
   const nextExpectedRaiseAmount = calcExpectedRaiseAmountYi(nextIssuePrice, nextIssueTotalWan);
-  const nextTotalIssuedShares = pickPositiveOrNullFromRow(row.total_issued_shares, old.total_issued_shares);
 
   const rowPubSlice = String(row.public_date || '').trim().slice(0, 10);
   const nextPublicDate = isYmd(rowPubSlice) ? rowPubSlice : toYmdDb(old.public_date) || null;
@@ -218,6 +224,22 @@ function calcExpectedRaiseAmountYi(issuePrice, issueTotalWan) {
   const w = Number(issueTotalWan);
   if (!Number.isFinite(p) || !Number.isFinite(w) || p <= 0 || w <= 0) return null;
   return Math.round((p * w / 10000) * 100) / 100;
+}
+
+/** 发行总数（万股）与总发行数量（股）互推，保证入库成对 */
+function resolveIssueTotalWanAndShares(issueTotalWan, totalIssuedShares) {
+  let wan = normalizePositiveOrNull(issueTotalWan);
+  let shares = normalizePositiveOrNull(totalIssuedShares);
+  if (wan == null && shares != null) {
+    wan = Math.round((shares / 10000) * 100) / 100;
+  }
+  if (shares == null && wan != null) {
+    shares = Math.round(wan * 10000 * 100) / 100;
+  }
+  if (wan != null && shares != null && shares <= wan * 100) {
+    shares = Math.round(wan * 10000 * 100) / 100;
+  }
+  return { issueTotalWan: wan, totalIssuedShares: shares };
 }
 
 function normalizePositiveOrNull(v) {
@@ -763,6 +785,126 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
   return { refreshed, refreshedUpdated, failed, candidates: candidates.length, skippedNoListDate };
 }
 
+async function backfillIncompleteNewShareRows(logTag, minSyncDate, progressReporter) {
+  const limit = Math.max(50, Math.min(800, Number(process.env.NEW_SHARE_BACKFILL_LIMIT || 400)));
+  const todayYmd = formatDateOnly(createShanghaiDate());
+  const candidates = await db.query(
+    `SELECT F_Id, stock_code, stock_name, exchange, issue_price,
+            DATE_FORMAT(issue_date, '%Y-%m-%d') AS issue_date,
+            DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
+            issue_total_wan, expected_raise_amount,
+            first_day_close, first_day_chg_pct, first_day_market_cap, total_issued_shares
+     FROM ipo_new_share
+     WHERE (
+       (exchange != '港交所' AND public_date IS NULL)
+       OR (
+         exchange != '港交所'
+         AND (issue_total_wan IS NULL OR issue_total_wan <= 0 OR total_issued_shares IS NULL OR total_issued_shares <= 0)
+       )
+       OR (
+         exchange = '港交所'
+         AND (issue_total_wan IS NULL OR issue_total_wan <= 0 OR expected_raise_amount IS NULL OR expected_raise_amount <= 0)
+       )
+       OR (
+         public_date IS NOT NULL AND public_date <= ?
+         AND (
+           first_day_close IS NULL OR first_day_close <= 0
+           OR first_day_chg_pct IS NULL
+           OR first_day_market_cap IS NULL OR first_day_market_cap <= 0
+         )
+       )
+     )
+     AND (
+       (issue_date IS NOT NULL AND DATE(issue_date) >= ?)
+       OR (public_date IS NOT NULL AND DATE(public_date) >= ?)
+     )
+     ORDER BY F_LastModifyTime DESC, F_Id DESC
+     LIMIT ?`,
+    [todayYmd, minSyncDate, minSyncDate, limit]
+  );
+  if (!candidates.length) {
+    console.log(`${logTag} 库内补全：无待补全记录`);
+    return { total: 0, updated: 0, skipped: 0, failed: 0 };
+  }
+  console.log(`${logTag} 库内补全开始 total=${candidates.length} limit=${limit}`);
+  await reportProgress(progressReporter, `阶段2b/4 库内补全开始 total=${candidates.length}`);
+  let updated = 0;
+  let skipped = 0;
+  let failed = 0;
+  const hkIntervalMs = Math.max(0, Number(process.env.HK_IPO_DETAIL_INTERVAL_MS || 150));
+  let hkFetched = 0;
+  for (const row of candidates) {
+    const exchange = String(row.exchange || '').trim();
+    const stockCode = String(row.stock_code || '').trim();
+    try {
+      if (exchange === '港交所') {
+        if (hkFetched > 0 && hkIntervalMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, hkIntervalMs));
+        }
+        hkFetched += 1;
+        const fetched = runHkIssueTotalWanFetch(stockCode, logTag);
+        if (!fetched.ok || fetched.wan == null) {
+          skipped += 1;
+          continue;
+        }
+        const issuePrice =
+          row.issue_price != null && Number.isFinite(Number(row.issue_price)) && Number(row.issue_price) > 0
+            ? Number(row.issue_price)
+            : null;
+        const era = calcExpectedRaiseAmountYi(issuePrice, fetched.wan);
+        const state = await upsertNewShareRow({
+          stock_code: stockCode,
+          stock_name: row.stock_name,
+          exchange,
+          issue_price: issuePrice,
+          issue_total_wan: fetched.wan,
+          expected_raise_amount: era,
+          total_issued_shares: Math.round(fetched.wan * 10000 * 100) / 100,
+        });
+        if (state === 'updated' || state === 'inserted') updated += 1;
+        else skipped += 1;
+        continue;
+      }
+      const derived = resolveIssueTotalWanAndShares(row.issue_total_wan, row.total_issued_shares);
+      const missingWan = normalizePositiveOrNull(row.issue_total_wan) == null;
+      const missingShares = normalizePositiveOrNull(row.total_issued_shares) == null;
+      if ((missingWan || missingShares) && derived.issueTotalWan != null) {
+        const state = await upsertNewShareRow({
+          stock_code: stockCode,
+          stock_name: row.stock_name,
+          exchange,
+          issue_price: row.issue_price,
+          issue_total_wan: derived.issueTotalWan,
+          total_issued_shares: derived.totalIssuedShares,
+        });
+        if (state === 'updated' || state === 'inserted') {
+          updated += 1;
+          continue;
+        }
+      }
+      const fetched = runIpoApplyBackfillByCode(stockCode, logTag);
+      if (!fetched.ok || !fetched.row) {
+        skipped += 1;
+        continue;
+      }
+      const state = await upsertNewShareRow(fetched.row);
+      if (state === 'updated' || state === 'inserted') updated += 1;
+      else skipped += 1;
+    } catch (err) {
+      failed += 1;
+      console.warn(
+        `${logTag} 库内补全失败 stock=${stockCode} exchange=${exchange} err=${String(err.message || err)}`
+      );
+    }
+  }
+  console.log(`${logTag} 库内补全完成 total=${candidates.length} updated=${updated} skipped=${skipped} failed=${failed}`);
+  await reportProgress(
+    progressReporter,
+    `阶段2b/4 库内补全完成 updated=${updated} skipped=${skipped} failed=${failed}`
+  );
+  return { total: candidates.length, updated, skipped, failed };
+}
+
 async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
   const limit = Math.max(1, Math.min(1000, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_LIMIT || 300)));
   const concurrency = Math.max(1, Math.min(16, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_CONCURRENCY || 3)));
@@ -1003,6 +1145,7 @@ async function syncNewShareCalendar(options = {}) {
     triggerType === 'scheduled' && !issueAfter ? 7 : 0;
   let syncError = null;
   let fullNameResult = { total: 0, updated: 0, skipped: 0, failed: 0 };
+  let backfillResult = { total: 0, updated: 0, skipped: 0, failed: 0 };
 
   console.log(
     `${logTag} 执行开始 from=${from} to=${to} trigger=${triggerType}` +
@@ -1081,6 +1224,10 @@ async function syncNewShareCalendar(options = {}) {
     }
     console.log(`${logTag} 阶段2/4 入库完成`);
     await reportProgress(progressReporter, '阶段2/4 入库完成');
+    backfillResult = await backfillIncompleteNewShareRows(logTag, minSyncDate, progressReporter);
+    console.log(
+      `${logTag} 阶段2b/4 库内补全 updated=${Number(backfillResult.updated || 0)} skipped=${Number(backfillResult.skipped || 0)} failed=${Number(backfillResult.failed || 0)}`
+    );
     console.log(`${logTag} 阶段3/4 开始补抓首日指标`);
     await reportProgress(progressReporter, '阶段3/4 开始补抓首日指标');
     const refreshResult = await refreshNewShareDailyMetrics(filteredRows, logTag, minSyncDate, progressReporter);
@@ -1102,6 +1249,10 @@ async function syncNewShareCalendar(options = {}) {
       dailyMetricsUpdated: refreshResult.refreshedUpdated,
       dailyMetricsFailed: Number(refreshResult.failed || 0),
       dailyMetricsCandidates: Number(refreshResult.candidates || 0),
+      backfillTotal: Number(backfillResult.total || 0),
+      backfillUpdated: Number(backfillResult.updated || 0),
+      backfillSkipped: Number(backfillResult.skipped || 0),
+      backfillFailed: Number(backfillResult.failed || 0),
       message: '打新日历同步完成',
       executedAt: new Date().toISOString(),
     };

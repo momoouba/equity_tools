@@ -113,15 +113,15 @@ async function exportNewShare(req, res) {
       { label: '发行价', key: 'issue_price' },
       { label: '发行市盈率', key: 'offer_pe' },
       { label: '申购上限', key: 'limit_shares' },
-      { label: '发行总数(万股)', key: 'issue_total_wan' },
+      { label: '总发行数量(万股)', key: 'issue_total_wan' },
       { label: '预计募资规模(亿)', key: 'expected_raise_amount' },
       { label: '交易所', key: 'exchange' },
       { label: '上市日期', key: 'public_date' },
       { label: '中签率', key: 'win_rate' },
-      { label: '总发行数量', key: 'total_issued_shares' },
+      { label: '总发行数量(股)', key: 'total_issued_shares' },
       { label: '上市首日收盘价', key: 'first_day_close' },
       { label: '首日涨幅(%)', key: 'first_day_chg_pct' },
-      { label: '首日市值', key: 'first_day_market_cap' },
+      { label: '首日市值(元)', key: 'first_day_market_cap' },
     ]);
     sendCsv(res, `打新日历_${Date.now()}.csv`, csv);
   } catch (e) {
@@ -187,10 +187,12 @@ async function syncNewShare(req, res) {
       windowEnd: to,
       taskKey,
     });
+    const updateDateAfterExclusive = subtractOneBeijingCalendarDay(todayYmd) || todayYmd;
     const result = await syncNewShareCalendar({
       from,
       to,
       issueDateAfterExclusive,
+      updateDateAfterExclusive,
       triggerType: 'manual',
       operatorUserId: user.id,
     });

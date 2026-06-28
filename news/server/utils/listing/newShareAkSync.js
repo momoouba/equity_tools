@@ -59,5 +59,64 @@ function runNewShareAkSync(opts) {
   return { ok: true, summary, rows: summary.rows };
 }
 
-module.exports = { runNewShareAkSync };
+function runIpoApplyBackfillByCode(stockCode, logTag) {
+  const code = String(stockCode || '').trim();
+  if (!code) return { ok: false, row: null, stderr: 'code empty' };
+  const script = path.join(__dirname, 'new_share_fetch.py');
+  const py = process.env.PYTHON || 'python';
+  const r = spawnSync(py, [script, '--backfill-code', code], {
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  if (r.error) return { ok: false, row: null, stderr: String(r.error.message || r.error) };
+  const stdout = String(r.stdout || '').trim();
+  const stderr = String(r.stderr || '').trim();
+  if (r.status !== 0) {
+    console.warn(`${logTag || '[打新日历-补全]'} 东财单条补抓失败 code=${code}`, stderr || stdout);
+    return { ok: false, row: null, stderr: stderr || stdout };
+  }
+  try {
+    const line = stdout.split('\n').filter(Boolean).pop();
+    const payload = JSON.parse(line);
+    return { ok: Boolean(payload.ok && payload.row), row: payload.row || null, stderr: payload.ok ? '' : 'row empty' };
+  } catch (e) {
+    return { ok: false, row: null, stderr: `parse failed: ${e.message}` };
+  }
+}
+
+function runHkIssueTotalWanFetch(stockCode, logTag) {
+  const code = String(stockCode || '').trim().padStart(5, '0');
+  if (!code || code === '00000') return { ok: false, wan: null, stderr: 'code empty' };
+  const script = path.join(__dirname, 'etnet_hk_fetch.py');
+  const py = process.env.PYTHON || 'python';
+  const r = spawnSync(py, [script, 'ipo-detail', '--code', code], {
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (r.error) return { ok: false, wan: null, stderr: String(r.error.message || r.error) };
+  const stdout = String(r.stdout || '').trim();
+  const stderr = String(r.stderr || '').trim();
+  if (r.status !== 0) {
+    console.warn(`${logTag || '[打新日历-补全]'} 港股详情补抓失败 code=${code}`, stderr || stdout);
+    return { ok: false, wan: null, stderr: stderr || stdout };
+  }
+  try {
+    const line = stdout.split('\n').filter(Boolean).pop();
+    const payload = JSON.parse(line);
+    const wan = payload.issueTotalWan != null ? Number(payload.issueTotalWan) : null;
+    return {
+      ok: Number.isFinite(wan) && wan > 0,
+      wan: Number.isFinite(wan) && wan > 0 ? wan : null,
+      stderr: payload.ok ? '' : String(payload.message || 'wan empty'),
+    };
+  } catch (e) {
+    return { ok: false, wan: null, stderr: `parse failed: ${e.message}` };
+  }
+}
+
+module.exports = { runNewShareAkSync, runIpoApplyBackfillByCode, runHkIssueTotalWanFetch };
 

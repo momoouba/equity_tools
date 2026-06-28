@@ -11,6 +11,8 @@ import {
   buildListingNumericColumn,
   formatListingAmount,
   formatListingYi,
+  formatIssueTotalWanDisplay,
+  formatMarketCapYiFromYuan,
   sumColumnWidths,
 } from './listingTableColumns'
 
@@ -161,15 +163,17 @@ export default function ListingNewSharePage() {
       { title: '申购日期', dataIndex: 'issue_date', key: 'issue_date', width: 120 },
       { title: '星期', dataIndex: 'issue_weekday', key: 'issue_weekday', width: 90, render: (v) => v || '-' },
       buildListingNumericColumn('发行价', 'issue_price', 100, (v) => formatListingAmount(v)),
-      buildListingNumericColumn('发行总数(万股)', 'issue_total_wan', 130, (v) => formatListingAmount(v)),
+      {
+        ...buildListingNumericColumn('总发行数量(万股)', 'issue_total_wan', 140, () => '-'),
+        render: (_, row) => formatIssueTotalWanDisplay(row.issue_total_wan, row.total_issued_shares),
+      },
       buildListingNumericColumn('预计募资规模', 'expected_raise_amount', 130, (v) => formatListingYi(v)),
       buildListingNumericColumn('申购上限', 'limit_shares', 110, (v) => formatListingAmount(v)),
       { title: '上市日期', dataIndex: 'public_date', key: 'public_date', width: 120, render: (v) => v || '-' },
       buildListingNumericColumn('中签率', 'win_rate', 100, (v) => formatPercent(v)),
       buildListingNumericColumn('上市首日收盘价', 'first_day_close', 140, (v) => formatListingAmount(v)),
       buildListingNumericColumn('首日涨幅', 'first_day_chg_pct', 100, (v) => formatPercent(v)),
-      buildListingNumericColumn('总发行数量', 'total_issued_shares', 130, (v) => formatListingAmount(v)),
-      buildListingNumericColumn('市值', 'first_day_market_cap', 140, (v) => formatListingAmount(v)),
+      buildListingNumericColumn('市值', 'first_day_market_cap', 120, (v) => formatMarketCapYiFromYuan(v)),
       { title: '交易所', dataIndex: 'exchange', key: 'exchange', width: 120 },
     ],
     []

@@ -112,7 +112,9 @@ def _extract_rows(df, start_date, end_date, issue_date_after_exclusive=None):
             exchange = "上交所"
 
         issue_price = _to_float(_pick(d, ["发行价格", "发行价"]))
-        issue_total_wan = _to_float(_pick(d, ["发行总数", "发行总股数", "总发行数量", "实际发行总数"]))
+        raw_issue = _pick(d, ["发行总数", "发行总股数", "总发行数量", "实际发行总数"])
+        issue_total_wan = _to_float(raw_issue)
+        total_issued_shares = _normalize_total_issued_shares(raw_issue, issue_total_wan)
         rows.append(
             {
                 "stock_code": stock_code,
@@ -124,13 +126,53 @@ def _extract_rows(df, start_date, end_date, issue_date_after_exclusive=None):
                 "limit_shares": _to_float(_pick(d, ["申购上限", "网上申购上限"])),
                 "issue_total_wan": issue_total_wan,
                 "expected_raise_amount": _calc_expected_raise_amount_yi(issue_price, issue_total_wan),
-                "total_issued_shares": _to_share_count(_pick(d, ["发行总数", "发行总股数", "总发行数量", "实际发行总数"])),
+                "total_issued_shares": total_issued_shares,
                 "exchange": exchange,
                 "public_date": _to_date_text(_pick(d, ["上市日期"])),
                 "win_rate": _to_float(_pick(d, ["中签率"])),
             }
         )
     return rows
+
+
+def _fetch_all_ipoapply_rows(page_size=5000):
+    """东财 RPTA_APP_IPOAPPLY 全量分页（总数常 >5000，单页会漏掉较新北交所等记录）。"""
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    base_params = {
+        "sortColumns": "APPLY_DATE,SECURITY_CODE",
+        "sortTypes": "-1,-1",
+        "reportName": "RPTA_APP_IPOAPPLY",
+        "columns": (
+            "SECURITY_CODE,SECURITY_NAME,APPLY_DATE,LISTING_DATE,ISSUE_PRICE,AFTER_ISSUE_PE,"
+            "ONLINE_APPLY_UPPER,ONLINE_ISSUE_LWR,TOTAL_ISSUE_NUM,ISSUE_NUM,MARKET_TYPE_NEW,UP_DATE"
+        ),
+    }
+    merged = []
+    page = 1
+    total_count = None
+    while page <= 20:
+        params = dict(base_params)
+        params["pageSize"] = str(page_size)
+        params["pageNumber"] = str(page)
+        r = requests.get(url, params=params, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        payload = r.json()
+        result = (payload or {}).get("result") or {}
+        chunk = result.get("data") or []
+        if total_count is None and result.get("count") is not None:
+            try:
+                total_count = int(result.get("count"))
+            except Exception:
+                total_count = None
+        if not chunk:
+            break
+        merged.extend(chunk)
+        if total_count is not None and len(merged) >= total_count:
+            break
+        if len(chunk) < page_size:
+            break
+        page += 1
+    return merged, len(merged)
 
 
 def _extract_a_rows_from_ipoapply(
@@ -150,22 +192,7 @@ def _extract_a_rows_from_ipoapply(
             listing_after_inclusive = (aft_dt - timedelta(days=listing_lookback)).strftime("%Y-%m-%d")
         except Exception:
             listing_after_inclusive = None
-    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-    params = {
-        "sortColumns": "APPLY_DATE,SECURITY_CODE",
-        "sortTypes": "-1,-1",
-        "pageSize": "5000",
-        "pageNumber": "1",
-        "reportName": "RPTA_APP_IPOAPPLY",
-        "columns": (
-            "SECURITY_CODE,SECURITY_NAME,APPLY_DATE,LISTING_DATE,ISSUE_PRICE,AFTER_ISSUE_PE,"
-            "ONLINE_APPLY_UPPER,ONLINE_ISSUE_LWR,TOTAL_ISSUE_NUM,ISSUE_NUM,MARKET_TYPE_NEW,UP_DATE"
-        ),
-    }
-    r = requests.get(url, params=params, timeout=45, headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
-    payload = r.json()
-    data = ((payload or {}).get("result") or {}).get("data") or []
+    data, _source_rows = _fetch_all_ipoapply_rows()
     rows = []
     for d in data:
         market = str(d.get("MARKET_TYPE_NEW") or "").strip()
@@ -176,7 +203,7 @@ def _extract_a_rows_from_ipoapply(
         update_date = _to_date_text(d.get("UP_DATE"))
         if after:
             issue_ok = bool(issue_date and issue_date > after and issue_date <= end_date)
-            # UP_DATE 回看使用含当日口径，避免同日补齐上市日期时漏抓
+            # UP_DATE 回看：含 cutoff 当日及之后（与定时/手动 updateDateAfterExclusive 对齐）
             update_ok = bool(updated_after and update_date and update_date >= updated_after and update_date <= end_date)
             # 兜底：部分 A 股行 UP_DATE 为空，但 LISTING_DATE 已补齐（如 920191），允许按上市日期回看窗口纳入
             listing_ok = bool(
@@ -206,9 +233,7 @@ def _extract_a_rows_from_ipoapply(
             exchange = "上交所"
         issue_price = _to_float(d.get("ISSUE_PRICE"))
         issue_total_wan = _to_float(d.get("ISSUE_NUM"))
-        total_issued_shares = _to_share_count(d.get("TOTAL_ISSUE_NUM"))
-        if total_issued_shares is None and issue_total_wan is not None:
-            total_issued_shares = issue_total_wan * 10000
+        total_issued_shares = _normalize_total_issued_shares(d.get("TOTAL_ISSUE_NUM"), issue_total_wan)
         wr = _to_float(d.get("ONLINE_ISSUE_LWR"))
         if wr is not None and wr <= 1:
             wr = wr * 100
@@ -230,6 +255,96 @@ def _extract_a_rows_from_ipoapply(
             }
         )
     return rows, len(data)
+
+
+def fetch_ipoapply_row_by_code(stock_code):
+    """按股票代码单条查询东财 RPTA_APP_IPOAPPLY（用于库内补全）。"""
+    code = str(stock_code or "").strip()
+    cands = [code]
+    if code.isdigit():
+        cands.append(code.zfill(6))
+    cands = [x for i, x in enumerate(cands) if x and x not in cands[:i]]
+    url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+    for cand in cands:
+        params = {
+            "reportName": "RPTA_APP_IPOAPPLY",
+            "filter": f"(SECURITY_CODE='{cand}')",
+            "pageSize": "10",
+            "pageNumber": "1",
+            "columns": (
+                "SECURITY_CODE,SECURITY_NAME,APPLY_DATE,LISTING_DATE,ISSUE_PRICE,AFTER_ISSUE_PE,"
+                "ONLINE_APPLY_UPPER,ONLINE_ISSUE_LWR,TOTAL_ISSUE_NUM,ISSUE_NUM,MARKET_TYPE_NEW,UP_DATE"
+            ),
+        }
+        try:
+            r = requests.get(url, params=params, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            rows = ((r.json().get("result") or {}).get("data") or [])
+            if rows:
+                return rows[0]
+        except Exception:
+            continue
+    target = cands[-1].zfill(6) if cands else ""
+    if not target:
+        return None
+    all_rows, _ = _fetch_all_ipoapply_rows()
+    for row in all_rows:
+        if str(row.get("SECURITY_CODE") or "").strip().zfill(6) == target:
+            return row
+    return None
+
+
+def _normalize_total_issued_shares(total_issued_shares, issue_total_wan):
+    wan = _to_float(issue_total_wan)
+    ts = _to_share_count(total_issued_shares)
+    if wan is not None and wan > 0:
+        expected = wan * 10000
+        if ts is None or ts <= wan * 100:
+            return expected
+    if ts is None and wan is not None and wan > 0:
+        return wan * 10000
+    return ts
+
+
+def ipoapply_row_to_calendar_fields(d):
+    """东财单行 → 打新日历字段 dict（A 股）。"""
+    if not d:
+        return None
+    market = str(d.get("MARKET_TYPE_NEW") or "").strip()
+    if market == "港交所":
+        return None
+    stock_code = str(d.get("SECURITY_CODE") or "").strip().zfill(6)
+    stock_name = str(d.get("SECURITY_NAME") or "").strip()
+    if not stock_code or not stock_name:
+        return None
+    if "北交" in market:
+        exchange = "北交所"
+    elif "深" in market or "创业" in market:
+        exchange = "深交所"
+    else:
+        exchange = "上交所"
+    issue_date = _to_date_text(d.get("APPLY_DATE"))
+    issue_price = _to_float(d.get("ISSUE_PRICE"))
+    issue_total_wan = _to_float(d.get("ISSUE_NUM"))
+    total_issued_shares = _normalize_total_issued_shares(d.get("TOTAL_ISSUE_NUM"), issue_total_wan)
+    wr = _to_float(d.get("ONLINE_ISSUE_LWR"))
+    if wr is not None and wr <= 1:
+        wr = wr * 100
+    return {
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+        "issue_date": issue_date,
+        "issue_weekday": None,
+        "issue_price": issue_price,
+        "offer_pe": _to_float(d.get("AFTER_ISSUE_PE")),
+        "limit_shares": _to_float(d.get("ONLINE_APPLY_UPPER")),
+        "issue_total_wan": issue_total_wan,
+        "expected_raise_amount": _calc_expected_raise_amount_yi(issue_price, issue_total_wan),
+        "total_issued_shares": total_issued_shares,
+        "exchange": exchange,
+        "public_date": _to_date_text(d.get("LISTING_DATE")),
+        "win_rate": wr,
+    }
 
 
 def _extract_hk_rows(df, start_date, end_date, issue_date_after_exclusive=None):
@@ -327,8 +442,9 @@ def _dedupe_merge_ipo_rows(rows):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--start-date", required=True)
-    p.add_argument("--end-date", required=True)
+    p.add_argument("--backfill-code", default="", help="按股票代码单条补抓东财 RPTA_APP_IPOAPPLY")
+    p.add_argument("--start-date", default="")
+    p.add_argument("--end-date", default="")
     p.add_argument("--hk-recent-days", type=int, default=0)
     p.add_argument(
         "--issue-date-after",
@@ -348,8 +464,24 @@ def main():
     )
     args = p.parse_args()
 
+    backfill_code = (args.backfill_code or "").strip()
+    if backfill_code:
+        raw = fetch_ipoapply_row_by_code(backfill_code)
+        fields = ipoapply_row_to_calendar_fields(raw)
+        print(
+            json.dumps(
+                {"ok": bool(fields), "row": fields, "source": "eastmoney.datacenter.RPTA_APP_IPOAPPLY.by-code"},
+                ensure_ascii=False,
+            )
+        )
+        return
+
     start_date = args.start_date.strip()[:10]
     end_date = args.end_date.strip()[:10]
+    if not start_date or not end_date:
+        print(json.dumps({"ok": False, "error": "start-date and end-date required"}, ensure_ascii=False))
+        raise SystemExit(1)
+
     issue_after = (args.issue_date_after or "").strip()[:10] or None
     update_after = (args.update_date_after or "").strip()[:10] or None
     listing_lookback_days = max(0, int(args.listing_date_lookback_days or 0))
