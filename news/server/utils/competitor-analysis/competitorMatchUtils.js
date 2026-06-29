@@ -219,10 +219,17 @@ function isPersistValidationPassed(c) {
   return true;
 }
 
+function isAiWebOnlyCandidate(c) {
+  if (!c || c.hasInternal) return false;
+  const srcs = c.sources || (c.source ? [c.source] : []);
+  return srcs.includes('ai_web');
+}
+
 /**
  * 是否达到落库分数门槛。
  * - 默认综合分 ≥ 60；
- * - LLM/校验分 ≥ 80 且校验为直接竞品（非上下游）时，综合分 ≥ 55 即可。
+ * - LLM/校验分 ≥ 80 且校验为直接竞品（非上下游）时，综合分 ≥ 55 即可；
+ * - 联网发现且 S5 高信任 direct/indirect：不因规则分缺失误杀。
  */
 function meetsPersistThreshold(c, finalScore, opts = {}) {
   const th = opts.threshold ?? SCORE_THRESHOLD_PERSIST;
@@ -234,17 +241,28 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   const lacksCoreProductOverlap =
     (Number.isFinite(coreLine) ? coreLine : 0) < 15 &&
     (Number.isFinite(product) ? product : 0) < 18;
+  const ai = getCandidateAiPart(c);
+  const vs = Number(c.validation?.validated_score);
+  const webHighTrust =
+    isAiWebOnlyCandidate(c) &&
+    Number.isFinite(vs) &&
+    vs >= 78 &&
+    ['direct', 'indirect', 'substitute'].includes(type);
 
   if (type === 'same_track') {
-    const vs = Number(c.validation?.validated_score);
     if (Number.isFinite(vs) && vs >= 35 && !lacksCoreProductOverlap) return true;
     if (Number.isFinite(vs) && vs >= 42) return true;
   }
   if (['direct', 'indirect', 'substitute'].includes(type) && lacksCoreProductOverlap) {
+    if (webHighTrust) {
+      return Number.isFinite(score) && score >= thHigh;
+    }
+    if (Number.isFinite(ai) && ai >= LLM_HIGH_TRUST_THRESHOLD && type === 'direct') {
+      return Number.isFinite(score) && score >= thHigh;
+    }
     return false;
   }
   if (Number.isFinite(score) && score >= th) return true;
-  const ai = getCandidateAiPart(c);
   if (
     c._trackInternalPeer &&
     c.validation?.competitor_type === 'direct' &&
@@ -254,6 +272,7 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   ) {
     return true;
   }
+  if (webHighTrust && Number.isFinite(score) && score >= thHigh) return true;
   if (ai < LLM_HIGH_TRUST_THRESHOLD) return false;
   if (c.validation?.is_competitor === false || c.validation?.is_upstream_downstream) return false;
   return Number.isFinite(score) && score >= thHigh;

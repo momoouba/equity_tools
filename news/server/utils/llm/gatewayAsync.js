@@ -24,8 +24,21 @@ function getResponsesPollMaxMs() {
   );
 }
 
+/** background 模式下 POST 只等任务入队/返回 id，不应阻塞到检索完成 */
+function getResponsesSubmitTimeoutMs(fallbackMs = 120000) {
+  return Math.max(
+    15000,
+    Math.min(
+      120000,
+      parseInt(process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS || '45000', 10) || 45000,
+      fallbackMs || 120000
+    )
+  );
+}
+
 module.exports = {
   isGatewayAsyncResponsesEnabled,
   getResponsesPollIntervalMs,
   getResponsesPollMaxMs,
+  getResponsesSubmitTimeoutMs,
 };

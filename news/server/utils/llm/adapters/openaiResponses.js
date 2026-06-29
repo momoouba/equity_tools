@@ -5,6 +5,7 @@ const {
   isGatewayAsyncResponsesEnabled,
   getResponsesPollIntervalMs,
   getResponsesPollMaxMs,
+  getResponsesSubmitTimeoutMs,
 } = require('../gatewayAsync');
 
 function sleep(ms) {
@@ -157,7 +158,10 @@ async function invokeOpenAiResponses({
   );
 
   const requestTimeoutMs = Math.max(30000, timeout || 120000);
-  const submitTimeout = requestTimeoutMs;
+  const submitTimeout = asyncMode
+    ? getResponsesSubmitTimeoutMs(requestTimeoutMs)
+    : requestTimeoutMs;
+  const pollMaxMs = Math.max(getResponsesPollMaxMs(), requestTimeoutMs);
 
   const response = await axios.post(endpoint, body, {
     headers: {
@@ -174,7 +178,7 @@ async function invokeOpenAiResponses({
       pollUrl,
       apiKey,
       pollIntervalMs: getResponsesPollIntervalMs(),
-      pollMaxMs: getResponsesPollMaxMs(),
+      pollMaxMs,
       logPrefix,
       requestTimeoutMs,
     });

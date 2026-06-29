@@ -8,6 +8,7 @@ const {
   normalizeCreditCode,
   strTrim,
 } = require('./competitorMatchUtils');
+const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
 
 const IPO_YEARS = 3;
 const FIN_YEARS = 3;
@@ -139,6 +140,7 @@ function filterExcludedIpoRows(rows, excludeCredit, excludeName) {
     const mapped = mapIpoRow(r);
     if (exC && mapped.unified_credit_code === exC) continue;
     if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
+    if (isOverseasCompetitorCandidate(mapped)) continue;
     out.push(mapped);
   }
   return dedupeRecalledByCompanyKey(out);
@@ -204,6 +206,7 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
     const mapped = mapFinancingRow(r);
     if (exC && mapped.unified_credit_code === exC) continue;
     if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
+    if (isOverseasCompetitorCandidate(mapped)) continue;
     out.push(mapped);
   }
   return dedupeRecalledByCompanyKey(out);
@@ -225,6 +228,15 @@ function mergeRecalledCandidates(ipoList, finList) {
       const subs = item.ipo_sub ? [item.ipo_sub] : [];
       map.set(key, { ...item, sources: [item.source], ipo_sub_funds: subs });
       return;
+    }
+    if (!prev.unified_credit_code && item.unified_credit_code) {
+      prev.unified_credit_code = item.unified_credit_code;
+    }
+    if (
+      strTrim(item.display_name).length > strTrim(prev.display_name).length &&
+      /[\u4e00-\u9fff]/.test(item.display_name || '')
+    ) {
+      prev.display_name = item.display_name;
     }
     if (!prev.sources.includes(item.source)) prev.sources.push(item.source);
     if (item.ipo_sub) {

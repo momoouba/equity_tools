@@ -72,6 +72,7 @@ function isRetryableLlmError(err) {
     msg.includes('throttl') ||
     msg.includes('too many requests') ||
     msg.includes('503') ||
+    msg.includes('524') ||
     msg.includes('429') ||
     msg.includes('timeout') ||
     msg.includes('econnaborted') ||
@@ -83,10 +84,25 @@ function isRetryableLlmError(err) {
   );
 }
 
+function getWebRetrySleepMs(err, attempt) {
+  const msg = String(err?.message || err || '');
+  if (msg.includes('524')) {
+    return Math.max(
+      30000,
+      parseInt(process.env.COMPETITOR_WEB_524_BACKOFF_MS || '120000', 10) || 120000
+    );
+  }
+  return 800 * attempt;
+}
+
 /** 独立请求，无多轮上下文。
- * @param {{ onSearchUnsupported?: () => void }} [opts]
+ * @param {{ allowDegradedFallback?: boolean }} [opts]
  */
-async function invokeCompetitorChat(systemContent, userContent, { enableSearch = false, timeout, onSearchUnsupported } = {}) {
+async function invokeCompetitorChat(
+  systemContent,
+  userContent,
+  { enableSearch = false, timeout, allowDegradedFallback = false, returnMeta = false } = {}
+) {
   const config = await getActiveCompetitorModelConfig();
   if (!config || !String(config.api_key || '').trim()) {
     throw new Error(
@@ -105,6 +121,8 @@ async function invokeCompetitorChat(systemContent, userContent, { enableSearch =
     ? Math.max(1, parseInt(process.env.COMPETITOR_WEB_RETRIES || '3', 10) || 3)
     : Math.max(1, parseInt(process.env.COMPETITOR_LLM_RETRIES || '3', 10) || 3);
 
+  const wrapResult = (content, meta = {}) => (returnMeta ? { content, ...meta } : content);
+
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -116,7 +134,10 @@ async function invokeCompetitorChat(systemContent, userContent, { enableSearch =
         timeout: timeout ?? defaultTimeout,
         logPrefix: '[projectSourcingCompetitorAi]',
       });
-      return result.content;
+      return wrapResult(result.content, {
+        usedWebSearch: !!(result.used_web_search || result.used_enable_search),
+        searchDegraded: !!result.search_degraded,
+      });
     } catch (err) {
       lastErr = err;
       if (wantSearch && err instanceof LlmSearchRequiredError) {
@@ -124,15 +145,45 @@ async function invokeCompetitorChat(systemContent, userContent, { enableSearch =
           '[projectSourcingCompetitorAi] 联网调用失败（本场景要求联网）:',
           err.message
         );
-        onSearchUnsupported?.();
       }
       if (attempt < maxAttempts && isRetryableLlmError(lastErr)) {
-        await sleep(800 * attempt);
+        const sleepMs = getWebRetrySleepMs(lastErr, attempt);
+        console.warn(
+          `[projectSourcingCompetitorAi] 联网/LLM 调用失败，${sleepMs}ms 后重试 (${attempt}/${maxAttempts})：${err.message}`
+        );
+        await sleep(sleepMs);
         continue;
       }
-      throw new Error(err.message || String(err));
+      break;
     }
   }
+
+  if (allowDegradedFallback && wantSearch) {
+    const noSearchTimeout = Math.max(
+      timeout ?? defaultTimeout,
+      parseInt(process.env.COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS || '300000', 10) || 300000
+    );
+    console.warn(
+      `[projectSourcingCompetitorAi] 联网 ${maxAttempts} 次仍失败，降级为无联网单次请求（timeout=${noSearchTimeout}ms）`
+    );
+    try {
+      const result = await llmInvoke(config, {
+        systemContent: String(systemContent || '').trim(),
+        userContent: userTrimmed,
+        wantSearch: false,
+        searchRequired: false,
+        timeout: noSearchTimeout,
+        logPrefix: '[projectSourcingCompetitorAi]',
+      });
+      return wrapResult(result.content, {
+        usedWebSearch: false,
+        searchDegraded: true,
+      });
+    } catch (degradedErr) {
+      throw new Error(degradedErr.message || String(degradedErr));
+    }
+  }
+
   throw new Error(lastErr?.message || String(lastErr));
 }
 
@@ -180,6 +231,7 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
     parseInt(process.env.COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS || '300000', 10) || 300000
   );
   let searchUnsupportedDegraded = false;
+  let usedWebSearch = false;
   logCompetitorAi(runId, 'web_discover', '开始联网发现', {
     keywords,
     exclude_count: (excludeNames || []).length,
@@ -197,26 +249,28 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
     KEYWORDS_JSON: jsonBlock(keywords),
     EXCLUDE_NAMES_JSON: jsonBlock(excludeNames || []),
   });
-  const raw = await invokeCompetitorChat(bundle.system, userContent, {
+  const invokeRes = await invokeCompetitorChat(bundle.system, userContent, {
     enableSearch: true,
     timeout: webTimeout,
-    onSearchUnsupported: () => {
-      searchUnsupportedDegraded = true;
-    },
+    allowDegradedFallback: true,
+    returnMeta: true,
   });
+  const raw = invokeRes.content;
+  searchUnsupportedDegraded = invokeRes.searchDegraded === true;
+  usedWebSearch = invokeRes.usedWebSearch === true;
   const parsed = extractJsonObject(raw);
   if (!parsed || !Array.isArray(parsed.candidates)) {
     if (!raw || (typeof raw === 'string' && !raw.trim())) {
       throw new Error(`竞品发现 AI 返回空响应（search_degraded=${searchUnsupportedDegraded}），无法区分"无竞品"与"调用失败"`);
     }
     logCompetitorAi(runId, 'web_discover', '无有效 candidates JSON', {
-      used_enable_search: !searchUnsupportedDegraded,
+      used_enable_search: usedWebSearch,
       search_degraded_no_api: searchUnsupportedDegraded,
     });
     return {
       candidates: [],
       meta: {
-        used_enable_search: false,
+        used_enable_search: usedWebSearch,
         search_degraded: searchUnsupportedDegraded,
         model_name: cfg?.model_name || null,
       },
@@ -225,13 +279,13 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
   const list = parsed.candidates.slice(0, 20);
   logCompetitorAi(runId, 'web_discover', `完成，候选 ${list.length} 条`, {
     names: list.map((x) => x.company_name).filter(Boolean).slice(0, 10),
-    used_enable_search: !searchUnsupportedDegraded,
+    used_enable_search: usedWebSearch,
     search_degraded_no_api: searchUnsupportedDegraded,
   });
   return {
     candidates: list,
     meta: {
-      used_enable_search: !searchUnsupportedDegraded,
+      used_enable_search: usedWebSearch,
       search_degraded: searchUnsupportedDegraded,
       model_name: cfg?.model_name || null,
     },
@@ -241,9 +295,10 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
 const LISTED_MANDATE_USER_SUFFIX = `
 
 【A股/北交所上市硬性要求】
-本次检索须专门补足中国大陆上市公司：上交所（SSE）、深交所（SZSE）、北交所（BSE）、新三板（NEEQ）。
+本次检索须专门补足中国大陆境内上市公司：上交所（SSE）、深交所（SZSE）、北交所（BSE）、新三板（NEEQ）。
 必须返回至少 3 家 is_listed=true 且 listing_market 为 sse/szse/bse/neeq 的公司，按 ai_relevance_score 降序（最相似优先）。
-禁止用港股（listing_market=hk）或未上市企业凑数。`;
+每家企业须提供 18 位统一社会信用代码与**当前最新工商注册全称**（勿用曾用名）。
+禁止用境外企业、港股（listing_market=hk）、美股或未上市企业凑数。`;
 
 /** 专项联网：补足国内 A 股/北交所/新三板上市公司（至少 3 家） */
 async function discoverDomesticListedCompetitors(profile, keywords, excludeNames, logCtx = {}) {
@@ -256,7 +311,7 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
     exclude_count: (excludeNames || []).length,
     target: profile?.display_name,
     model_name: cfg?.model_name,
-    min_domestic_listed: parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '3', 10) || 3,
+    min_domestic_listed: parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '5', 10) || 5,
   });
   const bundle = await loadCompetitorPromptBundle(PROMPT_TYPES.WEB_DISCOVER);
   const userContent =
@@ -265,13 +320,15 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
       KEYWORDS_JSON: jsonBlock(keywords),
       EXCLUDE_NAMES_JSON: jsonBlock(excludeNames || []),
     }) + LISTED_MANDATE_USER_SUFFIX;
-  const raw = await invokeCompetitorChat(bundle.system, userContent, {
+  const listedInvokeRes = await invokeCompetitorChat(bundle.system, userContent, {
     enableSearch: true,
     timeout: webTimeout,
-    onSearchUnsupported: () => {
-      searchUnsupportedDegraded = true;
-    },
+    allowDegradedFallback: true,
+    returnMeta: true,
   });
+  const raw = listedInvokeRes.content;
+  searchUnsupportedDegraded = listedInvokeRes.searchDegraded === true;
+  const usedWebSearch = listedInvokeRes.usedWebSearch === true;
   const parsed = extractJsonObject(raw);
   if (!parsed || !Array.isArray(parsed.candidates)) {
     logCompetitorAi(runId, 'web_discover_listed', '无有效 candidates JSON', {
@@ -279,7 +336,11 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
     });
     return {
       candidates: [],
-      meta: { search_degraded: searchUnsupportedDegraded, model_name: cfg?.model_name || null },
+      meta: {
+        used_enable_search: usedWebSearch,
+        search_degraded: searchUnsupportedDegraded,
+        model_name: cfg?.model_name || null,
+      },
     };
   }
   const list = parsed.candidates.slice(0, 20);
@@ -293,7 +354,7 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
   return {
     candidates: list,
     meta: {
-      used_enable_search: !searchUnsupportedDegraded,
+      used_enable_search: usedWebSearch,
       search_degraded: searchUnsupportedDegraded,
       model_name: cfg?.model_name || null,
     },
@@ -324,6 +385,7 @@ async function validateCandidate(targetSlice, candidateSlice, logCtx = {}) {
       ruleProductScore: logCtx.ruleProductScore,
       coreLineScore: logCtx.coreLineScore,
       specificTagScore: logCtx.specificTagScore,
+      fromAiWeb: logCtx.fromAiWeb === true,
     });
       logCompetitorAi(runId, 'validate', `完成 ${label}`, {
         is_competitor: normalized.is_competitor,

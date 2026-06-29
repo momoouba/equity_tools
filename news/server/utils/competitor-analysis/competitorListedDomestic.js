@@ -10,11 +10,18 @@ const {
   isPersistValidationPassed,
 } = require('./competitorMatchUtils');
 const { parseIsListedFromCandidate } = require('./competitorRelationPersistEnhance');
+const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
 
-/** 落库须包含的国内上市公司（上交所/深交所/北交所，含新三板）最少条数 */
+/** 落库须包含的国内上市公司（上交所/深交所/北交所，含新三板）最少条数（交付客户≥5，用户可筛≥3） */
 const MIN_DOMESTIC_LISTED_COMPETITORS = Math.max(
   1,
-  parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '3', 10) || 3
+  parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '5', 10) || 5
+);
+
+/** 落库须包含的未上市竞品最少条数（交付客户≥8，用户可筛≥5） */
+const MIN_UNLISTED_COMPETITORS = Math.max(
+  1,
+  parseInt(process.env.COMPETITOR_MIN_UNLISTED || '8', 10) || 8
 );
 
 const HK_LISTING_MARKETS = new Set(['hk', 'hkex', 'hkg', '港股']);
@@ -126,6 +133,13 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
     if (market && isOverseasListingMarket(market)) continue;
 
     const credit = normalizeCreditCode(w.unified_credit_code) || null;
+    const webProbe = {
+      display_name: name,
+      unified_credit_code: credit,
+      listing_market: market,
+      is_listed: w.is_listed,
+    };
+    if (isOverseasCompetitorCandidate(webProbe)) continue;
     const key = credit || name.toLowerCase();
     const dupIdx = scored.findIndex(
       (x) => (x.unified_credit_code && credit && x.unified_credit_code === credit) || x.display_name === name
@@ -179,15 +193,41 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
   return { added, merged };
 }
 
-function listedMandateMeetsThreshold(c, row, persistThresholdOpts) {
+function mandateMeetsThreshold(c, row, persistThresholdOpts) {
   if (meetsPersistThreshold(c, row.finalScore, persistThresholdOpts)) return true;
-  if (!isDomesticListedCandidate(c)) return false;
   const ai = getCandidateAiPart(c);
   const internal = Number(c.internalScore) || 0;
   const vs = Number(c.validation?.validated_score);
   if (isPersistValidationPassed(c) && Number.isFinite(vs) && vs >= 35) return true;
   if (ai >= 40 || internal >= 28) return true;
   return false;
+}
+
+function listedMandateMeetsThreshold(c, row, persistThresholdOpts) {
+  if (!isDomesticListedCandidate(c)) return false;
+  return mandateMeetsThreshold(c, row, persistThresholdOpts);
+}
+
+function unlistedMandateMeetsThreshold(c, row, persistThresholdOpts) {
+  if (isDomesticListedCandidate(c)) return false;
+  return mandateMeetsThreshold(c, row, persistThresholdOpts);
+}
+
+function countUnlistedInPersistRows(rows) {
+  const keys = new Set();
+  let n = 0;
+  for (const row of rows || []) {
+    const c = row._candidate || row;
+    if (isDomesticListedCandidate(c)) continue;
+    const k = candidateDedupeKey({
+      unified_credit_code: row.unified_credit_code || c.unified_credit_code,
+      display_name: row.display_name || c.display_name,
+    });
+    if (!k || keys.has(k)) continue;
+    keys.add(k);
+    n += 1;
+  }
+  return n;
 }
 
 function sortDomesticListedCandidates(scored) {
@@ -204,8 +244,33 @@ function sortDomesticListedCandidates(scored) {
     });
 }
 
+function sortUnlistedCandidates(scored) {
+  return [...(scored || [])]
+    .filter((c) => !isDomesticListedCandidate(c))
+    .sort((a, b) => {
+      const typeRank = (c) => {
+        const t = c.validation?.competitor_type;
+        if (t === 'direct') return 4;
+        if (t === 'indirect') return 3;
+        if (t === 'substitute') return 2;
+        if (t === 'same_track') return 1;
+        return 0;
+      };
+      const tr = typeRank(b) - typeRank(a);
+      if (tr !== 0) return tr;
+      const coreA = a.coreLineScore || 0;
+      const coreB = b.coreLineScore || 0;
+      if (coreB !== coreA) return coreB - coreA;
+      const sa = computeComprehensiveScore(a);
+      const sb = computeComprehensiveScore(b);
+      if (sb !== sa) return sb - sa;
+      return (getCandidateAiPart(b) || 0) - (getCandidateAiPart(a) || 0);
+    });
+}
+
 module.exports = {
   MIN_DOMESTIC_LISTED_COMPETITORS,
+  MIN_UNLISTED_COMPETITORS,
   isDomesticListedCandidate,
   isDomesticListedFromIpoPool,
   countDomesticListedInScored,
@@ -213,5 +278,8 @@ module.exports = {
   buildListedDomesticDiscoverKeywords,
   mergeWebCandidatesIntoScored,
   listedMandateMeetsThreshold,
+  unlistedMandateMeetsThreshold,
+  countUnlistedInPersistRows,
   sortDomesticListedCandidates,
+  sortUnlistedCandidates,
 };

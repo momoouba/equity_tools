@@ -183,7 +183,8 @@ function refineValidationByProductOverlap(validation, context = {}) {
     lowCoreOverlap &&
     type === 'same_track' &&
     validatedScore >= 55 &&
-    (Number.isFinite(coreLineScore) ? coreLineScore : 0) < 10
+    (Number.isFinite(coreLineScore) ? coreLineScore : 0) < 10 &&
+    !(context.fromAiWeb && validatedScore >= 78)
   ) {
     type = 'not_competitor';
     isCompetitor = false;
@@ -205,6 +206,57 @@ function refineValidationByProductOverlap(validation, context = {}) {
     rationale,
     is_upstream_downstream: type === 'upstream_downstream',
   };
+}
+
+/** 联网发现 + 高校验分但被误判为非竞品时，按产品线信号纠正 */
+function refineValidationForTrustedWebDiscovery(validation, context = {}) {
+  if (!validation || validation.ai_failed) return validation;
+  const vs = clampScore(validation.validated_score);
+  if (vs < 75) return validation;
+
+  const coreLine = Number(context.coreLineScore ?? NaN);
+  const product = Number(context.productScore ?? NaN);
+  const hasCoreSignal =
+    (Number.isFinite(coreLine) && coreLine >= 18) ||
+    (Number.isFinite(product) && product >= 18);
+  const fromWeb = context.fromAiWeb === true;
+  const type = validation.competitor_type;
+
+  if (
+    type === 'not_competitor' &&
+    (fromWeb || hasCoreSignal) &&
+    (vs >= 80 || (hasCoreSignal && vs >= 75))
+  ) {
+    const nextType = (Number.isFinite(coreLine) && coreLine >= 22) || (Number.isFinite(product) && product >= 22)
+      ? 'direct'
+      : 'indirect';
+    return {
+      ...validation,
+      competitor_type: nextType,
+      is_competitor: true,
+      is_upstream_downstream: false,
+      validated_score: vs,
+      reject_reason: '',
+      rationale: strTrim(
+        `${validation.rationale ? `${validation.rationale}；` : ''}核心产品线/联网检索高度重合，更正为${nextType === 'direct' ? '直接' : '间接'}竞品`
+      ).slice(0, 500),
+    };
+  }
+
+  if (type === 'not_competitor' && validation.is_competitor === false && hasCoreSignal && vs >= 72) {
+    return {
+      ...validation,
+      competitor_type: 'indirect',
+      is_competitor: true,
+      is_upstream_downstream: false,
+      reject_reason: '',
+      rationale: strTrim(
+        `${validation.rationale ? `${validation.rationale}；` : ''}产品线部分重合，更正为间接竞品`
+      ).slice(0, 500),
+    };
+  }
+
+  return validation;
 }
 
 /** 规范化 S5 validate JSON，补全 competitor_type 与兼容字段。 */
@@ -261,7 +313,8 @@ function normalizeCompetitorValidation(raw, context = null) {
   };
   normalized.evidence_summary = buildEvidenceSummary(normalized);
   if (context) {
-    return refineValidationByProductOverlap(normalized, context);
+    const afterOverlap = refineValidationByProductOverlap(normalized, context);
+    return refineValidationForTrustedWebDiscovery(afterOverlap, context);
   }
   return normalized;
 }
@@ -289,6 +342,8 @@ module.exports = {
   NON_PERSIST_TYPES,
   COMPETITOR_TYPE_LABELS,
   normalizeCompetitorValidation,
+  refineValidationByProductOverlap,
+  refineValidationForTrustedWebDiscovery,
   refineCompetitorTypeFromContext,
   shouldPersistCompetitorType,
   defaultIncludeInComparable,

@@ -91,6 +91,8 @@ async function logDataChange(tableName, recordId, oldData, newData, userId) {
         'F_DeleteTime',
         'F_DeleteUserId'
       ];
+    } else if (tableName === 'sourcing_competitor_comparable_pref') {
+      fields = ['include_in_comparable'];
     } else {
       console.warn(`未知的表名: ${tableName}`);
       return;

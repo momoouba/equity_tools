@@ -62,18 +62,29 @@ const {
 } = require('./competitorRelationReviewService');
 const {
   MIN_DOMESTIC_LISTED_COMPETITORS,
+  MIN_UNLISTED_COMPETITORS,
   isDomesticListedFromIpoPool,
   countDomesticListedInScored,
   countDomesticListedInPersistRows,
+  countUnlistedInPersistRows,
   buildListedDomesticDiscoverKeywords,
   mergeWebCandidatesIntoScored,
   listedMandateMeetsThreshold,
+  unlistedMandateMeetsThreshold,
   sortDomesticListedCandidates,
+  sortUnlistedCandidates,
 } = require('./competitorListedDomestic');
 const {
   computeProductPrecisionScores,
   extractCoreProductLines,
 } = require('./competitorProductLineUtils');
+const {
+  clearDomesticIdentityCache,
+  filterDomesticCompetitorCandidates,
+  finalizeDomesticPersistRows,
+  isOverseasCompetitorCandidate,
+  normalizeDomesticCandidateIdentity,
+} = require('./competitorDomesticIdentityUtils');
 
 const SCORE_THRESHOLD = SCORE_THRESHOLD_PERSIST;
 /** 规则分 Top N 进入 LLM 对标 */
@@ -98,9 +109,15 @@ const DIALYSIS_PRIMARY_RE =
 const TOP_N_LLM_RULE_TRACK = 28;
 /** 掩模赛道：名称/简介含关键词的候选补充进 LLM 池（与规则 Top 并集） */
 const KEYWORD_LLM_CAP = 28;
-const TOP_N_VALIDATE = 24;
-const AUTO_EXPAND_MIN_COUNT = 3;
-const AUTO_EXPAND_MIN_B_PLUS = 1;
+const TOP_N_VALIDATE = 42;
+const AUTO_EXPAND_MIN_LISTED = Math.max(
+  1,
+  parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '5', 10) || 5
+);
+const AUTO_EXPAND_MIN_UNLISTED = Math.max(
+  1,
+  parseInt(process.env.COMPETITOR_MIN_UNLISTED || '8', 10) || 8
+);
 const LLM_REQUEST_GAP_MS = Math.max(0, parseInt(process.env.COMPETITOR_LLM_GAP_MS || '650', 10) || 650);
 /** 联网候选进入校验的 AI 初分下限 */
 const WEB_VALIDATE_AI_MIN = 55;
@@ -116,8 +133,8 @@ const LLM_POOL_WEAK_MAX_INTERNAL =
   parseInt(process.env.COMPETITOR_LLM_WEAK_MAX_INTERNAL || '35', 10) || 35;
 /** 弱匹配时 LLM 池最多条数 */
 const LLM_POOL_WEAK_CAP = Math.max(
-  8,
-  parseInt(process.env.COMPETITOR_LLM_WEAK_POOL_CAP || '15', 10) || 15
+  12,
+  parseInt(process.env.COMPETITOR_LLM_WEAK_POOL_CAP || '22', 10) || 22
 );
 /** 赛道命中豁免：internal 下限（避免完全无关仍因关键词进池） */
 const LLM_POOL_TRACK_INTERNAL_FLOOR = Math.max(
@@ -266,12 +283,13 @@ function resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal) {
 function qualifiesForLlmPool(c, ctx) {
   if (!c) return false;
   if (isDomesticListedFromIpoPool(c) && (c.coreLineScore || 0) >= 10) return true;
-  if (LLM_POOL_RULE_MIN <= 0) return true;
+  const ruleMin = ctx?.ruleMin ?? LLM_POOL_RULE_MIN;
+  if (ruleMin <= 0) return true;
   const internal = c.internalScore || 0;
   const tag = c.tagScore || 0;
   const product = c.productScore || 0;
   const tagMin = ctx.tagMin ?? TAG_LLM_MIN;
-  if (internal >= LLM_POOL_RULE_MIN) return true;
+  if (internal >= ruleMin) return true;
   if ((c.coreLineScore || 0) >= 15) return true;
   if (tag >= tagMin) return true;
   if (
@@ -307,7 +325,14 @@ function buildLlmScoringPool(scored, target) {
   const expanded = trackKind != null;
   const trackRe = trackReForKind(trackKind);
   const tagMin = expanded ? TAG_LLM_MIN_NICHE : TAG_LLM_MIN;
-  const poolCtx = { trackRe, tagMin };
+  const maxInternalPreview = maxInternalScoreInList(scored);
+  const weakPool = maxInternalPreview < LLM_POOL_WEAK_MAX_INTERNAL;
+  const poolCtx = {
+    trackRe,
+    tagMin,
+    weakPool,
+    ruleMin: weakPool ? Math.min(LLM_POOL_RULE_MIN, 10) : LLM_POOL_RULE_MIN,
+  };
   let ruleTop = 0;
 
   if (expanded && trackRe) {
@@ -403,6 +428,23 @@ function buildLlmScoringPool(scored, target) {
 }
 
 /** 校验池：全量 scored 中内部达标 / LLM≥80 / 纯联网 AI 达标 / 内部+联网合并且联网 AI 达标 / 赛道内部池补充 */
+/** S5 校验池：上市/未上市补充槽位须有一定产品/规则相关性，避免泛 IPO 池误进校验 */
+function meetsValidatePoolRelevance(c, validateInternalMin) {
+  if (!c) return false;
+  const llm = c.llmProductScore != null ? Number(c.llmProductScore) : 0;
+  const ai = getCandidateAiPart(c);
+  const core = c.coreLineScore ?? 0;
+  const prod = c.productScore ?? 0;
+  const internal = Number(c.internalScore) || 0;
+  const srcs = c.sources || (c.source ? [c.source] : []);
+  if (srcs.includes('ai_web') && ai >= WEB_VALIDATE_AI_MIN) return true;
+  if (llm >= LLM_HIGH_TRUST_THRESHOLD) return true;
+  if (core >= 10 || prod >= 12) return true;
+  if (internal >= validateInternalMin && (core >= 8 || prod >= 10)) return true;
+  if (c._trackInternalPeer && llm >= TRACK_INTERNAL_LLM_VALIDATE_MIN) return true;
+  return false;
+}
+
 function buildValidatePool(scored, thresholds, ctx = {}) {
   const validateInternalMin =
     thresholds?.validateInternalMin ?? VALIDATE_INTERNAL_MIN_DEFAULT;
@@ -420,6 +462,7 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
     const llm = c.llmProductScore != null ? Number(c.llmProductScore) : null;
     const ai = getCandidateAiPart(c);
     const srcs = c.sources || (c.source ? [c.source] : []);
+    if (srcs.includes('ai_web') && (llm != null && llm >= WEB_VALIDATE_AI_MIN)) add(c);
     if (c.internalScore >= validateInternalMin) {
       if ((c.coreLineScore ?? 0) >= 12 || (c.productScore ?? 0) >= 15) add(c);
     } else if (llm != null && llm >= LLM_HIGH_TRUST_THRESHOLD) add(c);
@@ -440,10 +483,21 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
       add(c);
     }
   }
-  for (const c of sortDomesticListedCandidates(scored).slice(0, 12)) {
+  let listedAdded = 0;
+  for (const c of sortDomesticListedCandidates(scored)) {
+    if (!meetsValidatePoolRelevance(c, validateInternalMin)) continue;
     add(c);
+    listedAdded += 1;
+    if (listedAdded >= 12) break;
   }
-  return [...map.values()].slice(0, TOP_N_VALIDATE + 15);
+  let unlistedAdded = 0;
+  for (const c of sortUnlistedCandidates(scored)) {
+    if (!meetsValidatePoolRelevance(c, validateInternalMin)) continue;
+    add(c);
+    unlistedAdded += 1;
+    if (unlistedAdded >= 16) break;
+  }
+  return [...map.values()].slice(0, TOP_N_VALIDATE + 28);
 }
 
 function mapCandidateToPersistRow(c) {
@@ -491,81 +545,31 @@ function mapCandidateToPersistRow(c) {
 }
 
 /**
- * 落库前补足国内上市公司（上交所/深交所/北交所）至少 MIN 家，优先相似度最高者。
+ * 落库前补足国内上市公司至少 minN 家（默认 5，供客户筛选）。
  */
-async function ensureMinimumDomesticListedInFinalList({
-  target,
-  targetSlice,
-  scored,
-  toPersist,
-  persistThresholdOpts,
-  logCtx,
-}) {
-  const minN = MIN_DOMESTIC_LISTED_COMPETITORS;
-  let current = countDomesticListedInPersistRows(toPersist);
-  if (current >= minN) {
-    return { supplemented: 0, domestic_listed_in_persist: current };
-  }
+async function ensureMinimumDomesticListedInFinalList(args) {
+  return supplementPersistByQuota({
+    ...args,
+    minN: MIN_DOMESTIC_LISTED_COMPETITORS,
+    sortFn: sortDomesticListedCandidates,
+    meetsThresholdFn: listedMandateMeetsThreshold,
+    mandateLabel: 'listed_mandate',
+    countFn: countDomesticListedInPersistRows,
+  });
+}
 
-  const persistKeys = new Set(
-    toPersist.map((row) =>
-      candidateDedupeKey({
-        unified_credit_code: row.unified_credit_code,
-        display_name: row.display_name,
-      })
-    )
-  );
-
-  const candidates = sortDomesticListedCandidates(scored);
-  let supplemented = 0;
-  let vi = 0;
-
-  for (const c of candidates) {
-    if (current >= minN) break;
-    const key = candidateDedupeKey(c);
-    if (!key || persistKeys.has(key)) continue;
-
-    if (!c.validation || c.validation.ai_failed) {
-      if (vi > 0 && LLM_REQUEST_GAP_MS > 0) await sleep(LLM_REQUEST_GAP_MS);
-      vi += 1;
-      c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
-        ...logCtx,
-        candidateName: c.display_name,
-        ruleProductScore: c.productScore,
-        coreLineScore: c.coreLineScore,
-        specificTagScore: c.specificTagScore,
-      });
-      if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
-        c.is_listed = true;
-      }
-    }
-
-    if (
-      !isPersistValidationPassed(c) &&
-      !['direct', 'indirect', 'substitute', 'same_track'].includes(c.validation?.competitor_type)
-    ) {
-      continue;
-    }
-
-    const row = mapCandidateToPersistRow(c);
-    if (!listedMandateMeetsThreshold(c, row, persistThresholdOpts)) continue;
-
-    row.breakdown = { ...row.breakdown, listed_mandate: true };
-    toPersist.push({ ...row, _candidate: c });
-    persistKeys.add(key);
-    current += 1;
-    supplemented += 1;
-  }
-
-  if (current < minN) {
-    logCompetitorRun(logCtx.runId, 'S5_listed_mandate', `国内上市公司仅 ${current}/${minN} 家`, {
-      required: minN,
-      actual: current,
-      hint: '请检查联网模型与「联网发现竞品」提示词，或底层 ipo 项目池是否覆盖该赛道',
-    });
-  }
-
-  return { supplemented, domestic_listed_in_persist: current };
+/**
+ * 落库前补足未上市竞品至少 minN 家（默认 8，供客户筛选）。
+ */
+async function ensureMinimumUnlistedInFinalList(args) {
+  return supplementPersistByQuota({
+    ...args,
+    minN: MIN_UNLISTED_COMPETITORS,
+    sortFn: sortUnlistedCandidates,
+    meetsThresholdFn: unlistedMandateMeetsThreshold,
+    mandateLabel: 'unlisted_mandate',
+    countFn: countUnlistedInPersistRows,
+  });
 }
 
 async function appendStepLog({ runId, subjectType, stepCode, status, message, detail }) {
@@ -658,6 +662,128 @@ function sliceForLlm(target, cand) {
     display_name: cand.display_name,
     core_product_lines: coreLines.length ? coreLines : undefined,
   };
+}
+
+/** 为候选（尤其 S4 联网并入）补齐相对目标的规则分字段 */
+function applyTargetRuleScores(scored, target) {
+  if (!target || !scored?.length) return;
+  for (const c of scored) {
+    const rs = ruleScoreCandidate(target, c);
+    Object.assign(c, rs);
+  }
+}
+
+function candidateFromAiWeb(c) {
+  const srcs = c?.sources || (c?.source ? [c.source] : []);
+  return srcs.includes('ai_web');
+}
+
+/** S5 校验后结合规则分，纠正联网高信任误判 */
+function refreshValidationAfterRuleScores(c) {
+  if (!c?.validation || c.validation.ai_failed) return;
+  const { refineValidationForTrustedWebDiscovery } = require('./competitorTypeUtils');
+  c.validation = refineValidationForTrustedWebDiscovery(c.validation, {
+    ruleProductScore: c.productScore,
+    coreLineScore: c.coreLineScore,
+    specificTagScore: c.specificTagScore,
+    fromAiWeb: candidateFromAiWeb(c),
+  });
+}
+
+async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
+  await normalizeDomesticCandidateIdentity(c);
+  c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
+    ...logCtx,
+    candidateName: c.display_name,
+    ruleProductScore: c.productScore,
+    coreLineScore: c.coreLineScore,
+    specificTagScore: c.specificTagScore,
+    fromAiWeb: candidateFromAiWeb(c),
+  });
+  if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
+    c.is_listed = true;
+  }
+  if (!c.hasInternal && c.validation?.validated_score != null) {
+    c.llmProductScore = Number(c.validation.validated_score);
+  }
+  refreshValidationAfterRuleScores(c);
+}
+
+function isMandateEligibleType(c) {
+  if (isPersistValidationPassed(c)) return true;
+  return ['direct', 'indirect', 'substitute', 'same_track'].includes(c.validation?.competitor_type);
+}
+
+/** 配额补足只消费 S5 已校验候选，禁止在此阶段发起新的 LLM 校验 */
+function isMandateSupplementCandidate(c) {
+  const v = c?.validation;
+  if (!v || v.ai_failed) return false;
+  refreshValidationAfterRuleScores(c);
+  return isMandateEligibleType(c);
+}
+
+async function supplementPersistByQuota({
+  scored,
+  toPersist,
+  persistThresholdOpts,
+  logCtx,
+  minN,
+  sortFn,
+  meetsThresholdFn,
+  mandateLabel,
+  countFn,
+}) {
+  let current = countFn(toPersist);
+  if (current >= minN) {
+    return { supplemented: 0, actual: current };
+  }
+
+  const persistKeys = new Set(
+    toPersist.map((row) =>
+      candidateDedupeKey({
+        unified_credit_code: row.unified_credit_code,
+        display_name: row.display_name,
+      })
+    )
+  );
+
+  const mandateScanCap = Math.max(minN * 4, 32);
+  const candidates = sortFn(scored)
+    .filter(isMandateSupplementCandidate)
+    .slice(0, mandateScanCap);
+  let supplemented = 0;
+
+  for (const c of candidates) {
+    if (current >= minN) break;
+    const key = candidateDedupeKey(c);
+    if (!key || persistKeys.has(key)) continue;
+    if (isOverseasCompetitorCandidate(c)) continue;
+
+    await normalizeDomesticCandidateIdentity(c);
+    const { isValidMainlandUscc } = require('./competitorCompanyMatch');
+    if (!isValidMainlandUscc(c.unified_credit_code)) continue;
+
+    if (!isMandateEligibleType(c)) continue;
+
+    const row = mapCandidateToPersistRow(c);
+    if (!meetsThresholdFn(c, row, persistThresholdOpts)) continue;
+
+    row.breakdown = { ...row.breakdown, [mandateLabel]: true };
+    toPersist.push({ ...row, _candidate: c });
+    persistKeys.add(key);
+    current += 1;
+    supplemented += 1;
+  }
+
+  if (current < minN) {
+    logCompetitorRun(logCtx.runId, mandateLabel, `仅 ${current}/${minN} 家（仅复用已校验候选）`, {
+      required: minN,
+      actual: current,
+      scanned_validated: candidates.length,
+    });
+  }
+
+  return { supplemented, actual: current };
 }
 
 async function evaluatePreInvestmentReadiness(row) {
@@ -768,6 +894,7 @@ async function persistRelations({
   // #9: 清空运行级富化缓存，避免跨批次脏读
   clearEnrichCache();
   clearInternalDisplayCache();
+  clearDomesticIdentityCache();
 
   // 预生成所有 relId（批量连续序列，避免同秒多次 MAX+1 得到相同 ID）
   const relIds = await generateSequentialIds('sourcing_competitor_relation', rowsToPersist.length);
@@ -781,7 +908,7 @@ async function persistRelations({
     });
     const cand = (candidateByKey && candidateByKey.get(key)) || r._candidate || r;
     const displayFields = await enrichCompetitorDisplayFields(cand, { runId });
-    const fieldEnhance = enrichRelationFieldsBeforePersist(
+    const fieldEnhance = await enrichRelationFieldsBeforePersist(
       {
         displayName: r.display_name,
         unifiedCreditCode: r.unified_credit_code,
@@ -790,11 +917,13 @@ async function persistRelations({
       financingIndex
     );
     const creditFinal = fieldEnhance.unified_credit_code || r.unified_credit_code || null;
+    const displayNameFinal =
+      strTrim(fieldEnhance.display_name) || strTrim(r.display_name) || strTrim(cand.display_name);
     const competitorType = r.competitorType || cand.validation?.competitor_type || null;
     const includeComparable = isComparablePreferred(comparablePrefs, {
       unified_credit_code: creditFinal,
-      competitor_display_name: r.display_name,
-      competitor_weak_key: creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
+      competitor_display_name: displayNameFinal,
+      competitor_weak_key: creditFinal ? null : strTrim(displayNameFinal).slice(0, 160) || null,
     })
       ? 1
       : defaultIncludeInComparable(competitorType)
@@ -810,7 +939,7 @@ async function persistRelations({
       runIdValue: subjectType === 'invested_enterprise' ? runId : null,
       preInvestmentRunId: preInvestmentRunId || null,
       subjectDisplayName,
-      displayName: r.display_name,
+      displayName: displayNameFinal,
       creditFinal,
       isListed: fieldEnhance.is_listed ? 1 : 0,
       weakKey: creditFinal ? null : strTrim(r.display_name).slice(0, 160) || null,
@@ -1047,6 +1176,7 @@ async function executeCompetitorAnalysisRun(opts) {
       mergeRecalledCandidates(ipoList, ipoProductList),
       finList
     );
+    candidates = filterDomesticCompetitorCandidates(candidates);
 
     await appendStepLog({
       runId,
@@ -1254,6 +1384,16 @@ async function executeCompetitorAnalysisRun(opts) {
       });
     }
 
+    applyTargetRuleScores(scored, target);
+    for (const c of scored) {
+      if (candidateFromAiWeb(c)) {
+        await normalizeDomesticCandidateIdentity(c);
+      }
+    }
+    for (let si = scored.length - 1; si >= 0; si -= 1) {
+      if (isOverseasCompetitorCandidate(scored[si])) scored.splice(si, 1);
+    }
+
     const llmPoolKeys = new Set(llmPool.map((c) => candidateDedupeKey(c)).filter(Boolean));
     const validatePool = buildValidatePool(scored, thresholds, { target, llmPoolKeys });
     const validateReasons = {
@@ -1274,19 +1414,7 @@ async function executeCompetitorAnalysisRun(opts) {
       const c = validatePool[vi];
       if (vi > 0 && LLM_REQUEST_GAP_MS > 0) await sleep(LLM_REQUEST_GAP_MS);
       try {
-        c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
-          runId,
-          candidateName: c.display_name,
-          ruleProductScore: c.productScore,
-          coreLineScore: c.coreLineScore,
-          specificTagScore: c.specificTagScore,
-        });
-        if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
-          c.is_listed = true;
-        }
-        if (!c.hasInternal && c.validation?.validated_score != null) {
-          c.llmProductScore = Number(c.validation.validated_score);
-        }
+        await validateCandidateForPersist(c, target, targetSlice, { runId });
       } catch (err) {
         const { normalizeCompetitorValidation } = require('./competitorTypeUtils');
         c.validation = normalizeCompetitorValidation({
@@ -1323,11 +1451,17 @@ async function executeCompetitorAnalysisRun(opts) {
       skip_not_competitor: 0,
       skip_upstream_downstream: 0,
       skip_low_score: 0,
+      skip_overseas: 0,
       accepted_internal: 0,
       accepted_ai_only: 0,
     };
     const rejectedSamples = [];
     for (const c of scored) {
+      if (isOverseasCompetitorCandidate(c)) {
+        filterStats.skip_overseas += 1;
+        continue;
+      }
+      if (c.validation) refreshValidationAfterRuleScores(c);
       if (!isPersistValidationPassed(c)) {
         if (!c.validation || c.validation.ai_failed) {
           filterStats.skip_no_validation += 1;
@@ -1401,46 +1535,40 @@ async function executeCompetitorAnalysisRun(opts) {
 
     toPersist.sort((a, b) => b.finalScore - a.finalScore);
 
-    const listedMandateResult = await ensureMinimumDomesticListedInFinalList({
-      target,
-      targetSlice,
-      scored,
-      toPersist,
-      persistThresholdOpts,
-      logCtx,
-    });
-    if (listedMandateResult.supplemented > 0) {
-      toPersist.sort((a, b) => b.finalScore - a.finalScore);
-    }
-
     await appendStepLog({
       runId,
       subjectType,
       stepCode: 'S5_filter',
       status: 'ok',
-      message: `初筛通过 ${toPersist.length} 条（国内上市 ${listedMandateResult.domestic_listed_in_persist}/${MIN_DOMESTIC_LISTED_COMPETITORS}）`,
+      message: `初筛通过 ${toPersist.length} 条（上市 ${countDomesticListedInPersistRows(toPersist)}/${MIN_DOMESTIC_LISTED_COMPETITORS}，未上市 ${countUnlistedInPersistRows(toPersist)}/${MIN_UNLISTED_COMPETITORS}）`,
       detail: {
         filterStats,
-        candidates: summarizeCandidates(toPersist, 15),
+        candidates: summarizeCandidates(toPersist, 20),
         rejected_samples: rejectedSamples,
-        domestic_listed_in_persist: listedMandateResult.domestic_listed_in_persist,
-        domestic_listed_supplemented: listedMandateResult.supplemented,
+        domestic_listed_in_persist: countDomesticListedInPersistRows(toPersist),
+        unlisted_in_persist: countUnlistedInPersistRows(toPersist),
         required_min_domestic_listed: MIN_DOMESTIC_LISTED_COMPETITORS,
+        required_min_unlisted: MIN_UNLISTED_COMPETITORS,
       },
     });
 
     let finalList = toPersist;
     if (enableAutoExpand) {
-      const bPlus = toPersist.filter((x) => ['S', 'A', 'B'].includes(x.grade));
-      if (toPersist.length < AUTO_EXPAND_MIN_COUNT || bPlus.length < AUTO_EXPAND_MIN_B_PLUS) {
+      const listedN = countDomesticListedInPersistRows(toPersist);
+      const unlistedN = countUnlistedInPersistRows(toPersist);
+      const needExpand =
+        listedN < AUTO_EXPAND_MIN_LISTED || unlistedN < AUTO_EXPAND_MIN_UNLISTED;
+      if (needExpand) {
         logCompetitorRun(runId, 'S5_expand', '触发扩召回', {
-          current: toPersist.length,
-          b_plus: bPlus.length,
-          min_count: AUTO_EXPAND_MIN_COUNT,
-          min_b_plus: AUTO_EXPAND_MIN_B_PLUS,
+          current_total: toPersist.length,
+          listed: listedN,
+          unlisted: unlistedN,
+          min_listed: AUTO_EXPAND_MIN_LISTED,
+          min_unlisted: AUTO_EXPAND_MIN_UNLISTED,
         });
         const relaxed = scored
           .filter((c) => {
+            refreshValidationAfterRuleScores(c);
             if (!isPersistValidationPassed(c)) return false;
             const srcs = c.sources || (c.source ? [c.source] : []);
             const ai = getCandidateAiPart(c);
@@ -1451,14 +1579,19 @@ async function executeCompetitorAnalysisRun(opts) {
               (c.llmProductScore ?? 0) >= LLM_HIGH_TRUST_THRESHOLD
             );
           })
-          .slice(0, 50)
+          .slice(0, 80)
           .map((c) => {
             const row = mapCandidateToPersistRow(c);
             row.breakdown = { ...row.breakdown, expanded: true };
             row._candidate = c;
             return row;
           })
-          .filter((x) => meetsPersistThreshold(x._candidate, x.finalScore, persistThresholdOpts));
+          .filter(
+            (x) =>
+              meetsPersistThreshold(x._candidate, x.finalScore, persistThresholdOpts) ||
+              listedMandateMeetsThreshold(x._candidate, x, persistThresholdOpts) ||
+              unlistedMandateMeetsThreshold(x._candidate, x, persistThresholdOpts)
+          );
         const seen = new Set();
         finalList = [];
         for (const x of [...toPersist, ...relaxed]) {
@@ -1477,6 +1610,25 @@ async function executeCompetitorAnalysisRun(opts) {
           detail: { candidates: summarizeCandidates(finalList, 15) },
         });
       }
+    }
+
+    await ensureMinimumDomesticListedInFinalList({
+      scored,
+      toPersist: finalList,
+      persistThresholdOpts,
+      logCtx,
+    });
+    await ensureMinimumUnlistedInFinalList({
+      scored,
+      toPersist: finalList,
+      persistThresholdOpts,
+      logCtx,
+    });
+    finalList.sort((a, b) => b.finalScore - a.finalScore);
+
+    finalList = await finalizeDomesticPersistRows(finalList, logCtx);
+    if (!finalList.length) {
+      throw new Error('落库列表无有效境内竞品（已排除境外主体或无法补齐统一社会信用代码）');
     }
 
     logCompetitorRun(runId, 'S6_persist', `准备落库 ${finalList.length} 条`, summarizeCandidates(finalList, 20));
