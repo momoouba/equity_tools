@@ -90,20 +90,30 @@ function countDomesticListedInPersistRows(rows) {
 
 function buildListedDomesticDiscoverKeywords(target, baseKeywords) {
   const kw = [...(baseKeywords || [])];
+  const coreLines = target?.core_product_lines?.length
+    ? target.core_product_lines
+    : [];
+  for (const line of coreLines.slice(0, 6)) {
+    kw.push(`${strTrim(line)} A股上市公司`);
+    kw.push(`${strTrim(line)} 上市公司 对标`);
+  }
   kw.push(
     'A股上市公司',
     '上交所上市公司',
     '深交所上市公司',
     '北交所上市公司',
     '同行业上市公司',
-    '对标上市公司'
+    '对标上市公司',
+    '层析填料 上市公司',
+    '色谱填料 上市公司',
+    '生物制药纯化 上市公司'
   );
   const name = strTrim(target?.display_name);
   if (name) {
     kw.push(`${name} 同行业 A股`);
     kw.push(`${name} 上市公司 对标`);
   }
-  return [...new Set(kw.map((x) => strTrim(x)).filter(Boolean))].slice(0, 20);
+  return [...new Set(kw.map((x) => strTrim(x)).filter(Boolean))].slice(0, 24);
 }
 
 function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandidate: parseListed }) {
@@ -184,6 +194,9 @@ function sortDomesticListedCandidates(scored) {
   return [...(scored || [])]
     .filter(isDomesticListedCandidate)
     .sort((a, b) => {
+      const coreA = a.coreLineScore || 0;
+      const coreB = b.coreLineScore || 0;
+      if (coreB !== coreA) return coreB - coreA;
       const sa = computeComprehensiveScore(a);
       const sb = computeComprehensiveScore(b);
       if (sb !== sa) return sb - sa;

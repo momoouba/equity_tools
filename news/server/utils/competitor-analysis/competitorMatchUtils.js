@@ -228,9 +228,20 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   const th = opts.threshold ?? SCORE_THRESHOLD_PERSIST;
   const thHigh = opts.thresholdHighLlm ?? SCORE_THRESHOLD_HIGH_LLM;
   const score = Number(finalScore);
-  if (c.validation?.competitor_type === 'same_track') {
+  const type = c.validation?.competitor_type;
+  const coreLine = Number(c.coreLineScore ?? NaN);
+  const product = Number(c.productScore ?? NaN);
+  const lacksCoreProductOverlap =
+    (Number.isFinite(coreLine) ? coreLine : 0) < 15 &&
+    (Number.isFinite(product) ? product : 0) < 18;
+
+  if (type === 'same_track') {
     const vs = Number(c.validation?.validated_score);
-    if (Number.isFinite(vs) && vs >= 35) return true;
+    if (Number.isFinite(vs) && vs >= 35 && !lacksCoreProductOverlap) return true;
+    if (Number.isFinite(vs) && vs >= 42) return true;
+  }
+  if (['direct', 'indirect', 'substitute'].includes(type) && lacksCoreProductOverlap) {
+    return false;
   }
   if (Number.isFinite(score) && score >= th) return true;
   const ai = getCandidateAiPart(c);

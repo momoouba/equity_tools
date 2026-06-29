@@ -321,6 +321,9 @@ async function validateCandidate(targetSlice, candidateSlice, logCtx = {}) {
       subjectTrackHint: targetSlice?.subject_track_hint,
       subjectProductIntro: targetSlice?.product_intro,
       subjectTags: targetSlice?.tags,
+      ruleProductScore: logCtx.ruleProductScore,
+      coreLineScore: logCtx.coreLineScore,
+      specificTagScore: logCtx.specificTagScore,
     });
       logCompetitorAi(runId, 'validate', `完成 ${label}`, {
         is_competitor: normalized.is_competitor,

@@ -11,6 +11,7 @@ const {
 } = require('./competitorMatchReadinessService');
 const {
   recallFromIpoProjects,
+  recallListedIpoByProductTerms,
   recallFromFinancingEvents,
   mergeRecalledCandidates,
 } = require('./competitorMatchRecall');
@@ -61,6 +62,7 @@ const {
 } = require('./competitorRelationReviewService');
 const {
   MIN_DOMESTIC_LISTED_COMPETITORS,
+  isDomesticListedFromIpoPool,
   countDomesticListedInScored,
   countDomesticListedInPersistRows,
   buildListedDomesticDiscoverKeywords,
@@ -68,6 +70,10 @@ const {
   listedMandateMeetsThreshold,
   sortDomesticListedCandidates,
 } = require('./competitorListedDomestic');
+const {
+  computeProductPrecisionScores,
+  extractCoreProductLines,
+} = require('./competitorProductLineUtils');
 
 const SCORE_THRESHOLD = SCORE_THRESHOLD_PERSIST;
 /** 规则分 Top N 进入 LLM 对标 */
@@ -79,9 +85,12 @@ const TOP_N_LLM_TAG_NICHE = 28;
 const TAG_LLM_MIN = 22;
 const TAG_LLM_MIN_NICHE = 16;
 const NICHE_TRACK_TAG_RE = /掩模|光罩|mask|photomask/i;
-/** 生物制药过滤膜赛道：扩大标签/关键词 LLM 池与联网检索词 */
+/** 过滤膜/滤芯赛道信号（目标扩池须命中，避免「澄清过滤系统」等装备类误触发） */
+const BIO_FILTER_MEMBRANE_SIGNAL_RE =
+  /过滤膜|除菌过滤|深层过滤|除病毒过滤|囊式过滤|TFF|切向流|超滤膜|滤芯|膜包|除菌滤|深层滤|膜过滤|微滤膜|纳滤膜|过滤耗材.*膜|生物工艺.*膜/i;
+/** 候选赛道命中（膜/滤芯相关，不含泛「过滤系统」） */
 const BIO_FILTER_TRACK_RE =
-  /生物制药.*过滤|制药.*过滤|过滤膜|除菌过滤|深层过滤|切向流|TFF|超滤膜|生物工艺.*膜|除病毒过滤|囊式过滤|过滤器材|滤芯|过滤器|过滤耗材|膜过滤|除菌滤|深层滤|微滤|纳滤|膜包|切向流过滤/i;
+  /生物制药.*过滤膜|制药.*过滤膜|过滤膜|除菌过滤|深层过滤|切向流|TFF|超滤膜|生物工艺.*膜|除病毒过滤|囊式过滤|过滤器材|滤芯|过滤耗材|膜过滤|除菌滤|深层滤|微滤|纳滤|膜包|切向流过滤|除菌级.*滤/i;
 /** 血液透析/净化为主业（与生物制药过滤膜形成双赛道边界） */
 const DIALYSIS_PRIMARY_RE =
   /血液透析|透析器|腹膜透析|CRRT|血液净化|肾病治疗|肾科|透析耗材|透析设备|空心纤维透析/i;
@@ -97,6 +106,28 @@ const LLM_REQUEST_GAP_MS = Math.max(0, parseInt(process.env.COMPETITOR_LLM_GAP_M
 const WEB_VALIDATE_AI_MIN = 55;
 /** 专业赛道：内部池经 S3 对标后进入 S5 的 LLM 分下限（规则分低时仍校验） */
 const TRACK_INTERNAL_LLM_VALIDATE_MIN = 45;
+/** S3 入池：规则分低于此且未命中标签/赛道豁免则跳过 LLM（0=关闭） */
+const LLM_POOL_RULE_MIN = Math.max(
+  0,
+  parseInt(process.env.COMPETITOR_LLM_RULE_MIN || '15', 10) || 15
+);
+/** 全池规则分峰值低于此视为弱匹配，缩小 LLM 池上限 */
+const LLM_POOL_WEAK_MAX_INTERNAL =
+  parseInt(process.env.COMPETITOR_LLM_WEAK_MAX_INTERNAL || '35', 10) || 35;
+/** 弱匹配时 LLM 池最多条数 */
+const LLM_POOL_WEAK_CAP = Math.max(
+  8,
+  parseInt(process.env.COMPETITOR_LLM_WEAK_POOL_CAP || '15', 10) || 15
+);
+/** 赛道命中豁免：internal 下限（避免完全无关仍因关键词进池） */
+const LLM_POOL_TRACK_INTERNAL_FLOOR = Math.max(
+  0,
+  parseInt(process.env.COMPETITOR_LLM_TRACK_INTERNAL_FLOOR || '8', 10) || 8
+);
+const LLM_POOL_TRACK_PRODUCT_FLOOR = Math.max(
+  0,
+  parseInt(process.env.COMPETITOR_LLM_TRACK_PRODUCT_FLOOR || '12', 10) || 12
+);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,8 +143,10 @@ function isBioFilterTrackTarget(target) {
   const tags = target?.tags || [];
   const intro = [target?.product_intro, target?.qcc_intro_effective, target?.display_name]
     .filter(Boolean)
-    .join(' ');
-  return tags.some((t) => BIO_FILTER_TRACK_RE.test(String(t))) || BIO_FILTER_TRACK_RE.test(intro);
+    .join('\n');
+  const membraneInTags = tags.some((t) => BIO_FILTER_MEMBRANE_SIGNAL_RE.test(String(t)));
+  const membraneInIntro = BIO_FILTER_MEMBRANE_SIGNAL_RE.test(intro);
+  return membraneInTags || membraneInIntro;
 }
 
 function isDialysisPrimaryTarget(target) {
@@ -141,6 +174,8 @@ function inferSubjectTrackHint(target) {
     .trim()
     .slice(0, 160);
   if (intro) parts.push(`业务摘要：${intro}`);
+  const coreLines = extractCoreProductLines(target);
+  if (coreLines.length) parts.push(`核心产品线：${coreLines.slice(0, 8).join('、')}`);
   return parts.length ? parts.join('；') : null;
 }
 
@@ -188,35 +223,91 @@ function candidateHitsTrackKeyword(c, trackRe) {
 }
 
 function buildWebDiscoverKeywords(target) {
-  const kw = target.tags.slice(0, 6).map((t) => strTrim(t)).filter(Boolean);
+  const coreLines = target.core_product_lines?.length
+    ? target.core_product_lines
+    : extractCoreProductLines(target);
+  const kw = coreLines.slice(0, 8).map((t) => strTrim(t)).filter(Boolean);
+  kw.push(...target.tags.slice(0, 4).map((t) => strTrim(t)).filter(Boolean));
   if (target.industry_l1) kw.push(strTrim(target.industry_l1));
   if (target.industry_l2) kw.push(strTrim(target.industry_l2));
   const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
   kw.push(...extractIntroSearchTerms(introBlob));
-  kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所', 'A股同业');
+  kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所');
   return [...new Set(kw)].slice(0, 16);
 }
 
 function trackRelevanceScore(c) {
   return (
-    (c.productScore || 0) * 0.45 +
-    (c.tagScore || 0) * 0.35 +
-    (c.internalScore || 0) * 0.2
+    (c.coreLineScore || 0) * 0.38 +
+    (c.productScore || 0) * 0.32 +
+    (c.tagScore || 0) * 0.15 +
+    (c.internalScore || 0) * 0.15
   );
+}
+
+function maxInternalScoreInList(list) {
+  if (!list?.length) return 0;
+  return list.reduce((m, c) => Math.max(m, c.internalScore || 0), 0);
+}
+
+function resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal) {
+  let cap = expanded
+    ? trackKind === 'bio_filter' || trackKind === 'dialysis_dual'
+      ? TOP_N_LLM_RULE_TRACK
+      : TOP_N_LLM_RULE + 8
+    : TOP_N_LLM_RULE + TOP_N_LLM_TAG;
+  if (maxInternal < LLM_POOL_WEAK_MAX_INTERNAL) {
+    cap = Math.min(cap, LLM_POOL_WEAK_CAP);
+  }
+  return cap;
+}
+
+/** S3 入池门槛：规则分/标签分/赛道命中/底层上市公司产品线命中豁免 */
+function qualifiesForLlmPool(c, ctx) {
+  if (!c) return false;
+  if (isDomesticListedFromIpoPool(c) && (c.coreLineScore || 0) >= 10) return true;
+  if (LLM_POOL_RULE_MIN <= 0) return true;
+  const internal = c.internalScore || 0;
+  const tag = c.tagScore || 0;
+  const product = c.productScore || 0;
+  const tagMin = ctx.tagMin ?? TAG_LLM_MIN;
+  if (internal >= LLM_POOL_RULE_MIN) return true;
+  if ((c.coreLineScore || 0) >= 15) return true;
+  if (tag >= tagMin) return true;
+  if (
+    ctx.trackRe &&
+    candidateHitsTrackKeyword(c, ctx.trackRe) &&
+    internal >= LLM_POOL_TRACK_INTERNAL_FLOOR &&
+    product >= LLM_POOL_TRACK_PRODUCT_FLOOR
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /** LLM 对标池 = 规则分 Top + 标签分 Top（并集；专业赛道优先赛道命中候选） */
 function buildLlmScoringPool(scored, target) {
   const map = new Map();
+  let skippedPreLlm = 0;
   const add = (c) => {
-    if (!c) return;
+    if (!c) return false;
     const key = candidateDedupeKey(c);
-    if (!key || map.has(key)) return;
+    if (!key || map.has(key)) return false;
     map.set(key, c);
+    return true;
+  };
+  const tryAdd = (c, ctx) => {
+    if (!qualifiesForLlmPool(c, ctx)) {
+      skippedPreLlm += 1;
+      return false;
+    }
+    return add(c);
   };
   const trackKind = getExpandedLlmTrackKind(target);
   const expanded = trackKind != null;
   const trackRe = trackReForKind(trackKind);
+  const tagMin = expanded ? TAG_LLM_MIN_NICHE : TAG_LLM_MIN;
+  const poolCtx = { trackRe, tagMin };
   let ruleTop = 0;
 
   if (expanded && trackRe) {
@@ -232,30 +323,26 @@ function buildLlmScoringPool(scored, target) {
         : TOP_N_LLM_RULE;
     for (const c of byTrack) {
       if (ruleTop >= ruleCap) break;
-      const before = map.size;
-      add(c);
-      if (map.size > before) ruleTop += 1;
+      if (tryAdd(c, poolCtx)) ruleTop += 1;
     }
     for (const c of scored) {
       if (map.size >= llmRuleFloor) break;
-      const before = map.size;
-      add(c);
-      if (map.size > before && ruleTop < llmRuleFloor) ruleTop += 1;
+      const added = tryAdd(c, poolCtx);
+      if (added && ruleTop < llmRuleFloor) ruleTop += 1;
     }
   } else {
-    scored.slice(0, TOP_N_LLM_RULE).forEach(add);
-    ruleTop = Math.min(TOP_N_LLM_RULE, scored.length);
+    for (const c of scored.slice(0, TOP_N_LLM_RULE)) {
+      tryAdd(c, poolCtx);
+    }
+    ruleTop = Math.min(TOP_N_LLM_RULE, map.size);
   }
 
-  const tagMin = expanded ? TAG_LLM_MIN_NICHE : TAG_LLM_MIN;
   const tagCap = expanded ? TOP_N_LLM_TAG_NICHE : TOP_N_LLM_TAG;
   const byTag = [...scored].sort((a, b) => (b.tagScore || 0) - (a.tagScore || 0));
   let tagAdded = 0;
   for (const c of byTag) {
     if ((c.tagScore || 0) < tagMin) break;
-    const before = map.size;
-    add(c);
-    if (map.size > before) tagAdded += 1;
+    if (tryAdd(c, poolCtx)) tagAdded += 1;
     if (tagAdded >= tagCap) break;
   }
 
@@ -266,20 +353,52 @@ function buildLlmScoringPool(scored, target) {
       .sort((a, b) => trackRelevanceScore(b) - trackRelevanceScore(a));
     for (const c of byKw) {
       if (kwAdded >= KEYWORD_LLM_CAP) break;
-      const before = map.size;
-      add(c);
-      if (map.size > before) kwAdded += 1;
+      if (tryAdd(c, poolCtx)) kwAdded += 1;
     }
   }
 
+  const listedIpoBoost = [...scored]
+    .filter((c) => isDomesticListedFromIpoPool(c))
+    .sort(
+      (a, b) =>
+        (b.coreLineScore || 0) - (a.coreLineScore || 0) ||
+        (b.internalScore || 0) - (a.internalScore || 0)
+    );
+  let listedIpoAdded = 0;
+  const LISTED_IPO_POOL_SLOTS = 8;
+  for (const c of listedIpoBoost) {
+    if (listedIpoAdded >= LISTED_IPO_POOL_SLOTS) break;
+    if (add(c)) listedIpoAdded += 1;
+  }
+
+  const maxInternal = maxInternalScoreInList(scored);
+  const effectiveCap = resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal);
+  let pool = [...map.values()];
+  let poolTrimmed = 0;
+  if (pool.length > effectiveCap) {
+    poolTrimmed = pool.length - effectiveCap;
+    pool = pool
+      .sort(
+        (a, b) =>
+          (b.internalScore || 0) - (a.internalScore || 0) ||
+          trackRelevanceScore(b) - trackRelevanceScore(a)
+      )
+      .slice(0, effectiveCap);
+  }
+
   return {
-    pool: [...map.values()],
+    pool,
     niche: expanded,
     trackKind,
     tagAdded,
     kwAdded,
+    listed_ipo_added: listedIpoAdded,
     ruleTop,
     track_rule_top: expanded ? ruleTop : 0,
+    skipped_pre_llm: skippedPreLlm,
+    pool_trimmed: poolTrimmed,
+    max_internal: maxInternal,
+    effective_cap: effectiveCap,
   };
 }
 
@@ -301,8 +420,9 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
     const llm = c.llmProductScore != null ? Number(c.llmProductScore) : null;
     const ai = getCandidateAiPart(c);
     const srcs = c.sources || (c.source ? [c.source] : []);
-    if (c.internalScore >= validateInternalMin) add(c);
-    else if (llm != null && llm >= LLM_HIGH_TRUST_THRESHOLD) add(c);
+    if (c.internalScore >= validateInternalMin) {
+      if ((c.coreLineScore ?? 0) >= 12 || (c.productScore ?? 0) >= 15) add(c);
+    } else if (llm != null && llm >= LLM_HIGH_TRUST_THRESHOLD) add(c);
     else if (!c.hasInternal && ai >= WEB_VALIDATE_AI_MIN) add(c);
     else if (c.hasInternal && srcs.includes('ai_web') && ai >= WEB_VALIDATE_AI_MIN) add(c);
     else if (
@@ -311,6 +431,7 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
       c.hasInternal &&
       llmPoolKeys?.has(candidateDedupeKey(c)) &&
       (llm != null && llm >= TRACK_INTERNAL_LLM_VALIDATE_MIN) &&
+      ((c.coreLineScore ?? 0) >= 15 || (c.productScore ?? 0) >= 18) &&
       (candidateHitsTrackKeyword(c, trackRe) ||
         (trackKind === 'dialysis_dual' && candidateHitsTrackKeyword(c, BIO_FILTER_TRACK_RE)) ||
         (c.internalScore || 0) >= 28)
@@ -410,6 +531,9 @@ async function ensureMinimumDomesticListedInFinalList({
       c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
         ...logCtx,
         candidateName: c.display_name,
+        ruleProductScore: c.productScore,
+        coreLineScore: c.coreLineScore,
+        specificTagScore: c.specificTagScore,
       });
       if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
         c.is_listed = true;
@@ -483,35 +607,48 @@ function buildTargetProfile(row, readiness, subjectType) {
     industry_l2: strTrim(row.industry_std_lv2) || null,
   };
   profile.subject_track_hint = inferSubjectTrackHint(profile);
+  profile.core_product_lines = extractCoreProductLines(profile);
   return profile;
 }
 
 function ruleScoreCandidate(target, cand) {
+  const precision = computeProductPrecisionScores(target, cand);
   const tagScore = Math.round(jaccardSimilarity(target.tags, cand.tags) * 100);
-  const introA = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
-  const introB = [cand.product_intro, cand.qcc_intro].filter(Boolean).join('\n');
-  const productScore = Math.round(textOverlapScore(introA, introB) * 100);
+  const { productScore, coreLineScore, specificTagScore } = precision;
   let industryScore = 0;
   const scoreParts = [
-    { value: tagScore, weight: 0.35 },
-    { value: productScore, weight: 0.4 },
+    { value: productScore, weight: 0.36 },
+    { value: coreLineScore, weight: 0.34 },
+    { value: specificTagScore, weight: 0.18 },
   ];
   if (target.industry_l1 && cand.industry_l1) {
     if (target.industry_l1 === cand.industry_l1) industryScore += 50;
     industryScore += Math.round(l2Similarity(target.industry_l2, cand.industry_l2) * 50);
-    scoreParts.push({ value: industryScore, weight: 0.25 });
+    if (productScore >= 12 || coreLineScore >= 15) {
+      scoreParts.push({ value: industryScore, weight: 0.12 });
+    }
   }
-  const internalScore = weightedScore(scoreParts);
+  let internalScore = weightedScore(scoreParts);
+  if (coreLineScore < 15 && productScore < 18) {
+    internalScore = Math.min(internalScore, 34);
+  }
+  if ((cand.sources || []).includes('ipo_project') && coreLineScore >= 18) {
+    internalScore = Math.min(100, internalScore + Math.min(15, Math.round(coreLineScore * 0.22)));
+  }
   return {
     tagScore,
     productScore,
+    coreLineScore,
+    specificTagScore,
     industryScore,
     internalScore,
+    onlyBroadIndustry: precision.onlyBroadIndustry,
     hasInternal: (cand.sources || []).some((s) => s === 'ipo_project' || s === 'sourcing_financing_event'),
   };
 }
 
 function sliceForLlm(target, cand) {
+  const coreLines = extractCoreProductLines(cand);
   return {
     product_intro: cand.product_intro,
     qcc_intro_effective: cand.qcc_intro,
@@ -519,6 +656,7 @@ function sliceForLlm(target, cand) {
     industry_l1: cand.industry_l1,
     industry_l2: cand.industry_l2,
     display_name: cand.display_name,
+    core_product_lines: coreLines.length ? coreLines : undefined,
   };
 }
 
@@ -705,14 +843,7 @@ async function persistRelations({
     conn = await db.getConnection();
     await conn.beginTransaction();
 
-    // 归档旧竞品关系（事务内）
-    await archivePriorCompetitorRelations({
-      subjectType,
-      investedEnterpriseId,
-      preInvestmentProjectId,
-      userId,
-      executor: (sql, params) => conn.execute(sql, params),
-    });
+    // 保留各 run_id 下的历史批次，供版本下拉切换（不再软删旧 run 关系）
 
     // 批量插入新关系（事务内）
     let n = 0;
@@ -882,6 +1013,7 @@ async function executeCompetitorAnalysisRun(opts) {
         unified_credit_code: target.unified_credit_code || null,
         tag_count: target.tags.length,
         tags: target.tags.slice(0, 12),
+        core_product_lines: target.core_product_lines?.slice(0, 10) || [],
         product_intro_len: (target.product_intro || '').length,
         qcc_len: (target.qcc_intro_effective || '').length,
       },
@@ -893,8 +1025,14 @@ async function executeCompetitorAnalysisRun(opts) {
     const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : false;
 
     let ipoList = [];
+    let ipoProductList = [];
     if (recallFlags.enable_ipo_project) {
       ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
+      ipoProductList = await recallListedIpoByProductTerms(
+        target,
+        target.unified_credit_code,
+        target.display_name
+      );
     }
     let finList = [];
     let financingSkipReason = null;
@@ -905,7 +1043,10 @@ async function executeCompetitorAnalysisRun(opts) {
     } else {
       finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
     }
-    let candidates = mergeRecalledCandidates(ipoList, finList);
+    let candidates = mergeRecalledCandidates(
+      mergeRecalledCandidates(ipoList, ipoProductList),
+      finList
+    );
 
     await appendStepLog({
       runId,
@@ -915,6 +1056,7 @@ async function executeCompetitorAnalysisRun(opts) {
       message: `内部源召回 ${candidates.length} 条`,
       detail: {
         ipo: ipoList.length,
+        ipo_product_terms: ipoProductList.length,
         financing: finList.length,
         financing_skipped: financingSkipReason,
         recall_flags: recallFlags,
@@ -945,6 +1087,7 @@ async function executeCompetitorAnalysisRun(opts) {
       industry_l1: target.industry_l1,
       industry_l2: target.industry_l2,
       subject_track_hint: target.subject_track_hint,
+      core_product_lines: target.core_product_lines,
     };
 
     const {
@@ -955,6 +1098,10 @@ async function executeCompetitorAnalysisRun(opts) {
       kwAdded,
       ruleTop,
       track_rule_top: trackRuleTop,
+      skipped_pre_llm: skippedPreLlm,
+      pool_trimmed: poolTrimmed,
+      max_internal: maxInternalScored,
+      effective_cap: llmPoolCap,
     } = buildLlmScoringPool(scored, target);
     logCompetitorRun(runId, 'S3_llm', `LLM 产品对标开始，池大小 ${llmPool.length}`, {
       rule_top: ruleTop,
@@ -963,6 +1110,11 @@ async function executeCompetitorAnalysisRun(opts) {
       keyword_supplement: kwAdded,
       niche_track: nicheTrack,
       track_kind: trackKind,
+      skipped_pre_llm: skippedPreLlm,
+      pool_trimmed: poolTrimmed,
+      max_internal: maxInternalScored,
+      effective_cap: llmPoolCap,
+      llm_rule_min: LLM_POOL_RULE_MIN,
     });
     for (let i = 0; i < llmPool.length; i++) {
       const c = llmPool[i];
@@ -994,6 +1146,10 @@ async function executeCompetitorAnalysisRun(opts) {
         track_rule_top: trackRuleTop,
         tag_supplement: tagAdded,
         keyword_supplement: kwAdded,
+        skipped_pre_llm: skippedPreLlm,
+        pool_trimmed: poolTrimmed,
+        max_internal: maxInternalScored,
+        effective_cap: llmPoolCap,
         top: summarizeCandidates(
           [...scored].sort((a, b) => (b.llmProductScore ?? 0) - (a.llmProductScore ?? 0)),
           12
@@ -1121,6 +1277,9 @@ async function executeCompetitorAnalysisRun(opts) {
         c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
           runId,
           candidateName: c.display_name,
+          ruleProductScore: c.productScore,
+          coreLineScore: c.coreLineScore,
+          specificTagScore: c.specificTagScore,
         });
         if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
           c.is_listed = true;
@@ -1433,14 +1592,20 @@ async function recallCandidatesForPoc(target, userId) {
   const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : true;
 
   let ipoList = [];
+  let ipoProductList = [];
   if (recallFlags.enable_ipo_project) {
     ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
+    ipoProductList = await recallListedIpoByProductTerms(
+      target,
+      target.unified_credit_code,
+      target.display_name
+    );
   }
   let finList = [];
   if (recallFlags.enable_financing_event && canFinancing) {
     finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
   }
-  return mergeRecalledCandidates(ipoList, finList);
+  return mergeRecalledCandidates(mergeRecalledCandidates(ipoList, ipoProductList), finList);
 }
 
 /**

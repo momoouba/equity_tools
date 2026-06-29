@@ -147,6 +147,66 @@ function averageDimensionScore(dimensionScores) {
   return clampScore((d.substitutability + d.customer_overlap + d.scenario_overlap) / 3);
 }
 
+function refineValidationByProductOverlap(validation, context = {}) {
+  if (!validation || validation.ai_failed) return validation;
+  const productScore = Number(context.ruleProductScore ?? context.productScore ?? NaN);
+  const coreLineScore = Number(context.coreLineScore ?? NaN);
+  const specificTagScore = Number(context.specificTagScore ?? NaN);
+  const hasMetrics =
+    Number.isFinite(productScore) || Number.isFinite(coreLineScore) || Number.isFinite(specificTagScore);
+  if (!hasMetrics) return validation;
+
+  const lowCoreOverlap =
+    (Number.isFinite(coreLineScore) ? coreLineScore : 0) < 18 &&
+    (Number.isFinite(productScore) ? productScore : 0) < 22 &&
+    (Number.isFinite(specificTagScore) ? specificTagScore : 0) < 20;
+  const onlyBroad =
+    lowCoreOverlap && (validation.industry_match !== false || (Number.isFinite(productScore) && productScore < 15));
+
+  let type = validation.competitor_type;
+  let validatedScore = validation.validated_score;
+  let rationale = validation.rationale;
+  let rejectReason = validation.reject_reason;
+  let isCompetitor = validation.is_competitor;
+
+  if (onlyBroad && ['direct', 'indirect', 'substitute'].includes(type)) {
+    type = 'same_track';
+    isCompetitor = true;
+    validatedScore = Math.min(clampScore(validatedScore), 42);
+    rationale = strTrim(
+      `${rationale ? `${rationale}；` : ''}仅大行业或客户类型相近，核心产品线/装备耗材品类未重合，降为同赛道`
+    ).slice(0, 500);
+    rejectReason = '';
+  } else if (onlyBroad && type === 'same_track') {
+    validatedScore = Math.min(clampScore(validatedScore), 40);
+  } else if (
+    lowCoreOverlap &&
+    type === 'same_track' &&
+    validatedScore >= 55 &&
+    (Number.isFinite(coreLineScore) ? coreLineScore : 0) < 10
+  ) {
+    type = 'not_competitor';
+    isCompetitor = false;
+    validatedScore = Math.min(clampScore(validatedScore), 28);
+    rejectReason =
+      rejectReason ||
+      strTrim('与目标仅同属大行业或概念标签相近，核心产品线与客户采购场景无实质重叠').slice(0, 500);
+    rationale = strTrim(
+      `${rationale ? `${rationale}；` : ''}核心产品线未对齐，判为非竞品`
+    ).slice(0, 500);
+  }
+
+  return {
+    ...validation,
+    competitor_type: type,
+    is_competitor: isCompetitor,
+    validated_score: validatedScore,
+    reject_reason: rejectReason,
+    rationale,
+    is_upstream_downstream: type === 'upstream_downstream',
+  };
+}
+
 /** 规范化 S5 validate JSON，补全 competitor_type 与兼容字段。 */
 function normalizeCompetitorValidation(raw, context = null) {
   if (!raw || typeof raw !== 'object') {
@@ -200,6 +260,9 @@ function normalizeCompetitorValidation(raw, context = null) {
     dimension_scores: dimensionScores,
   };
   normalized.evidence_summary = buildEvidenceSummary(normalized);
+  if (context) {
+    return refineValidationByProductOverlap(normalized, context);
+  }
   return normalized;
 }
 

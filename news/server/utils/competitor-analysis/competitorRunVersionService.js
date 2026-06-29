@@ -50,45 +50,53 @@ function isEffectiveCompetitorRunVersion(row) {
 }
 
 /**
- * 版本列表：仅含该被投企业在 relation 中真实存在数据的 run_id（不含空跑/失败 run）。
+ * 版本列表：以 run 表为准，含已归档 relation（历史批次软删后仍可切换查看）。
  */
 async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
   const ieId = String(investedEnterpriseId || '').trim();
   if (!ieId) return [];
 
   const runRows = await db.query(
-    `SELECT r.run_id,
-            MIN(r.F_CreatorTime) AS first_relation_at,
-            COUNT(*) AS relation_count,
-            SUM(CASE WHEN r.F_CreatorUserId IS NULL AND COALESCE(r.human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count,
-            MAX(scr.F_CreatorTime) AS run_created_at,
-            MAX(scr.status) AS status,
-            MAX(scr.message) AS message,
-            MAX(scr.finished_at) AS finished_at,
-            MAX(scr.triggered_by_user_id) AS triggered_by_user_id
-     FROM sourcing_competitor_relation r
-     LEFT JOIN sourcing_competitor_run scr ON scr.F_Id = r.run_id AND scr.F_DeleteMark = 0
-     WHERE r.invested_enterprise_id = ?
-       AND r.run_id IS NOT NULL AND TRIM(r.run_id) <> ''
-       AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
-       AND r.F_DeleteMark = 0
-     GROUP BY r.run_id
-     ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.run_id ASC`,
-    [ieId]
+    `SELECT scr.F_Id AS run_id,
+            scr.F_CreatorTime AS run_created_at,
+            scr.status,
+            scr.message,
+            scr.finished_at,
+            scr.triggered_by_user_id,
+            COALESCE(rel.relation_count, 0) AS relation_count,
+            COALESCE(rel.ai_relation_count, 0) AS ai_relation_count
+     FROM sourcing_competitor_run scr
+     LEFT JOIN (
+       SELECT run_id,
+              COUNT(*) AS relation_count,
+              SUM(CASE WHEN F_CreatorUserId IS NULL AND COALESCE(human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count
+       FROM sourcing_competitor_relation
+       WHERE invested_enterprise_id = ?
+         AND run_id IS NOT NULL AND TRIM(run_id) <> ''
+         AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+       GROUP BY run_id
+     ) rel ON rel.run_id = scr.F_Id
+     WHERE scr.invested_enterprise_id = ?
+       AND scr.F_DeleteMark = 0
+       AND scr.status = 'success'
+       AND COALESCE(rel.ai_relation_count, 0) > 0
+     ORDER BY scr.F_CreatorTime ASC, scr.F_Id ASC`,
+    [ieId, ieId]
   );
 
   const runsAsc = runRows
     .filter((row) => row.run_id && String(row.run_id).trim())
-    .filter(isEffectiveCompetitorRunVersion)
     .map((row) => ({
       id: row.run_id,
-      created_at: row.run_created_at || row.first_relation_at,
+      created_at: row.run_created_at,
       status: row.status,
       message: row.message,
       finished_at: row.finished_at,
       triggered_by_user_id: row.triggered_by_user_id,
       relation_count: Number(row.relation_count) || 0,
-    }));
+      ai_relation_count: Number(row.ai_relation_count) || 0,
+    }))
+    .filter(isEffectiveCompetitorRunVersion);
 
   return assignVersionLabels(runsAsc).reverse();
 }
@@ -142,46 +150,53 @@ async function buildVersionLabelMapForInvestedEnterprise(investedEnterpriseId) {
 }
 
 /**
- * 版本列表：仅含该投前项目在 relation 中真实存在数据的 pre_investment_run_id（不含空跑/失败 run）。
+ * 版本列表：以 run 表为准，含已归档 relation（历史批次软删后仍可切换查看）。
  */
 async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
   const pipId = String(preInvestmentProjectId || '').trim();
   if (!pipId) return [];
 
   const runRows = await db.query(
-    `SELECT r.pre_investment_run_id,
-            MIN(r.F_CreatorTime) AS first_relation_at,
-            COUNT(*) AS relation_count,
-            SUM(CASE WHEN r.F_CreatorUserId IS NULL AND COALESCE(r.human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count,
-            MAX(scr.F_CreatorTime) AS run_created_at,
-            MAX(scr.status) AS status,
-            MAX(scr.message) AS message,
-            MAX(scr.finished_at) AS finished_at,
-            MAX(scr.triggered_by_user_id) AS triggered_by_user_id
-     FROM sourcing_competitor_relation r
-     LEFT JOIN sourcing_pre_investment_competitor_run scr
-       ON scr.F_Id = r.pre_investment_run_id AND scr.F_DeleteMark = 0
-     WHERE r.pre_investment_project_id = ?
-       AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
-       AND r.subject_type = 'pre_investment_project'
-       AND r.F_DeleteMark = 0
-     GROUP BY r.pre_investment_run_id
-     ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.pre_investment_run_id ASC`,
-    [pipId]
+    `SELECT scr.F_Id AS pre_investment_run_id,
+            scr.F_CreatorTime AS run_created_at,
+            scr.status,
+            scr.message,
+            scr.finished_at,
+            scr.triggered_by_user_id,
+            COALESCE(rel.relation_count, 0) AS relation_count,
+            COALESCE(rel.ai_relation_count, 0) AS ai_relation_count
+     FROM sourcing_pre_investment_competitor_run scr
+     LEFT JOIN (
+       SELECT pre_investment_run_id,
+              COUNT(*) AS relation_count,
+              SUM(CASE WHEN F_CreatorUserId IS NULL AND COALESCE(human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count
+       FROM sourcing_competitor_relation
+       WHERE pre_investment_project_id = ?
+         AND subject_type = 'pre_investment_project'
+         AND pre_investment_run_id IS NOT NULL AND TRIM(pre_investment_run_id) <> ''
+       GROUP BY pre_investment_run_id
+     ) rel ON rel.pre_investment_run_id = scr.F_Id
+     WHERE scr.pre_investment_project_id = ?
+       AND scr.F_DeleteMark = 0
+       AND scr.status = 'success'
+       AND COALESCE(rel.ai_relation_count, 0) > 0
+     ORDER BY scr.F_CreatorTime ASC, scr.F_Id ASC`,
+    [pipId, pipId]
   );
 
   const runsAsc = runRows
     .filter((row) => row.pre_investment_run_id && String(row.pre_investment_run_id).trim())
-    .filter(isEffectiveCompetitorRunVersion)
     .map((row) => ({
       id: row.pre_investment_run_id,
-      created_at: row.run_created_at || row.first_relation_at,
+      created_at: row.run_created_at,
       status: row.status,
       message: row.message,
       finished_at: row.finished_at,
       triggered_by_user_id: row.triggered_by_user_id,
       relation_count: Number(row.relation_count) || 0,
-    }));
+      ai_relation_count: Number(row.ai_relation_count) || 0,
+    }))
+    .filter(isEffectiveCompetitorRunVersion);
 
   return assignVersionLabels(runsAsc).reverse();
 }

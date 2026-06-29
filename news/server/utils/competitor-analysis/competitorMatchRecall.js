@@ -12,6 +12,19 @@ const {
 const IPO_YEARS = 3;
 const FIN_YEARS = 3;
 const RECALL_LIMIT = 3000;
+const RECALL_LISTED_BY_PRODUCT_LIMIT = 120;
+
+const IPO_RECALL_SELECT = `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
+            ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
+            qcc_company_intro, biz_update_time, F_LastModifyTime, F_CreatorTime
+     FROM ipo_project
+     WHERE F_DeleteMark = 0
+       AND data_app_id = ?
+       AND (
+         TRIM(IFNULL(ai_product_intro, '')) <> ''
+         OR TRIM(IFNULL(ai_industry_tags_display, '')) <> ''
+         OR ai_industry_tags_json IS NOT NULL
+       )`;
 
 function parseFinancingTags(row) {
   const fromJson = parseTagsFromJson(row.ai_company_tags_json);
@@ -77,22 +90,48 @@ async function recallFromIpoProjects(excludeCredit, excludeName) {
   const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
   if (!psAppId) return [];
   const rows = await db.query(
-    `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
-            ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
-            qcc_company_intro, biz_update_time, F_LastModifyTime, F_CreatorTime
-     FROM ipo_project
-     WHERE F_DeleteMark = 0
-       AND data_app_id = ?
-       AND (
-         TRIM(IFNULL(ai_product_intro, '')) <> ''
-         OR TRIM(IFNULL(ai_industry_tags_display, '')) <> ''
-         OR ai_industry_tags_json IS NOT NULL
-       )
+    `${IPO_RECALL_SELECT}
        AND COALESCE(F_LastModifyTime, biz_update_time, F_CreatorTime) >= DATE_SUB(NOW(), INTERVAL ? YEAR)
      ORDER BY COALESCE(F_LastModifyTime, biz_update_time, F_CreatorTime) DESC
      LIMIT ?`,
     [psAppId, IPO_YEARS, RECALL_LIMIT]
   );
+  return filterExcludedIpoRows(rows, excludeCredit, excludeName);
+}
+
+/**
+ * 按目标核心产品线/同义词在 ipo 池定向召回上市公司（不受 3000 条时间排序截断影响）。
+ */
+async function recallListedIpoByProductTerms(target, excludeCredit, excludeName) {
+  const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
+  if (!psAppId || !target) return [];
+  const { expandProductLineSearchTerms } = require('./competitorProductLineUtils');
+  const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
+  const terms = expandProductLineSearchTerms(target.core_product_lines, introBlob);
+  if (!terms.length) return [];
+
+  const termClauses = [];
+  const params = [psAppId];
+  for (const term of terms.slice(0, 10)) {
+    const like = `%${term}%`;
+    termClauses.push(
+      `(ai_product_intro LIKE ? OR ai_industry_tags_display LIKE ? OR qcc_company_intro LIKE ? OR company LIKE ? OR project_name LIKE ?)`
+    );
+    params.push(like, like, like, like, like);
+  }
+  params.push(RECALL_LISTED_BY_PRODUCT_LIMIT);
+
+  const rows = await db.query(
+    `${IPO_RECALL_SELECT}
+       AND (${termClauses.join(' OR ')})
+     ORDER BY COALESCE(F_LastModifyTime, biz_update_time, F_CreatorTime) DESC
+     LIMIT ?`,
+    params
+  );
+  return filterExcludedIpoRows(rows, excludeCredit, excludeName);
+}
+
+function filterExcludedIpoRows(rows, excludeCredit, excludeName) {
   const exC = normalizeCreditCode(excludeCredit);
   const exN = strTrim(excludeName).toLowerCase();
   const out = [];
@@ -221,6 +260,7 @@ function mergeRecalledCandidates(ipoList, finList) {
 
 module.exports = {
   recallFromIpoProjects,
+  recallListedIpoByProductTerms,
   recallFromFinancingEvents,
   mergeRecalledCandidates,
   parseFinancingTags,
