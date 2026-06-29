@@ -1,6 +1,287 @@
 const db = require('../db');
 const { generateId } = require('./idGenerator');
 
+function createDbPoolExec(dbPool) {
+  return {
+    query: async (sql, params) => {
+      const [rows] = await dbPool.query(sql, params);
+      return rows;
+    },
+    execute: async (sql, params) => {
+      const [result] = await dbPool.execute(sql, params);
+      return result;
+    },
+  };
+}
+
+function createDbModuleExec() {
+  return {
+    query: (sql, params) => db.query(sql, params),
+    execute: (sql, params) => db.execute(sql, params),
+  };
+}
+
+async function tableExists(exec, tableName) {
+  const rows = await exec.query(
+    `SELECT TABLE_NAME
+     FROM INFORMATION_SCHEMA.TABLES
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?`,
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
+async function resolveDefaultAiModelConfigId(exec, { log = false } = {}) {
+  let defaultAiModelConfigId = null;
+  try {
+    if (!(await tableExists(exec, 'ai_model_config'))) {
+      if (log) console.warn('  警告：ai_model_config 表不存在，提示词将不关联AI模型');
+      return null;
+    }
+    const aiConfigs = await exec.query(
+      `SELECT F_Id AS id FROM ai_model_config
+       WHERE application_type = 'news_analysis'
+         AND is_active = 1
+         AND F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC
+       LIMIT 1`
+    );
+    if (aiConfigs.length === 0) {
+      const anyConfigs = await exec.query(
+        `SELECT F_Id AS id FROM ai_model_config
+         WHERE is_active = 1
+           AND F_DeleteMark = 0
+         ORDER BY F_CreatorTime DESC
+         LIMIT 1`
+      );
+      if (anyConfigs.length > 0) {
+        defaultAiModelConfigId = anyConfigs[0].id;
+        if (log) console.log(`  ✓ 使用默认AI模型配置: ${anyConfigs[0].id}`);
+      } else if (log) {
+        console.warn('  警告：未找到可用的AI模型配置，提示词将不关联AI模型');
+      }
+    } else {
+      defaultAiModelConfigId = aiConfigs[0].id;
+      if (log) console.log(`  ✓ 使用新闻分析AI模型配置: ${aiConfigs[0].id}`);
+    }
+  } catch (error) {
+    if (log) {
+      console.warn('  获取AI模型配置时出现警告:', error.message);
+      if (error.code) console.warn('  错误代码:', error.code);
+      if (error.sqlMessage) console.warn('  SQL错误:', error.sqlMessage);
+    }
+  }
+  return defaultAiModelConfigId;
+}
+
+async function resolveProjectSourcingAnalysisModelId(exec, { log = false } = {}) {
+  try {
+    const psaRows = await exec.query(
+      `SELECT F_Id AS id FROM ai_model_config
+       WHERE application_type = 'project_sourcing_analysis'
+         AND is_active = 1 AND F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC LIMIT 1`
+    );
+    if (psaRows.length > 0) {
+      if (log) {
+        console.log(
+          `  ✓ 项目挖掘融资 AI 默认模型（project_sourcing_analysis）: ${psaRows[0].id}`
+        );
+      }
+      return psaRows[0].id;
+    }
+  } catch (e) {
+    if (log) console.warn('  读取 project_sourcing_analysis 模型时出现警告:', e.message);
+  }
+  return null;
+}
+
+async function resolveNewShareListingDataModelId(exec, { log = false } = {}) {
+  try {
+    const lsRows = await exec.query(
+      `SELECT F_Id AS id FROM ai_model_config
+       WHERE usage_type = 'listing_data'
+         AND is_active = 1 AND F_DeleteMark = 0
+       ORDER BY F_CreatorTime DESC LIMIT 1`
+    );
+    if (lsRows.length > 0) {
+      if (log) {
+        console.log(`  ✓ 打新日历企业全称默认模型（usage_type=listing_data）: ${lsRows[0].id}`);
+      }
+      return lsRows[0].id;
+    }
+  } catch (e) {
+    if (log) console.warn('  读取 listing_data 模型时出现警告:', e.message);
+  }
+  return null;
+}
+
+async function resolveCompetitorAnalysisModelId(exec, { log = false } = {}) {
+  try {
+    const caRows = await exec.query(
+      `SELECT F_Id AS id FROM ai_model_config
+       WHERE application_type = 'competitor_analysis'
+         AND usage_type = 'competitor_match'
+         AND is_active = 1 AND F_DeleteMark = 0
+       ORDER BY F_LastModifyTime DESC LIMIT 1`
+    );
+    if (caRows.length > 0) {
+      if (log) {
+        console.log(
+          `  ✓ 竞品分析默认模型（competitor_analysis/competitor_match）: ${caRows[0].id}`
+        );
+      }
+      return caRows[0].id;
+    }
+  } catch (e) {
+    if (log) console.warn('  读取 competitor_analysis 模型时出现警告:', e.message);
+  }
+  return null;
+}
+
+function resolveModelIdForPrompt(prompt, modelIds) {
+  const {
+    defaultAiModelConfigId,
+    projectSourcingAnalysisModelId,
+    newShareListingDataModelId,
+    competitorAnalysisModelId,
+  } = modelIds;
+  if (
+    prompt.interface_type === '项目挖掘' &&
+    prompt.prompt_type === 'project_sourcing_financing_web_enrich' &&
+    projectSourcingAnalysisModelId
+  ) {
+    return projectSourcingAnalysisModelId;
+  }
+  if (
+    prompt.interface_type === '打新接口' &&
+    prompt.prompt_type === 'enterprise_full_name' &&
+    newShareListingDataModelId
+  ) {
+    return newShareListingDataModelId;
+  }
+  if (prompt.interface_type === '竞品分析' && competitorAnalysisModelId) {
+    return competitorAnalysisModelId;
+  }
+  return defaultAiModelConfigId;
+}
+
+async function resolveAdminUserId(exec) {
+  const adminUsers = await exec.query("SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1");
+  return adminUsers.length > 0 ? adminUsers[0].id : null;
+}
+
+async function upsertOnePrompt(exec, prompt, resolvedModelId, adminUserId, { log = true, connection = null } = {}) {
+  const existing = await exec.query(
+    `SELECT F_Id AS id, ai_model_config_id, prompt_content FROM ai_prompt_config
+     WHERE interface_type = ?
+       AND prompt_type = ?
+       AND F_DeleteMark = 0
+     LIMIT 1`,
+    [prompt.interface_type, prompt.prompt_type]
+  );
+
+  if (existing.length > 0) {
+    const existingPrompt = existing[0];
+    const updateFields = [];
+    const updateValues = [];
+
+    if (!existingPrompt.ai_model_config_id && resolvedModelId) {
+      updateFields.push('ai_model_config_id = ?');
+      updateValues.push(resolvedModelId);
+    }
+    if (existingPrompt.prompt_content !== prompt.prompt_content) {
+      updateFields.push('prompt_content = ?');
+      updateValues.push(prompt.prompt_content);
+    }
+
+    if (updateFields.length === 0) {
+      return { created: 0, updated: 0 };
+    }
+
+    updateValues.push(existingPrompt.id);
+    await exec.execute(
+      `UPDATE ai_prompt_config
+       SET ${updateFields.join(', ')}, F_LastModifyTime = NOW()
+       WHERE F_Id = ?`,
+      updateValues
+    );
+    if (log) console.log(`  ✓ 已更新提示词: ${prompt.prompt_name}`);
+    return { created: 0, updated: 1 };
+  }
+
+  const promptId = await generateId('ai_prompt_config', connection);
+  await exec.execute(
+    `INSERT INTO ai_prompt_config
+     (F_Id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, F_CreatorUserId)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      promptId,
+      prompt.prompt_name,
+      prompt.interface_type,
+      prompt.prompt_type,
+      prompt.prompt_content,
+      resolvedModelId,
+      1,
+      adminUserId,
+    ]
+  );
+  if (log) console.log(`  ✓ 已创建提示词: ${prompt.prompt_name}`);
+
+  if (adminUserId) {
+    const logId = await generateId('ai_prompt_change_log', connection);
+    const logData = {
+      ...prompt,
+      ai_model_config_id: resolvedModelId,
+    };
+    await exec.execute(
+      `INSERT INTO ai_prompt_change_log
+       (F_Id, prompt_config_id, change_type, old_value, new_value, F_CreatorUserId, change_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [logId, promptId, 'create', null, JSON.stringify(logData), adminUserId, '系统初始化']
+    );
+  }
+  return { created: 1, updated: 0 };
+}
+
+/**
+ * 数据库表结构初始化阶段写入竞品分析默认提示词（直接使用 dbPool，避免 await db.ready 死锁）
+ */
+async function seedCompetitorAnalysisPrompts(dbPool) {
+  const { buildAllCompetitorPromptSeeds } = require('./competitor-analysis/competitorAnalysisPromptService');
+  const exec = createDbPoolExec(dbPool);
+
+  if (!(await tableExists(exec, 'ai_prompt_config'))) {
+    return { created: 0, updated: 0, skipped: true };
+  }
+
+  const [defaultAiModelConfigId, competitorAnalysisModelId, adminUserId] = await Promise.all([
+    resolveDefaultAiModelConfigId(exec),
+    resolveCompetitorAnalysisModelId(exec),
+    resolveAdminUserId(exec),
+  ]);
+  const modelIds = {
+    defaultAiModelConfigId,
+    competitorAnalysisModelId,
+    projectSourcingAnalysisModelId: null,
+    newShareListingDataModelId: null,
+  };
+
+  let created = 0;
+  let updated = 0;
+  for (const prompt of buildAllCompetitorPromptSeeds()) {
+    const resolvedModelId = resolveModelIdForPrompt(prompt, modelIds);
+    const result = await upsertOnePrompt(exec, prompt, resolvedModelId, adminUserId, {
+      log: false,
+      connection: dbPool,
+    });
+    created += result.created;
+    updated += result.updated;
+  }
+  return { created, updated, skipped: false };
+}
+
 /**
  * 初始化提示词配置到数据库
  */
@@ -8,93 +289,26 @@ async function initPrompts() {
   try {
     console.log('开始初始化提示词配置...');
     const { buildBuiltinPromptContentForDb } = require('./project-sourcing/financingAiEnrichService');
+    const { buildAllCompetitorPromptSeeds } = require('./competitor-analysis/competitorAnalysisPromptService');
+    const exec = createDbModuleExec();
 
-    // 获取默认的AI模型配置（优先选择 news_analysis 类型且启用的配置）
-    let defaultAiModelConfigId = null;
-    try {
-      // 先检查 ai_model_config 表是否存在
-      const [tables] = await db.query(`
-        SELECT TABLE_NAME 
-        FROM INFORMATION_SCHEMA.TABLES 
-        WHERE TABLE_SCHEMA = DATABASE() 
-        AND TABLE_NAME = 'ai_model_config'
-      `);
-      
-      if (tables.length === 0) {
-        console.warn('  警告：ai_model_config 表不存在，提示词将不关联AI模型');
-      } else {
-        const aiConfigs = await db.query(
-          `SELECT F_Id AS id FROM ai_model_config 
-           WHERE application_type = 'news_analysis' 
-           AND is_active = 1 
-           AND F_DeleteMark = 0 
-           ORDER BY F_CreatorTime DESC 
-           LIMIT 1`
-        );
-        
-        if (aiConfigs.length === 0) {
-          // 如果没有 news_analysis 类型的，尝试获取任何启用的配置
-          const anyConfigs = await db.query(
-            `SELECT F_Id AS id FROM ai_model_config 
-             WHERE is_active = 1 
-             AND F_DeleteMark = 0 
-             ORDER BY F_CreatorTime DESC 
-             LIMIT 1`
-          );
-          if (anyConfigs.length > 0) {
-            defaultAiModelConfigId = anyConfigs[0].id;
-            console.log(`  ✓ 使用默认AI模型配置: ${anyConfigs[0].id}`);
-          } else {
-            console.warn('  警告：未找到可用的AI模型配置，提示词将不关联AI模型');
-          }
-        } else {
-          defaultAiModelConfigId = aiConfigs[0].id;
-          console.log(`  ✓ 使用新闻分析AI模型配置: ${aiConfigs[0].id}`);
-        }
-      }
-    } catch (error) {
-      console.warn('  获取AI模型配置时出现警告:', error.message);
-      if (error.code) {
-        console.warn('  错误代码:', error.code);
-      }
-      if (error.sqlMessage) {
-        console.warn('  SQL错误:', error.sqlMessage);
-      }
-    }
-
-    /** 项目挖掘-融资 AI 增强：优先绑定 application_type = project_sourcing_analysis 的模型 */
-    let projectSourcingAnalysisModelId = null;
-    try {
-      const psaRows = await db.query(
-        `SELECT F_Id AS id FROM ai_model_config
-         WHERE application_type = 'project_sourcing_analysis'
-           AND is_active = 1 AND F_DeleteMark = 0
-         ORDER BY F_CreatorTime DESC LIMIT 1`
-      );
-      if (psaRows.length > 0) {
-        projectSourcingAnalysisModelId = psaRows[0].id;
-        console.log(`  ✓ 项目挖掘融资 AI 默认模型（project_sourcing_analysis）: ${projectSourcingAnalysisModelId}`);
-      }
-    } catch (e) {
-      console.warn('  读取 project_sourcing_analysis 模型时出现警告:', e.message);
-    }
-
-    /** 打新日历企业全称：优先绑定 usage_type = listing_data 的模型 */
-    let newShareListingDataModelId = null;
-    try {
-      const lsRows = await db.query(
-        `SELECT F_Id AS id FROM ai_model_config
-         WHERE usage_type = 'listing_data'
-           AND is_active = 1 AND F_DeleteMark = 0
-         ORDER BY F_CreatorTime DESC LIMIT 1`
-      );
-      if (lsRows.length > 0) {
-        newShareListingDataModelId = lsRows[0].id;
-        console.log(`  ✓ 打新日历企业全称默认模型（usage_type=listing_data）: ${newShareListingDataModelId}`);
-      }
-    } catch (e) {
-      console.warn('  读取 listing_data 模型时出现警告:', e.message);
-    }
+    const [
+      defaultAiModelConfigId,
+      projectSourcingAnalysisModelId,
+      newShareListingDataModelId,
+      competitorAnalysisModelId,
+    ] = await Promise.all([
+      resolveDefaultAiModelConfigId(exec, { log: true }),
+      resolveProjectSourcingAnalysisModelId(exec, { log: true }),
+      resolveNewShareListingDataModelId(exec, { log: true }),
+      resolveCompetitorAnalysisModelId(exec, { log: true }),
+    ]);
+    const modelIds = {
+      defaultAiModelConfigId,
+      projectSourcingAnalysisModelId,
+      newShareListingDataModelId,
+      competitorAnalysisModelId,
+    };
 
     // 检查每个必需的提示词是否存在，如果不存在则创建
     // 定义所有必需的提示词配置
@@ -395,114 +609,21 @@ async function initPrompts() {
         /** 含 ---SYSTEM--- / ---USER--- 全量内置，与 financingAiEnrichService 解析约定一致 */
         prompt_content: buildBuiltinPromptContentForDb(),
       },
+      ...buildAllCompetitorPromptSeeds(),
     ];
 
     // 获取系统用户ID（admin用户）
-    const adminUsers = await db.query("SELECT F_Id AS id FROM users WHERE account = 'admin' LIMIT 1");
-    const adminUserId = adminUsers.length > 0 ? adminUsers[0].id : null;
+    const adminUserId = await resolveAdminUserId(exec);
 
     let createdCount = 0;
     let updatedCount = 0;
 
     for (const prompt of prompts) {
       try {
-        const resolvedModelId =
-          prompt.interface_type === '项目挖掘' &&
-          prompt.prompt_type === 'project_sourcing_financing_web_enrich' &&
-          projectSourcingAnalysisModelId
-            ? projectSourcingAnalysisModelId
-            : prompt.interface_type === '打新接口' &&
-                prompt.prompt_type === 'enterprise_full_name' &&
-                newShareListingDataModelId
-              ? newShareListingDataModelId
-              : defaultAiModelConfigId;
-
-        // 检查该提示词是否已存在（按 interface_type 和 prompt_type 组合）
-        const existing = await db.query(
-          `SELECT F_Id AS id, ai_model_config_id, prompt_content FROM ai_prompt_config 
-           WHERE interface_type = ? 
-           AND prompt_type = ? 
-           AND F_DeleteMark = 0 
-           LIMIT 1`,
-          [prompt.interface_type, prompt.prompt_type]
-        );
-
-        if (existing.length > 0) {
-          // 如果已存在，检查是否需要更新AI模型配置或提示词内容
-          const existingPrompt = existing[0];
-          let needsUpdate = false;
-          let updateFields = [];
-          let updateValues = [];
-
-          // 如果缺少AI模型配置，添加它
-          if (!existingPrompt.ai_model_config_id && resolvedModelId) {
-            updateFields.push('ai_model_config_id = ?');
-            updateValues.push(resolvedModelId);
-            needsUpdate = true;
-          }
-
-          // 更新提示词内容（确保使用最新的提示词）
-          if (existingPrompt.prompt_content !== prompt.prompt_content) {
-            updateFields.push('prompt_content = ?');
-            updateValues.push(prompt.prompt_content);
-            needsUpdate = true;
-          }
-
-          if (needsUpdate) {
-            updateValues.push(existingPrompt.id);
-            await db.execute(
-              `UPDATE ai_prompt_config 
-               SET ${updateFields.join(', ')}, F_LastModifyTime = NOW()
-               WHERE F_Id = ?`,
-              updateValues
-            );
-            updatedCount++;
-            console.log(`  ✓ 已更新提示词: ${prompt.prompt_name}`);
-          }
-        } else {
-          // 如果不存在，创建新的提示词配置
-          const promptId = await generateId('ai_prompt_config');
-          await db.execute(
-            `INSERT INTO ai_prompt_config 
-             (F_Id, prompt_name, interface_type, prompt_type, prompt_content, ai_model_config_id, is_active, F_CreatorUserId) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              promptId,
-              prompt.prompt_name,
-              prompt.interface_type,
-              prompt.prompt_type,
-              prompt.prompt_content,
-              resolvedModelId, // 关联默认的AI模型配置（项目挖掘优先 project_sourcing_analysis）
-              1, // 默认启用
-              adminUserId
-            ]
-          );
-          createdCount++;
-          console.log(`  ✓ 已创建提示词: ${prompt.prompt_name}`);
-
-          // 记录创建日志
-          if (adminUserId) {
-            const logId = await generateId('ai_prompt_change_log');
-            const logData = {
-              ...prompt,
-              ai_model_config_id: resolvedModelId
-            };
-            await db.execute(
-              `INSERT INTO ai_prompt_change_log 
-               (F_Id, prompt_config_id, change_type, old_value, new_value, F_CreatorUserId, change_reason) 
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [
-                logId,
-                promptId,
-                'create',
-                null,
-                JSON.stringify(logData),
-                adminUserId,
-                '系统初始化'
-              ]
-            );
-          }
-        }
+        const resolvedModelId = resolveModelIdForPrompt(prompt, modelIds);
+        const result = await upsertOnePrompt(exec, prompt, resolvedModelId, adminUserId);
+        createdCount += result.created;
+        updatedCount += result.updated;
       } catch (promptError) {
         console.error(`  ✗ 处理提示词 "${prompt.prompt_name}" 时出错:`, promptError.message);
         if (promptError.code) {
@@ -540,5 +661,5 @@ async function initPrompts() {
   }
 }
 
-module.exports = { initPrompts };
+module.exports = { initPrompts, seedCompetitorAnalysisPrompts };
 

@@ -48,6 +48,8 @@ function mapIpoRow(row) {
     financing_amount_text: null,
     event_date: row.biz_update_time || row.F_LastModifyTime || row.F_CreatorTime,
     ipo_sub: strTrim(row.sub) || null,
+    is_listed: true,
+    domestic_listed: true,
   };
 }
 

@@ -13,6 +13,7 @@ const {
   buildAnthropicMessages,
   extractAnthropicText,
 } = require('./llm/adapters/anthropicMessages');
+const { resolveAnthropicTemperature } = require('./llm/anthropicModelUtils');
 const {
   buildGeminiContents,
   extractGeminiText,
@@ -78,8 +79,9 @@ async function testAnthropicMessages(config, profile, { maxTokens, temperature }
     model: config.model_name,
     max_tokens: maxTokens,
     messages: buildAnthropicMessages('', TEST_MSG),
-    temperature,
   };
+  const effTemperature = resolveAnthropicTemperature(config.model_name, temperature);
+  if (effTemperature !== undefined) body.temperature = effTemperature;
   if (profile.web_search_mode === WEB_SEARCH_MODE.ANTHROPIC_WEB_SEARCH) {
     body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
   }

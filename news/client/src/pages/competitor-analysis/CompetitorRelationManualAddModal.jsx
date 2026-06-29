@@ -135,7 +135,7 @@ export default function CompetitorRelationManualAddModal({
     >
       <p style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
         {isEdit
-          ? '修改用户新增的竞品信息，保存后立即更新列表。'
+          ? '修改竞品信息，保存后立即更新列表。'
           : '手动录入竞品公司信息；保存后数据源为「用户新增」，并立即出现在竞品明细列表中。'}
       </p>
       <Form form={form} layout="vertical">

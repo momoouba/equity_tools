@@ -37,6 +37,7 @@ const {
 const {
   scorePairSimilarity,
   discoverWebCompetitors,
+  discoverDomesticListedCompetitors,
   validateCandidate,
 } = require('./competitorAnalysisAi');
 const {
@@ -58,6 +59,15 @@ const {
   loadHumanLockedDedupeKeys,
   relinkHumanLockedRelationsToRun,
 } = require('./competitorRelationReviewService');
+const {
+  MIN_DOMESTIC_LISTED_COMPETITORS,
+  countDomesticListedInScored,
+  countDomesticListedInPersistRows,
+  buildListedDomesticDiscoverKeywords,
+  mergeWebCandidatesIntoScored,
+  listedMandateMeetsThreshold,
+  sortDomesticListedCandidates,
+} = require('./competitorListedDomestic');
 
 const SCORE_THRESHOLD = SCORE_THRESHOLD_PERSIST;
 /** 规则分 Top N 进入 LLM 对标 */
@@ -187,7 +197,7 @@ function buildWebDiscoverKeywords(target) {
   }
   const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
   kw.push(...extractIntroSearchTerms(introBlob, trackRe));
-  kw.push('同行业上市公司', 'A股同业');
+  kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所', 'A股同业');
   return [...new Set(kw)].slice(0, 16);
 }
 
@@ -313,6 +323,9 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
       add(c);
     }
   }
+  for (const c of sortDomesticListedCandidates(scored).slice(0, 12)) {
+    add(c);
+  }
   return [...map.values()].slice(0, TOP_N_VALIDATE + 15);
 }
 
@@ -358,6 +371,81 @@ function mapCandidateToPersistRow(c) {
       validation: v || null,
     },
   };
+}
+
+/**
+ * 落库前补足国内上市公司（上交所/深交所/北交所）至少 MIN 家，优先相似度最高者。
+ */
+async function ensureMinimumDomesticListedInFinalList({
+  target,
+  targetSlice,
+  scored,
+  toPersist,
+  persistThresholdOpts,
+  logCtx,
+}) {
+  const minN = MIN_DOMESTIC_LISTED_COMPETITORS;
+  let current = countDomesticListedInPersistRows(toPersist);
+  if (current >= minN) {
+    return { supplemented: 0, domestic_listed_in_persist: current };
+  }
+
+  const persistKeys = new Set(
+    toPersist.map((row) =>
+      candidateDedupeKey({
+        unified_credit_code: row.unified_credit_code,
+        display_name: row.display_name,
+      })
+    )
+  );
+
+  const candidates = sortDomesticListedCandidates(scored);
+  let supplemented = 0;
+  let vi = 0;
+
+  for (const c of candidates) {
+    if (current >= minN) break;
+    const key = candidateDedupeKey(c);
+    if (!key || persistKeys.has(key)) continue;
+
+    if (!c.validation || c.validation.ai_failed) {
+      if (vi > 0 && LLM_REQUEST_GAP_MS > 0) await sleep(LLM_REQUEST_GAP_MS);
+      vi += 1;
+      c.validation = await validateCandidate(targetSlice, sliceForLlm(target, c), {
+        ...logCtx,
+        candidateName: c.display_name,
+      });
+      if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
+        c.is_listed = true;
+      }
+    }
+
+    if (
+      !isPersistValidationPassed(c) &&
+      !['direct', 'indirect', 'substitute', 'same_track'].includes(c.validation?.competitor_type)
+    ) {
+      continue;
+    }
+
+    const row = mapCandidateToPersistRow(c);
+    if (!listedMandateMeetsThreshold(c, row, persistThresholdOpts)) continue;
+
+    row.breakdown = { ...row.breakdown, listed_mandate: true };
+    toPersist.push({ ...row, _candidate: c });
+    persistKeys.add(key);
+    current += 1;
+    supplemented += 1;
+  }
+
+  if (current < minN) {
+    logCompetitorRun(logCtx.runId, 'S5_listed_mandate', `国内上市公司仅 ${current}/${minN} 家`, {
+      required: minN,
+      actual: current,
+      hint: '请检查联网模型与「联网发现竞品」提示词，或底层 ipo 项目池是否覆盖该赛道',
+    });
+  }
+
+  return { supplemented, domestic_listed_in_persist: current };
 }
 
 async function appendStepLog({ runId, subjectType, stepCode, status, message, detail }) {
@@ -525,6 +613,21 @@ async function persistRelations({
     });
     return !lockedKeys.has(key);
   });
+
+  if (!rowsToPersist.length) {
+    console.log(
+      '[persistRelations] 无新竞品可落库，跳过归档，保留上一版本数据',
+      JSON.stringify({
+        subjectType,
+        investedEnterpriseId: investedEnterpriseId || null,
+        preInvestmentProjectId: preInvestmentProjectId || null,
+        runId,
+        preInvestmentRunId: preInvestmentRunId || null,
+        inputRows: rows.length,
+      })
+    );
+    return 0;
+  }
 
   // ── 预先准备好所有待写入的数据（在事务外完成，减少事务持有时间）──
 
@@ -917,59 +1020,67 @@ async function executeCompetitorAnalysisRun(opts) {
       const webRes = await discoverWebCompetitors(target, keywords, excludeNames, logCtx);
       const webList = Array.isArray(webRes) ? webRes : webRes.candidates || [];
       const webMeta = webRes && !Array.isArray(webRes) ? webRes.meta || {} : {};
-      for (const w of webList) {
-        const name = strTrim(w.company_name);
-        if (!name) continue;
-        const key = normalizeCreditCode(w.unified_credit_code) || name.toLowerCase();
-        const dupIdx = scored.findIndex(
-          (x) => (x.unified_credit_code && x.unified_credit_code === key) || x.display_name === name
-        );
-        if (dupIdx >= 0) {
-          const x = scored[dupIdx];
-          const srcs = x.sources || (x.source ? [x.source] : []);
-          if (!srcs.includes('ai_web')) {
-            x.sources = [...srcs, 'ai_web'];
-          }
-          const rawRel = Number(w.ai_relevance_score);
-          const rel = Number.isFinite(rawRel) ? Math.min(100, Math.max(0, rawRel)) : 0;
-          const webAi = Math.max(WEB_VALIDATE_AI_MIN, rel) || WEB_VALIDATE_AI_MIN;
-          const prevLlm = x.llmProductScore != null ? Number(x.llmProductScore) : 0;
-          x.llmProductScore = Math.max(Number.isFinite(prevLlm) ? prevLlm : 0, webAi);
-          if (w.is_listed != null && parseIsListedFromCandidate({ is_listed: w.is_listed })) {
-            x.is_listed = true;
-          }
-          if (w.unified_credit_code && !x.unified_credit_code) {
-            x.unified_credit_code = normalizeCreditCode(w.unified_credit_code) || null;
-          }
-          continue;
+      const mergeStats = mergeWebCandidatesIntoScored(scored, webList, {
+        parseIsListedFromCandidate,
+      });
+      webAdded = mergeStats.added;
+
+      let listedAfterWeb = countDomesticListedInScored(scored);
+      let listedSupplementAdded = 0;
+      if (listedAfterWeb < MIN_DOMESTIC_LISTED_COMPETITORS) {
+        try {
+          const listedKw = buildListedDomesticDiscoverKeywords(target, keywords);
+          const listedRes = await discoverDomesticListedCompetitors(
+            target,
+            listedKw,
+            scored.map((x) => x.display_name).filter(Boolean),
+            logCtx
+          );
+          const listedList = listedRes?.candidates || [];
+          const listedMerge = mergeWebCandidatesIntoScored(scored, listedList, {
+            parseIsListedFromCandidate,
+          });
+          listedSupplementAdded = listedMerge.added + listedMerge.merged;
+          listedAfterWeb = countDomesticListedInScored(scored);
+          await appendStepLog({
+            runId,
+            subjectType,
+            stepCode: 'S4_listed',
+            status: 'ok',
+            message: `A股/北交所上市补充检索，国内上市 ${listedAfterWeb} 家（目标≥${MIN_DOMESTIC_LISTED_COMPETITORS}）`,
+            detail: {
+              listed_supplement_added: listedSupplementAdded,
+              domestic_listed_count: listedAfterWeb,
+              required_min: MIN_DOMESTIC_LISTED_COMPETITORS,
+              search_degraded: listedRes?.meta?.search_degraded === true,
+            },
+          });
+        } catch (listedErr) {
+          await appendStepLog({
+            runId,
+            subjectType,
+            stepCode: 'S4_listed',
+            status: 'warn',
+            message: listedErr.message,
+            detail: {
+              domestic_listed_count: listedAfterWeb,
+              required_min: MIN_DOMESTIC_LISTED_COMPETITORS,
+            },
+          });
         }
-        const rawRel = Number(w.ai_relevance_score);
-        const rel = Number.isFinite(rawRel) ? Math.min(100, Math.max(0, rawRel)) : 0;
-        /** 联网初分若低于校验池下限，仍保底进入 S5（避免模型给 40～54 导致 by_ai_web=0） */
-        const webAi = Math.max(WEB_VALIDATE_AI_MIN, rel) || WEB_VALIDATE_AI_MIN;
-        scored.push({
-          source: 'ai_web',
-          sources: ['ai_web'],
-          display_name: name,
-          unified_credit_code: normalizeCreditCode(w.unified_credit_code) || null,
-          is_listed: parseIsListedFromCandidate({ is_listed: w.is_listed }) === 1,
-          product_intro: strTrim(w.core_products),
-          tags: [],
-          internalScore: 0,
-          hasInternal: false,
-          llmProductScore: webAi,
-          financing_amount_text: null,
-        });
-        webAdded += 1;
       }
+
       await appendStepLog({
         runId,
         subjectType,
         stepCode: 'S4_web',
         status: 'ok',
-        message: `联网发现 ${webAdded} 条`,
+        message: `联网发现 ${webAdded} 条，国内上市 ${listedAfterWeb} 家`,
         detail: {
           web_added: webAdded,
+          domestic_listed_count: listedAfterWeb,
+          required_min_domestic_listed: MIN_DOMESTIC_LISTED_COMPETITORS,
+          listed_supplement_added: listedSupplementAdded,
           used_enable_search: webMeta.used_enable_search === true,
           search_degraded: webMeta.search_degraded === true,
           model_name: webMeta.model_name || null,
@@ -1133,16 +1244,31 @@ async function executeCompetitorAnalysisRun(opts) {
 
     toPersist.sort((a, b) => b.finalScore - a.finalScore);
 
+    const listedMandateResult = await ensureMinimumDomesticListedInFinalList({
+      target,
+      targetSlice,
+      scored,
+      toPersist,
+      persistThresholdOpts,
+      logCtx,
+    });
+    if (listedMandateResult.supplemented > 0) {
+      toPersist.sort((a, b) => b.finalScore - a.finalScore);
+    }
+
     await appendStepLog({
       runId,
       subjectType,
       stepCode: 'S5_filter',
       status: 'ok',
-      message: `初筛通过 ${toPersist.length} 条（≥${thresholds.persist}；高信任竞品≥${thresholds.highLlm}）`,
+      message: `初筛通过 ${toPersist.length} 条（国内上市 ${listedMandateResult.domestic_listed_in_persist}/${MIN_DOMESTIC_LISTED_COMPETITORS}）`,
       detail: {
         filterStats,
         candidates: summarizeCandidates(toPersist, 15),
         rejected_samples: rejectedSamples,
+        domestic_listed_in_persist: listedMandateResult.domestic_listed_in_persist,
+        domestic_listed_supplemented: listedMandateResult.supplemented,
+        required_min_domestic_listed: MIN_DOMESTIC_LISTED_COMPETITORS,
       },
     });
 
@@ -1220,6 +1346,12 @@ async function executeCompetitorAnalysisRun(opts) {
       userId,
       candidateByKey,
     });
+
+    if (saved === 0) {
+      throw new Error(
+        '未生成有效竞品数据（模型未返回或均未达落库阈值），已保留上一版本数据，请检查 AI 模型配置后重试'
+      );
+    }
 
     const msg = `竞品分析完成：召回 ${candidates.length}，落库 ${saved} 条（≥${thresholds.persist} / 高信任≥${thresholds.highLlm}；LLM 池规则+标签+关键词；联网发现失败或模型不支持联网时会自动降级重试）`;
     await updateRunStatus(runTable, runId, 'success', msg);

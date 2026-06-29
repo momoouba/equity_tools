@@ -8291,6 +8291,26 @@ async function initializeTables(dbPool) {
   const { seedApplicationsAndEmailFallback } = require('./utils/project-sourcing/dbSeedFinancing');
   await seedApplicationsAndEmailFallback(dbPool);
 
+  console.log('  → 竞品分析 AI 提示词默认种子…');
+  try {
+    const { seedCompetitorAnalysisPrompts } = require('./utils/initPrompts');
+    const promptSeed = await seedCompetitorAnalysisPrompts(dbPool);
+    if (promptSeed.skipped) {
+      console.warn('  跳过竞品分析提示词种子：ai_prompt_config 表不存在');
+    } else if (promptSeed.created > 0 || promptSeed.updated > 0) {
+      console.log(
+        `  ✓ 竞品分析提示词：创建 ${promptSeed.created} 条，更新 ${promptSeed.updated} 条`
+      );
+    } else {
+      console.log('  ✓ 竞品分析提示词已就绪');
+    }
+  } catch (err) {
+    console.warn('  竞品分析提示词种子时出现警告:', err.message);
+    if (err.stack) {
+      console.warn(err.stack);
+    }
+  }
+
   console.log('✓ 所有数据库表结构初始化完成');
   
   // 初始化提示词配置（异步执行，不阻塞服务器启动）

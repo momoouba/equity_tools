@@ -80,19 +80,37 @@ export function scoreToConfidenceGrade(score) {
 export const GRADE_SCORE_RELATION_HINT =
   '与 AI 跑批规则一致：S≥90，A≥80，B≥70，C≥60；低于 60 分可不填等级'
 
-/** 嵌入主表展开行：去掉 fixed 列，按容器宽度等比收窄，避免独立横向滚动条 */
+/** 嵌入主表展开行：去掉 fixed 列；操作/可比列宽锁定，其余按容器等比收窄 */
 export function adaptCompetitorRelationColumnsForEmbedded(columns, containerWidth) {
   const base = (columns || []).map(({ fixed: _fixed, ...col }) => ({ ...col }))
-  if (!containerWidth || containerWidth <= 0) return base
 
-  const total = sumCompetitorRelationColumnWidths(base)
-  if (total <= containerWidth) return base
+  const isLockedCol = (col) =>
+    col.dataIndex === 'include_in_comparable' || (col.title === '操作' && !col.dataIndex)
 
-  const scale = containerWidth / total
-  return base.map((col) => ({
-    ...col,
-    width: Math.max(36, Math.floor((Number(col.width) || 80) * scale)),
-  }))
+  const lockedWidth = (col) => {
+    if (col.dataIndex === 'include_in_comparable') return CR_REL_COL_WIDTH.comparable.col
+    if (col.title === '操作' && !col.dataIndex) return CR_REL_COL_WIDTH.action.col
+    return Number(col.width) || 80
+  }
+
+  const withLocked = base.map((col) => (isLockedCol(col) ? { ...col, width: lockedWidth(col) } : col))
+
+  if (!containerWidth || containerWidth <= 0) return withLocked
+
+  const lockedTotal = withLocked.filter(isLockedCol).reduce((s, c) => s + lockedWidth(c), 0)
+  const scalable = withLocked.filter((c) => !isLockedCol(c))
+  const scalableTotal = sumCompetitorRelationColumnWidths(scalable)
+  const budget = containerWidth - lockedTotal
+
+  if (scalableTotal <= budget) return withLocked
+
+  const scale = budget / scalableTotal
+  return withLocked.map((col) => {
+    if (isLockedCol(col)) return { ...col, width: lockedWidth(col) }
+    const baseW = Number(col.width) || 80
+    const minW = col.dataIndex === 'competitor_display_name' ? 118 : 32
+    return { ...col, width: Math.max(minW, Math.floor(baseW * scale)) }
+  })
 }
 
 export const COMPETITOR_TYPE_META = {
@@ -137,12 +155,13 @@ function renderCompetitorTypeTag(type) {
 
 /** 长文本 Popover 触发区最大宽度（px），与列宽 - 左右 padding 对齐 */
 export const CR_REL_COL_WIDTH = {
-  name: { col: 108 },
+  name: { col: 132 },
   product: { col: 120, inner: 96 },
   tags: { col: 120, inner: 96 },
-  credit: { col: 128 },
-  financing: { col: 84, inner: 60 },
-  comparable: { col: 68 },
+  credit: { col: 106 },
+  financing: { col: 68, inner: 52 },
+  comparable: { col: 50 },
+  action: { col: 132 },
 }
 
 /** 竞品明细独立样式前缀（cr-rel-*），避免通用表格样式干扰 */
@@ -155,6 +174,9 @@ export const CR_REL_CSS = {
   colName: 'cr-rel-col-name',
   colComparable: 'cr-rel-col-comparable',
   colFinancing: 'cr-rel-col-financing',
+  colCredit: 'cr-rel-col-credit',
+  colActions: 'cr-rel-col-actions',
+  actionCell: 'cr-rel-action-cell',
   cellMono: 'cr-rel-cell-mono',
   nameText: 'cr-rel-name-text',
   createdAt: 'cr-rel-created-at',
@@ -257,6 +279,7 @@ export function getCompetitorRelationColumns(opts = {}) {
       title: '信用代码',
       dataIndex: 'unified_credit_code',
       width: CR_REL_COL_WIDTH.credit.col,
+      className: CR_REL_CSS.colCredit,
       render: (t) => renderMonoEllipsis(t),
     },
 
@@ -450,19 +473,18 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     {
 
-      title: '是否可比公司',
+      title: '可比公司',
 
       dataIndex: 'include_in_comparable',
 
       width: CR_REL_COL_WIDTH.comparable.col,
       align: 'center',
       className: CR_REL_CSS.colComparable,
-      fixed: 'right',
 
       render: (v, record) => (
 
         <Checkbox
-          aria-label={`${record.competitor_display_name || '竞品'}是否可比公司`}
+          aria-label={`${record.competitor_display_name || '竞品'}可比公司`}
           checked={Number(v) === 1}
           disabled={comparableReadOnly || comparableSavingId === record.id}
           onChange={(checked) => onComparableToggle?.(record, checked)}
@@ -474,42 +496,45 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     {
       title: '操作',
-      width: 120,
-      fixed: 'right',
+      width: CR_REL_COL_WIDTH.action.col,
+      className: CR_REL_CSS.colActions,
       render: (_, record) => {
         if (actionReadOnly) {
-          return onReview ? (
-            <Button type="outline" size="small" onClick={() => onReview(record, { readOnly: true })}>
-              查看
-            </Button>
-          ) : (
-            '-'
+          return (
+            <div className={CR_REL_CSS.actionCell}>
+              {onReview ? (
+                <Button type="outline" size="small" onClick={() => onReview(record, { readOnly: true })}>
+                  查看
+                </Button>
+              ) : (
+                '-'
+              )}
+            </div>
           )
         }
-        const userRow = !!record.creator_user_id
         const pending = isReviewPending(record)
         return (
-          <Space size={8} style={{ padding: '0 4px' }} wrap={false}>
+          <div className={CR_REL_CSS.actionCell}>
             {onReview ? (
               <Button
                 type={pending ? 'primary' : 'outline'}
                 size="small"
                 onClick={() => onReview(record)}
               >
-                {pending ? '复核' : '复核'}
+                复核
               </Button>
             ) : null}
-            {userRow ? (
-              <>
-                <Button type="outline" size="small" onClick={() => onEdit?.(record)}>
-                  编辑
-                </Button>
-                <Button type="outline" size="small" status="danger" onClick={() => onDelete?.(record)}>
-                  删除
-                </Button>
-              </>
+            {onEdit ? (
+              <Button type="outline" size="small" onClick={() => onEdit(record)}>
+                编辑
+              </Button>
             ) : null}
-          </Space>
+            {onDelete ? (
+              <Button type="outline" size="small" status="danger" onClick={() => onDelete(record)}>
+                删除
+              </Button>
+            ) : null}
+          </div>
         )
       },
     },

@@ -154,7 +154,7 @@ export default function CompetitorRelationDetailBlock({
     if (relationLoading) return '加载中…'
     if (!(relationData || []).length) return '暂无竞品明细'
     if (!showAllComparable && filteredRelationData.length === 0) {
-      return '暂无已纳入可比公司的竞品；请勾选上方「显示全部（含同赛道）」查看分析结果，并在「是否可比公司」列手动勾选'
+      return '暂无已纳入可比公司的竞品；请勾选上方「显示全部（含同赛道）」查看分析结果，并在「可比公司」列手动勾选'
     }
     return '暂无数据'
   }, [relationLoading, relationData, showAllComparable, filteredRelationData.length])

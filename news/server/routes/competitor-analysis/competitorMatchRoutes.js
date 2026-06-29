@@ -155,19 +155,22 @@ async function loadCompetitorRelationForWrite(req, relationId) {
     throw e;
   }
   const rel = rows[0];
-  if (!rel.creator_user_id) {
-    const e = new Error('仅用户新增的竞品可编辑或删除');
-    e.code = 403;
-    throw e;
-  }
   if (rel.invested_enterprise_id) {
     const row = await getInvestedEnterpriseRowForCompetitor(rel.invested_enterprise_id);
     assertInvestedEnterpriseCompetitorOwner(req, row);
   } else if (rel.pre_investment_project_id) {
     await loadPreInvestmentProjectForWrite(req, rel.pre_investment_project_id);
+  } else {
+    const e = new Error('无效的主体');
+    e.code = 400;
+    throw e;
   }
   const uid = req.psUser?.id ? String(req.psUser.id) : '';
-  if (!isAdminUser(req.psUser) && String(rel.creator_user_id) !== uid) {
+  if (
+    rel.creator_user_id &&
+    !isAdminUser(req.psUser) &&
+    String(rel.creator_user_id) !== uid
+  ) {
     const e = new Error('仅创建人或管理员可编辑或删除');
     e.code = 403;
     throw e;
@@ -893,7 +896,7 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 编辑用户新增的竞品关系 */
+  /** 编辑竞品关系（含 AI/系统生成与用户新增） */
   router.put('/competitor-analysis/relations/:relationId', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const relationId = String(req.params.relationId || '').trim();
@@ -946,7 +949,7 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 删除用户新增的竞品关系（软删除） */
+  /** 删除竞品关系（软删除，含 AI/系统生成与用户新增） */
   router.delete('/competitor-analysis/relations/:relationId', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const relationId = String(req.params.relationId || '').trim();

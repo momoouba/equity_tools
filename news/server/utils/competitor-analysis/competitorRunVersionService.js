@@ -39,6 +39,16 @@ function assignVersionLabels(runsAsc) {
   return labeled;
 }
 
+/** 有效版本：成功跑批且含 AI 落库行（排除仅 human_locked / 用户新增挂到新 run 的空跑） */
+function isEffectiveCompetitorRunVersion(row) {
+  const aiCount = Number(row.ai_relation_count) || 0;
+  if (aiCount <= 0) return false;
+  const status = row.status != null ? String(row.status).trim().toLowerCase() : '';
+  if (status === 'success') return true;
+  // 历史数据：run 表无记录但 relation 中仍有 AI 行
+  return !status;
+}
+
 /**
  * 版本列表：仅含该被投企业在 relation 中真实存在数据的 run_id（不含空跑/失败 run）。
  */
@@ -50,6 +60,7 @@ async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
     `SELECT r.run_id,
             MIN(r.F_CreatorTime) AS first_relation_at,
             COUNT(*) AS relation_count,
+            SUM(CASE WHEN r.F_CreatorUserId IS NULL AND COALESCE(r.human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count,
             MAX(scr.F_CreatorTime) AS run_created_at,
             MAX(scr.status) AS status,
             MAX(scr.message) AS message,
@@ -60,6 +71,7 @@ async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
      WHERE r.invested_enterprise_id = ?
        AND r.run_id IS NOT NULL AND TRIM(r.run_id) <> ''
        AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
+       AND r.F_DeleteMark = 0
      GROUP BY r.run_id
      ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.run_id ASC`,
     [ieId]
@@ -67,6 +79,7 @@ async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
 
   const runsAsc = runRows
     .filter((row) => row.run_id && String(row.run_id).trim())
+    .filter(isEffectiveCompetitorRunVersion)
     .map((row) => ({
       id: row.run_id,
       created_at: row.run_created_at || row.first_relation_at,
@@ -80,16 +93,38 @@ async function listInvestedEnterpriseCompetitorRuns(investedEnterpriseId) {
   return assignVersionLabels(runsAsc).reverse();
 }
 
-/** 当前有效批次（delete_mark=0 关系所属 run_id） */
+/** 当前有效批次：最近一次成功且含 AI 落库数据的 run_id */
 async function getLatestRunIdForInvestedEnterprise(investedEnterpriseId) {
   const ieId = String(investedEnterpriseId || '').trim();
   if (!ieId) return null;
+
+  const fromRunTable = await db.query(
+    `SELECT scr.F_Id AS run_id
+     FROM sourcing_competitor_run scr
+     INNER JOIN sourcing_competitor_relation r
+       ON r.run_id = scr.F_Id
+       AND r.invested_enterprise_id = scr.invested_enterprise_id
+       AND r.F_DeleteMark = 0
+       AND r.F_CreatorUserId IS NULL
+       AND COALESCE(r.human_locked, 0) = 0
+       AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
+     WHERE scr.invested_enterprise_id = ?
+       AND scr.F_DeleteMark = 0
+       AND scr.status = 'success'
+     ORDER BY scr.finished_at DESC, scr.F_CreatorTime DESC
+     LIMIT 1`,
+    [ieId]
+  );
+  if (fromRunTable.length) return fromRunTable[0].run_id;
+
   const rows = await db.query(
     `SELECT run_id
      FROM sourcing_competitor_relation
      WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
        AND run_id IS NOT NULL AND TRIM(run_id) <> ''
        AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+       AND F_CreatorUserId IS NULL
+       AND COALESCE(human_locked, 0) = 0
      ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     [ieId]
@@ -117,6 +152,7 @@ async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
     `SELECT r.pre_investment_run_id,
             MIN(r.F_CreatorTime) AS first_relation_at,
             COUNT(*) AS relation_count,
+            SUM(CASE WHEN r.F_CreatorUserId IS NULL AND COALESCE(r.human_locked, 0) = 0 THEN 1 ELSE 0 END) AS ai_relation_count,
             MAX(scr.F_CreatorTime) AS run_created_at,
             MAX(scr.status) AS status,
             MAX(scr.message) AS message,
@@ -128,6 +164,7 @@ async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
      WHERE r.pre_investment_project_id = ?
        AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
        AND r.subject_type = 'pre_investment_project'
+       AND r.F_DeleteMark = 0
      GROUP BY r.pre_investment_run_id
      ORDER BY COALESCE(MAX(scr.F_CreatorTime), MIN(r.F_CreatorTime)) ASC, r.pre_investment_run_id ASC`,
     [pipId]
@@ -135,6 +172,7 @@ async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
 
   const runsAsc = runRows
     .filter((row) => row.pre_investment_run_id && String(row.pre_investment_run_id).trim())
+    .filter(isEffectiveCompetitorRunVersion)
     .map((row) => ({
       id: row.pre_investment_run_id,
       created_at: row.run_created_at || row.first_relation_at,
@@ -148,21 +186,43 @@ async function listPreInvestmentCompetitorRuns(preInvestmentProjectId) {
   return assignVersionLabels(runsAsc).reverse();
 }
 
-/** 当前有效批次（delete_mark=0 关系所属 pre_investment_run_id） */
+/** 当前有效批次：最近一次成功且含 AI 落库数据的 pre_investment_run_id */
 async function getLatestRunIdForPreInvestmentProject(preInvestmentProjectId) {
   const pipId = String(preInvestmentProjectId || '').trim();
   if (!pipId) return null;
+
+  const fromRunTable = await db.query(
+    `SELECT scr.F_Id AS run_id
+     FROM sourcing_pre_investment_competitor_run scr
+     INNER JOIN sourcing_competitor_relation r
+       ON r.pre_investment_run_id = scr.F_Id
+       AND r.pre_investment_project_id = scr.pre_investment_project_id
+       AND r.subject_type = 'pre_investment_project'
+       AND r.F_DeleteMark = 0
+       AND r.F_CreatorUserId IS NULL
+       AND COALESCE(r.human_locked, 0) = 0
+     WHERE scr.pre_investment_project_id = ?
+       AND scr.F_DeleteMark = 0
+       AND scr.status = 'success'
+     ORDER BY scr.finished_at DESC, scr.F_CreatorTime DESC
+     LIMIT 1`,
+    [pipId]
+  );
+  if (fromRunTable.length) return fromRunTable[0].run_id;
+
   const rows = await db.query(
-    `SELECT pre_investment_run_id
+    `SELECT pre_investment_run_id AS run_id
      FROM sourcing_competitor_relation
      WHERE pre_investment_project_id = ? AND F_DeleteMark = 0
        AND subject_type = 'pre_investment_project'
        AND pre_investment_run_id IS NOT NULL AND TRIM(pre_investment_run_id) <> ''
+       AND F_CreatorUserId IS NULL
+       AND COALESCE(human_locked, 0) = 0
      ORDER BY F_CreatorTime DESC
      LIMIT 1`,
     [pipId]
   );
-  return rows.length ? rows[0].pre_investment_run_id : null;
+  return rows.length ? rows[0].run_id : null;
 }
 
 async function buildVersionLabelMapForPreInvestmentProject(preInvestmentProjectId) {
@@ -177,6 +237,7 @@ async function buildVersionLabelMapForPreInvestmentProject(preInvestmentProjectI
 module.exports = {
   parseYmdFromRunId,
   assignVersionLabels,
+  isEffectiveCompetitorRunVersion,
   listInvestedEnterpriseCompetitorRuns,
   getLatestRunIdForInvestedEnterprise,
   buildVersionLabelMapForInvestedEnterprise,

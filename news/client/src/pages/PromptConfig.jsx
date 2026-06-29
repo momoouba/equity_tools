@@ -28,6 +28,12 @@ function filterAiModelConfigsForPrompt(configs, interfaceType, promptType) {
   ) {
     return list.filter((c) => c.application_type === 'project_sourcing_analysis')
   }
+  if (interfaceType === '竞品分析' || String(promptType || '').startsWith('competitor_')) {
+    return list.filter(
+      (c) =>
+        c.application_type === 'competitor_analysis' || c.usage_type === 'competitor_match'
+    )
+  }
   if (interfaceType === '打新接口' && promptType === 'enterprise_full_name') {
     return list.filter(
       (c) =>
@@ -68,6 +74,7 @@ function PromptConfig() {
     { value: '上海国际集团', label: '上海国际集团接口' },
     { value: '打新接口', label: '打新接口' },
     { value: '项目挖掘', label: '项目挖掘' },
+    { value: '竞品分析', label: '竞品分析' },
   ]
 
   const promptTypes = [
@@ -79,7 +86,28 @@ function PromptConfig() {
       value: 'project_sourcing_financing_web_enrich',
       label: '融资联网 AI 增强（项目挖掘）',
     },
+    {
+      value: 'competitor_web_discover',
+      label: '联网发现竞品（竞品分析）',
+    },
+    {
+      value: 'competitor_pair_similarity',
+      label: '产品相似度对标（竞品分析）',
+    },
+    {
+      value: 'competitor_validate',
+      label: '竞品关系校验（竞品分析）',
+    },
   ]
+
+  const competitorPromptPlaceholderHelp = {
+    competitor_web_discover:
+      '格式：---SYSTEM---\\n系统提示词\\n---USER---\\n用户模板。USER 可用占位符：{{TARGET_PROFILE_JSON}}、{{KEYWORDS_JSON}}、{{EXCLUDE_NAMES_JSON}}。联网发现步骤会启用模型 web_search。',
+    competitor_pair_similarity:
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。',
+    competitor_validate:
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。',
+  }
 
   const filteredAiModelConfigs = useMemo(
     () => filterAiModelConfigsForPrompt(aiModelConfigs, formData.interface_type, formData.prompt_type),
@@ -289,13 +317,13 @@ function PromptConfig() {
     },
     {
       title: '提示词内容预览',
-      dataIndex: 'prompt_content',
+      dataIndex: 'prompt_content_preview',
       width: 300,
       ellipsis: true,
       tooltip: true,
-      render: (text) => {
-        const preview = text || ''
-        return preview.length > 100 ? preview.substring(0, 100) + '...' : preview
+      render: (text, record) => {
+        const preview = text || record.prompt_content || ''
+        return preview.length > 100 ? `${preview.substring(0, 100)}...` : preview
       }
     },
     {
@@ -310,9 +338,14 @@ function PromptConfig() {
     },
     {
       title: '创建时间',
-      dataIndex: 'created_at',
+      dataIndex: 'F_CreatorTime',
       width: 180,
-      render: (text) => new Date(text).toLocaleString()
+      render: (text, record) => {
+        const raw = text || record.created_at || record.F_CreatorTime
+        if (!raw) return '-'
+        const date = new Date(raw)
+        return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString()
+      }
     },
     {
       title: '操作',
@@ -466,7 +499,10 @@ function PromptConfig() {
                 {formData.interface_type === '项目挖掘' ||
                 formData.prompt_type === 'project_sourcing_financing_web_enrich'
                   ? '暂无「应用类型 = 项目挖掘分析」的启用模型。请先到「AI模型配置」页新增一条（与融资/被投企业联网 AI 一致），再回到此处绑定。'
-                  : formData.interface_type === '打新接口' &&
+                  : formData.interface_type === '竞品分析' ||
+                      String(formData.prompt_type || '').startsWith('competitor_')
+                    ? '暂无「竞品分析 / 竞品匹配」用途的启用模型，请先在「AI模型配置」中新增「项目挖掘-竞品」类配置。'
+                    : formData.interface_type === '打新接口' &&
                       formData.prompt_type === 'enterprise_full_name'
                     ? '暂无「上市进展分析 / 上市数据」用途的启用模型，请先在「AI模型配置」中新增。'
                     : '暂无与当前接口类型匹配的启用模型（新闻分析或通用）。'}
@@ -480,11 +516,20 @@ function PromptConfig() {
 
           <div className="form-group">
             <label>提示词内容 *</label>
+            {competitorPromptPlaceholderHelp[formData.prompt_type] ? (
+              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)', lineHeight: 1.6 }}>
+                {competitorPromptPlaceholderHelp[formData.prompt_type]}
+              </div>
+            ) : formData.prompt_type === 'project_sourcing_financing_web_enrich' ? (
+              <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)', lineHeight: 1.6 }}>
+                格式：---SYSTEM--- / ---USER---；USER 段占位符：{'{{COMPANY_NAME}}'}、{'{{CREDIT_CODE}}'}、{'{{PROJECT_NAME}}'}、{'{{QCC_COMPANY_INTRO}}'}
+              </div>
+            ) : null}
             <TextArea
               value={formData.prompt_content}
               onChange={(value) => handleChange('prompt_content', value)}
-              placeholder="请输入提示词内容"
-              rows={8}
+              placeholder="请输入提示词内容（竞品分析请使用 ---SYSTEM--- 与 ---USER--- 分段）"
+              rows={14}
             />
           </div>
 

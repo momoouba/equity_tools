@@ -283,18 +283,20 @@
 .cr-rel-scope .cr-rel-table .cr-rel-name-text {
   line-height: 1.4;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
-/* 是否可比公司 / 融资：收窄列内边距 */
+/* 可比公司 / 融资 / 信用代码：收窄列内边距 */
 .cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-cell,
-.cr-rel-scope .cr-rel-table .cr-rel-col-financing .arco-table-cell {
-  padding-left: 8px;
-  padding-right: 8px;
+.cr-rel-scope .cr-rel-table .cr-rel-col-financing .arco-table-cell,
+.cr-rel-scope .cr-rel-table .cr-rel-col-credit .arco-table-cell {
+  padding-left: 6px;
+  padding-right: 6px;
 }
 
 .cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-th-item {
   white-space: normal;
-  line-height: 1.25;
+  line-height: 1.2;
   font-size: 12px;
   text-align: center;
 }
@@ -302,6 +304,31 @@
 .cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-th-item,
 .cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-cell {
   text-align: center;
+}
+
+/* 操作列：固定三按钮槽位，非用户创建仅显示复核时不撑宽 */
+.cr-rel-scope .cr-rel-table .cr-rel-col-actions .arco-table-cell {
+  padding-left: 4px;
+  padding-right: 4px;
+  overflow: hidden;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-action-cell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-action-cell .arco-btn-size-small {
+  padding: 0 6px;
+  font-size: 12px;
+  height: 24px;
+  line-height: 22px;
+  flex: 0 0 auto;
 }
 
 .cr-rel-scope .cr-rel-table .arco-table-pagination {

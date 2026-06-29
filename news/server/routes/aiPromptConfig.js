@@ -1,8 +1,27 @@
 const express = require('express');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
+const { clearCompetitorPromptCache } = require('../utils/competitor-analysis/competitorAnalysisPromptService');
 
 const router = express.Router();
+
+const VALID_INTERFACE_TYPES = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘', '竞品分析'];
+const VALID_PROMPT_TYPES = [
+  'sentiment_analysis',
+  'enterprise_relevance',
+  'validation',
+  'enterprise_full_name',
+  'project_sourcing_financing_web_enrich',
+  'competitor_pair_similarity',
+  'competitor_web_discover',
+  'competitor_validate',
+];
+
+function maybeClearCompetitorPromptCache(record) {
+  if (record && String(record.interface_type) === '竞品分析') {
+    clearCompetitorPromptCache();
+  }
+}
 
 // 权限检查中间件
 const checkAdminPermission = (req, res, next) => {
@@ -74,7 +93,9 @@ router.get('/', checkAdminPermission, async (req, res) => {
       `SELECT 
         p.F_Id AS id, p.prompt_name, p.interface_type, p.prompt_type, 
         LEFT(p.prompt_content, 100) as prompt_content_preview,
-        p.ai_model_config_id, p.is_active, p.F_CreatorUserId, p.F_CreatorTime, p.F_LastModifyTime,
+        p.ai_model_config_id, p.is_active, p.F_CreatorUserId,
+        p.F_CreatorTime, p.F_CreatorTime AS created_at,
+        p.F_LastModifyTime, p.F_LastModifyTime AS updated_at,
         m.config_name as ai_model_config_name, m.provider, m.model_name
        FROM ai_prompt_config p
        LEFT JOIN ai_model_config m ON p.ai_model_config_id = m.F_Id AND m.F_DeleteMark = 0
@@ -152,27 +173,21 @@ router.post('/', checkAdminPermission, async (req, res) => {
       });
     }
 
-    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
-    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
+    // 验证接口类型
+    const validInterfaceTypes = VALID_INTERFACE_TYPES;
     if (!validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"、\"项目挖掘\"或\"竞品分析\"' 
       });
     }
 
     // 验证提示词类型
-    const validPromptTypes = [
-      'sentiment_analysis',
-      'enterprise_relevance',
-      'validation',
-      'enterprise_full_name',
-      'project_sourcing_financing_web_enrich',
-    ];
+    const validPromptTypes = VALID_PROMPT_TYPES;
     if (!validPromptTypes.includes(prompt_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
+        message: `提示词类型必须是：${VALID_PROMPT_TYPES.join('、')}` 
       });
     }
 
@@ -195,6 +210,8 @@ router.post('/', checkAdminPermission, async (req, res) => {
       is_active
     };
     await logPromptChange(configId, 'create', null, newValue, req.currentUserId, '创建提示词配置');
+
+    maybeClearCompetitorPromptCache({ interface_type });
 
     res.json({
       success: true,
@@ -240,28 +257,22 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
       is_active: existing[0].is_active
     };
 
-    // 验证接口类型（支持：新榜、企查查、上海国际集团、打新接口、项目挖掘）
-    const validInterfaceTypes = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘'];
+    // 验证接口类型
+    const validInterfaceTypes = VALID_INTERFACE_TYPES;
     if (interface_type && !validInterfaceTypes.includes(interface_type)) {
       return res.status(400).json({ 
         success: false, 
-        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"或\"项目挖掘\"' 
+        message: '接口类型必须是\"新榜\"、\"企查查\"、\"上海国际集团\"、\"打新接口\"、\"项目挖掘\"或\"竞品分析\"' 
       });
     }
 
     // 验证提示词类型
     if (prompt_type) {
-      const validPromptTypes = [
-        'sentiment_analysis',
-        'enterprise_relevance',
-        'validation',
-        'enterprise_full_name',
-        'project_sourcing_financing_web_enrich',
-      ];
+      const validPromptTypes = VALID_PROMPT_TYPES;
       if (!validPromptTypes.includes(prompt_type)) {
         return res.status(400).json({ 
           success: false, 
-          message: '提示词类型必须是：sentiment_analysis、enterprise_relevance、validation、enterprise_full_name 或 project_sourcing_financing_web_enrich' 
+          message: `提示词类型必须是：${VALID_PROMPT_TYPES.join('、')}` 
         });
       }
     }
@@ -300,6 +311,8 @@ router.put('/:id', checkAdminPermission, async (req, res) => {
 
     // 记录更新日志
     await logPromptChange(id, 'update', oldValue, newValue, req.currentUserId, '更新提示词配置');
+
+    maybeClearCompetitorPromptCache(updated[0]);
 
     res.json({
       success: true,
@@ -344,6 +357,8 @@ router.delete('/:id', checkAdminPermission, async (req, res) => {
 
     // 记录删除日志
     await logPromptChange(id, 'delete', oldValue, null, req.currentUserId, '删除提示词配置');
+
+    maybeClearCompetitorPromptCache(existing[0]);
 
     res.json({
       success: true,
@@ -391,6 +406,8 @@ router.patch('/:id/toggle-active', checkAdminPermission, async (req, res) => {
       req.currentUserId, 
       newIsActive === 1 ? '启用提示词配置' : '禁用提示词配置'
     );
+
+    maybeClearCompetitorPromptCache(existing[0]);
 
     res.json({
       success: true,

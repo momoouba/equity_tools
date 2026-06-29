@@ -4,6 +4,10 @@ const axios = require('axios');
 const { invokePlainChat } = require('./plainChat');
 const { WIRE_PROTOCOL, WEB_SEARCH_MODE } = require('../llmConstants');
 const { errorBlob } = require('./openaiResponses');
+const {
+  anthropicModelOmitsSamplingParams,
+  resolveAnthropicTemperature,
+} = require('../anthropicModelUtils');
 
 const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 
@@ -81,13 +85,15 @@ async function invokeAnthropicMessages({
     messages: buildAnthropicMessages(systemContent, userContent),
   };
   if (sys) body.system = sys;
-  if (Number.isFinite(temperature)) body.temperature = temperature;
+  const effTemperature = resolveAnthropicTemperature(model, temperature);
+  if (effTemperature !== undefined) body.temperature = effTemperature;
   if (wantSearch) {
     body.tools = buildWebSearchTools();
   }
 
+  const omitSampling = anthropicModelOmitsSamplingParams(model);
   console.log(
-    `${logPrefix} POST ${endpoint} model=${model} anthropic_messages web_search=${wantSearch ? 1 : 0}`
+    `${logPrefix} POST ${endpoint} model=${model} anthropic_messages web_search=${wantSearch ? 1 : 0}${omitSampling ? ' omit_sampling=1' : ''}`
   );
 
   const response = await axios.post(endpoint, body, {
