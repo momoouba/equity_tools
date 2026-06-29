@@ -308,13 +308,24 @@
 }
 
 /* 投前/投后主列表：fixed 列 + scroll 时表头/表体同步（避免横向滚动错列） */
+.pre-inv-sourcing-page .pre-inv-sourcing-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-table-wrap .pre-inv-sourcing-main-table .arco-table-container {
+  overflow-x: hidden !important;
+}
+
 .pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner {
-  width: auto !important;
-  max-width: none !important;
+  width: 100% !important;
+  max-width: 100% !important;
 }
 
 .pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-content-inner > table {
   table-layout: fixed !important;
+  width: 100% !important;
 }
 
 .pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-th,

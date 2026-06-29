@@ -7765,21 +7765,86 @@ async function initializeTables(dbPool) {
     console.warn('回填 sourcing_competitor_relation.review_status 时出现警告:', err.message);
   }
   try {
-    const [backfillResult] = await dbPool.query(
-      `UPDATE sourcing_competitor_relation
-       SET include_in_comparable = 1, F_LastModifyTime = NOW()
-       WHERE F_DeleteMark = 0
-         AND competitor_type IS NULL
-         AND include_in_comparable = 0
-         AND F_CreatorUserId IS NULL`
+    const [migFlag] = await dbPool.query(
+      `SELECT config_value FROM system_config WHERE config_key = 'migration_comparable_opt_in_v1' LIMIT 1`
     );
-    if (backfillResult.affectedRows > 0) {
-      console.log(
-        `  ✓ sourcing_competitor_relation 已回填 ${backfillResult.affectedRows} 条历史 AI 落库 include_in_comparable=1`
+    if (migFlag.length > 0 && String(migFlag[0].config_value) === '1') {
+      console.log('  ✓ 可比公司 opt-in 迁移已跳过（此前已完成）');
+    } else {
+      const { generateId } = require('./utils/idGenerator');
+      const [resetResult] = await dbPool.query(
+        `UPDATE sourcing_competitor_relation
+         SET include_in_comparable = 0, F_LastModifyTime = NOW()
+         WHERE F_DeleteMark = 0
+           AND include_in_comparable = 1
+           AND F_CreatorUserId IS NULL`
+      );
+      if (resetResult.affectedRows > 0) {
+        console.log(
+          `  ✓ sourcing_competitor_relation 已撤销 AI 默认可比勾选 ${resetResult.affectedRows} 条（改为用户主动勾选）`
+        );
+      }
+      const prefRows = await dbPool.query(
+        `SELECT subject_type, invested_enterprise_id, pre_investment_project_id, competitor_key
+         FROM sourcing_competitor_comparable_pref
+         WHERE include_in_comparable = 1`
+      );
+      let restored = 0;
+      for (const p of prefRows) {
+        const key = String(p.competitor_key || '').trim();
+        if (!key) continue;
+        let sql;
+        let params;
+        if (key.startsWith('name:')) {
+          const namePart = key.slice(5);
+          sql = `UPDATE sourcing_competitor_relation
+                 SET include_in_comparable = 1, F_LastModifyTime = NOW()
+                 WHERE F_DeleteMark = 0
+                   AND subject_type = ?
+                   AND (invested_enterprise_id <=> ?)
+                   AND (pre_investment_project_id <=> ?)
+                   AND (
+                     LEFT(IFNULL(competitor_display_name,''), 160) = ?
+                     OR LEFT(IFNULL(competitor_weak_key,''), 160) = ?
+                   )`;
+          params = [
+            p.subject_type,
+            p.invested_enterprise_id || null,
+            p.pre_investment_project_id || null,
+            namePart,
+            namePart,
+          ];
+        } else {
+          sql = `UPDATE sourcing_competitor_relation
+                 SET include_in_comparable = 1, F_LastModifyTime = NOW()
+                 WHERE F_DeleteMark = 0
+                   AND subject_type = ?
+                   AND (invested_enterprise_id <=> ?)
+                   AND (pre_investment_project_id <=> ?)
+                   AND UPPER(REPLACE(REPLACE(IFNULL(unified_credit_code,''),' ',''),'　','')) = ?`;
+          params = [
+            p.subject_type,
+            p.invested_enterprise_id || null,
+            p.pre_investment_project_id || null,
+            key.toUpperCase(),
+          ];
+        }
+        const [r] = await dbPool.query(sql, params);
+        restored += r.affectedRows || 0;
+      }
+      if (restored > 0) {
+        console.log(`  ✓ sourcing_competitor_relation 已从可比偏好恢复勾选 ${restored} 条`);
+      }
+      const flagId = await generateId('system_config', dbPool);
+      await dbPool.execute(
+        `INSERT INTO system_config (F_Id, config_key, config_value, config_desc)
+         VALUES (?, 'migration_comparable_opt_in_v1', '1', '可比公司改为用户主动勾选')
+         ON DUPLICATE KEY UPDATE config_value = '1', F_LastModifyTime = CURRENT_TIMESTAMP`,
+        [flagId]
       );
     }
   } catch (err) {
-    console.warn('回填 sourcing_competitor_relation.include_in_comparable 时出现警告:', err.message);
+    console.warn('修正 sourcing_competitor_relation.include_in_comparable 默认值时出现警告:', err.message);
   }
   try {
     const [fkRows] = await dbPool.query(

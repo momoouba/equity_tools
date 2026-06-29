@@ -1,7 +1,11 @@
 import React, { useEffect } from 'react'
 import { Modal, Form, Input, Select, InputNumber, Checkbox, Message } from '@arco-design/web-react'
 import { postCompetitorRelation, putCompetitorRelation } from '../../api/competitor-analysis'
-import { formatCompetitorDataSources } from './competitorRelationColumns'
+import {
+  formatCompetitorDataSources,
+  GRADE_SCORE_RELATION_HINT,
+  scoreToConfidenceGrade,
+} from './competitorRelationColumns'
 
 const FormItem = Form.Item
 
@@ -84,7 +88,7 @@ export default function CompetitorRelationManualAddModal({
     form.setFieldsValue({
       is_listed: 0,
       data_source_display: '用户新增',
-      include_in_comparable: true,
+      include_in_comparable: false,
     })
   }, [visible, form, isEdit, editingRecord])
 
@@ -156,8 +160,24 @@ export default function CompetitorRelationManualAddModal({
         <FormItem label="等级" field="confidence_grade">
           <Select allowClear placeholder="选填" options={GRADE_OPTIONS} />
         </FormItem>
-        <FormItem label="综合分" field="relevance_score">
-          <InputNumber min={0} max={100} precision={0} placeholder="0-100" style={{ width: '100%' }} />
+        <FormItem
+          label="综合分"
+          field="relevance_score"
+          extra={GRADE_SCORE_RELATION_HINT}
+        >
+          <InputNumber
+            min={0}
+            max={100}
+            precision={0}
+            placeholder="0-100"
+            style={{ width: '100%' }}
+            onChange={(v) => {
+              const grade = scoreToConfidenceGrade(v)
+              if (grade && !form.getFieldValue('confidence_grade')) {
+                form.setFieldValue('confidence_grade', grade)
+              }
+            }}
+          />
         </FormItem>
         <FormItem label="产品介绍" field="competitor_product_intro">
           <Input.TextArea placeholder="竞品产品介绍" autoSize={{ minRows: 2, maxRows: 6 }} />

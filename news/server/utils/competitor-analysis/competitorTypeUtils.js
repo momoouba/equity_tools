@@ -192,12 +192,9 @@ function shouldPersistCompetitorType(competitorType) {
   return !NON_PERSIST_TYPES.has(strTrim(competitorType).toLowerCase());
 }
 
-/** direct/indirect/substitute 默认进入可比列表；same_track 默认隐藏。 */
-function defaultIncludeInComparable(competitorType) {
-  const t = strTrim(competitorType).toLowerCase();
-  if (t === 'same_track') return false;
-  if (t === 'direct' || t === 'indirect' || t === 'substitute') return true;
-  return true;
+/** direct/indirect/substitute 等默认不纳入可比；仅用户勾选或历史 pref 恢复时为 1。 */
+function defaultIncludeInComparable(_competitorType) {
+  return false;
 }
 
 const COMPETITOR_TYPE_LABELS = {

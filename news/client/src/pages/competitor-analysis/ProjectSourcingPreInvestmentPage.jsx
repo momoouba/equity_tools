@@ -40,6 +40,7 @@ import {
   downloadBlob,
   parseExportFilename,
   sortRelationsForDisplay,
+  adaptCompetitorRelationColumnsForEmbedded,
 } from './competitorRelationColumns'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
@@ -47,8 +48,6 @@ import '../EnterpriseForm.css'
 const FormItem = Form.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 const BATCH_GAP_MS = 500
-/** 展开列 40 + 勾选 48 + 各列 width 之和 */
-const PRE_INV_MAIN_TABLE_SCROLL_X = 1428
 
 function rowLabel(row) {
   return row.enterprise_full_name || row.project_abbreviation || row.project_no || row.id
@@ -118,6 +117,8 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [qccCandidates, setQccCandidates] = useState([])
   const [showQccDropdown, setShowQccDropdown] = useState(false)
   const qccDropdownRef = useRef(null)
+  const tableWrapRef = useRef(null)
+  const [tableLayoutWidth, setTableLayoutWidth] = useState(0)
   const [projectNoPreview, setProjectNoPreview] = useState('')
   const [tableScrollY, setTableScrollY] = useState(520)
   const [batchBusy, setBatchBusy] = useState(null)
@@ -372,6 +373,20 @@ export default function ProjectSourcingPreInvestmentPage() {
     calc()
     window.addEventListener('resize', calc)
     return () => window.removeEventListener('resize', calc)
+  }, [])
+
+  useEffect(() => {
+    const el = tableWrapRef.current
+    if (!el) return undefined
+    const syncWidth = () => setTableLayoutWidth(Math.floor(el.clientWidth))
+    syncWidth()
+    const ro = new ResizeObserver(syncWidth)
+    ro.observe(el)
+    window.addEventListener('resize', syncWidth)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', syncWidth)
+    }
   }, [])
 
   useEffect(() => {
@@ -812,8 +827,7 @@ export default function ProjectSourcingPreInvestmentPage() {
           onChange={toggleSelectAllPage}
         />
       ),
-      width: 48,
-      fixed: 'left',
+      width: 44,
       render: (_, row) => (
         <Checkbox
           checked={selectedIds.includes(row.id)}
@@ -822,32 +836,31 @@ export default function ProjectSourcingPreInvestmentPage() {
         />
       ),
     },
-    { title: '项目编号', dataIndex: 'project_no', width: 140, render: (t) => t || '-' },
-    { title: '企业全称', dataIndex: 'enterprise_full_name', width: 220, ellipsis: true, tooltip: true },
-    { title: '统一信用代码', dataIndex: 'unified_credit_code', width: 180, render: (t) => t || '-' },
+    { title: '项目编号', dataIndex: 'project_no', width: 120, render: (t) => t || '-' },
+    { title: '企业全称', dataIndex: 'enterprise_full_name', width: 160, ellipsis: true, tooltip: true },
+    { title: '统一信用代码', dataIndex: 'unified_credit_code', width: 150, render: (t) => t || '-' },
     {
       title: '产品介绍（AI）',
       dataIndex: 'ai_product_intro',
-      width: 200,
-      render: (t) => <IntroPopoverCell columnTitle="产品介绍（AI）" raw={t} triggerMaxWidth={180} />,
+      width: 150,
+      render: (t) => <IntroPopoverCell columnTitle="产品介绍（AI）" raw={t} triggerMaxWidth={130} />,
     },
     {
       title: '企业标签（AI）',
       dataIndex: 'ai_industry_tags_display',
-      width: 180,
-      render: (t) => <IntroPopoverCell columnTitle="企业标签（AI）" raw={t} triggerMaxWidth={160} />,
+      width: 130,
+      render: (t) => <IntroPopoverCell columnTitle="企业标签（AI）" raw={t} triggerMaxWidth={110} />,
     },
     {
       title: '企业介绍（企查查）',
       dataIndex: 'qcc_company_intro',
-      width: 200,
-      render: (t) => <IntroPopoverCell columnTitle="企业介绍（企查查）" raw={t} triggerMaxWidth={180} />,
+      width: 150,
+      render: (t) => <IntroPopoverCell columnTitle="企业介绍（企查查）" raw={t} triggerMaxWidth={130} />,
     },
-    { title: '状态', dataIndex: 'pipeline_status', width: 100 },
+    { title: '状态', dataIndex: 'pipeline_status', width: 80 },
     {
       title: '操作',
-      width: 120,
-      fixed: 'right',
+      width: 100,
       render: (_, row) => (
         <Space size="mini">
           <Button type="text" size="mini" onClick={() => openEditModal(row)}>
@@ -860,6 +873,11 @@ export default function ProjectSourcingPreInvestmentPage() {
       ),
     },
   ]
+
+  const displayColumns = useMemo(
+    () => adaptCompetitorRelationColumnsForEmbedded(columns, tableLayoutWidth),
+    [columns, tableLayoutWidth]
+  )
 
   return (
     <div className="pre-inv-sourcing-page" style={{ padding: '16px 24px' }}>
@@ -920,16 +938,17 @@ export default function ProjectSourcingPreInvestmentPage() {
             竞品分析
           </Button>
         </Space>
+        <div ref={tableWrapRef} className="pre-inv-sourcing-table-wrap">
         <Table
           className="pre-inv-sourcing-main-table"
           rowKey="id"
           stripe
           loading={loading}
           data={displayList}
-          columns={columns}
+          columns={displayColumns}
           expandedRowKeys={expandedKeys}
           onExpandedRowsChange={onExpandedRowsChange}
-          expandProps={{ width: 40 }}
+          expandProps={{ width: 36 }}
           expandedRowRender={(row) => {
             const runs = runMap[row.id]?.list || []
             const selectedRunId = selectedRunMap[row.id]
@@ -947,6 +966,7 @@ export default function ProjectSourcingPreInvestmentPage() {
             return (
               <CompetitorRelationDetailBlock
                 embedded
+                layoutWidth={tableLayoutWidth}
                 stopPropagation
                 aiProductIntro={row.ai_product_intro}
                 industryTags={row.ai_industry_tags_display}
@@ -974,7 +994,7 @@ export default function ProjectSourcingPreInvestmentPage() {
               />
             )
           }}
-          scroll={{ x: PRE_INV_MAIN_TABLE_SCROLL_X, y: tableScrollY }}
+          scroll={{ y: tableScrollY }}
           pagination={{
             current: page,
             pageSize,
@@ -992,6 +1012,7 @@ export default function ProjectSourcingPreInvestmentPage() {
           }}
           border={{ wrapper: true, cell: true }}
         />
+        </div>
       </Card>
 
       <Modal

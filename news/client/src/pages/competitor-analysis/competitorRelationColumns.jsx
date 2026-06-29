@@ -62,7 +62,38 @@ const LEFT_ALIGN_FIELDS = new Set([
 ])
 
 /** 各列 width 之和，供 Table scroll.x 使用 */
-export const COMPETITOR_RELATION_TABLE_SCROLL_X = 1800
+export function sumCompetitorRelationColumnWidths(columns) {
+  return (columns || []).reduce((sum, col) => sum + (Number(col.width) || 0), 0)
+}
+
+/** 综合分 → 等级（与后端 competitorMatchUtils.scoreToGrade 一致） */
+export function scoreToConfidenceGrade(score) {
+  const n = Number(score)
+  if (!Number.isFinite(n)) return null
+  if (n >= 90) return 'S'
+  if (n >= 80) return 'A'
+  if (n >= 70) return 'B'
+  if (n >= 60) return 'C'
+  return null
+}
+
+export const GRADE_SCORE_RELATION_HINT =
+  '与 AI 跑批规则一致：S≥90，A≥80，B≥70，C≥60；低于 60 分可不填等级'
+
+/** 嵌入主表展开行：去掉 fixed 列，按容器宽度等比收窄，避免独立横向滚动条 */
+export function adaptCompetitorRelationColumnsForEmbedded(columns, containerWidth) {
+  const base = (columns || []).map(({ fixed: _fixed, ...col }) => ({ ...col }))
+  if (!containerWidth || containerWidth <= 0) return base
+
+  const total = sumCompetitorRelationColumnWidths(base)
+  if (total <= containerWidth) return base
+
+  const scale = containerWidth / total
+  return base.map((col) => ({
+    ...col,
+    width: Math.max(36, Math.floor((Number(col.width) || 80) * scale)),
+  }))
+}
 
 export const COMPETITOR_TYPE_META = {
   direct: { label: '直接竞品', color: 'red' },
@@ -73,31 +104,16 @@ export const COMPETITOR_TYPE_META = {
   not_competitor: { label: '非竞品', color: 'gray' },
 }
 
-/** 默认列表是否展示该行（兼容 Step 2 前 include_in_comparable 未写入的历史落库） */
+/** 默认列表是否展示该行：仅用户勾选「可比公司」后显示；同赛道默认隐藏（可点「显示全部」） */
 export function isDefaultComparableVisible(row) {
   const type = String(row?.competitor_type || '').trim().toLowerCase()
-  if (!type) return true
   if (type === 'same_track') return false
   return Number(row?.include_in_comparable) === 1
 }
 
-/** 列表排序：类型优先（direct → substitute → …）再综合分 */
-export const COMPETITOR_TYPE_SORT_ORDER = {
-  direct: 0,
-  indirect: 1,
-  substitute: 2,
-  same_track: 3,
-  upstream_downstream: 4,
-  not_competitor: 5,
-}
-
+/** 列表排序：已纳入可比公司置顶，组内按综合分降序；其余按综合分降序 */
 export function sortRelationsForDisplay(list) {
   return [...(list || [])].sort((a, b) => {
-    const ta =
-      COMPETITOR_TYPE_SORT_ORDER[String(a?.competitor_type || '').trim().toLowerCase()] ?? 6
-    const tb =
-      COMPETITOR_TYPE_SORT_ORDER[String(b?.competitor_type || '').trim().toLowerCase()] ?? 6
-    if (ta !== tb) return ta - tb
     const ca = Number(a.include_in_comparable) === 1 ? 1 : 0
     const cb = Number(b.include_in_comparable) === 1 ? 1 : 0
     if (cb !== ca) return cb - ca
@@ -121,11 +137,12 @@ function renderCompetitorTypeTag(type) {
 
 /** 长文本 Popover 触发区最大宽度（px），与列宽 - 左右 padding 对齐 */
 export const CR_REL_COL_WIDTH = {
-  name: { col: 187, inner: 163 },
-  product: { col: 140, inner: 108 },
-  tags: { col: 140, inner: 108 },
-  credit: { col: 140 },
-  financing: { col: 120, inner: 88 },
+  name: { col: 108 },
+  product: { col: 120, inner: 96 },
+  tags: { col: 120, inner: 96 },
+  credit: { col: 128 },
+  financing: { col: 84, inner: 60 },
+  comparable: { col: 68 },
 }
 
 /** 竞品明细独立样式前缀（cr-rel-*），避免通用表格样式干扰 */
@@ -135,11 +152,16 @@ export const CR_REL_CSS = {
   table: 'cr-rel-table',
   colProduct: 'cr-rel-col-product',
   colTags: 'cr-rel-col-tags',
+  colName: 'cr-rel-col-name',
+  colComparable: 'cr-rel-col-comparable',
+  colFinancing: 'cr-rel-col-financing',
   cellMono: 'cr-rel-cell-mono',
+  nameText: 'cr-rel-name-text',
   createdAt: 'cr-rel-created-at',
   introCell: 'cr-rel-intro-cell',
   sourceText: 'cr-rel-source-text',
   colNumeric: 'cr-rel-col-numeric',
+  rowComparable: 'cr-rel-row-comparable',
 }
 
 function renderMonoEllipsis(raw, empty = '-') {
@@ -226,8 +248,9 @@ export function getCompetitorRelationColumns(opts = {}) {
       title: '竞品名称',
       dataIndex: 'competitor_display_name',
       width: CR_REL_COL_WIDTH.name.col,
-      ellipsis: true,
-      render: (t) => t || '-',
+      className: CR_REL_CSS.colName,
+      ellipsis: false,
+      render: (t) => <div className={CR_REL_CSS.nameText}>{t || '-'}</div>,
     },
 
     {
@@ -240,25 +263,25 @@ export function getCompetitorRelationColumns(opts = {}) {
     {
       title: '上市',
       dataIndex: 'is_listed',
-      width: 56,
+      width: 52,
       render: (v) => (Number(v) === 1 ? '是' : '否'),
     },
 
-    { title: '等级', dataIndex: 'confidence_grade', width: 56, render: (t) => t || '-' },
+    { title: '等级', dataIndex: 'confidence_grade', width: 52, render: (t) => t || '-' },
 
     {
       title: '竞品类型',
       dataIndex: 'competitor_type',
-      width: 88,
+      width: 80,
       render: (t) => renderCompetitorTypeTag(t),
     },
 
-    { title: '综合分', dataIndex: 'relevance_score', width: 70, className: CR_REL_CSS.colNumeric, render: (v) => (v == null ? '-' : String(v)) },
+    { title: '综合分', dataIndex: 'relevance_score', width: 64, className: CR_REL_CSS.colNumeric, render: (v) => (v == null ? '-' : String(v)) },
 
     {
       title: '判断依据',
       dataIndex: 'evidence_summary',
-      width: 120,
+      width: 100,
       render: (t) => (
         <div className={CR_REL_CSS.introCell}>
           <IntroPopoverCell columnTitle="判断依据" raw={t} triggerMaxWidth={96} />
@@ -313,7 +336,7 @@ export function getCompetitorRelationColumns(opts = {}) {
     {
       title: '子基金名称',
       dataIndex: 'sub_fund_names',
-      width: 100,
+      width: 88,
       ellipsis: true,
       render: (t) => t || '-',
     },
@@ -321,7 +344,7 @@ export function getCompetitorRelationColumns(opts = {}) {
     {
       title: '数据源',
       dataIndex: 'data_sources_json',
-      width: 70,
+      width: 60,
       render: (v) => {
         const text = formatCompetitorDataSources(v)
         if (text === '-') return '-'
@@ -338,7 +361,7 @@ export function getCompetitorRelationColumns(opts = {}) {
     {
       title: '证据可信',
       dataIndex: 'evidence_confidence',
-      width: 128,
+      width: 108,
       ellipsis: false,
       render: (v, record) => {
         const label = evidenceConfidenceLabel(v)
@@ -391,7 +414,9 @@ export function getCompetitorRelationColumns(opts = {}) {
 
       dataIndex: 'financing_history_text',
 
-      width: 120,
+      width: CR_REL_COL_WIDTH.financing.col,
+
+      className: CR_REL_CSS.colFinancing,
 
       render: (t, record) => {
 
@@ -417,7 +442,7 @@ export function getCompetitorRelationColumns(opts = {}) {
 
       dataIndex: 'created_at',
 
-      width: 88,
+      width: 80,
 
       render: (t) => renderCreatedAtTwoLines(t),
 
@@ -429,7 +454,9 @@ export function getCompetitorRelationColumns(opts = {}) {
 
       dataIndex: 'include_in_comparable',
 
-      width: 100,
+      width: CR_REL_COL_WIDTH.comparable.col,
+      align: 'center',
+      className: CR_REL_CSS.colComparable,
       fixed: 'right',
 
       render: (v, record) => (
@@ -447,7 +474,7 @@ export function getCompetitorRelationColumns(opts = {}) {
 
     {
       title: '操作',
-      width: 168,
+      width: 120,
       fixed: 'right',
       render: (_, record) => {
         if (actionReadOnly) {
@@ -495,6 +522,11 @@ export function getCompetitorRelationColumns(opts = {}) {
   })
 
 }
+
+/** 默认列宽之和（与主表 scroll 宽度对齐，避免展开区出现横向滚动条） */
+export const COMPETITOR_RELATION_TABLE_SCROLL_X = sumCompetitorRelationColumnWidths(
+  getCompetitorRelationColumns()
+)
 
 
 

@@ -770,7 +770,7 @@ function registerCompetitorMatchRoutes(router) {
            data_sources_json, financing_amount_text, financing_history_text,
            competitor_product_intro, competitor_tags_display, competitor_tags_json, sub_fund_names,
            include_in_comparable, F_CreatorUserId, F_CreatorTime, F_LastModifyTime, F_DeleteMark
-         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW(),0)`,
         [
           relId,
           subjectType,

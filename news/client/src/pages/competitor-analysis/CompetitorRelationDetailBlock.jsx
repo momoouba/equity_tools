@@ -1,7 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, Link, Space, Select, Table, Typography } from '@arco-design/web-react'
 import { AiIntroFullText } from './introPopoverAiCell'
-import { COMPETITOR_RELATION_TABLE_SCROLL_X, CR_REL_CSS, isDefaultComparableVisible } from './competitorRelationColumns'
+import {
+  adaptCompetitorRelationColumnsForEmbedded,
+  COMPETITOR_RELATION_TABLE_SCROLL_X,
+  CR_REL_CSS,
+  isDefaultComparableVisible,
+  sortRelationsForDisplay,
+  sumCompetitorRelationColumnWidths,
+} from './competitorRelationColumns'
 import {
   countHiddenSameTrack,
   countPendingReview,
@@ -39,12 +46,15 @@ export default function CompetitorRelationDetailBlock({
   stopPropagation = false,
   onReview,
   reviewReadOnly = false,
+  layoutWidth = 0,
 }) {
   const [relPage, setRelPage] = useState(1)
   const [relPageSize, setRelPageSize] = useState(20)
-  const [showAllComparable, setShowAllComparable] = useState(false)
+  const [showAllComparable, setShowAllComparable] = useState(true)
   const [reviewFilter, setReviewFilter] = useState('all')
   const autoSameTrackExpandedRef = useRef(false)
+  const tableSectionRef = useRef(null)
+  const [tableSectionWidth, setTableSectionWidth] = useState(0)
 
   const effectiveRunId = selectedRunId || (runs[0]?.id ?? undefined)
 
@@ -55,7 +65,7 @@ export default function CompetitorRelationDetailBlock({
 
   useEffect(() => {
     autoSameTrackExpandedRef.current = false
-    setShowAllComparable(false)
+    setShowAllComparable(true)
   }, [effectiveRunId])
 
   useEffect(() => {
@@ -76,12 +86,31 @@ export default function CompetitorRelationDetailBlock({
     setRelPage(1)
   }, [relationData, showAllComparable, reviewFilter])
 
+  useEffect(() => {
+    if (!embedded) return undefined
+    const el = tableSectionRef.current
+    if (!el) return undefined
+    const syncWidth = () => {
+      setTableSectionWidth(Math.floor(el.getBoundingClientRect().width))
+    }
+    syncWidth()
+    const ro = new ResizeObserver(syncWidth)
+    ro.observe(el)
+    window.addEventListener('resize', syncWidth)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', syncWidth)
+    }
+  }, [embedded])
+
   const pendingReviewCount = useMemo(() => countPendingReview(relationData), [relationData])
 
   const filteredRelationData = useMemo(() => {
     let list = filterRelationsForDisplay(relationData, { reviewFilter })
-    if (showAllComparable) return list
-    return list.filter(isDefaultComparableVisible)
+    if (!showAllComparable) {
+      list = list.filter(isDefaultComparableVisible)
+    }
+    return sortRelationsForDisplay(list)
   }, [relationData, showAllComparable, reviewFilter])
 
   const guardClick = (e) => {
@@ -99,6 +128,36 @@ export default function CompetitorRelationDetailBlock({
     const start = (relPage - 1) * relPageSize
     return filteredRelationData.slice(start, start + relPageSize)
   }, [filteredRelationData, relPage, relPageSize])
+
+  const relationScrollX = useMemo(
+    () => sumCompetitorRelationColumnWidths(relationColumns) || COMPETITOR_RELATION_TABLE_SCROLL_X,
+    [relationColumns]
+  )
+
+  const embeddedContainerWidth = useMemo(() => {
+    const fromParent = Number(layoutWidth) || 0
+    const fromSection = Number(tableSectionWidth) || 0
+    const raw = fromParent > 0 ? fromParent : fromSection
+    if (raw <= 0) return 0
+    return Math.max(320, raw - 24)
+  }, [layoutWidth, tableSectionWidth])
+
+  const displayColumns = useMemo(() => {
+    if (!embedded) return relationColumns
+    return adaptCompetitorRelationColumnsForEmbedded(relationColumns, embeddedContainerWidth)
+  }, [embedded, relationColumns, embeddedContainerWidth])
+
+  const getRelationRowClassName = (record) =>
+    Number(record?.include_in_comparable) === 1 ? CR_REL_CSS.rowComparable : ''
+
+  const emptyHint = useMemo(() => {
+    if (relationLoading) return '加载中…'
+    if (!(relationData || []).length) return '暂无竞品明细'
+    if (!showAllComparable && filteredRelationData.length === 0) {
+      return '暂无已纳入可比公司的竞品；请勾选上方「显示全部（含同赛道）」查看分析结果，并在「是否可比公司」列手动勾选'
+    }
+    return '暂无数据'
+  }, [relationLoading, relationData, showAllComparable, filteredRelationData.length])
 
   return (
     <section
@@ -153,7 +212,7 @@ export default function CompetitorRelationDetailBlock({
         </div>
       </div>
 
-      <div className="cr-rel-table-section">
+      <div className="cr-rel-table-section" ref={tableSectionRef}>
         <div className="cr-rel-toolbar">
           <Space size={12} align="center" className="cr-rel-toolbar-title-wrap">
             <span className="cr-rel-toolbar-title">竞品明细</span>
@@ -220,14 +279,15 @@ export default function CompetitorRelationDetailBlock({
           </Space>
         </div>
         <Table
-          className={`${CR_REL_CSS.table} pre-inv-sourcing-main-table`}
+          className={CR_REL_CSS.table}
           rowKey="id"
           stripe
           loading={relationLoading}
           data={pagedRelationData}
-          columns={relationColumns}
+          columns={displayColumns}
+          rowClassName={getRelationRowClassName}
           border={{ wrapper: true, cell: true }}
-          scroll={{ x: COMPETITOR_RELATION_TABLE_SCROLL_X }}
+          scroll={embedded ? undefined : { x: relationScrollX }}
           pagination={{
             current: relPage,
             pageSize: relPageSize,
@@ -245,7 +305,7 @@ export default function CompetitorRelationDetailBlock({
           }}
           noDataElement={
             <div className="cr-rel-empty" role="status">
-              暂无竞品明细
+              {emptyHint}
             </div>
           }
         />

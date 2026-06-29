@@ -1,5 +1,5 @@
 /**
- * 竞品明细展开区 — 与主表 pre-inv-sourcing-main-table 共用 fixed 布局（见 EnterpriseManagement.css）
+ * 竞品明细展开区 — 独立 cr-rel-table 布局（勿复用主表 pre-inv-sourcing-main-table，避免撑宽触发横向滚动）
  */
 
 .cr-rel-scope {
@@ -121,26 +121,59 @@
 }
 
 
-/* 明细表列分隔线（布局/内边距与主表一致，由 pre-inv-sourcing-main-table 控制） */
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-th,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td {
+/* 明细表列分隔线、单元格内边距（独立于主表样式） */
+.cr-rel-scope .cr-rel-table .arco-table-th,
+.cr-rel-scope .cr-rel-table .arco-table-td {
   border-right: 1px solid var(--color-border) !important;
+  box-sizing: border-box;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-th:last-child,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td:last-child {
+.cr-rel-scope .cr-rel-table .arco-table-th:last-child,
+.cr-rel-scope .cr-rel-table .arco-table-td:last-child {
   border-right: none !important;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table.arco-table-border:not(.arco-table-borderless) .arco-table-container {
+.cr-rel-scope .cr-rel-table .arco-table-th,
+.cr-rel-scope .cr-rel-table .arco-table-td {
+  padding: 0 !important;
+}
+
+.cr-rel-scope .cr-rel-table .arco-table-th .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell {
+  padding: 8px 10px;
+  box-sizing: border-box;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-layout-fixed .arco-table-content-inner {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-layout-fixed .arco-table-content-inner > table {
+  table-layout: fixed !important;
+  width: 100% !important;
+}
+
+.cr-rel-scope--embedded .cr-rel-table-section {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.cr-rel-scope--embedded .cr-rel-table .arco-table-container,
+.cr-rel-scope--embedded .cr-rel-table .arco-table-body,
+.cr-rel-scope--embedded .cr-rel-table .arco-table-content {
+  overflow-x: hidden !important;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-border:not(.arco-table-borderless) .arco-table-container {
   border: none;
   border-top: none !important;
   border-radius: 0;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-header,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-body,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-content {
+.cr-rel-scope .cr-rel-table .arco-table-header,
+.cr-rel-scope .cr-rel-table .arco-table-body,
+.cr-rel-scope .cr-rel-table .arco-table-content {
   background-color: var(--color-bg-2);
 }
 
@@ -157,30 +190,44 @@
   background-color: var(--color-fill-1) !important;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td .arco-table-cell,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td .arco-table-cell-wrap-value,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td .arco-typography,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-th .arco-table-cell,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-th .arco-table-th-item {
+.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table .arco-table-td .arco-typography,
+.cr-rel-scope .cr-rel-table .arco-table-th .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-th .arco-table-th-item {
   background-color: transparent !important;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td:first-child .arco-table-cell,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td:first-child .arco-table-cell-wrap-value,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-td:first-child .arco-typography {
+.cr-rel-scope .cr-rel-table .arco-table-td:first-child .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-td:first-child .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table .arco-table-td:first-child .arco-typography {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-tbody .arco-table-tr:hover .arco-table-td {
+.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td {
   background-color: var(--color-fill-1) !important;
 }
 
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell-wrap-value,
-.cr-rel-scope .cr-rel-table.pre-inv-sourcing-main-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-typography {
+.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell,
+.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-typography {
   background-color: transparent !important;
+}
+
+/* 已勾选可比公司：浅蓝底色；未勾选保持默认斑马纹 */
+.cr-rel-scope .cr-rel-table .cr-rel-row-comparable .arco-table-td {
+  background-color: rgb(var(--primary-1)) !important;
+}
+
+.cr-rel-scope .cr-rel-table.arco-table-stripe .cr-rel-row-comparable .arco-table-td,
+.cr-rel-scope .cr-rel-table.arco-table-stripe .cr-rel-row-comparable.arco-table-tr-striped .arco-table-td {
+  background-color: rgb(var(--primary-1)) !important;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-row-comparable:hover .arco-table-td {
+  background-color: rgb(var(--primary-2)) !important;
 }
 
 .cr-rel-scope .cr-rel-table .cr-rel-cell-mono {
@@ -223,6 +270,40 @@
   font-size: 12px;
 }
 
+/* 竞品名称：换行显示，避免单行省略 */
+.cr-rel-scope .cr-rel-table .cr-rel-col-name .arco-table-cell,
+.cr-rel-scope .cr-rel-table .cr-rel-col-name .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table .cr-rel-col-name .arco-typography {
+  white-space: normal !important;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: unset;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-name-text {
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* 是否可比公司 / 融资：收窄列内边距 */
+.cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-cell,
+.cr-rel-scope .cr-rel-table .cr-rel-col-financing .arco-table-cell {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-th-item {
+  white-space: normal;
+  line-height: 1.25;
+  font-size: 12px;
+  text-align: center;
+}
+
+.cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-th-item,
+.cr-rel-scope .cr-rel-table .cr-rel-col-comparable .arco-table-cell {
+  text-align: center;
+}
+
 .cr-rel-scope .cr-rel-table .arco-table-pagination {
   margin: 0;
   padding: 8px 12px;
@@ -237,7 +318,7 @@
   color: var(--color-text);
 }
 
-/* 主表展开行：清外层 padding，嵌入区自带线框 */
+/* 主表展开行：清外层 padding，嵌入区限制在可视宽度内 */
 .pre-inv-sourcing-page .arco-table-expand-content > .arco-table-td {
   padding: 0;
   background: var(--color-fill-1);
@@ -245,4 +326,10 @@
 
 .pre-inv-sourcing-page .arco-table-expand-content > .arco-table-td > .arco-table-cell {
   padding: 0;
+  overflow-x: hidden;
+}
+
+.pre-inv-sourcing-page .arco-table-expand-content .cr-rel-scope--embedded {
+  max-width: 100%;
+  overflow-x: hidden;
 }
