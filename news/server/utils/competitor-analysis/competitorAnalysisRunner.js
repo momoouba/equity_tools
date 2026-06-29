@@ -123,15 +123,25 @@ function isDialysisPrimaryTarget(target) {
   return DIALYSIS_PRIMARY_RE.test(blob);
 }
 
+/** 从目标画像生成中性 subject_track_hint，供校验 prompt 读取（不写死行业结论） */
 function inferSubjectTrackHint(target) {
-  const dialysis = isDialysisPrimaryTarget(target);
-  const bioFilter = isBioFilterTrackTarget(target);
-  if (dialysis && bioFilter) {
-    return '血液透析/血液净化为主业，兼有生物制药过滤膜/TFF 副线；生物制药过滤膜竞品应标 same_track';
-  }
-  if (bioFilter) return '生物制药过滤膜/过滤器耗材为主业';
-  if (dialysis) return '血液透析/血液净化为主业';
-  return null;
+  const parts = [];
+  if (target?.industry_l1) parts.push(`行业一级：${target.industry_l1}`);
+  if (target?.industry_l2) parts.push(`行业二级：${target.industry_l2}`);
+  const tagStr = (target?.tags || [])
+    .map((t) => strTrim(t))
+    .filter(Boolean)
+    .slice(0, 6)
+    .join('、');
+  if (tagStr) parts.push(`标签：${tagStr}`);
+  const intro = [target?.product_intro, target?.qcc_intro_effective]
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+  if (intro) parts.push(`业务摘要：${intro}`);
+  return parts.length ? parts.join('；') : null;
 }
 
 function trackReForKind(trackKind) {
@@ -147,27 +157,23 @@ function getExpandedLlmTrackKind(target) {
   return null;
 }
 
-/** 从目标简介抽取检索短语（通用，不写死企业名） */
-function extractIntroSearchTerms(intro, trackRe) {
+/** 从目标简介抽取检索短语（通用，不写死行业词或企业名） */
+function extractIntroSearchTerms(intro) {
   const s = String(intro || '').trim();
   if (!s) return [];
   const terms = [];
   const phraseRe =
-    /[\u4e00-\u9fff]{2,14}(?:过滤|膜|滤芯|超滤|除菌|囊式|制药|生物|工艺|耗材|材料|器材|设备|过滤器)/g;
+    /[\u4e00-\u9fff]{2,14}(?:产品|服务|系统|平台|方案|设备|材料|耗材|技术|应用|制造|销售|加工|软件|工具)/g;
   let m;
   while ((m = phraseRe.exec(s)) !== null && terms.length < 8) {
     const t = m[0].trim();
     if (t.length >= 4 && !terms.includes(t)) terms.push(t);
   }
-  if (trackRe && trackRe.test(s)) {
-    for (const t of [
-      '生物制药过滤膜',
-      '除菌滤芯',
-      '深层过滤',
-      '切向流过滤',
-      '国产过滤耗材',
-    ]) {
-      if (!terms.includes(t)) terms.push(t);
+  if (terms.length < 3) {
+    for (const seg of s.split(/[，,。；;、\n]/)) {
+      const t = seg.trim().slice(0, 24);
+      if (t.length >= 4 && !terms.includes(t)) terms.push(t);
+      if (terms.length >= 6) break;
     }
   }
   return terms.slice(0, 6);
@@ -183,20 +189,10 @@ function candidateHitsTrackKeyword(c, trackRe) {
 
 function buildWebDiscoverKeywords(target) {
   const kw = target.tags.slice(0, 6).map((t) => strTrim(t)).filter(Boolean);
-  const trackKind = getExpandedLlmTrackKind(target);
-  const trackRe = trackReForKind(trackKind);
-  if (trackKind === 'bio_filter' || trackKind === 'dialysis_dual') {
-    kw.push(
-      '生物制药过滤膜',
-      '除菌级滤芯',
-      '国产过滤耗材',
-      '深层过滤器',
-      '除病毒过滤膜',
-      '小型膜过滤企业'
-    );
-  }
+  if (target.industry_l1) kw.push(strTrim(target.industry_l1));
+  if (target.industry_l2) kw.push(strTrim(target.industry_l2));
   const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
-  kw.push(...extractIntroSearchTerms(introBlob, trackRe));
+  kw.push(...extractIntroSearchTerms(introBlob));
   kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所', 'A股同业');
   return [...new Set(kw)].slice(0, 16);
 }
@@ -946,6 +942,8 @@ async function executeCompetitorAnalysisRun(opts) {
       product_intro: target.product_intro,
       qcc_intro_effective: target.qcc_intro_effective,
       tags: target.tags,
+      industry_l1: target.industry_l1,
+      industry_l2: target.industry_l2,
       subject_track_hint: target.subject_track_hint,
     };
 

@@ -102,11 +102,11 @@ function PromptConfig() {
 
   const competitorPromptPlaceholderHelp = {
     competitor_web_discover:
-      '格式：---SYSTEM---\\n系统提示词\\n---USER---\\n用户模板。USER 可用占位符：{{TARGET_PROFILE_JSON}}、{{KEYWORDS_JSON}}、{{EXCLUDE_NAMES_JSON}}。联网发现步骤会启用模型 web_search。',
+      '格式：---SYSTEM---\\n系统提示词\\n---USER---\\n用户模板。USER 占位符：{{TARGET_PROFILE_JSON}}、{{KEYWORDS_JSON}}、{{EXCLUDE_NAMES_JSON}}。联网发现步骤会启用模型 web_search；规则为跨行业通用，至少 3 家国内上市公司为产品硬性要求。',
     competitor_pair_similarity:
-      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。',
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。JSON 可含 product_intro、tags、industry_l1/l2 等；规则为跨行业通用产品相似度打分。',
     competitor_validate:
-      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。',
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。JSON 可含 product_intro、tags、industry_l1/l2、subject_track_hint 等字段；规则为跨行业通用，勿写死具体赛道或企业名。',
   }
 
   const filteredAiModelConfigs = useMemo(

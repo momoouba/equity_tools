@@ -142,6 +142,11 @@ function buildEvidenceSummary(validation) {
   return parts.join('\n').slice(0, 2000) || null;
 }
 
+function averageDimensionScore(dimensionScores) {
+  const d = normalizeDimensionScores(dimensionScores);
+  return clampScore((d.substitutability + d.customer_overlap + d.scenario_overlap) / 3);
+}
+
 /** 规范化 S5 validate JSON，补全 competitor_type 与兼容字段。 */
 function normalizeCompetitorValidation(raw, context = null) {
   if (!raw || typeof raw !== 'object') {
@@ -167,8 +172,18 @@ function normalizeCompetitorValidation(raw, context = null) {
     competitorType = refineCompetitorTypeFromContext(competitorType, context);
   }
   const nonPersist = NON_PERSIST_TYPES.has(competitorType);
-  const validatedScore = clampScore(raw.validated_score);
   const dimensionScores = normalizeDimensionScores(raw.dimension_scores);
+  const dimensionAverage = averageDimensionScore(dimensionScores);
+  const validatedScore = clampScore(
+    raw.validated_score != null && raw.validated_score !== ''
+      ? raw.validated_score
+      : dimensionAverage
+  );
+  const coreOverlapPercent = clampScore(
+    raw.core_overlap_percent != null && raw.core_overlap_percent !== ''
+      ? raw.core_overlap_percent
+      : dimensionAverage
+  );
 
   const normalized = {
     ...raw,
@@ -177,7 +192,7 @@ function normalizeCompetitorValidation(raw, context = null) {
     is_upstream_downstream: competitorType === 'upstream_downstream' || !!raw.is_upstream_downstream,
     is_listed: !!raw.is_listed,
     industry_match: raw.industry_match !== false,
-    core_overlap_percent: clampScore(raw.core_overlap_percent),
+    core_overlap_percent: coreOverlapPercent,
     validated_score: validatedScore,
     reject_reason: strTrim(raw.reject_reason).slice(0, 500),
     key_differences: strTrim(raw.key_differences).slice(0, 500),
