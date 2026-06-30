@@ -17,6 +17,11 @@ const {
 
 // ── 常量 ──────────────────────────────────────────────
 const MARKITDOWN_TIMEOUT_MS = 5 * 60 * 1000;           // MarkItDown 超时 5 分钟
+const BP_MARKDOWN_POLL_INTERVAL_MS = 2000;
+const BP_CHUNK_CONCURRENCY = Math.max(
+  1,
+  Math.min(8, parseInt(process.env.FINANCING_AI_CONCURRENCY || '4', 10) || 4)
+);
 const SINGLE_CALL_THRESHOLD = 12000;                    // 单次调用字符阈值
 const CHUNK_MAX_CHARS = 8000;                           // 单块最大字符数
 const CHUNK_OVERLAP = 500;                              // 分块重叠字符数
@@ -255,15 +260,23 @@ async function extractBpContent(markdownText) {
     return formatExtractResult(result);
   }
 
-  // 长文本：逐块提取（使用并发控制）
-  const extracts = [];
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const result = await withFinancingAiConcurrency(() => extractChunk(chunks[i], modelConfig));
-      extracts.push(result);
-    } catch (err) {
-      console.warn(`[bpFileParser] 第 ${i + 1} 块提取失败: ${err.message}`);
-      extracts.push(null);
+  // 长文本：分波并行提取（大 BP 可显著缩短总耗时）
+  const extracts = new Array(chunks.length).fill(null);
+  for (let i = 0; i < chunks.length; i += BP_CHUNK_CONCURRENCY) {
+    const wave = chunks.slice(i, i + BP_CHUNK_CONCURRENCY);
+    const waveResults = await Promise.all(
+      wave.map((chunk, j) => {
+        const chunkIndex = i + j;
+        return withFinancingAiConcurrency(() => extractChunk(chunk, modelConfig))
+          .then((result) => ({ chunkIndex, result }))
+          .catch((err) => {
+            console.warn(`[bpFileParser] 第 ${chunkIndex + 1} 块提取失败: ${err.message}`);
+            return { chunkIndex, result: null };
+          });
+      })
+    );
+    for (const { chunkIndex, result } of waveResults) {
+      extracts[chunkIndex] = result;
     }
   }
 
@@ -321,44 +334,52 @@ async function processBpFile({ absolutePath, projectId }) {
 }
 
 /**
+ * 轮询等待 MarkItDown 将 BP 转为 Markdown 并写入 bp_extract_text。
+ * @param {string} projectId
+ * @param {number} [maxWaitMs=MARKITDOWN_TIMEOUT_MS]
+ * @returns {Promise<string|null>} Markdown 全文；无 BP 文件或超时返回 null
+ */
+async function waitForBpMarkdown(projectId, maxWaitMs = MARKITDOWN_TIMEOUT_MS) {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const rows = await db.query(
+      'SELECT bp_filename, bp_extract_text FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
+      [projectId]
+    );
+    if (!rows.length) return null;
+    if (!rows[0].bp_filename) return null;
+    if (rows[0].bp_extract_text) {
+      return String(rows[0].bp_extract_text).trim() || null;
+    }
+    await new Promise((r) => setTimeout(r, BP_MARKDOWN_POLL_INTERVAL_MS));
+  }
+  console.warn(`[bpFileParser] 等待 BP Markdown 超时 (${projectId})，MarkItDown 可能仍在处理`);
+  return null;
+}
+
+/**
  * 从数据库读取 BP Markdown 文本，调用 LLM 提取产品介绍和企业标签，写入项目记录。
  * 在 AI 取数 pipeline 中调用（企查查简介之后、AI 取数之前）。
- * 内置轮询等待 MarkItDown 转换完成（最多等待 60 秒）。
+ * 内置轮询等待 MarkItDown 转换完成（最长与 MarkItDown 超时一致，默认 5 分钟）。
  *
  * @param {string} projectId - pre_investment_project 表记录 ID
  * @returns {Promise<{success: boolean, extracted?: boolean, error?: string}>}
  */
 async function extractBpForProject(projectId) {
   try {
-    // 轮询等待 bp_extract_text 被 processBpFile 写入（MarkItDown 转换可能需要数秒）
-    const POLL_INTERVAL = 2000;
-    const POLL_MAX_WAIT = 60000;
-    const start = Date.now();
-    let markdownText = null;
-
-    while (Date.now() - start < POLL_MAX_WAIT) {
-      const rows = await db.query(
-        'SELECT bp_filename, bp_extract_text FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
-        [projectId]
-      );
-      if (!rows.length) {
-        return { success: false, error: '项目不存在' };
-      }
-      // 无 BP 文件 → 无需提取
-      if (!rows[0].bp_filename) {
-        return { success: true, extracted: false };
-      }
-      // bp_extract_text 已就绪
-      if (rows[0].bp_extract_text) {
-        markdownText = rows[0].bp_extract_text;
-        break;
-      }
-      // 等待后重试
-      await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+    const rows = await db.query(
+      'SELECT bp_filename FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
+      [projectId]
+    );
+    if (!rows.length) {
+      return { success: false, error: '项目不存在' };
+    }
+    if (!rows[0].bp_filename) {
+      return { success: true, extracted: false };
     }
 
+    const markdownText = await waitForBpMarkdown(projectId);
     if (!markdownText) {
-      console.warn(`[bpFileParser] 等待 BP 文本超时 (${projectId})，MarkItDown 可能仍在处理`);
       return { success: true, extracted: false };
     }
 
@@ -388,5 +409,7 @@ module.exports = {
   processBpFile,
   extractBpContent,
   extractBpForProject,
+  waitForBpMarkdown,
   chunkMarkdown,
+  MARKITDOWN_TIMEOUT_MS,
 };

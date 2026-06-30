@@ -8,7 +8,6 @@ const {
   normalizeCreditCode,
   strTrim,
 } = require('./competitorMatchUtils');
-const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
 
 const IPO_YEARS = 3;
 const FIN_YEARS = 3;
@@ -140,7 +139,6 @@ function filterExcludedIpoRows(rows, excludeCredit, excludeName) {
     const mapped = mapIpoRow(r);
     if (exC && mapped.unified_credit_code === exC) continue;
     if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
-    if (isOverseasCompetitorCandidate(mapped)) continue;
     out.push(mapped);
   }
   return dedupeRecalledByCompanyKey(out);
@@ -206,7 +204,6 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
     const mapped = mapFinancingRow(r);
     if (exC && mapped.unified_credit_code === exC) continue;
     if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
-    if (isOverseasCompetitorCandidate(mapped)) continue;
     out.push(mapped);
   }
   return dedupeRecalledByCompanyKey(out);

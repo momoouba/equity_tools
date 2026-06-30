@@ -294,11 +294,11 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
 
 const LISTED_MANDATE_USER_SUFFIX = `
 
-【A股/北交所上市硬性要求】
+【A股/北交所上市硬性要求（仅补足境内名额，境外不计入）】
 本次检索须专门补足中国大陆境内上市公司：上交所（SSE）、深交所（SZSE）、北交所（BSE）、新三板（NEEQ）。
 必须返回至少 3 家 is_listed=true 且 listing_market 为 sse/szse/bse/neeq 的公司，按 ai_relevance_score 降序（最相似优先）。
 每家企业须提供 18 位统一社会信用代码与**当前最新工商注册全称**（勿用曾用名）。
-禁止用境外企业、港股（listing_market=hk）、美股或未上市企业凑数。`;
+禁止用境外企业、港股（listing_market=hk）、美股凑「境内上市至少 3 家」的名额；境外竞品可另列但不计入上述 3 家。`;
 
 /** 专项联网：补足国内 A 股/北交所/新三板上市公司（至少 3 家） */
 async function discoverDomesticListedCompetitors(profile, keywords, excludeNames, logCtx = {}) {

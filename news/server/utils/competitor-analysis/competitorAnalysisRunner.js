@@ -80,8 +80,7 @@ const {
 } = require('./competitorProductLineUtils');
 const {
   clearDomesticIdentityCache,
-  filterDomesticCompetitorCandidates,
-  finalizeDomesticPersistRows,
+  finalizePersistRows,
   isOverseasCompetitorCandidate,
   normalizeDomesticCandidateIdentity,
 } = require('./competitorDomesticIdentityUtils');
@@ -1176,7 +1175,6 @@ async function executeCompetitorAnalysisRun(opts) {
       mergeRecalledCandidates(ipoList, ipoProductList),
       finList
     );
-    candidates = filterDomesticCompetitorCandidates(candidates);
 
     await appendStepLog({
       runId,
@@ -1386,12 +1384,9 @@ async function executeCompetitorAnalysisRun(opts) {
 
     applyTargetRuleScores(scored, target);
     for (const c of scored) {
-      if (candidateFromAiWeb(c)) {
+      if (candidateFromAiWeb(c) && !isOverseasCompetitorCandidate(c)) {
         await normalizeDomesticCandidateIdentity(c);
       }
-    }
-    for (let si = scored.length - 1; si >= 0; si -= 1) {
-      if (isOverseasCompetitorCandidate(scored[si])) scored.splice(si, 1);
     }
 
     const llmPoolKeys = new Set(llmPool.map((c) => candidateDedupeKey(c)).filter(Boolean));
@@ -1451,16 +1446,12 @@ async function executeCompetitorAnalysisRun(opts) {
       skip_not_competitor: 0,
       skip_upstream_downstream: 0,
       skip_low_score: 0,
-      skip_overseas: 0,
       accepted_internal: 0,
       accepted_ai_only: 0,
+      accepted_overseas: 0,
     };
     const rejectedSamples = [];
     for (const c of scored) {
-      if (isOverseasCompetitorCandidate(c)) {
-        filterStats.skip_overseas += 1;
-        continue;
-      }
       if (c.validation) refreshValidationAfterRuleScores(c);
       if (!isPersistValidationPassed(c)) {
         if (!c.validation || c.validation.ai_failed) {
@@ -1529,6 +1520,7 @@ async function executeCompetitorAnalysisRun(opts) {
       }
 
       if (c.hasInternal) filterStats.accepted_internal += 1;
+      else if (isOverseasCompetitorCandidate(c)) filterStats.accepted_overseas += 1;
       else filterStats.accepted_ai_only += 1;
       toPersist.push({ ...row, _candidate: c });
     }
@@ -1626,9 +1618,9 @@ async function executeCompetitorAnalysisRun(opts) {
     });
     finalList.sort((a, b) => b.finalScore - a.finalScore);
 
-    finalList = await finalizeDomesticPersistRows(finalList, logCtx);
+    finalList = await finalizePersistRows(finalList, logCtx);
     if (!finalList.length) {
-      throw new Error('落库列表无有效境内竞品（已排除境外主体或无法补齐统一社会信用代码）');
+      throw new Error('落库列表无有效竞品（境内须可补齐统一社会信用代码，或保留有效境外竞品名称）');
     }
 
     logCompetitorRun(runId, 'S6_persist', `准备落库 ${finalList.length} 条`, summarizeCandidates(finalList, 20));

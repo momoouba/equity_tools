@@ -7,6 +7,7 @@ const {
   withFinancingAiConcurrency,
   PROMPT_TYPE,
 } = require('../project-sourcing/financingAiEnrichService');
+const { waitForBpMarkdown } = require('./bpFileParser');
 const {
   searchMetaSqlAssignments,
   searchMetaSqlValues,
@@ -193,7 +194,7 @@ async function runPreInvestmentProjectAiEnrichTask({
 
     const ev = await db.query(
       `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
-              qcc_company_intro, bp_extract_text, F_DeleteMark
+              qcc_company_intro, bp_extract_text, bp_filename, F_DeleteMark
        FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
       [preProjectId]
     );
@@ -201,6 +202,18 @@ async function runPreInvestmentProjectAiEnrichTask({
       throw new Error('投前项目不存在或已删除');
     }
     const row = ev[0];
+
+    // 有 BP 文件但 Markdown 尚未就绪时，后台等待 MarkItDown 完成（避免大文件前端超时后丢失 BP 上下文）
+    if (row.bp_filename && !row.bp_extract_text) {
+      console.log(`[preInvAiEnrich] 等待 BP Markdown 就绪: ${preProjectId}`);
+      const markdown = await waitForBpMarkdown(preProjectId);
+      if (markdown) {
+        row.bp_extract_text = markdown;
+        console.log(`[preInvAiEnrich] BP Markdown 已就绪: ${preProjectId}, ${markdown.length} 字符`);
+      } else {
+        console.warn(`[preInvAiEnrich] BP Markdown 等待超时，将不含 BP 正文继续 AI 取数: ${preProjectId}`);
+      }
+    }
 
     const rowForTemplate = buildFinancingAiTemplateRow(row);
     if (!rowForTemplate.company_name) {

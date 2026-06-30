@@ -3,6 +3,7 @@ const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
 const { buildVersionLabelMapForInvestedEnterprise, buildVersionLabelMapForPreInvestmentProject } = require('./competitorRunVersionService');
+const { formatFinancingDate } = require('./competitorFinancingResolve');
 
 const EXPORT_HEADERS = [
   '竞品名称',
@@ -12,6 +13,12 @@ const EXPORT_HEADERS = [
   '竞品类型',
   '综合分',
   '判断依据',
+  '证据可信',
+  '待复核',
+  '来源覆盖分',
+  '新鲜度分',
+  '一致性分',
+  '判断强度分',
   '产品介绍',
   '企业标签',
   '子基金名称',
@@ -67,15 +74,109 @@ const COMPETITOR_TYPE_LABELS = {
   not_competitor: '非竞品',
 };
 
-function relationToRow(rel, versionLabel) {
-  let bd = rel.evidence_breakdown_json;
-  if (bd && typeof bd === 'string') {
-    try {
-      bd = JSON.parse(bd);
-    } catch {
-      bd = null;
-    }
+function parseJsonField(v) {
+  if (v == null || v === '') return null;
+  if (typeof v === 'object') return v;
+  try {
+    return JSON.parse(String(v));
+  } catch {
+    return null;
   }
+}
+
+/** 导出用日期：统一 YYYY-MM-DD（兼容 Date / ISO / MySQL 字符串） */
+function formatExportYmd(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return '';
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const s = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  if (!Number.isNaN(d.getTime())) return formatExportYmd(d);
+  return s;
+}
+
+/** 融资历史多行文本：每行首段日期规范为 YYYY-MM-DD */
+function normalizeFinancingLineDate(prefix) {
+  const s = String(prefix || '').trim();
+  const m = s.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/);
+  if (m) {
+    const y = m[1];
+    const mo = String(m[2]).padStart(2, '0');
+    const day = m[3] != null && m[3] !== '' ? String(m[3]).padStart(2, '0') : '01';
+    return `${y}-${mo}-${day}`;
+  }
+  const ymd = formatFinancingDate(s);
+  return ymd && ymd !== '【无】' ? ymd : s;
+}
+
+function formatFinancingExportText(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  return raw
+    .split(/\r?\n/)
+    .map((line) => {
+      const t = String(line).trim();
+      if (!t) return '';
+      const m = t.match(/^(\d{4}-\d{1,2}-\d{0,2})(.*)$/);
+      if (!m) return t;
+      const ymd = normalizeFinancingLineDate(m[1]);
+      const rest = m[2] || '';
+      return `${ymd}${rest}`;
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function resolveEvidenceBreakdown(rel) {
+  const direct = parseJsonField(rel.evidence_breakdown_json);
+  if (direct && typeof direct === 'object') return direct;
+  const scoreBd = parseJsonField(rel.score_breakdown_json);
+  if (scoreBd?.evidence_breakdown && typeof scoreBd.evidence_breakdown === 'object') {
+    return scoreBd.evidence_breakdown;
+  }
+  return null;
+}
+
+function resolveEvidenceConfidence(rel, breakdown) {
+  if (rel.evidence_confidence != null && rel.evidence_confidence !== '') {
+    return rel.evidence_confidence;
+  }
+  const scoreBd = parseJsonField(rel.score_breakdown_json);
+  if (scoreBd?.evidence_confidence != null) return scoreBd.evidence_confidence;
+  if (breakdown && breakdown.source_coverage_score != null) {
+    return Math.round(
+      (Number(breakdown.source_coverage_score) || 0) * 0.35 +
+        (Number(breakdown.freshness_score) || 0) * 0.3 +
+        (Number(breakdown.consistency_score) || 0) * 0.25 +
+        (Number(breakdown.judgment_strength_score) || 0) * 0.1
+    );
+  }
+  return '';
+}
+
+function resolveNeedsReview(rel, breakdown) {
+  if (rel.needs_review != null && rel.needs_review !== '') {
+    return Number(rel.needs_review) === 1 ? '是' : '否';
+  }
+  const scoreBd = parseJsonField(rel.score_breakdown_json);
+  if (scoreBd?.needs_review != null) {
+    return Number(scoreBd.needs_review) === 1 ? '是' : '否';
+  }
+  const conf = Number(resolveEvidenceConfidence(rel, breakdown));
+  if (Number.isFinite(conf) && conf < 60) return '是';
+  return '否';
+}
+
+function relationToRow(rel, versionLabel) {
+  const bd = resolveEvidenceBreakdown(rel);
+  const financingRaw = rel.financing_history_text || rel.financing_amount_text || '';
   const base = {
     竞品名称: rel.competitor_display_name || '',
     统一社会信用代码: rel.unified_credit_code || '',
@@ -84,8 +185,8 @@ function relationToRow(rel, versionLabel) {
     竞品类型: COMPETITOR_TYPE_LABELS[rel.competitor_type] || rel.competitor_type || '',
     综合分: rel.relevance_score != null ? rel.relevance_score : '',
     判断依据: rel.evidence_summary || '',
-    证据可信: rel.evidence_confidence != null ? rel.evidence_confidence : '',
-    待复核: Number(rel.needs_review) === 1 ? '是' : '否',
+    证据可信: resolveEvidenceConfidence(rel, bd),
+    待复核: resolveNeedsReview(rel, bd),
     来源覆盖分: bd?.source_coverage_score ?? '',
     新鲜度分: bd?.freshness_score ?? '',
     一致性分: bd?.consistency_score ?? '',
@@ -94,9 +195,9 @@ function relationToRow(rel, versionLabel) {
     企业标签: rel.competitor_tags_display || '',
     子基金名称: rel.sub_fund_names || '',
     数据源: formatSources(rel.data_sources_json),
-    融资: rel.financing_history_text || rel.financing_amount_text || '',
+    融资: formatFinancingExportText(financingRaw),
     是否放入可比公司: Number(rel.include_in_comparable) === 1 ? '是' : '否',
-    落库时间: rel.F_CreatorTime ? String(rel.F_CreatorTime).replace('T', ' ').slice(0, 19) : '',
+    落库时间: formatExportYmd(rel.F_CreatorTime),
   };
   if (versionLabel != null) {
     return { 版本号: versionLabel || '', ...base };
@@ -170,7 +271,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
                 r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
-                r.evidence_breakdown_json,
+                r.evidence_breakdown_json, r.score_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
                 r.data_sources_json, r.financing_amount_text, r.financing_history_text,
                 r.is_listed, r.include_in_comparable, r.F_CreatorTime, r.run_id,
@@ -192,7 +293,8 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-                competitor_type, evidence_summary,
+                competitor_type, evidence_summary, evidence_confidence, needs_review,
+                evidence_breakdown_json, score_breakdown_json,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
                 data_sources_json, financing_amount_text, financing_history_text,
                 is_listed, include_in_comparable, F_CreatorTime
@@ -311,7 +413,7 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
       rels = await db.query(
         `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
                 r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
-                r.evidence_breakdown_json,
+                r.evidence_breakdown_json, r.score_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
                 r.data_sources_json, r.financing_amount_text, r.financing_history_text,
                 r.is_listed, r.include_in_comparable, r.F_CreatorTime, r.pre_investment_run_id,
@@ -335,7 +437,8 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
       }
       rels = await db.query(
         `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-                competitor_type, evidence_summary,
+                competitor_type, evidence_summary, evidence_confidence, needs_review,
+                evidence_breakdown_json, score_breakdown_json,
                 competitor_product_intro, competitor_tags_display, sub_fund_names,
                 data_sources_json, financing_amount_text, financing_history_text,
                 is_listed, include_in_comparable, F_CreatorTime

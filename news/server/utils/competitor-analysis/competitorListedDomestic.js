@@ -123,6 +123,13 @@ function buildListedDomesticDiscoverKeywords(target, baseKeywords) {
   return [...new Set(kw.map((x) => strTrim(x)).filter(Boolean))].slice(0, 24);
 }
 
+/** 境内未上市候选（境外主体单独统计，不计入未上市名额） */
+function isDomesticUnlistedCandidate(c) {
+  if (!c) return false;
+  if (isOverseasCompetitorCandidate(c)) return false;
+  return !isDomesticListedCandidate(c);
+}
+
 function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandidate: parseListed }) {
   let added = 0;
   let merged = 0;
@@ -130,7 +137,7 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
     const name = strTrim(w.company_name);
     if (!name) continue;
     const market = strTrim(w.listing_market || w.exchange || '');
-    if (market && isOverseasListingMarket(market)) continue;
+    const overseas = isOverseasListingMarket(market);
 
     const credit = normalizeCreditCode(w.unified_credit_code) || null;
     const webProbe = {
@@ -139,24 +146,28 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
       listing_market: market,
       is_listed: w.is_listed,
     };
-    if (isOverseasCompetitorCandidate(webProbe)) continue;
     const key = credit || name.toLowerCase();
     const dupIdx = scored.findIndex(
       (x) => (x.unified_credit_code && credit && x.unified_credit_code === credit) || x.display_name === name
     );
-    const listed =
-      parseListed({ is_listed: w.is_listed }) === 1 ||
-      isDomesticListedMarket(market) ||
-      !!w.is_listed;
+    const domesticListed =
+      !overseas &&
+      (parseListed({ is_listed: w.is_listed }) === 1 ||
+        isDomesticListedMarket(market) ||
+        !!w.is_listed);
 
     if (dupIdx >= 0) {
       const x = scored[dupIdx];
       const srcs = x.sources || (x.source ? [x.source] : []);
       if (!srcs.includes('ai_web')) x.sources = [...srcs, 'ai_web'];
-      if (listed) {
+      if (overseas) {
+        x.overseas = true;
+        x.domestic_listed = false;
+        if (market) x.listing_market = market;
+      } else if (domesticListed) {
         x.is_listed = true;
         if (market) x.listing_market = market;
-        x.domestic_listed = isDomesticListedMarket(market) || listed;
+        x.domestic_listed = isDomesticListedMarket(market) || domesticListed;
       }
       if (credit && !x.unified_credit_code) x.unified_credit_code = credit;
       const rawRel = Number(w.ai_relevance_score);
@@ -178,8 +189,9 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
       sources: ['ai_web'],
       display_name: name,
       unified_credit_code: credit,
-      is_listed: listed,
-      domestic_listed: isDomesticListedMarket(market) || listed,
+      is_listed: overseas ? !!w.is_listed : domesticListed,
+      domestic_listed: overseas ? false : isDomesticListedMarket(market) || domesticListed,
+      overseas: overseas || isOverseasCompetitorCandidate(webProbe),
       listing_market: market || null,
       product_intro: strTrim(w.core_products),
       tags: [],
@@ -209,7 +221,7 @@ function listedMandateMeetsThreshold(c, row, persistThresholdOpts) {
 }
 
 function unlistedMandateMeetsThreshold(c, row, persistThresholdOpts) {
-  if (isDomesticListedCandidate(c)) return false;
+  if (!isDomesticUnlistedCandidate(c)) return false;
   return mandateMeetsThreshold(c, row, persistThresholdOpts);
 }
 
@@ -218,7 +230,7 @@ function countUnlistedInPersistRows(rows) {
   let n = 0;
   for (const row of rows || []) {
     const c = row._candidate || row;
-    if (isDomesticListedCandidate(c)) continue;
+    if (!isDomesticUnlistedCandidate(c)) continue;
     const k = candidateDedupeKey({
       unified_credit_code: row.unified_credit_code || c.unified_credit_code,
       display_name: row.display_name || c.display_name,
@@ -246,7 +258,7 @@ function sortDomesticListedCandidates(scored) {
 
 function sortUnlistedCandidates(scored) {
   return [...(scored || [])]
-    .filter((c) => !isDomesticListedCandidate(c))
+    .filter(isDomesticUnlistedCandidate)
     .sort((a, b) => {
       const typeRank = (c) => {
         const t = c.validation?.competitor_type;
@@ -272,6 +284,7 @@ module.exports = {
   MIN_DOMESTIC_LISTED_COMPETITORS,
   MIN_UNLISTED_COMPETITORS,
   isDomesticListedCandidate,
+  isDomesticUnlistedCandidate,
   isDomesticListedFromIpoPool,
   countDomesticListedInScored,
   countDomesticListedInPersistRows,

@@ -1590,18 +1590,44 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 投前：从 BP 文件提取产品介绍和企业标签（同步，用于创建后 pipeline） */
+  /** 投前：从 BP 文件提取产品介绍和企业标签（异步，大文件可能需数分钟） */
   router.post('/pre-investment-projects/:id/bp-extract', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
       const id = String(req.params.id || '').trim();
       if (!id) {
         return res.status(400).json({ success: false, message: '缺少项目 ID' });
       }
-      const result = await extractBpForProject(id);
-      res.json({ success: true, data: result });
+      const rows = await db.query(
+        'SELECT bp_filename FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
+        [id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '投前项目不存在' });
+      }
+      if (!rows[0].bp_filename) {
+        return res.json({ success: true, data: { extracted: false }, message: '该项目无 BP 文件' });
+      }
+      setImmediate(() => {
+        extractBpForProject(id)
+          .then((result) => {
+            if (result.success && result.extracted) {
+              console.log(`[bpFileParser] 异步 BP 提取完成: ${id}`);
+            } else if (!result.success) {
+              console.warn(`[bpFileParser] 异步 BP 提取失败 (${id}): ${result.error}`);
+            }
+          })
+          .catch((err) => {
+            console.error(`[bpFileParser] 异步 BP 提取异常 (${id}):`, err);
+          });
+      });
+      return res.status(202).json({
+        success: true,
+        message: '已受理 BP 提取任务，大文件可能需要数分钟，请稍后刷新列表查看结果',
+        data: { pre_investment_project_id: id, accepted: true },
+      });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects/bp-extract]', e);
-      res.status(500).json({ success: false, message: e.message || 'BP 提取失败' });
+      res.status(500).json({ success: false, message: e.message || 'BP 提取受理失败' });
     }
   });
 

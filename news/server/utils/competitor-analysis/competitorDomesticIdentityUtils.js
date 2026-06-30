@@ -35,7 +35,7 @@ function isOverseasListingMarket(market) {
   return /^(nyse|nasdaq|otc|lse|tse|hk)/.test(m);
 }
 
-/** 是否为境外/非中国大陆工商主体（竞品池应排除） */
+/** 是否为境外/非中国大陆工商主体（用于名额统计与身份补齐分流，不再一律排除） */
 function isOverseasCompetitorCandidate(c) {
   if (!c) return true;
   const name = strTrim(c.display_name || c.company_name);
@@ -313,22 +313,36 @@ function filterDomesticCompetitorCandidates(list) {
 }
 
 /**
- * 落库前列：排除境外主体，补齐最新法定名称与信用代码。
+ * 落库前：境内主体补齐法定名称与信用代码；境外主体保留名称（不占境内名额）。
  * @returns {Promise<object[]>}
  */
-async function finalizeDomesticPersistRows(rows, logCtx = {}) {
+async function finalizePersistRows(rows, logCtx = {}) {
   const out = [];
-  let skippedOverseas = 0;
   let skippedNoIdentity = 0;
+  let keptOverseas = 0;
 
   for (const row of rows || []) {
     const c = row._candidate;
-    if (c && isOverseasCompetitorCandidate(c)) {
-      skippedOverseas += 1;
-      continue;
-    }
-    if (isOverseasCompetitorCandidate({ display_name: row.display_name, unified_credit_code: row.unified_credit_code })) {
-      skippedOverseas += 1;
+    const probe = {
+      display_name: row.display_name || c?.display_name,
+      unified_credit_code: row.unified_credit_code || c?.unified_credit_code,
+      listing_market: c?.listing_market || c?.validation?.listing_market,
+    };
+
+    if (isOverseasCompetitorCandidate(probe)) {
+      const name = strTrim(row.display_name || probe.display_name);
+      if (!name) continue;
+      row.display_name = normalizeCompanyName(name);
+      const credit = normalizeCreditCode(row.unified_credit_code || probe.unified_credit_code);
+      row.unified_credit_code = credit || null;
+      if (c) {
+        c.display_name = row.display_name;
+        c.unified_credit_code = row.unified_credit_code;
+        c.overseas = true;
+        c.domestic_listed = false;
+      }
+      out.push(row);
+      keptOverseas += 1;
       continue;
     }
 
@@ -347,16 +361,21 @@ async function finalizeDomesticPersistRows(rows, logCtx = {}) {
     out.push(row);
   }
 
-  if ((skippedOverseas > 0 || skippedNoIdentity > 0) && logCtx.runId) {
+  if ((skippedNoIdentity > 0 || keptOverseas > 0) && logCtx.runId) {
     const { logCompetitorRun } = require('./competitorAnalysisLogger');
-    logCompetitorRun(logCtx.runId, 'S6_domestic', '境内主体过滤与身份补齐', {
+    logCompetitorRun(logCtx.runId, 'S6_identity', '落库身份补齐', {
       kept: out.length,
-      skipped_overseas: skippedOverseas,
+      kept_overseas: keptOverseas,
       skipped_no_uscc: skippedNoIdentity,
     });
   }
 
   return out;
+}
+
+/** @deprecated 使用 finalizePersistRows */
+async function finalizeDomesticPersistRows(rows, logCtx = {}) {
+  return finalizePersistRows(rows, logCtx);
 }
 
 module.exports = {
@@ -367,5 +386,6 @@ module.exports = {
   applyDomesticIdentityToCandidate,
   normalizeDomesticCandidateIdentity,
   filterDomesticCompetitorCandidates,
+  finalizePersistRows,
   finalizeDomesticPersistRows,
 };

@@ -623,15 +623,15 @@ export default function ProjectSourcingPreInvestmentPage() {
     }
     await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
 
-    // BP 提取：后端会轮询等待 MarkItDown 转换完成（最多 60 秒）
+    // BP 提取：异步受理（大文件 LLM 分块提取可能需数分钟，避免前端 120s 超时）
     if (hasBpFile) {
       try {
         const bpRes = await postPreInvestmentBpExtract(projectId)
-        if (bpRes.data?.success && bpRes.data?.data?.extracted) {
+        if (bpRes.status === 202 || bpRes.data?.success) {
           bpOk = true
         }
       } catch (e) {
-        Message.warning(`BP 提取：${e.response?.data?.message || e.message || '提取失败'}`)
+        Message.warning(`BP 提取：${e.response?.data?.message || e.message || '受理失败'}`)
       }
       await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
     }
@@ -650,13 +650,13 @@ export default function ProjectSourcingPreInvestmentPage() {
 
     const label = projectNo ? `项目 ${projectNo}` : '新项目'
     if (bpOk && aiOk) {
-      Message.success(`${label} 已创建：企查查简介已同步，BP 提取 + AI 取数已受理（已整合 BP 内容），请稍后刷新列表`)
+      Message.success(`${label} 已创建：企查查简介已同步，BP 提取与 AI 取数已在后台处理（已整合 BP 内容），请稍后刷新列表`)
     } else if (qccOk && aiOk) {
       Message.success(`${label} 已创建：企查查简介已同步，AI 取数已受理，请稍后刷新列表`)
     } else if (qccOk || bpOk || aiOk) {
       const parts = []
       if (qccOk) parts.push('企查查简介已同步')
-      if (bpOk) parts.push('BP 提取完成')
+      if (bpOk) parts.push('BP 提取已受理')
       if (aiOk) parts.push('AI 取数已受理')
       Message.warning(`${label} 已创建：${parts.join('，')}；部分步骤未成功，请在列表中重试`)
     } else {
@@ -733,17 +733,17 @@ export default function ProjectSourcingPreInvestmentPage() {
           let bpOk = false
           try {
             const bpRes = await postPreInvestmentBpExtract(editingRow.id)
-            if (bpRes.data?.success && bpRes.data?.data?.extracted) {
+            if (bpRes.status === 202 || bpRes.data?.success) {
               bpOk = true
             }
           } catch (e) {
-            Message.warning(`BP 提取：${e.response?.data?.message || e.message || '提取失败'}`)
+            Message.warning(`BP 提取：${e.response?.data?.message || e.message || '受理失败'}`)
           }
           await new Promise((r) => setTimeout(r, BATCH_GAP_MS))
           try {
             const aiRes = await postPreInvestmentAiEnrich(editingRow.id)
             if (aiRes.status === 202 || aiRes.data?.success) {
-              Message.success(`已保存：${bpOk ? 'BP 提取 + ' : ''}AI 取数已受理，请稍后刷新查看整合结果`)
+              Message.success(`已保存：${bpOk ? 'BP 提取与 ' : ''}AI 取数已在后台处理，请稍后刷新查看整合结果`)
             } else {
               Message.warning(`已保存，但 AI 取数受理失败：${aiRes.data?.message || '未知错误'}`)
             }

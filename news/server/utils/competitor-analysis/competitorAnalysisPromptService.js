@@ -58,23 +58,24 @@ const BUILTIN = {
 - EXCLUDE_NAMES_JSON：已召回或须排除的公司名称，勿重复返回
 
 # 检索要求（按 core_product_lines / 核心 SKU 相似度排序，禁止硬编码或臆造企业名单）
-1. **仅中国大陆境内注册企业**（须可核验 18 位统一社会信用代码）；**禁止**境外公司、港澳台主体、开曼/BVI 架构、纯英文无中文法定名的外国企业
-2. 与目标 **core_product_lines** 直接对位的同业（同类装备/耗材/SKU，含本土中小企业）
-3. 不得仅因同属生物制药、生命科学、医疗健康等大行业而列入；须说明与目标哪条 core_product_lines 对齐
-4. 中国大陆上市公司（硬性至少 3 家）：须与目标**核心品类**最相似，按 ai_relevance_score 降序
+1. 与目标 **core_product_lines** 直接对位的同业（同类装备/耗材/SKU，含本土与境外企业）
+2. **境内企业**：须可核验 18 位统一社会信用代码，并填写最新工商注册全称
+3. **境外企业**（港股/美股/欧洲等）：可返回，listing_market 填 hk/nyse/nasdaq 等；unified_credit_code 可留空
+4. 不得仅因同属生物制药、生命科学、医疗健康等大行业而列入；须说明与目标哪条 core_product_lines 对齐
+5. **境内上市公司硬性至少 3 家**（sse/szse/bse/neeq）：须与目标**核心品类**最相似，按 ai_relevance_score 降序；**境外上市公司不计入该 3 家名额**
 
-**排除**：创新药研发企业、纯试剂/工具、检测设备、数字化平台、水处理/环保、半导体装备等——除非其明确经营与目标重合的核心 SKU；**一律排除境外企业**。
+**排除**：创新药研发企业、纯试剂/工具、检测设备、数字化平台、水处理/环保、半导体装备等——除非其明确经营与目标重合的核心 SKU。
 
 # 输出 JSON（禁止 Markdown 与 JSON 外文字）
-{"candidates":[{"company_name":"","unified_credit_code":"","is_listed":true/false,"listing_market":"sse|szse|bse|neeq","core_products":"","business_domain":"","ai_relevance_score":0}]}
+{"candidates":[{"company_name":"","unified_credit_code":"","is_listed":true/false,"listing_market":"sse|szse|bse|neeq|hk|nyse|nasdaq","core_products":"","business_domain":"","ai_relevance_score":0}]}
 
 字段规则：
-- company_name：**当前最新工商注册全称**（勿用曾用名、简称、项目代号、旧品牌名）
-- unified_credit_code：**18 位中国大陆统一社会信用代码**（境内企业必填；无法确认则不要返回该企业）
-- is_listed：A股/北交所/新三板已上市或挂牌为 true；无法判断为 false
-- listing_market：仅 sse/szse/bse/neeq（**禁止** hk/nyse/nasdaq 等境外市场）
+- company_name：**当前最新法定全称**（境内用工商全称；境外用官方英文或中英文法定名）
+- unified_credit_code：**18 位中国大陆统一社会信用代码**（仅境内企业必填；境外可留空）
+- is_listed：已上市为 true；无法判断为 false
+- listing_market：sse/szse/bse/neeq（境内）；hk/nyse/nasdaq 等（境外）
 - ai_relevance_score：0-100 整数，与目标产品/场景匹配度
-- 候选不超过 20 条；其中 is_listed=true 且 listing_market 为 sse/szse/bse/neeq 的不得少于 3 家
+- 候选不超过 20 条；其中 **境内** is_listed=true 且 listing_market 为 sse/szse/bse/neeq 的不得少于 3 家（境外上市不计入）
 
 # 兜底
 目标信息不足或检索无结果时返回 {"candidates":[]}；禁止编造未在检索中确认的企业。`,
@@ -86,8 +87,8 @@ const BUILTIN = {
 排除公司（已召回或已排除，勿重复）：{{EXCLUDE_NAMES_JSON}}
 
 请检索：
-①与目标业务直接对位的**中国大陆境内**同业（含未在排除列表中的中小企业，须含 18 位统一社会信用代码与最新法定全称）；
-②至少 3 家与目标产品/场景最相似的中国大陆 A 股或北交所/新三板上市公司（上交所、深交所、北交所均可），按相似度降序。**禁止**返回境外企业、港股/美股主体或无法提供信用代码的企业。`,
+①与目标业务直接对位的同业（境内须含 18 位统一社会信用代码与最新法定全称；境外可仅填公司法定名与 listing_market）；
+②至少 3 家与目标产品/场景最相似的**中国大陆** A 股或北交所/新三板上市公司，按相似度降序（**境外上市不计入该 3 家**）。`,
   },
   [PROMPT_TYPES.VALIDATE]: {
     prompt_name: '竞品分析-竞品关系校验',
@@ -100,7 +101,7 @@ const BUILTIN = {
 4. 输入异常兜底
 
 # 一、排他约束（最高优先级）
-0. **境外/港澳台/开曼等境外注册主体**，或候选无法对应中国大陆 18 位统一社会信用代码 → competitor_type=not_competitor，reject_reason 说明「境外主体或非境内工商注册」。
+0. **不得仅因候选为境外/港股/美股主体而判 not_competitor**；须按产品与场景对标关系判定。境外主体无法提供境内信用代码时，仍可依据 product_intro/core_product_lines 判竞品类型。
 1. 目标为初创或未上市：不得仅因候选上市、营收或规模差距大而降分，或改判 same_track / not_competitor。
 2. 候选为整线集成商、渠道平台、装备总包或控股平台型，目标为单品/组件/耗材型：competitor_type 为 upstream_downstream，不得 direct/indirect。
 3. **仅大行业/客户类型相同，core_product_lines 或 product_intro 核心 SKU 未对齐**：不得判 direct/indirect/substitute；应判 same_track 或 not_competitor，validated_score≤45。
@@ -131,7 +132,7 @@ const BUILTIN = {
 - is_upstream_downstream：仅 competitor_type=upstream_downstream 时为 true
 - validated_score、core_overlap_percent：三维度算术平均，四舍五入取 0-100 整数
 - industry_match：双方 industry_l1/industry_l2 或业务描述属于同一大类下游应用为 true；跨完全不同大行业为 false
-- is_listed：候选在 A股/北交所/新三板公开上市或处于明确境内 IPO/申报进程为 true；境外上市、仅母公司境外上市、或无法判断 → false
+- is_listed：候选在 A股/北交所/新三板公开上市或处于明确境内 IPO/申报进程为 true；仅境外上市、或无法判断 → false（境外上市仍可为竞品，is_listed 填 false）
 - reject_reason：not_competitor 或 upstream_downstream 时必填（20-60 字）；其余填空字符串 ""
 - key_differences：30-80 字，产品/客户/主业任一维度核心差异
 - rationale：30-80 字，说明当前 competitor_type 依据
