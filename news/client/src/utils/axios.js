@@ -54,10 +54,12 @@ axiosInstance.interceptors.response.use(
     return response
   },
   (error) => {
-    // 如果是401未授权，清除用户信息并跳转到登录页
-    if (error.response?.status === 401) {
+    const isLoginRequest = error.config?.url?.includes('/api/auth/login')
+    const isOnLoginPage = window.location.pathname === '/login'
+
+    // 401：登录失败留在登录页展示错误；已登录会话过期则跳转登录
+    if (error.response?.status === 401 && !isLoginRequest && !isOnLoginPage) {
       localStorage.removeItem('user')
-      // 只在非分享页面时跳转
       if (!window.location.pathname.startsWith('/share/')) {
         window.location.href = '/login'
       }

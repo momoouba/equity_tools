@@ -51,6 +51,10 @@
   text-align: center;
 }
 
+.login-container .login-error-alert {
+  margin-bottom: 20px;
+}
+
 .login-container .register-link {
   text-align: center;
   font-size: 14px;

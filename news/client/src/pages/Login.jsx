@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Form, Input, Button, Message } from '@arco-design/web-react'
+import { Form, Input, Button, Message, Alert } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import './Login.css'
 
@@ -9,6 +9,7 @@ const FormItem = Form.Item
 function Login() {
   const [form] = Form.useForm()
   const [loading, setLoading] = useState(false)
+  const [loginError, setLoginError] = useState('')
   const [systemName, setSystemName] = useState('')
   const [backgroundImage, setBackgroundImage] = useState('')
   const navigate = useNavigate()
@@ -225,6 +226,7 @@ function Login() {
 
   const handleSubmit = async (values) => {
     setLoading(true)
+    setLoginError('')
     try {
       const response = await axios.post('/api/auth/login', values)
       if (response.data.success) {
@@ -233,7 +235,14 @@ function Login() {
         navigate('/dashboard')
       }
     } catch (err) {
-      Message.error(err.response?.data?.message || '登录失败，请重试')
+      const status = err.response?.status
+      let message = err.response?.data?.message || '登录失败，请重试'
+      if (status === 401) {
+        message = '密码输入错误，请重试'
+      } else if (status === 403) {
+        message = err.response?.data?.message || '账号已被禁用'
+      }
+      setLoginError(message)
     } finally {
       setLoading(false)
     }
@@ -257,9 +266,19 @@ function Login() {
       
       <div className="login-card">
         <h1 className="login-title">{systemName || '股权投资小工具锦集'}</h1>
+        {loginError && (
+          <Alert
+            type="error"
+            content={loginError}
+            closable
+            onClose={() => setLoginError('')}
+            className="login-error-alert"
+          />
+        )}
         <Form
           form={form}
           onSubmit={handleSubmit}
+          onValuesChange={() => setLoginError('')}
           layout="vertical"
           autoComplete="off"
         >
