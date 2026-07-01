@@ -69,7 +69,7 @@ async function getNewsWithEmptyAbstract(limit = 50) {
          (content IS NOT NULL AND content != '' AND LENGTH(content) > 20)
          OR
          (source_url IS NOT NULL AND source_url != '' 
-          AND APItype IN ('企查查', 'qichacha', '上海国际集团'))
+          AND APItype IN ('企查查', 'qichacha', '上海国际', '上海国际集团'))
        )
        AND F_DeleteMark = 0
        AND DATE(F_CreatorTime) = DATE(?)
@@ -153,23 +153,6 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
       try {
         console.log(`[空摘要重新分析定时任务] 处理第 ${i + 1}/${newsList.length} 条: ID=${news.id}, 标题=${news.title?.substring(0, 50)}`);
 
-        // 检查是否是额外公众号
-        let isAdditionalAccount = false;
-        if (news.wechat_account) {
-          try {
-            const additionalResult = await db.query(
-              `SELECT F_Id FROM additional_wechat_accounts 
-               WHERE wechat_account_id = ? 
-               AND status = 'active' 
-               AND F_DeleteMark = 0`,
-              [news.wechat_account]
-            );
-            isAdditionalAccount = additionalResult.length > 0;
-          } catch (err) {
-            console.warn(`[空摘要重新分析定时任务] 检查额外公众号失败: ${err.message}`);
-          }
-        }
-
         // 不再跳过乱码：乱码时 processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
         const interfaceType = news.APItype || '新榜';
 
@@ -178,6 +161,7 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
         let analysisResult;
         if (news.enterprise_full_name) {
           analysisResult = await newsAnalysis.processNewsWithEnterprise({
+            F_Id: news.id,
             id: news.id,
             title: news.title || '',
             content: news.content || '',
@@ -189,6 +173,7 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
           });
         } else {
           analysisResult = await newsAnalysis.processNewsWithoutEnterprise({
+            F_Id: news.id,
             id: news.id,
             title: news.title || '',
             content: news.content || '',
@@ -196,11 +181,11 @@ async function executeEmptyAbstractReanalysis(batchSize = 50) {
             wechat_account: news.wechat_account || '',
             account_name: news.account_name || '',
             APItype: interfaceType
-          }, isAdditionalAccount);
+          });
         }
 
-        // 检查分析结果是否成功
-        if (analysisResult && analysisResult.success) {
+        // 检查分析结果是否成功（processNews* 返回 true/false/null）
+        if (analysisResult === true) {
           // 验证分析结果中是否有摘要
           const updatedNews = await db.query(
             'SELECT news_abstract FROM news_detail WHERE F_Id = ?',

@@ -8,6 +8,7 @@ const {
   isAdminAccount,
   LISTING_LEVEL,
 } = require('./listingAuth');
+const { IPP_ORDER_BY_IPP } = require('./listingProjectProgressOrder');
 
 async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
@@ -288,7 +289,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
              )
            )
          )
-       ORDER BY ipp.F_UpdateTime DESC`,
+       ORDER BY ${IPP_ORDER_BY_IPP}`,
       [recipient.user_id, reportDay, reportDay, reportDay]
     );
   }

@@ -5,6 +5,7 @@ const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../utils/listing/listingBeijingDate');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../utils/listing/listingCsv');
+const { IPP_ORDER_BY_PLAIN } = require('../utils/listing/listingProjectProgressOrder');
 const { shouldUseViteFrontendHost } = require('../utils/devHost');
 
 const router = express.Router();
@@ -319,7 +320,7 @@ router.get('/data/:token', async (req, res) => {
               status, board, exchange, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time
        FROM ipo_project_progress
        ${whereSql}
-       ORDER BY F_UpdateTime DESC, fund DESC, sub DESC
+       ORDER BY ${IPP_ORDER_BY_PLAIN}
        LIMIT ? OFFSET ?`,
       [...dateParams, pageSize, offset]
     );
@@ -362,7 +363,7 @@ router.get('/project-progress-export/:token', async (req, res) => {
          ct_residual
        FROM ipo_project_progress
        ${whereSql}
-       ORDER BY F_UpdateTime DESC, fund DESC, sub DESC
+       ORDER BY ${IPP_ORDER_BY_PLAIN}
        LIMIT 50000`,
       params
     );

@@ -3192,6 +3192,12 @@ class NewsAnalysis {
    * @param {boolean} forceRefetch - 是否强制重新抓取（即使content不为空）
    */
   async ensureNewsContent(newsItem, forceRefetch = false) {
+    const newsId = newsItem.F_Id ?? newsItem.id;
+    if (newsId) {
+      newsItem.F_Id = newsId;
+      newsItem.id = newsId;
+    }
+
     // 检查现有content是否有效
     const hasValidContent = newsItem.content && 
                             newsItem.content.trim() !== '' && 
@@ -3981,7 +3987,7 @@ class NewsAnalysis {
     
     // 对于企查查、上海国际集团新闻，即使内容被判断为脏内容或图片内容，也应该尝试进行AI分析
     // 只有新榜接口的图片内容或脏内容才跳过AI分析
-    const isQichachaOrSIG = interfaceType === '企查查' || interfaceType === 'qichacha' || interfaceType === '上海国际集团';
+    const isQichachaOrSIG = interfaceType === '企查查' || interfaceType === 'qichacha' || interfaceType === '上海国际集团' || interfaceType === '上海国际';
     // 企查查、上海国际集团新闻不跳过AI分析，即使内容被判断为脏内容
     const shouldSkipAI = !isQichachaOrSIG && (interfaceType === '新榜' || interfaceType === '新榜接口') && (isImageOnly || isContentDirty);
     
@@ -6220,6 +6226,13 @@ ${enterpriseList}
    */
   async processNewsWithEnterprise(newsItem) {
     try {
+      const newsId = newsItem.F_Id ?? newsItem.id;
+      if (!newsId) {
+        throw new Error('新闻ID缺失：newsItem 需包含 F_Id 或 id 字段');
+      }
+      newsItem.F_Id = newsId;
+      newsItem.id = newsId;
+
       // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚、终本案件接口数据仅拼接入库，不进行AI分析
       if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费' || newsItem.account_name === '行政处罚' || newsItem.account_name === '终本案件') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
         logWithTag('[processNewsWithEnterprise]', `${newsItem.account_name}数据仅拼接入库，跳过AI分析`);
@@ -6736,6 +6749,13 @@ ${enterpriseList}
    */
   async processNewsWithoutEnterprise(newsItem) {
     try {
+      const newsId = newsItem.F_Id ?? newsItem.id;
+      if (!newsId) {
+        throw new Error('新闻ID缺失：newsItem 需包含 F_Id 或 id 字段');
+      }
+      newsItem.F_Id = newsId;
+      newsItem.id = newsId;
+
       // 裁判文书、法院公告、送达公告、开庭公告、立案信息、破产重整、被执行人、失信被执行人、限制高消费、行政处罚、终本案件接口数据仅拼接入库，不进行AI分析
       if ((newsItem.account_name === '裁判文书' || newsItem.account_name === '法院公告' || newsItem.account_name === '送达公告' || newsItem.account_name === '开庭公告' || newsItem.account_name === '立案信息' || newsItem.account_name === '破产重整' || newsItem.account_name === '被执行人' || newsItem.account_name === '失信被执行人' || newsItem.account_name === '限制高消费' || newsItem.account_name === '行政处罚' || newsItem.account_name === '终本案件') && (newsItem.APItype === '上海国际' || newsItem.APItype === '上海国际集团')) {
         logWithTag('[processNewsWithoutEnterprise]', `${newsItem.account_name}数据仅拼接入库，跳过AI分析`);
@@ -6938,10 +6958,10 @@ ${enterpriseList}
            SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
            WHERE F_Id = ?`,
           [
-            validatedAnalysis.sentiment,
-            JSON.stringify(validatedAnalysis.keywords),
-            validatedAnalysis.news_abstract,
-            contentToSave,
+            validatedAnalysis.sentiment ?? 'neutral',
+            JSON.stringify(validatedAnalysis.keywords ?? []),
+            validatedAnalysis.news_abstract ?? null,
+            contentToSave ?? null,
             newsItem.F_Id
           ]
         );
@@ -7098,10 +7118,10 @@ ${enterpriseList}
              SET news_sentiment = ?, keywords = ?, news_abstract = ?, content = ?
              WHERE F_Id = ?`,
             [
-              validatedAnalysis.sentiment,
-              JSON.stringify(validatedAnalysis.keywords),
-              validatedAnalysis.news_abstract,
-              contentToSave2,
+              validatedAnalysis.sentiment ?? 'neutral',
+              JSON.stringify(validatedAnalysis.keywords ?? []),
+              validatedAnalysis.news_abstract ?? null,
+              contentToSave2 ?? null,
               newsItem.F_Id
             ]
           );
@@ -8014,7 +8034,7 @@ ${enterpriseList}
       
       // 获取需要分析的新闻（news_abstract为空的记录），包括公众号信息和接口类型
       const newsItems = await db.query(
-        `SELECT F_Id, title, content, source_url, enterprise_full_name, wechat_account, account_name, F_CreatorTime, APItype
+        `SELECT F_Id AS id, title, content, source_url, enterprise_full_name, wechat_account, account_name, F_CreatorTime, APItype
          FROM news_detail 
          WHERE news_abstract IS NULL 
          AND content IS NOT NULL 
@@ -8036,10 +8056,19 @@ ${enterpriseList}
 
       for (const newsItem of newsItems) {
         try {
+          const newsId = newsItem.id ?? newsItem.F_Id;
+          if (!newsId) {
+            warnWithTag('[批量分析]', '⚠️ 跳过：新闻ID缺失（需包含 id 或 F_Id 字段）');
+            errorCount++;
+            continue;
+          }
+          newsItem.id = newsId;
+          newsItem.F_Id = newsId;
+
           // 不再跳过乱码：乱码时 processNews* 内会通过 ensureNewsContent 从 source_url 重新抓取正文
           const interfaceType = newsItem.APItype || '新榜';
           if ((interfaceType === '新榜' || interfaceType === '新榜接口') && newsItem.content && newsItem.content.trim().length < 20) {
-            warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsItem.F_Id} - ${newsItem.title.substring(0, 50)}`);
+            warnWithTag('[批量分析]', `⚠️ 跳过内容太短（新榜接口）: ${newsId} - ${newsItem.title.substring(0, 50)}`);
             errorCount++;
             continue;
           }
@@ -8099,7 +8128,14 @@ ${enterpriseList}
                 // 更新数据库中的企业全称、企业简称、entity_type、fund和sub_fund
                 await db.execute(
                   'UPDATE news_detail SET enterprise_full_name = ?, enterprise_abbreviation = ?, entity_type = ?, fund = ?, sub_fund = ? WHERE F_Id = ?',
-                  [newsItem.enterprise_full_name, newsItem.enterprise_abbreviation, entityType, fund, sub_fund, newsItem.F_Id]
+                  [
+                    newsItem.enterprise_full_name,
+                    newsItem.enterprise_abbreviation ?? null,
+                    entityType ?? null,
+                    fund ?? null,
+                    sub_fund ?? null,
+                    newsId
+                  ]
                 );
               }
             } catch (e) {
@@ -8124,7 +8160,7 @@ ${enterpriseList}
           // 添加延迟避免API频率限制
           await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (error) {
-          console.error(`处理新闻 ${newsItem.F_Id} 时出错:`, error);
+          console.error(`处理新闻 ${newsItem.id ?? newsItem.F_Id ?? '(未知)'} 时出错:`, error);
           errorCount++;
         }
       }

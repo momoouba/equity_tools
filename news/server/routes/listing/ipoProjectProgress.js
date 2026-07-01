@@ -8,6 +8,7 @@ const {
   hasListingFeature,
   LISTING_FEATURE,
 } = require('../../utils/listing/listingAuth');
+const { IPP_ORDER_BY_IPP } = require('../../utils/listing/listingProjectProgressOrder');
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -181,7 +182,7 @@ async function listIpoProjectProgress(req, res) {
        FROM ipo_project_progress ipp
        LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
        ${whereSql}
-       ORDER BY ipp.F_UpdateTime DESC, ipp.fund DESC, ipp.sub DESC
+       ORDER BY ${IPP_ORDER_BY_IPP}
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -205,7 +206,7 @@ async function exportIpoProjectProgressCsv(req, res) {
        FROM ipo_project_progress ipp
        LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
        ${whereSql}
-       ORDER BY ipp.F_UpdateTime DESC, ipp.fund DESC, ipp.sub DESC
+       ORDER BY ${IPP_ORDER_BY_IPP}
        LIMIT 50000`,
       params
     );

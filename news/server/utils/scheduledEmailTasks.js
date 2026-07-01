@@ -878,7 +878,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
         
         const fundMap = {};
         fundData.forEach(item => {
-          fundMap[item.id] = {
+          fundMap[item.F_Id ?? item.id] = {
             fund: item.fund || null,
             sub_fund: item.sub_fund || null
           };
@@ -1009,7 +1009,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 创建映射表
       const fundMap = {};
       fundData.forEach(item => {
-        fundMap[item.id] = {
+        fundMap[item.F_Id ?? item.id] = {
           fund: item.fund || null,
           sub_fund: item.sub_fund || null
         };
@@ -1325,7 +1325,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 创建映射表
       const fundMap = {};
       fundData.forEach(item => {
-        fundMap[item.id] = {
+        fundMap[item.F_Id ?? item.id] = {
           fund: item.fund || null,
           sub_fund: item.sub_fund || null
         };
@@ -1799,7 +1799,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     // 创建映射表
     const fundMap = {};
     fundData.forEach(item => {
-      fundMap[item.id] = {
+      fundMap[item.F_Id ?? item.id] = {
         fund: item.fund || null,
         sub_fund: item.sub_fund || null
       };
@@ -2116,7 +2116,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         // 创建映射表
         const fundMap = {};
         fundData.forEach(item => {
-          fundMap[item.id] = {
+          fundMap[item.F_Id ?? item.id] = {
             fund: item.fund || null,
             sub_fund: item.sub_fund || null
           };
@@ -2757,7 +2757,7 @@ async function executeEmailTask(recipientId) {
             
             const fundMap = {};
             fundData.forEach(item => {
-              fundMap[item.id] = {
+              fundMap[item.F_Id ?? item.id] = {
                 fund: item.fund || null,
                 sub_fund: item.sub_fund || null
               };
