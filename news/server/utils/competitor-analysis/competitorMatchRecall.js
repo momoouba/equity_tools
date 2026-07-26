@@ -1,6 +1,7 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
+const { isDomesticExchange } = require('../listing/listedUniverseUtils');
 const {
   parseTagsFromJson,
   mergeTagArrays,
@@ -8,11 +9,14 @@ const {
   normalizeCreditCode,
   strTrim,
 } = require('./competitorMatchUtils');
+const { recallGoldStandardCandidates } = require('./competitorGoldStandardRecall');
 
 const IPO_YEARS = 3;
 const FIN_YEARS = 3;
 const RECALL_LIMIT = 3000;
 const RECALL_LISTED_BY_PRODUCT_LIMIT = 120;
+const RECALL_FINANCING_BY_PRODUCT_LIMIT = 160;
+const NEW_SHARE_RECALL_LIMIT = 8000;
 
 const IPO_RECALL_SELECT = `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
             ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
@@ -24,6 +28,20 @@ const IPO_RECALL_SELECT = `SELECT F_Id AS f_id, project_name, company, unified_c
          TRIM(IFNULL(ai_product_intro, '')) <> ''
          OR TRIM(IFNULL(ai_industry_tags_display, '')) <> ''
          OR ai_industry_tags_json IS NOT NULL
+       )`;
+
+const NEW_SHARE_RECALL_SELECT = `SELECT F_Id AS f_id, stock_code, stock_name, exchange,
+            enterprise_full_name_cn, enterprise_full_name_display,
+            unified_credit_code, sw_industry_l1, sw_industry_l2, industry_category_4,
+            product_intro, company_intro, industry_tags_display, industry_tags_json,
+            public_date, F_LastModifyTime, F_CreatorTime
+     FROM ipo_new_share
+     WHERE (
+         TRIM(IFNULL(product_intro, '')) <> ''
+         OR TRIM(IFNULL(company_intro, '')) <> ''
+         OR TRIM(IFNULL(industry_tags_display, '')) <> ''
+         OR industry_tags_json IS NOT NULL
+         OR TRIM(IFNULL(sw_industry_l1, '')) <> ''
        )`;
 
 function parseFinancingTags(row) {
@@ -58,11 +76,48 @@ function mapIpoRow(row) {
     tags,
     industry_l1: null,
     industry_l2: null,
+    industry_category_4: null,
     financing_amount_text: null,
     event_date: row.biz_update_time || row.F_LastModifyTime || row.F_CreatorTime,
     ipo_sub: strTrim(row.sub) || null,
     is_listed: true,
     domestic_listed: true,
+  };
+}
+
+function mapNewShareRow(row) {
+  const tags = mergeTagArrays(
+    parseTagsFromJson(row.industry_tags_json),
+    strTrim(row.industry_tags_display)
+      ? strTrim(row.industry_tags_display)
+          .split(/[,，、;/|]/g)
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : []
+  );
+  const exchange = strTrim(row.exchange);
+  const domestic = isDomesticExchange(exchange);
+  return {
+    source: 'ipo_new_share',
+    source_id: String(row.f_id),
+    display_name:
+      strTrim(row.enterprise_full_name_cn) ||
+      strTrim(row.enterprise_full_name_display) ||
+      strTrim(row.stock_name),
+    unified_credit_code: normalizeCreditCode(row.unified_credit_code),
+    product_intro: strTrim(row.product_intro) || strTrim(row.company_intro),
+    qcc_intro: strTrim(row.company_intro),
+    tags,
+    industry_l1: strTrim(row.sw_industry_l1) || strTrim(row.industry_category_4) || null,
+    industry_l2: strTrim(row.sw_industry_l2) || null,
+    industry_category_4: strTrim(row.industry_category_4) || null,
+    financing_amount_text: null,
+    event_date: row.public_date || row.F_LastModifyTime || row.F_CreatorTime,
+    ipo_sub: null,
+    is_listed: true,
+    domestic_listed: domestic,
+    listed_stock_code: strTrim(row.stock_code) || null,
+    listing_market: exchange || null,
   };
 }
 
@@ -77,6 +132,7 @@ function mapFinancingRow(row) {
     tags: parseFinancingTags(row),
     industry_l1: strTrim(row.industry_std_lv1),
     industry_l2: strTrim(row.industry_std_lv2),
+    industry_category_4: strTrim(row.industry_category_4) || null,
     financing_amount_text: strTrim(row.funding_amt_raw) || strTrim(row.estimated_amt_raw),
     event_date: row.event_date,
     latest_round: strTrim(row.round) || strTrim(row.latest_round),
@@ -96,7 +152,27 @@ async function recallFromIpoProjects(excludeCredit, excludeName) {
      LIMIT ?`,
     [psAppId, IPO_YEARS, RECALL_LIMIT]
   );
-  return filterExcludedIpoRows(rows, excludeCredit, excludeName);
+  return filterExcludedMappedRows(rows, mapIpoRow, excludeCredit, excludeName);
+}
+
+/**
+ * Stage 4：上市主池 `ipo_new_share` 召回（与 mapIpoRow 同构）。
+ */
+async function recallFromListedNewShare(excludeCredit, excludeName, opts = {}) {
+  const limit = Math.max(100, opts.limit || NEW_SHARE_RECALL_LIMIT);
+  const categories = Array.isArray(opts.categories)
+    ? opts.categories.map((x) => strTrim(x)).filter(Boolean)
+    : [];
+  let sql = `${NEW_SHARE_RECALL_SELECT}`;
+  const params = [];
+  if (categories.length) {
+    sql += ` AND industry_category_4 IN (${categories.map(() => '?').join(',')})`;
+    params.push(...categories);
+  }
+  sql += ` ORDER BY COALESCE(public_date, F_LastModifyTime, F_CreatorTime) DESC LIMIT ?`;
+  params.push(limit);
+  const rows = await db.query(sql, params);
+  return filterExcludedMappedRows(rows, mapNewShareRow, excludeCredit, excludeName);
 }
 
 /**
@@ -128,15 +204,103 @@ async function recallListedIpoByProductTerms(target, excludeCredit, excludeName)
      LIMIT ?`,
     params
   );
-  return filterExcludedIpoRows(rows, excludeCredit, excludeName);
+  return filterExcludedMappedRows(rows, mapIpoRow, excludeCredit, excludeName);
 }
 
-function filterExcludedIpoRows(rows, excludeCredit, excludeName) {
+/**
+ * 按透镜/核心产品短锚点在融资池定向召回（不受近 3000 条时间截断影响）。
+ */
+async function recallFinancingByProductTerms(target, excludeCredit, excludeName) {
+  if (!target) return [];
+  const {
+    expandProductLineSearchTerms,
+    buildLensScoringAnchors,
+  } = require('./competitorProductLineUtils');
+  const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
+  const lensAnchors = buildLensScoringAnchors(
+    [
+      ...(target.competition_lens?.must_align || []),
+      ...(target.competition_lens?.custom_keywords || []),
+    ],
+    10
+  );
+  const terms = [
+    ...lensAnchors,
+    ...expandProductLineSearchTerms(target.core_product_lines, introBlob),
+  ]
+    .map((t) => strTrim(t))
+    .filter((t) => t.length >= 3 && t.length <= 16);
+  const uniq = [...new Set(terms)].slice(0, 10);
+  if (!uniq.length) return [];
+
+  const termClauses = [];
+  const params = [];
+  for (const term of uniq) {
+    const like = `%${term}%`;
+    termClauses.push(
+      `(ai_product_intro LIKE ? OR ai_company_tags_display LIKE ? OR project_desc LIKE ? OR company_name LIKE ? OR project_name LIKE ?)`
+    );
+    params.push(like, like, like, like, like);
+  }
+  params.push(FIN_YEARS, RECALL_FINANCING_BY_PRODUCT_LIMIT);
+
+  const rows = await db.query(
+    `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
+            e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
+            e.industry_std_lv1, e.industry_std_lv2, e.industry_category_4,
+            e.funding_amt_raw, e.estimated_amt_raw,
+            e.round, e.latest_round, e.event_date
+     FROM sourcing_financing_event e
+     WHERE e.F_DeleteMark = 0
+       AND e.event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
+       AND (${termClauses.join(' OR ')})
+     ORDER BY e.event_date DESC
+     LIMIT ?`,
+    params
+  );
+  return filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
+}
+
+/**
+ * Stage 4：按产品线在 new_share 定向召回。
+ */
+async function recallListedNewShareByProductTerms(target, excludeCredit, excludeName, opts = {}) {
+  if (!target) return [];
+  const { expandProductLineSearchTerms } = require('./competitorProductLineUtils');
+  const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
+  const terms = expandProductLineSearchTerms(target.core_product_lines, introBlob);
+  if (!terms.length) return [];
+
+  const categories = Array.isArray(opts.categories)
+    ? opts.categories.map((x) => strTrim(x)).filter(Boolean)
+    : [];
+  const termClauses = [];
+  const params = [];
+  for (const term of terms.slice(0, 10)) {
+    const like = `%${term}%`;
+    termClauses.push(
+      `(product_intro LIKE ? OR company_intro LIKE ? OR industry_tags_display LIKE ? OR stock_name LIKE ? OR enterprise_full_name_cn LIKE ?)`
+    );
+    params.push(like, like, like, like, like);
+  }
+  let sql = `${NEW_SHARE_RECALL_SELECT} AND (${termClauses.join(' OR ')})`;
+  if (categories.length) {
+    sql += ` AND industry_category_4 IN (${categories.map(() => '?').join(',')})`;
+    params.push(...categories);
+  }
+  sql += ` ORDER BY COALESCE(public_date, F_LastModifyTime, F_CreatorTime) DESC LIMIT ?`;
+  params.push(RECALL_LISTED_BY_PRODUCT_LIMIT);
+
+  const rows = await db.query(sql, params);
+  return filterExcludedMappedRows(rows, mapNewShareRow, excludeCredit, excludeName);
+}
+
+function filterExcludedMappedRows(rows, mapFn, excludeCredit, excludeName) {
   const exC = normalizeCreditCode(excludeCredit);
   const exN = strTrim(excludeName).toLowerCase();
   const out = [];
   for (const r of rows) {
-    const mapped = mapIpoRow(r);
+    const mapped = mapFn(r);
     if (exC && mapped.unified_credit_code === exC) continue;
     if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
     out.push(mapped);
@@ -150,6 +314,11 @@ function recallRichness(item) {
     (item.tags?.length || 0) * 8 +
     (strTrim(item.qcc_intro).length || 0)
   );
+}
+
+function isNewShareListedSource(item) {
+  const srcs = item?.sources || (item?.source ? [item.source] : []);
+  return srcs.includes('ipo_new_share') && item?.is_listed === true;
 }
 
 /** 底层/融资召回：按企业信用代码或公司名去重，保留内容最丰富的一条（data_app_id 已在 SQL 限定）。 */
@@ -174,13 +343,15 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
   const rows = await db.query(
     `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
             e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
-            e.industry_std_lv1, e.industry_std_lv2, e.funding_amt_raw, e.estimated_amt_raw,
+            e.industry_std_lv1, e.industry_std_lv2, e.industry_category_4,
+            e.funding_amt_raw, e.estimated_amt_raw,
             e.round, e.latest_round, e.event_date
      FROM sourcing_financing_event e
      INNER JOIN (
        SELECT
          COALESCE(NULLIF(TRIM(company_credit_code), ''), CONCAT('nm:', TRIM(company_name))) AS grp_key,
-         MAX(event_date) AS max_dt
+         MAX(event_date) AS max_dt,
+         MAX(F_Id) AS tie_id
        FROM sourcing_financing_event
        WHERE F_DeleteMark = 0
          AND event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
@@ -192,21 +363,13 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
        GROUP BY grp_key
      ) t ON COALESCE(NULLIF(TRIM(e.company_credit_code), ''), CONCAT('nm:', TRIM(e.company_name))) = t.grp_key
         AND e.event_date = t.max_dt
+        AND e.F_Id = t.tie_id
      WHERE e.F_DeleteMark = 0
      ORDER BY e.event_date DESC
      LIMIT ?`,
     [FIN_YEARS, RECALL_LIMIT]
   );
-  const exC = normalizeCreditCode(excludeCredit);
-  const exN = strTrim(excludeName).toLowerCase();
-  const out = [];
-  for (const r of rows) {
-    const mapped = mapFinancingRow(r);
-    if (exC && mapped.unified_credit_code === exC) continue;
-    if (exN && strTrim(mapped.display_name).toLowerCase() === exN) continue;
-    out.push(mapped);
-  }
-  return dedupeRecalledByCompanyKey(out);
+  return filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
 }
 
 /** 合并双源候选（同键保留双源标记）。 */
@@ -216,6 +379,9 @@ function parseRecallEventDate(value) {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
+/**
+ * Stage 4 §8.1.1：new_share 行业优先 + recallRichness 富者覆盖；冲突时 new_share 优先。
+ */
 function mergeRecalledCandidates(ipoList, finList) {
   const map = new Map();
   const add = (item) => {
@@ -223,7 +389,13 @@ function mergeRecalledCandidates(ipoList, finList) {
     const prev = map.get(key);
     if (!prev) {
       const subs = item.ipo_sub ? [item.ipo_sub] : [];
-      map.set(key, { ...item, sources: [item.source], ipo_sub_funds: subs });
+      map.set(key, {
+        ...item,
+        sources: [item.source],
+        ipo_sub_funds: subs,
+        is_listed: item.is_listed === true ? true : item.is_listed,
+        domestic_listed: item.domestic_listed === true ? true : item.domestic_listed,
+      });
       return;
     }
     if (!prev.unified_credit_code && item.unified_credit_code) {
@@ -240,37 +412,234 @@ function mergeRecalledCandidates(ipoList, finList) {
       if (!prev.ipo_sub_funds) prev.ipo_sub_funds = [];
       if (!prev.ipo_sub_funds.includes(item.ipo_sub)) prev.ipo_sub_funds.push(item.ipo_sub);
     }
-    if (
-      recallRichness({ product_intro: item.product_intro, tags: item.tags }) >
-      recallRichness({ product_intro: prev.product_intro, tags: prev.tags })
-    ) {
+
+    // 禁止丢弃上市标记
+    if (item.is_listed === true) prev.is_listed = true;
+    if (item.domestic_listed === true) prev.domestic_listed = true;
+    if (item.listed_stock_code && !prev.listed_stock_code) {
+      prev.listed_stock_code = item.listed_stock_code;
+    }
+    if (item.listing_market && !prev.listing_market) {
+      prev.listing_market = item.listing_market;
+    }
+
+    // 金标标记不可在合并中丢失：否则同时被常规召回命中的金标竞品会失去强制进池资格
+    if (item._fromGoldStandard) {
+      prev._fromGoldStandard = true;
+      if (!prev._goldStandardType && item._goldStandardType) {
+        prev._goldStandardType = item._goldStandardType;
+      }
+    }
+
+    const itemRich = recallRichness(item);
+    const prevRich = recallRichness(prev);
+    const itemIsNewShare = item.source === 'ipo_new_share';
+    const prevIsNewShareListed = isNewShareListedSource(prev);
+    const preferItemProfile =
+      itemRich > prevRich || (itemRich === prevRich && itemIsNewShare && !prevIsNewShareListed);
+
+    if (preferItemProfile) {
       if (item.product_intro) prev.product_intro = item.product_intro;
       if (item.tags?.length) prev.tags = item.tags;
       if (item.qcc_intro) prev.qcc_intro = item.qcc_intro;
     } else {
       if (!prev.product_intro && item.product_intro) prev.product_intro = item.product_intro;
       if (!prev.tags?.length && item.tags?.length) prev.tags = item.tags;
+      if (!prev.qcc_intro && item.qcc_intro) prev.qcc_intro = item.qcc_intro;
     }
-    if (!prev.industry_l1 && item.industry_l1) prev.industry_l1 = item.industry_l1;
-    if (!prev.industry_l2 && item.industry_l2) prev.industry_l2 = item.industry_l2;
-    if (!prev.financing_amount_text && item.financing_amount_text) {
-      prev.financing_amount_text = item.financing_amount_text;
+
+    // 上市 new_share 侧行业优先；融资侧仅补空
+    if (itemIsNewShare && item.is_listed) {
+      if (item.industry_l1) prev.industry_l1 = item.industry_l1;
+      if (item.industry_l2) prev.industry_l2 = item.industry_l2;
+      if (item.industry_category_4) prev.industry_category_4 = item.industry_category_4;
+    } else if (!prevIsNewShareListed) {
+      if (!prev.industry_l1 && item.industry_l1) prev.industry_l1 = item.industry_l1;
+      if (!prev.industry_l2 && item.industry_l2) prev.industry_l2 = item.industry_l2;
+      if (!prev.industry_category_4 && item.industry_category_4) {
+        prev.industry_category_4 = item.industry_category_4;
+      }
     }
+
+    if (item.financing_amount_text) {
+      if (!prev.financing_amount_text || item.source === 'sourcing_financing_event') {
+        prev.financing_amount_text = item.financing_amount_text;
+      }
+    }
+    if (item.latest_round) {
+      if (!prev.latest_round || item.source === 'sourcing_financing_event') {
+        prev.latest_round = item.latest_round;
+      }
+    }
+
     const prevDt = parseRecallEventDate(prev.event_date);
     const itemDt = parseRecallEventDate(item.event_date);
     if (itemDt && (!prevDt || itemDt > prevDt)) {
       prev.event_date = item.event_date;
     }
   };
-  for (const x of ipoList) add(x);
-  for (const x of finList) add(x);
+  for (const x of ipoList || []) add(x);
+  for (const x of finList || []) add(x);
   return [...map.values()];
+}
+
+function parseGrayCategories(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((x) => strTrim(x)).filter(Boolean);
+  return String(raw)
+    .split(/[,，\s]+/)
+    .map((x) => strTrim(x))
+    .filter(Boolean);
+}
+
+function shouldUseNewShareForTarget(recallFlags, target) {
+  if (!recallFlags?.use_new_share_listed_recall) return false;
+  const cats = parseGrayCategories(recallFlags.new_share_gray_categories);
+  if (!cats.length) return true;
+  const hint =
+    strTrim(target?.industry_category_4) ||
+    strTrim(target?.subject_track_hint) ||
+    strTrim(target?.industry_l1) ||
+    '';
+  if (!hint) return false;
+  return cats.some((c) => hint === c || hint.includes(c));
+}
+
+/**
+ * Runner / POC 共用：按配置组装内部召回池（含可选 A/B 对比，不双写 relation）。
+ */
+async function buildInternalRecallPool({
+  target,
+  recallFlags,
+  canFinancing = false,
+}) {
+  const useNewShare = shouldUseNewShareForTarget(recallFlags, target);
+  const enableIpo = !!recallFlags.enable_ipo_project;
+  const enableAb = !!recallFlags.enable_recall_ab_compare;
+  const grayCategories = parseGrayCategories(recallFlags.new_share_gray_categories);
+  const excludeCredit = target?.unified_credit_code;
+  const excludeName = target?.display_name;
+
+  let listedMain = [];
+  let listedProduct = [];
+  let ipoSupplement = [];
+  let ipoProductSupplement = [];
+  let financingSkipReason = null;
+  let finList = [];
+
+  if (useNewShare) {
+    listedMain = await recallFromListedNewShare(excludeCredit, excludeName);
+    listedProduct = await recallListedNewShareByProductTerms(target, excludeCredit, excludeName);
+    if (enableIpo) {
+      ipoSupplement = await recallFromIpoProjects(excludeCredit, excludeName);
+      ipoProductSupplement = await recallListedIpoByProductTerms(
+        target,
+        excludeCredit,
+        excludeName
+      );
+    }
+  } else if (enableIpo) {
+    listedMain = await recallFromIpoProjects(excludeCredit, excludeName);
+    listedProduct = await recallListedIpoByProductTerms(target, excludeCredit, excludeName);
+  }
+
+  if (!recallFlags.enable_financing_event) {
+    financingSkipReason = 'config_disabled';
+  } else if (!canFinancing) {
+    financingSkipReason = 'no_project_sourcing_permission';
+  } else {
+    finList = await recallFromFinancingEvents(excludeCredit, excludeName);
+    const finByProduct = await recallFinancingByProductTerms(target, excludeCredit, excludeName);
+    finList = mergeRecalledCandidates(finList, finByProduct);
+  }
+
+  // 金标种子召回：同目标已有标注竞品时优先进入候选池，降低对 S4 联网方差的依赖
+  if (recallFlags?.enable_gold_standard_recall !== false && target) {
+    try {
+      const goldCandidates = await recallGoldStandardCandidates(
+        target,
+        excludeCredit,
+        excludeName
+      );
+      if (goldCandidates?.length) {
+        finList = mergeRecalledCandidates(finList, goldCandidates);
+      }
+    } catch (e) {
+      // 金标召回失败不应阻塞主召回流程
+      console.warn('金标种子召回失败:', e.message);
+    }
+  }
+
+  const listedMerged = mergeRecalledCandidates(
+    mergeRecalledCandidates(listedMain, listedProduct),
+    mergeRecalledCandidates(ipoSupplement, ipoProductSupplement)
+  );
+  const candidates = mergeRecalledCandidates(listedMerged, finList);
+
+  let abCompare = null;
+  if (enableAb) {
+    const altListed = useNewShare
+      ? mergeRecalledCandidates(
+          await recallFromIpoProjects(excludeCredit, excludeName),
+          await recallListedIpoByProductTerms(target, excludeCredit, excludeName)
+        )
+      : mergeRecalledCandidates(
+          await recallFromListedNewShare(excludeCredit, excludeName),
+          await recallListedNewShareByProductTerms(target, excludeCredit, excludeName)
+        );
+    const altMerged = mergeRecalledCandidates(altListed, finList);
+    const primaryKeys = new Set(candidates.map((c) => candidateDedupeKey(c)));
+    const altKeys = new Set(altMerged.map((c) => candidateDedupeKey(c)));
+    let overlap = 0;
+    for (const k of primaryKeys) {
+      if (altKeys.has(k)) overlap += 1;
+    }
+    abCompare = {
+      primary_mode: useNewShare ? 'ipo_new_share' : 'ipo_project',
+      primary_count: candidates.length,
+      alt_mode: useNewShare ? 'ipo_project' : 'ipo_new_share',
+      alt_count: altMerged.length,
+      overlap,
+      primary_only: primaryKeys.size - overlap,
+      alt_only: altKeys.size - overlap,
+      primary_with_industry_l1: candidates.filter((c) => strTrim(c.industry_l1)).length,
+      alt_with_industry_l1: altMerged.filter((c) => strTrim(c.industry_l1)).length,
+      switch_on: !!recallFlags.use_new_share_listed_recall,
+      gray_categories: grayCategories,
+      used_new_share_for_target: useNewShare,
+    };
+  }
+
+  return {
+    candidates,
+    stats: {
+      listed_main: listedMain.length,
+      listed_product_terms: listedProduct.length,
+      ipo_supplement: ipoSupplement.length,
+      ipo_product_supplement: ipoProductSupplement.length,
+      financing: finList.length,
+      financing_skipped: financingSkipReason,
+      merged: candidates.length,
+      use_new_share_listed_recall: !!recallFlags.use_new_share_listed_recall,
+      used_new_share_for_target: useNewShare,
+      gray_categories: grayCategories,
+    },
+    abCompare,
+  };
 }
 
 module.exports = {
   recallFromIpoProjects,
+  recallFromListedNewShare,
   recallListedIpoByProductTerms,
+  recallListedNewShareByProductTerms,
+  recallFinancingByProductTerms,
   recallFromFinancingEvents,
   mergeRecalledCandidates,
+  buildInternalRecallPool,
+  shouldUseNewShareForTarget,
   parseFinancingTags,
+  mapIpoRow,
+  mapNewShareRow,
+  recallRichness,
 };

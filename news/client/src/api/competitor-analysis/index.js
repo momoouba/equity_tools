@@ -105,8 +105,12 @@ export function postInvestedEnterpriseCompetitorSupplement(enterpriseId, body) {
   return axios.post(`${BASE}/invested-enterprises/${enterpriseId}/competitor-supplement`, body)
 }
 
-export function postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId) {
-  return axios.post(`${BASE}/invested-enterprises/${enterpriseId}/competitor-analysis-run`)
+export function postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, body) {
+  return axios.post(`${BASE}/invested-enterprises/${enterpriseId}/competitor-analysis-run`, body || {})
+}
+
+export function fetchInvestedCompetitionLensProposal(enterpriseId) {
+  return axios.get(`${BASE}/invested-enterprises/${encodeURIComponent(enterpriseId)}/competition-lens-proposal`)
 }
 
 export function fetchCompetitorRelations(params) {
@@ -185,6 +189,10 @@ export function postPreInvestmentAiEnrich(id) {
   return axios.post(`${BASE}/pre-investment-projects/${id}/ai-enrich`)
 }
 
-export function postPreInvestmentCompetitorAnalysisRun(id) {
-  return axios.post(`${BASE}/pre-investment-projects/${id}/competitor-analysis-run`)
+export function postPreInvestmentCompetitorAnalysisRun(id, body) {
+  return axios.post(`${BASE}/pre-investment-projects/${id}/competitor-analysis-run`, body || {})
+}
+
+export function fetchPreInvestmentCompetitionLensProposal(id) {
+  return axios.get(`${BASE}/pre-investment-projects/${encodeURIComponent(id)}/competition-lens-proposal`)
 }

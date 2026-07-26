@@ -4,7 +4,7 @@ const { normalizeDashScopeChatEndpoint, formatDashScopeHttpError } = require('..
 const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
 const { runNewShareAkSync, runIpoApplyBackfillByCode, runHkIssueTotalWanFetch } = require('./newShareAkSync');
 const { runNewShareMetricsSyncWithFallback } = require('./newShareMetricsSync');
-const { warmEtnetHkIpoInfoCache } = require('./etnetHkIpoInfoMetrics');
+const { warmEtnetHkIpoInfoCache, wasEtnetWarmRecentlyFailed } = require('./etnetHkIpoInfoMetrics');
 const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./newShareEnterpriseFullNamePrompt');
 
 const NEW_SHARE_MIN_SYNC_DATE = '2026-01-01';
@@ -246,6 +246,20 @@ function normalizePositiveOrNull(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n <= 0) return null;
   return n;
+}
+
+/** 首日涨幅可为 0 或负数，不可使用 normalizePositiveOrNull */
+function normalizeChgPctOrNull(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
+function computeFirstDayChgPctFromPrices(close, issuePrice) {
+  const c = Number(close);
+  const p = Number(issuePrice);
+  if (!Number.isFinite(c) || !Number.isFinite(p) || p <= 0) return null;
+  return Math.round(((c - p) / p) * 10000) / 100;
 }
 
 function hasChineseText(v) {
@@ -628,7 +642,7 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
   console.log(`${logTag} 港股配置: concurrency=${metricsConcurrencyHk} timeout=${metricsItemTimeoutMsHk}ms`);
 
   // 处理单个股票的通用函数
-  const processMetricsRow = async (row, market, timeoutMs) => {
+  const processMetricsRow = async (row, market, timeoutMs, extraOpts = {}) => {
     const listDate = String(row.public_date || '').slice(0, 10);
     if (!isYmd(listDate) || listDate > todayYmd) {
       return { status: 'skipped', row, listDate };
@@ -644,6 +658,7 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
           listDate,
           market,
           logTag: `${logTag}[${row.stock_code}][首日指标]`,
+          skipEtnet: !!extraOpts.skipEtnet,
         }),
         timeoutMs,
         `首日指标超时(${timeoutMs}ms)`
@@ -682,10 +697,19 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
           ? Number(fetched.totalShares)
           : null;
     const close = first.close != null && Number.isFinite(Number(first.close)) ? Number(first.close) : null;
-    const chgPct = first.chg_pct != null && Number.isFinite(Number(first.chg_pct)) ? Number(first.chg_pct) : null;
+    let chgPct = first.chg_pct != null && Number.isFinite(Number(first.chg_pct)) ? Number(first.chg_pct) : null;
     const fetchedIssuePrice =
       fetched.issuePrice != null && Number.isFinite(Number(fetched.issuePrice)) ? Number(fetched.issuePrice) : null;
     const fetchedWinRate = fetched.winRate != null && Number.isFinite(Number(fetched.winRate)) ? Number(fetched.winRate) : null;
+    if (chgPct == null && close != null) {
+      const issuePx =
+        fetchedIssuePrice != null && Number.isFinite(fetchedIssuePrice)
+          ? fetchedIssuePrice
+          : row.issue_price != null && Number.isFinite(Number(row.issue_price))
+            ? Number(row.issue_price)
+            : null;
+      chgPct = computeFirstDayChgPctFromPrices(close, issuePx);
+    }
     const marketCap = calcFirstDayMarketCap(close, totalIssuedShares);
 
     const result = await upsertNewShareRow({
@@ -700,7 +724,7 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
           : fetchedWinRate,
       total_issued_shares: normalizePositiveOrNull(totalIssuedShares ?? row.total_issued_shares ?? null),
       first_day_close: normalizePositiveOrNull(close),
-      first_day_chg_pct: normalizePositiveOrNull(chgPct),
+      first_day_chg_pct: normalizeChgPctOrNull(chgPct),
       first_day_market_cap: normalizePositiveOrNull(marketCap),
     });
     const refreshedItem = {
@@ -738,15 +762,20 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
   let hkTaskResults = [];
   if (hkCandidates.length > 0) {
     console.log(`${logTag} 开始处理港股首日指标 count=${hkCandidates.length}`);
+    let etnetWarmFailed = false;
     if (String(process.env.NEW_SHARE_METRICS_HK_ETNET_FIRST || '1') !== '0') {
       try {
         await warmEtnetHkIpoInfoCache({ logTag });
       } catch (warmErr) {
-        console.warn(`${logTag} 经济通新股信息预热失败（将按股拉取或走回退）: ${String(warmErr?.message || warmErr)}`);
+        etnetWarmFailed = true;
+        console.warn(
+          `${logTag} 经济通新股信息预热失败（将走近期页/东财/Python回退，不再重复全表翻页）: ${String(warmErr?.message || warmErr)}`
+        );
       }
     }
+    const skipEtnetFullWarm = etnetWarmFailed || wasEtnetWarmRecentlyFailed();
     hkTaskResults = await runWithConcurrency(hkCandidates, metricsConcurrencyHk, async (row) => {
-      return processMetricsRow(row, 'hk', metricsItemTimeoutMsHk);
+      return processMetricsRow(row, 'hk', metricsItemTimeoutMsHk, { skipEtnet: skipEtnetFullWarm });
     });
   }
 
@@ -905,28 +934,13 @@ async function backfillIncompleteNewShareRows(logTag, minSyncDate, progressRepor
   return { total: candidates.length, updated, skipped, failed };
 }
 
-async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
-  const limit = Math.max(1, Math.min(1000, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_LIMIT || 300)));
-  const concurrency = Math.max(1, Math.min(16, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_CONCURRENCY || 3)));
-  const candidates = await db.query(
-    `SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
-     FROM ipo_new_share
-     WHERE (enterprise_full_name_display IS NULL OR TRIM(enterprise_full_name_display) = '')
-       AND (
-         (issue_date IS NOT NULL AND DATE(issue_date) >= ?)
-         OR (public_date IS NOT NULL AND DATE(public_date) >= ?)
-       )
-       AND stock_code IS NOT NULL AND TRIM(stock_code) != ''
-       AND stock_name IS NOT NULL AND TRIM(stock_name) != ''
-     ORDER BY F_LastModifyTime DESC, F_Id DESC
-     LIMIT ?`,
-    [minSyncDate, minSyncDate, limit]
-  );
+async function backfillNewShareEnterpriseFullNamesForCandidates(candidates, logTag) {
   if (!candidates.length) {
     console.log(`${logTag} 企业全称补齐：无待补齐记录`);
     return { total: 0, updated: 0, failed: 0, skipped: 0 };
   }
 
+  const concurrency = Math.max(1, Math.min(16, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_CONCURRENCY || 3)));
   const cfg = await getPromptAndModelConfigForNewShareName();
   if (!cfg.model) {
     console.warn(`${logTag} 企业全称补齐：未找到可用AI模型配置，跳过`);
@@ -979,7 +993,8 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
 
       await db.execute(
         `UPDATE ipo_new_share
-         SET enterprise_full_name_cn = ?, enterprise_full_name_en = ?, enterprise_full_name_display = ?
+         SET enterprise_full_name_cn = ?, enterprise_full_name_en = ?, enterprise_full_name_display = ?,
+             profile_source = COALESCE(profile_source, 'llm_web')
          WHERE F_Id = ?`,
         [parsed.cn || null, parsed.en || null, parsed.display || null, row.F_Id]
       );
@@ -1006,6 +1021,44 @@ async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
     `${logTag} 企业全称补齐完成 total=${candidates.length} updated=${updated} skipped=${skipped} failed=${failed}`
   );
   return { total: candidates.length, updated, skipped, failed };
+}
+
+async function backfillNewShareEnterpriseFullNames(logTag, minSyncDate) {
+  const limit = Math.max(1, Math.min(1000, Number(process.env.NEW_SHARE_FULLNAME_BACKFILL_LIMIT || 300)));
+  const candidates = await db.query(
+    `SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
+     FROM ipo_new_share
+     WHERE (enterprise_full_name_display IS NULL OR TRIM(enterprise_full_name_display) = '')
+       AND (
+         (issue_date IS NOT NULL AND DATE(issue_date) >= ?)
+         OR (public_date IS NOT NULL AND DATE(public_date) >= ?)
+       )
+       AND stock_code IS NOT NULL AND TRIM(stock_code) != ''
+       AND stock_name IS NOT NULL AND TRIM(stock_name) != ''
+     ORDER BY F_LastModifyTime DESC, F_Id DESC
+     LIMIT ?`,
+    [minSyncDate, minSyncDate, limit]
+  );
+  return backfillNewShareEnterpriseFullNamesForCandidates(candidates, logTag);
+}
+
+/** Stage 1b：境内主池缺全称的记录 AI 补齐（不限打新日历日期） */
+async function backfillNewShareEnterpriseFullNamesDomesticPool(options = {}) {
+  const logTag = options.logTag || '[Stage1b-AI全称]';
+  const limit = Math.max(1, Math.min(2000, Number(options.limit || process.env.STAGE1B_AI_NAME_LIMIT || 500)));
+  const candidates = await db.query(
+    `SELECT F_Id, stock_code, stock_name, exchange, enterprise_full_name_cn, enterprise_full_name_en, enterprise_full_name_display
+     FROM ipo_new_share
+     WHERE exchange IN ('上交所', '深交所', '北交所')
+       AND (enterprise_full_name_display IS NULL OR TRIM(enterprise_full_name_display) = '')
+       AND (enterprise_full_name_cn IS NULL OR TRIM(enterprise_full_name_cn) = '')
+       AND stock_code IS NOT NULL AND TRIM(stock_code) <> ''
+       AND stock_name IS NOT NULL AND TRIM(stock_name) <> ''
+     ORDER BY F_Id ASC
+     LIMIT ?`,
+    [limit]
+  );
+  return backfillNewShareEnterpriseFullNamesForCandidates(candidates, logTag);
 }
 
 async function refreshNewShareEnterpriseFullNamesByIds(rowIds, options = {}) {
@@ -1296,5 +1349,6 @@ async function syncNewShareCalendar(options = {}) {
 module.exports = {
   syncNewShareCalendar,
   refreshNewShareEnterpriseFullNamesByIds,
+  backfillNewShareEnterpriseFullNamesDomesticPool,
 };
 

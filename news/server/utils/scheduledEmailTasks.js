@@ -2220,8 +2220,8 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     console.log(`[邮件发送] 原始新闻数: ${newsList.length}, 过滤后新闻数: ${filteredNewsList.length}, 过滤掉广告新闻: ${newsList.length - filteredNewsList.length} 条`);
     
-    // 与 sendNewsEmailToRecipient / emailSender 一致：有企业全称时按 news_detail.entity_type 分组（子基金、被投企业等）；
-    // 无企业全称时仍归入「第三方公众号」，按公众号分组（与无 Excel 的邮件逻辑对齐）。
+    // 分组逻辑：优先以 entity_type 判断归属（企业类型模式只看 entity_type + 企业简称，不考虑来源公众号）；
+    // 仅当 entity_type 为空且无企业全称时，才归入「第三方公众号」按公众号分组。
     const newsByEntityTypeAndEnterprise = {};
     const validEntityTypesForEmail = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
     filteredNewsList.forEach((news, idx) => {
@@ -2229,27 +2229,34 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         console.log(`[邮件发送] ⚠️ 跳过无效的新闻对象: ${news?.id || '(NULL)'}`);
         return;
       }
+
+      let entityType = news.entity_type;
+      if (entityType && typeof entityType === 'string') {
+        entityType = entityType.trim();
+      }
+      const hasValidEntityType = entityType && validEntityTypesForEmail.includes(entityType);
       const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
+
       let categoryKey;
       let groupKey;
 
-      if (!hasEnterpriseName) {
+      if (hasValidEntityType) {
+        // 有明确的 entity_type → 按企业类型分组，不考虑来源公众号
+        categoryKey = entityType;
+        groupKey = (hasEnterpriseName && news.enterprise_full_name.trim())
+          || (news.enterprise_abbreviation && String(news.enterprise_abbreviation).trim())
+          || (news.account_name || news.wechat_account || '').trim()
+          || '其他';
+      } else if (hasEnterpriseName) {
+        // 有企业全称但无有效 entity_type → 默认归为被投企业
+        categoryKey = '被投企业';
+        groupKey = news.enterprise_full_name.trim();
+        console.log(`[邮件发送] ⚠️ 新闻ID=${news.id} 有企业全称"${groupKey}"但entity_type为空/无效("${news.entity_type || '(NULL)'}")，默认归为被投企业`);
+      } else {
+        // 无 entity_type 且无企业全称 → 归入第三方公众号
         categoryKey = '第三方公众号';
         const accountNameOrId = (news.account_name || news.wechat_account || '').trim();
         groupKey = accountNameOrId || '其他公众号';
-      } else {
-        let entityType = news.entity_type;
-        if (!entityType || (typeof entityType === 'string' && entityType.trim() === '')) {
-          entityType = '被投企业';
-        } else if (typeof entityType === 'string') {
-          entityType = entityType.trim();
-        }
-        if (!validEntityTypesForEmail.includes(entityType)) {
-          console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.id})`);
-          entityType = '被投企业';
-        }
-        categoryKey = entityType;
-        groupKey = news.enterprise_full_name.trim();
       }
 
       if (idx < 10) {

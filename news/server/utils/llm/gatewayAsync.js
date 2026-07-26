@@ -24,15 +24,20 @@ function getResponsesPollMaxMs() {
   );
 }
 
-/** background 模式下 POST 只等任务入队/返回 id，不应阻塞到检索完成 */
-function getResponsesSubmitTimeoutMs(fallbackMs = 120000) {
+/** background 模式下 POST 只等任务入队/返回 id；联网检索场景网关可能较慢，提交超时需放宽 */
+function getResponsesSubmitTimeoutMs(fallbackMs = 120000, opts = {}) {
+  const wantSearch = !!opts.wantSearch;
+  const envRaw = wantSearch
+    ? process.env.LLM_RESPONSES_WEB_SUBMIT_TIMEOUT_MS ||
+      process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS ||
+      '180000'
+    : process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS || '90000';
+  const envMs = parseInt(envRaw, 10) || (wantSearch ? 180000 : 90000);
+  const floor = wantSearch ? 60000 : 15000;
+  const ceil = wantSearch ? 300000 : 180000;
   return Math.max(
-    15000,
-    Math.min(
-      120000,
-      parseInt(process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS || '45000', 10) || 45000,
-      fallbackMs || 120000
-    )
+    floor,
+    Math.min(ceil, envMs, fallbackMs > 0 ? fallbackMs : ceil)
   );
 }
 

@@ -763,7 +763,7 @@ async function migrateBatchFColumns(dbPool) {
     ai_model_config:          [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     holiday_calendar:         [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     ai_prompt_config:         [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updater_user_id', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
-    ai_prompt_change_log:     [{ old: 'id', new: 'F_Id' }, { old: 'creator_user_id', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }],
+    ai_prompt_change_log:     [{ old: 'id', new: 'F_Id' }, { old: 'change_user_id', new: 'F_CreatorUserId' }, { old: 'change_time', new: 'F_CreatorTime' }],
     external_db_config:       [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     enterprise_sync_task:     [{ old: 'id', new: 'F_Id' }, { old: 'created_by', new: 'F_CreatorUserId' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_by', new: 'F_LastModifyUserId' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
     performance_scheduled:    [{ old: 'id', new: 'F_Id' }, { old: 'created_at', new: 'F_CreatorTime' }, { old: 'updated_at', new: 'F_LastModifyTime' }, { old: 'delete_mark', new: 'F_DeleteMark' }, { old: 'delete_time', new: 'F_DeleteTime' }, { old: 'delete_user_id', new: 'F_DeleteUserId' }],
@@ -3012,6 +3012,41 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // 迁移 news_sync_execution_log：旧库可能仍为 creator_user_id/created_at，或缺少 F_CreatorUserId
+  try {
+    await applyTableColumnRenames(dbPool, 'news_sync_execution_log', [
+      { old: 'id', new: 'F_Id' },
+      { old: 'creator_user_id', new: 'F_CreatorUserId' },
+      { old: 'created_at', new: 'F_CreatorTime' },
+    ]);
+    const [syncLogUserCol] = await dbPool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_sync_execution_log' AND COLUMN_NAME = 'F_CreatorUserId'
+    `);
+    if (syncLogUserCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_sync_execution_log
+        ADD COLUMN F_CreatorUserId VARCHAR(19) NULL COMMENT '操作人ID（手动触发时记录）' AFTER execution_details
+      `);
+      console.log('✓ 已为 news_sync_execution_log 表添加 F_CreatorUserId 字段');
+    }
+    const [syncLogTimeCol] = await dbPool.query(`
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_sync_execution_log' AND COLUMN_NAME = 'F_CreatorTime'
+    `);
+    if (syncLogTimeCol.length === 0) {
+      await dbPool.query(`
+        ALTER TABLE news_sync_execution_log
+        ADD COLUMN F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间' AFTER F_CreatorUserId
+      `);
+      console.log('✓ 已为 news_sync_execution_log 表添加 F_CreatorTime 字段');
+    }
+  } catch (err) {
+    console.warn('迁移 news_sync_execution_log 系统字段时出现警告:', err.message);
+  }
+
   // ai_news_analysis_cache 表：AI分析时间缓存（持久化，避免2小时内重复分析）
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS ai_news_analysis_cache (
@@ -3512,6 +3547,7 @@ async function initializeTables(dbPool) {
       acc_exit_profit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计退出收益-23',
       acc_exit_capital DECIMAL(30,10) NULL DEFAULT NULL COMMENT '累计退出成本-22',
       acc_dividend DECIMAL(30,10) NULL DEFAULT NULL COMMENT '其中:累计分红-24',
+      irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-25',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细';
   `);
@@ -3618,24 +3654,102 @@ async function initializeTables(dbPool) {
       version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
       b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
       transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资类别-3',
-      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-5',
-      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额本月变动-6',
-      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-7',
-      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额本月变动-8',
-      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-9',
-      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额本月变动-10',
-      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-11',
-      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额本月变动-12',
+      first_date DATETIME NULL DEFAULT NULL COMMENT '首次投资日期-05',
+      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-06',
+      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额本月变动-07',
+      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-08',
+      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额本月变动-09',
+      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-10',
+      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额本月变动-11',
+      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-12',
+      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额本月变动-13',
       project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目名称-4',
-      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-13',
-      change_unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值变动-14',
-      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-15',
-      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-16',
-      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-17',
+      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-14',
+      change_unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值变动-15',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-16',
+      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-17',
+      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-18',
+      irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-19',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细汇总';
   `);
+  // 为已存在的 b_investment / b_investment_sum 表补充 irr 字段（若缺失），或扩容已有字段
+  try {
+    const [irrCols] = await dbPool.query(`
+      SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('b_investment', 'b_investment_sum')
+      AND COLUMN_NAME = 'irr'
+    `);
+    const irrExisting = new Set(irrCols.map(c => c.TABLE_NAME));
+    if (!irrExisting.has('b_investment')) {
+      await dbPool.query(`ALTER TABLE b_investment ADD COLUMN irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-25' AFTER acc_dividend`);
+    } else {
+      const col = irrCols.find(c => c.TABLE_NAME === 'b_investment');
+      if (col && col.COLUMN_TYPE !== 'decimal(20,10)') {
+        await dbPool.query(`ALTER TABLE b_investment MODIFY COLUMN irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-25'`);
+      }
+    }
+    if (!irrExisting.has('b_investment_sum')) {
+      await dbPool.query(`ALTER TABLE b_investment_sum ADD COLUMN irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-19' AFTER dpi`);
+    } else {
+      const col = irrCols.find(c => c.TABLE_NAME === 'b_investment_sum');
+      if (col && col.COLUMN_TYPE !== 'decimal(20,10)') {
+        await dbPool.query(`ALTER TABLE b_investment_sum MODIFY COLUMN irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-19'`);
+      }
+    }
+  } catch (err) {
+    console.warn('检查/添加 b_investment/b_investment_sum irr 字段时出现了警告:', err.message);
+  }
+  // b_investment_sum: 补充 first_date 字段 + 注释编号顺延（-5→-06 ... -18→-19）
+  try {
+    const [sumCols] = await dbPool.query(`
+      SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_COMMENT FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_investment_sum'
+    `);
+    const colMap = new Map(sumCols.map(c => [c.COLUMN_NAME, c]));
+
+    // 1) 添加 first_date（若缺失）
+    if (!colMap.has('first_date')) {
+      await dbPool.query(`ALTER TABLE b_investment_sum ADD COLUMN first_date DATETIME NULL DEFAULT NULL COMMENT '首次投资日期-05' AFTER transaction_type`);
+    }
+
+    // 2) 注释编号顺延：旧编号 → 新编号（从大到小避免冲突）
+    //    旧格式与 performanceExportColumnComments.js 一致（两位编号）
+    const commentShifts = [
+      ['irr',              'IRR-18',           'IRR-19'],
+      ['dpi',              'DPI-17',           'DPI-18'],
+      ['moc',              'MOC-16',           'MOC-17'],
+      ['total_value',      '总价值-15',         '总价值-16'],
+      ['change_unrealized','未实现价值变动-14',  '未实现价值变动-15'],
+      ['unrealized',       '未实现价值-13',      '未实现价值-14'],
+      ['change_receive',   '回款金额本月变动-12','回款金额本月变动-13'],
+      ['acc_receive',      '回款金额累计-11',    '回款金额累计-12'],
+      ['change_exit',      '退出金额本月变动-10','退出金额本月变动-11'],
+      ['acc_exit',         '退出金额累计-09',    '退出金额累计-10'],
+      ['change_paidin',    '实缴金额本月变动-08','实缴金额本月变动-09'],
+      ['acc_paidin',       '实缴金额累计-07',    '实缴金额累计-08'],
+      ['change_sub',       '认缴金额本月变动-06','认缴金额本月变动-07'],
+      ['acc_sub',          '认缴金额累计-05',    '认缴金额累计-06'],
+    ];
+    for (const [colName, oldComment, newComment] of commentShifts) {
+      const col = colMap.get(colName);
+      if (!col) continue;
+      // 仅当注释仍为旧值时才更新，避免重复执行
+      if (col.COLUMN_COMMENT === oldComment) {
+        const type = col.COLUMN_TYPE.toUpperCase();
+        let def = '';
+        if (colName === 'change_unrealized') {
+          def = 'NULL DEFAULT 0';
+        } else {
+          def = 'NULL DEFAULT NULL';
+        }
+        await dbPool.query(`ALTER TABLE b_investment_sum MODIFY COLUMN \`${colName}\` ${col.COLUMN_TYPE} ${def} COMMENT '${newComment}'`);
+      }
+    }
+  } catch (err) {
+    console.warn('b_investment_sum first_date/注释编号迁移时出现了警告:', err.message);
+  }
   // b_investor_list
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS b_investor_list (
@@ -4331,6 +4445,30 @@ async function initializeTables(dbPool) {
     await addCol('spv_receive', 'DECIMAL(30,10)', 'SPV累计回款金额');
     await addCol('lm_spv_receive', 'DECIMAL(30,10)', '上月SPV累计回款金额');
     await addCol('spv_receive_change', 'DECIMAL(30,10)', 'SPV累计回款金额变动');
+  } catch (e) { /* ignore */ }
+
+  // b_all_indicator 表：补充直投上市/辅导/受理指标列（若缺失）
+  try {
+    const indicatorFields = ['ipo_num', 'ipo_cost', 'ipo_valuation', 'fd_num', 'fd_cost', 'fd_valuation', 'sl_num', 'sl_cost', 'sl_valuation'];
+    const [indCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_all_indicator' AND COLUMN_NAME IN (${indicatorFields.map(() => '?').join(',')})
+    `, indicatorFields);
+    const indExisting = new Set(indCols.map(c => c.COLUMN_NAME));
+    const addIndCol = (name, type, comment) => {
+      if (!indExisting.has(name)) {
+        return dbPool.query(`ALTER TABLE b_all_indicator ADD COLUMN ${name} ${type} DEFAULT 0 COMMENT '${comment}'`);
+      }
+    };
+    await addIndCol('ipo_num', 'INT', '直投上市项目个数');
+    await addIndCol('ipo_cost', 'DECIMAL(30,2)', '直投上市项目累计成本');
+    await addIndCol('ipo_valuation', 'DECIMAL(30,2)', '直投上市项目总价值');
+    await addIndCol('fd_num', 'INT', '直投辅导项目个数');
+    await addIndCol('fd_cost', 'DECIMAL(30,2)', '直投辅导项目累计成本');
+    await addIndCol('fd_valuation', 'DECIMAL(30,2)', '直投辅导项目总价值');
+    await addIndCol('sl_num', 'INT', '直投受理项目个数');
+    await addIndCol('sl_cost', 'DECIMAL(30,2)', '直投受理项目累计成本');
+    await addIndCol('sl_valuation', 'DECIMAL(30,2)', '直投受理项目总价值');
   } catch (e) { /* ignore */ }
 
   // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
@@ -6191,6 +6329,71 @@ async function initializeTables(dbPool) {
     console.warn('回填 ipo_new_share.expected_raise_amount 时出现警告:', err.message);
   }
 
+  // Stage 1a：ipo_new_share 上市主档画像字段（申万行业等）
+  const ipoNewShareStage1Cols = [
+    {
+      name: 'unified_credit_code',
+      sql: `ADD COLUMN unified_credit_code VARCHAR(20) NULL COMMENT '统一社会信用代码' AFTER enterprise_full_name_display`,
+    },
+    {
+      name: 'sw_industry_l1',
+      sql: `ADD COLUMN sw_industry_l1 VARCHAR(100) NULL COMMENT '申万行业一级（东财 EM2016）' AFTER unified_credit_code`,
+    },
+    {
+      name: 'sw_industry_l2',
+      sql: `ADD COLUMN sw_industry_l2 VARCHAR(100) NULL COMMENT '申万行业二级（东财 EM2016）' AFTER sw_industry_l1`,
+    },
+    {
+      name: 'industry_category_4',
+      sql: `ADD COLUMN industry_category_4 VARCHAR(32) NULL COMMENT '四大类 category_4' AFTER sw_industry_l2`,
+    },
+    {
+      name: 'product_intro',
+      sql: `ADD COLUMN product_intro TEXT NULL COMMENT '产品/经营范围简介' AFTER industry_category_4`,
+    },
+    {
+      name: 'company_intro',
+      sql: `ADD COLUMN company_intro TEXT NULL COMMENT '企业介绍（东财/百科等）' AFTER product_intro`,
+    },
+    {
+      name: 'industry_tags_display',
+      sql: `ADD COLUMN industry_tags_display VARCHAR(2000) NULL COMMENT '行业标签展示（申万/赛道）' AFTER company_intro`,
+    },
+    {
+      name: 'industry_tags_json',
+      sql: `ADD COLUMN industry_tags_json JSON NULL COMMENT '行业标签 JSON 数组' AFTER industry_tags_display`,
+    },
+    {
+      name: 'baike_lemma_url',
+      sql: `ADD COLUMN baike_lemma_url VARCHAR(512) NULL COMMENT '百科词条 URL' AFTER industry_tags_json`,
+    },
+    {
+      name: 'baike_lemma_status',
+      sql: `ADD COLUMN baike_lemma_status VARCHAR(32) NULL COMMENT '百科词条状态 found/not_found/anti_crawl' AFTER baike_lemma_url`,
+    },
+    {
+      name: 'baike_miss_reason',
+      sql: `ADD COLUMN baike_miss_reason VARCHAR(64) NULL COMMENT '百科未命中原因' AFTER baike_lemma_status`,
+    },
+    {
+      name: 'profile_source',
+      sql: `ADD COLUMN profile_source VARCHAR(32) NULL COMMENT '画像来源（eastmoney_sw/listed_sync/llm_web 等）' AFTER product_intro`,
+    },
+    {
+      name: 'listed_pool_sync_at',
+      sql: `ADD COLUMN listed_pool_sync_at DATETIME NULL COMMENT '上市主池全量同步时间（Stage 1a）' AFTER profile_source`,
+    },
+  ];
+  for (const col of ipoNewShareStage1Cols) {
+    try {
+      await dbPool.query(`ALTER TABLE ipo_new_share ${col.sql}`);
+    } catch (err) {
+      if (!String(err.message || '').includes('Duplicate column name')) {
+        console.warn(`为 ipo_new_share 增加 ${col.name} 时出现警告:`, err.message);
+      }
+    }
+  }
+
   // 境外备案：已并入 ipo_progress（board=境外发行备案），不再创建 ipo_overseas_filing
   try {
     const [legacyOt] = await dbPool.query(`
@@ -6782,6 +6985,91 @@ async function initializeTables(dbPool) {
     console.warn('创建项目挖掘融资事件表时出现警告:', err.message);
   }
 
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS industry_source_l1_map (
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        source_lv1 VARCHAR(100) NOT NULL COMMENT '烯牛一级行业（industry_source_lv1）',
+        source_lv2 VARCHAR(100) NOT NULL DEFAULT '' COMMENT '烯牛二级行业（industry_source_lv2，空串表示 L1 默认）',
+        category_4 VARCHAR(32) NOT NULL COMMENT '竞品四大类：ai/bio/semi_mfg/other',
+        category_display VARCHAR(100) NULL COMMENT '业务映射分类展示名（xlsx 映射分类列）',
+        sub_track VARCHAR(32) NULL COMMENT 'semi_mfg 子轨：semi/advanced_mfg',
+        boundary_note VARCHAR(500) NULL COMMENT '边界说明',
+        confirmed_by VARCHAR(100) NULL COMMENT '业务确认人',
+        map_version VARCHAR(50) NULL DEFAULT 'stage0_v1' COMMENT '映射版本',
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0未删除，1已删除',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        UNIQUE KEY uk_industry_source_l1_map (source_lv1, source_lv2),
+        KEY idx_industry_map_category_4 (category_4),
+        KEY idx_industry_map_display (category_display)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='烯牛行业→竞品 category_4 映射（Stage 0）';
+    `);
+    console.log('✓ industry_source_l1_map 表已就绪');
+  } catch (err) {
+    console.warn('创建 industry_source_l1_map 表时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sw_industry_category_map (
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        sw_industry_l1 VARCHAR(100) NOT NULL COMMENT '申万一级（东财 EM2016）',
+        sw_industry_l2 VARCHAR(100) NOT NULL DEFAULT '' COMMENT '申万二级（空串表示 L1 默认）',
+        category_4 VARCHAR(32) NOT NULL COMMENT '竞品四大类：ai/bio/semi_mfg/other',
+        category_display VARCHAR(100) NULL COMMENT '业务映射分类展示名',
+        sub_track VARCHAR(32) NULL COMMENT 'semi_mfg 子轨：semi/advanced_mfg',
+        boundary_note VARCHAR(500) NULL COMMENT '边界说明',
+        confirmed_by VARCHAR(100) NULL COMMENT '业务确认人',
+        map_version VARCHAR(50) NULL DEFAULT 'stage1c_v1' COMMENT '映射版本',
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0未删除，1已删除',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        UNIQUE KEY uk_sw_industry_category_map (sw_industry_l1, sw_industry_l2),
+        KEY idx_sw_industry_map_category_4 (category_4)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='申万行业→竞品 category_4 映射（Stage 1c）';
+    `);
+    console.log('✓ sw_industry_category_map 表已就绪');
+  } catch (err) {
+    console.warn('创建 sw_industry_category_map 表时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS competitor_gold_standard_pair (
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键ID',
+        category_4 VARCHAR(32) NOT NULL COMMENT '赛道：ai/bio/semi_mfg/other',
+        target_source VARCHAR(40) NOT NULL COMMENT '目标来源：financing/new_share/pre_investment',
+        target_ref_id BIGINT NULL COMMENT '目标来源表主键',
+        target_display_name VARCHAR(255) NOT NULL COMMENT '目标企业展示名',
+        target_credit_code VARCHAR(64) NULL COMMENT '目标统一社会信用代码',
+        candidate_source VARCHAR(40) NULL COMMENT '候选来源',
+        candidate_ref_id BIGINT NULL COMMENT '候选来源表主键',
+        candidate_display_name VARCHAR(255) NULL COMMENT '候选企业展示名',
+        candidate_credit_code VARCHAR(64) NULL COMMENT '候选统一社会信用代码',
+        annotator_1_is_competitor TINYINT NULL COMMENT '标注人1：1竞品 0非竞品',
+        annotator_1_type VARCHAR(64) NULL COMMENT '标注人1：竞品类型',
+        annotator_2_is_competitor TINYINT NULL COMMENT '标注人2',
+        annotator_2_type VARCHAR(64) NULL COMMENT '标注人2：竞品类型',
+        annotator_3_is_competitor TINYINT NULL COMMENT '标注人3',
+        annotator_3_type VARCHAR(64) NULL COMMENT '标注人3：竞品类型',
+        final_is_competitor TINYINT NULL COMMENT '仲裁后：1竞品 0非竞品',
+        final_type VARCHAR(64) NULL COMMENT '仲裁后竞品类型',
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending/annotating/done',
+        notes VARCHAR(500) NULL COMMENT '备注',
+        batch_id VARCHAR(64) NULL COMMENT '导出批次',
+        F_DeleteMark TINYINT NOT NULL DEFAULT 0,
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_gold_category (category_4, status),
+        KEY idx_gold_target (target_credit_code, target_display_name(80))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析金标准样本对（Stage 0）';
+    `);
+    console.log('✓ competitor_gold_standard_pair 表已就绪');
+  } catch (err) {
+    console.warn('创建 competitor_gold_standard_pair 表时出现警告:', err.message);
+  }
+
   // 项目挖掘：融资事件标准表 — AI 增强字段（阶段 A）
   const addSfeCol = async (colName, ddl) => {
     try {
@@ -6844,6 +7132,94 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('迁移 sourcing_financing_event AI 索引时出现警告:', err.message);
   }
+
+  // Stage 2：融资池上市识别与 listed 画像同步字段
+  await addSfeCol(
+    'listing_status',
+    `ADD COLUMN listing_status VARCHAR(20) NULL COMMENT '上市关联：matched/unknown/no_match' AFTER ai_enrich_error`
+  );
+  await addSfeCol(
+    'listed_stock_code',
+    `ADD COLUMN listed_stock_code VARCHAR(32) NULL COMMENT '上市股票代码（new_share 同步）' AFTER listing_status`
+  );
+  await addSfeCol(
+    'listed_exchange',
+    `ADD COLUMN listed_exchange VARCHAR(32) NULL COMMENT '上市交易所（new_share 同步）' AFTER listed_stock_code`
+  );
+  await addSfeCol(
+    'new_share_row_id',
+    `ADD COLUMN new_share_row_id BIGINT NULL COMMENT '关联 ipo_new_share.F_Id' AFTER listed_exchange`
+  );
+  await addSfeCol(
+    'profile_source',
+    `ADD COLUMN profile_source VARCHAR(32) NULL COMMENT '画像来源：listed_sync/llm_web/baike 等' AFTER new_share_row_id`
+  );
+  await addSfeCol(
+    'industry_category_4',
+    `ADD COLUMN industry_category_4 VARCHAR(32) NULL COMMENT '竞品四大类：ai/bio/semi_mfg/other' AFTER profile_source`
+  );
+  await addSfeCol(
+    'company_intro',
+    `ADD COLUMN company_intro TEXT NULL COMMENT '企业介绍（listed_sync 来自 new_share）' AFTER industry_category_4`
+  );
+  await addSfeCol(
+    'listed_sync_at',
+    `ADD COLUMN listed_sync_at DATETIME NULL COMMENT '上市主档画像同步时间（Stage 2）' AFTER company_intro`
+  );
+  try {
+    const [ixListed] = await dbPool.query(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_financing_event' AND INDEX_NAME = 'idx_sfe_listing_status'`
+    );
+    if (ixListed.length === 0) {
+      await dbPool.query(
+        `ALTER TABLE sourcing_financing_event ADD KEY idx_sfe_listing_status (listing_status, F_Id)`
+      );
+      console.log('✓ sourcing_financing_event 已添加 idx_sfe_listing_status');
+    }
+    const [ixCredit] = await dbPool.query(
+      `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sourcing_financing_event' AND INDEX_NAME = 'idx_sfe_company_credit'`
+    );
+    if (ixCredit.length === 0) {
+      await dbPool.query(
+        `ALTER TABLE sourcing_financing_event ADD KEY idx_sfe_company_credit (company_credit_code(32))`
+      );
+      console.log('✓ sourcing_financing_event 已添加 idx_sfe_company_credit');
+    }
+  } catch (err) {
+    console.warn('迁移 sourcing_financing_event listing 索引时出现警告:', err.message);
+  }
+
+  // Stage 2b：融资池百科查词元数据
+  await addSfeCol(
+    'baike_lemma_url',
+    `ADD COLUMN baike_lemma_url VARCHAR(512) NULL COMMENT '百科词条 URL' AFTER listed_sync_at`
+  );
+  await addSfeCol(
+    'baike_lemma_status',
+    `ADD COLUMN baike_lemma_status VARCHAR(32) NULL COMMENT '百科：found/not_found/anti_crawl' AFTER baike_lemma_url`
+  );
+  await addSfeCol(
+    'baike_miss_reason',
+    `ADD COLUMN baike_miss_reason VARCHAR(64) NULL COMMENT '百科未命中原因' AFTER baike_lemma_status`
+  );
+  await addSfeCol(
+    'baike_lookup_at',
+    `ADD COLUMN baike_lookup_at DATETIME NULL COMMENT '最近一次百科查词时间' AFTER baike_miss_reason`
+  );
+  await addSfeCol(
+    'structured_profile_json',
+    `ADD COLUMN structured_profile_json JSON NULL COMMENT 'L2 structured 画像（Stage 3）' AFTER baike_lookup_at`
+  );
+  await addSfeCol(
+    'structured_schema_version',
+    `ADD COLUMN structured_schema_version VARCHAR(32) NULL COMMENT 'structured schema 版本' AFTER structured_profile_json`
+  );
+  await addSfeCol(
+    'structured_at',
+    `ADD COLUMN structured_at DATETIME NULL COMMENT 'structured 抽取时间' AFTER structured_schema_version`
+  );
 
   // 项目挖掘：融资信息 AI 增强执行日志（追加型）
   try {
@@ -6987,6 +7363,18 @@ async function initializeTables(dbPool) {
   await addIeEnterpriseAiCol(
     'qcc_sync_via',
     `ADD COLUMN qcc_sync_via VARCHAR(32) NULL COMMENT '最近一次企查查简介写入来源：cross_table_propagate|qcc_api|legacy_api' AFTER qcc_sync_error`
+  );
+  await addIeEnterpriseAiCol(
+    'competition_lens_json',
+    `ADD COLUMN competition_lens_json JSON NULL COMMENT '最近确认的对标焦点（竞争透镜）快照' AFTER qcc_sync_via`
+  );
+  await addIeEnterpriseAiCol(
+    'competition_lens_version',
+    `ADD COLUMN competition_lens_version INT NULL COMMENT '竞争透镜版本号' AFTER competition_lens_json`
+  );
+  await addIeEnterpriseAiCol(
+    'competition_lens_at',
+    `ADD COLUMN competition_lens_at DATETIME NULL COMMENT '竞争透镜最近保存时间' AFTER competition_lens_version`
   );
   await addIeEnterpriseAiCol(
     'data_app_id',
@@ -7275,6 +7663,9 @@ async function initializeTables(dbPool) {
         enable_ipo_project TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用底层项目池',
         enable_financing_event TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用融资事件池（须用户有项目挖掘权限）',
         enable_ai_web TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用联网发现',
+        use_new_share_listed_recall TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Stage4：1=ipo_new_share主召回，0=1.0 ipo_project',
+        enable_recall_ab_compare TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Stage4：并行新旧召回对比写入step_log',
+        new_share_gray_categories VARCHAR(128) NULL COMMENT 'Stage4灰度赛道如ai,bio；空=全量',
         F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
@@ -7282,6 +7673,29 @@ async function initializeTables(dbPool) {
         CONSTRAINT fk_ca_recall_app FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析—三源召回配置';
     `);
+    const recallStage4Cols = [
+      {
+        name: 'use_new_share_listed_recall',
+        sql: `ADD COLUMN use_new_share_listed_recall TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Stage4：1=ipo_new_share主召回，0=1.0 ipo_project' AFTER enable_ai_web`,
+      },
+      {
+        name: 'enable_recall_ab_compare',
+        sql: `ADD COLUMN enable_recall_ab_compare TINYINT(1) NOT NULL DEFAULT 0 COMMENT 'Stage4：并行新旧召回对比写入step_log' AFTER use_new_share_listed_recall`,
+      },
+      {
+        name: 'new_share_gray_categories',
+        sql: `ADD COLUMN new_share_gray_categories VARCHAR(128) NULL COMMENT 'Stage4灰度赛道如ai,bio；空=全量' AFTER enable_recall_ab_compare`,
+      },
+    ];
+    for (const col of recallStage4Cols) {
+      try {
+        await dbPool.query(`ALTER TABLE competitor_recall_source_config ${col.sql}`);
+      } catch (e) {
+        if (!String(e.message || '').includes('Duplicate column name')) {
+          console.warn(`为 competitor_recall_source_config 增加 ${col.name} 时出现警告:`, e.message);
+        }
+      }
+    }
     const CA_C = require('./utils/competitor-analysis/constants');
     const [existRecall] = await dbPool.query(
       'SELECT F_Id AS id FROM competitor_recall_source_config WHERE app_id = ? AND F_DeleteMark = 0 LIMIT 1',
@@ -7292,8 +7706,9 @@ async function initializeTables(dbPool) {
       const rid = await generateId('competitor_recall_source_config', dbPool);
       await dbPool.execute(
         `INSERT INTO competitor_recall_source_config (
-          F_Id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web
-        ) VALUES (?, ?, 1, 1, 1)`,
+          F_Id, app_id, enable_ipo_project, enable_financing_event, enable_ai_web,
+          use_new_share_listed_recall, enable_recall_ab_compare
+        ) VALUES (?, ?, 1, 1, 1, 0, 0)`,
         [rid, CA_C.COMPETITOR_ANALYSIS_APP_ID]
       );
     }
@@ -7502,6 +7917,93 @@ async function initializeTables(dbPool) {
     if (!String(err.message || '').includes('Duplicate column')) {
       console.warn('迁移 pre_investment_project.bp_extract_text 时出现警告:', err.message);
     }
+  }
+
+  const addPipCol = async (colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pre_investment_project' AND COLUMN_NAME = ?`,
+        [colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE pre_investment_project ${ddl}`);
+        console.log(`  ✓ pre_investment_project 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 pre_investment_project.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await addPipCol(
+    'company_intro',
+    `ADD COLUMN company_intro LONGTEXT NULL COMMENT '企业介绍（百科/bp 等）' AFTER bp_extract_text`
+  );
+  await addPipCol(
+    'product_intro',
+    `ADD COLUMN product_intro LONGTEXT NULL COMMENT '产品简介（百科/bp 等）' AFTER company_intro`
+  );
+  await addPipCol(
+    'profile_source',
+    `ADD COLUMN profile_source VARCHAR(32) NULL COMMENT '画像来源：bp/baike/listed_sync/donor/llm_web' AFTER product_intro`
+  );
+  await addPipCol(
+    'baike_lemma_url',
+    `ADD COLUMN baike_lemma_url VARCHAR(512) NULL COMMENT '百科词条 URL' AFTER profile_source`
+  );
+  await addPipCol(
+    'baike_lemma_status',
+    `ADD COLUMN baike_lemma_status VARCHAR(32) NULL COMMENT '百科：found/not_found/anti_crawl' AFTER baike_lemma_url`
+  );
+  await addPipCol(
+    'baike_miss_reason',
+    `ADD COLUMN baike_miss_reason VARCHAR(64) NULL COMMENT '百科未命中原因' AFTER baike_lemma_status`
+  );
+  await addPipCol(
+    'baike_lookup_at',
+    `ADD COLUMN baike_lookup_at DATETIME NULL COMMENT '最近一次百科查词时间' AFTER baike_miss_reason`
+  );
+  await addPipCol(
+    'structured_profile_json',
+    `ADD COLUMN structured_profile_json JSON NULL COMMENT 'L2 structured 画像（Stage 3）' AFTER baike_lookup_at`
+  );
+  await addPipCol(
+    'structured_schema_version',
+    `ADD COLUMN structured_schema_version VARCHAR(32) NULL COMMENT 'structured schema 版本' AFTER structured_profile_json`
+  );
+  await addPipCol(
+    'structured_at',
+    `ADD COLUMN structured_at DATETIME NULL COMMENT 'structured 抽取时间' AFTER structured_schema_version`
+  );
+  await addPipCol(
+    'competition_lens_json',
+    `ADD COLUMN competition_lens_json JSON NULL COMMENT '最近确认的对标焦点（竞争透镜）快照' AFTER structured_at`
+  );
+  await addPipCol(
+    'competition_lens_version',
+    `ADD COLUMN competition_lens_version INT NULL COMMENT '竞争透镜版本号' AFTER competition_lens_json`
+  );
+  await addPipCol(
+    'competition_lens_at',
+    `ADD COLUMN competition_lens_at DATETIME NULL COMMENT '竞争透镜最近保存时间' AFTER competition_lens_version`
+  );
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competition_lens_version (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        subject_type VARCHAR(40) NOT NULL COMMENT 'invested_enterprise / pre_investment_project',
+        subject_id VARCHAR(19) NOT NULL COMMENT '主体 id',
+        version INT NOT NULL COMMENT '自增版本号',
+        lens_json JSON NOT NULL COMMENT '该版本完整透镜快照',
+        F_CreatorUserId VARCHAR(19) NULL COMMENT '保存人',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        KEY idx_lens_ver_subject (subject_type, subject_id, version),
+        KEY idx_lens_ver_time (F_CreatorTime)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析—对标焦点透镜版本历史'
+    `);
+    console.log('✓ sourcing_competition_lens_version 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competition_lens_version 时出现警告:', err.message);
   }
 
   // 修复 bp_filename 中文编码乱码（Windows multer 以 Latin-1 解析 UTF-8 字节）

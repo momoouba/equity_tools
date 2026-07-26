@@ -32,6 +32,7 @@ const EXPORT_HEADERS_ALL_BATCHES = ['版本号', ...EXPORT_HEADERS];
 
 const SOURCE_LABELS = {
   ipo_project: '底层',
+  ipo_new_share: '上市主池',
   sourcing_financing_event: '融资',
   ai_web: '联网',
   user_added: '用户新增',

@@ -6430,6 +6430,8 @@ ${enterpriseList}
         if (!shouldKeepAssociation) {
           logWithTag('[processNewsWithEnterprise]', `🚫 AI判断需要解除企业关联: ${newsItem.enterprise_full_name}`);
           finalEnterpriseName = null;
+          enterpriseAbbreviation = null;
+          entityTypeFromEnterpriseCheck = null;
         } else {
           logWithTag('[processNewsWithEnterprise]', `✅ AI验证企业关联合理: ${newsItem.enterprise_full_name}`);
         }
@@ -7374,7 +7376,7 @@ ${enterpriseList}
       
       // 查询新榜接口中content不为空但摘要或关键词为空的记录
       const newsToSupplement = await db.query(
-        `SELECT F_Id, title, content, source_url, wechat_account, enterprise_full_name, account_name
+        `SELECT F_Id, F_Id AS id, title, content, source_url, wechat_account, enterprise_full_name, account_name
          FROM news_detail 
          WHERE APItype = '新榜'
          AND content IS NOT NULL 
@@ -7398,6 +7400,11 @@ ${enterpriseList}
 
       for (const newsItem of newsToSupplement) {
         try {
+          const newsId = newsItem.F_Id ?? newsItem.id;
+          if (!newsId) continue;
+          newsItem.F_Id = newsId;
+          newsItem.id = newsId;
+
           // 检查是否是额外公众号
           const isAdditionalAccountResult = await db.query(
             `SELECT F_Id FROM additional_wechat_accounts 
@@ -7767,7 +7774,15 @@ ${enterpriseList}
    */
   async analyzeXinbangNewsImmediately(newsItem, isAdditionalAccount = false) {
     try {
-      logWithTag('[立即分析新榜新闻]', `开始分析新闻ID: ${newsItem.F_Id}, 标题: ${newsItem.title.substring(0, 50)}...`);
+      const newsId = newsItem.F_Id ?? newsItem.id;
+      if (!newsId) {
+        errorWithTag('[立即分析新榜新闻]', '✗ 新闻ID缺失（需 id 或 F_Id），跳过分析');
+        return false;
+      }
+      newsItem.F_Id = newsId;
+      newsItem.id = newsId;
+
+      logWithTag('[立即分析新榜新闻]', `开始分析新闻ID: ${newsId}, 标题: ${(newsItem.title || '').substring(0, 50)}...`);
       
       const interfaceType = '新榜';
       const hasContent = newsItem.content && newsItem.content.trim().length > 0;
@@ -9135,10 +9150,18 @@ ${enterpriseList}
     const summary1 = getSummary(newsA);
     const summary2 = getSummary(newsB);
 
-    const prompt = `请判断以下两条新闻的标题是否在讲同一件事、摘要是否在讲同一件事。
+    const prompt = `请判断以下两条新闻是否在报道【同一件事】（即同一事件、同一动作、同一时间点发生的事）。
+注意：同一公司的不同事件（如一次融资和一次产品发布）不算同一件事，即使标题都包含相同公司名。
+
+判断标准（必须同时满足才算同一件事）：
+1. 核心事件/动作相同（如都是报道同一次融资、同一次发布会、同一次合作）
+2. 涉及的时间点或阶段相同
+3. 不是仅仅因为提到了同一家公司就判定为同一件事
+
 仅输出两个0-100的整数，用英文逗号分隔，格式为：标题相似度,摘要相似度
-- 100表示完全同一件事，0表示完全无关。50及以上视为在讲同一件事。
+- 100表示完全在报道同一件事，0表示完全不同的事件。
 - 若某条没有摘要，该维度输出0。
+- 同一公司但不同事件，标题相似度不应超过40。
 
 标题1：${title1}
 标题2：${title2}

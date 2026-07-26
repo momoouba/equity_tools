@@ -251,13 +251,13 @@ router.get('/fund-portfolio', async (req, res) => {
       `SELECT transaction_type, project, first_date, acc_sub, change_sub,
               acc_paidin, change_paidin, acc_exit, change_exit,
               acc_receive, change_receive, unrealized, change_unrealized,
-              total_value, moc, dpi
+              total_value, moc, dpi, irr
        FROM b_investment
        WHERE version = ? AND fund = ? AND F_DeleteMark = 0
        ORDER BY transaction_type, first_date ASC`,
       [version, fund]
     );
-    
+
     res.json({ success: true, data: { list: rows } });
   } catch (error) {
     console.error('获取基金投资组合明细失败:', error);
@@ -334,7 +334,10 @@ router.get('/portfolio', async (req, res) => {
               fund_exit_amount, fund_exit_amount_change, fund_receive, fund_receive_change,
               project_inv, project_inv_change, project_paidin, project_paidin_change,
               project_exit, project_exit_change, project_receive, project_receive_change,
-              spv_paidin, spv_paidin_change, spv_receive, spv_receive_change
+              spv_paidin, spv_paidin_change, spv_receive, spv_receive_change,
+              ipo_num, ipo_cost, ipo_valuation,
+              fd_num, fd_cost, fd_valuation,
+              sl_num, sl_cost, sl_valuation
        FROM b_all_indicator
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]
@@ -365,15 +368,15 @@ router.get('/portfolio-detail', async (req, res) => {
     }
     
     const rows = await db.query(
-      `SELECT transaction_type, project, acc_sub, change_sub, acc_paidin,
+      `SELECT transaction_type, project, first_date, acc_sub, change_sub, acc_paidin,
               change_paidin, acc_exit, change_exit, acc_receive, change_receive,
-              unrealized, change_unrealized, total_value, moc, dpi
+              unrealized, change_unrealized, total_value, moc, dpi, irr
        FROM b_investment_sum
        WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY (CASE WHEN transaction_type = '子基金' THEN 0 WHEN transaction_type = '直投项目' THEN 1 ELSE 2 END), transaction_type`,
+       ORDER BY (CASE WHEN transaction_type = '子基金' THEN 0 WHEN transaction_type = '直投项目' THEN 1 ELSE 2 END), first_date DESC`,
       [version]
     );
-    
+
     res.json({ success: true, data: { list: rows } });
   } catch (error) {
     console.error('获取整体投资组合明细失败:', error);

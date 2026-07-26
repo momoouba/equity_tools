@@ -159,9 +159,13 @@ async function invokeOpenAiResponses({
 
   const requestTimeoutMs = Math.max(30000, timeout || 120000);
   const submitTimeout = asyncMode
-    ? getResponsesSubmitTimeoutMs(requestTimeoutMs)
+    ? getResponsesSubmitTimeoutMs(requestTimeoutMs, { wantSearch: !!wantSearch })
     : requestTimeoutMs;
   const pollMaxMs = Math.max(getResponsesPollMaxMs(), requestTimeoutMs);
+
+  console.log(
+    `${logPrefix} responses submit_timeout_ms=${submitTimeout} request_timeout_ms=${requestTimeoutMs} poll_max_ms=${pollMaxMs}`
+  );
 
   const response = await axios.post(endpoint, body, {
     headers: {

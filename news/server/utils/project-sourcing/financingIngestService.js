@@ -11,6 +11,7 @@ const {
   eventHasCompleteAiContent,
   enqueueBatchFinancingAiEnrichByDateRange,
 } = require('./financingAiEnrichService');
+const { strTrim } = require('../competitor-analysis/competitorMatchUtils');
 
 const RULE_ENRICH_VERSION = 'rule_enrich_v1';
 
@@ -358,12 +359,70 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       }
       const { applyTrackMatchForEvents } = require('./financingTrackMatch');
       await applyTrackMatchForEvents({ eventIds: [eventPk], mode: 'all' });
+
+      /* ── Fix-13: 入库后异步触发百科查词 ── */
+      try {
+        const baikeRows = await db.query(
+          `SELECT company_name, company_credit_code, baike_lookup_at
+           FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+          [eventPk]
+        );
+        if (baikeRows.length && !baikeRows[0].baike_lookup_at) {
+          const companyName = strTrim(baikeRows[0].company_name);
+          if (companyName.length >= 2) {
+            setImmediate(() => {
+              triggerInlineBaikeLookup(eventPk, companyName, baikeRows[0].company_credit_code).catch(
+                (err) => console.warn('[financingIngest] inline baike failed:', err.message)
+              );
+            });
+          }
+        }
+      } catch (baikeTrigErr) {
+        console.warn('[financingIngest] baike trigger:', baikeTrigErr.message);
+      }
     }
   } catch (trackErr) {
     console.warn('[financingIngest] applyTrackMatchForEvents:', trackErr.message);
   }
 
   return true;
+}
+
+/* ── Fix-13: 入库后异步百科查词（单进程守卫） ── */
+let _inlineBaikeRunning = false;
+const _inlineBaikeQueue = [];
+
+async function triggerInlineBaikeLookup(eventId, companyName, creditCode) {
+  if (_inlineBaikeRunning) {
+    _inlineBaikeQueue.push({ eventId, companyName, creditCode });
+    return;
+  }
+  _inlineBaikeRunning = true;
+  try {
+    await _runInlineBaikeLookup(eventId, companyName, creditCode);
+    while (_inlineBaikeQueue.length) {
+      const next = _inlineBaikeQueue.shift();
+      await _runInlineBaikeLookup(next.eventId, next.companyName, next.creditCode);
+    }
+  } finally {
+    _inlineBaikeRunning = false;
+  }
+}
+
+async function _runInlineBaikeLookup(eventId, companyName, creditCode) {
+  try {
+    const { fetchBaikeHttp, applyBaikeToFinancingFanOut } = require('./baikeLookupService');
+    const baike = fetchBaikeHttp(companyName, 1500);
+    if (!baike || !baike.has_lemma) {
+      console.log(`[financingIngest] baike no lemma: ${companyName}`);
+      return;
+    }
+    const companyRow = { company_name: companyName, company_credit_code: creditCode };
+    const result = await applyBaikeToFinancingFanOut(db, companyRow, baike, {});
+    console.log(`[financingIngest] baike applied: ${companyName} → ${result.updated} rows`);
+  } catch (err) {
+    console.warn(`[financingIngest] baike lookup failed (${companyName}):`, err.message);
+  }
 }
 
 /**

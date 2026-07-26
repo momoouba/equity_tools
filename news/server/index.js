@@ -69,6 +69,14 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// API 路由禁用 Etag/304 缓存，避免浏览器缓存旧 JSON 响应
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
+  next();
+});
+
 // 服务器就绪检查中间件（健康检查接口除外）
 app.use((req, res, next) => {
   // 健康检查接口始终允许访问
@@ -451,6 +459,13 @@ async function startServer() {
           const { runCompetitorRelinkOnStartup } = require('./utils/competitor-analysis/competitorRelinkStartup');
           runCompetitorRelinkOnStartup().catch((error) => {
             console.error('竞品数据关联修复失败:', error);
+          });
+
+          // 初始化投前→投后竞品迁移定时任务
+          console.log('正在初始化竞品迁移定时任务...');
+          const { initializeCompetitorMigrationTask } = require('./utils/scheduledCompetitorMigrationTasks');
+          initializeCompetitorMigrationTask().catch((error) => {
+            console.error('初始化竞品迁移定时任务失败:', error);
           });
 
           // 初始化外部数据库连接（异步，不阻塞）

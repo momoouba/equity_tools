@@ -3,6 +3,7 @@ const { strTrim, textOverlapScore } = require('./competitorMatchUtils');
 const EVIDENCE_SOURCE_LABELS = {
   qcc: '企查查',
   internal_project: '底层项目',
+  internal_listed: '上市主池',
   internal_financing: '融资事件',
   ai_web: '联网发现',
   user_added: '人工新增',
@@ -26,6 +27,7 @@ function buildEvidenceSources(sources, candidate) {
   const srcs = Array.isArray(sources) ? sources.filter(Boolean) : [];
   for (const s of srcs) {
     if (s === 'ipo_project') out.add('internal_project');
+    else if (s === 'ipo_new_share') out.add('internal_listed');
     else if (s === 'sourcing_financing_event') out.add('internal_financing');
     else if (s === 'ai_web') out.add('ai_web');
     else if (s === 'user_added') out.add('user_added');

@@ -27,6 +27,7 @@ import {
   postPreInvestmentQccFuzzyLookup,
   postPreInvestmentAiEnrich,
   postPreInvestmentCompetitorAnalysisRun,
+  fetchPreInvestmentCompetitionLensProposal,
   patchCompetitorRelationComparable,
   deleteCompetitorRelation,
 } from '../../api/competitor-analysis'
@@ -35,6 +36,7 @@ import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
 import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
 import CompetitorRelationDetailBlock from './CompetitorRelationDetailBlock'
 import CompetitorRelationReviewDrawer from './CompetitorRelationReviewDrawer'
+import CompetitionLensConfirmModal from './CompetitionLensConfirmModal'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
@@ -122,6 +124,13 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [projectNoPreview, setProjectNoPreview] = useState('')
   const [tableScrollY, setTableScrollY] = useState(520)
   const [batchBusy, setBatchBusy] = useState(null)
+  const [lensModal, setLensModal] = useState({
+    visible: false,
+    loading: false,
+    confirming: false,
+    row: null,
+    proposal: null,
+  })
   const [expandedKeys, setExpandedKeys] = useState([])
   const [relMap, setRelMap] = useState({})
   const [relLoading, setRelLoading] = useState({})
@@ -519,25 +528,85 @@ export default function ProjectSourcingPreInvestmentPage() {
     })
   }
 
+  const submitPreInvCompetitorWithLens = async (row, competitionLens) => {
+    const res = await postPreInvestmentCompetitorAnalysisRun(row.id, {
+      competition_lens: competitionLens || undefined,
+    })
+    if (!(res.status === 202 || res.data?.success)) {
+      throw new Error(res.data?.message || '受理失败')
+    }
+    invalidateRelations(row.id)
+    if (expandedKeys.includes(row.id)) {
+      const { latestRunId } = await loadRuns(row.id)
+      await loadRelations(row.id, latestRunId, true)
+    }
+  }
+
+  const openLensThenRun = async (row) => {
+    setLensModal({
+      visible: true,
+      loading: true,
+      confirming: false,
+      row,
+      proposal: null,
+    })
+    try {
+      const res = await fetchPreInvestmentCompetitionLensProposal(row.id)
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || '提取对标因素失败')
+      }
+      setLensModal((prev) => ({
+        ...prev,
+        loading: false,
+        proposal: res.data.data,
+      }))
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '提取对标因素失败')
+      setLensModal({
+        visible: false,
+        loading: false,
+        confirming: false,
+        row: null,
+        proposal: null,
+      })
+    }
+  }
+
+  const handleLensConfirm = async (competitionLens) => {
+    const row = lensModal.row
+    if (!row) return
+    setLensModal((prev) => ({ ...prev, confirming: true }))
+    try {
+      await submitPreInvCompetitorWithLens(row, competitionLens)
+      Message.success('已按确认焦点发起竞品分析')
+      setLensModal({
+        visible: false,
+        loading: false,
+        confirming: false,
+        row: null,
+        proposal: null,
+      })
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '受理失败')
+      setLensModal((prev) => ({ ...prev, confirming: false }))
+    }
+  }
+
   const handleBatchCompetitor = () => {
     if (!hasSelection) {
       Message.warning('请先勾选要操作的项目')
       return
     }
+    if (selectedRows.length === 1) {
+      openLensThenRun(selectedRows[0])
+      return
+    }
     Modal.confirm({
-      title: '竞品分析',
-      content: `确认为已选的 ${selectedRows.length} 个投前项目依次发起竞品分析？将逐条提交异步任务。`,
+      title: '竞品分析（批量）',
+      content: `将对已选 ${selectedRows.length} 个投前项目依次发起竞品分析。批量将按各项目「系统默认对标焦点」运行；若需精细勾选因素，请每次只选 1 条。`,
       onOk: async () => {
         await runSequentialOnSelected('competitor', async (row) => {
-          const res = await postPreInvestmentCompetitorAnalysisRun(row.id)
-          if (!(res.status === 202 || res.data?.success)) {
-            throw new Error(res.data?.message || '受理失败')
-          }
-          invalidateRelations(row.id)
-          if (expandedKeys.includes(row.id)) {
-            const { latestRunId } = await loadRuns(row.id)
-            await loadRelations(row.id, latestRunId, true)
-          }
+          await submitPreInvCompetitorWithLens(row, null)
         })
       },
     })
@@ -1285,6 +1354,23 @@ export default function ProjectSourcingPreInvestmentPage() {
           if (!manualAddSubject?.id) return
           loadRelations(manualAddSubject.id, manualAddSubject.runId, true)
         }}
+      />
+      <CompetitionLensConfirmModal
+        visible={lensModal.visible}
+        onClose={() =>
+          setLensModal({
+            visible: false,
+            loading: false,
+            confirming: false,
+            row: null,
+            proposal: null,
+          })
+        }
+        subjectTitle={lensModal.row ? rowLabel(lensModal.row) : ''}
+        loadingProposal={lensModal.loading}
+        proposal={lensModal.proposal}
+        confirming={lensModal.confirming}
+        onConfirm={handleLensConfirm}
       />
     </div>
   )

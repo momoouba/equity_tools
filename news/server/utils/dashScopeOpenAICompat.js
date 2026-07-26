@@ -68,6 +68,11 @@ function isDashScopeNativeGenerationEndpoint(raw) {
   );
 }
 
+function compatibleModeV1BaseUrl(apiEndpoint) {
+  const ep = normalizeDashScopeChatEndpoint(apiEndpoint);
+  return ep.replace(/\/chat\/completions\/?$/i, '');
+}
+
 function formatDashScopeHttpError(err) {
   const status = err.response?.status;
   const data = err.response?.data;
@@ -94,6 +99,7 @@ function formatDashScopeHttpError(err) {
 
 module.exports = {
   normalizeDashScopeChatEndpoint,
+  compatibleModeV1BaseUrl,
   formatDashScopeHttpError,
   isDashScopeCompatibleModeEndpoint,
   isDashScopeNativeGenerationEndpoint,

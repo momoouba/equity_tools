@@ -17,7 +17,7 @@ const {
   createExternalPool,
   closeExternalPool
 } = require('../../utils/externalDb');
-const { computeAndUpdateTransactionIrr } = require('./transactionIrr');
+const { computeAndUpdateTransactionIrr, computeIRR } = require('./transactionIrr');
 
 // 业绩看板 b_* 表主键为 F_Id，插入时若结果中无则需生成
 const ID_COLUMN = 'F_Id';
@@ -436,6 +436,62 @@ router.post('/', async (req, res) => {
 
       // b_transaction_indicator 写入完成后，基于 b_transaction 同版本数据计算 Gross IRR / Net IRR 并回写
       await computeAndUpdateTransactionIrr(connection, version);
+
+      // 计算项目级 IRR 并回写 b_investment.irr（区分基金）和 b_investment_sum.irr（不区分基金）
+      try {
+        // 1. b_investment：按 fund + project 分组计算 IRR
+        const [fundCashflows] = await connection.query(
+          `SELECT fund, COALESCE(sub_fund, company) AS project, transaction_date,
+                  (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
+           FROM b_transaction
+           WHERE version = ? AND lp IS NULL AND transaction_type <> '认缴'
+             AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
+           ORDER BY fund, project, transaction_date ASC`,
+          [version]
+        );
+        const fundProjectMap = {};
+        for (const cf of fundCashflows) {
+          if (!cf.fund || !cf.project) continue;
+          const key = `${cf.fund}||${cf.project}`;
+          if (!fundProjectMap[key]) fundProjectMap[key] = { fund: cf.fund, project: cf.project, amounts: [], dates: [] };
+          fundProjectMap[key].amounts.push(Number(cf.amount));
+          fundProjectMap[key].dates.push(cf.transaction_date);
+        }
+        for (const { fund, project, amounts, dates } of Object.values(fundProjectMap)) {
+          const irr = computeIRR(amounts, dates);
+          await connection.query(
+            `UPDATE b_investment SET irr = ? WHERE version = ? AND fund = ? AND project = ? AND F_DeleteMark = 0`,
+            [irr, version, fund, project]
+          );
+        }
+
+        // 2. b_investment_sum：按 project 分组计算 IRR（不区分基金）
+        const [allCashflows] = await connection.query(
+          `SELECT COALESCE(sub_fund, company) AS project, transaction_date,
+                  (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
+           FROM b_transaction
+           WHERE version = ? AND fund <> '国方一期产品' AND lp IS NULL AND transaction_type <> '认缴'
+             AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
+           ORDER BY project, transaction_date ASC`,
+          [version]
+        );
+        const allProjectMap = {};
+        for (const cf of allCashflows) {
+          if (!cf.project) continue;
+          if (!allProjectMap[cf.project]) allProjectMap[cf.project] = { amounts: [], dates: [] };
+          allProjectMap[cf.project].amounts.push(Number(cf.amount));
+          allProjectMap[cf.project].dates.push(cf.transaction_date);
+        }
+        for (const [project, { amounts, dates }] of Object.entries(allProjectMap)) {
+          const irr = computeIRR(amounts, dates);
+          await connection.query(
+            `UPDATE b_investment_sum SET irr = ? WHERE version = ? AND project = ? AND F_DeleteMark = 0`,
+            [irr, version, project]
+          );
+        }
+      } catch (irrErr) {
+        console.warn('版本创建时计算项目级IRR失败:', irrErr.message);
+      }
       } finally {
         versionCreationLocks.delete(dateLockKey);
       }

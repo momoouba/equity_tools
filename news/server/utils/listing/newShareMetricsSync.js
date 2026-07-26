@@ -1,12 +1,20 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
-const { fetchHkFirstDayBundleFromEtnet } = require('./etnetHkIpoInfoMetrics');
+const { fetchHkFirstDayBundleFromEtnet, wasEtnetWarmRecentlyFailed } = require('./etnetHkIpoInfoMetrics');
 
 const IPOAPPLY_CACHE_TTL_MS = Math.max(30_000, Number(process.env.NEW_SHARE_METRICS_IPOAPPLY_CACHE_TTL_MS || 300_000));
 const FETCH_TIMEOUT_MS = Math.max(5000, Number(process.env.NEW_SHARE_METRICS_FETCH_TIMEOUT_MS || 20000));
 const PY_TIMEOUT_MS = Math.max(10000, Number(process.env.NEW_SHARE_METRICS_PY_TIMEOUT_MS || 45000));
 // 港股专用超时配置（更长，因为港股数据源较慢）
 const PY_TIMEOUT_MS_HK = Math.max(30000, Number(process.env.NEW_SHARE_METRICS_PY_TIMEOUT_MS_HK || 90000));
+const EASTMONEY_KLINE_URLS = [
+  'https://push2his.eastmoney.com/api/qt/stock/kline/get',
+  'https://6.push2his.eastmoney.com/api/qt/stock/kline/get',
+  'https://13.push2his.eastmoney.com/api/qt/stock/kline/get',
+  'https://19.push2his.eastmoney.com/api/qt/stock/kline/get',
+  'https://26.push2his.eastmoney.com/api/qt/stock/kline/get',
+  'https://39.push2his.eastmoney.com/api/qt/stock/kline/get',
+];
 let ipoApplyCache = { expireAt: 0, byCode: new Map() };
 
 function sleep(ms) {
@@ -165,59 +173,59 @@ async function fetchEastmoneyFirstRow({ stockCode, listDate, market }) {
   const listYmd = String(listDate || '').slice(0, 10);
   const beg = listYmd.replace(/-/g, '');
   const emAttempts = Math.max(1, Number(process.env.NEW_SHARE_METRICS_EM_ATTEMPTS || 5));
+  const end = new Date(`${listYmd}T00:00:00`);
+  end.setDate(end.getDate() + 20);
+  const endYmd = `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, '0')}${String(end.getDate()).padStart(2, '0')}`;
   for (const secid of eastmoneySecids(stockCode, market)) {
-    for (let i = 0; i < emAttempts; i += 1) {
-      try {
-        const end = new Date(`${listYmd}T00:00:00`);
-        end.setDate(end.getDate() + 20);
-        const endYmd = `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, '0')}${String(
-          end.getDate(),
-        ).padStart(2, '0')}`;
-        const u = new URL('https://push2his.eastmoney.com/api/qt/stock/kline/get');
-        u.searchParams.set('secid', secid);
-        u.searchParams.set('klt', '101');
-        u.searchParams.set('fqt', '0');
-        u.searchParams.set('beg', beg);
-        u.searchParams.set('end', endYmd);
-        u.searchParams.set('ut', 'fa5fd1943c7b386f172d6893dbfba10b');
-        u.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
-        u.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-        let resp;
+    for (const baseUrl of EASTMONEY_KLINE_URLS) {
+      for (let i = 0; i < emAttempts; i += 1) {
         try {
-          resp = await fetch(u.toString(), {
-            headers: {
-              'user-agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
-              referer: 'https://quote.eastmoney.com/',
-              accept: 'application/json,text/plain,*/*',
-            },
-            signal: ctrl.signal,
-          });
-        } finally {
-          clearTimeout(timer);
+          const u = new URL(baseUrl);
+          u.searchParams.set('secid', secid);
+          u.searchParams.set('klt', '101');
+          u.searchParams.set('fqt', '0');
+          u.searchParams.set('beg', beg);
+          u.searchParams.set('end', endYmd);
+          u.searchParams.set('ut', 'fa5fd1943c7b386f172d6893dbfba10b');
+          u.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
+          u.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+          let resp;
+          try {
+            resp = await fetch(u.toString(), {
+              headers: {
+                'user-agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+                referer: 'https://quote.eastmoney.com/',
+                accept: 'application/json,text/plain,*/*',
+              },
+              signal: ctrl.signal,
+            });
+          } finally {
+            clearTimeout(timer);
+          }
+          if (!resp.ok) throw new Error(`em http ${resp.status}`);
+          const payload = await resp.json();
+          const klines = payload?.data?.klines || [];
+          for (const line of klines) {
+            const parts = String(line || '').split(',');
+            if (parts.length < 9) continue;
+            const tradeDate = String(parts[0] || '').slice(0, 10);
+            if (!tradeDate || tradeDate < listYmd) continue;
+            const close = Number(parts[2]);
+            const chgPct = Number(parts[8]);
+            return {
+              trade_date: tradeDate,
+              close: Number.isFinite(close) ? close : null,
+              chg_pct: Number.isFinite(chgPct) ? chgPct : null,
+            };
+          }
+          break;
+        } catch (_) {
+          if (i >= emAttempts - 1) break;
+          await sleep(Math.min(12000, 800 * 2 ** i));
         }
-        if (!resp.ok) throw new Error(`em http ${resp.status}`);
-        const payload = await resp.json();
-        const klines = payload?.data?.klines || [];
-        for (const line of klines) {
-          const parts = String(line || '').split(',');
-          if (parts.length < 9) continue;
-          const tradeDate = String(parts[0] || '').slice(0, 10);
-          if (!tradeDate || tradeDate < listYmd) continue;
-          const close = Number(parts[2]);
-          const chgPct = Number(parts[8]);
-          return {
-            trade_date: tradeDate,
-            close: Number.isFinite(close) ? close : null,
-            chg_pct: Number.isFinite(chgPct) ? chgPct : null,
-          };
-        }
-        break;
-      } catch (_) {
-        if (i >= emAttempts - 1) break;
-        await sleep(Math.min(12000, 800 * 2 ** i));
       }
     }
   }
@@ -237,6 +245,10 @@ function runNewShareMetricsSync(opts) {
   const args = [script, '--stock-code', stockCode, '--list-date', listDate, '--market', market];
   // 港股使用更长的超时时间
   const pyTimeoutMs = market === 'hk' ? PY_TIMEOUT_MS_HK : PY_TIMEOUT_MS;
+  const pyEnv = { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' };
+  if (market === 'hk' && opts.skipEtnet) {
+    pyEnv.NEW_SHARE_METRICS_HK_SKIP_ETNET = '1';
+  }
   const parsePayload = (text) => {
     try {
       const line = String(text || '').trim().split('\n').filter(Boolean).pop();
@@ -246,7 +258,7 @@ function runNewShareMetricsSync(opts) {
     }
   };
   const r = spawnSync(py, args, {
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    env: pyEnv,
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 20 * 1024 * 1024,
@@ -277,14 +289,17 @@ function runNewShareMetricsSync(opts) {
 
 async function runNewShareMetricsSyncWithFallback(opts) {
   const market = String(opts.market || 'a').trim().toLowerCase();
+  const logTag = opts.logTag || '[打新日历-首日指标]';
+  const skipEtnet = !!opts.skipEtnet || wasEtnetWarmRecentlyFailed();
   if (market === 'hk') {
     const hkEtnetFirst = String(process.env.NEW_SHARE_METRICS_HK_ETNET_FIRST || '1') !== '0';
-    if (hkEtnetFirst) {
+    if (hkEtnetFirst && !skipEtnet) {
       try {
         const et = await fetchHkFirstDayBundleFromEtnet({
           stockCode: opts.stockCode,
           listDate: opts.listDate,
-          logTag: opts.logTag,
+          logTag,
+          skipFullWarm: false,
         });
         if (et && hasUsableFirstRow(et.firstRow)) {
           return {
@@ -296,8 +311,29 @@ async function runNewShareMetricsSyncWithFallback(opts) {
             issuePrice: et.issue_price != null && Number.isFinite(Number(et.issue_price)) ? Number(et.issue_price) : null,
           };
         }
-      } catch (_) {
-        // 经济通失败则回退东财 / Python
+      } catch (e) {
+        console.warn(`${logTag} 经济通查询失败，回退东财/Python: ${String(e?.message || e)}`);
+      }
+    } else if (hkEtnetFirst && skipEtnet) {
+      try {
+        const et = await fetchHkFirstDayBundleFromEtnet({
+          stockCode: opts.stockCode,
+          listDate: opts.listDate,
+          logTag,
+          skipFullWarm: true,
+        });
+        if (et && hasUsableFirstRow(et.firstRow)) {
+          return {
+            ok: true,
+            source: et.source || 'etnet.ci_ipo_info.js-recent',
+            firstRow: et.firstRow,
+            totalShares: null,
+            winRate: et.win_rate != null && Number.isFinite(Number(et.win_rate)) ? Number(et.win_rate) : null,
+            issuePrice: et.issue_price != null && Number.isFinite(Number(et.issue_price)) ? Number(et.issue_price) : null,
+          };
+        }
+      } catch (e) {
+        console.warn(`${logTag} 经济通近期页查询失败，回退东财/Python: ${String(e?.message || e)}`);
       }
     }
     const firstRow = await fetchEastmoneyFirstRow({
@@ -320,7 +356,7 @@ async function runNewShareMetricsSyncWithFallback(opts) {
     if (!allowPythonForHk) {
       return { ok: false, stderr: 'hk first row missing/incomplete (js fallback)' };
     }
-    const pyResult = runNewShareMetricsSync(opts);
+    const pyResult = runNewShareMetricsSync({ ...opts, skipEtnet });
     if (pyResult.ok && hasUsableFirstRow(pyResult.firstRow)) return pyResult;
     if (firstRow) {
       return {

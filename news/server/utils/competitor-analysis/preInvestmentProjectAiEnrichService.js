@@ -344,6 +344,36 @@ async function runPreInvestmentProjectAiEnrichTask({
   }
 }
 
+async function preparePreInvestmentProjectAiJobForBatch(preProjectId, triggerType = 'batch_profile_enrich') {
+  const id = String(preProjectId || '').trim();
+  if (!id) return { ok: false, message: '无效的项目 id' };
+
+  const rows = await db.query(
+    `SELECT F_Id, enterprise_full_name, F_DeleteMark FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
+    [id]
+  );
+  if (!rows.length || Number(rows[0].F_DeleteMark) !== 0) {
+    return { ok: false, message: '投前项目不存在或已删除' };
+  }
+
+  const jobTraceId = crypto.randomUUID();
+  const name = rows[0].enterprise_full_name != null ? String(rows[0].enterprise_full_name) : null;
+  const ins = await db.execute(
+    `INSERT INTO invested_enterprise_ai_enrich_log
+     (invested_enterprise_id, ipo_project_f_id, pre_investment_project_id, enterprise_full_name, trigger_type, triggered_by_user_id, client_ip, job_trace_id, execution_status, prompt_type, ai_enrich_version)
+     VALUES (NULL, NULL, ?, ?, ?, NULL, NULL, ?, 'pending', ?, ?)`,
+    [id, name, formatPreInvAiEnrichTriggerType(triggerType), jobTraceId, PROMPT_TYPE, PRE_INV_AI_VERSION]
+  );
+
+  await db.execute(
+    `UPDATE pre_investment_project SET ai_enrich_status = 'running', ai_enrich_error = NULL, pipeline_error = NULL, F_LastModifyTime = NOW()
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
+    [id]
+  );
+
+  return { ok: true, logId: ins.insertId, jobTraceId, preProjectId: id };
+}
+
 async function enqueueManualPreInvestmentProjectAiEnrich({
   preProjectId,
   triggeredByUserId,
@@ -382,5 +412,7 @@ async function enqueueManualPreInvestmentProjectAiEnrich({
 
 module.exports = {
   enqueueManualPreInvestmentProjectAiEnrich,
+  preparePreInvestmentProjectAiJobForBatch,
+  runPreInvestmentProjectAiEnrichTask,
   PRE_INV_AI_VERSION,
 };

@@ -12,6 +12,7 @@ const { loadInternalDisplayFields } = require('./competitorInternalDisplayLoader
 
 const SOURCE_LABELS = {
   ipo_project: '底层项目',
+  ipo_new_share: '上市主池',
   sourcing_financing_event: '融资事件',
   ai_web: '联网发现',
 };

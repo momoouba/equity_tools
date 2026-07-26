@@ -4309,6 +4309,9 @@ router.put('/competitor-recall-source-config', [
   body('enable_ipo_project').optional().isBoolean(),
   body('enable_financing_event').optional().isBoolean(),
   body('enable_ai_web').optional().isBoolean(),
+  body('use_new_share_listed_recall').optional().isBoolean(),
+  body('enable_recall_ab_compare').optional().isBoolean(),
+  body('new_share_gray_categories').optional().isString(),
 ], async (req, res) => {
   try {
     const userRole = req.headers['x-user-role'] || 'user';

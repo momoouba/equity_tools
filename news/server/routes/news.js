@@ -968,6 +968,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
                 const newsAnalysis = require('../utils/newsAnalysis');
                 const newsItem = {
                   id: newsId,
+                  F_Id: newsId,
                   title: article.title || '',
                   content: article.content || '',
                   source_url: sourceUrl,
@@ -2645,7 +2646,7 @@ router.get('/', async (req, res) => {
     const data = await db.query(
       `SELECT nd.F_Id AS id, nd.account_name, nd.wechat_account, nd.public_time, nd.title, nd.source_url,
               nd.keywords, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_abstract, nd.news_sentiment, nd.content,
-              nd.F_CreatorTime, nd.APItype, nd.news_category,
+              nd.F_CreatorTime, nd.F_CreatorTime AS created_at, nd.APItype, nd.news_category,
               nd.fund, nd.sub_fund,
               COALESCE(nd.entity_type, ie.entity_type) as entity_type
        FROM news_detail nd

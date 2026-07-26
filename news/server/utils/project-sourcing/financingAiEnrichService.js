@@ -140,6 +140,20 @@ function isManualFinancingAiEnrichTrigger(triggerType) {
   return String(triggerType || '').trim() === 'manual_api';
 }
 
+/** Stage 2b 无百科降级批处理（§6.6）：独立触发类型，落库 profile_source=llm_web */
+const NO_BAIKE_ENRICH_TRIGGER = 'batch_no_baike_enrich';
+
+function isNoBaikeEnrichTrigger(triggerType) {
+  return String(triggerType || '').trim() === NO_BAIKE_ENRICH_TRIGGER;
+}
+
+const NO_BAIKE_USER_PREFIX = `【重要：无百度百科词条】
+经系统检索，该企业无百度百科词条（baike_lemma_status=not_found）。请勿假设存在百科摘要。
+请完全依赖联网检索（官网、新闻、招聘页、产品发布等）撰写 product_intro；企查查材料仅作主体核对，禁止照抄经营范围。
+材料仍不足时，product_intro 固定写「公开信息不足，无法归纳」；tags 为 []。
+
+`;
+
 /**
  * 同一企业在库内多条融资记录：有信用代码则按代码批量更新；无代码则按企业全称批量更新；否则仅当前 id。
  */
@@ -399,6 +413,7 @@ async function persistFinancingAiLlmSuccess({
   taskLog = null,
   searchMeta = null,
   syncProjectDesc = false,
+  markProfileSourceLlmWeb = false,
 }) {
   const parsed = extractJsonObject(raw);
   const norm = normalizeAiPayload(parsed);
@@ -414,12 +429,19 @@ async function persistFinancingAiLlmSuccess({
 
   const fan = buildEnterpriseFanOutWhere(row, financingEventId);
   const projectDescStored = syncProjectDesc ? productIntroStored : null;
+  const profileSourceSql = markProfileSourceLlmWeb
+    ? `profile_source = CASE
+         WHEN COALESCE(profile_source, '') IN ('listed_sync', 'bp', 'baike') THEN profile_source
+         ELSE 'llm_web'
+       END,`
+    : '';
   const updHdr = await db.execute(
     `UPDATE sourcing_financing_event SET
          ai_product_intro = ?,
          ${syncProjectDesc ? 'project_desc = ?,' : ''}
          ai_company_tags_display = ?,
          ai_company_tags_json = ?,
+         ${profileSourceSql}
          ai_enrich_status = 'success',
          ai_enrich_at = NOW(),
          ai_enrich_model = ?,
@@ -1102,6 +1124,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
   dt,
   totalInRange,
   triggerType = 'batch_date_range',
+  llmConfigOverride = null,
 }) {
   /** @type {{ logId:number, financingEventId:number, row: object }[]} */
   const llmJobs = [];
@@ -1263,7 +1286,19 @@ async function submitLargeBatchFileFinancingAiEnrich({
         ? String(promptBundle.prompt_content)
         : '';
     const { system: systemContent, userTemplate } = resolveFinancingAiPromptSections(storedRaw);
-    const { llm_model_config_id: llmModelConfigId, config } = await resolveLlmConfig(promptBundle, promptMeta);
+    let llmModelConfigId;
+    let config;
+    if (llmConfigOverride && llmConfigOverride.api_key && llmConfigOverride.model_name) {
+      config = llmConfigOverride;
+      llmModelConfigId = llmConfigOverride.id != null ? llmConfigOverride.id : null;
+      financingAiJobLog(batchId, 'batch_file', 'resolve_model_override', `model=${config.model_name}`, {
+        llm_model_config_id: llmModelConfigId,
+      });
+    } else {
+      const resolved = await resolveLlmConfig(promptBundle, promptMeta);
+      llmModelConfigId = resolved.llm_model_config_id;
+      config = resolved.config;
+    }
     if (!config) {
       const err = new Error(
         '未配置可用的 AI 模型：请在「系统 AI 配置」中维护 application_type=project_sourcing_analysis 的模型，或为该提示词绑定模型'
@@ -1286,9 +1321,16 @@ async function submitLargeBatchFileFinancingAiEnrich({
     const baseUrl = compatibleModeV1BaseUrlFromEndpoint(config.api_endpoint);
     const sys = String(systemContent || '').trim() || BUILTIN_SYSTEM_PROMPT;
     const { temperature, max_tokens, top_p } = financingAiChatParamsFromConfig(config);
+    const batchBodyExtras = /^qwen3\.(5|6|7)/i.test(String(config.model_name || ''))
+      ? { enable_thinking: false }
+      : {};
 
     const lines = llmJobs.map((j) => {
-      const usr = String(fillTemplate(userTemplate, j.row) || '').trim();
+      const templateRow = buildFinancingAiTemplateRow(j.row);
+      let usr = String(fillTemplate(userTemplate, templateRow) || '').trim();
+      if (isNoBaikeEnrichTrigger(triggerType)) {
+        usr = `${NO_BAIKE_USER_PREFIX}${usr}`;
+      }
       if (!usr) {
         return null;
       }
@@ -1301,6 +1343,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
         temperature,
         max_tokens,
         top_p,
+        ...batchBodyExtras,
       };
       return JSON.stringify({
         custom_id: `l${j.logId}`,
@@ -1417,6 +1460,7 @@ async function pollAndApplyLargeBatchFileFinancingAiEnrich({
   llmModelConfigId,
   promptMeta,
   baseUrl,
+  triggerType = 'batch_date_range',
 }) {
   const pollMs = Math.max(
     3000,
@@ -1573,6 +1617,7 @@ async function pollAndApplyLargeBatchFileFinancingAiEnrich({
           started: startedLine,
           taskLog: applyTaskLog,
           searchMeta: searchMetaForBatchFile(),
+          markProfileSourceLlmWeb: isNoBaikeEnrichTrigger(triggerType),
         });
         doneLogIds.add(logId);
         applyHandled += 1;
@@ -1824,6 +1869,7 @@ async function runFinancingAiEnrichTask({
 
     const events = await db.query(
       `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, project_desc,
+              baike_lemma_status,
               F_DeleteMark AS delete_mark,
               ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
        FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
@@ -1915,7 +1961,11 @@ async function runFinancingAiEnrichTask({
         ? String(promptBundle.prompt_content)
         : '';
     const { system: systemContent, userTemplate } = resolveFinancingAiPromptSections(storedRaw);
-    const userContent = fillTemplate(userTemplate, row);
+    const templateRow = buildFinancingAiTemplateRow(row);
+    let userContent = fillTemplate(userTemplate, templateRow);
+    if (isNoBaikeEnrichTrigger(triggerType)) {
+      userContent = `${NO_BAIKE_USER_PREFIX}${userContent}`;
+    }
 
     const { llm_model_config_id, config } = await resolveLlmConfig(promptBundle, promptMeta);
     llmModelConfigId = llm_model_config_id;
@@ -1955,6 +2005,7 @@ async function runFinancingAiEnrichTask({
       taskLog,
       searchMeta: searchMetaFromLlmCall(llmOut),
       syncProjectDesc: forceLlmRefresh,
+      markProfileSourceLlmWeb: isNoBaikeEnrichTrigger(triggerType),
     });
   } catch (err) {
     await markFinancingAiEnrichFailed({
@@ -2520,17 +2571,25 @@ module.exports = {
   enqueueIngestFinancingAiEnrich,
   enqueueBatchFinancingAiEnrichByDateRange,
   runFinancingAiEnrichTask,
+  prepareFinancingAiEnrichJob,
+  findFinancingAiDonorRow,
+  applyFinancingAiReuseFromDonor,
   reuseFinancingAiForEventId,
   eventHasCompleteAiContent,
   runFinancingStyleWebEnrichLlmCall,
   buildFinancingAiTemplateRow,
+  buildEnterpriseFanOutWhere,
   withFinancingAiConcurrency,
   callDashScopeOpenAIChat,
   PROMPT_INTERFACE,
   PROMPT_TYPE,
   AI_ENRICH_VERSION,
+  NO_BAIKE_ENRICH_TRIGGER,
+  isNoBaikeEnrichTrigger,
   buildBuiltinPromptContentForDb,
   PROMPT_SECTION_SYSTEM,
   PROMPT_SECTION_USER,
   extractCompetitorSupplementTagsFromNarrative,
+  submitLargeBatchFileFinancingAiEnrich,
+  pollAndApplyLargeBatchFileFinancingAiEnrich,
 };

@@ -25,6 +25,7 @@ async function invokePlainChat({
   webSearchMode,
   timeout,
   logPrefix = '[llmChat]',
+  chatBodyExtras,
 }) {
   const messages = [];
   const sys = String(systemContent || '').trim();
@@ -38,6 +39,7 @@ async function invokePlainChat({
     temperature,
     max_tokens,
     top_p,
+    ...(chatBodyExtras && typeof chatBodyExtras === 'object' ? chatBodyExtras : {}),
   };
 
   let usedWebSearch = false;

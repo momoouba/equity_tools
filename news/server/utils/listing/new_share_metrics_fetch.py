@@ -365,7 +365,8 @@ def main():
             )
             return
 
-        extra_et = _fetch_hk_metrics_from_etnet(stock_code, list_date)
+        skip_etnet = str(os.environ.get("NEW_SHARE_METRICS_HK_SKIP_ETNET", "") or "").strip() == "1"
+        extra_et = None if skip_etnet else _fetch_hk_metrics_from_etnet(stock_code, list_date)
         if extra_et and _first_row_complete(extra_et.get("firstRow") or {}):
             print(
                 json.dumps(

@@ -159,9 +159,69 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
   return result;
 }
 
+/**
+ * 候选有效简介长度：取 product_intro / web_core_products / qcc_intro 三者中最长。
+ * 用于判断候选简介是否空/短到需要校验前联网补齐。
+ */
+function effectiveIntroLen(c) {
+  return Math.max(
+    strTrim(c?.product_intro).length,
+    strTrim(c?.web_core_products).length,
+    strTrim(c?.qcc_intro).length
+  );
+}
+
+/**
+ * 校验前定向联网增强：对空/短简介候选联网补齐产品简介与标签，
+ * 直接写回 candidate.web_core_products / tags，使后续 S5 校验基于真实业务判断，
+ * 而不是因为"企业业务信息缺失"被直接判死（web_search=0 的校验看不到联网信息）。
+ * 返回 { enriched, introLen, tagCount, error? }。
+ */
+async function preValidateWebEnrichCandidate(candidate, { runId } = {}) {
+  const name = strTrim(candidate.display_name);
+  if (!name) return { enriched: false };
+  const credit = normalizeCreditCode(candidate.unified_credit_code);
+  const before = effectiveIntroLen(candidate);
+  try {
+    logCompetitorRun(
+      runId,
+      'S5_pre_enrich',
+      `联网补齐简介 ${name}${candidate._fromGoldStandard ? '（金标优先）' : ''}`
+    );
+    const llm = await withFinancingAiConcurrency(() =>
+      runFinancingStyleWebEnrichLlmCall({
+        company_name: name,
+        company_credit_code: credit || '',
+        project_name: name,
+      })
+    );
+    const intro = strTrim(llm.productIntroStored);
+    // 提示词查不到主体时固定返回"公开信息不足，无法归纳"——这是废话而非业务画像，
+    // 不写回 web_core_products，避免校验据此仍判 not_competitor 还误计一次"已补齐"。
+    const isFailurePhrase = /公开信息不足|无法归纳|信息不足/.test(intro);
+    if (intro && !isFailurePhrase) candidate.web_core_products = intro;
+    let newTags = [];
+    if (llm.display) {
+      newTags = strTrim(llm.display)
+        .split(/[,，、]/g)
+        .map((x) => x.trim())
+        .filter(Boolean);
+    }
+    if (!newTags.length && llm.tagsJson) newTags = parseTagsFromJson(llm.tagsJson);
+    if (newTags.length) candidate.tags = mergeTagArrays(candidate.tags || [], newTags);
+    const after = effectiveIntroLen(candidate);
+    return { enriched: after > before, introLen: after, tagCount: (candidate.tags || []).length };
+  } catch (e) {
+    logCompetitorRun(runId, 'S5_pre_enrich', `联网补齐失败 ${name}: ${e.message}`);
+    return { enriched: false, error: e.message };
+  }
+}
+
 module.exports = {
   enrichCompetitorDisplayFields,
   clearEnrichCache,
   resolveSubFundNamesFromIpo,
   loadInternalDisplayFields,
+  effectiveIntroLen,
+  preValidateWebEnrichCandidate,
 };

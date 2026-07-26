@@ -187,17 +187,28 @@ async function invokeCompetitorChat(
   throw new Error(lastErr?.message || String(lastErr));
 }
 
+function withStrategyAppendix(systemPrompt, strategyAppendix) {
+  const appendix = strTrim(strategyAppendix);
+  if (!appendix) return systemPrompt;
+  return `${systemPrompt}\n\n${appendix}`;
+}
+
+function strTrim(v) {
+  return v == null ? '' : String(v).trim();
+}
+
 async function scorePairSimilarity(targetSlice, candidateSlice, logCtx = {}) {
-  const { runId, candidateName } = logCtx;
+  const { runId, candidateName, strategyAppendix } = logCtx;
   const label = candidateName || candidateSlice?.display_name || '候选';
   logCompetitorAi(runId, 'pair_similarity', `开始 ${label}`);
   try {
     const bundle = await loadCompetitorPromptBundle(PROMPT_TYPES.PAIR_SIMILARITY);
+    const system = withStrategyAppendix(bundle.system, strategyAppendix);
     const userContent = renderCompetitorUserPrompt(bundle.userTemplate, {
       TARGET_JSON: jsonBlock(targetSlice),
       CANDIDATE_JSON: jsonBlock(candidateSlice),
     });
-    const raw = await invokeCompetitorChat(bundle.system, userContent, {
+    const raw = await invokeCompetitorChat(system, userContent, {
       enableSearch: false,
     });
     const parsed = extractJsonObject(raw);
@@ -223,7 +234,7 @@ function textOverlapFallback(a, b) {
 }
 
 async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = {}) {
-  const { runId } = logCtx;
+  const { runId, strategyAppendix, relaxListedMandate } = logCtx;
   const cfg = await getActiveCompetitorModelConfig();
   const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000;
   const noSearchTimeout = Math.max(
@@ -240,16 +251,27 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
     timeout_ms: webTimeout,
     no_search_timeout_ms: noSearchTimeout,
     retries: parseInt(process.env.COMPETITOR_WEB_RETRIES || '2', 10) || 2,
+    relax_listed_mandate: !!relaxListedMandate,
     note:
       '联网机制：由 AI 模型配置的 web_search_mode 驱动（如 Anthropic web_search / OpenAI web_search_tool）；模型按提示词中的检索词与目标画像自主检索，非固定搜索引擎 API。',
   });
   const bundle = await loadCompetitorPromptBundle(PROMPT_TYPES.WEB_DISCOVER);
+  let system = withStrategyAppendix(bundle.system, strategyAppendix);
+  if (relaxListedMandate) {
+    system = withStrategyAppendix(
+      system,
+      `# 发现配额覆盖（本目标生效）
+- **取消**「境内上市公司硬性至少 3 家」要求；不得为凑上市名额塞入工业人形/纯大脑/晚期独角兽。
+- 优先：同场景、同产品形态、相近融资阶段的未上市或早期公司；品牌名可先返回再核验工商。
+- 仍鼓励返回可核验信用代码的境内公司，但不因缺代码整条丢弃极早期竞品。`
+    );
+  }
   const userContent = renderCompetitorUserPrompt(bundle.userTemplate, {
     TARGET_PROFILE_JSON: jsonBlock(profile),
     KEYWORDS_JSON: jsonBlock(keywords),
     EXCLUDE_NAMES_JSON: jsonBlock(excludeNames || []),
   });
-  const invokeRes = await invokeCompetitorChat(bundle.system, userContent, {
+  const invokeRes = await invokeCompetitorChat(system, userContent, {
     enableSearch: true,
     timeout: webTimeout,
     allowDegradedFallback: true,
@@ -273,6 +295,7 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
         used_enable_search: usedWebSearch,
         search_degraded: searchUnsupportedDegraded,
         model_name: cfg?.model_name || null,
+        relax_listed_mandate: !!relaxListedMandate,
       },
     };
   }
@@ -288,6 +311,7 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
       used_enable_search: usedWebSearch,
       search_degraded: searchUnsupportedDegraded,
       model_name: cfg?.model_name || null,
+      relax_listed_mandate: !!relaxListedMandate,
     },
   };
 }
@@ -302,7 +326,7 @@ const LISTED_MANDATE_USER_SUFFIX = `
 
 /** 专项联网：补足国内 A 股/北交所/新三板上市公司（至少 3 家） */
 async function discoverDomesticListedCompetitors(profile, keywords, excludeNames, logCtx = {}) {
-  const { runId } = logCtx;
+  const { runId, strategyAppendix } = logCtx;
   const cfg = await getActiveCompetitorModelConfig();
   const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000;
   let searchUnsupportedDegraded = false;
@@ -314,13 +338,14 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
     min_domestic_listed: parseInt(process.env.COMPETITOR_MIN_DOMESTIC_LISTED || '5', 10) || 5,
   });
   const bundle = await loadCompetitorPromptBundle(PROMPT_TYPES.WEB_DISCOVER);
+  const system = withStrategyAppendix(bundle.system, strategyAppendix);
   const userContent =
     renderCompetitorUserPrompt(bundle.userTemplate, {
       TARGET_PROFILE_JSON: jsonBlock(profile),
       KEYWORDS_JSON: jsonBlock(keywords),
       EXCLUDE_NAMES_JSON: jsonBlock(excludeNames || []),
     }) + LISTED_MANDATE_USER_SUFFIX;
-  const listedInvokeRes = await invokeCompetitorChat(bundle.system, userContent, {
+  const listedInvokeRes = await invokeCompetitorChat(system, userContent, {
     enableSearch: true,
     timeout: webTimeout,
     allowDegradedFallback: true,
@@ -362,16 +387,17 @@ async function discoverDomesticListedCompetitors(profile, keywords, excludeNames
 }
 
 async function validateCandidate(targetSlice, candidateSlice, logCtx = {}) {
-  const { runId, candidateName } = logCtx;
+  const { runId, candidateName, strategyAppendix } = logCtx;
   const label = candidateName || candidateSlice?.display_name || '候选';
   logCompetitorAi(runId, 'validate', `开始 ${label}`);
   try {
     const bundle = await loadCompetitorPromptBundle(PROMPT_TYPES.VALIDATE);
+    const system = withStrategyAppendix(bundle.system, strategyAppendix);
     const userContent = renderCompetitorUserPrompt(bundle.userTemplate, {
       TARGET_JSON: jsonBlock(targetSlice),
       CANDIDATE_JSON: jsonBlock(candidateSlice),
     });
-    const raw = await invokeCompetitorChat(bundle.system, userContent, {
+    const raw = await invokeCompetitorChat(system, userContent, {
       enableSearch: false,
     });
     const parsed = extractJsonObject(raw);

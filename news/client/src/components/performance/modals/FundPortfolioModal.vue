@@ -26,7 +26,7 @@
             <col style="width: 120px" /><col style="width: 120px" />
             <col style="width: 120px" /><col style="width: 120px" />
             <col style="width: 120px" />
-            <col style="width: 75px" /><col style="width: 75px" />
+            <col style="width: 75px" /><col style="width: 75px" /><col style="width: 75px" />
           </colgroup>
           <thead>
             <tr>
@@ -42,6 +42,7 @@
               <th rowspan="2" class="col-total-value">总价值</th>
               <th rowspan="2" class="col-ratio">MOC</th>
               <th rowspan="2" class="col-ratio">DPI</th>
+              <th rowspan="2" class="col-ratio">IRR</th>
             </tr>
             <tr>
               <th class="col-amount">累计值</th>
@@ -75,6 +76,7 @@
               <td class="td-num col-total-value">{{ formatAmountYuan(row.total_value) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(row.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(row.dpi) }}</td>
+              <td class="td-num col-ratio">{{ formatPercentRatio(row.irr) }}</td>
             </tr>
             <tr v-if="subFundRows.length > 0" class="summary-row">
               <td class="col-index">小计</td>
@@ -94,6 +96,7 @@
               <td class="td-num col-total-value">{{ formatAmountYuan(subFundSum.total_value) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(subFundSum.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(subFundSum.dpi) }}</td>
+              <td class="td-num col-ratio">-</td>
             </tr>
           </tbody>
           <tbody>
@@ -115,6 +118,7 @@
               <td class="td-num col-total-value">{{ formatAmountYuan(row.total_value) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(row.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(row.dpi) }}</td>
+              <td class="td-num col-ratio">{{ formatPercentRatio(row.irr) }}</td>
             </tr>
             <tr v-if="directRows.length > 0" class="summary-row">
               <td class="col-index">小计</td>
@@ -134,6 +138,7 @@
               <td class="td-num col-total-value">{{ formatAmountYuan(directSum.total_value) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(directSum.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(directSum.dpi) }}</td>
+              <td class="td-num col-ratio">-</td>
             </tr>
           </tbody>
           <tbody v-if="tableData.length > 0">
@@ -155,6 +160,7 @@
               <td class="td-num col-total-value">{{ formatAmountYuan(allSum.total_value) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(allSum.moc) }}</td>
               <td class="td-num col-ratio">{{ formatRatio(allSum.dpi) }}</td>
+              <td class="td-num col-ratio">-</td>
             </tr>
           </tbody>
         </table>
@@ -246,6 +252,13 @@ const formatAmountYuan = (val) => {
 const formatRatio = (val) => {
   if (val === null || val === undefined) return '-';
   return Number(val).toFixed(4) + 'x';
+};
+
+const formatPercentRatio = (val) => {
+  if (val === null || val === undefined) return '/';
+  const n = Number(val);
+  if (n === 0) return '-';
+  return (n * 100).toFixed(2) + '%';
 };
 
 const handleExport = async () => {

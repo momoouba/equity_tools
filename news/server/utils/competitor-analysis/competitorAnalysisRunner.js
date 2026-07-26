@@ -9,15 +9,21 @@ const {
   parseTagsFromRow,
   loadLatestSupplementTags,
 } = require('./competitorMatchReadinessService');
+const { buildInternalRecallPool } = require('./competitorMatchRecall');
+const { attachStrategyToTarget } = require('./industry-strategies');
 const {
-  recallFromIpoProjects,
-  recallListedIpoByProductTerms,
-  recallFromFinancingEvents,
-  mergeRecalledCandidates,
-} = require('./competitorMatchRecall');
+  proposeCompetitionLens,
+  resolveCompetitionLens,
+  applyCompetitionLensToTarget,
+  mergePromptAppendix,
+  applyLensRuleAdjust,
+  applyLensValidationCap,
+  isLensSpecializedCleanerMismatch,
+  mergeProposalWithSaved,
+  loadSavedCompetitionLens,
+  saveCompetitionLensVersion,
+} = require('./competitionLensService');
 const {
-  jaccardSimilarity,
-  textOverlapScore,
   l2Similarity,
   computeComprehensiveScore,
   meetsPersistThreshold,
@@ -45,7 +51,12 @@ const {
   logCompetitorRun,
   summarizeCandidates,
 } = require('./competitorAnalysisLogger');
-const { enrichCompetitorDisplayFields, clearEnrichCache } = require('./competitorRelationEnrichService');
+const {
+  enrichCompetitorDisplayFields,
+  clearEnrichCache,
+  effectiveIntroLen,
+  preValidateWebEnrichCandidate,
+} = require('./competitorRelationEnrichService');
 const { clearInternalDisplayCache } = require('./competitorInternalDisplayLoader');
 const { buildFinancingEventIndex } = require('./competitorFinancingResolve');
 const { loadComparablePrefsForSubject } = require('./competitorComparablePrefService');
@@ -73,10 +84,12 @@ const {
   unlistedMandateMeetsThreshold,
   sortDomesticListedCandidates,
   sortUnlistedCandidates,
+  isDomesticUnlistedCandidate,
 } = require('./competitorListedDomestic');
 const {
   computeProductPrecisionScores,
   extractCoreProductLines,
+  hasStrongOffTargetSignals,
 } = require('./competitorProductLineUtils');
 const {
   clearDomesticIdentityCache,
@@ -143,6 +156,15 @@ const LLM_POOL_TRACK_INTERNAL_FLOOR = Math.max(
 const LLM_POOL_TRACK_PRODUCT_FLOOR = Math.max(
   0,
   parseInt(process.env.COMPETITOR_LLM_TRACK_PRODUCT_FLOOR || '12', 10) || 12
+);
+/** 形态/服务对象对齐高的未上市（多为融资池早期）强制保送 LLM 池槽位 */
+const FORM_UNLISTED_LLM_SLOTS = Math.max(
+  4,
+  parseInt(process.env.COMPETITOR_FORM_UNLISTED_LLM_SLOTS || '12', 10) || 12
+);
+const FORM_UNLISTED_LLM_MIN_FORM = Math.max(
+  15,
+  parseInt(process.env.COMPETITOR_FORM_UNLISTED_MIN_FORM || '30', 10) || 30
 );
 
 function sleep(ms) {
@@ -238,18 +260,79 @@ function candidateHitsTrackKeyword(c, trackRe) {
   return trackRe.test(blob);
 }
 
-function buildWebDiscoverKeywords(target) {
-  const coreLines = target.core_product_lines?.length
-    ? target.core_product_lines
-    : extractCoreProductLines(target);
-  const kw = coreLines.slice(0, 8).map((t) => strTrim(t)).filter(Boolean);
-  kw.push(...target.tags.slice(0, 4).map((t) => strTrim(t)).filter(Boolean));
+function buildWebDiscoverKeywords(target, discoveryPolicy = null) {
+  const {
+    isTechBuzzwordTag,
+  } = require('./competitorProductLineUtils');
+  const { shortenLensAnchors } = require('./competitionLensService');
+  const lens = target.competition_lens;
+  const kw = [];
+  const lensConfirmed = !!(lens?.confirmed || lens?.source === 'user') && lens?.must_align?.length;
+
+  if (lensConfirmed) {
+    for (const a of shortenLensAnchors(
+      [...(lens.must_align || []), ...(lens.custom_keywords || [])],
+      12
+    )) {
+      kw.push(a);
+    }
+  } else {
+    for (const a of [...(lens?.must_align || []), ...(lens?.custom_keywords || [])]) {
+      const t = strTrim(a);
+      if (t) kw.push(t);
+    }
+    const coreLines = target.core_product_lines?.length
+      ? target.core_product_lines
+      : extractCoreProductLines(target);
+    for (const line of coreLines.slice(0, 10)) {
+      const t = strTrim(line);
+      if (t && !isTechBuzzwordTag(t)) kw.push(t);
+    }
+    for (const t of (target.tags || []).slice(0, 8)) {
+      const s = strTrim(t);
+      if (s && !isTechBuzzwordTag(s)) kw.push(s);
+    }
+    const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
+    kw.push(...extractIntroSearchTerms(introBlob));
+  }
+
+  const anchors = discoveryPolicy?.keyword_anchors || [];
+  for (const a of anchors) {
+    const t = strTrim(a);
+    if (t) kw.push(t);
+  }
   if (target.industry_l1) kw.push(strTrim(target.industry_l1));
   if (target.industry_l2) kw.push(strTrim(target.industry_l2));
-  const introBlob = [target.product_intro, target.qcc_intro_effective].filter(Boolean).join('\n');
-  kw.push(...extractIntroSearchTerms(introBlob));
-  kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所');
-  return [...new Set(kw)].slice(0, 16);
+  if (!discoveryPolicy?.drop_listed_keyword_boost) {
+    kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所');
+  }
+  return [...new Set(kw.filter(Boolean))].slice(0, 16);
+}
+
+function resolveDiscoveryPolicy(target) {
+  const fromStrategy =
+    typeof target?.strategy?.getDiscoveryPolicy === 'function'
+      ? target.strategy.getDiscoveryPolicy()
+      : null;
+  return (
+    fromStrategy || {
+      relax_listed_mandate: false,
+      min_domestic_listed: null,
+      keyword_anchors: [],
+      drop_listed_keyword_boost: false,
+    }
+  );
+}
+
+function resolveMinDomesticListed(discoveryPolicy) {
+  if (
+    discoveryPolicy &&
+    discoveryPolicy.min_domestic_listed != null &&
+    Number.isFinite(Number(discoveryPolicy.min_domestic_listed))
+  ) {
+    return Math.max(0, Math.floor(Number(discoveryPolicy.min_domestic_listed)));
+  }
+  return MIN_DOMESTIC_LISTED_COMPETITORS;
 }
 
 function trackRelevanceScore(c) {
@@ -385,6 +468,7 @@ function buildLlmScoringPool(scored, target) {
     .filter((c) => isDomesticListedFromIpoPool(c))
     .sort(
       (a, b) =>
+        (b.formCustomerScore || 0) - (a.formCustomerScore || 0) ||
         (b.coreLineScore || 0) - (a.coreLineScore || 0) ||
         (b.internalScore || 0) - (a.internalScore || 0)
     );
@@ -395,8 +479,98 @@ function buildLlmScoringPool(scored, target) {
     if (add(c)) listedIpoAdded += 1;
   }
 
+  // 形态对齐高的未上市（融资池早期）强制保送，不走弱规则分门槛
+  const lensConfirmed = !!(
+    target?.competition_lens?.confirmed || target?.competition_lens?.source === 'user'
+  );
+  const formMin = lensConfirmed
+    ? Math.max(18, FORM_UNLISTED_LLM_MIN_FORM - 8)
+    : FORM_UNLISTED_LLM_MIN_FORM;
+  const formUnlistedBoost = [...scored]
+    .filter((c) => {
+      if (!isDomesticUnlistedCandidate(c)) return false;
+      if (hasStrongOffTargetSignals(c)) return false;
+      const form = Number(c.formCustomerScore) || 0;
+      const core = Number(c.coreLineScore) || 0;
+      if (form >= formMin) return true;
+      // 形态接近门槛 + 产品线命中：同样保送
+      return form >= formMin - 8 && core >= 16;
+    })
+    .sort(
+      (a, b) =>
+        (b.formCustomerScore || 0) - (a.formCustomerScore || 0) ||
+        (b.coreLineScore || 0) - (a.coreLineScore || 0) ||
+        (b.internalScore || 0) - (a.internalScore || 0)
+    );
+  let formUnlistedAdded = 0;
+  for (const c of formUnlistedBoost) {
+    if (formUnlistedAdded >= FORM_UNLISTED_LLM_SLOTS) break;
+    if (add(c)) {
+      c._formUnlistedBoost = true;
+      formUnlistedAdded += 1;
+    }
+  }
+
+  // 确认透镜后：融资池中「短锚点命中」的未上市再保送一轮（应对长句形态分偏低）
+  let lensAnchorAdded = 0;
+  if (lensConfirmed && target?.competition_lens?.must_align?.length) {
+    const { buildLensScoringAnchors } = require('./competitorProductLineUtils');
+    const anchors = buildLensScoringAnchors(
+      [
+        ...(target.competition_lens.must_align || []),
+        ...(target.competition_lens.custom_keywords || []),
+      ],
+      10
+    );
+    const byLens = scored
+      .filter((c) => {
+        if (!isDomesticUnlistedCandidate(c)) return false;
+        if (hasStrongOffTargetSignals(c)) return false;
+        const blob = [c.display_name, c.product_intro, c.qcc_intro, ...(c.tags || [])]
+          .filter(Boolean)
+          .join('\n');
+        if (!blob) return false;
+        let hits = 0;
+        for (const a of anchors) {
+          if (a && blob.includes(a)) hits += 1;
+        }
+        return hits >= 1 || (Number(c.formCustomerScore) || 0) >= formMin - 5;
+      })
+      .sort(
+        (a, b) =>
+          (b.formCustomerScore || 0) - (a.formCustomerScore || 0) ||
+          (b.coreLineScore || 0) - (a.coreLineScore || 0)
+      );
+    for (const c of byLens) {
+      if (lensAnchorAdded >= 10) break;
+      if (add(c)) {
+        c._formUnlistedBoost = true;
+        c._lensAnchorBoost = true;
+        lensAnchorAdded += 1;
+        formUnlistedAdded += 1;
+      }
+    }
+  }
+
+  // 金标种子兜底：已人工标注为竞品的候选直接进 LLM 池，避免 S2 阈值误杀
+  let goldStandardAdded = 0;
+  for (const c of scored) {
+    if (!c._fromGoldStandard) continue;
+    const key = candidateDedupeKey(c);
+    if (!key || map.has(key)) continue;
+    if (add(c)) {
+      c._goldStandardBoost = true;
+      goldStandardAdded += 1;
+    }
+  }
+
   const maxInternal = maxInternalScoreInList(scored);
-  const effectiveCap = resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal);
+  // 保送形态未上市 + 金标种子后，弱池上限至少留出保送名额
+  let effectiveCap = resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal);
+  effectiveCap = Math.max(
+    effectiveCap,
+    Math.min(map.size, TOP_N_LLM_RULE + formUnlistedAdded + goldStandardAdded + 4)
+  );
   let pool = [...map.values()];
   let poolTrimmed = 0;
   if (pool.length > effectiveCap) {
@@ -404,6 +578,10 @@ function buildLlmScoringPool(scored, target) {
     pool = pool
       .sort(
         (a, b) =>
+          // 强制保送优先保留
+          (b._goldStandardBoost ? 1 : 0) - (a._goldStandardBoost ? 1 : 0) ||
+          (b._formUnlistedBoost ? 1 : 0) - (a._formUnlistedBoost ? 1 : 0) ||
+          (b.formCustomerScore || 0) - (a.formCustomerScore || 0) ||
           (b.internalScore || 0) - (a.internalScore || 0) ||
           trackRelevanceScore(b) - trackRelevanceScore(a)
       )
@@ -417,6 +595,8 @@ function buildLlmScoringPool(scored, target) {
     tagAdded,
     kwAdded,
     listed_ipo_added: listedIpoAdded,
+    form_unlisted_added: formUnlistedAdded,
+    gold_standard_added: goldStandardAdded,
     ruleTop,
     track_rule_top: expanded ? ruleTop : 0,
     skipped_pre_llm: skippedPreLlm,
@@ -430,14 +610,19 @@ function buildLlmScoringPool(scored, target) {
 /** S5 校验池：上市/未上市补充槽位须有一定产品/规则相关性，避免泛 IPO 池误进校验 */
 function meetsValidatePoolRelevance(c, validateInternalMin) {
   if (!c) return false;
+  // 金标种子：已人工标注为竞品，直接允许进入 S5 校验
+  if (c._fromGoldStandard) return true;
   const llm = c.llmProductScore != null ? Number(c.llmProductScore) : 0;
   const ai = getCandidateAiPart(c);
   const core = c.coreLineScore ?? 0;
   const prod = c.productScore ?? 0;
+  const form = c.formCustomerScore ?? 0;
   const internal = Number(c.internalScore) || 0;
   const srcs = c.sources || (c.source ? [c.source] : []);
   if (srcs.includes('ai_web') && ai >= WEB_VALIDATE_AI_MIN) return true;
   if (llm >= LLM_HIGH_TRUST_THRESHOLD) return true;
+  if (c._formUnlistedBoost && (form >= FORM_UNLISTED_LLM_MIN_FORM - 10 || llm >= 35)) return true;
+  if (form >= FORM_UNLISTED_LLM_MIN_FORM && (core >= 10 || prod >= 12 || llm >= 40)) return true;
   if (core >= 10 || prod >= 12) return true;
   if (internal >= validateInternalMin && (core >= 8 || prod >= 10)) return true;
   if (c._trackInternalPeer && llm >= TRACK_INTERNAL_LLM_VALIDATE_MIN) return true;
@@ -452,11 +637,16 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
   const trackRe = trackReForKind(trackKind);
   const map = new Map();
   const add = (c) => {
-    if (!c) return;
+    if (!c) return false;
     const key = candidateDedupeKey(c);
-    if (!key || map.has(key)) return;
+    if (!key || map.has(key)) return false;
     map.set(key, c);
+    return true;
   };
+  // 金标种子直接进 S5 校验池
+  for (const c of scored) {
+    if (c._fromGoldStandard) add(c);
+  }
   for (const c of scored) {
     const llm = c.llmProductScore != null ? Number(c.llmProductScore) : null;
     const ai = getCandidateAiPart(c);
@@ -485,15 +675,26 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
   let listedAdded = 0;
   for (const c of sortDomesticListedCandidates(scored)) {
     if (!meetsValidatePoolRelevance(c, validateInternalMin)) continue;
-    add(c);
-    listedAdded += 1;
+    if (add(c)) listedAdded += 1;
     if (listedAdded >= 12) break;
+  }
+  let formUnlistedValidateAdded = 0;
+  const byFormUnlisted = [...scored]
+    .filter((c) => c._formUnlistedBoost || ((c.formCustomerScore || 0) >= FORM_UNLISTED_LLM_MIN_FORM && isDomesticUnlistedCandidate(c)))
+    .sort(
+      (a, b) =>
+        (b.formCustomerScore || 0) - (a.formCustomerScore || 0) ||
+        (b.llmProductScore || 0) - (a.llmProductScore || 0)
+    );
+  for (const c of byFormUnlisted) {
+    if (formUnlistedValidateAdded >= FORM_UNLISTED_LLM_SLOTS) break;
+    if (!meetsValidatePoolRelevance(c, validateInternalMin) && (c.llmProductScore || 0) < 35) continue;
+    if (add(c)) formUnlistedValidateAdded += 1;
   }
   let unlistedAdded = 0;
   for (const c of sortUnlistedCandidates(scored)) {
     if (!meetsValidatePoolRelevance(c, validateInternalMin)) continue;
-    add(c);
-    unlistedAdded += 1;
+    if (add(c)) unlistedAdded += 1;
     if (unlistedAdded >= 16) break;
   }
   return [...map.values()].slice(0, TOP_N_VALIDATE + 28);
@@ -547,9 +748,14 @@ function mapCandidateToPersistRow(c) {
  * 落库前补足国内上市公司至少 minN 家（默认 5，供客户筛选）。
  */
 async function ensureMinimumDomesticListedInFinalList(args) {
+  const minN =
+    args?.minN != null && Number.isFinite(Number(args.minN))
+      ? Math.max(0, Math.floor(Number(args.minN)))
+      : MIN_DOMESTIC_LISTED_COMPETITORS;
+  if (minN <= 0) return args?.toPersist || [];
   return supplementPersistByQuota({
     ...args,
-    minN: MIN_DOMESTIC_LISTED_COMPETITORS,
+    minN,
     sortFn: sortDomesticListedCandidates,
     meetsThresholdFn: listedMandateMeetsThreshold,
     mandateLabel: 'listed_mandate',
@@ -616,51 +822,102 @@ function buildTargetProfile(row, readiness, subjectType) {
 
 function ruleScoreCandidate(target, cand) {
   const precision = computeProductPrecisionScores(target, cand);
-  const tagScore = Math.round(jaccardSimilarity(target.tags, cand.tags) * 100);
-  const { productScore, coreLineScore, specificTagScore } = precision;
+  const { productScore, coreLineScore, specificTagScore, formCustomerScore } = precision;
+  // 标签分用加权 specifically（降 buzzword），不再用全量 Jaccard
+  const tagScore = specificTagScore;
   let industryScore = 0;
   const scoreParts = [
-    { value: productScore, weight: 0.36 },
-    { value: coreLineScore, weight: 0.34 },
-    { value: specificTagScore, weight: 0.18 },
+    { value: productScore, weight: 0.28 },
+    { value: coreLineScore, weight: 0.3 },
+    { value: formCustomerScore || 0, weight: 0.24 },
+    { value: specificTagScore, weight: 0.12 },
   ];
   if (target.industry_l1 && cand.industry_l1) {
     if (target.industry_l1 === cand.industry_l1) industryScore += 50;
     industryScore += Math.round(l2Similarity(target.industry_l2, cand.industry_l2) * 50);
-    if (productScore >= 12 || coreLineScore >= 15) {
-      scoreParts.push({ value: industryScore, weight: 0.12 });
+    if (productScore >= 12 || coreLineScore >= 15 || (formCustomerScore || 0) >= 35) {
+      scoreParts.push({ value: industryScore, weight: 0.08 });
+    }
+  }
+  let categoryScore = 0;
+  if (
+    target.industry_category_4 &&
+    cand.industry_category_4 &&
+    target.industry_category_4 === cand.industry_category_4 &&
+    target.industry_category_4 !== 'other'
+  ) {
+    categoryScore = 70;
+    if (productScore >= 10 || coreLineScore >= 12 || (formCustomerScore || 0) >= 30) {
+      scoreParts.push({ value: categoryScore, weight: 0.06 });
     }
   }
   let internalScore = weightedScore(scoreParts);
-  if (coreLineScore < 15 && productScore < 18) {
+  if (coreLineScore < 15 && productScore < 18 && (formCustomerScore || 0) < 30) {
     internalScore = Math.min(internalScore, 34);
   }
-  if ((cand.sources || []).includes('ipo_project') && coreLineScore >= 18) {
-    internalScore = Math.min(100, internalScore + Math.min(15, Math.round(coreLineScore * 0.22)));
+  // 形态对齐高时抬升入池机会
+  if ((formCustomerScore || 0) >= 50 && coreLineScore >= 20) {
+    internalScore = Math.min(100, internalScore + Math.min(12, Math.round(formCustomerScore * 0.12)));
   }
-  return {
+  const srcs = cand.sources || (cand.source ? [cand.source] : []);
+  const fromFinancing = srcs.includes('sourcing_financing_event');
+  const listedInternal = srcs.some((s) => s === 'ipo_project' || s === 'ipo_new_share');
+  // 融资池未上市 + 形态对齐：抬升规则分，避免被 buzzword 明星挤出 S2 Top
+  if (fromFinancing && !listedInternal && (formCustomerScore || 0) >= FORM_UNLISTED_LLM_MIN_FORM) {
+    internalScore = Math.min(
+      100,
+      internalScore + Math.min(20, Math.round((formCustomerScore || 0) * 0.22))
+    );
+  }
+  if (listedInternal && (coreLineScore >= 18 || (formCustomerScore || 0) >= 45)) {
+    internalScore = Math.min(
+      100,
+      internalScore + Math.min(15, Math.round(Math.max(coreLineScore, formCustomerScore || 0) * 0.22))
+    );
+  }
+  let scores = {
     tagScore,
     productScore,
     coreLineScore,
     specificTagScore,
+    formCustomerScore: formCustomerScore || 0,
     industryScore,
+    categoryScore,
     internalScore,
     onlyBroadIndustry: precision.onlyBroadIndustry,
-    hasInternal: (cand.sources || []).some((s) => s === 'ipo_project' || s === 'sourcing_financing_event'),
+    hasInternal: srcs.some(
+      (s) => s === 'ipo_project' || s === 'ipo_new_share' || s === 'sourcing_financing_event'
+    ),
   };
+  const strategy = target?.strategy;
+  if (strategy && typeof strategy.adjustRuleScore === 'function') {
+    scores = strategy.adjustRuleScore({ target, cand, scores });
+  }
+  if (target?.competition_lens) {
+    scores = applyLensRuleAdjust(scores, target.competition_lens, cand);
+  }
+  return scores;
 }
 
 function sliceForLlm(target, cand) {
   const coreLines = extractCoreProductLines(cand);
-  return {
-    product_intro: cand.product_intro,
+  const webIntro = strTrim(cand.web_core_products);
+  const productIntro = webIntro || cand.product_intro;
+  const out = {
+    product_intro: productIntro,
     qcc_intro_effective: cand.qcc_intro,
     tags: cand.tags,
     industry_l1: cand.industry_l1,
     industry_l2: cand.industry_l2,
+    industry_category_4: cand.industry_category_4 || null,
+    sub_track: cand.sub_track || null,
     display_name: cand.display_name,
     core_product_lines: coreLines.length ? coreLines : undefined,
   };
+  if (cand.structured_profile && typeof cand.structured_profile === 'object') {
+    out.structured_profile = cand.structured_profile;
+  }
+  return out;
 }
 
 /** 为候选（尤其 S4 联网并入）补齐相对目标的规则分字段 */
@@ -698,6 +955,10 @@ async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
     coreLineScore: c.coreLineScore,
     specificTagScore: c.specificTagScore,
     fromAiWeb: candidateFromAiWeb(c),
+    strategyAppendix: mergePromptAppendix(
+      target?.strategy?.buildPromptAppendix?.() || null,
+      target?.competition_lens
+    ),
   });
   if (c.validation?.is_listed != null && parseIsListedFromCandidate({ is_listed: c.validation.is_listed })) {
     c.is_listed = true;
@@ -706,9 +967,61 @@ async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
     c.llmProductScore = Number(c.validation.validated_score);
   }
   refreshValidationAfterRuleScores(c);
+  c.validation = applyLensValidationCap(c.validation, target?.competition_lens, c);
+  if (c.validation?.lens_form_mismatch) {
+    c.lens_form_mismatch = c.validation.lens_form_mismatch;
+    if (!c.hasInternal && c.validation.validated_score != null) {
+      c.llmProductScore = Number(c.validation.validated_score);
+    }
+  }
+}
+
+// ── 校验前定向联网增强：仅对空/短简介候选触发，金标优先，控制联网调用量 ──
+// 非金标候选只在简介近乎为空时触发；金标候选放宽到较短简介也补齐（金标标注可信，尽量给其真实业务画像）。
+const PRE_ENRICH_SHORT_NON_GOLD = 24;
+const PRE_ENRICH_SHORT_GOLD = 160;
+const PRE_ENRICH_MAX_CALLS = 16;
+
+async function preValidateEnrichSparseCandidates(validatePool, target, { runId } = {}) {
+  if (!validatePool?.length) return { considered: 0, enriched: 0, need: 0 };
+  const need = validatePool.filter((c) => {
+    const len = effectiveIntroLen(c);
+    const th = c._fromGoldStandard ? PRE_ENRICH_SHORT_GOLD : PRE_ENRICH_SHORT_NON_GOLD;
+    return len < th;
+  });
+  if (!need.length) return { considered: 0, enriched: 0, need: 0 };
+  // 金标优先，其次按内部/LLM 分排序，确保有限的联网调用先花在金标候选上
+  need.sort((a, b) => {
+    const ga = a._fromGoldStandard ? 1 : 0;
+    const gb = b._fromGoldStandard ? 1 : 0;
+    if (ga !== gb) return gb - ga;
+    const sa = a.internalScore || a.llmProductScore || 0;
+    const sb = b.internalScore || b.llmProductScore || 0;
+    return sb - sa;
+  });
+  const selected = need.slice(0, PRE_ENRICH_MAX_CALLS);
+  logCompetitorRun(
+    runId,
+    'S5_pre_enrich',
+    `校验前联网增强：选中 ${selected.length}/${need.length} 个空/短简介候选（金标 ${selected.filter((c) => c._fromGoldStandard).length} 个，上限 ${PRE_ENRICH_MAX_CALLS}）`
+  );
+  const { hasStrongOffTargetSignals } = require('./competitorProductLineUtils');
+  let enriched = 0;
+  for (const c of selected) {
+    const r = await preValidateWebEnrichCandidate(c, { runId });
+    if (r.enriched) {
+      enriched += 1;
+      // 简介被联网结果升级后重算跑偏标记，避免沿用库内稀疏文本得出的旧结论
+      c._hasStrongOffTargetSignals = hasStrongOffTargetSignals(c);
+    }
+  }
+  return { considered: selected.length, enriched, need: need.length };
 }
 
 function isMandateEligibleType(c) {
+  if (c?.lens_form_mismatch === 'specialized_cleaner' || c?.validation?.lens_form_mismatch === 'specialized_cleaner') {
+    return false;
+  }
   if (isPersistValidationPassed(c)) return true;
   return ['direct', 'indirect', 'substitute', 'same_track'].includes(c.validation?.competitor_type);
 }
@@ -890,10 +1203,8 @@ async function persistRelations({
 
   // ── 预先准备好所有待写入的数据（在事务外完成，减少事务持有时间）──
 
-  // #9: 清空运行级富化缓存，避免跨批次脏读
-  clearEnrichCache();
-  clearInternalDisplayCache();
-  clearDomesticIdentityCache();
+  // #9: 不再清空全局富化缓存——这些是确定性 read-through 缓存，
+  //     跨 run 共享安全；clear 会导致并发 run 竞态（R-M7）。
 
   // 预生成所有 relId（批量连续序列，避免同秒多次 MAX+1 得到相同 ID）
   const relIds = await generateSequentialIds('sourcing_competitor_relation', rowsToPersist.length);
@@ -1059,6 +1370,7 @@ async function persistRelations({
  * @param {string} [opts.preInvestmentRunId]
  * @param {string|null} opts.userId
  * @param {boolean} [opts.enableAutoExpand]
+ * @param {object|null} [opts.competitionLens] 用户确认的对标焦点（selected_factor_ids / custom_keywords / must_align）
  */
 async function executeCompetitorAnalysisRun(opts) {
   const {
@@ -1069,6 +1381,7 @@ async function executeCompetitorAnalysisRun(opts) {
     preInvestmentRunId,
     userId,
     enableAutoExpand = true,
+    competitionLens: competitionLensInput = null,
   } = opts;
   const runTable =
     subjectType === 'pre_investment_project'
@@ -1117,7 +1430,8 @@ async function executeCompetitorAnalysisRun(opts) {
     } else {
       const rows = await db.query(
         `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
-                ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro
+                ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro,
+                structured_profile_json, structured_schema_version
          FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
         [preInvestmentProjectId]
       );
@@ -1128,6 +1442,52 @@ async function executeCompetitorAnalysisRun(opts) {
     }
 
     const target = buildTargetProfile(row, readiness, subjectType);
+    await attachStrategyToTarget(target, row);
+    let lensProposal = proposeCompetitionLens(target);
+    const subjectIdForLens =
+      subjectType === 'pre_investment_project' ? preInvestmentProjectId : investedEnterpriseId;
+    try {
+      const savedLens = await loadSavedCompetitionLens(subjectType, subjectIdForLens);
+      lensProposal = mergeProposalWithSaved(lensProposal, savedLens);
+    } catch (e) {
+      console.warn('[competitorRunner] load saved lens failed', e.message);
+    }
+    // 无用户提交时：用上次保存勾选/编辑作为自动默认
+    const lensInput =
+      competitionLensInput ||
+      (lensProposal.saved_lens
+        ? {
+            selected_factor_ids: lensProposal.factors
+              .filter((f) => f.default_selected)
+              .map((f) => f.id),
+            factors: lensProposal.factors.map((f) => ({
+              id: f.id,
+              text: f.text,
+              base_text: f.base_text,
+              edited: f.edited,
+            })),
+            custom_keywords: lensProposal.default_custom_keywords || [],
+            confirmed: false,
+            source: 'auto',
+          }
+        : null);
+    const resolvedLens = resolveCompetitionLens(lensInput, lensProposal.factors);
+    applyCompetitionLensToTarget(target, resolvedLens);
+    if (resolvedLens.confirmed && subjectIdForLens) {
+      try {
+        const savedMeta = await saveCompetitionLensVersion({
+          subjectType,
+          subjectId: subjectIdForLens,
+          lens: resolvedLens,
+          userId,
+        });
+        resolvedLens.version = savedMeta.version;
+        resolvedLens.saved_at = savedMeta.saved_at;
+        target.competition_lens = resolvedLens;
+      } catch (e) {
+        console.warn('[competitorRunner] save lens version failed', e.message);
+      }
+    }
     const subjectDisplayName = target.display_name;
 
     await appendStepLog({
@@ -1144,6 +1504,19 @@ async function executeCompetitorAnalysisRun(opts) {
         core_product_lines: target.core_product_lines?.slice(0, 10) || [],
         product_intro_len: (target.product_intro || '').length,
         qcc_len: (target.qcc_intro_effective || '').length,
+        industry_category_4: target.industry_category_4 || null,
+        sub_track: target.sub_track || null,
+        strategy_id: target.strategy?.id || null,
+        category_match_level: target.category_match_level || null,
+        competition_lens: {
+          source: resolvedLens.source,
+          confirmed: resolvedLens.confirmed,
+          version: resolvedLens.version || null,
+          must_align: resolvedLens.must_align,
+          custom_keywords: resolvedLens.custom_keywords,
+          selected_factor_ids: resolvedLens.selected_factor_ids,
+          resolve_warning: resolvedLens.resolve_warning || null,
+        },
       },
     });
 
@@ -1152,50 +1525,32 @@ async function executeCompetitorAnalysisRun(opts) {
     const recallFlags = await getCompetitorRecallSourceFlags();
     const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : false;
 
-    let ipoList = [];
-    let ipoProductList = [];
-    if (recallFlags.enable_ipo_project) {
-      ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
-      ipoProductList = await recallListedIpoByProductTerms(
-        target,
-        target.unified_credit_code,
-        target.display_name
-      );
-    }
-    let finList = [];
-    let financingSkipReason = null;
-    if (!recallFlags.enable_financing_event) {
-      financingSkipReason = 'config_disabled';
-    } else if (!canFinancing) {
-      financingSkipReason = 'no_project_sourcing_permission';
-    } else {
-      finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
-    }
-    let candidates = mergeRecalledCandidates(
-      mergeRecalledCandidates(ipoList, ipoProductList),
-      finList
-    );
+    const recallPool = await buildInternalRecallPool({
+      target,
+      recallFlags,
+      canFinancing,
+    });
+    let candidates = recallPool.candidates;
 
     await appendStepLog({
       runId,
       subjectType,
       stepCode: 'S1_recall',
       status: 'ok',
-      message: `内部源召回 ${candidates.length} 条`,
+      message: `内部源召回 ${candidates.length} 条${
+        recallFlags.use_new_share_listed_recall ? '（new_share 主召回）' : ''
+      }`,
       detail: {
-        ipo: ipoList.length,
-        ipo_product_terms: ipoProductList.length,
-        financing: finList.length,
-        financing_skipped: financingSkipReason,
+        ...recallPool.stats,
         recall_flags: recallFlags,
-        merged: candidates.length,
+        ab_compare: recallPool.abCompare,
         sample: summarizeCandidates(candidates, 5),
       },
     });
 
     const scored = candidates.map((c) => {
       const rs = ruleScoreCandidate(target, c);
-      return { ...c, ...rs };
+      return { ...c, ...rs, _hasStrongOffTargetSignals: hasStrongOffTargetSignals(c) };
     });
     scored.sort((a, b) => b.internalScore - a.internalScore);
 
@@ -1204,8 +1559,15 @@ async function executeCompetitorAnalysisRun(opts) {
       subjectType,
       stepCode: 'S2_rule',
       status: 'ok',
-      message: `规则打分完成，共 ${scored.length} 条`,
-      detail: { top: summarizeCandidates(scored, 10) },
+      message: `规则打分完成，共 ${scored.length} 条${
+        target.strategy?.id ? `（策略 ${target.strategy.id}）` : ''
+      }`,
+      detail: {
+        top: summarizeCandidates(scored, 10),
+        strategy_id: target.strategy?.id || null,
+        industry_category_4: target.industry_category_4 || null,
+        sub_track: target.sub_track || null,
+      },
     });
 
     const targetSlice = {
@@ -1214,9 +1576,26 @@ async function executeCompetitorAnalysisRun(opts) {
       tags: target.tags,
       industry_l1: target.industry_l1,
       industry_l2: target.industry_l2,
+      industry_category_4: target.industry_category_4 || null,
+      sub_track: target.sub_track || null,
       subject_track_hint: target.subject_track_hint,
       core_product_lines: target.core_product_lines,
+      structured_profile: target.structured_profile || undefined,
+      strategy_id: target.strategy?.id || null,
+      competition_lens: target.competition_lens
+        ? {
+            must_align: target.competition_lens.must_align,
+            custom_keywords: target.competition_lens.custom_keywords,
+            source: target.competition_lens.source,
+          }
+        : undefined,
     };
+    const strategyAppendix = mergePromptAppendix(
+      target.strategy?.buildPromptAppendix?.() || null,
+      target.competition_lens
+    );
+    const discoveryPolicy = resolveDiscoveryPolicy(target);
+    const minDomesticListedRequired = resolveMinDomesticListed(discoveryPolicy);
 
     const {
       pool: llmPool,
@@ -1230,12 +1609,16 @@ async function executeCompetitorAnalysisRun(opts) {
       pool_trimmed: poolTrimmed,
       max_internal: maxInternalScored,
       effective_cap: llmPoolCap,
+      form_unlisted_added: formUnlistedAdded,
+      gold_standard_added: goldStandardAdded,
     } = buildLlmScoringPool(scored, target);
     logCompetitorRun(runId, 'S3_llm', `LLM 产品对标开始，池大小 ${llmPool.length}`, {
       rule_top: ruleTop,
       track_rule_top: trackRuleTop,
       tag_supplement: tagAdded,
       keyword_supplement: kwAdded,
+      form_unlisted_boost: formUnlistedAdded || 0,
+      gold_standard_added: goldStandardAdded || 0,
       niche_track: nicheTrack,
       track_kind: trackKind,
       skipped_pre_llm: skippedPreLlm,
@@ -1251,10 +1634,15 @@ async function executeCompetitorAnalysisRun(opts) {
         const simResult = await scorePairSimilarity(targetSlice, sliceForLlm(target, c), {
           runId,
           candidateName: c.display_name,
+          strategyAppendix,
         });
-        c.llmProductScore = typeof simResult === 'object' && simResult !== null ? simResult.score : simResult;
+        c.llmProductScore = typeof simResult === 'object' && simResult !== null ? (simResult.score ?? 0) : simResult;
         if (typeof simResult === 'object' && simResult !== null && simResult.degraded) {
           c.llmProductScoreDegraded = true;
+        }
+        if (isLensSpecializedCleanerMismatch(target.competition_lens, c)) {
+          c.lens_form_mismatch = 'specialized_cleaner';
+          c.llmProductScore = Math.min(Number(c.llmProductScore) || 0, 42);
         }
       } catch (err) {
         c.llmProductScore = c.productScore;
@@ -1297,9 +1685,13 @@ async function executeCompetitorAnalysisRun(opts) {
         detail: { web_added: 0, skipped: 'config_disabled' },
       });
     } else try {
-      const keywords = buildWebDiscoverKeywords(target);
-      const excludeNames = scored.slice(0, 30).map((x) => x.display_name).filter(Boolean);
-      const webRes = await discoverWebCompetitors(target, keywords, excludeNames, logCtx);
+      const keywords = buildWebDiscoverKeywords(target, discoveryPolicy);
+      const excludeNames = scored.slice(0, 100).map((x) => x.display_name).filter(Boolean);
+      const webRes = await discoverWebCompetitors(target, keywords, excludeNames, {
+        ...logCtx,
+        strategyAppendix,
+        relaxListedMandate: !!discoveryPolicy.relax_listed_mandate,
+      });
       const webList = Array.isArray(webRes) ? webRes : webRes.candidates || [];
       const webMeta = webRes && !Array.isArray(webRes) ? webRes.meta || {} : {};
       const mergeStats = mergeWebCandidatesIntoScored(scored, webList, {
@@ -1309,14 +1701,18 @@ async function executeCompetitorAnalysisRun(opts) {
 
       let listedAfterWeb = countDomesticListedInScored(scored);
       let listedSupplementAdded = 0;
-      if (listedAfterWeb < MIN_DOMESTIC_LISTED_COMPETITORS) {
+      if (
+        !discoveryPolicy.relax_listed_mandate &&
+        minDomesticListedRequired > 0 &&
+        listedAfterWeb < minDomesticListedRequired
+      ) {
         try {
           const listedKw = buildListedDomesticDiscoverKeywords(target, keywords);
           const listedRes = await discoverDomesticListedCompetitors(
             target,
             listedKw,
             scored.map((x) => x.display_name).filter(Boolean),
-            logCtx
+            { ...logCtx, strategyAppendix }
           );
           const listedList = listedRes?.candidates || [];
           const listedMerge = mergeWebCandidatesIntoScored(scored, listedList, {
@@ -1329,11 +1725,11 @@ async function executeCompetitorAnalysisRun(opts) {
             subjectType,
             stepCode: 'S4_listed',
             status: 'ok',
-            message: `A股/北交所上市补充检索，国内上市 ${listedAfterWeb} 家（目标≥${MIN_DOMESTIC_LISTED_COMPETITORS}）`,
+            message: `A股/北交所上市补充检索，国内上市 ${listedAfterWeb} 家（目标≥${minDomesticListedRequired}）`,
             detail: {
               listed_supplement_added: listedSupplementAdded,
               domestic_listed_count: listedAfterWeb,
-              required_min: MIN_DOMESTIC_LISTED_COMPETITORS,
+              required_min: minDomesticListedRequired,
               search_degraded: listedRes?.meta?.search_degraded === true,
             },
           });
@@ -1346,10 +1742,24 @@ async function executeCompetitorAnalysisRun(opts) {
             message: listedErr.message,
             detail: {
               domestic_listed_count: listedAfterWeb,
-              required_min: MIN_DOMESTIC_LISTED_COMPETITORS,
+              required_min: minDomesticListedRequired,
             },
           });
         }
+      } else if (discoveryPolicy.relax_listed_mandate) {
+        await appendStepLog({
+          runId,
+          subjectType,
+          stepCode: 'S4_listed',
+          status: 'ok',
+          message: '已跳过上市硬配额补充（赛道发现策略 relax_listed_mandate）',
+          detail: {
+            skipped: 'relax_listed_mandate',
+            domestic_listed_count: listedAfterWeb,
+            required_min: minDomesticListedRequired,
+            discovery_policy: discoveryPolicy,
+          },
+        });
       }
 
       await appendStepLog({
@@ -1360,9 +1770,11 @@ async function executeCompetitorAnalysisRun(opts) {
         message: `联网发现 ${webAdded} 条，国内上市 ${listedAfterWeb} 家`,
         detail: {
           web_added: webAdded,
-          domestic_listed_count: listedAfterWeb,
-          required_min_domestic_listed: MIN_DOMESTIC_LISTED_COMPETITORS,
           listed_supplement_added: listedSupplementAdded,
+          domestic_listed_count: listedAfterWeb,
+          required_min_domestic_listed: minDomesticListedRequired,
+          relax_listed_mandate: !!discoveryPolicy.relax_listed_mandate,
+          keywords: keywords.slice(0, 12),
           used_enable_search: webMeta.used_enable_search === true,
           search_degraded: webMeta.search_degraded === true,
           model_name: webMeta.model_name || null,
@@ -1405,6 +1817,18 @@ async function executeCompetitorAnalysisRun(opts) {
       by_track_internal_peer: scored.filter((c) => c._trackInternalPeer).length,
     };
     logCompetitorRun(runId, 'S5_validate', `竞品校验开始，池大小 ${validatePool.length}`, validateReasons);
+    // 校验前定向联网增强：空/短简介候选（金标优先）先联网补齐简介，避免校验因"信息缺失"误杀
+    const preEnrichStat = await preValidateEnrichSparseCandidates(validatePool, target, { runId });
+    if (preEnrichStat.need > 0) {
+      await appendStepLog({
+        runId,
+        subjectType,
+        stepCode: 'S5_pre_enrich',
+        status: 'ok',
+        message: `校验前联网增强：补齐 ${preEnrichStat.enriched}/${preEnrichStat.considered} 条（待补 ${preEnrichStat.need}）`,
+        detail: preEnrichStat,
+      });
+    }
     for (let vi = 0; vi < validatePool.length; vi++) {
       const c = validatePool[vi];
       if (vi > 0 && LLM_REQUEST_GAP_MS > 0) await sleep(LLM_REQUEST_GAP_MS);
@@ -1414,8 +1838,8 @@ async function executeCompetitorAnalysisRun(opts) {
         const { normalizeCompetitorValidation } = require('./competitorTypeUtils');
         c.validation = normalizeCompetitorValidation({
           is_competitor: true,
-          competitor_type: 'direct',
-          validated_score: 50,
+          competitor_type: 'same_track',
+          validated_score: 30,
           is_upstream_downstream: false,
         });
         logCompetitorRun(runId, 'S5_validate', `校验异常 ${c.display_name}: ${err.message}`);
@@ -1532,15 +1956,16 @@ async function executeCompetitorAnalysisRun(opts) {
       subjectType,
       stepCode: 'S5_filter',
       status: 'ok',
-      message: `初筛通过 ${toPersist.length} 条（上市 ${countDomesticListedInPersistRows(toPersist)}/${MIN_DOMESTIC_LISTED_COMPETITORS}，未上市 ${countUnlistedInPersistRows(toPersist)}/${MIN_UNLISTED_COMPETITORS}）`,
+      message: `初筛通过 ${toPersist.length} 条（上市 ${countDomesticListedInPersistRows(toPersist)}/${minDomesticListedRequired}，未上市 ${countUnlistedInPersistRows(toPersist)}/${MIN_UNLISTED_COMPETITORS}）`,
       detail: {
         filterStats,
         candidates: summarizeCandidates(toPersist, 20),
         rejected_samples: rejectedSamples,
         domestic_listed_in_persist: countDomesticListedInPersistRows(toPersist),
         unlisted_in_persist: countUnlistedInPersistRows(toPersist),
-        required_min_domestic_listed: MIN_DOMESTIC_LISTED_COMPETITORS,
+        required_min_domestic_listed: minDomesticListedRequired,
         required_min_unlisted: MIN_UNLISTED_COMPETITORS,
+        relax_listed_mandate: !!discoveryPolicy.relax_listed_mandate,
       },
     });
 
@@ -1548,20 +1973,28 @@ async function executeCompetitorAnalysisRun(opts) {
     if (enableAutoExpand) {
       const listedN = countDomesticListedInPersistRows(toPersist);
       const unlistedN = countUnlistedInPersistRows(toPersist);
+      const expandMinListed = Math.min(AUTO_EXPAND_MIN_LISTED, Math.max(minDomesticListedRequired, 0));
       const needExpand =
-        listedN < AUTO_EXPAND_MIN_LISTED || unlistedN < AUTO_EXPAND_MIN_UNLISTED;
+        listedN < expandMinListed || unlistedN < AUTO_EXPAND_MIN_UNLISTED;
       if (needExpand) {
         logCompetitorRun(runId, 'S5_expand', '触发扩召回', {
           current_total: toPersist.length,
           listed: listedN,
           unlisted: unlistedN,
-          min_listed: AUTO_EXPAND_MIN_LISTED,
+          min_listed: expandMinListed,
           min_unlisted: AUTO_EXPAND_MIN_UNLISTED,
         });
         const relaxed = scored
           .filter((c) => {
             refreshValidationAfterRuleScores(c);
             if (!isPersistValidationPassed(c)) return false;
+            if (
+              c.lens_form_mismatch === 'specialized_cleaner' ||
+              c.validation?.lens_form_mismatch === 'specialized_cleaner' ||
+              isLensSpecializedCleanerMismatch(target.competition_lens, c)
+            ) {
+              return false;
+            }
             const srcs = c.sources || (c.source ? [c.source] : []);
             const ai = getCandidateAiPart(c);
             return (
@@ -1587,7 +2020,7 @@ async function executeCompetitorAnalysisRun(opts) {
         const seen = new Set();
         finalList = [];
         for (const x of [...toPersist, ...relaxed]) {
-          const k = x.unified_credit_code || x.display_name;
+          const k = candidateDedupeKey(x);
           if (seen.has(k)) continue;
           seen.add(k);
           finalList.push(x);
@@ -1609,6 +2042,7 @@ async function executeCompetitorAnalysisRun(opts) {
       toPersist: finalList,
       persistThresholdOpts,
       logCtx,
+      minN: minDomesticListedRequired,
     });
     await ensureMinimumUnlistedInFinalList({
       scored,
@@ -1674,14 +2108,18 @@ async function executeCompetitorAnalysisRun(opts) {
       subjectType === 'pre_investment_project'
         ? 'sourcing_pre_investment_competitor_run'
         : 'sourcing_competitor_run';
-    await updateRunStatus(runTable, runId, 'failed', e.message || '运行失败');
-    await appendStepLog({
-      runId,
-      subjectType,
-      stepCode: 'S6_done',
-      status: 'failed',
-      message: e.message,
-    });
+    try {
+      await updateRunStatus(runTable, runId, 'failed', e.message || '运行失败');
+      await appendStepLog({
+        runId,
+        subjectType,
+        stepCode: 'S6_done',
+        status: 'failed',
+        message: e.message,
+      });
+    } catch (cleanupErr) {
+      console.error('[competitorRunner] catch cleanup failed:', cleanupErr.message);
+    }
     return { ok: false, message: e.message };
   }
 }
@@ -1691,6 +2129,17 @@ function enqueueCompetitorAnalysisRun(opts) {
     subjectType: opts.subjectType,
     investedEnterpriseId: opts.investedEnterpriseId || null,
     preInvestmentProjectId: opts.preInvestmentProjectId || null,
+    competition_lens: opts.competitionLens
+      ? {
+          confirmed: !!opts.competitionLens.confirmed,
+          selected_factor_ids: opts.competitionLens.selected_factor_ids || null,
+          must_align: opts.competitionLens.must_align || null,
+          factors_count: Array.isArray(opts.competitionLens.factors)
+            ? opts.competitionLens.factors.length
+            : 0,
+          custom_keywords: opts.competitionLens.custom_keywords || [],
+        }
+      : null,
   });
   setImmediate(() => {
     executeCompetitorAnalysisRun(opts).catch((err) => {
@@ -1734,22 +2183,8 @@ async function recallCandidatesForPoc(target, userId) {
   const { canReadFinancingPoolForUser } = require('./competitorAnalysisRouteAuth');
   const recallFlags = await getCompetitorRecallSourceFlags();
   const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : true;
-
-  let ipoList = [];
-  let ipoProductList = [];
-  if (recallFlags.enable_ipo_project) {
-    ipoList = await recallFromIpoProjects(target.unified_credit_code, target.display_name);
-    ipoProductList = await recallListedIpoByProductTerms(
-      target,
-      target.unified_credit_code,
-      target.display_name
-    );
-  }
-  let finList = [];
-  if (recallFlags.enable_financing_event && canFinancing) {
-    finList = await recallFromFinancingEvents(target.unified_credit_code, target.display_name);
-  }
-  return mergeRecalledCandidates(mergeRecalledCandidates(ipoList, ipoProductList), finList);
+  const pool = await buildInternalRecallPool({ target, recallFlags, canFinancing });
+  return pool.candidates;
 }
 
 /**
@@ -1763,7 +2198,8 @@ async function recallCandidatesForPoc(target, userId) {
 async function buildEmbeddingPocSnapshot({ preInvestmentProjectId, userId, labelKeywords, sampleId }) {
   const rows = await db.query(
     `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
-            ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro
+            ai_product_intro, ai_industry_tags_display, ai_industry_tags_json, qcc_company_intro,
+            structured_profile_json, structured_schema_version
      FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
     [preInvestmentProjectId]
   );
@@ -1773,6 +2209,7 @@ async function buildEmbeddingPocSnapshot({ preInvestmentProjectId, userId, label
   if (!readiness.ready) throw new Error(`信息不足: ${preInvestmentProjectId} — ${readiness.reasons.join('; ')}`);
 
   const target = buildTargetProfile(row, readiness, 'pre_investment_project');
+  await attachStrategyToTarget(target, row);
   const candidates = await recallCandidatesForPoc(target, userId);
   const scored = candidates
     .map((c) => ({ ...c, ...ruleScoreCandidate(target, c) }))
@@ -1863,4 +2300,5 @@ module.exports = {
   listCompetitorRunStepLogs,
   buildEmbeddingPocSnapshot,
   exportGoldenEmbeddingPoc,
+  buildTargetProfile,
 };

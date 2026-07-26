@@ -11,6 +11,7 @@ import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './listing/ListingDataConfig'
 import FinancingSourceConfig from './project-sourcing/FinancingSourceConfig'
 import CompetitorRecallSourceConfig from './competitor-analysis/CompetitorRecallSourceConfig'
+import CompetitorMigrationConfig from './competitor-analysis/CompetitorMigrationConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
 import './SystemConfig.css'
 
@@ -91,6 +92,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="competitor-recall" title="竞品三源召回">
             <div className="config-content">
               <CompetitorRecallSourceConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="competitor-migration" title="竞品分析">
+            <div className="config-content">
+              <CompetitorMigrationConfig />
             </div>
           </TabPane>
 

@@ -229,9 +229,13 @@ function isAiWebOnlyCandidate(c) {
  * 是否达到落库分数门槛。
  * - 默认综合分 ≥ 60；
  * - LLM/校验分 ≥ 80 且校验为直接竞品（非上下游）时，综合分 ≥ 55 即可；
- * - 联网发现且 S5 高信任 direct/indirect：不因规则分缺失误杀。
+ * - 联网发现且 S5 已判 direct/indirect/substitute、validated≥55：不因库内产品线分缺失误杀（早期金标常态）。
  */
 function meetsPersistThreshold(c, finalScore, opts = {}) {
+  const hasOffTarget =
+    c._hasStrongOffTargetSignals ??
+    require('./competitorProductLineUtils').hasStrongOffTargetSignals(c);
+  if (hasOffTarget && Number(c?.validation?.validated_score) < 60) return false;
   const th = opts.threshold ?? SCORE_THRESHOLD_PERSIST;
   const thHigh = opts.thresholdHighLlm ?? SCORE_THRESHOLD_HIGH_LLM;
   const score = Number(finalScore);
@@ -243,18 +247,30 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
     (Number.isFinite(product) ? product : 0) < 18;
   const ai = getCandidateAiPart(c);
   const vs = Number(c.validation?.validated_score);
+  // 金标种子：只要 S5 校验为直接/间接/同赛道/替代竞品且分数达标，不因 S2 分缺失误杀
+  if (c._fromGoldStandard && isPersistValidationPassed(c)) {
+    if (Number.isFinite(vs) && vs >= thHigh) return true;
+  }
+  const fromAiWeb = isAiWebOnlyCandidate(c) || (c.sources || []).includes('ai_web');
   const webHighTrust =
-    isAiWebOnlyCandidate(c) &&
+    fromAiWeb &&
     Number.isFinite(vs) &&
     vs >= 78 &&
     ['direct', 'indirect', 'substitute'].includes(type);
+  // 联网已校验为竞品且分达高信任线：允许综合分≥55（覆盖若伴类早期同形态，不必等到 78）
+  const webValidatedPeer =
+    fromAiWeb &&
+    Number.isFinite(vs) &&
+    vs >= thHigh &&
+    ['direct', 'indirect', 'substitute'].includes(type) &&
+    isPersistValidationPassed(c);
 
   if (type === 'same_track') {
     if (Number.isFinite(vs) && vs >= 35 && !lacksCoreProductOverlap) return true;
     if (Number.isFinite(vs) && vs >= 42) return true;
   }
   if (['direct', 'indirect', 'substitute'].includes(type) && lacksCoreProductOverlap) {
-    if (webHighTrust) {
+    if (webHighTrust || webValidatedPeer) {
       return Number.isFinite(score) && score >= thHigh;
     }
     if (Number.isFinite(ai) && ai >= LLM_HIGH_TRUST_THRESHOLD && type === 'direct') {
@@ -272,7 +288,7 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   ) {
     return true;
   }
-  if (webHighTrust && Number.isFinite(score) && score >= thHigh) return true;
+  if ((webHighTrust || webValidatedPeer) && Number.isFinite(score) && score >= thHigh) return true;
   if (ai < LLM_HIGH_TRUST_THRESHOLD) return false;
   if (c.validation?.is_competitor === false || c.validation?.is_upstream_downstream) return false;
   return Number.isFinite(score) && score >= thHigh;

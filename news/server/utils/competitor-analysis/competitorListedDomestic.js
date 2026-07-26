@@ -10,6 +10,7 @@ const {
   isPersistValidationPassed,
 } = require('./competitorMatchUtils');
 const { parseIsListedFromCandidate } = require('./competitorRelationPersistEnhance');
+const { hasStrongOffTargetSignals } = require('./competitorProductLineUtils');
 const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
 
 /** 落库须包含的国内上市公司（上交所/深交所/北交所，含新三板）最少条数（交付客户≥5，用户可筛≥3） */
@@ -33,7 +34,15 @@ function candidateSources(c) {
 }
 
 function isDomesticListedFromIpoPool(c) {
-  return candidateSources(c).includes('ipo_project');
+  const srcs = candidateSources(c);
+  if (srcs.includes('ipo_project')) return true;
+  if (!srcs.includes('ipo_new_share')) return false;
+  if (c.domestic_listed === false) return false;
+  if (c.domestic_listed === true) return true;
+  const market = c.listing_market || c.validation?.listing_market;
+  if (market && isOverseasListingMarket(market)) return false;
+  if (market && isDomesticListedMarket(market)) return true;
+  return true;
 }
 
 function isOverseasListingMarket(market) {
@@ -170,6 +179,20 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
         x.domestic_listed = isDomesticListedMarket(market) || domesticListed;
       }
       if (credit && !x.unified_credit_code) x.unified_credit_code = credit;
+      // 联网 core_products 优先覆盖库内错绑/企查查空话，避免 S5 用错误画像压分（如欧拉/破壳）
+      const webIntro = strTrim(w.core_products);
+      if (webIntro) {
+        x.web_core_products = webIntro;
+        const prevIntro = strTrim(x.product_intro);
+        const prevLooksBoilerplate =
+          !prevIntro ||
+          /经营范围包括|一般项目：|成立于|法定代表人|科技推广和应用服务业/.test(prevIntro);
+        if (prevLooksBoilerplate || webIntro.length >= 16) {
+          x.product_intro = webIntro;
+        }
+      }
+      // product_intro 可能被联网结果升级，重算跑偏标记，避免沿用库内稀疏文本得出的旧值
+      x._hasStrongOffTargetSignals = hasStrongOffTargetSignals(x);
       const rawRel = Number(w.ai_relevance_score);
       if (Number.isFinite(rawRel)) {
         const rel = Math.min(100, Math.max(0, rawRel));
@@ -184,7 +207,8 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
     const rawRel = Number(w.ai_relevance_score);
     const rel = Number.isFinite(rawRel) ? Math.min(100, Math.max(0, rawRel)) : 0;
     const webAi = Math.max(WEB_LISTED_AI_FLOOR, rel) || WEB_LISTED_AI_FLOOR;
-    scored.push({
+    const webIntroNew = strTrim(w.core_products);
+    const webCandidate = {
       source: 'ai_web',
       sources: ['ai_web'],
       display_name: name,
@@ -193,13 +217,16 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
       domestic_listed: overseas ? false : isDomesticListedMarket(market) || domesticListed,
       overseas: overseas || isOverseasCompetitorCandidate(webProbe),
       listing_market: market || null,
-      product_intro: strTrim(w.core_products),
+      product_intro: webIntroNew,
+      web_core_products: webIntroNew || null,
       tags: [],
       internalScore: 0,
       hasInternal: false,
       llmProductScore: webAi,
       financing_amount_text: null,
-    });
+    };
+    webCandidate._hasStrongOffTargetSignals = hasStrongOffTargetSignals(webCandidate);
+    scored.push(webCandidate);
     added += 1;
   }
   return { added, merged };
@@ -207,11 +234,20 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
 
 function mandateMeetsThreshold(c, row, persistThresholdOpts) {
   if (meetsPersistThreshold(c, row.finalScore, persistThresholdOpts)) return true;
+  const hasOffTarget = c._hasStrongOffTargetSignals ?? hasStrongOffTargetSignals(c);
+  if (hasOffTarget && Number(c?.validation?.validated_score) < 60) return false;
   const ai = getCandidateAiPart(c);
   const internal = Number(c.internalScore) || 0;
   const vs = Number(c.validation?.validated_score);
+  const form = Number(c.formCustomerScore) || 0;
+  const type = c.validation?.competitor_type;
+  // same_track 且形态对齐很弱时，不拿来凑上市/未上市硬配额（仍允许其他路径落库）
+  if (type === 'same_track' && form < 25 && (!Number.isFinite(vs) || vs < 40)) {
+    return false;
+  }
   if (isPersistValidationPassed(c) && Number.isFinite(vs) && vs >= 35) return true;
-  if (ai >= 40 || internal >= 28) return true;
+  if ((ai >= 40 || internal >= 28) && form >= 20) return true;
+  if (ai >= 55 || internal >= 40) return true;
   return false;
 }
 
@@ -242,10 +278,25 @@ function countUnlistedInPersistRows(rows) {
   return n;
 }
 
+function competitorTypeRank(c) {
+  const t = c?.validation?.competitor_type;
+  if (t === 'direct') return 4;
+  if (t === 'indirect') return 3;
+  if (t === 'substitute') return 2;
+  if (t === 'same_track') return 1;
+  return 0;
+}
+
 function sortDomesticListedCandidates(scored) {
   return [...(scored || [])]
     .filter(isDomesticListedCandidate)
     .sort((a, b) => {
+      // 形态接近 + 竞品类型优先于「仅大类同轨」的凑数上市
+      const formA = a.formCustomerScore || 0;
+      const formB = b.formCustomerScore || 0;
+      if (formB !== formA) return formB - formA;
+      const tr = competitorTypeRank(b) - competitorTypeRank(a);
+      if (tr !== 0) return tr;
       const coreA = a.coreLineScore || 0;
       const coreB = b.coreLineScore || 0;
       if (coreB !== coreA) return coreB - coreA;
@@ -260,16 +311,11 @@ function sortUnlistedCandidates(scored) {
   return [...(scored || [])]
     .filter(isDomesticUnlistedCandidate)
     .sort((a, b) => {
-      const typeRank = (c) => {
-        const t = c.validation?.competitor_type;
-        if (t === 'direct') return 4;
-        if (t === 'indirect') return 3;
-        if (t === 'substitute') return 2;
-        if (t === 'same_track') return 1;
-        return 0;
-      };
-      const tr = typeRank(b) - typeRank(a);
+      const tr = competitorTypeRank(b) - competitorTypeRank(a);
       if (tr !== 0) return tr;
+      const formA = a.formCustomerScore || 0;
+      const formB = b.formCustomerScore || 0;
+      if (formB !== formA) return formB - formA;
       const coreA = a.coreLineScore || 0;
       const coreB = b.coreLineScore || 0;
       if (coreB !== coreA) return coreB - coreA;

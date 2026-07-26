@@ -62,67 +62,13 @@
       </div>
     </div>
 
-    <!-- 整体组合 -->
-    <div class="portfolio-subsection">
-      <div class="subsection-title">整体组合</div>
+    <!-- 整体组合：直投项目 + 子基金组合 -->
+    <div class="perf-portfolio-overall-section">
+      <div class="perf-section-title">直投项目</div>
       <div class="overall-grid" @click="$emit('overall-click')">
-          <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计投资数量<a-tooltip v-if="config.fundInvAccDesc" :content="config.fundInvAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value">{{ formatNumber(overall?.fund_inv) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_inv_change)">
-            {{ formatChange(overall?.fund_inv_change) }}
-          </div>
-        </div>
         <div class="overall-item clickable">
           <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计认缴金额<a-tooltip v-if="config.fundSubAccDesc" :content="config.fundSubAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value">{{ formatAmount(overall?.fund_sub) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_sub_change)">
-            {{ formatChange(overall?.fund_sub_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计实缴金额<a-tooltip v-if="config.fundPaidinAccDesc" :content="config.fundPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value">{{ formatAmount(overall?.fund_paidin) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_paidin_change)">
-            {{ formatChange(overall?.fund_paidin_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计退出数量<a-tooltip v-if="config.fundExitAccDesc" :content="config.fundExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value overall-value-blue">{{ formatNumber(overall?.fund_exit) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_change)">
-            {{ formatChange(overall?.fund_exit_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计退出金额<a-tooltip v-if="config.fundExitAmountAccDesc" :content="config.fundExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_exit_amount) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_amount_change)">
-            {{ formatChange(overall?.fund_exit_amount_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">子基金累计回款金额<a-tooltip v-if="config.fundReceiveAccDesc" :content="config.fundReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_receive) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.fund_receive_change)">
-            {{ formatChange(overall?.fund_receive_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">累计直投项目数量<a-tooltip v-if="config.projectInvAccDesc" :content="config.projectInvAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+            <span class="indicator-label-wrap">累计投资数量<a-tooltip v-if="config.projectInvAccDesc" :content="config.projectInvAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
           <div class="overall-value">{{ formatNumber(overall?.project_inv) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_inv_change)">
@@ -131,7 +77,7 @@
         </div>
         <div class="overall-item clickable">
           <div class="overall-label">
-            <span class="indicator-label-wrap">直投项目累计投资金额<a-tooltip v-if="config.projectPaidinAccDesc" :content="config.projectPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+            <span class="indicator-label-wrap">累计投资金额<a-tooltip v-if="config.projectPaidinAccDesc" :content="config.projectPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
           <div class="overall-value">{{ formatAmount(overall?.project_paidin) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_paidin_change)">
@@ -140,7 +86,16 @@
         </div>
         <div class="overall-item clickable">
           <div class="overall-label">
-            <span class="indicator-label-wrap">直投项目累计退出数量<a-tooltip v-if="config.projectExitAccDesc" :content="config.projectExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+            <span class="indicator-label-wrap">SPV累计投资金额<a-tooltip v-if="config.spvPaidinAccDesc" :content="config.spvPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatAmount(overall?.spv_paidin) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.spv_paidin_change)">
+            {{ formatChange(overall?.spv_paidin_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计退出数量<a-tooltip v-if="config.projectExitAccDesc" :content="config.projectExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
           <div class="overall-value overall-value-blue">{{ formatNumber(overall?.project_exit) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_exit_change)">
@@ -149,20 +104,101 @@
         </div>
         <div class="overall-item clickable">
           <div class="overall-label">
-            <span class="indicator-label-wrap">直投项目累计退出金额<a-tooltip v-if="config.projectExitAmountAccDesc" :content="config.projectExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
-          </div>
-          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.project_exit_amount) }}</div>
-          <div class="overall-change" :class="getChangeClass(overall?.project_exit_amount_change)">
-            {{ formatChange(overall?.project_exit_amount_change) }}
-          </div>
-        </div>
-        <div class="overall-item clickable">
-          <div class="overall-label">
-            <span class="indicator-label-wrap">直投项目累计回款金额<a-tooltip v-if="config.projectReceiveAccDesc" :content="config.projectReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+            <span class="indicator-label-wrap">累计回款金额<a-tooltip v-if="config.projectReceiveAccDesc" :content="config.projectReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
           </div>
           <div class="overall-value overall-value-blue">{{ formatAmount(overall?.project_receive) }}</div>
           <div class="overall-change" :class="getChangeClass(overall?.project_receive_change)">
             {{ formatChange(overall?.project_receive_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">SPV累计回款金额<a-tooltip v-if="config.spvReceiveAccDesc" :content="config.spvReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.spv_receive) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.spv_receive_change)">
+            {{ formatChange(overall?.spv_receive_change) }}
+          </div>
+        </div>
+      </div>
+      <div class="perf-ipo-cards">
+        <div class="perf-ipo-card" v-for="(item, idx) in [
+          { label: '已上市企业', num: overall?.ipo_num, cost: overall?.ipo_cost, valuation: overall?.ipo_valuation },
+          { label: '已受理企业', num: overall?.sl_num, cost: overall?.sl_cost, valuation: overall?.sl_valuation },
+          { label: '已辅导企业', num: overall?.fd_num, cost: overall?.fd_cost, valuation: overall?.fd_valuation },
+        ]" :key="idx">
+          <div class="perf-ipo-card-title">{{ item.label }}</div>
+          <div class="perf-ipo-card-metrics">
+            <div class="perf-ipo-card-metric">
+              <span class="perf-ipo-card-sub">数量</span>
+              <span class="perf-ipo-card-num">{{ formatNumber(item.num) }}</span>
+            </div>
+            <div class="perf-ipo-card-metric">
+              <span class="perf-ipo-card-sub">成本</span>
+              <span class="perf-ipo-card-num">{{ formatAmount(item.cost) }}</span>
+            </div>
+            <div class="perf-ipo-card-metric">
+              <span class="perf-ipo-card-sub">总市值</span>
+              <span class="perf-ipo-card-num">{{ formatAmount(item.valuation) }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="perf-section-title" style="margin-top: 20px;">子基金组合</div>
+      <div class="overall-grid" @click="$emit('overall-click')">
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计投资数量<a-tooltip v-if="config.fundInvAccDesc" :content="config.fundInvAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatNumber(overall?.fund_inv) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_inv_change)">
+            {{ formatChange(overall?.fund_inv_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计认缴金额<a-tooltip v-if="config.fundSubAccDesc" :content="config.fundSubAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatAmount(overall?.fund_sub) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_sub_change)">
+            {{ formatChange(overall?.fund_sub_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计实缴金额<a-tooltip v-if="config.fundPaidinAccDesc" :content="config.fundPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatAmount(overall?.fund_paidin) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_paidin_change)">
+            {{ formatChange(overall?.fund_paidin_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计退出数量<a-tooltip v-if="config.fundExitAccDesc" :content="config.fundExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatNumber(overall?.fund_exit) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_change)">
+            {{ formatChange(overall?.fund_exit_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计退出金额<a-tooltip v-if="config.fundExitAmountAccDesc" :content="config.fundExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_exit_amount) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_amount_change)">
+            {{ formatChange(overall?.fund_exit_amount_change) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计回款金额<a-tooltip v-if="config.fundReceiveAccDesc" :content="config.fundReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_receive) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_receive_change)">
+            {{ formatChange(overall?.fund_receive_change) }}
           </div>
         </div>
       </div>
@@ -322,7 +358,7 @@ const handleFundClick = (type) => {
 
 .overall-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 16px;
 }
 
@@ -382,5 +418,60 @@ const handleFundClick = (type) => {
 
 .indicator-desc-icon:hover {
   color: #165dff;
+}
+
+.perf-portfolio-overall-section {
+  margin-top: 8px;
+}
+.perf-section-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 16px;
+  padding: 10px 16px;
+  background: #1AA8E9;
+  border-bottom: none;
+  text-align: center;
+}
+
+.perf-ipo-cards {
+  display: flex;
+  gap: 12px;
+  margin-top: 12px;
+}
+.perf-ipo-card {
+  flex: 1;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.perf-ipo-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 10px;
+}
+.perf-ipo-card-metrics {
+  display: flex;
+  gap: 36px;
+}
+.perf-ipo-card-metric {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.perf-ipo-card-sub {
+  font-size: 12px;
+  color: #666;
+}
+.perf-ipo-card-num {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1AA8E9;
+  margin-top: 2px;
 }
 </style>

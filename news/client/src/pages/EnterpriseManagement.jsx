@@ -30,10 +30,12 @@ import {
   postInvestedEnterpriseBatchQccCompanyBrief,
   fetchInvestedEnterpriseCompetitorReadiness,
   postInvestedEnterpriseCompetitorAnalysisRun,
+  fetchInvestedCompetitionLensProposal,
 } from '../api/competitor-analysis'
 import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './competitor-analysis/financingDateUtils'
 import { IntroPopoverCell } from './competitor-analysis/introPopoverAiCell'
 import CompetitorMatchSupplementModal from './competitor-analysis/CompetitorMatchSupplementModal'
+import CompetitionLensConfirmModal from './competitor-analysis/CompetitionLensConfirmModal'
 import './EnterpriseManagement.css'
 
 const Option = Select.Option
@@ -229,6 +231,14 @@ function EnterpriseManagement({
     enterpriseName: '',
   })
   const [competitorRunSubmitting, setCompetitorRunSubmitting] = useState(false)
+  const [lensModal, setLensModal] = useState({
+    visible: false,
+    loading: false,
+    confirming: false,
+    enterpriseId: '',
+    enterpriseName: '',
+    proposal: null,
+  })
 
   useEffect(() => {
     if (hideEntityTabs) {
@@ -618,35 +628,82 @@ function EnterpriseManagement({
         })
         return
       }
-      return new Promise((resolve) => {
-        Modal.confirm({
-          title: '竞品分析',
-          content: `确认对「${displayName || enterpriseId}」发起竞品分析？系统将异步从融资池/底层项目召回候选并打分落库（综合分≥60 且须命中内部源）。`,
-          onOk: async () => {
-            try {
-              const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId)
-              if (r2.status === 202 && r2.data?.success) {
-                Message.success(r2.data.message || '已受理')
-              } else if (r2.data?.success) {
-                Message.success(r2.data.message || '已受理')
-              } else {
-                Message.error(r2.data?.message || '受理失败')
-              }
-            } catch (e) {
-              Message.error(e.response?.data?.message || e.message || '受理失败')
-            }
-            resolve()
-          },
-          onCancel: () => resolve(),
-        })
+      setLensModal({
+        visible: true,
+        loading: true,
+        confirming: false,
+        enterpriseId,
+        enterpriseName: displayName || '',
+        proposal: null,
       })
+      try {
+        const pRes = await fetchInvestedCompetitionLensProposal(enterpriseId)
+        if (!pRes.data?.success) {
+          throw new Error(pRes.data?.message || '提取对标因素失败')
+        }
+        setLensModal((prev) => ({
+          ...prev,
+          loading: false,
+          proposal: pRes.data.data,
+        }))
+      } catch (e) {
+        Message.error(e.response?.data?.message || e.message || '提取对标因素失败')
+        setLensModal({
+          visible: false,
+          loading: false,
+          confirming: false,
+          enterpriseId: '',
+          enterpriseName: '',
+          proposal: null,
+        })
+      }
     },
     []
   )
 
+  const handleInvestedLensConfirm = async (competitionLens) => {
+    const { enterpriseId, enterpriseName } = lensModal
+    if (!enterpriseId) return
+    setLensModal((prev) => ({ ...prev, confirming: true }))
+    try {
+      const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, {
+        competition_lens: competitionLens,
+      })
+      if (r2.status === 202 && r2.data?.success) {
+        Message.success(r2.data.message || '已受理')
+      } else if (r2.data?.success) {
+        Message.success(r2.data.message || '已受理')
+      } else {
+        Message.error(r2.data?.message || '受理失败')
+        setLensModal((prev) => ({ ...prev, confirming: false }))
+        return
+      }
+      setLensModal({
+        visible: false,
+        loading: false,
+        confirming: false,
+        enterpriseId: '',
+        enterpriseName: '',
+        proposal: null,
+      })
+    } catch (e) {
+      Message.error(
+        e.response?.data?.message || e.message || `「${enterpriseName || enterpriseId}」受理失败`
+      )
+      setLensModal((prev) => ({ ...prev, confirming: false }))
+    }
+  }
+
   const handleCompetitorBatchClick = useCallback(async () => {
     if (!competitorSelectedKeys.length) {
       Message.warning('请先在表格左侧勾选至少一家被投企业')
+      return
+    }
+    if (competitorSelectedKeys.length === 1) {
+      const id = competitorSelectedKeys[0]
+      const row = enterprises.find((e) => e.id === id)
+      const name = row?.enterprise_full_name || row?.project_abbreviation || id
+      await runCompetitorFlowForEnterprise(id, name)
       return
     }
     setCompetitorRunSubmitting(true)
@@ -668,7 +725,7 @@ function EnterpriseManagement({
       await new Promise((resolve) => {
         Modal.confirm({
           title: '竞品分析（批量）',
-          content: `将对已勾选的 ${competitorSelectedKeys.length} 家企业依次发起竞品分析（后台异步，请稍后到「竞品分析」页查看结果）。是否继续？`,
+          content: `将对已勾选的 ${competitorSelectedKeys.length} 家企业依次发起竞品分析（按各企业系统默认对标焦点；精细勾选请每次只选 1 家）。是否继续？`,
           onOk: async () => {
             for (const id of competitorSelectedKeys) {
               const row = enterprises.find((e) => e.id === id)
@@ -693,7 +750,7 @@ function EnterpriseManagement({
     } finally {
       setCompetitorRunSubmitting(false)
     }
-  }, [competitorSelectedKeys, enterprises])
+  }, [competitorSelectedKeys, enterprises, runCompetitorFlowForEnterprise])
 
   const columns = useMemo(() => {
     const indexCol = {
@@ -1531,6 +1588,25 @@ function EnterpriseManagement({
           fetchEnterprises()
           setCompetitorSupplementModal((s) => ({ ...s, visible: false }))
         }}
+      />
+
+      <CompetitionLensConfirmModal
+        visible={lensModal.visible}
+        onClose={() =>
+          setLensModal({
+            visible: false,
+            loading: false,
+            confirming: false,
+            enterpriseId: '',
+            enterpriseName: '',
+            proposal: null,
+          })
+        }
+        subjectTitle={lensModal.enterpriseName}
+        loadingProposal={lensModal.loading}
+        proposal={lensModal.proposal}
+        confirming={lensModal.confirming}
+        onConfirm={handleInvestedLensConfirm}
       />
 
       {showInvestedEnterpriseAi && (

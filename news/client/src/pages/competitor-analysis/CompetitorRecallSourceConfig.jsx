@@ -12,6 +12,9 @@ function CompetitorRecallSourceConfig() {
     enable_ipo_project: true,
     enable_financing_event: true,
     enable_ai_web: true,
+    use_new_share_listed_recall: false,
+    enable_recall_ab_compare: false,
+    new_share_gray_categories: '',
   })
 
   const load = async () => {
@@ -19,10 +22,14 @@ function CompetitorRecallSourceConfig() {
     try {
       const res = await axios.get('/api/system/competitor-recall-source-config')
       if (res.data?.success && res.data.data) {
+        const d = res.data.data
         setFlags({
-          enable_ipo_project: !!res.data.data.enable_ipo_project,
-          enable_financing_event: !!res.data.data.enable_financing_event,
-          enable_ai_web: !!res.data.data.enable_ai_web,
+          enable_ipo_project: !!d.enable_ipo_project,
+          enable_financing_event: !!d.enable_financing_event,
+          enable_ai_web: !!d.enable_ai_web,
+          use_new_share_listed_recall: !!d.use_new_share_listed_recall,
+          enable_recall_ab_compare: !!d.enable_recall_ab_compare,
+          new_share_gray_categories: d.new_share_gray_categories || '',
         })
       }
     } catch (e) {
@@ -91,6 +98,29 @@ function CompetitorRecallSourceConfig() {
             onChange={(v) => onToggle('enable_ai_web', v)}
           />
           <span style={{ marginLeft: 12 }}>联网发现（AI 检索第三源）</span>
+        </div>
+        <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0, color: 'var(--color-text-3)' }}>
+          Stage 4 · 上市召回灰度（默认不改主路径）
+        </Typography.Paragraph>
+        <div>
+          <Switch
+            checked={flags.enable_recall_ab_compare}
+            disabled={saving}
+            onChange={(v) => onToggle('enable_recall_ab_compare', v)}
+          />
+          <span style={{ marginLeft: 12 }}>
+            A/B 对比（并行新旧召回统计写入 S1 step_log，不改落库候选）
+          </span>
+        </div>
+        <div>
+          <Switch
+            checked={flags.use_new_share_listed_recall}
+            disabled={saving}
+            onChange={(v) => onToggle('use_new_share_listed_recall', v)}
+          />
+          <span style={{ marginLeft: 12 }}>
+            主召回切到 ipo_new_share（关闭则仍用 1.0 ipo_project）
+          </span>
         </div>
       </Space>
     </div>

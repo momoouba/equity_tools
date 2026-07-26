@@ -382,7 +382,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
       // 调试日志：检查数据
       if (entityType === '子基金' || entityType === '子基金管理人' || entityType === '子基金GP') {
         console.log(`[邮件生成] 企业类型: ${entityType}, 企业名称: ${enterpriseName}`);
-        console.log(`[邮件生成] 第一条新闻ID: ${firstNews?.F_Id}, fund: ${fund || '(NULL)'}, sub_fund: ${subFund || '(NULL)'}`);
+        console.log(`[邮件生成] 第一条新闻ID: ${firstNews?.F_Id ?? firstNews?.id}, fund: ${fund || '(NULL)'}, sub_fund: ${subFund || '(NULL)'}`);
         if (firstNews) {
           console.log(`[邮件生成] 新闻数据包含fund字段: ${'fund' in firstNews}, 包含sub_fund字段: ${'sub_fund' in firstNews}`);
           console.log(`[邮件生成] 新闻数据所有字段:`, Object.keys(firstNews).join(', '));
@@ -792,7 +792,7 @@ function resolveEntityType(news) {
   }
   const validEntityTypes = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
   if (!validEntityTypes.includes(entityType)) {
-    console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.F_Id})`);
+    console.log(`[邮件发送] ⚠️ 无效的entity_type: "${entityType}"，使用默认值"被投企业" (新闻ID: ${news.F_Id ?? news.id})`);
     return '被投企业';
   }
   return entityType;
@@ -836,7 +836,7 @@ async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
   const addToGroup = (groupName, enterpriseName, news) => {
     if (!grouped[groupName]) grouped[groupName] = {};
     if (!grouped[groupName][enterpriseName]) grouped[groupName][enterpriseName] = [];
-    const dedupKey = `${groupName}::${enterpriseName}::${news.F_Id}`;
+    const dedupKey = `${groupName}::${enterpriseName}::${news.F_Id ?? news.id}`;
     if (groupedDedup.has(dedupKey)) return;
     groupedDedup.add(dedupKey);
     grouped[groupName][enterpriseName].push(news);
