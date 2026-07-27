@@ -12,8 +12,9 @@ news-backup-*/
 scripts/analyze_golden_export.py
 scripts/golden_export_analysis.json
 
-# Exported PDF (source of truth is markdown in repo)
-需求文档/竞品分析/竞品分析Agent模型与维度建议.pdf
+# 根目录需求文档：正式入库在 sync-issue-5849a；release/clean 仅本地保留副本、不提交
+# （切分支后由 .git/hooks/post-checkout 或 scripts/restore-req-docs.ps1 从 sync 恢复）
+/需求文档/
 
 # SSL private keys and certs (deploy from server secrets, not git)
 **/ssl/*.pem
