@@ -287,6 +287,24 @@ print('playwright chromium OK')
 **`news/上市进展/辅导备案与Playwright部署说明.md`**。  
 排错与手动安装可参考 **`news/手动安装Playwright.md`**、**`news/验证依赖安装.md`**。
 
+## 百度百科查词与宿主机 CDP（生产）
+
+**背景**：融资 / 投前等「批量百科查词」在 Docker **headless** 下常被百度安全验证拦截（`anti_crawl`）。生产推荐在宿主机运行带 `--remote-debugging-port` 的 Chromium，容器通过 `host.docker.internal` + `socat` 以 **CDP** 连接。
+
+**要点**：
+
+```bash
+# .env
+BAIKE_BROWSER_MODE=cdp
+BAIKE_CDP_URL=http://host.docker.internal:9223
+
+docker compose up -d app --force-recreate
+```
+
+安装与启动、冒烟、systemd 常驻见：
+
+**`news/文档/部署相关/百度百科CDP与Playwright部署说明.md`**
+
 ## ⚙️ 配置说明
 
 ### Docker Compose 服务说明

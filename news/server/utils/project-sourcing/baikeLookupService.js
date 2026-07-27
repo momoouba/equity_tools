@@ -67,8 +67,20 @@ function isUsableIntro(text) {
   const s = strTrim(text);
   if (s.length < MIN_INTRO_LEN) return false;
   // 过滤百度百科站点通用介绍（搜索摘要模式未命中具体词条时返回）
-  if (s.startsWith(BAIKE_SITE_DESC_PREFIX)) return false;
+  if (s.startsWith(BAIKE_SITE_DESC_PREFIX) || s.includes(BAIKE_SITE_DESC_PREFIX)) return false;
   return true;
+}
+
+/** 百科目录 TOC / 站点套话，不能当产品简介 */
+function sanitizeBaikeProductIntro(companyIntro, productIntro) {
+  const p = strTrim(productIntro);
+  const c = isUsableIntro(companyIntro) ? strTrim(companyIntro) : null;
+  if (!p) return c;
+  if (!isUsableIntro(p)) return c;
+  const bulletCount = (p.match(/▪/g) || []).length;
+  if (bulletCount >= 3 || /^▪/.test(p)) return c;
+  if (/^\d+\s+[\u4e00-\u9fff].*\d+\s+[\u4e00-\u9fff]/.test(p) && p.length < 80) return c;
+  return p;
 }
 
 function pickBaikeSearchName(row, fields = ['company_name', 'enterprise_full_name', 'project_abbreviation']) {
@@ -96,8 +108,8 @@ function normalizeBaikePayload(raw, fallbackName) {
   const hasLemma = Boolean(raw.has_lemma);
   const lemmaStatus = strTrim(raw.lemma_status) || (hasLemma ? 'found' : 'not_found');
   const companyIntro = strTrim(raw.company_intro) || null;
-  let productIntro = strTrim(raw.product_intro) || null;
-  if (!productIntro && isUsableIntro(companyIntro)) productIntro = companyIntro;
+  let productIntro = sanitizeBaikeProductIntro(companyIntro, raw.product_intro);
+  if (!productIntro && isUsableIntro(companyIntro)) productIntro = strTrim(companyIntro);
   return {
     ok: Boolean(raw.ok) || hasLemma,
     has_lemma: hasLemma,
@@ -600,6 +612,9 @@ async function applyBaikeToFinancingFanOut(db, companyRow, baike, opts = {}) {
         profile_source = CASE WHEN ${profileGuard} THEN 'baike' ELSE profile_source END,
         ai_enrich_status = CASE WHEN ${profileGuard} THEN 'skipped' ELSE ai_enrich_status END,
         ai_enrich_version = CASE WHEN ${profileGuard} THEN ? ELSE ai_enrich_version END,
+        structured_profile_json = CASE WHEN ${profileGuard} THEN NULL ELSE structured_profile_json END,
+        structured_schema_version = CASE WHEN ${profileGuard} THEN NULL ELSE structured_schema_version END,
+        structured_at = CASE WHEN ${profileGuard} THEN NULL ELSE structured_at END,
         F_LastModifyTime = CURRENT_TIMESTAMP
       WHERE ${where.clause}${freshGuard}`,
       [
@@ -614,28 +629,39 @@ async function applyBaikeToFinancingFanOut(db, companyRow, baike, opts = {}) {
     );
     const affected = r.affectedRows || 0;
     if (affected > 0) {
-      /* ── 百科写入简介后异步触发结构化信息提取 ── */
+      /* ── 百科写入简介后异步触发结构化信息提取（不强制要求 category_4） ── */
       setImmediate(async () => {
         try {
           const metaRows = await db.query(
-            `SELECT company_name, company_credit_code, industry_category_4, ai_product_intro, ai_company_tags_display
-             FROM sourcing_financing_event WHERE F_DeleteMark = 0 AND (${where.clause}) AND COALESCE(ai_product_intro,'') <> '' AND COALESCE(industry_category_4,'') <> ''
+            `SELECT company_name, company_credit_code, industry_category_4, company_intro, ai_product_intro, ai_company_tags_display
+             FROM sourcing_financing_event
+             WHERE F_DeleteMark = 0 AND (${where.clause})
+               AND (COALESCE(ai_product_intro,'') <> '' OR COALESCE(company_intro,'') <> '')
+             ORDER BY CASE WHEN COALESCE(industry_category_4,'') <> '' THEN 0 ELSE 1 END, F_Id DESC
              LIMIT 1`,
             where.params
           );
-          if (!metaRows.length) return;
+          if (!metaRows.length) {
+            console.log('[baikeLookup][structured] skip: no intro after baike write');
+            return;
+          }
           const metaRow = metaRows[0];
           const { extractStructuredProfile, applyStructuredToFinancingFanOut } = require('../competitor-analysis/structuredProfileService');
           const sourceRow = {
-            company_intro: null,
+            company_intro: metaRow.company_intro,
             ai_product_intro: metaRow.ai_product_intro,
             ai_company_tags_display: metaRow.ai_company_tags_display,
           };
           const meta = {
             company_name: metaRow.company_name,
-            industry_category_4: metaRow.industry_category_4,
+            industry_category_4: strTrim(metaRow.industry_category_4) || 'ai',
             sub_track: null,
           };
+          if (!strTrim(metaRow.industry_category_4)) {
+            console.log(
+              `[baikeLookup][structured] ${metaRow.company_name}: industry_category_4 empty → fallback schema category_4=ai`
+            );
+          }
           const sp = await extractStructuredProfile(meta, sourceRow);
           if (sp && sp.ok && sp.profile) {
             const n = await applyStructuredToFinancingFanOut(db, { company_name: metaRow.company_name, company_credit_code: metaRow.company_credit_code }, sp.profile);

@@ -9,6 +9,7 @@ import {
   Form,
   Select,
   DatePicker,
+  Switch,
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import {
@@ -638,6 +639,7 @@ export default function FinancingEventsPage() {
                     financingDateRange?.[0] && financingDateRange?.[1]
                       ? financingDateRange
                       : [financingNow().subtract(7, 'day'), financingNow()],
+                  force: false,
                 })
                 setBatchBaikeVisible(true)
               }}
@@ -854,6 +856,7 @@ export default function FinancingEventsPage() {
             const res = await postFinancingBatchBaikeLookup({
               start_date: dayjs(d0).format('YYYY-MM-DD'),
               end_date: dayjs(d1).format('YYYY-MM-DD'),
+              force: Boolean(values.force),
             })
             if (res.data?.success) {
               Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
@@ -870,19 +873,24 @@ export default function FinancingEventsPage() {
         }}
         confirmLoading={batchBaikeSubmitting}
         onCancel={() => setBatchBaikeVisible(false)}
-        style={{ width: 480 }}
+        style={{ width: 520 }}
       >
         <Form form={batchBaikeForm} layout="vertical">
           <FormItem
-            label="融资日期范围（筛选 event_date 且 baike_lookup_at 为空的记录）"
+            label="融资日期范围（按 event_date 筛选）"
             field="date_range"
             rules={[{ required: true, message: '请选择日期范围' }]}
           >
             <DatePicker.RangePicker style={{ width: '100%' }} />
           </FormItem>
+          <FormItem label="强制重跑（覆盖已查词）" field="force" triggerPropName="checked">
+            <Switch />
+          </FormItem>
         </Form>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          按企业名称调用百度百科查词（HTTP + Playwright），结果 fan-out 至同一信用代码下的全部融资记录。已查过的记录（baike_lookup_at 非空）会跳过。任务后台执行，请稍后刷新；进度见服务器 docker compose logs app -f。
+          按企业名称调用百度百科查词（HTTP + Playwright），结果 fan-out 至同一信用代码下的全部融资记录。默认跳过已查词（baike_lookup_at
+          非空）；开启「强制重跑」会重新抓取并覆盖简介，并异步重跑结构化。任务后台执行，请稍后刷新；进度见服务器 docker
+          compose logs app -f。
         </p>
       </Modal>
     </div>

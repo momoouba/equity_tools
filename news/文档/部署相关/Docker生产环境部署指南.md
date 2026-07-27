@@ -161,6 +161,28 @@ print('playwright chromium OK')
 
 完整参数说明见：**`news/上市进展/辅导备案与Playwright部署说明.md`**；容器内手动排错见 **`news/手动安装Playwright.md`**。
 
+#### 步骤9：百度百科查词（宿主机 Chromium CDP）
+
+若生产需使用融资/投前等模块的 **百度百科批量查词**，容器内 headless 常被百度拦截。推荐：
+
+1. 宿主机安装 Chromium（或 Chrome），以 `--remote-debugging-port=9222 --remote-allow-origins=*` 启动（可用 `xvfb-run`）。
+2. `socat` 将 `0.0.0.0:9223` 转到 `127.0.0.1:9222`。
+3. `.env` / compose：`BAIKE_BROWSER_MODE=cdp`，`BAIKE_CDP_URL=http://host.docker.internal:9223`，并 recreate `app`。
+4. 冒烟：容器内执行 `baidu_baike_fetch_browser.py --mode=cdp ...`，确认 `ok: true`。
+
+专文（含 snap profile 路径、Host/IP 改写原因、systemd 示例）：
+
+**`news/文档/部署相关/百度百科CDP与Playwright部署说明.md`**
+
+（容器内 `python3 -m playwright install chromium` 仍建议保留，供 **辅导备案** 等 headless 场景使用，与百科 CDP 互补。）
+
+#### 步骤10：验证部署（可选补充）
+
+```bash
+# 百科环境变量
+docker compose exec app printenv BAIKE_BROWSER_MODE BAIKE_CDP_URL
+```
+
 ### 方法2：使用部署脚本
 
 如果服务器上有 `deploy/docker-deploy.sh` 脚本：
@@ -295,6 +317,7 @@ docker stats
 4. **磁盘空间**：确保有足够的磁盘空间用于构建镜像（**Playwright Chromium** 约数百 MB，见 **`news/上市进展/辅导备案与Playwright部署说明.md`**）
 5. **构建时间**：首次构建可能需要较长时间，请耐心等待
 6. **上市进展 · 辅导备案**：更新 Python 依赖或新装机后，勿忘在容器内执行 **`python3 -m playwright install chromium`**（见上文「步骤8」）
+7. **百度百科查词**：生产推荐宿主机 Chromium CDP + socat，见上文「步骤9」与 **`news/文档/部署相关/百度百科CDP与Playwright部署说明.md`**
 
 ## 🔄 回滚操作
 

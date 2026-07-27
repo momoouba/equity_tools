@@ -283,6 +283,7 @@ function registerFinancingRoutes(router) {
       if (!Number.isFinite(id) || id <= 0) {
         return res.status(400).json({ success: false, message: '无效的融资事件 ID' });
       }
+      const force = Boolean(req.body?.force || req.query?.force);
       const rows = await db.query(
         `SELECT F_Id AS id, company_name, company_credit_code, baike_lookup_at
          FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
@@ -292,28 +293,52 @@ function registerFinancingRoutes(router) {
         return res.status(404).json({ success: false, message: '融资事件不存在' });
       }
       const row = rows[0];
-      if (row.baike_lookup_at) {
-        return res.status(400).json({ success: false, message: '该事件已完成百科查词，请勿重复操作' });
+      if (row.baike_lookup_at && !force) {
+        return res.status(400).json({
+          success: false,
+          message: '该事件已完成百科查词；如需覆盖请传 force=true',
+        });
       }
       const { fetchBaike, applyBaikeToFinancingFanOut } = require('../../utils/project-sourcing/baikeLookupService');
       const name = String(row.company_name || '').trim();
       if (name.length < 2) {
         return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
       }
-      console.log(`[project-sourcing/events/baike-lookup] start id=${id} name="${name}"`);
+      console.log(`[project-sourcing/events/baike-lookup] start id=${id} name="${name}" force=${force}`);
       const baike = fetchBaike(name, 1500);
       if (!baike || !baike.has_lemma) {
-        await db.execute(
-          `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
-           WHERE F_Id = ?`,
-          [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', id]
-        );
+        if (force) {
+          await applyBaikeToFinancingFanOut(
+            db,
+            { company_name: name, company_credit_code: row.company_credit_code },
+            baike || {
+              has_lemma: false,
+              lemma_status: 'not_found',
+              miss_reason: 'fetch_error',
+              baike_url: null,
+              company_intro: null,
+              product_intro: null,
+            },
+            { force: true }
+          );
+        } else {
+          await db.execute(
+            `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
+             WHERE F_Id = ?`,
+            [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', id]
+          );
+        }
         console.log(
           `[project-sourcing/events/baike-lookup] miss id=${id} status=${baike?.lemma_status} miss=${baike?.miss_reason || '-'}`
         );
         return res.json({ success: true, message: '百科未命中', data: { lemma_status: baike?.lemma_status || 'not_found' } });
       }
-      const result = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, { force: false });
+      const result = await applyBaikeToFinancingFanOut(
+        db,
+        { company_name: name, company_credit_code: row.company_credit_code },
+        baike,
+        { force: true }
+      );
       console.log(
         `[project-sourcing/events/baike-lookup] ok id=${id} updated=${result.updated} url=${baike.baike_url || '-'}`
       );
@@ -330,7 +355,7 @@ function registerFinancingRoutes(router) {
 
   router.post('/batch-baike-lookup', requireAdmin, async (req, res) => {
     try {
-      const { start_date, end_date } = req.body || {};
+      const { start_date, end_date, force } = req.body || {};
       const {
         enqueueFinancingBatchBaikeLookup,
       } = require('../../utils/project-sourcing/baikeBatchJobService');
@@ -338,6 +363,7 @@ function registerFinancingRoutes(router) {
         dateFrom: start_date,
         dateTo: end_date,
         sleepMs: 800,
+        force: Boolean(force),
       });
       if (!r.ok) {
         return res.status(r.code || 500).json({ success: false, message: r.message });

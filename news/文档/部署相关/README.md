@@ -327,6 +327,12 @@ sudo journalctl -u newsapp -f
 
 - **`news/上市进展/辅导备案与Playwright部署说明.md`**
 
+## Python / 百度百科查词（宿主机 CDP，生产推荐）
+
+百科批量查词在生产上推荐 **宿主机 Chromium 远程调试（CDP）+ socat**，容器设置 `BAIKE_BROWSER_MODE=cdp`。容器内纯 headless 易被百度 BIOC 拦截。
+
+- **`news/文档/部署相关/百度百科CDP与Playwright部署说明.md`**
+
 ## 🆘 故障排除
 
 ### 1. 应用无法启动

@@ -212,10 +212,14 @@ function enqueueBackground(scope, runner) {
   return { ok: true };
 }
 
-/** 融资：按 event_date 区间，去重企业后查词并 fan-out */
-async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 800 } = {}) {
+/** 融资：按 event_date 区间，去重企业后查词并 fan-out
+ * @param {{ dateFrom, dateTo, sleepMs?, force? }} opts
+ *   force=true 时包含已查词企业并覆盖写入（强制重跑）
+ */
+async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 800, force = false } = {}) {
   const df = String(dateFrom || '').slice(0, 10);
   const dt = String(dateTo || '').slice(0, 10);
+  const forceRun = Boolean(force);
   if (!df || !dt) {
     return { ok: false, code: 400, message: '缺少参数：start_date、end_date（yyyy-MM-dd）' };
   }
@@ -227,12 +231,17 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
     `SELECT F_Id AS id, company_name, project_name, company_credit_code, baike_lookup_at
      FROM sourcing_financing_event
      WHERE F_DeleteMark = 0 AND event_date >= ? AND event_date <= ?
-       AND baike_lookup_at IS NULL
+       ${forceRun ? '' : 'AND baike_lookup_at IS NULL'}
      ORDER BY event_date DESC, F_Id DESC`,
     [df, dt]
   );
   if (!rows.length) {
-    return { ok: true, code: 200, message: '区间内无待查词记录', data: { total: 0, accepted: false } };
+    return {
+      ok: true,
+      code: 200,
+      message: forceRun ? '区间内无融资记录' : '区间内无待查词记录（已查过的已跳过；勾选强制重跑可覆盖）',
+      data: { total: 0, accepted: false, force: forceRun },
+    };
   }
 
   const map = new Map();
@@ -253,7 +262,7 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
   }
   const companies = [...map.values()];
   if (!companies.length) {
-    return { ok: true, code: 200, message: '区间内无有效企业名称', data: { total: 0, accepted: false } };
+    return { ok: true, code: 200, message: '区间内无有效企业名称', data: { total: 0, accepted: false, force: forceRun } };
   }
 
   const scope = 'financing';
@@ -263,6 +272,9 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
       searchName: c.company_name,
       row: c,
     }));
+    console.log(
+      `${LOG}[financing] accepted total=${companies.length} force=${forceRun} browserMode=${mode} range=${df}~${dt}`
+    );
     await runHttpThenBrowserBatch(items, {
       sleepMs,
       logTag: `${LOG}[financing]`,
@@ -275,6 +287,26 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
               company_credit_code: item.row.company_credit_code,
             },
             baike,
+            { force: true }
+          );
+          return r.updated || 0;
+        }
+        // 未命中：force 时 fan-out 写状态；否则只写抽样行
+        if (forceRun) {
+          const r = await applyBaikeToFinancingFanOut(
+            db,
+            {
+              company_name: item.row.company_name,
+              company_credit_code: item.row.company_credit_code,
+            },
+            baike || {
+              has_lemma: false,
+              lemma_status: 'not_found',
+              miss_reason: 'fetch_error',
+              baike_url: null,
+              company_intro: null,
+              product_intro: null,
+            },
             { force: true }
           );
           return r.updated || 0;
@@ -293,7 +325,7 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
   return {
     ok: true,
     code: 202,
-    message: `已受理融资百科批量查词：区间 ${df}～${dt}，待查 ${companies.length} 家企业（browser=${mode}），后台执行中，请稍后刷新列表；进度见 docker compose logs app -f`,
+    message: `已受理融资百科批量查词${forceRun ? '（强制重跑）' : ''}：区间 ${df}～${dt}，待查 ${companies.length} 家企业（browser=${mode}），后台执行中；进度见 docker compose logs app -f`,
     data: {
       accepted: true,
       scope,
@@ -302,6 +334,7 @@ async function enqueueFinancingBatchBaikeLookup({ dateFrom, dateTo, sleepMs = 80
       browser_mode: mode,
       date_from: df,
       date_to: dt,
+      force: forceRun,
     },
   };
 }
