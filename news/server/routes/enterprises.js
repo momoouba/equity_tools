@@ -657,8 +657,8 @@ router.get('/', async (req, res) => {
         // 子基金管理人及GP：包含子基金管理人或子基金GP
         condition += ' AND (entity_type = ? OR entity_type = ?)';
         params.push('子基金管理人', '子基金GP');
-      } else if (dataAppName === DATA_APP_PROJECT_SOURCING && entityType === '被投企业') {
-        // 项目挖掘被投企业页固定筛「被投企业」；同步 SQL 常不写 entity_type（为 NULL），须与列表一致
+      } else if ((dataAppName === DATA_APP_PROJECT_SOURCING || dataAppName === DATA_APP_COMPETITOR_ANALYSIS) && entityType === '被投企业') {
+        // 项目挖掘/竞品分析的被投企业页固定筛「被投企业」；同步 SQL 常不写 entity_type（为 NULL），须与列表一致
         condition +=
           ' AND (TRIM(COALESCE(entity_type, \'\')) = ? OR TRIM(COALESCE(entity_type, \'\')) = \'\')';
         params.push(entityType);

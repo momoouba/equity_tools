@@ -7,7 +7,9 @@ const { fetchCompanyBriefGetInfo } = require('../qichachaCompanyBrief');
 
 const PY_INTRO_BULK = path.join(__dirname, 'listed_profile_intro_bulk_fetch.py');
 const PY_BAIKE = path.join(__dirname, '../project-sourcing/baidu_baike_fetch.py');
+const PY_BAIKE_BROWSER = path.join(__dirname, '../project-sourcing/baidu_baike_fetch_browser.py');
 const MIN_INTRO_LEN = 20;
+const BAIKE_SITE_DESC_PREFIX = '百度百科是一部内容开放';
 
 function hasText(v) {
   return v != null && String(v).trim() !== '';
@@ -50,23 +52,71 @@ function runBulkIntroFetch(limit = 0) {
   return { payload, map };
 }
 
+function isUsableIntroText(text) {
+  const s = String(text || '').trim();
+  if (s.length < MIN_INTRO_LEN) return false;
+  if (s.startsWith(BAIKE_SITE_DESC_PREFIX)) return false;
+  return true;
+}
+
 function fetchBaikeSync(companyName, sleepMs = 1200) {
   const name = String(companyName || '').trim();
   if (name.length < 2) return null;
+
+  // --- HTTP 模式 ---
   const py = resolvePythonBin();
-  const args = pythonArgs(PY_BAIKE, ['--name', name, '--sleep-ms', String(sleepMs), '--dry-json']);
+  const args = pythonArgs(PY_BAIKE, ['--name', name, '--sleep-ms', String(sleepMs)]);
   const r = spawnSync(py, args, {
     encoding: 'utf8',
     windowsHide: true,
     env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-    maxBuffer: 4 * 1024 * 1024,
+    maxBuffer: 8 * 1024 * 1024,
   });
-  if (r.status !== 0) return null;
+  let httpResult = null;
+  if (r.status === 0) {
+    try {
+      const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
+      httpResult = JSON.parse(line);
+    } catch { /* ignore parse error, will fallback to browser */ }
+  }
+  // HTTP 命中且有可用简介 → 直接返回
+  if (httpResult && httpResult.ok && httpResult.has_lemma &&
+      (isUsableIntroText(httpResult.company_intro) || isUsableIntroText(httpResult.product_intro))) {
+    return httpResult;
+  }
+
+  // --- Browser 模式 fallback ---
+  const cdpUrl = process.env.BAIKE_CDP_URL || 'http://127.0.0.1:9222';
+  const browserArgs = pythonArgs(PY_BAIKE_BROWSER, [
+    '--name', name,
+    '--sleep-ms', String(sleepMs),
+    '--cdp-url', cdpUrl,
+    '--captcha-wait-ms', '15000',
+    '--timeout-ms', '30000',
+  ]);
+  const r2 = spawnSync(py, browserArgs, {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (r2.status !== 0) {
+    console.warn(`[newShareIntroBackfill][browser] script failed for "${name}": status=${r2.status}, stderr=${String(r2.stderr || '').slice(0, 500)}`);
+    return httpResult; // browser 也失败，返回 HTTP 结果（可能为 null）
+  }
   try {
-    const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
-    return JSON.parse(line);
-  } catch {
-    return null;
+    const line2 = String(r2.stdout || '').trim().split('\n').filter(Boolean).pop();
+    const browserResult = JSON.parse(line2);
+    console.log(`[newShareIntroBackfill][browser] "${name}": ${browserResult.has_lemma ? 'found' : (browserResult.lemma_status || 'unknown')}`);
+    if (browserResult.ok && browserResult.has_lemma &&
+        (isUsableIntroText(browserResult.company_intro) || isUsableIntroText(browserResult.product_intro))) {
+      return browserResult;
+    }
+    // browser 有词条但无可用简介，或 browser 也无词条 → 返回 HTTP 结果
+    return httpResult || browserResult;
+  } catch (e) {
+    console.warn(`[newShareIntroBackfill][browser] parse failed for "${name}":`, e.message);
+    return httpResult;
   }
 }
 

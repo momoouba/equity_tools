@@ -23,9 +23,9 @@ import axios from '../../utils/axios'
 import {
   fetchFinancingEvents,
   postFinancingSync,
-  postFinancingEventAiEnrich,
   postFinancingBatchAiEnrich,
   fetchFinancingAiEnrichLogs,
+  postFinancingBatchBaikeLookup,
 } from '../../api/project-sourcing'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
 import { IntroPopoverCell } from './introPopoverAiCell'
@@ -121,7 +121,6 @@ export default function FinancingEventsPage() {
   const [configsLoading, setConfigsLoading] = useState(false)
   const [exportingAll, setExportingAll] = useState(false)
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
-  const [aiEnrichSubmitting, setAiEnrichSubmitting] = useState(false)
   const [aiLogVisible, setAiLogVisible] = useState(false)
   const [aiLogLoading, setAiLogLoading] = useState(false)
   const [aiLogRows, setAiLogRows] = useState([])
@@ -132,6 +131,9 @@ export default function FinancingEventsPage() {
   const [retryFailedSubmitting, setRetryFailedSubmitting] = useState(false)
   const [batchAiForm] = Form.useForm()
   const [retryFailedForm] = Form.useForm()
+  const [batchBaikeVisible, setBatchBaikeVisible] = useState(false)
+  const [batchBaikeSubmitting, setBatchBaikeSubmitting] = useState(false)
+  const [batchBaikeForm] = Form.useForm()
 
   const isAdmin = useMemo(() => parseUserAdmin(), [])
 
@@ -560,55 +562,18 @@ export default function FinancingEventsPage() {
           {isAdmin && (
             <Button
               type="outline"
-              loading={aiEnrichSubmitting}
-              disabled={!selectedRowKeys.length}
-              onClick={async () => {
-                const id = selectedRowKeys[0]
-                if (!id) {
-                  Message.warning('请先勾选一行融资记录')
-                  return
-                }
-                setAiEnrichSubmitting(true)
-                try {
-                  const res = await postFinancingEventAiEnrich(id)
-                  if (res.status === 202 && res.data?.success) {
-                    Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
-                    load()
-                  } else if (res.data?.success) {
-                    Message.success(res.data.message || '已受理')
-                    load()
-                  } else {
-                    Message.error(res.data?.message || '受理失败')
-                  }
-                } catch (e) {
-                  Message.error(e.response?.data?.message || e.message || '受理失败')
-                } finally {
-                  setAiEnrichSubmitting(false)
-                }
-              }}
-            >
-              手动AI取数
-            </Button>
-          )}
-          {isAdmin && (
-            <Button
-              type="outline"
               disabled={!selectedRowKeys.length}
               loading={aiLogLoading}
               onClick={async () => {
-                const id = selectedRowKeys[0]
-                if (!id) {
-                  Message.warning('请先勾选一行融资记录')
-                  return
-                }
-                setAiLogFinancingId(String(id))
+                const ids = selectedRowKeys.map((k) => String(k))
+                setAiLogFinancingId(ids.join(','))
                 setAiLogVisible(true)
                 setAiLogLoading(true)
                 try {
                   const res = await fetchFinancingAiEnrichLogs({
-                    financing_event_id: id,
+                    financing_event_id: ids.join(','),
                     page: 1,
-                    pageSize: 50,
+                    pageSize: 200,
                   })
                   if (res.data?.success) {
                     setAiLogRows(res.data.data?.list || [])
@@ -663,6 +628,23 @@ export default function FinancingEventsPage() {
               重试失败AI
             </Button>
           )}
+          {isAdmin && (
+            <Button
+              type="outline"
+              status="success"
+              onClick={() => {
+                batchBaikeForm.setFieldsValue({
+                  date_range:
+                    financingDateRange?.[0] && financingDateRange?.[1]
+                      ? financingDateRange
+                      : [financingNow().subtract(7, 'day'), financingNow()],
+                })
+                setBatchBaikeVisible(true)
+              }}
+            >
+              批量百科查词
+            </Button>
+          )}
         </Space>
       </Space>
 
@@ -676,7 +658,7 @@ export default function FinancingEventsPage() {
         rowSelection={
           isAdmin
             ? {
-                type: 'radio',
+                type: 'checkbox',
                 selectedRowKeys,
                 onChange: (keys) => setSelectedRowKeys(keys),
               }
@@ -704,7 +686,7 @@ export default function FinancingEventsPage() {
       />
 
       <Modal
-        title={`AI 增强执行日志（融资事件 id=${aiLogFinancingId || '—'}）`}
+        title={`AI 增强执行日志（已选 ${selectedRowKeys.length} 条融资事件，按时间降序）`}
         visible={aiLogVisible}
         footer={null}
         onCancel={() => setAiLogVisible(false)}
@@ -720,8 +702,9 @@ export default function FinancingEventsPage() {
           data={aiLogRows}
           stripe
           border
-          scroll={{ x: 880, y: 420 }}
+          scroll={{ x: 1000, y: 420 }}
           columns={[
+            { title: '融资事件ID', dataIndex: 'financing_event_id', width: 120 },
             { title: '触发时间', dataIndex: 'triggered_at', width: 168, render: formatFinancingDateTime },
             { title: '状态', dataIndex: 'execution_status', width: 88 },
             {
@@ -853,6 +836,53 @@ export default function FinancingEventsPage() {
         </Form>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
           使用「系统配置 → 融资信息源配置」中已启用的投融资接口；凭证取自对应应用的「上海国际集团接口配置」。
+        </p>
+      </Modal>
+
+      <Modal
+        title="批量百科查词"
+        visible={batchBaikeVisible}
+        onOk={async () => {
+          const values = await batchBaikeForm.validate()
+          const [d0, d1] = values.date_range || []
+          if (!d0 || !d1) {
+            Message.warning('请选择日期范围')
+            return
+          }
+          setBatchBaikeSubmitting(true)
+          try {
+            const res = await postFinancingBatchBaikeLookup({
+              start_date: dayjs(d0).format('YYYY-MM-DD'),
+              end_date: dayjs(d1).format('YYYY-MM-DD'),
+            })
+            if (res.data?.success) {
+              Message.success(res.data.message || '批量百科查词完成')
+              load()
+            } else {
+              Message.error(res.data?.message || '批量查词失败')
+            }
+          } catch (e) {
+            Message.error(e.response?.data?.message || e.message || '批量查词失败')
+          } finally {
+            setBatchBaikeSubmitting(false)
+            setBatchBaikeVisible(false)
+          }
+        }}
+        confirmLoading={batchBaikeSubmitting}
+        onCancel={() => setBatchBaikeVisible(false)}
+        style={{ width: 480 }}
+      >
+        <Form form={batchBaikeForm} layout="vertical">
+          <FormItem
+            label="融资日期范围（筛选 event_date 且 baike_lookup_at 为空的记录）"
+            field="date_range"
+            rules={[{ required: true, message: '请选择日期范围' }]}
+          >
+            <DatePicker.RangePicker style={{ width: '100%' }} />
+          </FormItem>
+        </Form>
+        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+          按企业名称调用百度百科查词，结果 fan-out 至同一信用代码下的全部融资记录。已查过的记录（baike_lookup_at 非空）会跳过。
         </p>
       </Modal>
     </div>

@@ -24,13 +24,13 @@ import BatchImportModal from './BatchImportModal'
 import LogModal from './LogModal'
 import EnterpriseSyncModal from './EnterpriseSyncModal'
 import {
-  postInvestedEnterpriseAiEnrich,
   postInvestedEnterpriseBatchAiEnrich,
   fetchInvestedEnterpriseAiEnrichLogs,
   postInvestedEnterpriseBatchQccCompanyBrief,
   fetchInvestedEnterpriseCompetitorReadiness,
   postInvestedEnterpriseCompetitorAnalysisRun,
   fetchInvestedCompetitionLensProposal,
+  postInvestedEnterpriseBatchBaikeLookup,
 } from '../api/competitor-analysis'
 import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './competitor-analysis/financingDateUtils'
 import { IntroPopoverCell } from './competitor-analysis/introPopoverAiCell'
@@ -210,7 +210,6 @@ function EnterpriseManagement({
   }, [viewportBoundTable, filterCollapsed, activeTab, hideEntityTabs])
 
   const [exportingAll, setExportingAll] = useState(false)
-  const [aiEnrichSubmitting, setAiEnrichSubmitting] = useState(false)
   const [ieAiLogVisible, setIeAiLogVisible] = useState(false)
   const [ieAiLogLoading, setIeAiLogLoading] = useState(false)
   const [ieAiLogRows, setIeAiLogRows] = useState([])
@@ -220,9 +219,11 @@ function EnterpriseManagement({
   const [retryFailedIeAiVisible, setRetryFailedIeAiVisible] = useState(false)
   const [retryFailedIeAiSubmitting, setRetryFailedIeAiSubmitting] = useState(false)
   const [qccBriefSubmitting, setQccBriefSubmitting] = useState(false)
-  const [qccBriefPageSubmitting, setQccBriefPageSubmitting] = useState(false)
   const [batchIeAiForm] = Form.useForm()
   const [retryFailedIeAiForm] = Form.useForm()
+  const [batchIeBaikeVisible, setBatchIeBaikeVisible] = useState(false)
+  const [batchIeBaikeSubmitting, setBatchIeBaikeSubmitting] = useState(false)
+  const [batchIeBaikeForm] = Form.useForm()
 
   const [competitorSelectedKeys, setCompetitorSelectedKeys] = useState([])
   const [competitorSupplementModal, setCompetitorSupplementModal] = useState({
@@ -533,6 +534,33 @@ function EnterpriseManagement({
       Message.error(e.response?.data?.message || e.message || '受理失败')
     } finally {
       setRetryFailedIeAiSubmitting(false)
+    }
+  }
+
+  const handleBatchIeBaikeOk = async () => {
+    try {
+      const v = await batchIeBaikeForm.validate()
+      const range = v.date_range
+      if (!range || range.length !== 2 || !range[0] || !range[1]) {
+        Message.warning('请选择创建日期范围')
+        return
+      }
+      const start = formatFinancingYmd(range[0])
+      const end = formatFinancingYmd(range[1])
+      setBatchIeBaikeSubmitting(true)
+      const res = await postInvestedEnterpriseBatchBaikeLookup({ start_date: start, end_date: end })
+      if (res.data?.success) {
+        Message.success(res.data.message || '批量百科查词完成')
+        setBatchIeBaikeVisible(false)
+        fetchEnterprises()
+      } else {
+        Message.error(res.data?.message || '查词失败')
+      }
+    } catch (e) {
+      if (e?.errors) return
+      Message.error(e.response?.data?.message || e.message || '查词失败')
+    } finally {
+      setBatchIeBaikeSubmitting(false)
     }
   }
 
@@ -1160,43 +1188,6 @@ function EnterpriseManagement({
                 {isAdmin && (
                   <Button
                     type="outline"
-                    loading={aiEnrichSubmitting}
-                    disabled={!competitorSelectedKeys.length}
-                    onClick={async () => {
-                      if (competitorSelectedKeys.length > 1) {
-                        Message.warning('请仅勾选一行被投企业')
-                        return
-                      }
-                      const id = competitorSelectedKeys[0]
-                      if (!id) {
-                        Message.warning('请先勾选一行被投企业')
-                        return
-                      }
-                      setAiEnrichSubmitting(true)
-                      try {
-                        const res = await postInvestedEnterpriseAiEnrich(id)
-                        if (res.status === 202 && res.data?.success) {
-                          Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
-                          fetchEnterprises()
-                        } else if (res.data?.success) {
-                          Message.success(res.data.message || '已受理')
-                          fetchEnterprises()
-                        } else {
-                          Message.error(res.data?.message || '受理失败')
-                        }
-                      } catch (e) {
-                        Message.error(e.response?.data?.message || e.message || '受理失败')
-                      } finally {
-                        setAiEnrichSubmitting(false)
-                      }
-                    }}
-                  >
-                    手动AI取数
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button
-                    type="outline"
                     loading={qccBriefSubmitting}
                     disabled={!competitorSelectedKeys.length}
                     onClick={() => {
@@ -1260,72 +1251,22 @@ function EnterpriseManagement({
                 {isAdmin && (
                   <Button
                     type="outline"
-                    loading={qccBriefPageSubmitting}
-                    disabled={!enterprises.length}
-                    onClick={() => {
-                      Modal.confirm({
-                        title: '企查查同步当前页',
-                        content: (
-                          <div>
-                            <p>
-                              将对当前页最多 {Math.min(enterprises.length, 80)} 条被投企业顺序调用企查查「企业简介」接口并写库，每条间隔约
-                              400ms，整页可能需数十秒～数分钟；请确认已配置企查查「企业信息」接口且账号有剩余额度。
-                            </p>
-                          </div>
-                        ),
-                        onOk: async () => {
-                          const ids = enterprises.map((r) => r.id).filter(Boolean).slice(0, 80)
-                          setQccBriefPageSubmitting(true)
-                          try {
-                            const res = await postInvestedEnterpriseBatchQccCompanyBrief({
-                              enterprise_ids: ids,
-                            })
-                            if (res.data?.success) {
-                              const d = res.data.data || {}
-                              const hint = summarizeInvestedEnterpriseQccBatchResults(d.results)
-                              Message.success(
-                                (res.data.message ||
-                                  `完成：成功 ${d.success ?? 0}，失败 ${d.failed ?? 0}`) + hint
-                              )
-                              fetchEnterprises()
-                            } else {
-                              Message.error(res.data?.message || '批量同步失败')
-                            }
-                          } catch (e) {
-                            Message.error(e.response?.data?.message || e.message || '批量同步失败')
-                          } finally {
-                            setQccBriefPageSubmitting(false)
-                          }
-                        },
-                      })
-                    }}
-                  >
-                    企查查同步当前页
-                  </Button>
-                )}
-                {isAdmin && (
-                  <Button
-                    type="outline"
                     disabled={!competitorSelectedKeys.length}
                     loading={ieAiLogLoading}
                     onClick={async () => {
-                      if (competitorSelectedKeys.length > 1) {
-                        Message.warning('请仅勾选一行被投企业')
+                      if (!competitorSelectedKeys.length) {
+                        Message.warning('请先勾选被投企业')
                         return
                       }
-                      const id = competitorSelectedKeys[0]
-                      if (!id) {
-                        Message.warning('请先勾选一行被投企业')
-                        return
-                      }
-                      setIeAiLogEnterpriseId(String(id))
+                      const ids = competitorSelectedKeys.map((k) => String(k)).filter(Boolean)
+                      setIeAiLogEnterpriseId(ids.join(','))
                       setIeAiLogVisible(true)
                       setIeAiLogLoading(true)
                       try {
                         const res = await fetchInvestedEnterpriseAiEnrichLogs({
-                          invested_enterprise_id: id,
+                          invested_enterprise_id: ids.join(','),
                           page: 1,
-                          pageSize: 50,
+                          pageSize: 200,
                         })
                         if (res.data?.success) {
                           setIeAiLogRows(res.data.data?.list || [])
@@ -1371,6 +1312,15 @@ function EnterpriseManagement({
                     }}
                   >
                     重试失败AI
+                  </Button>
+                )}
+                {isAdmin && (
+                  <Button
+                    type="outline"
+                    status="success"
+                    onClick={() => setBatchIeBaikeVisible(true)}
+                  >
+                    批量百科查词
                   </Button>
                 )}
               </>
@@ -1612,11 +1562,11 @@ function EnterpriseManagement({
       {showInvestedEnterpriseAi && (
         <>
           <Modal
-            title={`AI 增强执行日志（被投企业 id=${ieAiLogEnterpriseId || '—'}）`}
+            title={`AI 增强执行日志（已选 ${ieAiLogEnterpriseId ? ieAiLogEnterpriseId.split(',').length : 0} 条被投企业，按时间降序）`}
             visible={ieAiLogVisible}
             footer={null}
             onCancel={() => setIeAiLogVisible(false)}
-            style={{ width: 960 }}
+            style={{ width: 1060 }}
             unmountOnExit
           >
             <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
@@ -1628,8 +1578,13 @@ function EnterpriseManagement({
               data={ieAiLogRows}
               stripe
               border
-              scroll={{ x: 900, y: 420 }}
+              scroll={{ x: 1060, y: 420 }}
               columns={[
+                {
+                  title: '被投企业ID',
+                  dataIndex: 'invested_enterprise_id',
+                  width: 120,
+                },
                 {
                   title: '触发时间',
                   dataIndex: 'triggered_at',
@@ -1721,6 +1676,29 @@ function EnterpriseManagement({
             </Form>
             <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
               与融资事件使用同一套联网大模型提示词与模型配置；任务以<strong>被投企业全称</strong>为主键参与去重与模板填充。
+            </p>
+          </Modal>
+
+          <Modal
+            title="批量百科查词（按创建日期）"
+            visible={batchIeBaikeVisible}
+            onOk={handleBatchIeBaikeOk}
+            confirmLoading={batchIeBaikeSubmitting}
+            onCancel={() => setBatchIeBaikeVisible(false)}
+            style={{ width: 520 }}
+            okText="开始查词"
+          >
+            <Form form={batchIeBaikeForm} layout="vertical">
+              <FormItem
+                label="创建日期范围（含首尾两天，仅筛选 qcc_company_intro 为空的被投企业）"
+                field="date_range"
+                rules={[{ required: true, message: '请选择日期范围' }]}
+              >
+                <DatePicker.RangePicker style={{ width: '100%' }} />
+              </FormItem>
+            </Form>
+            <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
+              对区间内创建且尚未查词的被投企业，逐条调用百度百科接口提取公司简介与产品简介。每条间隔 800ms，单次上限 200 条。
             </p>
           </Modal>
         </>

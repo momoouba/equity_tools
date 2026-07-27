@@ -50,8 +50,14 @@ async function executeWithDeadlockRetry(db, sql, params, retries = 15) {
   return null;
 }
 
+const BAIKE_SITE_DESC_PREFIX = '百度百科是一部内容开放';
+
 function isUsableIntro(text) {
-  return strTrim(text).length >= MIN_INTRO_LEN;
+  const s = strTrim(text);
+  if (s.length < MIN_INTRO_LEN) return false;
+  // 过滤百度百科站点通用介绍（搜索摘要模式未命中具体词条时返回）
+  if (s.startsWith(BAIKE_SITE_DESC_PREFIX)) return false;
+  return true;
 }
 
 function pickBaikeSearchName(row, fields = ['company_name', 'enterprise_full_name', 'project_abbreviation']) {
@@ -98,7 +104,7 @@ function fetchBaikeHttp(companyName, sleepMs = 1200) {
   const name = strTrim(companyName);
   if (name.length < 2) return normalizeBaikePayload(null, name);
   const py = resolvePythonBin();
-  const args = pythonArgs(PY_BAIKE, ['--name', name, '--sleep-ms', String(sleepMs), '--dry-json']);
+  const args = pythonArgs(PY_BAIKE, ['--name', name, '--sleep-ms', String(sleepMs)]);
   const r = spawnSync(py, args, {
     encoding: 'utf8',
     windowsHide: true,
@@ -106,6 +112,7 @@ function fetchBaikeHttp(companyName, sleepMs = 1200) {
     maxBuffer: 8 * 1024 * 1024,
   });
   if (r.status !== 0) {
+    console.warn(`[baikeLookup] python script failed for "${name}": status=${r.status}, stderr=${String(r.stderr || '').slice(0, 500)}, stdout=${String(r.stdout || '').slice(0, 200)}`);
     return normalizeBaikePayload(
       { ok: false, has_lemma: false, lemma_status: 'error', miss_reason: 'fetch_error', error: r.stderr || r.stdout },
       name
@@ -115,10 +122,52 @@ function fetchBaikeHttp(companyName, sleepMs = 1200) {
     const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
     return normalizeBaikePayload(JSON.parse(line), name);
   } catch (e) {
+    console.warn(`[baikeLookup] parse error for "${name}": stdout=${String(r.stdout || '').slice(0, 500)}, err=${e.message}`);
     return normalizeBaikePayload(
       { ok: false, has_lemma: false, lemma_status: 'error', miss_reason: 'parse_error', error: e.message },
       name
     );
+  }
+}
+
+/**
+ * 百科查词统一入口：HTTP 优先，失败或返回通用描述时 fallback 到 Playwright browser 模式。
+ * 解决百度反爬导致 HTTP 模式拿不到真实词条内容的问题。
+ */
+function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
+  const httpResult = fetchBaikeHttp(companyName, sleepMs);
+  // HTTP 命中且有有效简介 → 直接返回
+  if (httpResult.has_lemma && (httpResult.company_intro || httpResult.product_intro)) {
+    return httpResult;
+  }
+  // HTTP 未命中 / 返回通用描述 / 报错 → 尝试 browser 模式
+  const name = strTrim(companyName);
+  if (name.length < 2) return httpResult;
+  try {
+    const py = resolvePythonBin();
+    const args = buildBrowserPythonArgs(browserOpts, ['--name', name, '--sleep-ms', String(sleepMs)]);
+    const r = spawnSync(py, args, {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    if (r.status !== 0) {
+      console.warn(`[baikeLookup][browser] script failed for "${name}": status=${r.status}, stderr=${String(r.stderr || '').slice(0, 500)}`);
+      return httpResult; // browser 也失败，返回 HTTP 结果
+    }
+    const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
+    const browserResult = normalizeBaikePayload(JSON.parse(line), name);
+    console.log(`[baikeLookup][browser] "${name}": ${browserResult.has_lemma ? 'found' : browserResult.lemma_status}`);
+    // browser 结果优于 HTTP 则用 browser，否则保留 HTTP
+    if (browserResult.has_lemma && (browserResult.company_intro || browserResult.product_intro)) {
+      return browserResult;
+    }
+    if (browserResult.has_lemma && !httpResult.has_lemma) return browserResult;
+    return httpResult;
+  } catch (e) {
+    console.warn(`[baikeLookup][browser] fallback failed for "${name}":`, e.message);
+    return httpResult;
   }
 }
 
@@ -531,6 +580,41 @@ async function applyBaikeToFinancingFanOut(db, companyRow, baike, opts = {}) {
       ]
     );
     const affected = r.affectedRows || 0;
+    if (affected > 0) {
+      /* ── 百科写入简介后异步触发结构化信息提取 ── */
+      setImmediate(async () => {
+        try {
+          const metaRows = await db.query(
+            `SELECT company_name, company_credit_code, industry_category_4, ai_product_intro, ai_company_tags_display
+             FROM sourcing_financing_event WHERE F_DeleteMark = 0 AND (${where.clause}) AND COALESCE(ai_product_intro,'') <> '' AND COALESCE(industry_category_4,'') <> ''
+             LIMIT 1`,
+            where.params
+          );
+          if (!metaRows.length) return;
+          const metaRow = metaRows[0];
+          const { extractStructuredProfile, applyStructuredToFinancingFanOut } = require('../competitor-analysis/structuredProfileService');
+          const sourceRow = {
+            company_intro: null,
+            ai_product_intro: metaRow.ai_product_intro,
+            ai_company_tags_display: metaRow.ai_company_tags_display,
+          };
+          const meta = {
+            company_name: metaRow.company_name,
+            industry_category_4: metaRow.industry_category_4,
+            sub_track: null,
+          };
+          const sp = await extractStructuredProfile(meta, sourceRow);
+          if (sp && sp.ok && sp.profile) {
+            const n = await applyStructuredToFinancingFanOut(db, { company_name: metaRow.company_name, company_credit_code: metaRow.company_credit_code }, sp.profile);
+            console.log(`[baikeLookup][structured] ${metaRow.company_name} → ${n} rows, model=${sp.model}`);
+          } else {
+            console.log(`[baikeLookup][structured] ${metaRow.company_name} skipped: ${sp?.reason || 'no_profile'}`);
+          }
+        } catch (err) {
+          console.warn('[baikeLookup][structured] trigger failed:', err.message);
+        }
+      });
+    }
     return { updated: affected, profile_updated: affected };
   }
 
@@ -602,6 +686,7 @@ module.exports = {
   pickBaikeSearchName,
   normalizeBaikePayload,
   fetchBaikeHttp,
+  fetchBaike,
   fetchBaikeBrowserBatch,
   ensureBrowserWorker,
   closeBrowserWorker,

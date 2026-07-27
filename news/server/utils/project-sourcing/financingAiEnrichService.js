@@ -507,6 +507,43 @@ async function persistFinancingAiLlmSuccess({
         `  tags(AI): ${display || '(空)'}`
     );
   }
+
+  /* ── AI 增强成功后异步触发结构化信息提取 ── */
+  setImmediate(async () => {
+    try {
+      const metaRows = await db.query(
+        `SELECT company_name, company_credit_code, industry_category_4, industry_source_lv1, industry_source_lv2,
+                ai_product_intro, ai_company_tags_display
+         FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+        [financingEventId]
+      );
+      if (!metaRows.length) return;
+      const metaRow = metaRows[0];
+      if (!String(metaRow.ai_product_intro || '').trim()) return;
+      if (!String(metaRow.industry_category_4 || '').trim()) return;
+
+      const { extractStructuredProfile, applyStructuredToFinancingFanOut } = require('../competitor-analysis/structuredProfileService');
+      const sourceRow = {
+        company_intro: null,
+        ai_product_intro: metaRow.ai_product_intro,
+        ai_company_tags_display: metaRow.ai_company_tags_display,
+      };
+      const meta = {
+        company_name: metaRow.company_name,
+        industry_category_4: metaRow.industry_category_4,
+        sub_track: null,
+      };
+      const sp = await extractStructuredProfile(meta, sourceRow);
+      if (sp && sp.ok && sp.profile) {
+        const n = await applyStructuredToFinancingFanOut(db, { company_name: metaRow.company_name, company_credit_code: metaRow.company_credit_code }, sp.profile);
+        console.log(`[financingAiEnrich][structured] event_id=${financingEventId} → ${n} rows, model=${sp.model}`);
+      } else {
+        console.log(`[financingAiEnrich][structured] event_id=${financingEventId} skipped: ${sp?.reason || 'no_profile'}`);
+      }
+    } catch (err) {
+      console.warn('[financingAiEnrich][structured] trigger failed:', err.message);
+    }
+  });
 }
 
 /**

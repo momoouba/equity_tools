@@ -1,6 +1,6 @@
 'use strict';
 
-const DEFAULT_GATEWAY_V1 = 'https://gateway.di-matrix.ai/v1';
+const DEFAULT_GATEWAY_V1 = 'https://direct-gateway.di-matrix.ai/v1';
 
 function isGatewayHost(endpoint) {
   return /di-matrix\.ai|gateway\./i.test(String(endpoint || ''));

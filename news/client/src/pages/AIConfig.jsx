@@ -211,7 +211,10 @@ function AIConfig() {
       next.wire_protocol = 'responses'
       next.web_search_mode = 'openai_web_search_tool'
     }
-    next.api_endpoint = getDefaultEndpoint('gateway', next.usage_type, model)
+    // 仅在 api_endpoint 为空时才填充默认值，保留 DB 中已配置的自定义端点
+    if (!next.api_endpoint) {
+      next.api_endpoint = getDefaultEndpoint('gateway', next.usage_type, model)
+    }
     return next
   }
 
@@ -338,7 +341,7 @@ function AIConfig() {
       alibaba: isVisionModel
         ? 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
         : 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-      gateway: 'https://gateway.di-matrix.ai/v1',
+      gateway: 'https://direct-gateway.di-matrix.ai/v1',
       openai: 'https://api.openai.com/v1',
       baidu: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions',
       tencent: 'https://hunyuan.tencentcloudapi.com/',
@@ -581,7 +584,7 @@ function AIConfig() {
                 <Input
                   value={formData.api_endpoint}
                   onChange={(value) => handleChange('api_endpoint', value)}
-                  placeholder="网关填 https://gateway.di-matrix.ai/v1；阿里填 compatible-mode 地址"
+                  placeholder="网关填 https://direct-gateway.di-matrix.ai/v1；阿里填 compatible-mode 地址"
                 />
               </div>
 

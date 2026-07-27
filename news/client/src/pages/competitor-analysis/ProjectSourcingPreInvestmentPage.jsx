@@ -28,6 +28,9 @@ import {
   postPreInvestmentAiEnrich,
   postPreInvestmentCompetitorAnalysisRun,
   fetchPreInvestmentCompetitionLensProposal,
+  postPreInvestmentBatchBaikeLookup,
+  fetchPreInvestmentBpVersions,
+  getPreInvestmentBpVersionDownload,
   patchCompetitorRelationComparable,
   deleteCompetitorRelation,
 } from '../../api/competitor-analysis'
@@ -115,6 +118,8 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [bpFileList, setBpFileList] = useState([])
   const [editBpFile, setEditBpFile] = useState(null)
   const [editBpFileList, setEditBpFileList] = useState([])
+  const [bpVersions, setBpVersions] = useState([])
+  const [bpVersionsLoading, setBpVersionsLoading] = useState(false)
   const [lookupLoading, setLookupLoading] = useState(false)
   const [qccCandidates, setQccCandidates] = useState([])
   const [showQccDropdown, setShowQccDropdown] = useState(false)
@@ -124,6 +129,8 @@ export default function ProjectSourcingPreInvestmentPage() {
   const [projectNoPreview, setProjectNoPreview] = useState('')
   const [tableScrollY, setTableScrollY] = useState(520)
   const [batchBusy, setBatchBusy] = useState(null)
+  const [baikeSubmitting, setBaikeSubmitting] = useState(false)
+  const [batchBaikeSubmitting, setBatchBaikeSubmitting] = useState(false)
   const [lensModal, setLensModal] = useState({
     visible: false,
     loading: false,
@@ -528,6 +535,34 @@ export default function ProjectSourcingPreInvestmentPage() {
     })
   }
 
+  const handleBatchBaikeLookup = () => {
+    if (!hasSelection) {
+      Message.warning('请先勾选要操作的项目')
+      return
+    }
+    const ids = selectedIds.slice()
+    Modal.confirm({
+      title: '批量百科查词',
+      content: `确认为已选的 ${ids.length} 个投前项目发起百科查词？将逐条调用百度百科接口提取公司简介与产品简介，每条间隔 800ms。`,
+      onOk: async () => {
+        setBatchBaikeSubmitting(true)
+        try {
+          const res = await postPreInvestmentBatchBaikeLookup({ ids })
+          if (res.data?.success) {
+            Message.success(res.data.message || '批量百科查词完成')
+            load()
+          } else {
+            Message.error(res.data?.message || '查词失败')
+          }
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '查词失败')
+        } finally {
+          setBatchBaikeSubmitting(false)
+        }
+      },
+    })
+  }
+
   const submitPreInvCompetitorWithLens = async (row, competitionLens) => {
     const res = await postPreInvestmentCompetitorAnalysisRun(row.id, {
       competition_lens: competitionLens || undefined,
@@ -771,7 +806,42 @@ export default function ProjectSourcingPreInvestmentPage() {
     })
     setEditBpFile(null)
     setEditBpFileList([])
+    setBpVersions([])
     setEditVisible(true)
+    // 加载 BP 版本列表
+    if (row.bp_filename) {
+      loadBpVersions(row.id)
+    }
+  }
+
+  const loadBpVersions = async (projectId) => {
+    setBpVersionsLoading(true)
+    try {
+      const res = await fetchPreInvestmentBpVersions(projectId)
+      if (res.data?.success) {
+        setBpVersions(res.data.data || [])
+      }
+    } catch (e) {
+      // 静默失败，不影响编辑
+    } finally {
+      setBpVersionsLoading(false)
+    }
+  }
+
+  const handleDownloadBpVersion = async (version) => {
+    try {
+      const res = await getPreInvestmentBpVersionDownload(version.id)
+      const url = window.URL.createObjectURL(new Blob([res.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', version.bp_filename || `BP_v${version.version_no}`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (e) {
+      Message.error(e.response?.data?.message || '下载失败')
+    }
   }
 
   const handleEditSave = async () => {
@@ -1006,6 +1076,15 @@ export default function ProjectSourcingPreInvestmentPage() {
           >
             竞品分析
           </Button>
+          <Button
+            type="outline"
+            status="success"
+            disabled={batchDisabled}
+            loading={batchBaikeSubmitting}
+            onClick={handleBatchBaikeLookup}
+          >
+            批量百科查词
+          </Button>
         </Space>
         <div ref={tableWrapRef} className="pre-inv-sourcing-table-wrap">
         <Table
@@ -1106,12 +1185,12 @@ export default function ProjectSourcingPreInvestmentPage() {
           <FormItem
             label="上传BP"
             extra={editingRow?.bp_filename && !editBpFile
-              ? `当前BP：${editingRow.bp_filename}；重新选择文件将替换原BP并重新提取`
+              ? `当前BP：${editingRow.bp_filename}；重新选择文件将作为新版本保存`
               : editBpFile
                 ? '保存后将解析此文件并与现有产品介绍、企业标签整合'
                 : '非必填，支持任意格式文件；上传保存后将自动解析并与现有信息整合'}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <Upload
                 limit={1}
                 fileList={editBpFileList}
@@ -1125,7 +1204,7 @@ export default function ProjectSourcingPreInvestmentPage() {
                 }}
               >
                 <Button type="outline" size="small">
-                  {editingRow?.bp_filename ? '重新选择文件' : '选择文件'}
+                  {editingRow?.bp_filename ? '上传新版本' : '选择文件'}
                 </Button>
               </Upload>
               {editBpFile && (
@@ -1138,7 +1217,93 @@ export default function ProjectSourcingPreInvestmentPage() {
                   >×</span>
                 </span>
               )}
+              {/* 当前BP下载按钮 */}
+              {editingRow?.bp_filename && !editBpFile && bpVersions.length > 0 && (
+                <Button
+                  type="text"
+                  size="small"
+                  onClick={() => {
+                    const current = bpVersions.find((v) => v.is_current) || bpVersions[0]
+                    handleDownloadBpVersion(current)
+                  }}
+                  style={{ fontSize: 13 }}
+                >
+                  下载当前BP
+                </Button>
+              )}
             </div>
+            {/* BP 版本历史 */}
+            {bpVersions.length > 0 && (
+              <div style={{ marginTop: 8, padding: '8px 12px', background: 'var(--color-fill-1)', borderRadius: 4, fontSize: 13 }}>
+                <div style={{ fontWeight: 500, marginBottom: 6, color: 'var(--color-text-1)' }}>
+                  BP 版本历史（{bpVersions.length} 个版本）
+                </div>
+                {bpVersionsLoading ? (
+                  <span style={{ color: 'var(--color-text-3)' }}>加载中...</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {bpVersions.map((v) => (
+                      <div
+                        key={v.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '4px 0',
+                          borderBottom: '1px solid var(--color-border-2)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                          <span
+                            style={{
+                              fontWeight: v.is_current ? 600 : 400,
+                              color: v.is_current ? 'rgb(var(--primary-6))' : 'var(--color-text-1)',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            v{v.version_no}
+                          </span>
+                          <span
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              color: 'var(--color-text-2)',
+                              flex: 1,
+                            }}
+                            title={v.bp_filename}
+                          >
+                            {v.bp_filename}
+                          </span>
+                          {v.is_current && (
+                            <span
+                              style={{
+                                fontSize: 12,
+                                padding: '1px 6px',
+                                background: 'rgb(var(--primary-1))',
+                                color: 'rgb(var(--primary-6))',
+                                borderRadius: 3,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              当前
+                            </span>
+                          )}
+                        </div>
+                        <Button
+                          type="text"
+                          size="mini"
+                          onClick={() => handleDownloadBpVersion(v)}
+                          style={{ whiteSpace: 'nowrap', marginLeft: 8 }}
+                        >
+                          下载
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </FormItem>
           <FormItem label="产品介绍（AI）" field="ai_product_intro">
             <Input.TextArea

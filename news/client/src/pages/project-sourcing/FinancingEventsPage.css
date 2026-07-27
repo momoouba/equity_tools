@@ -9,6 +9,15 @@
   text-align: left;
 }
 
+/* 全选框列（rowSelection 首列）表头居中 */
+.financing-events-page .arco-table-th:first-child,
+.financing-events-page .arco-table-th:first-child .arco-table-cell,
+.financing-events-page .arco-table-th:first-child .arco-table-th-item,
+.financing-events-page .arco-table-th:first-child .arco-table-th-content {
+  text-align: center !important;
+  justify-content: center !important;
+}
+
 .financing-events-page .arco-table-th .arco-table-cell,
 .financing-events-page .arco-table-td .arco-table-cell {
   text-align: left;

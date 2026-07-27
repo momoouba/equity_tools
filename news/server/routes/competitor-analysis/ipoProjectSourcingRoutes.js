@@ -684,6 +684,96 @@ function registerIpoProjectSourcingRoutes(router) {
       res.status(code).json({ success: false, message: e.message || '同步失败' });
     }
   });
+
+  /** 管理员：单条底层项目百科查词 */
+  router.post('/ipo-projects/:f_id/baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const fid = String(req.params.f_id || '').trim();
+      const rows = await db.query(
+        `SELECT F_Id AS id, company, unified_credit_code, qcc_company_intro
+         FROM ipo_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+        [fid]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '底层项目不存在' });
+      }
+      const row = rows[0];
+      const name = String(row.company || '').trim();
+      if (name.length < 2) {
+        return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const baike = fetchBaikeHttp(name, 1500);
+      const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+      await db.execute(
+        `UPDATE ipo_project SET qcc_company_intro = COALESCE(?, qcc_company_intro), F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
+        [intro, fid]
+      );
+      res.json({
+        success: true,
+        message: intro ? `百科查词完成，已写入简介（${intro.length} 字）` : '百科未命中',
+        data: { has_lemma: baike?.has_lemma || false, lemma_status: baike?.lemma_status || 'not_found' },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/ipo-projects/baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '百科查词失败' });
+    }
+  });
+
+  /** 管理员：批量底层项目百科查词 */
+  router.post('/ipo-projects/batch-baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      let rows;
+      if (Array.isArray(ids) && ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        rows = await db.query(
+          `SELECT F_Id AS id, company, unified_credit_code, qcc_company_intro
+           FROM ipo_project WHERE F_Id IN (${placeholders}) AND F_DeleteMark = 0`,
+          ids.map(String)
+        );
+      } else {
+        rows = await db.query(
+          `SELECT F_Id AS id, company, unified_credit_code, qcc_company_intro
+           FROM ipo_project WHERE F_DeleteMark = 0 AND (qcc_company_intro IS NULL OR qcc_company_intro = '')
+           ORDER BY F_Id DESC LIMIT 200`
+        );
+      }
+      if (!rows.length) {
+        return res.json({ success: true, message: '无需查词的记录', data: { total: 0 } });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const total = rows.length;
+      let found = 0;
+      let notFound = 0;
+      for (const row of rows) {
+        const name = String(row.company || '').trim();
+        if (name.length < 2) continue;
+        try {
+          const baike = fetchBaikeHttp(name, 600);
+          const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+          await db.execute(
+            `UPDATE ipo_project SET qcc_company_intro = COALESCE(?, qcc_company_intro), F_LastModifyTime = NOW()
+             WHERE F_Id = ?`,
+            [intro, row.id]
+          );
+          if (intro) found += 1; else notFound += 1;
+        } catch (err) {
+          console.warn(`[batch-baike-lookup ipo] ${name}:`, err.message);
+          notFound += 1;
+        }
+      }
+      res.json({
+        success: true,
+        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家`,
+        data: { total, found, not_found: notFound },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/ipo-projects/batch-baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '批量百科查词失败' });
+    }
+  });
 }
 
 module.exports = { registerIpoProjectSourcingRoutes };

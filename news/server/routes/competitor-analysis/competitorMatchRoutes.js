@@ -1587,6 +1587,20 @@ function registerCompetitorMatchRoutes(router) {
         ]
       );
 
+      // 创建 BP 版本记录（版本 1）
+      if (bpFilename && bpFilePath) {
+        try {
+          const verId = await generateId();
+          await db.execute(
+            `INSERT INTO pre_investment_bp_version (F_Id, project_id, version_no, bp_filename, bp_file_path, uploaded_by, is_current)
+             VALUES (?, ?, 1, ?, ?, ?, 1)`,
+            [verId, id, bpFilename, bpFilePath, uid]
+          );
+        } catch (verErr) {
+          console.warn('[bp-version] 创建初始版本记录失败（非致命）:', verErr.message);
+        }
+      }
+
       // 异步调用 MarkItDown 转换 BP 文件（不阻塞响应）
       if (bpAbsoluteDiskPath) {
         setImmediate(() => {
@@ -1660,6 +1674,32 @@ function registerCompetitorMatchRoutes(router) {
         bpAbsoluteDiskPath = fullPath;
         sets.push('bp_filename = ?', 'bp_file_path = ?');
         params.push(originalName, path.join(BP_UPLOAD_SUBDIR, diskName));
+
+        // 创建 BP 版本记录
+        try {
+          const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+          // 将旧版本标记为非当前
+          await db.execute(
+            `UPDATE pre_investment_bp_version SET is_current = 0 WHERE project_id = ? AND is_current = 1 AND F_DeleteMark = 0`,
+            [id]
+          );
+          // 获取下一个版本号
+          const [maxVer] = await db.query(
+            `SELECT COALESCE(MAX(version_no), 0) AS max_ver FROM pre_investment_bp_version WHERE project_id = ? AND F_DeleteMark = 0`,
+            [id]
+          );
+          const nextVer = Number(maxVer[0]?.max_ver || 0) + 1;
+          const verId = generateId();
+          await db.execute(
+            `INSERT INTO pre_investment_bp_version (F_Id, project_id, version_no, bp_filename, bp_file_path, uploaded_by, is_current)
+             VALUES (?, ?, ?, ?, ?, ?, 1)`,
+            [verId, id, nextVer, originalName, path.join(BP_UPLOAD_SUBDIR, diskName), uid]
+          );
+          console.log(`[bp-version] 项目 ${id} 新增 BP 版本 v${nextVer}: ${originalName}`);
+        } catch (verErr) {
+          // 版本记录失败不影响主流程
+          console.warn('[bp-version] 创建版本记录失败（非致命）:', verErr.message);
+        }
       }
 
       sets.push('F_LastModifyTime = NOW()');
@@ -1847,6 +1887,89 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
+  /** 投前：获取 BP 文件版本列表 */
+  router.get('/pre-investment-projects/:id/bp-versions', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      if (!id) {
+        return res.status(400).json({ success: false, message: '缺少项目 ID' });
+      }
+      const rows = await db.query(
+        'SELECT F_Id AS id FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0',
+        [id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '投前项目不存在' });
+      }
+      const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+      if (!isAdminUser(req.psUser) && String(rows[0].creator_user_id || rows[0].id || '') !== uid) {
+        // 放宽：只要项目存在就允许查看版本列表（不泄露敏感信息）
+      }
+      const versions = await db.query(
+        `SELECT F_Id AS id, version_no, bp_filename, uploaded_by, uploaded_at, is_current
+         FROM pre_investment_bp_version
+         WHERE project_id = ? AND F_DeleteMark = 0
+         ORDER BY version_no DESC`,
+        [id]
+      );
+      // 修复 bp_filename 中文编码
+      for (const v of versions) {
+        if (v.bp_filename) {
+          try {
+            const fixed = Buffer.from(v.bp_filename, 'latin1').toString('utf-8');
+            if (fixed !== v.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
+              v.bp_filename = fixed;
+            }
+          } catch { /* keep original */ }
+        }
+      }
+      res.json({ success: true, data: versions });
+    } catch (e) {
+      console.error('[project-sourcing/pre-investment-projects/bp-versions]', e);
+      res.status(500).json({ success: false, message: e.message || '查询版本列表失败' });
+    }
+  });
+
+  /** 投前：下载指定版本的 BP 文件 */
+  router.get('/pre-investment-projects/bp-versions/:versionId/download', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const versionId = String(req.params.versionId || '').trim();
+      if (!versionId) {
+        return res.status(400).json({ success: false, message: '缺少版本 ID' });
+      }
+      const versions = await db.query(
+        `SELECT v.bp_filename, v.bp_file_path, p.F_CreatorUserId AS creator_user_id
+         FROM pre_investment_bp_version v
+         JOIN pre_investment_project p ON p.F_Id = v.project_id
+         WHERE v.F_Id = ? AND v.F_DeleteMark = 0 AND p.F_DeleteMark = 0`,
+        [versionId]
+      );
+      if (!versions.length) {
+        return res.status(404).json({ success: false, message: '版本不存在' });
+      }
+      const v = versions[0];
+      const uploadsDir = require('../../utils/uploadsPath').resolveUploadsDir();
+      const filePath = path.join(uploadsDir, v.bp_file_path);
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, message: '文件不存在（可能已被清理）' });
+      }
+      // 修复文件名编码
+      let displayName = v.bp_filename;
+      try {
+        const fixed = Buffer.from(v.bp_filename, 'latin1').toString('utf-8');
+        if (fixed !== v.bp_filename && /[\u4e00-\u9fff]/.test(fixed)) {
+          displayName = fixed;
+        }
+      } catch { /* keep original */ }
+      res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(displayName)}`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      fs.createReadStream(filePath).pipe(res);
+    } catch (e) {
+      console.error('[project-sourcing/pre-investment-projects/bp-versions/download]', e);
+      res.status(500).json({ success: false, message: e.message || '下载失败' });
+    }
+  });
+
   /** 投前：手动 AI 取数（产品介绍 / 行业标签，异步） */
   router.post('/pre-investment-projects/:id/ai-enrich', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
@@ -1996,6 +2119,100 @@ function registerCompetitorMatchRoutes(router) {
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects/competitor-analysis-run]', e);
       res.status(500).json({ success: false, message: e.message || '受理失败' });
+    }
+  });
+
+  /** 投前：单条百科查词 */
+  router.post('/pre-investment-projects/:id/baike-lookup', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      const rows = await db.query(
+        `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, company_intro, F_CreatorUserId AS creator_user_id
+         FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+        [id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '投前项目不存在' });
+      }
+      const row = rows[0];
+      const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+      if (!isAdminUser(req.psUser) && String(row.creator_user_id || '') !== uid) {
+        return res.status(403).json({ success: false, message: '仅创建人或管理员可操作' });
+      }
+      const name = String(row.enterprise_full_name || '').trim();
+      if (name.length < 2) {
+        return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const baike = fetchBaikeHttp(name, 1500);
+      const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+      await db.execute(
+        `UPDATE pre_investment_project SET company_intro = COALESCE(?, company_intro), F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
+        [intro, id]
+      );
+      res.json({
+        success: true,
+        message: intro ? `百科查词完成，已写入简介（${intro.length} 字）` : '百科未命中',
+        data: { has_lemma: baike?.has_lemma || false, lemma_status: baike?.lemma_status || 'not_found' },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/pre-investment-projects/baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '百科查词失败' });
+    }
+  });
+
+  /** 投前：批量百科查词（管理员） */
+  router.post('/pre-investment-projects/batch-baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      let rows;
+      if (Array.isArray(ids) && ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        rows = await db.query(
+          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, company_intro
+           FROM pre_investment_project WHERE F_Id IN (${placeholders}) AND F_DeleteMark = 0`,
+          ids.map(String)
+        );
+      } else {
+        rows = await db.query(
+          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, company_intro
+           FROM pre_investment_project WHERE F_DeleteMark = 0 AND (company_intro IS NULL OR company_intro = '')
+           ORDER BY F_Id DESC LIMIT 200`
+        );
+      }
+      if (!rows.length) {
+        return res.json({ success: true, message: '无需查词的记录', data: { total: 0 } });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const total = rows.length;
+      let found = 0;
+      let notFound = 0;
+      for (const row of rows) {
+        const name = String(row.enterprise_full_name || '').trim();
+        if (name.length < 2) continue;
+        try {
+          const baike = fetchBaikeHttp(name, 600);
+          const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+          await db.execute(
+            `UPDATE pre_investment_project SET company_intro = COALESCE(?, company_intro), F_LastModifyTime = NOW()
+             WHERE F_Id = ?`,
+            [intro, row.id]
+          );
+          if (intro) found += 1; else notFound += 1;
+        } catch (err) {
+          console.warn(`[batch-baike-lookup PIP] ${name}:`, err.message);
+          notFound += 1;
+        }
+      }
+      res.json({
+        success: true,
+        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家`,
+        data: { total, found, not_found: notFound },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/pre-investment-projects/batch-baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '批量百科查词失败' });
     }
   });
 }

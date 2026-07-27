@@ -141,20 +141,28 @@ function registerFinancingRoutes(router) {
     }
   });
 
-  /** 管理员：某条融资事件的 AI 增强执行日志（含成功时写入的简介/标签快照） */
+  /** 管理员：融资事件的 AI 增强执行日志（支持单个或多个 financing_event_id，逗号分隔；按 triggered_at 降序） */
   router.get('/ai-enrich-logs', requireAdmin, async (req, res) => {
     try {
-      const feId = parseInt(String(req.query.financing_event_id || '').trim(), 10);
-      if (!Number.isFinite(feId) || feId <= 0) {
-        return res.status(400).json({ success: false, message: '缺少或无效的 financing_event_id' });
+      const rawIds = String(req.query.financing_event_id || '').trim();
+      if (!rawIds) {
+        return res.status(400).json({ success: false, message: '缺少 financing_event_id' });
+      }
+      const feIds = rawIds
+        .split(',')
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (!feIds.length) {
+        return res.status(400).json({ success: false, message: '无效的 financing_event_id' });
       }
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+      const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 50));
       const offset = (page - 1) * pageSize;
 
+      const placeholders = feIds.map(() => '?').join(',');
       const countRows = await db.query(
-        `SELECT COUNT(*) AS total FROM sourcing_financing_ai_enrich_log WHERE financing_event_id = ?`,
-        [feId]
+        `SELECT COUNT(*) AS total FROM sourcing_financing_ai_enrich_log WHERE financing_event_id IN (${placeholders})`,
+        feIds
       );
       const total = Number(countRows[0].total || 0);
 
@@ -164,10 +172,10 @@ function registerFinancingRoutes(router) {
                 invoke_mode, used_enable_search, search_degraded,
                 used_enable_thinking, thinking_degraded
          FROM sourcing_financing_ai_enrich_log
-         WHERE financing_event_id = ?
-         ORDER BY F_Id DESC
+         WHERE financing_event_id IN (${placeholders})
+         ORDER BY triggered_at DESC, F_Id DESC
          LIMIT ? OFFSET ?`,
-        [feId, pageSize, offset]
+        [...feIds, pageSize, offset]
       );
 
       const { attachSearchStatusLabel } = require('../../utils/project-sourcing/financingAiEnrichSearchMeta');
@@ -267,6 +275,108 @@ function registerFinancingRoutes(router) {
     } catch (e) {
       console.error('[project-sourcing/events/ai-enrich]', e);
       res.status(500).json({ success: false, message: safeErrorMessage(e) || '受理失败' });
+    }
+  });
+  router.post('/events/:id/baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!Number.isFinite(id) || id <= 0) {
+        return res.status(400).json({ success: false, message: '无效的融资事件 ID' });
+      }
+      const rows = await db.query(
+        `SELECT F_Id AS id, company_name, company_credit_code, baike_lookup_at
+         FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+        [id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '融资事件不存在' });
+      }
+      const row = rows[0];
+      if (row.baike_lookup_at) {
+        return res.status(400).json({ success: false, message: '该事件已完成百科查词，请勿重复操作' });
+      }
+      const { fetchBaike, applyBaikeToFinancingFanOut } = require('../../utils/project-sourcing/baikeLookupService');
+      const name = String(row.company_name || '').trim();
+      if (name.length < 2) {
+        return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
+      }
+      const baike = fetchBaike(name, 1500);
+      if (!baike || !baike.has_lemma) {
+        await db.execute(
+          `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
+           WHERE F_Id = ?`,
+          [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', id]
+        );
+        return res.json({ success: true, message: '百科未命中', data: { lemma_status: baike?.lemma_status || 'not_found' } });
+      }
+      const result = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, { force: false });
+      res.json({
+        success: true,
+        message: `百科查词完成，更新 ${result.updated} 条记录`,
+        data: { lemma_status: baike.lemma_status, baike_url: baike.baike_url, updated: result.updated },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/events/baike-lookup]', e);
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '百科查词失败' });
+    }
+  });
+
+  router.post('/batch-baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const { start_date, end_date } = req.body || {};
+      if (!start_date || !end_date) {
+        return res.status(400).json({ success: false, message: '缺少参数：start_date、end_date（yyyy-MM-dd）' });
+      }
+      const df = String(start_date).slice(0, 10);
+      const dt = String(end_date).slice(0, 10);
+      if (df > dt) {
+        return res.status(400).json({ success: false, message: '开始日期不能晚于结束日期' });
+      }
+      const rows = await db.query(
+        `SELECT F_Id AS id, company_name, project_name, company_credit_code
+         FROM sourcing_financing_event
+         WHERE F_DeleteMark = 0 AND event_date >= ? AND event_date <= ?
+         ORDER BY event_date DESC, F_Id DESC`,
+        [df, dt]
+      );
+      if (!rows.length) {
+        return res.json({ success: true, message: '区间内无记录', data: { total: 0 } });
+      }
+      const { fetchBaike, applyBaikeToFinancingFanOut } = require('../../utils/project-sourcing/baikeLookupService');
+      const total = rows.length;
+      let updated = 0;
+      let found = 0;
+      let notFound = 0;
+      for (const row of rows) {
+        const name = String(row.company_name || row.project_name || '').trim();
+        if (name.length < 2) continue;
+        try {
+          const baike = fetchBaike(name, 800);
+          if (baike && baike.has_lemma) {
+            const r = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, { force: true });
+            updated += r.updated || 0;
+            found += 1;
+          } else {
+            await db.execute(
+              `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
+               WHERE F_Id = ?`,
+              [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', row.id]
+            );
+            notFound += 1;
+          }
+        } catch (err) {
+          console.warn(`[batch-baike-lookup] ${name}:`, err.message);
+          notFound += 1;
+        }
+      }
+      res.json({
+        success: true,
+        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家，更新 ${updated} 条记录`,
+        data: { total, found, not_found: notFound, updated },
+      });
+    } catch (e) {
+      console.error('[project-sourcing/batch-baike-lookup]', e);
+      res.status(500).json({ success: false, message: safeErrorMessage(e) || '批量百科查词失败' });
     }
   });
 }

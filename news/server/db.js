@@ -950,9 +950,9 @@ async function initializeTables(dbPool) {
       await dbPool.query(`
         ALTER TABLE invested_enterprises 
         ADD COLUMN creator_user_id INT COMMENT '创建用户ID' AFTER exit_status,
-        ADD COLUMN modifier_user_id INT COMMENT '修改用户ID' AFTER created_at,
-        ADD COLUMN delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
-        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
+        ADD COLUMN modifier_user_id INT COMMENT '修改用户ID' AFTER F_CreatorTime,
+        ADD COLUMN delete_mark INT DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
+        ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER F_DeleteMark,
         ADD COLUMN delete_user_id INT NULL COMMENT '删除用户ID' AFTER delete_time
       `);
       await dbPool.query(`
@@ -1004,7 +1004,7 @@ async function initializeTables(dbPool) {
       await dbPool.query(`
         ALTER TABLE company 
         ADD COLUMN creator_user_id INT COMMENT '创建用户ID' AFTER wechat_official_account_id,
-        ADD COLUMN updater_user_id INT COMMENT '更新用户ID' AFTER created_at
+        ADD COLUMN updater_user_id INT COMMENT '更新用户ID' AFTER F_CreatorTime
       `);
       await dbPool.query(`
         ALTER TABLE company 
@@ -1062,7 +1062,7 @@ async function initializeTables(dbPool) {
     if (qcDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE qichacha_config
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -1251,7 +1251,7 @@ async function initializeTables(dbPool) {
     if (sigDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE shanghai_international_group_config
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -1292,7 +1292,7 @@ async function initializeTables(dbPool) {
     if (qncDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE qichacha_news_categories
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -2477,7 +2477,7 @@ async function initializeTables(dbPool) {
     if (ecDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE email_config
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -4517,7 +4517,7 @@ async function initializeTables(dbPool) {
     if (estDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE enterprise_sync_task
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -4586,7 +4586,7 @@ async function initializeTables(dbPool) {
     if (psDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE performance_scheduled
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -5826,7 +5826,7 @@ async function initializeTables(dbPool) {
     if (nslDm.length === 0) {
       await dbPool.query(`
         ALTER TABLE news_share_links
-        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER updated_at,
+        ADD COLUMN delete_mark TINYINT(1) DEFAULT 0 COMMENT '删除标志：0-未删除，1-已删除' AFTER F_LastModifyTime,
         ADD COLUMN delete_time DATETIME NULL COMMENT '删除时间' AFTER delete_mark,
         ADD COLUMN delete_user_id VARCHAR(19) NULL COMMENT '删除用户ID' AFTER delete_time
       `);
@@ -7733,6 +7733,15 @@ async function initializeTables(dbPool) {
       `);
       console.log('✓ external_db_config 已添加 app_id');
     }
+    // 检测 delete mark 列实际名称（兼容 migrateBatchFColumns 未生效的情况）
+    const [dmCol] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_db_config' AND COLUMN_NAME IN ('F_DeleteMark', 'delete_mark')
+    `);
+    const dmColName = dmCol.length ? dmCol[0].COLUMN_NAME : null;
+    const dmPredicate = dmColName ? `e.${dmColName} = 0` : '1=1';
+    const dmPredicateSimple = dmColName ? `${dmColName} = 0` : '1=1';
+
     const CA_C_EDB = require('./utils/competitor-analysis/constants');
     const PS_C_EDB = require('./utils/project-sourcing/constants');
     const LISTING_APP_ID = '2026033000000000001';
@@ -7741,7 +7750,7 @@ async function initializeTables(dbPool) {
        INNER JOIN ipo_project_sql_sync_setting s
          ON s.external_db_config_id = e.F_Id AND s.write_target = ?
        SET e.app_id = ?
-       WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+       WHERE ${dmPredicate} AND (e.app_id IS NULL OR e.app_id = '')`,
       [CA_C_EDB.IPO_SQL_WRITE_TARGET_COMPETITOR, CA_C_EDB.COMPETITOR_ANALYSIS_APP_ID]
     );
     await dbPool.execute(
@@ -7750,7 +7759,7 @@ async function initializeTables(dbPool) {
          ON s.external_db_config_id = e.F_Id
          AND (s.write_target IS NULL OR s.write_target = '' OR s.write_target = 'listing' OR s.write_target = 'project_sourcing')
        SET e.app_id = ?
-       WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+       WHERE ${dmPredicate} AND (e.app_id IS NULL OR e.app_id = '')`,
       [LISTING_APP_ID]
     );
     const [perfApp] = await dbPool.query(
@@ -7761,12 +7770,12 @@ async function initializeTables(dbPool) {
         `UPDATE external_db_config e
          INNER JOIN b_sql b ON b.external_db_config_id = e.F_Id AND b.F_DeleteMark = 0
          SET e.app_id = ?
-         WHERE e.F_DeleteMark = 0 AND (e.app_id IS NULL OR e.app_id = '')`,
+         WHERE ${dmPredicate} AND (e.app_id IS NULL OR e.app_id = '')`,
         [perfApp[0].id]
       );
     }
     await dbPool.execute(
-      `UPDATE external_db_config SET app_id = ? WHERE F_DeleteMark = 0 AND (app_id IS NULL OR app_id = '')`,
+      `UPDATE external_db_config SET app_id = ? WHERE ${dmPredicateSimple} AND (app_id IS NULL OR app_id = '')`,
       [LISTING_APP_ID]
     );
     console.log('✓ external_db_config.app_id 历史数据已回填');
@@ -7986,6 +7995,60 @@ async function initializeTables(dbPool) {
     'competition_lens_at',
     `ADD COLUMN competition_lens_at DATETIME NULL COMMENT '竞争透镜最近保存时间' AFTER competition_lens_version`
   );
+
+  // BP 文件版本历史表
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS pre_investment_bp_version (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        project_id VARCHAR(19) NOT NULL COMMENT 'pre_investment_project.F_Id',
+        version_no INT NOT NULL COMMENT '版本号（从1开始自增）',
+        bp_filename VARCHAR(255) NOT NULL COMMENT 'BP原始文件名',
+        bp_file_path VARCHAR(500) NOT NULL COMMENT 'BP文件磁盘路径（相对uploads根目录）',
+        uploaded_by VARCHAR(19) NULL COMMENT '上传人',
+        uploaded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '上传时间',
+        is_current TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否当前版本：1是 0否',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        KEY idx_bp_ver_project (project_id, version_no),
+        KEY idx_bp_ver_current (project_id, is_current),
+        CONSTRAINT fk_bp_ver_project FOREIGN KEY (project_id) REFERENCES pre_investment_project(F_Id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='投前项目—BP文件版本历史'
+    `);
+    console.log('✓ pre_investment_bp_version 表已就绪');
+  } catch (err) {
+    console.warn('创建 pre_investment_bp_version 时出现警告:', err.message);
+  }
+
+  // 将现有 BP 记录迁移为版本 1
+  try {
+    const [existingVersions] = await dbPool.query(`
+      SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.TABLES
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'pre_investment_bp_version'
+    `);
+    if (existingVersions.length && Number(existingVersions[0].c) > 0) {
+      const [hasData] = await dbPool.query(`SELECT COUNT(*) AS c FROM pre_investment_bp_version`);
+      if (Number(hasData[0].c || 0) === 0) {
+        const [rows] = await dbPool.query(`
+          SELECT F_Id, bp_filename, bp_file_path, F_CreatorUserId, F_CreatorTime
+          FROM pre_investment_project
+          WHERE F_DeleteMark = 0 AND bp_filename IS NOT NULL AND bp_filename != ''
+        `);
+        for (const row of rows) {
+          const verId = await (require('./utils/idGenerator').generateId)();
+          await dbPool.query(`
+            INSERT INTO pre_investment_bp_version
+            (F_Id, project_id, version_no, bp_filename, bp_file_path, uploaded_by, uploaded_at, is_current)
+            VALUES (?, ?, 1, ?, ?, ?, ?, 1)
+          `, [verId, row.F_Id, row.bp_filename, row.bp_file_path, row.F_CreatorUserId, row.F_CreatorTime]);
+        }
+        if (rows.length > 0) {
+          console.log(`✓ 已将 ${rows.length} 条现有 BP 记录迁移为版本 1`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('迁移现有 BP 记录到版本表时出现警告:', err.message);
+  }
 
   try {
     await dbPool.query(`

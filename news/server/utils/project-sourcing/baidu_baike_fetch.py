@@ -352,7 +352,7 @@ def _extract_search_abstract(html):
 
         text = _clean_text(m.group(1))
 
-        if len(text) >= 15:
+        if len(text) >= 15 and not _is_generic_baike_intro(text):
 
             return text
 
@@ -362,7 +362,7 @@ def _extract_search_abstract(html):
 
         text = meta.group(1).strip()
 
-        if len(text) >= 15:
+        if len(text) >= 15 and not _is_generic_baike_intro(text):
 
             return text
 

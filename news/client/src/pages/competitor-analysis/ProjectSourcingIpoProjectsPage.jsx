@@ -25,7 +25,6 @@ import {
 import {
   fetchCompetitorAnalysisIpoProjects,
   getCompetitorAnalysisIpoProjectsExport,
-  postIpoProjectAiEnrich,
   postIpoProjectBatchAiEnrich,
   fetchIpoProjectAiEnrichLogs,
   postIpoProjectBatchQccCompanyBrief,
@@ -38,6 +37,7 @@ import {
   putCompetitorAnalysisIpoProject,
   deleteCompetitorAnalysisIpoProject,
   fetchCompetitorAnalysisIpoProjectChangeLog,
+  postIpoProjectBatchBaikeLookup,
 } from '../../api/competitor-analysis'
 import BatchImportModal from '../BatchImportModal'
 import { IntroPopoverCell } from './introPopoverAiCell'
@@ -182,6 +182,7 @@ export default function ProjectSourcingIpoProjectsPage() {
   const [retryFailedSubmitting, setRetryFailedSubmitting] = useState(false)
   const [batchAiForm] = Form.useForm()
   const [retryFailedForm] = Form.useForm()
+  const [batchBaikeSubmitting, setBatchBaikeSubmitting] = useState(false)
   const [batchQccSubmitting, setBatchQccSubmitting] = useState(false)
   const [sqlModalOpen, setSqlModalOpen] = useState(false)
   const [dbList, setDbList] = useState([])
@@ -795,37 +796,6 @@ export default function ProjectSourcingIpoProjectsPage() {
               <>
                 <Button
                   type="outline"
-                  loading={aiEnrichSubmitting}
-                  disabled={!selectedRowKeys.length}
-                  onClick={async () => {
-                    const id = selectedRowKeys[0]
-                    if (!id) {
-                      Message.warning('请先勾选一行')
-                      return
-                    }
-                    setAiEnrichSubmitting(true)
-                    try {
-                      const res = await postIpoProjectAiEnrich(String(id))
-                      if (res.status === 202 && res.data?.success) {
-                        Message.success(res.data.message || '已受理 AI 取数，请稍后刷新查看')
-                        load()
-                      } else if (res.data?.success) {
-                        Message.success(res.data.message || '已受理')
-                        load()
-                      } else {
-                        Message.error(res.data?.message || '受理失败')
-                      }
-                    } catch (e) {
-                      Message.error(e.response?.data?.message || e.message || '受理失败')
-                    } finally {
-                      setAiEnrichSubmitting(false)
-                    }
-                  }}
-                >
-                  手动AI取数
-                </Button>
-                <Button
-                  type="outline"
                   loading={batchQccSubmitting}
                   disabled={!selectedRowKeys.length}
                   onClick={async () => {
@@ -954,6 +924,40 @@ export default function ProjectSourcingIpoProjectsPage() {
                   }}
                 >
                   重试失败AI
+                </Button>
+                <Button
+                  type="outline"
+                  status="success"
+                  loading={batchBaikeSubmitting}
+                  disabled={!selectedRowKeys.length}
+                  onClick={async () => {
+                    if (!selectedRowKeys.length) {
+                      Message.warning('请勾选至少一行')
+                      return
+                    }
+                    Modal.confirm({
+                      title: '批量百科查词',
+                      content: `确认为已选的 ${selectedRowKeys.length} 条底层项目发起百科查词？将逐条调用百度百科接口提取公司简介与产品简介，每条间隔 800ms。`,
+                      onOk: async () => {
+                        setBatchBaikeSubmitting(true)
+                        try {
+                          const res = await postIpoProjectBatchBaikeLookup({ ids: selectedRowKeys.map(String) })
+                          if (res.data?.success) {
+                            Message.success(res.data.message || '批量百科查词完成')
+                            load()
+                          } else {
+                            Message.error(res.data?.message || '查词失败')
+                          }
+                        } catch (e) {
+                          Message.error(e.response?.data?.message || e.message || '查词失败')
+                        } finally {
+                          setBatchBaikeSubmitting(false)
+                        }
+                      },
+                    })
+                  }}
+                >
+                  批量百科查词
                 </Button>
               </>
             ) : null}

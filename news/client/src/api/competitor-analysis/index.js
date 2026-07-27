@@ -196,3 +196,37 @@ export function postPreInvestmentCompetitorAnalysisRun(id, body) {
 export function fetchPreInvestmentCompetitionLensProposal(id) {
   return axios.get(`${BASE}/pre-investment-projects/${encodeURIComponent(id)}/competition-lens-proposal`)
 }
+
+export function postInvestedEnterpriseBaikeLookup(enterpriseId) {
+  return axios.post(`${BASE}/invested-enterprises/${enterpriseId}/baike-lookup`)
+}
+
+export function postInvestedEnterpriseBatchBaikeLookup(body) {
+  return axios.post(`${BASE}/invested-enterprises/batch-baike-lookup`, body)
+}
+
+export function postPreInvestmentBaikeLookup(id) {
+  return axios.post(`${BASE}/pre-investment-projects/${id}/baike-lookup`)
+}
+
+export function postPreInvestmentBatchBaikeLookup(body) {
+  return axios.post(`${BASE}/pre-investment-projects/batch-baike-lookup`, body)
+}
+
+export function postIpoProjectBaikeLookup(fId) {
+  return axios.post(`${BASE}/ipo-projects/${fId}/baike-lookup`)
+}
+
+export function postIpoProjectBatchBaikeLookup(body) {
+  return axios.post(`${BASE}/ipo-projects/batch-baike-lookup`, body)
+}
+
+export function fetchPreInvestmentBpVersions(projectId) {
+  return axios.get(`${BASE}/pre-investment-projects/${projectId}/bp-versions`)
+}
+
+export function getPreInvestmentBpVersionDownload(versionId) {
+  return axios.get(`${BASE}/pre-investment-projects/bp-versions/${versionId}/download`, {
+    responseType: 'blob',
+  })
+}

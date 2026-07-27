@@ -13,17 +13,22 @@ const { clientIpFromReq } = require('../../utils/competitor-analysis/competitorR
 function registerInvestedEnterpriseAiRoutes(router) {
   router.get('/invested-enterprises/ai-enrich-logs', requireAdmin, async (req, res) => {
     try {
-      const ieId = String(req.query.invested_enterprise_id || '').trim();
-      if (!ieId) {
+      const rawIds = String(req.query.invested_enterprise_id || '').trim();
+      if (!rawIds) {
         return res.status(400).json({ success: false, message: '缺少 invested_enterprise_id' });
       }
+      const ieIds = rawIds.split(',').map((s) => s.trim()).filter(Boolean);
+      if (!ieIds.length) {
+        return res.status(400).json({ success: false, message: '缺少 invested_enterprise_id' });
+      }
+      const placeholders = ieIds.map(() => '?').join(',');
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+      const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
       const offset = (page - 1) * pageSize;
 
       const countRows = await db.query(
-        `SELECT COUNT(*) AS total FROM invested_enterprise_ai_enrich_log WHERE invested_enterprise_id = ?`,
-        [ieId]
+        `SELECT COUNT(*) AS total FROM invested_enterprise_ai_enrich_log WHERE invested_enterprise_id IN (${placeholders})`,
+        ieIds
       );
       const total = Number(countRows[0].total || 0);
 
@@ -33,10 +38,10 @@ function registerInvestedEnterpriseAiRoutes(router) {
                 invoke_mode, used_enable_search, search_degraded,
                 used_enable_thinking, thinking_degraded
          FROM invested_enterprise_ai_enrich_log
-         WHERE invested_enterprise_id = ?
-         ORDER BY F_Id DESC
+         WHERE invested_enterprise_id IN (${placeholders})
+         ORDER BY triggered_at DESC, F_Id DESC
          LIMIT ? OFFSET ?`,
-        [ieId, pageSize, offset]
+        [...ieIds, pageSize, offset]
       );
 
       const { attachSearchStatusLabel } = require('../../utils/project-sourcing/financingAiEnrichSearchMeta');
@@ -159,6 +164,95 @@ function registerInvestedEnterpriseAiRoutes(router) {
       const code = e.code === 400 || e.code === 404 ? e.code : 500;
       console.error('[project-sourcing/invested-enterprises/qcc-company-brief]', e);
       res.status(code).json({ success: false, message: e.message || '同步失败' });
+    }
+  });
+  /** 管理员：单条被投企业百科查词 */
+  router.post('/invested-enterprises/:id/baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      const rows = await db.query(
+        `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, qcc_company_intro
+         FROM invested_enterprises WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+        [id]
+      );
+      if (!rows.length) {
+        return res.status(404).json({ success: false, message: '被投企业不存在' });
+      }
+      const row = rows[0];
+      const name = String(row.enterprise_full_name || '').trim();
+      if (name.length < 2) {
+        return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const baike = fetchBaikeHttp(name, 1500);
+      const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+      await db.execute(
+        `UPDATE invested_enterprises SET qcc_company_intro = COALESCE(?, qcc_company_intro), F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
+        [intro, id]
+      );
+      res.json({
+        success: true,
+        message: intro ? `百科查词完成，已写入简介（${intro.length} 字）` : '百科未命中',
+        data: { has_lemma: baike?.has_lemma || false, lemma_status: baike?.lemma_status || 'not_found' },
+      });
+    } catch (e) {
+      console.error('[competitor-analysis/invested-enterprises/baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '百科查词失败' });
+    }
+  });
+
+  /** 管理员：批量被投企业百科查词 */
+  router.post('/invested-enterprises/batch-baike-lookup', requireAdmin, async (req, res) => {
+    try {
+      const { ids } = req.body || {};
+      let rows;
+      if (Array.isArray(ids) && ids.length > 0) {
+        const placeholders = ids.map(() => '?').join(',');
+        rows = await db.query(
+          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, qcc_company_intro
+           FROM invested_enterprises WHERE F_Id IN (${placeholders}) AND F_DeleteMark = 0`,
+          ids.map(String)
+        );
+      } else {
+        rows = await db.query(
+          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, qcc_company_intro
+           FROM invested_enterprises WHERE F_DeleteMark = 0 AND (qcc_company_intro IS NULL OR qcc_company_intro = '')
+           ORDER BY F_Id DESC LIMIT 200`
+        );
+      }
+      if (!rows.length) {
+        return res.json({ success: true, message: '无需查词的记录', data: { total: 0 } });
+      }
+      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
+      const total = rows.length;
+      let found = 0;
+      let notFound = 0;
+      for (const row of rows) {
+        const name = String(row.enterprise_full_name || '').trim();
+        if (name.length < 2) continue;
+        try {
+          const baike = fetchBaikeHttp(name, 600);
+          const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
+          await db.execute(
+            `UPDATE invested_enterprises SET qcc_company_intro = COALESCE(?, qcc_company_intro), F_LastModifyTime = NOW()
+             WHERE F_Id = ?`,
+            [intro, row.id]
+          );
+          if (intro) found += 1; else notFound += 1;
+        } catch (err) {
+          console.warn(`[batch-baike-lookup IE] ${name}:`, err.message);
+          notFound += 1;
+        }
+      }
+      res.json({
+        success: true,
+        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家`,
+        data: { total, found, not_found: notFound },
+      });
+    } catch (e) {
+      console.error('[competitor-analysis/invested-enterprises/batch-baike-lookup]', e);
+      res.status(500).json({ success: false, message: e.message || '批量百科查词失败' });
     }
   });
 }

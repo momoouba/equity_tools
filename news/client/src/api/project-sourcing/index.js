@@ -89,3 +89,11 @@ export function postTrackImport(formData) {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
+
+export function postFinancingEventBaikeLookup(eventId) {
+  return axios.post(`/api/project-sourcing/events/${eventId}/baike-lookup`)
+}
+
+export function postFinancingBatchBaikeLookup(body) {
+  return axios.post('/api/project-sourcing/batch-baike-lookup', body)
+}

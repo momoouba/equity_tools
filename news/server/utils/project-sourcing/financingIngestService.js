@@ -363,12 +363,12 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       /* ── Fix-13: 入库后异步触发百科查词 ── */
       try {
         const baikeRows = await db.query(
-          `SELECT company_name, company_credit_code, baike_lookup_at
+          `SELECT company_name, project_name, company_credit_code, baike_lookup_at
            FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
           [eventPk]
         );
         if (baikeRows.length && !baikeRows[0].baike_lookup_at) {
-          const companyName = strTrim(baikeRows[0].company_name);
+          const companyName = strTrim(baikeRows[0].company_name || baikeRows[0].project_name);
           if (companyName.length >= 2) {
             setImmediate(() => {
               triggerInlineBaikeLookup(eventPk, companyName, baikeRows[0].company_credit_code).catch(
@@ -411,15 +411,21 @@ async function triggerInlineBaikeLookup(eventId, companyName, creditCode) {
 
 async function _runInlineBaikeLookup(eventId, companyName, creditCode) {
   try {
-    const { fetchBaikeHttp, applyBaikeToFinancingFanOut } = require('./baikeLookupService');
-    const baike = fetchBaikeHttp(companyName, 1500);
-    if (!baike || !baike.has_lemma) {
-      console.log(`[financingIngest] baike no lemma: ${companyName}`);
-      return;
+    const { fetchBaike, applyBaikeToFinancingFanOut } = require('./baikeLookupService');
+    const baike = fetchBaike(companyName, 1500);
+    if (baike && baike.has_lemma) {
+      const companyRow = { company_name: companyName, company_credit_code: creditCode };
+      const result = await applyBaikeToFinancingFanOut(db, companyRow, baike, {});
+      console.log(`[financingIngest] baike applied: ${companyName} → ${result.updated} rows`);
+    } else {
+      /* 未命中也写入状态，避免下次入库时重复查词 */
+      await db.execute(
+        `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
+         WHERE F_Id = ? AND F_DeleteMark = 0 AND baike_lookup_at IS NULL`,
+        [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', eventId]
+      );
+      console.log(`[financingIngest] baike no lemma: ${companyName} → ${baike?.lemma_status || 'not_found'}`);
     }
-    const companyRow = { company_name: companyName, company_credit_code: creditCode };
-    const result = await applyBaikeToFinancingFanOut(db, companyRow, baike, {});
-    console.log(`[financingIngest] baike applied: ${companyName} → ${result.updated} rows`);
   } catch (err) {
     console.warn(`[financingIngest] baike lookup failed (${companyName}):`, err.message);
   }
@@ -619,6 +625,54 @@ async function syncFinancingDateRange(configId, range, syncOptions = {}) {
             }
           })
           .catch((err) => console.warn('[投融资入库][AI失败兜底] 异常:', err.message || err));
+      });
+
+      /* ── 入库后批量补全百科：兜底 inline 未覆盖的记录 ── */
+      setImmediate(async () => {
+        try {
+          const { fetchBaike, applyBaikeToFinancingFanOut } = require('./baikeLookupService');
+          const pending = await db.query(
+            `SELECT F_Id AS id, company_name, project_name, company_credit_code
+             FROM sourcing_financing_event
+             WHERE F_DeleteMark = 0 AND event_date >= ? AND event_date <= ? AND baike_lookup_at IS NULL
+             ORDER BY F_Id`,
+            [startDate, endDate]
+          );
+          if (!pending.length) return;
+          console.log(`[投融资入库][百科补全] 区间 ${startDate}~${endDate} 待查词 ${pending.length} 条`);
+          let foundCount = 0;
+          let missCount = 0;
+          for (const row of pending) {
+            const name = String(row.company_name || row.project_name || '').trim();
+            if (name.length < 2) {
+              await db.execute(
+                `UPDATE sourcing_financing_event SET baike_lemma_status = 'not_found', baike_miss_reason = 'name_too_short', baike_lookup_at = NOW(), F_LastModifyTime = NOW() WHERE F_Id = ?`,
+                [row.id]
+              );
+              missCount += 1;
+              continue;
+            }
+            try {
+              const baike = fetchBaike(name, 800);
+              if (baike && baike.has_lemma) {
+                const r = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, {});
+                foundCount += 1;
+              } else {
+                await db.execute(
+                  `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW() WHERE F_Id = ? AND baike_lookup_at IS NULL`,
+                  [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', row.id]
+                );
+                missCount += 1;
+              }
+            } catch (err) {
+              console.warn(`[投融资入库][百科补全] ${name}:`, err.message);
+              missCount += 1;
+            }
+          }
+          console.log(`[投融资入库][百科补全] 完成：命中 ${foundCount}，未命中 ${missCount}`);
+        } catch (err) {
+          console.warn('[投融资入库][百科补全] 异常:', err.message);
+        }
       });
     }
 
