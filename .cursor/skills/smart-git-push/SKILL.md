@@ -215,6 +215,16 @@ git push equity_tools backup
 | 整包快照 | `backup` | ✓ backup | ✗ |
 | 落地页 nginx/ssl 模板 | `release/clean` | ✓ | ✗ |
 
+## §根目录 `需求文档/` 本地保留（切分支不丢）
+
+- **正式入库**：仅在 **`sync-issue-5849a`**（推 `equity_tools`，不推 `origin`）。
+- **`release/clean`**：`.gitignore` 已忽略 `/需求文档/`，**不提交**该目录；但工作区应保留本地副本（含「优化改进2.0」等）。
+- **切到 `release/clean` 后**必须确保本地目录仍在：
+  1. 本机已装 `.git/hooks/post-checkout`（从 sync 检出 `需求文档/` 再 `git rm -r --cached`，不入库）；或
+  2. 手动执行：`powershell -File scripts/restore-req-docs.ps1`（脚本在 `release/clean`）。
+- Agent 在 `release/clean` ↔ `sync-issue-5849a` 之间切换后：若当前为 clean 且 `需求文档/竞品分析/` 缺失，**立刻**跑恢复脚本，**禁止**把「干净线不跟踪」理解成「可以删掉本地文档」。
+- 恢复后 `git status` 不应出现 `需求文档/`（已被 ignore）；若出现在暂存区，执行 `git rm -r --cached 需求文档/`。
+
 ## 注意事项
 
 - 推送的是 **当前分支 HEAD** 的 commit 集合，不是按路径拆 push。
