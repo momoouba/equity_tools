@@ -550,7 +550,7 @@ function EnterpriseManagement({
       setBatchIeBaikeSubmitting(true)
       const res = await postInvestedEnterpriseBatchBaikeLookup({ start_date: start, end_date: end })
       if (res.data?.success) {
-        Message.success(res.data.message || '批量百科查词完成')
+        Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
         setBatchIeBaikeVisible(false)
         fetchEnterprises()
       } else {
@@ -1698,7 +1698,7 @@ function EnterpriseManagement({
               </FormItem>
             </Form>
             <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              对区间内创建且尚未查词的被投企业，逐条调用百度百科接口提取公司简介与产品简介。每条间隔 800ms，单次上限 200 条。
+              对区间内创建且尚未查词的被投企业，后台批量查询百度百科（HTTP + Playwright）。单次上限 200 条；请稍后刷新列表，进度见服务器日志。
             </p>
           </Modal>
         </>

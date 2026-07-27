@@ -53,11 +53,14 @@ services:
       # 生产建议强制 Playwright，避免 silently fallback 到 requests 导致取到旧页 0 条
       CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT: ${CSRC_GUIDANCE_REQUIRE_PLAYWRIGHT:-1}
       CSRC_GUIDANCE_TLS_VERIFY: ${CSRC_GUIDANCE_TLS_VERIFY:-0}
+      # 百度百科 Playwright：生产用 headless（容器内 Chromium）；本机 PoC 可改为 cdp
+      BAIKE_BROWSER_MODE: ${BAIKE_BROWSER_MODE:-headless}
+      BAIKE_CDP_URL: ${BAIKE_CDP_URL:-http://127.0.0.1:9222}
       # 代理配置 - 用于访问被墙的网站(证监会等)
       # 格式: http://<Mac局域网IP>:<代理端口>
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,host.docker.internal}
       ALL_PROXY: ${ALL_PROXY:-}
       # 竞品分析 S4 联网（从宿主机 .env 注入）
       COMPETITOR_WEB_TIMEOUT_MS: ${COMPETITOR_WEB_TIMEOUT_MS:-180000}
@@ -70,6 +73,9 @@ services:
       LLM_RESPONSES_POLL_INTERVAL_MS: ${LLM_RESPONSES_POLL_INTERVAL_MS:-5000}
     ports:
       - "${APP_PORT:-3001}:3001"
+    extra_hosts:
+      # 供百科 CDP 回连宿主机 Chrome：BAIKE_CDP_URL=http://host.docker.internal:9222
+      - "host.docker.internal:host-gateway"
     volumes:
       - app_uploads:/app/uploads
       - ./logs:/app/logs

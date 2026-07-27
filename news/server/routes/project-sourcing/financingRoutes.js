@@ -300,6 +300,7 @@ function registerFinancingRoutes(router) {
       if (name.length < 2) {
         return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
       }
+      console.log(`[project-sourcing/events/baike-lookup] start id=${id} name="${name}"`);
       const baike = fetchBaike(name, 1500);
       if (!baike || !baike.has_lemma) {
         await db.execute(
@@ -307,9 +308,15 @@ function registerFinancingRoutes(router) {
            WHERE F_Id = ?`,
           [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', id]
         );
+        console.log(
+          `[project-sourcing/events/baike-lookup] miss id=${id} status=${baike?.lemma_status} miss=${baike?.miss_reason || '-'}`
+        );
         return res.json({ success: true, message: '百科未命中', data: { lemma_status: baike?.lemma_status || 'not_found' } });
       }
       const result = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, { force: false });
+      console.log(
+        `[project-sourcing/events/baike-lookup] ok id=${id} updated=${result.updated} url=${baike.baike_url || '-'}`
+      );
       res.json({
         success: true,
         message: `百科查词完成，更新 ${result.updated} 条记录`,
@@ -324,55 +331,21 @@ function registerFinancingRoutes(router) {
   router.post('/batch-baike-lookup', requireAdmin, async (req, res) => {
     try {
       const { start_date, end_date } = req.body || {};
-      if (!start_date || !end_date) {
-        return res.status(400).json({ success: false, message: '缺少参数：start_date、end_date（yyyy-MM-dd）' });
+      const {
+        enqueueFinancingBatchBaikeLookup,
+      } = require('../../utils/project-sourcing/baikeBatchJobService');
+      const r = await enqueueFinancingBatchBaikeLookup({
+        dateFrom: start_date,
+        dateTo: end_date,
+        sleepMs: 800,
+      });
+      if (!r.ok) {
+        return res.status(r.code || 500).json({ success: false, message: r.message });
       }
-      const df = String(start_date).slice(0, 10);
-      const dt = String(end_date).slice(0, 10);
-      if (df > dt) {
-        return res.status(400).json({ success: false, message: '开始日期不能晚于结束日期' });
-      }
-      const rows = await db.query(
-        `SELECT F_Id AS id, company_name, project_name, company_credit_code
-         FROM sourcing_financing_event
-         WHERE F_DeleteMark = 0 AND event_date >= ? AND event_date <= ?
-         ORDER BY event_date DESC, F_Id DESC`,
-        [df, dt]
-      );
-      if (!rows.length) {
-        return res.json({ success: true, message: '区间内无记录', data: { total: 0 } });
-      }
-      const { fetchBaike, applyBaikeToFinancingFanOut } = require('../../utils/project-sourcing/baikeLookupService');
-      const total = rows.length;
-      let updated = 0;
-      let found = 0;
-      let notFound = 0;
-      for (const row of rows) {
-        const name = String(row.company_name || row.project_name || '').trim();
-        if (name.length < 2) continue;
-        try {
-          const baike = fetchBaike(name, 800);
-          if (baike && baike.has_lemma) {
-            const r = await applyBaikeToFinancingFanOut(db, { company_name: name, company_credit_code: row.company_credit_code }, baike, { force: true });
-            updated += r.updated || 0;
-            found += 1;
-          } else {
-            await db.execute(
-              `UPDATE sourcing_financing_event SET baike_lemma_status = ?, baike_miss_reason = ?, baike_lookup_at = NOW(), F_LastModifyTime = NOW()
-               WHERE F_Id = ?`,
-              [baike?.lemma_status || 'not_found', baike?.miss_reason || 'fetch_error', row.id]
-            );
-            notFound += 1;
-          }
-        } catch (err) {
-          console.warn(`[batch-baike-lookup] ${name}:`, err.message);
-          notFound += 1;
-        }
-      }
-      res.json({
+      return res.status(r.code || 200).json({
         success: true,
-        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家，更新 ${updated} 条记录`,
-        data: { total, found, not_found: notFound, updated },
+        message: r.message,
+        data: r.data,
       });
     } catch (e) {
       console.error('[project-sourcing/batch-baike-lookup]', e);

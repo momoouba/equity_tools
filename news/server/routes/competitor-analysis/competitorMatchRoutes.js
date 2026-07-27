@@ -2143,13 +2143,28 @@ function registerCompetitorMatchRoutes(router) {
       if (name.length < 2) {
         return res.status(400).json({ success: false, message: '企业名称过短，无法查词' });
       }
-      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
-      const baike = fetchBaikeHttp(name, 1500);
-      const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
-      await db.execute(
-        `UPDATE pre_investment_project SET company_intro = COALESCE(?, company_intro), F_LastModifyTime = NOW()
-         WHERE F_Id = ?`,
-        [intro, id]
+      const {
+        fetchBaike,
+        applyBaikeToPreInvFanOut,
+      } = require('../../utils/project-sourcing/baikeLookupService');
+      console.log(`[project-sourcing/pre-investment-projects/baike-lookup] start id=${id} name="${name}"`);
+      const baike = fetchBaike(name, 1500);
+      const intro = baike && baike.has_lemma ? baike.company_intro || baike.product_intro : null;
+      await applyBaikeToPreInvFanOut(
+        db,
+        { enterprise_full_name: row.enterprise_full_name, unified_credit_code: row.unified_credit_code },
+        baike,
+        { force: false }
+      );
+      if (intro) {
+        await db.execute(
+          `UPDATE pre_investment_project SET company_intro = COALESCE(?, company_intro), F_LastModifyTime = NOW()
+           WHERE F_Id = ?`,
+          [intro, id]
+        );
+      }
+      console.log(
+        `[project-sourcing/pre-investment-projects/baike-lookup] done id=${id} has_lemma=${!!baike?.has_lemma} intro_len=${intro ? intro.length : 0}`
       );
       res.json({
         success: true,
@@ -2162,53 +2177,21 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
-  /** 投前：批量百科查词（管理员） */
+  /** 投前：批量百科查词（管理员，后台任务） */
   router.post('/pre-investment-projects/batch-baike-lookup', requireAdmin, async (req, res) => {
     try {
       const { ids } = req.body || {};
-      let rows;
-      if (Array.isArray(ids) && ids.length > 0) {
-        const placeholders = ids.map(() => '?').join(',');
-        rows = await db.query(
-          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, company_intro
-           FROM pre_investment_project WHERE F_Id IN (${placeholders}) AND F_DeleteMark = 0`,
-          ids.map(String)
-        );
-      } else {
-        rows = await db.query(
-          `SELECT F_Id AS id, enterprise_full_name, unified_credit_code, company_intro
-           FROM pre_investment_project WHERE F_DeleteMark = 0 AND (company_intro IS NULL OR company_intro = '')
-           ORDER BY F_Id DESC LIMIT 200`
-        );
+      const {
+        enqueuePreInvestmentBatchBaikeLookup,
+      } = require('../../utils/project-sourcing/baikeBatchJobService');
+      const r = await enqueuePreInvestmentBatchBaikeLookup({ ids, sleepMs: 800 });
+      if (!r.ok) {
+        return res.status(r.code || 500).json({ success: false, message: r.message });
       }
-      if (!rows.length) {
-        return res.json({ success: true, message: '无需查词的记录', data: { total: 0 } });
-      }
-      const { fetchBaikeHttp } = require('../../utils/project-sourcing/baikeLookupService');
-      const total = rows.length;
-      let found = 0;
-      let notFound = 0;
-      for (const row of rows) {
-        const name = String(row.enterprise_full_name || '').trim();
-        if (name.length < 2) continue;
-        try {
-          const baike = fetchBaikeHttp(name, 600);
-          const intro = (baike && baike.has_lemma) ? (baike.company_intro || baike.product_intro) : null;
-          await db.execute(
-            `UPDATE pre_investment_project SET company_intro = COALESCE(?, company_intro), F_LastModifyTime = NOW()
-             WHERE F_Id = ?`,
-            [intro, row.id]
-          );
-          if (intro) found += 1; else notFound += 1;
-        } catch (err) {
-          console.warn(`[batch-baike-lookup PIP] ${name}:`, err.message);
-          notFound += 1;
-        }
-      }
-      res.json({
+      return res.status(r.code || 200).json({
         success: true,
-        message: `批量百科查词完成：共 ${total} 条，命中 ${found} 家，未命中 ${notFound} 家`,
-        data: { total, found, not_found: notFound },
+        message: r.message,
+        data: r.data,
       });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects/batch-baike-lookup]', e);

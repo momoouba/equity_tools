@@ -22,6 +22,17 @@ const PY_BAIKE_BROWSER = path.join(__dirname, 'baidu_baike_fetch_browser.py');
 const BAIKE_LOOKUP_VERSION = 'baike_lookup_v1';
 const MIN_INTRO_LEN = 20;
 
+/** @returns {'cdp'|'headless'} */
+function resolveBaikeBrowserMode(opts = {}) {
+  const raw = String(opts.browserMode || process.env.BAIKE_BROWSER_MODE || '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'cdp' || raw === 'headless') return raw;
+  const pwPath = String(process.env.PLAYWRIGHT_BROWSERS_PATH || '').trim();
+  if (pwPath) return 'headless';
+  return 'cdp';
+}
+
 const PROTECTED_FINANCING_PROFILE = new Set(['listed_sync', 'bp', 'llm_web']);
 const PROTECTED_PRE_INV_PROFILE = new Set(['bp', 'listed_sync', 'donor', 'llm_web']);
 
@@ -135,9 +146,13 @@ function fetchBaikeHttp(companyName, sleepMs = 1200) {
  * 解决百度反爬导致 HTTP 模式拿不到真实词条内容的问题。
  */
 function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
+  const mode = resolveBaikeBrowserMode(browserOpts);
   const httpResult = fetchBaikeHttp(companyName, sleepMs);
   // HTTP 命中且有有效简介 → 直接返回
   if (httpResult.has_lemma && (httpResult.company_intro || httpResult.product_intro)) {
+    console.log(
+      `[baikeLookup] "${strTrim(companyName)}": found via http intro_len=${(httpResult.company_intro || httpResult.product_intro || '').length}`
+    );
     return httpResult;
   }
   // HTTP 未命中 / 返回通用描述 / 报错 → 尝试 browser 模式
@@ -146,6 +161,7 @@ function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
   try {
     const py = resolvePythonBin();
     const args = buildBrowserPythonArgs(browserOpts, ['--name', name, '--sleep-ms', String(sleepMs)]);
+    console.log(`[baikeLookup][browser] fallback "${name}" mode=${mode}`);
     const r = spawnSync(py, args, {
       encoding: 'utf8',
       windowsHide: true,
@@ -153,12 +169,18 @@ function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
       maxBuffer: 8 * 1024 * 1024,
     });
     if (r.status !== 0) {
-      console.warn(`[baikeLookup][browser] script failed for "${name}": status=${r.status}, stderr=${String(r.stderr || '').slice(0, 500)}`);
+      console.warn(
+        `[baikeLookup][browser] script failed for "${name}" mode=${mode}: status=${r.status}, stderr=${String(r.stderr || '').slice(0, 500)}`
+      );
       return httpResult; // browser 也失败，返回 HTTP 结果
     }
     const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
     const browserResult = normalizeBaikePayload(JSON.parse(line), name);
-    console.log(`[baikeLookup][browser] "${name}": ${browserResult.has_lemma ? 'found' : browserResult.lemma_status}`);
+    const introLen = (browserResult.company_intro || browserResult.product_intro || '').length;
+    console.log(
+      `[baikeLookup][browser] "${name}": ${browserResult.has_lemma ? 'found' : browserResult.lemma_status}` +
+        ` miss=${browserResult.miss_reason || '-'} intro_len=${introLen} mode=${mode}`
+    );
     // browser 结果优于 HTTP 则用 browser，否则保留 HTTP
     if (browserResult.has_lemma && (browserResult.company_intro || browserResult.product_intro)) {
       return browserResult;
@@ -166,18 +188,27 @@ function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
     if (browserResult.has_lemma && !httpResult.has_lemma) return browserResult;
     return httpResult;
   } catch (e) {
-    console.warn(`[baikeLookup][browser] fallback failed for "${name}":`, e.message);
+    console.warn(`[baikeLookup][browser] fallback failed for "${name}" mode=${mode}:`, e.message);
     return httpResult;
   }
 }
 
 function buildBrowserPythonArgs(opts, extra = []) {
+  const mode = resolveBaikeBrowserMode(opts);
+  const captchaWaitMs =
+    opts.captchaWaitMs != null
+      ? opts.captchaWaitMs
+      : mode === 'headless'
+        ? 0
+        : 15000;
   const args = pythonArgs(PY_BAIKE_BROWSER, [
     ...extra,
+    '--mode',
+    mode,
     '--cdp-url',
     opts.cdpUrl || process.env.BAIKE_CDP_URL || 'http://127.0.0.1:9222',
     '--captcha-wait-ms',
-    String(opts.captchaWaitMs ?? 15000),
+    String(captchaWaitMs),
     '--timeout-ms',
     String(opts.pageTimeoutMs ?? 30000),
   ]);
@@ -337,9 +368,11 @@ let sharedBrowserWorker = null;
 let sharedBrowserWorkerKey = null;
 
 function browserWorkerKey(opts) {
+  const mode = resolveBaikeBrowserMode(opts);
   return [
+    mode,
     opts.cdpUrl || process.env.BAIKE_CDP_URL || 'http://127.0.0.1:9222',
-    opts.captchaWaitMs ?? 15000,
+    opts.captchaWaitMs ?? (mode === 'headless' ? 0 : 15000),
     opts.pageTimeoutMs ?? 30000,
   ].join('|');
 }
@@ -685,6 +718,7 @@ module.exports = {
   sleep,
   pickBaikeSearchName,
   normalizeBaikePayload,
+  resolveBaikeBrowserMode,
   fetchBaikeHttp,
   fetchBaike,
   fetchBaikeBrowserBatch,

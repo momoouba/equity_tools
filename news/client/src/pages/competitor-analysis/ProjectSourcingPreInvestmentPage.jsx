@@ -543,13 +543,13 @@ export default function ProjectSourcingPreInvestmentPage() {
     const ids = selectedIds.slice()
     Modal.confirm({
       title: '批量百科查词',
-      content: `确认为已选的 ${ids.length} 个投前项目发起百科查词？将逐条调用百度百科接口提取公司简介与产品简介，每条间隔 800ms。`,
+      content: `确认为已选的 ${ids.length} 个投前项目发起百科查词？将后台执行（HTTP + Playwright），请稍后刷新列表查看结果。`,
       onOk: async () => {
         setBatchBaikeSubmitting(true)
         try {
           const res = await postPreInvestmentBatchBaikeLookup({ ids })
           if (res.data?.success) {
-            Message.success(res.data.message || '批量百科查词完成')
+            Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
             load()
           } else {
             Message.error(res.data?.message || '查词失败')

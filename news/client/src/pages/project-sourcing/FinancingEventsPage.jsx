@@ -856,7 +856,7 @@ export default function FinancingEventsPage() {
               end_date: dayjs(d1).format('YYYY-MM-DD'),
             })
             if (res.data?.success) {
-              Message.success(res.data.message || '批量百科查词完成')
+              Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
               load()
             } else {
               Message.error(res.data?.message || '批量查词失败')
@@ -882,7 +882,7 @@ export default function FinancingEventsPage() {
           </FormItem>
         </Form>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          按企业名称调用百度百科查词，结果 fan-out 至同一信用代码下的全部融资记录。已查过的记录（baike_lookup_at 非空）会跳过。
+          按企业名称调用百度百科查词（HTTP + Playwright），结果 fan-out 至同一信用代码下的全部融资记录。已查过的记录（baike_lookup_at 非空）会跳过。任务后台执行，请稍后刷新；进度见服务器 docker compose logs app -f。
         </p>
       </Modal>
     </div>
