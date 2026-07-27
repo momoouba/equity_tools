@@ -40,6 +40,7 @@ const {
   mergeTagArrays,
   normalizeCreditCode,
   candidateDedupeKey,
+  describeComprehensiveScore,
 } = require('./competitorMatchUtils');
 const {
   scorePairSimilarity,
@@ -701,8 +702,9 @@ function buildValidatePool(scored, thresholds, ctx = {}) {
 }
 
 function mapCandidateToPersistRow(c) {
-  const aiPart = getCandidateAiPart(c);
-  const finalScore = computeComprehensiveScore(c);
+  const scoreDesc = describeComprehensiveScore(c);
+  const aiPart = scoreDesc.ai_score;
+  const finalScore = scoreDesc.final_score;
   const v = c.validation || null;
   const sources = c.sources || (c.source ? [c.source] : []);
   const evidenceMeta = buildEvidenceMeta(sources, c, v);
@@ -710,7 +712,7 @@ function mapCandidateToPersistRow(c) {
     display_name: c.display_name,
     unified_credit_code: c.unified_credit_code,
     finalScore,
-    grade: scoreToGrade(finalScore),
+    grade: scoreDesc.grade || scoreToGrade(finalScore),
     sources,
     financing_amount_text: c.financing_amount_text,
     competitorType: v?.competitor_type || null,
@@ -724,11 +726,9 @@ function mapCandidateToPersistRow(c) {
       internal_score: c.internalScore,
       ai_score: aiPart,
       final_score: finalScore,
-      score_mode: !c.hasInternal
-        ? 'ai_only'
-        : aiPart >= LLM_HIGH_TRUST_THRESHOLD
-          ? 'internal_0.2_ai_0.8'
-          : 'internal_0.6_ai_0.4',
+      score_mode: scoreDesc.score_mode,
+      score_formula: scoreDesc.formula,
+      score_reason_lines: scoreDesc.reason_lines,
       tag_score: c.tagScore,
       product_score: c.productScore,
       industry_score: c.industryScore,

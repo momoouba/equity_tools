@@ -163,26 +163,141 @@ const TRACK_INTERNAL_AI_FLOOR = 68;
 const TRACK_INTERNAL_PERSIST_AI_MIN = 52;
 
 function computeComprehensiveScore(c) {
+  return describeComprehensiveScore(c).final_score;
+}
+
+/**
+ * 综合分实算 + 路径说明（落库 score_breakdown / 前端展示）
+ */
+function describeComprehensiveScore(c) {
   const ai = getCandidateAiPart(c);
   const internal = Number(c.internalScore) || 0;
   const hasInternal = !!c.hasInternal;
+  const gradeHint = '等级门槛：S≥90，A≥80，B≥70，C≥60；低于 60 分不标等级';
+  const reasonLines = [];
+  const v = c.validation || null;
+  const dims = v?.dimension_scores && typeof v.dimension_scores === 'object' ? v.dimension_scores : null;
+  const productScore = Number(c.productScore);
+  const tagScore = Number(c.tagScore);
+  const llmProduct = Number(c.llmProductScore);
+
+  let scoreMode = 'ai_only';
+  let finalScore = Math.round(Math.min(100, Math.max(0, ai)));
+  let formula = `综合分 = AI ${ai}`;
+
+  const pushAiHighExplain = () => {
+    reasonLines.push(
+      `【为何综合分能到 ${finalScore}】本条综合分几乎完全来自 AI/S5 对标强度，不是来自证据可信四维，也不是来自产品规则分/标签分。`
+    );
+    if (dims) {
+      reasonLines.push(
+        `S5 三维（驱动高分的主要因素）：可替代性 ${dims.substitutability ?? '—'}，客户重叠 ${dims.customer_overlap ?? '—'}，场景重叠 ${dims.scenario_overlap ?? '—'} → 合成校验分/AI 对标分 ${ai}。`
+      );
+    } else if (Number.isFinite(llmProduct) && Math.round(llmProduct) === Math.round(ai)) {
+      reasonLines.push(`AI 对标分 ${ai} 来自 LLM 产品对标分（无单独三维明细）。`);
+    } else {
+      reasonLines.push(`AI 对标分 ${ai}（优先取 S5 validated_score，否则回退 LLM 产品分）。`);
+    }
+    if (Number.isFinite(productScore)) {
+      reasonLines.push(
+        `未计入综合分：产品规则分 ${productScore}${Number.isFinite(tagScore) ? `、标签分 ${tagScore}` : ''}（本路径不参与加权）。`
+      );
+    }
+    reasonLines.push('左侧「系统证据分」只影响证据可信/是否待复核，不会把综合分从 91 拉低或抬高。');
+  };
+
   if (!hasInternal) {
-    return Math.round(Math.min(100, Math.max(0, ai)));
-  }
-  if (
+    scoreMode = 'ai_only';
+    finalScore = Math.round(Math.min(100, Math.max(0, ai)));
+    formula = `综合分 = AI 对标分 ${ai}`;
+    reasonLines.push('计分路径：综合分 = AI 对标分（无内部库召回，不按内部规则分加权）。');
+    reasonLines.push(
+      '触发条件：未命中底层项目/融资事件/上市主池等内部源（仅联网/外部发现）。因此不会走「内部×0.6+AI×0.4」。'
+    );
+    reasonLines.push(`实算：综合分 = ${ai} → ${finalScore}。`);
+    pushAiHighExplain();
+    if (Number.isFinite(internal) && internal > 0) {
+      reasonLines.push(`内部规则分 ${internal} 仅作参考，本路径不计入综合分。`);
+    }
+  } else if (
     c._trackInternalPeer &&
     ai >= TRACK_INTERNAL_PERSIST_AI_MIN &&
     isPersistValidationPassed(c)
   ) {
-    return Math.round(Math.min(100, Math.max(0, ai)));
+    scoreMode = 'ai_only';
+    finalScore = Math.round(Math.min(100, Math.max(0, ai)));
+    formula = `综合分 = AI 对标分 ${ai}（专业赛道内部池 peer 特例）`;
+    reasonLines.push('计分路径：综合分 = AI 对标分（专业赛道内部池：S5 通过后以校验分为准）。');
+    reasonLines.push(
+      `触发条件：_trackInternalPeer 且 AI≥${TRACK_INTERNAL_PERSIST_AI_MIN} 且 S5 校验通过。`
+    );
+    reasonLines.push(`实算：综合分 = ${ai} → ${finalScore}。内部规则分 ${internal} 不计入。`);
+    pushAiHighExplain();
+  } else if (ai >= LLM_HIGH_TRUST_THRESHOLD) {
+    scoreMode = 'internal_0.2_ai_0.8';
+    const raw = internal * 0.2 + ai * 0.8;
+    finalScore = Math.round(Math.min(100, Math.max(0, raw)));
+    formula = `${internal}×0.2 + ${ai}×0.8 = ${raw.toFixed(2)} → ${finalScore}`;
+    reasonLines.push('计分路径：综合分 = 内部×0.2 + AI×0.8。');
+    reasonLines.push(
+      `触发条件：有内部源，且 AI ≥ ${LLM_HIGH_TRUST_THRESHOLD}（LLM 高信任）→ AI 权重大。`
+    );
+    reasonLines.push(`实算：${formula}。`);
+    reasonLines.push(
+      `【分数构成】内部规则分贡献约 ${(internal * 0.2).toFixed(1)} 分，AI 对标分贡献约 ${(ai * 0.8).toFixed(1)} 分；高分主要来自 AI 侧 ${ai}。`
+    );
+    if (dims) {
+      reasonLines.push(
+        `AI 侧三维：可替代性 ${dims.substitutability ?? '—'}，客户重叠 ${dims.customer_overlap ?? '—'}，场景重叠 ${dims.scenario_overlap ?? '—'}。`
+      );
+    }
+  } else if (c._trackInternalPeer && ai >= TRACK_INTERNAL_AI_FLOOR) {
+    scoreMode = 'internal_0.25_ai_0.75';
+    const raw = internal * 0.25 + ai * 0.75;
+    finalScore = Math.round(Math.min(100, Math.max(0, raw)));
+    formula = `${internal}×0.25 + ${ai}×0.75 = ${raw.toFixed(2)} → ${finalScore}`;
+    reasonLines.push('计分路径：综合分 = 内部×0.25 + AI×0.75（专业赛道内部池）。');
+    reasonLines.push(`实算：${formula}。`);
+    reasonLines.push(
+      `【分数构成】内部约 ${(internal * 0.25).toFixed(1)} + AI 约 ${(ai * 0.75).toFixed(1)}；高分仍主要看 AI 侧。`
+    );
+  } else {
+    scoreMode = 'internal_0.6_ai_0.4';
+    const raw = internal * 0.6 + ai * 0.4;
+    finalScore = Math.round(Math.min(100, Math.max(0, raw)));
+    formula = `${internal}×0.6 + ${ai}×0.4 = ${raw.toFixed(2)} → ${finalScore}`;
+    reasonLines.push('计分路径：综合分 = 内部×0.6 + AI×0.4。');
+    reasonLines.push('触发条件：有内部源，且 AI < 80（未触发高信任）。');
+    reasonLines.push(`实算：${formula}。`);
+    reasonLines.push(
+      `【分数构成】内部规则分贡献约 ${(internal * 0.6).toFixed(1)} 分，AI 贡献约 ${(ai * 0.4).toFixed(1)} 分。`
+    );
   }
-  if (ai >= LLM_HIGH_TRUST_THRESHOLD) {
-    return Math.round(Math.min(100, Math.max(0, internal * 0.2 + ai * 0.8)));
+
+  const grade = scoreToGrade(finalScore);
+  if (!grade) {
+    reasonLines.push(`综合分 ${finalScore} < 60 → 不标等级。要到 C 至少 ≥60，要到 A 至少 ≥80，要到 S 至少 ≥90。`);
+  } else {
+    const floors = { S: 90, A: 80, B: 70, C: 60 };
+    const next = { C: ['B', 70], B: ['A', 80], A: ['S', 90], S: null };
+    let gText = `综合分 ${finalScore} ≥ ${floors[grade]} → 等级 ${grade}。`;
+    const up = next[grade];
+    if (up) gText += `未到 ${up[0]}：需要 ≥${up[1]}（还差 ${Math.max(0, up[1] - finalScore)} 分）。`;
+    else gText += '已是最高档 S。';
+    reasonLines.push(gText);
   }
-  if (c._trackInternalPeer && ai >= TRACK_INTERNAL_AI_FLOOR) {
-    return Math.round(Math.min(100, Math.max(0, internal * 0.25 + ai * 0.75)));
-  }
-  return fuseConfidence(internal, ai);
+  reasonLines.push(gradeHint);
+  reasonLines.push('说明：匹配综合分 ≠ 证据可信四维；也 ≠ 人工认定的证据可信度。');
+
+  return {
+    final_score: finalScore,
+    score_mode: scoreMode,
+    formula,
+    internal_score: internal,
+    ai_score: ai,
+    grade,
+    reason_lines: reasonLines,
+  };
 }
 
 const SCORE_THRESHOLD_PERSIST = 60;
@@ -331,6 +446,7 @@ module.exports = {
   scoreToGrade,
   fuseConfidence,
   computeComprehensiveScore,
+  describeComprehensiveScore,
   meetsPersistThreshold,
   getCandidateAiPart,
   getThresholds,
