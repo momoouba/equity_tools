@@ -6,7 +6,7 @@ const {
   hasListingFeature,
   LISTING_FEATURE,
 } = require('../../utils/listing/listingAuth');
-const { syncNewShareCalendar, refreshNewShareEnterpriseFullNamesByIds } = require('../../utils/listing/newShareService');
+const { syncNewShareCalendar, refreshNewShareEnterpriseFullNamesByIds, shortenNewShareSyncError } = require('../../utils/listing/newShareService');
 const { createExecutionLog, finishExecutionLog } = require('../../utils/listing/listingSyncExecutionLog');
 const { buildTaskKey } = require('../../utils/listing/listingSourceType');
 const {
@@ -206,15 +206,16 @@ async function syncNewShare(req, res) {
     });
     return res.json({ success: true, data: result });
   } catch (e) {
+    const shortMessage = shortenNewShareSyncError(e);
     if (logId) {
       try {
-        await finishExecutionLog(logId, { status: 'failed', retryCount: 0, errorMessage: String(e.message || e) });
+        await finishExecutionLog(logId, { status: 'failed', retryCount: 0, errorMessage: shortMessage });
       } catch (_) {
         // ignore logging error
       }
     }
     console.error('syncNewShare', e);
-    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+    return res.status(500).json({ success: false, message: shortMessage });
   }
 }
 

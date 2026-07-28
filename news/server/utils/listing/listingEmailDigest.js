@@ -1,6 +1,6 @@
 const db = require('../../db');
 const { sendMailWithConfig } = require('../sendMailWithConfig');
-const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
+const { createShanghaiDate, formatDateOnly, addDaysCalendar, subtractOneBeijingCalendarDay } = require('./listingBeijingDate');
 const { toSimplified, containsTraditional, normalizeCompanyName } = require('./zhconvUtils');
 const {
   getListingMembershipLevelName,
@@ -9,6 +9,119 @@ const {
   LISTING_LEVEL,
 } = require('./listingAuth');
 const { IPP_ORDER_BY_IPP } = require('./listingProjectProgressOrder');
+const { syncNewShareCalendar, refreshFirstDayMetricsForRows } = require('./newShareService');
+
+/** 同一报告日内多收件人只触发一次打新补齐 */
+const newShareMailPreflightMemo = new Map();
+
+function isIncompleteNewShareFirstDayRow(row) {
+  if (!row) return true;
+  const close = Number(row.first_day_close);
+  const issue = Number(row.issue_price);
+  const chgRaw = row.first_day_chg_pct;
+  const chgMissing = chgRaw === null || chgRaw === undefined || String(chgRaw).trim() === '';
+  if (!Number.isFinite(close) || close <= 0) return true;
+  if (chgMissing) return true;
+  if (!Number.isFinite(issue) || issue <= 0) return true;
+  return false;
+}
+
+async function queryNewShareListedYesterdayRows(todayYmd) {
+  return db.query(
+    `SELECT stock_code, stock_name, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
+            exchange, issue_price, first_day_close, first_day_chg_pct
+     FROM ipo_new_share
+     WHERE public_date IS NOT NULL
+       AND DATE(public_date) = DATE_SUB(?, INTERVAL 1 DAY)
+     ORDER BY stock_code ASC
+     LIMIT 300`,
+    [todayYmd]
+  );
+}
+
+/**
+ * IPO上市（昨日）行若缺首日收盘/涨幅/发行价，先同步打新日历再重查；
+ * 若仍有空字段（常见于港股 etnet 失败），再定向补抓一次（港股跳过 etnet）。
+ * 同步失败不阻断发信（仍用当前数据发送）。
+ */
+async function ensureNewShareListedYesterdayMetrics(todayYmd, reportDay, rows) {
+  const incomplete = (rows || []).filter(isIncompleteNewShareFirstDayRow);
+  if (!incomplete.length) return rows || [];
+
+  const memoKey = String(reportDay || todayYmd);
+  let inflight = newShareMailPreflightMemo.get(memoKey);
+  if (!inflight) {
+    inflight = (async () => {
+      const codes = incomplete.map((r) => r.stock_code).filter(Boolean);
+      console.warn(
+        `[上市进展邮件] IPO上市（昨日）存在空字段，触发打新日历补齐 reportDay=${reportDay} incomplete=${incomplete.length} codes=${codes.join(',')}`
+      );
+      const issueAfter = subtractOneBeijingCalendarDay(todayYmd) || reportDay;
+      const updateAfter = issueAfter;
+      const to = formatDateOnly(addDaysCalendar(createShanghaiDate(new Date(`${todayYmd}T12:00:00+08:00`)), 14));
+      try {
+        const syncResult = await syncNewShareCalendar({
+          from: todayYmd,
+          to,
+          issueDateAfterExclusive: issueAfter,
+          updateDateAfterExclusive: updateAfter,
+          listingDateLookbackDays: 14,
+          triggerType: 'email-preflight',
+          skipFullNameBackfill: true,
+          logTag: '[上市进展邮件][打新补齐]',
+        });
+        console.log('[上市进展邮件] 打新日历补齐完成', {
+          reportDay,
+          dailyMetricsUpdated: Number(syncResult.dailyMetricsUpdated || 0),
+          dailyMetricsFailed: Number(syncResult.dailyMetricsFailed || 0),
+          inserted: Number(syncResult.inserted || 0),
+          updated: Number(syncResult.updated || 0),
+        });
+      } catch (err) {
+        console.warn(
+          `[上市进展邮件] 打新日历补齐失败（继续定向重试） reportDay=${reportDay} err=${String(err.message || err).slice(0, 300)}`
+        );
+      }
+
+      // 二次保底：仍缺的行（尤其港股）跳过 etnet，直打东财/Python
+      let stillIncomplete = [];
+      try {
+        const afterSync = await queryNewShareListedYesterdayRows(todayYmd);
+        stillIncomplete = afterSync.filter(isIncompleteNewShareFirstDayRow);
+      } catch (qErr) {
+        stillIncomplete = incomplete;
+        console.warn(`[上市进展邮件] 补齐后重查失败，沿用原空字段行: ${String(qErr.message || qErr).slice(0, 200)}`);
+      }
+      if (stillIncomplete.length) {
+        const hkCodes = stillIncomplete
+          .filter((r) => String(r.exchange || '').trim() === '港交所')
+          .map((r) => r.stock_code);
+        console.warn(
+          `[上市进展邮件] 打新同步后仍有空字段，启动定向指标重试 count=${stillIncomplete.length} hk=${hkCodes.join(',') || '-'}`
+        );
+        try {
+          const retryResult = await refreshFirstDayMetricsForRows(stillIncomplete, {
+            forceSkipEtnet: true,
+            logTag: '[上市进展邮件][首日指标二次保底]',
+          });
+          console.log('[上市进展邮件] 定向指标重试完成', retryResult);
+        } catch (retryErr) {
+          console.warn(
+            `[上市进展邮件] 定向指标重试失败（仍继续发信） err=${String(retryErr.message || retryErr).slice(0, 300)}`
+          );
+        }
+      }
+    })();
+    newShareMailPreflightMemo.set(memoKey, inflight);
+    // 避免 Map 无限增长：保留最近几天
+    if (newShareMailPreflightMemo.size > 8) {
+      const oldest = newShareMailPreflightMemo.keys().next().value;
+      newShareMailPreflightMemo.delete(oldest);
+    }
+  }
+  await inflight;
+  return queryNewShareListedYesterdayRows(todayYmd);
+}
 
 async function isWorkdayForListingEmail(date) {
   const dateStr = formatDateOnly(date);
@@ -379,16 +492,8 @@ async function executeListingEmailDigest(recipient, options = {}) {
     );
   }
   if (includeNewShareListedYesterday) {
-    nsFirstDayRows = await db.query(
-      `SELECT stock_code, stock_name, DATE_FORMAT(public_date, '%Y-%m-%d') AS public_date,
-              exchange, issue_price, first_day_close, first_day_chg_pct
-       FROM ipo_new_share
-       WHERE public_date IS NOT NULL
-         AND DATE(public_date) = DATE_SUB(?, INTERVAL 1 DAY)
-       ORDER BY stock_code ASC
-       LIMIT 300`,
-      [todayYmd]
-    );
+    nsFirstDayRows = await queryNewShareListedYesterdayRows(todayYmd);
+    nsFirstDayRows = await ensureNewShareListedYesterdayMetrics(todayYmd, reportDay, nsFirstDayRows);
   }
 
   const tableBaseStyle =

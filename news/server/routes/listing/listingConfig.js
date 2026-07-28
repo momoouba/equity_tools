@@ -14,7 +14,7 @@ const { encryptText, decryptText, maskToken } = require('../../utils/listing/lis
 const { normalizeSourceType, buildTaskKey } = require('../../utils/listing/listingSourceType');
 const { executeWithRetry } = require('../../utils/listing/listingRetry');
 const { createExecutionLog, appendExecutionLogProgress, finishExecutionLog } = require('../../utils/listing/listingSyncExecutionLog');
-const { syncNewShareCalendar } = require('../../utils/listing/newShareService');
+const { syncNewShareCalendar, shortenNewShareSyncError } = require('../../utils/listing/newShareService');
 const { syncGuidanceProgress } = require('../../utils/listing/guidanceProgressService');
 const { syncOverseasFiling, DEFAULT_CSRC_PORTAL_URL } = require('../../utils/listing/overseasFilingService');
 const { createShanghaiDate, formatDateOnly, subtractOneBeijingCalendarDay } = require('../../utils/listing/listingBeijingDate');
@@ -646,24 +646,31 @@ async function syncListingConfig(req, res) {
         data: result,
       });
     } catch (syncErr) {
+      const shortMessage =
+        sourceType === 'new_share' ? shortenNewShareSyncError(syncErr) : String(syncErr.message || syncErr);
       if (logId) {
-        await appendExecutionLogProgress(logId, `执行失败：${String(syncErr.message || syncErr)}`);
+        await appendExecutionLogProgress(logId, `执行失败：${shortMessage}`);
       }
       if (logId) {
         await finishExecutionLog(logId, {
           status: 'failed',
           retryCount: Number(syncErr.attemptCount || 5),
-          errorMessage: String(syncErr.message || syncErr),
+          errorMessage: shortMessage,
         });
       }
-      throw syncErr;
+      throw Object.assign(new Error(shortMessage), { attemptCount: syncErr.attemptCount });
     } finally {
       // #13: 释放 DB 持久化锁
       await releaseTaskLock(taskKey);
     }
   } catch (e) {
     console.error('syncListingConfig', e);
-    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+    return res.status(500).json({
+      success: false,
+      message: String(e.message || e).includes('Traceback')
+        ? shortenNewShareSyncError(e)
+        : e.message || '服务器错误',
+    });
   }
 }
 

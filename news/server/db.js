@@ -17,6 +17,56 @@ const {
 /** 端口统一为数字，避免 .env 中写成字符串导致异常连接行为 */
 const DB_PORT_NUM = parseInt(String(DB_PORT), 10) || 3306;
 
+/**
+ * 数据库初始化日志过滤：默认隐藏「表已就绪 / 字段注释 / 进度」类噪音，保留功能性里程碑与真实变更。
+ * 需要全量排查时设 DB_INIT_VERBOSE=1。
+ */
+function shouldSuppressDbInitLog(args) {
+  if (String(process.env.DB_INIT_VERBOSE || '').trim() === '1') return false;
+  const s = args.map((a) => (typeof a === 'string' ? a : a == null ? '' : String(a))).join(' ');
+  if (!s) return false;
+  // 始终保留的关键节点 / 错误
+  if (
+    /正在初始化数据库|所有数据库表结构初始化完成|数据库初始化完成|数据库连接已就绪|初始化数据库表结构时出错|数据库初始化过程中出错|✗|错误堆栈/.test(
+      s
+    )
+  ) {
+    return false;
+  }
+  // 表就绪 / 注释 / 纯进度
+  if (/表已就绪/.test(s)) return true;
+  if (/字段注释|注释已检查|注释已补齐|空字段注释|列注释已检查|并更新注释/.test(s)) return true;
+  if (/表结构已校验|表结构终检|批量字段重命名：无需迁移/.test(s)) return true;
+  if (/→ 进度：|→ 正在校验并创建数据表|步骤很多，首次或迁移/.test(s)) return true;
+  if (/→ 校验标准应用|→ 竞品分析|→ 归并历史|→ 统一各应用会员等级|开始初始化基础数据/.test(s)) return true;
+  if (/会员等级已按.*统一|标准应用记录已校验|提示词已就绪|所有提示词配置已存在/.test(s)) return true;
+  if (/admin 账号已存在，跳过|企查查配置已存在，跳过|默认接口配置已存在|索引已存在/.test(s)) return true;
+  if (/已跳过（此前已完成）|已初始化 AI 模型名称字典|已初始化 AI 模型应用类型/.test(s)) return true;
+  if (/已为 news_sync_detail_log 同步|已禁用上海国际集团|已为上海国际集团启用/.test(s)) return true;
+  if (/正在等待数据库表结构初始化完成/.test(s)) return true;
+  return false;
+}
+
+function installDbInitLogFilter() {
+  if (String(process.env.DB_INIT_VERBOSE || '').trim() === '1') {
+    return () => {};
+  }
+  const origLog = console.log;
+  const origWarn = console.warn;
+  console.log = (...args) => {
+    if (shouldSuppressDbInitLog(args)) return;
+    return origLog.apply(console, args);
+  };
+  console.warn = (...args) => {
+    if (shouldSuppressDbInitLog(args)) return;
+    return origWarn.apply(console, args);
+  };
+  return () => {
+    console.log = origLog;
+    console.warn = origWarn;
+  };
+}
+
 let pool;
 
 // 从 performance.sql 中解析各 b_* 表的列注释，缓存到内存中
@@ -1777,29 +1827,43 @@ async function initializeTables(dbPool) {
 
       const items = aiMetaItemsByCode[t.dict_code] || [];
       for (const it of items) {
+        // 先按主键判断，避免历史脏数据导致 Duplicate entry（同 id 已存在但 item_code 查不到）
+        const [exById] = await dbPool.query(
+          `SELECT F_Id AS id FROM base_dictionary WHERE F_Id = ? LIMIT 1`,
+          [it.id]
+        );
+        if (exById && exById.length > 0) continue;
         const [exItem] = await dbPool.query(
           `SELECT F_Id AS id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND F_DeleteMark = 0 LIMIT 1`,
           [parentId, t.dict_code, it.item_code]
         );
         if (exItem && exItem.length > 0) continue;
-        await dbPool.execute(
-          `INSERT INTO base_dictionary
-           (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
-          [
-            it.id,
-            parentId,
-            t.dict_code,
-            t.dict_name,
-            it.item_code,
-            it.item_name,
-            it.sort_order,
-            opId,
-            opId,
-            nowDict,
-            nowDict,
-          ]
-        );
+        try {
+          await dbPool.execute(
+            `INSERT INTO base_dictionary
+             (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
+            [
+              it.id,
+              parentId,
+              t.dict_code,
+              t.dict_name,
+              it.item_code,
+              it.item_name,
+              it.sort_order,
+              opId,
+              opId,
+              nowDict,
+              nowDict,
+            ]
+          );
+        } catch (insErr) {
+          // 并发/历史主键冲突：跳过即可
+          if (insErr && (insErr.code === 'ER_DUP_ENTRY' || /Duplicate entry/i.test(String(insErr.message || '')))) {
+            continue;
+          }
+          throw insErr;
+        }
       }
     }
     console.log('✓ base_dictionary 已初始化 AI 模型应用类型/使用类型字典');
@@ -5705,23 +5769,33 @@ async function initializeTables(dbPool) {
     `);
     const atType2 = atCol2.length ? String(atCol2[0].COLUMN_TYPE || '') : '';
     if (atType2 && !atType2.includes('competitor_analysis')) {
+      // 先扩展 ENUM（临时保留旧值 project_sourcing_competitor），再回填，避免 Data truncated
+      const enumWithLegacy = atType2.includes('project_sourcing_competitor')
+        ? `'news_analysis','general','project_sourcing_analysis','listing_progress_analysis','competitor_analysis','project_sourcing_competitor'`
+        : `'news_analysis','general','project_sourcing_analysis','listing_progress_analysis','competitor_analysis'`;
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN application_type ENUM(${enumWithLegacy})
+        DEFAULT 'news_analysis'
+        COMMENT '应用类型：含竞品分析应用 competitor_analysis'
+      `);
       if (atType2.includes('project_sourcing_competitor')) {
         await dbPool.query(
           `UPDATE ai_model_config SET application_type = 'competitor_analysis' WHERE application_type = 'project_sourcing_competitor'`
         );
+        await dbPool.query(`
+          ALTER TABLE ai_model_config
+          MODIFY COLUMN application_type ENUM(
+            'news_analysis',
+            'general',
+            'project_sourcing_analysis',
+            'listing_progress_analysis',
+            'competitor_analysis'
+          )
+          DEFAULT 'news_analysis'
+          COMMENT '应用类型：含竞品分析应用 competitor_analysis'
+        `);
       }
-      await dbPool.query(`
-        ALTER TABLE ai_model_config
-        MODIFY COLUMN application_type ENUM(
-          'news_analysis',
-          'general',
-          'project_sourcing_analysis',
-          'listing_progress_analysis',
-          'competitor_analysis'
-        )
-        DEFAULT 'news_analysis'
-        COMMENT '应用类型：含竞品分析应用 competitor_analysis'
-      `);
       console.log('✓ ai_model_config.application_type 已迁移为 competitor_analysis');
     }
     const [fixCa] = await dbPool.query(
@@ -7733,17 +7807,30 @@ async function initializeTables(dbPool) {
       `);
       console.log('✓ external_db_config 已添加 app_id');
     }
-    // 检测 delete mark 列实际名称（兼容 migrateBatchFColumns 未生效的情况）
-    const [dmCol] = await dbPool.query(`
-      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'external_db_config' AND COLUMN_NAME IN ('F_DeleteMark', 'delete_mark')
-    `);
-    const dmColName = dmCol.length ? dmCol[0].COLUMN_NAME : null;
-    const dmPredicate = dmColName ? `e.${dmColName} = 0` : '1=1';
-    const dmPredicateSimple = dmColName ? `${dmColName} = 0` : '1=1';
+    // 用 SHOW COLUMNS 实测列名，避免 INFORMATION_SCHEMA 与实际表不一致
+    let dmColName = null;
+    try {
+      const [edbCols] = await dbPool.query('SHOW COLUMNS FROM `external_db_config`');
+      const edbFields = new Set((edbCols || []).map((c) => String(c.Field || '')));
+      if (edbFields.has('F_DeleteMark')) dmColName = 'F_DeleteMark';
+      else if (edbFields.has('delete_mark')) dmColName = 'delete_mark';
+    } catch (_) {
+      dmColName = null;
+    }
+    const dmPredicate = dmColName ? `e.\`${dmColName}\` = 0` : '1=1';
+    const dmPredicateSimple = dmColName ? `\`${dmColName}\` = 0` : '1=1';
+
+    let bSqlDeletePred = '1=1';
+    try {
+      const [bSqlCols] = await dbPool.query('SHOW COLUMNS FROM `b_sql`');
+      const bFields = new Set((bSqlCols || []).map((c) => String(c.Field || '')));
+      if (bFields.has('F_DeleteMark')) bSqlDeletePred = 'b.`F_DeleteMark` = 0';
+      else if (bFields.has('delete_mark')) bSqlDeletePred = 'b.`delete_mark` = 0';
+    } catch (_) {
+      bSqlDeletePred = '1=1';
+    }
 
     const CA_C_EDB = require('./utils/competitor-analysis/constants');
-    const PS_C_EDB = require('./utils/project-sourcing/constants');
     const LISTING_APP_ID = '2026033000000000001';
     await dbPool.execute(
       `UPDATE external_db_config e
@@ -7768,7 +7855,7 @@ async function initializeTables(dbPool) {
     if (perfApp.length) {
       await dbPool.execute(
         `UPDATE external_db_config e
-         INNER JOIN b_sql b ON b.external_db_config_id = e.F_Id AND b.F_DeleteMark = 0
+         INNER JOIN b_sql b ON b.external_db_config_id = e.F_Id AND ${bSqlDeletePred}
          SET e.app_id = ?
          WHERE ${dmPredicate} AND (e.app_id IS NULL OR e.app_id = '')`,
         [perfApp[0].id]
@@ -8898,6 +8985,7 @@ async function initializeTables(dbPool) {
 }
 
 async function init() {
+  const restoreDbInitLogs = installDbInitLogFilter();
   try {
     console.log('正在初始化数据库...');
     // 确保数据库存在
@@ -8984,6 +9072,8 @@ async function init() {
     console.error('数据库初始化过程中出错:', detail);
     console.error('错误堆栈:', error.stack);
     throw error;
+  } finally {
+    restoreDbInitLogs();
   }
 }
 

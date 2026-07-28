@@ -55,8 +55,14 @@ function runNewShareAkSync(opts) {
   if (!summary || !Array.isArray(summary.rows)) {
     return { ok: false, stderr: 'akshare output invalid' };
   }
+  if (summary.hkWarning) {
+    console.warn(`${logTag} 港股源降级/跳过: ${String(summary.hkWarning).slice(0, 500)}`);
+  }
+  if (stderr) {
+    console.warn(`${logTag} python stderr: ${stderr.slice(0, 800)}`);
+  }
   console.log(`${logTag} 抓取完成 sourceRows=${summary.sourceRows || 0} builtRows=${summary.builtRows || 0}`);
-  return { ok: true, summary, rows: summary.rows };
+  return { ok: true, summary, rows: summary.rows, hkWarning: summary.hkWarning || null };
 }
 
 function runIpoApplyBackfillByCode(stockCode, logTag) {

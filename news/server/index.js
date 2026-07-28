@@ -398,7 +398,6 @@ app.get('/api/test-upload-file/:filename', (req, res) => {
 async function startServer() {
   try {
     // 等待数据库初始化（通过执行一个查询来确保数据库已就绪）
-    console.log('正在等待数据库表结构初始化完成（与上方「正在初始化数据库」为同一流程，请勿关闭）…');
     try {
       await db.query('SELECT 1');
       console.log('✓ 数据库连接已就绪');

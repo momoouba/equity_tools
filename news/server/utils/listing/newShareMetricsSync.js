@@ -54,6 +54,13 @@ function hasUsableFirstRow(firstRow) {
   return close != null && chgPct != null;
 }
 
+/** 有可用收盘价即可（涨幅可在入库时用发行价推算）；避免为等 Python 超时而丢掉东财结果 */
+function hasUsableClose(firstRow) {
+  if (!firstRow || typeof firstRow !== 'object') return false;
+  const close = toNum(firstRow.close);
+  return close != null && close > 0;
+}
+
 async function fetchIpoApplySnapshot(force = false) {
   const now = Date.now();
   if (!force && ipoApplyCache.expireAt > now && ipoApplyCache.byCode.size > 0) {
@@ -341,34 +348,29 @@ async function runNewShareMetricsSyncWithFallback(opts) {
       listDate: opts.listDate,
       market,
     });
-    if (hasUsableFirstRow(firstRow)) {
+    // 东财已有收盘价：直接采用，不再为 etnet/Python 阻塞（涨幅可由发行价推算）
+    if (hasUsableFirstRow(firstRow) || hasUsableClose(firstRow)) {
       return {
         ok: true,
-        source: 'eastmoney.push2his.js-fallback',
+        source: hasUsableFirstRow(firstRow)
+          ? 'eastmoney.push2his.js-fallback'
+          : 'eastmoney.push2his.js-fallback.close-only',
         firstRow,
         totalShares: null,
         winRate: null,
         issuePrice: null,
       };
     }
-    // 默认启用 Python 兜底（含经济通 etnet），仅在显式置 0 时关闭。
+    // 默认启用 Python 兜底（含经济通 etnet / AkShare），仅在显式置 0 时关闭。
     const allowPythonForHk = String(process.env.NEW_SHARE_METRICS_HK_ALLOW_PY || '1') !== '0';
     if (!allowPythonForHk) {
-      return { ok: false, stderr: 'hk first row missing/incomplete (js fallback)' };
+      return { ok: false, stderr: 'hk first row missing (js fallback)' };
     }
     const pyResult = runNewShareMetricsSync({ ...opts, skipEtnet });
-    if (pyResult.ok && hasUsableFirstRow(pyResult.firstRow)) return pyResult;
-    if (firstRow) {
-      return {
-        ok: true,
-        source: 'eastmoney.push2his.js-fallback.incomplete',
-        firstRow,
-        totalShares: pyResult.ok ? pyResult.totalShares ?? null : null,
-        winRate: pyResult.ok ? pyResult.winRate ?? null : null,
-        issuePrice: pyResult.ok ? pyResult.issuePrice ?? null : null,
-      };
+    if (pyResult.ok && (hasUsableFirstRow(pyResult.firstRow) || hasUsableClose(pyResult.firstRow))) {
+      return pyResult;
     }
-    return pyResult;
+    return pyResult.ok ? pyResult : { ok: false, stderr: String(pyResult.stderr || 'hk metrics missing') };
   }
   if (market !== 'hk') {
     try {

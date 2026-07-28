@@ -9,6 +9,30 @@ const { NEW_SHARE_ENTERPRISE_FULL_NAME_PROMPT_BODY } = require('./newShareEnterp
 
 const NEW_SHARE_MIN_SYNC_DATE = '2026-01-01';
 
+/** 把 Python traceback / 长错误压成前端可读短句 */
+function shortenNewShareSyncError(err) {
+  const raw = String((err && err.message) || err || '').trim();
+  if (!raw) return '打新日历同步失败';
+  const lines = raw
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (/^(requests\.exceptions\.|urllib3\.exceptions\.|TimeoutError|ConnectionError|ReadTimeout)/.test(line)) {
+      return line.slice(0, 280);
+    }
+    if (/^[A-Za-z][\w.]*Error:|^[A-Za-z][\w.]*Exception:/.test(line)) {
+      return line.slice(0, 280);
+    }
+  }
+  if (/etnet\.com\.hk/i.test(raw)) {
+    return '港股源 etnet.com.hk 请求失败（超时或连接重置），已尝试降级；若仍失败请稍后重试';
+  }
+  if (raw.length > 280) return `${raw.slice(0, 280)}…`;
+  return raw;
+}
+
 function weekdayZh(ymd) {
   const s = String(ymd || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
@@ -1224,7 +1248,12 @@ async function syncNewShareCalendar(options = {}) {
       logTag,
     });
     if (!fetched.ok) {
-      throw new Error(fetched.stderr || '打新日历抓取失败');
+      const err = new Error(shortenNewShareSyncError(fetched.stderr || '打新日历抓取失败'));
+      err.causeDetail = String(fetched.stderr || '').slice(0, 4000);
+      throw err;
+    }
+    if (fetched.hkWarning) {
+      console.warn(`${logTag} 阶段1/4 港股源告警（已继续A股流程）: ${String(fetched.hkWarning).slice(0, 500)}`);
     }
     console.log(
       `${logTag} 阶段1/4 抓取完成 sourceRows=${Number((fetched.summary && fetched.summary.sourceRows) || 0)}`
@@ -1311,28 +1340,39 @@ async function syncNewShareCalendar(options = {}) {
     };
   } catch (err) {
     syncError = err;
-    console.warn(`${logTag} 主流程失败，仍将继续执行AI全称补齐 err=${String(err.message || err)}`);
-    await reportProgress(progressReporter, `主流程失败，继续执行AI全称补齐：${String(err.message || err)}`);
+    const shortMsg = shortenNewShareSyncError(err);
+    const continueHint = options.skipFullNameBackfill
+      ? '主流程失败（已跳过AI全称补齐）'
+      : '主流程失败，仍将继续执行AI全称补齐';
+    console.warn(`${logTag} ${continueHint} err=${shortMsg}`);
+    await reportProgress(progressReporter, `${continueHint}：${shortMsg}`);
   } finally {
-    console.log(`${logTag} 阶段4/4 开始企业全称AI补齐`);
-    await reportProgress(progressReporter, '阶段4/4 开始企业全称AI补齐');
-    try {
-      fullNameResult = await backfillNewShareEnterpriseFullNames(logTag, minSyncDate);
-      console.log(
-        `${logTag} 阶段4/4 完成 total=${Number(fullNameResult.total || 0)} updated=${Number(fullNameResult.updated || 0)} skipped=${Number(fullNameResult.skipped || 0)} failed=${Number(fullNameResult.failed || 0)}`
-      );
-      await reportProgress(
-        progressReporter,
-        `阶段4/4 完成 total=${Number(fullNameResult.total || 0)} updated=${Number(fullNameResult.updated || 0)} skipped=${Number(fullNameResult.skipped || 0)} failed=${Number(fullNameResult.failed || 0)}`
-      );
-    } catch (fullNameErr) {
-      console.warn(`${logTag} AI全称补齐执行失败 err=${String(fullNameErr.message || fullNameErr)}`);
-      await reportProgress(progressReporter, `AI全称补齐执行失败：${String(fullNameErr.message || fullNameErr)}`);
-      if (!syncError) syncError = fullNameErr;
+    if (options.skipFullNameBackfill) {
+      console.log(`${logTag} 阶段4/4 跳过企业全称AI补齐（skipFullNameBackfill=1）`);
+      await reportProgress(progressReporter, '阶段4/4 跳过企业全称AI补齐');
+    } else {
+      console.log(`${logTag} 阶段4/4 开始企业全称AI补齐`);
+      await reportProgress(progressReporter, '阶段4/4 开始企业全称AI补齐');
+      try {
+        fullNameResult = await backfillNewShareEnterpriseFullNames(logTag, minSyncDate);
+        console.log(
+          `${logTag} 阶段4/4 完成 total=${Number(fullNameResult.total || 0)} updated=${Number(fullNameResult.updated || 0)} skipped=${Number(fullNameResult.skipped || 0)} failed=${Number(fullNameResult.failed || 0)}`
+        );
+        await reportProgress(
+          progressReporter,
+          `阶段4/4 完成 total=${Number(fullNameResult.total || 0)} updated=${Number(fullNameResult.updated || 0)} skipped=${Number(fullNameResult.skipped || 0)} failed=${Number(fullNameResult.failed || 0)}`
+        );
+      } catch (fullNameErr) {
+        console.warn(`${logTag} AI全称补齐执行失败 err=${String(fullNameErr.message || fullNameErr)}`);
+        await reportProgress(progressReporter, `AI全称补齐执行失败：${String(fullNameErr.message || fullNameErr)}`);
+        if (!syncError) syncError = fullNameErr;
+      }
     }
   }
   if (syncError) {
-    throw syncError;
+    const short = new Error(shortenNewShareSyncError(syncError));
+    short.causeDetail = String(syncError.message || syncError).slice(0, 4000);
+    throw short;
   }
   result.fullNameBackfillTotal = Number(fullNameResult.total || 0);
   result.fullNameBackfillUpdated = Number(fullNameResult.updated || 0);
@@ -1346,8 +1386,97 @@ async function syncNewShareCalendar(options = {}) {
   return result;
 }
 
+/**
+ * 定向补抓首日指标（邮件保底二次重试用）。
+ * 港股默认 skipEtnet，优先东财 K 线，避免经济通再次拖死。
+ */
+async function refreshFirstDayMetricsForRows(rows, options = {}) {
+  const logTag = options.logTag || '[打新日历-首日指标定向补齐]';
+  const forceSkipEtnet = options.forceSkipEtnet !== false;
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  let updated = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const row of list) {
+    const listDate = String(row.public_date || '').slice(0, 10);
+    if (!isYmd(listDate)) {
+      skipped += 1;
+      continue;
+    }
+    const market = String(row.exchange || '').trim() === '港交所' ? 'hk' : 'a';
+    const timeoutMs =
+      market === 'hk'
+        ? Math.max(30000, Number(process.env.NEW_SHARE_METRICS_ITEM_TIMEOUT_MS_HK || 120000))
+        : Math.max(10000, Number(process.env.NEW_SHARE_METRICS_ITEM_TIMEOUT_MS || 70000));
+    try {
+      const fetched = await withTimeout(
+        runNewShareMetricsSyncWithFallback({
+          stockCode: row.stock_code,
+          listDate,
+          market,
+          logTag: `${logTag}[${row.stock_code}]`,
+          skipEtnet: forceSkipEtnet && market === 'hk',
+        }),
+        timeoutMs,
+        `首日指标超时(${timeoutMs}ms)`
+      );
+      if (!fetched.ok || !fetched.firstRow) {
+        failed += 1;
+        console.warn(
+          `${logTag} 失败 stock=${row.stock_code} exchange=${row.exchange || ''} reason=${String(fetched.stderr || 'missing').slice(0, 200)}`
+        );
+        continue;
+      }
+      const first = fetched.firstRow || {};
+      const close = first.close != null && Number.isFinite(Number(first.close)) ? Number(first.close) : null;
+      let chgPct = first.chg_pct != null && Number.isFinite(Number(first.chg_pct)) ? Number(first.chg_pct) : null;
+      const fetchedIssuePrice =
+        fetched.issuePrice != null && Number.isFinite(Number(fetched.issuePrice)) ? Number(fetched.issuePrice) : null;
+      if (chgPct == null && close != null) {
+        const issuePx =
+          fetchedIssuePrice != null
+            ? fetchedIssuePrice
+            : row.issue_price != null && Number.isFinite(Number(row.issue_price))
+              ? Number(row.issue_price)
+              : null;
+        chgPct = computeFirstDayChgPctFromPrices(close, issuePx);
+      }
+      const totalIssuedShares =
+        row.total_issued_shares != null && Number.isFinite(Number(row.total_issued_shares)) && Number(row.total_issued_shares) > 0
+          ? Number(row.total_issued_shares)
+          : fetched.totalShares != null && Number.isFinite(Number(fetched.totalShares))
+            ? Number(fetched.totalShares)
+            : null;
+      const state = await upsertNewShareRow({
+        ...row,
+        issue_price:
+          row.issue_price != null && Number.isFinite(Number(row.issue_price)) && Number(row.issue_price) > 0
+            ? Number(row.issue_price)
+            : fetchedIssuePrice,
+        total_issued_shares: normalizePositiveOrNull(totalIssuedShares ?? row.total_issued_shares ?? null),
+        first_day_close: normalizePositiveOrNull(close),
+        first_day_chg_pct: normalizeChgPctOrNull(chgPct),
+        first_day_market_cap: normalizePositiveOrNull(calcFirstDayMarketCap(close, totalIssuedShares)),
+      });
+      if (state === 'updated' || state === 'inserted') updated += 1;
+      else skipped += 1;
+      console.log(
+        `${logTag} 成功 stock=${row.stock_code} close=${close ?? 'null'} chgPct=${chgPct ?? 'null'} source=${fetched.source || '-'} state=${state}`
+      );
+    } catch (err) {
+      failed += 1;
+      console.warn(
+        `${logTag} 失败 stock=${row.stock_code} exchange=${row.exchange || ''} reason=${String(err.message || err).slice(0, 200)}`
+      );
+    }
+  }
+  return { total: list.length, updated, failed, skipped };
+}
+
 module.exports = {
   syncNewShareCalendar,
+  shortenNewShareSyncError,
+  refreshFirstDayMetricsForRows,
   refreshNewShareEnterpriseFullNamesByIds,
   backfillNewShareEnterpriseFullNamesDomesticPool,
 };

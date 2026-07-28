@@ -2,8 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 打新日历抓取：
-- A 股：AkShare ak.stock_xgsglb_em()
-- 港股：默认经济通 etnet.com.hk ci_ipo.php（var listing.listingipos）；可设 HK_NEW_SHARE_SOURCE=hkex 回退港交所静态表
+- A 股：东财 RPTA_APP_IPOAPPLY（失败时回退 AkShare stock_xgsglb_em）
+- 港股：默认经济通 etnet；失败时回退港交所静态表（或反之）。港股失败不阻断 A 股结果输出。
+  可设 HK_NEW_SHARE_SOURCE=hkex|etnet
 """
 
 import argparse
@@ -508,33 +509,66 @@ def main():
         hk_start = start_dt.strftime("%Y-%m-%d")
 
     hk_src = (os.environ.get("HK_NEW_SHARE_SOURCE") or "etnet").strip().lower()
-    if hk_src in ("hkex", "hkex-web", "legacy"):
+    hk_rows = []
+    hk_meta = "skipped"
+    hk_warning = None
+
+    def _fetch_hk_via_hkex():
         from hkex_ipo_scraper import fetch_hkex_nli_dataframe  # noqa: PLC0415
 
         hk_df = fetch_hkex_nli_dataframe()
-        hk_rows = _extract_hk_rows(hk_df, hk_start, hk_end, issue_after)
-        hk_meta = f"hkex rows={len(hk_df.index)}"
-    else:
+        return _extract_hk_rows(hk_df, hk_start, hk_end, issue_after), f"hkex rows={len(hk_df.index)}"
+
+    def _fetch_hk_via_etnet():
         from etnet_hk_fetch import hk_calendar_rows_from_etnet  # noqa: PLC0415
 
-        hk_rows = hk_calendar_rows_from_etnet(hk_start, hk_end, issue_after)
-        hk_meta = f"etnet listingipos built={len(hk_rows)}"
+        built = hk_calendar_rows_from_etnet(hk_start, hk_end, issue_after)
+        return built, f"etnet listingipos built={len(built)}"
+
+    # 港股源失败不得阻断 A 股入库与后续首日指标补抓
+    if hk_src in ("hkex", "hkex-web", "legacy"):
+        try:
+            hk_rows, hk_meta = _fetch_hk_via_hkex()
+        except Exception as e:  # noqa: BLE001
+            hk_warning = f"hkex failed: {e}"
+            try:
+                hk_rows, hk_meta = _fetch_hk_via_etnet()
+                hk_src = "etnet-fallback"
+                hk_warning = f"{hk_warning}; recovered via etnet"
+            except Exception as e2:  # noqa: BLE001
+                hk_rows = []
+                hk_meta = "skipped"
+                hk_warning = f"{hk_warning}; etnet fallback failed: {e2}"
+    else:
+        try:
+            hk_rows, hk_meta = _fetch_hk_via_etnet()
+        except Exception as e:  # noqa: BLE001
+            hk_warning = f"etnet failed: {e}"
+            try:
+                hk_rows, hk_meta = _fetch_hk_via_hkex()
+                hk_src = "hkex-fallback"
+                hk_warning = f"{hk_warning}; recovered via hkex"
+            except Exception as e2:  # noqa: BLE001
+                hk_rows = []
+                hk_meta = "skipped"
+                hk_warning = f"{hk_warning}; hkex fallback failed: {e2}"
+
+    if hk_warning:
+        print(f"[new_share_fetch] HK warn: {hk_warning}", file=sys.stderr)
 
     rows = _dedupe_merge_ipo_rows(a_rows + hk_rows)
     raw_concat_len = len(a_rows) + len(hk_rows)
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "source": f"{a_source} + {hk_src}({hk_meta})",
-                "sourceRows": int(a_source_rows) + int(len(hk_rows)),
-                "rawBuiltRows": raw_concat_len,
-                "builtRows": len(rows),
-                "rows": rows,
-            },
-            ensure_ascii=False,
-        )
-    )
+    payload = {
+        "ok": True,
+        "source": f"{a_source} + {hk_src}({hk_meta})",
+        "sourceRows": int(a_source_rows) + int(len(hk_rows)),
+        "rawBuiltRows": raw_concat_len,
+        "builtRows": len(rows),
+        "rows": rows,
+    }
+    if hk_warning:
+        payload["hkWarning"] = str(hk_warning)[:500]
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 if __name__ == "__main__":
