@@ -230,3 +230,41 @@ export function getPreInvestmentBpVersionDownload(versionId) {
     responseType: 'blob',
   })
 }
+
+export function fetchCompetitorScheduleStatusOptions() {
+  return axios.get(`${BASE}/competitor-schedule/status-options`)
+}
+
+export function fetchCompetitorScheduleTasks() {
+  return axios.get(`${BASE}/competitor-schedule/tasks`)
+}
+
+export function fetchCompetitorScheduleTask(id) {
+  return axios.get(`${BASE}/competitor-schedule/tasks/${encodeURIComponent(id)}`)
+}
+
+export function postCompetitorScheduleTask(body) {
+  return axios.post(`${BASE}/competitor-schedule/tasks`, body)
+}
+
+export function putCompetitorScheduleTask(id, body) {
+  return axios.put(`${BASE}/competitor-schedule/tasks/${encodeURIComponent(id)}`, body)
+}
+
+export function deleteCompetitorScheduleTask(id) {
+  return axios.delete(`${BASE}/competitor-schedule/tasks/${encodeURIComponent(id)}`)
+}
+
+export function fetchCompetitorScheduleEnterprises(params) {
+  return axios.get(`${BASE}/competitor-schedule/enterprises`, { params })
+}
+
+export function fetchCompetitorScheduleRuns(taskId, params) {
+  return axios.get(`${BASE}/competitor-schedule/tasks/${encodeURIComponent(taskId)}/runs`, {
+    params,
+  })
+}
+
+export function postCompetitorScheduleTaskRun(taskId) {
+  return axios.post(`${BASE}/competitor-schedule/tasks/${encodeURIComponent(taskId)}/run`)
+}

@@ -40,6 +40,7 @@ const {
 const { attachStrategyToTarget } = require('../../utils/competitor-analysis/industry-strategies');
 const {
   exportCompetitorRelationsToBuffer,
+  exportCompetitorRelationsAsDownload,
   listInvestedEnterpriseYears,
   listPreInvestmentYears,
 } = require('../../utils/competitor-analysis/competitorMatchExport');
@@ -1402,7 +1403,7 @@ function registerCompetitorMatchRoutes(router) {
         throw e;
       }
 
-      const buf = await exportCompetitorRelationsToBuffer({
+      const download = await exportCompetitorRelationsAsDownload({
         subjectType,
         investedEnterpriseIds: ieIds,
         preInvestmentProjectIds: pipIds,
@@ -1412,22 +1413,22 @@ function registerCompetitorMatchRoutes(router) {
         psUser: req.psUser,
         isAdmin: isAdminUser(req.psUser),
       });
-      const label = isPre ? '投前竞品' : '竞品分析';
-      const batchSuffix = !exportAll && batchModeAll ? '_所有批次' : '';
-      const filename = encodeURIComponent(
-        exportAll
-          ? `${label}导出_全量_${new Date().toISOString().slice(0, 10)}.xlsx`
-          : `${label}导出_${ids.length}项${batchSuffix}.xlsx`
-      );
+      let filename = download.filename;
+      if (exportAll) {
+        const label = isPre ? '投前竞品' : '竞品分析';
+        const ext = download.contentType === 'application/zip' ? 'zip' : 'xlsx';
+        filename = `${label}导出_全量_${new Date().toISOString().slice(0, 10)}.${ext}`;
+      } else if (batchModeAll && download.contentType === 'application/zip') {
+        const label = isPre ? '投前竞品' : '竞品分析';
+        filename = `${label}导出_${ids.length}项_所有批次.zip`;
+      }
+      const encoded = encodeURIComponent(filename);
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="${filename}"; filename*=UTF-8''${filename}`
+        `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`
       );
-      res.setHeader(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      );
-      res.send(buf);
+      res.setHeader('Content-Type', download.contentType);
+      res.send(download.buffer);
     } catch (e) {
       const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
       console.error('[project-sourcing/competitor-analysis/export]', e);

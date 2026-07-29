@@ -1,5 +1,17 @@
 ﻿import React, { useEffect, useState, useCallback, useMemo } from 'react'
-import { Card, Table, Button, Message, Space, Select, Checkbox, Modal, Radio } from '@arco-design/web-react'
+import {
+  Card,
+  Table,
+  Button,
+  Message,
+  Space,
+  Select,
+  Checkbox,
+  Modal,
+  Radio,
+  Form,
+  Input,
+} from '@arco-design/web-react'
 import axios from '../../utils/axios'
 import {
   fetchCompetitorRelations,
@@ -8,12 +20,18 @@ import {
   postCompetitorAnalysisExport,
   patchCompetitorRelationComparable,
   deleteCompetitorRelation,
+  fetchInvestedEnterpriseCompetitorReadiness,
+  fetchInvestedCompetitionLensProposal,
+  postInvestedEnterpriseCompetitorAnalysisRun,
 } from '../../api/competitor-analysis'
 import { IntroPopoverCell } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
 import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
 import CompetitorRelationDetailBlock from './CompetitorRelationDetailBlock'
 import CompetitorRelationReviewDrawer from './CompetitorRelationReviewDrawer'
+import CompetitionLensConfirmModal from './CompetitionLensConfirmModal'
+import CompetitorMatchSupplementModal from './CompetitorMatchSupplementModal'
+import CompetitorScheduleTasksModal from './CompetitorScheduleTasksModal'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
@@ -22,9 +40,14 @@ import {
 } from './competitorRelationColumns'
 import '../EnterpriseManagement.css'
 
+const FormItem = Form.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
-/** 展开列 40 + 勾选 48 + 各列 width 之和 */
-const POST_INV_MAIN_TABLE_SCROLL_X = 1328
+/** 展开列 40 + 勾选 48 + 各列 width 之和 + 操作列 */
+const POST_INV_MAIN_TABLE_SCROLL_X = 1508
+
+function rowLabel(row) {
+  return row?.enterprise_full_name || row?.project_abbreviation || row?.project_number || row?.id || ''
+}
 
 function sortRelationsByComparable(list) {
   return sortRelationsForDisplay(list)
@@ -61,6 +84,25 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   const [manualAddSubject, setManualAddSubject] = useState(null)
   const [editingRelation, setEditingRelation] = useState(null)
   const [reviewDrawer, setReviewDrawer] = useState({ visible: false, record: null, readOnly: false })
+  const [editForm] = Form.useForm()
+  const [editVisible, setEditVisible] = useState(false)
+  const [editingRow, setEditingRow] = useState(null)
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [competitorRunSubmitting, setCompetitorRunSubmitting] = useState(false)
+  const [lensModal, setLensModal] = useState({
+    visible: false,
+    loading: false,
+    confirming: false,
+    enterpriseId: '',
+    enterpriseName: '',
+    proposal: null,
+  })
+  const [competitorSupplementModal, setCompetitorSupplementModal] = useState({
+    visible: false,
+    enterpriseId: '',
+    enterpriseName: '',
+  })
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
 
   const openReviewDrawer = useCallback((record, opts = {}) => {
     setReviewDrawer({ visible: true, record, readOnly: !!opts.readOnly })
@@ -376,6 +418,196 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     setExportModalOpen(true)
   }
 
+  const openEditModal = (row) => {
+    setEditingRow(row)
+    editForm.setFieldsValue({
+      ai_product_intro: row.ai_product_intro || '',
+      ai_industry_tags: row.ai_industry_tags_display || '',
+      qcc_company_intro: row.qcc_company_intro || '',
+    })
+    setEditVisible(true)
+  }
+
+  const handleEditSave = async () => {
+    if (!editingRow?.id) return
+    try {
+      const v = await editForm.validate()
+      setEditSubmitting(true)
+      const tagsRaw = String(v.ai_industry_tags || '').trim()
+      const res = await axios.put(`/api/enterprises/${editingRow.id}`, {
+        project_abbreviation: editingRow.project_abbreviation || '',
+        enterprise_full_name: editingRow.enterprise_full_name,
+        unified_credit_code: editingRow.unified_credit_code || '',
+        wechat_official_account_id: editingRow.wechat_official_account_id || '',
+        official_website: editingRow.official_website || '',
+        entity_type: editingRow.entity_type || '被投企业',
+        exit_status: editingRow.exit_status || '未退出',
+        ai_product_intro: v.ai_product_intro,
+        ai_industry_tags_display: tagsRaw,
+        qcc_company_intro: v.qcc_company_intro,
+      })
+      if (res.data?.success) {
+        Message.success('已保存')
+        setEditVisible(false)
+        setEditingRow(null)
+        editForm.resetFields()
+        fetchList()
+      } else {
+        Message.error(res.data?.message || '保存失败')
+      }
+    } catch (e) {
+      if (e?.errors) return
+      Message.error(e.response?.data?.message || e.message || '保存失败')
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
+  const runCompetitorFlowForEnterprise = useCallback(async (enterpriseId, displayName) => {
+    const res = await fetchInvestedEnterpriseCompetitorReadiness(enterpriseId)
+    if (!res.data?.success) {
+      Message.error(res.data?.message || '就绪校验失败')
+      return
+    }
+    const d = res.data.data || {}
+    if (d.needSupplement) {
+      setCompetitorSupplementModal({
+        visible: true,
+        enterpriseId,
+        enterpriseName: displayName || '',
+      })
+      return
+    }
+    setLensModal({
+      visible: true,
+      loading: true,
+      confirming: false,
+      enterpriseId,
+      enterpriseName: displayName || '',
+      proposal: null,
+    })
+    try {
+      const pRes = await fetchInvestedCompetitionLensProposal(enterpriseId)
+      if (!pRes.data?.success) {
+        throw new Error(pRes.data?.message || '提取对标因素失败')
+      }
+      setLensModal((prev) => ({
+        ...prev,
+        loading: false,
+        proposal: pRes.data.data,
+      }))
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '提取对标因素失败')
+      setLensModal({
+        visible: false,
+        loading: false,
+        confirming: false,
+        enterpriseId: '',
+        enterpriseName: '',
+        proposal: null,
+      })
+    }
+  }, [])
+
+  const handleInvestedLensConfirm = async (competitionLens) => {
+    const { enterpriseId, enterpriseName } = lensModal
+    if (!enterpriseId) return
+    setLensModal((prev) => ({ ...prev, confirming: true }))
+    try {
+      const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, {
+        competition_lens: competitionLens,
+      })
+      if (r2.status === 202 && r2.data?.success) {
+        Message.success(r2.data.message || '已受理')
+      } else if (r2.data?.success) {
+        Message.success(r2.data.message || '已受理')
+      } else {
+        Message.error(r2.data?.message || '受理失败')
+        setLensModal((prev) => ({ ...prev, confirming: false }))
+        return
+      }
+      setLensModal({
+        visible: false,
+        loading: false,
+        confirming: false,
+        enterpriseId: '',
+        enterpriseName: '',
+        proposal: null,
+      })
+      if (expandedKeys.includes(enterpriseId)) {
+        setRunMap((m) => {
+          const next = { ...m }
+          delete next[enterpriseId]
+          return next
+        })
+        const { latestRunId } = await loadRuns(enterpriseId)
+        await loadRelations(enterpriseId, latestRunId, true)
+      }
+    } catch (e) {
+      Message.error(
+        e.response?.data?.message || e.message || `「${enterpriseName || enterpriseId}」受理失败`
+      )
+      setLensModal((prev) => ({ ...prev, confirming: false }))
+    }
+  }
+
+  const handleBatchCompetitor = useCallback(async () => {
+    if (!selectedIds.length) {
+      Message.warning('请先勾选要分析的被投企业')
+      return
+    }
+    if (selectedIds.length === 1) {
+      const id = selectedIds[0]
+      const row = rows.find((e) => e.id === id)
+      await runCompetitorFlowForEnterprise(id, rowLabel(row) || id)
+      return
+    }
+    setCompetitorRunSubmitting(true)
+    try {
+      for (const id of selectedIds) {
+        const row = rows.find((e) => e.id === id)
+        const name = rowLabel(row) || id
+        const res = await fetchInvestedEnterpriseCompetitorReadiness(id)
+        if (!res.data?.success) {
+          Message.error(res.data?.message || `「${name}」就绪校验失败`)
+          return
+        }
+        if (res.data.data?.needSupplement) {
+          Message.warning(`「${name}」需先补充业务信息（已打开补录窗口）`)
+          setCompetitorSupplementModal({ visible: true, enterpriseId: id, enterpriseName: name })
+          return
+        }
+      }
+      await new Promise((resolve) => {
+        Modal.confirm({
+          title: '竞品分析（批量）',
+          content: `将对已勾选的 ${selectedIds.length} 家被投企业依次发起新一轮竞品分析（按各企业系统默认对标焦点；精细勾选请每次只选 1 家）。是否继续？`,
+          onOk: async () => {
+            for (const id of selectedIds) {
+              const row = rows.find((e) => e.id === id)
+              const name = rowLabel(row) || id
+              try {
+                const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(id)
+                if (!r2.data?.success) {
+                  Message.error(`「${name}」：${r2.data?.message || '失败'}`)
+                  return
+                }
+              } catch (e) {
+                Message.error(`「${name}」：${e.response?.data?.message || e.message || '失败'}`)
+                return
+              }
+            }
+            Message.success('批量任务已提交')
+            resolve()
+          },
+          onCancel: () => resolve(),
+        })
+      })
+    } finally {
+      setCompetitorRunSubmitting(false)
+    }
+  }, [selectedIds, rows, runCompetitorFlowForEnterprise])
+
   const allPageSelected = rows.length > 0 && rows.every((r) => selectedIds.includes(r.id))
 
   const columns = [
@@ -402,6 +634,12 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
     { title: '项目简称', dataIndex: 'project_abbreviation', width: 120, ellipsis: true, render: (t) => t || '-' },
     { title: '统一信用代码', dataIndex: 'unified_credit_code', width: 180, render: (t) => t || '-' },
     {
+      title: '项目状态',
+      dataIndex: 'exit_status',
+      width: 100,
+      render: (t) => t || '-',
+    },
+    {
       title: '产品介绍（AI）',
       dataIndex: 'ai_product_intro',
       width: 200,
@@ -425,14 +663,23 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
         />
       ),
     },
+    {
+      title: '操作',
+      width: 80,
+      fixed: 'right',
+      render: (_, row) => (
+        <Button type="text" size="mini" onClick={() => openEditModal(row)}>
+          编辑
+        </Button>
+      ),
+    },
   ]
 
   return (
     <div className="pre-inv-sourcing-page" style={{ padding: '16px 24px' }}>
       <Card title="投后-竞品分析（被投企业 × 竞品）" bordered={false}>
         <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
-          仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。批量发起入口在
-          <strong>被投企业</strong>列表左侧勾选 +「竞品分析（多选）」。
+          仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。勾选后可发起新一轮竞品分析；行内「编辑」可补充产品介绍、企业标签与企查查介绍。
         </p>
         <Space wrap style={{ marginBottom: 12 }}>
           <span style={{ fontSize: 13, color: 'var(--color-text-3)' }}>已选 {selectedIds.length} 家</span>
@@ -447,6 +694,17 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
           />
           <Button type="outline" onClick={handleRefresh} loading={loading}>
             刷新
+          </Button>
+          <Button type="outline" onClick={() => setScheduleModalOpen(true)}>
+            定时任务
+          </Button>
+          <Button
+            type="outline"
+            disabled={!selectedIds.length}
+            loading={competitorRunSubmitting}
+            onClick={handleBatchCompetitor}
+          >
+            竞品分析
           </Button>
           <Button type="primary" loading={exporting} onClick={openExportModal}>
             导出已选
@@ -576,6 +834,80 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
           if (!manualAddSubject?.id) return
           loadRelations(manualAddSubject.id, manualAddSubject.runId, true)
         }}
+      />
+      <Modal
+        title={editingRow ? `编辑 — ${rowLabel(editingRow)}` : '编辑被投企业'}
+        style={{ width: 640 }}
+        visible={editVisible}
+        onCancel={() => {
+          setEditVisible(false)
+          setEditingRow(null)
+          editForm.resetFields()
+        }}
+        onOk={handleEditSave}
+        confirmLoading={editSubmitting}
+        okText="保存"
+      >
+        <p style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
+          可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
+        </p>
+        <Form form={editForm} layout="vertical">
+          <FormItem label="产品介绍（AI）" field="ai_product_intro">
+            <Input.TextArea
+              placeholder="请输入或粘贴产品介绍"
+              autoSize={{ minRows: 4, maxRows: 12 }}
+              maxLength={8000}
+              showWordLimit
+            />
+          </FormItem>
+          <FormItem
+            label="企业标签（AI）"
+            field="ai_industry_tags"
+            extra="多个标签请用中文逗号、英文逗号或顿号分隔"
+          >
+            <Input placeholder="例如：半导体、光刻胶、先进封装" />
+          </FormItem>
+          <FormItem label="企业介绍（企查查）" field="qcc_company_intro">
+            <Input.TextArea
+              placeholder="请输入企查查企业介绍正文"
+              autoSize={{ minRows: 4, maxRows: 12 }}
+              maxLength={16000}
+              showWordLimit
+            />
+          </FormItem>
+        </Form>
+      </Modal>
+      <CompetitorMatchSupplementModal
+        visible={competitorSupplementModal.visible}
+        investedEnterpriseId={competitorSupplementModal.enterpriseId}
+        enterpriseName={competitorSupplementModal.enterpriseName}
+        onClose={() => setCompetitorSupplementModal((s) => ({ ...s, visible: false }))}
+        onSaved={() => {
+          fetchList()
+          setCompetitorSupplementModal((s) => ({ ...s, visible: false }))
+        }}
+      />
+      <CompetitionLensConfirmModal
+        visible={lensModal.visible}
+        onClose={() =>
+          setLensModal({
+            visible: false,
+            loading: false,
+            confirming: false,
+            enterpriseId: '',
+            enterpriseName: '',
+            proposal: null,
+          })
+        }
+        subjectTitle={lensModal.enterpriseName}
+        loadingProposal={lensModal.loading}
+        proposal={lensModal.proposal}
+        confirming={lensModal.confirming}
+        onConfirm={handleInvestedLensConfirm}
+      />
+      <CompetitorScheduleTasksModal
+        visible={scheduleModalOpen}
+        onClose={() => setScheduleModalOpen(false)}
       />
     </div>
   )

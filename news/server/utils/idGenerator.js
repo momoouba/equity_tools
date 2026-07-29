@@ -49,6 +49,8 @@ async function generateId(tableName, connection) {
       'sourcing_competitor_comparable_pref',
       'sourcing_pre_investment_competitor_run',
       'sourcing_competition_lens_version',
+      'sourcing_competitor_schedule_task',
+      'sourcing_competitor_schedule_run',
     ];
     
     if (!validTableNames.includes(tableName)) {

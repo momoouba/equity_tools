@@ -467,6 +467,13 @@ async function startServer() {
             console.error('初始化竞品迁移定时任务失败:', error);
           });
 
+          // 初始化投后竞品分析定时任务
+          console.log('正在初始化投后竞品分析定时任务...');
+          const { initializeCompetitorScheduleTasks } = require('./utils/scheduledCompetitorAnalysisTasks');
+          initializeCompetitorScheduleTasks().catch((error) => {
+            console.error('初始化投后竞品分析定时任务失败:', error);
+          });
+
           // 初始化外部数据库连接（异步，不阻塞）
           console.log('正在初始化外部数据库连接...');
           db.query('SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1')

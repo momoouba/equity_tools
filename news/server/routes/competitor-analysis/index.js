@@ -6,11 +6,13 @@ const { registerCompetitorMatchRoutes } = require('./competitorMatchRoutes');
 const { registerIpoProjectSourcingRoutes } = require('./ipoProjectSourcingRoutes');
 const { registerInvestedEnterpriseAiRoutes } = require('./investedEnterpriseRoutes');
 const { registerCompetitorMigrationRoutes } = require('./competitorMigrationRoutes');
+const { registerCompetitorScheduleRoutes } = require('./competitorScheduleRoutes');
 
 const router = express.Router();
 registerCompetitorMatchRoutes(router);
 registerIpoProjectSourcingRoutes(router);
 registerInvestedEnterpriseAiRoutes(router);
 registerCompetitorMigrationRoutes(router);
+registerCompetitorScheduleRoutes(router);
 
 module.exports = router;

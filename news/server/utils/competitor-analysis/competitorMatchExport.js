@@ -2,7 +2,7 @@ const xlsx = require('xlsx');
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
-const { buildVersionLabelMapForInvestedEnterprise, buildVersionLabelMapForPreInvestmentProject } = require('./competitorRunVersionService');
+const { buildVersionLabelMapForInvestedEnterprise, buildVersionLabelMapForPreInvestmentProject, listInvestedEnterpriseCompetitorRuns, listPreInvestmentCompetitorRuns } = require('./competitorRunVersionService');
 const { formatFinancingDate } = require('./competitorFinancingResolve');
 
 const EXPORT_HEADERS = [
@@ -485,8 +485,278 @@ async function exportCompetitorRelationsToBuffer(opts) {
   return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
 }
 
+function sanitizeExportFileBase(name) {
+  return String(name || '未命名')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || '未命名';
+}
+
+/**
+ * 单主体一张表 → 独立 xlsx buffer（用于 ZIP 分文件导出）
+ */
+function workbookBufferFromRows(headers, rows, sheetName) {
+  const workbook = xlsx.utils.book_new();
+  const used = new Set();
+  const label = sanitizeSheetName(sheetName, used);
+  const data =
+    rows && rows.length
+      ? rows
+      : [Object.fromEntries(headers.map((h) => [h, '']))];
+  const ws = xlsx.utils.json_to_sheet(data, { header: headers });
+  xlsx.utils.book_append_sheet(workbook, ws, label);
+  return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+}
+
+/**
+ * 被投/投前：每个主体一个文件；文件名 {简称}-{版本号}.xlsx 或 {简称}-所有批次.xlsx
+ * @returns {Promise<{ files: { name: string, data: Buffer, subjectId: string, abbrev: string, versionLabel: string|null }[], enterpriseCount: number }>}
+ */
+async function buildCompetitorExportFileList(opts) {
+  const subjectType = opts.subjectType || 'invested_enterprise';
+  const allBatches = opts.exportBatchMode === 'all';
+  const headers = allBatches ? EXPORT_HEADERS_ALL_BATCHES : EXPORT_HEADERS;
+  const files = [];
+
+  if (subjectType === 'pre_investment_project') {
+    const {
+      preInvestmentProjectIds = [],
+      exportAll = false,
+      years = [],
+      psUser,
+      isAdmin,
+    } = opts;
+    const uid = psUser?.id ? String(psUser.id) : null;
+    let pipRows = await db.query(
+      `SELECT F_Id, project_no, enterprise_full_name, project_abbreviation, F_CreatorUserId
+       FROM pre_investment_project WHERE F_DeleteMark = 0`
+    );
+    const filtered = [];
+    for (const row of pipRows) {
+      if (!isAdmin && String(row.F_CreatorUserId) !== uid) continue;
+      if (years.length) {
+        const y = preProjectYear(row.project_no);
+        if (!years.includes(y)) continue;
+      }
+      if (!exportAll && preInvestmentProjectIds.length) {
+        if (!preInvestmentProjectIds.includes(String(row.F_Id))) continue;
+      }
+      filtered.push(row);
+    }
+    if (!exportAll && preInvestmentProjectIds.length) {
+      pipRows = preInvestmentProjectIds
+        .map((id) => filtered.find((r) => String(r.F_Id) === String(id)))
+        .filter(Boolean);
+    } else {
+      pipRows = filtered;
+    }
+
+    const usedNames = new Set();
+    for (const pip of pipRows) {
+      let rels;
+      let versionMap = null;
+      let latestLabel = null;
+      if (allBatches) {
+        versionMap = await buildVersionLabelMapForPreInvestmentProject(pip.F_Id);
+        rels = await db.query(
+          `SELECT r.*
+           FROM sourcing_competitor_relation r
+           INNER JOIN sourcing_pre_investment_competitor_run run
+             ON run.F_Id = r.pre_investment_run_id AND run.F_DeleteMark = 0
+           WHERE r.pre_investment_project_id = ?
+             AND r.subject_type = 'pre_investment_project'
+             AND r.pre_investment_run_id IS NOT NULL AND TRIM(r.pre_investment_run_id) <> ''
+           ORDER BY run.F_CreatorTime DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.F_CreatorTime DESC`,
+          [pip.F_Id]
+        );
+      } else {
+        const runs = await listPreInvestmentCompetitorRuns(pip.F_Id);
+        latestLabel = runs[0]?.version_label || null;
+        rels = await db.query(
+          `SELECT * FROM sourcing_competitor_relation
+           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0
+           ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
+          [pip.F_Id]
+        );
+      }
+      if (!rels.length && exportAll) continue;
+      const abbrev = sanitizeExportFileBase(
+        pip.project_abbreviation || pip.enterprise_full_name || pip.project_no || pip.F_Id
+      );
+      const fileName = allBatches
+        ? `${abbrev}-所有批次.xlsx`
+        : `${abbrev}-${latestLabel || '未命名版本'}.xlsx`;
+      const uniqueName = uniquifyFileName(fileName, usedNames);
+      const rows = rels.length
+        ? rels.map((rel) =>
+            relationToRow(
+              rel,
+              allBatches ? versionMap.get(String(rel.pre_investment_run_id)) || '' : null
+            )
+          )
+        : [];
+      files.push({
+        name: uniqueName,
+        data: workbookBufferFromRows(headers, rows, abbrev),
+        subjectId: String(pip.F_Id),
+        abbrev,
+        versionLabel: allBatches ? null : latestLabel,
+      });
+    }
+    return { files, enterpriseCount: files.length };
+  }
+
+  // invested_enterprise
+  const {
+    investedEnterpriseIds = [],
+    exportAll = false,
+    years = [],
+    psUser,
+    isAdmin,
+  } = opts;
+  const uid = psUser?.id ? String(psUser.id) : null;
+  let ieRows = await db.query(
+    `SELECT F_Id, project_number, project_abbreviation, enterprise_full_name, F_CreatorUserId,
+            data_app_id, data_app_name, exit_status, F_DeleteMark
+     FROM invested_enterprises WHERE F_DeleteMark = 0`
+  );
+  const filtered = [];
+  for (const row of ieRows) {
+    if (Number(row.F_DeleteMark) !== 0) continue;
+    if (String(row.exit_status || '').trim() === '已退出') continue;
+    if (!(await isInvestedEnterpriseCompetitorAnalysisApp(row))) continue;
+    if (!isAdmin && String(row.F_CreatorUserId) !== uid) continue;
+    if (years.length) {
+      const y = String(row.project_number || '').slice(0, 4);
+      if (!years.includes(y)) continue;
+    }
+    if (!exportAll && investedEnterpriseIds.length) {
+      if (!investedEnterpriseIds.includes(String(row.F_Id))) continue;
+    }
+    filtered.push(row);
+  }
+  if (!exportAll && investedEnterpriseIds.length) {
+    ieRows = investedEnterpriseIds
+      .map((id) => filtered.find((r) => String(r.F_Id) === String(id)))
+      .filter(Boolean);
+  } else {
+    ieRows = filtered;
+  }
+
+  const usedNames = new Set();
+  for (const ie of ieRows) {
+    let rels;
+    let versionMap = null;
+    let latestLabel = null;
+    if (allBatches) {
+      versionMap = await buildVersionLabelMapForInvestedEnterprise(ie.F_Id);
+      rels = await db.query(
+        `SELECT r.*
+         FROM sourcing_competitor_relation r
+         INNER JOIN sourcing_competitor_run run ON run.F_Id = r.run_id AND run.F_DeleteMark = 0
+         WHERE r.invested_enterprise_id = ?
+           AND (r.subject_type = 'invested_enterprise' OR r.subject_type IS NULL)
+         ORDER BY run.F_CreatorTime DESC, r.include_in_comparable DESC, r.relevance_score DESC, r.F_CreatorTime DESC`,
+        [ie.F_Id]
+      );
+    } else {
+      const runs = await listInvestedEnterpriseCompetitorRuns(ie.F_Id);
+      latestLabel = runs[0]?.version_label || null;
+      rels = await db.query(
+        `SELECT * FROM sourcing_competitor_relation
+         WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
+           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+         ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
+        [ie.F_Id]
+      );
+    }
+    if (!rels.length && exportAll) continue;
+    const abbrev = sanitizeExportFileBase(
+      ie.project_abbreviation || ie.enterprise_full_name || ie.F_Id
+    );
+    const fileName = allBatches
+      ? `${abbrev}-所有批次.xlsx`
+      : `${abbrev}-${latestLabel || '未命名版本'}.xlsx`;
+    const uniqueName = uniquifyFileName(fileName, usedNames);
+    const rows = rels.length
+      ? rels.map((rel) =>
+          relationToRow(rel, allBatches ? versionMap.get(String(rel.run_id)) || '' : null)
+        )
+      : [];
+    files.push({
+      name: uniqueName,
+      data: workbookBufferFromRows(headers, rows, abbrev),
+      subjectId: String(ie.F_Id),
+      abbrev,
+      versionLabel: allBatches ? null : latestLabel,
+    });
+  }
+  return { files, enterpriseCount: files.length };
+}
+
+function uniquifyFileName(name, used) {
+  if (!used.has(name)) {
+    used.add(name);
+    return name;
+  }
+  const m = String(name).match(/^(.*)(\.[^.]+)$/);
+  const base = m ? m[1] : name;
+  const ext = m ? m[2] : '';
+  let n = 2;
+  let next = `${base}_${n}${ext}`;
+  while (used.has(next)) {
+    n += 1;
+    next = `${base}_${n}${ext}`;
+  }
+  used.add(next);
+  return next;
+}
+
+/**
+ * 导出为单 xlsx（仅 1 个主体）或 ZIP（多个主体）
+ */
+async function exportCompetitorRelationsAsDownload(opts) {
+  const { files, enterpriseCount } = await buildCompetitorExportFileList(opts);
+  if (!files.length) {
+    const empty = workbookBufferFromRows(
+      opts.exportBatchMode === 'all' ? EXPORT_HEADERS_ALL_BATCHES : EXPORT_HEADERS,
+      [],
+      '无数据'
+    );
+    return {
+      buffer: empty,
+      filename: '竞品分析导出_无数据.xlsx',
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      fileCount: 0,
+      enterpriseCount: 0,
+    };
+  }
+  if (files.length === 1) {
+    return {
+      buffer: files[0].data,
+      filename: files[0].name,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      fileCount: 1,
+      enterpriseCount,
+    };
+  }
+  const { createZipBuffer } = require('../zipBuffer');
+  const isPre = opts.subjectType === 'pre_investment_project';
+  const zipName = isPre
+    ? `投前竞品导出_${files.length}项.zip`
+    : `竞品分析导出_${files.length}项.zip`;
+  return {
+    buffer: createZipBuffer(files.map((f) => ({ name: f.name, data: f.data }))),
+    filename: zipName,
+    contentType: 'application/zip',
+    fileCount: files.length,
+    enterpriseCount,
+    files,
+  };
+}
+
 /** 投前项目编号 P+年度 可选列表 */
-// fix #15: 非管理员仅需一次限定查询，避免先全量查询再丢弃结果
 async function listPreInvestmentYears(psUser, isAdmin) {
   const uid = psUser?.id ? String(psUser.id) : null;
   const baseWhere = `F_DeleteMark = 0 AND project_no IS NOT NULL AND LENGTH(TRIM(project_no)) >= 5 AND project_no LIKE 'P%'`;
@@ -500,9 +770,12 @@ async function listPreInvestmentYears(psUser, isAdmin) {
 
 module.exports = {
   exportCompetitorRelationsToBuffer,
+  exportCompetitorRelationsAsDownload,
+  buildCompetitorExportFileList,
   listInvestedEnterpriseYears,
   listPreInvestmentYears,
   buildPreInvestmentCompetitorExportWorkbook,
   EXPORT_HEADERS,
   EXPORT_HEADERS_ALL_BATCHES,
+  sanitizeExportFileBase,
 };

@@ -8534,6 +8534,59 @@ async function initializeTables(dbPool) {
   } catch (err) {
     console.warn('创建 sourcing_competitor_comparable_pref 时出现警告:', err.message);
   }
+
+  // 投后竞品分析 — 定时任务
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_schedule_task (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        recipient_emails VARCHAR(1000) NOT NULL COMMENT '收件人，逗号/分号分隔',
+        email_subject VARCHAR(255) NOT NULL COMMENT '邮件主题',
+        email_body TEXT NULL COMMENT '邮件正文',
+        cron_expression VARCHAR(128) NOT NULL COMMENT 'Cron（支持 Quartz 7 段）',
+        project_status VARCHAR(32) NOT NULL COMMENT '项目状态=被投 exit_status',
+        excluded_enterprise_ids JSON NULL COMMENT '长期排除的被投企业 ID 列表',
+        is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+        last_run_at DATETIME NULL COMMENT '最近执行时间',
+        last_run_status VARCHAR(32) NULL COMMENT '最近执行状态',
+        last_run_summary VARCHAR(500) NULL COMMENT '最近执行摘要',
+        F_CreatorUserId VARCHAR(19) NULL COMMENT '创建人',
+        F_LastModifyUserId VARCHAR(19) NULL COMMENT '修改人',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        KEY idx_scst_active (is_active, F_DeleteMark)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='投后竞品分析定时任务'
+    `);
+    console.log('✓ sourcing_competitor_schedule_task 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_schedule_task 时出现警告:', err.message);
+  }
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sourcing_competitor_schedule_run (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        task_id VARCHAR(19) NOT NULL COMMENT 'sourcing_competitor_schedule_task.F_Id',
+        status VARCHAR(32) NOT NULL DEFAULT 'running' COMMENT 'running/success/partial/failed/skipped',
+        trigger_type VARCHAR(16) NOT NULL DEFAULT 'cron' COMMENT 'cron/manual',
+        started_at DATETIME NULL COMMENT '开始时间',
+        finished_at DATETIME NULL COMMENT '结束时间',
+        included_enterprise_ids JSON NULL COMMENT '本次实际纳入的企业 ID（供下次状态不符对比）',
+        success_count INT NOT NULL DEFAULT 0,
+        fail_count INT NOT NULL DEFAULT 0,
+        skip_count INT NOT NULL DEFAULT 0,
+        result_json JSON NULL COMMENT '明细：成功/失败/状态不符等',
+        message VARCHAR(1000) NULL COMMENT '摘要',
+        F_CreatorUserId VARCHAR(19) NULL,
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+        KEY idx_scsr_task (task_id, F_CreatorTime)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='投后竞品分析定时任务执行日志'
+    `);
+    console.log('✓ sourcing_competitor_schedule_run 表已就绪');
+  } catch (err) {
+    console.warn('创建 sourcing_competitor_schedule_run 时出现警告:', err.message);
+  }
   try {
     const [ieCol] = await dbPool.query(
       `SELECT IS_NULLABLE FROM INFORMATION_SCHEMA.COLUMNS
