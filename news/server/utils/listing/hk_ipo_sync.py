@@ -9,7 +9,8 @@
 3) 环境变量 HK_IPO_CSV_PATH 或命令行 --csv：手工 UTF-8 CSV（优先级最高）。
 
 与 news/server/utils/listing/listingExchangeCrawler.js 中 insertRows 规则对齐：
-业务唯一键 exchange + company + status + board + 更新日历日（DATE(f_update_time)）；同一递表可在不同日期多条。
+业务唯一键 exchange + company + status + board + 更新日历日（DATE(F_UpdateTime)）；同一递表可在不同日期多条。
+库表列名与 Node insertRows 一致：F_CreatorTime / F_UpdateTime / F_Id（Linux MySQL 列名大小写敏感）。
 
 环境变量（与 Node db.js 一致）：DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 
@@ -373,11 +374,11 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             # 从而跳过本次应新增的日历日（日志里常表现为 builtRows 较大但 inserted 很少）。
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT f_id, f_update_time, code, project_name, register_address, receive_date
+                    """SELECT F_Id, F_UpdateTime, code, project_name, register_address, receive_date
                        FROM ipo_progress
                        WHERE F_DeleteMark = 0 AND exchange = %s AND company = %s AND status = %s AND board = %s
-                         AND DATE(f_update_time) = %s
-                       ORDER BY f_id ASC LIMIT 1""",
+                         AND DATE(F_UpdateTime) = %s
+                       ORDER BY F_Id ASC LIMIT 1""",
                     (exchange, company, status, board, date_str),
                 )
                 existing_same_day = cur.fetchall()
@@ -408,7 +409,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                         """UPDATE ipo_progress SET
                              code = %s, project_name = %s, register_address = %s, receive_date = %s,
                              F_LastModifyUserId = %s, F_LastModifyTime = NOW()
-                           WHERE f_id = %s AND F_DeleteMark = 0""",
+                           WHERE F_Id = %s AND F_DeleteMark = 0""",
                         (
                             new_code or old_code_s,
                             new_pn or old_pn_s,
@@ -430,7 +431,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             cur3 = conn.cursor()
             cur3.execute(
                 """INSERT INTO ipo_progress (
-                     f_create_date, f_update_time, code, project_name, status, register_address, receive_date,
+                     F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
                      company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0)""",
                 (

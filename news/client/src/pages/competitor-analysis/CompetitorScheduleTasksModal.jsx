@@ -380,7 +380,7 @@ export default function CompetitorScheduleTasksModal({ visible, onClose }) {
         visible={visible}
         onCancel={onClose}
         footer={null}
-        style={{ width: 1100 }}
+        style={{ width: 1360 }}
         unmountOnExit
       >
         <Space style={{ marginBottom: 12 }}>

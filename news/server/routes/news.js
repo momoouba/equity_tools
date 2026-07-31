@@ -59,16 +59,23 @@ async function getFundAndSubFundFromEnterprise(enterpriseFullName, unifiedCredit
       query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND unified_credit_code = ?`;
       params[0] = unifiedCreditCode.trim();
     } else if (wechatAccountId && wechatAccountId.trim() !== '') {
-      // 其次使用公众号ID匹配（支持逗号分隔的多个ID）
+      // 其次使用公众号ID匹配（支持逗号分隔的多个ID，与入库/分析侧一致）
       const accountIds = splitAccountIds(wechatAccountId);
       if (accountIds.length > 0) {
-        const placeholders = accountIds.map(() => '?').join(',');
-        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0)`;
-        params[0] = `%${accountIds[0]}%`;
-        // 如果只有一个ID，使用LIKE匹配；如果有多个，尝试FIND_IN_SET
-        if (accountIds.length > 1) {
-          query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND (wechat_official_account_id LIKE ? OR FIND_IN_SET(?, wechat_official_account_id) > 0) LIMIT 1`;
-        }
+        const accountId = accountIds[0];
+        query = `SELECT fund, sub_fund FROM invested_enterprises WHERE ${IE_NEWS_APP_FILTER_SQL} AND  F_DeleteMark = 0 AND (
+          wechat_official_account_id = ?
+          OR wechat_official_account_id LIKE ?
+          OR wechat_official_account_id LIKE ?
+          OR wechat_official_account_id LIKE ?
+        ) LIMIT 1`;
+        params.length = 0;
+        params.push(
+          accountId,
+          `${accountId},%`,
+          `%,${accountId},%`,
+          `%,${accountId}`
+        );
       }
     }
 

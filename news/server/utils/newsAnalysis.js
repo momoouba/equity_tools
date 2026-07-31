@@ -6442,44 +6442,84 @@ ${enterpriseList}
       // === 弱提及检测（仅在shouldValidate=false的新榜"免检通道"执行） ===
       // 修复：新榜接口跳过AI验证时，列举式提及的企业也会被保留的问题
       // 注意：shouldValidate=true的路径已经在validateExistingAssociation中完成了提及权重分析，不需要重复检测
+      // 企业公众号自有新闻必须保持关联：正文常不写工商全称/项目简称，弱提及规则不适用
       if (!shouldValidate && shouldKeepAssociation && finalEnterpriseName) {
-        // 确保内容有值（新榜免检通道可能未调用ensureNewsContent）
-        let weakMentionContent = newsItem.content || '';
-        if (weakMentionContent.trim().length < 50 && newsItem.source_url) {
+        let skipWeakMentionForOwnAccount = false;
+        if (newsItem.wechat_account) {
           try {
-            const fetchedContent = await this.ensureNewsContent(newsItem);
-            if (fetchedContent && fetchedContent.trim().length > weakMentionContent.trim().length) {
-              weakMentionContent = fetchedContent;
-            }
+            const wmFullNameForAccount = (() => {
+              const m = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
+              return m ? m[2].trim() : finalEnterpriseName;
+            })();
+            const ownAccountRows = await db.query(
+              `SELECT 1 FROM invested_enterprises
+               WHERE ${IE_NEWS_APP_FILTER_SQL} AND (
+                 enterprise_full_name = ? OR enterprise_full_name = ?
+               )
+               AND (wechat_official_account_id = ?
+                 OR wechat_official_account_id LIKE ?
+                 OR wechat_official_account_id LIKE ?
+                 OR wechat_official_account_id LIKE ?)
+               AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+               AND F_DeleteMark = 0
+               LIMIT 1`,
+              [
+                finalEnterpriseName,
+                wmFullNameForAccount,
+                newsItem.wechat_account,
+                `${newsItem.wechat_account},%`,
+                `%,${newsItem.wechat_account},%`,
+                `%,${newsItem.wechat_account}`
+              ]
+            );
+            skipWeakMentionForOwnAccount = ownAccountRows.length > 0;
           } catch (e) {
-            logWithTag('[processNewsWithEnterprise]', `弱提及检测前抓取内容失败: ${e.message}，使用原始内容`);
+            warnWithTag('[processNewsWithEnterprise]', `检查企业公众号豁免弱提及时出错: ${e.message}`);
           }
         }
 
-        // 解析企业名称格式（"简称【全称】"格式需拆分）
-        let wmEnterpriseName = finalEnterpriseName;
-        let wmFullName = finalEnterpriseName;
-        const wmFormatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
-        if (wmFormatMatch) {
-          wmEnterpriseName = wmFormatMatch[1].trim();
-          wmFullName = wmFormatMatch[2].trim();
-        }
-
-        const isWeakMention = this.detectWeakMention(
-          newsItem.title,
-          weakMentionContent,
-          wmEnterpriseName,
-          enterpriseAbbreviation || null,
-          wmFullName
-        );
-
-        if (isWeakMention) {
+        if (skipWeakMentionForOwnAccount) {
           logWithTag('[processNewsWithEnterprise]',
-            `🚫 弱提及检测：企业"${finalEnterpriseName}"在新闻中仅为顺带提及/列举提及（出现次数少、不在标题和开头），解除关联`);
-          shouldKeepAssociation = false;
-          finalEnterpriseName = null;
-          enterpriseAbbreviation = null;
-          entityTypeFromEnterpriseCheck = null;
+            `企业公众号自有新闻，跳过弱提及检测，保持关联: ${finalEnterpriseName}, 公众号: ${newsItem.wechat_account}`);
+        } else {
+          // 确保内容有值（新榜免检通道可能未调用ensureNewsContent）
+          let weakMentionContent = newsItem.content || '';
+          if (weakMentionContent.trim().length < 50 && newsItem.source_url) {
+            try {
+              const fetchedContent = await this.ensureNewsContent(newsItem);
+              if (fetchedContent && fetchedContent.trim().length > weakMentionContent.trim().length) {
+                weakMentionContent = fetchedContent;
+              }
+            } catch (e) {
+              logWithTag('[processNewsWithEnterprise]', `弱提及检测前抓取内容失败: ${e.message}，使用原始内容`);
+            }
+          }
+
+          // 解析企业名称格式（"简称【全称】"格式需拆分）
+          let wmEnterpriseName = finalEnterpriseName;
+          let wmFullName = finalEnterpriseName;
+          const wmFormatMatch = finalEnterpriseName.match(/^(.+?)【(.+?)】$/);
+          if (wmFormatMatch) {
+            wmEnterpriseName = wmFormatMatch[1].trim();
+            wmFullName = wmFormatMatch[2].trim();
+          }
+
+          const isWeakMention = this.detectWeakMention(
+            newsItem.title,
+            weakMentionContent,
+            wmEnterpriseName,
+            enterpriseAbbreviation || null,
+            wmFullName
+          );
+
+          if (isWeakMention) {
+            logWithTag('[processNewsWithEnterprise]',
+              `🚫 弱提及检测：企业"${finalEnterpriseName}"在新闻中仅为顺带提及/列举提及（出现次数少、不在标题和开头），解除关联`);
+            shouldKeepAssociation = false;
+            finalEnterpriseName = null;
+            enterpriseAbbreviation = null;
+            entityTypeFromEnterpriseCheck = null;
+          }
         }
       }
 

@@ -863,14 +863,7 @@ class WeChatArticleExtractor:
             
             # 其他情况，返回None
             print(f"⚠️ HTML内容可能无效（长度: {len(html_content)}字符，无文章标识）", file=sys.stderr)
-                return None
-            
-            # 检查是否包含实际文章内容（通过检查常见的文章标识）
-            if len(html_content) < 500:
-                print(f"返回内容太短，可能是错误页面", file=sys.stderr)
-                return None
-            
-            return html_content
+            return None
         except requests.exceptions.RequestException as e:
             print(f"请求失败: {str(e)}", file=sys.stderr)
             return None
