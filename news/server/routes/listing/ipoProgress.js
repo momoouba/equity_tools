@@ -45,6 +45,7 @@ async function buildIpoProgressWhere(req) {
   const exchange = (req.query.exchange || '').trim();
   const board = (req.query.board || '').trim();
   const status = (req.query.status || '').trim();
+  const timelineConfirmed = (req.query.timelineConfirmed || '').trim();
 
   const where = ['F_DeleteMark = 0'];
   const params = [];
@@ -73,6 +74,11 @@ async function buildIpoProgressWhere(req) {
   if (status) {
     where.push('status = ?');
     params.push(status);
+  }
+  if (timelineConfirmed === '1' || timelineConfirmed === 'confirmed') {
+    where.push('timeline_confirmed = 1');
+  } else if (timelineConfirmed === '0' || timelineConfirmed === 'pending') {
+    where.push('(timeline_confirmed = 0 OR timeline_confirmed IS NULL)');
   }
 
   const whereSql = `WHERE ${where.join(' AND ')}`;
@@ -107,6 +113,9 @@ async function listIpoProgress(req, res) {
          company,
          board,
          exchange,
+         exchange_project_id,
+         timeline_confirmed,
+         DATE_FORMAT(timeline_confirmed_at, '%Y-%m-%d %H:%i:%s') AS timeline_confirmed_at,
          F_CreatorUserId,
          F_LastModifyUserId,
          DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS F_LastModifyTime
@@ -384,11 +393,71 @@ async function softDeleteIpoProgress(req, res) {
   }
 }
 
+async function getIpoProgressRecheck(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!(await hasListingFeature(user.id, user.account, LISTING_FEATURE.IPO_PROGRESS))) return forbidden(res);
+
+    const fId = req.params.fId;
+    const { getRecheckSummaryForProgressRow } = require('../../utils/listing/ipoProgressRecheck');
+    const summary = await getRecheckSummaryForProgressRow(fId);
+    if (!summary) return res.status(404).json({ success: false, message: '记录不存在' });
+
+    const row = await db.query(
+      `SELECT F_Id, status, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time,
+              DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date,
+              timeline_confirmed, exchange, company, board
+       FROM ipo_progress WHERE F_Id = ? LIMIT 1`,
+      [fId]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        row: row[0] || null,
+        recheck: summary.rechecks || [],
+        projectKey: summary.projectKey,
+      },
+    });
+  } catch (e) {
+    console.error('getIpoProgressRecheck', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
+async function postIpoProgressBackfillTimeline(req, res) {
+  try {
+    const user = await getUserFromHeader(req);
+    if (!user) return unauthorized(res);
+    if (!isAdminAccount(user.account)) return forbidden(res);
+
+    const limit = Math.min(2000, Math.max(1, parseInt(req.body?.limit, 10) || 200));
+    const {
+      runIpoProgressBackfill,
+      runIpoProgressMatchCleanupAfterBackfill,
+    } = require('../../utils/listing/ipoProgressRecheck');
+
+    const backfill = await runIpoProgressBackfill({ limit, adminId: user.id });
+    let cleanup = null;
+    if (req.body?.runMatchCleanup) {
+      cleanup = await runIpoProgressMatchCleanupAfterBackfill();
+    }
+
+    return res.json({ success: true, data: { backfill, cleanup } });
+  } catch (e) {
+    console.error('postIpoProgressBackfillTimeline', e);
+    return res.status(500).json({ success: false, message: e.message || '服务器错误' });
+  }
+}
+
 function registerIpoProgressRoutes(router) {
   router.get('/ipo-progress', listIpoProgress);
   router.get('/ipo-progress/filter-options', listIpoProgressFilterOptions);
   router.get('/ipo-progress/stats', fetchIpoProgressStats);
   router.get('/ipo-progress/export', exportIpoProgressCsv);
+  router.get('/ipo-progress/:fId/recheck', getIpoProgressRecheck);
+  router.post('/ipo-progress/backfill-timeline', postIpoProgressBackfillTimeline);
   router.post('/ipo-progress', createIpoProgress);
   router.put('/ipo-progress/:fId', updateIpoProgress);
   router.delete('/ipo-progress/:fId', softDeleteIpoProgress);

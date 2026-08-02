@@ -2,7 +2,7 @@
  * 四家交易所 IPO 进展爬虫：HTTP + JSON/JSONP 接口直连。
  * - 深交所：https://www.szse.cn/api/ras/projectrends/query ?bizType=1 IPO
  * - 上交所：https://query.sse.com.cn/commonSoaQuery.do ?sqlId=SH_XM_LB
- * - 北交所：https://www.bse.cn/projectNewsController/infoResult.do (JSONP，需先获取 Cookie)
+ * - 北交所：列表 infoResult.do / 详情 infoDetailResult.do（JSONP，需先获取 Cookie；勿解析 SPA HTML）
  */
 
 const axios = require('axios');
@@ -11,6 +11,7 @@ const { runHkexAkshareIpoSync } = require('./hkexAkshareIpoSync');
 const { runIfindIpoSync } = require('./ifindIpoSync');
 const { decryptText } = require('./listingSecret');
 const { containsTraditional, normalizeCompanyName } = require('./zhconvUtils');
+const { isWatchlistStatus } = require('./ipoProgressWatchlist');
 
 const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
 
@@ -139,15 +140,38 @@ function ymdInRange(ymd, startYmd, endYmd) {
 }
 
 function toYmdLoose(v) {
-  const s = String(v || '').trim();
-  if (!s) return '';
-  const m = s.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (m) {
-    const mm = m[2].padStart(2, '0');
-    const dd = m[3].padStart(2, '0');
-    return `${m[1]}-${mm}-${dd}`;
+  if (v == null || v === '') return '';
+  // mysql2 / JS Date：禁止 String(date).slice(0,10) → "Wed Jul 01"
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    const bj = new Date(v.getTime() + 8 * 60 * 60 * 1000);
+    const y = bj.getUTCFullYear();
+    const m = String(bj.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(bj.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
   }
-  return s.slice(0, 10);
+  if (typeof v === 'object' && v.time != null) {
+    const ms = Number(v.time);
+    if (Number.isFinite(ms)) {
+      const bj = new Date(ms + 8 * 60 * 60 * 1000);
+      const y = bj.getUTCFullYear();
+      const m = String(bj.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(bj.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+  }
+  const s = String(v).trim();
+  if (!s) return '';
+  let m = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) {
+    return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  }
+  m = s.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (m) {
+    return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  }
+  // ISO 开头
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  return '';
 }
 
 function normalizeStatusText(s) {
@@ -162,6 +186,72 @@ function isStatusLikelySame(a, b) {
   const y = normalizeStatusText(b);
   if (!x || !y) return false;
   return x === y || x.includes(y) || y.includes(x);
+}
+
+function mapRowExchangeProjectId(row) {
+  if (!row || typeof row !== 'object') return '';
+  const ex = String(row.exchange || '').trim();
+  let pid = '';
+  if (ex === '深交所') pid = String(row._szse_prjid || row.exchange_project_id || '').trim();
+  else if (ex === '上交所') pid = String(row._sse_audit_id || row.exchange_project_id || '').trim();
+  else if (ex === '北交所') pid = String(row._bse_id || row.exchange_project_id || '').trim();
+  else pid = String(row.exchange_project_id || '').trim();
+  if (pid) row.exchange_project_id = pid;
+  return pid;
+}
+
+function findTimelineDateForStatus(timelineRows, listStatus) {
+  const timeline = normalizeTimelineRows(timelineRows || []);
+  const candidates = timeline.filter((t) => isStatusLikelySame(t.status, listStatus));
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => String(b.ymd).localeCompare(String(a.ymd)))[0];
+}
+
+async function applyTimelineConfirmationPolicy(rows, logTag = '[上市进展爬虫]') {
+  const { enqueueRecheck, buildProjectKey } = require('./ipoProgressRecheck');
+  let confirmed = 0;
+  let unconfirmed = 0;
+  let enqueued = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const ex = String(row.exchange || '').trim();
+    if (!['深交所', '上交所', '北交所'].includes(ex)) continue;
+    mapRowExchangeProjectId(row);
+    const status = String(row.status || '').trim();
+    const hit = findTimelineDateForStatus(row._timeline_rows, status);
+    if (hit?.ymd && isStatusLikelySame(hit.status, status)) {
+      row.receive_date = hit.ymd;
+      row._timeline_confirmed = 1;
+      row._timeline_confirmed_at = new Date();
+      confirmed += 1;
+      continue;
+    }
+    if (isWatchlistStatus(status)) {
+      row._timeline_confirmed = 0;
+      row._timeline_confirmed_at = null;
+      row.receive_date = null;
+      unconfirmed += 1;
+      const projectKey = row.exchange_project_id || buildProjectKey(ex, '', row.company, row.board);
+      if (projectKey) {
+        const r = await enqueueRecheck({
+          exchange: ex,
+          projectKey,
+          company: row.company,
+          board: row.board,
+          listStatus: status,
+          listUpdateYmd: toYmdLoose(row.f_update_time),
+          reason: row._detail_failed ? 'detail_http_failed' : 'timeline_missing_status_date',
+        });
+        if (r.enqueued) enqueued += 1;
+      }
+      continue;
+    }
+    row._timeline_confirmed = row.receive_date ? 1 : 0;
+    row._timeline_confirmed_at = row._timeline_confirmed ? new Date() : null;
+  }
+  if (confirmed || unconfirmed || enqueued) {
+    console.log(`${logTag} 详情确认策略：已确认=${confirmed} 待确认=${unconfirmed} 入队recheck=${enqueued}`);
+  }
+  return { confirmed, unconfirmed, enqueued };
 }
 
 function normalizeTimelineRows(rows) {
@@ -188,14 +278,20 @@ function expandRowsWithTimeline(rows, logTag = '[上市进展爬虫]') {
     const timeline = normalizeTimelineRows(row?._timeline_rows || []);
     if (!timeline.length) return;
     timeline.forEach((t) => {
+      // 同状态+同日：主行已覆盖。不同状态即使同日也必须扩行（北交所 6/30 已受理+中止）
       const sameCurrentStatus = isStatusLikelySame(t.status, row.status || '');
       const sameCurrentDate = toYmdLoose(row.f_update_time) === t.ymd;
       if (sameCurrentStatus && sameCurrentDate) return;
+      const sameReceiveDate = toYmdLoose(row.receive_date) === t.ymd;
+      if (sameCurrentStatus && sameReceiveDate) return;
       expanded.push({
         ...row,
         status: t.status,
         receive_date: t.ymd,
         f_update_time: `${t.ymd} 00:00:00`,
+        // 扩展行事件日来自时间轴，视为已对齐（与主行确认策略一致）
+        _timeline_confirmed: 1,
+        _timeline_confirmed_at: row._timeline_confirmed_at || new Date(),
       });
       added += 1;
     });
@@ -206,6 +302,22 @@ function expandRowsWithTimeline(rows, logTag = '[上市进展爬虫]') {
   return expanded;
 }
 
+function isTimelineAllowedStatusDate(allowedEntries, status, ymd) {
+  const st = String(status || '').trim();
+  const d = String(ymd || '').slice(0, 10);
+  if (!st || !d) return false;
+  if (allowedEntries.has(`${st}__${d}`)) return true;
+  for (const key of allowedEntries) {
+    const [aStatus, aYmd] = String(key).split('__');
+    if (aYmd === d && isStatusLikelySame(aStatus, st)) return true;
+  }
+  return false;
+}
+
+/**
+ * 软删「不在当前详情时间轴上的状态行」（§1.4.3 回摆：如中止不在轴上则逻辑删除）。
+ * 不仅清理同状态错日期，也清理时间轴已消失的状态（中止等）。
+ */
 async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进展爬虫]') {
   const list = Array.isArray(rows) ? rows : [];
   const group = new Map();
@@ -218,55 +330,43 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
     if (!timeline.length) return;
     const key = `${exchange}__${company}__${board}`;
     if (!group.has(key)) {
-      group.set(key, { exchange, company, board, allowed: new Set(), statuses: new Set() });
+      group.set(key, { exchange, company, board, allowed: new Set() });
     }
     const g = group.get(key);
     timeline.forEach((t) => {
       g.allowed.add(`${t.status}__${t.ymd}`);
-      g.statuses.add(t.status);
     });
   });
 
   let softDeleted = 0;
   for (const g of group.values()) {
-    const statuses = Array.from(g.statuses);
-    if (!statuses.length) continue;
-    const statusPlaceholders = statuses.map(() => '?').join(',');
-    const sql = `
-      UPDATE ipo_progress
-      SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
-      WHERE F_DeleteMark = 0
-        AND exchange = ?
-        AND company = ?
-        AND board = ?
-        AND status IN (${statusPlaceholders})
-    `;
-    const params = [adminId, g.exchange, g.company, g.board, ...statuses];
-    // 先查候选，避免误删；仅删除不在时间轴集合的状态+日期。
+    if (!g.allowed.size) continue;
+    // 取该公司全部有效行：事件日优先 receive_date
     const candidates = await db.query(
-      `SELECT F_Id, status, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd
+      `SELECT F_Id, status,
+              DATE_FORMAT(COALESCE(receive_date, F_UpdateTime), '%Y-%m-%d') AS ymd
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange = ?
          AND company = ?
-         AND board = ?
-         AND status IN (${statusPlaceholders})`,
-      [g.exchange, g.company, g.board, ...statuses]
+         AND board = ?`,
+      [g.exchange, g.company, g.board]
     );
     const toDeleteIds = candidates
-      .filter((x) => !g.allowed.has(`${String(x.status || '').trim()}__${String(x.ymd || '').slice(0, 10)}`))
+      .filter((x) => !isTimelineAllowedStatusDate(g.allowed, x.status, x.ymd))
       .map((x) => x.F_Id)
       .filter(Boolean);
     if (!toDeleteIds.length) continue;
-    // #17: 分块处理 IN 子句，避免占位符超限（替代原截断 500 方案，防止遗漏删除）
     const CHUNK = 500;
     for (let ci = 0; ci < toDeleteIds.length; ci += CHUNK) {
       const chunk = toDeleteIds.slice(ci, ci + CHUNK);
       const idPlaceholders = chunk.map(() => '?').join(',');
-      // 先清理关联的 ipo_project_progress（硬删除）
+      // 关联匹配行：软删（与补齐善后一致，避免硬删丢审计）
       await db.execute(
-        `DELETE FROM ipo_project_progress WHERE ipo_progress_row_id IN (${idPlaceholders})`,
-        [...chunk]
+        `UPDATE ipo_project_progress
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+         WHERE F_DeleteMark = 0 AND ipo_progress_row_id IN (${idPlaceholders})`,
+        [adminId, ...chunk]
       );
       const header = await db.execute(
         `UPDATE ipo_progress
@@ -278,7 +378,7 @@ async function pruneMismatchedTimelineRows(rows, adminId, logTag = '[上市进�
     }
   }
   if (softDeleted > 0) {
-    console.log(`${logTag} 详情时间轴反向清理：软删除错日期记录=${softDeleted}`);
+    console.log(`${logTag} 详情时间轴反向清理：软删除不在当前时间轴的记录=${softDeleted}`);
   }
   return { softDeleted };
 }
@@ -615,7 +715,13 @@ async function enrichSzseStatusDate(rows, logTag) {
   let skippedFresh = 0;
   for (let i = 0; i < targets.length; i += 1) {
     const row = targets[i];
-    if (row._filing_ymd && row._update_ymd && row._filing_ymd === row._update_ymd) {
+    // 宽名单不因「受理日=更新日」跳过详情（北交所同类问题）
+    if (
+      !isWatchlistStatus(row.status) &&
+      row._filing_ymd &&
+      row._update_ymd &&
+      row._filing_ymd === row._update_ymd
+    ) {
       skippedFresh += 1;
       continue;
     }
@@ -669,6 +775,61 @@ async function enrichSzseStatusDate(rows, logTag) {
   return { ok, failed, matched };
 }
 
+/**
+ * 上交所详情「其他」表（原因 + 披露日期）。多 sqlId 试探，失败返回空数组。
+ */
+async function fetchSseOtherEvents(auditId, logTag) {
+  const id = String(auditId || '').trim();
+  if (!id) return [];
+  const sqlIds = [
+    'GP_GPZCZ_XMQTBGLB',
+    'GP_GPZCZ_XM_QTBGLB',
+    'GP_GPZCZ_XMQTYJLB',
+    'GP_GPZCZ_XMDTQTLB',
+  ];
+  for (const sqlId of sqlIds) {
+    try {
+      const { data } = await getWithRetry(
+        'https://query.sse.com.cn/commonSoaQuery.do',
+        {
+          params: { sqlId, stockAuditNum: id, isPagination: false },
+          headers: {
+            Referer: `https://www.sse.com.cn/listing/renewal/ipo/index_listing_detail.shtml?auditId=${id}`,
+          },
+        },
+        {
+          attempts: 2,
+          baseDelayMs: 400,
+          maxDelayMs: 3000,
+          factor: 2,
+          blockedCooldownMs: 5 * 60 * 1000,
+          maxBlockedWaits: 1,
+          label: `SSE其他 ${sqlId} auditId=${id}`,
+        }
+      );
+      const list = Array.isArray(data?.result)
+        ? data.result
+        : Array.isArray(data?.pageHelp?.data)
+          ? data.pageHelp.data
+          : [];
+      if (!list.length) continue;
+      const events = list
+        .map((x) => ({
+          reason: String(x.reason || x.cause || x.content || x.remark || x.title || '').trim(),
+          ymd: toYmdLoose(x.publishDate || x.discloseDate || x.timesave || x.qianDate || x.updateDate),
+        }))
+        .filter((x) => x.ymd && x.reason);
+      if (events.length) {
+        console.log(`${logTag} 上交所其他披露命中 sqlId=${sqlId} 条数=${events.length}`);
+        return events;
+      }
+    } catch (e) {
+      // try next sqlId
+    }
+  }
+  return [];
+}
+
 async function enrichSseStatusDate(rows, logTag) {
   const targets = (Array.isArray(rows) ? rows : []).filter((r) => r.exchange === '\u4e0a\u4ea4\u6240' && r._sse_audit_id);
   if (!targets.length) return { ok: 0, failed: 0, matched: 0 };
@@ -678,7 +839,12 @@ async function enrichSseStatusDate(rows, logTag) {
   let skippedFresh = 0;
   for (let i = 0; i < targets.length; i += 1) {
     const row = targets[i];
-    if (row._filing_ymd && row._update_ymd && row._filing_ymd === row._update_ymd) {
+    if (
+      !isWatchlistStatus(row.status) &&
+      row._filing_ymd &&
+      row._update_ymd &&
+      row._filing_ymd === row._update_ymd
+    ) {
       skippedFresh += 1;
       continue;
     }
@@ -716,6 +882,21 @@ async function enrichSseStatusDate(rows, logTag) {
           ymd: toYmdLoose(x.publishDate || x.qianDate || x.timesave),
         }))
         .filter((x) => x.ymd);
+      // 「其他」披露：财务过期/补充材料等，写入 _other_events；不插入第二条已问询，仅辅助审计与中止识别
+      const otherEvents = await fetchSseOtherEvents(row._sse_audit_id, logTag);
+      row._other_events = otherEvents;
+      for (const ev of otherEvents) {
+        if (!ev.ymd) continue;
+        if (/中止|财务资料|过有效期|补充提交/.test(ev.reason || '')) {
+          const already = mapped.some((m) => isStatusLikelySame(m.status, '中止') && m.ymd === ev.ymd);
+          if (!already && /过有效期|中止/.test(ev.reason || '')) {
+            // 仅当列表当前仍为中止类时，把该披露日并入时间轴；回摆到已问询后由 prune 软删中止行
+            if (isStatusLikelySame(row.status, '中止') || /中止/.test(String(row.status || ''))) {
+              mapped.push({ status: '中止（财报更新）', ymd: ev.ymd });
+            }
+          }
+        }
+      }
       row._timeline_rows = mapped;
       const status = row.status || '';
       const candidates = mapped.filter((x) => isStatusLikelySame(x.status, status));
@@ -738,6 +919,90 @@ async function enrichSseStatusDate(rows, logTag) {
   return { ok, failed, matched };
 }
 
+/**
+ * 北交所详情 projectStatus → 时间轴（与官网 project_news_detail.min.js 字段一致）。
+ * SPA 详情页 HTML 无日期，必须走 infoDetailResult.do。
+ */
+function bseProjectStatusToTimeline(ps) {
+  if (!ps || typeof ps !== 'object') return [];
+  const rows = [];
+  const push = (status, dateObj) => {
+    const ymd = bseTimeToYmd(dateObj);
+    if (status && ymd) rows.push({ status, ymd });
+  };
+  push('已受理', ps.receiveDate);
+  push('已问询', ps.inquiryDate);
+  const lcYmd = bseTimeToYmd(ps.listingCommitteeDate);
+  if (lcYmd) {
+    const r = String(ps.listingCommitteeResult || '');
+    let st = '上市委会议通过';
+    if (r === '2') st = '上市委会议未通过';
+    else if (r === '3') st = '上市委会议暂缓';
+    else if (r === '1' || !r) st = '上市委会议通过';
+    rows.push({ status: st, ymd: lcYmd });
+  }
+  push('提交注册', ps.submitDate);
+  const arYmd = bseTimeToYmd(ps.approveResultDate);
+  if (arYmd) {
+    const c = String(ps.approveResult || '');
+    let st = '注册';
+    if (c === '2') st = '不予注册';
+    else if (c === '3') st = '终止';
+    else st = '注册';
+    rows.push({ status: st, ymd: arYmd });
+  }
+  push('中止', ps.suspendDate);
+  push('终止', ps.terminateDate);
+  return normalizeTimelineRows(rows);
+}
+
+async function fetchBseProjectStatusDetail(id, label) {
+  const pid = String(id || '').trim();
+  if (!pid) throw new Error('missing_id');
+  await ensureBseCookie();
+  const callback = `jsonp_${Date.now()}`;
+  const url = 'https://www.bse.cn/projectNewsController/infoDetailResult.do';
+  const params = { callback, id: pid };
+  const headers = {
+    Referer: `https://www.bse.cn/audit/project_news_detail.html?id=${encodeURIComponent(pid)}`,
+    Cookie: bseCookieHeader || undefined,
+    'X-Requested-With': 'XMLHttpRequest',
+  };
+  let resp = await getWithRetry(
+    url,
+    { maxRedirects: 0, params, headers, responseType: 'text' },
+    {
+      attempts: 3,
+      baseDelayMs: 700,
+      maxDelayMs: 5000,
+      factor: 2,
+      blockedCooldownMs: 15 * 60 * 1000,
+      maxBlockedWaits: 1,
+      label: label || `BSE详情API id=${pid}`,
+    }
+  );
+  if (resp.status >= 300 && resp.status < 400) {
+    await ensureBseCookie(true);
+    resp = await axiosJson.get(url, {
+      maxRedirects: 0,
+      params: { ...params, callback: `jsonp_${Date.now()}` },
+      headers: {
+        ...headers,
+        Cookie: bseCookieHeader || undefined,
+      },
+      responseType: 'text',
+    });
+    if (resp.status >= 300 && resp.status < 400) {
+      const loc = resp.headers?.location || '';
+      throw new Error(`详情API重定向(${resp.status})${loc ? ` -> ${loc}` : ''}`);
+    }
+  }
+  const parsed = parseJsonpBody(resp.data);
+  const pack = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!pack || typeof pack !== 'object') throw new Error('empty_detail_pack');
+  return pack;
+}
+
 async function enrichBseStatusDate(rows, logTag) {
   const targets = (Array.isArray(rows) ? rows : []).filter((r) => r.exchange === '\u5317\u4ea4\u6240' && r._bse_id);
   if (!targets.length) return { ok: 0, failed: 0, matched: 0 };
@@ -751,139 +1016,67 @@ async function enrichBseStatusDate(rows, logTag) {
   });
   let skippedFresh = 0;
   const detailTargets = targets.filter((r) => {
-    if (r._filing_ymd && r._update_ymd && r._filing_ymd === r._update_ymd) {
-      skippedFresh += 1;
-      return false;
+    const status = String(r.status || '').trim();
+    const opYmd = toYmdLoose(r._bse_operating_date);
+    const sameDayFiling = !!(r._filing_ymd && r._update_ymd && r._filing_ymd === r._update_ymd);
+    // 宽名单（已问询/中止/提交注册等）一律打详情 API
+    if (isWatchlistStatus(status)) return true;
+    // 北交所同日双事件：受理日=更新日时也可能叠加中止，禁止当「新备案」跳过
+    if (sameDayFiling) return true;
+    // 已受理且受理日≠更新日、列表已有 operatingTime：可跳过详情
+    if (opYmd) {
+      const norm = normalizeStatusText(status);
+      if (norm === '已受理') {
+        skippedFresh += 1;
+        return false;
+      }
     }
-    return !toYmdLoose(r._bse_operating_date);
+    return !opYmd;
   });
   if (!detailTargets.length) {
-    console.log(`${logTag} 北交所状态日期补齐：跳过新备案=${skippedFresh} 列表operatingTime直取成功=${fastApplied}（无需详情页）`);
+    console.log(
+      `${logTag} 北交所状态日期补齐：跳过可直取已受理=${skippedFresh} 列表operatingTime直取成功=${fastApplied}（无需详情API）`
+    );
     return { ok: fastApplied, failed: 0, matched: fastApplied };
-  }
-  await ensureBseCookie();
-  let detailUrlTemplates = null;
-  try {
-    const resp = await axiosJson.get('https://www.bse.cn/audit/project_news.html', {
-      headers: {
-        Referer: 'https://www.bse.cn/',
-        Cookie: bseCookieHeader || undefined,
-      },
-      responseType: 'text',
-    });
-    const html = String(resp?.data || '');
-    const pickValue = (id) => {
-      const re = new RegExp(`<[^>]*id=["']${id}["'][^>]*value=["']([^"']+)["'][^>]*>`, 'i');
-      const m = html.match(re);
-      return m && m[1] ? String(m[1]).trim() : '';
-    };
-    const detail = pickValue('project_news_detail');
-    const select = pickValue('project_news_select');
-    const toAbs = (u) => {
-      const s = String(u || '').trim();
-      if (!s) return '';
-      if (/^https?:\/\//i.test(s)) return s;
-      if (s.startsWith('/')) return `https://www.bse.cn${s}`;
-      return `https://www.bse.cn/${s}`;
-    };
-    detailUrlTemplates = [toAbs(detail), toAbs(select)].filter(Boolean);
-  } catch (e) {
-    detailUrlTemplates = null;
   }
   let ok = 0;
   let failed = 0;
   let matched = 0;
   const failedSamples = [];
-  const statusDateRe =
-    /(已受理|已问询|上市委会议通过|上市委会议未通过|上市委会议暂缓|提交注册|注册|不予注册|中止|终止)[^\d]{0,24}(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})/g;
   for (let i = 0; i < detailTargets.length; i += 1) {
     const row = detailTargets[i];
-      const id = String(row._bse_id || '').trim();
-      if (!id) {
-        failed += 1;
-        if (failedSamples.length < 5) {
-          failedSamples.push({
-            company: row.company || '',
-            status: row.status || '',
-            id: id || '',
-            update: String(row.f_update_time || '').slice(0, 10),
-            reason: 'missing_id',
-          });
-        }
-        continue;
+    const id = String(row._bse_id || row.exchange_project_id || '').trim();
+    if (!id) {
+      failed += 1;
+      row._detail_failed = true;
+      if (failedSamples.length < 5) {
+        failedSamples.push({
+          company: row.company || '',
+          status: row.status || '',
+          id: '',
+          update: toYmdLoose(row.f_update_time) || '',
+          reason: 'missing_id',
+        });
       }
-      const fromTpl = (Array.isArray(detailUrlTemplates) ? detailUrlTemplates : []).map((tpl) => {
-        if (/[?&]id=/.test(tpl)) return tpl.replace(/([?&]id=)[^&#]*/i, `$1${encodeURIComponent(id)}`);
-        return `${tpl}${tpl.includes('?') ? '&' : '?'}id=${encodeURIComponent(id)}`;
-      });
-      const urls = Array.from(
-        new Set([
-          ...fromTpl,
-          `https://www.bse.cn/audit/project_news_detail.html?id=${encodeURIComponent(id)}`,
-          `https://www.bse.cn/audit/project_news_details.html?id=${encodeURIComponent(id)}`,
-          `https://www.bse.cn/audit/project_detail.html?id=${encodeURIComponent(id)}`,
-        ])
+      continue;
+    }
+    try {
+      const pack = await fetchBseProjectStatusDetail(
+        id,
+        `BSE详情API id=${id} row=${i + 1}/${detailTargets.length}`
       );
-      let html = '';
-      for (const url of urls) {
-        try {
-          const resp = await getWithRetry(
-            url,
-            {
-              headers: {
-                Referer: 'https://www.bse.cn/audit/project_news.html',
-                Cookie: bseCookieHeader || undefined,
-              },
-              responseType: 'text',
-            },
-            {
-              attempts: 2,
-              baseDelayMs: 700,
-              maxDelayMs: 5000,
-              factor: 2,
-              blockedCooldownMs: 15 * 60 * 1000,
-              maxBlockedWaits: 1,
-              label: `BSE详情 id=${id} row=${i + 1}/${detailTargets.length}`,
-            }
-          );
-          const body = String(resp?.data || '');
-          if (body && !/404 Not Found|系统繁忙|302 Found/i.test(body)) {
-            html = body;
-            break;
-          }
-        } catch (e) {
-          // ignore and try next url
-        }
-      }
-      if (!html) {
-        failed += 1;
-        if (failedSamples.length < 5) {
-          failedSamples.push({
-            company: row.company || '',
-            status: row.status || '',
-            id,
-            update: String(row.f_update_time || '').slice(0, 10),
-            reason: 'empty_detail_html',
-          });
-        }
-        continue;
-      }
-      const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-      const candidates = [];
-      let m;
-      while ((m = statusDateRe.exec(text))) {
-        candidates.push({ status: m[1], ymd: toYmdLoose(m[2]) });
-      }
+      const timeline = bseProjectStatusToTimeline(pack.projectStatus);
+      row._timeline_rows = timeline;
       const status = row.status || '';
       const chosen =
-        candidates.find((x) => isStatusLikelySame(x.status, status) && x.ymd) ||
-        candidates.find((x) => x.ymd) ||
+        timeline.find((x) => isStatusLikelySame(x.status, status) && x.ymd) ||
+        timeline.find((x) => x.ymd) ||
         null;
       if (chosen?.ymd) {
         row.receive_date = chosen.ymd;
         ok += 1;
         matched += isStatusLikelySame(chosen.status, status) ? 1 : 0;
-        return;
+        continue;
       }
       failed += 1;
       if (failedSamples.length < 5) {
@@ -891,15 +1084,26 @@ async function enrichBseStatusDate(rows, logTag) {
           company: row.company || '',
           status: row.status || '',
           id,
-          update: String(row.f_update_time || '').slice(0, 10),
-          reason: 'no_status_date_match',
+          update: toYmdLoose(row.f_update_time) || '',
+          reason: timeline.length ? 'no_status_date_match' : 'empty_project_status',
         });
       }
+    } catch (e) {
+      failed += 1;
+      row._detail_failed = true;
+      if (failedSamples.length < 5) {
+        failedSamples.push({
+          company: row.company || '',
+          status: row.status || '',
+          id,
+          update: toYmdLoose(row.f_update_time) || '',
+          reason: String(e?.message || e || 'detail_api_error').slice(0, 80),
+        });
+      }
+    }
   }
   console.log(
-    `${logTag} 北交所状态日期补齐：跳过新备案=${skippedFresh} 列表直取=${fastApplied} 详情命中=${matched} 详情成功=${ok} 详情失败=${failed} 模板=${
-      Array.isArray(detailUrlTemplates) && detailUrlTemplates.length ? detailUrlTemplates.join(',') : '-'
-    }`
+    `${logTag} 北交所状态日期补齐：跳过可直取已受理=${skippedFresh} 列表直取=${fastApplied} 详情命中=${matched} 详情成功=${ok} 详情失败=${failed} 源=infoDetailResult.do`
   );
   if (failedSamples.length > 0) {
     const lines = failedSamples.map(
@@ -972,6 +1176,8 @@ async function ensureBseCookie(forceRefresh = false) {
     .filter(Boolean)
     .map(pickCookiePair);
   bseCookieHeader = mergeCookieHeader(bseCookieHeader, warmPairs);
+  // axios 拒绝 Cookie 头中的非 ASCII；脏字符会导致详情/列表请求异常
+  bseCookieHeader = String(bseCookieHeader || '').replace(/[^\x20-\x7E]/g, '');
 }
 
 function bseStatusToZh(code) {
@@ -1028,13 +1234,12 @@ function bsePickStatusDateYmd(row) {
   return null;
 }
 
-async function fetchBseIpoInRange(startYmd, endYmd) {
+async function fetchBseIpoInRangeForState(startYmd, endYmd, statetypes) {
   await ensureBseCookie();
   const out = [];
   const pageSize = 20;
   let page = 0;
   let totalPages = 1;
-  const statetypes = 'P01';
   const needFields = [
     'id',
     'stockCode',
@@ -1107,14 +1312,23 @@ async function fetchBseIpoInRange(startYmd, endYmd) {
       const u = bseTimeToYmd(r.updateDate);
       const statusDateYmd = bsePickStatusDateYmd(r) || u;
       const filingYmd = bseTimeToYmd(r.receiveDate) || '';
+      const statusZh = bseStatusToZh(r.status);
       if (u && (!pageMaxYmd || u > pageMaxYmd)) pageMaxYmd = u;
       if (!u || !ymdInRange(u, startYmd, endYmd)) continue;
+      // 列表侧先种一版时间轴：同日「已受理+中止」即使详情暂失败也能扩出双行
+      const listTimeline = [];
+      if (filingYmd) listTimeline.push({ status: '已受理', ymd: filingYmd });
+      if (/中止/.test(statusZh) && statusDateYmd) {
+        listTimeline.push({ status: '中止', ymd: statusDateYmd });
+      } else if (/终止/.test(statusZh) && statusDateYmd) {
+        listTimeline.push({ status: '终止', ymd: statusDateYmd });
+      }
       out.push({
         exchange: '\u5317\u4ea4\u6240',
         board: '\u5317\u4ea4\u6240',
         company: (r.companyName || '').trim(),
         project_name: (r.stockName || '').trim() || (r.companyName || '').trim(),
-        status: bseStatusToZh(r.status),
+        status: statusZh,
         register_address: (r.registerAddress || '').trim(),
         code: (r.stockCode || '').trim(),
         receive_date: statusDateYmd || null,
@@ -1123,6 +1337,7 @@ async function fetchBseIpoInRange(startYmd, endYmd) {
         _bse_operating_date: statusDateYmd || '',
         _update_ymd: u || '',
         _filing_ymd: filingYmd,
+        _timeline_rows: normalizeTimelineRows(listTimeline),
       });
     }
     if (content.length === 0) break;
@@ -1130,6 +1345,25 @@ async function fetchBseIpoInRange(startYmd, endYmd) {
     page += 1;
   }
   return out;
+}
+
+const BSE_STATE_CODES = ['P01', 'P02', 'P03', 'P04', 'P05', 'P06', 'P07', 'P08', 'P09', 'P10'];
+
+async function fetchBseIpoInRange(startYmd, endYmd) {
+  const byId = new Map();
+  for (const code of BSE_STATE_CODES) {
+    let batch = [];
+    try {
+      batch = await fetchBseIpoInRangeForState(startYmd, endYmd, code);
+    } catch (e) {
+      console.warn(`[上市进展爬虫] 北交所列表 statetypes=${code} 失败: ${e.message || e}`);
+    }
+    for (const row of batch) {
+      const id = String(row._bse_id || '').trim() || `${row.company}__${row.f_update_time}`;
+      if (!byId.has(id)) byId.set(id, row);
+    }
+  }
+  return Array.from(byId.values());
 }
 
 function stringifyFetchedSampleRow(row, idx) {
@@ -1284,6 +1518,44 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
     const status = String(r.status || '-').trim() || '-';
     const board = String(r.board || '').trim();
 
+    // 宽名单未确认行：同 exchange+company+board+status 仅保留一行，刷新列表更新日（§1.4.3）
+    if (
+      ['深交所', '上交所', '北交所'].includes(exchange) &&
+      Number(r._timeline_confirmed) === 0 &&
+      isWatchlistStatus(status)
+    ) {
+      const existingWatch = await db.query(
+        `SELECT F_Id FROM ipo_progress
+         WHERE F_DeleteMark = 0 AND exchange = ? AND company = ? AND board = ? AND status = ?
+           AND timeline_confirmed = 0
+         ORDER BY F_Id ASC LIMIT 1`,
+        [exchange, company, board, status]
+      );
+      if (existingWatch.length) {
+        const exchangeProjectId = mapRowExchangeProjectId(r) || null;
+        await db.execute(
+          `UPDATE ipo_progress SET
+             F_UpdateTime = ?, exchange_project_id = COALESCE(?, exchange_project_id),
+             project_name = ?, register_address = ?, code = ?,
+             receive_date = NULL, timeline_confirmed = 0, timeline_confirmed_at = NULL,
+             F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+           WHERE F_Id = ?`,
+          [
+            r.f_update_time || `${dateStr} 00:00:00`,
+            exchangeProjectId,
+            r.project_name || company,
+            r.register_address || '',
+            r.code || '',
+            adminId,
+            existingWatch[0].F_Id,
+          ]
+        );
+        updatedExisting += 1;
+        skipped += 1;
+        continue;
+      }
+    }
+
     const existing = await db.query(
       `SELECT F_Id, receive_date, project_name, register_address, code FROM ipo_progress
        WHERE F_DeleteMark = 0
@@ -1306,18 +1578,39 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       const newProject = String(r.project_name || company).trim();
       const newAddr = String(r.register_address || '').trim();
       const newCode = String(r.code || '').trim();
+      const exchangeProjectId = mapRowExchangeProjectId(r) || null;
+      const timelineConfirmed = r._timeline_confirmed != null ? Number(r._timeline_confirmed) : null;
+      const timelineConfirmedAt = r._timeline_confirmed_at || null;
+      const listUpdateTime = r.f_update_time || `${dateStr} 00:00:00`;
       const needRefresh =
         oldReceive !== newReceive ||
         oldProject !== newProject ||
         oldAddr !== newAddr ||
-        oldCode !== newCode;
+        oldCode !== newCode ||
+        exchangeProjectId ||
+        timelineConfirmed != null;
       if (needRefresh) {
         await db.execute(
           `UPDATE ipo_progress
            SET receive_date = ?, project_name = ?, register_address = ?, code = ?,
+               exchange_project_id = COALESCE(?, exchange_project_id),
+               timeline_confirmed = COALESCE(?, timeline_confirmed),
+               timeline_confirmed_at = COALESCE(?, timeline_confirmed_at),
+               F_UpdateTime = ?,
                F_LastModifyUserId = ?, F_LastModifyTime = NOW()
            WHERE F_Id = ? AND F_DeleteMark = 0`,
-          [newReceive, newProject, newAddr, newCode, adminId, old.F_Id]
+          [
+            newReceive,
+            newProject,
+            newAddr,
+            newCode,
+            exchangeProjectId,
+            timelineConfirmed,
+            timelineConfirmedAt,
+            listUpdateTime,
+            adminId,
+            old.F_Id,
+          ]
         );
         updatedExisting += 1;
       }
@@ -1340,10 +1633,14 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       [exchange, company, status, board, dedupeDateStr]
     );
     if (deletedSameKey.length) {
+      const exchangeProjectId = mapRowExchangeProjectId(r) || null;
+      const timelineConfirmed = r._timeline_confirmed != null ? Number(r._timeline_confirmed) : 1;
+      const timelineConfirmedAt = r._timeline_confirmed_at || (timelineConfirmed ? new Date() : null);
       await db.execute(
         `UPDATE ipo_progress SET
            F_CreatorTime = ?, F_UpdateTime = ?, code = ?, project_name = ?, status = ?, register_address = ?,
            receive_date = ?, company = ?, board = ?, exchange = ?,
+           exchange_project_id = ?, timeline_confirmed = ?, timeline_confirmed_at = ?,
            F_DeleteMark = 0, F_DeleteTime = NULL, F_DeleteUserId = NULL,
            F_LastModifyUserId = ?, F_LastModifyTime = NOW()
          WHERE F_Id = ?`,
@@ -1358,6 +1655,9 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
           company,
           board,
           exchange,
+          exchangeProjectId,
+          timelineConfirmed,
+          timelineConfirmedAt,
           adminId,
           deletedSameKey[0].F_Id,
         ]
@@ -1377,11 +1677,15 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       continue;
     }
 
+    const exchangeProjectId = mapRowExchangeProjectId(r) || null;
+    const timelineConfirmed = r._timeline_confirmed != null ? Number(r._timeline_confirmed) : 1;
+    const timelineConfirmedAt = r._timeline_confirmed_at || (timelineConfirmed ? new Date() : null);
     await db.execute(
       `INSERT INTO ipo_progress (
         F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
-        company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
+        company, board, exchange, exchange_project_id, timeline_confirmed, timeline_confirmed_at,
+        F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
       [
         dateStr,
         r.f_update_time || `${dateStr} 00:00:00`,
@@ -1393,6 +1697,9 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
         company,
         board,
         exchange,
+        exchangeProjectId,
+        timelineConfirmed,
+        timelineConfirmedAt,
         adminId,
         adminId,
       ]
@@ -1464,9 +1771,11 @@ async function runListingExchangeCrawler({
     fetchBseIpoInRange(startYmd, endYmd),
   ]);
   const labels = ['深交所', '上交所', '北交所'];
+  const fetchFns = [fetchSzseIpoInRange, fetchSseIpoInRange, fetchBseIpoInRange];
   const parts = [[], [], []];
   /** @type {{ exchange: string, message: string }[]} */
   const exchangeErrors = [];
+  const failedIndices = [];
   for (let i = 0; i < settled.length; i++) {
     const s = settled[i];
     if (s.status === 'fulfilled') {
@@ -1475,9 +1784,33 @@ async function runListingExchangeCrawler({
     } else {
       const msg = s.reason?.message || String(s.reason);
       exchangeErrors.push({ exchange: labels[i], message: msg });
+      failedIndices.push(i);
       await emit(`${logTag} ${labels[i]} 拉取失败: ${msg}`, true);
     }
   }
+
+  if (failedIndices.length) {
+    await emit(`${logTag} 失败所重试 1 次: ${failedIndices.map((i) => labels[i]).join('、')}`);
+    const retrySettled = await Promise.allSettled(
+      failedIndices.map((i) => fetchFns[i](startYmd, endYmd))
+    );
+    for (let ri = 0; ri < failedIndices.length; ri++) {
+      const i = failedIndices[ri];
+      const rs = retrySettled[ri];
+      if (rs.status === 'fulfilled') {
+        parts[i] = rs.value;
+        const errIdx = exchangeErrors.findIndex((e) => e.exchange === labels[i]);
+        if (errIdx >= 0) exchangeErrors.splice(errIdx, 1);
+        await emit(`${logTag} ${labels[i]} 重试成功 返回 ${parts[i].length} 条`);
+      } else {
+        const msg = rs.reason?.message || String(rs.reason);
+        const errIdx = exchangeErrors.findIndex((e) => e.exchange === labels[i]);
+        if (errIdx >= 0) exchangeErrors[errIdx].message = msg;
+        await emit(`${logTag} ${labels[i]} 重试仍失败: ${msg}`, true);
+      }
+    }
+  }
+
   const merged = [...parts[0], ...parts[1], ...parts[2]];
   // #11: 三家交易所详情补全并行化（各函数仅处理本所行，互不干扰），提速约 3 倍
   const [szseEnrich, sseEnrich, bseEnrich] = await Promise.all([
@@ -1486,6 +1819,7 @@ async function runListingExchangeCrawler({
     enrichBseStatusDate(merged, logTag),
   ]);
   await migrateStaleTimelineDates(merged, adminId, logTag);
+  await applyTimelineConfirmationPolicy(merged, logTag);
   await pruneMismatchedTimelineRows(merged, adminId, logTag);
   const mergedExpanded = expandRowsWithTimeline(merged, logTag);
   await emit(`${logTag} 三家合并共 ${mergedExpanded.length} 条，开始去重入库 ipo_progress`);
@@ -1575,6 +1909,27 @@ async function runListingExchangeCrawler({
     await emit(`${logTag} 本次无写入（同交易所+公司+状态+板块+更新日期已存在）`);
   }
 
+  let recheckResult = null;
+  let dirtyCheckResult = null;
+  try {
+    const { processIpoProgressRecheck } = require('./ipoProgressRecheck');
+    recheckResult = await processIpoProgressRecheck({ adminId, logTag: `${logTag}[recheck]` });
+    await emit(
+      `${logTag}[recheck] 完成 processed=${recheckResult.processed} confirmed=${recheckResult.confirmed} failed=${recheckResult.failed} expired=${recheckResult.expired}`
+    );
+  } catch (e) {
+    await emit(`${logTag}[recheck] 异常: ${e.message}`, true);
+  }
+  try {
+    const { processIpoProgressDirtyCheck } = require('./ipoProgressDirtyCheck');
+    dirtyCheckResult = await processIpoProgressDirtyCheck({ adminId, logTag: `${logTag}[脏检查]` });
+    await emit(
+      `${logTag}[脏检查] 完成 checked=${dirtyCheckResult.checked} confirmed=${dirtyCheckResult.confirmed} enqueued=${dirtyCheckResult.enqueued}`
+    );
+  } catch (e) {
+    await emit(`${logTag}[脏检查] 异常: ${e.message}`, true);
+  }
+
   return {
     ...result,
     fetched: {
@@ -1600,9 +1955,52 @@ async function runListingExchangeCrawler({
       fallbackError: hkexIpo?.stderr || '',
     },
     exchangeErrors,
+    recheckResult,
+    dirtyCheckResult,
     ifindIpo,
     hkexIpo,
   };
 }
 
-module.exports = { runListingExchangeCrawler };
+async function enrichSingleExchangeRowDetail(row, logTag = '[上市进展详情]') {
+  const ex = String(row?.exchange || '').trim();
+  if (!ex || !['深交所', '上交所', '北交所'].includes(ex)) {
+    return { ok: false, error: 'unsupported_exchange' };
+  }
+  const batch = [row];
+  try {
+    if (ex === '深交所') await enrichSzseStatusDate(batch, logTag);
+    else if (ex === '上交所') await enrichSseStatusDate(batch, logTag);
+    else await enrichBseStatusDate(batch, logTag);
+    mapRowExchangeProjectId(row);
+    const hit = findTimelineDateForStatus(row._timeline_rows, row.status);
+    if (hit?.ymd) return { ok: true, ymd: hit.ymd, timeline: row._timeline_rows };
+    if (row.receive_date) return { ok: true, ymd: toYmdLoose(row.receive_date), timeline: row._timeline_rows };
+    return { ok: false, error: 'detail_parse_failed', timeline: row._timeline_rows };
+  } catch (e) {
+    row._detail_failed = true;
+    return { ok: false, error: String(e.message || e) };
+  }
+}
+
+module.exports = {
+  runListingExchangeCrawler,
+  enrichSingleExchangeRowDetail,
+  enrichSzseStatusDate,
+  enrichSseStatusDate,
+  enrichBseStatusDate,
+  fetchBseProjectStatusDetail,
+  bseProjectStatusToTimeline,
+  applyTimelineConfirmationPolicy,
+  expandRowsWithTimeline,
+  fetchSzseIpoInRange,
+  fetchSseIpoInRange,
+  fetchBseIpoInRange,
+  insertRows,
+  isStatusLikelySame,
+  toYmdLoose,
+  normalizeTimelineRows,
+  mapRowExchangeProjectId,
+  pruneMismatchedTimelineRows,
+  findTimelineDateForStatus,
+};

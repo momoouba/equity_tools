@@ -5,6 +5,7 @@ import {
   fetchIpoProgressList,
   fetchIpoProgressFilterOptions,
   fetchIpoProgressStats,
+  fetchIpoProgressRecheck,
   downloadIpoProgressExport,
   createIpoProgress,
   updateIpoProgress,
@@ -55,6 +56,7 @@ export default function ListingIpoProgressPage() {
   const [exchange, setExchange] = useState('')
   const [board, setBoard] = useState('')
   const [status, setStatus] = useState('')
+  const [timelineConfirmed, setTimelineConfirmed] = useState('')
   const isAdmin = useMemo(() => readIsAdmin(), [])
 
   const [editOpen, setEditOpen] = useState(false)
@@ -63,6 +65,9 @@ export default function ListingIpoProgressPage() {
   const [logOpen, setLogOpen] = useState(false)
   const [logRows, setLogRows] = useState([])
   const [logLoading, setLogLoading] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmLoading, setConfirmLoading] = useState(false)
+  const [confirmDetail, setConfirmDetail] = useState(null)
   const [tableScrollY, setTableScrollY] = useState(520)
   const [stats, setStats] = useState({
     yesterday: '',
@@ -87,6 +92,7 @@ export default function ListingIpoProgressPage() {
         exchange,
         board,
         status,
+        timelineConfirmed,
       })
       if (res.data?.success) {
         const d = res.data.data || {}
@@ -101,7 +107,7 @@ export default function ListingIpoProgressPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, kwSearch, sourceCategory, exchange, board, status])
+  }, [page, pageSize, kwSearch, sourceCategory, exchange, board, status, timelineConfirmed])
 
   useEffect(() => {
     load()
@@ -158,7 +164,7 @@ export default function ListingIpoProgressPage() {
 
   const handleExport = async () => {
     try {
-      const res = await downloadIpoProgressExport({ keyword: kwSearch, sourceCategory, exchange, board, status })
+      const res = await downloadIpoProgressExport({ keyword: kwSearch, sourceCategory, exchange, board, status, timelineConfirmed })
       saveBlobAsCsv(res)
       Message.success('已开始下载')
     } catch (e) {
@@ -172,6 +178,7 @@ export default function ListingIpoProgressPage() {
     setExchange('')
     setBoard('')
     setStatus('')
+    setTimelineConfirmed('')
     setPage(1)
     if (kwSearch) {
       setKwSearch('')
@@ -273,6 +280,21 @@ export default function ListingIpoProgressPage() {
     }
   }
 
+  const openConfirmDetail = async (record) => {
+    setEditing(record)
+    setConfirmOpen(true)
+    setConfirmLoading(true)
+    setConfirmDetail(null)
+    try {
+      const res = await fetchIpoProgressRecheck(record.f_id)
+      if (res.data?.success) setConfirmDetail(res.data.data)
+    } catch {
+      setConfirmDetail({ row: record, recheck: [] })
+    } finally {
+      setConfirmLoading(false)
+    }
+  }
+
   const columns = [
     {
       title: '更新日期',
@@ -286,6 +308,21 @@ export default function ListingIpoProgressPage() {
     { title: '交易所', dataIndex: 'exchange', width: 140, render: (v) => v || '-' },
     { title: '板块', dataIndex: 'board', width: 120, render: (v) => v || '-' },
     { title: '注册地', dataIndex: 'register_address', width: 140, ellipsis: true, render: (v) => v || '-' },
+    {
+      title: '详情确认',
+      dataIndex: 'timeline_confirmed',
+      width: 110,
+      render: (v, record) => {
+        const confirmed = Number(v) === 1
+        const label = confirmed ? '已确认' : '待确认'
+        if (confirmed) return label
+        return (
+          <Button type="text" size="mini" onClick={() => openConfirmDetail(record)}>
+            {label}
+          </Button>
+        )
+      },
+    },
   ]
 
   if (isAdmin) {
@@ -413,6 +450,20 @@ export default function ListingIpoProgressPage() {
                 </Option>
               ))}
             </Select>
+            <Select
+              style={{ width: 140 }}
+              allowClear
+              placeholder="详情确认"
+              value={timelineConfirmed || undefined}
+              onChange={(v) => {
+                setPage(1)
+                setTimelineConfirmed(v || '')
+              }}
+            >
+              <Option value="">全部</Option>
+              <Option value="1">已确认</Option>
+              <Option value="0">待确认</Option>
+            </Select>
             <Button
               type="primary"
               onClick={() => {
@@ -534,6 +585,49 @@ export default function ListingIpoProgressPage() {
             <Input />
           </FormItem>
         </Form>
+      </Modal>
+
+      <Modal
+        title="详情确认 / 待复核"
+        visible={confirmOpen}
+        footer={null}
+        onCancel={() => setConfirmOpen(false)}
+        style={{ width: 560 }}
+      >
+        {confirmLoading ? (
+          <div>加载中…</div>
+        ) : (
+          <div>
+            <p>
+              <strong>审核状态：</strong>
+              {confirmDetail?.row?.status || editing?.status || '-'}
+            </p>
+            <p>
+              <strong>列表更新日期：</strong>
+              {confirmDetail?.row?.f_update_time || editing?.f_update_time || '-'}
+            </p>
+            <p>
+              <strong>事件日（receive_date）：</strong>
+              {confirmDetail?.row?.receive_date || '（空）'}
+            </p>
+            {Array.isArray(confirmDetail?.recheck) && confirmDetail.recheck.length > 0 ? (
+              <Table
+                size="small"
+                rowKey={(r, i) => `${r.reason}-${i}`}
+                pagination={false}
+                columns={[
+                  { title: '原因', dataIndex: 'reason', width: 160 },
+                  { title: '次数', render: (_, r) => `${r.attempts}/${r.max_attempts}` },
+                  { title: '下次复核', dataIndex: 'next_recheck_at', width: 160 },
+                  { title: '最近错误', dataIndex: 'last_error', ellipsis: true },
+                ]}
+                data={confirmDetail.recheck}
+              />
+            ) : (
+              <div style={{ color: '#86909c' }}>暂无 recheck 队列记录</div>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal

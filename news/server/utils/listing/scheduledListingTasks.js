@@ -23,9 +23,12 @@ const sqlSyncScheduledTasks = new Map();
 // #13: 互斥锁改用 DB 持久化（替代原内存 Set），PM2 等进程重启后不会丢失
 const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
 
+/** 心跳超过该分钟数视为僵尸（杀进程后 finally 无法释放锁） */
+const STALE_LOCK_HEARTBEAT_MINUTES = 45;
+
 /**
  * #13: 尝试获取 DB 持久化任务锁（替代内存 Set，进程重启后不丢失）。
- * - 先清理超过 2 小时的过期锁（防止崩溃后死锁）
+ * - 清理：超过 2 小时的锁；或无「心跳新鲜」的 running 执行日志的孤儿锁
  * - 再 INSERT IGNORE 尝试获取锁
  * @returns {Promise<boolean>} 是否成功获取锁
  */
@@ -35,11 +38,24 @@ async function tryAcquireTaskLock(taskKey) {
       `DELETE FROM listing_sync_task_lock WHERE task_key = ? AND F_CreatorTime < DATE_SUB(NOW(), INTERVAL 2 HOUR)`,
       [taskKey]
     );
-    const [res] = await db.execute(
+    // 进程被杀时 finally 不跑：锁还在，但执行日志无新鲜心跳 → 允许抢占
+    await db.execute(
+      `DELETE l FROM listing_sync_task_lock l
+       WHERE l.task_key = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM listing_sync_execution_log e
+            WHERE e.task_key = l.task_key
+              AND e.status = 'running'
+              AND COALESCE(e.heartbeat_at, e.started_at, e.F_CreatorTime) > DATE_SUB(NOW(), INTERVAL ? MINUTE)
+         )`,
+      [taskKey, STALE_LOCK_HEARTBEAT_MINUTES]
+    );
+    // db.execute 直接返回 ResultSetHeader，不可再解构为 [res]
+    const res = await db.execute(
       `INSERT IGNORE INTO listing_sync_task_lock (task_key, F_CreatorTime) VALUES (?, NOW())`,
       [taskKey]
     );
-    return res.affectedRows > 0;
+    return Number(res?.affectedRows || 0) > 0;
   } catch (e) {
     // 表不存在时自动降级为允许执行（首次运行需手动建表或由 migration 创建）
     console.warn('[上市进展定时] 任务锁表异常，降级为允许执行:', e.message);
@@ -55,6 +71,36 @@ async function releaseTaskLock(taskKey) {
     await db.execute(`DELETE FROM listing_sync_task_lock WHERE task_key = ?`, [taskKey]);
   } catch (e) {
     console.warn('[上市进展定时] 释放任务锁异常:', e.message);
+  }
+}
+
+/**
+ * 服务启动时：清空任务锁，并把仍为 running 的执行日志标为中断。
+ * 全量重启后内存中不可能还有在跑的同步；否则会误报「同源同窗口任务正在执行」。
+ */
+async function recoverListingSyncLocksOnStartup() {
+  try {
+    const del = await db.execute(`DELETE FROM listing_sync_task_lock`);
+    const upd = await db.execute(
+      `UPDATE listing_sync_execution_log
+          SET status = 'failed',
+              error_message = CONCAT(
+                COALESCE(NULLIF(error_message, ''), ''),
+                CASE WHEN COALESCE(error_message, '') = '' THEN '' ELSE ' | ' END,
+                '服务重启，任务中断'
+              ),
+              finished_at = NOW(),
+              heartbeat_at = NOW(),
+              F_LastModifyTime = NOW()
+        WHERE status = 'running'`
+    );
+    const lockN = Number(del?.affectedRows || 0);
+    const logN = Number(upd?.affectedRows || 0);
+    if (lockN || logN) {
+      console.log(`[上市进展定时] 启动恢复：清除任务锁=${lockN}，中断 running 日志=${logN}`);
+    }
+  } catch (e) {
+    console.warn('[上市进展定时] 启动恢复任务锁异常（不影响后续）:', e.message);
   }
 }
 
@@ -374,8 +420,12 @@ async function executeListingSyncTask(configId) {
     const result = { ...syncResult, matchResult };
     const hasSyncError = syncError !== null;
     const hasMatchError = matchError !== null;
-    // 仅在同步无错误时推进 last_sync_range_end，否则下次运行会重试该日期区间
-    if (!hasSyncError) {
+    const hasExchangeErrors =
+      sourceType === 'exchange_crawler' &&
+      Array.isArray(syncResult?.exchangeErrors) &&
+      syncResult.exchangeErrors.length > 0;
+    // 仅在同步无错误且无交易所失败时推进 last_sync_range_end
+    if (!hasSyncError && !hasExchangeErrors) {
       const rangeEndStored = sourceType === 'new_share' ? formatDateOnly(baseRunDate) : endDate;
       await db.execute(
         `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
@@ -390,7 +440,7 @@ async function executeListingSyncTask(configId) {
     }
 
     // 判断整体状态：如果数据入库或项目匹配有异常，记录为 partial_success 或 failed
-    const overallStatus = (hasSyncError || hasMatchError)
+    const overallStatus = (hasSyncError || hasMatchError || hasExchangeErrors)
       ? (syncResult ? 'partial_success' : 'failed')
       : 'success';
 
@@ -401,7 +451,13 @@ async function executeListingSyncTask(configId) {
       dedupHits: Number(syncResult?.skipped || 0),
       matchedCount: Number(matchResult?.matched || 0),
       status: overallStatus,
-      errorMessage: hasSyncError ? `入库异常: ${syncError.message}` : (hasMatchError ? `匹配异常: ${matchError.message}` : null),
+      errorMessage: hasSyncError
+        ? `入库异常: ${syncError.message}`
+        : hasExchangeErrors
+          ? `部分交易所失败: ${syncResult.exchangeErrors.map((e) => e.exchange).join('、')}`
+          : hasMatchError
+            ? `匹配异常: ${matchError.message}`
+            : null,
     });
 
     // 如果数据入库有严重错误（无任何数据入库），抛出异常触发告警
@@ -581,6 +637,7 @@ async function updateListingScheduledTasks() {
 }
 
 async function initializeListingScheduledTasks() {
+  await recoverListingSyncLocksOnStartup();
   await updateListingScheduledTasks();
 
   // 启动时立即执行一次繁体数据清理（处理历史存量数据）
@@ -635,4 +692,5 @@ module.exports = {
   executeListingSyncTask,
   tryAcquireTaskLock,
   releaseTaskLock,
+  recoverListingSyncLocksOnStartup,
 };

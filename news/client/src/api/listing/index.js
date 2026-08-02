@@ -10,6 +10,14 @@ export function fetchIpoProgressList(params) {
   return axios.get(`${base}/ipo-progress`, { params })
 }
 
+export function fetchIpoProgressRecheck(fId) {
+  return axios.get(`${base}/ipo-progress/${fId}/recheck`)
+}
+
+export function postIpoProgressBackfillTimeline(body) {
+  return axios.post(`${base}/ipo-progress/backfill-timeline`, body)
+}
+
 export function fetchIpoProgressStats() {
   return axios.get(`${base}/ipo-progress/stats`)
 }

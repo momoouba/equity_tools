@@ -489,7 +489,11 @@ async function syncListingConfig(req, res) {
     // #13: 使用 DB 持久化锁替代内存 Set
     const manualLockAcquired = await tryAcquireTaskLock(taskKey);
     if (!manualLockAcquired) {
-      return res.status(409).json({ success: false, message: '同源同窗口任务正在执行，请稍后重试' });
+      return res.status(409).json({
+        success: false,
+        message:
+          '同源同窗口任务正在执行，请稍后重试。若刚杀进程/重启仍看到此提示：再重启一次服务即可自动清锁',
+      });
     }
 
     let logId = null;
@@ -614,14 +618,26 @@ async function syncListingConfig(req, res) {
 
       const result = wrapped.result || {};
       const hkexMeta = result.hkexSourceMeta || null;
+      const hasExchangeErrors =
+        sourceType === 'exchange_crawler' &&
+        Array.isArray(result.exchangeErrors) &&
+        result.exchangeErrors.length > 0;
       const rangeEndStored =
         sourceType === 'new_share' ? formatDateOnly(createShanghaiDate()) : endDateFinal;
-      await db.execute(
-        `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
-        [rangeEndStored, cfg.id]
-      );
+      if (!hasExchangeErrors) {
+        await db.execute(
+          `UPDATE listing_data_config SET last_sync_time = NOW(), last_sync_range_end = ? WHERE F_Id = ?`,
+          [rangeEndStored, cfg.id]
+        );
+      } else {
+        await db.execute(`UPDATE listing_data_config SET last_sync_time = NOW() WHERE F_Id = ?`, [cfg.id]);
+        await appendExecutionLogProgress(
+          logId,
+          `部分交易所失败，未推进水位：${result.exchangeErrors.map((e) => `${e.exchange}(${e.message})`).join('；')}`
+        );
+      }
       await finishExecutionLog(logId, {
-        status: 'success',
+        status: hasExchangeErrors ? 'partial_success' : 'success',
         retryCount: Number(wrapped.attemptCount || 1) - 1,
         insertedCount: Number(result.inserted || 0),
         updatedCount: Number(result.updated || result.updatedEarlier || 0),

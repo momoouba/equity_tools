@@ -5986,6 +5986,78 @@ async function initializeTables(dbPool) {
     console.warn('创建 ipo_progress 表时出现警告:', err.message);
   }
 
+  const addIpoProgressCol = async (name, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ipo_progress' AND COLUMN_NAME = ?`,
+        [name]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE ipo_progress ${ddl}`);
+        console.log(`  ✓ 已为 ipo_progress 表添加 ${name} 字段`);
+        return true;
+      }
+      return false;
+    } catch (err) {
+      console.warn(`检查/添加 ipo_progress.${name} 时出现警告:`, err.message);
+      return false;
+    }
+  };
+
+  try {
+    await addIpoProgressCol(
+      'exchange_project_id',
+      `ADD COLUMN exchange_project_id VARCHAR(64) NULL COMMENT '所侧项目ID' AFTER exchange`
+    );
+    const addedTimelineConfirmed = await addIpoProgressCol(
+      'timeline_confirmed',
+      `ADD COLUMN timeline_confirmed TINYINT(1) NOT NULL DEFAULT 0 COMMENT '详情时间轴已确认' AFTER exchange_project_id`
+    );
+    await addIpoProgressCol(
+      'timeline_confirmed_at',
+      `ADD COLUMN timeline_confirmed_at DATETIME NULL COMMENT '详情确认时间（匹配主窗）' AFTER timeline_confirmed`
+    );
+    if (addedTimelineConfirmed) {
+      await dbPool.query(`
+        UPDATE ipo_progress
+        SET timeline_confirmed = 1,
+            timeline_confirmed_at = COALESCE(F_LastModifyTime, F_UpdateTime)
+        WHERE timeline_confirmed = 0
+      `);
+      console.log('  ✓ 已迁移历史 ipo_progress 行为 timeline_confirmed=1');
+    }
+  } catch (err) {
+    console.warn('迁移 ipo_progress 确认字段时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS ipo_progress_recheck (
+        F_Id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '主键',
+        exchange VARCHAR(20) NOT NULL COMMENT '交易所',
+        project_key VARCHAR(128) NOT NULL COMMENT '所侧项目ID或降级键',
+        company TEXT NOT NULL COMMENT '公司全称',
+        board VARCHAR(20) NOT NULL DEFAULT '' COMMENT '板块',
+        list_status VARCHAR(50) NOT NULL COMMENT '入队时列表状态',
+        list_update_ymd DATE NULL COMMENT '入队时列表更新日',
+        reason VARCHAR(64) NOT NULL DEFAULT 'timeline_missing_status_date' COMMENT '入队原因',
+        attempts INT NOT NULL DEFAULT 0 COMMENT '已复核次数',
+        max_attempts INT NOT NULL DEFAULT 21 COMMENT '上限（深上21北45）',
+        next_recheck_at DATETIME NOT NULL COMMENT '下次可执行时间',
+        last_error VARCHAR(500) NULL COMMENT '最近失败原因',
+        status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending|done|expired|cancelled',
+        F_CreatorTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        F_UpdateTime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_recheck_pending (status, next_recheck_at),
+        KEY idx_recheck_exchange_project (exchange, project_key)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='IPO进展详情待复核队列';
+    `);
+    console.log('✓ ipo_progress_recheck 表已就绪');
+  } catch (err) {
+    console.warn('创建 ipo_progress_recheck 表时出现警告:', err.message);
+  }
+
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS ipo_project (

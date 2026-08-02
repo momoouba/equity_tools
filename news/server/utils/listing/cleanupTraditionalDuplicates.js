@@ -87,8 +87,8 @@ async function chunkedInExecute(sqlTemplate, ids, prefixParams = []) {
     const chunk = ids.slice(i, i + MAX_IN_CLAUSE_SIZE);
     const placeholders = chunk.map(() => '?').join(',');
     const sql = sqlTemplate.replace('__IN__', placeholders);
-    const [res] = await db.execute(sql, [...prefixParams, ...chunk]);
-    totalAffected += res.affectedRows || 0;
+    const res = await db.execute(sql, [...prefixParams, ...chunk]);
+    totalAffected += Number(res?.affectedRows || 0);
   }
   return totalAffected;
 }

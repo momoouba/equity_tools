@@ -412,9 +412,10 @@ async function executeListingEmailDigest(recipient, options = {}) {
       `SELECT F_Id, company, status, exchange, board, F_UpdateTime, project_name
        FROM ipo_progress
        WHERE F_DeleteMark = 0
-         AND DATE(F_UpdateTime) = ?
+         AND COALESCE(timeline_confirmed, 1) = 1
+         AND DATE(COALESCE(timeline_confirmed_at, F_UpdateTime)) = ?
          AND exchange IN ('北交所','深交所','上交所','香港联交所','港交所')
-       ORDER BY F_UpdateTime DESC
+       ORDER BY COALESCE(timeline_confirmed_at, F_UpdateTime) DESC
        LIMIT 300`,
       [reportDay]
     );

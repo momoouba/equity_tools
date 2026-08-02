@@ -369,26 +369,40 @@ async function runListingMatchBatch({
     await db.execute(delSql, delParams);
   }
 
-  const ipoWhere = [];
-  if (selectedIpoTypes.includes('exchange_ipo')) {
-    ipoWhere.push(`(COALESCE(exchange, '') <> '证监会辅导备案' AND COALESCE(exchange, '') <> '境外发行备案' AND COALESCE(board, '') <> '境外发行备案')`);
-  }
-  if (selectedIpoTypes.includes('guidance_progress')) {
-    ipoWhere.push(`(exchange = '证监会辅导备案')`);
-  }
-  if (selectedIpoTypes.includes('overseas_filing')) {
-    ipoWhere.push(`(exchange = '境外发行备案' OR board = '境外发行备案')`);
-  }
-
   let progressRows = [];
   if (includeIpoProgress && startDate && endDate) {
-    const sql = `SELECT * FROM ipo_progress
-      WHERE F_DeleteMark = 0
-        AND DATE(F_UpdateTime) >= ?
-        AND DATE(F_UpdateTime) <= ?
-        AND (${ipoWhere.join(' OR ')})
-      ORDER BY F_Id`;
-    progressRows = await db.query(sql, [startDate, endDate]);
+    const exchangeIpoIncluded = selectedIpoTypes.includes('exchange_ipo');
+    const guidanceIncluded = selectedIpoTypes.includes('guidance_progress');
+    const overseasIncluded = selectedIpoTypes.includes('overseas_filing');
+    const clauses = [];
+    const params = [];
+    if (exchangeIpoIncluded) {
+      clauses.push(`(
+        COALESCE(exchange, '') <> '证监会辅导备案'
+        AND COALESCE(exchange, '') <> '境外发行备案'
+        AND COALESCE(board, '') <> '境外发行备案'
+        AND COALESCE(timeline_confirmed, 1) = 1
+        AND (
+          (timeline_confirmed_at IS NOT NULL AND DATE(timeline_confirmed_at) >= ? AND DATE(timeline_confirmed_at) <= ?)
+          OR (timeline_confirmed_at IS NULL AND DATE(F_UpdateTime) >= ? AND DATE(F_UpdateTime) <= ?)
+        )
+      )`);
+      params.push(startDate, endDate, startDate, endDate);
+    }
+    if (guidanceIncluded) {
+      clauses.push(`(exchange = '证监会辅导备案' AND DATE(F_UpdateTime) >= ? AND DATE(F_UpdateTime) <= ?)`);
+      params.push(startDate, endDate);
+    }
+    if (overseasIncluded) {
+      clauses.push(`((exchange = '境外发行备案' OR board = '境外发行备案') AND DATE(F_UpdateTime) >= ? AND DATE(F_UpdateTime) <= ?)`);
+      params.push(startDate, endDate);
+    }
+    if (clauses.length) {
+      const sql = `SELECT * FROM ipo_progress
+        WHERE F_DeleteMark = 0 AND (${clauses.join(' OR ')})
+        ORDER BY F_Id`;
+      progressRows = await db.query(sql, params);
+    }
   }
 
   let projectSql = `SELECT *, F_Id AS id FROM ipo_project WHERE F_DeleteMark = 0`;
@@ -540,4 +554,91 @@ async function runListingMatchBatch({
   };
 }
 
-module.exports = { runListingMatchBatch };
+/**
+ * 对单条已确认 ipo_progress 行做即时匹配（确认后触发）
+ */
+async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null } = {}) {
+  const rows = await db.query(`SELECT * FROM ipo_progress WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`, [rowId]);
+  if (!rows.length) return { inserted: 0, skipped: true, reason: 'not_found' };
+  const ip = rows[0];
+  if (Number(ip.timeline_confirmed) === 0) {
+    return { inserted: 0, skipped: true, reason: 'not_confirmed' };
+  }
+
+  const listingAppId = await getApplicationIdByAppName('上市进展');
+  if (!listingAppId) return { inserted: 0, skipped: true, reason: 'no_listing_app' };
+
+  let projectSql = `SELECT *, F_Id AS id FROM ipo_project WHERE F_DeleteMark = 0 AND data_app_id <=> ?`;
+  const projectParams = [listingAppId];
+  if (restrictProjectUserId) {
+    projectSql += ` AND F_CreatorUserId = ?`;
+    projectParams.push(restrictProjectUserId);
+  }
+  const projectRows = await db.query(projectSql, projectParams);
+  const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
+  if (!nip) return { inserted: 0, skipped: true, reason: 'empty_company' };
+
+  const FUZZY_MATCH_THRESHOLD = 0.85;
+  let inserted = 0;
+  const now = new Date();
+
+  for (const p of projectRows) {
+    const np = canonicalCompanyForMatchCross(p.company, ip.exchange);
+    let matched = false;
+    let matchScore = null;
+    if (np && nip === np) matched = true;
+    else if (np) {
+      const sim = fuzzySimilarity(nip, np);
+      if (sim >= FUZZY_MATCH_THRESHOLD) {
+        matched = true;
+        matchScore = Math.round(sim * 1000) / 1000;
+      }
+    }
+    if (!matched) {
+      const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
+      const pProjName = canonicalCompanyForMatchCross(p.project_name, ip.exchange);
+      if (ipProjName && pProjName && ipProjName === pProjName) {
+        matched = true;
+        matchScore = 1;
+      }
+    }
+    if (!matched) continue;
+    if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime)) continue;
+
+    await db.execute(
+      `INSERT INTO ipo_project_progress (
+        F_CreatorTime, F_CreatorUserId, ipo_project_f_id, ipo_progress_row_id,
+        new_share_row_id, match_source, match_score,
+        fund, sub, project_name, company,
+        inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+        status, board, exchange, F_UpdateTime
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        now,
+        p.F_CreatorUserId,
+        p.F_Id,
+        ip.F_Id,
+        null,
+        'ipo_progress',
+        matchScore,
+        p.fund,
+        p.sub,
+        ip.project_name || ip.company,
+        ip.company,
+        p.inv_amount,
+        p.residual_amount,
+        p.ratio,
+        p.ct_amount,
+        p.ct_residual,
+        ip.status,
+        ip.board,
+        ip.exchange,
+        ip.F_UpdateTime,
+      ]
+    );
+    inserted += 1;
+  }
+  return { inserted, skipped: inserted === 0, rowId };
+}
+
+module.exports = { runListingMatchBatch, matchSingleIpoProgressRow };
