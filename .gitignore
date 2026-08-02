@@ -8,6 +8,19 @@ news-backup-*/
 # Visual Studio workspace (local IDE state)
 .vs/
 
+# Local agent / Cursor skill installs（release/clean 不入库；已跟踪的 smart-git-push 不受影响）
+.agents/
+.cursor/rules/
+.cursor/skills/darwin-skill/
+skills-lock.json
+
+# 上市进展爬虫本地探针产物（cookie/HTML/临时脚本，勿提交）
+news/server/scripts/bse.cookie
+news/server/scripts/bse*.html
+news/server/scripts/bse_detail.js
+news/server/scripts/bse_detail_api_*.json
+news/server/scripts/probeBse*.js
+
 # One-off golden-set export analysis (local only)
 scripts/analyze_golden_export.py
 scripts/golden_export_analysis.json
