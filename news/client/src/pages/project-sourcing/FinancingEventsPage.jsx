@@ -30,6 +30,7 @@ import {
 } from '../../api/project-sourcing'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
 import { IntroPopoverCell } from './introPopoverAiCell'
+import { getUser } from '../../utils/auth'
 import './FinancingEventsPage.css'
 
 const Option = Select.Option
@@ -38,9 +39,8 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 
 function parseUserAdmin() {
   try {
-    const raw = localStorage.getItem('user')
-    if (!raw) return false
-    const u = JSON.parse(raw)
+    const u = getUser()
+    if (!u) return false
     return String(u.role || '').toLowerCase() === 'admin'
   } catch {
     return false

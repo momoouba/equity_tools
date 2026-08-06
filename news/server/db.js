@@ -3176,6 +3176,47 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   `);
 
+  // news_fetch_day_log：抓取日账本（新榜企业公众号 / 上海国际按账号×业务日）
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS news_fetch_day_log (
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
+      interface_type VARCHAR(50) NOT NULL COMMENT '新榜 / 上海国际',
+      news_type VARCHAR(50) NOT NULL DEFAULT '新闻舆情' COMMENT '新闻类型',
+      account_key VARCHAR(255) NOT NULL COMMENT '新榜=公众号ID；上海国际=统一信用代码',
+      biz_date DATE NOT NULL COMMENT '业务日（被抓取的日历日）',
+      status ENUM('has_data', 'empty', 'failed') NOT NULL COMMENT '抓取结果',
+      empty_retry_count INT NOT NULL DEFAULT 0 COMMENT 'empty 后再试次数',
+      item_count INT NOT NULL DEFAULT 0 COMMENT '本次抓取条数',
+      config_id VARCHAR(19) NULL COMMENT 'news_interface_config.F_Id',
+      last_error VARCHAR(500) NULL COMMENT '失败原因摘要',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_fetch_day (interface_type, news_type, account_key, biz_date),
+      INDEX idx_biz_date (biz_date),
+      INDEX idx_account_key (account_key)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='新闻抓取日账本';
+  `);
+
+  // news_detail.external_news_id：上海国际舆情 news_id_ths 等外部唯一键
+  try {
+    const [extCols] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'news_detail' AND COLUMN_NAME = 'external_news_id'`
+    );
+    if (!extCols || extCols.length === 0) {
+      await dbPool.query(
+        `ALTER TABLE news_detail
+         ADD COLUMN external_news_id VARCHAR(100) NULL COMMENT '外部资讯ID（如上海国际 news_id_ths）' AFTER source_url,
+         ADD INDEX idx_external_news_id (external_news_id)`
+      );
+      console.log('✓ news_detail 已添加 external_news_id');
+    }
+  } catch (err) {
+    if (!String(err.message || '').includes('Duplicate')) {
+      console.warn('迁移 news_detail.external_news_id 时出现警告:', err.message);
+    }
+  }
+
 
   // additional_wechat_accounts 表：额外公众号数据源
   // 校验规则：同一用户(creator_user_id)下 wechat_account_id 唯一，不同用户可创建相同的 wechat_account_id

@@ -29,10 +29,22 @@ function splitAccountIds(accountIdsStr) {
 /** 无行业标签的第三方公众号在收件筛选中的占位值 */
 const ADDITIONAL_ACCOUNT_TAG_NONE = '__NONE__';
 
+/** 第三方公众号新闻是否已挂到被投企业（此类按企业新闻发送，不受行业标签空选排除） */
+function isAdditionalAccountNewsLinkedToEnterprise(news) {
+  if (!news) return false;
+  const name = news.enterprise_full_name && String(news.enterprise_full_name).trim();
+  if (name) return true;
+  const et = news.entity_type && String(news.entity_type).trim();
+  const enterpriseEntityTypes = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP'];
+  return !!(et && enterpriseEntityTypes.includes(et));
+}
+
 /**
  * 按收件管理配置的 industry 标签筛选「当前用户名下第三方公众号」相关新闻。
- * - additional_account_tag_codes 为 NULL 或 []：均视为未选标签，筛掉来源为当前用户 additional_wechat_accounts 的新闻（与前端默认 [] 一致）
- * - 非空：仅保留 wechat_account 命中所选标签（含 __NONE__ 表示 industry_tag_code 为空）
+ * - additional_account_tag_codes 为 NULL 或 []：未选标签时筛掉纯第三方来源；
+ *   但已匹配企业全称/企业类型的第三方新闻仍保留（按企业舆情发送）
+ * - 非空：仅保留 wechat_account 命中所选标签（含 __NONE__ 表示 industry_tag_code 为空）；
+ *   已挂企业的同样放行
  * @param {Array} newsList
  * @param {{ user_id?: string, additional_account_tag_codes?: any }} recipientConfig
  * @returns {Promise<Array>}
@@ -82,11 +94,14 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
   );
 
   if (selected.length === 0) {
-    const filtered = newsList.filter(
-      (n) => !n.wechat_account || !scopedSet.has(n.wechat_account)
-    );
+    const filtered = newsList.filter((n) => {
+      if (!n.wechat_account || !scopedSet.has(n.wechat_account)) return true;
+      // 已挂企业：按企业新闻保留
+      if (isAdditionalAccountNewsLinkedToEnterprise(n)) return true;
+      return false;
+    });
     console.log(
-      `[邮件发送] 第三方公众号标签：未选任何标签，已排除当前用户名下第三方公众号来源新闻 ${newsList.length} -> ${filtered.length}`
+      `[邮件发送] 第三方公众号标签：未选标签，排除纯第三方来源（已挂企业的保留） ${newsList.length} -> ${filtered.length}`
     );
     return filtered;
   }
@@ -96,6 +111,9 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
 
   const filtered = newsList.filter((n) => {
     if (!n.wechat_account || !scopedSet.has(n.wechat_account)) {
+      return true;
+    }
+    if (isAdditionalAccountNewsLinkedToEnterprise(n)) {
       return true;
     }
     const tc = tagByAccount.get(n.wechat_account);
@@ -108,7 +126,7 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
     return false;
   });
   console.log(
-    `[邮件发送] 第三方公众号标签筛选（已选 ${selected.length} 项）：${newsList.length} -> ${filtered.length} 条`
+    `[邮件发送] 第三方公众号标签筛选（已选 ${selected.length} 项，已挂企业放行）：${newsList.length} -> ${filtered.length} 条`
   );
   return filtered;
 }
@@ -210,23 +228,384 @@ function formatDateOnly(date) {
 }
 
 /**
- * 上海国际邮件发送时间窗口校验：
- * - 仅对 APItype = '上海国际' 生效
- * - public_time 为空时不发送
- * - 仅发送 public_time 与 created_at 日期差 <= 30 天的数据
+ * 将日期转为北京时区 YYYY-MM-DD
+ * @param {Date|string|number} input
+ * @returns {string|null}
  */
-function passShanghaiInternationalTimeWindow(news) {
-  if (!news || news.APItype !== '上海国际') return true;
-  if (!news.public_time || !news.F_CreatorTime) return false;
+function toBeijingYmd(input) {
+  if (input == null || input === '') return null;
+  if (typeof input === 'string') {
+    const s = input.trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  }
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return null;
+  return formatDateOnly(d);
+}
 
-  const publicDate = new Date(news.public_time);
-  const createdDate = new Date(news.F_CreatorTime);
-  if (Number.isNaN(publicDate.getTime()) || Number.isNaN(createdDate.getTime())) {
-    return false;
+/**
+ * YYYY-MM-DD 加减天数（按日历日，避免本地时区偏移）
+ * @param {string} ymd
+ * @param {number} days
+ * @returns {string}
+ */
+function addDaysToYmd(ymd, days) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const utc = new Date(Date.UTC(y, m - 1, d + days));
+  return `${utc.getUTCFullYear()}-${String(utc.getUTCMonth() + 1).padStart(2, '0')}-${String(utc.getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 上海国际非「新闻舆情」诉讼类（account_name），邮件按 public_time ≥ 今天-30天（含未来）
+ * 与 emailSender.NO_LINK_ACCOUNT_NAMES 对齐，并兼容「破产重组」旧命名
+ */
+const SHANGHAI_INTL_LITIGATION_ACCOUNT_NAMES = [
+  '裁判文书',
+  '法院公告',
+  '送达公告',
+  '开庭公告',
+  '立案信息',
+  '破产重整',
+  '破产重组',
+  '被执行人',
+  '失信被执行人',
+  '限制高消费',
+  '行政处罚',
+  '终本案件'
+];
+
+const SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN = SHANGHAI_INTL_LITIGATION_ACCOUNT_NAMES
+  .map((n) => `'${n.replace(/'/g, "''")}'`)
+  .join(', ');
+
+/** 诉讼类邮件：public_time 下限 = 北京今天往前 30 天（含当天） */
+function getLitigationEmailMinPublicYmd() {
+  return addDaysToYmd(formatDateOnly(new Date()), -30);
+}
+
+function isShanghaiIntlLitigationAccount(accountName) {
+  return SHANGHAI_INTL_LITIGATION_ACCOUNT_NAMES.includes(String(accountName || '').trim());
+}
+
+function isShanghaiIntlApiType(apiType) {
+  const t = String(apiType || '').trim();
+  return t === '上海国际' || t === '上海国际集团';
+}
+
+/**
+ * 按被投企业全称/简称匹配新闻。
+ * 司法诉讼入库时 wechat_account 存的是案号，不能靠公众号 ID 命中，必须走企业名匹配。
+ * @param {{ userId?: string|null, entityTypeSubqueryFilter?: string, tableAlias?: string }} opts
+ * @returns {{ sql: string, params: any[] }}
+ */
+function buildInvestedEnterpriseNameMatchSql({
+  userId = null,
+  entityTypeSubqueryFilter = '',
+  tableAlias = 'nd'
+} = {}) {
+  const userFilter = userId ? 'AND F_CreatorUserId = ?' : '';
+  const ieBase = `
+    FROM invested_enterprises
+    WHERE ${IE_NEWS_APP_FILTER_SQL}
+    AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+    AND F_DeleteMark = 0
+    ${userFilter}
+    ${entityTypeSubqueryFilter || ''}
+  `;
+  // 6 个 IN 子查询各绑一份 userId
+  const params = userId ? Array(6).fill(userId) : [];
+
+  const sql = `(
+    ${tableAlias}.enterprise_full_name IS NOT NULL
+    AND ${tableAlias}.enterprise_full_name != ''
+    AND (
+      ${tableAlias}.enterprise_full_name IN (
+        SELECT enterprise_full_name ${ieBase}
+      )
+      OR (CASE
+        WHEN ${tableAlias}.enterprise_full_name LIKE '%(%' THEN
+          TRIM(SUBSTRING_INDEX(${tableAlias}.enterprise_full_name, '(', 1))
+        ELSE ${tableAlias}.enterprise_full_name
+      END) IN (
+        SELECT enterprise_full_name ${ieBase}
+      )
+      OR ${tableAlias}.enterprise_full_name IN (
+        SELECT CASE
+          WHEN enterprise_full_name LIKE '%(%' THEN
+            TRIM(SUBSTRING_INDEX(enterprise_full_name, '(', 1))
+          ELSE enterprise_full_name
+        END
+        ${ieBase}
+      )
+      OR ${tableAlias}.enterprise_abbreviation IN (
+        SELECT project_abbreviation ${ieBase}
+        AND project_abbreviation IS NOT NULL
+        AND project_abbreviation != ''
+      )
+      OR (CASE
+        WHEN ${tableAlias}.enterprise_full_name LIKE '%【%】%' THEN
+          TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(${tableAlias}.enterprise_full_name, '【', -1), '】', 1))
+        ELSE NULL
+      END) IN (
+        SELECT enterprise_full_name ${ieBase}
+      )
+      OR ${tableAlias}.enterprise_full_name IN (
+        SELECT CASE
+          WHEN enterprise_full_name LIKE '%【%】%' THEN
+            TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(enterprise_full_name, '【', -1), '】', 1))
+          ELSE enterprise_full_name
+        END
+        ${ieBase}
+      )
+    )
+  )`;
+
+  return { sql, params };
+}
+
+/**
+ * 专项拉取今日司法诉讼（上海国际）。
+ * 诉讼入库时已按监控企业写入 enterprise_full_name / abbreviation / entity_type，
+ * 邮件侧不再因 exit_status、data_app 二次 EXISTS 把已入库诉讼挡掉。
+ */
+async function fetchShanghaiLitigationNewsForEmail({
+  from,
+  to,
+  userId = null,
+  entityTypeSubqueryFilter = '',
+  entityTypeCondition = ''
+} = {}) {
+  void entityTypeSubqueryFilter;
+  void entityTypeCondition;
+
+  const userFilterSql = userId
+    ? `AND (
+         EXISTS (
+           SELECT 1 FROM invested_enterprises ie
+           WHERE ie.F_DeleteMark = 0
+             AND ie.F_CreatorUserId = ?
+             AND (
+               TRIM(ie.enterprise_full_name) = TRIM(nd.enterprise_full_name)
+               OR (
+                 nd.enterprise_abbreviation IS NOT NULL
+                 AND TRIM(nd.enterprise_abbreviation) != ''
+                 AND ie.project_abbreviation IS NOT NULL
+                 AND TRIM(ie.project_abbreviation) = TRIM(nd.enterprise_abbreviation)
+               )
+             )
+         )
+       )`
+    : '';
+
+  // ? 顺序：from, to, [userId]；public_time 窗口在 JS 用 passShanghaiInternationalTimeWindow 校验
+  // （避免 DATE(CAST(public_time AS CHAR)) 在部分库/驱动下对合法日期返回 NULL，导致专项恒为 0）
+  const bindParams = [from, to];
+  if (userId) bindParams.push(userId);
+
+  const rows = await db.query(
+    `SELECT
+        nd.F_Id AS id,
+        nd.enterprise_full_name,
+        nd.enterprise_abbreviation,
+        nd.title,
+        nd.news_abstract,
+        nd.news_sentiment,
+        nd.entity_type,
+        nd.fund,
+        nd.sub_fund,
+        nd.keywords,
+        nd.summary,
+        nd.content,
+        nd.public_time,
+        nd.account_name,
+        nd.wechat_account,
+        nd.source_url,
+        nd.F_CreatorTime,
+        nd.APItype,
+        nd.news_category
+     FROM news_detail nd
+     WHERE nd.APItype IN ('上海国际', '上海国际集团')
+       AND nd.account_name IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+       AND nd.F_CreatorTime >= ?
+       AND nd.F_CreatorTime < ?
+       AND nd.F_DeleteMark = 0
+       AND nd.enterprise_full_name IS NOT NULL
+       AND TRIM(nd.enterprise_full_name) != ''
+       AND nd.public_time IS NOT NULL
+       ${userFilterSql}
+     ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
+    bindParams
+  );
+
+  const filtered = (rows || []).filter((n) => passShanghaiInternationalTimeWindow(n));
+  if ((rows || []).length > 0 && filtered.length < rows.length) {
+    console.log(
+      `[邮件发送] 司法诉讼专项：SQL命中 ${(rows || []).length} 条，public_time窗口过滤后 ${filtered.length} 条`
+    );
   }
 
-  const msPerDay = 24 * 60 * 60 * 1000;
-  const dayDiff = Math.floor((createdDate - publicDate) / msPerDay);
+  console.log(
+    `[邮件发送] 司法诉讼专项查询: ${filtered.length} 条` +
+      (userId ? `（已按用户 ${userId} 企业归属过滤）` : '（管理员：已入库且有企业全称即纳入）')
+  );
+  if (filtered.length > 0) {
+    console.log(
+      `[邮件发送] 司法诉讼专项示例:`,
+      filtered.slice(0, 5).map((n) => ({
+        id: n.id,
+        account_name: n.account_name,
+        enterprise: n.enterprise_full_name,
+        abbr: n.enterprise_abbreviation,
+        public_time: n.public_time,
+        entity_type: n.entity_type
+      }))
+    );
+  } else if ((rows || []).length === 0) {
+    // 便于确认是「时间窗内无入库」还是「SQL条件过严」
+    try {
+      const rawToday = await db.query(
+        `SELECT nd.F_Id AS id, nd.public_time, nd.account_name,
+                DATE(nd.public_time) AS date_direct,
+                DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) AS date_via_cast
+         FROM news_detail nd
+         WHERE nd.APItype IN ('上海国际', '上海国际集团')
+           AND nd.account_name IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+           AND nd.F_CreatorTime >= ? AND nd.F_CreatorTime < ?
+           AND nd.F_DeleteMark = 0
+         LIMIT 5`,
+        [from, to]
+      );
+      if (rawToday.length > 0) {
+        console.log(
+          `[邮件发送] 司法诉讼专项诊断：今日有入库但专项条件未命中，样例:`,
+          rawToday.map((r) => ({
+            id: r.id,
+            account_name: r.account_name,
+            public_time: r.public_time,
+            date_direct: r.date_direct,
+            date_via_cast: r.date_via_cast
+          }))
+        );
+      }
+    } catch (e) {
+      console.warn(`[邮件发送] 司法诉讼专项诊断失败:`, e.message);
+    }
+  }
+
+  return filtered;
+}
+
+/** 统一新闻主键：查询结果可能是 id 或 F_Id */
+function normalizeNewsRowId(news) {
+  if (!news || typeof news !== 'object') return news;
+  const id = news.id || news.F_Id;
+  if (id) {
+    news.id = id;
+    news.F_Id = news.F_Id || id;
+  }
+  return news;
+}
+
+function normalizeNewsListIds(newsList) {
+  if (!Array.isArray(newsList)) return [];
+  newsList.forEach(normalizeNewsRowId);
+  return newsList;
+}
+
+/**
+ * 将今日司法诉讼专项结果并入邮件候选列表（按 id 去重）
+ * @param {Array} newsList
+ * @param {{ userId?: string|null }} opts - 管理员传 userId=null；普通用户传其 userId
+ */
+async function mergeShanghaiLitigationIntoNewsList(newsList, { userId = null } = {}) {
+  const list = Array.isArray(newsList) ? newsList : [];
+  normalizeNewsListIds(list);
+  try {
+    const { from, to } = await getEmailTimeRange();
+    const litigationExtra = await fetchShanghaiLitigationNewsForEmail({
+      from,
+      to,
+      userId
+    });
+    if (!litigationExtra.length) {
+      return list;
+    }
+    const existingIds = new Set(list.map((n) => n.id || n.F_Id).filter(Boolean));
+    const toAdd = litigationExtra.filter((n) => {
+      normalizeNewsRowId(n);
+      return n.id && !existingIds.has(n.id);
+    });
+    if (toAdd.length > 0) {
+      console.log(
+        `[邮件发送] 专项并入司法诉讼 ${toAdd.length} 条` +
+          (userId ? `（用户 ${userId}）` : '（管理员）')
+      );
+      return [...list, ...toAdd];
+    }
+  } catch (e) {
+    console.warn(`[邮件发送] 专项并入司法诉讼失败:`, e.message);
+  }
+  return list;
+}
+
+/**
+ * 上海国际 public_time 邮件窗口 SQL（需额外绑定 litigationMinYmd）
+ * - 诉讼类（开庭/裁判文书/被执行人等）：public_time >= 今天-30天（含未来）
+ * - 新闻舆情等其他上海国际：仍按 F_CreatorTime 与 public_time 日期差 0~30 天
+ * 注意：勿用 DATE(CAST(public_time AS CHAR))，部分环境下会对合法 datetime 算出 NULL
+ */
+const SHANGHAI_INTL_PUBLIC_TIME_EMAIL_SQL = `(
+  nd.APItype NOT IN ('上海国际', '上海国际集团')
+  OR (
+    -- 诉讼类（两种 APItype）：public_time >= 今天-30天（含未来）
+    nd.account_name IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+    AND nd.public_time IS NOT NULL
+    AND TRIM(CAST(nd.public_time AS CHAR)) NOT IN ('', '0000-00-00', '0000-00-00 00:00:00')
+    AND DATE(nd.public_time) > '1970-01-01'
+    AND DATE(nd.public_time) >= ?
+  )
+  OR (
+    -- 上海国际集团非诉讼：保持原行为（不额外卡 public_time 窗口）
+    nd.APItype = '上海国际集团'
+    AND IFNULL(nd.account_name, '') NOT IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+  )
+  OR (
+    -- 上海国际非诉讼：入库日与 public_time 差 0~30 天
+    nd.APItype = '上海国际'
+    AND IFNULL(nd.account_name, '') NOT IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+    AND nd.public_time IS NOT NULL
+    AND TRIM(CAST(nd.public_time AS CHAR)) NOT IN ('', '0000-00-00', '0000-00-00 00:00:00')
+    AND DATE(nd.public_time) > '1970-01-01'
+    AND DATEDIFF(DATE(nd.F_CreatorTime), DATE(nd.public_time)) BETWEEN 0 AND 30
+  )
+)`;
+
+/**
+ * 上海国际邮件发送时间窗口校验：
+ * - 诉讼类（上海国际 / 上海国际集团）：public_time ≥ 今天-30天（含未来）
+ * - 上海国际非诉讼：public_time 与 F_CreatorTime 日期差 0~30 天
+ * - 上海国际集团非诉讼：不额外限制（与历史行为一致）
+ */
+function passShanghaiInternationalTimeWindow(news) {
+  if (!news || !isShanghaiIntlApiType(news.APItype)) return true;
+
+  if (isShanghaiIntlLitigationAccount(news.account_name)) {
+    const publicYmd = toBeijingYmd(news.public_time);
+    if (!publicYmd || publicYmd <= '1970-01-01') return false;
+    return publicYmd >= getLitigationEmailMinPublicYmd();
+  }
+
+  if (String(news.APItype || '').trim() === '上海国际集团') return true;
+
+  const publicYmd = toBeijingYmd(news.public_time);
+  if (!publicYmd || publicYmd <= '1970-01-01') return false;
+  if (!news.F_CreatorTime) return false;
+  const createdYmd = toBeijingYmd(news.F_CreatorTime);
+  if (!createdYmd) return false;
+
+  const [cy, cm, cd] = createdYmd.split('-').map(Number);
+  const [py, pm, pd] = publicYmd.split('-').map(Number);
+  const dayDiff = Math.round((Date.UTC(cy, cm - 1, cd) - Date.UTC(py, pm - 1, pd)) / 86400000);
   return dayDiff >= 0 && dayDiff <= 30;
 }
 
@@ -567,8 +946,18 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        AND F_DeleteMark = 0
        ${entityTypeFilter}`
     );
+
+    // 司法诉讼等上海国际数据 wechat_account=案号，需靠企业全称命中；即使没有公众号 ID 也要继续查
+    const enterpriseCountRows = await db.query(
+      `SELECT COUNT(*) AS cnt
+       FROM invested_enterprises
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND F_DeleteMark = 0
+       ${entityTypeFilter}`
+    );
+    const investedEnterpriseCount = Number(enterpriseCountRows[0]?.cnt || 0);
     
-    if (enterprises.length === 0) {
+    if (enterprises.length === 0 && investedEnterpriseCount === 0) {
       console.log('[邮件发送] 管理员：没有满足条件的被投企业');
       return [];
     }
@@ -580,20 +969,22 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       accountIds.push(...ids);
     });
     
-    if (accountIds.length === 0) {
-      console.log('[邮件发送] 管理员：没有有效的公众号ID');
-      return [];
-    }
-    
-    // 去重公众号ID
+    // 去重公众号ID（允许为空：仅靠企业全称匹配司法诉讼）
     const uniqueAccountIds = [...new Set(accountIds)];
-    const placeholders = uniqueAccountIds.map(() => '?').join(',');
+    const placeholders = uniqueAccountIds.length > 0
+      ? uniqueAccountIds.map(() => '?').join(',')
+      : null;
+    
+    if (uniqueAccountIds.length === 0) {
+      console.log('[邮件发送] 管理员：无有效公众号ID，将仅按企业全称匹配（含司法诉讼）');
+    }
     
     // 查询这些公众号的新闻，或者企业全称在被投企业管理中的新闻
     console.log(`[邮件发送] 管理员：执行SQL查询`);
     console.log(`[邮件发送] - 时间范围：${from} 到 ${to}`);
     console.log(`[邮件发送] - 公众号ID列表（前10个）：${uniqueAccountIds.slice(0, 10).join(', ')}`);
     console.log(`[邮件发送] - 公众号总数：${uniqueAccountIds.length}`);
+    console.log(`[邮件发送] - 被投企业数（含无公众号）：${investedEnterpriseCount}`);
     
     // 先测试一下时间范围查询（使用字符串格式，确保格式正确）
     const testTimeQuery = await db.query(
@@ -701,6 +1092,10 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     // 按照用户要求：简化查询，只查询需要的字段
     // 步骤2：查询created_at为今天的且enterprise_full_name不为null的数据
     // 先简化查询，不使用LEFT JOIN，直接查询news_detail表，确保fund和sub_fund字段能正确返回
+    // 司法诉讼 wechat_account=案号，必须保留企业全称 OR 分支
+    const wechatMatchSql = uniqueAccountIds.length > 0
+      ? `nd.wechat_account IN (${placeholders}) OR`
+      : '';
     newsList = await db.query(
       `SELECT 
               nd.F_Id AS id, 
@@ -724,9 +1119,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
               nd.news_category
        FROM news_detail nd
        WHERE (
-         -- 通过公众号ID匹配
-         nd.wechat_account IN (${placeholders})
-         OR
+         ${wechatMatchSql}
          -- 或者通过企业全称匹配（如果企业全称不为空）
          -- 支持精确匹配和模糊匹配（去掉括号内容后匹配，处理"企业全称(简称)"格式）
          -- 企业全称匹配（不再解析"简称【全称】"格式，直接使用enterprise_full_name字段）
@@ -828,22 +1221,116 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        )
        AND nd.F_CreatorTime >= ? 
        AND nd.F_CreatorTime < ?
-       AND (
-         nd.APItype != '上海国际'
-         OR (
-          NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
-          AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
-          AND DATEDIFF(DATE(nd.F_CreatorTime), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
-         )
-       )
+       AND ${SHANGHAI_INTL_PUBLIC_TIME_EMAIL_SQL}
       AND nd.F_DeleteMark = 0
        ${entityTypeCondition}
        ORDER BY nd.enterprise_full_name, nd.public_time DESC`,
-      [...uniqueAccountIds, from, to]
+      [...uniqueAccountIds, from, to, getLitigationEmailMinPublicYmd()]
     );
+
+    // 专项并入司法诉讼（案号存在 wechat_account，主查询易漏）
+    newsList = await mergeShanghaiLitigationIntoNewsList(newsList, { userId: null });
     
     // 调试：立即检查查询结果是否包含fund和sub_fund字段
     console.log(`[邮件发送] ========== 查询结果检查 ==========`);
+    {
+      const litigationHitAdmin = (newsList || []).filter(
+        (n) => isShanghaiIntlApiType(n.APItype) && isShanghaiIntlLitigationAccount(n.account_name)
+      );
+      console.log(`[邮件发送] 管理员：司法诉讼类命中 ${litigationHitAdmin.length} 条（时间窗内+企业匹配后）`);
+      if (litigationHitAdmin.length > 0) {
+        console.log(
+          `[邮件发送] 管理员：诉讼类示例:`,
+          litigationHitAdmin.slice(0, 5).map((n) => ({
+            id: n.id,
+            account_name: n.account_name,
+            public_time: n.public_time,
+            enterprise: n.enterprise_full_name,
+            wechat_account: n.wechat_account
+          }))
+        );
+      } else {
+        // 诊断：今天是否有诉讼入库但未进候选，并逐条打印未命中原因
+        try {
+          const litRows = await db.query(
+            `SELECT nd.F_Id AS id, nd.account_name, nd.APItype, nd.enterprise_full_name, nd.enterprise_abbreviation,
+                    nd.entity_type, nd.public_time, nd.wechat_account, nd.title, nd.F_CreatorTime,
+                    nd.summary, nd.news_abstract, nd.content
+             FROM news_detail nd
+             WHERE nd.APItype IN ('上海国际', '上海国际集团')
+             AND nd.account_name IN (${SHANGHAI_INTL_LITIGATION_ACCOUNT_SQL_IN})
+             AND nd.F_CreatorTime >= ? AND nd.F_CreatorTime < ?
+             AND nd.F_DeleteMark = 0`,
+            [from, to]
+          );
+          console.log(
+            `[邮件发送] 管理员：今日入库司法诉讼总数=${litRows.length}（若>0但命中=0，见下方逐条诊断）`
+          );
+          for (const row of litRows) {
+            const name = (row.enterprise_full_name || '').trim();
+            const abbr = (row.enterprise_abbreviation || '').trim();
+            const ieByName = name
+              ? await db.query(
+                  `SELECT F_Id, enterprise_full_name, entity_type, exit_status, data_app_id, data_app_name, F_DeleteMark
+                   FROM invested_enterprises
+                   WHERE F_DeleteMark = 0
+                   AND (
+                     enterprise_full_name = ?
+                     OR TRIM(enterprise_full_name) = ?
+                     OR project_abbreviation = ?
+                   )
+                   LIMIT 5`,
+                  [name, name, abbr || name]
+                )
+              : [];
+            const ieNewsApp = name
+              ? await db.query(
+                  `SELECT F_Id, enterprise_full_name, entity_type, exit_status
+                   FROM invested_enterprises
+                   WHERE ${IE_NEWS_APP_FILTER_SQL}
+                   AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+                   AND F_DeleteMark = 0
+                   AND (
+                     enterprise_full_name = ?
+                     OR TRIM(enterprise_full_name) = ?
+                     OR project_abbreviation = ?
+                   )
+                   ${entityTypeSubqueryFilter || ''}
+                   LIMIT 5`,
+                  [name, name, abbr || name]
+                )
+              : [];
+            const publicOk = passShanghaiInternationalTimeWindow({
+              ...row,
+              APItype: row.APItype === '上海国际集团' ? '上海国际' : row.APItype
+            });
+            // 兼容：邮件窗口函数只认 APItype=上海国际；集团同义也测一遍
+            const publicOkRaw = passShanghaiInternationalTimeWindow(row);
+            console.log(`[邮件发送] 管理员：诉讼未进候选诊断 id=${row.id}`, {
+              account_name: row.account_name,
+              APItype: row.APItype,
+              enterprise_full_name: row.enterprise_full_name,
+              enterprise_abbreviation: row.enterprise_abbreviation,
+              entity_type: row.entity_type,
+              public_time: row.public_time,
+              wechat_account: row.wechat_account,
+              public_time_window_ok: publicOk || publicOkRaw,
+              litigation_min_ymd: getLitigationEmailMinPublicYmd(),
+              ie_any_match: ieByName.length,
+              ie_any_sample: ieByName.slice(0, 2),
+              ie_email_filter_match: ieNewsApp.length,
+              ie_email_sample: ieNewsApp.slice(0, 2),
+              has_summary_or_abstract: !!(
+                (row.summary && String(row.summary).trim()) ||
+                (row.news_abstract && String(row.news_abstract).trim())
+              )
+            });
+          }
+        } catch (e) {
+          console.warn(`[邮件发送] 管理员：诉讼诊断查询失败:`, e.message);
+        }
+      }
+    }
     if (newsList.length > 0) {
       const firstNews = newsList[0];
       console.log(`[邮件发送] 查询到的第一条新闻ID: ${firstNews.id}`);
@@ -1230,6 +1717,17 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
        ${entityTypeFilter}`,
       [userId]
     );
+
+    const userEnterpriseCountRows = await db.query(
+      `SELECT COUNT(*) AS cnt
+       FROM invested_enterprises
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND F_CreatorUserId = ?
+       AND exit_status NOT IN ('完全退出', '已上市', '不再观察')
+       AND F_DeleteMark = 0
+       ${entityTypeFilter}`,
+      [userId]
+    );
+    const userInvestedEnterpriseCount = Number(userEnterpriseCountRows[0]?.cnt || 0);
     
     // 2. 查询用户创建的额外公众号ID
     const userAdditionalAccounts = await db.query(
@@ -1244,6 +1742,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     );
     
     console.log(`[邮件发送] 用户创建的被投企业公众号数: ${wechatAccounts.length}`);
+    console.log(`[邮件发送] 用户创建的被投企业数（含无公众号）: ${userInvestedEnterpriseCount}`);
     console.log(`[邮件发送] 用户创建的额外公众号数: ${userAdditionalAccounts.length}`);
     
     // 拆分逗号分隔的公众号ID
@@ -1259,17 +1758,30 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
     // 去重公众号ID
     const uniqueAccountIds = [...new Set(accountIds)];
     
-    if (uniqueAccountIds.length === 0) {
+    // 无公众号时仍可能有司法诉讼（靠企业全称）；两者都没有才返回空
+    if (uniqueAccountIds.length === 0 && userInvestedEnterpriseCount === 0) {
       console.log(`[邮件发送] 用户没有创建任何被投企业或额外公众号`);
       return [];
     }
     
-    const placeholders = uniqueAccountIds.map(() => '?').join(',');
+    const placeholders = uniqueAccountIds.length > 0
+      ? uniqueAccountIds.map(() => '?').join(',')
+      : null;
     console.log(`[邮件发送] 用户查询的公众号总数: ${uniqueAccountIds.length}`);
+
+    // 企业类型过滤：用于企业全称子查询（entityTypeFilter 已是 AND ... 形式）
+    const nameMatch = buildInvestedEnterpriseNameMatchSql({
+      userId,
+      entityTypeSubqueryFilter: entityTypeFilter,
+      tableAlias: 'nd'
+    });
+    const wechatMatchSql = uniqueAccountIds.length > 0
+      ? `nd.wechat_account IN (${placeholders}) OR`
+      : '';
     
-    // 查询这些公众号的新闻，包括：
-    // 1. 通过公众号ID匹配且有企业全称的新闻（来自被投企业）
-    // 2. 通过公众号ID匹配的额外公众号新闻（可能有企业全称，也可能没有）
+    // 查询：
+    // 1. 通过公众号ID匹配（新榜/额外公众号）
+    // 2. 通过企业全称匹配（上海国际司法诉讼 wechat_account=案号，必须走这条）
     newsList = await db.query(
       `SELECT nd.F_Id AS id, nd.title, nd.enterprise_full_name, nd.enterprise_abbreviation, nd.news_sentiment, nd.keywords, 
               nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
@@ -1291,26 +1803,39 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
              ie.enterprise_full_name
          END)
        ) AND ie.F_DeleteMark = 0 AND ${IE_NEWS_APP_FILTER_SQL_IE}
-       WHERE nd.wechat_account IN (${placeholders})
+       WHERE (
+         ${wechatMatchSql}
+         ${nameMatch.sql}
+       )
        AND nd.F_CreatorTime >= ? 
        AND nd.F_CreatorTime < ?
-       AND (
-         nd.APItype != '上海国际'
-         OR (
-          NULLIF(CAST(nd.public_time AS CHAR), '') IS NOT NULL
-          AND DATE(NULLIF(CAST(nd.public_time AS CHAR), '')) > '1970-01-01'
-          AND DATEDIFF(DATE(nd.F_CreatorTime), DATE(NULLIF(CAST(nd.public_time AS CHAR), ''))) BETWEEN 0 AND 30
-         )
-       )
+       AND ${SHANGHAI_INTL_PUBLIC_TIME_EMAIL_SQL}
        AND nd.F_DeleteMark = 0
        ORDER BY 
          CASE WHEN nd.enterprise_full_name IS NOT NULL AND nd.enterprise_full_name != '' THEN 0 ELSE 1 END,
          COALESCE(nd.enterprise_full_name, nd.account_name, ''),
          nd.public_time DESC`,
-      [...uniqueAccountIds, from, to]
+      [...uniqueAccountIds, ...nameMatch.params, from, to, getLitigationEmailMinPublicYmd()]
     );
     
     console.log(`[邮件发送] 普通用户：查询到 ${newsList.length} 条新闻`);
+    newsList = await mergeShanghaiLitigationIntoNewsList(newsList, { userId });
+    const litigationHit = (newsList || []).filter(
+      (n) => isShanghaiIntlApiType(n.APItype) && isShanghaiIntlLitigationAccount(n.account_name)
+    );
+    console.log(`[邮件发送] 普通用户：其中司法诉讼类 ${litigationHit.length} 条`);
+    if (litigationHit.length > 0) {
+      console.log(
+        `[邮件发送] 普通用户：诉讼类示例:`,
+        litigationHit.slice(0, 5).map((n) => ({
+          id: n.id,
+          account_name: n.account_name,
+          public_time: n.public_time,
+          enterprise: n.enterprise_full_name,
+          wechat_account: n.wechat_account
+        }))
+      );
+    }
     
     // 如果查询结果中没有fund和sub_fund字段，手动补充这些字段
     if (newsList.length > 0 && !('fund' in newsList[0])) {
@@ -1720,7 +2245,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 新榜新闻：只要有摘要（news_abstract 或 summary）即可推送
       if (hasAbstract || hasSummary) {
         if (!passShanghaiInternationalTimeWindow(news)) {
-          console.log(`[邮件发送] 过滤掉上海国际新闻（public_time为空或与created_at日期差超过30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
+          console.log(`[邮件发送] 过滤掉上海国际新闻（时间窗口不满足：诉讼类要求public_time≥今天-30天；新闻舆情要求public_time与入库日差0~30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
           return false;
         }
         // 特别记录量子位公众号的新闻
@@ -1760,7 +2285,7 @@ async function getUserVisibleYesterdayNews(userId, recipientConfig = null, skipF
       // 进入此过滤的企查查新闻都是类别在配置的允许列表中的
       if (hasAbstract || hasContent) {
         if (!passShanghaiInternationalTimeWindow(news)) {
-          console.log(`[邮件发送] 过滤掉上海国际新闻（public_time为空或与created_at日期差超过30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
+          console.log(`[邮件发送] 过滤掉上海国际新闻（时间窗口不满足：诉讼类要求public_time≥今天-30天；新闻舆情要求public_time与入库日差0~30天）: ${news.id} - ${news.title?.substring(0, 50)}`);
           return false;
         }
         if (isTargetNews) {
@@ -1994,7 +2519,19 @@ function exportNewsToExcel(newsList) {
       '新闻标签': Array.isArray(keywords) ? keywords.join('、') : '',
       '新闻情绪': sentimentMap[news.news_sentiment] || news.news_sentiment || '未知',
       '新闻摘要': news.news_abstract || news.summary || '',
-      '发布时间': news.public_time ? new Date(news.public_time).toLocaleString('zh-CN') : '',
+      '发布时间': isNoLinkNoSemanticDedupType(news)
+        ? (news.F_CreatorTime ? new Date(news.F_CreatorTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '')
+        : (news.public_time ? new Date(news.public_time).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : ''),
+      '事件日期': isNoLinkNoSemanticDedupType(news) && news.public_time
+        ? (() => {
+            const raw = news.public_time;
+            const ymd = raw instanceof Date
+              ? raw.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
+              : String(raw).trim().slice(0, 10);
+            const label = String(news.account_name || '').trim() === '开庭公告' ? '开庭日期' : '事件日期';
+            return `${label}：${ymd}`;
+          })()
+        : '',
       '公众号名称': news.account_name || '',
       '原文链接': isNoLinkNoSemanticDedupType(news) ? '' : (news.source_url || '')
     };
@@ -2013,6 +2550,7 @@ function exportNewsToExcel(newsList) {
     { wch: 12 },  // 新闻情绪
     { wch: 50 },  // 新闻摘要
     { wch: 20 },  // 发布时间
+    { wch: 22 },  // 事件日期
     { wch: 20 },  // 公众号名称
     { wch: 50 }   // 原文链接
   ];
@@ -2035,6 +2573,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
   const { generateId } = require('./idGenerator');
   
   try {
+    normalizeNewsListIds(newsList);
     // 检查传入的新闻列表的 entity_type 分布（用于调试）
     console.log(`[邮件发送] ========== sendNewsEmailWithExcel 函数开始 ==========`);
     console.log(`[邮件发送] 传入的新闻数量: ${newsList.length}`);
@@ -2104,7 +2643,7 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       
       if (!('fund' in firstNews)) {
         console.log(`[邮件发送] ⚠️ 过滤前检查：查询结果中缺少fund和sub_fund字段，手动补充...`);
-        const newsIds = newsList.map(n => n.id);
+        const newsIds = newsList.map(n => n.id || n.F_Id).filter(Boolean);
         const placeholders = newsIds.map(() => '?').join(',');
         const fundData = await db.query(
           `SELECT F_Id, fund, sub_fund FROM news_detail WHERE F_Id IN (${placeholders})`,
@@ -2124,9 +2663,10 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         
         // 补充字段
         newsList.forEach(news => {
-          if (fundMap[news.id]) {
-            news.fund = fundMap[news.id].fund;
-            news.sub_fund = fundMap[news.id].sub_fund;
+          const nid = news.id || news.F_Id;
+          if (fundMap[nid]) {
+            news.fund = fundMap[nid].fund;
+            news.sub_fund = fundMap[nid].sub_fund;
           } else {
             news.fund = null;
             news.sub_fund = null;
@@ -2176,11 +2716,13 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     }
 
     // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，含春节/中秋及母亲节/圣诞等）；
-    // 企业推介自家产品、服务、品牌的发展类内容不打此类标签，故不会被过滤（股权投资关注企业发展）
+    // 例外：企业公众号（有企业归属且非额外公众号）即使带营销推广/节假日营销类标签也发送
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
       const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
       const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
+      // 企业公众号：已关联被投企业等主体，且不是额外/第三方公众号
+      const isFromEnterpriseAccount = hasEnterpriseName && !isFromAdditionalAccount;
 
       // 对于普通企业新闻：仍然要求有企业名称
       // 对于额外公众号新闻：允许企业名称为空，只要后续满足摘要等条件
@@ -2197,22 +2739,26 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         advertisementKeywords.includes(keyword)
       );
       
-      // 如果包含广告标签，过滤掉（不包含在邮件正文中）
-      if (hasAdvertisementTag) {
-        console.log(`[邮件发送] 过滤广告新闻: ${news.title} (标签: ${keywords.join(', ')})`);
-        return false;
-      }
+      // 企业公众号：保留营销推广/节假日营销类内容；额外公众号等仍按原规则过滤
+      if (!isFromEnterpriseAccount) {
+        if (hasAdvertisementTag) {
+          console.log(`[邮件发送] 过滤广告新闻: ${news.title} (标签: ${keywords.join(', ')})`);
+          return false;
+        }
 
-      if (isHolidayContentTaggedNews(news)) {
-        console.log(`[邮件发送] 过滤「节假日」主题标签新闻: ${news.title} (标签: ${keywords.join('、')})`);
-        return false;
-      }
+        if (isHolidayContentTaggedNews(news)) {
+          console.log(`[邮件发送] 过滤「节假日」主题标签新闻: ${news.title} (标签: ${keywords.join('、')})`);
+          return false;
+        }
 
-      // 兜底：新榜新闻若命中节假日官方营销文案，也过滤掉（防止关键词字段异常导致漏拦截）
-      const isXinbang = news.APItype === '新榜' || news.APItype === '新榜接口' || !news.APItype;
-      if (isXinbang && isHolidayMarketingNews(news)) {
-        console.log(`[邮件发送] 过滤节假日营销新闻(兜底规则): ${news.title}`);
-        return false;
+        // 兜底：新榜新闻若命中节假日官方营销文案，也过滤掉（防止关键词字段异常导致漏拦截）
+        const isXinbang = news.APItype === '新榜' || news.APItype === '新榜接口' || !news.APItype;
+        if (isXinbang && isHolidayMarketingNews(news)) {
+          console.log(`[邮件发送] 过滤节假日营销新闻(兜底规则): ${news.title}`);
+          return false;
+        }
+      } else if (hasAdvertisementTag || isHolidayContentTaggedNews(news) || isHolidayMarketingNews(news)) {
+        console.log(`[邮件发送] 保留企业公众号营销/节假日类新闻: ${news.title} (标签: ${keywords.join(', ') || '无'})`);
       }
       
       return true;
@@ -2702,7 +3248,8 @@ async function executeEmailTask(recipientId) {
       
       // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）
       logWithTimestamp(`[邮件发送] 从数据库重新获取最新的新闻数据...`);
-      const newsIds = newsList.map(n => n.id);
+      normalizeNewsListIds(newsList);
+      const newsIds = newsList.map(n => n.id || n.F_Id).filter(Boolean);
       if (newsIds.length > 0) {
         // 先测试查询一条新闻，确认 entity_type 是否有值
         const testNewsId = newsIds[0];
@@ -2718,7 +3265,7 @@ async function executeEmailTask(recipientId) {
         
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
-          `SELECT DISTINCT nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+          `SELECT DISTINCT nd.F_Id AS id, nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                   nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
                   nd.APItype, nd.news_category, nd.entity_type, 
                   nd.fund, nd.sub_fund
@@ -2727,6 +3274,7 @@ async function executeEmailTask(recipientId) {
            AND nd.F_DeleteMark = 0`,
           newsIds
         );
+        normalizeNewsListIds(refreshedNewsList);
         
         logWithTimestamp(`[邮件发送] 重新获取到 ${refreshedNewsList.length} 条新闻数据`);
         
@@ -2805,6 +3353,9 @@ async function executeEmailTask(recipientId) {
         // 重要：更新 newsList 引用
         logWithTimestamp(`[邮件发送] 更新 newsList 引用，从 ${newsList.length} 条更新为 ${refreshedNewsList.length} 条`);
         newsList = refreshedNewsList;
+        // AI 重取后再次并入司法诉讼，避免仅拼接入库数据在重取链路中丢失
+        const mergeUserId = (recipient.user_role === 'admin' || recipient.role === 'admin') ? null : recipient.user_id;
+        newsList = await mergeShanghaiLitigationIntoNewsList(newsList, { userId: mergeUserId });
         newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipient);
         
         // 验证更新后的 newsList
@@ -2819,6 +3370,29 @@ async function executeEmailTask(recipientId) {
       }
     }
     
+    // 发信前补查：合并任务执行期间新入库的今日新闻，缓解「同步稍晚于发信」竞态
+    try {
+      const lateNews = await getUserVisibleYesterdayNews(recipient.user_id, recipient, true);
+      const existingIds = new Set(newsList.map((n) => n.id || n.F_Id).filter(Boolean));
+      const added = [];
+      for (const n of lateNews || []) {
+        const id = n.id || n.F_Id;
+        if (!id || existingIds.has(id)) continue;
+        n.id = id;
+        added.push(n);
+        existingIds.add(id);
+      }
+      if (added.length > 0) {
+        logWithTimestamp(`[邮件发送] 发信前补查新增 ${added.length} 条今日入库新闻（防同步竞态）`);
+        newsList = [...newsList, ...added];
+        newsList = await applyRecipientAdditionalAccountTagFilter(newsList, recipient);
+      } else {
+        logWithTimestamp(`[邮件发送] 发信前补查：无新增今日入库新闻`);
+      }
+    } catch (lateErr) {
+      warnWithTimestamp(`[邮件发送] 发信前补查失败（不影响主流程）: ${lateErr.message}`);
+    }
+
     // 按收件所属应用加载邮件配置（与「邮件发送配置」页一致，发件人名称区分应用）
     const emailConfig = await getEmailConfigForRecipient(recipient);
     
@@ -3135,7 +3709,9 @@ module.exports = {
   isWorkdayDate,
   filterNewsByCategory,
   deduplicateNewsBySemanticSimilarity,
-  isHolidayContentTaggedNews
+  isHolidayContentTaggedNews,
+  mergeShanghaiLitigationIntoNewsList,
+  normalizeNewsListIds
 };
 
 

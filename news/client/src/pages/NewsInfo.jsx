@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Tabs, Input, Select, Tag, Progress, Checkbox, Radio, Divider, Icon } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { getUser } from '../utils/auth'
 import AdditionalAccounts from './AdditionalAccounts'
 import RecipientManagement from './RecipientManagement'
 import UserEmailRecords from './UserEmailRecords'
@@ -52,9 +53,8 @@ function NewsInfo() {
   const [currentShareLinkId, setCurrentShareLinkId] = useState(null)
 
   useEffect(() => {
-    const userData = localStorage.getItem('user')
-    if (userData) {
-      const userInfo = JSON.parse(userData)
+    const userInfo = getUser()
+    if (userInfo) {
       setUser(userInfo)
       setIsAdmin(userInfo.role === 'admin')
     }

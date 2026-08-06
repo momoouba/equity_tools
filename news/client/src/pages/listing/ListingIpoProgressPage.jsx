@@ -13,6 +13,7 @@ import {
   fetchListingDataChangeLog,
 } from '../../api/listing'
 import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
+import { getUser } from '../../utils/auth'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -21,7 +22,7 @@ const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
 
 function readIsAdmin() {
   try {
-    const u = JSON.parse(localStorage.getItem('user') || '{}')
+    const u = getUser() || {}
     return u.role === 'admin'
   } catch {
     return false

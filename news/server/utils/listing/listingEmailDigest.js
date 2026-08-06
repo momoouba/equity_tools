@@ -407,17 +407,30 @@ async function executeListingEmailDigest(recipient, options = {}) {
     );
   }
   if (includeListingProgress) {
-    // 独立查询 IPO 审核数据，不依赖 ipo_project_progress 匹配表
+    // 独立查询 IPO 审核数据，不依赖 ipo_project_progress 匹配表。
+    // 「昨日」按交易所分流：
+    // - 沪/深/北：receive_date（时间轴状态业务日）；勿用 timeline_confirmed_at（抓取确认时刻）以免重抓误报。
+    // - 港交所：F_UpdateTime（源数据业务日；同步按前一自然日写入，与辅导备案同类）。
     ipoExchangeYesterday = await db.query(
-      `SELECT F_Id, company, status, exchange, board, F_UpdateTime, project_name
+      `SELECT F_Id, company, status, exchange, board, F_UpdateTime, project_name,
+              DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND COALESCE(timeline_confirmed, 1) = 1
-         AND DATE(COALESCE(timeline_confirmed_at, F_UpdateTime)) = ?
-         AND exchange IN ('北交所','深交所','上交所','香港联交所','港交所')
-       ORDER BY COALESCE(timeline_confirmed_at, F_UpdateTime) DESC
+         AND (
+           (
+             exchange IN ('北交所','深交所','上交所')
+             AND receive_date IS NOT NULL
+             AND DATE(receive_date) = ?
+           )
+           OR (
+             exchange IN ('香港联交所','港交所')
+             AND DATE(F_UpdateTime) = ?
+           )
+         )
+       ORDER BY COALESCE(receive_date, F_UpdateTime) DESC, F_UpdateTime DESC
        LIMIT 300`,
-      [reportDay]
+      [reportDay, reportDay]
     );
     ipoExchangeYesterday = dedupeHkIpoRowsForListingMail(ipoExchangeYesterday);
     ipoExchangeYesterday = filterNewlyListedFromIpoAuditMailRows(ipoExchangeYesterday);

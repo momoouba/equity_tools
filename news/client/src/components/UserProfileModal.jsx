@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Modal, Form, Input, Button, Message } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { updateStoredUser } from '../utils/auth'
 import './UserProfileModal.css'
 
 const FormItem = Form.Item
@@ -66,15 +67,12 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
 
       if (response.data.success) {
         Message.success('个人信息更新成功')
-        const userData = localStorage.getItem('user')
-        if (userData) {
-          const user = JSON.parse(userData)
-          user.phone = values.phone
-          user.email = values.email
-          localStorage.setItem('user', JSON.stringify(user))
-          if (onUpdateUser) {
-            onUpdateUser(user)
-          }
+        const next = updateStoredUser({
+          phone: values.phone,
+          email: values.email
+        })
+        if (next && onUpdateUser) {
+          onUpdateUser(next)
         }
         setTimeout(() => {
           onClose()

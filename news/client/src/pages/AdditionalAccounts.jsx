@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Collapse, Select, Input, Form, Upload, Tag } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { getUser } from '../utils/auth'
 import LogModal from './LogModal'
 import './AdditionalAccounts.css'
 
@@ -48,10 +49,9 @@ function AdditionalAccounts() {
   const [filterCollapsed, setFilterCollapsed] = useState(true)
 
   useEffect(() => {
-    const userData = localStorage.getItem('user')
-    if (userData) {
+    const user = getUser()
+    if (user) {
       try {
-        const user = JSON.parse(userData)
         setUserRole(user.role || 'user')
         if (user.role === 'admin') {
           fetchUsers()

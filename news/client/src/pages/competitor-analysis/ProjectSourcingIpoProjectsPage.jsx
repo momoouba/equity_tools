@@ -42,6 +42,7 @@ import {
 import BatchImportModal from '../BatchImportModal'
 import { IntroPopoverCell } from './introPopoverAiCell'
 import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
+import { getUser } from '../../utils/auth'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
 import '../project-sourcing/FinancingEventsPage.css'
@@ -112,9 +113,8 @@ function downloadIpoProjectsCurrentPageCsv(rows) {
 
 function parseUserAdmin() {
   try {
-    const raw = localStorage.getItem('user')
-    if (!raw) return false
-    const u = JSON.parse(raw)
+    const u = getUser()
+    if (!u) return false
     return String(u.role || '').toLowerCase() === 'admin'
   } catch {
     return false
@@ -123,10 +123,9 @@ function parseUserAdmin() {
 
 function parseUserId() {
   try {
-    const raw = localStorage.getItem('user')
-    if (!raw) return ''
-    const u = JSON.parse(raw)
-    return u.id != null ? String(u.id) : ''
+    const u = getUser()
+    if (!u) return ''
+    return u.id != null ? String(u.id) : (u.F_Id != null ? String(u.F_Id) : '')
   } catch {
     return ''
   }

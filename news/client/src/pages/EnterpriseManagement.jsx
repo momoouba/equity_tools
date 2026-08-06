@@ -19,6 +19,7 @@ import {
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import axios from '../utils/axios'
+import { getUser } from '../utils/auth'
 import EnterpriseForm from './EnterpriseForm'
 import BatchImportModal from './BatchImportModal'
 import LogModal from './LogModal'
@@ -248,10 +249,9 @@ function EnterpriseManagement({
   }, [hideEntityTabs])
 
   useEffect(() => {
-    const userData = localStorage.getItem('user')
-    if (userData) {
+    const user = getUser()
+    if (user) {
       try {
-        const user = JSON.parse(userData)
         setIsAdmin(user.role === 'admin')
         if (user.role === 'admin') {
           fetchUsers()
@@ -280,11 +280,10 @@ function EnterpriseManagement({
   const fetchEnterprises = async () => {
     setLoading(true)
     try {
-      const userData = localStorage.getItem('user')
+      const user = getUser()
       let currentIsAdmin = isAdmin
-      if (userData) {
+      if (user) {
         try {
-          const user = JSON.parse(userData)
           currentIsAdmin = user.role === 'admin'
         } catch (e) {
           console.error('解析用户信息失败:', e)

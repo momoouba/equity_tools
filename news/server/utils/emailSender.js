@@ -5,13 +5,34 @@ const { generateId } = require('./idGenerator');
 /** APItype 为上海国际/企查查且 account_name 为以下类型时：邮件正文与附件均不显示原文链接 */
 const NO_LINK_ACCOUNT_NAMES = ['裁判文书', '法院公告', '送达公告', '开庭公告', '立案信息', '破产重整', '被执行人', '失信被执行人', '限制高消费', '行政处罚', '终本案件'];
 
+/** 司法诉讼类 public_time 在邮件中的日期标注（相对入库创建时间） */
+const LITIGATION_PUBLIC_DATE_LABELS = {
+  '开庭公告': '开庭日期',
+  '裁判文书': '裁判日期',
+  '法院公告': '公告日期',
+  '送达公告': '送达日期',
+  '立案信息': '立案日期',
+  '破产重整': '公告日期',
+  '破产重组': '公告日期',
+  '被执行人': '执行日期',
+  '失信被执行人': '列入日期',
+  '限制高消费': '限制日期',
+  '行政处罚': '处罚日期',
+  '终本案件': '终本日期'
+};
+
 function isNoLinkType(news) {
   if (!news) return false;
   const apiType = (news.APItype && String(news.APItype).trim()) || '';
   const isApi = apiType === '上海国际' || apiType === '上海国际集团' || apiType === '企查查' || apiType === 'qichacha';
   if (!isApi) return false;
   const name = (news.account_name && String(news.account_name).trim()) || '';
-  return NO_LINK_ACCOUNT_NAMES.includes(name);
+  return NO_LINK_ACCOUNT_NAMES.includes(name) || name === '破产重组';
+}
+
+function getLitigationPublicDateLabel(accountName) {
+  const name = String(accountName || '').trim();
+  return LITIGATION_PUBLIC_DATE_LABELS[name] || '事件日期';
 }
 
 /**
@@ -156,21 +177,78 @@ function formatNewsSentiment(sentiment) {
 }
 
 /**
- * 格式化发布时间
+ * 格式化发布时间（北京时区）
  */
 function formatPublicTime(timeStr) {
   if (!timeStr) return '未知时间';
   try {
     const date = new Date(timeStr);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day} ${hours}:${minutes}`;
+    if (Number.isNaN(date.getTime())) return String(timeStr);
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false
+      })
+        .formatToParts(date)
+        .filter((p) => p.type !== 'literal')
+        .map((p) => [p.type, p.value])
+    );
+    return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`;
   } catch (e) {
-    return timeStr;
+    return String(timeStr);
   }
+}
+
+/**
+ * 格式化日期为 YYYY-MM-DD（北京时区，用于开庭日等）
+ */
+function formatPublicDateOnly(timeStr) {
+  if (!timeStr) return '';
+  try {
+    const date = new Date(timeStr);
+    if (Number.isNaN(date.getTime())) {
+      const s = String(timeStr).trim();
+      return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : s;
+    }
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      })
+        .formatToParts(date)
+        .filter((p) => p.type !== 'literal')
+        .map((p) => [p.type, p.value])
+    );
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  } catch (e) {
+    return String(timeStr).slice(0, 10);
+  }
+}
+
+/**
+ * 邮件单条新闻底部元信息：
+ * - 普通新闻：发布时间 + 公众号
+ * - 司法诉讼：创建时间 + 类型名 + public_time 标注（如开庭日期）
+ */
+function formatNewsFooterMeta(news) {
+  const accountName = news.account_name || '未知公众号';
+  if (isNoLinkType(news)) {
+    const createdTime = formatPublicTime(news.F_CreatorTime || news.created_at || news.public_time);
+    const eventDate = formatPublicDateOnly(news.public_time);
+    const label = getLitigationPublicDateLabel(news.account_name);
+    if (eventDate) {
+      return `${createdTime}，${accountName}，${label}：${eventDate}`;
+    }
+    return `${createdTime}，${accountName}`;
+  }
+  return `${formatPublicTime(news.public_time)}，${accountName}`;
 }
 
 /**
@@ -438,8 +516,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     for (const news of newsList) {
       const tags = formatNewsTags(news.keywords);
       const sentiment = formatNewsSentiment(news.news_sentiment);
-      const publicTime = formatPublicTime(news.public_time);
-      const accountName = news.account_name || '未知公众号';
+      const footerMeta = formatNewsFooterMeta(news);
       const abstract = news.news_abstract || '暂无摘要';
       const showSourceLink = !isNoLinkType(news);
       const sourceLinkHtml = showSourceLink
@@ -461,7 +538,7 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
             ${abstract}
           </div>
           <div style="color: #888; font-size: 13px;">
-            ${publicTime}，${accountName}${showSourceLink ? '，' + sourceLinkHtml : ''}
+            ${footerMeta}${showSourceLink ? '，' + sourceLinkHtml : ''}
           </div>
         </div>
       `;
@@ -594,14 +671,13 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
       for (const news of newsList) {
         const tags = formatNewsTags(news.keywords);
         const sentiment = formatNewsSentiment(news.news_sentiment);
-        const publicTime = formatPublicTime(news.public_time);
-        const accountName = news.account_name || '未知公众号';
+        const footerMeta = formatNewsFooterMeta(news);
         const abstract = news.news_abstract || '暂无摘要';
         const sourcePart = isNoLinkType(news) ? '' : `，${news.source_url || ''}`;
         
         text += `${news.title || '无标题'} ${tags} ${sentiment}\n`;
         text += `${abstract}\n`;
-        text += `${publicTime}，${accountName}${sourcePart}\n\n`;
+        text += `${footerMeta}${sourcePart}\n\n`;
       }
       
       text += '\n';

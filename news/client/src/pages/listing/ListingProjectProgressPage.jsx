@@ -38,6 +38,7 @@ import {
 } from '../../api/listing'
 import { normalizeRecordList, resolveRecordId } from '../../utils/recordId'
 import CronGenerator from '../../components/CronGenerator'
+import { getUser } from '../../utils/auth'
 
 const TabPane = Tabs.TabPane
 const FormItem = Form.Item
@@ -47,7 +48,7 @@ const LISTING_PAGE_SIZE_OPTIONS = [10, 15, 20, 50, 100, 200]
 
 function readIsAdmin() {
   try {
-    const u = JSON.parse(localStorage.getItem('user') || '{}')
+    const u = getUser() || {}
     return u.role === 'admin'
   } catch {
     return false

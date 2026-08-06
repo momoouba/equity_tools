@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { devApiOrigin } from '../config/devApiPort'
+import { clearUser, getUser, touchSession } from './auth'
 
 // 创建axios实例
 // 开发环境下优先直连后端，避免代理偶发未生效导致 404
@@ -21,24 +22,17 @@ const axiosInstance = axios.create({
   timeout: 120000 // 增加到120秒，适应AI分析的时间需求
 })
 
-// 请求拦截器：自动添加用户ID和角色到请求头
+// 请求拦截器：自动添加用户ID和角色到请求头；记住我模式下滑动续期
 axiosInstance.interceptors.request.use(
   (config) => {
-    // 从localStorage获取用户信息
-    const userStr = localStorage.getItem('user')
-    if (userStr) {
-      try {
-        const user = JSON.parse(userStr)
-        if (user.id) {
-          // 添加用户ID到请求头
-          config.headers['x-user-id'] = user.id
-        }
-        if (user.role) {
-          // 添加用户角色到请求头
-          config.headers['x-user-role'] = user.role
-        }
-      } catch (e) {
-        // 静默处理解析错误
+    const user = touchSession() || getUser()
+    if (user) {
+      const id = user.id || user.F_Id
+      if (id) {
+        config.headers['x-user-id'] = id
+      }
+      if (user.role) {
+        config.headers['x-user-role'] = user.role
       }
     }
     return config
@@ -59,7 +53,7 @@ axiosInstance.interceptors.response.use(
 
     // 401：登录失败留在登录页展示错误；已登录会话过期则跳转登录
     if (error.response?.status === 401 && !isLoginRequest && !isOnLoginPage) {
-      localStorage.removeItem('user')
+      clearUser()
       if (!window.location.pathname.startsWith('/share/')) {
         window.location.href = '/login'
       }
@@ -69,4 +63,3 @@ axiosInstance.interceptors.response.use(
 )
 
 export default axiosInstance
-

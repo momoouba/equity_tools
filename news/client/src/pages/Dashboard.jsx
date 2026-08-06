@@ -3,6 +3,7 @@ import { useNavigate, Routes, Route, useLocation, Navigate } from 'react-router-
 import { Layout, Button, Spin, Message } from '@arco-design/web-react'
 import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb, IconMindMapping } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
+import { clearUser, getUser, updateStoredUser } from '../utils/auth'
 import EnterpriseManagement from './EnterpriseManagement'
 import CompanyManagement from './CompanyManagement'
 import SystemConfig from './SystemConfig'
@@ -141,7 +142,7 @@ function Dashboard() {
       if (res.data?.success && res.data.user) {
         const freshUser = res.data.user
         applyUserInfo(freshUser)
-        localStorage.setItem('user', JSON.stringify(freshUser))
+        updateStoredUser(freshUser)
       }
     } catch (error) {
       console.error('刷新当前用户信息失败:', error)
@@ -149,12 +150,11 @@ function Dashboard() {
   }
 
   useEffect(() => {
-    const userData = localStorage.getItem('user')
-    if (!userData) {
+    const userInfo = getUser()
+    if (!userInfo) {
       navigate('/login')
       return
     }
-    const userInfo = JSON.parse(userData)
     applyUserInfo(userInfo)
 
     // 后台再刷新一次，拿到最新会员配置
@@ -277,14 +277,14 @@ function Dashboard() {
   }, [])
 
   const handleLogout = () => {
-    localStorage.removeItem('user')
+    clearUser()
     Message.success('已退出登录')
     navigate('/login')
   }
 
   const handleUpdateUser = (updatedUser) => {
     setUser(updatedUser)
-    localStorage.setItem('user', JSON.stringify(updatedUser))
+    updateStoredUser(updatedUser)
   }
 
   const handleMenuClick = (key) => {

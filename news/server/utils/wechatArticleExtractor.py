@@ -743,14 +743,8 @@ class WeChatArticleExtractor:
             html_content = response.text
             print(f"[HTTP请求] 获取到HTML内容，长度: {len(html_content)}字符", file=sys.stderr)
             
-            # 输出完整的HTML内容，方便调试和确认是否抓取到有效信息
-            print(f"\n{'='*80}", file=sys.stderr)
-            print(f"[完整HTML内容] 开始输出（长度: {len(html_content)}字符）:", file=sys.stderr)
-            print(f"{'='*80}", file=sys.stderr)
-            print(html_content, file=sys.stderr)
-            print(f"{'='*80}", file=sys.stderr)
-            print(f"[完整HTML内容] 输出结束", file=sys.stderr)
-            print(f"{'='*80}\n", file=sys.stderr)
+            # 仅输出摘要结果，避免完整 HTML 刷屏日志
+            print(f"[HTML内容] 已获取，长度: {len(html_content)}字符（不输出全文）", file=sys.stderr)
             
             # 检查关键内容
             print(f"[HTML内容检查] 检查关键标识...", file=sys.stderr)

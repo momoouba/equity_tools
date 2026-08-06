@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Form, Input, Select, Switch, Tag, Checkbox } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { getUser } from '../utils/auth'
 import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
 import './RecipientManagement.css'
@@ -88,10 +89,9 @@ function RecipientManagement() {
   useEffect(() => {
     let isMounted = true
     
-    const userData = localStorage.getItem('user')
-    if (userData) {
+    const user = getUser()
+    if (user) {
       try {
-        const user = JSON.parse(userData)
         if (isMounted) {
           setIsAdmin(user.role === 'admin')
         }

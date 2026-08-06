@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Form, Input, Button, Message, Alert } from '@arco-design/web-react'
+import { Form, Input, Button, Message, Alert, Checkbox } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { setUserSession, isLoggedIn } from '../utils/auth'
 import './Login.css'
 
 const FormItem = Form.Item
@@ -12,6 +13,7 @@ function Login() {
   const [loginError, setLoginError] = useState('')
   const [systemName, setSystemName] = useState('')
   const [backgroundImage, setBackgroundImage] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
   const navigate = useNavigate()
   const canvasRef = useRef(null)
   const animationFrameRef = useRef(null)
@@ -19,6 +21,11 @@ function Login() {
   const mouseRef = useRef({ x: null, y: null, radius: 150 })
 
   useEffect(() => {
+    // 已登录（含记住我未过期）直接进系统
+    if (isLoggedIn()) {
+      navigate('/dashboard', { replace: true })
+      return
+    }
     fetchSystemConfig()
   }, [])
 
@@ -228,10 +235,13 @@ function Login() {
     setLoading(true)
     setLoginError('')
     try {
-      const response = await axios.post('/api/auth/login', values)
+      const response = await axios.post('/api/auth/login', {
+        account: values.account,
+        password: values.password
+      })
       if (response.data.success) {
-        localStorage.setItem('user', JSON.stringify(response.data.user))
-        Message.success('登录成功')
+        setUserSession(response.data.user, rememberMe)
+        Message.success(rememberMe ? '登录成功（已记住 30 天）' : '登录成功')
         navigate('/dashboard')
       }
     } catch (err) {
@@ -296,6 +306,12 @@ function Login() {
             rules={[{ required: true, message: '请输入密码' }]}
           >
             <Input.Password placeholder="请输入密码" />
+          </FormItem>
+
+          <FormItem style={{ marginBottom: 16 }}>
+            <Checkbox checked={rememberMe} onChange={setRememberMe}>
+              记住我 30 天
+            </Checkbox>
           </FormItem>
 
           <FormItem>

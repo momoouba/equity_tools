@@ -7,12 +7,18 @@ const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient, getEmailConfigForRecipient } = require('../utils/emailSender');
-const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews, deduplicateNewsBySemanticSimilarity } = require('../utils/scheduledEmailTasks');
+const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews, deduplicateNewsBySemanticSimilarity, mergeShanghaiLitigationIntoNewsList, normalizeNewsListIds } = require('../utils/scheduledEmailTasks');
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
 const { maskSearchKeyForLog, previewBodyForLog } = require('../utils/qichachaApiLog');
 const { IE_NEWS_APP_FILTER_SQL, IE_NEWS_APP_FILTER_SQL_IE } = require('../utils/investedEnterpriseNewsAppSql');
+const {
+  resolveSyncBizDates,
+  dayRangeFromTo,
+  shouldFetchAccountBizDay,
+  upsertFetchDayResult
+} = require('../utils/newsFetchDayLog');
 
 /** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
 async function getNewsSentimentAppId() {
@@ -357,56 +363,70 @@ function addDays(date, days) {
  * @param {{from?: string, to?: string}|null} customRange - 手动触发的 from/to（YYYY-MM-DD HH:mm:ss）
  * @returns {{ queryDates: string[], lastQueryDate: string|null }}
  */
-function buildShanghaiInternationalQueryDates(config, customRange) {
-  const now = new Date();
-  const baseRunDate = createShanghaiDate(now);
-  const yesterday = new Date(baseRunDate);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const yesterdayStr = formatDateOnly(yesterday);
-
-  if (customRange && customRange.from && customRange.to) {
-    const startStr = String(customRange.from).trim().split(' ')[0];
-    const endStr = String(customRange.to).trim().split(' ')[0];
-    const queryDates = [];
-    const startD = new Date(startStr + 'T00:00:00+08:00');
-    const endD = new Date(endStr + 'T00:00:00+08:00');
-    for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
-      queryDates.push(formatDateOnly(d));
-    }
-    const lastQueryDate = queryDates.length > 0 ? queryDates[queryDates.length - 1] : null;
-    return { queryDates, lastQueryDate };
-  }
-
-  let lastSyncDateStr = null;
-  if (config.last_sync_date) {
-    if (config.last_sync_date instanceof Date) {
-      lastSyncDateStr = formatDateOnly(config.last_sync_date);
-    } else {
-      lastSyncDateStr = String(config.last_sync_date).trim().split(' ')[0];
-    }
-  } else if (config.last_sync_time) {
-    const lt = new Date(config.last_sync_time);
-    const parts = lt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).split(' ')[0].split(/[\/\-]/);
-    if (parts.length === 3) {
-      lastSyncDateStr = `${parts[0]}-${String(parts[1]).padStart(2, '0')}-${String(parts[2]).padStart(2, '0')}`;
-    }
-  }
-
-  const queryDates = [];
-  if (lastSyncDateStr) {
-    const lastD = new Date(lastSyncDateStr + 'T00:00:00+08:00');
-    const nextD = new Date(lastD);
-    nextD.setDate(nextD.getDate() + 1);
-    const yesterdayD = new Date(yesterdayStr + 'T00:00:00+08:00');
-    for (let d = new Date(nextD); d <= yesterdayD; d.setDate(d.getDate() + 1)) {
-      queryDates.push(formatDateOnly(d));
-    }
-  }
-  if (queryDates.length === 0) {
-    queryDates.push(yesterdayStr);
-  }
-  const lastQueryDate = queryDates.length > 0 ? queryDates[queryDates.length - 1] : yesterdayStr;
+/**
+ * 上海国际按日查询：业务日窗口与新榜企业公众号一致（含手动 customRange / 节后拉长）
+ * @returns {Promise<{ queryDates: string[], lastQueryDate: string|null }>}
+ */
+async function buildShanghaiInternationalQueryDates(config, customRange) {
+  const queryDates = await resolveSyncBizDates({
+    runDate: new Date(),
+    customRange: customRange && customRange.from && customRange.to ? customRange : null
+  });
+  const lastQueryDate = queryDates.length > 0 ? queryDates[queryDates.length - 1] : null;
+  console.log(
+    `[上海国际] 业务日窗口 config=${config?.id || '-'} dates=${queryDates.join(', ') || '(空)'}`
+  );
   return { queryDates, lastQueryDate };
+}
+
+/**
+ * 上海国际：按「news_type + 信用代码 + 业务日」过滤账本已 has_data / empty 耗尽的日期
+ */
+async function filterShanghaiQueryDatesByLedger(newsType, accountKey, queryDates) {
+  const out = [];
+  for (const d of queryDates) {
+    const decision = await shouldFetchAccountBizDay({
+      interfaceType: '上海国际',
+      newsType,
+      accountKey,
+      bizDate: d
+    });
+    if (!decision.fetch) {
+      console.log(
+        `[上海国际][${newsType}] 账本跳过 account=${accountKey} bizDate=${d} reason=${decision.reason}`
+      );
+      continue;
+    }
+    out.push({ queryDate: d, previousRow: decision.row || null, reason: decision.reason });
+  }
+  return out;
+}
+
+async function recordShanghaiFetchDay({
+  newsType,
+  accountKey,
+  bizDate,
+  status,
+  itemCount = 0,
+  configId = null,
+  lastError = null,
+  previousRow = null
+}) {
+  try {
+    await upsertFetchDayResult({
+      interfaceType: '上海国际',
+      newsType,
+      accountKey,
+      bizDate,
+      status,
+      itemCount,
+      configId,
+      lastError,
+      previousRow
+    });
+  } catch (e) {
+    console.warn(`[上海国际][${newsType}] 写入抓取日账本失败: ${e.message}`);
+  }
 }
 
 /**
@@ -583,19 +603,25 @@ function calculateScheduledSyncTimeRange(targetDate = null) {
  * @returns {Promise<object>} 同步结果
  */
 async function executeNewsSyncForConfig(config, range, options = {}) {
-  const { isManual = false, logId = null } = options;
+  const { isManual = false, logId = null, bizDates: optionBizDates = null, customRange = null } = options;
   try {
   const { request_url, content_type, api_key } = config;
   const { from, to } = range;
+
+  // 企业公众号：按业务日拆分请求 + 抓取日账本；额外公众号仍用整段 range（排除在账本外）
+  let enterpriseBizDates = Array.isArray(optionBizDates) && optionBizDates.length
+    ? optionBizDates
+    : await resolveSyncBizDates({ customRange: customRange || null });
   
   console.log(`取数时间范围（${isManual ? '手动触发' : '定时任务'}，配置 ${config.id}）：`, { from, to });
+  console.log(`[新榜同步] 企业公众号业务日: ${enterpriseBizDates.join(', ') || '(无)'}`);
   
   if (isManual) {
     const now = new Date();
     console.log(`手动触发详情：`);
     console.log(`- 点击时间: ${formatDate(now)}`);
     console.log(`- 获取范围: ${from} 到 ${to}`);
-    console.log(`- 说明: 获取前一天0点到今天0点之间发布的新闻`);
+    console.log(`- 说明: 企业公众号按业务日抓取并走账本；额外公众号使用整段时间范围`);
   }
 
   // 解析 entity_type 配置（仅对新榜接口生效）
@@ -699,17 +725,15 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
 
   // 去重公众号ID
   let uniqueAccounts = [...new Set(allAccountIds)];
+  const enterpriseAccountSet = new Set(enterpriseAccountIds);
 
-  // 过滤掉当天已查询过的公众号ID（手动触发和定时任务都使用相同逻辑）
-  // 这样可以避免重复查询，减少失败率，提高效率
+  // 额外公众号：仍可按「当天已有入库」跳过整号；企业公众号改走抓取日账本，不再整号跳过
   try {
-    // 获取当天开始时间（Asia/Shanghai时区）
     const todayStart = createShanghaiDate();
     const todayEnd = new Date(todayStart);
     todayEnd.setDate(todayEnd.getDate() + 1);
     todayEnd.setMilliseconds(todayEnd.getMilliseconds() - 1);
 
-    // 查询当天已同步的公众号ID（新榜接口）
     const syncedAccounts = await db.query(
       `SELECT DISTINCT wechat_account 
        FROM news_detail 
@@ -721,42 +745,72 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
        AND F_DeleteMark = 0`,
       [todayStart, todayEnd]
     );
-
-    const syncedAccountIds = syncedAccounts.map(a => a.wechat_account);
-    const syncedAccountSet = new Set(syncedAccountIds);
-
-    // 过滤掉已查询的公众号ID
+    const syncedAccountSet = new Set(syncedAccounts.map(a => a.wechat_account));
     const beforeFilterCount = uniqueAccounts.length;
-    uniqueAccounts = uniqueAccounts.filter(account => !syncedAccountSet.has(account));
-    const afterFilterCount = uniqueAccounts.length;
-    const filteredCount = beforeFilterCount - afterFilterCount;
-
+    uniqueAccounts = uniqueAccounts.filter((account) => {
+      if (enterpriseAccountSet.has(account)) return true;
+      return !syncedAccountSet.has(account);
+    });
+    const filteredCount = beforeFilterCount - uniqueAccounts.length;
     if (filteredCount > 0) {
-      const triggerType = isManual ? '手动同步' : '定时任务';
-      console.log(`[${triggerType}] 过滤掉当天已查询的公众号ID: ${filteredCount} 个`);
-      console.log(`[${triggerType}] 剩余待查询公众号ID: ${afterFilterCount} 个`);
+      console.log(`[新榜同步] 额外公众号：过滤当天已查询 ${filteredCount} 个；剩余 ${uniqueAccounts.length} 个`);
     }
-
     if (uniqueAccounts.length === 0) {
-      const triggerType = isManual ? '手动同步' : '定时任务';
-      console.log(`[${triggerType}] 所有公众号ID今天都已查询过，无需再次同步`);
       return {
         success: true,
-        message: '所有公众号今天都已同步过，无需再次同步',
+        message: '没有待同步的公众号',
         data: { synced: 0, total: 0 }
       };
     }
   } catch (filterError) {
-    const triggerType = isManual ? '手动同步' : '定时任务';
-    console.error(`[${triggerType}] 过滤已查询公众号ID时出错:`, filterError.message);
-    // 如果过滤出错，继续使用所有公众号ID，不中断同步流程
+    console.error(`[新榜同步] 过滤已查询公众号ID时出错:`, filterError.message);
   }
+
+  // 组装工作项：企业公众号=每业务日一条；额外公众号=整段 range
+  const workItems = [];
+  for (const account of uniqueAccounts) {
+    if (enterpriseAccountSet.has(account) && enterpriseBizDates.length > 0) {
+      for (const bizDate of enterpriseBizDates) {
+        const dayRange = dayRangeFromTo(bizDate);
+        workItems.push({
+          account,
+          from: dayRange.from,
+          to: dayRange.to,
+          bizDate,
+          useLedger: true
+        });
+      }
+    } else {
+      workItems.push({ account, from, to, bizDate: null, useLedger: false });
+    }
+  }
+  console.log(`[新榜同步] 工作项总数: ${workItems.length}（企业按日拆分 + 额外公众号整段）`);
   
   let totalSynced = 0;
   const errors = [];
 
-  // 遍历每个公众号，调用接口获取数据
-  for (const account of uniqueAccounts) {
+  // 遍历工作项调用接口
+  for (const work of workItems) {
+    const account = work.account;
+    const fetchFrom = work.from;
+    const fetchTo = work.to;
+    let ledgerPreviousRow = null;
+
+    if (work.useLedger && work.bizDate) {
+      const decision = await shouldFetchAccountBizDay({
+        interfaceType: '新榜',
+        newsType: '新闻舆情',
+        accountKey: account,
+        bizDate: work.bizDate
+      });
+      if (!decision.fetch) {
+        console.log(`[新榜同步] 账本跳过 account=${account} bizDate=${work.bizDate} reason=${decision.reason}`);
+        continue;
+      }
+      ledgerPreviousRow = decision.row || null;
+      console.log(`[新榜同步] 账本抓取 account=${account} bizDate=${work.bizDate} reason=${decision.reason}`);
+    }
+
     // 记录每个公众号的同步详情
     let accountDataCount = 0; // 该公众号返回的数据条数
     let accountInsertCount = 0; // 该公众号成功入库的条数
@@ -771,14 +825,14 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
         // 调用新闻接口（使用 x-www-form-urlencoded 格式）
         const params = new URLSearchParams({
           account: account,
-          from: from,
-          to: to,
+          from: fetchFrom,
+          to: fetchTo,
           page: page.toString(),
           size: '20'
         });
 
         // 记录API调用详情，便于排查404问题
-        console.log(`[新榜同步] 调用API - 公众号ID: "${account}", 时间范围: ${from} 到 ${to}, 页码: ${page}`);
+        console.log(`[新榜同步] 调用API - 公众号ID: "${account}", 时间范围: ${fetchFrom} 到 ${fetchTo}, 页码: ${page}`);
         console.log(`[新榜同步] API地址: ${request_url}`);
         
         const response = await axios.post(request_url, 
@@ -1062,6 +1116,57 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
         // 避免请求过快，添加延迟
         await new Promise(resolve => setTimeout(resolve, 500));
       }
+
+      // 企业公众号按日：写入抓取日账本
+      if (work.useLedger && work.bizDate) {
+        let ledgerStatus = 'empty';
+        if (accountHasData) {
+          ledgerStatus = 'has_data';
+        } else if (accountErrorMsg) {
+          const isEmptyMsg = /数据不存在|不存在|无数据|没有数据/.test(accountErrorMsg);
+          ledgerStatus = isEmptyMsg ? 'empty' : 'failed';
+        }
+        try {
+          await upsertFetchDayResult({
+            interfaceType: '新榜',
+            newsType: '新闻舆情',
+            accountKey: account,
+            bizDate: work.bizDate,
+            status: ledgerStatus,
+            itemCount: accountDataCount,
+            configId: config.id,
+            lastError: accountErrorMsg,
+            previousRow: ledgerPreviousRow
+          });
+          console.log(`[新榜同步] 账本已更新 account=${account} bizDate=${work.bizDate} status=${ledgerStatus} count=${accountDataCount}`);
+        } catch (ledgerErr) {
+          console.warn(`[新榜同步] 写入抓取日账本失败: ${ledgerErr.message}`);
+        }
+      }
+
+      if (logId) {
+        try {
+          const detailLogId = await generateId('news_sync_detail_log');
+          await db.execute(
+            `INSERT INTO news_sync_detail_log 
+             (F_Id, sync_log_id, interface_type, account_id, has_data, data_count, insert_success, insert_count, error_message) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              detailLogId,
+              logId,
+              '新榜',
+              work.bizDate ? `${account}@${work.bizDate}` : account,
+              accountHasData ? 1 : 0,
+              accountDataCount,
+              accountInsertCount > 0 ? 1 : 0,
+              accountInsertCount,
+              accountErrorMsg
+            ]
+          );
+        } catch (detailLogError) {
+          console.error(`[新榜同步] 记录详细日志失败（公众号：${account}）：`, detailLogError.message);
+        }
+      }
     } catch (error) {
       // 区分不同类型的错误
       let errorMessage = error.message;
@@ -1109,6 +1214,24 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       
       // 记录错误信息
       accountErrorMsg = errorMessage;
+
+      if (work.useLedger && work.bizDate) {
+        try {
+          await upsertFetchDayResult({
+            interfaceType: '新榜',
+            newsType: '新闻舆情',
+            accountKey: account,
+            bizDate: work.bizDate,
+            status: 'failed',
+            itemCount: accountDataCount,
+            configId: config.id,
+            lastError: accountErrorMsg,
+            previousRow: ledgerPreviousRow
+          });
+        } catch (ledgerErr) {
+          console.warn(`[新榜同步] 写入抓取日账本失败(catch): ${ledgerErr.message}`);
+        }
+      }
       
       // 检查是否是使用量不足的错误
       const isQuotaExceeded = errorMessage.includes('使用量') || 
@@ -1149,7 +1272,7 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
               detailLogId,
               logId,
               '新榜',
-              account,
+              work.bizDate ? `${account}@${work.bizDate}` : account,
               accountHasData ? 1 : 0,
               accountDataCount,
               accountInsertCount > 0 ? 1 : 0,
@@ -1205,9 +1328,9 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       }
     });
     
-    // 显示前5个错误详情
-    console.log(`[新榜同步] 失败详情（前5个）:`);
-    errors.slice(0, 5).forEach((err, index) => {
+    // 列示全部失败公众号（便于排查「数据不存在」等批量问题）
+    console.log(`[新榜同步] 失败详情（共 ${errors.length} 个）:`);
+    errors.forEach((err, index) => {
       console.log(`[新榜同步]   ${index + 1}. 公众号 "${err.account}": [${err.type || '未知'}] ${err.message}`);
     });
     
@@ -1519,6 +1642,23 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     console.log(`[新闻同步] - toDate: ${toDate.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
   }
 
+  // 新榜企业公众号：统一用抓取日账本业务日窗口（周一=周五~周日；周二~周五=前两天；并集节后拉长）
+  const interfaceTypeForRange = config.interface_type || '新榜';
+  let xinbangBizDates = null;
+  if (interfaceTypeForRange === '新榜') {
+    xinbangBizDates = await resolveSyncBizDates({
+      runDate: now,
+      customRange: customRangeEnabled ? customRange : null
+    });
+    if (xinbangBizDates.length > 0) {
+      const [y1, m1, d1] = xinbangBizDates[0].split('-').map(Number);
+      const [y2, m2, d2] = xinbangBizDates[xinbangBizDates.length - 1].split('-').map(Number);
+      fromDate = new Date(y1, m1 - 1, d1, 0, 0, 0);
+      toDate = new Date(y2, m2 - 1, d2, 23, 59, 59);
+      console.log(`[新闻同步] 新榜业务日窗口: ${xinbangBizDates.join(', ')}`);
+    }
+  }
+
   if (!toDate || !fromDate) {
     return { success: true, skipped: true, reason: 'invalid-range', runDate: formatDateOnly(baseRunDate) };
   }
@@ -1545,50 +1685,56 @@ async function syncConfigWithSchedule(config, { isManual, runDate, customRange, 
     result = await syncQichachaNewsData(config.id, logId);
   } else if (interfaceType === '上海国际集团') {
     const newsType = (config.news_type || '新闻舆情').trim();
+    const shCustomRange = customRangeEnabled ? customRange : null;
     if (newsType === '被执行人') {
       console.log(`[新闻同步] 上海国际集团接口(被执行人)，调用syncShanghaiInternationalGroupExecPersData`);
-      result = await syncShanghaiInternationalGroupExecPersData(config.id, logId);
+      result = await syncShanghaiInternationalGroupExecPersData(config.id, logId, shCustomRange);
     } else if (newsType === '裁判文书') {
       console.log(`[新闻同步] 上海国际集团接口(裁判文书)，调用syncShanghaiInternationalGroupJudgmentData`);
-      result = await syncShanghaiInternationalGroupJudgmentData(config.id, logId);
+      result = await syncShanghaiInternationalGroupJudgmentData(config.id, logId, shCustomRange);
     } else if (newsType === '法院公告') {
       console.log(`[新闻同步] 上海国际集团接口(法院公告)，调用syncShanghaiInternationalGroupCourtAnnouncementData`);
-      result = await syncShanghaiInternationalGroupCourtAnnouncementData(config.id, logId);
+      result = await syncShanghaiInternationalGroupCourtAnnouncementData(config.id, logId, shCustomRange);
     } else if (newsType === '送达公告') {
       console.log(`[新闻同步] 上海国际集团接口(送达公告)，调用syncShanghaiInternationalGroupDeliveryAnnouncementData`);
-      result = await syncShanghaiInternationalGroupDeliveryAnnouncementData(config.id, logId);
+      result = await syncShanghaiInternationalGroupDeliveryAnnouncementData(config.id, logId, shCustomRange);
     } else if (newsType === '开庭公告') {
       console.log(`[新闻同步] 上海国际集团接口(开庭公告)，调用syncShanghaiInternationalGroupCourtHearingData`);
-      result = await syncShanghaiInternationalGroupCourtHearingData(config.id, logId);
+      result = await syncShanghaiInternationalGroupCourtHearingData(config.id, logId, shCustomRange);
     } else if (newsType === '立案信息') {
       console.log(`[新闻同步] 上海国际集团接口(立案信息)，调用syncShanghaiInternationalGroupFilingData`);
-      result = await syncShanghaiInternationalGroupFilingData(config.id, logId);
+      result = await syncShanghaiInternationalGroupFilingData(config.id, logId, shCustomRange);
     } else if (newsType === '破产重整') {
       console.log(`[新闻同步] 上海国际集团接口(破产重整)，调用syncShanghaiInternationalGroupBankrptReorgData`);
-      result = await syncShanghaiInternationalGroupBankrptReorgData(config.id, logId);
+      result = await syncShanghaiInternationalGroupBankrptReorgData(config.id, logId, shCustomRange);
     } else if (newsType === '失信被执行人') {
       console.log(`[新闻同步] 上海国际集团接口(失信被执行人)，调用syncShanghaiInternationalGroupDiscrdtExecData`);
-      result = await syncShanghaiInternationalGroupDiscrdtExecData(config.id, logId);
+      result = await syncShanghaiInternationalGroupDiscrdtExecData(config.id, logId, shCustomRange);
     } else if (newsType === '限制高消费') {
       console.log(`[新闻同步] 上海国际集团接口(限制高消费)，调用syncShanghaiInternationalGroupRestrictHighConsData`);
-      result = await syncShanghaiInternationalGroupRestrictHighConsData(config.id, logId);
+      result = await syncShanghaiInternationalGroupRestrictHighConsData(config.id, logId, shCustomRange);
     } else if (newsType === '行政处罚') {
       console.log(`[新闻同步] 上海国际集团接口(行政处罚)，调用syncShanghaiInternationalGroupAdminPnshData`);
-      result = await syncShanghaiInternationalGroupAdminPnshData(config.id, logId);
+      result = await syncShanghaiInternationalGroupAdminPnshData(config.id, logId, shCustomRange);
     } else if (newsType === '终本案件') {
       console.log(`[新闻同步] 上海国际集团接口(终本案件)，调用syncShanghaiInternationalGroupFinalCaseData`);
-      result = await syncShanghaiInternationalGroupFinalCaseData(config.id, logId);
+      result = await syncShanghaiInternationalGroupFinalCaseData(config.id, logId, shCustomRange);
     } else if (newsType === '同花顺订阅') {
       console.log(`[新闻同步] 上海国际集团接口(同花顺订阅)，调用syncShanghaiInternationalGroupThsSubscriptionData`);
-      result = await syncShanghaiInternationalGroupThsSubscriptionData(config.id, logId);
+      result = await syncShanghaiInternationalGroupThsSubscriptionData(config.id, logId, shCustomRange);
     } else {
       console.log(`[新闻同步] 上海国际集团接口，调用syncShanghaiInternationalGroupNewsData`);
-      result = await syncShanghaiInternationalGroupNewsData(config.id, logId);
+      result = await syncShanghaiInternationalGroupNewsData(config.id, logId, shCustomRange);
     }
   } else {
-    // 新榜接口使用executeNewsSyncForConfig
+    // 新榜接口使用executeNewsSyncForConfig（企业公众号按业务日+账本）
     console.log(`[新闻同步] 新榜接口，调用executeNewsSyncForConfig`);
-    result = await executeNewsSyncForConfig(config, range, { isManual, logId });
+    result = await executeNewsSyncForConfig(config, range, {
+      isManual,
+      logId,
+      bizDates: xinbangBizDates,
+      customRange: customRangeEnabled ? customRange : null
+    });
   }
 
   // 检查是否获取到数据
@@ -4272,18 +4418,20 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       
       // 重新分析完成后，从数据库重新获取最新的新闻数据（包含entity_type）
       logWithTag('[手动发送邮件]', '从数据库重新获取最新的新闻数据...');
-      const newsIds = basicFilteredNewsList.map(n => n.id);
+      normalizeNewsListIds(basicFilteredNewsList);
+      const newsIds = basicFilteredNewsList.map(n => n.id || n.F_Id).filter(Boolean);
       if (newsIds.length > 0) {
         const placeholders = newsIds.map(() => '?').join(',');
         const refreshedNewsList = await db.query(
-          `SELECT DISTINCT nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
+          `SELECT DISTINCT nd.F_Id AS id, nd.F_Id, nd.title, nd.enterprise_full_name, nd.news_sentiment, nd.keywords, 
                   nd.news_abstract, nd.summary, nd.content, nd.public_time, nd.account_name, nd.wechat_account, nd.source_url, nd.F_CreatorTime,
-                  nd.APItype, nd.news_category, nd.entity_type
+                  nd.APItype, nd.news_category, nd.entity_type, nd.fund, nd.sub_fund
            FROM news_detail nd
            WHERE nd.F_Id IN (${placeholders})
            AND nd.F_DeleteMark = 0`,
           newsIds
         );
+        normalizeNewsListIds(refreshedNewsList);
         
         logWithTag('[手动发送邮件]', `重新获取到 ${refreshedNewsList.length} 条新闻数据`);
         
@@ -4303,6 +4451,17 @@ router.post('/recipients/:id/send-email', async (req, res) => {
         }
         
         newsList = refreshedNewsList;
+      }
+
+      // AI 重取后再次并入司法诉讼（开庭公告等），避免主查询漏案号或重取丢 id
+      {
+        const roleRows = await db.query('SELECT role FROM users WHERE F_Id = ?', [recipient.user_id]);
+        const mergeUserId = (roleRows[0]?.role === 'admin') ? null : recipient.user_id;
+        const beforeLit = newsList.length;
+        newsList = await mergeShanghaiLitigationIntoNewsList(newsList, { userId: mergeUserId });
+        if (newsList.length > beforeLit) {
+          logWithTag('[手动发送邮件]', `AI重取后专项并入司法诉讼 ${newsList.length - beforeLit} 条`);
+        }
       }
       
       // 重新应用最终过滤逻辑（过滤掉不满足发送邮件条件的数据）
@@ -5760,7 +5919,7 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -5830,7 +5989,8 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('被执行人', execIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = execIdtfnCd.substring(0, 4) + '****' + execIdtfnCd.slice(-4);
         console.log(`[上海国际集团被执行人] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -5863,6 +6023,15 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
             const desc = response.data?.Desc || '未知错误';
             console.warn(`[上海国际集团被执行人] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
             errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '被执行人',
+              accountKey: execIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -5924,9 +6093,27 @@ async function syncShanghaiInternationalGroupExecPersData(configId = null, logId
             existingCaseNos.add(caseNo);
             totalSynced++;
           }
+          await recordShanghaiFetchDay({
+            newsType: '被执行人',
+            accountKey: execIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
         } catch (apiError) {
           console.error(`[上海国际集团被执行人] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
           errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+          await recordShanghaiFetchDay({
+            newsType: '被执行人',
+            accountKey: execIdtfnCd,
+            bizDate: queryDate,
+            status: 'failed',
+            configId: config.id,
+            lastError: apiError.message,
+            previousRow: ledgerPrev
+          });
         }
       }
     }
@@ -6027,7 +6214,7 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -6097,7 +6284,8 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('失信被执行人', execIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = execIdtfnCd.substring(0, 4) + '****' + execIdtfnCd.slice(-4);
         console.log(`[上海国际集团失信被执行人] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -6128,8 +6316,17 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
         if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
           const code = response.data?.Code || 'unknown';
           const desc = response.data?.Desc || '未知错误';
-          console.warn(`[上海国际集团失信被执行人] 接口错误: ${code}, ${desc}`);
-          errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+          console.warn(`[上海国际集团失信被执行人] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+          errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+          await recordShanghaiFetchDay({
+            newsType: '失信被执行人',
+            accountKey: execIdtfnCd,
+            bizDate: queryDate,
+            status: 'failed',
+            configId: config.id,
+            lastError: `${code}: ${desc}`,
+            previousRow: ledgerPrev
+          });
           continue;
         }
 
@@ -6193,9 +6390,27 @@ async function syncShanghaiInternationalGroupDiscrdtExecData(configId = null, lo
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '失信被执行人',
+            accountKey: execIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团失信被执行人] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团失信被执行人] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '失信被执行人',
+          accountKey: execIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -6296,7 +6511,7 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -6366,7 +6581,8 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('限制高消费', restrIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = restrIdtfnCd.substring(0, 4) + '****' + restrIdtfnCd.slice(-4);
         console.log(`[上海国际集团限制高消费] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -6397,8 +6613,17 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团限制高消费] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团限制高消费] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '限制高消费',
+              accountKey: restrIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -6462,9 +6687,27 @@ async function syncShanghaiInternationalGroupRestrictHighConsData(configId = nul
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '限制高消费',
+            accountKey: restrIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团限制高消费] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团限制高消费] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '限制高消费',
+          accountKey: restrIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -6565,7 +6808,7 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -6635,7 +6878,8 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('行政处罚', pnshIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = pnshIdtfnCd.substring(0, 4) + '****' + pnshIdtfnCd.slice(-4);
         console.log(`[上海国际集团行政处罚] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -6666,8 +6910,17 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团行政处罚] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团行政处罚] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '行政处罚',
+              accountKey: pnshIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -6731,9 +6984,27 @@ async function syncShanghaiInternationalGroupAdminPnshData(configId = null, logI
           existingInstrmntNos.add(instrmntNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '行政处罚',
+            accountKey: pnshIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团行政处罚] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团行政处罚] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '行政处罚',
+          accountKey: pnshIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -6834,7 +7105,7 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -6904,7 +7175,8 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('终本案件', execIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = execIdtfnCd.substring(0, 4) + '****' + execIdtfnCd.slice(-4);
         console.log(`[上海国际集团终本案件] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -6935,8 +7207,17 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团终本案件] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团终本案件] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '终本案件',
+              accountKey: execIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -7001,9 +7282,27 @@ async function syncShanghaiInternationalGroupFinalCaseData(configId = null, logI
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '终本案件',
+            accountKey: execIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团终本案件] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团终本案件] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '终本案件',
+          accountKey: execIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -7104,7 +7403,7 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -7174,7 +7473,8 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('裁判文书', subjIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
         console.log(`[上海国际集团裁判文书] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -7205,8 +7505,17 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团裁判文书] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团裁判文书] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '裁判文书',
+              accountKey: subjIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -7269,9 +7578,27 @@ async function syncShanghaiInternationalGroupJudgmentData(configId = null, logId
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '裁判文书',
+            accountKey: subjIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团裁判文书] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团裁判文书] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '裁判文书',
+          accountKey: subjIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -7372,7 +7699,7 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -7442,7 +7769,8 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('法院公告', subjIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
         console.log(`[上海国际集团法院公告] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -7473,8 +7801,17 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团法院公告] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团法院公告] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '法院公告',
+              accountKey: subjIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -7537,9 +7874,27 @@ async function syncShanghaiInternationalGroupCourtAnnouncementData(configId = nu
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '法院公告',
+            accountKey: subjIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团法院公告] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团法院公告] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '法院公告',
+          accountKey: subjIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -7640,7 +7995,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -7710,7 +8065,8 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('开庭公告', subjIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
         console.log(`[上海国际集团开庭公告] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -7741,8 +8097,17 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团开庭公告] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团开庭公告] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '开庭公告',
+              accountKey: subjIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -7759,11 +8124,17 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           if (!caseNo) continue;
           if (existingCaseNos.has(caseNo)) continue;
 
-          // 开庭时间 sess_dt 作为 public_time
+          // 开庭时间 sess_dt 作为 public_time（兼容仅日期 YYYY-MM-DD）
           let publicTime = null;
           if (item.sess_dt) {
-            const s = String(item.sess_dt).replace('T', ' ').substring(0, 19);
-            if (s.length >= 19) publicTime = s;
+            const s = String(item.sess_dt).replace('T', ' ').trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10)) && s.length < 19) {
+              publicTime = `${s.slice(0, 10)} 00:00:00`;
+            } else if (s.length >= 19) {
+              publicTime = s.substring(0, 19);
+            } else if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+              publicTime = `${s.slice(0, 10)} 00:00:00`;
+            }
           }
           if (!publicTime) publicTime = formatDate(new Date());
 
@@ -7806,9 +8177,27 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '开庭公告',
+            accountKey: subjIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团开庭公告] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团开庭公告] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '开庭公告',
+          accountKey: subjIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -7909,7 +8298,7 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -7979,7 +8368,8 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('立案信息', partyIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = partyIdtfnCd.substring(0, 4) + '****' + partyIdtfnCd.slice(-4);
         console.log(`[上海国际集团立案信息] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -8010,8 +8400,17 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团立案信息] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团立案信息] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '立案信息',
+              accountKey: partyIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -8075,9 +8474,27 @@ async function syncShanghaiInternationalGroupFilingData(configId = null, logId =
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '立案信息',
+            accountKey: partyIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团立案信息] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团立案信息] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '立案信息',
+          accountKey: partyIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -8178,7 +8595,7 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -8248,7 +8665,8 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('送达公告', subjIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
         console.log(`[上海国际集团送达公告] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -8279,8 +8697,17 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团送达公告] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团送达公告] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '送达公告',
+              accountKey: subjIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -8342,9 +8769,27 @@ async function syncShanghaiInternationalGroupDeliveryAnnouncementData(configId =
           existingTitles.add(title);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '送达公告',
+            accountKey: subjIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团送达公告] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团送达公告] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '送达公告',
+          accountKey: subjIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -8445,7 +8890,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
       throw new Error('上海国际集团接口X-App-Id或APIkey未配置');
     }
 
-    const { queryDates, lastQueryDate } = buildShanghaiInternationalQueryDates(config, customRange);
+    const { queryDates, lastQueryDate } = await buildShanghaiInternationalQueryDates(config, customRange);
     if (queryDates.length === 0) {
       return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
@@ -8515,7 +8960,8 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
         continue;
       }
 
-      for (const queryDate of queryDates) {
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('破产重整', subjIdtfnCd, queryDates);
+      for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
         requestIndex += 1;
         const maskedCode = subjIdtfnCd.substring(0, 4) + '****' + subjIdtfnCd.slice(-4);
         console.log(`[上海国际集团破产重整] 请求第 ${requestIndex} 机构:${maskedCode} query_date:${queryDate}`);
@@ -8546,8 +8992,17 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           if (!response.data || response.data.Code !== '200' || !Array.isArray(response.data.Data)) {
             const code = response.data?.Code || 'unknown';
             const desc = response.data?.Desc || '未知错误';
-            console.warn(`[上海国际集团破产重整] 接口错误: ${code}, ${desc}`);
-            errors.push(`接口错误 (${maskedCode}): ${code} - ${desc}`);
+            console.warn(`[上海国际集团破产重整] 接口错误 (${maskedCode}, ${queryDate}): ${code}, ${desc}`);
+            errors.push(`接口错误 (${maskedCode}, ${queryDate}): ${code} - ${desc}`);
+            await recordShanghaiFetchDay({
+              newsType: '破产重整',
+              accountKey: subjIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
             continue;
           }
 
@@ -8612,9 +9067,27 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           existingCaseNos.add(caseNo);
           totalSynced++;
         }
+          await recordShanghaiFetchDay({
+            newsType: '破产重整',
+            accountKey: subjIdtfnCd,
+            bizDate: queryDate,
+            status: list.length > 0 ? 'has_data' : 'empty',
+            itemCount: list.length,
+            configId: config.id,
+            previousRow: ledgerPrev
+          });
       } catch (apiError) {
-        console.error(`[上海国际集团破产重整] 请求失败 (${creditCode}):`, apiError.message);
-        errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        console.error(`[上海国际集团破产重整] 请求失败 (${creditCode}, ${queryDate}):`, apiError.message);
+        errors.push(`请求失败 (${creditCode}, ${queryDate}): ${apiError.message}`);
+        await recordShanghaiFetchDay({
+          newsType: '破产重整',
+          accountKey: subjIdtfnCd,
+          bizDate: queryDate,
+          status: 'failed',
+          configId: config.id,
+          lastError: apiError.message,
+          previousRow: ledgerPrev
+        });
       }
       }
     }
@@ -8724,63 +9197,23 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
 
     console.log(`[上海国际集团同步] 每日查询限制次数: ${dailyLimit}`);
 
-    const now = new Date();
-    const baseRunDate = createShanghaiDate(now);
-    let startDate, endDate;
-
-    // 手动同步时若传入自定义时间范围，优先使用（from/to 格式：YYYY-MM-DD HH:mm:ss）
-    if (customRange && customRange.from && customRange.to) {
-      startDate = customRange.from.split(' ')[0];
-      endDate = customRange.to.split(' ')[0];
-      console.log(`[上海国际集团同步] 使用自定义时间范围: ${startDate} 至 ${endDate}`);
-    } else {
-      const toDate = new Date(baseRunDate);
-      toDate.setDate(toDate.getDate() - 1);
-      endDate = formatDateOnly(toDate);
-
-      if (config.last_sync_date) {
-      let lastSyncDateStr;
-      if (config.last_sync_date instanceof Date) {
-        const beijingDateStr = config.last_sync_date.toLocaleString('zh-CN', {
-          timeZone: 'Asia/Shanghai',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit'
-        });
-        const datePart = beijingDateStr.split(' ')[0];
-        const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
-        lastSyncDateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      } else {
-        lastSyncDateStr = String(config.last_sync_date);
-      }
-      const [year, month, day] = lastSyncDateStr.split('-').map(Number);
-      const lastSyncDate = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-      startDate = formatDateOnly(lastSyncDate);
-    } else if (config.last_sync_time) {
-      const lastSyncTime = new Date(config.last_sync_time);
-      const beijingDateStr = lastSyncTime.toLocaleString('zh-CN', {
-        timeZone: 'Asia/Shanghai',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit'
-      });
-      const datePart = beijingDateStr.split(' ')[0];
-      const [year, month, day] = datePart.split(/[\/\-]/).map(Number);
-      const lastSyncDateOnly = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
-      startDate = formatDateOnly(lastSyncDateOnly);
-    } else {
-      const yesterdayDate = new Date(baseRunDate);
-      yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-      startDate = formatDateOnly(yesterdayDate);
-    }
+    // 与抓取日账本窗口一致（周一周五~周日；周二~周五前两天；节后拉长；手动 customRange）
+    const newsBizDates = await resolveSyncBizDates({
+      runDate: new Date(),
+      customRange: customRange && customRange.from && customRange.to ? customRange : null
+    });
+    let startDate = newsBizDates.length ? newsBizDates[0] : null;
+    let endDate = newsBizDates.length ? newsBizDates[newsBizDates.length - 1] : null;
+    if (!startDate || !endDate) {
+      return { success: true, message: '无需补拉日期', data: { synced: 0, total: 0 } };
     }
 
-    // 接口要求 start_time <= end_time，否则返回「请输入正确的报文格式」
+    // 接口要求 start_time <= end_time
     if (startDate > endDate) {
       console.warn(`[上海国际集团同步] 修正日期范围：start_date(${startDate}) 晚于 end_date(${endDate})，已改为 start_date=${endDate}`);
       startDate = endDate;
     }
-    // 部分网关要求 start_time 早于 end_time（不能同一天），同一天时改为查询 [endDate-1, endDate]
+    // 部分网关要求 start_time 早于 end_time（不能同一天）
     if (startDate === endDate) {
       const prev = new Date(endDate + 'T00:00:00+08:00');
       prev.setDate(prev.getDate() - 1);
@@ -8791,7 +9224,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
       }
     }
 
-    console.log(`[上海国际集团同步] 时间范围：${startDate} 至 ${endDate}`);
+    console.log(`[上海国际集团同步] 时间范围：${startDate} 至 ${endDate}（业务日: ${newsBizDates.join(', ')}）`);
 
     // 根据entity_type过滤企业
     let entityTypeFilter = '';
@@ -8877,9 +9310,17 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
         continue;
       }
 
+      const datesToFetch = await filterShanghaiQueryDatesByLedger('新闻舆情', instnIdtfnCd, newsBizDates);
+      if (datesToFetch.length === 0) {
+        console.log(`[上海国际集团同步] 账本跳过企业 ${instnIdtfnCd.substring(0, 4)}****（业务日均已覆盖）`);
+        continue;
+      }
+      const fetchStart = datesToFetch[0].queryDate;
+      const fetchEnd = datesToFetch[datesToFetch.length - 1].queryDate;
+
       requestIndex += 1;
       const maskedCode = instnIdtfnCd.substring(0, 4) + '****' + instnIdtfnCd.slice(-4);
-      console.log(`[上海国际集团同步] 请求第 ${requestIndex}/${totalEnterprises} 个企业 机构:${maskedCode} 时间:${startDate} ~ ${endDate}`);
+      console.log(`[上海国际集团同步] 请求第 ${requestIndex}/${totalEnterprises} 个企业 机构:${maskedCode} 时间:${fetchStart} ~ ${fetchEnd}`);
 
       try {
         const uuid = require('crypto').randomUUID();
@@ -8888,8 +9329,8 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
         // 按文档：instn_idtfn_cd 为 String；start_time/end_time 为 yyyy-MM-dd（仅日期）
         const requestBody = {
           instn_idtfn_cd: instnIdtfnCd,
-          start_time: String(startDate),
-          end_time: endDate ? String(endDate) : ''
+          start_time: String(fetchStart),
+          end_time: fetchEnd ? String(fetchEnd) : ''
         };
         if (!firstRequestLogged) {
           firstRequestLogged = true;
@@ -8940,6 +9381,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
             try {
               const sourceUrl = item.news_url || '';
               const title = item.news_title || '';
+              const externalNewsId = (item.news_id_ths && String(item.news_id_ths).trim()) || '';
               let publicTime = null;
               if (item.disp_time) {
                 try {
@@ -8947,15 +9389,21 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                 } catch (e) {}
               }
 
-              if (!sourceUrl && !title && !publicTime) continue;
+              if (!sourceUrl && !title && !publicTime && !externalNewsId) continue;
 
               let existing = [];
-              if (sourceUrl) {
+              if (externalNewsId) {
+                existing = await db.query(
+                  'SELECT F_Id, F_DeleteMark FROM news_detail WHERE external_news_id = ? LIMIT 1',
+                  [externalNewsId]
+                );
+              }
+              if (existing.length === 0 && sourceUrl) {
                 existing = await db.query(
                   'SELECT F_Id, F_DeleteMark FROM news_detail WHERE source_url = ? LIMIT 1',
                   [sourceUrl]
                 );
-              } else if (title && publicTime) {
+              } else if (existing.length === 0 && title && publicTime) {
                 existing = await db.query(
                   'SELECT F_Id, F_DeleteMark FROM news_detail WHERE title = ? AND public_time = ? LIMIT 1',
                   [title, publicTime]
@@ -8963,7 +9411,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
               }
               if (existing.length > 0) {
                 if (existing[0].F_DeleteMark === 1) {
-                  console.log(`[上海国际集团同步] 跳过已删除的新闻: ${sourceUrl || title}`);
+                  console.log(`[上海国际集团同步] 跳过已删除的新闻: ${sourceUrl || title || externalNewsId}`);
                 }
                 continue;
               }
@@ -9056,8 +9504,8 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
 
               await db.execute(
                 `INSERT INTO news_detail
-                 (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, title, summary, public_time, content, keywords, news_sentiment, APItype, news_abstract, fund, sub_fund)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 (F_Id, account_name, wechat_account, enterprise_full_name, enterprise_abbreviation, entity_type, source_url, external_news_id, title, summary, public_time, content, keywords, news_sentiment, APItype, news_abstract, fund, sub_fund)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   newsId,
                   accountName,
@@ -9066,6 +9514,7 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
                   insertEnterpriseAbbreviation,
                   insertEntityType,
                   sourceUrl,
+                  externalNewsId || null,
                   title,
                   item.event_nm_lv12 || item.risk_nm_lv12 || '',
                   publicTime,
@@ -9084,6 +9533,22 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
               errors.push(`插入失败 (${creditCode}): ${insertError.message}`);
             }
           }
+          const daysWithData = new Set(
+            newsItems
+              .map((i) => (i.disp_time ? String(i.disp_time).replace('T', ' ').slice(0, 10) : ''))
+              .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+          );
+          for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
+            await recordShanghaiFetchDay({
+              newsType: '新闻舆情',
+              accountKey: instnIdtfnCd,
+              bizDate: queryDate,
+              status: daysWithData.has(queryDate) ? 'has_data' : 'empty',
+              itemCount: newsItems.filter((i) => String(i.disp_time || '').slice(0, 10) === queryDate).length,
+              configId: config.id,
+              previousRow: ledgerPrev
+            });
+          }
         } else {
           const code = response.data?.Code || 'unknown';
           const desc = response.data?.Desc || '未知错误';
@@ -9093,10 +9558,32 @@ async function syncShanghaiInternationalGroupNewsData(configId = null, logId = n
             console.warn(`[上海国际集团同步] 报文格式错误时响应体(仅首条):`, JSON.stringify(response.data));
           }
           errors.push(`接口错误 (${creditCode}): ${code} - ${desc}`);
+          for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
+            await recordShanghaiFetchDay({
+              newsType: '新闻舆情',
+              accountKey: instnIdtfnCd,
+              bizDate: queryDate,
+              status: 'failed',
+              configId: config.id,
+              lastError: `${code}: ${desc}`,
+              previousRow: ledgerPrev
+            });
+          }
         }
       } catch (apiError) {
         console.error(`[上海国际集团同步] 请求失败 (${creditCode}):`, apiError.message);
         errors.push(`请求失败 (${creditCode}): ${apiError.message}`);
+        for (const { queryDate, previousRow: ledgerPrev } of datesToFetch) {
+          await recordShanghaiFetchDay({
+            newsType: '新闻舆情',
+            accountKey: instnIdtfnCd,
+            bizDate: queryDate,
+            status: 'failed',
+            configId: config.id,
+            lastError: apiError.message,
+            previousRow: ledgerPrev
+          });
+        }
       }
     }
 
