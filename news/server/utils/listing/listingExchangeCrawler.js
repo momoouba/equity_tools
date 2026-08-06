@@ -204,7 +204,8 @@ function findTimelineDateForStatus(timelineRows, listStatus) {
   const timeline = normalizeTimelineRows(timelineRows || []);
   const candidates = timeline.filter((t) => isStatusLikelySame(t.status, listStatus));
   if (!candidates.length) return null;
-  return candidates.sort((a, b) => String(b.ymd).localeCompare(String(a.ymd)))[0];
+  // 取该状态在时间轴上的首次达成日（中止/恢复后列表 updateDate 变新，不应改写已问询等业务日）
+  return candidates.sort((a, b) => String(a.ymd).localeCompare(String(b.ymd)))[0];
 }
 
 async function applyTimelineConfirmationPolicy(rows, logTag = '[上市进展爬虫]') {
@@ -214,6 +215,13 @@ async function applyTimelineConfirmationPolicy(rows, logTag = '[上市进展爬�
   let enqueued = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
     const ex = String(row.exchange || '').trim();
+    // 港交所无内地「详情时间轴确认」流程，入库即视为已确认
+    if (HK_IPO_PROGRESS_EXCHANGES.has(ex)) {
+      row._timeline_confirmed = 1;
+      row._timeline_confirmed_at = row._timeline_confirmed_at || new Date();
+      confirmed += 1;
+      continue;
+    }
     if (!['深交所', '上交所', '北交所'].includes(ex)) continue;
     mapRowExchangeProjectId(row);
     const status = String(row.status || '').trim();
@@ -438,8 +446,11 @@ async function migrateStaleTimelineDates(rows, adminId, logTag = '[上市进展�
       // 如果该记录的日期已在时间轴中，无需修正
       if (timelineDates.has(cYmd)) continue;
 
-      // 找到时间轴中匹配该记录状态的日期
-      const matchingEntry = g.timeline.find((t) => isStatusLikelySame(t.status, cStatus));
+      // 找到时间轴中匹配该记录状态的首次达成日
+      const matchingEntries = g.timeline
+        .filter((t) => isStatusLikelySame(t.status, cStatus))
+        .sort((a, b) => String(a.ymd).localeCompare(String(b.ymd)));
+      const matchingEntry = matchingEntries[0];
       if (!matchingEntry) continue;
 
       const targetYmd = matchingEntry.ymd;
@@ -1506,17 +1517,28 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       skipped += 1;
       continue;
     }
-    const dateStr = r.f_update_time ? String(r.f_update_time).slice(0, 10) : '';
+    // 禁止 String(Date).slice(0,10) → "Fri May 15"（mysql2 无 dateStrings 时 DATE 为 Date 对象）
+    const dateStr = toYmdLoose(r.f_update_time);
     if (!dateStr) {
       skippedNoDate += 1;
       skipped += 1;
       continue;
     }
     // 业务去重日期：优先使用时间轴状态日期（receive_date），无时间轴时回退到 f_update_time
-    const dedupeDateStr = r.receive_date ? String(r.receive_date).slice(0, 10) : dateStr;
+    const dedupeDateStr = toYmdLoose(r.receive_date) || dateStr;
     const exchange = String(r.exchange || '').trim();
     const status = String(r.status || '-').trim() || '-';
     const board = String(r.board || '').trim();
+    const incomingReceiveYmd = toYmdLoose(r.receive_date) || null;
+    const listUpdateTime = (() => {
+      const raw = r.f_update_time;
+      if (typeof raw === 'string') {
+        const s = raw.trim();
+        if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(s)) return s.slice(0, 19).replace('T', ' ');
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s.slice(0, 10))) return `${s.slice(0, 10)} 00:00:00`;
+      }
+      return `${dateStr} 00:00:00`;
+    })();
 
     // 宽名单未确认行：同 exchange+company+board+status 仅保留一行，刷新列表更新日（§1.4.3）
     if (
@@ -1541,7 +1563,7 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
              F_LastModifyUserId = ?, F_LastModifyTime = NOW()
            WHERE F_Id = ?`,
           [
-            r.f_update_time || `${dateStr} 00:00:00`,
+            listUpdateTime,
             exchangeProjectId,
             r.project_name || company,
             r.register_address || '',
@@ -1557,7 +1579,8 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
     }
 
     const existing = await db.query(
-      `SELECT F_Id, receive_date, project_name, register_address, code FROM ipo_progress
+      `SELECT F_Id, receive_date, project_name, register_address, code, timeline_confirmed, F_UpdateTime
+       FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND exchange = ?
          AND company = ?
@@ -1570,8 +1593,8 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
 
     if (existing.length) {
       const old = existing[0] || {};
-      const newReceive = r.receive_date || null;
-      const oldReceive = old.receive_date ? String(old.receive_date).slice(0, 10) : null;
+      const newReceive = incomingReceiveYmd;
+      const oldReceive = toYmdLoose(old.receive_date) || null;
       const oldProject = String(old.project_name || '').trim();
       const oldAddr = String(old.register_address || '').trim();
       const oldCode = String(old.code || '').trim();
@@ -1581,14 +1604,31 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       const exchangeProjectId = mapRowExchangeProjectId(r) || null;
       const timelineConfirmed = r._timeline_confirmed != null ? Number(r._timeline_confirmed) : null;
       const timelineConfirmedAt = r._timeline_confirmed_at || null;
-      const listUpdateTime = r.f_update_time || `${dateStr} 00:00:00`;
+      const isMainland = ['深交所', '上交所', '北交所'].includes(exchange);
+      const oldConfirmed = Number(old.timeline_confirmed) === 1;
+      const incomingConfirmed = timelineConfirmed === 1;
+      // 已确认行：保留首次状态日；F_UpdateTime 对齐 receive_date，勿被列表 updateDate /「其他」披露日覆盖
+      const statusYmd = toYmdLoose(
+        (oldConfirmed && oldReceive) || newReceive || oldReceive || ''
+      );
+      const nextReceive =
+        isMainland && oldConfirmed && oldReceive
+          ? oldReceive
+          : newReceive || oldReceive;
+      const nextUpdateTime =
+        isMainland && (oldConfirmed || incomingConfirmed) && /^\d{4}-\d{2}-\d{2}$/.test(statusYmd)
+          ? `${statusYmd} 00:00:00`
+          : listUpdateTime;
+      const oldUpdateYmd = toYmdLoose(old.F_UpdateTime);
+      const nextUpdateYmd = toYmdLoose(nextUpdateTime);
       const needRefresh =
-        oldReceive !== newReceive ||
+        oldReceive !== nextReceive ||
         oldProject !== newProject ||
         oldAddr !== newAddr ||
         oldCode !== newCode ||
         exchangeProjectId ||
-        timelineConfirmed != null;
+        timelineConfirmed != null ||
+        oldUpdateYmd !== nextUpdateYmd;
       if (needRefresh) {
         await db.execute(
           `UPDATE ipo_progress
@@ -1600,14 +1640,14 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
                F_LastModifyUserId = ?, F_LastModifyTime = NOW()
            WHERE F_Id = ? AND F_DeleteMark = 0`,
           [
-            newReceive,
+            nextReceive,
             newProject,
             newAddr,
             newCode,
             exchangeProjectId,
             timelineConfirmed,
             timelineConfirmedAt,
-            listUpdateTime,
+            nextUpdateTime,
             adminId,
             old.F_Id,
           ]
@@ -1617,6 +1657,54 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       skippedDupSameOrLater += 1;
       skipped += 1;
       continue;
+    }
+
+    // 沪深北已确认同状态：列表 updateDate 变化时勿再插新行，只刷新元数据并保持状态日
+    if (['深交所', '上交所', '北交所'].includes(exchange) && Number(r._timeline_confirmed) !== 0) {
+      const existingConfirmedStatus = await db.query(
+        `SELECT F_Id, receive_date, project_name, register_address, code, F_UpdateTime, timeline_confirmed
+         FROM ipo_progress
+         WHERE F_DeleteMark = 0
+           AND exchange = ? AND company = ? AND board = ? AND status = ?
+           AND COALESCE(timeline_confirmed, 1) = 1
+         ORDER BY COALESCE(receive_date, F_UpdateTime) ASC, F_Id ASC
+         LIMIT 1`,
+        [exchange, company, board, status]
+      );
+      if (existingConfirmedStatus.length) {
+        const old = existingConfirmedStatus[0];
+        // 已确认同状态：优先保留库内首次状态日，再用本次时间轴补缺
+        const keepReceive =
+          toYmdLoose(old.receive_date) || incomingReceiveYmd || null;
+        const statusYmd = keepReceive || toYmdLoose(old.F_UpdateTime) || '';
+        const nextUpdateTime = /^\d{4}-\d{2}-\d{2}$/.test(statusYmd)
+          ? `${statusYmd} 00:00:00`
+          : listUpdateTime;
+        const exchangeProjectId = mapRowExchangeProjectId(r) || null;
+        await db.execute(
+          `UPDATE ipo_progress SET
+             receive_date = COALESCE(?, receive_date),
+             project_name = ?, register_address = ?, code = ?,
+             exchange_project_id = COALESCE(?, exchange_project_id),
+             F_UpdateTime = ?,
+             F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [
+            keepReceive,
+            r.project_name || company,
+            r.register_address || '',
+            r.code || '',
+            exchangeProjectId,
+            nextUpdateTime,
+            adminId,
+            old.F_Id,
+          ]
+        );
+        updatedExisting += 1;
+        skippedDupSameOrLater += 1;
+        skipped += 1;
+        continue;
+      }
     }
 
     // 同键若存在历史软删记录，优先恢复并以抓取结果覆盖，避免同键反复新增新行。
@@ -1646,12 +1734,12 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
          WHERE F_Id = ?`,
         [
           dateStr,
-          r.f_update_time || `${dateStr} 00:00:00`,
+          listUpdateTime,
           r.code || '',
           r.project_name || company,
           status,
           r.register_address || '',
-          r.receive_date || null,
+          incomingReceiveYmd,
           company,
           board,
           exchange,
@@ -1671,7 +1759,7 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
           company,
           project_name: (r.project_name || company).slice(0, 80),
           status: status.slice(0, 40),
-          f_update_time: String(r.f_update_time || '').slice(0, 19),
+          f_update_time: listUpdateTime.slice(0, 19),
         });
       }
       continue;
@@ -1688,12 +1776,12 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
       [
         dateStr,
-        r.f_update_time || `${dateStr} 00:00:00`,
+        listUpdateTime,
         r.code || '',
         r.project_name || company,
         status,
         r.register_address || '',
-        r.receive_date || null,
+        incomingReceiveYmd,
         company,
         board,
         exchange,
@@ -1713,7 +1801,7 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
         company,
         project_name: (r.project_name || company).slice(0, 80),
         status: status.slice(0, 40),
-        f_update_time: String(r.f_update_time || '').slice(0, 19),
+        f_update_time: listUpdateTime.slice(0, 19),
       });
     }
   }

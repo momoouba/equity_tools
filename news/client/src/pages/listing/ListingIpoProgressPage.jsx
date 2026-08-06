@@ -282,6 +282,11 @@ export default function ListingIpoProgressPage() {
   }
 
   const openConfirmDetail = async (record) => {
+    const ex = String(record?.exchange || '').trim()
+    if (ex === '港交所' || ex === '香港联交所') {
+      Message.info('港交所数据无需详情确认')
+      return
+    }
     setEditing(record)
     setConfirmOpen(true)
     setConfirmLoading(true)
@@ -314,6 +319,10 @@ export default function ListingIpoProgressPage() {
       dataIndex: 'timeline_confirmed',
       width: 110,
       render: (v, record) => {
+        const ex = String(record?.exchange || '').trim()
+        if (ex === '港交所' || ex === '香港联交所') {
+          return '不适用'
+        }
         const confirmed = Number(v) === 1
         const label = confirmed ? '已确认' : '待确认'
         if (confirmed) return label

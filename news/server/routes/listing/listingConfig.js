@@ -55,8 +55,13 @@ function forbidden(res) {
 }
 
 function normalizeYmd(v) {
-  const s = String(v || '').trim().slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+  if (v == null || v === '') return '';
+  // mysql2 DATE → JS Date：禁止 String(date).slice(0,10) → "Sun Mar 01"
+  if (v instanceof Date && !Number.isNaN(v.getTime())) {
+    return formatDateOnly(v);
+  }
+  const s = String(v).trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
 }
 
 function maxYmd(a, b) {
@@ -114,9 +119,12 @@ async function listConfig(req, res) {
 
     const rows = await db.query(`
       SELECT
-        F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
+        F_Id AS id, name, interface_type, request_url,
+        DATE_FORMAT(min_sync_date, '%Y-%m-%d') AS min_sync_date,
+        cron_expression,
         DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
-        last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+        DATE_FORMAT(last_sync_range_end, '%Y-%m-%d') AS last_sync_range_end,
+        status, is_active, news_interface_type, skip_holiday,
         ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
         DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
       FROM listing_data_config
@@ -183,9 +191,11 @@ async function createConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url,
+         DATE_FORMAT(min_sync_date, '%Y-%m-%d') AS min_sync_date,
+         cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
-         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         DATE_FORMAT(last_sync_range_end, '%Y-%m-%d') AS last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
          DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config
@@ -347,9 +357,11 @@ async function updateConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url,
+         DATE_FORMAT(min_sync_date, '%Y-%m-%d') AS min_sync_date,
+         cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
-         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         DATE_FORMAT(last_sync_range_end, '%Y-%m-%d') AS last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
          DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config
@@ -427,9 +439,11 @@ async function copyListingConfig(req, res) {
     );
     const row = await db.query(
       `SELECT
-         F_Id AS id, name, interface_type, request_url, min_sync_date, cron_expression,
+         F_Id AS id, name, interface_type, request_url,
+         DATE_FORMAT(min_sync_date, '%Y-%m-%d') AS min_sync_date,
+         cron_expression,
          DATE_FORMAT(last_sync_time, '%Y-%m-%d %H:%i:%s') AS last_sync_time,
-         last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
+         DATE_FORMAT(last_sync_range_end, '%Y-%m-%d') AS last_sync_range_end, status, is_active, news_interface_type, skip_holiday,
          ifind_enabled, ifind_username, ifind_password, ifind_token, ifind_dr_code, ifind_query_params, ifind_fields, ifind_format, ifind_fallback_to_hkex,
          DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at
        FROM listing_data_config

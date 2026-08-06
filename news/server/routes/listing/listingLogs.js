@@ -90,7 +90,10 @@ async function listSyncExecutionLog(req, res) {
     );
     const rows = await db.query(
       `SELECT
-         F_Id AS id, config_id, config_name, source_type, trigger_type, window_start, window_end, task_key, status,
+         F_Id AS id, config_id, config_name, source_type, trigger_type,
+         DATE_FORMAT(window_start, '%Y-%m-%d') AS window_start,
+         DATE_FORMAT(window_end, '%Y-%m-%d') AS window_end,
+         task_key, status,
          DATE_FORMAT(started_at, '%Y-%m-%d %H:%i:%s') AS started_at,
          DATE_FORMAT(finished_at, '%Y-%m-%d %H:%i:%s') AS ended_at,
          retry_count, inserted_count, updated_count, skipped_count, dedup_hits, error_message, progress_log,

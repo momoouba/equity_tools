@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -278,6 +279,7 @@ def fetch_admin_id(conn: pymysql.connections.Connection) -> str:
 
 
 def _recv_ymd(v: Any) -> str:
+    """Normalize receive_date to YYYY-MM-DD; never use str(Date)[:10] (→ 'Fri May 15')."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
     if hasattr(v, "strftime"):
@@ -285,7 +287,17 @@ def _recv_ymd(v: Any) -> str:
             return v.strftime("%Y-%m-%d")
         except Exception:
             return ""
-    return str(v).strip()[:10]
+    s = str(v).strip()
+    if not s:
+        return ""
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    # Reject English locale fragments like "Fri May 15"
+    if re.match(r"^[A-Za-z]", s):
+        return ""
+    ymd = _norm_ymd(s)
+    return ymd if ymd and re.match(r"^\d{4}-\d{2}-\d{2}$", ymd) else ""
 
 
 def _hk_row_log_payload(r: Dict[str, Any]) -> Dict[str, str]:
@@ -401,13 +413,17 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                     or (not old_reg_s and new_reg)
                 )
                 if need_refresh:
-                    recv_out = row_ex[5]
-                    if old_recv_s != new_recv_s and new_recv_s:
-                        recv_out = r.get("receive_date")
+                    recv_out = (
+                        new_recv_s
+                        if (old_recv_s != new_recv_s and new_recv_s)
+                        else (old_recv_s or new_recv_s or None)
+                    )
                     cur_rf = conn.cursor()
                     cur_rf.execute(
                         """UPDATE ipo_progress SET
                              code = %s, project_name = %s, register_address = %s, receive_date = %s,
+                             timeline_confirmed = 1,
+                             timeline_confirmed_at = COALESCE(timeline_confirmed_at, NOW()),
                              F_LastModifyUserId = %s, F_LastModifyTime = NOW()
                            WHERE F_Id = %s AND F_DeleteMark = 0""",
                         (
@@ -423,6 +439,16 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                     updated_earlier += 1
                     row_outcomes.append({"action": "refreshed_same_day", "row": _hk_row_log_payload(r)})
                 else:
+                    with conn.cursor() as cur_cf:
+                        cur_cf.execute(
+                            """UPDATE ipo_progress SET
+                                 timeline_confirmed = 1,
+                                 timeline_confirmed_at = COALESCE(timeline_confirmed_at, NOW())
+                               WHERE F_Id = %s AND F_DeleteMark = 0 AND COALESCE(timeline_confirmed, 0) = 0""",
+                            (fid,),
+                        )
+                        if cur_cf.rowcount:
+                            conn.commit()
                     row_outcomes.append({"action": "skipped_same_day_exists", "row": _hk_row_log_payload(r)})
                 skipped_dup += 1
                 skipped += 1
@@ -432,8 +458,9 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
             cur3.execute(
                 """INSERT INTO ipo_progress (
                      F_CreatorTime, F_UpdateTime, code, project_name, status, register_address, receive_date,
-                     company, board, exchange, F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
-                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), 0)""",
+                     company, board, exchange, timeline_confirmed, timeline_confirmed_at,
+                     F_CreatorUserId, F_LastModifyUserId, F_LastModifyTime, F_DeleteMark
+                   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, NOW(), %s, %s, NOW(), 0)""",
                 (
                     date_str,
                     r.get("f_update_time") or f"{date_str} 00:00:00",
@@ -441,7 +468,7 @@ def insert_rows_mysql(rows: List[Dict[str, Any]], admin_id: str, dry_run: bool) 
                     r.get("project_name") or company,
                     status,
                     r.get("register_address") or "",
-                    r.get("receive_date"),
+                    _recv_ymd(r.get("receive_date")) or None,
                     company,
                     board,
                     exchange,

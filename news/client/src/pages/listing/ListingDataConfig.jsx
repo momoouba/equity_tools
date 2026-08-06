@@ -60,12 +60,22 @@ const emptyForm = {
 
 const formatYmd = (value, fallback = '-') => {
   if (value == null || value === '') return fallback
-  const text = String(value)
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return dayjs(value).format('YYYY-MM-DD')
+  }
+  const text = String(value).trim()
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10)
   const parsed = dayjs(text)
   if (parsed.isValid()) return parsed.format('YYYY-MM-DD')
-  const s = text.replace('T', ' ')
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
   return fallback
+}
+
+/** 日历日 YYYY-MM-DD；兼容 dayjs / Date / 字符串，避免 String(Date).slice(0,10) */
+const toYmdSafe = (d) => {
+  if (d == null || d === '') return ''
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d.trim())) return d.trim().slice(0, 10)
+  const x = dayjs(d)
+  return x.isValid() ? x.format('YYYY-MM-DD') : ''
 }
 
 export default function ListingDataConfig() {
@@ -82,6 +92,9 @@ export default function ListingDataConfig() {
   const [syncLiveLog, setSyncLiveLog] = useState('')
   const [syncLiveStatus, setSyncLiveStatus] = useState('')
   const [syncLiveStartedAt, setSyncLiveStartedAt] = useState('')
+  /** 本次点击「同步」时实际提交的区间，用于与轮询到的执行日志对齐，避免与可编辑日期框错位 */
+  const [syncSubmittedRange, setSyncSubmittedRange] = useState(null)
+  const syncSubmittedRangeRef = useRef(null)
   const syncPollTimerRef = useRef(null)
   const [logOpen, setLogOpen] = useState(false)
   const [logRecord, setLogRecord] = useState(null)
@@ -184,6 +197,8 @@ export default function ListingDataConfig() {
     setSyncLiveLog('')
     setSyncLiveStatus('')
     setSyncLiveStartedAt('')
+    setSyncSubmittedRange(null)
+    syncSubmittedRangeRef.current = null
     if (record.news_interface_type === 'new_share') {
       setSyncSingleDate(dayjs())
     } else {
@@ -209,6 +224,14 @@ export default function ListingDataConfig() {
       })
       const row = res.data?.data?.list?.[0]
       if (!row) return
+      const submitted = syncSubmittedRangeRef.current
+      if (submitted?.startDate) {
+        const ws = formatYmd(row.window_start, '')
+        const we = formatYmd(row.window_end, '')
+        // 轮询可能先拿到上一次任务：窗口不一致时忽略，避免「日期框是 1~2 月、日志却是 3 月」
+        if (ws && ws !== submitted.startDate) return
+        if (submitted.endDate && we && we !== submitted.endDate) return
+      }
       setSyncLiveStatus(row.status || '')
       setSyncLiveStartedAt(row.started_at || '')
       setSyncLiveLog(row.progress_log || row.error_message || '')
@@ -230,12 +253,6 @@ export default function ListingDataConfig() {
 
   const runSync = async () => {
     if (!syncRow?.id) return
-    // RangePicker onChange 可能为原生 Date，需用 dayjs 再 format
-    const toYmd = (d) => {
-      if (d == null || d === '') return ''
-      const x = dayjs(d)
-      return x.isValid() ? x.format('YYYY-MM-DD') : ''
-    }
     const isNewShare = syncRow?.news_interface_type === 'new_share'
     let payload
     const confirmAutoAdjustStartDate = (fromDate, minDate) =>
@@ -247,19 +264,19 @@ export default function ListingDataConfig() {
           onCancel: () => resolve(false),
         })
       })
-    let latestMinSyncDate = String(syncRow?.min_sync_date || '').slice(0, 10)
+    let latestMinSyncDate = formatYmd(syncRow?.min_sync_date, '')
     try {
       // 同步前拉一次最新配置，避免使用到表格中的旧缓存
       const cfgRes = await axios.get('/api/listing/listing-config')
       const latestList = cfgRes?.data?.data || []
       const latestRow = latestList.find((x) => String(x.id) === String(syncRow.id))
-      if (latestRow?.min_sync_date) latestMinSyncDate = String(latestRow.min_sync_date).slice(0, 10)
+      if (latestRow?.min_sync_date) latestMinSyncDate = formatYmd(latestRow.min_sync_date, '')
       if (latestRow) setSyncRow((prev) => ({ ...(prev || {}), ...latestRow }))
     } catch (_) {
       // 拉取失败时走现有 syncRow，避免阻断用户手动同步
     }
     if (isNewShare) {
-      let startDate = toYmd(syncSingleDate)
+      let startDate = toYmdSafe(syncSingleDate)
       if (!startDate) {
         Message.warning('请选择开始日期')
         return
@@ -271,8 +288,8 @@ export default function ListingDataConfig() {
       }
       payload = { startDate }
     } else {
-      let startDate = toYmd(syncRange[0])
-      const endDate = toYmd(syncRange[1])
+      let startDate = toYmdSafe(syncRange?.[0])
+      const endDate = toYmdSafe(syncRange?.[1])
       if (!startDate || !endDate) {
         Message.warning('请选择开始与结束日期')
         return
@@ -288,8 +305,16 @@ export default function ListingDataConfig() {
       }
       payload = { startDate, endDate }
     }
+    const submitted = {
+      startDate: payload.startDate,
+      endDate: payload.endDate || null,
+    }
+    syncSubmittedRangeRef.current = submitted
+    setSyncSubmittedRange(submitted)
     setSyncing(true)
-    setSyncLiveLog('正在触发同步任务...')
+    setSyncLiveLog(
+      `已提交同步，区间=${submitted.startDate}${submitted.endDate ? `~${submitted.endDate}` : '（打新：起日含当日）'}，等待执行日志...`
+    )
     setSyncLiveStatus('running')
     startSyncPolling(syncRow.id)
     try {
@@ -616,10 +641,18 @@ export default function ListingDataConfig() {
         <p style={{ marginBottom: 10, color: 'var(--color-text-2)', fontSize: 12 }}>
           当前配置最早同步日期：{formatYmd(syncRow?.min_sync_date, '2026-01-01')}
         </p>
+        {syncSubmittedRange?.startDate ? (
+          <p style={{ marginBottom: 10, color: 'rgb(var(--primary-6))', fontSize: 13, fontWeight: 500 }}>
+            本次已提交区间：{syncSubmittedRange.startDate}
+            {syncSubmittedRange.endDate ? ` ~ ${syncSubmittedRange.endDate}` : '（打新：起日含当日）'}
+            {syncing ? '（执行中，日期选择已锁定）' : ''}
+          </p>
+        ) : null}
         {syncRow?.news_interface_type === 'new_share' ? (
           <DatePicker
             style={{ width: '100%' }}
             value={syncSingleDate}
+            disabled={syncing}
             onChange={(v) => setSyncSingleDate(v ? dayjs(v) : dayjs())}
             allowClear={false}
           />
@@ -627,12 +660,15 @@ export default function ListingDataConfig() {
           <DatePicker.RangePicker
             style={{ width: '100%' }}
             value={syncRange}
-            onChange={(v) => {
-              if (!v || !v.length) {
+            disabled={syncing}
+            onChange={(dateString, date) => {
+              const start = date?.[0] ?? dateString?.[0]
+              const end = date?.[1] ?? dateString?.[1]
+              if (!start || !end) {
                 setSyncRange([])
                 return
               }
-              setSyncRange([dayjs(v[0]), dayjs(v[1])])
+              setSyncRange([dayjs(start), dayjs(end)])
             }}
             allowClear={false}
           />

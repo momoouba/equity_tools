@@ -6068,6 +6068,36 @@ async function initializeTables(dbPool) {
       `);
       console.log('  ✓ 已迁移历史 ipo_progress 行为 timeline_confirmed=1');
     }
+
+    // 港交所无内地详情时间轴确认：历史未确认行一次性回填
+    const [hkConfirmResult] = await dbPool.query(`
+      UPDATE ipo_progress
+      SET timeline_confirmed = 1,
+          timeline_confirmed_at = COALESCE(timeline_confirmed_at, F_LastModifyTime, F_UpdateTime, NOW())
+      WHERE F_DeleteMark = 0
+        AND exchange IN ('港交所', '香港联交所')
+        AND COALESCE(timeline_confirmed, 0) = 0
+    `);
+    const hkConfirmFixed = Number(hkConfirmResult?.affectedRows || 0);
+    if (hkConfirmFixed > 0) {
+      console.log(`  ✓ 已回填港交所 timeline_confirmed=1：${hkConfirmFixed} 条`);
+    }
+
+    // 沪深北已确认行：F_UpdateTime 对齐状态业务日 receive_date（修正列表 updateDate 误覆盖）
+    const [mainlandUpdateResult] = await dbPool.query(`
+      UPDATE ipo_progress
+      SET F_UpdateTime = CONCAT(DATE_FORMAT(receive_date, '%Y-%m-%d'), ' 00:00:00'),
+          F_LastModifyTime = COALESCE(F_LastModifyTime, NOW())
+      WHERE F_DeleteMark = 0
+        AND exchange IN ('深交所', '上交所', '北交所')
+        AND COALESCE(timeline_confirmed, 1) = 1
+        AND receive_date IS NOT NULL
+        AND DATE(F_UpdateTime) <> DATE(receive_date)
+    `);
+    const mainlandFixed = Number(mainlandUpdateResult?.affectedRows || 0);
+    if (mainlandFixed > 0) {
+      console.log(`  ✓ 已对齐已确认内地 F_UpdateTime←receive_date：${mainlandFixed} 条`);
+    }
   } catch (err) {
     console.warn('迁移 ipo_progress 确认字段时出现警告:', err.message);
   }
