@@ -786,4 +786,51 @@ router.post('/ipo-companies', checkExportPermission, async (req, res) => {
   }
 });
 
+const IPO_P_STATUS_META = {
+  已上市: '已上市企业明细',
+  已受理: '已受理企业明细',
+  辅导备案: '已辅导企业明细',
+};
+
+/**
+ * 导出直投项目-上市进展企业明细（b_ipo_p）
+ * POST /api/performance/exports/listed-enterprises
+ * body: { version, status: 已上市|已受理|辅导备案 }
+ */
+router.post('/listed-enterprises', checkExportPermission, async (req, res) => {
+  try {
+    const { version, status = '已上市' } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+    const sheetName = IPO_P_STATUS_META[status];
+    if (!sheetName) {
+      return res.status(400).json({ success: false, message: '无效的上市状态' });
+    }
+
+    const rows = await db.query(
+      `SELECT * FROM b_ipo_p
+       WHERE version = ? AND F_DeleteMark = 0 AND ipo_status = ?
+       ORDER BY ipo_date DESC, fund ASC, project ASC`,
+      [version, status]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const ws = await buildSheetFromRows('b_ipo_p', rows);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-${sheetName}-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出上市进展企业明细失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
 module.exports = router;

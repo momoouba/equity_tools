@@ -91,6 +91,9 @@ export const dashboardApi = {
   
   // 获取上市企业明细
   getIpoCompanies: (version, type) => api.get('/dashboard/ipo-companies', { params: { version, type } }),
+
+  // 直投项目-上市进展企业明细（b_ipo_p，status: 已上市|已受理|辅导备案）
+  getListedEnterprises: (version, status = '已上市') => api.get('/dashboard/listed-enterprises', { params: { version, status } }),
   
   // 获取区域企业明细
   getRegionCompanies: (version, type) => api.get('/dashboard/region-companies', { params: { version, type } })
@@ -162,7 +165,10 @@ export const exportApi = {
   exportRegionCompanies: (version, type) => api.post('/exports/region-companies', { version, type }, { responseType: 'blob' }),
 
   // 导出上市企业明细
-  exportIpoCompanies: (version, type) => api.post('/exports/ipo-companies', { version, type }, { responseType: 'blob' })
+  exportIpoCompanies: (version, type) => api.post('/exports/ipo-companies', { version, type }, { responseType: 'blob' }),
+
+  // 导出直投项目-上市进展企业明细
+  exportListedEnterprises: (version, status = '已上市') => api.post('/exports/listed-enterprises', { version, status }, { responseType: 'blob' })
 };
 
 // 分享API

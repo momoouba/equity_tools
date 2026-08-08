@@ -548,6 +548,70 @@ router.get('/ipo-companies', async (req, res) => {
   }
 });
 
+const IPO_P_STATUS_WHITELIST = ['已上市', '已受理', '辅导备案'];
+
+/**
+ * 直投项目-上市进展企业明细（b_ipo_p）
+ * GET /api/performance/dashboard/listed-enterprises?version=xxx&status=已上市|已受理|辅导备案
+ */
+router.get('/listed-enterprises', async (req, res) => {
+  try {
+    const { version, status = '已上市' } = req.query;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+    if (!IPO_P_STATUS_WHITELIST.includes(status)) {
+      return res.status(400).json({ success: false, message: '无效的上市状态' });
+    }
+
+    const rows = await db.query(
+      `SELECT fund, project, ipo_date, ticker, ipo_progress, paid_amount, realized, unrealized, total_value,
+              DPI AS dpi, MOC AS moc
+       FROM b_ipo_p
+       WHERE version = ? AND F_DeleteMark = 0 AND ipo_status = ?
+       ORDER BY ipo_date DESC, fund ASC, project ASC`,
+      [version, status]
+    );
+
+    const list = Array.isArray(rows) ? rows : [];
+    const projectSet = new Set();
+    let paidAmount = 0;
+    let realized = 0;
+    let unrealized = 0;
+    let totalValue = 0;
+    for (const row of list) {
+      const p = row.project != null ? String(row.project).trim() : '';
+      if (p) projectSet.add(p);
+      paidAmount += Number(row.paid_amount) || 0;
+      realized += Number(row.realized) || 0;
+      unrealized += Number(row.unrealized) || 0;
+      totalValue += Number(row.total_value) || 0;
+    }
+    const dpi = paidAmount !== 0 ? realized / paidAmount : null;
+    const moc = paidAmount !== 0 ? totalValue / paidAmount : null;
+
+    res.json({
+      success: true,
+      data: {
+        list,
+        status,
+        summary: {
+          projectCountDedup: projectSet.size,
+          paid_amount: paidAmount,
+          realized,
+          unrealized,
+          total_value: totalValue,
+          dpi,
+          moc,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('获取上市进展企业明细失败:', error);
+    res.status(500).json({ success: false, message: '获取上市进展企业明细失败' });
+  }
+});
+
 /**
  * 获取区域企业明细
  * GET /api/performance/dashboard/region-companies?version=xxx&type=cumulative|current

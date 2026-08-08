@@ -54,6 +54,20 @@ const formatAmountYuan = (val) => {
   return Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+// 金额（元）：0 也显示 0.00（已上市企业明细等）
+const formatAmountYuanKeepZero = (val) => {
+  const n = toNum(val)
+  if (n === null) return '/'
+  return Number(n).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+// 倍数/比率：保留2位小数，不加 x
+const formatDecimal2 = (val) => {
+  const n = toNum(val)
+  if (n === null) return '/'
+  return n.toFixed(2)
+}
+
 // 工具函数 - 格式化数字（整数）
 const formatNumber = (val) => {
   const n = toNum(val)
@@ -115,6 +129,7 @@ const performanceApi = {
   getUnderlying: (version) => axios.get(`/api/performance/dashboard/underlying?version=${encodeURIComponent(version)}`),
   getUnderlyingCompanies: (version, type) => axios.get(`/api/performance/dashboard/underlying-companies?version=${encodeURIComponent(version)}&type=${type}`),
   getIpoCompanies: (version, type) => axios.get(`/api/performance/dashboard/ipo-companies?version=${encodeURIComponent(version)}&type=${type}`),
+  getListedEnterprises: (version, status = '已上市') => axios.get(`/api/performance/dashboard/listed-enterprises?version=${encodeURIComponent(version)}&status=${encodeURIComponent(status)}`),
   getRegionCompanies: (version, type) => axios.get(`/api/performance/dashboard/region-companies?version=${encodeURIComponent(version)}&type=${type}`),
   getIndicators: () => axios.get('/api/performance/config/indicators'),
   updateIndicators: (data) => axios.put('/api/performance/config/indicators', data),
@@ -129,6 +144,7 @@ const performanceApi = {
   exportPortfolio: (version) => axios.post('/api/performance/exports/portfolio', { version }, { responseType: 'blob' }),
   exportFundProducts: (version) => axios.post('/api/performance/exports/fund-products', { version }, { responseType: 'blob' }),
   exportIpoCompanies: (version, type) => axios.post('/api/performance/exports/ipo-companies', { version, type }, { responseType: 'blob' }),
+  exportListedEnterprises: (version, status = '已上市') => axios.post('/api/performance/exports/listed-enterprises', { version, status }, { responseType: 'blob' }),
   exportUnderlyingCompanies: (version, type) => axios.post('/api/performance/exports/underlying-companies', { version, type }, { responseType: 'blob' }),
   exportRegionCompanies: (version, type) => axios.post('/api/performance/exports/region-companies', { version, type }, { responseType: 'blob' }),
 }
@@ -235,22 +251,30 @@ function MonthYearPicker({ value, onChange, placeholder = '选择年月', style 
 }
 
 // 模态框头部信息组件
-function ModalInfo({ version, unit = '人民币', onExport }) {
+function ModalInfo({ version, unit = '人民币', onExport, onClose, dateLabel = '数据截至日期' }) {
   return (
-    <div className={`perf-modal-header${onExport ? ' perf-modal-header-with-action' : ''}`}>
+    <div className={`perf-modal-header${(onExport || onClose) ? ' perf-modal-header-with-action' : ''}`}>
       <span>单位：{unit}</span>
-      <span>数据截至日期：{formatVersionDate(version)}</span>
+      <span>{dateLabel}：{formatVersionDate(version)}</span>
       <span>版本号：{version}</span>
-      {onExport && (
-        <Button
-          type="primary"
-          className="perf-export-btn"
-          icon={<IconDownload />}
-          onClick={onExport}
-          style={{ marginLeft: 'auto' }}
-        >
-          导出底稿
-        </Button>
+      {(onExport || onClose) && (
+        <div className="perf-modal-header-actions">
+          {onExport && (
+            <Button
+              type="primary"
+              className="perf-export-btn"
+              icon={<IconDownload />}
+              onClick={onExport}
+            >
+              导出底稿
+            </Button>
+          )}
+          {onClose && (
+            <Button className="perf-close-btn" onClick={onClose}>
+              关闭
+            </Button>
+          )}
+        </div>
       )}
     </div>
   )
@@ -296,7 +320,7 @@ function ManagerCard({ data, config, onClick }) {
 }
 
 // 投资组合板块（参考设计图：左侧子基金/直投项目区隔指标块，每基金拆成投/退两列；整体组合左侧色块+子基金/直投项目区隔）
-function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onSpvDetail, onExport }) {
+function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfolio, onPortfolioDetail, onSpvDetail, onIpoProgressDetail, onExport }) {
   const fundMap = (portfolioFunds || []).reduce((acc, r) => { acc[r.fund] = r; return acc }, {})
   // 投资组合列名取自 b_investment_indicator.fund
   const portfolioFundNames = (portfolioFunds || []).map(r => r.fund)
@@ -409,11 +433,15 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
           </div>
           <div className="perf-ipo-cards">
             {[
-              { label: '已上市企业', num: overall.ipo_num, cost: overall.ipo_cost, valuation: overall.ipo_valuation },
-              { label: '已受理企业', num: overall.sl_num, cost: overall.sl_cost, valuation: overall.sl_valuation },
-              { label: '已辅导企业', num: overall.fd_num, cost: overall.fd_cost, valuation: overall.fd_valuation },
+              { label: '已上市企业', num: overall.ipo_num, cost: overall.ipo_cost, valuation: overall.ipo_valuation, status: '已上市' },
+              { label: '已受理企业', num: overall.sl_num, cost: overall.sl_cost, valuation: overall.sl_valuation, status: '已受理' },
+              { label: '已辅导企业', num: overall.fd_num, cost: overall.fd_cost, valuation: overall.fd_valuation, status: '辅导备案' },
             ].map((item, idx) => (
-              <div key={idx} className="perf-ipo-card">
+              <div
+                key={idx}
+                className={`perf-ipo-card${onIpoProgressDetail ? ' perf-clickable' : ''}`}
+                onClick={onIpoProgressDetail ? () => onIpoProgressDetail(item.status) : undefined}
+              >
                 <div className="perf-ipo-card-title">{item.label}</div>
                 <div className="perf-ipo-card-metrics">
                   <div className="perf-ipo-card-metric">
@@ -710,6 +738,9 @@ function PerformanceApp() {
           case 'ipoCompanies':
             res = await performanceApi.getIpoCompanies(selectedVersion, modal.modalType)
             break
+          case 'listedEnterprises':
+            res = await performanceApi.getListedEnterprises(selectedVersion, modal.modalType || '已上市')
+            break
           case 'regionCompanies':
             res = await performanceApi.getRegionCompanies(selectedVersion, modal.modalType)
             break
@@ -857,6 +888,13 @@ function PerformanceApp() {
           res = await performanceApi.exportIpoCompanies(selectedVersion, modal.modalType)
           filename = `${selectedVersion}-上市企业明细-${date}.xlsx`
           break
+        case 'listedEnterprises': {
+          const status = modal.modalType || '已上市'
+          const titleMap = { 已上市: '已上市企业明细', 已受理: '已受理企业明细', 辅导备案: '已辅导企业明细' }
+          res = await performanceApi.exportListedEnterprises(selectedVersion, status)
+          filename = `${selectedVersion}-${titleMap[status] || '上市进展企业明细'}-${date}.xlsx`
+          break
+        }
         case 'underlyingCompanies':
           res = await performanceApi.exportUnderlyingCompanies(selectedVersion, modal.modalType)
           filename = `${selectedVersion}-底层企业明细-${modal.modalType === 'cumulative' ? '累计' : '当前'}-${date}.xlsx`
@@ -892,13 +930,13 @@ function PerformanceApp() {
     const hasIndicatorAbove = ['fundPerformance', 'projectCashflow'].includes(modal.type)
     const CHROME = hasIndicatorAbove ? 430
       : threeSectionTypes.includes(modal.type) ? 320
-      : ['underlyingCompanies', 'regionCompanies'].includes(modal.type) ? 350
+      : ['underlyingCompanies', 'regionCompanies', 'listedEnterprises'].includes(modal.type) ? 350
       : 250
 
     // 有分组小计/合计的弹窗额外预留行数；投资人名录+3(合计行+冗余高度避免滚动条)
     const extraRows = (modal.type === 'investors') ? 3
       : ['fundPortfolio', 'portfolioDetail', 'spvDetail'].includes(modal.type) ? 3
-      : ['underlyingCompanies', 'regionCompanies'].includes(modal.type) ? 3
+      : ['underlyingCompanies', 'regionCompanies', 'listedEnterprises'].includes(modal.type) ? 3
       : 0
     const ROW_H = 42
     // 现金流弹窗保证最小高度，确保不同基金显示一致（projectCashflow~10行, fundPerformance~8行）
@@ -1909,6 +1947,105 @@ function PerformanceApp() {
           </div>
         )
       }
+      case 'listedEnterprises': {
+        const list = modalData.list || []
+        const summary = modalData.summary || {}
+        const isListed = (modal.modalType || '已上市') === '已上市'
+        const projectCountDedup = summary.projectCountDedup != null
+          ? summary.projectCountDedup
+          : new Set(list.map((r) => String(r.project || '').trim()).filter(Boolean)).size
+        const sumPaid = summary.paid_amount != null
+          ? Number(summary.paid_amount)
+          : list.reduce((s, r) => s + (Number(r.paid_amount) || 0), 0)
+        const sumRealized = summary.realized != null
+          ? Number(summary.realized)
+          : list.reduce((s, r) => s + (Number(r.realized) || 0), 0)
+        const sumUnrealized = summary.unrealized != null
+          ? Number(summary.unrealized)
+          : list.reduce((s, r) => s + (Number(r.unrealized) || 0), 0)
+        const sumTotal = summary.total_value != null
+          ? Number(summary.total_value)
+          : list.reduce((s, r) => s + (Number(r.total_value) || 0), 0)
+        const sumDpi = summary.dpi != null
+          ? summary.dpi
+          : (sumPaid !== 0 ? sumRealized / sumPaid : null)
+        const sumMoc = summary.moc != null
+          ? summary.moc
+          : (sumPaid !== 0 ? sumTotal / sumPaid : null)
+        return (
+          <div className="perf-modal-investors-wrap perf-listed-ipo-wrap">
+            <ModalInfo
+              version={selectedVersion}
+              unit="人民币元"
+              dateLabel="数据截止日期"
+              onExport={() => handleExport('listedEnterprises', null)}
+              onClose={closeModal}
+            />
+            <div className="perf-modal-listed-ipo-scroll">
+              <table className="perf-table perf-table-bordered perf-table-listed-ipo">
+                <colgroup>
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 110 }} />
+                  <col style={{ width: isListed ? 100 : 120 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 140 }} />
+                  <col style={{ width: 80 }} />
+                  <col style={{ width: 80 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>基金名称</th>
+                    <th>项目简称</th>
+                    <th>{isListed ? '上市日期' : '更新时间'}</th>
+                    <th>{isListed ? '股票代码' : '最新状态'}</th>
+                    <th className="perf-col-amount">投资成本</th>
+                    <th className="perf-col-amount">已实现价值</th>
+                    <th className="perf-col-amount">未实现价值</th>
+                    <th className="perf-col-amount">总价值</th>
+                    <th className="perf-col-amount">MOC</th>
+                    <th className="perf-col-amount">DPI</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map((row, i) => (
+                    <tr key={row.F_Id || i}>
+                      <td>{row.fund}</td>
+                      <td>{row.project}</td>
+                      <td>{formatDateOnly(row.ipo_date)}</td>
+                      <td>{isListed ? row.ticker : row.ipo_progress}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(row.paid_amount)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(row.realized)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(row.unrealized)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(row.total_value)}</td>
+                      <td className="perf-td-num">{formatDecimal2(row.moc)}</td>
+                      <td className="perf-td-num">{formatDecimal2(row.dpi)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {list.length > 0 && (
+                  <tfoot>
+                    <tr className="perf-table-summary">
+                      <td>合计</td>
+                      <td>去重项目个数：{projectCountDedup}</td>
+                      <td />
+                      <td />
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(sumPaid)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(sumRealized)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(sumUnrealized)}</td>
+                      <td className="perf-td-num">{formatAmountYuanKeepZero(sumTotal)}</td>
+                      <td className="perf-td-num">{formatDecimal2(sumMoc)}</td>
+                      <td className="perf-td-num">{formatDecimal2(sumDpi)}</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        )
+      }
       case 'underlyingCompanies': {
         const list = modalData.list || []
         const sumTotal = list.length ? list.reduce((acc, r) => ({
@@ -2111,6 +2248,11 @@ function PerformanceApp() {
       spvDetail: 'SPV投资组合明细',
       underlyingCompanies: `底层企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
       ipoCompanies: `上市企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
+      listedEnterprises: ({
+        已上市: '已上市企业明细',
+        已受理: '已受理企业明细',
+        辅导备案: '已辅导企业明细',
+      })[modal.modalType] || '已上市企业明细',
       regionCompanies: `区域企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
     }
     return typeMap[modal.type] || ''
@@ -2241,6 +2383,7 @@ function PerformanceApp() {
             onFundPortfolio={(fund) => openModal('fundPortfolio', fund)}
             onPortfolioDetail={(filterType) => openModal('portfolioDetail', null, filterType || null)}
             onSpvDetail={() => openModal('spvDetail')}
+            onIpoProgressDetail={(status) => openModal('listedEnterprises', null, status)}
             onExport={() => handleExport('portfolio', null)}
           />
 
@@ -2258,7 +2401,7 @@ function PerformanceApp() {
       {/* 数据弹窗 */}
       {modal.type && !['versionUpdate', 'share'].includes(modal.type) && (
         <Modal
-          className={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type)
+          className={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'listedEnterprises', 'regionCompanies'].includes(modal.type)
             ? 'perf-data-modal perf-modal-body-flush'
             : 'perf-data-modal'}
           title={
@@ -2273,9 +2416,11 @@ function PerformanceApp() {
           onCancel={closeModal}
           footer={null}
           style={{
-            width: ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
+            width: modal.type === 'listedEnterprises'
+              ? 1280
+              : ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
             '--perf-modal-h': getModalHeight(),
-            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? { paddingBottom: 0, overflow: 'hidden' } : {})
+            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'listedEnterprises', 'regionCompanies'].includes(modal.type) ? { paddingBottom: 0, overflow: 'hidden' } : {})
           }}
         >
           {renderModalContent()}

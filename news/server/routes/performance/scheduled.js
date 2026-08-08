@@ -265,7 +265,8 @@ router.post('/:id/run', async (req, res) => {
                   'b_project_a',
                   'b_region_a',
                   'b_region',
-                  'b_ipo_a'
+                  'b_ipo_a',
+                  'b_ipo_p'
                 ];
 
                 const cleanupConn = await db.getConnection();

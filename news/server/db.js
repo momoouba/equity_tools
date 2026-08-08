@@ -3927,6 +3927,67 @@ async function initializeTables(dbPool) {
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-上市企业明细-累计';
   `);
+  // b_ipo_p - 定开看板-上市进展项目数据表
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_ipo_p (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_Name VARCHAR(255) NULL DEFAULT NULL COMMENT '名称',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户',
+      F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间',
+      F_SortCode INT NULL DEFAULT NULL COMMENT '排序码',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      F_Description VARCHAR(500) NULL DEFAULT NULL COMMENT '描述',
+      F_Concerned INT NULL DEFAULT NULL COMMENT '关注数据',
+      F_BelongingId VARCHAR(50) NULL DEFAULT NULL COMMENT '数据所属人',
+      F_ParticipantsId VARCHAR(2000) NULL DEFAULT NULL COMMENT '数据参与人',
+      F_LayoutId VARCHAR(50) NULL DEFAULT NULL COMMENT '布局id',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '所属基金-3',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目简称-4',
+      ticker VARCHAR(300) NULL DEFAULT NULL COMMENT '股票代码-5',
+      ipo_date DATETIME NULL DEFAULT NULL COMMENT '进展日期-6',
+      ipo_status VARCHAR(255) NULL DEFAULT NULL COMMENT '上市状态-7',
+      ipo_progress VARCHAR(255) NULL DEFAULT NULL COMMENT '上市进展-8',
+      paid_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资成本-9',
+      realized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '已实现价值-10',
+      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-11',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-12',
+      DPI DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-13',
+      MOC DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-14',
+      F_Lock INT NULL DEFAULT NULL COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-上市进展项目数据表';
+  `);
+  // b_ipo_p 若已存在则补充 F_LastModifyUserId、F_LastModifyTime（旧库可能缺这两列）
+  try {
+    const [bIpoPLastModifyUserCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_ipo_p' AND COLUMN_NAME = 'F_LastModifyUserId'
+    `);
+    if (bIpoPLastModifyUserCols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_ipo_p ADD COLUMN F_LastModifyUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '修改用户' AFTER F_CreatorTime`);
+    }
+    const [bIpoPLastModifyTimeCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_ipo_p' AND COLUMN_NAME = 'F_LastModifyTime'
+    `);
+    if (bIpoPLastModifyTimeCols.length === 0) {
+      await dbPool.query(`ALTER TABLE b_ipo_p ADD COLUMN F_LastModifyTime DATETIME NULL DEFAULT NULL COMMENT '修改时间' AFTER F_LastModifyUserId`);
+    }
+    // ipo_status 注释统一为「上市状态-7」
+    const [bIpoPStatusComment] = await dbPool.query(`
+      SELECT COLUMN_COMMENT FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_ipo_p' AND COLUMN_NAME = 'ipo_status'
+    `);
+    if (bIpoPStatusComment[0] && bIpoPStatusComment[0].COLUMN_COMMENT !== '上市状态-7') {
+      await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN ipo_status VARCHAR(255) NULL DEFAULT NULL COMMENT '上市状态-7'`);
+    }
+  } catch (e) { /* ignore */ }
   // b_manage
   await dbPool.query(`
     CREATE TABLE IF NOT EXISTS b_manage (

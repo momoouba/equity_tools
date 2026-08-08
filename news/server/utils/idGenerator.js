@@ -36,7 +36,7 @@ async function generateId(tableName, connection) {
       'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',
       'b_all_indicator', 'b_investment', 'b_investment_spv', 'b_investment_sum', 'b_investor_list',
       'b_transaction', 'b_project', 'b_project_a', 'b_project_all',
-      'b_ipo', 'b_ipo_a', 'b_region', 'b_region_a',
+      'b_ipo', 'b_ipo_a', 'b_ipo_p', 'b_region', 'b_region_a',
       'performance_scheduled',
       'listing_data_config',
       'ipo_project_sql_sync_setting',

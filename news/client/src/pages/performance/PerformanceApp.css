@@ -540,6 +540,14 @@
   flex-direction: column;
   align-items: flex-start;
 }
+.perf-ipo-card.perf-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.perf-ipo-card.perf-clickable:hover {
+  border-color: #1AA8E9;
+  box-shadow: 0 2px 8px rgba(26, 168, 233, 0.12);
+}
 .perf-ipo-card-title {
   font-size: 13px;
   font-weight: 600;
@@ -635,6 +643,25 @@
 .perf-modal-header-with-action {
   align-items: center;
   flex-wrap: wrap;
+}
+
+.perf-modal-header-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.perf-close-btn {
+  background: #fff;
+  border: 1px solid #1d2129;
+  color: #1d2129;
+}
+
+.perf-close-btn:hover {
+  background: #f7f8fa;
+  border-color: #1d2129;
+  color: #1d2129;
 }
 
 .perf-modal-footer {
@@ -1395,6 +1422,99 @@
 /* 合计行投资金额右对齐 */
 .perf-table-ipo-summary-row td.perf-td-num {
   text-align: right;
+}
+
+/* 直投项目-已上市企业明细：单表 + 吸顶表头 + 吸底合计 */
+.perf-listed-ipo-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+.perf-modal-listed-ipo-scroll {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+  margin: 0 -16px;
+  padding: 0 16px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 4px;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo {
+  table-layout: fixed;
+  width: 100%;
+  min-width: 1170px;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f7f8fa;
+  font-weight: 500;
+  color: #4e5969;
+  box-shadow: 0 1px 0 #e5e6eb;
+  height: 33px;
+  min-height: 33px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tbody tr {
+  height: 35px;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tbody td {
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  text-align: center;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tbody td.perf-td-num,
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo thead th.perf-col-amount {
+  text-align: right;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tfoot tr {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tfoot td {
+  background: #1AA8E9;
+  color: #fff;
+  font-weight: 500;
+  border: 1px solid #1AA8E9;
+  height: 35px;
+  min-height: 35px;
+  vertical-align: middle;
+  padding: 4px 8px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tfoot td.perf-td-num {
+  text-align: right;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tbody tr:nth-child(even) td {
+  background: #f3f9fd;
+}
+
+.perf-modal-listed-ipo-scroll .perf-table-listed-ipo tbody tr:hover td {
+  background: #f2f3f5 !important;
 }
 
 /* 底层企业明细：两级表头，合计行灰底 */
