@@ -390,14 +390,61 @@ class BaikeBrowserSession:
             return self
 
         try:
-            endpoint = resolve_cdp_connect_endpoint(self.cdp_url)
+            try:
+                endpoint = resolve_cdp_connect_endpoint(self.cdp_url)
+            except Exception as e:
+                # 保证完整异常写入 stderr（Node 侧会截断，但至少含类型与文案）
+                sys.stderr.write(f"[baike-browser] resolve_cdp_connect_endpoint failed: {type(e).__name__}: {e}\n")
+                sys.stderr.flush()
+                raise
             self._browser = self._pw.chromium.connect_over_cdp(endpoint)
-        except PlaywrightError as e:
-            raise RuntimeError(f"无法连接 CDP ({self.cdp_url}): {e}\n{CDP_HINT}") from e
-        except RuntimeError:
-            raise
-        except Exception as e:
-            raise RuntimeError(f"无法连接 CDP ({self.cdp_url}): {e}\n{CDP_HINT}") from e
+        except Exception as cdp_err:
+            allow_fallback = str(os.environ.get("BAIKE_CDP_FALLBACK_HEADLESS", "1") or "1").strip() != "0"
+            pw_path = str(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "") or "").strip()
+            can_headless = allow_fallback and bool(pw_path and os.path.isdir(pw_path))
+            if not can_headless:
+                if isinstance(cdp_err, PlaywrightError):
+                    raise RuntimeError(f"无法连接 CDP ({self.cdp_url}): {cdp_err}\n{CDP_HINT}") from cdp_err
+                if isinstance(cdp_err, RuntimeError):
+                    raise
+                raise RuntimeError(f"无法连接 CDP ({self.cdp_url}): {cdp_err}\n{CDP_HINT}") from cdp_err
+            sys.stderr.write(
+                f"[baike-browser] CDP 失败，回退 headless: {type(cdp_err).__name__}: {cdp_err}\n"
+            )
+            sys.stderr.flush()
+            # 切换为 headless 启动路径
+            self.mode = "headless"
+            self.captcha_wait_ms = min(int(self.captcha_wait_ms or 0), 2000)
+            ensure_playwright_browser_path()
+            try:
+                launch_kwargs = {
+                    "headless": True,
+                    "args": _headless_launch_args(),
+                    "env": _playwright_launch_env(),
+                }
+                proxy = _playwright_proxy()
+                if proxy:
+                    launch_kwargs["proxy"] = proxy
+                self._browser = self._pw.chromium.launch(**launch_kwargs)
+                self._owned_browser = True
+            except PlaywrightError as e:
+                raise RuntimeError(
+                    f"CDP 失败且 headless 也无法启动: CDP={cdp_err}; headless={e}\n"
+                    "请确认宿主机 Chrome/socat 可用，或已执行 playwright install chromium"
+                ) from e
+            self._context = self._browser.new_context(
+                locale="zh-CN",
+                timezone_id="Asia/Shanghai",
+                user_agent=USER_AGENT,
+                viewport={"width": 1365, "height": 900},
+                extra_http_headers={
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Upgrade-Insecure-Requests": "1",
+                },
+            )
+            self._context.add_init_script(STEALTH_INIT_SCRIPT)
+            self.page = self._context.new_page()
+            return self
         if not self._browser.contexts:
             raise RuntimeError(f"CDP 已连接但无浏览器上下文。\n{CDP_HINT}")
         context = self._browser.contexts[0]
@@ -642,11 +689,25 @@ def fetch_baike_browser(session, company_name, fast_item_only=False):
 
 def run_batch_in_session(session, items, sleep_ms, fast_item_only=False):
     results = []
+    total = len(items)
     for i, item in enumerate(items):
         name = str((item or {}).get("company_name") or "").strip()
+        sys.stderr.write(f"[baike-browser] progress {i + 1}/{total} start name={name!r}\n")
+        sys.stderr.flush()
         if sleep_ms > 0 and i > 0:
             time.sleep(sleep_ms / 1000.0)
-        results.append(fetch_baike_browser(session, name, fast_item_only=fast_item_only))
+        t0 = time.time()
+        row = fetch_baike_browser(session, name, fast_item_only=fast_item_only)
+        results.append(row)
+        elapsed = time.time() - t0
+        status = row.get("lemma_status") or "-"
+        miss = row.get("miss_reason") or "-"
+        intro_len = len(str(row.get("company_intro") or row.get("product_intro") or ""))
+        sys.stderr.write(
+            f"[baike-browser] progress {i + 1}/{total} done status={status} miss={miss} "
+            f"intro_len={intro_len} elapsed={elapsed:.1f}s name={name!r}\n"
+        )
+        sys.stderr.flush()
     return results
 
 

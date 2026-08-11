@@ -1,12 +1,13 @@
 const db = require('../db');
-const NewsAnalysis = require('./newsAnalysis');
+// newsAnalysis 导出的是单例实例（module.exports = new NewsAnalysis()），不可再 new
+const newsAnalysis = require('./newsAnalysis');
 
 /**
  * 新闻数据去重和清理工具
  */
 class NewsDeduplication {
   constructor() {
-    this.newsAnalysis = new NewsAnalysis();
+    this.newsAnalysis = newsAnalysis;
   }
 
   /**

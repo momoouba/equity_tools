@@ -1,5 +1,26 @@
 const db = require('../db');
 
+/** 同表 generateId 串行化，避免并发读到相同 maxId 撞主键 */
+const tableIdLocks = new Map();
+
+async function withTableIdLock(tableName, fn) {
+  const prev = tableIdLocks.get(tableName) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  tableIdLocks.set(
+    tableName,
+    prev.then(() => gate).catch(() => gate)
+  );
+  await prev.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /**
  * 生成年月日时分秒+5位自增序列的ID
  * 格式：YYYYMMDDHHmmss + 5位自增序列（例如：2025112015304500001）
@@ -8,6 +29,10 @@ const db = require('../db');
  * @returns {Promise<string>} 生成的ID
  */
 async function generateId(tableName, connection) {
+  return withTableIdLock(tableName, () => generateIdUnlocked(tableName, connection));
+}
+
+async function generateIdUnlocked(tableName, connection) {
   const now = new Date();
   const year = now.getFullYear();
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -108,7 +133,7 @@ async function generateId(tableName, connection) {
         } else {
           // 如果序列号已满，等待下一秒
           await new Promise(resolve => setTimeout(resolve, 1000));
-          return generateId(tableName, connection);
+          return generateIdUnlocked(tableName, connection);
         }
       }
     }
@@ -134,22 +159,25 @@ async function generateId(tableName, connection) {
 async function generateSequentialIds(tableName, count, connection) {
   const n = Math.max(0, parseInt(count, 10) || 0);
   if (n === 0) return [];
-  const ids = [];
-  let current = await generateId(tableName, connection);
-  ids.push(current);
-  for (let i = 1; i < n; i++) {
-    const prefix = current.slice(0, -5);
-    let seq = parseInt(current.slice(-5), 10);
-    seq += 1;
-    if (seq > 99999) {
-      current = await generateId(tableName, connection);
-      ids.push(current);
-      continue;
-    }
-    current = `${prefix}${String(seq).padStart(5, '0')}`;
+  // 整批在同表锁内分配，避免与并发 generateId 交错撞号
+  return withTableIdLock(tableName, async () => {
+    const ids = [];
+    let current = await generateIdUnlocked(tableName, connection);
     ids.push(current);
-  }
-  return ids;
+    for (let i = 1; i < n; i++) {
+      const prefix = current.slice(0, -5);
+      let seq = parseInt(current.slice(-5), 10);
+      seq += 1;
+      if (seq > 99999) {
+        current = await generateIdUnlocked(tableName, connection);
+        ids.push(current);
+        continue;
+      }
+      current = `${prefix}${String(seq).padStart(5, '0')}`;
+      ids.push(current);
+    }
+    return ids;
+  });
 }
 
 module.exports = {

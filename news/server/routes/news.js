@@ -142,25 +142,33 @@ async function createSyncLog(params) {
     userId = null,
     executionDetails = {}
   } = params;
-  
-  const logId = await generateId('news_sync_execution_log');
+
   const startTime = new Date();
-  
-  await db.execute(
-    `INSERT INTO news_sync_execution_log 
-     (F_Id, config_id, execution_type, start_time, status, execution_details, F_CreatorUserId) 
-     VALUES (?, ?, ?, ?, 'running', ?, ?)`,
-    [
-      logId,
-      configId,
-      executionType,
-      startTime,
-      JSON.stringify(executionDetails),
-      userId
-    ]
-  );
-  
-  return logId;
+  const detailsJson = JSON.stringify(executionDetails);
+  let lastError = null;
+
+  // 并发定时任务可能撞同一秒序列号，主键冲突时重试换新 ID
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const logId = await generateId('news_sync_execution_log');
+    try {
+      await db.execute(
+        `INSERT INTO news_sync_execution_log 
+         (F_Id, config_id, execution_type, start_time, status, execution_details, F_CreatorUserId) 
+         VALUES (?, ?, ?, ?, 'running', ?, ?)`,
+        [logId, configId, executionType, startTime, detailsJson, userId]
+      );
+      return logId;
+    } catch (err) {
+      lastError = err;
+      const isDup =
+        err &&
+        (err.code === 'ER_DUP_ENTRY' || /Duplicate entry/i.test(String(err.message || '')));
+      if (!isDup) throw err;
+      await new Promise((r) => setTimeout(r, 20 * (attempt + 1)));
+    }
+  }
+
+  throw lastError || new Error('创建同步日志失败：主键冲突重试耗尽');
 }
 
 /**

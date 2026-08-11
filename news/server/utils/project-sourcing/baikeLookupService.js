@@ -157,6 +157,35 @@ function fetchBaikeHttp(companyName, sleepMs = 1200) {
  * 百科查词统一入口：HTTP 优先，失败或返回通用描述时 fallback 到 Playwright browser 模式。
  * 解决百度反爬导致 HTTP 模式拿不到真实词条内容的问题。
  */
+function runBaikeBrowserOnce(name, sleepMs, browserOpts, mode) {
+  const py = resolvePythonBin();
+  const args = buildBrowserPythonArgs(
+    { ...browserOpts, browserMode: mode },
+    ['--name', name, '--sleep-ms', String(sleepMs)]
+  );
+  console.log(`[baikeLookup][browser] fallback "${name}" mode=${mode}`);
+  const r = spawnSync(py, args, {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (r.status !== 0) {
+    const errText = String(r.stderr || r.stdout || '').trim();
+    console.warn(
+      `[baikeLookup][browser] script failed for "${name}" mode=${mode}: status=${r.status}, stderr=${errText.slice(0, 2000)}`
+    );
+    return { ok: false, error: errText };
+  }
+  try {
+    const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
+    return { ok: true, result: normalizeBaikePayload(JSON.parse(line), name) };
+  } catch (e) {
+    console.warn(`[baikeLookup][browser] parse error for "${name}" mode=${mode}:`, e.message);
+    return { ok: false, error: e.message };
+  }
+}
+
 function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
   const mode = resolveBaikeBrowserMode(browserOpts);
   const httpResult = fetchBaikeHttp(companyName, sleepMs);
@@ -171,28 +200,30 @@ function fetchBaike(companyName, sleepMs = 1200, browserOpts = {}) {
   const name = strTrim(companyName);
   if (name.length < 2) return httpResult;
   try {
-    const py = resolvePythonBin();
-    const args = buildBrowserPythonArgs(browserOpts, ['--name', name, '--sleep-ms', String(sleepMs)]);
-    console.log(`[baikeLookup][browser] fallback "${name}" mode=${mode}`);
-    const r = spawnSync(py, args, {
-      encoding: 'utf8',
-      windowsHide: true,
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    if (r.status !== 0) {
-      console.warn(
-        `[baikeLookup][browser] script failed for "${name}" mode=${mode}: status=${r.status}, stderr=${String(r.stderr || '').slice(0, 500)}`
-      );
-      return httpResult; // browser 也失败，返回 HTTP 结果
+    const modesToTry = [mode];
+    // CDP 连不上宿主机 Chrome 时回退 headless（容器内 Playwright Chromium）
+    if (mode === 'cdp' && String(process.env.BAIKE_CDP_FALLBACK_HEADLESS || '1').trim() !== '0') {
+      modesToTry.push('headless');
     }
-    const line = String(r.stdout || '').trim().split('\n').filter(Boolean).pop();
-    const browserResult = normalizeBaikePayload(JSON.parse(line), name);
-    const introLen = (browserResult.company_intro || browserResult.product_intro || '').length;
-    console.log(
-      `[baikeLookup][browser] "${name}": ${browserResult.has_lemma ? 'found' : browserResult.lemma_status}` +
-        ` miss=${browserResult.miss_reason || '-'} intro_len=${introLen} mode=${mode}`
-    );
+    let browserResult = null;
+    for (const tryMode of modesToTry) {
+      const ran = runBaikeBrowserOnce(name, sleepMs, browserOpts, tryMode);
+      if (!ran.ok) {
+        if (tryMode === 'cdp' && modesToTry.includes('headless')) {
+          console.warn(`[baikeLookup][browser] CDP 失败，回退 headless: "${name}"`);
+          continue;
+        }
+        break;
+      }
+      browserResult = ran.result;
+      const introLen = (browserResult.company_intro || browserResult.product_intro || '').length;
+      console.log(
+        `[baikeLookup][browser] "${name}": ${browserResult.has_lemma ? 'found' : browserResult.lemma_status}` +
+          ` miss=${browserResult.miss_reason || '-'} intro_len=${introLen} mode=${tryMode}`
+      );
+      break;
+    }
+    if (!browserResult) return httpResult;
     // browser 结果优于 HTTP 则用 browser，否则保留 HTTP
     if (browserResult.has_lemma && (browserResult.company_intro || browserResult.product_intro)) {
       return browserResult;
