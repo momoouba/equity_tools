@@ -76,8 +76,16 @@ export default defineConfig(({ mode }) => {
           if (!id.includes('node_modules')) return undefined;
           if (id.includes('@arco-design')) return 'arco-vendor';
           if (id.includes('react-router')) return 'react-router-vendor';
-          if (id.includes('react-dom') || id.includes('scheduler')) return 'react-dom-vendor';
-          if (/[/\\]node_modules[/\\]react[/\\]/.test(id)) return 'react-vendor';
+          // react 与 react-dom 必须同一 chunk，拆开易出现
+          // Cannot read properties of undefined (reading '__SECRET_INTERNALS_...')
+          if (
+            id.includes('react-dom') ||
+            id.includes('scheduler') ||
+            /[/\\]node_modules[/\\]react[/\\]/.test(id) ||
+            /[/\\]node_modules[/\\]react[/\\]index/.test(id)
+          ) {
+            return 'react-vendor';
+          }
           return 'vendor';
         },
       },

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Table,
   Button,
@@ -10,6 +11,7 @@ import {
   Select,
   DatePicker,
   Switch,
+  Tag,
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
 import {
@@ -102,6 +104,7 @@ function buildFinancingExportRows(list) {
 const FINANCING_EXPORT_PAGE_SIZE = 200
 
 export default function FinancingEventsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState([])
   const [total, setTotal] = useState(0)
@@ -113,6 +116,12 @@ export default function FinancingEventsPage() {
   const [financingDateRange, setFinancingDateRange] = useState(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [trackPrimary, setTrackPrimary] = useState('')
+  const [trackSecondary, setTrackSecondary] = useState('')
+  const [investorKeyword, setInvestorKeyword] = useState('')
+  const [roundBucket, setRoundBucket] = useState('')
+  const [trackEmpty, setTrackEmpty] = useState(false)
+  const [filtersReady, setFiltersReady] = useState(false)
   const [tableScrollY, setTableScrollY] = useState(520)
 
   const [syncVisible, setSyncVisible] = useState(false)
@@ -139,6 +148,31 @@ export default function FinancingEventsPage() {
   const isAdmin = useMemo(() => parseUserAdmin(), [])
 
   useEffect(() => {
+    const df = searchParams.get('date_from') || ''
+    const dt = searchParams.get('date_to') || ''
+    const tp = searchParams.get('track_primary') || ''
+    const ts = searchParams.get('track_secondary') || ''
+    const ik = searchParams.get('investor_keyword') || ''
+    const rb = searchParams.get('round_bucket') || ''
+    const te =
+      searchParams.get('track_empty') === '1' ||
+      String(searchParams.get('track_empty') || '').toLowerCase() === 'true'
+    if (df && dt) {
+      setDateFrom(df.slice(0, 10))
+      setDateTo(dt.slice(0, 10))
+      setFinancingDateRange([dayjs(df.slice(0, 10)), dayjs(dt.slice(0, 10))])
+    }
+    setTrackPrimary(tp)
+    setTrackSecondary(ts)
+    setInvestorKeyword(ik)
+    setRoundBucket(rb)
+    setTrackEmpty(te)
+    setFiltersReady(true)
+    // 仅首屏从 URL 灌入；后续改筛选用本页状态
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
     const calc = () => {
       const y = Math.max(320, window.innerHeight - 280)
       setTableScrollY(y)
@@ -148,6 +182,28 @@ export default function FinancingEventsPage() {
     return () => window.removeEventListener('resize', calc)
   }, [])
 
+  const eventQueryFilters = useMemo(
+    () => ({
+      keyword: kwSearch || undefined,
+      date_from: dateFrom || undefined,
+      date_to: dateTo || undefined,
+      track_primary: trackEmpty ? undefined : trackPrimary || undefined,
+      track_secondary: trackSecondary || undefined,
+      investor_keyword: investorKeyword || undefined,
+      round_bucket: roundBucket || undefined,
+      track_empty: trackEmpty ? '1' : undefined,
+    }),
+    [
+      kwSearch,
+      dateFrom,
+      dateTo,
+      trackPrimary,
+      trackSecondary,
+      investorKeyword,
+      roundBucket,
+      trackEmpty,
+    ]
+  )
   const loadConfigsForSync = useCallback(async () => {
     setConfigsLoading(true)
     try {
@@ -191,14 +247,13 @@ export default function FinancingEventsPage() {
   }, [syncVisible, isAdmin, loadConfigsForSync])
 
   const load = useCallback(async () => {
+    if (!filtersReady) return
     setLoading(true)
     try {
       const res = await fetchFinancingEvents({
         page,
         pageSize,
-        keyword: kwSearch || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
+        ...eventQueryFilters,
       })
       if (res.data?.success) {
         const d = res.data.data || {}
@@ -212,12 +267,11 @@ export default function FinancingEventsPage() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, kwSearch, dateFrom, dateTo])
+  }, [page, pageSize, eventQueryFilters, filtersReady])
 
   useEffect(() => {
     load()
   }, [load])
-
   const columns = [
     {
       title: '融资日期',
@@ -328,9 +382,7 @@ export default function FinancingEventsPage() {
     try {
       const paramsBase = {
         pageSize: FINANCING_EXPORT_PAGE_SIZE,
-        keyword: kwSearch || undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
+        ...eventQueryFilters,
       }
       const first = await fetchFinancingEvents({ page: 1, ...paramsBase })
       if (!first.data?.success) {
@@ -366,14 +418,14 @@ export default function FinancingEventsPage() {
     } finally {
       setExportingAll(false)
     }
-  }, [kwSearch, dateFrom, dateTo])
+  }, [eventQueryFilters, total])
 
   const handleExportAllClick = useCallback(() => {
     Modal.confirm({
       title: '导出全部',
       content: (
         <div>
-          <p>将按当前筛选条件（模糊关键词、融资日期起止）分页拉取全部数据并导出为 Excel；日期按融资日期过滤且包含首尾两天，与点击「查询」后的列表一致。</p>
+          <p>将按当前筛选条件（关键词、日期、赛道、投资方、轮次桶等）分页拉取全部数据并导出为 Excel；日期按融资日期过滤且包含首尾两天，与列表一致。</p>
           {total > 0 ? (
             <p style={{ marginTop: 8, color: 'var(--color-text-2)' }}>最近一次加载的合计：{total} 条（若刚改条件请先点「查询」）。</p>
           ) : null}
@@ -525,7 +577,13 @@ export default function FinancingEventsPage() {
               setFinancingDateRange(null)
               setDateFrom('')
               setDateTo('')
+              setTrackPrimary('')
+              setTrackSecondary('')
+              setInvestorKeyword('')
+              setRoundBucket('')
+              setTrackEmpty(false)
               setPage(1)
+              setSearchParams({})
             }}
           >
             重置
@@ -534,6 +592,70 @@ export default function FinancingEventsPage() {
             刷新
           </Button>
         </Space>
+        {(trackPrimary ||
+          trackSecondary ||
+          investorKeyword ||
+          roundBucket ||
+          trackEmpty) && (
+          <Space wrap size={8}>
+            <span style={{ color: 'var(--color-text-2)', fontSize: 12 }}>精确筛选（来自概览下钻）</span>
+            {trackEmpty ? (
+              <Tag
+                closable
+                onClose={() => {
+                  setTrackEmpty(false)
+                  setPage(1)
+                }}
+              >
+                赛道未分类
+              </Tag>
+            ) : null}
+            {trackPrimary && !trackEmpty ? (
+              <Tag
+                closable
+                onClose={() => {
+                  setTrackPrimary('')
+                  setPage(1)
+                }}
+              >
+                主赛道：{trackPrimary}
+              </Tag>
+            ) : null}
+            {trackSecondary ? (
+              <Tag
+                closable
+                onClose={() => {
+                  setTrackSecondary('')
+                  setPage(1)
+                }}
+              >
+                子赛道：{trackSecondary}
+              </Tag>
+            ) : null}
+            {investorKeyword ? (
+              <Tag
+                closable
+                onClose={() => {
+                  setInvestorKeyword('')
+                  setPage(1)
+                }}
+              >
+                投资方：{investorKeyword}
+              </Tag>
+            ) : null}
+            {roundBucket ? (
+              <Tag
+                closable
+                onClose={() => {
+                  setRoundBucket('')
+                  setPage(1)
+                }}
+              >
+                轮次桶：{roundBucket}
+              </Tag>
+            ) : null}
+          </Space>
+        )}
         <Space wrap>
           <Button type="outline" onClick={handleExportCurrentPage} disabled={loading || exportingAll || !data.length}>
             导出当前页

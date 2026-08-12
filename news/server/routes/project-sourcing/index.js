@@ -4,9 +4,11 @@
 const express = require('express');
 const { registerTrackRoutes } = require('./trackRoutes');
 const { registerFinancingRoutes } = require('./financingRoutes');
+const { registerMarketOverviewRoutes } = require('./marketOverviewRoutes');
 
 const router = express.Router();
 registerTrackRoutes(router);
 registerFinancingRoutes(router);
+registerMarketOverviewRoutes(router);
 
 module.exports = router;

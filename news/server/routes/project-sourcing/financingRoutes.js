@@ -8,6 +8,10 @@ const {
   requireProjectSourcingAccess,
   requireAdmin,
 } = require('../../utils/project-sourcing/projectSourcingRouteAuth');
+const {
+  roundBucketSqlExpr,
+  isValidRoundBucket,
+} = require('../../utils/project-sourcing/financingRoundBuckets');
 
 /** 脱敏错误消息：避免向前端泄露 SQL、连接字符串等内部信息 */
 function safeErrorMessage(err, fallback = '操作失败') {
@@ -59,6 +63,19 @@ function registerFinancingRoutes(router) {
       }
       const dateFrom = req.query.date_from ? String(req.query.date_from).slice(0, 10) : '';
       const dateTo = req.query.date_to ? String(req.query.date_to).slice(0, 10) : '';
+      const trackPrimary = req.query.track_primary ? String(req.query.track_primary).trim() : '';
+      const trackSecondary = req.query.track_secondary ? String(req.query.track_secondary).trim() : '';
+      const investorKeyword = req.query.investor_keyword
+        ? String(req.query.investor_keyword).trim().slice(0, 200)
+        : '';
+      const roundBucket = req.query.round_bucket ? String(req.query.round_bucket).trim() : '';
+      const trackEmpty =
+        req.query.track_empty === '1' ||
+        String(req.query.track_empty || '').toLowerCase() === 'true';
+
+      if (roundBucket && !isValidRoundBucket(roundBucket)) {
+        return res.status(400).json({ success: false, message: '无效的 round_bucket' });
+      }
 
       const where = ['F_DeleteMark = 0'];
       const params = [];
@@ -101,6 +118,25 @@ function registerFinancingRoutes(router) {
       if (dateTo) {
         where.push('event_date <= ?');
         params.push(dateTo);
+      }
+      if (trackEmpty) {
+        where.push(`(track_primary IS NULL OR TRIM(track_primary) = '')`);
+      } else if (trackPrimary) {
+        where.push('track_primary = ?');
+        params.push(trackPrimary);
+      }
+      if (trackSecondary) {
+        where.push('track_secondary = ?');
+        params.push(trackSecondary);
+      }
+      if (investorKeyword) {
+        where.push('(COALESCE(investor_names,\'\') LIKE ? OR COALESCE(lead_investor,\'\') LIKE ?)');
+        const ik = `%${investorKeyword}%`;
+        params.push(ik, ik);
+      }
+      if (roundBucket) {
+        where.push(`${roundBucketSqlExpr('round')} = ?`);
+        params.push(roundBucket);
       }
 
       const sqlWhere = `WHERE ${where.join(' AND ')}`;
