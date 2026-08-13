@@ -9220,6 +9220,150 @@ async function initializeTables(dbPool) {
     }
   }
 
+  // ========== wewe 私有公众号专队（P1）==========
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS wewe_private_config (
+        F_Id VARCHAR(19) PRIMARY KEY,
+        wewe_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '总开关',
+        enqueue_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '允许新榜数据不存在时入队',
+        extract_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '允许夜间提取',
+        ingest_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '允许工作日入库',
+        remind_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '允许催扫/待订阅邮件',
+        wewe_base_url VARCHAR(500) NULL COMMENT 'wewe-rss 根地址',
+        extract_start VARCHAR(10) NOT NULL DEFAULT '21:00',
+        ingest_at VARCHAR(10) NOT NULL DEFAULT '00:00',
+        poll_interval_minutes INT NOT NULL DEFAULT 5,
+        session_ttl_hours INT NOT NULL DEFAULT 24,
+        remind_before_hours INT NOT NULL DEFAULT 24,
+        remind_interval_buffer_hours INT NOT NULL DEFAULT 2,
+        remind_interval_dead_minutes INT NOT NULL DEFAULT 30,
+        remind_daily_cap INT NOT NULL DEFAULT 20,
+        ops_email VARCHAR(1000) NULL COMMENT '运维通知邮箱，逗号分隔',
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+        F_DeleteTime DATETIME NULL,
+        F_DeleteUserId VARCHAR(19) NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='wewe私有公众号专队配置'
+    `);
+    console.log('✓ wewe_private_config 表已就绪');
+
+    const [cfgRows] = await dbPool.query(
+      `SELECT F_Id FROM wewe_private_config WHERE F_DeleteMark = 0 LIMIT 1`
+    );
+    if (cfgRows.length === 0) {
+      const { generateId } = require('./utils/idGenerator');
+      const cfgId = await generateId('wewe_private_config', dbPool);
+      await dbPool.query(
+        `INSERT INTO wewe_private_config
+         (F_Id, wewe_enabled, enqueue_enabled, extract_enabled, ingest_enabled, remind_enabled, wewe_base_url)
+         VALUES (?, 0, 0, 0, 0, 0, ?)`,
+        [cfgId, process.env.WEWE_RSS_BASE_URL || 'http://127.0.0.1:4000']
+      );
+      console.log('✓ wewe_private_config 已插入默认行（全部开关默认关）');
+    }
+  } catch (err) {
+    console.warn('创建 wewe_private_config 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS wewe_private_accounts (
+        F_Id VARCHAR(19) PRIMARY KEY,
+        wechat_account_id VARCHAR(100) NOT NULL COMMENT 'gh_xxx',
+        source_type VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT 'invested|additional|both|unknown',
+        team_status VARCHAR(30) NOT NULL DEFAULT 'pending_subscribe' COMMENT 'pending_subscribe|active|exited|disabled',
+        map_status VARCHAR(30) NOT NULL DEFAULT 'pending_subscribe' COMMENT 'pending_subscribe|mapped|failed',
+        feed_id VARCHAR(100) NULL COMMENT 'wewe feed id',
+        sample_article_url VARCHAR(1000) NULL,
+        last_xinbang_error VARCHAR(500) NULL,
+        last_enqueued_at DATETIME NULL,
+        last_exited_at DATETIME NULL,
+        last_extract_status VARCHAR(30) NULL COMMENT 'success|empty|failed|session_dead',
+        last_extract_at DATETIME NULL,
+        extract_pending TINYINT(1) NOT NULL DEFAULT 0 COMMENT '会话恢复后待补提',
+        note VARCHAR(500) NULL,
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+        F_DeleteTime DATETIME NULL,
+        F_DeleteUserId VARCHAR(19) NULL,
+        UNIQUE KEY uk_wewe_gh (wechat_account_id),
+        KEY idx_wewe_team_status (team_status),
+        KEY idx_wewe_map_status (map_status)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='wewe专队账号'
+    `);
+    console.log('✓ wewe_private_accounts 表已就绪');
+  } catch (err) {
+    console.warn('创建 wewe_private_accounts 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS wewe_private_session (
+        F_Id VARCHAR(19) PRIMARY KEY,
+        last_login_at DATETIME NULL,
+        session_ttl_hours INT NOT NULL DEFAULT 24,
+        session_status VARCHAR(30) NOT NULL DEFAULT 'unknown' COMMENT 'ok|buffering|expired|unknown',
+        last_remind_at DATETIME NULL,
+        remind_count_today INT NOT NULL DEFAULT 0,
+        remind_day_ymd CHAR(10) NULL COMMENT '北京日历日，用于日计数',
+        pause_extract TINYINT(1) NOT NULL DEFAULT 0 COMMENT '会话失效时暂停提取',
+        note VARCHAR(500) NULL,
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+        F_DeleteTime DATETIME NULL,
+        F_DeleteUserId VARCHAR(19) NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='wewe微信读书会话催办状态'
+    `);
+    console.log('✓ wewe_private_session 表已就绪');
+
+    const [sessRows] = await dbPool.query(
+      `SELECT F_Id FROM wewe_private_session WHERE F_DeleteMark = 0 LIMIT 1`
+    );
+    if (sessRows.length === 0) {
+      const { generateId } = require('./utils/idGenerator');
+      const sid = await generateId('wewe_private_session', dbPool);
+      await dbPool.query(
+        `INSERT INTO wewe_private_session (F_Id, session_status) VALUES (?, 'unknown')`,
+        [sid]
+      );
+      console.log('✓ wewe_private_session 已插入默认行');
+    }
+  } catch (err) {
+    console.warn('创建 wewe_private_session 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS wewe_private_article_stage (
+        F_Id VARCHAR(19) PRIMARY KEY,
+        wechat_account_id VARCHAR(100) NOT NULL,
+        feed_id VARCHAR(100) NOT NULL,
+        wewe_article_id VARCHAR(100) NULL,
+        title VARCHAR(500) NULL,
+        source_url VARCHAR(1000) NULL,
+        content MEDIUMTEXT NULL,
+        public_time DATETIME NULL,
+        extract_ymd CHAR(10) NOT NULL COMMENT '提取业务日 YYYY-MM-DD 北京',
+        ingest_status VARCHAR(20) NOT NULL DEFAULT 'pending' COMMENT 'pending|ingested|skipped|failed',
+        ingest_error VARCHAR(500) NULL,
+        ingested_news_id VARCHAR(19) NULL,
+        F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+        UNIQUE KEY uk_wewe_stage_url_day (source_url(255), extract_ymd),
+        KEY idx_wewe_stage_ingest (ingest_status, extract_ymd),
+        KEY idx_wewe_stage_gh (wechat_account_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='wewe专队提取暂存（待入库）'
+    `);
+    console.log('✓ wewe_private_article_stage 表已就绪');
+  } catch (err) {
+    console.warn('创建 wewe_private_article_stage 时出现警告:', err.message);
+  }
+
   console.log('✓ 所有数据库表结构初始化完成');
   
   // 初始化提示词配置（异步执行，不阻塞服务器启动）

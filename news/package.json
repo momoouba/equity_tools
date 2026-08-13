@@ -32,7 +32,8 @@
     "backfill:financing-structured": "node server/scripts/backfillFinancingStructured.js",
     "backfill:pre-investment-structured": "node server/scripts/backfillPreInvestmentStructured.js",
     "poc:stage4-recall-compare": "node server/scripts/pocStage4RecallCompare.js",
-    "export:gold-standard": "node server/scripts/exportGoldStandardTemplate.js --import-db"
+    "export:gold-standard": "node server/scripts/exportGoldStandardTemplate.js --import-db",
+    "probe:wewe": "node server/scripts/wewe-probe.js"
   },
   "keywords": [
     "news",

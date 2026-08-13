@@ -76,6 +76,10 @@ async function generateIdUnlocked(tableName, connection) {
       'sourcing_competition_lens_version',
       'sourcing_competitor_schedule_task',
       'sourcing_competitor_schedule_run',
+      'wewe_private_config',
+      'wewe_private_accounts',
+      'wewe_private_session',
+      'wewe_private_article_stage',
     ];
     
     if (!validTableNames.includes(tableName)) {

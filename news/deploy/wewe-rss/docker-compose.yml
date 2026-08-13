@@ -1,0 +1,23 @@
+# wewe-rss 本地 / 临时单独部署（SQLite）
+# 生产推荐使用仓库根目录 news/docker-compose.yml 中的 wewe-rss 服务（与 app 同网络）。
+# 文档：./README.md 、 https://github.com/cooderl/wewe-rss
+
+services:
+  wewe-rss:
+    image: cooderl/wewe-rss-sqlite:latest
+    container_name: wewe-rss
+    ports:
+      - "${WEWE_HOST_PORT:-4000}:4000"
+    restart: unless-stopped
+    environment:
+      DATABASE_TYPE: sqlite
+      AUTH_CODE: ${AUTH_CODE:-change-me-wewe}
+      FEED_MODE: ${FEED_MODE:-fulltext}
+      PLATFORM_URL: ${PLATFORM_URL:-https://weread.111965.xyz}
+      CRON_EXPRESSION: ${CRON_EXPRESSION:-35 5,17 * * *}
+      UPDATE_DELAY_TIME: ${UPDATE_DELAY_TIME:-60s}
+      MAX_REQUEST_PER_MINUTE: ${MAX_REQUEST_PER_MINUTE:-60}
+      SERVER_ORIGIN_URL: ${SERVER_ORIGIN_URL:-http://127.0.0.1:4000}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data:/app/data

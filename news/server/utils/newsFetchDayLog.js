@@ -201,6 +201,8 @@ module.exports = {
   formatBeijingYmd,
   addDaysYmd,
   eachYmdInclusive,
+  isWorkdayYmd,
+  findPreviousWorkdayYmd,
   resolveSyncBizDates,
   dayRangeFromTo,
   shouldFetchAccountBizDay,

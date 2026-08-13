@@ -19,6 +19,7 @@ const {
   shouldFetchAccountBizDay,
   upsertFetchDayResult
 } = require('../utils/newsFetchDayLog');
+const { handleXinbangAccountFinish } = require('../utils/wewe/wewePrivateTeam');
 
 /** 新闻舆情应用的 applications.id，用于收件管理与上市进展等应用隔离 */
 async function getNewsSentimentAppId() {
@@ -1175,6 +1176,21 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
           console.error(`[新榜同步] 记录详细日志失败（公众号：${account}）：`, detailLogError.message);
         }
       }
+
+      // wewe 专队：数据不存在入队；有文/空成功出队（开关默认关，失败不影响同步）
+      try {
+        let finishErrorType = null;
+        if (accountErrorMsg && /数据不存在|不存在|无数据|没有数据/.test(accountErrorMsg)) {
+          finishErrorType = '数据不存在';
+        }
+        await handleXinbangAccountFinish(account, {
+          hasData: accountHasData,
+          errorType: finishErrorType,
+          errorMessage: accountErrorMsg
+        });
+      } catch (weweHookErr) {
+        console.warn(`[新榜同步] wewe专队钩子失败 account=${account}: ${weweHookErr.message}`);
+      }
     } catch (error) {
       // 区分不同类型的错误
       let errorMessage = error.message;
@@ -1222,6 +1238,16 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
       
       // 记录错误信息
       accountErrorMsg = errorMessage;
+
+      try {
+        await handleXinbangAccountFinish(account, {
+          hasData: false,
+          errorType,
+          errorMessage
+        });
+      } catch (weweHookErr) {
+        console.warn(`[新榜同步] wewe专队钩子失败(catch) account=${account}: ${weweHookErr.message}`);
+      }
 
       if (work.useLedger && work.bizDate) {
         try {

@@ -6,6 +6,7 @@ import EmailConfig from './EmailConfig'
 import QichachaConfig from './QichachaConfig'
 import ShanghaiInternationalGroupConfig from './ShanghaiInternationalGroupConfig'
 import NewsConfig from './NewsConfig'
+import WewePrivateConfig from './WewePrivateConfig'
 import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './listing/ListingDataConfig'
@@ -62,6 +63,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="news" title="新闻接口配置">
             <div className="config-content">
               <NewsConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="wewe-private" title="私有公众号 wewe">
+            <div className="config-content">
+              <WewePrivateConfig />
             </div>
           </TabPane>
 

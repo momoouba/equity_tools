@@ -35,10 +35,21 @@ const performanceRoutes = require('./routes/performance');
 const listingRoutes = require('./routes/listing');
 const listingShareRoutes = require('./routes/listingShare');
 const projectSourcingRoutes = require('./routes/project-sourcing');
+const weweProbeRoutes = require('./routes/weweProbe');
+const { router: weweLiveQrRoutes, liveQrHtml } = require('./routes/weweLiveQr');
+const {
+  weweRssProxyMiddleware,
+  weweDashProxyMiddleware,
+  weweTrpcProxyMiddleware,
+  handleWeweRssGate
+} = require('./routes/weweRssProxy');
 const { initializeScheduledTasks } = require('./utils/scheduledEmailTasks');
 const { initializeExternalDatabases } = require('./utils/externalDb');
 const { initializeEnterpriseSyncTasks } = require('./utils/enterpriseSyncTasks');
 const { initializeNewsSyncScheduledTasks } = require('./utils/scheduledNewsSyncTasks');
+const { initializeWeweExtractScheduledTasks } = require('./utils/wewe/scheduledWeweExtractTasks');
+const { initializeWeweIngestScheduledTasks } = require('./utils/wewe/scheduledWeweIngestTasks');
+const { initializeWeweRemindScheduledTasks } = require('./utils/wewe/scheduledWeweRemindTasks');
 const { initializeListingScheduledTasks } = require('./utils/listing/scheduledListingTasks');
 const { initializeScheduledTaskFromConfig: initializeNewsReanalysisTask } = require('./utils/scheduledNewsReanalysisTasks');
 const { ensureUploadsDir } = require('./utils/uploadsPath');
@@ -213,8 +224,21 @@ app.use('/api/performance', performanceRoutes);
 app.use('/api/listing', listingRoutes);
 app.use('/api/listing-share', listingShareRoutes);
 app.use('/api/project-sourcing', projectSourcingRoutes);
+app.use('/api/wewe-probe', weweProbeRoutes);
+app.use('/api/wewe-live-qr', weweLiveQrRoutes);
+// wewe 管理页反代：必须挂 /dash、/trpc（SPA 会跳到 /dash/login）
+app.use('/dash', weweDashProxyMiddleware);
+app.use('/trpc', weweTrpcProxyMiddleware);
+app.use('/wewe-rss', weweRssProxyMiddleware);
+app.get(['/wewe-rss-gate', '/wewe-rss-gate/'], handleWeweRssGate);
 const competitorAnalysisRoutes = require('./routes/competitor-analysis');
 app.use('/api/competitor-analysis', competitorAnalysisRoutes);
+
+// P5：活码页（免登录 HTML，不依赖前端构建）
+app.get(['/wewe/live-qr', '/wewe/live-qr/'], (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(liveQrHtml());
+});
 
 // SPA路由支持：对于所有非API路径，返回前端应用的index.html
 // 这样前端路由（如 /share/:token）才能正常工作
@@ -436,6 +460,30 @@ async function startServer() {
           initializeNewsSyncScheduledTasks().catch(error => {
             console.error('初始化新闻同步定时任务失败:', error);
           });
+
+          console.log('正在初始化 wewe 专队提取定时任务...');
+          initializeWeweExtractScheduledTasks().catch((error) => {
+            console.error('初始化 wewe 提取定时任务失败:', error);
+          });
+
+          console.log('正在初始化 wewe 专队入库定时任务...');
+          initializeWeweIngestScheduledTasks().catch((error) => {
+            console.error('初始化 wewe 入库定时任务失败:', error);
+          });
+
+          console.log('正在初始化 wewe 专队催办定时任务...');
+          initializeWeweRemindScheduledTasks().catch((error) => {
+            console.error('初始化 wewe 催办定时任务失败:', error);
+          });
+
+          try {
+            const { getWewePrivateConfig } = require('./utils/wewe/wewePrivateTeam');
+            const { setWeweBaseUrlOverride } = require('./utils/wewe/weweClient');
+            const cfg = await getWewePrivateConfig();
+            if (cfg && cfg.wewe_base_url) setWeweBaseUrlOverride(cfg.wewe_base_url);
+          } catch (e) {
+            console.warn('加载 wewe_base_url 覆盖失败:', e.message);
+          }
 
           console.log('正在初始化上市进展定时任务...');
           initializeListingScheduledTasks().catch((error) => {

@@ -60,7 +60,7 @@ services:
       # 格式: http://<Mac局域网IP>:<代理端口>
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,host.docker.internal}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,wewe-rss,host.docker.internal}
       ALL_PROXY: ${ALL_PROXY:-}
       # 竞品分析 S4 联网（从宿主机 .env 注入）
       COMPETITOR_WEB_TIMEOUT_MS: ${COMPETITOR_WEB_TIMEOUT_MS:-180000}
@@ -71,6 +71,13 @@ services:
       LLM_RESPONSES_SUBMIT_TIMEOUT_MS: ${LLM_RESPONSES_SUBMIT_TIMEOUT_MS:-45000}
       LLM_RESPONSES_POLL_MAX_MS: ${LLM_RESPONSES_POLL_MAX_MS:-900000}
       LLM_RESPONSES_POLL_INTERVAL_MS: ${LLM_RESPONSES_POLL_INTERVAL_MS:-5000}
+      # wewe-rss：容器内走服务名；AUTH 与下方 wewe-rss 服务 AUTH_CODE 一致
+      WEWE_RSS_BASE_URL: ${WEWE_RSS_BASE_URL:-http://wewe-rss:4000}
+      WEWE_RSS_AUTH_CODE: ${WEWE_RSS_AUTH_CODE:-}
+      NEWS_PUBLIC_BASE_URL: ${NEWS_PUBLIC_BASE_URL:-}
+      WEWE_LIVE_QR_SECRET: ${WEWE_LIVE_QR_SECRET:-}
+      WEWE_LIVE_QR_TTL_HOURS: ${WEWE_LIVE_QR_TTL_HOURS:-48}
+      WEWE_OPS_EMAIL: ${WEWE_OPS_EMAIL:-}
     ports:
       - "${APP_PORT:-3001}:3001"
     extra_hosts:
@@ -91,6 +98,43 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s  # 增加到120秒，确保应用完全初始化（数据库初始化、定时任务等）
+
+  # wewe-rss：私有公众号补抓（独立容器，与 app 同网络；勿打进 app 镜像）
+  # 本地开发仍可只用 deploy/wewe-rss/docker-compose.yml；生产推荐本服务一并 up
+  wewe-rss:
+    image: cooderl/wewe-rss-sqlite:latest
+    container_name: newsapp-wewe-rss
+    restart: unless-stopped
+    environment:
+      DATABASE_TYPE: sqlite
+      AUTH_CODE: ${WEWE_RSS_AUTH_CODE:-change-me-wewe}
+      FEED_MODE: ${WEWE_FEED_MODE:-fulltext}
+      PLATFORM_URL: ${WEWE_PLATFORM_URL:-https://weread.111965.xyz}
+      CRON_EXPRESSION: ${WEWE_CRON_EXPRESSION:-35 5,17 * * *}
+      UPDATE_DELAY_TIME: ${WEWE_UPDATE_DELAY_TIME:-60s}
+      MAX_REQUEST_PER_MINUTE: ${WEWE_MAX_REQUEST_PER_MINUTE:-60}
+      # 浏览器直连 wewe 管理页时的外链根；嵌入走新闻反代时可填新闻公网地址
+      SERVER_ORIGIN_URL: ${WEWE_SERVER_ORIGIN_URL:-http://127.0.0.1:4000}
+      TZ: Asia/Shanghai
+    # 默认只绑本机，避免公网裸奔 4000；需要外网直连再改 WEWE_HOST_BIND=0.0.0.0
+    ports:
+      - "${WEWE_HOST_BIND:-127.0.0.1}:${WEWE_HOST_PORT:-4000}:4000"
+    volumes:
+      - ./deploy/wewe-rss/data:/app/data
+    networks:
+      - newsapp-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:4000/',(r)=>{process.exit(r.statusCode&&r.statusCode<500?0:1)}).on('error',()=>process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
 
   # Nginx 反向代理
   nginx:
