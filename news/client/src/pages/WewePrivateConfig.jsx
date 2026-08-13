@@ -34,7 +34,7 @@ function apiOrigin() {
 const boolFields = [
   { key: 'wewe_enabled', label: '总开关', hint: '关闭则专队全部不跑' },
   { key: 'enqueue_enabled', label: '允许入队', hint: '新榜「数据不存在」写入专队' },
-  { key: 'extract_enabled', label: '允许提取', hint: '夜间 extract_start 轮询 wewe' },
+  { key: 'extract_enabled', label: '允许提取', hint: 'extract_start 入队；有文优先，空号 1 分钟、有文用提取间隔' },
   { key: 'ingest_enabled', label: '允许入库', hint: '工作日 ingest_at 写入 news_detail' },
   { key: 'remind_enabled', label: '允许催办', hint: '可独立早开，维持扫码会话' }
 ]
@@ -508,13 +508,16 @@ function WewePrivateConfig() {
                       />
                     </label>
                     <label>
-                      提取间隔（分钟）
+                      提取间隔（有文，分钟）
                       <InputNumber
                         min={1}
                         max={60}
                         value={Number(config.poll_interval_minutes) || 5}
                         onChange={(v) => setConfig({ ...config, poll_interval_minutes: v })}
                       />
+                      <span className="wewe-private-config__hint">
+                        当天有文后等这么久再提下一个；空号/失败固定 1 分钟。队列优先提上次有文的号。
+                      </span>
                     </label>
                     <label>
                       会话 TTL（小时）

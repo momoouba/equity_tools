@@ -7,6 +7,7 @@ const { getWewePrivateConfig } = require('./wewePrivateTeam');
 const { sendWeweOpsMail, resolveOpsRecipients } = require('./weweOpsMail');
 const { signLiveQrToken, buildLiveQrPageUrl } = require('./weweLiveQrToken');
 const { resumeExtractAfterLogin, getSessionRow, runExtractTick } = require('./weweExtractService');
+const { applyExtractTickDelay } = require('./scheduledWeweExtractTasks');
 const { createLoginUrl, getLoginResult, addWeweAccount } = require('./weweClient');
 
 function publicBaseUrl(req) {
@@ -252,7 +253,8 @@ async function markSessionRecovered({ vid, username } = {}) {
   );
   const resume = await resumeExtractAfterLogin();
   try {
-    await runExtractTick({ force: true });
+    const tickResult = await runExtractTick({ force: true });
+    await applyExtractTickDelay(tickResult);
   } catch (e) {
     console.warn('[wewe活码] 恢复后立即 tick 失败:', e.message);
   }

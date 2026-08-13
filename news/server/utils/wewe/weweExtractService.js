@@ -91,6 +91,7 @@ async function markAllActiveForExtract() {
 }
 
 async function pickNextPendingAccount() {
+  // 有文(success)优先，未知/失败其次，连续 empty 最后；同组按最久未提
   const rows = await db.query(
     `SELECT * FROM wewe_private_accounts
      WHERE F_DeleteMark = 0
@@ -98,7 +99,15 @@ async function pickNextPendingAccount() {
        AND team_status = 'active'
        AND map_status = 'mapped'
        AND feed_id IS NOT NULL AND feed_id != ''
-     ORDER BY last_extract_at IS NULL DESC, last_extract_at ASC, F_CreatorTime ASC
+     ORDER BY
+       CASE last_extract_status
+         WHEN 'success' THEN 0
+         WHEN 'empty' THEN 2
+         ELSE 1
+       END,
+       last_extract_at IS NULL DESC,
+       last_extract_at ASC,
+       F_CreatorTime ASC
      LIMIT 1`
   );
   return rows[0] || null;
