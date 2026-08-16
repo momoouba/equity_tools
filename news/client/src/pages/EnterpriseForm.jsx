@@ -4,6 +4,7 @@ import './EnterpriseForm.css'
 
 const DATA_APP_PROJECT = '项目挖掘'
 const DATA_APP_COMPETITOR = '竞品分析'
+const DATA_APP_VALUATION = '项目估值'
 
 function qccSyncViaLabel(v) {
   const s = String(v || '').trim()
@@ -79,7 +80,7 @@ function decimalFieldToString(v) {
 }
 
 function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻舆情', competitorInvestedForm = false }) {
-  const isCompetitorInvestedForm = competitorInvestedForm || dataAppName === DATA_APP_COMPETITOR
+  const isCompetitorInvestedForm = competitorInvestedForm || dataAppName === DATA_APP_COMPETITOR || dataAppName === DATA_APP_VALUATION
   const showCostFields = dataAppName === DATA_APP_PROJECT || isCompetitorInvestedForm
   const [formData, setFormData] = useState({
     project_abbreviation: '',

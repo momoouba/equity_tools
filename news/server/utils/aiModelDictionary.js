@@ -61,6 +61,7 @@ const FALLBACK_APPLICATION_TYPES = [
   { value: 'project_sourcing_analysis', label: '项目挖掘分析' },
   { value: 'competitor_analysis', label: '竞品分析应用' },
   { value: 'listing_progress_analysis', label: '上市进展分析' },
+  { value: 'project_valuation', label: '项目估值' },
   { value: 'general', label: '通用' },
 ];
 
@@ -70,6 +71,7 @@ const FALLBACK_USAGE_TYPES = [
   { value: 'project_mining', label: '项目挖掘' },
   { value: 'listing_data', label: '上市数据' },
   { value: 'competitor_match', label: '竞品匹配' },
+  { value: 'project_valuation', label: '项目估值' },
 ];
 
 async function loadDictOptionsByCode(dictCode) {

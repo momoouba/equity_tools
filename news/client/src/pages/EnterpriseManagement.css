@@ -390,3 +390,38 @@
 .enterprise-management.invested-enterprises-table-page .invested-enterprises-table-container {
   overflow: hidden !important;
 }
+
+/* 项目估值-被投企业：与投前/投后估值列表同一套表头与列线 */
+.enterprise-management.valuation-invested-page .management-title {
+  font-size: 18px;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-th,
+.enterprise-management.valuation-invested-page .arco-table-header .arco-table-th,
+.enterprise-management.valuation-invested-page .arco-table-th:last-child {
+  background-color: #dbeafe !important;
+  color: #1e3a8a;
+  font-weight: 600;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-td,
+.enterprise-management.valuation-invested-page .arco-table-th {
+  border-right: 1px solid #c9d6e8;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-border .arco-table-th,
+.enterprise-management.valuation-invested-page .arco-table-border .arco-table-td {
+  border-color: #c9d6e8;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-container {
+  border: 1px solid #c9d6e8;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-body .arco-table-tr:nth-child(even) .arco-table-td {
+  background-color: #f3f8ff;
+}
+
+.enterprise-management.valuation-invested-page .arco-table-body .arco-table-tr:nth-child(odd) .arco-table-td {
+  background-color: #fff;
+}

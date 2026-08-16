@@ -1797,6 +1797,7 @@ async function initializeTables(dbPool) {
         { id: '2026051612001000003', item_code: 'competitor_analysis', item_name: '竞品分析应用', sort_order: 2 },
         { id: '2026051612001000004', item_code: 'listing_progress_analysis', item_name: '上市进展分析', sort_order: 3 },
         { id: '2026051612001000005', item_code: 'general', item_name: '通用', sort_order: 4 },
+        { id: '2026073012001000001', item_code: 'project_valuation', item_name: '项目估值', sort_order: 5 },
       ],
       ai_model_usage_type: [
         { id: '2026051612001100001', item_code: 'content_analysis', item_name: '情绪分析', sort_order: 0 },
@@ -1804,6 +1805,7 @@ async function initializeTables(dbPool) {
         { id: '2026051612001100003', item_code: 'project_mining', item_name: '项目挖掘', sort_order: 2 },
         { id: '2026051612001100004', item_code: 'listing_data', item_name: '上市数据', sort_order: 3 },
         { id: '2026051612001100005', item_code: 'competitor_match', item_name: '竞品匹配', sort_order: 4 },
+        { id: '2026073012001100001', item_code: 'project_valuation', item_name: '项目估值', sort_order: 5 },
       ],
     };
 
@@ -5071,6 +5073,7 @@ async function initializeTables(dbPool) {
     const { generateId } = require('./utils/idGenerator');
     const PS_C = require('./utils/project-sourcing/constants');
     const CA_C = require('./utils/competitor-analysis/constants');
+    const VAL_C = require('./utils/valuation/constants');
     const APPS = {
       performance: { id: '2026031616180010001', name: '业绩看板', created_at: '2026-03-16 16:18:00' },
       news: { id: '2025112019132600001', name: '新闻舆情', created_at: '2025-11-20 19:13:31' },
@@ -5084,6 +5087,11 @@ async function initializeTables(dbPool) {
         id: CA_C.COMPETITOR_ANALYSIS_APP_ID,
         name: CA_C.APP_NAME_COMPETITOR_ANALYSIS,
         created_at: CA_C.COMPETITOR_ANALYSIS_CREATED_AT,
+      },
+      projectValuation: {
+        id: VAL_C.PROJECT_VALUATION_APP_ID,
+        name: VAL_C.APP_NAME_PROJECT_VALUATION,
+        created_at: VAL_C.PROJECT_VALUATION_CREATED_AT,
       },
     };
 
@@ -5230,6 +5238,7 @@ async function initializeTables(dbPool) {
     await ensureCanonicalApp(APPS.listing);
     await ensureCanonicalApp(APPS.projectSourcing);
     await ensureCanonicalApp(APPS.competitorAnalysis);
+    await ensureCanonicalApp(APPS.projectValuation);
     console.log('  ✓ 标准应用记录已校验');
 
     // 竞品分析应用：从项目挖掘迁出 data_app_id / data_app_name（新闻舆情行不动）
@@ -5464,6 +5473,7 @@ async function initializeTables(dbPool) {
     await ensureAppMembershipLevels(APPS.listing.id, APPS.listing.name);
     await ensureAppMembershipLevels(APPS.projectSourcing.id, APPS.projectSourcing.name);
     await ensureAppMembershipLevels(APPS.competitorAnalysis.id, APPS.competitorAnalysis.name);
+    await ensureAppMembershipLevels(APPS.projectValuation.id, APPS.projectValuation.name);
 
     // 竞品分析：从项目挖掘复制企查查配置（按 interface_type 去重）
     try {
@@ -5949,6 +5959,58 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 ai_model_config.usage_type 扩展 competitor_match 时出现警告:', err.message);
+  }
+
+  // 扩展 ai_model_config：项目估值 application_type / usage_type
+  try {
+    const [atVal] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'application_type'
+      LIMIT 1
+    `);
+    const atTypeVal = atVal.length ? String(atVal[0].COLUMN_TYPE || '') : '';
+    if (atTypeVal && !atTypeVal.includes('project_valuation')) {
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN application_type ENUM(
+          'news_analysis',
+          'general',
+          'project_sourcing_analysis',
+          'listing_progress_analysis',
+          'competitor_analysis',
+          'project_valuation'
+        )
+        DEFAULT 'news_analysis'
+        COMMENT '应用类型：含项目估值 project_valuation'
+      `);
+      console.log('✓ ai_model_config.application_type 已扩展 project_valuation');
+    }
+    const [utVal] = await dbPool.query(`
+      SELECT COLUMN_TYPE
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'ai_model_config'
+        AND COLUMN_NAME = 'usage_type'
+      LIMIT 1
+    `);
+    const utTypeVal = utVal.length ? String(utVal[0].COLUMN_TYPE || '') : '';
+    if (utTypeVal && !utTypeVal.includes('project_valuation')) {
+      const usageEnum = utTypeVal.includes('competitor_match')
+        ? `'content_analysis','image_recognition','project_mining','listing_data','competitor_match','project_valuation'`
+        : `'content_analysis','image_recognition','project_mining','listing_data','competitor_match','project_valuation'`;
+      await dbPool.query(`
+        ALTER TABLE ai_model_config
+        MODIFY COLUMN usage_type ENUM(${usageEnum})
+        DEFAULT 'content_analysis'
+        COMMENT '用途类型（含项目估值 project_valuation）'
+      `);
+      console.log('✓ ai_model_config.usage_type 已扩展 project_valuation');
+    }
+  } catch (err) {
+    console.warn('迁移 ai_model_config 扩展 project_valuation 时出现警告:', err.message);
   }
   
   // 创建舆情信息分享链接表
@@ -9454,6 +9516,13 @@ async function init() {
       }
     } catch (migLlmErr) {
       console.warn('补全 ai_model_config LLM 字段时出现警告:', migLlmErr.message);
+    }
+
+    try {
+      const { ensureValuationSchema } = require('./utils/valuation/schema');
+      await ensureValuationSchema(pool);
+    } catch (valSchemaErr) {
+      console.warn('初始化项目估值表结构时出现警告:', valSchemaErr.message);
     }
 
     console.log('✓ 数据库初始化完成');

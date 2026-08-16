@@ -18,6 +18,7 @@ import {
 } from '@arco-design/web-react'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
+import { useNavigate } from 'react-router-dom'
 import axios from '../utils/axios'
 import { getUser } from '../utils/auth'
 import EnterpriseForm from './EnterpriseForm'
@@ -34,6 +35,7 @@ import {
   postInvestedEnterpriseBatchBaikeLookup,
 } from '../api/competitor-analysis'
 import { formatFinancingYmd, financingNow, formatFinancingDateTime } from './competitor-analysis/financingDateUtils'
+import { openValuationCaseFromInvested } from '../api/valuation'
 import { IntroPopoverCell } from './competitor-analysis/introPopoverAiCell'
 import CompetitorMatchSupplementModal from './competitor-analysis/CompetitorMatchSupplementModal'
 import CompetitionLensConfirmModal from './competitor-analysis/CompetitionLensConfirmModal'
@@ -47,6 +49,7 @@ const FormItem = Form.Item
 
 const DATA_APP_NEWS = '新闻舆情'
 const DATA_APP_PROJECT = '竞品分析'
+const DATA_APP_VALUATION = '项目估值'
 const IE_ROW_SELECTION_WIDTH = 52
 const IE_NUM_COL_CLASS = 'invested-enterprises-num-col'
 
@@ -168,6 +171,7 @@ function EnterpriseManagement({
   hideEntityTabs = false,
   /** 为 true 时：页面高度锁在视口内，仅表体纵向滚动（用于项目挖掘-被投企业） */
   viewportBoundTable = false,
+  onValuationClick,
 }) {
   const [enterprises, setEnterprises] = useState([])
   const [loading, setLoading] = useState(false)
@@ -190,6 +194,8 @@ function EnterpriseManagement({
   const [allTotal, setAllTotal] = useState(0)
 
   const showInvestedEnterpriseAi = dataAppName === DATA_APP_PROJECT && hideEntityTabs
+  const showValuationAction = dataAppName === DATA_APP_VALUATION && hideEntityTabs
+  const navigate = useNavigate()
 
   const tableScrollAreaRef = useRef(null)
   const [tableScrollY, setTableScrollY] = useState(360)
@@ -788,11 +794,33 @@ function EnterpriseManagement({
     }
     const actionCol = {
       title: '操作',
-      width: showInvestedEnterpriseAi && isAdmin ? 340 : 220,
+      width: showInvestedEnterpriseAi && isAdmin ? 340 : showValuationAction ? 280 : 220,
       fixed: showInvestedEnterpriseAi ? 'right' : undefined,
       align: 'left',
       render: (_, record) => (
         <Space size={8} wrap={false}>
+          {showValuationAction ? (
+            <Button
+              type="primary"
+              size="small"
+              onClick={async () => {
+                try {
+                  const res = await openValuationCaseFromInvested(record.id)
+                  if (res.data?.success) {
+                    const cid = res.data.data.id
+                    if (onValuationClick) onValuationClick(cid)
+                    else navigate(`/dashboard/valuation/workbench/${cid}`)
+                  } else {
+                    Message.error(res.data?.message || '打开估值案件失败')
+                  }
+                } catch (e) {
+                  Message.error(e.response?.data?.message || e.message || '打开估值案件失败')
+                }
+              }}
+            >
+              进行估值
+            </Button>
+          ) : null}
           {showInvestedEnterpriseAi && isAdmin ? (
             <Button
               type="outline"
@@ -1026,17 +1054,21 @@ function EnterpriseManagement({
       return base
     }
 
-    return [
-      indexCol,
+    const vw = (n) => (showValuationAction ? n : undefined)
+    const cols = [
+      { ...indexCol, width: showValuationAction ? 64 : indexCol.width },
       {
         title: '项目编号',
         dataIndex: 'project_number',
+        width: vw(140),
         ellipsis: true,
-        tooltip: true
+        tooltip: true,
+        render: (text) => text || '-',
       },
       {
         title: '企业类型',
         dataIndex: 'entity_type',
+        width: vw(100),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
@@ -1044,6 +1076,7 @@ function EnterpriseManagement({
       {
         title: '项目简称',
         dataIndex: 'project_abbreviation',
+        width: vw(120),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
@@ -1051,76 +1084,97 @@ function EnterpriseManagement({
       {
         title: '关联基金',
         dataIndex: 'fund',
+        width: vw(140),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
       },
-      {
+    ]
+    if (!showValuationAction) {
+      cols.push({
         title: '关联子基金',
         dataIndex: 'sub_fund',
+        width: vw(140),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
-      },
+      })
+    }
+    cols.push(
       {
-        title: '被投企业全称',
+        title: showValuationAction ? '企业名称' : '被投企业全称',
         dataIndex: 'enterprise_full_name',
+        width: vw(200),
         ellipsis: true,
         tooltip: true
       },
       {
         title: '统一信用代码',
         dataIndex: 'unified_credit_code',
+        width: vw(170),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
-      },
-      {
-        title: '企业公众号id',
-        dataIndex: 'wechat_official_account_id',
-        ellipsis: true,
-        tooltip: true,
-        render: (text) => text || '-'
-      },
-      {
-        title: '企业官网',
-        dataIndex: 'official_website',
-        ellipsis: true,
-        tooltip: true,
-        render: (text) => text ? (
-          <a href={text} target="_blank" rel="noopener noreferrer">
-            {text}
-          </a>
-        ) : '-'
-      },
+      }
+    )
+    if (!showValuationAction) {
+      cols.push(
+        {
+          title: '企业公众号id',
+          dataIndex: 'wechat_official_account_id',
+          width: vw(140),
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text || '-'
+        },
+        {
+          title: '企业官网',
+          dataIndex: 'official_website',
+          width: vw(180),
+          ellipsis: true,
+          tooltip: true,
+          render: (text) => text ? (
+            <a href={text} target="_blank" rel="noopener noreferrer">
+              {text}
+            </a>
+          ) : '-'
+        }
+      )
+    }
+    cols.push(
       {
         title: '退出状态',
         dataIndex: 'exit_status',
+        width: vw(100),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
       },
       actionCol
-    ]
+    )
+    return cols
   }, [
     dataAppName,
     currentPage,
     pageSize,
     showInvestedEnterpriseAi,
+    showValuationAction,
     isAdmin,
     enterprises,
     competitorSelectedKeys,
     runCompetitorFlowForEnterprise,
+    onValuationClick,
+    navigate,
   ])
 
   const investedEnterpriseTableScrollX = useMemo(() => {
-    if (!showInvestedEnterpriseAi) return 'max-content'
+    if (!showInvestedEnterpriseAi && !showValuationAction) return 'max-content'
     return columns.reduce((sum, col) => sum + (Number(col.width) || 0), 0)
-  }, [columns, showInvestedEnterpriseAi])
+  }, [columns, showInvestedEnterpriseAi, showValuationAction])
 
   return (
     <div
-      className={`enterprise-management${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-page' : ''}`}
+      className={`enterprise-management${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-page' : ''}${showValuationAction ? ' valuation-invested-page' : ''}`}
       style={
         viewportBoundTable
           ? {
@@ -1453,6 +1507,7 @@ function EnterpriseManagement({
               loading={loading}
               pagination={false}
               rowKey="id"
+              className={showValuationAction ? 'valuation-list-table' : undefined}
               border={{
                 wrapper: true,
                 cell: true

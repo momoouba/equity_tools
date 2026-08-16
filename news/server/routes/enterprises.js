@@ -8,10 +8,12 @@ const { logEnterpriseChange } = require('../utils/logger');
 const { generateId } = require('../utils/idGenerator');
 const { checkNewsPermission, checkProjectSourcingPermission } = require('../utils/permissionChecker');
 const { checkCompetitorAnalysisPermission } = require('../utils/competitor-analysis/competitorAnalysisPermission');
+const { checkProjectValuationPermission } = require('../utils/valuation/permission');
 const {
   DATA_APP_NEWS_SENTIMENT,
   DATA_APP_PROJECT_SOURCING,
   DATA_APP_COMPETITOR_ANALYSIS,
+  DATA_APP_PROJECT_VALUATION,
   normalizeDataAppName,
   investedEnterpriseAppMatchClause,
   investedEnterpriseSyncOwnerClause,
@@ -57,6 +59,15 @@ async function assertEnterpriseDataAppPermission(userId, userRole, dataAppName) 
     }
     return;
   }
+  if (dataAppName === DATA_APP_PROJECT_VALUATION) {
+    const ok = await checkProjectValuationPermission(userId);
+    if (!ok) {
+      const err = new Error('FORBIDDEN');
+      err.statusCode = 403;
+      throw err;
+    }
+    return;
+  }
   const err = new Error('BAD_APP');
   err.statusCode = 400;
   throw err;
@@ -77,6 +88,9 @@ function syncTaskAppFallbackOrder(dataAppName) {
   const name = String(dataAppName || '');
   if (name === DATA_APP_COMPETITOR_ANALYSIS) {
     return [DATA_APP_COMPETITOR_ANALYSIS, DATA_APP_PROJECT_SOURCING];
+  }
+  if (name === DATA_APP_PROJECT_VALUATION) {
+    return [DATA_APP_PROJECT_VALUATION, DATA_APP_COMPETITOR_ANALYSIS];
   }
   return [name];
 }
@@ -657,7 +671,7 @@ router.get('/', async (req, res) => {
         // 子基金管理人及GP：包含子基金管理人或子基金GP
         condition += ' AND (entity_type = ? OR entity_type = ?)';
         params.push('子基金管理人', '子基金GP');
-      } else if ((dataAppName === DATA_APP_PROJECT_SOURCING || dataAppName === DATA_APP_COMPETITOR_ANALYSIS) && entityType === '被投企业') {
+      } else if ((dataAppName === DATA_APP_PROJECT_SOURCING || dataAppName === DATA_APP_COMPETITOR_ANALYSIS || dataAppName === DATA_APP_PROJECT_VALUATION) && entityType === '被投企业') {
         // 项目挖掘/竞品分析的被投企业页固定筛「被投企业」；同步 SQL 常不写 entity_type（为 NULL），须与列表一致
         condition +=
           ' AND (TRIM(COALESCE(entity_type, \'\')) = ? OR TRIM(COALESCE(entity_type, \'\')) = \'\')';
@@ -1910,7 +1924,8 @@ async function executeSyncTask(
     }
     if (
       (targetDataAppName === DATA_APP_PROJECT_SOURCING ||
-        targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) &&
+        targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS ||
+        targetDataAppName === DATA_APP_PROJECT_VALUATION) &&
       (enterpriseData.entity_type === undefined ||
         enterpriseData.entity_type === null ||
         String(enterpriseData.entity_type).trim() === '')

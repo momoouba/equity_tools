@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useNavigate, Routes, Route, useLocation, Navigate } from 'react-router-dom'
 import { Layout, Button, Spin, Message } from '@arco-design/web-react'
-import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb, IconMindMapping } from '@arco-design/web-react/icon'
+import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb, IconMindMapping, IconSafe } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
 import { clearUser, getUser, updateStoredUser } from '../utils/auth'
 import EnterpriseManagement from './EnterpriseManagement'
@@ -22,6 +22,11 @@ import ProjectSourcingInvestedEnterprisesPage from './competitor-analysis/Projec
 import ProjectSourcingIpoProjectsPage from './competitor-analysis/ProjectSourcingIpoProjectsPage'
 import ProjectSourcingCompetitorAnalysisPage from './competitor-analysis/ProjectSourcingCompetitorAnalysisPage'
 import ProjectSourcingPreInvestmentPage from './competitor-analysis/ProjectSourcingPreInvestmentPage'
+import ValuationInvestedEnterprisesPage from './valuation/ValuationInvestedEnterprisesPage'
+import ValuationPreProjectsPage from './valuation/ValuationPreProjectsPage'
+import ValuationPostCasesPage from './valuation/ValuationPostCasesPage'
+import ValuationWorkbenchPage from './valuation/ValuationWorkbenchPage'
+import ValuationDbConfigPage from './valuation/ValuationDbConfigPage'
 import FinancingEventsPage from './project-sourcing/FinancingEventsPage'
 import TrackConfigPage from './project-sourcing/TrackConfigPage'
 import UserProfileModal from '../components/UserProfileModal'
@@ -37,6 +42,13 @@ const COMPETITOR_MENU_ROUTES = {
   'competitor-analysis-pre-investment': 'competitor-analysis/pre-investment',
 }
 
+const VALUATION_MENU_ROUTES = {
+  'valuation-pre-projects': 'valuation/pre-projects',
+  'valuation-invested-enterprises': 'valuation/invested-enterprises',
+  'valuation-post-cases': 'valuation/post-cases',
+  'valuation-system-db': 'valuation/system-db',
+}
+
 function Dashboard() {
   const [user, setUser] = useState(null)
   const [selectedKeys, setSelectedKeys] = useState(['enterprises'])
@@ -46,6 +58,7 @@ function Dashboard() {
   const [hasListingPermission, setHasListingPermission] = useState(false)
   const [hasProjectSourcingPermission, setHasProjectSourcingPermission] = useState(false)
   const [hasCompetitorAnalysisPermission, setHasCompetitorAnalysisPermission] = useState(false)
+  const [hasProjectValuationPermission, setHasProjectValuationPermission] = useState(false)
   const [systemConfig, setSystemConfig] = useState({
     system_name: '',
     logo: ''
@@ -85,21 +98,28 @@ function Dashboard() {
     const hasCaPerm = appPermissions.some(
       (perm) => perm.app_name === '竞品分析' && perm.membership_level_id
     )
+    const hasValPerm = appPermissions.some(
+      (perm) => perm.app_name === '项目估值' && perm.membership_level_id
+    )
 
     const newsEnabled = hasNewsPerm || isAdminUser
     const perfEnabled = hasPerfPerm || isAdminUser
     const listingEnabled = hasListingPerm || isAdminUser
     const projectSourcingEnabled = hasPsPerm || isAdminUser
     const competitorAnalysisEnabled = hasCaPerm || isAdminUser
+    const projectValuationEnabled = hasValPerm || isAdminUser
     setHasNewsPermission(newsEnabled)
     setHasPerformancePermission(perfEnabled)
     setHasListingPermission(listingEnabled)
     setHasProjectSourcingPermission(projectSourcingEnabled)
     setHasCompetitorAnalysisPermission(competitorAnalysisEnabled)
+    setHasProjectValuationPermission(projectValuationEnabled)
 
     // 优先保持与当前路由一致，避免刷新用户信息后顶栏高亮跳回新闻舆情
     const p = location.pathname
-    if (p.includes('competitor-analysis')) {
+    if (p.includes('valuation')) {
+      setActiveAppKey('valuation-app')
+    } else if (p.includes('competitor-analysis')) {
       setActiveAppKey('competitor-analysis-app')
     } else if (p.includes('project-sourcing')) {
       setActiveAppKey('project-sourcing-app')
@@ -124,6 +144,8 @@ function Dashboard() {
       setActiveAppKey('project-sourcing-app')
     } else if (competitorAnalysisEnabled) {
       setActiveAppKey('competitor-analysis-app')
+    } else if (projectValuationEnabled) {
+      setActiveAppKey('valuation-app')
     } else if (newsEnabled) {
       setActiveAppKey('news-app')
     } else if (listingEnabled) {
@@ -165,7 +187,24 @@ function Dashboard() {
 
   useEffect(() => {
     const p = location.pathname
-    if (p.includes('competitor-analysis/')) {
+    if (p.includes('valuation/')) {
+      if (p.includes('workbench')) {
+        setSelectedKeys(['valuation-post-cases'])
+        setActiveAppKey('valuation-app')
+      } else if (p.includes('pre-projects')) {
+        setSelectedKeys(['valuation-pre-projects'])
+        setActiveAppKey('valuation-app')
+      } else if (p.includes('invested-enterprises')) {
+        setSelectedKeys(['valuation-invested-enterprises'])
+        setActiveAppKey('valuation-app')
+      } else if (p.includes('post-cases')) {
+        setSelectedKeys(['valuation-post-cases'])
+        setActiveAppKey('valuation-app')
+      } else if (p.includes('system-db')) {
+        setSelectedKeys(['valuation-system-db'])
+        setActiveAppKey('valuation-app')
+      }
+    } else if (p.includes('competitor-analysis/')) {
       if (p.includes('invested-enterprises')) {
         setSelectedKeys(['competitor-analysis-invested-enterprises'])
         setActiveAppKey('competitor-analysis-app')
@@ -291,6 +330,8 @@ function Dashboard() {
     setSelectedKeys([key])
     if (key === 'system-db') {
       navigate('/dashboard/system-db')
+    } else if (VALUATION_MENU_ROUTES[key]) {
+      navigate(`/dashboard/${VALUATION_MENU_ROUTES[key]}`)
     } else if (COMPETITOR_MENU_ROUTES[key]) {
       navigate(`/dashboard/${COMPETITOR_MENU_ROUTES[key]}`)
     } else {
@@ -330,6 +371,18 @@ function Dashboard() {
         { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
         { key: 'competitor-analysis-pre-investment', title: '投前-竞品分析' },
         { key: 'system-db', title: '数据库连接配置' }
+      ]
+    },
+    {
+      key: 'valuation-app',
+      title: '项目估值',
+      icon: <IconSafe />,
+      visible: isAdmin || hasProjectValuationPermission,
+      children: [
+        { key: 'valuation-pre-projects', title: '投前项目估值' },
+        { key: 'valuation-invested-enterprises', title: '被投企业' },
+        { key: 'valuation-post-cases', title: '投后项目估值' },
+        { key: 'valuation-system-db', title: '数据库连接配置' }
       ]
     },
     {
@@ -563,6 +616,46 @@ function Dashboard() {
               element={
                 (isAdmin || hasCompetitorAnalysisPermission)
                   ? <ProjectSourcingPreInvestmentPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/valuation/pre-projects"
+              element={
+                (isAdmin || hasProjectValuationPermission)
+                  ? <ValuationPreProjectsPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/valuation/invested-enterprises"
+              element={
+                (isAdmin || hasProjectValuationPermission)
+                  ? <ValuationInvestedEnterprisesPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/valuation/post-cases"
+              element={
+                (isAdmin || hasProjectValuationPermission)
+                  ? <ValuationPostCasesPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/valuation/workbench/:caseId"
+              element={
+                (isAdmin || hasProjectValuationPermission)
+                  ? <ValuationWorkbenchPage />
+                  : <div>您没有访问权限</div>
+              }
+            />
+            <Route
+              path="/valuation/system-db"
+              element={
+                (isAdmin || hasProjectValuationPermission)
+                  ? <ValuationDbConfigPage />
                   : <div>您没有访问权限</div>
               }
             />

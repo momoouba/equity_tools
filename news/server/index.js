@@ -77,8 +77,25 @@ let serverReady = false;
 
 // 中间件
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// wewe 反代路径必须保留原始请求体：express.json 读完 POST 后 /trpc 管道会变成空 body，
+// 管理页「删除 / 立即更新 / 开关」等 mutation 会静默失败。
+const jsonParser = express.json();
+const urlencodedParser = express.urlencoded({ extended: true });
+app.use((req, res, next) => {
+  const p = String(req.path || '');
+  if (
+    p.startsWith('/trpc') ||
+    p.startsWith('/dash') ||
+    p.startsWith('/wewe-rss') ||
+    p.startsWith('/wewe/')
+  ) {
+    return next();
+  }
+  jsonParser(req, res, (err) => {
+    if (err) return next(err);
+    urlencodedParser(req, res, next);
+  });
+});
 
 // API 路由禁用 Etag/304 缓存，避免浏览器缓存旧 JSON 响应
 app.use('/api', (req, res, next) => {
@@ -233,6 +250,8 @@ app.use('/wewe-rss', weweRssProxyMiddleware);
 app.get(['/wewe-rss-gate', '/wewe-rss-gate/'], handleWeweRssGate);
 const competitorAnalysisRoutes = require('./routes/competitor-analysis');
 app.use('/api/competitor-analysis', competitorAnalysisRoutes);
+const valuationRoutes = require('./routes/valuation');
+app.use('/api/valuation', valuationRoutes);
 
 // P5：活码页（免登录 HTML，不依赖前端构建）
 app.get(['/wewe/live-qr', '/wewe/live-qr/'], (req, res) => {
