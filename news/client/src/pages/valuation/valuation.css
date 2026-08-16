@@ -723,3 +723,44 @@
     grid-template-columns: 1fr;
   }
 }
+
+.valuation-qcc-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: white;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  max-height: 300px;
+  overflow-y: auto;
+  z-index: 1100;
+  margin-top: 4px;
+}
+
+.valuation-qcc-dropdown-item {
+  padding: 12px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.valuation-qcc-dropdown-item:last-child {
+  border-bottom: none;
+}
+
+.valuation-qcc-dropdown-item:hover {
+  background: #f5f7fa;
+}
+
+.valuation-qcc-dropdown-main {
+  font-size: 14px;
+  color: #333;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.valuation-qcc-dropdown-sub {
+  font-size: 12px;
+  color: #999;
+}

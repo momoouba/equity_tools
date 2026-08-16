@@ -28,6 +28,7 @@ const { buildWorkbookBuffer } = require('../../utils/valuation/exportService');
 const { defaultMethodConfig } = require('../../utils/valuation/defaults');
 const { comparabilityFromScore, defaultInPool } = require('../../utils/valuation/defaults');
 const C = require('../../utils/valuation/constants');
+const { fetchQichachaFuzzyCompanies } = require('../../utils/qichachaFuzzySearch');
 const {
   parseTargetFinancialWorkbook,
   mergeTargetFinancials,
@@ -67,6 +68,40 @@ function registerValuationRoutes(router) {
       res.json({ success: true, data });
     } catch (e) {
       sendErr(res, e);
+    }
+  });
+
+  router.post('/qcc-fuzzy-lookup', requireProjectValuationAccess, async (req, res) => {
+    try {
+      const kw = String(req.body?.search_key ?? req.body?.keyword ?? '').trim();
+      if (kw.length < 2) {
+        return res.status(400).json({ success: false, message: '搜索关键词至少 2 个字符' });
+      }
+      const out = await fetchQichachaFuzzyCompanies(kw, { pageIndex: 1 });
+      const first = out.companies[0];
+      const candidates = out.companies.slice(0, 10).map((c) => ({
+        enterprise_full_name: String(c.name || '').trim(),
+        unified_credit_code: String(c.creditCode || '')
+          .replace(/\s+/g, '')
+          .trim(),
+      }));
+      res.json({
+        success: true,
+        data: {
+          enterprise_full_name: first ? String(first.name || '').trim() : '',
+          unified_credit_code: first
+            ? String(first.creditCode || '')
+                .replace(/\s+/g, '')
+                .trim()
+            : '',
+          total: out.companies.length,
+          candidates,
+        },
+      });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 'NO_CONFIG' ? 400 : 500;
+      if (code === 500) console.error('[valuation/qcc-fuzzy-lookup]', e);
+      return res.status(code).json({ success: false, message: e.message || '企查查查询失败' });
     }
   });
 

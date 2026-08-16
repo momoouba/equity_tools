@@ -14,6 +14,10 @@ export function postValuationPreProject(body) {
   return axios.post(`${BASE}/pre-projects`, body)
 }
 
+export function postValuationQccFuzzyLookup(body) {
+  return axios.post(`${BASE}/qcc-fuzzy-lookup`, body)
+}
+
 export function openValuationCaseFromPreProject(preProjectId) {
   return axios.post(`${BASE}/pre-projects/${preProjectId}/open-case`)
 }
