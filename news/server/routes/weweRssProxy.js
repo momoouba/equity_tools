@@ -143,6 +143,47 @@ function rewriteHtml(html, siteOrigin) {
   return out;
 }
 
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailers',
+  'transfer-encoding',
+  'upgrade',
+  'host',
+  'accept-encoding'
+]);
+
+function buildProxyHeaders(req, targetHost, authCode, contentLength) {
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers || {})) {
+    const key = String(k).toLowerCase();
+    if (HOP_BY_HOP.has(key)) continue;
+    if (contentLength != null && key === 'content-length') continue;
+    headers[k] = v;
+  }
+  headers.host = targetHost;
+  if (contentLength != null) headers['content-length'] = String(contentLength);
+  if (authCode) {
+    headers.authorization = authCode;
+    headers['x-auth-code'] = authCode;
+  }
+  return headers;
+}
+
+/** express.json 已读完时，把 parsed body 还原成 JSON 再转给 wewe */
+function parsedBodyBuffer(req) {
+  if (req.method === 'GET' || req.method === 'HEAD') return null;
+  if (!req.readableEnded) return null;
+  const body = req.body;
+  if (body === undefined || body === null) return Buffer.alloc(0);
+  if (Buffer.isBuffer(body)) return body;
+  if (typeof body === 'string') return Buffer.from(body);
+  return Buffer.from(JSON.stringify(body));
+}
+
 function proxyToWewe(req, res, upstreamPath) {
   const { baseUrl, authCode } = getWeweConfig();
   let path = upstreamPath || '/';
@@ -156,14 +197,16 @@ function proxyToWewe(req, res, upstreamPath) {
     return;
   }
 
-  const lib = target.protocol === 'https:' ? https : http;
-  const headers = { ...req.headers, host: target.host };
-  delete headers['accept-encoding'];
-  if (authCode) {
-    headers.authorization = authCode;
-    headers['x-auth-code'] = authCode;
-  }
+  const replayBuf = parsedBodyBuffer(req);
+  const contentLength =
+    replayBuf != null
+      ? replayBuf.length
+      : req.headers['content-length'] != null
+        ? Number(req.headers['content-length'])
+        : null;
+  const headers = buildProxyHeaders(req, target.host, authCode, Number.isFinite(contentLength) ? contentLength : null);
 
+  const lib = target.protocol === 'https:' ? https : http;
   const proxyReq = lib.request(
     {
       protocol: target.protocol,
@@ -205,8 +248,15 @@ function proxyToWewe(req, res, upstreamPath) {
     if (!res.headersSent) res.status(502).send(`wewe proxy error: ${e.message}`);
   });
 
-  if (req.method === 'GET' || req.method === 'HEAD') proxyReq.end();
-  else req.pipe(proxyReq);
+  if (req.method === 'GET' || req.method === 'HEAD') {
+    proxyReq.end();
+    return;
+  }
+  if (replayBuf != null) {
+    proxyReq.end(replayBuf);
+    return;
+  }
+  req.pipe(proxyReq);
 }
 
 /** 兼容旧 /wewe-rss/* ：剥前缀后反代 */

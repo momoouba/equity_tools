@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
+import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/AdminListTable'
 import './EmailConfig.css'
 
 const Option = Select.Option
@@ -273,50 +274,34 @@ function EmailConfig() {
     }
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-'
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    } catch (e) {
-      return dateString
-    }
-  }
-
   const columns = [
     {
       title: '应用',
       dataIndex: 'app_name',
-      width: 150,
+      width: 72,
       render: (text) => text || '-'
     },
     {
       title: 'SMTP服务器地址',
       dataIndex: 'smtp_host',
-      width: 180,
+      width: 160,
       render: (text) => text || '-'
     },
     {
       title: 'POP服务器地址',
       dataIndex: 'pop_host',
-      width: 180,
+      width: 160,
       render: (text) => text || '-'
     },
     {
       title: '发件人邮箱',
       dataIndex: 'from_email',
-      width: 200
+      width: 175
     },
     {
       title: '发件人名称',
       dataIndex: 'from_name',
-      width: 150,
+      width: 80,
       render: (text) => text || '-'
     },
     {
@@ -328,7 +313,8 @@ function EmailConfig() {
     {
       title: '状态',
       dataIndex: 'is_active',
-      width: 100,
+      width: 60,
+      className: 'admin-nowrap',
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
           {isActive ? '启用' : '禁用'}
@@ -338,25 +324,20 @@ function EmailConfig() {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (text) => formatDate(text)
+      width: 156,
+      className: 'admin-nowrap',
+      render: (text) => formatAdminDateTime(text, { oneLine: true })
     },
     {
       title: '操作',
-      width: 200,
+      width: 187,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record.id)}>编辑</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
             onClick={() => {
               setLogConfigId(record.id)
               setShowLogModal(true)
@@ -364,15 +345,8 @@ function EmailConfig() {
           >
             日志
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -383,6 +357,7 @@ function EmailConfig() {
         <h3>邮件发送配置</h3>
         <Space>
           <Button
+            type="outline"
             onClick={fetchConfigs}
             loading={loading}
           >
@@ -405,17 +380,14 @@ function EmailConfig() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={configs}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={currentPage}
+            pageSize={pageSize}
           />
         )}
       </div>

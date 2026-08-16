@@ -39,7 +39,10 @@ Write-Host "[startChromeForBaike] 启动后请在浏览器打开 https://baike.b
 
 Start-Process -FilePath $chrome -ArgumentList @(
   "--remote-debugging-port=$port",
+  "--remote-allow-origins=*",
   "--user-data-dir=$profile",
+  "--no-first-run",
+  "--no-default-browser-check",
   "https://baike.baidu.com/"
 )
 

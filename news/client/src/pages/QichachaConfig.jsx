@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
 import LogModal from './LogModal'
 import QichachaNewsCategoryList from './QichachaNewsCategoryList'
 import './QichachaConfig.css'
@@ -183,22 +184,6 @@ function QichachaConfig() {
     }
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-'
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    } catch (e) {
-      return dateString
-    }
-  }
-
   const columns = [
     {
       title: '应用',
@@ -209,27 +194,26 @@ function QichachaConfig() {
     {
       title: '接口类型',
       dataIndex: 'interface_type',
-      width: 150,
+      width: 75,
       render: (text) => text || '企业信息'
     },
     {
       title: '应用凭证',
       dataIndex: 'qichacha_app_key',
-      width: 200,
-      ellipsis: true,
-      tooltip: true,
+      width: 238,
       render: (text) => text || '-'
     },
     {
       title: '每日查询限制',
       dataIndex: 'qichacha_daily_limit',
-      width: 150,
+      width: 90,
       render: (text) => text || 100
     },
     {
       title: '状态',
       dataIndex: 'is_active',
-      width: 100,
+      width: 54,
+      className: 'admin-nowrap',
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
           {isActive ? '启用' : '禁用'}
@@ -239,25 +223,20 @@ function QichachaConfig() {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (text) => formatDate(text)
+      width: 96,
+      className: 'admin-dt-col',
+      render: (text) => formatAdminDateTime(text)
     },
     {
       title: '操作',
-      width: 260,
+      width: 190,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record.id)}>编辑</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
             loading={testingConfigId === record.id}
             onClick={() => handleTest(record.id)}
           >
@@ -266,7 +245,6 @@ function QichachaConfig() {
           <Button
             type="outline"
             size="small"
-            status="success"
             onClick={() => {
               setLogConfigId(record.id)
               setShowLogModal(true)
@@ -274,15 +252,8 @@ function QichachaConfig() {
           >
             日志
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -317,17 +288,14 @@ function QichachaConfig() {
                 text={{ rows: 8, width: ['100%'] }}
               />
             ) : (
-              <Table
+              <AdminListTable
                 columns={columns}
                 data={configs}
                 loading={loading}
                 pagination={false}
                 rowKey="id"
-                border={{
-                  wrapper: true,
-                  cell: true
-                }}
-                stripe
+                page={currentPage}
+                pageSize={pageSize}
               />
             )}
           </div>

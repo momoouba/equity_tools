@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, DatePicker, Collapse, Upload } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, DatePicker, Collapse, Upload } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps } from '../components/AdminListTable'
 import './HolidayConfig.css'
 
 const Option = Select.Option
@@ -285,25 +286,13 @@ function HolidayConfig() {
     },
     {
       title: '操作',
-      width: 150,
+      width: 132,
+      className: 'admin-ops-col',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record)}
-          >
-            删除
-          </Button>
-        </Space>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record)}>编辑</Button>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -453,17 +442,14 @@ function HolidayConfig() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={holidays}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={pagination.page}
+            pageSize={pagination.pageSize}
           />
         )}
       </div>

@@ -36,8 +36,8 @@ function delayMinutesForResult(result, longMinutes) {
   }
   const hadArticle =
     result.status === 'success' ||
-    Number(result.staged) > 0 ||
-    Number(result.matchedDay) > 0;
+    result.status === 'partial' ||
+    Number(result.staged) > 0;
   return hadArticle ? longMinutes : EMPTY_INTERVAL_MINUTES;
 }
 

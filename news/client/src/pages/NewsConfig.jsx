@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/AdminListTable'
 import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
 import dayjs from 'dayjs'
@@ -507,70 +508,44 @@ function NewsConfig({ financingSourceMode = false }) {
     }
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-'
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    } catch (e) {
-      return dateString
-    }
-  }
-
-  // 格式化 Cron 表达式显示
-  const formatCronExpression = (cron) => {
-    if (!cron) return '-'
-    // 简化显示：如果是常见的表达式，显示友好文本
-    if (cron === '0 0 0 * * ? *') return '每天 00:00:00'
-    if (cron === '0 0 0 ? * 1 *') return '每周一 00:00:00'
-    if (cron === '0 0 0 1 * ? *') return '每月1号 00:00:00'
-    return cron
-  }
-
   const columns = [
     {
       title: '应用',
       dataIndex: 'app_name',
-      width: 150,
+      width: 72,
       render: (text) => text || '-'
     },
     {
       title: financingSourceMode ? '接口类型' : '新闻接口类型',
       dataIndex: 'interface_type',
-      width: 160,
+      width: financingSourceMode ? 124 : 110,
       render: (text) => formatInterfaceTypeColumn(text)
     },
     {
       title: '新闻类型',
       dataIndex: 'news_type',
-      width: 120,
+      width: financingSourceMode ? 100 : 80,
+      className: 'admin-nowrap',
       render: (text) => text || '新闻舆情'
     },
     {
       title: '请求地址',
       dataIndex: 'request_url',
-      width: 300,
-      ellipsis: true,
-      tooltip: true,
+      width: financingSourceMode ? 168 : 188,
+      className: 'admin-url-col',
       render: (text) => text || '-'
     },
     {
       title: 'Cron表达式',
       dataIndex: 'cron_expression',
-      width: 200,
+      width: financingSourceMode ? 104 : 126,
+      className: 'admin-nowrap',
       render: (text, record) => {
-        // 兼容旧数据：如果有 frequency_type，显示旧的格式
         if (record.frequency_type && !text) {
           const typeMap = { 'day': '天', 'week': '周', 'month': '月' }
           return `${typeMap[record.frequency_type] || record.frequency_type} - ${record.frequency_value || '-'}`
         }
-        return formatCronExpression(text)
+        return text || '-'
       }
     },
     ...(financingSourceMode
@@ -579,32 +554,34 @@ function NewsConfig({ financingSourceMode = false }) {
           {
             title: '企业类型',
             dataIndex: 'entity_type',
-            width: 200,
+            width: 204,
             render: (entityType) => {
-              if (!entityType) return '-';
-              let types = entityType;
+              if (!entityType) return '-'
+              let types = entityType
               if (typeof types === 'string') {
                 try {
-                  types = JSON.parse(types);
+                  types = JSON.parse(types)
                 } catch (e) {
-                  return entityType;
+                  return entityType
                 }
               }
-              if (!Array.isArray(types) || types.length === 0) return '-';
-              return types.join('、');
+              if (!Array.isArray(types) || types.length === 0) return '-'
+              return types.join('、')
             }
           }
         ]),
     {
       title: '最后同步时间',
       dataIndex: 'last_sync_time',
-      width: 180,
-      render: (text) => text ? formatDate(text) : '-'
+      width: financingSourceMode ? 120 : 96,
+      className: 'admin-dt-col',
+      render: (text) => formatAdminDateTime(text)
     },
     {
       title: '状态',
       dataIndex: 'is_active',
-      width: 100,
+      width: financingSourceMode ? 64 : 58,
+      className: 'admin-nowrap',
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
           {isActive ? '启用' : '禁用'}
@@ -614,32 +591,21 @@ function NewsConfig({ financingSourceMode = false }) {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (text) => formatDate(text)
+      width: financingSourceMode ? 82 : 86,
+      className: 'admin-dt-col',
+      render: (text) => formatAdminDateTime(text)
     },
     {
       title: '操作',
-      width: 380,
+      width: financingSourceMode ? 176 : 186,
+      className: 'admin-ops-col admin-ops-wrap-3',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record.id)}>编辑</Button>
+          <Button type="outline" size="small" onClick={() => handleCopy(record.id)}>复制</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleCopy(record.id)}
-          >
-            复制
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
             loading={syncing === record.id}
             onClick={() => handleSync(record.id, record.interface_type)}
           >
@@ -648,7 +614,6 @@ function NewsConfig({ financingSourceMode = false }) {
           <Button
             type="outline"
             size="small"
-            status="success"
             onClick={() => {
               setLogConfigId(record.id)
               setShowLogModal(true)
@@ -656,15 +621,8 @@ function NewsConfig({ financingSourceMode = false }) {
           >
             日志
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -675,6 +633,7 @@ function NewsConfig({ financingSourceMode = false }) {
         <h3>{financingSourceMode ? '融资信息源 · 接口类型' : '新闻接口配置'}</h3>
         <Space>
           <Button
+            type="outline"
             onClick={fetchConfigs}
             loading={loading}
           >
@@ -697,17 +656,14 @@ function NewsConfig({ financingSourceMode = false }) {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={configs}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={currentPage}
+            pageSize={pageSize}
           />
         )}
       </div>

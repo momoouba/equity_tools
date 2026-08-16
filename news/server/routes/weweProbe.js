@@ -10,7 +10,7 @@
 const express = require('express');
 const { getCurrentUser } = require('../middleware/auth');
 const { probeHealth, fetchAllFeedsJson, fetchFeedJson, getWeweConfig, setWeweBaseUrlOverride, listWeweAccounts } = require('../utils/wewe/weweClient');
-const { getWewePrivateConfig, enqueueFromXinbangError } = require('../utils/wewe/wewePrivateTeam');
+const { getWewePrivateConfig, enqueueFromXinbangError, unsubscribeFromWewe } = require('../utils/wewe/wewePrivateTeam');
 const { mapAccountWithSampleUrl, tryAutoMapAfterEnqueue } = require('../utils/wewe/weweFeedMap');
 const {
   extractOneAccount,
@@ -359,6 +359,35 @@ router.post('/team/enqueue-test', requireAdmin, async (req, res) => {
       [gh]
     );
     res.json({ success: true, phase: 'P1', result, mapPreview, account: rows[0] || null });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** 出队并删除 wewe-rss 订阅源（新闻库不软删，只把 team_status 标为 exited） */
+router.post('/team/unsubscribe', requireAdmin, async (req, res) => {
+  try {
+    const gh = String(req.body.wechat_account_id || req.body.account || '').trim();
+    if (!gh) {
+      return res.status(400).json({ success: false, message: '需要 wechat_account_id' });
+    }
+    const result = await unsubscribeFromWewe(gh);
+    if (result.action === 'not_found') {
+      return res.status(404).json({ success: false, message: '专队无此账号' });
+    }
+    const rows = await db.query(
+      `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      [gh]
+    );
+    const weweFailed = result.action === 'dequeued_wewe_failed';
+    res.status(weweFailed ? 502 : 200).json({
+      success: !weweFailed,
+      message: weweFailed
+        ? `专队已出队，但 wewe-rss 退订失败：${result.wewe?.error || '未知错误'}`
+        : '已出队并从 wewe-rss 删除订阅',
+      result,
+      account: rows[0] || null
+    });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
   }

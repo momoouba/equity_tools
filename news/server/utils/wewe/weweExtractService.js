@@ -3,7 +3,7 @@
  */
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
-const { fetchFeedJson, refreshMpArticles, getMpArticles } = require('./weweClient');
+const { fetchFeedJson, refreshMpArticles, getMpArticles, htmlToPlainText } = require('./weweClient');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 
 const SESSION_DEAD_RE = /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新/i;
@@ -41,6 +41,82 @@ function isSessionDeadError(err) {
   const msg = String((err && err.message) || err || '');
   const body = err && err.body ? JSON.stringify(err.body) : '';
   return SESSION_DEAD_RE.test(msg) || SESSION_DEAD_RE.test(body);
+}
+
+const FEED_LIMIT = 50;
+const MIN_CN_CHARS = 40;
+const MIN_PLAIN_LEN = 120;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function weixinUrlKey(url) {
+  const s = String(url || '').trim().split('#')[0];
+  if (!s) return '';
+  const short = s.match(/mp\.weixin\.qq\.com\/s\/([A-Za-z0-9_-]+)/i);
+  if (short) return `s:${short[1]}`;
+  try {
+    const u = new URL(s);
+    const sn = u.searchParams.get('sn');
+    const mid = u.searchParams.get('mid');
+    const idx = u.searchParams.get('idx');
+    if (sn) return `sn:${sn}:${mid || ''}:${idx || ''}`;
+  } catch (_) {
+    /* ignore */
+  }
+  return s;
+}
+
+function titleKey(title) {
+  return String(title || '').replace(/\s+/g, '').slice(0, 80);
+}
+
+function toUsableContent(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const text = htmlToPlainText(s, 80000);
+  const cn = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (cn >= MIN_CN_CHARS) return text;
+  if (!s.includes('<') && text.length >= MIN_PLAIN_LEN) return text;
+  return '';
+}
+
+function indexFeedContent(feedArticles) {
+  const byUrl = new Map();
+  const byTitle = new Map();
+  for (const a of feedArticles || []) {
+    const body = a.contentFull || '';
+    if (!String(body).trim()) continue;
+    const uk = weixinUrlKey(a.link);
+    if (uk) byUrl.set(uk, body);
+    if (a.link) byUrl.set(String(a.link).split('#')[0], body);
+    const tk = titleKey(a.title);
+    if (tk) byTitle.set(tk, body);
+  }
+  return { byUrl, byTitle };
+}
+
+function contentFromIndex(index, link, title) {
+  const uk = weixinUrlKey(link);
+  return (
+    (uk && index.byUrl.get(uk)) ||
+    index.byUrl.get(String(link || '').split('#')[0]) ||
+    index.byTitle.get(titleKey(title)) ||
+    ''
+  );
+}
+
+function attachFeedContent(candidates, index) {
+  return (candidates || []).map((a) => ({
+    ...a,
+    contentFull: a.contentFull || contentFromIndex(index, a.link, a.title) || ''
+  }));
+}
+
+async function loadFeedArticles(feedId, { update = false } = {}) {
+  const result = await fetchFeedJson(feedId, { limit: FEED_LIMIT, update });
+  return result.articles || [];
 }
 
 async function getSessionRow() {
@@ -102,8 +178,10 @@ async function pickNextPendingAccount() {
      ORDER BY
        CASE last_extract_status
          WHEN 'success' THEN 0
-         WHEN 'empty' THEN 2
-         ELSE 1
+         WHEN 'partial' THEN 1
+         WHEN 'empty' THEN 3
+         WHEN 'empty_content' THEN 3
+         ELSE 2
        END,
        last_extract_at IS NULL DESC,
        last_extract_at ASC,
@@ -114,6 +192,10 @@ async function pickNextPendingAccount() {
 }
 
 async function stageArticle(row) {
+  const content = String(row.content || '').trim();
+  if (!content) {
+    return false;
+  }
   const id = await generateId('wewe_private_article_stage');
   try {
     await db.execute(
@@ -125,6 +207,8 @@ async function stageArticle(row) {
          content = VALUES(content),
          public_time = VALUES(public_time),
          wewe_article_id = COALESCE(VALUES(wewe_article_id), wewe_article_id),
+         ingest_status = IF(ingest_status IN ('ingested', 'skipped'), ingest_status, 'pending'),
+         ingest_error = NULL,
          F_LastModifyTime = CURRENT_TIMESTAMP`,
       [
         id,
@@ -133,7 +217,7 @@ async function stageArticle(row) {
         row.weweArticleId || null,
         (row.title || '').slice(0, 500),
         (row.sourceUrl || '').slice(0, 1000),
-        row.content || null,
+        content,
         row.publicTime || null,
         row.extractYmd
       ]
@@ -145,11 +229,13 @@ async function stageArticle(row) {
       await db.execute(
         `UPDATE wewe_private_article_stage
          SET title = ?, content = ?, public_time = ?, wewe_article_id = COALESCE(?, wewe_article_id),
+             ingest_status = IF(ingest_status IN ('ingested', 'skipped'), ingest_status, 'pending'),
+             ingest_error = NULL,
              F_LastModifyTime = CURRENT_TIMESTAMP
          WHERE source_url = ? AND extract_ymd = ? AND F_DeleteMark = 0`,
         [
           (row.title || '').slice(0, 500),
-          row.content || null,
+          content,
           row.publicTime || null,
           row.weweArticleId || null,
           row.sourceUrl,
@@ -178,8 +264,8 @@ async function extractOneAccount(accountRow, options = {}) {
   }
 
   try {
-    // 主路径：platform.getMpArticles（新订阅 feeds/*.json 常为空）
-    // 注意：先 refresh 再 getMpArticles 易被 wewe 限流成空列表，故不前置 refresh
+    // 主路径：platform.getMpArticles 拿当日目录（不含正文）
+    // 先 refresh 再 getMpArticles 易被 wewe 限流成空列表，故不前置 refresh
     let rawList = [];
     try {
       rawList = await getMpArticles(feedId);
@@ -188,63 +274,97 @@ async function extractOneAccount(accountRow, options = {}) {
       if (isSessionDeadError(e)) throw e;
     }
 
-    // 回退 / 补全文：feed.json（含 content_html）。仅当主路径为空时才带 update 刷新
     let feedArticles = [];
     try {
-      const needUpdate = updateFeed && rawList.length === 0;
-      const feedResult = await fetchFeedJson(feedId, { limit: 30, update: needUpdate });
-      feedArticles = feedResult.articles || [];
-      if (rawList.length === 0 && feedArticles.length === 0) {
-        try {
-          await refreshMpArticles(feedId);
-          const again = await fetchFeedJson(feedId, { limit: 30, update: false });
-          feedArticles = again.articles || [];
-        } catch (e2) {
-          console.warn(`[wewe提取] refresh+feed 回退警告 account=${gh}: ${e2.message}`);
-        }
-      }
+      feedArticles = await loadFeedArticles(feedId, { update: false });
     } catch (e) {
       console.warn(`[wewe提取] feed.json 失败 account=${gh}: ${e.message}`);
       if (isSessionDeadError(e) && rawList.length === 0) throw e;
     }
 
-    const contentByUrl = new Map();
-    for (const a of feedArticles) {
-      if (a.link) contentByUrl.set(a.link, a.contentFull || '');
-    }
+    const buildCandidates = (list, feeds, index) => {
+      if (list.length > 0) {
+        return attachFeedContent(
+          list.map((a) => {
+            const link = a.url || a.link || '';
+            const pub = a.publishTime != null ? a.publishTime : a.publicTime;
+            return {
+              weweArticleId: a.id != null ? String(a.id) : null,
+              title: a.title || '',
+              link,
+              publicTime: pub,
+              contentFull: contentFromIndex(index, link, a.title || '')
+            };
+          }),
+          index
+        );
+      }
+      return (feeds || []).map((a) => ({
+        weweArticleId: a.weweArticleId || null,
+        title: a.title,
+        link: a.link,
+        publicTime: a.publicTime,
+        contentFull: a.contentFull || ''
+      }));
+    };
 
-    const candidates = [];
-    if (rawList.length > 0) {
-      for (const a of rawList) {
-        const link = a.url || a.link || '';
-        const pub = a.publishTime != null ? a.publishTime : a.publicTime;
-        candidates.push({
-          weweArticleId: a.id != null ? String(a.id) : null,
-          title: a.title || '',
-          link,
-          publicTime: pub,
-          contentFull: contentByUrl.get(link) || ''
-        });
+    let index = indexFeedContent(feedArticles);
+    let candidates = buildCandidates(rawList, feedArticles, index);
+
+    const dayItems = () =>
+      candidates.filter((a) => toBeijingYmdFromUnknown(a.publicTime) === extractYmd);
+    const missingContent = () =>
+      dayItems().filter((a) => a.link && !toUsableContent(a.contentFull));
+
+    const refreshFeedForContent = async (reason) => {
+      if (!updateFeed) return;
+      console.log(`[wewe提取] 补全文 ${reason} account=${gh} feed=${feedId}`);
+      try {
+        await loadFeedArticles(feedId, { update: true });
+        await sleep(2000);
+        feedArticles = await loadFeedArticles(feedId, { update: false });
+        index = indexFeedContent(feedArticles);
+        candidates = buildCandidates(rawList, feedArticles, index);
+      } catch (e) {
+        console.warn(`[wewe提取] feed 刷新失败 account=${gh}: ${e.message}`);
+        if (isSessionDeadError(e)) throw e;
       }
-    } else {
-      for (const a of feedArticles) {
-        candidates.push({
-          weweArticleId: a.weweArticleId || null,
-          title: a.title,
-          link: a.link,
-          publicTime: a.publicTime,
-          contentFull: a.contentFull || ''
-        });
+      if (missingContent().length === 0) return;
+      try {
+        await refreshMpArticles(feedId);
+        await sleep(2000);
+        feedArticles = await loadFeedArticles(feedId, { update: false });
+        index = indexFeedContent(feedArticles);
+        candidates = buildCandidates(rawList, feedArticles, index);
+      } catch (e2) {
+        console.warn(`[wewe提取] refreshArticles 回退警告 account=${gh}: ${e2.message}`);
+        if (isSessionDeadError(e2)) throw e2;
       }
+    };
+
+    const missing = missingContent();
+    if (rawList.length === 0 && feedArticles.length === 0) {
+      await refreshFeedForContent('目录为空');
+    } else if (missing.length > 0) {
+      await refreshFeedForContent(`当日缺正文 ${missing.length} 篇`);
     }
 
     let staged = 0;
     let matched = 0;
+    let skippedEmpty = 0;
     for (const a of candidates) {
       const ymd = toBeijingYmdFromUnknown(a.publicTime);
       if (ymd !== extractYmd) continue;
       matched += 1;
       if (!a.link) continue;
+      const content = toUsableContent(a.contentFull);
+      if (!content) {
+        skippedEmpty += 1;
+        console.warn(
+          `[wewe提取] 跳过空正文 account=${gh} title=${String(a.title || '').slice(0, 40)} url=${a.link}`
+        );
+        continue;
+      }
       let publicTimeStr = null;
       if (typeof a.publicTime === 'number') {
         const ms = a.publicTime < 1e12 ? a.publicTime * 1000 : a.publicTime;
@@ -255,20 +375,25 @@ async function extractOneAccount(accountRow, options = {}) {
       } else if (typeof a.publicTime === 'string' && /^\d{4}-\d{2}-\d{2}/.test(a.publicTime)) {
         publicTimeStr = String(a.publicTime).slice(0, 19).replace('T', ' ');
       }
-      await stageArticle({
+      const ok = await stageArticle({
         wechatAccountId: gh,
         feedId,
         weweArticleId: a.weweArticleId || null,
         title: a.title,
         sourceUrl: a.link,
-        content: a.contentFull || '',
+        content,
         publicTime: publicTimeStr,
         extractYmd
       });
-      staged += 1;
+      if (ok) staged += 1;
+      else skippedEmpty += 1;
     }
 
-    const status = staged > 0 ? 'success' : 'empty';
+    let status = 'empty';
+    if (staged > 0 && skippedEmpty === 0) status = 'success';
+    else if (staged > 0) status = 'partial';
+    else if (matched > 0) status = 'empty_content';
+
     await db.execute(
       `UPDATE wewe_private_accounts
        SET extract_pending = 0,
@@ -279,13 +404,13 @@ async function extractOneAccount(accountRow, options = {}) {
        WHERE F_Id = ?`,
       [
         status,
-        `extract_ymd=${extractYmd} staged=${staged} matchedDay=${matched} candidates=${candidates.length}`,
+        `extract_ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} candidates=${candidates.length}`,
         accountRow.F_Id
       ]
     );
 
     console.log(
-      `[wewe提取] account=${gh} feed=${feedId} ymd=${extractYmd} staged=${staged} matchedDay=${matched} candidates=${candidates.length}`
+      `[wewe提取] account=${gh} feed=${feedId} ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} candidates=${candidates.length}`
     );
     return {
       action: 'extracted',
@@ -293,6 +418,7 @@ async function extractOneAccount(accountRow, options = {}) {
       feedId,
       extractYmd,
       staged,
+      skippedEmpty,
       matchedDay: matched,
       totalFetched: candidates.length,
       status

@@ -207,11 +207,11 @@ async function ingestOneStage(stageRow, options = {}) {
     return { action: 'skipped', reason: 'dup_source_url', newsId: existing.F_Id };
   }
 
-  let content = stageRow.content || '';
-  if (!String(content).trim()) {
-    console.warn(
-      `[wewe入库] 正文为空，入库后由异步 AI/Python 补抽 stage=${stageRow.F_Id} url=${sourceUrl}`
-    );
+  let content = String(stageRow.content || '').trim();
+  if (!content) {
+    await markStage(stageRow.F_Id, 'skipped', { error: 'empty_content' });
+    console.warn(`[wewe入库] 跳过空正文 stage=${stageRow.F_Id} url=${sourceUrl}`);
+    return { action: 'skipped', reason: 'empty_content' };
   }
 
   const accountName = await resolveAccountName(gh);

@@ -11,6 +11,7 @@ const {
   sleep,
   pickBaikeSearchName,
   resolveBaikeBrowserMode,
+  resolveBaikeBrowserModeWithCdpProbe,
   fetchBaikeHttp,
   fetchBaikeBrowserBatch,
   closeBrowserWorker,
@@ -72,7 +73,8 @@ function preferBaike(httpResult, browserResult) {
 async function runHttpThenBrowserBatch(items, opts = {}) {
   const sleepMs = opts.sleepMs ?? 800;
   const logTag = opts.logTag || LOG;
-  const mode = resolveBaikeBrowserMode();
+  const probed = await resolveBaikeBrowserModeWithCdpProbe(opts);
+  const mode = probed.mode;
   const stats = emptyStats();
   stats.total = items.length;
 
@@ -133,6 +135,7 @@ async function runHttpThenBrowserBatch(items, opts = {}) {
       browserResults = await fetchBaikeBrowserBatch(companies, {
         itemSleepMs: sleepMs,
         sleepMs,
+        browserMode: mode,
         captchaWaitMs: mode === 'headless' ? 0 : 15000,
       });
     } catch (e) {

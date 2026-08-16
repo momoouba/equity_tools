@@ -10,19 +10,19 @@ import {
   Select,
   Skeleton,
   Space,
-  Table,
   Tabs,
   Tag,
   Typography
 } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps } from '../components/AdminListTable'
 import './WewePrivateConfig.css'
 
 const TabPane = Tabs.TabPane
 const CollapseItem = Collapse.Item
 const Option = Select.Option
 
-const ACCOUNT_PAGE_SIZE = 20
+const ACCOUNT_PAGE_SIZE_OPTIONS = [20, 50, 100]
 
 function apiOrigin() {
   if (import.meta.env.DEV && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
@@ -139,7 +139,9 @@ function WewePrivateConfig() {
   const [accountKeyword, setAccountKeyword] = useState('')
   const [filterCollapsed, setFilterCollapsed] = useState(false)
   const [accountPage, setAccountPage] = useState(1)
+  const [accountPageSize, setAccountPageSize] = useState(ACCOUNT_PAGE_SIZE_OPTIONS[0])
   const [remindingPending, setRemindingPending] = useState(false)
+  const [unsubscribingId, setUnsubscribingId] = useState('')
 
   const loadConfigAndSession = useCallback(async () => {
     setLoading(true)
@@ -298,6 +300,37 @@ function WewePrivateConfig() {
     }
   }
 
+  const unsubscribeAccount = (row) => {
+    const name = row.account_name || row.wechat_account_id
+    Modal.confirm({
+      title: '从 wewe 退订',
+      content: `将删除 wewe-rss 里「${name}」的订阅，并把专队状态标为已出队。新闻库专队记录不会软删除；若新榜再次报数据不存在，仍可重新入队。`,
+      okText: '退订',
+      okButtonProps: { status: 'danger' },
+      cancelText: '取消',
+      onOk: async () => {
+        setUnsubscribingId(row.F_Id)
+        try {
+          const res = await axios.post('/api/wewe-probe/team/unsubscribe', {
+            wechat_account_id: row.wechat_account_id
+          })
+          if (res.data?.success) {
+            Message.success(res.data.message || '已退订')
+            loadAccounts()
+          } else {
+            Message.error(res.data?.message || '退订失败')
+            loadAccounts()
+          }
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '退订失败')
+          loadAccounts()
+        } finally {
+          setUnsubscribingId('')
+        }
+      }
+    })
+  }
+
   const pendingCount = useMemo(
     () =>
       accounts.filter(
@@ -313,6 +346,12 @@ function WewePrivateConfig() {
         if (a.team_status !== 'pending_subscribe' && a.map_status !== 'pending_subscribe') {
           return false
         }
+      }
+      if (accountFilter === 'exited' && a.team_status !== 'exited') {
+        return false
+      }
+      if (accountFilter === 'active' && a.team_status !== 'active') {
+        return false
       }
       if (!kw) return true
       const hay = [
@@ -332,18 +371,18 @@ function WewePrivateConfig() {
   }, [accounts, accountFilter, accountKeyword])
 
   const pagedAccounts = useMemo(() => {
-    const start = (accountPage - 1) * ACCOUNT_PAGE_SIZE
-    return filteredAccounts.slice(start, start + ACCOUNT_PAGE_SIZE)
-  }, [filteredAccounts, accountPage])
+    const start = (accountPage - 1) * accountPageSize
+    return filteredAccounts.slice(start, start + accountPageSize)
+  }, [filteredAccounts, accountPage, accountPageSize])
 
   useEffect(() => {
     setAccountPage(1)
   }, [accountFilter, accountKeyword])
 
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(filteredAccounts.length / ACCOUNT_PAGE_SIZE) || 1)
+    const maxPage = Math.max(1, Math.ceil(filteredAccounts.length / accountPageSize) || 1)
     if (accountPage > maxPage) setAccountPage(maxPage)
-  }, [filteredAccounts.length, accountPage])
+  }, [filteredAccounts.length, accountPage, accountPageSize])
 
   const columns = [
     {
@@ -360,8 +399,7 @@ function WewePrivateConfig() {
     {
       title: '被投企业',
       dataIndex: 'enterprise_full_name',
-      width: 220,
-      ellipsis: true,
+      width: 207,
       render: (v, row) => v || row.project_abbreviation || '-'
     },
     {
@@ -373,20 +411,19 @@ function WewePrivateConfig() {
     {
       title: '专队状态',
       dataIndex: 'team_status',
-      width: 130,
+      width: 78,
       render: (v) => <Tag color={statusColor(v)}>{v}</Tag>
     },
     {
       title: '映射',
       dataIndex: 'map_status',
-      width: 120,
+      width: 79,
       render: (v) => <Tag color={statusColor(v)}>{v}</Tag>
     },
     {
       title: 'feed_id',
       dataIndex: 'feed_id',
-      width: 180,
-      ellipsis: true,
+      width: 168,
       render: (v) => v || '-'
     },
     {
@@ -397,24 +434,41 @@ function WewePrivateConfig() {
     },
     {
       title: '操作',
-      width: 120,
-      fixed: 'right',
+      width: 150,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, row) => {
         const needPaste =
           row.team_status === 'pending_subscribe' ||
           row.map_status === 'pending_subscribe' ||
           !row.feed_id
+        const canUnsubscribe =
+          Boolean(row.feed_id) ||
+          row.team_status === 'active' ||
+          row.team_status === 'pending_subscribe'
         return (
-          <Button
-            type={needPaste ? 'primary' : 'secondary'}
-            size="small"
-            onClick={() => {
-              setMapTarget(row)
-              setSampleUrl(row.sample_article_url || '')
-            }}
-          >
-            粘贴链接
-          </Button>
+          <AdminOps>
+            <Button
+              type="outline"
+              size="small"
+              onClick={() => {
+                setMapTarget(row)
+                setSampleUrl(row.sample_article_url || '')
+              }}
+            >
+              粘贴链接
+            </Button>
+            {canUnsubscribe ? (
+              <Button
+                type="outline"
+                status="danger"
+                size="small"
+                loading={unsubscribingId === row.F_Id}
+                onClick={() => unsubscribeAccount(row)}
+              >
+                退订
+              </Button>
+            ) : null}
+          </AdminOps>
         )
       }
     }
@@ -658,7 +712,9 @@ function WewePrivateConfig() {
                         style={{ width: 180 }}
                       >
                         <Option value="all">全部</Option>
+                        <Option value="active">仅在队</Option>
                         <Option value="pending_subscribe">仅待订阅</Option>
+                        <Option value="exited">仅已出队</Option>
                       </Select>
                     </div>
                     <div className="filter-item">
@@ -689,22 +745,22 @@ function WewePrivateConfig() {
             </Collapse>
 
             <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
-              待订阅账号点右侧「粘贴链接」，填入该号任意一篇文章的 mp.weixin 分享 URL（勿在 wewe-rss 管理页操作）。
+              待订阅账号点右侧「粘贴链接」，填入该号任意一篇文章的 mp.weixin 分享 URL。
+              新榜已能抓到、但 wewe 仍在订阅的号，点「退订」（不要只在 wewe-rss 管理页点删除：那边删的是 wewe 自己的库，新闻专队列表不会变）。
             </Typography.Paragraph>
 
             <div className="table-container">
               {accountsLoading && accounts.length === 0 ? (
                 <Skeleton loading animation text={{ rows: 8, width: ['100%'] }} />
               ) : (
-                <Table
+                <AdminListTable
                   rowKey="F_Id"
                   columns={columns}
                   data={pagedAccounts}
                   loading={accountsLoading}
                   pagination={false}
-                  border={{ wrapper: true, cell: true }}
-                  stripe
-                  scroll={{ x: 1200 }}
+                  page={accountPage}
+                  pageSize={accountPageSize}
                 />
               )}
             </div>
@@ -714,8 +770,15 @@ function WewePrivateConfig() {
                 <Pagination
                   current={accountPage}
                   total={filteredAccounts.length}
-                  pageSize={ACCOUNT_PAGE_SIZE}
+                  pageSize={accountPageSize}
+                  sizeCanChange
+                  sizeOptions={ACCOUNT_PAGE_SIZE_OPTIONS}
+                  pageSizeChangeResetCurrent
                   onChange={setAccountPage}
+                  onPageSizeChange={(size) => {
+                    setAccountPageSize(size)
+                    setAccountPage(1)
+                  }}
                   showTotal
                   showJumper
                 />

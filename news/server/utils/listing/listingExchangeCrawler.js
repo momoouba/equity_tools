@@ -188,6 +188,60 @@ function isStatusLikelySame(a, b) {
   return x === y || x.includes(y) || y.includes(x);
 }
 
+/** 交易所时间轴阶段名，不是审核状态，禁止入库 */
+function isRegistrationStageLabel(status) {
+  return normalizeStatusText(status) === '注册结果';
+}
+
+const REGISTRATION_OUTCOME_STATUSES = new Set([
+  '注册生效',
+  '不予注册',
+  '终止注册',
+  '核准注册',
+  '同意注册',
+]);
+
+function pickSzseNestedResultCaption(progress) {
+  const nested = Array.isArray(progress?.status) ? progress.status : [];
+  for (const item of nested) {
+    const caption = String(item?.caption || '').trim();
+    if (caption && !isRegistrationStageLabel(caption)) return caption;
+  }
+  return '';
+}
+
+/**
+ * 深交所 prjprogs：caption=注册结果 是阶段名，真实审核状态在 status[].caption（如注册生效）。
+ */
+function resolveSzseProgressStatus(progress, fallbackStatus) {
+  const caption = String(progress?.caption || '').trim();
+  if (!caption) return '';
+  if (!isRegistrationStageLabel(caption)) return caption;
+  const nested = pickSzseNestedResultCaption(progress);
+  if (nested) return nested;
+  const fb = String(fallbackStatus || '').trim();
+  if (REGISTRATION_OUTCOME_STATUSES.has(fb)) return fb;
+  return '';
+}
+
+function mapSzseProgsToTimeline(progs, fallbackStatus) {
+  return normalizeTimelineRows(
+    (Array.isArray(progs) ? progs : []).map((p) => ({
+      status: resolveSzseProgressStatus(p, fallbackStatus),
+      ymd: toYmdLoose(p.date),
+    }))
+  );
+}
+
+/** 北交所官网成功结果写「注册」，与沪深「注册生效」对齐；注册结果阶段名丢弃。 */
+function normalizeExchangeAuditStatus(status, exchange) {
+  const s = String(status || '').trim();
+  if (!s) return '';
+  if (isRegistrationStageLabel(s)) return '';
+  if (String(exchange || '').trim() === '北交所' && s === '注册') return '注册生效';
+  return s;
+}
+
 function mapRowExchangeProjectId(row) {
   if (!row || typeof row !== 'object') return '';
   const ex = String(row.exchange || '').trim();
@@ -282,18 +336,24 @@ function expandRowsWithTimeline(rows, logTag = '[上市进展爬虫]') {
   const expanded = [];
   let added = 0;
   base.forEach((row) => {
-    expanded.push(row);
-    const timeline = normalizeTimelineRows(row?._timeline_rows || []);
+    const exchange = String(row?.exchange || '').trim();
+    const mainStatus = normalizeExchangeAuditStatus(row?.status, exchange);
+    const main = mainStatus ? { ...row, status: mainStatus } : null;
+    if (main) expanded.push(main);
+    const timeline = normalizeTimelineRows(row?._timeline_rows || [])
+      .map((t) => ({ ...t, status: normalizeExchangeAuditStatus(t.status, exchange) }))
+      .filter((t) => t.status);
     if (!timeline.length) return;
+    const compareStatus = main?.status || '';
     timeline.forEach((t) => {
       // 同状态+同日：主行已覆盖。不同状态即使同日也必须扩行（北交所 6/30 已受理+中止）
-      const sameCurrentStatus = isStatusLikelySame(t.status, row.status || '');
+      const sameCurrentStatus = isStatusLikelySame(t.status, compareStatus);
       const sameCurrentDate = toYmdLoose(row.f_update_time) === t.ymd;
       if (sameCurrentStatus && sameCurrentDate) return;
       const sameReceiveDate = toYmdLoose(row.receive_date) === t.ymd;
       if (sameCurrentStatus && sameReceiveDate) return;
       expanded.push({
-        ...row,
+        ...(main || row),
         status: t.status,
         receive_date: t.ymd,
         f_update_time: `${t.ymd} 00:00:00`,
@@ -761,16 +821,17 @@ async function enrichSzseStatusDate(rows, logTag) {
         continue;
       }
       const progs = Array.isArray(detail.prjprogs) ? detail.prjprogs : [];
-      row._timeline_rows = progs
-        .map((p) => ({ status: String(p.caption || '').trim(), ymd: toYmdLoose(p.date) }))
-        .filter((x) => x.status && x.ymd);
+      const fallbackStatus = String(detail.prjst || row.status || '').trim();
+      row._timeline_rows = mapSzseProgsToTimeline(progs, fallbackStatus);
+      if (isRegistrationStageLabel(row.status)) {
+        const outcome = row._timeline_rows.find((t) => REGISTRATION_OUTCOME_STATUSES.has(t.status));
+        if (outcome?.status) row.status = outcome.status;
+      }
       const status = row.status || '';
-      const candidates = progs.filter((p) => isStatusLikelySame(p.caption, status) && toYmdLoose(p.date));
+      const candidates = row._timeline_rows.filter((p) => isStatusLikelySame(p.status, status) && p.ymd);
       const chosen =
-        candidates.find((p) => p.finished) ||
-        candidates.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')))[0] ||
-        null;
-      const ymd = toYmdLoose(chosen?.date) || toYmdLoose(detail.updtdt);
+        candidates.sort((a, b) => String(a.ymd || '').localeCompare(String(b.ymd || '')))[0] || null;
+      const ymd = chosen?.ymd || toYmdLoose(detail.updtdt);
       if (ymd) {
         row.receive_date = ymd;
         matched += chosen ? 1 : 0;
@@ -892,7 +953,7 @@ async function enrichSseStatusDate(rows, logTag) {
           }),
           ymd: toYmdLoose(x.publishDate || x.qianDate || x.timesave),
         }))
-        .filter((x) => x.ymd);
+        .filter((x) => x.ymd && !isRegistrationStageLabel(x.status));
       // 「其他」披露：财务过期/补充材料等，写入 _other_events；不插入第二条已问询，仅辅助审计与中止识别
       const otherEvents = await fetchSseOtherEvents(row._sse_audit_id, logTag);
       row._other_events = otherEvents;
@@ -956,10 +1017,10 @@ function bseProjectStatusToTimeline(ps) {
   const arYmd = bseTimeToYmd(ps.approveResultDate);
   if (arYmd) {
     const c = String(ps.approveResult || '');
-    let st = '注册';
+    let st = '注册生效';
     if (c === '2') st = '不予注册';
     else if (c === '3') st = '终止';
-    else st = '注册';
+    else st = '注册生效';
     rows.push({ status: st, ymd: arYmd });
   }
   push('中止', ps.suspendDate);
@@ -1078,6 +1139,7 @@ async function enrichBseStatusDate(rows, logTag) {
       );
       const timeline = bseProjectStatusToTimeline(pack.projectStatus);
       row._timeline_rows = timeline;
+      row.status = normalizeExchangeAuditStatus(row.status, '北交所') || row.status;
       const status = row.status || '';
       const chosen =
         timeline.find((x) => isStatusLikelySame(x.status, status) && x.ymd) ||
@@ -1199,7 +1261,7 @@ function bseStatusToZh(code) {
     P04: '\u4e0a\u5e02\u59d4\u4f1a\u8bae\u672a\u901a\u8fc7',
     P05: '\u4e0a\u5e02\u59d4\u4f1a\u8bae\u6682\u7f13',
     P06: '\u63d0\u4ea4\u6ce8\u518c',
-    P07: '\u6ce8\u518c',
+    P07: '\u6ce8\u518c\u751f\u6548',
     P08: '\u4e0d\u4e88\u6ce8\u518c',
     P09: '\u4e2d\u6b62',
     P10: '\u7ec8\u6b62',
@@ -1491,6 +1553,60 @@ async function mergeDuplicateIpoProgressExchangeRows(adminId, logTag = '[上市�
 }
 
 /**
+ * 历史行纠偏：丢掉阶段名「注册结果」；北交所成功结果「注册」统一为「注册生效」。
+ */
+async function unifyRegistrationResultStatuses(adminId, logTag = '[上市进展爬虫]') {
+  const resultRows = await db.query(
+    `SELECT F_Id FROM ipo_progress WHERE F_DeleteMark = 0 AND status = '注册结果'`
+  );
+  const resultIds = resultRows.map((r) => r.F_Id).filter(Boolean);
+  let softDeletedResult = 0;
+  if (resultIds.length) {
+    const CHUNK = 500;
+    for (let ci = 0; ci < resultIds.length; ci += CHUNK) {
+      const chunk = resultIds.slice(ci, ci + CHUNK);
+      const idPlaceholders = chunk.map(() => '?').join(',');
+      await db.execute(
+        `UPDATE ipo_project_progress
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+         WHERE F_DeleteMark = 0 AND ipo_progress_row_id IN (${idPlaceholders})`,
+        [adminId, ...chunk]
+      );
+      const header = await db.execute(
+        `UPDATE ipo_progress
+         SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = ?
+         WHERE F_DeleteMark = 0 AND F_Id IN (${idPlaceholders})`,
+        [adminId, ...chunk]
+      );
+      softDeletedResult += Number(header?.affectedRows || 0);
+    }
+  }
+
+  const renameHeader = await db.execute(
+    `UPDATE ipo_progress
+     SET status = '注册生效', F_LastModifyUserId = ?, F_LastModifyTime = NOW()
+     WHERE F_DeleteMark = 0 AND exchange = '北交所' AND status = '注册'`,
+    [adminId]
+  );
+  const renamed = Number(renameHeader?.affectedRows || 0);
+  if (renamed > 0) {
+    await db.execute(
+      `UPDATE ipo_project_progress
+       SET status = '注册生效'
+       WHERE F_DeleteMark = 0 AND exchange = '北交所' AND status = '注册'`
+    );
+  }
+
+  if (softDeletedResult > 0 || renamed > 0) {
+    console.log(
+      `${logTag} 注册状态纠偏：软删注册结果=${softDeletedResult} 北交所注册→注册生效=${renamed}`
+    );
+    await mergeDuplicateIpoProgressExchangeRows(adminId, logTag);
+  }
+  return { softDeletedResult, renamed };
+}
+
+/**
  * 业务唯一键：交易所 + 公司全称 + 审核状态 + 上市板块 + 受理日期(YYYY-MM-DD)。
  * 同一键仅入库一次；同状态若受理日期相同则视为同一事件，不重复入库。
  * 受理日期优先取时间轴日期（receive_date），无时间轴时回退到 f_update_time。
@@ -1527,7 +1643,11 @@ async function insertRows(rows, adminId, logTag = '[上市进展爬虫]') {
     // 业务去重日期：优先使用时间轴状态日期（receive_date），无时间轴时回退到 f_update_time
     const dedupeDateStr = toYmdLoose(r.receive_date) || dateStr;
     const exchange = String(r.exchange || '').trim();
-    const status = String(r.status || '-').trim() || '-';
+    const status = normalizeExchangeAuditStatus(String(r.status || '-').trim() || '-', exchange);
+    if (!status) {
+      skipped += 1;
+      continue;
+    }
     const board = String(r.board || '').trim();
     const incomingReceiveYmd = toYmdLoose(r.receive_date) || null;
     const listUpdateTime = (() => {
@@ -1908,6 +2028,7 @@ async function runListingExchangeCrawler({
   ]);
   await migrateStaleTimelineDates(merged, adminId, logTag);
   await applyTimelineConfirmationPolicy(merged, logTag);
+  await unifyRegistrationResultStatuses(adminId, logTag);
   await pruneMismatchedTimelineRows(merged, adminId, logTag);
   const mergedExpanded = expandRowsWithTimeline(merged, logTag);
   await emit(`${logTag} 三家合并共 ${mergedExpanded.length} 条，开始去重入库 ipo_progress`);
@@ -2091,4 +2212,7 @@ module.exports = {
   mapRowExchangeProjectId,
   pruneMismatchedTimelineRows,
   findTimelineDateForStatus,
+  unifyRegistrationResultStatuses,
+  normalizeExchangeAuditStatus,
+  mapSzseProgsToTimeline,
 };

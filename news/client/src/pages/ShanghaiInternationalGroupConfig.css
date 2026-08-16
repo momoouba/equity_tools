@@ -40,6 +40,13 @@
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.shanghai-international-group-config .admin-ops .arco-btn {
+  min-width: 0;
+  height: 24px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+
 .shanghai-international-group-config .form-group {
   margin-bottom: 16px;
 }

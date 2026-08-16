@@ -202,6 +202,62 @@ async function dequeueOnXinbangSuccess(wechatAccountId, meta = {}) {
 }
 
 /**
+ * 手动出队 + 从 wewe-rss 删除订阅源。
+ * 新闻库 wewe_private_accounts 只改 team_status=exited，不软删（F_DeleteMark 仍为 0）。
+ */
+async function unsubscribeFromWewe(wechatAccountId) {
+  const gh = String(wechatAccountId || '').trim();
+  if (!gh) return { action: 'skip_empty' };
+
+  const existing = await db.query(
+    `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+    [gh]
+  );
+  if (existing.length === 0) {
+    return { action: 'not_found' };
+  }
+  const row = existing[0];
+  const feedId = String(row.feed_id || '').trim();
+  let wewe = { skipped: true };
+
+  if (feedId) {
+    const { deleteWeweFeed } = require('./weweClient');
+    try {
+      wewe = await deleteWeweFeed(feedId);
+    } catch (e) {
+      wewe = { deleted: false, feedId, error: e.message };
+    }
+  }
+
+  const weweOk = !feedId || wewe.deleted === true;
+  const note = weweOk
+    ? (feedId ? `已从 wewe 退订 ${feedId}` : '已出队（无 wewe feed）')
+    : `wewe 退订失败: ${String(wewe.error || '').slice(0, 200)}`;
+
+  await db.execute(
+    `UPDATE wewe_private_accounts
+     SET team_status = 'exited',
+         last_exited_at = NOW(),
+         extract_pending = 0,
+         feed_id = CASE WHEN ? = 1 THEN NULL ELSE feed_id END,
+         note = ?,
+         F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_Id = ?`,
+    [weweOk && feedId ? 1 : 0, note.slice(0, 500), row.F_Id]
+  );
+
+  console.log(
+    `[wewe专队] 退订 account=${gh} feed=${feedId || '-'} weweOk=${weweOk} weweErr=${wewe.error || '-'}`
+  );
+  return {
+    action: weweOk ? 'unsubscribed' : 'dequeued_wewe_failed',
+    accountId: row.F_Id,
+    feedId: feedId || null,
+    wewe
+  };
+}
+
+/**
  * 在账号同步收尾时根据结果调用入/出队（不抛错）
  */
 async function handleXinbangAccountFinish(wechatAccountId, result) {
@@ -240,6 +296,7 @@ module.exports = {
   isEnqueueEnabled,
   enqueueFromXinbangError,
   dequeueOnXinbangSuccess,
+  unsubscribeFromWewe,
   handleXinbangAccountFinish,
   resolveSourceType
 };

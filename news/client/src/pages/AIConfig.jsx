@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs, Card } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs, Card } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import PromptConfig from './PromptConfig'
+import AdminListTable, { AdminOps } from '../components/AdminListTable'
 import './AIConfig.css'
 
 const Option = Select.Option
@@ -354,7 +355,7 @@ function AIConfig() {
     {
       title: '配置名称',
       dataIndex: 'config_name',
-      width: 200
+      width: 100
     },
     {
       title: '提供商',
@@ -376,7 +377,7 @@ function AIConfig() {
     {
       title: '应用类型',
       dataIndex: 'application_type',
-      width: 120,
+      width: 143,
       render: (text) => applicationTypes.find(t => t.value === text)?.label || text
     },
     {
@@ -397,34 +398,21 @@ function AIConfig() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 209,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record)}>编辑</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
             loading={testLoading === record.id}
             onClick={() => handleTest(record.id)}
           >
             测试
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -437,6 +425,7 @@ function AIConfig() {
             <h3>AI模型配置管理</h3>
             <Space>
               <Button
+                type="outline"
                 onClick={() => {
                   fetchConfigs()
                   fetchMetaOptions()
@@ -463,17 +452,14 @@ function AIConfig() {
                 text={{ rows: 8, width: ['100%'] }}
               />
             ) : (
-              <Table
+              <AdminListTable
                 columns={columns}
                 data={configs}
                 loading={loading}
                 pagination={false}
                 rowKey="id"
-                border={{
-                  wrapper: true,
-                  cell: true
-                }}
-                stripe
+                page={pagination.page}
+                pageSize={pagination.pageSize}
               />
             )}
           </div>

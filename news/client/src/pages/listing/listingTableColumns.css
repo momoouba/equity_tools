@@ -55,3 +55,16 @@
 .listing-new-share-page .arco-table .arco-table-tr .arco-table-td:last-child {
   border-right: none !important;
 }
+
+.listing-data-config .arco-table-th.listing-min-sync-col,
+.listing-data-config .arco-table-th.listing-min-sync-col .arco-table-cell,
+.listing-data-config .arco-table-th.listing-min-sync-col .arco-table-th-item {
+  white-space: nowrap !important;
+  word-break: keep-all;
+  overflow: visible;
+}
+
+.listing-data-config .arco-table-td.listing-min-sync-col,
+.listing-data-config .arco-table-td.listing-min-sync-col .arco-table-cell {
+  white-space: nowrap;
+}

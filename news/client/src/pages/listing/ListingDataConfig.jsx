@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
-  Table,
   Button,
   Space,
   Modal,
@@ -20,6 +19,8 @@ import {
   fetchListingSyncExecutionLog,
 } from '../../api/listing'
 import CronGenerator from '../../components/CronGenerator'
+import AdminListTable, { formatAdminDateTime, AdminOps } from '../../components/AdminListTable'
+import './listingTableColumns.css'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -389,17 +390,17 @@ export default function ListingDataConfig() {
   }
 
   const columns = [
-    { title: '配置名称', dataIndex: 'name', width: 160 },
-    { title: '接口类型', dataIndex: 'interface_type', width: 100 },
+    { title: '配置名称', dataIndex: 'name', width: 96 },
+    { title: '接口类型', dataIndex: 'interface_type', width: 79 },
     {
       title: '接口子类型',
       dataIndex: 'news_interface_type',
-      width: 170,
+      width: 110,
       render: (v) => LISTING_INTERFACE_SUB_TYPES.find((x) => x.value === v)?.label || v || '-',
     },
     {
       title: 'iFinD',
-      width: 140,
+      width: 79,
       render: (_, record) =>
         record.ifind_enabled === 1 || record.ifind_enabled === true
           ? (record.ifind_username_configured && record.ifind_password_configured) || record.ifind_token_configured
@@ -407,60 +408,67 @@ export default function ListingDataConfig() {
             : '已启用(缺凭证)'
           : '未启用',
     },
-    { title: '请求地址', dataIndex: 'request_url', ellipsis: true },
+    { title: '请求地址', dataIndex: 'request_url', className: 'admin-url-col' },
     {
-      title: '最早同步日期',
+      title: '最早同步时间',
       dataIndex: 'min_sync_date',
-      width: 140,
-      render: (t) => formatYmd(t, '2026-01-01'),
+      width: 111,
+      className: 'admin-dt-col',
+      render: (t) => formatAdminDateTime(t || '2026-01-01'),
     },
-    { title: 'Cron', dataIndex: 'cron_expression', width: 140 },
+    { title: 'Cron', dataIndex: 'cron_expression', width: 114 },
     {
-      title: '跳过节假日',
+      title: (
+        <>
+          跳过
+          <br />
+          节假日
+        </>
+      ),
       dataIndex: 'skip_holiday',
-      width: 100,
+      width: 79,
+      className: 'admin-th-wrap',
       render: (v) => (v === 1 || v === true ? '是' : '否'),
     },
     {
-      title: '最后同步时间',
+      title: (
+        <>
+          最后
+          <br />
+          同步时间
+        </>
+      ),
       dataIndex: 'last_sync_time',
-      width: 170,
-      render: (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '-'),
+      width: 96,
+      className: 'admin-dt-col admin-th-wrap',
+      render: (t) => formatAdminDateTime(t),
     },
-    { title: '状态', dataIndex: 'status', width: 100 },
+    { title: '状态', dataIndex: 'status', width: 74 },
     {
       title: '启用',
       dataIndex: 'is_active',
-      width: 80,
+      width: 58,
       render: (v) => (v === 1 || v === true ? '是' : '否'),
     },
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 170,
-      render: (t) => (t ? String(t).replace('T', ' ').slice(0, 19) : '-'),
+      width: 96,
+      className: 'admin-dt-col',
+      render: (t) => formatAdminDateTime(t),
     },
     {
       title: '操作',
-      width: 340,
+      width: 158,
+      className: 'admin-ops-col admin-ops-wrap-3',
       render: (_, record) => (
-        <Space>
-          <Button type="text" size="small" onClick={() => openEdit(record)}>
-            编辑
-          </Button>
-          <Button type="text" size="small" onClick={() => handleCopy(record)}>
-            复制
-          </Button>
-          <Button type="text" size="small" onClick={() => openSync(record)}>
-            同步
-          </Button>
-          <Button type="text" size="small" onClick={() => openLog(record)}>
-            日志
-          </Button>
-          <Button type="text" size="small" status="danger" onClick={() => handleDelete(record)}>
-            删除
-          </Button>
-        </Space>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => openEdit(record)}>编辑</Button>
+          <Button type="outline" size="small" onClick={() => handleCopy(record)}>复制</Button>
+          <Button type="outline" size="small" onClick={() => openSync(record)}>同步</Button>
+          <Button type="outline" size="small" onClick={() => openLog(record)}>日志</Button>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record)}>删除</Button>
+        </AdminOps>
       ),
     },
   ]
@@ -476,12 +484,11 @@ export default function ListingDataConfig() {
           刷新
         </Button>
       </Space>
-      <Table
+      <AdminListTable
         rowKey="id"
         loading={loading}
         columns={columns}
         data={data}
-        scroll={{ x: 1600 }}
       />
 
       <Modal
@@ -511,7 +518,7 @@ export default function ListingDataConfig() {
             />
           </FormItem>
           <FormItem
-            label="最早同步日期"
+            label="最早同步时间"
             field="min_sync_date"
             rules={[{ required: true, message: '请选择最早同步日期' }]}
             extra="该日期之前的数据将不会同步；建议所有上市接口统一设置。"
@@ -639,7 +646,7 @@ export default function ListingDataConfig() {
             : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。'}
         </p>
         <p style={{ marginBottom: 10, color: 'var(--color-text-2)', fontSize: 12 }}>
-          当前配置最早同步日期：{formatYmd(syncRow?.min_sync_date, '2026-01-01')}
+          当前配置最早同步时间：{formatYmd(syncRow?.min_sync_date, '2026-01-01')} 00:00:00
         </p>
         {syncSubmittedRange?.startDate ? (
           <p style={{ marginBottom: 10, color: 'rgb(var(--primary-6))', fontSize: 13, fontWeight: 500 }}>

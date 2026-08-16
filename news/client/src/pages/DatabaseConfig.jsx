@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/AdminListTable'
 import './DatabaseConfig.css'
 
 const Option = Select.Option
@@ -218,43 +219,27 @@ function DatabaseConfig() {
     }
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-'
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    } catch (e) {
-      return dateString
-    }
-  }
-
   const columns = [
     {
       title: '配置名称',
       dataIndex: 'name',
-      width: 150
+      width: 80
     },
     {
       title: '数据库类型',
       dataIndex: 'db_type',
-      width: 120,
+      width: 98,
       render: (text) => text?.toUpperCase() || 'MySQL'
     },
     {
       title: '主机地址',
       dataIndex: 'host',
-      width: 180
+      width: 134
     },
     {
       title: '端口',
       dataIndex: 'port',
-      width: 100
+      width: 74
     },
     {
       title: '数据库名',
@@ -279,25 +264,21 @@ function DatabaseConfig() {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (text) => formatDate(text)
+      width: 96,
+      className: 'admin-dt-col',
+      render: (text) => formatAdminDateTime(text)
     },
     {
       title: '操作',
-      width: 200,
+      width: 166,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record.id)}>编辑</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
+            loading={testing === record.id}
             onClick={async () => {
               setTesting(record.id)
               try {
@@ -313,19 +294,11 @@ function DatabaseConfig() {
                 setTesting(null)
               }
             }}
-            loading={testing === record.id}
           >
             测试
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -358,17 +331,14 @@ function DatabaseConfig() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={configs}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={currentPage}
+            pageSize={pageSize}
           />
         )}
       </div>

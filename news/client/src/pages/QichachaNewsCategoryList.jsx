@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Input, Form, Upload } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Input, Form, Upload } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps } from '../components/AdminListTable'
 import './QichachaNewsCategoryList.css'
 
 const InputSearch = Input.Search
@@ -147,25 +148,13 @@ function QichachaNewsCategoryList() {
     },
     {
       title: '操作',
-      width: 150,
+      width: 132,
+      className: 'admin-ops-col',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record)}>编辑</Button>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -212,17 +201,14 @@ function QichachaNewsCategoryList() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={categories}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={currentPage}
+            pageSize={pageSize}
           />
         )}
       </div>

@@ -42,7 +42,7 @@ function isTerminalStatus(status) {
   if (/不予注册/.test(x)) return true;
   if (/注册生效/.test(x)) return true;
   if (/核准注册|同意注册/.test(x)) return true;
-  // 北交所「注册」终态（非「提交注册」）
+  // 北交所历史「注册」与统一后的「注册生效」均为终态（非「提交注册」）
   if (x === '注册' || (x.includes('注册') && !x.includes('提交') && !x.includes('问询'))) {
     return TERMINAL_PATTERNS.some((p) => x.includes(p));
   }

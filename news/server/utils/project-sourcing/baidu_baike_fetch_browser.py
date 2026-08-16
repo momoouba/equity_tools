@@ -292,7 +292,7 @@ def resolve_cdp_connect_endpoint(cdp_url: str) -> str:
     if payload is None:
         raise RuntimeError(
             f"无法读取 CDP {version_url}（已尝试伪装 Host）: {last_err}\n"
-            "请确认宿主机 Chrome 已加 --remote-allow-origins=* ，且 socat 在转发 9223→9222"
+            f"{CDP_HINT}"
         )
 
     ws = str(payload.get("webSocketDebuggerUrl") or "").strip()
@@ -401,7 +401,8 @@ class BaikeBrowserSession:
         except Exception as cdp_err:
             allow_fallback = str(os.environ.get("BAIKE_CDP_FALLBACK_HEADLESS", "1") or "1").strip() != "0"
             pw_path = str(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "") or "").strip()
-            can_headless = allow_fallback and bool(pw_path and os.path.isdir(pw_path))
+            # 本地未设 PLAYWRIGHT_BROWSERS_PATH 时仍可用 Playwright 默认缓存 launch Chromium
+            can_headless = allow_fallback and (not pw_path or os.path.isdir(pw_path))
             if not can_headless:
                 if isinstance(cdp_err, PlaywrightError):
                     raise RuntimeError(f"无法连接 CDP ({self.cdp_url}): {cdp_err}\n{CDP_HINT}") from cdp_err

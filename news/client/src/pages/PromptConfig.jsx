@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Switch, Form } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Switch, Form } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
 import './PromptConfig.css'
 
 const Option = Select.Option
@@ -295,7 +296,7 @@ function PromptConfig() {
     {
       title: '提示词名称',
       dataIndex: 'prompt_name',
-      width: 200
+      width: 170
     },
     {
       title: '接口类型',
@@ -306,30 +307,30 @@ function PromptConfig() {
     {
       title: '提示词类型',
       dataIndex: 'prompt_type',
-      width: 150,
+      width: 113,
       render: (text) => getPromptTypeLabel(text)
     },
     {
       title: '大模型配置',
       dataIndex: 'ai_model_config_name',
-      width: 200,
+      width: 100,
       render: (text, record) => text || <span style={{ color: '#86909c' }}>未配置</span>
     },
     {
       title: '提示词内容预览',
       dataIndex: 'prompt_content_preview',
-      width: 300,
-      ellipsis: true,
-      tooltip: true,
+      width: 397,
       render: (text, record) => {
         const preview = text || record.prompt_content || ''
-        return preview.length > 100 ? `${preview.substring(0, 100)}...` : preview
+        if (!preview) return '-'
+        return <div className="prompt-preview-2line">{preview}</div>
       }
     },
     {
       title: '状态',
       dataIndex: 'is_active',
-      width: 100,
+      width: 60,
+      className: 'admin-nowrap',
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
           {isActive ? '启用' : '禁用'}
@@ -339,43 +340,22 @@ function PromptConfig() {
     {
       title: '创建时间',
       dataIndex: 'F_CreatorTime',
-      width: 180,
-      render: (text, record) => {
-        const raw = text || record.created_at || record.F_CreatorTime
-        if (!raw) return '-'
-        const date = new Date(raw)
-        return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString()
-      }
+      width: 96,
+      className: 'admin-dt-col',
+      render: (text, record) => formatAdminDateTime(text || record.created_at || record.F_CreatorTime)
     },
     {
       title: '操作',
-      width: 250,
+      width: 162,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status={record.is_active ? 'warning' : 'success'}
-            onClick={() => handleToggleActive(record.id)}
-          >
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record)}>编辑</Button>
+          <Button type="outline" size="small" onClick={() => handleToggleActive(record.id)}>
             {record.is_active ? '禁用' : '启用'}
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -386,6 +366,7 @@ function PromptConfig() {
         <h3>模型提示词设置</h3>
         <Space>
           <Button
+            type="outline"
             onClick={fetchPrompts}
             loading={loading}
           >
@@ -408,17 +389,14 @@ function PromptConfig() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={prompts}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={pagination.page}
+            pageSize={pagination.pageSize}
           />
         )}
       </div>

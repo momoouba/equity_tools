@@ -31,7 +31,17 @@
   border-top: 1px solid #e5e6eb;
 }
 
-/* 操作按钮样式优化 */
+.prompt-preview-2line {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+  line-height: 1.4;
+  white-space: normal;
+  cursor: default;
+}
+
 .prompt-config .arco-btn {
   min-width: 64px;
   height: 28px;
@@ -57,6 +67,18 @@
 
 .prompt-config .arco-btn-outline:hover {
   border-color: currentColor;
+}
+
+.prompt-config .admin-ops .arco-btn {
+  min-width: 0;
+  height: 24px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+
+.prompt-config .admin-ops .arco-btn:hover {
+  transform: none;
+  box-shadow: none;
 }
 
 /* 表单样式 */

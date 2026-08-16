@@ -1591,7 +1591,7 @@ function registerCompetitorMatchRoutes(router) {
       // 创建 BP 版本记录（版本 1）
       if (bpFilename && bpFilePath) {
         try {
-          const verId = await generateId();
+          const verId = await generateId('pre_investment_bp_version');
           await db.execute(
             `INSERT INTO pre_investment_bp_version (F_Id, project_id, version_no, bp_filename, bp_file_path, uploaded_by, is_current)
              VALUES (?, ?, 1, ?, ?, ?, 1)`,
@@ -1685,12 +1685,12 @@ function registerCompetitorMatchRoutes(router) {
             [id]
           );
           // 获取下一个版本号
-          const [maxVer] = await db.query(
+          const maxRows = await db.query(
             `SELECT COALESCE(MAX(version_no), 0) AS max_ver FROM pre_investment_bp_version WHERE project_id = ? AND F_DeleteMark = 0`,
             [id]
           );
-          const nextVer = Number(maxVer[0]?.max_ver || 0) + 1;
-          const verId = generateId();
+          const nextVer = Number(maxRows[0]?.max_ver || 0) + 1;
+          const verId = await generateId('pre_investment_bp_version');
           await db.execute(
             `INSERT INTO pre_investment_bp_version (F_Id, project_id, version_no, bp_filename, bp_file_path, uploaded_by, is_current)
              VALUES (?, ?, ?, ?, ?, ?, 1)`,

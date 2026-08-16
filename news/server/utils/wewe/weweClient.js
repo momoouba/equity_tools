@@ -57,8 +57,8 @@ function normalizeArticles(payload) {
   return [];
 }
 
-/** 从微信整页 HTML / 富文本里抽出可读纯文本预览（G0 探路用） */
-function htmlToTextPreview(html, maxLen = 240) {
+/** 从微信整页 HTML / 富文本抽出可读正文 */
+function htmlToPlainText(html, maxLen = 80000) {
   const s = String(html || '');
   if (!s) return '';
   let text = s
@@ -72,7 +72,6 @@ function htmlToTextPreview(html, maxLen = 240) {
     .replace(/&#?\w+;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  // 常见微信页噪音前缀过长时，尝试从「阅读原文」等之后截；失败则直接截断
   if (text.length > maxLen * 3) {
     const m = text.match(/(发布|作者|阅读原文|[\u4e00-\u9fff]{8,})/);
     if (m && m.index != null && m.index < text.length / 2) {
@@ -80,6 +79,11 @@ function htmlToTextPreview(html, maxLen = 240) {
     }
   }
   return text.slice(0, maxLen);
+}
+
+/** 从微信整页 HTML / 富文本里抽出可读纯文本预览（G0 探路用） */
+function htmlToTextPreview(html, maxLen = 240) {
+  return htmlToPlainText(html, maxLen);
 }
 
 function pickArticleFields(raw, feedHint = null) {
@@ -184,10 +188,11 @@ async function fetchFeedJson(feedId, { limit = 10, update = false } = {}) {
   };
 }
 
-/** tRPC mutation：body 直接传 procedure input（不要包 json 层） */
+/** tRPC mutation：body 直接传 procedure input（不要包 json 层）。字符串须 JSON 编码。 */
 async function trpcMutation(procedurePath, input) {
   const { client, baseUrl } = buildClient();
-  const res = await client.post(`/trpc/${procedurePath}`, input, {
+  const payload = typeof input === 'string' ? JSON.stringify(input) : input;
+  const res = await client.post(`/trpc/${procedurePath}`, payload, {
     headers: { 'Content-Type': 'application/json' }
   });
   if (res.status >= 400 || res.data?.error) {
@@ -250,6 +255,27 @@ async function getMpInfoByArticleUrl(wxsLink) {
     intro: row.intro || row.mpIntro || '',
     updateTime: Number(row.updateTime) || Math.floor(Date.now() / 1000)
   };
+}
+
+function isWeweFeedGoneError(err) {
+  const msg = String((err && err.message) || err || '');
+  const body = err && err.body ? JSON.stringify(err.body) : '';
+  return /No feed|does not exist|Record to delete|P2025|not found/i.test(`${msg} ${body}`);
+}
+
+/** 从 wewe-rss 硬删除订阅源（wewe SQLite/MySQL，不是新闻库软删） */
+async function deleteWeweFeed(feedId) {
+  const id = String(feedId || '').trim();
+  if (!id) throw new Error('feedId required');
+  try {
+    await trpcMutation('feed.delete', id);
+    return { deleted: true, feedId: id };
+  } catch (e) {
+    if (isWeweFeedGoneError(e)) {
+      return { deleted: true, alreadyGone: true, feedId: id };
+    }
+    throw e;
+  }
 }
 
 /** 若 wewe 尚无该 feed 则 upsert 订阅 */
@@ -336,6 +362,8 @@ module.exports = {
   fetchFeedJson,
   normalizeArticles,
   pickArticleFields,
+  htmlToPlainText,
+  htmlToTextPreview,
   trpcMutation,
   trpcQuery,
   listWeweFeeds,
@@ -343,6 +371,7 @@ module.exports = {
   hasEnabledWeweAccount,
   getMpInfoByArticleUrl,
   ensureWeweFeedSubscribed,
+  deleteWeweFeed,
   refreshMpArticles,
   getMpArticles,
   createLoginUrl,

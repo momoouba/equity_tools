@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import LogModal from './LogModal'
+import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
 import './ShanghaiInternationalGroupConfig.css'
 
 const Option = Select.Option
@@ -175,22 +176,6 @@ function ShanghaiInternationalGroupConfig() {
     }
   }
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '-'
-    try {
-      const date = new Date(dateString)
-      return date.toLocaleString('zh-CN', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit'
-      })
-    } catch (e) {
-      return dateString
-    }
-  }
-
   const columns = [
     {
       title: '应用',
@@ -201,15 +186,13 @@ function ShanghaiInternationalGroupConfig() {
     {
       title: 'X-App-Id',
       dataIndex: 'x_app_id',
-      width: 200,
-      ellipsis: true,
-      tooltip: true,
+      width: 160,
       render: (text) => text || '-'
     },
     {
       title: '每日查询限制',
       dataIndex: 'daily_limit',
-      width: 150,
+      width: 75,
       render: (text) => text ?? 100
     },
     {
@@ -225,25 +208,20 @@ function ShanghaiInternationalGroupConfig() {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
-      render: (text) => formatDate(text)
+      width: 137,
+      className: 'admin-dt-col',
+      render: (text) => formatAdminDateTime(text)
     },
     {
       title: '操作',
-      width: 260,
+      width: 166,
+      className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
+          <Button type="outline" size="small" onClick={() => handleEdit(record.id)}>编辑</Button>
           <Button
             type="outline"
             size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
             loading={testingConfigId === record.id}
             onClick={() => handleTest(record.id)}
           >
@@ -252,7 +230,6 @@ function ShanghaiInternationalGroupConfig() {
           <Button
             type="outline"
             size="small"
-            status="success"
             onClick={() => {
               setLogConfigId(record.id)
               setShowLogModal(true)
@@ -260,15 +237,8 @@ function ShanghaiInternationalGroupConfig() {
           >
             日志
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+          <Button type="outline" size="small" status="danger" onClick={() => handleDelete(record.id)}>删除</Button>
+        </AdminOps>
       )
     }
   ]
@@ -301,17 +271,14 @@ function ShanghaiInternationalGroupConfig() {
             text={{ rows: 8, width: ['100%'] }}
           />
         ) : (
-          <Table
+          <AdminListTable
             columns={columns}
             data={configs}
             loading={loading}
             pagination={false}
             rowKey="id"
-            border={{
-              wrapper: true,
-              cell: true
-            }}
-            stripe
+            page={currentPage}
+            pageSize={pageSize}
           />
         )}
       </div>

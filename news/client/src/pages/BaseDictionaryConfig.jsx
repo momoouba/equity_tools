@@ -9,10 +9,10 @@ import {
   Popconfirm,
   Space,
   Switch,
-  Table,
   Tag
 } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import AdminListTable, { AdminOps } from '../components/AdminListTable'
 
 const FormItem = Form.Item
 
@@ -186,34 +186,35 @@ function BaseDictionaryConfig() {
     {
       title: '排序',
       dataIndex: 'sort_order',
-      width: 80
+      width: 52
     },
     {
       title: '选项数',
       dataIndex: 'item_count',
-      width: 80
+      width: 56
     },
     {
       title: '状态',
       dataIndex: 'is_enabled',
-      width: 90,
+      width: 56,
       render: (v) => (
         <Tag color={Number(v) === 1 ? 'green' : 'gray'}>{Number(v) === 1 ? '启用' : '停用'}</Tag>
       )
     },
     {
       title: '操作',
-      width: 200,
+      width: 132,
+      className: 'admin-ops-col',
       render: (_, row) => (
-        <Space>
+        <AdminOps>
           <Switch
+            size="small"
             checked={Number(row.is_enabled) === 1}
-            checkedText="启用"
-            uncheckedText="停用"
             onChange={(v) => toggleDictStatus(row, v)}
           />
           <Button
-            type="text"
+            type="outline"
+            size="small"
             onClick={() => {
               setEditingDict(row)
               setDictModalVisible(true)
@@ -225,9 +226,9 @@ function BaseDictionaryConfig() {
             title="确认删除该字典类型及其全部选项？"
             onOk={() => removeDict(row)}
           >
-            <Button type="text" status="danger">删除</Button>
+            <Button type="outline" size="small" status="danger">删除</Button>
           </Popconfirm>
-        </Space>
+        </AdminOps>
       )
     }
   ]
@@ -246,29 +247,30 @@ function BaseDictionaryConfig() {
     {
       title: '排序',
       dataIndex: 'sort_order',
-      width: 80
+      width: 52
     },
     {
       title: '状态',
       dataIndex: 'is_enabled',
-      width: 90,
+      width: 56,
       render: (v) => (
         <Tag color={Number(v) === 1 ? 'green' : 'gray'}>{Number(v) === 1 ? '启用' : '停用'}</Tag>
       )
     },
     {
       title: '操作',
-      width: 240,
+      width: 132,
+      className: 'admin-ops-col',
       render: (_, row) => (
-        <Space>
+        <AdminOps>
           <Switch
+            size="small"
             checked={Number(row.is_enabled) === 1}
-            checkedText="启用"
-            uncheckedText="停用"
             onChange={(v) => toggleItemStatus(row, v)}
           />
           <Button
-            type="text"
+            type="outline"
+            size="small"
             onClick={() => {
               setEditingItem(row)
               setItemModalVisible(true)
@@ -277,9 +279,9 @@ function BaseDictionaryConfig() {
             修改
           </Button>
           <Popconfirm title="确认删除该选项？" onOk={() => removeItem(row)}>
-            <Button type="text" status="danger">删除</Button>
+            <Button type="outline" size="small" status="danger">删除</Button>
           </Popconfirm>
-        </Space>
+        </AdminOps>
       )
     }
   ]
@@ -329,7 +331,7 @@ function BaseDictionaryConfig() {
               新增字典类型
             </Button>
           </div>
-          <Table
+          <AdminListTable
             rowKey="F_Id"
             loading={loading}
             columns={dictColumns}
@@ -365,7 +367,7 @@ function BaseDictionaryConfig() {
               新增字典选项
             </Button>
           </div>
-          <Table
+          <AdminListTable
             rowKey="F_Id"
             loading={itemLoading}
             columns={itemColumns}

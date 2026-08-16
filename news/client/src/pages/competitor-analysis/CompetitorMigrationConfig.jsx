@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { Table, Button, Space, Message, Tag, Switch } from '@arco-design/web-react'
+import { Button, Space, Message, Tag, Switch } from '@arco-design/web-react'
 import axios from '../../utils/axios'
 import CronGenerator from '../../components/CronGenerator'
+import AdminListTable, { AdminOps } from '../../components/AdminListTable'
 
 /**
  * 系统配置 · 竞品分析：投前→投后竞品数据自动迁移定时任务配置
@@ -152,9 +153,10 @@ function CompetitorMigrationConfig() {
     },
     {
       title: '操作',
-      width: 300,
+      width: 132,
+      className: 'admin-ops-col',
       render: (_, record) => (
-        <Space size={8}>
+        <AdminOps>
           <Button
             type="outline"
             size="small"
@@ -165,23 +167,15 @@ function CompetitorMigrationConfig() {
           >
             编辑Cron
           </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            loading={syncing}
-            onClick={handleManualSync}
-          >
+          <Button type="outline" size="small" loading={syncing} onClick={handleManualSync}>
             手动同步
           </Button>
           <Switch
             size="small"
             checked={record.active}
             onChange={handleToggleActive}
-            checkedText="启用"
-            uncheckedText="禁用"
           />
-        </Space>
+        </AdminOps>
       )
     }
   ]
@@ -208,12 +202,11 @@ function CompetitorMigrationConfig() {
         每日定时检查投前项目中与被投企业全称匹配的记录，将最新一次成功的投前竞品分析数据同步至投后（排除已上市/完全退出企业）。
       </p>
 
-      <Table
+      <AdminListTable
         columns={columns}
         data={tableData}
         loading={loading}
         pagination={false}
-        borderCell
         style={{ marginBottom: 16 }}
       />
 

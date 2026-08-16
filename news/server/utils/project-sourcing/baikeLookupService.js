@@ -33,6 +33,54 @@ function resolveBaikeBrowserMode(opts = {}) {
   return 'cdp';
 }
 
+function defaultCdpUrl(opts = {}) {
+  return String(opts.cdpUrl || process.env.BAIKE_CDP_URL || 'http://127.0.0.1:9222').trim();
+}
+
+function localBaikeChromeHint() {
+  if (process.platform === 'win32') {
+    return '本地请先启动带调试端口的 Chrome：powershell -ExecutionPolicy Bypass -File server/scripts/startChromeForBaike.ps1 ，并在弹出窗口打开百度百科完成验证（如有）。不需要 socat。';
+  }
+  return '请启动带 --remote-debugging-port=9222 --remote-allow-origins=* 的 Chrome。Docker 生产才需要 socat 9223→9222。';
+}
+
+function probeCdpUrl(url, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    try {
+      const u = new URL(url);
+      const net = require('net');
+      const sock = net.connect({ host: u.hostname, port: Number(u.port || 9222) }, () => {
+        sock.end();
+        resolve(true);
+      });
+      sock.on('error', () => resolve(false));
+      sock.setTimeout(timeoutMs, () => {
+        sock.destroy();
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+async function resolveBaikeBrowserModeWithCdpProbe(opts = {}) {
+  const mode = resolveBaikeBrowserMode(opts);
+  if (mode !== 'cdp') return { mode, cdpReady: false };
+  const cdpUrl = defaultCdpUrl(opts);
+  const cdpReady = await probeCdpUrl(cdpUrl);
+  if (cdpReady) return { mode: 'cdp', cdpReady: true };
+  const allowFallback = String(process.env.BAIKE_CDP_FALLBACK_HEADLESS || '1').trim() !== '0';
+  if (!allowFallback) {
+    console.warn(`[baikeLookup] CDP 未就绪 ${cdpUrl}。${localBaikeChromeHint()}`);
+    return { mode: 'cdp', cdpReady: false };
+  }
+  console.warn(
+    `[baikeLookup] CDP 未就绪 ${cdpUrl}，本批改用 headless。${localBaikeChromeHint()}`
+  );
+  return { mode: 'headless', cdpReady: false };
+}
+
 const PROTECTED_FINANCING_PROFILE = new Set(['listed_sync', 'bp', 'llm_web']);
 const PROTECTED_PRE_INV_PROFILE = new Set(['bp', 'listed_sync', 'donor', 'llm_web']);
 
@@ -776,6 +824,7 @@ module.exports = {
   pickBaikeSearchName,
   normalizeBaikePayload,
   resolveBaikeBrowserMode,
+  resolveBaikeBrowserModeWithCdpProbe,
   fetchBaikeHttp,
   fetchBaike,
   fetchBaikeBrowserBatch,

@@ -59,6 +59,18 @@
   border-color: currentColor;
 }
 
+.database-config .admin-ops .arco-btn {
+  min-width: 0;
+  height: 24px;
+  padding: 0 5px;
+  font-size: 12px;
+}
+
+.database-config .admin-ops .arco-btn:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 /* 表单样式 */
 .form-group {
   margin-bottom: 16px;
