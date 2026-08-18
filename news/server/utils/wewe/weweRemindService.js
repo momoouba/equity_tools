@@ -6,9 +6,14 @@ const { formatBeijingYmd } = require('../newsFetchDayLog');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 const { sendWeweOpsMail, resolveOpsRecipients } = require('./weweOpsMail');
 const { signLiveQrToken, buildLiveQrPageUrl } = require('./weweLiveQrToken');
-const { resumeExtractAfterLogin, getSessionRow, runExtractTick } = require('./weweExtractService');
+const {
+  resumeExtractAfterLogin,
+  getSessionRow,
+  runExtractTick,
+  setExtractPaused
+} = require('./weweExtractService');
 const { applyExtractTickDelay } = require('./scheduledWeweExtractTasks');
-const { createLoginUrl, getLoginResult, addWeweAccount } = require('./weweClient');
+const { createLoginUrl, getLoginResult, addWeweAccount, hasEnabledWeweAccount } = require('./weweClient');
 
 function publicBaseUrl(req) {
   if (process.env.NEWS_PUBLIC_BASE_URL) {
@@ -143,13 +148,30 @@ async function runScanRemindTick(options = {}) {
   }
 
   const session = await ensureSessionRow();
-  const phaseInfo = computeSessionPhase(session, cfg || {});
+  let phaseInfo = computeSessionPhase(session, cfg || {});
+
+  let noEnabledAccount = false;
+  try {
+    noEnabledAccount = !(await hasEnabledWeweAccount());
+  } catch (e) {
+    console.warn(`[wewe催办] 查询读书账号失败，不按失效处理: ${e.message}`);
+  }
+  if (noEnabledAccount && phaseInfo.phase !== 'dead') {
+    console.log('[wewe催办] 无可用读书账号（status≠1），按会话失效催办');
+    phaseInfo = { ...phaseInfo, phase: 'dead' };
+    try {
+      await setExtractPaused(true, '无可用读书账号');
+    } catch (e) {
+      console.warn('[wewe催办] 暂停提取失败:', e.message);
+    }
+  }
+
   if (phaseInfo.phase === 'ok') {
     return { action: 'idle_ok', phase: 'ok', expiresAt: phaseInfo.expiresAt };
   }
   if (phaseInfo.phase === 'unknown' && !force) {
     // 从未登录：仍可催一次（当 pause 或运维要求）
-    if (Number(session.pause_extract) !== 1 && session.session_status !== 'expired') {
+    if (Number(session.pause_extract) !== 1 && session.session_status !== 'expired' && !noEnabledAccount) {
       return { action: 'idle_unknown' };
     }
   }
@@ -201,6 +223,46 @@ async function runScanRemindTick(options = {}) {
   };
 }
 
+async function filterPendingSubscribeNeedLink(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return { needLink: [], skippedXinbangDup: [] };
+
+  const ids = [...new Set(list.map((r) => String(r.wechat_account_id || '').trim()).filter(Boolean))];
+  const existing = new Set();
+  if (ids.length) {
+    const ph = ids.map(() => '?').join(',');
+    const hits = await db.query(
+      `SELECT DISTINCT wechat_account
+       FROM news_detail
+       WHERE F_DeleteMark = 0
+         AND wechat_account IN (${ph})`,
+      ids
+    );
+    for (const h of hits || []) {
+      const k = String(h.wechat_account || '').trim();
+      if (k) existing.add(k);
+    }
+  }
+
+  const needLink = [];
+  const skippedXinbangDup = [];
+  for (const row of list) {
+    const gh = String(row.wechat_account_id || '').trim();
+    if (!gh) continue;
+    const reasonText = `${row.note || ''} ${row.last_xinbang_error || ''}`;
+    const looksDup = /重复/.test(reasonText);
+    if (existing.has(gh) || looksDup) {
+      skippedXinbangDup.push(gh);
+      continue;
+    }
+    needLink.push({
+      wechatAccountId: gh,
+      reason: row.note || row.last_xinbang_error || '缺分享链接'
+    });
+  }
+  return { needLink, skippedXinbangDup };
+}
+
 /**
  * 待订阅日催（默认每天）
  */
@@ -221,16 +283,26 @@ async function runPendingSubscribeRemindTick(options = {}) {
   );
   if (!rows.length) return { action: 'idle_empty', count: 0 };
 
-  // 合并为一封 digest，避免一号一邮
+  const { needLink, skippedXinbangDup } = await filterPendingSubscribeNeedLink(rows);
+  if (skippedXinbangDup.length) {
+    console.log(
+      `[wewe催办] 待订阅跳过 ${skippedXinbangDup.length} 个（新闻库已有文或新榜重复，不催补链接）: ${skippedXinbangDup.join(',')}`
+    );
+  }
+  if (!needLink.length) {
+    return {
+      action: 'idle_all_skipped',
+      count: 0,
+      skipped: skippedXinbangDup.length
+    };
+  }
+
   const { notifyPendingSubscribeDigest } = require('./wewePendingSubscribeMail');
-  const accounts = rows.map((row) => ({
-    wechatAccountId: row.wechat_account_id,
-    reason: row.note || row.last_xinbang_error || '缺分享链接'
-  }));
-  const digest = await notifyPendingSubscribeDigest({ accounts, force });
+  const digest = await notifyPendingSubscribeDigest({ accounts: needLink, force });
   return {
     action: 'digest',
-    count: accounts.length,
+    count: needLink.length,
+    skipped: skippedXinbangDup.length,
     subject: digest.subject,
     sent: digest.sent,
     mode: digest.mode,
