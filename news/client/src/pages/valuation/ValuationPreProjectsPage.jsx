@@ -240,7 +240,7 @@ export default function ValuationPreProjectsPage() {
               onSearch={(v) => { setKeyword(v); setPage(1) }}
             />
             <Button onClick={() => setPickVisible(true)}>从竞品分析选择</Button>
-            <Button type="primary" onClick={openCreateModal}>手工新建</Button>
+            <Button type="primary" onClick={() => setCreateVisible(true)}>手工新建</Button>
           </Space>
         </div>
         <Table
@@ -266,64 +266,36 @@ export default function ValuationPreProjectsPage() {
       </Card>
 
       <Modal
-        title="新增企业信息"
-        style={{ width: 520 }}
+        title="手工新建投前主体"
         visible={createVisible}
-        onCancel={closeCreateModal}
-        onOk={handleCreateSubmit}
-        confirmLoading={createSubmitting}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onValuesChange={(changed) => {
-            if (Object.prototype.hasOwnProperty.call(changed, 'project_abbreviation')) {
-              clearQccDropdown()
+        onCancel={() => setCreateVisible(false)}
+        onOk={async () => {
+          const values = await form.validate()
+          try {
+            const res = await postValuationPreProject(values)
+            if (res.data?.success) {
+              Message.success('已创建')
+              setCreateVisible(false)
+              form.resetFields()
+              load()
+              await openCase(res.data.data.id)
+            } else {
+              Message.error(res.data?.message || '创建失败')
             }
-          }}
-        >
-          <FormItem label="项目编号">
-            <Input value={projectNoPreview} disabled placeholder="自动生成" />
+          } catch (e) {
+            Message.error(e.response?.data?.message || e.message || '创建失败')
+          }
+        }}
+      >
+        <Form form={form} layout="vertical">
+          <FormItem label="企业全称" field="enterprise_full_name" rules={[{ required: true, message: '请填写企业全称' }]}>
+            <Input />
           </FormItem>
-          <FormItem label="企业简称">
-            <div ref={qccDropdownRef} style={{ position: 'relative', width: '100%' }}>
-              <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-                <FormItem field="project_abbreviation" noStyle>
-                  <Input placeholder="请输入企业简称" style={{ flex: 1 }} />
-                </FormItem>
-                <Button type="primary" loading={lookupLoading} onClick={handleQccLookup}>
-                  查询
-                </Button>
-              </div>
-              {showQccDropdown && qccCandidates.length > 0 && (
-                <div className="valuation-qcc-dropdown">
-                  {qccCandidates.map((company, index) => (
-                    <div
-                      key={`${company.unified_credit_code || company.enterprise_full_name}-${index}`}
-                      className="valuation-qcc-dropdown-item"
-                      onClick={() => handleSelectQccCandidate(company)}
-                    >
-                      <div className="valuation-qcc-dropdown-main">{company.enterprise_full_name}</div>
-                      {company.unified_credit_code ? (
-                        <div className="valuation-qcc-dropdown-sub">
-                          统一社会信用代码：{company.unified_credit_code}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+          <FormItem label="项目简称" field="project_abbreviation">
+            <Input />
           </FormItem>
-          <FormItem
-            label="企业全称"
-            field="enterprise_full_name"
-            rules={[{ required: true, message: '必填' }]}
-          >
-            <Input placeholder="请输入企业全称（查询后请从列表中选择）" />
-          </FormItem>
-          <FormItem label="统一信用代码" field="unified_credit_code">
-            <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
+          <FormItem label="统一社会信用代码" field="unified_credit_code">
+            <Input />
           </FormItem>
         </Form>
       </Modal>
