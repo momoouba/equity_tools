@@ -6,8 +6,7 @@ const { generateId } = require('../idGenerator');
 const { fetchFeedJson, refreshMpArticles, getMpArticles, htmlToPlainText } = require('./weweClient');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 
-const SESSION_DEAD_RE =
-  /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新|暂无可用读书账号|无可用读书账号|WeReadError401/i;
+const SESSION_DEAD_RE = /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新/i;
 
 function formatBeijingYmd(date = new Date()) {
   const s = date.toLocaleString('zh-CN', {
