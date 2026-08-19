@@ -2125,14 +2125,30 @@ async function executeSyncTask(
 
       if (insertFields.length > 2) {
         const placeholders = insertFields.map(() => '?').join(', ');
-        await db.execute(
-          `INSERT INTO invested_enterprises 
+        let insertedOk = false;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            await db.execute(
+              `INSERT INTO invested_enterprises 
            (${insertFields.join(', ')}) 
            VALUES (${placeholders})`,
-          insertValues
-        );
-        inserted++;
-        console.log(`新增企业：${enterpriseData.enterprise_full_name}，统一信用代码：${enterpriseData.unified_credit_code || '无'}，项目编号：${projectNumber}，插入字段: ${insertFields.slice(2).join(', ')}`);
+              insertValues
+            );
+            insertedOk = true;
+            break;
+          } catch (err) {
+            if (err.code !== 'ER_DUP_ENTRY' || attempt === 4) throw err;
+            const retryId = await generateId('invested_enterprises');
+            insertValues[0] = retryId;
+            console.warn(
+              `[企业同步任务] 主键冲突已换号重试 ${attempt + 1}/4：${err.sqlMessage || err.message} → ${retryId}`
+            );
+          }
+        }
+        if (insertedOk) {
+          inserted++;
+          console.log(`新增企业：${enterpriseData.enterprise_full_name}，统一信用代码：${enterpriseData.unified_credit_code || '无'}，项目编号：${projectNumber}，插入字段: ${insertFields.slice(2).join(', ')}`);
+        }
       } else {
         console.warn(`跳过插入：没有匹配的字段，企业全称：${enterpriseData.enterprise_full_name}`);
       }

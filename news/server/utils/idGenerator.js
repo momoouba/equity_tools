@@ -2,6 +2,8 @@ const db = require('../db');
 
 /** 同表 generateId 串行化，避免并发读到相同 maxId 撞主键 */
 const tableIdLocks = new Map();
+/** 本进程已发出、但可能尚未 INSERT 的最大号；防止查库 MAX 落后于发号 */
+const lastIssuedByTable = new Map();
 
 async function withTableIdLock(tableName, fn) {
   const prev = tableIdLocks.get(tableName) || Promise.resolve();
@@ -176,15 +178,31 @@ async function generateIdUnlocked(tableName, connection) {
         }
       }
     }
+
+    const issued = lastIssuedByTable.get(tableName);
+    if (issued && String(issued).startsWith(prefix)) {
+      const issuedSeq = parseInt(String(issued).slice(-5), 10);
+      if (Number.isFinite(issuedSeq) && issuedSeq >= sequence) {
+        if (issuedSeq >= 99999) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return generateIdUnlocked(tableName, connection);
+        }
+        sequence = issuedSeq + 1;
+      }
+    }
     
     // 生成5位序列号
     const sequenceStr = String(sequence).padStart(5, '0');
-    return `${prefix}${sequenceStr}`;
+    const id = `${prefix}${sequenceStr}`;
+    lastIssuedByTable.set(tableName, id);
+    return id;
   } catch (error) {
     console.error(`生成ID失败（表：${tableName}）：`, error);
     // 如果查询失败，使用时间戳+随机数作为后备方案
     const random = Math.floor(Math.random() * 10000);
-    return `${prefix}${String(random).padStart(5, '0')}`;
+    const fallback = `${prefix}${String(random).padStart(5, '0')}`;
+    lastIssuedByTable.set(tableName, fallback);
+    return fallback;
   }
 }
 
@@ -215,6 +233,7 @@ async function generateSequentialIds(tableName, count, connection) {
       current = `${prefix}${String(seq).padStart(5, '0')}`;
       ids.push(current);
     }
+    if (current) lastIssuedByTable.set(tableName, current);
     return ids;
   });
 }

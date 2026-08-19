@@ -7,12 +7,24 @@ const executeSyncTask = enterpriseRoutes.executeSyncTask;
 
 // 存储所有定时任务
 const scheduledTasks = new Map();
+/** 多个应用 20:00 同时触发时串行执行，避免 invested_enterprises 发号撞主键 */
+let syncRunChain = Promise.resolve();
+
+function enqueueSyncRun(fn) {
+  const run = syncRunChain.then(fn, fn);
+  syncRunChain = run.catch(() => {});
+  return run;
+}
 
 /**
  * 执行企业同步任务
  * @param {Object} task - 任务对象
  */
 async function executeEnterpriseSyncTask(task) {
+  return enqueueSyncRun(() => runEnterpriseSyncTask(task));
+}
+
+async function runEnterpriseSyncTask(task) {
   try {
     console.log(`[企业同步任务] 开始执行任务: ${task.F_Id} (${task.description || '无描述'})`);
     
