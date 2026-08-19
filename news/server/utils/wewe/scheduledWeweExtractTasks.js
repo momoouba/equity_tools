@@ -11,6 +11,7 @@ const {
 } = require('./wewePrivateTeam');
 const {
   markAllActiveForExtract,
+  catchUpExtractQueueAfterRestart,
   runExtractTick,
   isExtractEnabled,
   formatBeijingYmd
@@ -33,6 +34,9 @@ function delayMinutesForResult(result, longMinutes) {
     result.action === 'session_dead'
   ) {
     return 0;
+  }
+  if (result.action === 'wewe_unavailable') {
+    return EMPTY_INTERVAL_MINUTES;
   }
   const hadArticle =
     result.status === 'success' ||
@@ -127,7 +131,11 @@ async function updateWeweExtractScheduledTasks() {
 
 async function initializeWeweExtractScheduledTasks() {
   try {
-    await updateWeweExtractScheduledTasks();
+    const reg = await updateWeweExtractScheduledTasks();
+    if (reg && reg.registered) {
+      await catchUpExtractQueueAfterRestart();
+      nextTickAllowedAt = 0;
+    }
   } catch (e) {
     console.error('[wewe提取调度] 初始化失败:', e.message);
   }

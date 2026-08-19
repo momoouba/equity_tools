@@ -7,6 +7,8 @@ const { fetchFeedJson, refreshMpArticles, getMpArticles, htmlToPlainText } = req
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 
 const SESSION_DEAD_RE = /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新/i;
+const WEWE_DOWN_RE =
+  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|暂无可用读书账号|无可用读书账号/i;
 
 function formatBeijingYmd(date = new Date()) {
   const s = date.toLocaleString('zh-CN', {
@@ -41,6 +43,17 @@ function isSessionDeadError(err) {
   const msg = String((err && err.message) || err || '');
   const body = err && err.body ? JSON.stringify(err.body) : '';
   return SESSION_DEAD_RE.test(msg) || SESSION_DEAD_RE.test(body);
+}
+
+function isWeweUnavailableError(err) {
+  if (!err) return false;
+  const msg = String(err.message || err || '');
+  const code = String(err.code || '');
+  const status = Number(err.status || 0);
+  if (WEWE_DOWN_RE.test(msg) || WEWE_DOWN_RE.test(code)) return true;
+  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) return true;
+  if (status >= 500 && status < 600) return true;
+  return false;
 }
 
 const FEED_LIMIT = 50;
@@ -166,6 +179,74 @@ async function markAllActiveForExtract() {
   return n;
 }
 
+function beijingMinutesNow() {
+  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  const hm = String(s).slice(11, 16);
+  const [hh, mm] = hm.split(':').map((x) => parseInt(x, 10));
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return 0;
+  return hh * 60 + mm;
+}
+
+function extractStartMinutes(cfg) {
+  const m = String((cfg && cfg.extract_start) || '21:00').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return 21 * 60;
+  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
+  const mi = Math.min(59, Math.max(0, parseInt(m[2], 10)));
+  return h * 60 + mi;
+}
+
+/**
+ * app / wewe 在 extract_start 之后重启：把今天还没 success/partial 的号重新入队。
+ * 未到 extract_start 不补，避免凌晨重启把昨天的号再跑一遍。
+ */
+async function catchUpExtractQueueAfterRestart() {
+  const cfg = await getWewePrivateConfig();
+  if (!cfg || Number(cfg.wewe_enabled) !== 1 || Number(cfg.extract_enabled) !== 1) {
+    return { action: 'skip_disabled', marked: 0 };
+  }
+  if (beijingMinutesNow() < extractStartMinutes(cfg)) {
+    console.log('[wewe提取] 未到 extract_start，跳过重启补队');
+    return { action: 'before_start', marked: 0 };
+  }
+  const ymd = formatBeijingYmd();
+  const result = await db.execute(
+    `UPDATE wewe_private_accounts
+     SET extract_pending = 1, F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_DeleteMark = 0
+       AND team_status = 'active'
+       AND map_status = 'mapped'
+       AND feed_id IS NOT NULL
+       AND feed_id != ''
+       AND NOT (
+         last_extract_status IN ('success', 'partial')
+         AND last_extract_at IS NOT NULL
+         AND DATE(last_extract_at) = ?
+       )`,
+    [ymd]
+  );
+  const n = result?.affectedRows != null ? result.affectedRows : 0;
+  console.log(`[wewe提取] 重启补队：今日尚未 success/partial 的账号 ${n} 个重新入队`);
+  return { action: 'caught_up', marked: n, extractYmd: ymd };
+}
+
+async function keepPendingWeweDown(accountRow, message) {
+  await db.execute(
+    `UPDATE wewe_private_accounts
+     SET last_extract_status = 'wewe_down',
+         last_extract_at = NOW(),
+         note = ?,
+         F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_Id = ?`,
+    [String(message || 'wewe unavailable').slice(0, 500), accountRow.F_Id]
+  );
+  console.warn(`[wewe提取] wewe 不可用，保留队列 account=${accountRow.wechat_account_id}: ${message}`);
+  return {
+    action: 'wewe_unavailable',
+    wechatAccountId: accountRow.wechat_account_id,
+    error: message
+  };
+}
+
 async function pickNextPendingAccount() {
   // 有文(success)优先，未知/失败其次，连续 empty 最后；同组按最久未提
   const rows = await db.query(
@@ -267,9 +348,11 @@ async function extractOneAccount(accountRow, options = {}) {
     // 主路径：platform.getMpArticles 拿当日目录（不含正文）
     // 先 refresh 再 getMpArticles 易被 wewe 限流成空列表，故不前置 refresh
     let rawList = [];
+    let mpError = null;
     try {
       rawList = await getMpArticles(feedId);
     } catch (e) {
+      mpError = e;
       console.warn(`[wewe提取] getMpArticles 失败，回退 feed.json account=${gh}: ${e.message}`);
       if (isSessionDeadError(e)) throw e;
     }
@@ -280,6 +363,13 @@ async function extractOneAccount(accountRow, options = {}) {
     } catch (e) {
       console.warn(`[wewe提取] feed.json 失败 account=${gh}: ${e.message}`);
       if (isSessionDeadError(e) && rawList.length === 0) throw e;
+      if (isWeweUnavailableError(e) && rawList.length === 0) {
+        return keepPendingWeweDown(accountRow, e.message);
+      }
+    }
+
+    if (isWeweUnavailableError(mpError)) {
+      return keepPendingWeweDown(accountRow, mpError.message);
     }
 
     const buildCandidates = (list, feeds, index) => {
@@ -438,6 +528,10 @@ async function extractOneAccount(accountRow, options = {}) {
       return { action: 'session_dead', wechatAccountId: gh, error: e.message };
     }
 
+    if (isWeweUnavailableError(e)) {
+      return keepPendingWeweDown(accountRow, e.message);
+    }
+
     await db.execute(
       `UPDATE wewe_private_accounts
        SET extract_pending = 0,
@@ -490,6 +584,7 @@ module.exports = {
   isExtractPaused,
   isExtractEnabled,
   markAllActiveForExtract,
+  catchUpExtractQueueAfterRestart,
   pickNextPendingAccount,
   extractOneAccount,
   runExtractTick,
