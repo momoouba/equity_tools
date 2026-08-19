@@ -624,13 +624,12 @@ function modelOriginYear(rawPl) {
   return null;
 }
 
-/** 折现原点：利润表最早年份，且不晚于「锚定日已实现年 − 1」，避免删掉更早的已实现年后把首个预测年重计为 t=1。 */
+/** 折现原点：预测期第一年 = 第 1 期。已实现年已含在净负债/现金里，不再折进 EV。 */
 function dcfOriginYear(rawPl, asOf) {
-  const completed = latestCompletedFiscalYear(asOf);
-  const fromAsOf = completed - 1;
-  const fromPl = modelOriginYear(rawPl);
-  if (fromPl == null) return fromAsOf;
-  return Math.min(fromPl, fromAsOf);
+  const years = rawPl?.years || [];
+  const fromForecast = yearNum(years[firstForecastIndex(rawPl, asOf)]);
+  if (fromForecast != null) return fromForecast;
+  return modelOriginYear(rawPl);
 }
 
 function discountPeriod(year, originYear, fallbackT) {
@@ -669,21 +668,27 @@ function lastFilledYearIndex(rawPl) {
   return idx;
 }
 
-/** 市场法基数：已填年份中最近一个已实现年（日历年-1）；没有则退回最后已填年。 */
+/** 市场法基数：优先锚定日所在财年（有营收）；否则最近已实现年；再没有则最后已填年。 */
 function marketBaseYearIndex(rawPl, asOf) {
   const years = rawPl?.years || [];
   const revs = rawPl?.revenue || [];
   const completed = latestCompletedFiscalYear(asOf);
+  const asOfYear = asOf instanceof Date && Number.isFinite(asOf.getTime())
+    ? asOf.getFullYear()
+    : completed + 1;
   const n = Math.max(years.length, revs.length);
   let lastFilled = 0;
   let hist = null;
+  let asOfIdx = null;
   for (let i = 0; i < n; i += 1) {
     const r = toNumber(revs[i]);
     if (r == null || r === 0) continue;
     lastFilled = i;
     const y = yearNum(years[i]);
+    if (y != null && y === asOfYear) asOfIdx = i;
     if (y != null && y <= completed) hist = i;
   }
+  if (asOfIdx != null) return asOfIdx;
   return hist != null ? hist : lastFilled;
 }
 
@@ -787,6 +792,17 @@ function poolSigmaSet(pool, medianKey, latestKey, saneFn, overrideKey) {
   };
 }
 
+function explicitMultipleSet(minV, medianV) {
+  const median = toNumber(medianV);
+  if (median == null) return null;
+  const min = toNumber(minV);
+  return {
+    min: min != null ? min : median,
+    median,
+    max: median,
+  };
+}
+
 function marketMethod({
   multipleSource,
   poolRelatives,
@@ -794,6 +810,7 @@ function marketMethod({
   pl,
   liquidityDiscount,
   baseYearIndex,
+  multipleBand,
 }) {
   const maxIdx = Math.max(0, (pl.years || []).length - 1);
   const lastIdx = Math.min(Math.max(0, baseYearIndex == null ? maxIdx : baseYearIndex), maxIdx);
@@ -806,29 +823,46 @@ function marketMethod({
 
   let peSet;
   let psSet;
-  if (multipleSource === C.MULTIPLE_INDUSTRY && industryMultiples) {
-    peSet = {
-      min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
-      median: toNumber(industryMultiples.pe_median),
-      max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
-    };
-    psSet = {
-      min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
-      median: toNumber(industryMultiples.ps_median),
-      max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
-    };
-  } else {
-    const pool = (poolRelatives || []).filter((r) => r.in_pool);
-    peSet = poolSigmaSet(pool, 'pe_median', 'pe_latest', isHistPe, 'pe_median_override');
-    psSet = poolSigmaSet(pool, 'ps_median', 'ps_latest', isSanePs, 'ps_median_override');
-    if (peSet.dropped) warnings.push(`已排除 ${peSet.dropped} 家负 PE/极端 PE，不参与市场法 P/E 的 ±1σ`);
-    if (psSet.dropped) warnings.push(`已排除 ${psSet.dropped} 家负 PS/极端 PS，不参与市场法 P/S 的 ±1σ`);
-    if (peSet.clamped) warnings.push('POOL P/E −1σ 为负，低端倍数已按 0.01x 处理');
-    if (psSet.clamped) warnings.push('POOL P/S −1σ 为负，低端倍数已按 0.01x 处理');
-    if (peSet.sigma_winsorized) warnings.push('计算 P/E 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）');
-    if (psSet.sigma_winsorized) warnings.push('计算 P/S 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL，不再整段剔除）');
-    if (peSet.median == null) warnings.push('POOL 中无可用 P/E 历史中位，市场法 P/E 为空');
-    if (psSet.median == null) warnings.push('POOL 中无可用 P/S 历史中位，市场法 P/S 为空');
+  const peBand = explicitMultipleSet(multipleBand?.pe_min, multipleBand?.pe_median);
+  const psBand = explicitMultipleSet(multipleBand?.ps_min, multipleBand?.ps_median);
+  if (peBand || psBand) {
+    if (peBand) peSet = peBand;
+    if (psBand) psSet = psBand;
+    warnings.push('市场法已用底稿低端/中位倍数，未用 POOL 的 −1σ / 中位');
+  }
+  if (!peSet || !psSet) {
+    if (multipleSource === C.MULTIPLE_INDUSTRY && industryMultiples) {
+      if (!peSet) {
+        peSet = {
+          min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
+          median: toNumber(industryMultiples.pe_median),
+          max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
+        };
+      }
+      if (!psSet) {
+        psSet = {
+          min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
+          median: toNumber(industryMultiples.ps_median),
+          max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
+        };
+      }
+    } else {
+      const pool = (poolRelatives || []).filter((r) => r.in_pool);
+      if (!peSet) {
+        peSet = poolSigmaSet(pool, 'pe_median', 'pe_latest', isHistPe, 'pe_median_override');
+        if (peSet.dropped) warnings.push(`已排除 ${peSet.dropped} 家负 PE/极端 PE，不参与市场法 P/E 的 ±1σ`);
+        if (peSet.clamped) warnings.push('POOL P/E −1σ 为负，低端倍数已按 0.01x 处理');
+        if (peSet.sigma_winsorized) warnings.push('计算 P/E 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）');
+        if (peSet.median == null) warnings.push('POOL 中无可用 P/E 历史中位，市场法 P/E 为空');
+      }
+      if (!psSet) {
+        psSet = poolSigmaSet(pool, 'ps_median', 'ps_latest', isSanePs, 'ps_median_override');
+        if (psSet.dropped) warnings.push(`已排除 ${psSet.dropped} 家负 PS/极端 PS，不参与市场法 P/S 的 ±1σ`);
+        if (psSet.clamped) warnings.push('POOL P/S −1σ 为负，低端倍数已按 0.01x 处理');
+        if (psSet.sigma_winsorized) warnings.push('计算 P/S 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL，不再整段剔除）');
+        if (psSet.median == null) warnings.push('POOL 中无可用 P/S 历史中位，市场法 P/S 为空');
+      }
+    }
   }
 
   const d = num(liquidityDiscount, 0.3);
@@ -856,7 +890,7 @@ function marketMethod({
     pe: { low: peLow, mid: peMid, high: peHigh },
     ps: { low: psLow, mid: psMid, high: psHigh },
     warnings,
-    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S 基数=已实现年营业收入；P/E 基数=已实现年净利润。POOL 倍数=各公司锚定日及以前历史中位的 MEDIAN 与 STDEV（无历史中位时回退锚定日截面）；低端=中位−σ，高端=中位',
+    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。有底稿低端/中位则用之；否则 POOL=各公司锚定日及以前历史中位的 MEDIAN 与 STDEV（无历史中位时回退锚定日截面）；低端=中位−σ，高端=中位',
   };
 }
 
@@ -1019,15 +1053,17 @@ function runValuationEngine(input) {
   const originYear = dcfOriginYear(rawPl, asOf);
   const baseYearIndex = marketBaseYearIndex(rawPl, asOf);
   const forecastStart = firstForecastIndex(rawPl, asOf);
-  const completedFy = latestCompletedFiscalYear(asOf);
   const marketBaseYear = yearNum(rawPl.years?.[baseYearIndex]);
-  if (marketBaseYear != null && marketBaseYear > completedFy) {
-    warnings.push(`利润表没有 ${completedFy} 及以前的已实现年，市场法基数暂用 ${marketBaseYear}（预测年），P/S、P/E 会偏高。请补录已实现年营收/净利润`);
+  const asOfYear = asOf.getFullYear();
+  if (marketBaseYear != null && marketBaseYear === asOfYear) {
+    warnings.push(`市场法基数用锚定日所在年 ${marketBaseYear}`);
+  } else if (marketBaseYear != null && marketBaseYear > asOfYear) {
+    warnings.push(`利润表没有锚定年 ${asOfYear} 的营收，市场法基数暂用 ${marketBaseYear}，P/S、P/E 会偏高。请补录锚定年或已实现年`);
   }
   const forecastRaw = slicePlFrom(rawPl, forecastStart);
   const firstForecastYear = yearNum(forecastRaw.years?.[0]);
-  if (originYear != null && firstForecastYear != null && firstForecastYear - originYear + 1 > 1) {
-    warnings.push(`DCF 折现原点按锚定日取 ${originYear} 年（${originYear}A=第 1 期），${firstForecastYear}E 为第 ${firstForecastYear - originYear + 1} 期`);
+  if (firstForecastYear != null) {
+    warnings.push(`DCF 以预测首年 ${firstForecastYear} 为第 1 期（已实现年不折现）`);
   }
   const yoyA = toNumber(forecastRaw.revenue?.[0]);
   const yoyB = toNumber(forecastRaw.revenue?.[1]);
@@ -1130,6 +1166,12 @@ function runValuationEngine(input) {
     pl: rawPl,
     liquidityDiscount: assumptions.liquidity_discount,
     baseYearIndex,
+    multipleBand: {
+      pe_min: assumptions.pe_low_multiple,
+      pe_median: assumptions.pe_median_multiple,
+      ps_min: assumptions.ps_low_multiple,
+      ps_median: assumptions.ps_median_multiple,
+    },
   });
   warnings.push(...(market.warnings || []));
 
@@ -1155,7 +1197,7 @@ function runValuationEngine(input) {
           : `自由现金流=净利润+折旧摊销+ESOP−资本性支出−营运资本增加。${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}。并购股权价值=(EV−净负债)×(1−并购流动性折扣)；上市股权价值=EV−净负债，不扣折扣。市场法用另一套折扣`)
         : (fcfMethod === C.FCF_NOPAT
           ? `NOPAT=EBIT×(1−税率)（EBIT≤0 时税额为 0）；FCFF=NOPAT+折旧摊销−营运资金变化−资本支出；${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}；股权价值=(EV−净负债)×(1−DCF流动性折扣)`
-          : `自由现金流=净利润+折旧摊销+ESOP−资本性支出−营运资本增加；${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}；股东权益=企业价值−净负债（净利润桥不再乘流动性折扣）。折现期数按锚定日对齐（已实现年−1 = 第 1 期），不因删掉历史列而把 2026E 重计为 t=1`),
+          : `自由现金流=净利润+折旧摊销+ESOP−资本性支出−营运资本增加；${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}；股东权益=企业价值−净负债（净利润桥不再乘流动性折扣）。折现期数以预测首年为第 1 期，已实现年不折现`)
     },
     market: {
       title: '市场法',

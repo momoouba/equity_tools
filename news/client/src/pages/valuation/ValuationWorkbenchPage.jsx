@@ -354,6 +354,42 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
       />
     ),
   })
+  fields.push({
+    label: 'P/S 低端倍数（空=POOL −1σ）',
+    control: (
+      <DcfNumInput
+        value={assumptions.ps_low_multiple}
+        onChange={(v) => patchPayload({ assumptions: { ...assumptions, ps_low_multiple: v } })}
+      />
+    ),
+  })
+  fields.push({
+    label: 'P/S 中位倍数（空=POOL 中位）',
+    control: (
+      <DcfNumInput
+        value={assumptions.ps_median_multiple}
+        onChange={(v) => patchPayload({ assumptions: { ...assumptions, ps_median_multiple: v } })}
+      />
+    ),
+  })
+  fields.push({
+    label: 'P/E 低端倍数（空=POOL −1σ）',
+    control: (
+      <DcfNumInput
+        value={assumptions.pe_low_multiple}
+        onChange={(v) => patchPayload({ assumptions: { ...assumptions, pe_low_multiple: v } })}
+      />
+    ),
+  })
+  fields.push({
+    label: 'P/E 中位倍数（空=POOL 中位）',
+    control: (
+      <DcfNumInput
+        value={assumptions.pe_median_multiple}
+        onChange={(v) => patchPayload({ assumptions: { ...assumptions, pe_median_multiple: v } })}
+      />
+    ),
+  })
   const dcfLiqApplies = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
   if (dcfLiqApplies) {
     fields.push({
@@ -1310,7 +1346,7 @@ export default function ValuationWorkbenchPage() {
                 },
                 {
                   name: '营业利润',
-                  note: '利润表「营业利润」；市场法 P/E 已改用已实现年净利润',
+                  note: '利润表「营业利润」；市场法 P/E 用锚定年净利润',
                   values: pl.operating_profit || [],
                   onChange: (i, nv) => {
                     const operating_profit = [...(pl.operating_profit || [])]
@@ -1320,7 +1356,7 @@ export default function ValuationWorkbenchPage() {
                 },
                 {
                   name: '净利润',
-                  note: '利润表「净利润」。已实现年这一列是市场法 P/E 基数；预测年是 DCF 净利润桥起点',
+                  note: '利润表「净利润」。市场法 P/E 优先用锚定日所在年；预测年是 DCF 净利润桥起点',
                   values: pl.net_income || [],
                   onChange: (i, nv) => {
                     const net_income = [...(pl.net_income || [])]

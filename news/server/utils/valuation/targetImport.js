@@ -507,13 +507,13 @@ function buildTargetFinancialTemplateBuffer(payload) {
   ]), '说明');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['科目', '科目说明', ...years],
-    ['营业收入', '利润表「营业收入」合计。\n已实现最近一年（如 2025）是市场法 P/S 基数。', ...pickPl('revenue')],
+    ['营业收入', '利润表「营业收入」合计。\n市场法 P/S 优先用锚定日所在年营收。', ...pickPl('revenue')],
     ['营业成本', '可选。\n不填则按毛利率或费用率外推后续年份。', ...pickPl('cogs')],
     ['销售费用', '利润表「销售费用」。\n填正数（不要填成负数）。', ...pickPl('selling')],
     ['管理费用', '利润表「管理费用」。\n填正数。', ...pickPl('admin')],
     ['研发费用', '利润表「研发费用」。\n填正数。', ...pickPl('rd')],
-    ['营业利润', '利润表「营业利润」。\n市场法 P/E 已改用已实现年净利润，本行供 DCF / 对标。', ...pickPl('operating_profit')],
-    ['净利润', '利润表「净利润」。\n已实现年是市场法 P/E 基数；预测年是 DCF 净利润桥起点。', ...pickPl('net_income')],
+    ['营业利润', '利润表「营业利润」。\n市场法 P/E 用锚定年净利润，本行供 DCF / 对标。', ...pickPl('operating_profit')],
+    ['净利润', '利润表「净利润」。\n市场法 P/E 优先用锚定日所在年；预测年是 DCF 净利润桥起点。', ...pickPl('net_income')],
   ]), '利润表');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['科目', '科目说明', '金额（万元）'],

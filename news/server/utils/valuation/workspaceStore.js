@@ -118,6 +118,7 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     'discount_rate', 'exit_pe', 'exit_ps', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
     'esop', 'valuation_date', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
+    'pe_low_multiple', 'pe_median_multiple', 'ps_low_multiple', 'ps_median_multiple',
   ], [
     numOrNull(a.discount_rate),
     numOrNull(a.exit_pe),
@@ -136,6 +137,10 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(w.debt_equity),
     numOrNull(w.debt_cost),
     numOrNull(w.tax_rate),
+    numOrNull(a.pe_low_multiple),
+    numOrNull(a.pe_median_multiple),
+    numOrNull(a.ps_low_multiple),
+    numOrNull(a.ps_median_multiple),
   ]);
 }
 
@@ -178,6 +183,10 @@ async function loadAssumptions(caseId, versionId, pool) {
       debt_cost: numOrNull(r.wacc_debt_cost),
       tax_rate: numOrNull(r.wacc_tax_rate),
     },
+    pe_low_multiple: numOrNull(r.pe_low_multiple),
+    pe_median_multiple: numOrNull(r.pe_median_multiple),
+    ps_low_multiple: numOrNull(r.ps_low_multiple),
+    ps_median_multiple: numOrNull(r.ps_median_multiple),
   };
 }
 

@@ -384,6 +384,18 @@ async function ensureValuationSchema(dbPool) {
     if (!assCols.has('dcf_liquidity_discount')) {
       await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN dcf_liquidity_discount DECIMAL(20,8) NULL COMMENT '并购 DCF 流动性折扣，与市场法折扣分开'`);
     }
+    if (!assCols.has('pe_low_multiple')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN pe_low_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/E 低端倍数，有值则覆盖 POOL'`);
+    }
+    if (!assCols.has('pe_median_multiple')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN pe_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/E 中位倍数，有值则覆盖 POOL'`);
+    }
+    if (!assCols.has('ps_low_multiple')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN ps_low_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 低端倍数，有值则覆盖 POOL'`);
+    }
+    if (!assCols.has('ps_median_multiple')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN ps_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 中位倍数，有值则覆盖 POOL'`);
+    }
   }
   if (await tableExists(dbPool, 'valuation_case_comparable')) {
     const compCols = await listColumns(dbPool, 'valuation_case_comparable');
@@ -538,6 +550,10 @@ async function createStructuredResultTables(dbPool) {
       exit_ps DECIMAL(20,6) NULL,
       liquidity_discount DECIMAL(20,8) NULL,
       dcf_liquidity_discount DECIMAL(20,8) NULL COMMENT '并购 DCF 流动性折扣，与市场法折扣分开',
+      pe_low_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/E 低端倍数，有值则覆盖 POOL',
+      pe_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/E 中位倍数，有值则覆盖 POOL',
+      ps_low_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 低端倍数，有值则覆盖 POOL',
+      ps_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 中位倍数，有值则覆盖 POOL',
       tax_rate DECIMAL(20,8) NULL,
       forecast_years INT NULL,
       esop DECIMAL(24,4) NULL,
