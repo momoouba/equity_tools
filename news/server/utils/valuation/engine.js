@@ -803,6 +803,39 @@ function explicitMultipleSet(minV, medianV) {
   };
 }
 
+function defaultMarketMultipleSets({ multipleSource, poolRelatives, industryMultiples }) {
+  if (multipleSource === C.MULTIPLE_INDUSTRY && industryMultiples) {
+    return {
+      peSet: {
+        min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
+        median: toNumber(industryMultiples.pe_median),
+        max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
+      },
+      psSet: {
+        min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
+        median: toNumber(industryMultiples.ps_median),
+        max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
+      },
+      peWarnings: [],
+      psWarnings: [],
+    };
+  }
+  const pool = (poolRelatives || []).filter((r) => r.in_pool);
+  const peSet = poolSigmaSet(pool, 'pe_median', 'pe_latest', isHistPe, 'pe_median_override');
+  const psSet = poolSigmaSet(pool, 'ps_median', 'ps_latest', isSanePs, 'ps_median_override');
+  const peWarnings = [];
+  const psWarnings = [];
+  if (peSet.dropped) peWarnings.push(`已排除 ${peSet.dropped} 家负 PE/极端 PE，不参与市场法 P/E 的 ±1σ`);
+  if (peSet.clamped) peWarnings.push('POOL P/E −1σ 为负，低端倍数已按 0.01x 处理');
+  if (peSet.sigma_winsorized) peWarnings.push('计算 P/E 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）');
+  if (peSet.median == null) peWarnings.push('POOL 中无可用 P/E 历史中位，市场法 P/E 为空');
+  if (psSet.dropped) psWarnings.push(`已排除 ${psSet.dropped} 家负 PS/极端 PS，不参与市场法 P/S 的 ±1σ`);
+  if (psSet.clamped) psWarnings.push('POOL P/S −1σ 为负，低端倍数已按 0.01x 处理');
+  if (psSet.sigma_winsorized) psWarnings.push('计算 P/S 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL，不再整段剔除）');
+  if (psSet.median == null) psWarnings.push('POOL 中无可用 P/S 历史中位，市场法 P/S 为空');
+  return { peSet, psSet, peWarnings, psWarnings };
+}
+
 function marketMethod({
   multipleSource,
   poolRelatives,
@@ -821,49 +854,20 @@ function marketMethod({
   const warnings = [];
   if (peBase < 0) warnings.push('利润为负，P/E 仅供参考');
 
-  let peSet;
-  let psSet;
+  const defaults = defaultMarketMultipleSets({
+    multipleSource,
+    poolRelatives,
+    industryMultiples,
+  });
   const peBand = explicitMultipleSet(multipleBand?.pe_min, multipleBand?.pe_median);
   const psBand = explicitMultipleSet(multipleBand?.ps_min, multipleBand?.ps_median);
+  const peSet = peBand || defaults.peSet;
+  const psSet = psBand || defaults.psSet;
   if (peBand || psBand) {
-    if (peBand) peSet = peBand;
-    if (psBand) psSet = psBand;
-    warnings.push('市场法已用底稿低端/中位倍数，未用 POOL 的 −1σ / 中位');
+    warnings.push('市场法倍数已按填写值覆盖 POOL 的 −1σ / 中位');
   }
-  if (!peSet || !psSet) {
-    if (multipleSource === C.MULTIPLE_INDUSTRY && industryMultiples) {
-      if (!peSet) {
-        peSet = {
-          min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
-          median: toNumber(industryMultiples.pe_median),
-          max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
-        };
-      }
-      if (!psSet) {
-        psSet = {
-          min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
-          median: toNumber(industryMultiples.ps_median),
-          max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
-        };
-      }
-    } else {
-      const pool = (poolRelatives || []).filter((r) => r.in_pool);
-      if (!peSet) {
-        peSet = poolSigmaSet(pool, 'pe_median', 'pe_latest', isHistPe, 'pe_median_override');
-        if (peSet.dropped) warnings.push(`已排除 ${peSet.dropped} 家负 PE/极端 PE，不参与市场法 P/E 的 ±1σ`);
-        if (peSet.clamped) warnings.push('POOL P/E −1σ 为负，低端倍数已按 0.01x 处理');
-        if (peSet.sigma_winsorized) warnings.push('计算 P/E 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）');
-        if (peSet.median == null) warnings.push('POOL 中无可用 P/E 历史中位，市场法 P/E 为空');
-      }
-      if (!psSet) {
-        psSet = poolSigmaSet(pool, 'ps_median', 'ps_latest', isSanePs, 'ps_median_override');
-        if (psSet.dropped) warnings.push(`已排除 ${psSet.dropped} 家负 PS/极端 PS，不参与市场法 P/S 的 ±1σ`);
-        if (psSet.clamped) warnings.push('POOL P/S −1σ 为负，低端倍数已按 0.01x 处理');
-        if (psSet.sigma_winsorized) warnings.push('计算 P/S 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL，不再整段剔除）');
-        if (psSet.median == null) warnings.push('POOL 中无可用 P/S 历史中位，市场法 P/S 为空');
-      }
-    }
-  }
+  if (!peBand) warnings.push(...defaults.peWarnings);
+  if (!psBand) warnings.push(...defaults.psWarnings);
 
   const d = num(liquidityDiscount, 0.3);
   const apply = (multiple, base) => {
@@ -882,6 +886,8 @@ function marketMethod({
   return {
     pe_multiples: peSet,
     ps_multiples: psSet,
+    pool_pe_multiples: defaults.peSet,
+    pool_ps_multiples: defaults.psSet,
     revenue_base: revenue,
     operating_profit_base: peBase,
     net_income_base: ni,
@@ -890,7 +896,7 @@ function marketMethod({
     pe: { low: peLow, mid: peMid, high: peHigh },
     ps: { low: psLow, mid: psMid, high: psHigh },
     warnings,
-    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。有底稿低端/中位则用之；否则 POOL=各公司锚定日及以前历史中位的 MEDIAN 与 STDEV（无历史中位时回退锚定日截面）；低端=中位−σ，高端=中位',
+    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。倍数默认取可比 POOL（低端=中位−σ，高端=中位）；改过市场法倍数则覆盖 POOL',
   };
 }
 

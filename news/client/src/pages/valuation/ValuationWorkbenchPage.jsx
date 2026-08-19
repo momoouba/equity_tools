@@ -309,6 +309,95 @@ function WaccBreakdownBlock({ assumptions, payload, patchPayload }) {
   )
 }
 
+const MARKET_MULTIPLE_KEYS = [
+  'ps_low_multiple',
+  'ps_median_multiple',
+  'pe_low_multiple',
+  'pe_median_multiple',
+]
+
+function filledMultiple(v) {
+  return v != null && v !== ''
+}
+
+function marketPoolFallback(payload) {
+  const market = payload?.sheets?.market?.payload || {}
+  const poolPs = market.pool_ps_multiples || {}
+  const poolPe = market.pool_pe_multiples || {}
+  const usedPs = market.ps_multiples || {}
+  const usedPe = market.pe_multiples || {}
+  return {
+    ps_low_multiple: poolPs.min ?? usedPs.min,
+    ps_median_multiple: poolPs.median ?? usedPs.median,
+    pe_low_multiple: poolPe.min ?? usedPe.min,
+    pe_median_multiple: poolPe.median ?? usedPe.median,
+  }
+}
+
+function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
+  const pool = marketPoolFallback(payload)
+  const locked = MARKET_MULTIPLE_KEYS.some((k) => filledMultiple(assumptions[k]))
+  const shown = {
+    ps_low_multiple: filledMultiple(assumptions.ps_low_multiple) ? assumptions.ps_low_multiple : pool.ps_low_multiple,
+    ps_median_multiple: filledMultiple(assumptions.ps_median_multiple) ? assumptions.ps_median_multiple : pool.ps_median_multiple,
+    pe_low_multiple: filledMultiple(assumptions.pe_low_multiple) ? assumptions.pe_low_multiple : pool.pe_low_multiple,
+    pe_median_multiple: filledMultiple(assumptions.pe_median_multiple) ? assumptions.pe_median_multiple : pool.pe_median_multiple,
+  }
+  const patchOne = (key, v) => {
+    const next = {}
+    MARKET_MULTIPLE_KEYS.forEach((k) => {
+      next[k] = filledMultiple(assumptions[k]) ? assumptions[k] : pool[k]
+    })
+    next[key] = v
+    patchPayload({ assumptions: { ...assumptions, ...next } })
+  }
+  const followPool = () => {
+    patchPayload({
+      assumptions: {
+        ...assumptions,
+        ps_low_multiple: null,
+        ps_median_multiple: null,
+        pe_low_multiple: null,
+        pe_median_multiple: null,
+      },
+    })
+  }
+  const fields = [
+    { key: 'ps_low_multiple', label: 'P/S 低端（−1σ）' },
+    { key: 'ps_median_multiple', label: 'P/S 中位' },
+    { key: 'pe_low_multiple', label: 'P/E 低端（−1σ）' },
+    { key: 'pe_median_multiple', label: 'P/E 中位' },
+  ]
+  return (
+    <div className="valuation-dcf-param-block">
+      <div className="valuation-dcf-param-head">
+        <Typography.Title heading={6} className="valuation-ratio-col-title">市场法倍数</Typography.Title>
+        <Tag className="valuation-edit-tag" size="small">{locked ? '已锁定' : '跟随 POOL'}</Tag>
+        {locked ? (
+          <Button size="mini" type="text" onClick={followPool}>跟随 POOL</Button>
+        ) : null}
+      </div>
+      <div className="valuation-dcf-param-grid">
+        {fields.map((f) => (
+          <div key={f.key} className="valuation-dcf-param-item">
+            <span>{f.label}</span>
+            <DcfNumInput
+              precision={2}
+              value={shown[f.key]}
+              onChange={(v) => patchOne(f.key, v)}
+            />
+          </div>
+        ))}
+      </div>
+      <Typography.Paragraph className="valuation-dcf-terminal-hint">
+        {locked
+          ? '已按填写值覆盖 POOL。点「跟随 POOL」后再只计算，会重新用可比股算出的 −1σ / 中位。'
+          : '数字由下方表同一套 POOL 填入：低端 = 中位 − σ，中位 = POOL 中位。改数字会锁定，只计算时不再跟 POOL。'}
+      </Typography.Paragraph>
+    </div>
+  )
+}
+
 function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
   const usePs = method.terminal_type === 'exit_ps'
   const waccPreview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
@@ -351,42 +440,6 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
       <PctInput
         value={assumptions.liquidity_discount}
         onChange={(v) => patchPayload({ assumptions: { ...assumptions, liquidity_discount: v } })}
-      />
-    ),
-  })
-  fields.push({
-    label: 'P/S 低端倍数（空=POOL −1σ）',
-    control: (
-      <DcfNumInput
-        value={assumptions.ps_low_multiple}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, ps_low_multiple: v } })}
-      />
-    ),
-  })
-  fields.push({
-    label: 'P/S 中位倍数（空=POOL 中位）',
-    control: (
-      <DcfNumInput
-        value={assumptions.ps_median_multiple}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, ps_median_multiple: v } })}
-      />
-    ),
-  })
-  fields.push({
-    label: 'P/E 低端倍数（空=POOL −1σ）',
-    control: (
-      <DcfNumInput
-        value={assumptions.pe_low_multiple}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, pe_low_multiple: v } })}
-      />
-    ),
-  })
-  fields.push({
-    label: 'P/E 中位倍数（空=POOL 中位）',
-    control: (
-      <DcfNumInput
-        value={assumptions.pe_median_multiple}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, pe_median_multiple: v } })}
       />
     ),
   })
@@ -1725,6 +1778,11 @@ export default function ValuationWorkbenchPage() {
                           {payload.sheets.market.formula}
                         </Typography.Paragraph>
                       ) : null}
+                      <MarketMultiplesBlock
+                        assumptions={assumptions}
+                        payload={payload}
+                        patchPayload={patchPayload}
+                      />
                       <MarketMethodTable payload={payload.sheets?.market?.payload} />
                     </section>
 
