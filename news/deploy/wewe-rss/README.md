@@ -35,6 +35,8 @@ WEWE_RSS_AUTH_CODE=与 AUTH_CODE 一致
 
 主文件已含服务 `wewe-rss`（容器名 `newsapp-wewe-rss`），数据卷：`./deploy/wewe-rss/data`。
 
+Node 堆默认约 2GB，全量 feed 会 `heap out of memory`。compose 已设 `NODE_OPTIONS=--max-old-space-size=4096`、容器 `mem_limit: 5g`。同步 `docker-compose.yml` 后执行 `docker compose up -d wewe-rss`（会 recreate 容器，**不要**删 `deploy/wewe-rss/data`，会话在库里）。可用 `WEWE_NODE_OPTIONS` 覆盖。
+
 ### 1）云上 `.env` 必填清单
 
 | 变量 | 生产示例 | 说明 |

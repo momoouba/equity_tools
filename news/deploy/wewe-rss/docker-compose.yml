@@ -9,6 +9,7 @@ services:
     ports:
       - "${WEWE_HOST_PORT:-4000}:4000"
     restart: unless-stopped
+    mem_limit: 5g
     environment:
       DATABASE_TYPE: sqlite
       AUTH_CODE: ${AUTH_CODE:-change-me-wewe}
@@ -19,5 +20,6 @@ services:
       MAX_REQUEST_PER_MINUTE: ${MAX_REQUEST_PER_MINUTE:-60}
       SERVER_ORIGIN_URL: ${SERVER_ORIGIN_URL:-http://127.0.0.1:4000}
       TZ: Asia/Shanghai
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=4096}
     volumes:
       - ./data:/app/data

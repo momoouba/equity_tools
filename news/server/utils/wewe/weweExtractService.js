@@ -22,6 +22,26 @@ function formatBeijingYmd(date = new Date()) {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+function formatBeijingDateTime(date = new Date()) {
+  return date
+    .toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' })
+    .replace('T', ' ')
+    .slice(0, 19);
+}
+
+function extractKindLabel(kind) {
+  if (kind === 'evening') return '当晚';
+  if (kind === 'catchup') return '隔日补抓';
+  if (kind === 'manual') return '手工';
+  return kind || '-';
+}
+
+function formatAccountLabel(gh, name) {
+  const id = String(gh || '').trim() || '-';
+  const n = String(name || '').trim();
+  return n ? `${n}(${id})` : id;
+}
+
 function toBeijingYmdFromUnknown(value) {
   if (value == null || value === '') return null;
   if (typeof value === 'number') {
@@ -271,6 +291,82 @@ function mappedActivePendingSql() {
 }
 
 /**
+ * 当前窗口进度：已完成 + 仍 pending（含正在抓的这个）。
+ * 第 index/total 个。
+ */
+async function getExtractProgress(kind) {
+  const today = formatBeijingYmd();
+  const rows = await db.query(
+    `SELECT
+       SUM(CASE WHEN extract_pending = 1 THEN 1 ELSE 0 END) AS pending,
+       SUM(CASE
+             WHEN extract_pending = 0
+              AND last_extract_kind = ?
+              AND last_extract_at IS NOT NULL
+              AND DATE(last_extract_at) = ?
+             THEN 1 ELSE 0 END) AS done
+     FROM wewe_private_accounts
+     WHERE ${mappedActivePendingSql()}`,
+    [kind || '', today]
+  );
+  const pending = Number(rows[0]?.pending || 0);
+  const done = Number(rows[0]?.done || 0);
+  return {
+    index: done + 1,
+    total: done + pending,
+    pending,
+    done
+  };
+}
+
+async function resolveAccountDisplayName(wechatAccountId) {
+  const gh = String(wechatAccountId || '').trim();
+  if (!gh) return '';
+  try {
+    const ad = await db.query(
+      `SELECT account_name FROM additional_wechat_accounts
+       WHERE F_DeleteMark = 0 AND wechat_account_id = ? LIMIT 1`,
+      [gh]
+    );
+    if (ad[0] && ad[0].account_name) return String(ad[0].account_name);
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    const { IE_NEWS_APP_FILTER_SQL } = require('../investedEnterpriseNewsAppSql');
+    const ie = await db.query(
+      `SELECT project_abbreviation, enterprise_full_name
+       FROM invested_enterprises
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND F_DeleteMark = 0
+         AND (wechat_official_account_id = ?
+           OR wechat_official_account_id LIKE ?
+           OR wechat_official_account_id LIKE ?
+           OR wechat_official_account_id LIKE ?)
+       LIMIT 1`,
+      [gh, `${gh},%`, `%,${gh},%`, `%,${gh}`]
+    );
+    if (ie[0]) {
+      return String(ie[0].project_abbreviation || ie[0].enterprise_full_name || '');
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  try {
+    const nd = await db.query(
+      `SELECT account_name FROM news_detail
+       WHERE F_DeleteMark = 0 AND wechat_account = ?
+         AND account_name IS NOT NULL AND account_name != ''
+       ORDER BY F_CreatorTime DESC LIMIT 1`,
+      [gh]
+    );
+    if (nd[0] && nd[0].account_name) return String(nd[0].account_name);
+  } catch (_) {
+    /* ignore */
+  }
+  return '';
+}
+
+/**
  * app / wewe 重启：按当前窗口补队。
  * 隔日补抓窗口：今晚 success 的号也要再入队（21:00 后稿）。
  * 未到隔日补抓开始不补，避免凌晨把昨天队列用「今天」ymd 再跑一遍。
@@ -413,7 +509,7 @@ async function stageArticle(row) {
 /**
  * 提取单个已映射账号
  * @param {object} accountRow wewe_private_accounts 行
- * @param {{ extractYmd?: string, updateFeed?: boolean, extractKind?: string, skipLate?: boolean }} options
+ * @param {{ extractYmd?: string, updateFeed?: boolean, extractKind?: string, skipLate?: boolean, progress?: object, accountName?: string }} options
  */
 async function extractOneAccount(accountRow, options = {}) {
   const extractYmd = options.extractYmd || formatBeijingYmd();
@@ -422,8 +518,28 @@ async function extractOneAccount(accountRow, options = {}) {
   const skipLate = options.skipLate === true;
   const gh = accountRow.wechat_account_id;
   const feedId = accountRow.feed_id;
+  const startedAt = Date.now();
+  const progress = options.progress || (await getExtractProgress(extractKind));
+  const accountName =
+    options.accountName != null
+      ? options.accountName
+      : await resolveAccountDisplayName(gh);
+  const accountLabel = formatAccountLabel(gh, accountName);
+  const seq =
+    progress && progress.total > 0
+      ? `第${progress.index}/${progress.total}个`
+      : '第?/??个';
+  const windowLabel = extractKindLabel(extractKind);
+
+  const logPrefix = () =>
+    `[wewe提取] ${formatBeijingDateTime()} ${seq} 公众号=${accountLabel} 窗口=${windowLabel}`;
+
+  console.log(
+    `${logPrefix()} 开始抓取 业务日=${extractYmd} 剩余待抓=${Number(progress.pending || 0)}`
+  );
 
   if (!feedId) {
+    console.warn(`${logPrefix()} 跳过：未映射 feed`);
     return { action: 'skip_unmapped', wechatAccountId: gh };
   }
 
@@ -530,6 +646,7 @@ async function extractOneAccount(accountRow, options = {}) {
     let matched = 0;
     let skippedEmpty = 0;
     let deferredLate = 0;
+    const stagedTitles = [];
     for (const a of candidates) {
       const ymd = toBeijingYmdFromUnknown(a.publicTime);
       if (ymd !== extractYmd) continue;
@@ -567,8 +684,13 @@ async function extractOneAccount(accountRow, options = {}) {
         publicTime: publicTimeStr,
         extractYmd
       });
-      if (ok) staged += 1;
-      else skippedEmpty += 1;
+      if (ok) {
+        staged += 1;
+        const t = String(a.title || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+        if (t) stagedTitles.push(t);
+      } else {
+        skippedEmpty += 1;
+      }
     }
 
     let status = 'empty';
@@ -593,21 +715,29 @@ async function extractOneAccount(accountRow, options = {}) {
       ]
     );
 
+    const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const titlePart = stagedTitles.length
+      ? ` 标题=${stagedTitles.join('；')}`
+      : '';
     console.log(
-      `[wewe提取] account=${gh} feed=${feedId} kind=${extractKind} ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} deferredLate=${deferredLate} candidates=${candidates.length}`
+      `${logPrefix()} 完成抓取 业务日=${extractYmd} 暂存入库=${staged}篇 当日匹配=${matched} 空正文=${skippedEmpty} 延后21点后=${deferredLate} 目录=${candidates.length} 状态=${status} 用时=${elapsedSec}s${titlePart}`
     );
     return {
       action: 'extracted',
       wechatAccountId: gh,
+      accountName: accountName || '',
       feedId,
       extractYmd,
       extractKind,
+      seqIndex: progress.index,
+      seqTotal: progress.total,
       staged,
       skippedEmpty,
       matchedDay: matched,
       deferredLate,
       totalFetched: candidates.length,
-      status
+      status,
+      elapsedSec: Number(elapsedSec)
     };
   } catch (e) {
     if (isSessionDeadError(e)) {
@@ -620,7 +750,7 @@ async function extractOneAccount(accountRow, options = {}) {
          WHERE F_Id = ?`,
         [accountRow.F_Id]
       );
-      console.warn(`[wewe提取] 会话失效，整队暂停 account=${gh}: ${e.message}`);
+      console.warn(`${logPrefix()} 会话失效，整队暂停: ${e.message}`);
       return { action: 'session_dead', wechatAccountId: gh, error: e.message };
     }
 
@@ -639,7 +769,7 @@ async function extractOneAccount(accountRow, options = {}) {
        WHERE F_Id = ?`,
       [extractKind, String(e.message || 'extract failed').slice(0, 500), accountRow.F_Id]
     );
-    console.warn(`[wewe提取] 失败 account=${gh}: ${e.message}`);
+    console.warn(`${logPrefix()} 失败: ${e.message}`);
     return { action: 'failed', wechatAccountId: gh, error: e.message };
   }
 }
@@ -671,11 +801,15 @@ async function runExtractTick(options = {}) {
       extractYmd: window.extractYmd
     };
   }
+  const progress = await getExtractProgress(window.kind);
+  const accountName = await resolveAccountDisplayName(account.wechat_account_id);
   return extractOneAccount(account, {
     ...options,
     extractYmd: window.extractYmd,
     extractKind: window.kind,
-    skipLate: window.skipLate
+    skipLate: window.skipLate,
+    progress,
+    accountName
   });
 }
 
@@ -697,6 +831,7 @@ async function resumeExtractAfterLogin() {
 module.exports = {
   LATE_PUBLISH_MINUTES,
   formatBeijingYmd,
+  formatBeijingDateTime,
   toBeijingYmdFromUnknown,
   parseHmToMinutes,
   resolveExtractWindow,

@@ -158,7 +158,9 @@ async function updateWeweExtractScheduledTasks() {
         if (waitMin > 0) {
           nextTickAllowedAt = Date.now() + waitMin * 60 * 1000;
         }
-        if (
+        if (result.action === 'extracted') {
+          /* 抓取明细已在 weweExtractService 打印 */
+        } else if (
           result.action !== 'idle_empty_queue' &&
           result.action !== 'skip_paused' &&
           result.action !== 'skip_disabled' &&

@@ -105,6 +105,8 @@ services:
     image: cooderl/wewe-rss-sqlite:latest
     container_name: newsapp-wewe-rss
     restart: unless-stopped
+    # 全量 feed 易把 Node 默认 ~2GB 堆打满（日志 FATAL heap out of memory）
+    mem_limit: 5g
     environment:
       DATABASE_TYPE: sqlite
       AUTH_CODE: ${WEWE_RSS_AUTH_CODE:-change-me-wewe}
@@ -116,6 +118,7 @@ services:
       # 浏览器直连 wewe 管理页时的外链根；嵌入走新闻反代时可填新闻公网地址
       SERVER_ORIGIN_URL: ${WEWE_SERVER_ORIGIN_URL:-http://127.0.0.1:4000}
       TZ: Asia/Shanghai
+      NODE_OPTIONS: ${WEWE_NODE_OPTIONS:---max-old-space-size=4096}
     # 默认只绑本机，避免公网裸奔 4000；需要外网直连再改 WEWE_HOST_BIND=0.0.0.0
     ports:
       - "${WEWE_HOST_BIND:-127.0.0.1}:${WEWE_HOST_PORT:-4000}:4000"
