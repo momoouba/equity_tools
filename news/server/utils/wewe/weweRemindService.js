@@ -74,6 +74,15 @@ function msSince(dt) {
   return Date.now() - t;
 }
 
+/** 北京时间 00:00–07:00 不发读书失效/缓冲催办，7 点后若仍有问题再发 */
+function isWeweRemindQuietHours(now = new Date()) {
+  const s = now.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
+  const hm = String(s).slice(11, 16);
+  const [hh, mm] = hm.split(':').map((x) => parseInt(x, 10));
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return false;
+  return hh * 60 + mm < 7 * 60;
+}
+
 async function bumpRemindCounters(session, kind) {
   const ymd = formatBeijingYmd();
   let count = Number(session.remind_count_today || 0);
@@ -194,6 +203,11 @@ async function runScanRemindTick(options = {}) {
       kind,
       waitMs: minIntervalMs - msSince(session.last_remind_at)
     };
+  }
+
+  if (!force && isWeweRemindQuietHours()) {
+    console.log(`[wewe催办] 静默时段 00:00-07:00，跳过发送 kind=${kind}`);
+    return { action: 'skip_quiet_hours', kind, phase: phaseInfo.phase };
   }
 
   const { token, expiresAt: tokenExp } = signLiveQrToken({
@@ -403,6 +417,7 @@ module.exports = {
   computeSessionPhase,
   runScanRemindTick,
   runPendingSubscribeRemindTick,
+  isWeweRemindQuietHours,
   markSessionRecovered,
   completeLoginFromPoll,
   issueLiveQrForMail,

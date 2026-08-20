@@ -34,9 +34,9 @@ function apiOrigin() {
 const boolFields = [
   { key: 'wewe_enabled', label: '总开关', hint: '关闭则专队全部不跑' },
   { key: 'enqueue_enabled', label: '允许入队', hint: '新榜「数据不存在」写入专队' },
-  { key: 'extract_enabled', label: '允许提取', hint: 'extract_start 入队；有文优先，空号 1 分钟、有文用提取间隔' },
+  { key: 'extract_enabled', label: '允许提取', hint: 'extract_start 当晚入队；catchup_extract_start 隔日补抓昨天 21:00 后；有文优先，空号 1 分钟' },
   { key: 'ingest_enabled', label: '允许入库', hint: '工作日 ingest_at 写入 news_detail' },
-  { key: 'remind_enabled', label: '允许催办', hint: '可独立早开，维持扫码会话' }
+  { key: 'remind_enabled', label: '允许催办', hint: '可独立早开；读书失效催办 00:00–07:00 静默，7 点后再发' }
 ]
 
 function statusColor(s) {
@@ -217,6 +217,7 @@ function WewePrivateConfig() {
         wewe_base_url: config.wewe_base_url || '',
         ops_email: config.ops_email || '',
         extract_start: config.extract_start || '21:00',
+        catchup_extract_start: config.catchup_extract_start || '06:00',
         ingest_at: config.ingest_at || '00:00',
         poll_interval_minutes: Number(config.poll_interval_minutes) || 5,
         session_ttl_hours: Number(config.session_ttl_hours) || 24,
@@ -552,6 +553,20 @@ function WewePrivateConfig() {
                         onChange={(v) => setConfig({ ...config, extract_start: v })}
                         placeholder="21:00"
                       />
+                      <span className="wewe-private-config__hint">
+                        当晚入队，只收当天 21:00 前的稿。21:00 及以后留给次日隔日补抓。
+                      </span>
+                    </label>
+                    <label>
+                      隔日补抓 catchup_extract_start
+                      <Input
+                        value={config.catchup_extract_start || '06:00'}
+                        onChange={(v) => setConfig({ ...config, catchup_extract_start: v })}
+                        placeholder="06:00"
+                      />
+                      <span className="wewe-private-config__hint">
+                        次日此时入队，抓昨天（含 21:00 后）。建议早于入库时刻，补完与当天 ingest_at 一并入库，作为当天新闻。
+                      </span>
                     </label>
                     <label>
                       入库时刻 ingest_at
@@ -560,6 +575,9 @@ function WewePrivateConfig() {
                         onChange={(v) => setConfig({ ...config, ingest_at: v })}
                         placeholder="00:00"
                       />
+                      <span className="wewe-private-config__hint">
+                        工作日此时把昨晚提取 + 当天隔日补抓一并写入 news_detail，作为当天新闻。
+                      </span>
                     </label>
                     <label>
                       提取间隔（有文，分钟）
@@ -608,6 +626,9 @@ function WewePrivateConfig() {
                         value={Number(config.remind_interval_dead_minutes) || 30}
                         onChange={(v) => setConfig({ ...config, remind_interval_dead_minutes: v })}
                       />
+                      <span className="wewe-private-config__hint">
+                        读书失效/缓冲催办在北京时间 00:00–07:00 静默不发信，7 点后若仍失效再发。
+                      </span>
                     </label>
                     <label>
                       日催办上限

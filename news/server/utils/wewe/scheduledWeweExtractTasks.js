@@ -1,9 +1,11 @@
 /**
  * P3：wewe 专队提取调度
- * - extract_start：标记所有 active+mapped 为 extract_pending
+ * - extract_start：当晚入队，抓当天 21:00 前的稿
+ * - catchup_extract_start：隔日补抓入队，抓昨天（含 21:00 后）
  * - 每分钟巡检；有文后等 poll_interval_minutes，空号/失败等 1 分钟再提下一个
  * - 排队：上次 success 优先，empty 最后
  * - 会话失效暂停；恢复后共用同一队列补提
+ * - 隔日补抓队列清空后补一次入库，避免晚于 ingest_at 的稿漏进当天新闻
  */
 const cron = require('node-cron');
 const {
@@ -14,16 +16,20 @@ const {
   catchUpExtractQueueAfterRestart,
   runExtractTick,
   isExtractEnabled,
-  formatBeijingYmd
+  formatBeijingYmd,
+  parseHmToMinutes
 } = require('./weweExtractService');
 
 const EMPTY_INTERVAL_MINUTES = 1;
 
 let startJob = null;
+let catchupJob = null;
 let tickJob = null;
 let runningTick = false;
 /** 下次允许提取的时间戳（毫秒）；进程重启后归零，会立刻提一个 */
 let nextTickAllowedAt = 0;
+/** 隔日补抓队列清空后已补入库的北京日，避免每分钟重复入库 */
+let catchupIngestDoneYmd = '';
 
 function delayMinutesForResult(result, longMinutes) {
   if (!result || !result.action) return 0;
@@ -31,6 +37,7 @@ function delayMinutesForResult(result, longMinutes) {
     result.action === 'idle_empty_queue' ||
     result.action === 'skip_paused' ||
     result.action === 'skip_disabled' ||
+    result.action === 'skip_idle_window' ||
     result.action === 'session_dead'
   ) {
     return 0;
@@ -46,30 +53,55 @@ function delayMinutesForResult(result, longMinutes) {
 }
 
 function parseHm(hm, fallbackH, fallbackM) {
-  const m = String(hm || '').trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return { h: fallbackH, mi: fallbackM };
-  const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
-  const mi = Math.min(59, Math.max(0, parseInt(m[2], 10)));
-  return { h, mi };
+  const fallback = fallbackH * 60 + fallbackM;
+  const total = parseHmToMinutes(hm, fallback);
+  return { h: Math.floor(total / 60), mi: total % 60 };
+}
+
+async function maybeIngestAfterCatchupIdle(result) {
+  if (!result || result.action !== 'idle_empty_queue' || result.extractKind !== 'catchup') {
+    return;
+  }
+  const today = formatBeijingYmd();
+  if (catchupIngestDoneYmd === today) return;
+  const cfg = await getWewePrivateConfig();
+  const ingestMin = parseHmToMinutes((cfg && cfg.ingest_at) || '07:00', 7 * 60);
+  const nowMin = parseHmToMinutes(
+    new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).slice(11, 16),
+    0
+  );
+  if (nowMin < ingestMin) return;
+  try {
+    const { triggerIngestTick } = require('./scheduledWeweIngestTasks');
+    console.log(`[wewe提取调度] 隔日补抓队列已空且已过入库时刻，补入库 ${today}`);
+    const ingestResult = await triggerIngestTick('catchup_idle');
+    if (ingestResult && ingestResult.action !== 'skip_busy') {
+      catchupIngestDoneYmd = today;
+    }
+    console.log('[wewe提取调度] 隔日补抓后入库', {
+      action: ingestResult.action,
+      pending: ingestResult.pending,
+      ingested: ingestResult.ingested
+    });
+  } catch (e) {
+    console.warn(`[wewe提取调度] 隔日补抓后入库失败: ${e.message}`);
+  }
+}
+
+function stopJob(job) {
+  if (!job) return null;
+  try {
+    job.stop();
+  } catch (_) {
+    /* ignore */
+  }
+  return null;
 }
 
 async function updateWeweExtractScheduledTasks() {
-  if (startJob) {
-    try {
-      startJob.stop();
-    } catch (_) {
-      /* ignore */
-    }
-    startJob = null;
-  }
-  if (tickJob) {
-    try {
-      tickJob.stop();
-    } catch (_) {
-      /* ignore */
-    }
-    tickJob = null;
-  }
+  startJob = stopJob(startJob);
+  catchupJob = stopJob(catchupJob);
+  tickJob = stopJob(tickJob);
 
   const cfg = await getWewePrivateConfig();
   if (!cfg || Number(cfg.wewe_enabled) !== 1 || Number(cfg.extract_enabled) !== 1) {
@@ -78,9 +110,9 @@ async function updateWeweExtractScheduledTasks() {
   }
 
   const { h, mi } = parseHm(cfg.extract_start || '21:00', 21, 0);
+  const catchup = parseHm(cfg.catchup_extract_start || '06:00', 6, 0);
   const interval = Math.min(60, Math.max(1, parseInt(cfg.poll_interval_minutes, 10) || 5));
 
-  // 每日 extract_start：入队
   const startCron = `${mi} ${h} * * *`;
   startJob = cron.schedule(
     startCron,
@@ -96,7 +128,23 @@ async function updateWeweExtractScheduledTasks() {
     { timezone: 'Asia/Shanghai' }
   );
 
-  // 每分钟巡检 1 次；实际是否提取由 nextTickAllowedAt 节流
+  const catchupCron = `${catchup.mi} ${catchup.h} * * *`;
+  catchupJob = cron.schedule(
+    catchupCron,
+    async () => {
+      try {
+        const ymd = formatBeijingYmd();
+        console.log(`[wewe提取调度] catchup_extract_start 触发 ${ymd}（抓昨天 21:00 后）`);
+        nextTickAllowedAt = 0;
+        catchupIngestDoneYmd = '';
+        await markAllActiveForExtract();
+      } catch (e) {
+        console.error('[wewe提取调度] 隔日补抓 markAll 失败:', e.message);
+      }
+    },
+    { timezone: 'Asia/Shanghai' }
+  );
+
   tickJob = cron.schedule(
     '* * * * *',
     async () => {
@@ -110,9 +158,15 @@ async function updateWeweExtractScheduledTasks() {
         if (waitMin > 0) {
           nextTickAllowedAt = Date.now() + waitMin * 60 * 1000;
         }
-        if (result.action !== 'idle_empty_queue' && result.action !== 'skip_paused' && result.action !== 'skip_disabled') {
+        if (
+          result.action !== 'idle_empty_queue' &&
+          result.action !== 'skip_paused' &&
+          result.action !== 'skip_disabled' &&
+          result.action !== 'skip_idle_window'
+        ) {
           console.log('[wewe提取调度] tick', { ...result, nextWaitMin: waitMin });
         }
+        await maybeIngestAfterCatchupIdle(result);
       } catch (e) {
         console.error('[wewe提取调度] tick 失败:', e.message);
         nextTickAllowedAt = Date.now() + EMPTY_INTERVAL_MINUTES * 60 * 1000;
@@ -124,9 +178,15 @@ async function updateWeweExtractScheduledTasks() {
   );
 
   console.log(
-    `[wewe提取调度] 已注册 start=${startCron} tick=* * * * * empty=${EMPTY_INTERVAL_MINUTES}m success=${interval}m (Asia/Shanghai)`
+    `[wewe提取调度] 已注册 start=${startCron} catchup=${catchupCron} tick=* * * * * empty=${EMPTY_INTERVAL_MINUTES}m success=${interval}m (Asia/Shanghai)`
   );
-  return { registered: true, startCron, interval, emptyInterval: EMPTY_INTERVAL_MINUTES };
+  return {
+    registered: true,
+    startCron,
+    catchupCron,
+    interval,
+    emptyInterval: EMPTY_INTERVAL_MINUTES
+  };
 }
 
 async function initializeWeweExtractScheduledTasks() {

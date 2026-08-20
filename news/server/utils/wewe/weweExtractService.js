@@ -59,6 +59,9 @@ function isWeweUnavailableError(err) {
 const FEED_LIMIT = 50;
 const MIN_CN_CHARS = 40;
 const MIN_PLAIN_LEN = 120;
+/** 当晚提取不收当天此时刻及之后的稿，留给次日隔日补抓 */
+const LATE_PUBLISH_MINUTES = 21 * 60;
+const DEFAULT_CATCHUP_START_MINUTES = 6 * 60;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -179,54 +182,132 @@ async function markAllActiveForExtract() {
   return n;
 }
 
-function beijingMinutesNow() {
-  const s = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
+function addDaysYmd(ymd, days) {
+  const [y, m, d] = String(ymd).split('-').map(Number);
+  const utc = Date.UTC(y, m - 1, d + days);
+  const dt = new Date(utc);
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    dt.getUTCDate()
+  ).padStart(2, '0')}`;
+}
+
+function beijingMinutesAt(date = new Date()) {
+  const s = date.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' });
   const hm = String(s).slice(11, 16);
   const [hh, mm] = hm.split(':').map((x) => parseInt(x, 10));
   if (!Number.isFinite(hh) || !Number.isFinite(mm)) return 0;
   return hh * 60 + mm;
 }
 
-function extractStartMinutes(cfg) {
-  const m = String((cfg && cfg.extract_start) || '21:00').trim().match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return 21 * 60;
+function beijingMinutesNow() {
+  return beijingMinutesAt(new Date());
+}
+
+function parseHmToMinutes(hm, fallbackMinutes) {
+  const m = String(hm || '').trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return fallbackMinutes;
   const h = Math.min(23, Math.max(0, parseInt(m[1], 10)));
   const mi = Math.min(59, Math.max(0, parseInt(m[2], 10)));
   return h * 60 + mi;
 }
 
+function extractStartMinutes(cfg) {
+  return parseHmToMinutes((cfg && cfg.extract_start) || '21:00', 21 * 60);
+}
+
+function catchupStartMinutes(cfg) {
+  return parseHmToMinutes(
+    (cfg && cfg.catchup_extract_start) || '06:00',
+    DEFAULT_CATCHUP_START_MINUTES
+  );
+}
+
+function beijingMinutesFromUnknown(value) {
+  if (value == null || value === '') return 0;
+  let date = null;
+  if (typeof value === 'number') {
+    const ms = value < 1e12 ? value * 1000 : value;
+    date = new Date(ms);
+  } else {
+    const str = String(value).trim();
+    if (/^\d{10,13}$/.test(str)) {
+      const n = Number(str);
+      const ms = n < 1e12 ? n * 1000 : n;
+      date = new Date(ms);
+    } else {
+      date = new Date(str);
+    }
+  }
+  if (!date || Number.isNaN(date.getTime())) return 0;
+  return beijingMinutesAt(date);
+}
+
 /**
- * app / wewe 在 extract_start 之后重启：把今天还没 success/partial 的号重新入队。
- * 未到 extract_start 不补，避免凌晨重启把昨天的号再跑一遍。
+ * 当晚 extract_start 之后：抓今天、跳过 21:00 及以后。
+ * 隔日补抓 catchup_extract_start～extract_start：抓昨天（含 21:00 后，并补漏当晚已扫过的号）。
+ * 0 点到隔日补抓开始：不跑，避免 ymd 滚到新一天。
+ */
+function resolveExtractWindow(cfg, now = new Date()) {
+  const today = formatBeijingYmd(now);
+  const yesterday = addDaysYmd(today, -1);
+  const nowMin = beijingMinutesAt(now);
+  const extractStart = extractStartMinutes(cfg);
+  const catchupStart = catchupStartMinutes(cfg);
+  if (nowMin >= extractStart) {
+    return { kind: 'evening', extractYmd: today, skipLate: true };
+  }
+  if (nowMin >= catchupStart) {
+    return { kind: 'catchup', extractYmd: yesterday, skipLate: false };
+  }
+  return { kind: 'idle', extractYmd: null, skipLate: false };
+}
+
+function mappedActivePendingSql() {
+  return `F_DeleteMark = 0
+       AND team_status = 'active'
+       AND map_status = 'mapped'
+       AND feed_id IS NOT NULL
+       AND feed_id != ''`;
+}
+
+/**
+ * app / wewe 重启：按当前窗口补队。
+ * 隔日补抓窗口：今晚 success 的号也要再入队（21:00 后稿）。
+ * 未到隔日补抓开始不补，避免凌晨把昨天队列用「今天」ymd 再跑一遍。
  */
 async function catchUpExtractQueueAfterRestart() {
   const cfg = await getWewePrivateConfig();
   if (!cfg || Number(cfg.wewe_enabled) !== 1 || Number(cfg.extract_enabled) !== 1) {
     return { action: 'skip_disabled', marked: 0 };
   }
-  if (beijingMinutesNow() < extractStartMinutes(cfg)) {
-    console.log('[wewe提取] 未到 extract_start，跳过重启补队');
+  const window = resolveExtractWindow(cfg);
+  if (window.kind === 'idle') {
+    console.log('[wewe提取] 未到隔日补抓/当晚提取，跳过重启补队');
     return { action: 'before_start', marked: 0 };
   }
-  const ymd = formatBeijingYmd();
+  const today = formatBeijingYmd();
+  const kind = window.kind;
+  const doneStatuses =
+    kind === 'catchup'
+      ? "('success', 'partial', 'empty', 'empty_content')"
+      : "('success', 'partial')";
   const result = await db.execute(
     `UPDATE wewe_private_accounts
      SET extract_pending = 1, F_LastModifyTime = CURRENT_TIMESTAMP
-     WHERE F_DeleteMark = 0
-       AND team_status = 'active'
-       AND map_status = 'mapped'
-       AND feed_id IS NOT NULL
-       AND feed_id != ''
+     WHERE ${mappedActivePendingSql()}
        AND NOT (
-         last_extract_status IN ('success', 'partial')
+         last_extract_kind = ?
+         AND last_extract_status IN ${doneStatuses}
          AND last_extract_at IS NOT NULL
          AND DATE(last_extract_at) = ?
        )`,
-    [ymd]
+    [kind, today]
   );
   const n = result?.affectedRows != null ? result.affectedRows : 0;
-  console.log(`[wewe提取] 重启补队：今日尚未 success/partial 的账号 ${n} 个重新入队`);
-  return { action: 'caught_up', marked: n, extractYmd: ymd };
+  console.log(
+    `[wewe提取] 重启补队：${kind} 窗口尚未完成的账号 ${n} 个重新入队 ymd=${window.extractYmd}`
+  );
+  return { action: 'caught_up', marked: n, extractYmd: window.extractYmd, extractKind: kind };
 }
 
 async function keepPendingWeweDown(accountRow, message) {
@@ -332,11 +413,13 @@ async function stageArticle(row) {
 /**
  * 提取单个已映射账号
  * @param {object} accountRow wewe_private_accounts 行
- * @param {{ extractYmd?: string, updateFeed?: boolean }} options
+ * @param {{ extractYmd?: string, updateFeed?: boolean, extractKind?: string, skipLate?: boolean }} options
  */
 async function extractOneAccount(accountRow, options = {}) {
   const extractYmd = options.extractYmd || formatBeijingYmd();
   const updateFeed = options.updateFeed !== false;
+  const extractKind = options.extractKind || 'manual';
+  const skipLate = options.skipLate === true;
   const gh = accountRow.wechat_account_id;
   const feedId = accountRow.feed_id;
 
@@ -401,8 +484,12 @@ async function extractOneAccount(accountRow, options = {}) {
     let index = indexFeedContent(feedArticles);
     let candidates = buildCandidates(rawList, feedArticles, index);
 
-    const dayItems = () =>
-      candidates.filter((a) => toBeijingYmdFromUnknown(a.publicTime) === extractYmd);
+    const isTargetDayArticle = (a) => {
+      if (toBeijingYmdFromUnknown(a.publicTime) !== extractYmd) return false;
+      if (skipLate && beijingMinutesFromUnknown(a.publicTime) >= LATE_PUBLISH_MINUTES) return false;
+      return true;
+    };
+    const dayItems = () => candidates.filter(isTargetDayArticle);
     const missingContent = () =>
       dayItems().filter((a) => a.link && !toUsableContent(a.contentFull));
 
@@ -442,9 +529,14 @@ async function extractOneAccount(accountRow, options = {}) {
     let staged = 0;
     let matched = 0;
     let skippedEmpty = 0;
+    let deferredLate = 0;
     for (const a of candidates) {
       const ymd = toBeijingYmdFromUnknown(a.publicTime);
       if (ymd !== extractYmd) continue;
+      if (skipLate && beijingMinutesFromUnknown(a.publicTime) >= LATE_PUBLISH_MINUTES) {
+        deferredLate += 1;
+        continue;
+      }
       matched += 1;
       if (!a.link) continue;
       const content = toUsableContent(a.contentFull);
@@ -488,28 +580,32 @@ async function extractOneAccount(accountRow, options = {}) {
       `UPDATE wewe_private_accounts
        SET extract_pending = 0,
            last_extract_status = ?,
+           last_extract_kind = ?,
            last_extract_at = NOW(),
            note = ?,
            F_LastModifyTime = CURRENT_TIMESTAMP
        WHERE F_Id = ?`,
       [
         status,
-        `extract_ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} candidates=${candidates.length}`,
+        extractKind,
+        `kind=${extractKind} extract_ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} deferredLate=${deferredLate} candidates=${candidates.length}`,
         accountRow.F_Id
       ]
     );
 
     console.log(
-      `[wewe提取] account=${gh} feed=${feedId} ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} candidates=${candidates.length}`
+      `[wewe提取] account=${gh} feed=${feedId} kind=${extractKind} ymd=${extractYmd} staged=${staged} skippedEmpty=${skippedEmpty} matchedDay=${matched} deferredLate=${deferredLate} candidates=${candidates.length}`
     );
     return {
       action: 'extracted',
       wechatAccountId: gh,
       feedId,
       extractYmd,
+      extractKind,
       staged,
       skippedEmpty,
       matchedDay: matched,
+      deferredLate,
       totalFetched: candidates.length,
       status
     };
@@ -536,11 +632,12 @@ async function extractOneAccount(accountRow, options = {}) {
       `UPDATE wewe_private_accounts
        SET extract_pending = 0,
            last_extract_status = 'failed',
+           last_extract_kind = ?,
            last_extract_at = NOW(),
            note = ?,
            F_LastModifyTime = CURRENT_TIMESTAMP
        WHERE F_Id = ?`,
-      [String(e.message || 'extract failed').slice(0, 500), accountRow.F_Id]
+      [extractKind, String(e.message || 'extract failed').slice(0, 500), accountRow.F_Id]
     );
     console.warn(`[wewe提取] 失败 account=${gh}: ${e.message}`);
     return { action: 'failed', wechatAccountId: gh, error: e.message };
@@ -555,11 +652,31 @@ async function runExtractTick(options = {}) {
   if (await isExtractPaused()) {
     return { action: 'skip_paused' };
   }
+  const cfg = await getWewePrivateConfig();
+  const window = options.extractYmd
+    ? {
+        kind: options.extractKind || 'manual',
+        extractYmd: options.extractYmd,
+        skipLate: options.skipLate === true
+      }
+    : resolveExtractWindow(cfg);
+  if (window.kind === 'idle') {
+    return { action: 'skip_idle_window' };
+  }
   const account = await pickNextPendingAccount();
   if (!account) {
-    return { action: 'idle_empty_queue' };
+    return {
+      action: 'idle_empty_queue',
+      extractKind: window.kind,
+      extractYmd: window.extractYmd
+    };
   }
-  return extractOneAccount(account, options);
+  return extractOneAccount(account, {
+    ...options,
+    extractYmd: window.extractYmd,
+    extractKind: window.kind,
+    skipLate: window.skipLate
+  });
 }
 
 async function resumeExtractAfterLogin() {
@@ -578,8 +695,11 @@ async function resumeExtractAfterLogin() {
 }
 
 module.exports = {
+  LATE_PUBLISH_MINUTES,
   formatBeijingYmd,
   toBeijingYmdFromUnknown,
+  parseHmToMinutes,
+  resolveExtractWindow,
   isSessionDeadError,
   isExtractPaused,
   isExtractEnabled,

@@ -45,7 +45,7 @@ async function updateWeweRemindScheduledTasks() {
       runningScan = true;
       try {
         const result = await runScanRemindTick();
-        if (result.action === 'sent' || result.action.startsWith('not_sent')) {
+        if (result.action === 'sent' || result.action.startsWith('not_sent') || result.action === 'skip_quiet_hours') {
           console.log('[wewe催办调度] scan', result.action, result.kind);
         }
       } catch (e) {

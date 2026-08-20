@@ -16,6 +16,37 @@ function parseHm(hm, fallbackH, fallbackM) {
   return { h, mi };
 }
 
+async function triggerIngestTick(reason = 'ingest_at') {
+  if (running) {
+    console.log(`[wewe入库调度] 已在跑，跳过 ${reason}`);
+    return { action: 'skip_busy', reason };
+  }
+  if (!(await isIngestEnabled()) && reason !== 'force') {
+    return { action: 'skip_disabled' };
+  }
+  running = true;
+  try {
+    console.log(`[wewe入库调度] ${reason} 触发 ${formatBeijingYmd()}`);
+    const result = await runIngestTick();
+    console.log('[wewe入库调度] 结果', {
+      action: result.action,
+      ingestYmd: result.ingestYmd,
+      pending: result.pending,
+      ingested: result.ingested,
+      skipped: result.skipped,
+      failed: result.failed,
+      bizDates: result.bizDates,
+      reason
+    });
+    return result;
+  } catch (e) {
+    console.error('[wewe入库调度] 失败:', e.message);
+    return { action: 'error', error: e.message };
+  } finally {
+    running = false;
+  }
+}
+
 async function updateWeweIngestScheduledTasks() {
   if (ingestJob) {
     try {
@@ -38,26 +69,7 @@ async function updateWeweIngestScheduledTasks() {
   ingestJob = cron.schedule(
     expr,
     async () => {
-      if (running) return;
-      running = true;
-      try {
-        if (!(await isIngestEnabled())) return;
-        console.log(`[wewe入库调度] ingest_at 触发 ${formatBeijingYmd()}`);
-        const result = await runIngestTick();
-        console.log('[wewe入库调度] 结果', {
-          action: result.action,
-          ingestYmd: result.ingestYmd,
-          pending: result.pending,
-          ingested: result.ingested,
-          skipped: result.skipped,
-          failed: result.failed,
-          bizDates: result.bizDates
-        });
-      } catch (e) {
-        console.error('[wewe入库调度] 失败:', e.message);
-      } finally {
-        running = false;
-      }
+      await triggerIngestTick('ingest_at');
     },
     { timezone: 'Asia/Shanghai' }
   );
@@ -76,5 +88,6 @@ async function initializeWeweIngestScheduledTasks() {
 
 module.exports = {
   updateWeweIngestScheduledTasks,
-  initializeWeweIngestScheduledTasks
+  initializeWeweIngestScheduledTasks,
+  triggerIngestTick
 };

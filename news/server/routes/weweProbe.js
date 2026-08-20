@@ -245,6 +245,10 @@ router.patch('/team/config', requireAdmin, async (req, res) => {
       fields.push('extract_start = ?');
       values.push(String(req.body.extract_start || '21:00').slice(0, 10));
     }
+    if (req.body.catchup_extract_start !== undefined) {
+      fields.push('catchup_extract_start = ?');
+      values.push(String(req.body.catchup_extract_start || '06:00').slice(0, 10));
+    }
     if (req.body.poll_interval_minutes !== undefined) {
       fields.push('poll_interval_minutes = ?');
       values.push(Math.min(60, Math.max(1, parseInt(req.body.poll_interval_minutes, 10) || 5)));

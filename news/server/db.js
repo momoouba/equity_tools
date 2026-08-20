@@ -9294,6 +9294,7 @@ async function initializeTables(dbPool) {
         remind_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '允许催扫/待订阅邮件',
         wewe_base_url VARCHAR(500) NULL COMMENT 'wewe-rss 根地址',
         extract_start VARCHAR(10) NOT NULL DEFAULT '21:00',
+        catchup_extract_start VARCHAR(10) NOT NULL DEFAULT '06:00' COMMENT '隔日补抓开始 HH:mm，抓昨天21:00后的稿',
         ingest_at VARCHAR(10) NOT NULL DEFAULT '00:00',
         poll_interval_minutes INT NOT NULL DEFAULT 5,
         session_ttl_hours INT NOT NULL DEFAULT 24,
@@ -9344,6 +9345,7 @@ async function initializeTables(dbPool) {
         last_exited_at DATETIME NULL,
         last_extract_status VARCHAR(30) NULL COMMENT 'success|empty|failed|session_dead',
         last_extract_at DATETIME NULL,
+        last_extract_kind VARCHAR(20) NULL COMMENT 'evening|catchup',
         extract_pending TINYINT(1) NOT NULL DEFAULT 0 COMMENT '会话恢复后待补提',
         note VARCHAR(500) NULL,
         F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -9359,6 +9361,37 @@ async function initializeTables(dbPool) {
     console.log('✓ wewe_private_accounts 表已就绪');
   } catch (err) {
     console.warn('创建 wewe_private_accounts 时出现警告:', err.message);
+  }
+
+  try {
+    const [catchupCols] = await dbPool.query(
+      "SHOW COLUMNS FROM wewe_private_config LIKE 'catchup_extract_start'"
+    );
+    if (!catchupCols.length) {
+      await dbPool.query(
+        `ALTER TABLE wewe_private_config
+         ADD COLUMN catchup_extract_start VARCHAR(10) NOT NULL DEFAULT '06:00'
+         COMMENT '隔日补抓开始 HH:mm，抓昨天21:00后的稿' AFTER extract_start`
+      );
+      console.log('✓ wewe_private_config.catchup_extract_start 已添加');
+    }
+  } catch (err) {
+    console.warn('迁移 catchup_extract_start 时出现警告:', err.message);
+  }
+
+  try {
+    const [kindCols] = await dbPool.query(
+      "SHOW COLUMNS FROM wewe_private_accounts LIKE 'last_extract_kind'"
+    );
+    if (!kindCols.length) {
+      await dbPool.query(
+        `ALTER TABLE wewe_private_accounts
+         ADD COLUMN last_extract_kind VARCHAR(20) NULL COMMENT 'evening|catchup' AFTER last_extract_at`
+      );
+      console.log('✓ wewe_private_accounts.last_extract_kind 已添加');
+    }
+  } catch (err) {
+    console.warn('迁移 last_extract_kind 时出现警告:', err.message);
   }
 
   try {
