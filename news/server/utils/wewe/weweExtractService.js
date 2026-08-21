@@ -3,7 +3,7 @@
  */
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
-const { fetchFeedJson, refreshMpArticles, getMpArticles, htmlToPlainText } = require('./weweClient');
+const { fetchFeedJson, getMpArticles, htmlToPlainText } = require('./weweClient');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 
 const SESSION_DEAD_RE = /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新/i;
@@ -76,7 +76,9 @@ function isWeweUnavailableError(err) {
   return false;
 }
 
-const FEED_LIMIT = 50;
+/** 目录用不含全文的 json，避免 200 篇 HTML 撑爆；正文再按标题小批量拉 */
+const CATALOG_LIMIT = 80;
+const FULLTEXT_LIMIT = 8;
 const MIN_CN_CHARS = 40;
 const MIN_PLAIN_LEN = 120;
 /** 当晚提取不收当天此时刻及之后的稿，留给次日隔日补抓 */
@@ -88,20 +90,30 @@ function sleep(ms) {
 }
 
 function weixinUrlKey(url) {
+  const keys = weixinUrlKeys(url);
+  return keys[0] || '';
+}
+
+function weixinUrlKeys(url) {
   const s = String(url || '').trim().split('#')[0];
-  if (!s) return '';
+  const keys = [];
+  if (!s) return keys;
   const short = s.match(/mp\.weixin\.qq\.com\/s\/([A-Za-z0-9_-]+)/i);
-  if (short) return `s:${short[1]}`;
+  if (short) keys.push(`s:${short[1]}`);
   try {
     const u = new URL(s);
     const sn = u.searchParams.get('sn');
     const mid = u.searchParams.get('mid');
     const idx = u.searchParams.get('idx');
-    if (sn) return `sn:${sn}:${mid || ''}:${idx || ''}`;
+    if (sn) {
+      keys.push(`sn:${sn}:${mid || ''}:${idx || ''}`);
+      keys.push(`s:${sn}`);
+    }
   } catch (_) {
     /* ignore */
   }
-  return s;
+  keys.push(s);
+  return [...new Set(keys)];
 }
 
 function titleKey(title) {
@@ -115,6 +127,11 @@ function toUsableContent(raw) {
   const cn = (text.match(/[\u4e00-\u9fff]/g) || []).length;
   if (cn >= MIN_CN_CHARS) return text;
   if (!s.includes('<') && text.length >= MIN_PLAIN_LEN) return text;
+  const picked = (s.match(/[\u4e00-\u9fff0-9A-Za-z，。；：、！？“”‘’（）\s]{20,}/g) || [])
+    .filter((chunk) => (chunk.match(/[\u4e00-\u9fff]/g) || []).length >= 8)
+    .join('');
+  const pickedCn = (picked.match(/[\u4e00-\u9fff]/g) || []).length;
+  if (pickedCn >= MIN_CN_CHARS) return picked.replace(/\s+/g, ' ').trim().slice(0, 80000);
   return '';
 }
 
@@ -124,8 +141,9 @@ function indexFeedContent(feedArticles) {
   for (const a of feedArticles || []) {
     const body = a.contentFull || '';
     if (!String(body).trim()) continue;
-    const uk = weixinUrlKey(a.link);
-    if (uk) byUrl.set(uk, body);
+    for (const uk of weixinUrlKeys(a.link)) {
+      byUrl.set(uk, body);
+    }
     if (a.link) byUrl.set(String(a.link).split('#')[0], body);
     const tk = titleKey(a.title);
     if (tk) byTitle.set(tk, body);
@@ -134,9 +152,11 @@ function indexFeedContent(feedArticles) {
 }
 
 function contentFromIndex(index, link, title) {
-  const uk = weixinUrlKey(link);
+  for (const uk of weixinUrlKeys(link)) {
+    const hit = index.byUrl.get(uk);
+    if (hit) return hit;
+  }
   return (
-    (uk && index.byUrl.get(uk)) ||
     index.byUrl.get(String(link || '').split('#')[0]) ||
     index.byTitle.get(titleKey(title)) ||
     ''
@@ -150,8 +170,9 @@ function attachFeedContent(candidates, index) {
   }));
 }
 
-async function loadFeedArticles(feedId, { update = false } = {}) {
-  const result = await fetchFeedJson(feedId, { limit: FEED_LIMIT, update });
+async function loadFeedArticles(feedId, { update = false, titleInclude = '', mode = 'fulltext', limit } = {}) {
+  const n = Number(limit) > 0 ? Number(limit) : mode === 'fulltext' ? FULLTEXT_LIMIT : CATALOG_LIMIT;
+  const result = await fetchFeedJson(feedId, { limit: n, update, titleInclude, mode });
   return result.articles || [];
 }
 
@@ -544,26 +565,31 @@ async function extractOneAccount(accountRow, options = {}) {
   }
 
   try {
-    // 主路径：platform.getMpArticles 拿当日目录（不含正文）
-    // 先 refresh 再 getMpArticles 易被 wewe 限流成空列表，故不前置 refresh
+    // 先读 sqlite 目录（mode=- 无 HTML）。getMpArticles 易被限流成 0，不能当唯一目录。
     let rawList = [];
     let mpError = null;
-    try {
-      rawList = await getMpArticles(feedId);
-    } catch (e) {
-      mpError = e;
-      console.warn(`[wewe提取] getMpArticles 失败，回退 feed.json account=${gh}: ${e.message}`);
-      if (isSessionDeadError(e)) throw e;
-    }
-
     let feedArticles = [];
     try {
-      feedArticles = await loadFeedArticles(feedId, { update: false });
+      feedArticles = await loadFeedArticles(feedId, {
+        update: false,
+        mode: 'text',
+        limit: CATALOG_LIMIT
+      });
     } catch (e) {
-      console.warn(`[wewe提取] feed.json 失败 account=${gh}: ${e.message}`);
-      if (isSessionDeadError(e) && rawList.length === 0) throw e;
-      if (isWeweUnavailableError(e) && rawList.length === 0) {
+      console.warn(`[wewe提取] 目录 feed.json 失败 account=${gh}: ${e.message}`);
+      if (isSessionDeadError(e)) throw e;
+      if (isWeweUnavailableError(e)) {
         return keepPendingWeweDown(accountRow, e.message);
+      }
+    }
+
+    if (feedArticles.length === 0) {
+      try {
+        rawList = await getMpArticles(feedId);
+      } catch (e) {
+        mpError = e;
+        console.warn(`[wewe提取] getMpArticles 失败 account=${gh}: ${e.message}`);
+        if (isSessionDeadError(e)) throw e;
       }
     }
 
@@ -588,17 +614,24 @@ async function extractOneAccount(accountRow, options = {}) {
           index
         );
       }
-      return (feeds || []).map((a) => ({
-        weweArticleId: a.weweArticleId || null,
-        title: a.title,
-        link: a.link,
-        publicTime: a.publicTime,
-        contentFull: a.contentFull || ''
-      }));
+      return (feeds || []).map((a) => {
+        let link = a.link || '';
+        if (!link && a.weweArticleId && !String(a.weweArticleId).startsWith('MP_WXS')) {
+          link = `https://mp.weixin.qq.com/s/${a.weweArticleId}`;
+        }
+        return {
+          weweArticleId: a.weweArticleId || null,
+          title: a.title,
+          link,
+          publicTime: a.publicTime,
+          contentFull: a.contentFull || contentFromIndex(index, link, a.title) || ''
+        };
+      });
     };
 
     let index = indexFeedContent(feedArticles);
     let candidates = buildCandidates(rawList, feedArticles, index);
+    const catalogSnapshot = candidates.slice();
 
     const isTargetDayArticle = (a) => {
       if (toBeijingYmdFromUnknown(a.publicTime) !== extractYmd) return false;
@@ -609,29 +642,67 @@ async function extractOneAccount(accountRow, options = {}) {
     const missingContent = () =>
       dayItems().filter((a) => a.link && !toUsableContent(a.contentFull));
 
+    const titleIncludeFromMissing = () =>
+      missingContent()
+        .map((a) => String(a.title || '').trim())
+        .filter(Boolean)
+        .slice(0, 8)
+        .join('|')
+        .slice(0, 400);
+
+    const mergeFulltext = (fulltextList) => {
+      index = indexFeedContent(fulltextList);
+      candidates = attachFeedContent(catalogSnapshot.length ? catalogSnapshot : candidates, index);
+    };
+
     const refreshFeedForContent = async (reason) => {
-      if (!updateFeed) return;
-      console.log(`[wewe提取] 补全文 ${reason} account=${gh} feed=${feedId}`);
+      const titleInclude = titleIncludeFromMissing();
+      console.log(
+        `[wewe提取] 补全文 ${reason} account=${gh} feed=${feedId} titles=${titleInclude} catalog=${feedArticles.length} mpList=${rawList.length}`
+      );
       try {
-        await loadFeedArticles(feedId, { update: true });
-        await sleep(2000);
-        feedArticles = await loadFeedArticles(feedId, { update: false });
-        index = indexFeedContent(feedArticles);
-        candidates = buildCandidates(rawList, feedArticles, index);
+        const fulltextList = await loadFeedArticles(feedId, {
+          update: false,
+          titleInclude,
+          mode: 'fulltext',
+          limit: 30
+        });
+        mergeFulltext(fulltextList);
+      } catch (e) {
+        console.warn(`[wewe提取] 全文 json 失败 account=${gh}: ${e.message}`);
+        if (isSessionDeadError(e)) throw e;
+        try {
+          const fulltextList = await loadFeedArticles(feedId, {
+            update: false,
+            titleInclude,
+            mode: 'fulltext',
+            limit: FULLTEXT_LIMIT
+          });
+          mergeFulltext(fulltextList);
+        } catch (e2) {
+          console.warn(`[wewe提取] 全文 json 降级失败 account=${gh}: ${e2.message}`);
+          if (isSessionDeadError(e2)) throw e2;
+        }
+      }
+      if (!updateFeed || missingContent().length === 0) return;
+      try {
+        await loadFeedArticles(feedId, {
+          update: true,
+          titleInclude,
+          mode: 'fulltext',
+          limit: FULLTEXT_LIMIT
+        });
+        await sleep(3000);
+        const fulltextList = await loadFeedArticles(feedId, {
+          update: false,
+          titleInclude,
+          mode: 'fulltext',
+          limit: FULLTEXT_LIMIT
+        });
+        mergeFulltext(fulltextList);
       } catch (e) {
         console.warn(`[wewe提取] feed 刷新失败 account=${gh}: ${e.message}`);
         if (isSessionDeadError(e)) throw e;
-      }
-      if (missingContent().length === 0) return;
-      try {
-        await refreshMpArticles(feedId);
-        await sleep(2000);
-        feedArticles = await loadFeedArticles(feedId, { update: false });
-        index = indexFeedContent(feedArticles);
-        candidates = buildCandidates(rawList, feedArticles, index);
-      } catch (e2) {
-        console.warn(`[wewe提取] refreshArticles 回退警告 account=${gh}: ${e2.message}`);
-        if (isSessionDeadError(e2)) throw e2;
       }
     };
 
@@ -640,6 +711,12 @@ async function extractOneAccount(accountRow, options = {}) {
       await refreshFeedForContent('目录为空');
     } else if (missing.length > 0) {
       await refreshFeedForContent(`当日缺正文 ${missing.length} 篇`);
+    } else if (dayItems().length === 0 && feedArticles.length > 0) {
+      console.warn(
+        `${logPrefix()} 目录${feedArticles.length}篇均未匹配业务日=${extractYmd} 样例日期=${toBeijingYmdFromUnknown(
+          feedArticles[0] && feedArticles[0].publicTime
+        )} 样例标题=${String((feedArticles[0] && feedArticles[0].title) || '').slice(0, 30)}`
+      );
     }
 
     let staged = 0;
@@ -647,6 +724,7 @@ async function extractOneAccount(accountRow, options = {}) {
     let skippedEmpty = 0;
     let deferredLate = 0;
     const stagedTitles = [];
+    const skippedEmptyItems = [];
     for (const a of candidates) {
       const ymd = toBeijingYmdFromUnknown(a.publicTime);
       if (ymd !== extractYmd) continue;
@@ -655,12 +733,43 @@ async function extractOneAccount(accountRow, options = {}) {
         continue;
       }
       matched += 1;
-      if (!a.link) continue;
-      const content = toUsableContent(a.contentFull);
+      if (!a.link) {
+        skippedEmpty += 1;
+        skippedEmptyItems.push({
+          title: String(a.title || '').slice(0, 80),
+          url: '',
+          contentLen: 0,
+          reason: 'no_link'
+        });
+        console.warn(
+          `[wewe提取] 跳过无链接 account=${gh} title=${String(a.title || '').slice(0, 40)}`
+        );
+        continue;
+      }
+      let content = toUsableContent(a.contentFull);
+      if (!content && a.link) {
+        const placeholder = [
+          String(a.title || '').trim(),
+          `原文链接：${a.link}`,
+          '（公众号原文未解析出足够正文，已保留标题与链接，请打开原文阅读。）'
+        ].join('\n\n');
+        content = toUsableContent(placeholder);
+        if (content) {
+          console.warn(
+            `[wewe提取] 空正文改用标题占位 account=${gh} title=${String(a.title || '').slice(0, 40)}`
+          );
+        }
+      }
       if (!content) {
         skippedEmpty += 1;
+        const rawLen = String(a.contentFull || '').length;
+        skippedEmptyItems.push({
+          title: String(a.title || '').slice(0, 80),
+          url: a.link,
+          contentLen: rawLen
+        });
         console.warn(
-          `[wewe提取] 跳过空正文 account=${gh} title=${String(a.title || '').slice(0, 40)} url=${a.link}`
+          `[wewe提取] 跳过空正文 account=${gh} title=${String(a.title || '').slice(0, 40)} url=${a.link} contentLen=${rawLen}`
         );
         continue;
       }
@@ -736,6 +845,7 @@ async function extractOneAccount(accountRow, options = {}) {
       matchedDay: matched,
       deferredLate,
       totalFetched: candidates.length,
+      skippedEmptyItems,
       status,
       elapsedSec: Number(elapsedSec)
     };

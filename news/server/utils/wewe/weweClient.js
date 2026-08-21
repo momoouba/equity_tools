@@ -57,13 +57,25 @@ function normalizeArticles(payload) {
   return [];
 }
 
-/** 从微信整页 HTML / 富文本抽出可读正文 */
-function htmlToPlainText(html, maxLen = 80000) {
+/** 去掉脚本/样式/base64 图，优先切到微信正文容器，避免 50 万字整页把正文挤出窗口 */
+function compactWeixinHtml(html) {
   const s = String(html || '');
   if (!s) return '';
-  let text = s
+  const noHeavy = s
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+/gi, ' ')
+    .replace(/<svg[\s\S]*?<\/svg>/gi, ' ');
+  const marker = noHeavy.search(/id=["']js_content["']|class=["'][^"']*rich_media_content/i);
+  const body = marker >= 0 ? noHeavy.slice(marker, marker + 250000) : noHeavy;
+  return body.slice(0, 250000);
+}
+
+/** 从微信整页 HTML / 富文本抽出可读正文 */
+function htmlToPlainText(html, maxLen = 80000) {
+  const s = compactWeixinHtml(html);
+  if (!s) return '';
+  let text = s
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
@@ -72,12 +84,8 @@ function htmlToPlainText(html, maxLen = 80000) {
     .replace(/&#?\w+;/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  if (text.length > maxLen * 3) {
-    const m = text.match(/(发布|作者|阅读原文|[\u4e00-\u9fff]{8,})/);
-    if (m && m.index != null && m.index < text.length / 2) {
-      text = text.slice(m.index);
-    }
-  }
+  const cnStart = text.search(/[\u4e00-\u9fff]{6,}/);
+  if (cnStart > 0) text = text.slice(cnStart);
   return text.slice(0, maxLen);
 }
 
@@ -88,37 +96,46 @@ function htmlToTextPreview(html, maxLen = 240) {
 
 function pickArticleFields(raw, feedHint = null) {
   const title = raw.title || raw.name || '';
-  const link = raw.url || raw.link || raw.source_url || raw.external_url || '';
+  let link = raw.url || raw.link || raw.source_url || raw.external_url || '';
+  const rawId = raw.id != null ? String(raw.id) : '';
+  if (!link && /^https?:\/\//i.test(rawId)) link = rawId;
+  if (!link && /^[A-Za-z0-9_-]{8,}$/.test(rawId) && !rawId.startsWith('MP_WXS')) {
+    link = `https://mp.weixin.qq.com/s/${rawId}`;
+  }
   const content =
     raw.content ||
     raw.content_html ||
+    raw.content_text ||
+    raw.contentHtml ||
+    raw.contentText ||
+    raw.html ||
     raw.description ||
     raw.summary ||
-    raw.contentText ||
     '';
   // wewe JSON Feed 常见为 date_modified，不一定有 date_published
   const publicTime =
     raw.date_published ||
-    raw.date_modified ||
     raw.published ||
     raw.pubDate ||
     raw.publishTime ||
+    raw.date ||
+    raw.date_modified ||
     raw.created ||
     raw.updateTime ||
     null;
   const feedId = raw.feed_id || raw.feedId || feedHint || null;
-  const contentStr = String(content);
+  const contentStr = compactWeixinHtml(String(content));
   return {
     title: String(title).slice(0, 500),
     link: String(link).slice(0, 1000),
     contentPreview: htmlToTextPreview(contentStr, 240),
-    contentFull: contentStr.slice(0, 500000),
+    contentFull: contentStr,
     contentLength: contentStr.length,
     hasHtmlBody: contentStr.includes('<') && contentStr.length > 500,
     publicTime,
     author: raw.author || null,
     feedId,
-    weweArticleId: raw.id != null ? String(raw.id) : null,
+    weweArticleId: rawId || null,
     rawKeys: Object.keys(raw || {}).slice(0, 20)
   };
 }
@@ -149,15 +166,17 @@ async function fetchAllFeedsJson(limitPerFeed = 5) {
   return { baseUrl, status: res.status, count: articles.length, articles: articles.slice(0, limitPerFeed * 10) };
 }
 
-async function fetchFeedJson(feedId, { limit = 10, update = false } = {}) {
+async function fetchFeedJson(feedId, { limit = 10, update = false, titleInclude = '', mode = 'fulltext' } = {}) {
   const id = String(feedId || '').trim();
   if (!id) throw new Error('feedId required');
   const { client, baseUrl } = buildClient();
 
   if (update) {
     // 官方：单 feed 刷新 GET /feeds/:feed.rss?update=true
+    // 刷新响不含文章；正文另用小 limit 的 json，避免 200 篇全文 JSON.stringify 撑爆
     const upd = await client.get(`/feeds/${encodeURIComponent(id)}.rss`, {
       params: withAuthQuery({ update: true }),
+      timeout: 180000,
       responseType: 'text',
       transformResponse: [(d) => d]
     });
@@ -168,9 +187,17 @@ async function fetchFeedJson(feedId, { limit = 10, update = false } = {}) {
     }
   }
 
-  const res = await client.get(`/feeds/${encodeURIComponent(id)}.json`, {
-    params: withAuthQuery({ limit })
-  });
+  const readJson = async (n) => {
+    const params = withAuthQuery({ limit: n, mode: mode || 'fulltext' });
+    const include = String(titleInclude || '').trim();
+    if (include) params.title_include = include.slice(0, 400);
+    return client.get(`/feeds/${encodeURIComponent(id)}.json`, { params });
+  };
+
+  let res = await readJson(limit);
+  if (res.status >= 400) {
+    res = await readJson(Math.min(5, limit));
+  }
   if (res.status >= 400) {
     const err = new Error(`wewe feed.json HTTP ${res.status}`);
     err.status = res.status;
