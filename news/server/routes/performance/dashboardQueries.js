@@ -76,7 +76,7 @@ async function fetchFundsData(version) {
        WHEN '外部备案SPV' THEN 5
        WHEN '外部非备案SPV' THEN 6
        ELSE 7
-     END, set_up_date ASC`,
+     END, set_up_date ASC, fund ASC`,
     [version]
   );
   const indicators = {};
@@ -110,7 +110,7 @@ async function fetchPortfolioData(version) {
        WHEN '外部备案SPV' THEN 5
        WHEN '外部非备案SPV' THEN 6
        ELSE 7
-     END, set_up_date ASC`,
+     END, set_up_date ASC, fund ASC`,
     [version]
   );
 
