@@ -132,9 +132,11 @@ function computeIRR(amounts, dates) {
 
 /**
  * 从 b_transaction 行构建 Net IRR 现金流（投资人视角）
- * - 流出：lp is not null and transaction_type = '实缴'
- * - 流入：lp is not null and transaction_type = '分配'
- * - 终值：lp is null and sub_fund is null and company is null and transaction_type = '未实现价值'
+ * - 实缴：lp 非空；现金流 = -amount（负金额实缴为流入，如退回）
+ * - 分配：lp 非空；现金流 = +amount
+ * - 终值：lp / sub_fund / company 皆空且 transaction_type = '未实现价值'
+ *
+ * 符号必须保留 amount 正负，不可用 ±abs。负的「实缴」是退回/划转，应为流入。
  */
 function buildNetCashFlows(rows) {
   const amounts = [];
@@ -146,15 +148,15 @@ function buildNetCashFlows(rows) {
     const type = (r.transaction_type && String(r.transaction_type).trim()) || '';
     const amount = Number(r.transaction_amount);
     const date = r.transaction_date;
-    if (date == null) continue;
+    if (date == null || Number.isNaN(amount)) continue;
     if (lp && type === '实缴') {
-      amounts.push(-Math.abs(amount));
+      amounts.push(-amount);
       dates.push(date);
     } else if (lp && type === '分配') {
-      amounts.push(Math.abs(amount));
+      amounts.push(amount);
       dates.push(date);
     } else if (!lp && !subFund && !company && type === '未实现价值') {
-      amounts.push(Math.abs(amount));
+      amounts.push(amount);
       dates.push(date);
     }
   }
@@ -163,9 +165,11 @@ function buildNetCashFlows(rows) {
 
 /**
  * 从 b_transaction 行构建 Gross IRR 现金流（基金视角）
- * - 现金流流出（负数）：lp is null AND transaction_type IN ('实缴','出资')
- * - 现金流流入（正数）：lp is null AND transaction_type IN ('分配','转让','分红','退出','债转股回收')
- * - 终值（正数）：lp is null AND (sub_fund is not null OR company is not null) AND transaction_type = '未实现价值'
+ * - 实缴/出资：lp is null；现金流 = -amount（负金额实缴为流入，如 SPV 划转/退回）
+ * - 分配/转让/分红/退出/债转股回收：lp is null；现金流 = +amount
+ * - 终值：lp is null AND (sub_fund is not null OR company is not null) AND transaction_type = '未实现价值'
+ *
+ * 与 b_investment 项目级 IRR 一致：实缴现金流 = -transaction_amount，不可用 -abs。
  */
 const GROSS_OUT_TYPES = ['实缴', '出资'];
 const GROSS_IN_TYPES = ['分配', '转让', '分红', '退出', '债转股回收'];
@@ -180,19 +184,16 @@ function buildGrossCashFlows(rows) {
     const type = (r.transaction_type && String(r.transaction_type).trim()) || '';
     const amount = Number(r.transaction_amount);
     const date = r.transaction_date;
-    if (date == null) continue;
-    // 基金视角（需求修正）：仅当 lp 为空时参与 GROSS IRR
-    // 流出：lp IS NULL AND transaction_type IN ('实缴','出资')
+    if (date == null || Number.isNaN(amount)) continue;
+    // 基金视角：仅当 lp 为空时参与 GROSS IRR
     if (!lp && GROSS_OUT_TYPES.includes(type)) {
-      amounts.push(-Math.abs(amount));
+      amounts.push(-amount);
       dates.push(date);
-    // 流入：lp IS NULL AND transaction_type IN ('分配','转让','分红','退出','债转股回收')
     } else if (!lp && GROSS_IN_TYPES.includes(type)) {
-      amounts.push(Math.abs(amount));
+      amounts.push(amount);
       dates.push(date);
-    // 终值：lp IS NULL AND (sub_fund IS NOT NULL OR company IS NOT NULL) AND transaction_type = '未实现价值'
-    } else if ( !lp && (subFund || company) && type === '未实现价值') {
-      amounts.push(Math.abs(amount));
+    } else if (!lp && (subFund || company) && type === '未实现价值') {
+      amounts.push(amount);
       dates.push(date);
     }
   }
