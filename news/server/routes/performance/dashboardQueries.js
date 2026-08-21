@@ -62,11 +62,21 @@ async function fetchManagerData(version) {
  * @returns {{ funds: string[], indicators: Object<string, object> }}
  */
 async function fetchFundsData(version) {
+  // 表头逻辑顺序：先基金类型（母基金→直投基金→SPV），再成立时间
   const indicatorRows = await db.query(
     `SELECT fund, lp_sub, paidin, distribution, tvpi, dpi, rvpi, nirr,
             sub_amount, inv_amount, exit_amount, girr, moc
      FROM b_transaction_indicator
-     WHERE version = ? AND F_DeleteMark = 0`,
+     WHERE version = ? AND F_DeleteMark = 0
+     ORDER BY CASE fund_type
+       WHEN '母基金' THEN 1
+       WHEN '直投基金' THEN 2
+       WHEN '内部备案SPV' THEN 3
+       WHEN '内部非备案SPV' THEN 4
+       WHEN '外部备案SPV' THEN 5
+       WHEN '外部非备案SPV' THEN 6
+       ELSE 7
+     END, set_up_date ASC`,
     [version]
   );
   const indicators = {};
@@ -85,12 +95,22 @@ async function fetchFundsData(version) {
  * @returns {{ funds: object[], overall: object|null }}
  */
 async function fetchPortfolioData(version) {
+  // 表头顺序与基金产品一致：先基金类型（母基金→直投基金→SPV），再成立时间
   const fundRows = await db.query(
     `SELECT fund, fund_inv, fund_exit, fund_sub, fund_exit_amount,
             fund_paidin, fund_receive, project_inv, project_exit,
             project_paidin, project_receive
      FROM b_investment_indicator
-     WHERE version = ? AND F_DeleteMark = 0`,
+     WHERE version = ? AND F_DeleteMark = 0
+     ORDER BY CASE fund_type
+       WHEN '母基金' THEN 1
+       WHEN '直投基金' THEN 2
+       WHEN '内部备案SPV' THEN 3
+       WHEN '内部非备案SPV' THEN 4
+       WHEN '外部备案SPV' THEN 5
+       WHEN '外部非备案SPV' THEN 6
+       ELSE 7
+     END, set_up_date ASC`,
     [version]
   );
 

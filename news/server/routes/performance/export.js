@@ -561,10 +561,19 @@ router.post('/portfolio', checkExportPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '版本号不能为空' });
     }
 
+    // 与看板表头一致：先基金类型（母基金→直投基金→SPV），再成立时间
     const indicatorRows = await db.query(
       `SELECT * FROM b_investment_indicator
        WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY fund_type, fund`,
+       ORDER BY CASE fund_type
+         WHEN '母基金' THEN 1
+         WHEN '直投基金' THEN 2
+         WHEN '内部备案SPV' THEN 3
+         WHEN '内部非备案SPV' THEN 4
+         WHEN '外部备案SPV' THEN 5
+         WHEN '外部非备案SPV' THEN 6
+         ELSE 7
+       END, set_up_date ASC`,
       [version]
     );
 
@@ -616,10 +625,19 @@ router.post('/fund-products', checkExportPermission, async (req, res) => {
       return res.status(400).json({ success: false, message: '版本号不能为空' });
     }
 
+    // 与看板表头一致：先基金类型（母基金→直投基金→SPV），再成立时间
     const indicatorRows = await db.query(
       `SELECT * FROM b_transaction_indicator
        WHERE version = ? AND F_DeleteMark = 0
-       ORDER BY fund_type, fund`,
+       ORDER BY CASE fund_type
+         WHEN '母基金' THEN 1
+         WHEN '直投基金' THEN 2
+         WHEN '内部备案SPV' THEN 3
+         WHEN '内部非备案SPV' THEN 4
+         WHEN '外部备案SPV' THEN 5
+         WHEN '外部非备案SPV' THEN 6
+         ELSE 7
+       END, set_up_date ASC`,
       [version]
     );
 
