@@ -7082,7 +7082,7 @@ async function initializeTables(dbPool) {
         news_interface_type: 'overseas_filing',
         request_url:
           (process.env.CSRC_ZFXXGK_PAGE_URL || '').trim() ||
-          'http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede',
+          'https://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede',
       },
     ];
 

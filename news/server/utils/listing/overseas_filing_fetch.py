@@ -428,10 +428,11 @@ def _http_get_bytes_csrc_xlsx(file_url: str, timeout=90) -> bytes:
 
 
 def _try_discover_excel_bytes(portal_url):
-    """复用 getSearch + 详情页解析，无需浏览器。"""
+    """复用 getSearch + 详情页解析，无需浏览器。失败原因写 stderr，便于排障。"""
     try:
         from overseas_filing_discover import discover_excel_url  # noqa: PLC0415
-    except Exception:
+    except Exception as e:
+        print(f"[境外备案][discover] overseas_filing_discover 模块不可用，跳过直链解析: {e}", file=sys.stderr)
         return None, ""
     kw = os.environ.get("OVERSEAS_FILING_SEARCH_KEYWORD", "境内企业境外发行证券和上市备案").strip()
     if not kw:
@@ -440,11 +441,18 @@ def _try_discover_excel_bytes(portal_url):
         out = discover_excel_url(page_url=portal_url.strip(), keyword=kw)
         excel_url = (out or {}).get("excelUrl") or ""
         if not excel_url:
+            print("[境外备案][discover] getSearch 未解析到 Excel 直链（无命中或接口异常），回退 Playwright", file=sys.stderr)
             return None, ""
         raw = _http_get_bytes(excel_url)
         if _looks_like_xlsx_bytes(raw):
             return raw, excel_url
-    except Exception:
+        print(
+            f"[境外备案][discover] 直链下载内容非有效 xlsx（{len(raw or b'')} 字节，头部 {(raw or b'')[:8]!r}），"
+            f"回退 Playwright excel_url={excel_url}",
+            file=sys.stderr,
+        )
+    except Exception as e:
+        print(f"[境外备案][discover] 直链解析失败，回退 Playwright: {type(e).__name__}: {e}", file=sys.stderr)
         return None, ""
     return None, ""
 
@@ -583,8 +591,15 @@ def _fetch_excel_via_playwright(portal_url):
     custom_sel_btn = os.environ.get("OVERSEAS_FILING_PW_SEARCH_BUTTON", "").strip()
 
     ensure_playwright_browser_path()
+    # 与 _download_csrc_xlsx_via_playwright 保持一致：继承 HTTP_PROXY/HTTPS_PROXY，
+    # 否则需要代理才能访问 csrc.gov.cn 的机房里该兜底路径必然超时
+    launch_kwargs = dict(_overseas_playwright_launch_kwargs(headless))
+    proxy = _playwright_proxy_from_env()
+    if proxy:
+        launch_kwargs["proxy"] = proxy
+        print(f"[境外备案][playwright] 浏览器出口走代理 {proxy.get('server')}", file=sys.stderr)
     with sync_playwright() as p:
-        browser = p.chromium.launch(**_overseas_playwright_launch_kwargs(headless))
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             locale="zh-CN",
             user_agent=os.environ.get(

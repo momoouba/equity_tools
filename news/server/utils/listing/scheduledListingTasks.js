@@ -27,6 +27,15 @@ const DEFAULT_MIN_SYNC_DATE = '2026-01-01';
 const STALE_LOCK_HEARTBEAT_MINUTES = 45;
 
 /**
+ * 定时任务数据入库失败后的当日自动重试。
+ * 典型场景：凌晨证监会站点维护/限流导致超时，稍后重试即可恢复，避免整日缺数。
+ * 计数按「配置 + 北京日期」归零；仅定时触发重试，手动触发不自动续跑。
+ */
+const LISTING_RETRY_MAX = Math.max(0, Number(process.env.LISTING_SYNC_RETRY_MAX ?? 2));
+const LISTING_RETRY_DELAY_MIN = Math.max(5, Number(process.env.LISTING_SYNC_RETRY_DELAY_MIN ?? 60));
+const listingRetryState = new Map(); // configId -> { dateYmd, count }
+
+/**
  * #13: 尝试获取 DB 持久化任务锁（替代内存 Set，进程重启后不丢失）。
  * - 清理：超过 2 小时的锁；或无「心跳新鲜」的 running 执行日志的孤儿锁
  * - 再 INSERT IGNORE 尝试获取锁
@@ -206,6 +215,12 @@ function computeScheduledSyncRange(config, baseRunDate) {
  * - 正常周五发布 → 周一运行时回退到周五
  * - 周四提前发布（周五放假）→ 周五运行时直接命中周四
  * - 周六补班发布 → 周一运行时回退到周六（holiday_calendar 中 is_workday=1）
+ *
+ * 区间策略（2026-08 修订）：Excel 为「截至发布日」的累计快照表，新增行的「接收日期」
+ * 通常早于发布日若干天（如 8/21 发布的表含 8/19 接收的行）。若窗口只取发布日当天，
+ * 新增行会被日期过滤整体漏掉。因此改为全量快照比对：窗口 = minSyncDate ~ 最近工作日，
+ * 新增行靠入库去重键（board+exchange+receive_date+申报类型+规范化公司名）幂等跳过，
+ * 仅新行产生 INSERT。可用 OVERSEAS_FILING_SNAPSHOT_LOOKBACK_DAYS 限制回看天数（默认 90）。
  */
 async function computeOverseasScheduledSyncRange(config, baseRunDate) {
   const MAX_LOOKBACK = 7;
@@ -226,7 +241,11 @@ async function computeOverseasScheduledSyncRange(config, baseRunDate) {
     console.warn(`[境外备案定时] 过去${MAX_LOOKBACK}天内无工作日记录，降级使用昨日 ${targetDate}`);
   }
 
-  return { startDate: targetDate, endDate: targetDate, reason: 'daily_latest_workday', gapDays: 0 };
+  const lookbackDays = Math.max(7, Number(process.env.OVERSEAS_FILING_SNAPSHOT_LOOKBACK_DAYS ?? 90));
+  const minYmd = normalizeYmd(config.min_sync_date) || DEFAULT_MIN_SYNC_DATE;
+  const floorYmd = formatDateOnly(addDaysCalendar(baseRunDate, -lookbackDays));
+  const startDate = maxYmd(minYmd, floorYmd);
+  return { startDate, endDate: targetDate, reason: 'snapshot_diff', gapDays: 0 };
 }
 
 async function executeListingSyncTask(configId) {
@@ -237,7 +256,7 @@ async function executeListingSyncTask(configId) {
   );
   if (!rows.length) {
     console.log(`[上市进展定时] 配置 id=${configId} 不存在或未启用，跳过`);
-    return;
+    return { ok: true, skipped: true };
   }
   const cfg = rows[0];
   const cfgLabel = cfg.name ? `${cfg.name}(${configId})` : String(configId);
@@ -249,7 +268,7 @@ async function executeListingSyncTask(configId) {
     if (!workday) {
       const ds = formatDateOnly(baseRunDate);
       console.log(`[上市进展定时] ${ds} 为节假日且已开启跳过，本次不执行`);
-      return;
+      return { ok: true, skipped: true };
     }
   }
 
@@ -280,19 +299,19 @@ async function executeListingSyncTask(configId) {
   }
   if (!startDate || !endDate) {
     console.warn(`[上市进展定时] 配置「${cfg.name || configId}」日期区间无效，跳过`);
-    return;
+    return { ok: true, skipped: true };
   }
   startDate = maxYmd(startDate, minSyncDate);
   if (startDate > endDate) {
     console.log(`[上市进展定时] 配置「${cfg.name || configId}」区间早于最早同步日期(${minSyncDate})，跳过`);
-    return;
+    return { ok: true, skipped: true };
   }
 
   console.log(
     sourceType === 'new_share'
       ? `[上市进展定时] 配置「${cfg.name || configId}」打新日历：A股申购日/港股上市日 > ${newShareIssueAfterExclusive}（昨日本地日，不含）且 ≤ ${endDate}；A股补抓 UP_DATE >= ${newShareUpdateAfterExclusive}（北京时间；入库按 stock_code+exchange 插入或更新）interface=${cfg.interface_type || '-'}`
       : sourceType === 'overseas_filing'
-        ? `[上市进展定时] 配置「${cfg.name || configId}」境外备案区间 ${startDate} ~ ${endDate}（策略=每日查询最近工作日，minSyncDate=${minSyncDate}，北京时间闭区间）interface=${cfg.interface_type || '-'}`
+        ? `[上市进展定时] 配置「${cfg.name || configId}」境外备案区间 ${startDate} ~ ${endDate}（策略=全量快照比对：Excel 为截至发布日的累计表，接收日期早于发布日的行靠入库去重幂等跳过，minSyncDate=${minSyncDate}，北京时间闭区间）interface=${cfg.interface_type || '-'}`
       : `[上市进展定时] 配置「${cfg.name || configId}」同步区间 ${startDate} ~ ${endDate}（minSyncDate=${minSyncDate}，北京时间闭区间；入库按 exchange+公司+更新时间去重，重复则跳过）interface=${cfg.interface_type || '-'}`
   );
   const taskKey = buildTaskKey(cfg, startDate, endDate);
@@ -311,7 +330,7 @@ async function executeListingSyncTask(configId) {
       status: 'skipped',
     });
     await finishExecutionLog(logId, { status: 'skipped', errorMessage: '同源同窗口任务运行中，已跳过' });
-    return;
+    return { ok: true, skipped: true };
   }
   let logId = null;
   let syncResult = null;
@@ -464,6 +483,7 @@ async function executeListingSyncTask(configId) {
     if (hasSyncError && !syncResult) {
       throw syncError;
     }
+    return { ok: overallStatus !== 'failed', status: overallStatus };
   } catch (e) {
     console.error(`[上市进展定时] 执行失败:`, e);
     if (logId) {
@@ -497,10 +517,54 @@ async function executeListingSyncTask(configId) {
     } catch (alertErr) {
       console.warn('[上市进展定时] 告警邮件未发送:', alertErr.message);
     }
+    return { ok: false, status: 'failed', error: String(e.message || e) };
   } finally {
     // #13: 释放 DB 持久化锁
     await releaseTaskLock(taskKey);
   }
+}
+
+/**
+ * 执行定时任务；数据入库失败时自动安排延后重试（默认 60 分钟后，每天最多 2 次）。
+ * 典型场景：凌晨证监会站点维护/出口限流导致超时，稍后重试即可恢复，避免整日缺数。
+ * 重试计数按北京日期归零；跳过类结果（节假日/互斥/区间无效）视为正常，不触发重试。
+ */
+async function runListingTaskWithAutoRetry(configId) {
+  let result = null;
+  try {
+    result = await executeListingSyncTask(configId);
+  } catch (e) {
+    result = { ok: false, status: 'failed', error: String(e.message || e) };
+  }
+  const dateYmd = formatDateOnly(createShanghaiDate());
+  let state = listingRetryState.get(configId);
+  if (!state || state.dateYmd !== dateYmd) {
+    state = { dateYmd, count: 0 };
+  }
+  if (result && result.ok) {
+    if (state.count > 0) {
+      console.log(`[上市进展定时] 配置 id=${configId} 重试执行成功，清除当日重试计数（${dateYmd}）`);
+    }
+    listingRetryState.delete(configId);
+    return;
+  }
+  if (LISTING_RETRY_MAX <= 0 || state.count >= LISTING_RETRY_MAX) {
+    console.warn(
+      `[上市进展定时] 配置 id=${configId} 执行失败且已达当日重试上限（${state.count}/${LISTING_RETRY_MAX}），不再自动重试。err=${result?.error || 'unknown'}`
+    );
+    listingRetryState.set(configId, state);
+    return;
+  }
+  state.count += 1;
+  listingRetryState.set(configId, state);
+  console.warn(
+    `[上市进展定时] 配置 id=${configId} 执行失败，${LISTING_RETRY_DELAY_MIN} 分钟后自动重试（当日第 ${state.count}/${LISTING_RETRY_MAX} 次）。err=${result?.error || 'unknown'}`
+  );
+  setTimeout(() => {
+    runListingTaskWithAutoRetry(configId).catch((e) => {
+      console.warn(`[上市进展定时] 配置 id=${configId} 自动重试异常:`, e.message);
+    });
+  }, LISTING_RETRY_DELAY_MIN * 60 * 1000);
 }
 
 async function updateListingScheduledTasks() {
@@ -538,7 +602,7 @@ async function updateListingScheduledTasks() {
           console.log(
             `[上市进展定时] Cron 触发 配置 id=${config.id} ${nm}类型=${config.interface_type || '-'}`.trim()
           );
-          await executeListingSyncTask(config.id);
+          await runListingTaskWithAutoRetry(config.id);
         },
         { scheduled: true, timezone: 'Asia/Shanghai' }
       );

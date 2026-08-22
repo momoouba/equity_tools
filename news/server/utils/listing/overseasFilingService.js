@@ -1,14 +1,22 @@
 const db = require('../../db');
-const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
+const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 const { runOverseasFilingDiscoverSync } = require('./overseasFilingDiscoverSync');
 const { runOverseasFilingSync } = require('./overseasFilingSync');
 const { runOverseasFilingNoticeSync } = require('./overseasFilingNoticeSync');
 const { normalizeCompanyName } = require('./zhconvUtils');
 
 const OVERSEAS_BOARD = '境外发行备案';
-/** 证监会政府信息公开 · 境外证券发行（含 channelid，与需求文档列表入口一致） */
+/** 证监会政府信息公开 · 境外证券发行（含 channelid，与需求文档列表入口一致）
+ *  注意必须用 https：http 301 跳转会把 POST 降级为 GET，导致 /getSearch 404 */
 const DEFAULT_CSRC_PORTAL_URL =
-  'http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede';
+  'https://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede';
+
+/** csrc.gov.cn 域名一律直连 https（与 Python prefer_https 同义） */
+function preferHttpsCsrcUrl(url) {
+  const u = String(url || '').trim();
+  if (u.startsWith('http://') && u.includes('csrc.gov.cn')) return `https://${u.slice('http://'.length)}`;
+  return u;
+}
 
 /** 企业名称匹配：Unicode 规范化 + 繁简统一 + 去空白（与 listingMatchRunner 的 canonicalCompanyForMatchCross 对齐） */
 function normalizeOverseasNameKey(name) {
@@ -185,7 +193,7 @@ async function resolveOverseasSourceUrl() {
      ORDER BY F_LastModifyTime DESC, F_Id DESC
      LIMIT 1`
   );
-  return rows[0]?.request_url ? String(rows[0].request_url).trim() : '';
+  return rows[0]?.request_url ? preferHttpsCsrcUrl(rows[0].request_url) : '';
 }
 
 /**
@@ -270,11 +278,28 @@ async function syncOverseasFiling(options = {}) {
   const triggerType = options.triggerType || 'manual';
   const logTag = options.logTag || '[境外备案审核同步]';
   const source = options.source || 'url';
-  const explicitUrl = String(options.sourceUrl || '').trim();
+  const explicitUrl = preferHttpsCsrcUrl(options.sourceUrl);
   const explicitFile = String(options.sourceFile || '').trim();
   const useCsrcDiscover = options.useCsrcDiscover !== false;
 
   assertManualOverseasDateRange(from, to, triggerType);
+
+  // Excel 为「截至发布日」累计快照表：新增行的接收日期常早于发布日若干天
+  // （如 8/21 发布的表含 8/19 接收的行）。仅按请求窗口过滤会整体漏掉新增行，
+  // 故抓取窗口起点默认前移 14 天；已存在行靠入库去重键幂等跳过，仅新行 INSERT。
+  const windowLookbackDays = Math.max(0, Number(process.env.OVERSEAS_FILING_WINDOW_LOOKBACK_DAYS ?? 14));
+  let effectiveFrom = from;
+  if (windowLookbackDays > 0) {
+    const fromDate = new Date(`${String(from).slice(0, 10)}T12:00:00+08:00`);
+    if (!Number.isNaN(fromDate.getTime())) {
+      effectiveFrom = formatDateOnly(addDaysCalendar(fromDate, -windowLookbackDays));
+    }
+  }
+  if (effectiveFrom !== from) {
+    console.log(
+      `${logTag} 快照表窗口扩展 ${from}~${to} → ${effectiveFrom}~${to}（OVERSEAS_FILING_WINDOW_LOOKBACK_DAYS=${windowLookbackDays}；重复行去重跳过）`
+    );
+  }
 
   console.log(`${logTag} 执行开始 from=${from} to=${to} trigger=${triggerType}`);
   let sourceUrl = explicitUrl || (source === 'url' ? await resolveOverseasSourceUrl() : '');
@@ -290,7 +315,7 @@ async function syncOverseasFiling(options = {}) {
     if (!disc.ok) {
       // getSearch 偶发 5xx/502 时，直接回退到政府信息公开门户地址，
       // 由 overseas_filing_fetch.py 继续执行 discover/playwright 兜底，避免整次任务提前失败。
-      sourceUrl = process.env.CSRC_ZFXXGK_PAGE_URL || DEFAULT_CSRC_PORTAL_URL;
+      sourceUrl = preferHttpsCsrcUrl(process.env.CSRC_ZFXXGK_PAGE_URL) || DEFAULT_CSRC_PORTAL_URL;
       console.warn(
         `${logTag} 自动解析 Excel 失败，回退门户抓取 sourceUrl=${sourceUrl} err=${
           disc.stderr || 'unknown'
@@ -307,11 +332,11 @@ async function syncOverseasFiling(options = {}) {
     }
   }
   if (source === 'url' && !explicitFile && !sourceUrl) {
-    sourceUrl = (process.env.CSRC_ZFXXGK_PAGE_URL || '').trim() || DEFAULT_CSRC_PORTAL_URL;
+    sourceUrl = preferHttpsCsrcUrl(process.env.CSRC_ZFXXGK_PAGE_URL) || DEFAULT_CSRC_PORTAL_URL;
     console.log(`${logTag} request_url 未配置，使用默认证监会信息公开入口`);
   }
   const fetched = runOverseasFilingSync({
-    startDate: from,
+    startDate: effectiveFrom,
     endDate: to,
     source,
     sourceUrl,
@@ -339,35 +364,40 @@ async function syncOverseasFiling(options = {}) {
   let noticeInserted = 0;
   let noticeUpdated = 0;
   let noticeSkipped = 0;
+  let noticeError = null;
   const noticeDisabled = String(process.env.OVERSEAS_FILING_NOTICE_DISABLE || '').trim() === '1';
   const noticeListUrl = String(process.env.OVERSEAS_FILING_NOTICE_LIST_URL || '').trim();
 
   if (source !== 'file' && !noticeDisabled) {
     const noticeLog = `${logTag}[备案通知书HTML]`;
-    console.log(`${noticeLog} 开始 from=${from} to=${to}`);
+    console.log(`${noticeLog} 开始 from=${effectiveFrom} to=${to}`);
     const noticeRun = runOverseasFilingNoticeSync({
-      startDate: from,
+      startDate: effectiveFrom,
       endDate: to,
       listUrl: noticeListUrl,
       logTag: noticeLog,
     });
     if (!noticeRun.ok) {
-      throw new Error(noticeRun.stderr || '境外备案通知书 HTML 抓取失败');
+      // 通知书是补充数据：失败不中断主流程（Excel 主数据已入库），仅告警留痕
+      noticeError = String(noticeRun.stderr || '境外备案通知书 HTML 抓取失败');
+      console.warn(`${noticeLog} 抓取失败（不影响备案情况表主数据）: ${noticeError}`);
+    } else {
+      const nrows = noticeRun.rows || [];
+      noticeFetched = nrows.length;
+      for (const nrow of nrows) {
+        const st = await upsertNoticeFilingRow(nrow, adminId, writeDate);
+        if (st === 'inserted') noticeInserted += 1;
+        else if (st === 'updated') noticeUpdated += 1;
+        else noticeSkipped += 1;
+      }
+      console.log(`${noticeLog} 完成 fetched=${noticeFetched} inserted=${noticeInserted} updated=${noticeUpdated} skipped=${noticeSkipped}`);
     }
-    const nrows = noticeRun.rows || [];
-    noticeFetched = nrows.length;
-    for (const nrow of nrows) {
-      const st = await upsertNoticeFilingRow(nrow, adminId, writeDate);
-      if (st === 'inserted') noticeInserted += 1;
-      else if (st === 'updated') noticeUpdated += 1;
-      else noticeSkipped += 1;
-    }
-    console.log(`${noticeLog} 完成 fetched=${noticeFetched} inserted=${noticeInserted} updated=${noticeUpdated} skipped=${noticeSkipped}`);
   }
 
   const result = {
     from,
     to,
+    effectiveFrom,
     triggerType,
     fetched: rows.length,
     inserted,
@@ -379,8 +409,11 @@ async function syncOverseasFiling(options = {}) {
     noticeInserted,
     noticeUpdated,
     noticeSkipped,
+    ...(noticeError ? { noticeError, noticeOk: false } : { noticeOk: true }),
     noticeSkippedReason: noticeDisabled ? 'OVERSEAS_FILING_NOTICE_DISABLE=1' : source === 'file' ? 'source=file' : null,
-    message: '境外备案审核同步完成（已写入 ipo_progress，board=境外发行备案）',
+    message: noticeError
+      ? `境外备案审核同步完成（已写入备案情况表主数据；通知书 HTML 抓取失败：${noticeError}）`
+      : '境外备案审核同步完成（已写入 ipo_progress，board=境外发行备案）',
     executedAt: new Date().toISOString(),
     ...(csrcDiscover ? { csrcDiscover, usedCsrcAutoDiscover: true } : {}),
   };

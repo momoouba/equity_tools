@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -22,10 +22,11 @@ _pw_utils = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _pw_utils not in sys.path:
     sys.path.insert(0, _pw_utils)
 from playwright_host import ensure_playwright_browser_path  # noqa: E402
+from overseas_filing_discover import prefer_https  # noqa: E402
 
-# 默认：需求文档 14.5 列表入口
+# 默认：需求文档 14.5 列表入口（https 直连：http 301 会把 POST 降级为 GET 导致 getSearch 404）
 DEFAULT_NOTICE_LIST_URL = (
-    "http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml"
+    "https://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml"
     "?channelid=8f3f0d4be56b4f8aa8183b3234b88ede"
 )
 
@@ -170,7 +171,168 @@ def _list_row_cells(tr) -> list[str]:
     return out
 
 
+def _notice_session(page_url: str):
+    """与 overseas_filing_discover 一致的浏览器风格会话（生产已验证可过 WAF）。"""
+    import requests  # noqa: PLC0415
+
+    s = requests.Session()
+    s.headers.update(
+        {
+            "User-Agent": os.environ.get(
+                "CSRC_HTTP_USER_AGENT",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            ),
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "X-Requested-With": "XMLHttpRequest",
+            "Origin": "https://www.csrc.gov.cn",
+            "Referer": page_url,
+        }
+    )
+    return s
+
+
+def _fetch_notice_rows_via_requests(start_date: str, end_date: str, list_url: str) -> list[dict]:
+    """
+    免浏览器链路：门户页解析 channelId → getSearch 搜「备案通知书」→ requests 拉详情页解析。
+    生产环境 requests 直连证监会已被 Excel discover 链路验证可用；列表 AJAX 接口
+    （/getFileListByCodeId）在部分出口会被 WAF 拦截返回 HTML，故不用它。
+    """
+    from overseas_filing_discover import _abs_url, _parse_channel_id, _strip_em_tags  # noqa: PLC0415
+
+    kw = os.environ.get("OVERSEAS_FILING_NOTICE_SEARCH_KEYWORD", "备案通知书").strip()
+    if not kw:
+        raise RuntimeError("OVERSEAS_FILING_NOTICE_SEARCH_KEYWORD 为空")
+    max_pages = max(1, int(os.environ.get("OVERSEAS_FILING_NOTICE_SEARCH_MAX_PAGES", "5")))
+    detail_cap = max(1, int(os.environ.get("OVERSEAS_FILING_NOTICE_DETAIL_CAP", "50")))
+    timeout = int(os.environ.get("OVERSEAS_FILING_NOTICE_HTTP_TIMEOUT", "35"))
+    page_size = 10
+
+    s = _notice_session(list_url)
+    r0 = s.get(list_url, timeout=timeout)
+    r0.raise_for_status()
+    r0.encoding = r0.apparent_encoding or r0.encoding or "utf-8"
+    channel_id = _parse_channel_id(r0.text)
+    if not channel_id:
+        raise RuntimeError("列表页未解析到 channelId，请检查 OVERSEAS_FILING_NOTICE_LIST_URL")
+
+    parts = urlparse(list_url)
+    search_url = urljoin(f"{parts.scheme}://{parts.netloc}/", "getSearch")
+
+    candidates: dict[str, dict] = {}
+    for page_idx in range(1, max_pages + 1):
+        data = {
+            "type": "title",
+            "searchContent": kw,
+            "channelId": channel_id,
+            "isAgg": "true",
+            "isIdentifier": "true",
+            "page": str(page_idx),
+            "size": str(page_size),
+        }
+        r1 = s.post(search_url, data=data, timeout=timeout)
+        r1.raise_for_status()
+        try:
+            payload = r1.json()
+        except Exception as e:
+            raise RuntimeError(f"getSearch 返回非 JSON: {e}") from e
+        if payload.get("code") != 200:
+            raise RuntimeError(f"getSearch 业务错误: {payload!r}")
+
+        results = (payload.get("data") or {}).get("results") or []
+        total = int((payload.get("data") or {}).get("total") or 0)
+        for it in results:
+            title = _strip_em_tags(it.get("title") or it.get("subTitle") or "")
+            abs_url = _abs_url((it.get("url") or "").strip(), list_url)
+            if not abs_url or "备案通知书" not in title:
+                continue
+            date_hint = ""
+            for k in ("publishedTimeStr", "docpub", "publishTime", "pubTime", "time", "date"):
+                v = str(it.get(k) or "").strip()
+                if v:
+                    d0 = _norm_date_dispatch(v)
+                    if d0:
+                        date_hint = d0
+                        break
+            if date_hint and (date_hint < start_date or date_hint > end_date):
+                continue
+            candidates.setdefault(abs_url, {"title": title, "date_hint": date_hint})
+        if not results or page_idx * page_size >= total:
+            break
+
+    out_rows: list[dict] = []
+    detail_headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": list_url,
+    }
+    for abs_url, meta in list(candidates.items())[:detail_cap]:
+        try:
+            r2 = s.get(abs_url, timeout=timeout, headers=detail_headers)
+            r2.raise_for_status()
+            r2.encoding = r2.apparent_encoding or r2.encoding or "utf-8"
+            parsed = _parse_detail_html(r2.text, abs_url)
+        except Exception as ex:
+            out_rows.append(
+                {
+                    "error": str(ex)[:500],
+                    "detail_url": abs_url,
+                    "company_name": _extract_company_from_title(meta.get("title") or ""),
+                    "receive_date": meta.get("date_hint") or "",
+                    "filing_type": "",
+                    "filing_entity": "",
+                    "target_exchange": "",
+                    "filing_status": "备案完成",
+                    "row_kind": "filing_notice",
+                }
+            )
+            continue
+
+        receive = parsed.get("dispatch_date") or meta.get("date_hint") or ""
+        if receive and (receive < start_date or receive > end_date):
+            continue
+        company = parsed.get("company_name") or _extract_company_from_title(meta.get("title") or "")
+        doc = parsed.get("doc_number") or ""
+        ex_name = parsed.get("target_exchange") or ""
+        out_rows.append(
+            {
+                "company_name": company,
+                "receive_date": receive,
+                "filing_type": doc[:200] if doc else "",
+                "filing_entity": company,
+                "target_exchange": ex_name,
+                "filing_status": "备案完成",
+                "detail_url": abs_url,
+                "row_kind": "filing_notice",
+            }
+        )
+    return out_rows
+
+
 def fetch_notice_rows(start_date: str, end_date: str, list_url: str) -> list[dict]:
+    """requests（getSearch）优先；异常或显式指定时回退 Playwright 列表翻页。"""
+    force_pw = os.environ.get("OVERSEAS_FILING_NOTICE_FORCE_PLAYWRIGHT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not force_pw:
+        try:
+            rows = _fetch_notice_rows_via_requests(start_date, end_date, list_url)
+            print(
+                f"[境外备案通知书][requests] getSearch+详情解析完成 入库候选={len(rows)} 条（免浏览器）",
+                file=sys.stderr,
+            )
+            return rows
+        except Exception as e:
+            print(
+                f"[境外备案通知书][requests] 直连解析失败，回退 Playwright: {type(e).__name__}: {e}",
+                file=sys.stderr,
+            )
+    return _fetch_notice_rows_via_playwright(start_date, end_date, list_url)
+
+
+def _fetch_notice_rows_via_playwright(start_date: str, end_date: str, list_url: str) -> list[dict]:
     try:
         from playwright.sync_api import sync_playwright  # noqa: PLC0415
     except ImportError as e:
@@ -178,7 +340,7 @@ def fetch_notice_rows(start_date: str, end_date: str, list_url: str) -> list[dic
             "未安装 playwright，请执行: pip install playwright && playwright install chromium"
         ) from e
 
-    timeout_ms = int(os.environ.get("OVERSEAS_FILING_NOTICE_PW_TIMEOUT_MS", "120000"))
+    timeout_ms = int(os.environ.get("OVERSEAS_FILING_NOTICE_PW_TIMEOUT_MS", "60000"))
     headless = os.environ.get("OVERSEAS_FILING_PW_HEADLESS", "1").strip().lower() not in ("0", "false", "no")
     max_pages = int(os.environ.get("OVERSEAS_FILING_NOTICE_MAX_PAGES", "200"))
     detail_delay_ms = int(os.environ.get("OVERSEAS_FILING_NOTICE_DETAIL_DELAY_MS", "400"))
@@ -345,7 +507,7 @@ def main():
     args = p.parse_args()
     start_date = args.start_date.strip()[:10]
     end_date = args.end_date.strip()[:10]
-    list_url = (args.list_url or DEFAULT_NOTICE_LIST_URL).strip()
+    list_url = prefer_https(args.list_url or DEFAULT_NOTICE_LIST_URL)
 
     rows = fetch_notice_rows(start_date, end_date, list_url)
     print(

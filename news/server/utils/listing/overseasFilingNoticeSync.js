@@ -1,7 +1,9 @@
 const { spawnSync } = require('child_process');
 const path = require('path');
 
-const MAX_SYNC_ATTEMPTS = 5;
+// 通知书抓取（requests 免浏览器链路）通常秒级完成；仅 Playwright 回退较慢，
+// 且 spawnSync 会阻塞事件循环，故重试次数默认收敛为 2（可用环境变量覆盖）。
+const MAX_SYNC_ATTEMPTS = Math.max(1, Number(process.env.OVERSEAS_FILING_NOTICE_RETRY_MAX ?? 2));
 
 /**
  * 证监会备案通知书列表 + 详情 HTML → JSON rows（与 overseas_filing_fetch 输出形状兼容）。

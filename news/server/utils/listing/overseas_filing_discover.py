@@ -20,13 +20,24 @@ if hasattr(sys.stdout, "reconfigure"):
 
 DEFAULT_PAGE = os.environ.get(
     "CSRC_ZFXXGK_PAGE_URL",
-    "http://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede",
+    "https://www.csrc.gov.cn/csrc/c101935/zfxxgk_zdgk.shtml?channelid=8f3f0d4be56b4f8aa8183b3234b88ede",
 )
 DEFAULT_KEYWORD = os.environ.get(
     "OVERSEAS_FILING_SEARCH_KEYWORD",
     "境内企业境外发行证券和上市备案",
 )
-ORIGIN = "http://www.csrc.gov.cn"
+ORIGIN = "https://www.csrc.gov.cn"
+
+
+def prefer_https(url):
+    """
+    证监会站点 http→https 301 会把 POST 降级为 GET（requests 遵循 RFC），
+    导致 /getSearch 等接口 404。csrc.gov.cn 域名一律直连 https。
+    """
+    u = (url or "").strip()
+    if u.startswith("http://") and "csrc.gov.cn" in u:
+        return "https://" + u[len("http://") :]
+    return u
 
 
 def _session():
@@ -114,7 +125,7 @@ def _pick_excel_url(soup, page_url):
 
 
 def discover_excel_url(page_url=None, keyword=None):
-    page_url = (page_url or DEFAULT_PAGE).strip()
+    page_url = prefer_https(page_url or DEFAULT_PAGE)
     keyword = (keyword or DEFAULT_KEYWORD).strip()
     if not keyword:
         raise RuntimeError("empty search keyword")
