@@ -2389,6 +2389,15 @@ async function executeSyncTask(
     } catch (dedupeErr) {
       console.warn('[企业同步任务] 竞品分析去重失败（不影响同步结果）', dedupeErr.message);
     }
+    // 同步完成后自动补全：企查查介绍为空且有信用代码的行补企查查；产品简介/标签为空的行补 AI（后台串行）
+    try {
+      const {
+        schedulePostSyncAutoEnrichForCompetitorInvestedEnterprises,
+      } = require('../utils/competitor-analysis/postSyncAutoEnrichService');
+      schedulePostSyncAutoEnrichForCompetitorInvestedEnterprises({ userId: syncOwnerUserId });
+    } catch (autoEnrichErr) {
+      console.warn('[企业同步任务] 调度同步后自动补全失败（不影响同步结果）', autoEnrichErr.message);
+    }
   }
 
   const snapshotNote =

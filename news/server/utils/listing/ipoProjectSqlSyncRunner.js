@@ -274,6 +274,22 @@ async function maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId
   }
 }
 
+/**
+ * 竞品分析写入目标：同步完成后自动补全空值（企查查介绍按信用码、AI 产品简介/标签），
+ * 后台串行执行，不阻塞同步返回。
+ */
+function maybeSchedulePostSyncAutoEnrich({ wt, userId }) {
+  if (!isCompetitorFamilyWriteTarget(wt)) return;
+  try {
+    const {
+      schedulePostSyncAutoEnrichForCompetitorIpoProjects,
+    } = require('../competitor-analysis/postSyncAutoEnrichService');
+    schedulePostSyncAutoEnrichForCompetitorIpoProjects({ userId });
+  } catch (e) {
+    console.error('[ipoProjectSqlSync] 调度同步后自动补全失败', e);
+  }
+}
+
 async function runIpoProjectSqlSyncForUser({
   userId,
   external_db_config_id,
@@ -430,6 +446,7 @@ async function runIpoProjectSqlSyncForUser({
       await conn.commit();
       await pruneOldIpoProjectAiSnapshots();
       const qcc_post_sync = await maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId });
+      maybeSchedulePostSyncAutoEnrich({ wt, userId });
       return {
         inserted: 0,
         updated: 0,
@@ -511,6 +528,7 @@ async function runIpoProjectSqlSyncForUser({
     await pruneOldIpoProjectAiSnapshots();
 
     const qcc_post_sync = await maybeRunQccAfterSqlSync({ qccAfterSyncOn, userId, targetDataAppId });
+    maybeSchedulePostSyncAutoEnrich({ wt, userId });
 
     return {
       inserted,

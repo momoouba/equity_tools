@@ -456,5 +456,7 @@ async function enqueueBatchIpoProjectAiEnrich({
 module.exports = {
   enqueueManualIpoProjectAiEnrich,
   enqueueBatchIpoProjectAiEnrich,
+  prepareIpoProjectAiJob,
+  runIpoProjectAiEnrichTask,
   IPP_AI_VERSION,
 };

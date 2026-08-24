@@ -53,6 +53,14 @@ function normalizeNameKey(name) {
     .trim();
 }
 
+/** 与底层项目/企查查侧一致：成功时按统一社会信用代码回写同源多行 */
+function normalizeCreditDedupe(code) {
+  return String(code ?? '')
+    .replace(/\s+/g, '')
+    .trim()
+    .toUpperCase();
+}
+
 async function markIeAiLogSuccess({
   logId,
   started,
@@ -214,7 +222,7 @@ async function runInvestedEnterpriseAiEnrichTask({
 
     const ev = await db.query(
       `SELECT F_Id, enterprise_full_name, unified_credit_code, project_abbreviation,
-              qcc_company_intro, F_DeleteMark
+              qcc_company_intro, data_app_name, data_app_id, F_DeleteMark
        FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
       [enterpriseId]
     );
@@ -265,6 +273,38 @@ async function runInvestedEnterpriseAiEnrichTask({
         enterpriseId,
       ]
     );
+
+    // 成功时按统一社会信用代码回写同源多行（与底层项目侧一致），
+    // 保证同步后补全只跑代表行也能覆盖同信用码的所有被投行
+    const creditNorm = normalizeCreditDedupe(row.unified_credit_code);
+    const rowAppId = row.data_app_id != null ? String(row.data_app_id).trim() : '';
+    if (creditNorm.length >= 8 && rowAppId) {
+      await db.execute(
+        `UPDATE invested_enterprises SET
+           ai_product_intro = ?,
+           ai_industry_tags_display = ?,
+           ai_industry_tags_json = ?,
+           ai_enrich_status = 'success',
+           ai_enrich_at = NOW(),
+           ai_enrich_model = ?,
+           ai_enrich_version = ?,
+           ai_enrich_error = NULL,
+           F_LastModifyTime = NOW()
+         WHERE F_DeleteMark = 0 AND F_Id <> ?
+           AND data_app_id <=> ?
+           AND UPPER(REPLACE(TRIM(IFNULL(unified_credit_code,'')),' ','')) = ?`,
+        [
+          llm.productIntroStored || null,
+          llm.display || null,
+          llm.tagsJson,
+          String(llm.config.model_name || ''),
+          IE_AI_VERSION,
+          enterpriseId,
+          rowAppId,
+          creditNorm,
+        ]
+      );
+    }
 
     await markIeAiLogSuccess({
       logId,
@@ -442,5 +482,7 @@ async function enqueueBatchInvestedEnterpriseAiEnrich({
 module.exports = {
   enqueueManualInvestedEnterpriseAiEnrich,
   enqueueBatchInvestedEnterpriseAiEnrich,
+  prepareInvestedEnterpriseAiJob,
+  runInvestedEnterpriseAiEnrichTask,
   IE_AI_VERSION,
 };
