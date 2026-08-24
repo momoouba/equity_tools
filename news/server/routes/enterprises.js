@@ -340,6 +340,74 @@ async function applyInvestedEnterpriseAiSnapshotAfterInsert(batchId, creatorUser
   return affected;
 }
 
+/** 页面手动标记、同步时需压过外部 SQL 的退出状态（外部源系统不存在这两种监控态） */
+const MANUAL_EXIT_STATUSES = ['不再观察', '继续观察'];
+
+function isManualExitStatus(value) {
+  return MANUAL_EXIT_STATUSES.includes(String(value || '').trim());
+}
+
+/** 与 sqlNormInvestedEnterpriseUnifiedCredit 一致：trim、去空格、大写 */
+function normManualExitUnifiedCredit(value) {
+  return String(value || '').trim().replace(/ /g, '').toUpperCase();
+}
+
+function normManualExitEnterpriseName(value) {
+  return String(value || '').trim();
+}
+
+function buildManualExitLookup(rows) {
+  const byCredit = new Map();
+  const byName = new Map();
+  for (const r of rows || []) {
+    const status = String(r.exit_status || '').trim();
+    if (!MANUAL_EXIT_STATUSES.includes(status)) continue;
+    const ucc = normManualExitUnifiedCredit(r.unified_credit_code);
+    const name = normManualExitEnterpriseName(r.enterprise_full_name);
+    if (ucc) {
+      if (!byCredit.has(ucc)) byCredit.set(ucc, status);
+    } else if (name && !byName.has(name)) {
+      byName.set(name, status);
+    }
+  }
+  return { byCredit, byName };
+}
+
+function resolveManualExitStatus(lookup, credit, name) {
+  if (!lookup) return null;
+  const ucc = normManualExitUnifiedCredit(credit);
+  if (ucc) return lookup.byCredit.get(ucc) || null;
+  const n = normManualExitEnterpriseName(name);
+  if (n) return lookup.byName.get(n) || null;
+  return null;
+}
+
+/**
+ * 硬删前快照本用户本应用下手动退出状态（不再观察/继续观察），供全量插入后按统一社会信用代码回填。
+ * 硬删会把旧行全部物理删除，若不做快照，页面手动设置的退出状态会被外部 SQL 的状态覆盖。
+ * 仅回填 SQL 仍返回的对象，不重插已从源名单消失的行。
+ */
+async function snapshotManualExitStatuses(creatorUserId, dataAppName) {
+  if (!creatorUserId) return buildManualExitLookup([]);
+  const dataAppId = await getApplicationIdByAppName(dataAppName);
+  const { sql: appMatch, params: appParams } = investedEnterpriseAppMatchClause('', dataAppId, dataAppName);
+  const { sql: ownerMatch, params: ownerParams } = investedEnterpriseSyncOwnerClause('', creatorUserId);
+  const rows = await db.query(
+    `SELECT unified_credit_code, enterprise_full_name, exit_status
+     FROM invested_enterprises
+     WHERE ${ownerMatch} AND ${appMatch}
+       AND F_DeleteMark = 0
+       AND TRIM(IFNULL(exit_status,'')) IN (?, ?)`,
+    [...ownerParams, ...appParams, ...MANUAL_EXIT_STATUSES]
+  );
+  const lookup = buildManualExitLookup(rows);
+  const n = lookup.byCredit.size + lookup.byName.size;
+  console.log(
+    `[企业同步任务] ${dataAppName} 已快照手动退出状态 ${n} 条（不再观察/继续观察，按统一社会信用代码，供硬删后回填）`
+  );
+  return lookup;
+}
+
 /** 清理过久快照，避免表无限增长（保留最近 180 天） */
 async function pruneOldInvestedEnterpriseAiSnapshots() {
   try {
@@ -1793,7 +1861,14 @@ async function executeSyncTask(
   let deletedBeforeSync = 0;
   let aiSnapshotBatchId = null;
   let competitorSnapshotBatchId = null;
+  let manualExitLookup = buildManualExitLookup([]);
   if (syncOwnerUserId) {
+    try {
+      manualExitLookup = await snapshotManualExitStatuses(syncOwnerUserId, targetDataAppName);
+    } catch (e) {
+      console.error('[企业同步任务] 快照手动退出状态失败（中止硬删）', e);
+      throw e;
+    }
     try {
       aiSnapshotBatchId = await insertInvestedEnterpriseAiSnapshotBeforeHardDelete(
         syncOwnerUserId,
@@ -1889,6 +1964,7 @@ async function executeSyncTask(
   let synced = 0;
   let updated = 0;
   let inserted = 0;
+  let manualExitRestored = 0;
   const targetDataAppId = await getApplicationIdByAppName(targetDataAppName);
 
   for (const row of externalData) {
@@ -1971,14 +2047,29 @@ async function executeSyncTask(
       }
     }
 
-    if (existing) {
-      // 如果现有记录的退出状态为"不再观察"，则跳过更新，保护用户手动设置的状态
-      if (existing.exit_status === '不再观察') {
-        console.log(`跳过更新企业（退出状态为"不再观察"）：统一信用代码 ${enterpriseData.unified_credit_code}，企业全称 ${enterpriseData.enterprise_full_name}`);
-        continue; // 跳过这条数据，不进行更新
+    // 硬删后按统一社会信用代码（无信用代码时退回企业全称）回填手动退出状态，
+    // 避免外部 SQL 的退出状态覆盖页面手动设置的「不再观察/继续观察」
+    const preservedExit =
+      resolveManualExitStatus(
+        manualExitLookup,
+        enterpriseData.unified_credit_code,
+        enterpriseData.enterprise_full_name
+      ) || (existing && isManualExitStatus(existing.exit_status)
+        ? String(existing.exit_status).trim()
+        : null);
+    if (preservedExit) {
+      const sqlExit = String(enterpriseData.exit_status || '').trim();
+      if (preservedExit !== sqlExit) {
+        manualExitRestored += 1;
+        console.log(
+          `回填手动退出状态：统一信用代码 ${enterpriseData.unified_credit_code || '无'}，企业全称 ${enterpriseData.enterprise_full_name}，${sqlExit || '空'} → ${preservedExit}`
+        );
       }
-      
-      // 统一信用代码一致，动态更新所有匹配的字段
+      enterpriseData.exit_status = preservedExit;
+    }
+
+    if (existing) {
+      // 统一信用代码一致，动态更新所有匹配的字段（手动退出状态已回填到 enterpriseData，其它字段仍跟 SQL）
       const updateFields = [];
       const updateValues = [];
       
@@ -2312,13 +2403,17 @@ async function executeSyncTask(
         : competitorSnapshotBatchId != null
           ? `；竞品快照 batch_id=${competitorSnapshotBatchId}（无匹配新被投或未恢复）`
           : '';
+  const manualExitNote =
+    manualExitRestored > 0
+      ? `；已回填手动退出状态 ${manualExitRestored} 条（不再观察/继续观察，按统一社会信用代码匹配）`
+      : '';
 
   return {
     success: true,
     message:
       deletedBeforeSync > 0
-        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}`
-        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}`,
+        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}`
+        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}`,
     synced,
     updated,
     inserted,
@@ -2327,6 +2422,7 @@ async function executeSyncTask(
     ai_snapshot_restored: aiSnapshotRestored,
     competitor_snapshot_batch_id: competitorSnapshotBatchId || undefined,
     competitor_snapshot_restored: competitorSnapshotRestored || undefined,
+    manual_exit_status_restored: manualExitRestored,
   };
 }
 
