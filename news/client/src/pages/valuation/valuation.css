@@ -15,6 +15,10 @@
   font-weight: 600;
 }
 
+.valuation-page-header > :only-child {
+  margin-left: auto;
+}
+
 .valuation-workbench {
   display: flex;
   height: calc(100vh - 72px);

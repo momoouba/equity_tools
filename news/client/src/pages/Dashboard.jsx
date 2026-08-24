@@ -18,13 +18,11 @@ import ListingIpoProjectPage from './listing/ListingIpoProjectPage'
 import ListingIpoProgressPage from './listing/ListingIpoProgressPage'
 import ListingNewSharePage from './listing/ListingNewSharePage'
 import ProjectSourcingPage from './project-sourcing/ProjectSourcingPage'
-import ProjectSourcingInvestedEnterprisesPage from './competitor-analysis/ProjectSourcingInvestedEnterprisesPage'
+import CompetitorAnalysisPostPage from './competitor-analysis/CompetitorAnalysisPostPage'
 import ProjectSourcingIpoProjectsPage from './competitor-analysis/ProjectSourcingIpoProjectsPage'
-import ProjectSourcingCompetitorAnalysisPage from './competitor-analysis/ProjectSourcingCompetitorAnalysisPage'
 import ProjectSourcingPreInvestmentPage from './competitor-analysis/ProjectSourcingPreInvestmentPage'
-import ValuationInvestedEnterprisesPage from './valuation/ValuationInvestedEnterprisesPage'
+import ValuationPostPage from './valuation/ValuationPostPage'
 import ValuationPreProjectsPage from './valuation/ValuationPreProjectsPage'
-import ValuationPostCasesPage from './valuation/ValuationPostCasesPage'
 import ValuationWorkbenchPage from './valuation/ValuationWorkbenchPage'
 import ValuationDbConfigPage from './valuation/ValuationDbConfigPage'
 import FinancingEventsPage from './project-sourcing/FinancingEventsPage'
@@ -36,7 +34,6 @@ const { Header, Content } = Layout
 
 /** 竞品分析子菜单 key → 实际路由段（须与 Route path 一致，不能用连字符拼成单段） */
 const COMPETITOR_MENU_ROUTES = {
-  'competitor-analysis-invested-enterprises': 'competitor-analysis/invested-enterprises',
   'competitor-analysis-ipo-projects': 'competitor-analysis/ipo-projects',
   'competitor-analysis-analysis': 'competitor-analysis/analysis',
   'competitor-analysis-pre-investment': 'competitor-analysis/pre-investment',
@@ -44,7 +41,6 @@ const COMPETITOR_MENU_ROUTES = {
 
 const VALUATION_MENU_ROUTES = {
   'valuation-pre-projects': 'valuation/pre-projects',
-  'valuation-invested-enterprises': 'valuation/invested-enterprises',
   'valuation-post-cases': 'valuation/post-cases',
   'valuation-system-db': 'valuation/system-db',
 }
@@ -195,7 +191,8 @@ function Dashboard() {
         setSelectedKeys(['valuation-pre-projects'])
         setActiveAppKey('valuation-app')
       } else if (p.includes('invested-enterprises')) {
-        setSelectedKeys(['valuation-invested-enterprises'])
+        // 旧「被投企业」路由已并入「投后项目估值」标签页
+        setSelectedKeys(['valuation-post-cases'])
         setActiveAppKey('valuation-app')
       } else if (p.includes('post-cases')) {
         setSelectedKeys(['valuation-post-cases'])
@@ -206,7 +203,8 @@ function Dashboard() {
       }
     } else if (p.includes('competitor-analysis/')) {
       if (p.includes('invested-enterprises')) {
-        setSelectedKeys(['competitor-analysis-invested-enterprises'])
+        // 旧「被投企业」路由已并入「投后-竞品分析」标签页
+        setSelectedKeys(['competitor-analysis-analysis'])
         setActiveAppKey('competitor-analysis-app')
       } else if (p.includes('ipo-projects')) {
         setSelectedKeys(['competitor-analysis-ipo-projects'])
@@ -366,10 +364,9 @@ function Dashboard() {
       icon: <IconMindMapping />,
       visible: isAdmin || hasCompetitorAnalysisPermission,
       children: [
-        { key: 'competitor-analysis-invested-enterprises', title: '被投企业' },
-        { key: 'competitor-analysis-ipo-projects', title: '底层项目' },
-        { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
         { key: 'competitor-analysis-pre-investment', title: '投前-竞品分析' },
+        { key: 'competitor-analysis-analysis', title: '投后-竞品分析' },
+        { key: 'competitor-analysis-ipo-projects', title: '底层项目' },
         { key: 'system-db', title: '数据库连接配置' }
       ]
     },
@@ -380,7 +377,6 @@ function Dashboard() {
       visible: isAdmin || hasProjectValuationPermission,
       children: [
         { key: 'valuation-pre-projects', title: '投前项目估值' },
-        { key: 'valuation-invested-enterprises', title: '被投企业' },
         { key: 'valuation-post-cases', title: '投后项目估值' },
         { key: 'valuation-system-db', title: '数据库连接配置' }
       ]
@@ -588,14 +584,6 @@ function Dashboard() {
               }
             />
             <Route
-              path="/competitor-analysis/invested-enterprises"
-              element={
-                (isAdmin || hasCompetitorAnalysisPermission)
-                  ? <ProjectSourcingInvestedEnterprisesPage />
-                  : <div>您没有访问权限</div>
-              }
-            />
-            <Route
               path="/competitor-analysis/ipo-projects"
               element={
                 (isAdmin || hasCompetitorAnalysisPermission)
@@ -607,10 +595,11 @@ function Dashboard() {
               path="/competitor-analysis/analysis"
               element={
                 (isAdmin || hasCompetitorAnalysisPermission)
-                  ? <ProjectSourcingCompetitorAnalysisPage />
+                  ? <CompetitorAnalysisPostPage />
                   : <div>您没有访问权限</div>
               }
             />
+            <Route path="/competitor-analysis/invested-enterprises" element={<Navigate to="/dashboard/competitor-analysis/analysis" replace />} />
             <Route
               path="/competitor-analysis/pre-investment"
               element={
@@ -628,21 +617,14 @@ function Dashboard() {
               }
             />
             <Route
-              path="/valuation/invested-enterprises"
-              element={
-                (isAdmin || hasProjectValuationPermission)
-                  ? <ValuationInvestedEnterprisesPage />
-                  : <div>您没有访问权限</div>
-              }
-            />
-            <Route
               path="/valuation/post-cases"
               element={
                 (isAdmin || hasProjectValuationPermission)
-                  ? <ValuationPostCasesPage />
+                  ? <ValuationPostPage />
                   : <div>您没有访问权限</div>
               }
             />
+            <Route path="/valuation/invested-enterprises" element={<Navigate to="/dashboard/valuation/post-cases" replace />} />
             <Route
               path="/valuation/workbench/:caseId"
               element={
@@ -659,11 +641,11 @@ function Dashboard() {
                   : <div>您没有访问权限</div>
               }
             />
-            <Route path="/competitor-analysis-invested-enterprises" element={<Navigate to="competitor-analysis/invested-enterprises" replace />} />
+            <Route path="/competitor-analysis-invested-enterprises" element={<Navigate to="/dashboard/competitor-analysis/analysis" replace />} />
             <Route path="/competitor-analysis-ipo-projects" element={<Navigate to="competitor-analysis/ipo-projects" replace />} />
             <Route path="/competitor-analysis-analysis" element={<Navigate to="competitor-analysis/analysis" replace />} />
             <Route path="/competitor-analysis-pre-investment" element={<Navigate to="competitor-analysis/pre-investment" replace />} />
-            <Route path="/project-sourcing-invested-enterprises" element={<Navigate to="competitor-analysis/invested-enterprises" replace />} />
+            <Route path="/project-sourcing-invested-enterprises" element={<Navigate to="/dashboard/competitor-analysis/analysis" replace />} />
             <Route path="/project-sourcing-ipo-projects" element={<Navigate to="/dashboard/competitor-analysis/ipo-projects" replace />} />
             <Route path="/project-sourcing-competitor-analysis" element={<Navigate to="/dashboard/competitor-analysis/analysis" replace />} />
             <Route path="/project-sourcing-pre-investment" element={<Navigate to="/dashboard/competitor-analysis/pre-investment" replace />} />

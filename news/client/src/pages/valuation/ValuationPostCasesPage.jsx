@@ -21,7 +21,7 @@ function fmtRange(conclusion) {
   return `${fmtN(yi.market_ps?.low)} / ${fmtN(yi.market_pe?.low)} / ${fmtN(dcf?.low)}  ~  ${fmtN(yi.market_ps?.high)} / ${fmtN(yi.market_pe?.high)} / ${fmtN(dcf?.high)}`
 }
 
-export default function ValuationPostCasesPage() {
+export default function ValuationPostCasesPage({ embedded = false }) {
   const navigate = useNavigate()
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
@@ -67,10 +67,10 @@ export default function ValuationPostCasesPage() {
   ]
 
   return (
-    <div className="valuation-page">
+    <div className={embedded ? undefined : 'valuation-page'}>
       <Card bordered={false}>
         <div className="valuation-page-header">
-          <h2>投后项目估值</h2>
+          {!embedded && <h2>投后项目估值</h2>}
           <Input.Search
             allowClear
             placeholder="按企业筛选"

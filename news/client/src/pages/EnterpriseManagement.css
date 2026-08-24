@@ -34,6 +34,10 @@
   margin: 0;
 }
 
+.management-header-no-title {
+  justify-content: flex-end;
+}
+
 .filter-collapse {
   margin-bottom: 16px;
 }
@@ -389,6 +393,25 @@
 
 .enterprise-management.invested-enterprises-table-page .invested-enterprises-table-container {
   overflow: hidden !important;
+}
+
+/* 合并标签页公共样式（项目估值-投后 / 竞品分析-投后）：内边距由外层页容器提供 */
+.merged-tabs-page {
+  padding: 16px 24px;
+}
+
+.merged-tabs-page > .arco-tabs-header-nav {
+  margin-bottom: 12px;
+}
+
+.merged-tabs-page .valuation-page {
+  padding: 0;
+}
+
+/* 嵌入标签页后，顶部多出页边距与 tab 头，需相应压缩视口锁定高度 */
+.merged-tabs-page .enterprise-management.invested-enterprises-table-page {
+  height: calc(100vh - 140px) !important;
+  padding: 0 !important;
 }
 
 /* 项目估值-被投企业：与投前/投后估值列表同一套表头与列线 */

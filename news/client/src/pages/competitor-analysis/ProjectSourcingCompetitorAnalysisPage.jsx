@@ -56,7 +56,7 @@ function sortRelationsByComparable(list) {
 /**
  * 竞品分析 — 竞品分析（被投 × 竞品）：主数据来自被投列表，展开查看已落库竞品关系。
  */
-export default function ProjectSourcingCompetitorAnalysisPage() {
+export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false }) {
   const [loading, setLoading] = useState(false)
   const [rows, setRows] = useState([])
   const [total, setTotal] = useState(0)
@@ -676,8 +676,8 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
   ]
 
   return (
-    <div className="pre-inv-sourcing-page" style={{ padding: '16px 24px' }}>
-      <Card title="投后-竞品分析（被投企业 × 竞品）" bordered={false}>
+    <div className="pre-inv-sourcing-page" style={embedded ? undefined : { padding: '16px 24px' }}>
+      <Card title={embedded ? undefined : '投后-竞品分析（被投企业 × 竞品）'} bordered={false}>
         <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
           仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。勾选后可发起新一轮竞品分析；行内「编辑」可补充产品介绍、企业标签与企查查介绍。
         </p>
@@ -767,7 +767,11 @@ export default function ProjectSourcingCompetitorAnalysisPage() {
               />
             )
           }}
-          scroll={{ x: POST_INV_MAIN_TABLE_SCROLL_X, y: tableScrollY }}
+          scroll={{
+            x: POST_INV_MAIN_TABLE_SCROLL_X,
+            // 嵌入标签页时顶部多出 tab 头，压缩表体高度避免整页滚动
+            y: embedded ? Math.max(300, tableScrollY - 96) : tableScrollY,
+          }}
           pagination={{
             current: page,
             pageSize,

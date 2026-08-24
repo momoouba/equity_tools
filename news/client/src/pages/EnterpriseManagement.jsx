@@ -171,6 +171,8 @@ function EnterpriseManagement({
   hideEntityTabs = false,
   /** 为 true 时：页面高度锁在视口内，仅表体纵向滚动（用于项目挖掘-被投企业） */
   viewportBoundTable = false,
+  /** 嵌入标签页等容器时隐藏页内大标题 */
+  hidePageTitle = false,
   onValuationClick,
 }) {
   const [enterprises, setEnterprises] = useState([])
@@ -1068,7 +1070,7 @@ function EnterpriseManagement({
       {
         title: '企业类型',
         dataIndex: 'entity_type',
-        width: vw(100),
+        width: vw(112),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
@@ -1145,7 +1147,7 @@ function EnterpriseManagement({
       {
         title: '退出状态',
         dataIndex: 'exit_status',
-        width: vw(100),
+        width: vw(112),
         ellipsis: true,
         tooltip: true,
         render: (text) => text || '-'
@@ -1209,8 +1211,8 @@ function EnterpriseManagement({
             : undefined
         }
       >
-        <div className="management-header">
-          <h2 className="management-title">{pageTitle}</h2>
+        <div className={`management-header${hidePageTitle ? ' management-header-no-title' : ''}`}>
+          {!hidePageTitle && <h2 className="management-title">{pageTitle}</h2>}
           <Space wrap>
             <Button onClick={fetchEnterprises} loading={loading}>
               刷新
