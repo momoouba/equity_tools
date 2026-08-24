@@ -411,12 +411,14 @@ async function executeListingEmailDigest(recipient, options = {}) {
     // 「昨日」按交易所分流：
     // - 沪/深/北：receive_date（时间轴状态业务日）；勿用 timeline_confirmed_at（抓取确认时刻）以免重抓误报。
     // - 港交所：F_UpdateTime（源数据业务日；同步按前一自然日写入，与辅导备案同类）。
+    // 境外发行备案行（exchange 常为「香港联交所」）仅在「境内企业境外上市备案」板块展示，此处排除避免重复。
     ipoExchangeYesterday = await db.query(
       `SELECT F_Id, company, status, exchange, board, F_UpdateTime, project_name,
               DATE_FORMAT(receive_date, '%Y-%m-%d') AS receive_date
        FROM ipo_progress
        WHERE F_DeleteMark = 0
          AND COALESCE(timeline_confirmed, 1) = 1
+         AND COALESCE(board, '') <> '境外发行备案'
          AND (
            (
              exchange IN ('北交所','深交所','上交所')
