@@ -637,13 +637,12 @@ router.post('/sql/:id/test', async (req, res) => {
     let rowCount = 0;
     try {
       if (config.external_db_config_id) {
-        const { queryExternal, executeExternal, getExternalPool, createExternalPool } = require('../../utils/externalDb');
-        if (!getExternalPool(config.external_db_config_id)) {
-          const cfgRows = await db.query('SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1', [config.external_db_config_id]);
-          if (cfgRows && cfgRows.length > 0) {
-            await createExternalPool(cfgRows[0]);
-          }
+        const { queryExternal, executeExternal, getExternalPool, ensureExternalPool } = require('../../utils/externalDb');
+        const cfgRows = await db.query('SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1', [config.external_db_config_id]);
+        if (!cfgRows || cfgRows.length === 0) {
+          return res.status(500).json({ success: false, message: '外部数据库连接不可用，请检查系统配置中的数据库连接' });
         }
+        await ensureExternalPool(cfgRows[0]);
         if (!getExternalPool(config.external_db_config_id)) {
           return res.status(500).json({ success: false, message: '外部数据库连接不可用，请检查系统配置中的数据库连接' });
         }

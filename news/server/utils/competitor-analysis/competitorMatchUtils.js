@@ -325,12 +325,15 @@ function getThresholds(subjectType) {
 
 /** 是否已通过 S5 校验且可参与落库（非 ai_failed / 非竞品 / 非上下游）。 */
 function isPersistValidationPassed(c) {
+  if (c?._goldStandardNegative) return false;
   const v = c?.validation;
   if (!v || v.ai_failed) return false;
   const type = v.competitor_type;
   if (type === 'not_competitor' || type === 'upstream_downstream') return false;
   if (v.is_competitor === false) return false;
   if (v.is_upstream_downstream) return false;
+  // 模态不一致的同赛道：不当作可落库竞品（扩召回/配额补足一并拦截）
+  if (type === 'same_track' && v.modality_match === false) return false;
   return true;
 }
 
@@ -346,6 +349,34 @@ function isAiWebOnlyCandidate(c) {
  * - LLM/校验分 ≥ 80 且校验为直接竞品（非上下游）时，综合分 ≥ 55 即可；
  * - 联网发现且 S5 已判 direct/indirect/substitute、validated≥55：不因库内产品线分缺失误杀（早期金标常态）。
  */
+/** 金标种子：S5 校验通过但候选库内简介稀疏导致综合分偏低时，仍允许落库 */
+const GOLD_PERSIST_MIN_FINAL = Math.max(
+  10,
+  parseInt(process.env.COMPETITOR_GOLD_PERSIST_MIN_SCORE || '15', 10) || 15
+);
+const GOLD_PERSIST_MIN_VALIDATED = Math.max(
+  30,
+  parseInt(process.env.COMPETITOR_GOLD_PERSIST_MIN_VALIDATED || '35', 10) || 35
+);
+
+function meetsGoldStandardPersistThreshold(c, finalScore) {
+  if (!c?._fromGoldStandard || !isPersistValidationPassed(c)) return false;
+  const vs = Number(c.validation?.validated_score);
+  const score = Number(finalScore);
+  if (!Number.isFinite(vs) || vs < GOLD_PERSIST_MIN_VALIDATED) return false;
+  if (c.validation?.modality_match === false) return false;
+  return Number.isFinite(score) && score >= GOLD_PERSIST_MIN_FINAL;
+}
+
+function sortPersistRowsWithGoldPriority(rows) {
+  return [...rows].sort((a, b) => {
+    const ga = a._candidate?._fromGoldStandard ? 1 : 0;
+    const gb = b._candidate?._fromGoldStandard ? 1 : 0;
+    if (ga !== gb) return gb - ga;
+    return (b.finalScore || 0) - (a.finalScore || 0);
+  });
+}
+
 function meetsPersistThreshold(c, finalScore, opts = {}) {
   const hasOffTarget =
     c._hasStrongOffTargetSignals ??
@@ -365,6 +396,7 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
   // 金标种子：只要 S5 校验为直接/间接/同赛道/替代竞品且分数达标，不因 S2 分缺失误杀
   if (c._fromGoldStandard && isPersistValidationPassed(c)) {
     if (Number.isFinite(vs) && vs >= thHigh) return true;
+    if (meetsGoldStandardPersistThreshold(c, score)) return true;
   }
   const fromAiWeb = isAiWebOnlyCandidate(c) || (c.sources || []).includes('ai_web');
   const webHighTrust =
@@ -448,6 +480,8 @@ module.exports = {
   computeComprehensiveScore,
   describeComprehensiveScore,
   meetsPersistThreshold,
+  meetsGoldStandardPersistThreshold,
+  sortPersistRowsWithGoldPriority,
   getCandidateAiPart,
   getThresholds,
   isPersistValidationPassed,

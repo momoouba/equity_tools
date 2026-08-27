@@ -712,7 +712,8 @@ async function applyBaikeToFinancingFanOut(db, companyRow, baike, opts = {}) {
       setImmediate(async () => {
         try {
           const metaRows = await db.query(
-            `SELECT company_name, company_credit_code, industry_category_4, company_intro, ai_product_intro, ai_company_tags_display
+            `SELECT company_name, company_credit_code, industry_category_4, company_intro, ai_product_intro, ai_company_tags_display,
+                    round, latest_round, funding_amt_raw, estimated_amt_raw, event_date
              FROM sourcing_financing_event
              WHERE F_DeleteMark = 0 AND (${where.clause})
                AND (COALESCE(ai_product_intro,'') <> '' OR COALESCE(company_intro,'') <> '')
@@ -730,6 +731,11 @@ async function applyBaikeToFinancingFanOut(db, companyRow, baike, opts = {}) {
             company_intro: metaRow.company_intro,
             ai_product_intro: metaRow.ai_product_intro,
             ai_company_tags_display: metaRow.ai_company_tags_display,
+            round: metaRow.round,
+            latest_round: metaRow.latest_round,
+            funding_amt_raw: metaRow.funding_amt_raw,
+            estimated_amt_raw: metaRow.estimated_amt_raw,
+            event_date: metaRow.event_date,
           };
           const meta = {
             company_name: metaRow.company_name,

@@ -114,7 +114,7 @@ async function invokeCompetitorChat(
     enableSearch && String(process.env.COMPETITOR_WEB_FORCE_NO_SEARCH || '').trim() !== '1';
   const userTrimmed = truncatePromptContent(String(userContent || '').trim());
   const defaultTimeout = wantSearch
-    ? parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000
+    ? parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '600000', 10) || 600000
     : parseInt(process.env.COMPETITOR_LLM_TIMEOUT_MS || '90000', 10) || 90000;
 
   const maxAttempts = wantSearch
@@ -233,10 +233,79 @@ function textOverlapFallback(a, b) {
   return textOverlapScore(a, b);
 }
 
+async function discoverWebCompetitorsViaDashScope(system, userContent, logCtx = {}) {
+  const { runId } = logCtx;
+  const rows = await db.query(
+    `SELECT * FROM ai_model_config
+     WHERE F_DeleteMark = 0 AND is_active = 1
+       AND application_type IN ('project_sourcing_analysis', 'financing_ai_enrich', 'project_sourcing')
+       AND api_key IS NOT NULL AND TRIM(api_key) != ''
+     ORDER BY
+       CASE application_type
+         WHEN 'project_sourcing_analysis' THEN 0
+         WHEN 'financing_ai_enrich' THEN 1
+         ELSE 2
+       END,
+       F_LastModifyTime DESC
+     LIMIT 1`
+  );
+  const config = rows[0];
+  if (!config) {
+    logCompetitorAi(runId, 'web_discover_dashscope', '无可用融资/DashScope 模型配置，跳过备份');
+    return null;
+  }
+  const timeout = Math.min(
+    parseInt(process.env.COMPETITOR_WEB_DASHSCOPE_TIMEOUT_MS || '180000', 10) || 180000,
+    parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '600000', 10) || 600000
+  );
+  logCompetitorAi(runId, 'web_discover_dashscope', '启用 DashScope 联网备份', {
+    model_name: config.model_name,
+    timeout_ms: timeout,
+  });
+  const llmOut = await llmInvoke(config, {
+    systemContent: String(system || '').trim(),
+    userContent: String(userContent || '').trim(),
+    wantSearch: true,
+    searchRequired: true,
+    timeout,
+    logPrefix: '[competitorWebDashScopeFallback]',
+  });
+  const parsed = extractJsonObject(llmOut?.content);
+  if (!parsed || !Array.isArray(parsed.candidates)) {
+    logCompetitorAi(runId, 'web_discover_dashscope', '备份无有效 candidates JSON');
+    return {
+      candidates: [],
+      meta: {
+        used_enable_search: !!(llmOut?.used_web_search || llmOut?.used_enable_search),
+        search_degraded: false,
+        model_name: config.model_name || null,
+        dashscope_fallback: true,
+      },
+    };
+  }
+  const list = parsed.candidates.slice(0, 20);
+  logCompetitorAi(runId, 'web_discover_dashscope', `备份完成，候选 ${list.length} 条`, {
+    names: list.map((x) => x.company_name).filter(Boolean).slice(0, 10),
+  });
+  return {
+    candidates: list,
+    meta: {
+      used_enable_search: !!(llmOut?.used_web_search || llmOut?.used_enable_search),
+      search_degraded: false,
+      model_name: config.model_name || null,
+      dashscope_fallback: true,
+    },
+  };
+}
+
+function dashScopeFallbackEnabled() {
+  return String(process.env.COMPETITOR_WEB_DASHSCOPE_FALLBACK || '1').trim() !== '0';
+}
+
 async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = {}) {
   const { runId, strategyAppendix, relaxListedMandate } = logCtx;
   const cfg = await getActiveCompetitorModelConfig();
-  const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000;
+  const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '600000', 10) || 600000;
   const noSearchTimeout = Math.max(
     webTimeout,
     parseInt(process.env.COMPETITOR_WEB_NO_SEARCH_TIMEOUT_MS || '300000', 10) || 300000
@@ -252,6 +321,7 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
     no_search_timeout_ms: noSearchTimeout,
     retries: parseInt(process.env.COMPETITOR_WEB_RETRIES || '2', 10) || 2,
     relax_listed_mandate: !!relaxListedMandate,
+    dashscope_fallback: dashScopeFallbackEnabled(),
     note:
       '联网机制：由 AI 模型配置的 web_search_mode 驱动（如 Anthropic web_search / OpenAI web_search_tool）；模型按提示词中的检索词与目标画像自主检索，非固定搜索引擎 API。',
   });
@@ -271,48 +341,91 @@ async function discoverWebCompetitors(profile, keywords, excludeNames, logCtx = 
     KEYWORDS_JSON: jsonBlock(keywords),
     EXCLUDE_NAMES_JSON: jsonBlock(excludeNames || []),
   });
-  const invokeRes = await invokeCompetitorChat(system, userContent, {
-    enableSearch: true,
-    timeout: webTimeout,
-    allowDegradedFallback: true,
-    returnMeta: true,
-  });
-  const raw = invokeRes.content;
-  searchUnsupportedDegraded = invokeRes.searchDegraded === true;
-  usedWebSearch = invokeRes.usedWebSearch === true;
-  const parsed = extractJsonObject(raw);
-  if (!parsed || !Array.isArray(parsed.candidates)) {
-    if (!raw || (typeof raw === 'string' && !raw.trim())) {
-      throw new Error(`竞品发现 AI 返回空响应（search_degraded=${searchUnsupportedDegraded}），无法区分"无竞品"与"调用失败"`);
-    }
-    logCompetitorAi(runId, 'web_discover', '无有效 candidates JSON', {
-      used_enable_search: usedWebSearch,
-      search_degraded_no_api: searchUnsupportedDegraded,
+
+  let primaryErr = null;
+  let list = [];
+  let webMeta = {
+    used_enable_search: false,
+    search_degraded: false,
+    model_name: cfg?.model_name || null,
+    relax_listed_mandate: !!relaxListedMandate,
+  };
+
+  try {
+    const invokeRes = await invokeCompetitorChat(system, userContent, {
+      enableSearch: true,
+      timeout: webTimeout,
+      allowDegradedFallback: true,
+      returnMeta: true,
     });
-    return {
-      candidates: [],
-      meta: {
-        used_enable_search: usedWebSearch,
-        search_degraded: searchUnsupportedDegraded,
-        model_name: cfg?.model_name || null,
-        relax_listed_mandate: !!relaxListedMandate,
-      },
-    };
-  }
-  const list = parsed.candidates.slice(0, 20);
-  logCompetitorAi(runId, 'web_discover', `完成，候选 ${list.length} 条`, {
-    names: list.map((x) => x.company_name).filter(Boolean).slice(0, 10),
-    used_enable_search: usedWebSearch,
-    search_degraded_no_api: searchUnsupportedDegraded,
-  });
-  return {
-    candidates: list,
-    meta: {
+    const raw = invokeRes.content;
+    searchUnsupportedDegraded = invokeRes.searchDegraded === true;
+    usedWebSearch = invokeRes.usedWebSearch === true;
+    webMeta = {
       used_enable_search: usedWebSearch,
       search_degraded: searchUnsupportedDegraded,
       model_name: cfg?.model_name || null,
       relax_listed_mandate: !!relaxListedMandate,
-    },
+    };
+    const parsed = extractJsonObject(raw);
+    if (!parsed || !Array.isArray(parsed.candidates)) {
+      if (!raw || (typeof raw === 'string' && !raw.trim())) {
+        primaryErr = new Error(
+          `竞品发现 AI 返回空响应（search_degraded=${searchUnsupportedDegraded}），无法区分"无竞品"与"调用失败"`
+        );
+      } else {
+        logCompetitorAi(runId, 'web_discover', '无有效 candidates JSON', {
+          used_enable_search: usedWebSearch,
+          search_degraded_no_api: searchUnsupportedDegraded,
+        });
+      }
+    } else {
+      list = parsed.candidates.slice(0, 20);
+    }
+  } catch (e) {
+    primaryErr = e;
+    logCompetitorAi(runId, 'web_discover', `主路径失败: ${e.message}`);
+  }
+
+  const needFallback =
+    dashScopeFallbackEnabled() &&
+    (primaryErr || !list.length || searchUnsupportedDegraded);
+  if (needFallback) {
+    try {
+      const fb = await discoverWebCompetitorsViaDashScope(system, userContent, logCtx);
+      if (fb && Array.isArray(fb.candidates) && fb.candidates.length) {
+        list = fb.candidates;
+        webMeta = {
+          ...webMeta,
+          ...(fb.meta || {}),
+          primary_error: primaryErr ? String(primaryErr.message || primaryErr) : null,
+          primary_empty_or_degraded: !primaryErr,
+        };
+        primaryErr = null;
+      } else if (fb) {
+        webMeta = {
+          ...webMeta,
+          ...(fb.meta || {}),
+          primary_error: primaryErr ? String(primaryErr.message || primaryErr) : null,
+        };
+      }
+    } catch (fbErr) {
+      logCompetitorAi(runId, 'web_discover_dashscope', `备份失败: ${fbErr.message}`);
+      webMeta.dashscope_fallback_error = fbErr.message;
+    }
+  }
+
+  if (primaryErr && !list.length) throw primaryErr;
+
+  logCompetitorAi(runId, 'web_discover', `完成，候选 ${list.length} 条`, {
+    names: list.map((x) => x.company_name).filter(Boolean).slice(0, 10),
+    used_enable_search: webMeta.used_enable_search === true,
+    search_degraded_no_api: webMeta.search_degraded === true,
+    dashscope_fallback: webMeta.dashscope_fallback === true,
+  });
+  return {
+    candidates: list,
+    meta: webMeta,
   };
 }
 
@@ -328,7 +441,7 @@ const LISTED_MANDATE_USER_SUFFIX = `
 async function discoverDomesticListedCompetitors(profile, keywords, excludeNames, logCtx = {}) {
   const { runId, strategyAppendix } = logCtx;
   const cfg = await getActiveCompetitorModelConfig();
-  const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '180000', 10) || 180000;
+  const webTimeout = parseInt(process.env.COMPETITOR_WEB_TIMEOUT_MS || '600000', 10) || 600000;
   let searchUnsupportedDegraded = false;
   logCompetitorAi(runId, 'web_discover_listed', '开始 A股/北交所上市专项联网', {
     keywords,
@@ -405,13 +518,19 @@ async function validateCandidate(targetSlice, candidateSlice, logCtx = {}) {
     const normalized = normalizeCompetitorValidation(parsed, {
       display_name: candidateSlice?.display_name,
       candidateProductIntro: candidateSlice?.product_intro,
+      candidateFinancingText:
+        logCtx.candidateFinancingText || candidateSlice?.financing_amount_text || null,
+      candidateLatestRound: logCtx.candidateLatestRound || candidateSlice?.latest_round || null,
       subjectTrackHint: targetSlice?.subject_track_hint,
       subjectProductIntro: targetSlice?.product_intro,
+      subjectFinancingText: logCtx.subjectFinancingText || targetSlice?.financing_amount_text || null,
+      subjectLatestRound: logCtx.subjectLatestRound || targetSlice?.latest_round || null,
       subjectTags: targetSlice?.tags,
       ruleProductScore: logCtx.ruleProductScore,
       coreLineScore: logCtx.coreLineScore,
       specificTagScore: logCtx.specificTagScore,
       fromAiWeb: logCtx.fromAiWeb === true,
+      fromGoldStandard: logCtx.fromGoldStandard === true || logCtx._fromGoldStandard === true,
     });
       logCompetitorAi(runId, 'validate', `完成 ${label}`, {
         is_competitor: normalized.is_competitor,

@@ -140,6 +140,12 @@ function isManualFinancingAiEnrichTrigger(triggerType) {
   return String(triggerType || '').trim() === 'manual_api';
 }
 
+/** 强制重新调用模型（不复用库内 AI、不跳过已有简介） */
+function isForceLlmRefreshTrigger(triggerType) {
+  const t = String(triggerType || '').trim();
+  return t === 'manual_api' || t === 'batch_selected_force';
+}
+
 /** Stage 2b 无百科降级批处理（§6.6）：独立触发类型，落库 profile_source=llm_web */
 const NO_BAIKE_ENRICH_TRIGGER = 'batch_no_baike_enrich';
 
@@ -513,7 +519,8 @@ async function persistFinancingAiLlmSuccess({
     try {
       const metaRows = await db.query(
         `SELECT company_name, company_credit_code, industry_category_4, industry_source_lv1, industry_source_lv2,
-                ai_product_intro, ai_company_tags_display
+                ai_product_intro, ai_company_tags_display,
+                round, latest_round, funding_amt_raw, estimated_amt_raw, event_date
          FROM sourcing_financing_event WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
         [financingEventId]
       );
@@ -527,6 +534,11 @@ async function persistFinancingAiLlmSuccess({
         company_intro: null,
         ai_product_intro: metaRow.ai_product_intro,
         ai_company_tags_display: metaRow.ai_company_tags_display,
+        round: metaRow.round,
+        latest_round: metaRow.latest_round,
+        funding_amt_raw: metaRow.funding_amt_raw,
+        estimated_amt_raw: metaRow.estimated_amt_raw,
+        event_date: metaRow.event_date,
       };
       const meta = {
         company_name: metaRow.company_name,
@@ -632,6 +644,8 @@ const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段
 企业名称（档案/列表用，可能是现用名、曾用名或投资简称）：{{COMPANY_NAME}}
 统一社会信用代码：{{CREDIT_CODE}}
 （可选）项目简称：{{PROJECT_NAME}}
+投融资侧项目简介（一行摘要，仅作检索锚点；须联网核实真实产品与场景，禁止无核验时照抄；若与联网结果冲突则以联网为准）：
+{{PROJECT_DESC}}
 企查查侧参考（仅辅助核对主体/曾用名；多为经营范围口径，勿据此写 product_intro）：
 {{QCC_COMPANY_INTRO}}
 
@@ -643,7 +657,8 @@ const BUILTIN_USER_PROMPT = `以下为待增强的一条记录中的主体字段
 
 2）**产品简介质量**
    - 仅写产品与商业化能力；**以联网检索到的官网/产品/报道为准**，勿照抄企查查或工商经营范围。
-   - 检索时建议组合：{{COMPANY_NAME}}、{{PROJECT_NAME}}（若有）、信用代码、官网域名/品牌名；优先找「产品」「解决方案」「关于我们」类页面。
+   - 若上方「投融资侧项目简介」非空，可作为检索关键词与业务方向线索（如核药/RDC/ADC 等），但**必须**经联网核实后再写入 product_intro；不得仅凭该一行摘要下结论，更不得写出与核实结果相悖的行业（例如摘要写核药却输出细胞治疗耗材）。
+   - 检索时建议组合：{{COMPANY_NAME}}、{{PROJECT_NAME}}（若有）、投融资项目简介关键词、信用代码、官网域名/品牌名；优先找「产品」「解决方案」「关于我们」类页面。
    - **第一句不得以 {{COMPANY_NAME}} 全称起笔**；勿写「企业名称：」「统一社会信用代码：」等标签行；勿写「官网显示」「媒体报道」「公开信息显示」等出处套话；勿堆砌无对应产品的产学研合作花边。
 
 3）**输出格式**
@@ -691,6 +706,7 @@ function buildFinancingAiTemplateRow(fields) {
     company_name: String(f.company_name || f.enterprise_full_name || f.company || '').trim(),
     company_credit_code: String(f.company_credit_code || f.unified_credit_code || '').trim(),
     project_name: String(f.project_name || f.project_abbreviation || '').trim(),
+    project_desc: String(f.project_desc || '').trim(),
     qcc_company_intro:
       f.qcc_company_intro != null ? String(f.qcc_company_intro).trim() : '',
   };
@@ -703,26 +719,49 @@ function formatQccIntroForTemplate(raw) {
   return `${s.slice(0, QCC_INTRO_TEMPLATE_MAX)}…（已截断）`;
 }
 
+const PROJECT_DESC_BLOCK_FALLBACK = `投融资侧项目简介（一行摘要，仅作检索锚点；须联网核实真实产品与场景，禁止无核验时照抄；若与联网结果冲突则以联网为准）：
+{{PROJECT_DESC}}`;
+
 const QCC_BLOCK_FALLBACK = `企查查侧参考（仅辅助核对主体/曾用名；多为经营范围口径，勿据此写 product_intro）：
 {{QCC_COMPANY_INTRO}}`;
 
+/** 库内旧版 USER 段若缺少 project_desc 占位符，自动补上 */
+function ensureUserTemplateHasProjectDescBlock(userTemplate) {
+  const t = String(userTemplate || '');
+  if (/\{\{\s*PROJECT_DESC\s*\}\}/i.test(t)) return t;
+  if (/\{\{\s*QCC_COMPANY_INTRO\s*\}\}/i.test(t)) {
+    return t.replace(
+      /(\{\{\s*QCC_COMPANY_INTRO\s*\}\})/i,
+      `${PROJECT_DESC_BLOCK_FALLBACK}\n$1`
+    );
+  }
+  return `${t.trim()}\n\n${PROJECT_DESC_BLOCK_FALLBACK}`;
+}
+
 /** 库内旧版 USER 段若缺少企查查占位符，自动补上，避免模型收不到 qcc_company_intro */
 function ensureUserTemplateHasQccBlock(userTemplate) {
-  const t = String(userTemplate || '');
+  const t = ensureUserTemplateHasProjectDescBlock(userTemplate);
   if (/\{\{\s*QCC_COMPANY_INTRO\s*\}\}/i.test(t)) return t;
   return `${t.trim()}\n\n${QCC_BLOCK_FALLBACK}`;
+}
+
+function formatProjectDescForTemplate(raw) {
+  const s = String(raw || '').trim();
+  return s || '（无）';
 }
 
 function fillTemplate(template, row) {
   const company = row.company_name != null ? String(row.company_name) : '';
   const credit = row.company_credit_code != null ? String(row.company_credit_code) : '';
   const project = row.project_name != null ? String(row.project_name) : '';
+  const projectDesc = formatProjectDescForTemplate(row.project_desc);
   const qcc = formatQccIntroForTemplate(row.qcc_company_intro);
   const tpl = ensureUserTemplateHasQccBlock(template);
   return String(tpl || '')
     .replace(/\{\{COMPANY_NAME\}\}/g, company)
     .replace(/\{\{CREDIT_CODE\}\}/g, credit)
     .replace(/\{\{PROJECT_NAME\}\}/g, project)
+    .replace(/\{\{\s*PROJECT_DESC\s*\}\}/gi, projectDesc)
     .replace(/\{\{\s*QCC_COMPANY_INTRO\s*\}\}/gi, qcc);
 }
 
@@ -1199,7 +1238,7 @@ async function submitLargeBatchFileFinancingAiEnrich({
       }
 
       const events = await db.query(
-        `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, F_DeleteMark AS delete_mark,
+        `SELECT F_Id AS id, event_id, company_name, company_credit_code, project_name, project_desc, F_DeleteMark AS delete_mark,
                 ai_enrich_status, ai_product_intro, ai_company_tags_display, ai_company_tags_json
          FROM sourcing_financing_event WHERE F_Id = ? LIMIT 1`,
         [prep.idNum]
@@ -1219,68 +1258,70 @@ async function submitLargeBatchFileFinancingAiEnrich({
       }
       const row = events[0];
 
-      const donorRow = await findFinancingAiDonorRow({
-        credit: row.company_credit_code,
-        name: row.company_name,
-        excludeId: prep.idNum,
-      });
-      if (donorRow) {
-        try {
-          await runFinancingAiEnrichTask({
-            financingEventId: prep.idNum,
-            logId: prep.logId,
-            triggerType,
-            triggeredByUserId,
-            clientIp,
-            taskLog: batchTaskLog,
-          });
-          cntDonor += 1;
-        } catch (e) {
-          financingAiJobLog(batchId, 'batch_file', 'prepare_donor_error', `event_id=${prep.idNum}`, {
-            err: (e && e.message) || String(e),
-          });
+      if (!isForceLlmRefreshTrigger(triggerType)) {
+        const donorRow = await findFinancingAiDonorRow({
+          credit: row.company_credit_code,
+          name: row.company_name,
+          excludeId: prep.idNum,
+        });
+        if (donorRow) {
+          try {
+            await runFinancingAiEnrichTask({
+              financingEventId: prep.idNum,
+              logId: prep.logId,
+              triggerType,
+              triggeredByUserId,
+              clientIp,
+              taskLog: batchTaskLog,
+            });
+            cntDonor += 1;
+          } catch (e) {
+            financingAiJobLog(batchId, 'batch_file', 'prepare_donor_error', `event_id=${prep.idNum}`, {
+              err: (e && e.message) || String(e),
+            });
+          }
+          const atEnd = ii === totalRep - 1;
+          const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
+          if (atTick || atEnd) {
+            financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
+              skip_prepare: skipPrepare,
+              skip_gone: skipGone,
+              reuse_donor: cntDonor,
+              reuse_local: cntReuseLocal,
+              queued_llm: llmJobs.length,
+            });
+          }
+          continue;
         }
-        const atEnd = ii === totalRep - 1;
-        const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
-        if (atTick || atEnd) {
-          financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
-            skip_prepare: skipPrepare,
-            skip_gone: skipGone,
-            reuse_donor: cntDonor,
-            reuse_local: cntReuseLocal,
-            queued_llm: llmJobs.length,
-          });
+        if (eventHasCompleteAiContent(row)) {
+          try {
+            await runFinancingAiEnrichTask({
+              financingEventId: prep.idNum,
+              logId: prep.logId,
+              triggerType,
+              triggeredByUserId,
+              clientIp,
+              taskLog: batchTaskLog,
+            });
+            cntReuseLocal += 1;
+          } catch (e) {
+            financingAiJobLog(batchId, 'batch_file', 'prepare_reuse_local_error', `event_id=${prep.idNum}`, {
+              err: (e && e.message) || String(e),
+            });
+          }
+          const atEnd = ii === totalRep - 1;
+          const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
+          if (atTick || atEnd) {
+            financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
+              skip_prepare: skipPrepare,
+              skip_gone: skipGone,
+              reuse_donor: cntDonor,
+              reuse_local: cntReuseLocal,
+              queued_llm: llmJobs.length,
+            });
+          }
+          continue;
         }
-        continue;
-      }
-      if (eventHasCompleteAiContent(row)) {
-        try {
-          await runFinancingAiEnrichTask({
-            financingEventId: prep.idNum,
-            logId: prep.logId,
-            triggerType,
-            triggeredByUserId,
-            clientIp,
-            taskLog: batchTaskLog,
-          });
-          cntReuseLocal += 1;
-        } catch (e) {
-          financingAiJobLog(batchId, 'batch_file', 'prepare_reuse_local_error', `event_id=${prep.idNum}`, {
-            err: (e && e.message) || String(e),
-          });
-        }
-        const atEnd = ii === totalRep - 1;
-        const atTick = (ii + 1) % FINANCING_AI_JOB_LOG_PROGRESS_EVERY === 0;
-        if (atTick || atEnd) {
-          financingAiJobLog(batchId, 'batch_file', 'prepare_progress', `scanned ${ii + 1}/${totalRep}`, {
-            skip_prepare: skipPrepare,
-            skip_gone: skipGone,
-            reuse_donor: cntDonor,
-            reuse_local: cntReuseLocal,
-            queued_llm: llmJobs.length,
-          });
-        }
-        continue;
       }
 
       llmJobs.push({ logId: prep.logId, financingEventId: prep.idNum, row });
@@ -1916,7 +1957,7 @@ async function runFinancingAiEnrichTask({
       throw new Error('融资事件不存在或已删除');
     }
     row = events[0];
-    const forceLlmRefresh = isManualFinancingAiEnrichTrigger(triggerType);
+    const forceLlmRefresh = isForceLlmRefreshTrigger(triggerType);
 
     if (!forceLlmRefresh) {
       const donorRow = await findFinancingAiDonorRow({
@@ -2303,6 +2344,25 @@ function scheduleFinancingAiBatchPump() {
 }
 
 /**
+ * 去重减少无效调用：有统一社会信用代码时按代码去重；无代码时按企业全称去重。
+ * rows 须已按 event_date DESC, id DESC 排序，代表行取每组第一条。
+ */
+function dedupeFinancingEventRepresentatives(rows) {
+  const seenKey = new Set();
+  const representativeIds = [];
+  for (const r of rows) {
+    const credit = normalizedCreditCode(r.company_credit_code);
+    const nm = normalizeCompanyName(r.company_name);
+    const dedupeKey = credit ? `c:${credit}` : nm ? `n:${nm}` : `id:${r.id}`;
+    if (seenKey.has(dedupeKey)) continue;
+    seenKey.add(dedupeKey);
+    const idNum = Number(r.id);
+    if (Number.isFinite(idNum) && idNum > 0) representativeIds.push(idNum);
+  }
+  return representativeIds;
+}
+
+/**
  * 按融资日期区间批量：去重后条数大于 {@link BATCH_FILE_THRESHOLD} 时走百炼 Batch File 异步；
  * 否则服务端并发池（{@link FINANCING_AI_CONCURRENCY_N}）执行多条 chat/completions，波次间间隔 {@link BATCH_AI_GAP_MS}。
  */
@@ -2342,24 +2402,85 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
   }
 
   const batchTriggerType = onlyFailed ? 'batch_retry_failed' : 'batch_date_range';
+  const representativeIds = dedupeFinancingEventRepresentatives(rows);
 
-  /**
-   * 去重减少无效调用：有统一社会信用代码时按代码去重（推荐）；无代码时按企业全称去重。
-   * 代表行取区间内最新融资（ORDER BY event_date DESC, id DESC 已保证顺序）。
-   */
-  const seenKey = new Set();
-  const representativeIds = [];
-  for (const r of rows) {
-    const credit = normalizedCreditCode(r.company_credit_code);
-    const nm = normalizeCompanyName(r.company_name);
-    const dedupeKey = credit ? `c:${credit}` : nm ? `n:${nm}` : `id:${r.id}`;
-    if (seenKey.has(dedupeKey)) continue;
-    seenKey.add(dedupeKey);
-    const idNum = Number(r.id);
-    if (Number.isFinite(idNum) && idNum > 0) representativeIds.push(idNum);
+  return enqueueBatchFinancingAiEnrichJobs({
+    representativeIds,
+    totalInRange,
+    batchTriggerType,
+    triggeredByUserId,
+    clientIp,
+    onlyFailed,
+    selectionMode: 'date_range',
+    dateFrom: df,
+    dateTo: dt,
+  });
+}
+
+/**
+ * 按勾选的融资事件 id 批量 AI 取数（按主体去重）；forceRefresh 时强制重新调用模型。
+ */
+async function enqueueBatchFinancingAiEnrichBySelectedIds({
+  financingEventIds,
+  triggeredByUserId,
+  clientIp,
+  forceRefresh = true,
+}) {
+  const rawIds = Array.isArray(financingEventIds) ? financingEventIds : [];
+  const idNums = [
+    ...new Set(
+      rawIds
+        .map((x) => parseInt(String(x), 10))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    ),
+  ];
+  if (!idNums.length) {
+    return { ok: false, code: 400, message: '请至少选择一条融资事件' };
   }
 
+  const placeholders = idNums.map(() => '?').join(',');
+  const rows = await db.query(
+    `SELECT F_Id AS id, company_name, company_credit_code FROM sourcing_financing_event
+     WHERE F_DeleteMark = 0 AND F_Id IN (${placeholders})
+     ORDER BY event_date DESC, F_Id DESC`,
+    idNums
+  );
+  if (!rows.length) {
+    return { ok: false, code: 400, message: '所选融资事件不存在或已删除' };
+  }
+
+  const batchTriggerType = forceRefresh ? 'batch_selected_force' : 'batch_selected';
+  const representativeIds = dedupeFinancingEventRepresentatives(rows);
+
+  return enqueueBatchFinancingAiEnrichJobs({
+    representativeIds,
+    totalInRange: idNums.length,
+    batchTriggerType,
+    triggeredByUserId,
+    clientIp,
+    onlyFailed: false,
+    selectionMode: 'selected',
+    forceRefresh: !!forceRefresh,
+    selectedCount: idNums.length,
+  });
+}
+
+async function enqueueBatchFinancingAiEnrichJobs({
+  representativeIds,
+  totalInRange,
+  batchTriggerType,
+  triggeredByUserId,
+  clientIp,
+  onlyFailed = false,
+  selectionMode = 'date_range',
+  dateFrom = null,
+  dateTo = null,
+  forceRefresh = false,
+  selectedCount = null,
+}) {
   const batchId = crypto.randomUUID();
+  const df = dateFrom != null ? String(dateFrom).trim().slice(0, 10) : '';
+  const dt = dateTo != null ? String(dateTo).trim().slice(0, 10) : '';
   const queuedJobs = representativeIds.length;
 
   let useDashScopeBatchFile = queuedJobs > BATCH_FILE_THRESHOLD;
@@ -2438,6 +2559,9 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
           dashscope_batch_id: null,
           llm_jobs_submitted: 0,
           only_failed: !!onlyFailed,
+          selection_mode: selectionMode,
+          force_refresh: !!forceRefresh,
+          selected_count: selectedCount,
         },
       };
     }
@@ -2484,6 +2608,9 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
         dashscope_batch_id: dashscopeBatchId,
         llm_jobs_submitted: llmJobs.length,
         only_failed: !!onlyFailed,
+        selection_mode: selectionMode,
+        force_refresh: !!forceRefresh,
+        selected_count: selectedCount,
       },
     };
   }
@@ -2524,6 +2651,9 @@ async function enqueueBatchFinancingAiEnrichByDateRange({
       gap_ms: BATCH_AI_GAP_MS,
       concurrency: FINANCING_AI_CONCURRENCY_N,
       only_failed: !!onlyFailed,
+      selection_mode: selectionMode,
+      force_refresh: !!forceRefresh,
+      selected_count: selectedCount,
     },
   };
 }
@@ -2607,6 +2737,7 @@ module.exports = {
   enqueueManualFinancingAiEnrich,
   enqueueIngestFinancingAiEnrich,
   enqueueBatchFinancingAiEnrichByDateRange,
+  enqueueBatchFinancingAiEnrichBySelectedIds,
   runFinancingAiEnrichTask,
   prepareFinancingAiEnrichJob,
   findFinancingAiDonorRow,

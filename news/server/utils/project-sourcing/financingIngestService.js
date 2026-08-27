@@ -137,6 +137,18 @@ function leadInvestorFromInv(invInfo) {
 }
 
 /**
+ * 国际集团接口 as_delete：1 删除，0 正常（String）。映射到 sourcing_financing_event.F_DeleteMark。
+ */
+function parseAsDeleteMark(deal) {
+  const v = deal?.as_delete;
+  if (v == null || v === '') return 0;
+  const s = String(v).trim().toLowerCase();
+  if (s === '1' || s === 'true' || s === 'yes') return 1;
+  const n = Number(s);
+  return Number.isFinite(n) && n === 1 ? 1 : 0;
+}
+
+/**
  * 单条 deal_info_w_infer 写入明细表并 upsert 标准表
  * @param {string} [fundingDtYmd] queryByDate 当日 yyyy-MM-dd，用于补齐缺失的 event_date
  * @param {{ userId?: string|null }} [ingestOpts] 入库后 AI 入队时写入 triggered_by（手动同步有值）
@@ -151,6 +163,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
   const fundingId = String(deal.funding_id ?? '');
   // #3.2 fix: 统一将空 credit code 归一化为 NULL（而非 ''），避免 DB 中 NULL 与空字符串混存
   const credit = String(deal.instn_idtfn_cd ?? '').trim() || null;
+  const deleteMark = parseAsDeleteMark(deal);
 
   if (!eventDate) {
     console.warn('[投融资入库] 跳过无融资日期的记录 funding_id=', fundingId);
@@ -245,7 +258,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       funding_status, source_create_time, source_update_time,
       classification_status, classification_source, classification_version, classification_retry_count,
       F_DeleteMark
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON DUPLICATE KEY UPDATE
       source_record_id = VALUES(source_record_id),
       company_name = VALUES(company_name),
@@ -280,6 +293,7 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       classification_source = IF(classification_status = 'completed', classification_source, VALUES(classification_source)),
       classification_version = IF(classification_status = 'completed', classification_version, VALUES(classification_version)),
       classification_retry_count = IF(classification_status = 'completed', classification_retry_count, VALUES(classification_retry_count)),
+      F_DeleteMark = VALUES(F_DeleteMark),
       F_LastModifyTime = CURRENT_TIMESTAMP`,
     [
       wInferId,
@@ -317,8 +331,14 @@ async function ingestOneDeal(deal, requestId, queryType, fundingDtYmd, ingestOpt
       'rule',
       RULE_ENRICH_VERSION,
       0,
+      deleteMark,
     ]
   );
+
+  // 接口标记删除：只落库删除符，不触发 AI / 赛道 / 百科等后续 enrichment
+  if (deleteMark === 1) {
+    return true;
+  }
 
   try {
     const evRows = await db.query(

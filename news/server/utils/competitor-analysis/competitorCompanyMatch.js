@@ -110,6 +110,26 @@ function isComparablePreferred(comparablePrefs, fields) {
   return false;
 }
 
+/**
+ * 金标 checklist / 别名匹配：统一全半角括号、后缀后再比；支持短名包含。
+ * 例：先通医药 ↔ 北京先通国际医药科技股份有限公司；艾博兹（上海）↔ 艾博兹(上海)
+ */
+function namesMatchLoosely(a, b) {
+  const na = normalizeCompetitorCompanyNameForMatch(a);
+  const nb = normalizeCompetitorCompanyNameForMatch(b);
+  if (!na || !nb) return false;
+  if (na === nb) return true;
+  if (na.includes(nb) || nb.includes(na)) return true;
+  const stripSuffix = (s) =>
+    s
+      .replace(/(股份有限公司|有限责任公司|有限公司|集团|控股|药业|医药|生物|科技|医疗)$/g, '')
+      .replace(/(股份有限公司|有限责任公司|有限公司)$/g, '');
+  const ca = stripSuffix(na);
+  const cb = stripSuffix(nb);
+  if (ca && cb && (ca === cb || ca.includes(cb) || cb.includes(ca))) return true;
+  return false;
+}
+
 module.exports = {
   MAINLAND_USCC_LEN,
   isValidMainlandUscc,
@@ -120,4 +140,5 @@ module.exports = {
   collectCompetitorLookupKeys,
   isComparablePreferred,
   stripSubsidiarySuffixes,
+  namesMatchLoosely,
 };

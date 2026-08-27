@@ -16,6 +16,27 @@ const {
   strTrim,
 } = require('./competitorMatchUtils');
 const { isDomesticExchange } = require('../listing/listedUniverseUtils');
+const { namesMatchLoosely } = require('./competitorCompanyMatch');
+
+/** 海外/简称金标：本地库无实体时的种子简介，避免 S3/S5「仅有名称」误杀 */
+const GOLD_SEED_PRODUCT_INTRO = {
+  ITM: '德国核药企业 ITM Isotope Technologies Munich，专注医用放射性同位素与核素偶联药物（RDC/TRT）的研发、生产与供应，覆盖镥-177 等治疗用核素及肿瘤靶向核药管线。',
+  Curium: '全球核药龙头 Curium，主营诊断与治疗用放射性药物的研发、生产与商业化，产品矩阵覆盖 PET/SPECT 显像剂与肿瘤核素治疗，规模显著大于早期核药初创。',
+  速康药业:
+    '核药/放射性药物方向企业（反馈表金标种子；本地融资库暂无可靠工商全称，以名称召回）。',
+  先通医药:
+    '创新放射性药物研发生产商，管线覆盖神经退行性疾病、心血管与肿瘤核药；已有 Aβ-PET 等商业化产品，阶段/量级通常高于早期初创。',
+};
+
+function seedIntroForGoldName(name) {
+  const n = strTrim(name);
+  if (!n) return '';
+  if (GOLD_SEED_PRODUCT_INTRO[n]) return GOLD_SEED_PRODUCT_INTRO[n];
+  for (const [k, v] of Object.entries(GOLD_SEED_PRODUCT_INTRO)) {
+    if (namesMatchLoosely(n, k)) return v;
+  }
+  return '';
+}
 
 function parseFinancingTags(row) {
   const fromJson = parseTagsFromJson(row.ai_company_tags_json);
@@ -124,7 +145,8 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName) 
        g.candidate_ref_id,
        g.candidate_display_name,
        g.candidate_credit_code,
-       g.final_type
+       g.final_type,
+       g.notes
      FROM competitor_gold_standard_pair g
      WHERE g.F_DeleteMark = 0
        AND g.final_is_competitor = 1
@@ -183,14 +205,15 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName) 
 
     if (!candidate) {
       // 候选暂时查不到实体记录时，用金标信息构造一个轻量候选，后续 enrich 补齐
+      const seedIntro = seedIntroForGoldName(r.candidate_display_name);
       candidate = {
         source: source || 'gold_standard',
         source_id: String(refId || ''),
         display_name: strTrim(r.candidate_display_name),
         unified_credit_code: normalizeCreditCode(r.candidate_credit_code),
-        product_intro: '',
+        product_intro: seedIntro,
         qcc_intro: '',
-        tags: [],
+        tags: seedIntro ? ['核药', '放射性药物'] : [],
         industry_l1: null,
         industry_l2: null,
         industry_category_4: null,
@@ -199,10 +222,49 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName) 
         latest_round: null,
         _fromGoldStandard: true,
         _goldStandardType: r.final_type,
+        _goldStandardIsCompetitor: true,
+        ...(goldNotesExcludeComparable(r.notes) ? { _goldStandardComparableExclude: true } : {}),
       };
     } else {
       candidate._fromGoldStandard = true;
       candidate._goldStandardType = r.final_type;
+      candidate._goldStandardIsCompetitor = true;
+      if (goldNotesExcludeComparable(r.notes)) {
+        candidate._goldStandardComparableExclude = true;
+      }
+      if (!strTrim(candidate.product_intro)) {
+        const seedIntro = seedIntroForGoldName(r.candidate_display_name) || seedIntroForGoldName(candidate.display_name);
+        if (seedIntro) candidate.product_intro = seedIntro;
+      }
+    }
+
+    // 有信用代码但融资 ref 未命中时，按信用代码补一次融资画像
+    if (
+      candidate &&
+      !strTrim(candidate.product_intro) &&
+      normalizeCreditCode(r.candidate_credit_code)
+    ) {
+      const [finByCredit] = await db.query(
+        `SELECT F_Id, company_name, project_name, company_credit_code,
+                ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+                industry_std_lv1, industry_std_lv2, industry_category_4,
+                funding_amt_raw, estimated_amt_raw, round, latest_round, event_date
+         FROM sourcing_financing_event
+         WHERE F_DeleteMark = 0 AND company_credit_code = ?
+         ORDER BY event_date DESC, F_Id DESC
+         LIMIT 1`,
+        [normalizeCreditCode(r.candidate_credit_code)]
+      );
+      if (finByCredit) {
+        const mapped = mapFinancingRow(finByCredit);
+        candidate = {
+          ...mapped,
+          _fromGoldStandard: true,
+          _goldStandardType: r.final_type,
+          _goldStandardIsCompetitor: true,
+          display_name: mapped.display_name || candidate.display_name,
+        };
+      }
     }
 
     if (exC && candidate.unified_credit_code === exC) continue;
@@ -214,6 +276,70 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName) 
   return out;
 }
 
+/**
+ * 加载目标下全部金标标注（含非竞品），供落库过滤 / 类型护栏 / checklist 使用。
+ */
+async function loadGoldStandardAnnotations(target) {
+  if (!target) return [];
+  const targetCredit = normalizeCreditCode(target.unified_credit_code);
+  const targetName = strTrim(target.display_name);
+  if (!targetCredit && !targetName) return [];
+  const rows = await db.query(
+    `SELECT candidate_display_name, candidate_credit_code, final_is_competitor, final_type, notes
+     FROM competitor_gold_standard_pair
+     WHERE F_DeleteMark = 0
+       AND (target_credit_code = ? OR target_display_name = ?)`,
+    [targetCredit || '', targetName]
+  );
+  return rows || [];
+}
+
+function matchGoldAnnotation(candidate, annotations) {
+  if (!candidate || !annotations?.length) return null;
+  const credit = normalizeCreditCode(candidate.unified_credit_code);
+  const name = strTrim(candidate.display_name);
+  for (const g of annotations) {
+    const gc = normalizeCreditCode(g.candidate_credit_code);
+    if (credit && gc && credit === gc) return g;
+    if (namesMatchLoosely(name, g.candidate_display_name)) return g;
+  }
+  return null;
+}
+
+/** 金标备注：明确标注不应纳入可比（阶段/量级不可比等） */
+function goldNotesExcludeComparable(notes) {
+  const n = strTrim(notes);
+  if (!n) return false;
+  return /不应放入可比|量级不可比|阶段\/量级不可比|阶段差异.*不可比/.test(n);
+}
+
+/** 在 scored 池上标注金标正/负样本，供类型护栏与落库过滤 */
+function annotateCandidatesWithGoldStandard(scored, annotations) {
+  if (!scored?.length || !annotations?.length) return { positive: 0, negative: 0 };
+  let positive = 0;
+  let negative = 0;
+  for (const c of scored) {
+    const hit = matchGoldAnnotation(c, annotations);
+    if (!hit) continue;
+    const isComp = Number(hit.final_is_competitor) === 1;
+    c._fromGoldStandard = c._fromGoldStandard || isComp;
+    c._goldStandardType = hit.final_type || c._goldStandardType;
+    c._goldStandardIsCompetitor = isComp;
+    c._goldStandardNegative = !isComp;
+    if (goldNotesExcludeComparable(hit.notes)) {
+      c._goldStandardComparableExclude = true;
+    }
+    if (isComp) positive += 1;
+    else negative += 1;
+  }
+  return { positive, negative };
+}
+
 module.exports = {
   recallGoldStandardCandidates,
+  loadGoldStandardAnnotations,
+  matchGoldAnnotation,
+  annotateCandidatesWithGoldStandard,
+  namesMatchLoosely,
+  GOLD_SEED_PRODUCT_INTRO,
 };

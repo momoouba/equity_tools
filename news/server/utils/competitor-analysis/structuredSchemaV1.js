@@ -25,6 +25,8 @@ const FIELD_SCHEMAS = {
     process_stage: { type: 'string', maxLen: 64 },
     core_skus: { type: 'array', maxItems: 12, itemMaxLen: 80 },
     customer_type: { type: 'string', maxLen: 120 },
+    stage: { type: 'string', maxLen: 64 },
+    scale_signals: { type: 'string', maxLen: 300 },
   },
   semi: {
     chain_position: { type: 'string', maxLen: 64 },
@@ -114,11 +116,13 @@ function getSchemaPromptBlock(category4, subTrack) {
   }
   if (cat === 'bio') {
     return `赛道=bio（生物医药）。JSON 业务字段：
-- value_chain: 产业链位置，优先：创新药 / CXO / 器械 / 诊断 / 数字化 / 其他
-- modality: 技术模态（小分子/抗体/细胞治疗等；无则 null）
+- value_chain: 产业链位置，优先：创新药 / CXO / 器械 / 诊断 / 数字化 / 核药 / 其他
+- modality: 技术模态，优先从枚举取值：小分子 / 抗体 / ADC / 双抗 / 细胞治疗 / 基因治疗 / 多肽 / 核酸药 / 放射性药物 / 核素偶联(RDC) / 诊疗一体化核药 / 疫苗 / PROTAC / 其他（无则 null；核素/同位素路线必须标注为放射性药物或核素偶联）
 - process_stage: 阶段，优先：临床前 / 临床 / 注册 / 商业化 / 其他
 - core_skus: 核心产品/管线 JSON 数组（1-8 项）
-- customer_type: 客户类型（医院/药企/渠道等）`;
+- customer_type: 客户类型（医院/药企/渠道等）
+- stage: 融资/发展阶段，优先：种子天使 / A轮前后 / B轮前后 / C轮及以后 / Pre-IPO / 已上市 / 其他（从融资事件上下文判断，无则 null）
+- scale_signals: 规模信号（最新融资轮次与金额、累计融资、营收区间、员工规模等；无则 null）`;
   }
   const st = strTrim(subTrack) === 'semi' ? 'semi' : 'advanced_mfg';
   if (st === 'semi') {
@@ -158,7 +162,9 @@ function getSchemaJsonExample(category4, subTrack) {
   "modality": "抗体",
   "process_stage": "临床",
   "core_skus": ["抗肿瘤单抗管线", "ADC 平台"],
-  "customer_type": "创新药企"
+  "customer_type": "创新药企",
+  "stage": "B轮前后",
+  "scale_signals": "B轮 2 亿元，累计融资超 5 亿元"
 }`;
   }
   const st = strTrim(subTrack) === 'semi' ? 'semi' : 'advanced_mfg';

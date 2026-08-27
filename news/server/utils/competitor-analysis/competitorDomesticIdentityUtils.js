@@ -320,6 +320,7 @@ async function finalizePersistRows(rows, logCtx = {}) {
   const out = [];
   let skippedNoIdentity = 0;
   let keptOverseas = 0;
+  let keptGoldNoUscc = 0;
 
   for (const row of rows || []) {
     const c = row._candidate;
@@ -351,6 +352,18 @@ async function finalizePersistRows(rows, logCtx = {}) {
       unifiedCreditCode: row.unified_credit_code,
     });
     if (!identity) {
+      const goldName = strTrim(row.display_name || c?.display_name);
+      if (c?._fromGoldStandard && goldName) {
+        row.display_name = normalizeCompanyName(goldName);
+        row.unified_credit_code =
+          normalizeCreditCode(row.unified_credit_code || c.unified_credit_code) || null;
+        c.display_name = row.display_name;
+        c.unified_credit_code = row.unified_credit_code;
+        c.gold_name_only = !row.unified_credit_code;
+        out.push(row);
+        keptGoldNoUscc += 1;
+        continue;
+      }
       skippedNoIdentity += 1;
       continue;
     }
@@ -361,11 +374,12 @@ async function finalizePersistRows(rows, logCtx = {}) {
     out.push(row);
   }
 
-  if ((skippedNoIdentity > 0 || keptOverseas > 0) && logCtx.runId) {
+  if ((skippedNoIdentity > 0 || keptOverseas > 0 || keptGoldNoUscc > 0) && logCtx.runId) {
     const { logCompetitorRun } = require('./competitorAnalysisLogger');
     logCompetitorRun(logCtx.runId, 'S6_identity', '落库身份补齐', {
       kept: out.length,
       kept_overseas: keptOverseas,
+      kept_gold_no_uscc: keptGoldNoUscc,
       skipped_no_uscc: skippedNoIdentity,
     });
   }

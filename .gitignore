@@ -25,6 +25,9 @@ news/server/scripts/probeBse*.js
 scripts/analyze_golden_export.py
 scripts/golden_export_analysis.json
 
+# 本地竞品分析/回归跑批临时输出（json/xlsx/log）
+news/tmp/
+
 # 根目录需求文档：正式入库在 sync-issue-5849a；release/clean 仅本地保留副本、不提交
 # （切分支后由 .git/hooks/post-checkout 或 scripts/restore-req-docs.ps1 从 sync 恢复）
 /需求文档/

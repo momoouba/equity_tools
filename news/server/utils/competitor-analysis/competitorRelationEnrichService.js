@@ -8,9 +8,70 @@ const {
 const { parseTagsFromJson, mergeTagArrays, strTrim, normalizeCreditCode } = require('./competitorMatchUtils');
 const { logCompetitorRun } = require('./competitorAnalysisLogger');
 const { loadInternalDisplayFields } = require('./competitorInternalDisplayLoader');
+const { RADIOPHARMA_TRACK_RE } = require('./industry-strategies/baseStrategy');
 
 function tagsToDisplay(tags) {
   return (tags || []).map((t) => strTrim(t)).filter(Boolean).join('、');
+}
+
+/** 简介偏 CRO/外包服务而非核药管线 */
+const CRO_SERVICE_INTRO_RE =
+  /\bCRO\b|合同研究组织|临床研究组织|临床试验服务|医药研发服务|医药外包|临床CRO|临床运营|SMO\b|药物警戒服务/i;
+
+/**
+ * 展示简介择优：若主简介偏 CRO、而 web/校验侧有核药信号，优先核药简介，避免落库误导。
+ */
+function pickPreferredProductIntro(candidate, primaryIntro) {
+  const primary = strTrim(primaryIntro);
+  const web = strTrim(candidate?.web_core_products);
+  const qcc = strTrim(candidate?.qcc_intro);
+  const structuredBits = [];
+  const sp = candidate?.structured_profile;
+  if (sp && typeof sp === 'object') {
+    if (Array.isArray(sp.core_product_lines)) {
+      structuredBits.push(sp.core_product_lines.map((x) => strTrim(x)).filter(Boolean).join('；'));
+    }
+    if (sp.modality) structuredBits.push(strTrim(sp.modality));
+    if (sp.one_liner) structuredBits.push(strTrim(sp.one_liner));
+  }
+  const structured = structuredBits.filter(Boolean).join('；');
+  const candidates = [primary, web, structured, qcc].filter((t) => t && t.length >= 12);
+
+  const looksRadio = (t) => RADIOPHARMA_TRACK_RE.test(t);
+  const looksCro = (t) => CRO_SERVICE_INTRO_RE.test(t) && !looksRadio(t);
+
+  if (!primary) {
+    return candidates.find((t) => looksRadio(t)) || candidates[0] || '';
+  }
+  if (looksCro(primary)) {
+    const radioAlt = candidates.find((t) => t !== primary && looksRadio(t));
+    if (radioAlt) return radioAlt;
+  }
+  // 主简介无核药信号、备选有：在核药目标场景下优先备选（由调用方在 need 时使用）
+  if (!looksRadio(primary)) {
+    const radioAlt = candidates.find((t) => t !== primary && looksRadio(t));
+    if (radioAlt && looksCro(primary)) return radioAlt;
+  }
+  return primary;
+}
+
+/**
+ * 落库展示是否仍偏 CRO、且候选侧已有核药信号 → 强制再联网补一次展示简介。
+ */
+function shouldForceRadiopharmaReenrich(candidate, productIntro) {
+  const intro = strTrim(productIntro);
+  if (!intro || !CRO_SERVICE_INTRO_RE.test(intro)) return false;
+  if (RADIOPHARMA_TRACK_RE.test(intro)) return false;
+  const blob = [
+    candidate?.web_core_products,
+    candidate?.validation?.rationale,
+    candidate?.validation?.evidence_summary,
+    ...(Array.isArray(candidate?.tags) ? candidate.tags : []),
+  ]
+    .map((x) => strTrim(x))
+    .filter(Boolean)
+    .join(' ');
+  return RADIOPHARMA_TRACK_RE.test(blob) || candidate?.validation?.modality_match === true;
 }
 
 // ── 运行级富化缓存：同一分析批次内相同竞品只调一次 LLM ──
@@ -66,7 +127,7 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
   const cached = _enrichCache.get(cacheKey);
   if (cached) return cached;
 
-  let productIntro = strTrim(candidate.product_intro);
+  let productIntro = pickPreferredProductIntro(candidate, candidate.product_intro);
   let tags = Array.isArray(candidate.tags) ? [...candidate.tags] : [];
   if (!tags.length && candidate.ai_company_tags_display) {
     tags = strTrim(candidate.ai_company_tags_display)
@@ -79,16 +140,23 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
   }
 
   const internal = await loadInternalDisplayFields(credit, name);
-  if (!productIntro && internal.product_intro) productIntro = internal.product_intro;
+  if (!productIntro && internal.product_intro) {
+    productIntro = pickPreferredProductIntro(candidate, internal.product_intro);
+  } else if (productIntro && internal.product_intro) {
+    productIntro = pickPreferredProductIntro(
+      { ...candidate, product_intro: productIntro, web_core_products: candidate.web_core_products || internal.product_intro },
+      productIntro
+    );
+  }
   if (tags.length < 1 && internal.tags?.length) tags = [...internal.tags];
   if (!candidate.ipo_sub_funds?.length && internal.ipo_sub_funds?.length) {
     candidate.ipo_sub_funds = internal.ipo_sub_funds;
   }
 
-  const needLlm = !productIntro || tags.length < 1;
+  const needLlm = !productIntro || tags.length < 1 || shouldForceRadiopharmaReenrich(candidate, productIntro);
   if (needLlm && name) {
     // ── 持久化缓存：查数据库中已有富化结果，跳过 LLM 调用 ──
-    if (credit) {
+    if (credit && !shouldForceRadiopharmaReenrich(candidate, productIntro)) {
       try {
         const prevRows = await db.query(
           `SELECT competitor_product_intro, competitor_tags_display, competitor_tags_json
@@ -101,7 +169,7 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
         if (prevRows.length) {
           const prev = prevRows[0];
           if (!productIntro && prev.competitor_product_intro) {
-            productIntro = strTrim(prev.competitor_product_intro);
+            productIntro = pickPreferredProductIntro(candidate, prev.competitor_product_intro);
           }
           if (tags.length < 1 && prev.competitor_tags_json) {
             tags = parseTagsFromJson(prev.competitor_tags_json);
@@ -113,10 +181,15 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
     }
   }
 
-  const stillNeedLlm = !productIntro || tags.length < 1;
+  const stillNeedLlm =
+    !productIntro || tags.length < 1 || shouldForceRadiopharmaReenrich(candidate, productIntro);
   if (stillNeedLlm && name) {
     try {
-      logCompetitorRun(runId, 'S6_enrich', `联网增强补齐 ${name}`);
+      logCompetitorRun(
+        runId,
+        'S6_enrich',
+        `联网增强补齐 ${name}${shouldForceRadiopharmaReenrich(candidate, productIntro) ? '（CRO简介→核药重取）' : ''}`
+      );
       const llm = await withFinancingAiConcurrency(() =>
         runFinancingStyleWebEnrichLlmCall({
           company_name: name,
@@ -124,7 +197,26 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
           project_name: name,
         })
       );
-      if (!productIntro && llm.productIntroStored) productIntro = strTrim(llm.productIntroStored);
+      const llmIntro = strTrim(llm.productIntroStored);
+      if (llmIntro) {
+        const merged = pickPreferredProductIntro(
+          { ...candidate, web_core_products: candidate.web_core_products || llmIntro },
+          productIntro || llmIntro
+        );
+        // 强制重取时：若 LLM 仍偏 CRO 但 web 已有核药，保留核药；否则采用 LLM
+        if (shouldForceRadiopharmaReenrich(candidate, productIntro)) {
+          productIntro = RADIOPHARMA_TRACK_RE.test(llmIntro)
+            ? llmIntro
+            : merged || llmIntro;
+        } else if (!productIntro) {
+          productIntro = llmIntro;
+        } else {
+          productIntro = pickPreferredProductIntro(
+            { ...candidate, web_core_products: llmIntro },
+            productIntro
+          );
+        }
+      }
       if (tags.length < 1 && llm.display) {
         tags = strTrim(llm.display)
           .split(/[,，、]/g)
@@ -138,6 +230,9 @@ async function enrichCompetitorDisplayFields(candidate, { runId } = {}) {
       logCompetitorRun(runId, 'S6_enrich', `补齐失败 ${name}: ${e.message}`);
     }
   }
+
+  // 最终再择优一次（web_core / structured 可能更准）
+  productIntro = pickPreferredProductIntro(candidate, productIntro) || productIntro;
 
   const sources = candidate.sources || (candidate.source ? [candidate.source] : []);
   let subFundNames = '';
@@ -224,4 +319,5 @@ module.exports = {
   loadInternalDisplayFields,
   effectiveIntroLen,
   preValidateWebEnrichCandidate,
+  pickPreferredProductIntro,
 };

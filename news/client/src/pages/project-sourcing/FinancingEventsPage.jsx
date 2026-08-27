@@ -11,6 +11,7 @@ import {
   Select,
   DatePicker,
   Switch,
+  Radio,
   Tag,
 } from '@arco-design/web-react'
 import dayjs from 'dayjs'
@@ -37,6 +38,7 @@ import './FinancingEventsPage.css'
 
 const Option = Select.Option
 const FormItem = Form.Item
+const RadioGroup = Radio.Group
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 
 function parseUserAdmin() {
@@ -474,15 +476,32 @@ export default function FinancingEventsPage() {
   const handleBatchAiOk = async () => {
     try {
       const v = await batchAiForm.validate()
-      const range = v.date_range
-      if (!range || range.length !== 2 || !range[0] || !range[1]) {
-        Message.warning('请选择融资日期范围')
-        return
-      }
-      const start = formatFinancingYmd(range[0])
-      const end = formatFinancingYmd(range[1])
+      const mode = v.mode || 'date_range'
       setBatchAiSubmitting(true)
-      const res = await postFinancingBatchAiEnrich({ start_date: start, end_date: end })
+      let payload
+      if (mode === 'selected') {
+        if (!selectedRowKeys.length) {
+          Message.warning('请先在列表中勾选融资事件')
+          return
+        }
+        payload = {
+          mode: 'selected',
+          financing_event_ids: selectedRowKeys.map((k) => String(k)),
+          force_refresh: v.force_refresh !== false,
+        }
+      } else {
+        const range = v.date_range
+        if (!range || range.length !== 2 || !range[0] || !range[1]) {
+          Message.warning('请选择融资日期范围')
+          return
+        }
+        payload = {
+          mode: 'date_range',
+          start_date: formatFinancingYmd(range[0]),
+          end_date: formatFinancingYmd(range[1]),
+        }
+      }
+      const res = await postFinancingBatchAiEnrich(payload)
       if (res.status === 202 && res.data?.success) {
         Message.success(res.data.message || '已加入队列')
         setBatchAiVisible(false)
@@ -720,11 +739,14 @@ export default function FinancingEventsPage() {
               type="outline"
               status="success"
               onClick={() => {
+                const defaultRange =
+                  financingDateRange?.[0] && financingDateRange?.[1]
+                    ? financingDateRange
+                    : [financingNow().subtract(7, 'day'), financingNow()]
                 batchAiForm.setFieldsValue({
-                  date_range:
-                    financingDateRange?.[0] && financingDateRange?.[1]
-                      ? financingDateRange
-                      : [financingNow().subtract(7, 'day'), financingNow()],
+                  mode: selectedRowKeys.length ? 'selected' : 'date_range',
+                  date_range: defaultRange,
+                  force_refresh: true,
                 })
                 setBatchAiVisible(true)
               }}
@@ -895,25 +917,43 @@ export default function FinancingEventsPage() {
       </Modal>
 
       <Modal
-        title="批量 AI 取数（按融资日期）"
+        title="批量 AI 取数"
         visible={batchAiVisible}
         onOk={handleBatchAiOk}
         confirmLoading={batchAiSubmitting}
         onCancel={() => setBatchAiVisible(false)}
-        style={{ width: 520 }}
+        style={{ width: 560 }}
         okText="加入队列"
       >
-        <Form form={batchAiForm} layout="vertical">
-          <FormItem
-            label="融资日期范围（含首尾两天，筛选 sourcing_financing_event.event_date）"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
+        <Form form={batchAiForm} layout="vertical" initialValues={{ mode: 'date_range', force_refresh: true }}>
+          <FormItem label="取数范围" field="mode" rules={[{ required: true }]}>
+            <RadioGroup>
+              <Radio value="selected" disabled={!selectedRowKeys.length}>
+                按选中行（已选 {selectedRowKeys.length} 条）
+              </Radio>
+              <Radio value="date_range">按融资日期区间</Radio>
+            </RadioGroup>
           </FormItem>
+          <Form.Item shouldUpdate noStyle>
+            {(values) =>
+              values.mode === 'selected' ? (
+                <FormItem label="强制重新取数" field="force_refresh" triggerPropName="checked">
+                  <Switch />
+                </FormItem>
+              ) : (
+                <FormItem
+                  label="融资日期范围（含首尾两天，筛选 sourcing_financing_event.event_date）"
+                  field="date_range"
+                  rules={[{ required: true, message: '请选择日期范围' }]}
+                >
+                  <DatePicker.RangePicker style={{ width: '100%' }} />
+                </FormItem>
+              )
+            }
+          </Form.Item>
         </Form>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在区间内<strong>去重</strong>，每个主体在当次任务里<strong>最多调用一次模型</strong>；若库内已有可复用的 AI 简介/标签则会直接复用，不重复请求。写入成功后，会按信用代码（无代码则按企业全称）<strong>扇出同步</strong>到该企业在本库内的多条融资记录。同一主体在短时间窗口内若已有进行中的 AI 任务，会<strong>拒绝重复提交</strong>。
+          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在当次范围内<strong>去重</strong>，每个主体最多调用一次模型。按日期区间时，若库内已有可复用的 AI 简介/标签则会直接复用；<strong>按选中行</strong>默认<strong>强制重新取数</strong>（适合修正错误简介，如蓝纳成）。写入成功后按信用代码扇出同步到该企业全部融资记录。
         </p>
         <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
           <strong>服务端执行方式</strong>（与去重后的企业数有关，默认阈值 100，可由环境变量

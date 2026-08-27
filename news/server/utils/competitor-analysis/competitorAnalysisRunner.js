@@ -12,6 +12,10 @@ const {
 const { buildInternalRecallPool } = require('./competitorMatchRecall');
 const { attachStrategyToTarget } = require('./industry-strategies');
 const {
+  RADIOPHARMA_TARGET_SIGNAL_RE,
+  RADIOPHARMA_TRACK_RE,
+} = require('./industry-strategies/baseStrategy');
+const {
   proposeCompetitionLens,
   resolveCompetitionLens,
   applyCompetitionLensToTarget,
@@ -27,6 +31,8 @@ const {
   l2Similarity,
   computeComprehensiveScore,
   meetsPersistThreshold,
+  meetsGoldStandardPersistThreshold,
+  sortPersistRowsWithGoldPriority,
   getCandidateAiPart,
   getThresholds,
   isPersistValidationPassed,
@@ -60,13 +66,17 @@ const {
 } = require('./competitorRelationEnrichService');
 const { clearInternalDisplayCache } = require('./competitorInternalDisplayLoader');
 const { buildFinancingEventIndex } = require('./competitorFinancingResolve');
-const { loadComparablePrefsForSubject } = require('./competitorComparablePrefService');
+const { loadComparablePrefsForSubject, loadComparableExcludedPrefsForSubject, isComparableExcluded } = require('./competitorComparablePrefService');
 const { isComparablePreferred } = require('./competitorCompanyMatch');
 const {
   enrichRelationFieldsBeforePersist,
   parseIsListedFromCandidate,
 } = require('./competitorRelationPersistEnhance');
-const { defaultIncludeInComparable } = require('./competitorTypeUtils');
+const { defaultIncludeInComparable, autoSuggestIncludeInComparable, applyGoldStandardTypeGuard } = require('./competitorTypeUtils');
+const {
+  loadGoldStandardAnnotations,
+  annotateCandidatesWithGoldStandard,
+} = require('./competitorGoldStandardRecall');
 const { buildEvidenceMeta } = require('./competitorEvidenceUtils');
 const {
   loadHumanLockedDedupeKeys,
@@ -188,6 +198,20 @@ function isBioFilterTrackTarget(target) {
   return membraneInTags || membraneInIntro;
 }
 
+function isRadiopharmaTrackTarget(target) {
+  const tags = target?.tags || [];
+  const intro = [target?.product_intro, target?.qcc_intro_effective, target?.display_name]
+    .filter(Boolean)
+    .join('\n');
+  const inTags = tags.some((t) => RADIOPHARMA_TARGET_SIGNAL_RE.test(String(t)));
+  return inTags || RADIOPHARMA_TARGET_SIGNAL_RE.test(intro);
+}
+
+/** bio 内的专业赛道（生物过滤膜/核药）：规则分 Top 槽位优先给赛道命中候选 */
+function isBioExpandedTrackKind(trackKind) {
+  return trackKind === 'bio_filter' || trackKind === 'dialysis_dual' || trackKind === 'radiopharma';
+}
+
 function isDialysisPrimaryTarget(target) {
   const tags = target?.tags || [];
   const intro = [target?.product_intro, target?.qcc_intro_effective].filter(Boolean).join(' ');
@@ -221,6 +245,7 @@ function inferSubjectTrackHint(target) {
 function trackReForKind(trackKind) {
   if (trackKind === 'niche') return NICHE_TRACK_TAG_RE;
   if (trackKind === 'bio_filter' || trackKind === 'dialysis_dual') return BIO_FILTER_TRACK_RE;
+  if (trackKind === 'radiopharma') return RADIOPHARMA_TRACK_RE;
   return null;
 }
 
@@ -228,6 +253,7 @@ function getExpandedLlmTrackKind(target) {
   if (isNicheTrackTarget(target)) return 'niche';
   if (isDialysisPrimaryTarget(target) && isBioFilterTrackTarget(target)) return 'dialysis_dual';
   if (isBioFilterTrackTarget(target)) return 'bio_filter';
+  if (isRadiopharmaTrackTarget(target)) return 'radiopharma';
   return null;
 }
 
@@ -352,7 +378,7 @@ function maxInternalScoreInList(list) {
 
 function resolveLlmPoolEffectiveCap(expanded, trackKind, maxInternal) {
   let cap = expanded
-    ? trackKind === 'bio_filter' || trackKind === 'dialysis_dual'
+    ? isBioExpandedTrackKind(trackKind)
       ? TOP_N_LLM_RULE_TRACK
       : TOP_N_LLM_RULE + 8
     : TOP_N_LLM_RULE + TOP_N_LLM_TAG;
@@ -421,14 +447,12 @@ function buildLlmScoringPool(scored, target) {
   if (expanded && trackRe) {
     const trackMatched = scored.filter((c) => candidateHitsTrackKeyword(c, trackRe));
     const byTrack = [...trackMatched].sort((a, b) => trackRelevanceScore(b) - trackRelevanceScore(a));
-    const ruleCap =
-      trackKind === 'bio_filter' || trackKind === 'dialysis_dual'
-        ? TOP_N_LLM_RULE_TRACK
-        : TOP_N_LLM_RULE + 8;
-    const llmRuleFloor =
-      trackKind === 'bio_filter' || trackKind === 'dialysis_dual'
-        ? TOP_N_LLM_RULE_TRACK
-        : TOP_N_LLM_RULE;
+    const ruleCap = isBioExpandedTrackKind(trackKind)
+      ? TOP_N_LLM_RULE_TRACK
+      : TOP_N_LLM_RULE + 8;
+    const llmRuleFloor = isBioExpandedTrackKind(trackKind)
+      ? TOP_N_LLM_RULE_TRACK
+      : TOP_N_LLM_RULE;
     for (const c of byTrack) {
       if (ruleTop >= ruleCap) break;
       if (tryAdd(c, poolCtx)) ruleTop += 1;
@@ -912,6 +936,8 @@ function sliceForLlm(target, cand) {
     industry_category_4: cand.industry_category_4 || null,
     sub_track: cand.sub_track || null,
     display_name: cand.display_name,
+    financing_amount_text: cand.financing_amount_text || null,
+    latest_round: cand.latest_round || null,
     core_product_lines: coreLines.length ? coreLines : undefined,
   };
   if (cand.structured_profile && typeof cand.structured_profile === 'object') {
@@ -955,6 +981,12 @@ async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
     coreLineScore: c.coreLineScore,
     specificTagScore: c.specificTagScore,
     fromAiWeb: candidateFromAiWeb(c),
+    fromGoldStandard: !!c._fromGoldStandard,
+    candidateDisplayName: c.display_name,
+    candidateFinancingText: c.financing_amount_text || null,
+    candidateLatestRound: c.latest_round || null,
+    subjectFinancingText: target?.financing_amount_text || null,
+    subjectLatestRound: target?.latest_round || null,
     strategyAppendix: mergePromptAppendix(
       target?.strategy?.buildPromptAppendix?.() || null,
       target?.competition_lens
@@ -967,7 +999,10 @@ async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
     c.llmProductScore = Number(c.validation.validated_score);
   }
   refreshValidationAfterRuleScores(c);
+  c.validation = applyGoldStandardTypeGuard(c.validation, c);
   c.validation = applyLensValidationCap(c.validation, target?.competition_lens, c);
+  // lens 封顶后再套一次金标护栏，避免负样本被抬回 is_competitor=true
+  c.validation = applyGoldStandardTypeGuard(c.validation, c);
   if (c.validation?.lens_form_mismatch) {
     c.lens_form_mismatch = c.validation.lens_form_mismatch;
     if (!c.hasInternal && c.validation.validated_score != null) {
@@ -1019,11 +1054,12 @@ async function preValidateEnrichSparseCandidates(validatePool, target, { runId }
 }
 
 function isMandateEligibleType(c) {
+  if (c?._goldStandardNegative) return false;
   if (c?.lens_form_mismatch === 'specialized_cleaner' || c?.validation?.lens_form_mismatch === 'specialized_cleaner') {
     return false;
   }
   if (isPersistValidationPassed(c)) return true;
-  return ['direct', 'indirect', 'substitute', 'same_track'].includes(c.validation?.competitor_type);
+  return ['direct', 'indirect', 'substitute'].includes(c.validation?.competitor_type);
 }
 
 /** 配额补足只消费 S5 已校验候选，禁止在此阶段发起新的 LLM 校验 */
@@ -1172,6 +1208,11 @@ async function persistRelations({
     investedEnterpriseId,
     preInvestmentProjectId,
   });
+  const comparableExcludedPrefs = await loadComparableExcludedPrefsForSubject({
+    subjectType,
+    investedEnterpriseId,
+    preInvestmentProjectId,
+  });
   const financingIndex = await buildFinancingEventIndex();
   const lockedKeys = await loadHumanLockedDedupeKeys({
     subjectType,
@@ -1230,15 +1271,26 @@ async function persistRelations({
     const displayNameFinal =
       strTrim(fieldEnhance.display_name) || strTrim(r.display_name) || strTrim(cand.display_name);
     const competitorType = r.competitorType || cand.validation?.competitor_type || null;
-    const includeComparable = isComparablePreferred(comparablePrefs, {
+    const prefFields = {
       unified_credit_code: creditFinal,
       competitor_display_name: displayNameFinal,
       competitor_weak_key: creditFinal ? null : strTrim(displayNameFinal).slice(0, 160) || null,
-    })
+    };
+    const includeComparable = isComparablePreferred(comparablePrefs, prefFields)
       ? 1
-      : defaultIncludeInComparable(competitorType)
-        ? 1
-        : 0;
+      : isComparableExcluded(comparableExcludedPrefs, prefFields)
+        ? 0
+        : autoSuggestIncludeInComparable(cand.validation, competitorType, {
+            hasInternal: !!cand.hasInternal,
+            fromGoldStandard: !!cand._fromGoldStandard,
+            goldNegative: !!cand._goldStandardNegative,
+            goldComparableExclude: !!cand._goldStandardComparableExclude,
+            fromAiWeb: candidateFromAiWeb(cand),
+          })
+          ? 1
+          : defaultIncludeInComparable(competitorType)
+            ? 1
+            : 0;
     const relId = relIds[idx];
 
     return {
@@ -1612,6 +1664,33 @@ async function executeCompetitorAnalysisRun(opts) {
       form_unlisted_added: formUnlistedAdded,
       gold_standard_added: goldStandardAdded,
     } = buildLlmScoringPool(scored, target);
+
+    // 金标正/负样本标注：类型护栏、落库过滤、可比勾选信任源
+    let goldAnnotStat = { positive: 0, negative: 0 };
+    let goldAnnotations = [];
+    try {
+      goldAnnotations = await loadGoldStandardAnnotations(target);
+      goldAnnotStat = annotateCandidatesWithGoldStandard(scored, goldAnnotations);
+      if (goldAnnotStat.positive || goldAnnotStat.negative) {
+        logCompetitorRun(runId, 'S2_gold_annotate', '金标标注覆盖 scored 池', goldAnnotStat);
+      }
+    } catch (goldAnnotErr) {
+      logCompetitorRun(runId, 'S2_gold_annotate', `金标标注失败（忽略）: ${goldAnnotErr.message}`);
+    }
+
+    // 预增强前移到 S3 前：金标优先补齐简介，避免「仅有名称」在对标池被压分
+    const s3PreEnrichStat = await preValidateEnrichSparseCandidates(llmPool, target, { runId });
+    if (s3PreEnrichStat.need > 0) {
+      await appendStepLog({
+        runId,
+        subjectType,
+        stepCode: 'S3_pre_enrich',
+        status: 'ok',
+        message: `对标前联网增强：补齐 ${s3PreEnrichStat.enriched}/${s3PreEnrichStat.considered} 条（待补 ${s3PreEnrichStat.need}）`,
+        detail: { ...s3PreEnrichStat, gold_annotate: goldAnnotStat },
+      });
+    }
+
     logCompetitorRun(runId, 'S3_llm', `LLM 产品对标开始，池大小 ${llmPool.length}`, {
       rule_top: ruleTop,
       track_rule_top: trackRuleTop,
@@ -1626,6 +1705,8 @@ async function executeCompetitorAnalysisRun(opts) {
       max_internal: maxInternalScored,
       effective_cap: llmPoolCap,
       llm_rule_min: LLM_POOL_RULE_MIN,
+      s3_pre_enrich: s3PreEnrichStat,
+      gold_annotate: goldAnnotStat,
     });
     for (let i = 0; i < llmPool.length; i++) {
       const c = llmPool[i];
@@ -1654,7 +1735,7 @@ async function executeCompetitorAnalysisRun(opts) {
       subjectType,
       stepCode: 'S3_llm',
       status: 'ok',
-      message: `LLM 对标完成 ${llmPool.length} 条（规则Top${ruleTop}${trackRuleTop ? `，赛道优先${trackRuleTop}` : ''}+标签${tagAdded}+关键词${kwAdded}${nicheTrack ? `，${trackKind === 'bio_filter' ? '生物过滤膜赛道' : '专业赛道'}` : ''}）`,
+      message: `LLM 对标完成 ${llmPool.length} 条（规则Top${ruleTop}${trackRuleTop ? `，赛道优先${trackRuleTop}` : ''}+标签${tagAdded}+关键词${kwAdded}${nicheTrack ? `，${trackKind === 'bio_filter' ? '生物过滤膜赛道' : trackKind === 'radiopharma' ? '核药赛道' : '专业赛道'}` : ''}）`,
         detail: {
         pool_size: llmPool.length,
         niche_track: nicheTrack,
@@ -1778,6 +1859,8 @@ async function executeCompetitorAnalysisRun(opts) {
           used_enable_search: webMeta.used_enable_search === true,
           search_degraded: webMeta.search_degraded === true,
           model_name: webMeta.model_name || null,
+          dashscope_fallback: webMeta.dashscope_fallback === true,
+          primary_error: webMeta.primary_error || null,
         },
       });
     } catch (e) {
@@ -1799,6 +1882,10 @@ async function executeCompetitorAnalysisRun(opts) {
       if (candidateFromAiWeb(c) && !isOverseasCompetitorCandidate(c)) {
         await normalizeDomesticCandidateIdentity(c);
       }
+    }
+    // S4 新进候选再覆盖金标标注
+    if (goldAnnotations?.length) {
+      goldAnnotStat = annotateCandidatesWithGoldStandard(scored, goldAnnotations);
     }
 
     const llmPoolKeys = new Set(llmPool.map((c) => candidateDedupeKey(c)).filter(Boolean));
@@ -1869,6 +1956,8 @@ async function executeCompetitorAnalysisRun(opts) {
       skip_no_validation: 0,
       skip_not_competitor: 0,
       skip_upstream_downstream: 0,
+      skip_gold_negative: 0,
+      skip_modality_mismatch: 0,
       skip_low_score: 0,
       accepted_internal: 0,
       accepted_ai_only: 0,
@@ -1877,6 +1966,39 @@ async function executeCompetitorAnalysisRun(opts) {
     const rejectedSamples = [];
     for (const c of scored) {
       if (c.validation) refreshValidationAfterRuleScores(c);
+      // 模态负样本金标：不落库（即便校验成 same_track）
+      if (c._goldStandardNegative) {
+        filterStats.skip_gold_negative += 1;
+        if (rejectedSamples.length < 30) {
+          rejectedSamples.push({
+            name: c.display_name,
+            credit: c.unified_credit_code || null,
+            internal: c.internalScore,
+            llm: c.llmProductScore,
+            reason: `金标负样本不落库（标注类型 ${c._goldStandardType || 'same_track'}）`,
+            sources: c.sources || (c.source ? [c.source] : []),
+          });
+        }
+        continue;
+      }
+      // 模态不一致的同赛道：初筛即丢弃，避免扩召回再捞回
+      if (
+        c.validation?.competitor_type === 'same_track' &&
+        c.validation?.modality_match === false
+      ) {
+        filterStats.skip_modality_mismatch = (filterStats.skip_modality_mismatch || 0) + 1;
+        if (rejectedSamples.length < 30) {
+          rejectedSamples.push({
+            name: c.display_name,
+            credit: c.unified_credit_code || null,
+            internal: c.internalScore,
+            llm: c.llmProductScore,
+            reason: '模态不一致同赛道不落库',
+            sources: c.sources || (c.source ? [c.source] : []),
+          });
+        }
+        continue;
+      }
       if (!isPersistValidationPassed(c)) {
         if (!c.validation || c.validation.ai_failed) {
           filterStats.skip_no_validation += 1;
@@ -1949,7 +2071,20 @@ async function executeCompetitorAnalysisRun(opts) {
       toPersist.push({ ...row, _candidate: c });
     }
 
-    toPersist.sort((a, b) => b.finalScore - a.finalScore);
+    for (const c of scored) {
+      if (!c._fromGoldStandard || c._goldStandardNegative || !isPersistValidationPassed(c)) continue;
+      const key = candidateDedupeKey(c);
+      if (!key || toPersist.some((x) => candidateDedupeKey(x) === key)) continue;
+      const row = mapCandidateToPersistRow(c);
+      if (!meetsGoldStandardPersistThreshold(c, row.finalScore)) continue;
+      row.breakdown = { ...row.breakdown, gold_standard_persist: true };
+      if (c.hasInternal) filterStats.accepted_internal += 1;
+      else if (isOverseasCompetitorCandidate(c)) filterStats.accepted_overseas += 1;
+      else filterStats.accepted_ai_only += 1;
+      toPersist.push({ ...row, _candidate: c });
+    }
+
+    sortPersistRowsWithGoldPriority(toPersist);
 
     await appendStepLog({
       runId,
@@ -1986,8 +2121,13 @@ async function executeCompetitorAnalysisRun(opts) {
         });
         const relaxed = scored
           .filter((c) => {
+            if (c._goldStandardNegative) return false;
             refreshValidationAfterRuleScores(c);
             if (!isPersistValidationPassed(c)) return false;
+            // 扩召回不回填 same_track，避免模态负样本/弱相关占名额
+            const ctype = c.validation?.competitor_type;
+            if (ctype === 'same_track') return false;
+            if (c.validation?.modality_match === false) return false;
             if (
               c.lens_form_mismatch === 'specialized_cleaner' ||
               c.validation?.lens_form_mismatch === 'specialized_cleaner' ||
@@ -2025,7 +2165,12 @@ async function executeCompetitorAnalysisRun(opts) {
           seen.add(k);
           finalList.push(x);
         }
-        finalList.sort((a, b) => b.finalScore - a.finalScore);
+        finalList.sort((a, b) => {
+          const ga = a._candidate?._fromGoldStandard ? 1 : 0;
+          const gb = b._candidate?._fromGoldStandard ? 1 : 0;
+          if (ga !== gb) return gb - ga;
+          return (b.finalScore || 0) - (a.finalScore || 0);
+        });
         await appendStepLog({
           runId,
           subjectType,
@@ -2050,7 +2195,7 @@ async function executeCompetitorAnalysisRun(opts) {
       persistThresholdOpts,
       logCtx,
     });
-    finalList.sort((a, b) => b.finalScore - a.finalScore);
+    finalList = sortPersistRowsWithGoldPriority(finalList);
 
     finalList = await finalizePersistRows(finalList, logCtx);
     if (!finalList.length) {

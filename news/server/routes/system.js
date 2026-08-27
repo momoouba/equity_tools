@@ -9,6 +9,14 @@ const xlsx = require('xlsx');
 const multer = require('multer');
 const { logWithTag, errorWithTag, warnWithTag } = require('../utils/logUtils');
 const psNewsIf = require('./project-sourcing/newsInterfaceConfigHelpers');
+const { initializeExternalDatabases } = require('../utils/externalDb');
+
+async function refreshActiveExternalDbPools() {
+  const configs = await db.query(
+    'SELECT * FROM external_db_config WHERE F_DeleteMark = 0 AND is_active = 1'
+  );
+  await initializeExternalDatabases(configs);
+}
 
 // 配置multer用于Excel文件上传
 const excelUpload = multer({
@@ -3516,6 +3524,10 @@ router.post('/database-config', [
       ]
     );
 
+    if (finalIsActive === 1) {
+      await refreshActiveExternalDbPools();
+    }
+
     res.json({ success: true, message: '数据库配置创建成功', data: { id: configId } });
   } catch (error) {
     console.error('创建数据库配置失败：', error);
@@ -3605,6 +3617,8 @@ router.put('/database-config/:id', [
         `UPDATE external_db_config SET ${updateFields.join(', ')} WHERE F_Id = ?`,
         updateValues
       );
+
+      await refreshActiveExternalDbPools();
     }
 
     res.json({ success: true, message: '数据库配置更新成功' });
@@ -3636,6 +3650,7 @@ router.delete('/database-config/:id', async (req, res) => {
        WHERE F_Id = ?`,
       [userId, id]
     );
+    await refreshActiveExternalDbPools();
     res.json({ success: true, message: '数据库配置删除成功' });
   } catch (error) {
     console.error('删除数据库配置失败：', error);

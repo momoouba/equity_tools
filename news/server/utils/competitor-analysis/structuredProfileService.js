@@ -153,6 +153,24 @@ function buildContextBlock(row) {
   if (tags) parts.push(`【行业标签】\n${tags.slice(0, 1000)}`);
   const lv = [row.industry_source_lv1, row.industry_source_lv2].filter(Boolean).join(' / ');
   if (lv) parts.push(`【烯牛行业】\n${lv}`);
+
+  // 本地库融资证据：轮次/金额/日期（供 stage / scale_signals 抽取与证据分）
+  const financingBits = [];
+  const round = strTrim(row.round) || strTrim(row.latest_round);
+  if (round) financingBits.push(`融资轮次：${round}`);
+  const amount = strTrim(row.funding_amt_raw) || strTrim(row.estimated_amt_raw);
+  if (amount) financingBits.push(`融资金额：${amount}`);
+  const eventDate = row.event_date != null ? strTrim(row.event_date) : '';
+  if (eventDate) financingBits.push(`事件日期：${eventDate.slice(0, 10)}`);
+  if (financingBits.length) {
+    parts.push(`【本地融资事件】\n${financingBits.join('；')}`);
+  }
+
+  const ipoBits = [];
+  if (row.ipo_sub) ipoBits.push(`上市进展：${strTrim(row.ipo_sub)}`);
+  if (row.is_listed === true) ipoBits.push('境内已上市');
+  if (ipoBits.length) parts.push(`【IPO/上市进展】\n${ipoBits.join('；')}`);
+
   return parts.join('\n\n');
 }
 
@@ -289,7 +307,8 @@ async function loadFinancingRepresentativeRowsMap(dbConn, companies) {
 
   const rows = await dbConn.query(
     `SELECT company_name, company_credit_code, industry_category_4, industry_source_lv1, industry_source_lv2,
-            company_intro, ai_product_intro, ai_company_tags_display, profile_source, event_date
+            company_intro, ai_product_intro, ai_company_tags_display, profile_source, event_date,
+            round, latest_round, funding_amt_raw, estimated_amt_raw
      FROM sourcing_financing_event
      WHERE F_DeleteMark = 0 AND (${conditions.join(' OR ')})`,
     params

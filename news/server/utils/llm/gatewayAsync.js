@@ -30,15 +30,14 @@ function getResponsesSubmitTimeoutMs(fallbackMs = 120000, opts = {}) {
   const envRaw = wantSearch
     ? process.env.LLM_RESPONSES_WEB_SUBMIT_TIMEOUT_MS ||
       process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS ||
-      '180000'
+      '600000'
     : process.env.LLM_RESPONSES_SUBMIT_TIMEOUT_MS || '90000';
-  const envMs = parseInt(envRaw, 10) || (wantSearch ? 180000 : 90000);
+  const envMs = parseInt(envRaw, 10) || (wantSearch ? 600000 : 90000);
   const floor = wantSearch ? 60000 : 15000;
-  const ceil = wantSearch ? 300000 : 180000;
-  return Math.max(
-    floor,
-    Math.min(ceil, envMs, fallbackMs > 0 ? fallbackMs : ceil)
-  );
+  // 联网提交：网关入队偶发很慢；允许 env 放到 15min。取 env 与调用方 timeout 的较大值，避免 fallback=180s 盖掉 env=600s。
+  const ceil = wantSearch ? 900000 : 180000;
+  const preferred = Math.max(envMs, fallbackMs > 0 ? fallbackMs : 0);
+  return Math.max(floor, Math.min(ceil, preferred || envMs));
 }
 
 module.exports = {

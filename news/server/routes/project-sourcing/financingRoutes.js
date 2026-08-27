@@ -3,6 +3,7 @@ const { syncFinancingDateRange } = require('../../utils/project-sourcing/financi
 const {
   enqueueManualFinancingAiEnrich,
   enqueueBatchFinancingAiEnrichByDateRange,
+  enqueueBatchFinancingAiEnrichBySelectedIds,
 } = require('../../utils/project-sourcing/financingAiEnrichService');
 const {
   requireProjectSourcingAccess,
@@ -234,23 +235,39 @@ function registerFinancingRoutes(router) {
     }
   });
 
-  /** 管理员：按融资日期区间批量 AI 取数（去重后条数多则百炼 Batch File，否则并发 chat）；only_failed 时仅重试 ai_enrich_status=failed */
+  /** 管理员：批量 AI 取数（按融资日期区间，或按勾选的融资事件 id）；only_failed 时仅重试 ai_enrich_status=failed（仅日期模式） */
   router.post('/batch-ai-enrich', requireAdmin, async (req, res) => {
     try {
       const body = req.body || {};
-      const { start_date, end_date } = body;
+      const mode = String(body.mode || 'date_range').trim();
       const only_failed =
         body.only_failed === true ||
         body.only_failed === 1 ||
         String(body.only_failed || '').toLowerCase() === 'true';
+      const force_refresh =
+        body.force_refresh === true ||
+        body.force_refresh === 1 ||
+        String(body.force_refresh || '').toLowerCase() === 'true';
       const userId = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
-      const r = await enqueueBatchFinancingAiEnrichByDateRange({
-        dateFrom: start_date,
-        dateTo: end_date,
-        triggeredByUserId: userId,
-        clientIp: clientIpFromReq(req),
-        onlyFailed: only_failed,
-      });
+
+      let r;
+      if (mode === 'selected') {
+        r = await enqueueBatchFinancingAiEnrichBySelectedIds({
+          financingEventIds: body.financing_event_ids,
+          triggeredByUserId: userId,
+          clientIp: clientIpFromReq(req),
+          forceRefresh: force_refresh !== false,
+        });
+      } else {
+        const { start_date, end_date } = body;
+        r = await enqueueBatchFinancingAiEnrichByDateRange({
+          dateFrom: start_date,
+          dateTo: end_date,
+          triggeredByUserId: userId,
+          clientIp: clientIpFromReq(req),
+          onlyFailed: only_failed,
+        });
+      }
       if (!r.ok) {
         return res.status(r.code).json({ success: false, message: r.message });
       }
@@ -258,7 +275,9 @@ function registerFinancingRoutes(router) {
       let detail = '';
       let suffix = '';
       if (d.total_in_range != null && d.queued_jobs != null) {
-        if (d.only_failed) {
+        if (d.selection_mode === 'selected') {
+          detail = `已选 ${d.selected_count ?? d.total_in_range} 条融资事件，按主体去重后 ${d.queued_jobs} 次 AI${d.force_refresh ? '（强制重新取数，不复用库内已有简介）' : ''}；同一信用代码下全部融资事件将同步更新简介与标签`;
+        } else if (d.only_failed) {
           detail = `区间内 AI 状态为 failed 的融资记录共 ${d.total_in_range} 条，去重后 ${d.queued_jobs} 次重试任务；同一信用代码下全部融资事件将同步更新简介与标签`;
         } else {
           detail = `区间内共 ${d.total_in_range} 条融资记录，去重后 ${d.queued_jobs} 次 AI；同一信用代码下全部融资事件将同步更新简介与标签`;

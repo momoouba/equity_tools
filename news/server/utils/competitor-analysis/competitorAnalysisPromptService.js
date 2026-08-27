@@ -33,6 +33,8 @@ const BUILTIN = {
 **硬上限（必须遵守）**：
 - 仅大行业/客户类型相同，core_product_lines 无实质对齐 → **similarity_score 不得高于 45**
 - 候选为创新药/试剂/检测设备/数字化/医院信息化/水处理/半导体等与目标装备耗材品类不同 → **不得高于 40**
+- 双方核心技术路线/药物模态/产品形态本质不同（如放射性药物核药目标对比小分子/抗体/ADC/细胞治疗/多肽/PROTAC/AI 制药候选；纯软件对比硬件整机）→ **不得高于 40**，rationale 注明「技术路线不同」
+- 量级悬殊（成熟商业化龙头对比早期初创，且产品线仅部分对齐）→ **不得高于 60**，rationale 注明「仅品牌/赛道对标，量级不可比」
 
 须综合评估核心产品线替代性、场景重合度。不得仅因上市或规模差距单独加减分。
 
@@ -106,6 +108,9 @@ const BUILTIN = {
 1. 目标为初创或未上市：不得仅因候选上市、营收或规模差距大而降分，或改判 same_track / not_competitor。
 2. 候选为整线集成商、渠道平台、装备总包或控股平台型，目标为单品/组件/耗材型：competitor_type 为 upstream_downstream，不得 direct/indirect。
 3. **仅大行业/客户类型相同，core_product_lines 或 product_intro 核心 SKU 未对齐**：不得判 direct/indirect/substitute；应判 same_track 或 not_competitor，validated_score≤45。
+4. **模态/技术路线门（生物医药尤其重要）**：从 structured_profile.modality、core_product_lines、product_intro、tags 判断双方药物模态或核心技术路线。目标为放射性药物/核素偶联（RDC）/诊疗一体化核药，而候选模态为小分子、抗体/ADC、细胞/基因治疗、多肽、PROTAC、mRNA、疫苗、抗病毒、AI 制药等非同一技术路线 → 不得判 direct/indirect/substitute；competitor_type 最高 same_track，validated_score≤45，modality_match=false。其他赛道同理：核心技术路线/产品形态本质不同（如纯软件 vs 硬件整机、试剂耗材 vs 创新药研发）不得判 direct。
+5. **产业链位置门**：候选主业为原料/核素/同位素供应、放射源、分销渠道、纯 CDMO/CRDMO、整体解决方案集成，且无与目标同类的自研产品管线 → upstream_downstream，is_competitor=false，stage_comparable=false。
+6. **量级/阶段门**：先各自判断目标与候选所处阶段（早期初创 / 临床中后期 / 商业化成熟 / 上市龙头）。候选为成熟商业化龙头（年营收数亿级、上市多年、多产品商业化矩阵）而目标为早期初创，或反之 → 竞品关系可保留（direct/indirect 按产品线对齐判定），但 stage_comparable=false，stage_reason 写明「量级/阶段不可比：候选为成熟龙头而目标为早期初创」；仅当双方融资轮次/临床阶段/商业化程度相近时 stage_comparable=true。modality_match 与 stage_comparable 不影响 competitor_type 判定，仅标记可比性。
 
 # 二、六大竞品类型（六选一，仅用给定枚举）
 - direct：core_product_lines 高度重合，同客户、同场景、同采购预算，采购二选一
@@ -134,6 +139,9 @@ const BUILTIN = {
 - validated_score、core_overlap_percent：三维度算术平均，四舍五入取 0-100 整数
 - industry_match：双方 industry_l1/industry_l2 或业务描述属于同一大类下游应用为 true；跨完全不同大行业为 false
 - is_listed：候选在 A股/北交所/新三板公开上市或处于明确境内 IPO/申报进程为 true；仅境外上市、或无法判断 → false（境外上市仍可为竞品，is_listed 填 false）
+- modality_match：双方核心技术路线/药物模态/产品形态一致为 true；不一致或无法判断 → false
+- stage_comparable：双方融资轮次/临床阶段/商业化程度相近为 true；量级悬殊（成熟龙头 vs 早期初创等）→ false；无法判断 → true
+- stage_reason：stage_comparable=false 时必填（20-60 字，说明量级/阶段差异）；其余填 ""
 - reject_reason：not_competitor 或 upstream_downstream 时必填（20-60 字）；其余填空字符串 ""
 - key_differences：30-80 字，产品/客户/主业任一维度核心差异
 - rationale：30-80 字，说明当前 competitor_type 依据
@@ -143,7 +151,7 @@ TARGET_JSON/CANDIDATE_JSON 为空、关键字段缺失、业务描述空白或�
 
 # 七、输出约束
 仅输出纯 JSON，禁止 Markdown 与 JSON 外文字。字段名不得增删改。
-{"is_competitor":true/false,"competitor_type":"direct|indirect|substitute|upstream_downstream|same_track|not_competitor","is_listed":true/false,"industry_match":true/false,"core_overlap_percent":0-100,"is_upstream_downstream":false,"validated_score":0-100,"reject_reason":"","key_differences":"核心差异一句话","dimension_scores":{"substitutability":0,"customer_overlap":0,"scenario_overlap":0},"rationale":"竞品判断一句话"}`,
+{"is_competitor":true/false,"competitor_type":"direct|indirect|substitute|upstream_downstream|same_track|not_competitor","is_listed":true/false,"industry_match":true/false,"core_overlap_percent":0-100,"is_upstream_downstream":false,"validated_score":0-100,"modality_match":true/false,"stage_comparable":true/false,"stage_reason":"","reject_reason":"","key_differences":"核心差异一句话","dimension_scores":{"substitutability":0,"customer_overlap":0,"scenario_overlap":0},"rationale":"竞品判断一句话"}`,
     userTemplate: `目标：
 {{TARGET_JSON}}
 

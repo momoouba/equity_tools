@@ -26,6 +26,38 @@ async function loadComparablePrefsForSubject({
   return map;
 }
 
+/** 显式排除偏好（include_in_comparable=0）：自动建议不得覆盖用户取消勾选 */
+async function loadComparableExcludedPrefsForSubject({
+  subjectType,
+  investedEnterpriseId,
+  preInvestmentProjectId,
+}) {
+  const ieId = investedEnterpriseId ? String(investedEnterpriseId) : null;
+  const pipId = preInvestmentProjectId ? String(preInvestmentProjectId) : null;
+  const rows = await db.query(
+    `SELECT competitor_key
+     FROM sourcing_competitor_comparable_pref
+     WHERE subject_type = ?
+       AND (invested_enterprise_id <=> ?)
+       AND (pre_investment_project_id <=> ?)
+       AND include_in_comparable = 0`,
+    [subjectType, ieId, pipId]
+  );
+  const map = new Map();
+  for (const r of rows) {
+    if (r.competitor_key) map.set(String(r.competitor_key), true);
+  }
+  return map;
+}
+
+function isComparableExcluded(excludedPrefs, fields) {
+  if (!excludedPrefs || !excludedPrefs.size) return false;
+  for (const k of collectCompetitorLookupKeys(fields)) {
+    if (excludedPrefs.get(k)) return true;
+  }
+  return false;
+}
+
 async function upsertComparablePref({
   subjectType,
   investedEnterpriseId,
@@ -136,6 +168,8 @@ async function upsertComparablePrefForRelation(rel, includeInComparable, userId)
 
 module.exports = {
   loadComparablePrefsForSubject,
+  loadComparableExcludedPrefsForSubject,
+  isComparableExcluded,
   upsertComparablePref,
   upsertComparablePrefForRelation,
   competitorKeyFromRelationRow,

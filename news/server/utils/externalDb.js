@@ -4,6 +4,13 @@ const { Pool: PgPool } = require('pg');
 
 // 存储所有外部数据库连接池
 const externalPools = new Map();
+// 连接池对应的配置指纹，用于检测 host/port 等变更后自动重建
+const externalPoolMeta = new Map();
+
+function buildPoolFingerprint(config) {
+  const dbType = config.db_type || 'mysql';
+  return `${dbType}|${config.host}|${config.port}|${config.user}|${config.database}`;
+}
 
 /**
  * 创建外部数据库连接池
@@ -39,8 +46,8 @@ async function createExternalPool(config) {
       await client.query('SELECT 1');
       client.release();
       
-      // 将连接池保存到缓存中
       externalPools.set(config.F_Id, pool);
+      externalPoolMeta.set(config.F_Id, buildPoolFingerprint(config));
 
       return pool;
     } else {
@@ -67,8 +74,8 @@ async function createExternalPool(config) {
       await connection.ping();
       connection.release();
       
-      // 将连接池保存到缓存中
       externalPools.set(config.F_Id, pool);
+      externalPoolMeta.set(config.F_Id, buildPoolFingerprint(config));
 
       return pool;
     }
@@ -93,6 +100,7 @@ async function initializeExternalDatabases(configs) {
       }
     }
     externalPools.clear();
+    externalPoolMeta.clear();
 
     // 创建新连接
     for (const config of configs) {
@@ -121,6 +129,25 @@ async function initializeExternalDatabases(configs) {
  */
 function getExternalPool(configId) {
   return externalPools.get(configId) || null;
+}
+
+/**
+ * 确保外部数据库连接池存在且与配置一致（host/port 等变更时自动重建）
+ * @param {Object} config - external_db_config 行
+ * @returns {Promise<Object|null>} 连接池对象
+ */
+async function ensureExternalPool(config) {
+  const configId = config.F_Id;
+  const fingerprint = buildPoolFingerprint(config);
+  const existing = externalPools.get(configId);
+  if (existing && externalPoolMeta.get(configId) === fingerprint) {
+    return existing;
+  }
+  await closeExternalPool(configId);
+  if (config.is_active === 1 && !config.F_DeleteMark) {
+    return createExternalPool(config);
+  }
+  return null;
 }
 
 /**
@@ -293,6 +320,7 @@ async function closeExternalPool(configId) {
     try {
       await pool.end();
       externalPools.delete(configId);
+      externalPoolMeta.delete(configId);
       console.log(`✓ 已关闭外部数据库连接: ${configId}`);
     } catch (error) {
       console.error(`关闭外部数据库连接失败 (${configId}):`, error.message);
@@ -304,6 +332,7 @@ module.exports = {
   createExternalPool,
   initializeExternalDatabases,
   getExternalPool,
+  ensureExternalPool,
   queryExternal,
   executeExternal,
   getExternalConnection,

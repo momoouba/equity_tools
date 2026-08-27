@@ -13,8 +13,7 @@ const {
 } = require('./config');
 const {
   queryExternal,
-  getExternalPool,
-  createExternalPool,
+  ensureExternalPool,
   closeExternalPool
 } = require('../../utils/externalDb');
 const { computeAndUpdateTransactionIrr, computeIRR } = require('./transactionIrr');
@@ -362,20 +361,23 @@ router.post('/', async (req, res) => {
         }
 
         if (externalId) {
-          const ensureExternalPool = async () => {
-            if (!getExternalPool(externalId)) {
-              const cfgRows = await db.query(
-                'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
-                [externalId]
-              );
-              if (!cfgRows || cfgRows.length === 0) {
-                throw new Error(`外部数据源配置不存在或未启用: ${externalId}`);
-              }
-              await createExternalPool(cfgRows[0]);
+          const loadExternalConfig = async () => {
+            const cfgRows = await db.query(
+              'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
+              [externalId]
+            );
+            if (!cfgRows || cfgRows.length === 0) {
+              throw new Error(`外部数据源配置不存在或未启用: ${externalId}`);
             }
+            return cfgRows[0];
           };
 
-          await ensureExternalPool();
+          const ensureExternalPoolReady = async () => {
+            const cfg = await loadExternalConfig();
+            await ensureExternalPool(cfg);
+          };
+
+          await ensureExternalPoolReady();
           if (isInsert) {
             throw new Error(`数据接口「${row.interface_name || row.F_Id}」使用外部数据源时仅支持 SELECT/WITH，请用 SELECT 取数后由系统写入目标表`);
           }
@@ -387,11 +389,12 @@ router.post('/', async (req, res) => {
               err &&
               (err.code === 'ECONNRESET' ||
                 err.code === 'PROTOCOL_CONNECTION_LOST' ||
+                err.code === 'ETIMEDOUT' ||
                 err.errno === -4077)
             ) {
-              console.warn(`外部数据库连接重置，将尝试重连后重试一次 (${externalId}):`, err.message);
+              console.warn(`外部数据库连接异常，将尝试重连后重试一次 (${externalId}):`, err.message);
               await closeExternalPool(externalId);
-              await ensureExternalPool();
+              await ensureExternalPoolReady();
               rows = await queryExternal(externalId, sql, []);
             } else {
               throw err;
