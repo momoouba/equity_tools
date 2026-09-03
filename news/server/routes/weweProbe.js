@@ -10,7 +10,7 @@
 const express = require('express');
 const { getCurrentUser } = require('../middleware/auth');
 const { probeHealth, fetchAllFeedsJson, fetchFeedJson, getWeweConfig, setWeweBaseUrlOverride, listWeweAccounts } = require('../utils/wewe/weweClient');
-const { getWewePrivateConfig, enqueueFromXinbangError, unsubscribeFromWewe } = require('../utils/wewe/wewePrivateTeam');
+const { getWewePrivateConfig, enqueueFromXinbangError, unsubscribeFromWewe, setAccountEnqueueBlocked } = require('../utils/wewe/wewePrivateTeam');
 const { mapAccountWithSampleUrl, tryAutoMapAfterEnqueue } = require('../utils/wewe/weweFeedMap');
 const {
   extractOneAccount,
@@ -389,6 +389,38 @@ router.post('/team/unsubscribe', requireAdmin, async (req, res) => {
       message: weweFailed
         ? `专队已出队，但 wewe-rss 退订失败：${result.wewe?.error || '未知错误'}`
         : '已出队并从 wewe-rss 删除订阅',
+      result,
+      account: rows[0] || null
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** 人工禁止/恢复新榜自动重新入队（单条；禁止时标 exited，不删 wewe 订阅） */
+router.post('/team/enqueue-block', requireAdmin, async (req, res) => {
+  try {
+    const gh = String(req.body.wechat_account_id || req.body.account || '').trim();
+    if (!gh) {
+      return res.status(400).json({ success: false, message: '需要 wechat_account_id' });
+    }
+    const blockedRaw = req.body.blocked ?? req.body.enqueue_blocked;
+    const blocked = blockedRaw !== false && blockedRaw !== 0 && blockedRaw !== '0';
+    const result = await setAccountEnqueueBlocked(gh, blocked, {
+      note: req.body.note || undefined
+    });
+    if (result.action === 'not_found') {
+      return res.status(404).json({ success: false, message: '专队无此账号' });
+    }
+    const rows = await db.query(
+      `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      [gh]
+    );
+    res.json({
+      success: true,
+      message: blocked
+        ? '已禁止该账号被新榜自动重新入队（已标为已出队）'
+        : '已恢复允许新榜自动入队',
       result,
       account: rows[0] || null
     });

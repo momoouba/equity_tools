@@ -63,12 +63,27 @@ router.get('/session', authLiveQr, async (req, res) => {
   }
 });
 
+function isPlatformRelayError(message) {
+  return /404|502|500|createLoginUrl|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|status code/i.test(
+    String(message || '')
+  );
+}
+
+const PLATFORM_RELAY_HINT =
+  '微信读书中转（wewe 的 PLATFORM_URL）连不上，所以出不了码。这不是新闻站缺路由。默认 https://weread.111965.xyz 现为 502；备用 https://weread.965111.xyz 已 404（Deno Deploy Classic 于 2026-07-20 下线）。请看 docker compose logs wewe-rss --tail 80。中转恢复或换可用 PLATFORM_URL 之前无法扫码。';
+
 router.post('/qr', authLiveQr, async (req, res) => {
   try {
     const qr = await createLoginUrl();
     res.json({ success: true, phase: 'P5', uuid: qr.uuid, scanUrl: qr.scanUrl });
   } catch (e) {
-    res.status(502).json({ success: false, message: e.message, body: e.body });
+    const message = e.message || '生成二维码失败';
+    res.status(502).json({
+      success: false,
+      message,
+      hint: isPlatformRelayError(message) ? PLATFORM_RELAY_HINT : undefined,
+      body: e.body
+    });
   }
 });
 
@@ -172,7 +187,11 @@ function liveQrHtml() {
       if (timer) clearInterval(timer);
       const res = await fetch('/api/wewe-live-qr/qr' + qs, { method: 'POST', credentials: 'include' });
       const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.message || '生成失败');
+      if (!res.ok || !data.success) {
+        const err = new Error(data.message || '生成失败');
+        err.hint = data.hint || '';
+        throw err;
+      }
       uuid = data.uuid;
       const scanUrl = data.scanUrl || '';
       if (!scanUrl) throw new Error('未返回 scanUrl');
@@ -219,8 +238,12 @@ function liveQrHtml() {
       }
     }
 
-    document.getElementById('refresh').onclick = () => createQr().catch(e => setStatus(e.message, 'err'));
-    createQr().catch(e => setStatus(e.message, 'err'));
+    function failQr(e) {
+      setStatus(e.message || String(e), 'err');
+      setDetail(e.hint || '');
+    }
+    document.getElementById('refresh').onclick = () => createQr().catch(failQr);
+    createQr().catch(failQr);
   </script>
 </body>
 </html>`;

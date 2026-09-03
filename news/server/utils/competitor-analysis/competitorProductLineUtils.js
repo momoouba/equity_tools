@@ -566,6 +566,22 @@ function expandProductLineSearchTerms(coreLines, introBlob) {
   if (/反应器|培养|生物反应|一次性/.test(blob)) {
     terms.push('生物反应器', '细胞培养', '一次性生物反应器');
   }
+  if (/核药|放射性|核素偶联|RDC|PET成像|PET显像|诊疗一体化核药|α核素|砹-211|Lu-177|Ac-225/.test(blob)) {
+    terms.push(
+      '核药',
+      'RDC药物',
+      '核素偶联',
+      '放射性药物',
+      'α核素',
+      '砹-211',
+      'Lu-177',
+      '镥-177',
+      'Ac-225',
+      '锕-225',
+      'PET显像剂'
+    );
+  }
+  const termCap = /核药|放射性|核素偶联|RDC/.test(blob) ? 18 : 14;
   const seen = new Set();
   const out = [];
   for (const t of terms) {
@@ -574,7 +590,7 @@ function expandProductLineSearchTerms(coreLines, introBlob) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(t);
-    if (out.length >= 14) break;
+    if (out.length >= termCap) break;
   }
   if (out.length < 3) {
     for (const t of terms) {

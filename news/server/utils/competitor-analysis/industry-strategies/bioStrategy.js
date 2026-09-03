@@ -32,8 +32,9 @@ const BioPharmaStrategy = {
 
 # 核药模态门（目标为放射性药物/核素偶联时强制执行）
 6. **模态对齐**：目标主营为核药/放射性药物/核素偶联（RDC）/诊疗一体化时，候选模态为小分子、抗体/ADC、CAR-T/细胞基因治疗、多肽、PROTAC、AI 制药、疫苗、抗病毒等非核素路线 → competitor_type 最高 same_track，validated_score≤45，不得判 direct/indirect/substitute。
-7. **产业链位置**：候选主业为同位素/核素生产供应、放射源、核医学影像服务、核药房、纯代加工（无自研核药管线）→ upstream_downstream，is_competitor=false，不放入可比公司。
-8. **量级/阶段**：候选为成熟商业化龙头（年营收数亿欧元级/上市多年/商业化产品矩阵）而目标为早期初创 → 即使同为核药赛道，stage_comparable=false，不放入可比公司（可判 indirect）。`;
+7. **同为核药不得因适应症否决模态**：双方均为核药/RDC/放射性药物/PET显像剂时 modality_match=true；肿瘤 vs 神经退行/阿尔茨海默等适应症或靶点差异只写入 key_differences，不得判模态不一致，不得因此丢掉同赛道核药同行。
+8. **产业链位置**：候选主业为同位素/核素生产供应、放射源、核医学影像服务、核药房、纯代加工（无自研核药管线）→ upstream_downstream，is_competitor=false，不放入可比公司。
+9. **量级/阶段**：候选为成熟商业化龙头（年营收数亿欧元级/上市多年/商业化产品矩阵）而目标为早期初创 → 即使同为核药赛道，stage_comparable=false，不放入可比公司（可判 indirect）。`;
   },
 
   getDiscoveryPolicy({ target } = {}) {
@@ -48,6 +49,9 @@ const BioPharmaStrategy = {
           '核素偶联药物',
           'RDC 放射性配体',
           '诊疗一体化核药',
+          'α核素',
+          'PET显像剂',
+          '未上市核药',
           '镥-177',
           '同位素药物初创',
         ],

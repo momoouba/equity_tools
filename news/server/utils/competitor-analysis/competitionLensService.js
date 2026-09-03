@@ -315,6 +315,46 @@ function looksLikeFactorId(s) {
   return /^f_?[a-z0-9]+$/i.test(t) && t.length <= 24 && !/[\u4e00-\u9fff]/.test(t);
 }
 
+/** 产品形态 / 药物模态：必须对齐 */
+const LENS_FORM_KEEP_RE =
+  /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|诊疗一体化|镥|锕|砹|同位素药物|放射性配体/;
+
+/** 适应症 / 疾病方向：只加分，不得当排除门 */
+const LENS_INDICATION_RE =
+  /阿尔茨海默|帕金森|神经退行|适应症|适应证|早诊|筛查|肿瘤|癌症|癌$|瘤$|诊断$|病$|症$/;
+
+/** 过宽技术词：与形态并列时会把非核药（小分子/ADC/CNS）抬进规则 Top */
+const LENS_GENERIC_TECH_RE =
+  /^(创新药|分子靶向技术|靶向技术|精准医疗|精准诊疗|生物医药|创新药研发)$/;
+
+function isSoftLensPhrase(text) {
+  const s = strTrim(text);
+  if (!s) return false;
+  if (LENS_FORM_KEEP_RE.test(s)) return false;
+  if (LENS_GENERIC_TECH_RE.test(s)) return true;
+  if (LENS_INDICATION_RE.test(s)) return true;
+  return false;
+}
+
+/**
+ * 把用户勾选拆成 must_align（形态）与 prefer_align（适应症/宽泛技术）。
+ * 若全部都是软焦点，则保留为 must_align，避免透镜被拆空。
+ */
+function splitLensPhrases(phrases) {
+  const must = [];
+  const prefer = [];
+  for (const p of phrases || []) {
+    const s = strTrim(p);
+    if (!s) continue;
+    if (isSoftLensPhrase(s)) prefer.push(s);
+    else must.push(s);
+  }
+  if (!must.length && prefer.length) {
+    return { must_align: prefer, prefer_align: [] };
+  }
+  return { must_align: must, prefer_align: prefer };
+}
+
 function resolveCompetitionLens(userInput, factors = []) {
   const input = userInput && typeof userInput === 'object' ? userInput : {};
   const factorById = new Map((factors || []).map((f) => [String(f.id), { ...f }]));
@@ -406,7 +446,20 @@ function resolveCompetitionLens(userInput, factors = []) {
 
   const excludeHints = normalizePhraseList(input.exclude_hints || [], 8, KEYWORD_MAX);
   const confirmed = input.confirmed === true || input.source === 'user';
-  const mustAlign = normalizePhraseList([...selectedTexts, ...custom], 14);
+  const selectedSplit = splitLensPhrases(selectedTexts);
+  const customSplit = splitLensPhrases(custom);
+  const mustAlign = normalizePhraseList(
+    [...selectedSplit.must_align, ...customSplit.must_align],
+    14
+  );
+  const preferAlign = normalizePhraseList(
+    [
+      ...selectedSplit.prefer_align,
+      ...customSplit.prefer_align,
+      ...(Array.isArray(input.prefer_align) ? input.prefer_align : []),
+    ],
+    14
+  );
   const resolvedSelectedIds =
     selectedIds?.length && selectedTexts.length
       ? selectedIds
@@ -429,14 +482,14 @@ function resolveCompetitionLens(userInput, factors = []) {
 
   return {
     must_align: mustAlign,
-    prefer_align: [],
+    prefer_align: preferAlign,
     custom_keywords: custom,
     exclude_hints: excludeHints,
     confirmed: effectiveConfirmed,
     source: effectiveConfirmed ? 'user' : confirmed ? 'user_empty' : 'auto',
     selected_factor_ids: resolvedSelectedIds,
     factors: factorsSnapshot,
-    factors_used: mustAlign,
+    factors_used: [...mustAlign, ...preferAlign],
     resolve_warning:
       confirmed && !mustAlign.length
         ? 'selected_factor_ids 无法映射到因素文本，must_align 为空'
@@ -457,7 +510,7 @@ function applyCompetitionLensToTarget(target, lens) {
     const seen = new Set();
     const seed =
       lens.confirmed || lens.source === 'user'
-        ? [...lens.must_align, ...(lens.custom_keywords || [])]
+        ? [...lens.must_align]
         : [...lens.must_align, ...(target.core_product_lines || [])];
     for (const t of seed) {
       const s = strTrim(t);
@@ -508,11 +561,16 @@ function shortenLensAnchors(phrases, max = 10) {
 }
 
 function buildLensPromptAppendix(lens) {
-  if (!lens?.must_align?.length) return '';
+  if (!lens?.must_align?.length && !lens?.prefer_align?.length) return '';
   const lines = [
     '# 用户确认的对标焦点（竞争透镜）',
-    `必对齐焦点：${lens.must_align.join('、')}`,
+    `必对齐焦点（产品形态/药物模态）：${(lens.must_align || []).join('、') || '（无）'}`,
   ];
+  if (lens.prefer_align?.length) {
+    lines.push(
+      `适应症/加分方向（只加分，不得作为排除或 modality_match=false 的依据）：${lens.prefer_align.join('、')}`
+    );
+  }
   if (lens.custom_keywords?.length) {
     lines.push(`用户补充关键词：${lens.custom_keywords.join('、')}`);
   }
@@ -520,12 +578,14 @@ function buildLensPromptAppendix(lens) {
     lines.push(`明确降权/排除倾向：${lens.exclude_hints.join('、')}`);
   }
   lines.push(
-    '判定时须优先满足上述焦点；仅因宽泛行业/技术大标签重合，不得标为 direct。',
-    '焦点明显错位时最高 same_track，并降低 validated_score。'
+    '判定时须优先满足形态/产品焦点；仅因宽泛行业/技术大标签重合，不得标为 direct。',
+    '适应症或靶点不同，不得单独排除同形态候选，也不得因此判模态不一致。',
+    '形态焦点明显错位时最高 same_track，并降低 validated_score。'
   );
   /* ── 机器人/清洁电器专属 prompt：仅当透镜涉及相关关键词时注入 ── */
   const lensTextBlob = [
     ...(lens.must_align || []),
+    ...(lens.prefer_align || []),
     ...(lens.custom_keywords || []),
     ...(lens.exclude_hints || []),
   ].join(' ');
@@ -534,6 +594,13 @@ function buildLensPromptAppendix(lens) {
     lines.push(
       '**产品形态同层**：若目标焦点强调「通用/服务/操作（含臂、夹爪、管家、长程家务）」等，而候选仅为单一任务清洁电器（扫地/扫拖/擦窗等）且无操作/服务扩展能力 → 最高 same_track 或 indirect，validated_score≤45，不得判 direct。',
       '**联网发现专令（有透镜时）**：除境内上市配额外，须主动检索与焦点同层的**未上市/早期**公司（种子/天使/Pre-A 优先），检索式须组合焦点短语 + 「创业公司/融资/天使轮/未上市」；禁止用单任务清洁电器或仅大赛道人形明星凑满候选。'
+    );
+  }
+  const RADIO_LENS_RE = /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|放射性配体/;
+  if (RADIO_LENS_RE.test(lensTextBlob)) {
+    lines.push(
+      '**核药同模态**：双方均为核药/RDC/放射性药物/PET显像剂时 modality_match=true；肿瘤 vs 神经退行/阿尔茨海默等适应症差异只影响适应症重合，不得判模态不一致，不得因此丢掉同赛道核药同行。',
+      '**联网发现**：不得因「创新药研发」排除核药/RDC 初创；境内统一社会信用代码能核验则填，核验不到时仍须返回法定全称或公开品牌名。'
     );
   }
   if (lens.source === 'auto') {
@@ -716,6 +783,7 @@ async function saveCompetitionLensVersion({ subjectType, subjectId, lens, userId
     version: null, // filled after atomic increment
     saved_at: savedAt.toISOString(),
     must_align: lens.must_align || [],
+    prefer_align: lens.prefer_align || [],
     custom_keywords: lens.custom_keywords || [],
     exclude_hints: lens.exclude_hints || [],
     selected_factor_ids: lens.selected_factor_ids || [],
@@ -781,6 +849,8 @@ module.exports = {
   mergeProposalWithSaved,
   resolveCompetitionLens,
   applyCompetitionLensToTarget,
+  isSoftLensPhrase,
+  splitLensPhrases,
   shortenLensAnchors,
   buildLensPromptAppendix,
   mergePromptAppendix,

@@ -377,22 +377,49 @@ function sortPersistRowsWithGoldPriority(rows) {
   });
 }
 
+function candidateHasRadiopharmaSignal(c) {
+  const { RADIOPHARMA_TRACK_RE } = require('./industry-strategies/baseStrategy');
+  const blob = [
+    c?.display_name,
+    c?.product_intro,
+    c?.qcc_intro,
+    c?.web_core_products,
+    ...(c?.tags || []),
+    ...(c?.core_product_lines || []),
+    c?.validation?.rationale,
+    c?.validation?.key_differences,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return RADIOPHARMA_TRACK_RE.test(blob);
+}
+
 function meetsPersistThreshold(c, finalScore, opts = {}) {
   const hasOffTarget =
     c._hasStrongOffTargetSignals ??
     require('./competitorProductLineUtils').hasStrongOffTargetSignals(c);
-  if (hasOffTarget && Number(c?.validation?.validated_score) < 60) return false;
+  const type = c.validation?.competitor_type;
+  const vs = Number(c.validation?.validated_score);
+  const radiopharmaPeerPersist =
+    !!opts.radiopharmaTrackTarget &&
+    candidateHasRadiopharmaSignal(c) &&
+    ['direct', 'indirect', 'substitute', 'same_track'].includes(type) &&
+    Number.isFinite(vs) &&
+    vs >= 32 &&
+    isPersistValidationPassed(c);
+  if (hasOffTarget && Number(c?.validation?.validated_score) < 60 && !radiopharmaPeerPersist) {
+    return false;
+  }
+  if (radiopharmaPeerPersist) return true;
   const th = opts.threshold ?? SCORE_THRESHOLD_PERSIST;
   const thHigh = opts.thresholdHighLlm ?? SCORE_THRESHOLD_HIGH_LLM;
   const score = Number(finalScore);
-  const type = c.validation?.competitor_type;
   const coreLine = Number(c.coreLineScore ?? NaN);
   const product = Number(c.productScore ?? NaN);
   const lacksCoreProductOverlap =
     (Number.isFinite(coreLine) ? coreLine : 0) < 15 &&
     (Number.isFinite(product) ? product : 0) < 18;
   const ai = getCandidateAiPart(c);
-  const vs = Number(c.validation?.validated_score);
   // 金标种子：只要 S5 校验为直接/间接/同赛道/替代竞品且分数达标，不因 S2 分缺失误杀
   if (c._fromGoldStandard && isPersistValidationPassed(c)) {
     if (Number.isFinite(vs) && vs >= thHigh) return true;

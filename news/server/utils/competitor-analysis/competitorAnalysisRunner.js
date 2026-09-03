@@ -281,10 +281,29 @@ function extractIntroSearchTerms(intro) {
 
 function candidateHitsTrackKeyword(c, trackRe) {
   if (!trackRe) return false;
-  const blob = [c.display_name, c.product_intro, c.qcc_intro, ...(c.tags || [])]
+  const blob = [c.display_name, c.product_intro, c.qcc_intro, c.web_core_products, ...(c.tags || [])]
     .filter(Boolean)
     .join('\n');
   return trackRe.test(blob);
+}
+
+/** 目标与候选同为核药/RDC：适应症不同不得当模态不一致丢弃 */
+function isRadiopharmaModalityPeer(target, c) {
+  if (!isRadiopharmaTrackTarget(target)) return false;
+  const blob = [
+    c?.display_name,
+    c?.product_intro,
+    c?.qcc_intro,
+    c?.web_core_products,
+    ...(c?.tags || []),
+    ...(c?.core_product_lines || []),
+    c?.validation?.rationale,
+    c?.validation?.key_differences,
+    c?.validation?.evidence_summary,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return RADIOPHARMA_TRACK_RE.test(blob);
 }
 
 function buildWebDiscoverKeywords(target, discoveryPolicy = null) {
@@ -328,12 +347,16 @@ function buildWebDiscoverKeywords(target, discoveryPolicy = null) {
     const t = strTrim(a);
     if (t) kw.push(t);
   }
+  for (const a of lens?.prefer_align || []) {
+    const t = strTrim(a);
+    if (t) kw.push(t);
+  }
   if (target.industry_l1) kw.push(strTrim(target.industry_l1));
   if (target.industry_l2) kw.push(strTrim(target.industry_l2));
   if (!discoveryPolicy?.drop_listed_keyword_boost) {
     kw.push('同行业上市公司', 'A股上市公司', '上交所', '深交所', '北交所');
   }
-  return [...new Set(kw.filter(Boolean))].slice(0, 16);
+  return [...new Set(kw.filter(Boolean))].slice(0, 18);
 }
 
 function resolveDiscoveryPolicy(target) {
@@ -401,13 +424,12 @@ function qualifiesForLlmPool(c, ctx) {
   if (internal >= ruleMin) return true;
   if ((c.coreLineScore || 0) >= 15) return true;
   if (tag >= tagMin) return true;
-  if (
-    ctx.trackRe &&
-    candidateHitsTrackKeyword(c, ctx.trackRe) &&
-    internal >= LLM_POOL_TRACK_INTERNAL_FLOOR &&
-    product >= LLM_POOL_TRACK_PRODUCT_FLOOR
-  ) {
-    return true;
+  if (ctx.trackRe && candidateHitsTrackKeyword(c, ctx.trackRe)) {
+    // 核药简介常稀疏，赛道命中即进池，不再要求 internal≥8 / product≥12
+    if (ctx.trackKind === 'radiopharma') return true;
+    if (internal >= LLM_POOL_TRACK_INTERNAL_FLOOR && product >= LLM_POOL_TRACK_PRODUCT_FLOOR) {
+      return true;
+    }
   }
   return false;
 }
@@ -438,6 +460,7 @@ function buildLlmScoringPool(scored, target) {
   const weakPool = maxInternalPreview < LLM_POOL_WEAK_MAX_INTERNAL;
   const poolCtx = {
     trackRe,
+    trackKind,
     tagMin,
     weakPool,
     ruleMin: weakPool ? Math.min(LLM_POOL_RULE_MIN, 10) : LLM_POOL_RULE_MIN,
@@ -457,10 +480,13 @@ function buildLlmScoringPool(scored, target) {
       if (ruleTop >= ruleCap) break;
       if (tryAdd(c, poolCtx)) ruleTop += 1;
     }
-    for (const c of scored) {
-      if (map.size >= llmRuleFloor) break;
-      const added = tryAdd(c, poolCtx);
-      if (added && ruleTop < llmRuleFloor) ruleTop += 1;
+    // 核药赛道剩余槽位不得用高 internal 的 CNS/ADC 等非核药回填
+    if (trackKind !== 'radiopharma') {
+      for (const c of scored) {
+        if (map.size >= llmRuleFloor) break;
+        const added = tryAdd(c, poolCtx);
+        if (added && ruleTop < llmRuleFloor) ruleTop += 1;
+      }
     }
   } else {
     for (const c of scored.slice(0, TOP_N_LLM_RULE)) {
@@ -515,6 +541,10 @@ function buildLlmScoringPool(scored, target) {
     .filter((c) => {
       if (!isDomesticUnlistedCandidate(c)) return false;
       if (hasStrongOffTargetSignals(c)) return false;
+      // 核药赛道：形态保送不得用 CRO/ADC 等非核药占满 S3
+      if (trackKind === 'radiopharma' && trackRe && !candidateHitsTrackKeyword(c, trackRe)) {
+        return false;
+      }
       const form = Number(c.formCustomerScore) || 0;
       const core = Number(c.coreLineScore) || 0;
       if (form >= formMin) return true;
@@ -541,16 +571,16 @@ function buildLlmScoringPool(scored, target) {
   if (lensConfirmed && target?.competition_lens?.must_align?.length) {
     const { buildLensScoringAnchors } = require('./competitorProductLineUtils');
     const anchors = buildLensScoringAnchors(
-      [
-        ...(target.competition_lens.must_align || []),
-        ...(target.competition_lens.custom_keywords || []),
-      ],
+      [...(target.competition_lens.must_align || [])],
       10
     );
     const byLens = scored
       .filter((c) => {
         if (!isDomesticUnlistedCandidate(c)) return false;
         if (hasStrongOffTargetSignals(c)) return false;
+        if (trackKind === 'radiopharma' && trackRe && !candidateHitsTrackKeyword(c, trackRe)) {
+          return false;
+        }
         const blob = [c.display_name, c.product_intro, c.qcc_intro, ...(c.tags || [])]
           .filter(Boolean)
           .join('\n');
@@ -960,16 +990,32 @@ function candidateFromAiWeb(c) {
   return srcs.includes('ai_web');
 }
 
-/** S5 校验后结合规则分，纠正联网高信任误判 */
-function refreshValidationAfterRuleScores(c) {
+/** S5 校验后结合规则分，纠正联网高信任误判与核药模态误杀 */
+function refreshValidationAfterRuleScores(c, target = null) {
   if (!c?.validation || c.validation.ai_failed) return;
-  const { refineValidationForTrustedWebDiscovery } = require('./competitorTypeUtils');
+  const { refineValidationForTrustedWebDiscovery, refineRadiopharmaModality } = require('./competitorTypeUtils');
   c.validation = refineValidationForTrustedWebDiscovery(c.validation, {
     ruleProductScore: c.productScore,
     coreLineScore: c.coreLineScore,
     specificTagScore: c.specificTagScore,
     fromAiWeb: candidateFromAiWeb(c),
   });
+  if (target) {
+    c.validation = refineRadiopharmaModality(c.validation, {
+      display_name: c.display_name,
+      candidateName: c.display_name,
+      candidateProductIntro: c.product_intro || c.web_core_products,
+      candidateQccIntro: c.qcc_intro,
+      candidateTags: c.tags,
+      webCoreProducts: c.web_core_products,
+      fromAiWeb: candidateFromAiWeb(c),
+      subjectDisplayName: target.display_name,
+      subjectProductIntro: target.product_intro,
+      subjectTags: target.tags,
+      subjectCoreLines: target.core_product_lines,
+      subjectTrackHint: target.subject_track_hint,
+    });
+  }
 }
 
 async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
@@ -998,7 +1044,7 @@ async function validateCandidateForPersist(c, target, targetSlice, logCtx) {
   if (!c.hasInternal && c.validation?.validated_score != null) {
     c.llmProductScore = Number(c.validation.validated_score);
   }
-  refreshValidationAfterRuleScores(c);
+  refreshValidationAfterRuleScores(c, target);
   c.validation = applyGoldStandardTypeGuard(c.validation, c);
   c.validation = applyLensValidationCap(c.validation, target?.competition_lens, c);
   // lens 封顶后再套一次金标护栏，避免负样本被抬回 is_competitor=true
@@ -1541,6 +1587,7 @@ async function executeCompetitorAnalysisRun(opts) {
       }
     }
     const subjectDisplayName = target.display_name;
+    persistThresholdOpts.radiopharmaTrackTarget = isRadiopharmaTrackTarget(target);
 
     await appendStepLog({
       runId,
@@ -1623,6 +1670,7 @@ async function executeCompetitorAnalysisRun(opts) {
     });
 
     const targetSlice = {
+      display_name: target.display_name,
       product_intro: target.product_intro,
       qcc_intro_effective: target.qcc_intro_effective,
       tags: target.tags,
@@ -1637,6 +1685,7 @@ async function executeCompetitorAnalysisRun(opts) {
       competition_lens: target.competition_lens
         ? {
             must_align: target.competition_lens.must_align,
+            prefer_align: target.competition_lens.prefer_align,
             custom_keywords: target.competition_lens.custom_keywords,
             source: target.competition_lens.source,
           }
@@ -1965,7 +2014,7 @@ async function executeCompetitorAnalysisRun(opts) {
     };
     const rejectedSamples = [];
     for (const c of scored) {
-      if (c.validation) refreshValidationAfterRuleScores(c);
+      if (c.validation) refreshValidationAfterRuleScores(c, target);
       // 模态负样本金标：不落库（即便校验成 same_track）
       if (c._goldStandardNegative) {
         filterStats.skip_gold_negative += 1;
@@ -1981,10 +2030,11 @@ async function executeCompetitorAnalysisRun(opts) {
         }
         continue;
       }
-      // 模态不一致的同赛道：初筛即丢弃，避免扩召回再捞回
+      // 模态不一致的同赛道：初筛即丢弃，避免扩召回再捞回（同为核药时适应症不同不算模态不一致）
       if (
         c.validation?.competitor_type === 'same_track' &&
-        c.validation?.modality_match === false
+        c.validation?.modality_match === false &&
+        !isRadiopharmaModalityPeer(target, c)
       ) {
         filterStats.skip_modality_mismatch = (filterStats.skip_modality_mismatch || 0) + 1;
         if (rejectedSamples.length < 30) {
@@ -2122,12 +2172,12 @@ async function executeCompetitorAnalysisRun(opts) {
         const relaxed = scored
           .filter((c) => {
             if (c._goldStandardNegative) return false;
-            refreshValidationAfterRuleScores(c);
+            refreshValidationAfterRuleScores(c, target);
             if (!isPersistValidationPassed(c)) return false;
-            // 扩召回不回填 same_track，避免模态负样本/弱相关占名额
+            // 扩召回不回填弱相关 same_track；同为核药的同行可回补未上市配额
             const ctype = c.validation?.competitor_type;
-            if (ctype === 'same_track') return false;
-            if (c.validation?.modality_match === false) return false;
+            if (ctype === 'same_track' && !isRadiopharmaModalityPeer(target, c)) return false;
+            if (c.validation?.modality_match === false && !isRadiopharmaModalityPeer(target, c)) return false;
             if (
               c.lens_form_mismatch === 'specialized_cleaner' ||
               c.validation?.lens_form_mismatch === 'specialized_cleaner' ||

@@ -5,10 +5,11 @@ const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const { fetchFeedJson, getMpArticles, htmlToPlainText } = require('./weweClient');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
-
-const SESSION_DEAD_RE = /登录|失效|扫码|未登录|auth|token|session|账号.*(过期|无效)|请重新/i;
-const WEWE_DOWN_RE =
-  /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|socket hang up|暂无可用读书账号|无可用读书账号/i;
+const {
+  isSessionDeadError,
+  isWeweUnavailableError,
+  isSessionTtlExpired
+} = require('./weweExtractErrors');
 
 function formatBeijingYmd(date = new Date()) {
   const s = date.toLocaleString('zh-CN', {
@@ -57,23 +58,6 @@ function toBeijingYmdFromUnknown(value) {
   const d = new Date(str);
   if (Number.isNaN(d.getTime())) return null;
   return formatBeijingYmd(d);
-}
-
-function isSessionDeadError(err) {
-  const msg = String((err && err.message) || err || '');
-  const body = err && err.body ? JSON.stringify(err.body) : '';
-  return SESSION_DEAD_RE.test(msg) || SESSION_DEAD_RE.test(body);
-}
-
-function isWeweUnavailableError(err) {
-  if (!err) return false;
-  const msg = String(err.message || err || '');
-  const code = String(err.code || '');
-  const status = Number(err.status || 0);
-  if (WEWE_DOWN_RE.test(msg) || WEWE_DOWN_RE.test(code)) return true;
-  if (['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(code)) return true;
-  if (status >= 500 && status < 600) return true;
-  return false;
 }
 
 /** 目录用不含全文的 json，避免 200 篇 HTML 撑爆；正文再按标题小批量拉 */
@@ -893,6 +877,12 @@ async function runExtractTick(options = {}) {
     return { action: 'skip_paused' };
   }
   const cfg = await getWewePrivateConfig();
+  const session = await getSessionRow();
+  if (isSessionTtlExpired(session, cfg || {})) {
+    await setExtractPaused(true, '会话已过期，暂停提取');
+    console.warn('[wewe提取] 会话已过期但 pause_extract=0，已暂停提取，请扫码恢复');
+    return { action: 'session_dead', error: 'session_ttl_expired' };
+  }
   const window = options.extractYmd
     ? {
         kind: options.extractKind || 'manual',
@@ -946,6 +936,8 @@ module.exports = {
   parseHmToMinutes,
   resolveExtractWindow,
   isSessionDeadError,
+  isWeweUnavailableError,
+  isSessionTtlExpired,
   isExtractPaused,
   isExtractEnabled,
   markAllActiveForExtract,

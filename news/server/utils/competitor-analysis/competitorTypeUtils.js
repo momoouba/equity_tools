@@ -327,6 +327,73 @@ function refineStageComparableByScaleGap(validation, context = {}) {
   return validation;
 }
 
+/** 双方均为核药/RDC：适应症或靶点不同不得判 modality_match=false */
+function radiopharmaContextBlob(ctx, side) {
+  if (side === 'subject') {
+    return [
+      ctx.subjectDisplayName,
+      ctx.subjectProductIntro,
+      ctx.subjectTrackHint,
+      ...(ctx.subjectTags || []),
+      ...(ctx.subjectCoreLines || []),
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }
+  return [
+    ctx.display_name || ctx.candidateName,
+    ctx.candidateProductIntro,
+    ctx.product_intro,
+    ctx.candidateQccIntro,
+    ctx.webCoreProducts,
+    ...(ctx.candidateTags || []),
+    ctx.rationale,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function refineRadiopharmaModality(validation, context = {}) {
+  if (!validation || validation.ai_failed) return validation;
+  const { looksLikeRadiopharma, RADIOPHARMA_TRACK_RE } = require('./industry-strategies/baseStrategy');
+  const subjBlob = radiopharmaContextBlob(context, 'subject');
+  const candBlob = [
+    radiopharmaContextBlob(context, 'candidate'),
+    validation.rationale,
+    validation.key_differences,
+    validation.evidence_summary,
+  ]
+    .filter(Boolean)
+    .join('\n');
+  const subjectRadio =
+    looksLikeRadiopharma({
+      display_name: context.subjectDisplayName,
+      product_intro: context.subjectProductIntro,
+      tags: context.subjectTags,
+      core_product_lines: context.subjectCoreLines,
+    }) || RADIOPHARMA_TRACK_RE.test(subjBlob);
+  const candRadio = RADIOPHARMA_TRACK_RE.test(candBlob);
+  if (!subjectRadio || !candRadio) return validation;
+
+  const next = { ...validation };
+  if (next.modality_match === false) {
+    next.modality_match = true;
+    next.rationale = strTrim(
+      `${next.rationale ? `${next.rationale}；` : ''}双方均为核药/RDC/放射性药物，适应症或靶点不同不等于模态不同`
+    ).slice(0, 500);
+  }
+  const vs = Number(next.validated_score);
+  if (next.competitor_type === 'same_track' && Number.isFinite(vs) && vs >= 32) {
+    next.competitor_type = 'indirect';
+    next.is_competitor = true;
+    next.reject_reason = '';
+    next.rationale = strTrim(
+      `${next.rationale ? `${next.rationale}；` : ''}同为核药/RDC 同行，适应症差异改为间接竞品`
+    ).slice(0, 500);
+  }
+  return next;
+}
+
 /** 规范化 S5 validate JSON，补全 competitor_type 与兼容字段。 */
 function normalizeCompetitorValidation(raw, context = null) {
   if (!raw || typeof raw !== 'object') {
@@ -389,7 +456,8 @@ function normalizeCompetitorValidation(raw, context = null) {
   if (context) {
     const afterOverlap = refineValidationByProductOverlap(normalized, context);
     const afterWeb = refineValidationForTrustedWebDiscovery(afterOverlap, context);
-    return refineStageComparableByScaleGap(afterWeb, context);
+    const afterRadio = refineRadiopharmaModality(afterWeb, context);
+    return refineStageComparableByScaleGap(afterRadio, context);
   }
   return refineStageComparableByScaleGap(normalized, context || {});
 }
@@ -520,6 +588,7 @@ module.exports = {
   normalizeCompetitorValidation,
   refineValidationByProductOverlap,
   refineValidationForTrustedWebDiscovery,
+  refineRadiopharmaModality,
   shouldSkipBroadIndustryDowngrade,
   refineCompetitorTypeFromContext,
   shouldPersistCompetitorType,

@@ -142,6 +142,7 @@ function WewePrivateConfig() {
   const [accountPageSize, setAccountPageSize] = useState(ACCOUNT_PAGE_SIZE_OPTIONS[0])
   const [remindingPending, setRemindingPending] = useState(false)
   const [unsubscribingId, setUnsubscribingId] = useState('')
+  const [enqueueBlockingId, setEnqueueBlockingId] = useState('')
 
   const loadConfigAndSession = useCallback(async () => {
     setLoading(true)
@@ -305,7 +306,7 @@ function WewePrivateConfig() {
     const name = row.account_name || row.wechat_account_id
     Modal.confirm({
       title: '从 wewe 退订',
-      content: `将删除 wewe-rss 里「${name}」的订阅，并把专队状态标为已出队。新闻库专队记录不会软删除；若新榜再次报数据不存在，仍可重新入队。`,
+      content: `将删除 wewe-rss 里「${name}」的订阅，并把专队状态标为已出队。若仅不想再次被新榜自动拉回队列，可改用「禁止重新入队」（不删 wewe 订阅）。`,
       okText: '退订',
       okButtonProps: { status: 'danger' },
       cancelText: '取消',
@@ -332,10 +333,47 @@ function WewePrivateConfig() {
     })
   }
 
+  const toggleEnqueueBlock = (row, blocked) => {
+    const name = row.account_name || row.wechat_account_id
+    if (blocked) {
+      Modal.confirm({
+        title: '禁止重新入队',
+        content: `「${name}」将标为已出队，且新榜再报「数据不存在」时也不会自动回到待订阅。不会删除 wewe-rss 已有订阅；若要退订请用「退订」。`,
+        okText: '禁止入队',
+        cancelText: '取消',
+        onOk: () => postEnqueueBlock(row, true)
+      })
+    } else {
+      postEnqueueBlock(row, false)
+    }
+  }
+
+  const postEnqueueBlock = async (row, blocked) => {
+    setEnqueueBlockingId(row.F_Id)
+    try {
+      const res = await axios.post('/api/wewe-probe/team/enqueue-block', {
+        wechat_account_id: row.wechat_account_id,
+        blocked
+      })
+      if (res.data?.success) {
+        Message.success(res.data.message || (blocked ? '已禁止重新入队' : '已恢复允许入队'))
+        loadAccounts()
+      } else {
+        Message.error(res.data?.message || '操作失败')
+      }
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '操作失败')
+    } finally {
+      setEnqueueBlockingId('')
+    }
+  }
+
   const pendingCount = useMemo(
     () =>
       accounts.filter(
-        (a) => a.team_status === 'pending_subscribe' || a.map_status === 'pending_subscribe'
+        (a) =>
+          Number(a.enqueue_blocked) !== 1 &&
+          (a.team_status === 'pending_subscribe' || a.map_status === 'pending_subscribe')
       ).length,
     [accounts]
   )
@@ -344,9 +382,13 @@ function WewePrivateConfig() {
     const kw = accountKeyword.trim().toLowerCase()
     return accounts.filter((a) => {
       if (accountFilter === 'pending_subscribe') {
+        if (Number(a.enqueue_blocked) === 1) return false
         if (a.team_status !== 'pending_subscribe' && a.map_status !== 'pending_subscribe') {
           return false
         }
+      }
+      if (accountFilter === 'enqueue_blocked' && Number(a.enqueue_blocked) !== 1) {
+        return false
       }
       if (accountFilter === 'exited' && a.team_status !== 'exited') {
         return false
@@ -412,8 +454,17 @@ function WewePrivateConfig() {
     {
       title: '专队状态',
       dataIndex: 'team_status',
-      width: 78,
-      render: (v) => <Tag color={statusColor(v)}>{v}</Tag>
+      width: 110,
+      render: (v, row) => (
+        <Space size={4}>
+          <Tag color={statusColor(v)}>{v}</Tag>
+          {Number(row.enqueue_blocked) === 1 ? (
+            <Tag color="purple" size="small">
+              禁入队
+            </Tag>
+          ) : null}
+        </Space>
+      )
     },
     {
       title: '映射',
@@ -435,17 +486,16 @@ function WewePrivateConfig() {
     },
     {
       title: '操作',
-      width: 150,
+      width: 248,
       className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, row) => {
-        const needPaste =
-          row.team_status === 'pending_subscribe' ||
-          row.map_status === 'pending_subscribe' ||
-          !row.feed_id
+        const blocked = Number(row.enqueue_blocked) === 1
         const canUnsubscribe =
           Boolean(row.feed_id) ||
           row.team_status === 'active' ||
           row.team_status === 'pending_subscribe'
+        const canBlockEnqueue =
+          !blocked && (row.team_status === 'pending_subscribe' || row.team_status === 'active')
         return (
           <AdminOps>
             <Button
@@ -458,6 +508,26 @@ function WewePrivateConfig() {
             >
               粘贴链接
             </Button>
+            {canBlockEnqueue ? (
+              <Button
+                type="outline"
+                size="small"
+                loading={enqueueBlockingId === row.F_Id}
+                onClick={() => toggleEnqueueBlock(row, true)}
+              >
+                禁止重新入队
+              </Button>
+            ) : null}
+            {blocked ? (
+              <Button
+                type="outline"
+                size="small"
+                loading={enqueueBlockingId === row.F_Id}
+                onClick={() => toggleEnqueueBlock(row, false)}
+              >
+                允许重新入队
+              </Button>
+            ) : null}
             {canUnsubscribe ? (
               <Button
                 type="outline"
@@ -669,6 +739,12 @@ function WewePrivateConfig() {
                         : ''}
                     </span>
                   </Space>
+                  {phaseInfo?.phase === 'dead' && (
+                    <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                      微信读书会话已失效（与 wewe 服务是否在线无关）。请点「打开活码页」扫码，
+                      直到页内出现绿色「扫码成功」，再回本页刷新；恢复后提取会自动继续。
+                    </Typography.Paragraph>
+                  )}
                   {hasEnabledAccount === false && (
                     <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
                       「探测 wewe」只说明服务在线。粘贴链接 / 提取需要<strong>启用中的微信读书账号</strong>。
@@ -735,6 +811,7 @@ function WewePrivateConfig() {
                         <Option value="all">全部</Option>
                         <Option value="active">仅在队</Option>
                         <Option value="pending_subscribe">仅待订阅</Option>
+                        <Option value="enqueue_blocked">仅禁止入队</Option>
                         <Option value="exited">仅已出队</Option>
                       </Select>
                     </div>

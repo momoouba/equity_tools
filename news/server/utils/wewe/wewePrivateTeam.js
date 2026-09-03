@@ -94,6 +94,10 @@ async function enqueueFromXinbangError(wechatAccountId, errorMeta = {}) {
 
     if (existing.length > 0) {
       const row = existing[0];
+      if (Number(row.enqueue_blocked) === 1) {
+        console.log(`[wewe专队] 跳过入队（人工禁止重新入队） account=${gh} status=${row.team_status}`);
+        return { action: 'skip_enqueue_blocked', account: row };
+      }
       if (row.team_status === 'active' || row.team_status === 'pending_subscribe') {
         await db.execute(
           `UPDATE wewe_private_accounts
@@ -258,6 +262,56 @@ async function unsubscribeFromWewe(wechatAccountId) {
 }
 
 /**
+ * 人工禁止/恢复新榜自动重新入队（单条账号）。
+ * 禁止时标为 exited 并清 extract_pending，不删 wewe 订阅（需退订请走 unsubscribe）。
+ */
+async function setAccountEnqueueBlocked(wechatAccountId, blocked, opts = {}) {
+  const gh = String(wechatAccountId || '').trim();
+  if (!gh) return { action: 'skip_empty' };
+
+  const existing = await db.query(
+    `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+    [gh]
+  );
+  if (!existing.length) {
+    return { action: 'not_found' };
+  }
+  const row = existing[0];
+  const wantBlock = blocked !== false && blocked !== 0 && blocked !== '0';
+
+  if (wantBlock) {
+    const noteExtra = String(opts.note || '人工禁止重新入队').slice(0, 200);
+    const prevNote = String(row.note || '').trim();
+    const note = prevNote && !prevNote.includes(noteExtra)
+      ? `${prevNote}；${noteExtra}`.slice(0, 500)
+      : prevNote || noteExtra;
+    await db.execute(
+      `UPDATE wewe_private_accounts
+       SET enqueue_blocked = 1,
+           team_status = 'exited',
+           extract_pending = 0,
+           last_exited_at = COALESCE(last_exited_at, NOW()),
+           note = ?,
+           F_LastModifyTime = CURRENT_TIMESTAMP
+       WHERE F_Id = ?`,
+      [note, row.F_Id]
+    );
+    console.log(`[wewe专队] 禁止重新入队 account=${gh}`);
+    return { action: 'enqueue_blocked', accountId: row.F_Id, blocked: true };
+  }
+
+  await db.execute(
+    `UPDATE wewe_private_accounts
+     SET enqueue_blocked = 0,
+         F_LastModifyTime = CURRENT_TIMESTAMP
+     WHERE F_Id = ?`,
+    [row.F_Id]
+  );
+  console.log(`[wewe专队] 恢复允许重新入队 account=${gh}`);
+  return { action: 'enqueue_unblocked', accountId: row.F_Id, blocked: false };
+}
+
+/**
  * 在账号同步收尾时根据结果调用入/出队（不抛错）
  */
 async function handleXinbangAccountFinish(wechatAccountId, result) {
@@ -297,6 +351,7 @@ module.exports = {
   enqueueFromXinbangError,
   dequeueOnXinbangSuccess,
   unsubscribeFromWewe,
+  setAccountEnqueueBlocked,
   handleXinbangAccountFinish,
   resolveSourceType
 };

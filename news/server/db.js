@@ -1828,25 +1828,43 @@ async function initializeTables(dbPool) {
       }
 
       const items = aiMetaItemsByCode[t.dict_code] || [];
+      const { generateId } = require('./utils/idGenerator');
       for (const it of items) {
-        // 先按主键判断，避免历史脏数据导致 Duplicate entry（同 id 已存在但 item_code 查不到）
+        const [exItem] = await dbPool.query(
+          `SELECT F_Id AS id, F_DeleteMark AS deleted, is_enabled
+           FROM base_dictionary
+           WHERE parent_id = ? AND dict_code = ? AND item_code = ?
+           ORDER BY F_DeleteMark ASC, F_Id ASC
+           LIMIT 1`,
+          [parentId, t.dict_code, it.item_code]
+        );
+        if (exItem && exItem.length > 0) {
+          if (Number(exItem[0].deleted) === 1 || Number(exItem[0].is_enabled) === 0) {
+            await dbPool.execute(
+              `UPDATE base_dictionary
+               SET F_DeleteMark = 0, is_enabled = 1, item_name = ?, sort_order = ?,
+                   F_DeleteUserId = NULL, F_DeleteTime = NULL, F_LastModifyTime = NOW()
+               WHERE F_Id = ?`,
+              [it.item_name, it.sort_order, exItem[0].id]
+            );
+          }
+          continue;
+        }
         const [exById] = await dbPool.query(
           `SELECT F_Id AS id FROM base_dictionary WHERE F_Id = ? LIMIT 1`,
           [it.id]
         );
-        if (exById && exById.length > 0) continue;
-        const [exItem] = await dbPool.query(
-          `SELECT F_Id AS id FROM base_dictionary WHERE parent_id = ? AND dict_code = ? AND item_code = ? AND F_DeleteMark = 0 LIMIT 1`,
-          [parentId, t.dict_code, it.item_code]
-        );
-        if (exItem && exItem.length > 0) continue;
+        const insertId =
+          exById && exById.length > 0
+            ? await generateId('base_dictionary', dbPool)
+            : it.id;
         try {
           await dbPool.execute(
             `INSERT INTO base_dictionary
              (F_Id, parent_id, dict_code, dict_name, item_code, item_name, sort_order, is_enabled, F_DeleteMark, F_CreatorUserId, F_LastModifyUserId, F_DeleteUserId, F_DeleteTime, F_CreatorTime, F_LastModifyTime)
              VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, NULL, ?, ?)`,
             [
-              it.id,
+              insertId,
               parentId,
               t.dict_code,
               t.dict_name,
@@ -1860,7 +1878,6 @@ async function initializeTables(dbPool) {
             ]
           );
         } catch (insErr) {
-          // 并发/历史主键冲突：跳过即可
           if (insErr && (insErr.code === 'ER_DUP_ENTRY' || /Duplicate entry/i.test(String(insErr.message || '')))) {
             continue;
           }
@@ -9392,6 +9409,22 @@ async function initializeTables(dbPool) {
     }
   } catch (err) {
     console.warn('迁移 last_extract_kind 时出现警告:', err.message);
+  }
+
+  try {
+    const [blockCols] = await dbPool.query(
+      "SHOW COLUMNS FROM wewe_private_accounts LIKE 'enqueue_blocked'"
+    );
+    if (!blockCols.length) {
+      await dbPool.query(
+        `ALTER TABLE wewe_private_accounts
+         ADD COLUMN enqueue_blocked TINYINT(1) NOT NULL DEFAULT 0
+         COMMENT '1=人工禁止新榜自动重新入队' AFTER extract_pending`
+      );
+      console.log('✓ wewe_private_accounts.enqueue_blocked 已添加');
+    }
+  } catch (err) {
+    console.warn('迁移 enqueue_blocked 时出现警告:', err.message);
   }
 
   try {

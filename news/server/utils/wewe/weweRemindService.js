@@ -186,6 +186,13 @@ async function runScanRemindTick(options = {}) {
   }
 
   const kind = phaseInfo.phase === 'buffer' ? 'buffer' : 'dead';
+  if (kind === 'dead' && Number(session.pause_extract) !== 1) {
+    try {
+      await setExtractPaused(true, noEnabledAccount ? '无可用读书账号' : '会话已失效');
+    } catch (e) {
+      console.warn('[wewe催办] 暂停提取失败:', e.message);
+    }
+  }
   const bufferHours = Number(cfg.remind_interval_buffer_hours || 2) || 2;
   const deadMinutes = Number(cfg.remind_interval_dead_minutes || 30) || 30;
   const dailyCap = Number(cfg.remind_daily_cap || 20) || 20;

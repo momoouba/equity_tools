@@ -34,6 +34,7 @@ const BUILTIN = {
 - 仅大行业/客户类型相同，core_product_lines 无实质对齐 → **similarity_score 不得高于 45**
 - 候选为创新药/试剂/检测设备/数字化/医院信息化/水处理/半导体等与目标装备耗材品类不同 → **不得高于 40**
 - 双方核心技术路线/药物模态/产品形态本质不同（如放射性药物核药目标对比小分子/抗体/ADC/细胞治疗/多肽/PROTAC/AI 制药候选；纯软件对比硬件整机）→ **不得高于 40**，rationale 注明「技术路线不同」
+- 双方同为核药/RDC/放射性药物/PET显像剂时，仅适应症或靶点不同（如肿瘤 vs 阿尔茨海默）**不得**按「技术路线不同」压到 40 以下
 - 量级悬殊（成熟商业化龙头对比早期初创，且产品线仅部分对齐）→ **不得高于 60**，rationale 注明「仅品牌/赛道对标，量级不可比」
 
 须综合评估核心产品线替代性、场景重合度。不得仅因上市或规模差距单独加减分。
@@ -62,19 +63,23 @@ const BUILTIN = {
 # 检索要求（按 core_product_lines / 核心 SKU 相似度排序，禁止硬编码或臆造企业名单）
 1. 与目标 **core_product_lines** 直接对位的同业（同类装备/耗材/SKU，含本土与境外企业）
 2. **未上市/早期同形态优先**：若目标为初创或早期融资阶段，须至少返回 8 家与核心产品形态+服务对象同层的未上市企业（种子/天使/Pre-A 优先）；检索须组合 KEYWORDS + 「创业公司/融资/天使轮/未上市」。不得只用知名上市品牌或大赛道明星凑满名单。
-3. **境内企业**：须可核验 18 位统一社会信用代码，并填写最新工商注册全称
+3. **境内企业**：尽量核验并填写 18 位统一社会信用代码与最新工商注册全称；暂时核验不到代码时仍须返回法定全称或公开品牌名，**勿因缺代码整条丢弃**
 4. **境外企业**（港股/美股/欧洲等）：可返回，listing_market 填 hk/nyse/nasdaq 等；unified_credit_code 可留空
 5. 不得仅因同属生物制药、生命科学、医疗健康、具身智能、机器人等大行业而列入；须说明与目标哪条 core_product_lines 对齐
 6. **境内上市公司硬性至少 3 家**（sse/szse/bse/neeq）：须与目标**核心品类**最相似，按 ai_relevance_score 降序；**境外上市公司不计入该 3 家名额**
+7. 若 KEYWORDS 含适应症/疾病词（如阿尔茨海默），仅作加分检索，不得把名单限制为该适应症，也不得排除其他适应症的同形态公司
 
-**排除**：创新药研发企业、纯试剂/工具、检测设备、数字化平台、水处理/环保、半导体装备等——除非其明确经营与目标重合的核心 SKU。若目标为通用/可操作家庭服务机器人，排除仅做扫地/扫拖/擦窗等单任务清洁电器且无操作扩展能力的公司（除非画像明确同为清洁专用品类）。
+**排除**：
+- 若目标为过滤/纯化等装备耗材：排除创新药研发企业、纯试剂/工具、检测设备、数字化平台、水处理/环保、半导体装备——除非其明确经营与目标重合的核心 SKU。
+- 若目标为核药/放射性药物/RDC/PET显像剂：不得因「创新药研发」排除同为核药/RDC/放射性配体的企业；排除无核素偶联的小分子/ADC/细胞治疗、纯同位素供应/核药房/纯 CDMO。适应症或靶点不同（如肿瘤 vs 神经退行）不得作为排除理由。检索可组合「核药 创业公司 融资」「RDC 初创」「α核素 医药 融资」。
+- 若目标为通用/可操作家庭服务机器人，排除仅做扫地/扫拖/擦窗等单任务清洁电器且无操作扩展能力的公司（除非画像明确同为清洁专用品类）。
 
 # 输出 JSON（禁止 Markdown 与 JSON 外文字）
 {"candidates":[{"company_name":"","unified_credit_code":"","is_listed":true/false,"listing_market":"sse|szse|bse|neeq|hk|nyse|nasdaq","core_products":"","business_domain":"","ai_relevance_score":0}]}
 
 字段规则：
 - company_name：**当前最新法定全称**（境内用工商全称；境外用官方英文或中英文法定名）
-- unified_credit_code：**18 位中国大陆统一社会信用代码**（仅境内企业必填；境外可留空）
+- unified_credit_code：**18 位中国大陆统一社会信用代码**（境内尽量填写；核验不到可留空但仍须返回公司名；境外可留空）
 - is_listed：已上市为 true；无法判断为 false
 - listing_market：sse/szse/bse/neeq（境内）；hk/nyse/nasdaq 等（境外）
 - ai_relevance_score：0-100 整数，与目标产品/场景匹配度
@@ -90,7 +95,7 @@ const BUILTIN = {
 排除公司（已召回或已排除，勿重复）：{{EXCLUDE_NAMES_JSON}}
 
 请检索：
-①与目标业务直接对位的同业，其中**未上市/早期同形态**公司优先不少于 8 家（境内须含 18 位统一社会信用代码与最新法定全称；境外可仅填公司法定名与 listing_market）；
+①与目标业务直接对位的同业，其中**未上市/早期同形态**公司优先不少于 8 家（境内尽量含 18 位统一社会信用代码与最新法定全称，核验不到代码时仍返回法定全称或公开品牌名；境外可仅填公司法定名与 listing_market）；
 ②至少 3 家与目标产品/场景最相似的**中国大陆** A 股或北交所/新三板上市公司，按相似度降序（**境外上市不计入该 3 家**）。`,
   },
   [PROMPT_TYPES.VALIDATE]: {
@@ -108,7 +113,7 @@ const BUILTIN = {
 1. 目标为初创或未上市：不得仅因候选上市、营收或规模差距大而降分，或改判 same_track / not_competitor。
 2. 候选为整线集成商、渠道平台、装备总包或控股平台型，目标为单品/组件/耗材型：competitor_type 为 upstream_downstream，不得 direct/indirect。
 3. **仅大行业/客户类型相同，core_product_lines 或 product_intro 核心 SKU 未对齐**：不得判 direct/indirect/substitute；应判 same_track 或 not_competitor，validated_score≤45。
-4. **模态/技术路线门（生物医药尤其重要）**：从 structured_profile.modality、core_product_lines、product_intro、tags 判断双方药物模态或核心技术路线。目标为放射性药物/核素偶联（RDC）/诊疗一体化核药，而候选模态为小分子、抗体/ADC、细胞/基因治疗、多肽、PROTAC、mRNA、疫苗、抗病毒、AI 制药等非同一技术路线 → 不得判 direct/indirect/substitute；competitor_type 最高 same_track，validated_score≤45，modality_match=false。其他赛道同理：核心技术路线/产品形态本质不同（如纯软件 vs 硬件整机、试剂耗材 vs 创新药研发）不得判 direct。
+4. **模态/技术路线门（生物医药尤其重要）**：从 structured_profile.modality、core_product_lines、product_intro、tags 判断双方药物模态或核心技术路线。目标为放射性药物/核素偶联（RDC）/诊疗一体化核药，而候选模态为小分子、抗体/ADC、细胞/基因治疗、多肽、PROTAC、mRNA、疫苗、抗病毒、AI 制药等非同一技术路线 → 不得判 direct/indirect/substitute；competitor_type 最高 same_track，validated_score≤45，modality_match=false。**双方均为核药/RDC/放射性药物/PET显像剂时 modality_match=true**；肿瘤 vs 阿尔茨海默/神经退行等适应症或靶点差异只写入 key_differences，不得判模态不一致，不得因此降为 same_track+modality_match=false。其他赛道同理：核心技术路线/产品形态本质不同（如纯软件 vs 硬件整机、试剂耗材 vs 创新药研发）不得判 direct。
 5. **产业链位置门**：候选主业为原料/核素/同位素供应、放射源、分销渠道、纯 CDMO/CRDMO、整体解决方案集成，且无与目标同类的自研产品管线 → upstream_downstream，is_competitor=false，stage_comparable=false。
 6. **量级/阶段门**：先各自判断目标与候选所处阶段（早期初创 / 临床中后期 / 商业化成熟 / 上市龙头）。候选为成熟商业化龙头（年营收数亿级、上市多年、多产品商业化矩阵）而目标为早期初创，或反之 → 竞品关系可保留（direct/indirect 按产品线对齐判定），但 stage_comparable=false，stage_reason 写明「量级/阶段不可比：候选为成熟龙头而目标为早期初创」；仅当双方融资轮次/临床阶段/商业化程度相近时 stage_comparable=true。modality_match 与 stage_comparable 不影响 competitor_type 判定，仅标记可比性。
 

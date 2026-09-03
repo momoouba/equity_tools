@@ -10,13 +10,57 @@ const {
   strTrim,
 } = require('./competitorMatchUtils');
 const { recallGoldStandardCandidates } = require('./competitorGoldStandardRecall');
+const { PRIORITY_CATEGORY_4 } = require('./structuredSchemaV1');
 
 const IPO_YEARS = 3;
-const FIN_YEARS = 3;
+const FIN_YEARS = Math.max(
+  1,
+  parseInt(process.env.COMPETITOR_FINANCING_MAX_AGE_YEARS || '6', 10) || 6
+);
 const RECALL_LIMIT = 3000;
+/** 三大类目标：6 年窗口内按企业去重后，不再与全行业抢 3000 名额 */
+const RECALL_INDUSTRY_FINANCING_LIMIT = Math.max(
+  RECALL_LIMIT,
+  parseInt(process.env.COMPETITOR_FINANCING_INDUSTRY_LIMIT || '8000', 10) || 8000
+);
+/** 未标注 category_4 时，用来源/标准一二级把同一大类捞回来。
+ * 烯牛常见 L1=医疗、L2=生物医药；只看一级会对不上「医疗」。
+ * 这里用的是大类文案（生物医药），不是核药/肿瘤等细分赛道。
+ */
+const CATEGORY_UNLABELED_INDUSTRY_RE = {
+  bio: '生物医药|生物制药|生命科学|医疗健康|化学制药|创新药|医药',
+  ai: '数字智能|人工智能|软件和信息技术|互联网|企业服务',
+  semi_mfg: '半导体|先进制造|电子|高端装备|机器人',
+};
 const RECALL_LISTED_BY_PRODUCT_LIMIT = 120;
 const RECALL_FINANCING_BY_PRODUCT_LIMIT = 160;
+const RECALL_RADIO_FINANCING_BY_PRODUCT_LIMIT = Math.max(
+  200,
+  parseInt(process.env.COMPETITOR_RADIO_FINANCING_PRODUCT_LIMIT || '600', 10) || 600
+);
 const NEW_SHARE_RECALL_LIMIT = 8000;
+
+/** 宽词会把产品定向召回灌满最近融资事件，核药同行被挤出 160 条上限 */
+const FLOOD_FINANCING_PRODUCT_TERM_RE =
+  /诊疗一体化(?!核药)|阿尔茨海默|神经退行|^创新药$|^未上市$|融资$|^RDC$|^PET$/i;
+
+/** 核药目标专用检索锚点（不写公司名；避免透镜宽词占满前 10 个 LIKE） */
+const RADIO_FINANCING_SEED_TERMS = [
+  '核药',
+  '放射性药物',
+  '放射性治疗',
+  '核素偶联',
+  'RDC药物',
+  'PET显像剂',
+  'PET成像药物',
+  'α核素',
+  '砹-211',
+  'Lu-177',
+  '镥-177',
+  'Ac-225',
+  '锕-225',
+  '锝-99',
+];
 
 const IPO_RECALL_SELECT = `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
             ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
@@ -207,11 +251,23 @@ async function recallListedIpoByProductTerms(target, excludeCredit, excludeName)
   return filterExcludedMappedRows(rows, mapIpoRow, excludeCredit, excludeName);
 }
 
-/**
- * 按透镜/核心产品短锚点在融资池定向召回（不受近 3000 条时间截断影响）。
- */
-async function recallFinancingByProductTerms(target, excludeCredit, excludeName) {
-  if (!target) return [];
+function isRadiopharmaRecallTarget(target) {
+  const { looksLikeRadiopharma, RADIOPHARMA_TRACK_RE } = require('./industry-strategies/baseStrategy');
+  if (looksLikeRadiopharma(target)) return true;
+  const blob = [
+    target?.display_name,
+    target?.product_intro,
+    target?.qcc_intro_effective,
+    ...(target?.tags || []),
+    ...(target?.core_product_lines || []),
+    ...(target?.competition_lens?.must_align || []),
+  ]
+    .filter(Boolean)
+    .join('\n');
+  return RADIOPHARMA_TRACK_RE.test(blob);
+}
+
+function collectFinancingProductRecallTerms(target) {
   const {
     expandProductLineSearchTerms,
     buildLensScoringAnchors,
@@ -224,25 +280,49 @@ async function recallFinancingByProductTerms(target, excludeCredit, excludeName)
     ],
     10
   );
-  const terms = [
-    ...lensAnchors,
-    ...expandProductLineSearchTerms(target.core_product_lines, introBlob),
-  ]
-    .map((t) => strTrim(t))
-    .filter((t) => t.length >= 3 && t.length <= 16);
-  const uniq = [...new Set(terms)].slice(0, 10);
+  const expanded = expandProductLineSearchTerms(target.core_product_lines, introBlob);
+  const radio = isRadiopharmaRecallTarget(target);
+  const raw = radio
+    ? [...RADIO_FINANCING_SEED_TERMS, ...expanded, ...lensAnchors]
+    : [...lensAnchors, ...expanded];
+  const uniq = [];
+  const seen = new Set();
+  for (const term of raw.map((t) => strTrim(t))) {
+    // 「核药」仅 2 字，但仍是核药召回主锚点
+    const minLen = radio && term === '核药' ? 2 : 3;
+    if (term.length < minLen || term.length > 16) continue;
+    if (radio && FLOOD_FINANCING_PRODUCT_TERM_RE.test(term)) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    uniq.push(term);
+    if (uniq.length >= (radio ? 14 : 10)) break;
+  }
+  return { terms: uniq, radio };
+}
+
+/**
+ * 按透镜/核心产品短锚点在融资池定向召回（不受近 3000 条时间截断影响）。
+ * 核药目标：优先用核素/核药专词，并搜标签 JSON；宽词（诊疗一体化等）不进 LIKE。
+ */
+async function recallFinancingByProductTerms(target, excludeCredit, excludeName, metaOut) {
+  if (!target) return [];
+  const { terms: uniq, radio } = collectFinancingProductRecallTerms(target);
   if (!uniq.length) return [];
+  const limit = radio
+    ? Math.max(RECALL_FINANCING_BY_PRODUCT_LIMIT, RECALL_RADIO_FINANCING_BY_PRODUCT_LIMIT)
+    : RECALL_FINANCING_BY_PRODUCT_LIMIT;
 
   const termClauses = [];
-  const params = [];
+  const params = [FIN_YEARS];
   for (const term of uniq) {
     const like = `%${term}%`;
     termClauses.push(
-      `(ai_product_intro LIKE ? OR ai_company_tags_display LIKE ? OR project_desc LIKE ? OR company_name LIKE ? OR project_name LIKE ?)`
+      `(ai_product_intro LIKE ? OR ai_company_tags_display LIKE ? OR CAST(IFNULL(ai_company_tags_json, '') AS CHAR) LIKE ? OR project_desc LIKE ? OR company_name LIKE ? OR project_name LIKE ?)`
     );
-    params.push(like, like, like, like, like);
+    params.push(like, like, like, like, like, like);
   }
-  params.push(FIN_YEARS, RECALL_FINANCING_BY_PRODUCT_LIMIT);
+  params.push(limit);
 
   const rows = await db.query(
     `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
@@ -258,7 +338,14 @@ async function recallFinancingByProductTerms(target, excludeCredit, excludeName)
      LIMIT ?`,
     params
   );
-  return filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
+  const mapped = filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
+  if (metaOut && typeof metaOut === 'object') {
+    metaOut.terms = uniq;
+    metaOut.limit = limit;
+    metaOut.radio = radio;
+    metaOut.count = mapped.length;
+  }
+  return mapped;
 }
 
 /**
@@ -336,10 +423,62 @@ function dedupeRecalledByCompanyKey(list) {
   return [...map.values()];
 }
 
+function resolveFinancingIndustryScope(target) {
+  const category4 = strTrim(target?.industry_category_4);
+  if (PRIORITY_CATEGORY_4.includes(category4)) {
+    return {
+      mode: 'industry',
+      category4,
+      unlabeledRe: CATEGORY_UNLABELED_INDUSTRY_RE[category4] || null,
+      limit: RECALL_INDUSTRY_FINANCING_LIMIT,
+    };
+  }
+  return {
+    mode: 'global',
+    category4: category4 || null,
+    unlabeledRe: null,
+    limit: RECALL_LIMIT,
+  };
+}
+
 /**
- * 融资事件池：近 3 年，按企业信用代码/公司名取最近一条 event_date。
+ * 融资事件池：近 6 年、按信用代码（无则公司名）去重取最近一条有简介的事件。
+ * 目标属于 ai/bio/semi_mfg 时先按四大类（及未标注但一级行业同族）收窄，再截断，
+ * 避免全行业最近 3000 家把同业更早融资的公司挤掉。
  */
-async function recallFromFinancingEvents(excludeCredit, excludeName) {
+async function recallFromFinancingEvents(excludeCredit, excludeName, opts = {}) {
+  const scope = resolveFinancingIndustryScope(opts.target);
+  const params = [FIN_YEARS];
+  let industrySql = '';
+  const industryParams = [];
+  if (scope.mode === 'industry') {
+    if (scope.unlabeledRe) {
+      industrySql = ` AND (
+        TRIM(IFNULL(e.industry_category_4, '')) = ?
+        OR (
+          TRIM(IFNULL(e.industry_category_4, '')) = ''
+          AND (
+            IFNULL(e.industry_std_lv1, '') REGEXP ?
+            OR IFNULL(e.industry_std_lv2, '') REGEXP ?
+            OR IFNULL(e.industry_source_lv1, '') REGEXP ?
+            OR IFNULL(e.industry_source_lv2, '') REGEXP ?
+          )
+        )
+      )`;
+      industryParams.push(
+        scope.category4,
+        scope.unlabeledRe,
+        scope.unlabeledRe,
+        scope.unlabeledRe,
+        scope.unlabeledRe
+      );
+    } else {
+      industrySql = ` AND TRIM(IFNULL(e.industry_category_4, '')) = ?`;
+      industryParams.push(scope.category4);
+    }
+  }
+  params.push(...industryParams, ...industryParams, scope.limit);
+
   const rows = await db.query(
     `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
             e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
@@ -349,27 +488,34 @@ async function recallFromFinancingEvents(excludeCredit, excludeName) {
      FROM sourcing_financing_event e
      INNER JOIN (
        SELECT
-         COALESCE(NULLIF(TRIM(company_credit_code), ''), CONCAT('nm:', TRIM(company_name))) AS grp_key,
-         MAX(event_date) AS max_dt,
-         MAX(F_Id) AS tie_id
-       FROM sourcing_financing_event
-       WHERE F_DeleteMark = 0
-         AND event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
+         COALESCE(NULLIF(TRIM(e.company_credit_code), ''), CONCAT('nm:', TRIM(e.company_name))) AS grp_key,
+         MAX(e.event_date) AS max_dt
+       FROM sourcing_financing_event e
+       WHERE e.F_DeleteMark = 0
+         AND e.event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
          AND (
-           TRIM(IFNULL(ai_product_intro, '')) <> ''
-           OR TRIM(IFNULL(ai_company_tags_display, '')) <> ''
-           OR ai_company_tags_json IS NOT NULL
+           TRIM(IFNULL(e.ai_product_intro, '')) <> ''
+           OR TRIM(IFNULL(e.ai_company_tags_display, '')) <> ''
+           OR e.ai_company_tags_json IS NOT NULL
          )
+         ${industrySql}
        GROUP BY grp_key
      ) t ON COALESCE(NULLIF(TRIM(e.company_credit_code), ''), CONCAT('nm:', TRIM(e.company_name))) = t.grp_key
         AND e.event_date = t.max_dt
-        AND e.F_Id = t.tie_id
      WHERE e.F_DeleteMark = 0
+       ${industrySql}
      ORDER BY e.event_date DESC
      LIMIT ?`,
-    [FIN_YEARS, RECALL_LIMIT]
+    params
   );
-  return filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
+  const mapped = filterExcludedMappedRows(rows, mapFinancingRow, excludeCredit, excludeName);
+  if (opts.metaOut && typeof opts.metaOut === 'object') {
+    opts.metaOut.mode = scope.mode;
+    opts.metaOut.category4 = scope.category4;
+    opts.metaOut.limit = scope.limit;
+    opts.metaOut.count = mapped.length;
+  }
+  return mapped;
 }
 
 /** 合并双源候选（同键保留双源标记）。 */
@@ -526,6 +672,8 @@ async function buildInternalRecallPool({
   let ipoProductSupplement = [];
   let financingSkipReason = null;
   let finList = [];
+  let financingProductMeta = null;
+  let financingRecallMeta = null;
 
   if (useNewShare) {
     listedMain = await recallFromListedNewShare(excludeCredit, excludeName);
@@ -548,9 +696,20 @@ async function buildInternalRecallPool({
   } else if (!canFinancing) {
     financingSkipReason = 'no_project_sourcing_permission';
   } else {
-    finList = await recallFromFinancingEvents(excludeCredit, excludeName);
-    const finByProduct = await recallFinancingByProductTerms(target, excludeCredit, excludeName);
+    financingRecallMeta = {};
+    finList = await recallFromFinancingEvents(excludeCredit, excludeName, {
+      target,
+      metaOut: financingRecallMeta,
+    });
+    const productMeta = {};
+    const finByProduct = await recallFinancingByProductTerms(
+      target,
+      excludeCredit,
+      excludeName,
+      productMeta
+    );
     finList = mergeRecalledCandidates(finList, finByProduct);
+    financingProductMeta = productMeta;
   }
 
   // 金标种子召回：同目标已有标注竞品时优先进入候选池，降低对 S4 联网方差的依赖
@@ -618,6 +777,13 @@ async function buildInternalRecallPool({
       ipo_supplement: ipoSupplement.length,
       ipo_product_supplement: ipoProductSupplement.length,
       financing: finList.length,
+      financing_recall_mode: financingRecallMeta?.mode || null,
+      financing_industry_category_4: financingRecallMeta?.category4 || null,
+      financing_industry_limit: financingRecallMeta?.limit || null,
+      financing_industry_count: financingRecallMeta?.count || 0,
+      financing_product_terms: financingProductMeta?.count || 0,
+      financing_product_term_limit: financingProductMeta?.limit || null,
+      financing_product_term_sample: financingProductMeta?.terms || [],
       financing_skipped: financingSkipReason,
       merged: candidates.length,
       use_new_share_listed_recall: !!recallFlags.use_new_share_listed_recall,
