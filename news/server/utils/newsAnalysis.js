@@ -3238,7 +3238,7 @@ class NewsAnalysis {
         console.log(`[ensureNewsContent] 新闻ID ${newsItem.id} ${refetchReason}，尝试从source_url抓取内容`);
         console.log(`[ensureNewsContent] 接口类型: ${interfaceType}, 是否新榜接口: ${isXinbang}`);
         
-        // 对于微信公众号文章，优先使用Python脚本提取（支持验证页面URL，但图片提取功能已禁用）
+        // 微信公众号：仅 HTTP 提取；验证页失败即停，不走无头、不二次抓取
         let fetchedContent = null;
         if (newsItem.source_url && newsItem.source_url.includes('mp.weixin.qq.com')) {
           try {
@@ -3252,42 +3252,16 @@ class NewsAnalysis {
               // console.log(`[ensureNewsContent] 图片统计: 找到 ${extractResult.image_count || 0} 张图片，识别 ${extractResult.recognized_image_count || 0} 张`);
               console.log(`[ensureNewsContent] 图片统计: 图片提取功能已禁用`);
             } else {
-              console.warn(`[ensureNewsContent] Python脚本提取失败或内容为空，错误: ${extractResult?.error || '未知错误'}`);
-              // Python脚本提取失败，尝试使用常规方法作为备用
-              console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
-              try {
-                fetchedContent = await this.fetchContentFromUrl(newsItem.source_url, newsItem.account_name);
-              } catch (fetchError) {
-                // 检查是否是反爬虫阻塞错误或需要JavaScript渲染的错误
-                if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
-                  console.warn(`[ensureNewsContent] 检测到反爬虫阻塞（521错误），URL: ${newsItem.source_url}`);
-                  newsItem._antiCrawlerBlocked = true;
-                  fetchedContent = null;
-                } else if (fetchError.message === 'JAVASCRIPT_REQUIRED') {
-                  console.warn(`[ensureNewsContent] 检测到需要JavaScript渲染的页面，URL: ${newsItem.source_url}`);
-                  newsItem._antiCrawlerBlocked = true;
-                  fetchedContent = null;
-                } else {
-                  throw fetchError;
-                }
+              const extractError = extractResult?.error || '未知错误';
+              console.warn(`[ensureNewsContent] Python脚本提取失败或内容为空，错误: ${extractError}；微信链接失败即停，不再二次抓取`);
+              if (extractError === 'WEIXIN_CAPTCHA_BLOCKED') {
+                newsItem._antiCrawlerBlocked = true;
               }
+              fetchedContent = null;
             }
           } catch (wechatError) {
-            console.error(`[ensureNewsContent] Python脚本提取时出错: ${wechatError.message}`);
-            // Python脚本提取失败，尝试使用常规方法作为备用
-            console.log(`[ensureNewsContent] 尝试使用常规方法作为备用方案`);
-            try {
-              fetchedContent = await this.fetchContentFromUrl(newsItem.source_url, newsItem.account_name);
-            } catch (fetchError) {
-              // 检查是否是反爬虫阻塞错误
-              if (fetchError.message === 'ANTI_CRAWLER_BLOCKED' || fetchError.status === 521) {
-                console.warn(`[ensureNewsContent] 检测到反爬虫阻塞（521错误），URL: ${newsItem.source_url}`);
-                newsItem._antiCrawlerBlocked = true;
-                fetchedContent = null;
-              } else {
-                throw fetchError;
-              }
-            }
+            console.error(`[ensureNewsContent] Python脚本提取时出错: ${wechatError.message}；微信链接失败即停，不再二次抓取`);
+            fetchedContent = null;
           }
         } else {
           // 非微信公众号文章，使用常规提取

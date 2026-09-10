@@ -43,7 +43,7 @@ function formatCronExpression(cronStr) {
 function formatDate(v) {
   if (!v) return '-'
   try {
-    return new Date(v).toLocaleString('zh-CN')
+    return new Date(v).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
   } catch {
     return String(v)
   }

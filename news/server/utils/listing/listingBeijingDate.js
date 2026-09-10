@@ -18,6 +18,18 @@ function createShanghaiDate(date = null) {
   return new Date(dateStr);
 }
 
+/** 北京时间墙钟 YYYY-MM-DD HH:mm:ss，供日志/说明文案（避免 Docker UTC 的 ISO 串） */
+function formatBeijingDateTime(value) {
+  if (value == null || value === '') return '';
+  const raw = typeof value === 'string' ? value.trim() : value;
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+    return raw;
+  }
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(d.getTime())) return String(raw);
+  return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ').slice(0, 19);
+}
+
 function formatDateOnly(date) {
   const beijingDateStr = date.toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
@@ -59,6 +71,7 @@ function subtractOneBeijingCalendarDay(ymd) {
 module.exports = {
   createShanghaiDate,
   formatDateOnly,
+  formatBeijingDateTime,
   addDaysCalendar,
   subtractOneBeijingCalendarDay,
 };

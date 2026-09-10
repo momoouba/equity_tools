@@ -173,8 +173,10 @@ async function main() {
   console.log('[exportGoldStandardTemplate] 目标企业数:', targets.length);
 
   if (opts.importDb) {
-    const n = await importToDb(targets, opts.batchId);
-    console.log('[exportGoldStandardTemplate] 已写入 competitor_gold_standard_pair:', n, 'batch=', opts.batchId);
+    console.error(
+      '[exportGoldStandardTemplate] 已拒绝 --import-db：生产召回不再读取 competitor_gold_standard_pair，金标只来自用户勾选可比公司。'
+    );
+    process.exitCode = 1;
   }
 
   await db.closePool();

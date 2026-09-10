@@ -266,7 +266,15 @@ router.post('/:id/run', async (req, res) => {
                   'b_region_a',
                   'b_region',
                   'b_ipo_a',
-                  'b_ipo_p'
+                  'b_ipo_p',
+                  'perf_fund',
+                  'perf_relation',
+                  'perf_company',
+                  'perf_ipo',
+                  'perf_ipo_progress',
+                  'perf_fof_to_company_ratio',
+                  'perf_stock_price',
+                  'perf_exchange_rate'
                 ];
 
                 const cleanupConn = await db.getConnection();

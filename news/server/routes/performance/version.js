@@ -9,7 +9,9 @@ const { getCurrentUser } = require('../../middleware/auth');
 const {
   replaceDateInSql,
   replaceVersionInSql,
-  getSqlFirstKeyword
+  replacePrevVersionPlaceholders,
+  getSqlFirstKeyword,
+  extraSqlStatementMessage
 } = require('./config');
 const {
   queryExternal,
@@ -17,6 +19,15 @@ const {
   closeExternalPool
 } = require('../../utils/externalDb');
 const { computeAndUpdateTransactionIrr, computeIRR } = require('./transactionIrr');
+const {
+  EXTERNAL_QUERY_TIMEOUT_MS,
+  PERF_TABLES,
+  GENERATE_TARGETS,
+  VERSION_DATA_TABLES,
+  READY_STATUS_SQL,
+  normalizeLayer,
+  findForbiddenCustomerTable
+} = require('../../utils/performance/sqlLayers');
 
 // 业绩看板 b_* 表主键为 F_Id，插入时若结果中无则需生成
 const ID_COLUMN = 'F_Id';
@@ -55,10 +66,11 @@ function getShanghaiNow() {
   ));
 }
 
-/** 是否为需要写入创建人/修改人时间的 b_ 业务表（排除 b_sql、b_sql_change_log） */
+/** 是否为需要写入创建人时间的业务表（b_* 排除配置表；perf_* 维度表） */
 function isBizTableWithAudit(targetTable) {
-  return targetTable && typeof targetTable === 'string' &&
-    targetTable.startsWith('b_') && targetTable !== 'b_sql' && targetTable !== 'b_sql_change_log';
+  if (!targetTable || typeof targetTable !== 'string') return false;
+  if (targetTable.startsWith('perf_')) return true;
+  return targetTable.startsWith('b_') && targetTable !== 'b_sql' && targetTable !== 'b_sql_change_log';
 }
 
 /**
@@ -83,7 +95,7 @@ function injectCreatorAndModify(rows, creatorId, creatorTimeStr) {
  */
 async function ensureRowIds(rows, targetTable, connection) {
   if (!rows.length) return rows;
-  const useFId = targetTable.startsWith('b_') || targetTable === 'b_sql_change_log';
+  const useFId = targetTable.startsWith('b_') || targetTable.startsWith('perf_') || targetTable === 'b_sql_change_log';
   const idCol = useFId ? ID_COLUMN : 'id';
   let lastId = null;
   const out = [];
@@ -150,6 +162,360 @@ async function filterColumnsForInsert(rows, targetTable, connection) {
   });
 }
 
+async function setVersionStatus(version, status, extra = {}) {
+  await db.execute(
+    `UPDATE b_version
+     SET status = ?, failed_layer = ?, status_message = ?
+     WHERE version = ? AND F_DeleteMark = 0`,
+    [status, extra.failedLayer || null, extra.message ? String(extra.message).slice(0, 500) : null, version]
+  );
+}
+
+async function softDeleteByVersion(tables, version, userId) {
+  for (const table of tables) {
+    await db.execute(
+      `UPDATE \`${table}\`
+       SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = NOW()
+       WHERE version = ? AND F_DeleteMark = 0`,
+      [userId || null, version]
+    );
+  }
+}
+
+async function getPrevMonthReadyVersion(monthDate) {
+  const rows = await db.query(
+    `SELECT version FROM b_version
+     WHERE F_DeleteMark = 0 AND ${READY_STATUS_SQL}
+       AND DATE_FORMAT(b_date, '%Y-%m') = DATE_FORMAT(DATE_SUB(?, INTERVAL 1 MONTH), '%Y-%m')
+     ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC
+     LIMIT 1`,
+    [monthDate]
+  );
+  return (rows[0] && rows[0].version) || '';
+}
+
+async function getPrevYearEndReadyVersion(monthDate) {
+  const rows = await db.query(
+    `SELECT version FROM b_version
+     WHERE F_DeleteMark = 0 AND ${READY_STATUS_SQL}
+       AND YEAR(b_date) = YEAR(?) - 1 AND MONTH(b_date) = 12
+     ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC
+     LIMIT 1`,
+    [monthDate]
+  );
+  return (rows[0] && rows[0].version) || '';
+}
+
+async function insertRowsToTarget(connection, rows, targetTable, version, monthDate, creatorId, creatorTimeStr) {
+  if (!rows.length || !targetTable) return;
+  const withVersion = rows.map((r) => (
+    typeof r === 'object' && r !== null
+      ? { ...r, version, b_date: monthDate }
+      : { version, b_date: monthDate, value: r }
+  ));
+  if (isBizTableWithAudit(targetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
+  const withIds = await ensureRowIds(withVersion, targetTable, connection);
+  const filtered = await filterColumnsForInsert(withIds, targetTable, connection);
+  if (!filtered.length || !Object.keys(filtered[0] || {}).length) return;
+  const cols = Object.keys(filtered[0]);
+  const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
+  const values = filtered.map((r) => cols.map((c) => r[c]));
+  await connection.query(
+    `INSERT INTO \`${targetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
+    [values]
+  );
+}
+
+async function executeConfiguredSql(row, ctx) {
+  const {
+    monthDate, version, prevMonthVersion, prevYearEndVersion,
+    creatorId, creatorTimeStr, connection, queryTimeoutMs
+  } = ctx;
+  let sql = (row.sql_content || '').trim();
+  if (!sql) return;
+  sql = replaceDateInSql(sql, monthDate);
+  sql = replaceVersionInSql(sql, version);
+  sql = replacePrevVersionPlaceholders(sql, prevMonthVersion, prevYearEndVersion);
+  const extraSql = extraSqlStatementMessage(sql);
+  if (extraSql) {
+    throw new Error(`数据接口「${row.interface_name || row.F_Id}」${extraSql}`);
+  }
+  const firstKeyword = getSqlFirstKeyword(sql);
+  const isInsert = firstKeyword === 'INSERT';
+  const targetTable = row.target_table;
+  const sanitizedTargetTable = targetTable ? String(targetTable).trim() : '';
+  if (sanitizedTargetTable && sanitizedTargetTable.toLowerCase() === 'b_version') {
+    return;
+  }
+  if (sanitizedTargetTable && sanitizedTargetTable.includes('.')) {
+    throw new Error(`数据接口「${row.interface_name || row.F_Id}」目标表名包含非法字符（不允许 schema 限定）: ${targetTable}`);
+  }
+
+  let externalId = row.external_db_config_id || null;
+  const layer = normalizeLayer(row.sql_layer);
+  const isTxn = sanitizedTargetTable.toLowerCase() === 'b_transaction';
+  if (!externalId && (layer === 'wash' || (!layer && isTxn))) {
+    const peers = await db.query(
+      `SELECT external_db_config_id FROM b_sql
+       WHERE F_DeleteMark = 0
+         AND sql_layer IN ('extract', 'wash')
+         AND external_db_config_id IS NOT NULL
+         AND TRIM(external_db_config_id) <> ''
+       ORDER BY exec_order
+       LIMIT 1`
+    );
+    externalId = peers?.[0]?.external_db_config_id || null;
+  }
+
+  if (!externalId) {
+    const customerTable = findForbiddenCustomerTable(sql);
+    if (customerTable) {
+      const name = row.interface_name || row.F_Id;
+      throw new Error(
+        layer === 'generate'
+          ? `数据接口「${name}」为 generate，将在本系统 investment_tools 执行，但 SQL 引用了客户库表 ${customerTable}。请改用本系统 perf_* / b_transaction，或粘贴需求文档中改写后的 SQL。`
+          : isTxn
+            ? `数据接口「${name}」是交易明细洗数，引用了客户库表 ${customerTable}。请到「外部数据提取」改为 wash 并选择外部数据库。`
+            : `数据接口「${name}」将在本系统执行，但 SQL 引用了客户库表 ${customerTable}。请改为 extract/wash 并选择外部数据库，或改写为只读本系统表。`
+      );
+    }
+  }
+
+  const runInsert = async (localConn, resultRows) => {
+    await insertRowsToTarget(localConn, resultRows, sanitizedTargetTable, version, monthDate, creatorId, creatorTimeStr);
+  };
+
+  if (externalId) {
+    const loadExternalConfig = async () => {
+      const cfgRows = await db.query(
+        'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
+        [externalId]
+      );
+      if (!cfgRows || cfgRows.length === 0) {
+        throw new Error(`外部数据源配置不存在或未启用: ${externalId}`);
+      }
+      return cfgRows[0];
+    };
+    const ensureExternalPoolReady = async () => {
+      const cfg = await loadExternalConfig();
+      await ensureExternalPool(cfg);
+    };
+    await ensureExternalPoolReady();
+    if (isInsert) {
+      throw new Error(`数据接口「${row.interface_name || row.F_Id}」使用外部数据源时仅支持 SELECT/WITH，请用 SELECT 取数后由系统写入目标表`);
+    }
+    const timeoutOpts = queryTimeoutMs ? { timeoutMs: queryTimeoutMs } : {};
+    let rows;
+    try {
+      rows = await queryExternal(externalId, sql, [], timeoutOpts);
+    } catch (err) {
+      if (
+        err &&
+        (err.code === 'ECONNRESET' ||
+          err.code === 'PROTOCOL_CONNECTION_LOST' ||
+          err.code === 'ETIMEDOUT' ||
+          err.errno === -4077)
+      ) {
+        if (err.code === 'ETIMEDOUT') {
+          throw new Error(`数据接口「${row.interface_name || row.F_Id}」外部查询超时（${Math.round((queryTimeoutMs || 0) / 60000)} 分钟）`);
+        }
+        console.warn(`外部数据库连接异常，将尝试重连后重试一次 (${externalId}):`, err.message);
+        await closeExternalPool(externalId);
+        await ensureExternalPoolReady();
+        rows = await queryExternal(externalId, sql, [], timeoutOpts);
+      } else {
+        throw err;
+      }
+    }
+    if (rows.length > 0 && sanitizedTargetTable) {
+      if (connection) {
+        await runInsert(connection, rows);
+      } else {
+        const writeConn = await db.getConnection();
+        try {
+          await writeConn.beginTransaction();
+          await runInsert(writeConn, rows);
+          await writeConn.commit();
+        } catch (writeErr) {
+          await writeConn.rollback();
+          throw writeErr;
+        } finally {
+          writeConn.release();
+        }
+      }
+    }
+    return;
+  }
+
+  const runLocal = async (localConn) => {
+    try {
+      if (isInsert) {
+        await localConn.execute(sql, []);
+      } else {
+        const [rows] = await localConn.query(sql, []);
+        if (rows.length > 0 && sanitizedTargetTable) {
+          await runInsert(localConn, rows);
+        }
+      }
+    } catch (err) {
+      const name = row.interface_name || row.F_Id;
+      err.message = `数据接口「${name}」执行失败: ${err.message}`;
+      throw err;
+    }
+  };
+
+  if (connection) {
+    await runLocal(connection);
+    return;
+  }
+
+  const writeConn = await db.getConnection();
+  try {
+    await writeConn.beginTransaction();
+    await runLocal(writeConn);
+    await writeConn.commit();
+  } catch (writeErr) {
+    await writeConn.rollback();
+    throw writeErr;
+  } finally {
+    writeConn.release();
+  }
+}
+
+async function runVersionPipeline({
+  version, monthDate, creatorId, creatorTimeStr, sqlRows
+}) {
+  const prevMonthVersion = await getPrevMonthReadyVersion(monthDate);
+  const prevYearEndVersion = await getPrevYearEndReadyVersion(monthDate);
+  const washRows = sqlRows.filter((r) => normalizeLayer(r.sql_layer) === 'wash');
+  const extractRows = sqlRows.filter((r) => normalizeLayer(r.sql_layer) === 'extract');
+  const generateRows = sqlRows.filter((r) => normalizeLayer(r.sql_layer) === 'generate');
+  const legacyRows = sqlRows.filter((r) => !normalizeLayer(r.sql_layer));
+  const isTxnTarget = (r) => String(r.target_table || '').trim().toLowerCase() === 'b_transaction';
+  const generateTargetSet = new Set(
+    generateRows.map((r) => String(r.target_table || '').trim().toLowerCase()).filter(Boolean)
+  );
+  const hasExplicitTxn = washRows.length > 0 || extractRows.some(isTxnTarget);
+  // 现网「2.交易明细表」未分层：没有 wash/extract 写 b_transaction 时，当作 wash 跑
+  const implicitWash = hasExplicitTxn ? [] : legacyRows.filter(isTxnTarget);
+  // 目标表已有 generate 的未分层残留不再本库重跑
+  const leftoverLegacy = legacyRows.filter((r) => {
+    if (isTxnTarget(r)) return false;
+    const t = String(r.target_table || '').trim().toLowerCase();
+    if (!t || t === 'b_version') return false;
+    if (generateTargetSet.has(t)) return false;
+    return true;
+  });
+  // 外层先打版本（本系统已 INSERT b_version），再入库流水，维度 extract 才有时点
+  const txnRows = [...washRows, ...extractRows.filter(isTxnTarget), ...implicitWash];
+  const dimExtractRows = extractRows.filter((r) => !isTxnTarget(r));
+
+  const baseCtx = {
+    monthDate, version, prevMonthVersion, prevYearEndVersion, creatorId, creatorTimeStr
+  };
+
+  await setVersionStatus(version, 'washing');
+  if (txnRows.length) {
+    try {
+      for (const row of txnRows) {
+        await executeConfiguredSql(row, { ...baseCtx, queryTimeoutMs: EXTERNAL_QUERY_TIMEOUT_MS });
+      }
+    } catch (err) {
+      await softDeleteByVersion(['b_transaction'], version, creatorId);
+      err.failedLayer = 'wash';
+      throw err;
+    }
+  }
+
+  await setVersionStatus(version, 'extracting');
+  if (dimExtractRows.length) {
+    try {
+      for (const row of dimExtractRows) {
+        await executeConfiguredSql(row, { ...baseCtx, queryTimeoutMs: EXTERNAL_QUERY_TIMEOUT_MS });
+      }
+    } catch (err) {
+      await softDeleteByVersion(PERF_TABLES, version, creatorId);
+      err.failedLayer = 'extract';
+      throw err;
+    }
+  }
+
+  await setVersionStatus(version, 'generating');
+  const localConn = await db.getConnection();
+  try {
+    await localConn.beginTransaction();
+    for (const row of generateRows) {
+      await executeConfiguredSql(row, { ...baseCtx, connection: localConn });
+    }
+    for (const row of leftoverLegacy) {
+      await executeConfiguredSql(row, { ...baseCtx, connection: localConn });
+    }
+    await computeAndUpdateTransactionIrr(localConn, version);
+    try {
+      const [fundCashflows] = await localConn.query(
+        `SELECT fund, COALESCE(sub_fund, company) AS project, transaction_date,
+                (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
+         FROM b_transaction
+         WHERE version = ? AND lp IS NULL AND transaction_type <> '认缴'
+           AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
+         ORDER BY fund, project, transaction_date ASC`,
+        [version]
+      );
+      const fundProjectMap = {};
+      for (const cf of fundCashflows) {
+        if (!cf.fund || !cf.project) continue;
+        const key = `${cf.fund}||${cf.project}`;
+        if (!fundProjectMap[key]) fundProjectMap[key] = { fund: cf.fund, project: cf.project, amounts: [], dates: [] };
+        fundProjectMap[key].amounts.push(Number(cf.amount));
+        fundProjectMap[key].dates.push(cf.transaction_date);
+      }
+      for (const { fund, project, amounts, dates } of Object.values(fundProjectMap)) {
+        const irr = computeIRR(amounts, dates);
+        await localConn.query(
+          `UPDATE b_investment SET irr = ? WHERE version = ? AND fund = ? AND project = ? AND F_DeleteMark = 0`,
+          [irr, version, fund, project]
+        );
+      }
+
+      const [allCashflows] = await localConn.query(
+        `SELECT COALESCE(sub_fund, company) AS project, transaction_date,
+                (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
+         FROM b_transaction
+         WHERE version = ? AND fund <> '国方一期产品' AND lp IS NULL AND transaction_type <> '认缴'
+           AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
+         ORDER BY project, transaction_date ASC`,
+        [version]
+      );
+      const allProjectMap = {};
+      for (const cf of allCashflows) {
+        if (!cf.project) continue;
+        if (!allProjectMap[cf.project]) allProjectMap[cf.project] = { amounts: [], dates: [] };
+        allProjectMap[cf.project].amounts.push(Number(cf.amount));
+        allProjectMap[cf.project].dates.push(cf.transaction_date);
+      }
+      for (const [project, { amounts, dates }] of Object.entries(allProjectMap)) {
+        const irr = computeIRR(amounts, dates);
+        await localConn.query(
+          `UPDATE b_investment_sum SET irr = ? WHERE version = ? AND project = ? AND F_DeleteMark = 0`,
+          [irr, version, project]
+        );
+      }
+    } catch (irrErr) {
+      console.warn('版本创建时计算项目级IRR失败:', irrErr.message);
+    }
+    await localConn.commit();
+  } catch (err) {
+    await localConn.rollback();
+    await softDeleteByVersion(GENERATE_TARGETS, version, creatorId);
+    err.failedLayer = err.failedLayer || (generateRows.length ? 'generate' : 'legacy');
+    throw err;
+  } finally {
+    localConn.release();
+  }
+
+  await setVersionStatus(version, 'ready');
+}
+
 /**
  * 获取日期列表
  * GET /api/performance/versions/dates
@@ -159,7 +525,7 @@ router.get('/dates', async (req, res) => {
     const rows = await db.query(
       `SELECT DISTINCT DATE(b_date) as date 
        FROM b_version 
-       WHERE F_DeleteMark = 0 
+       WHERE F_DeleteMark = 0 AND ${READY_STATUS_SQL}
        ORDER BY date DESC`
     );
     
@@ -194,9 +560,11 @@ router.get('/', async (req, res) => {
         F_CreatorUserId,
         F_CreatorTime,
         F_Lock,
-        F_DeleteMark
+        F_DeleteMark,
+        status
        FROM b_version
        WHERE F_DeleteMark = 0 
+         AND ${READY_STATUS_SQL}
          AND DATE(b_date) = ?
        ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC`,
       [date]
@@ -238,7 +606,10 @@ router.get('/history', async (req, res) => {
         F_CreatorTime,
         F_Lock,
         F_DeleteMark,
-        F_DeleteTime
+        F_DeleteTime,
+        status,
+        failed_layer,
+        status_message
        FROM b_version
        WHERE DATE(b_date) = ?
        ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC`,
@@ -253,7 +624,10 @@ router.get('/history', async (req, res) => {
       createTime: row.F_CreatorTime,
       isLocked: row.F_Lock === 1,
       isDeleted: row.F_DeleteMark === 1,
-      deleteTime: row.F_DeleteTime
+      deleteTime: row.F_DeleteTime,
+      status: row.status || 'ready',
+      failedLayer: row.failed_layer || null,
+      statusMessage: row.status_message || null
     }));
     
     res.json({ success: true, data: { versions } });
@@ -268,15 +642,11 @@ router.get('/history', async (req, res) => {
  * POST /api/performance/versions
  */
 router.post('/', async (req, res) => {
-  const connection = await db.getConnection();
-  
   try {
     const { date, months } = req.body;
-    // 触发生成数据的用户 id，与 users 表 id 一致（前端需在请求头传 X-User-Id）
     const creatorId = req.headers['x-user-id'] != null
       ? String(req.headers['x-user-id']).trim() || null
       : (req.currentUserId != null ? String(req.currentUserId) : null);
-    // 统一使用上海时间当前时间，用于 F_CreatorTime（MySQL datetime 格式）
     const shNow = getShanghaiNow();
     const creatorTimeStr = `${shNow.getUTCFullYear()}-${String(shNow.getUTCMonth() + 1).padStart(2, '0')}-${String(
       shNow.getUTCDate()
@@ -292,215 +662,73 @@ router.post('/', async (req, res) => {
     if (months.length > 6) {
       return res.status(400).json({ success: false, message: '最多只能选择6个月份' });
     }
-    
-    await connection.beginTransaction();
+
+    const sqlRows = await db.query(
+      `SELECT F_Id, interface_name, sql_content, exec_order, sql_layer, external_db_config_id, target_table
+       FROM b_sql WHERE F_DeleteMark = 0 ORDER BY exec_order ASC`
+    );
     
     const createdVersions = [];
     
     for (const monthDate of months) {
-      // 应用层并发锁：防止同日期并发创建导致版本号重复（FOR UPDATE 在空结果集上不获取锁）
       const dateLockKey = `version_${monthDate}`;
       if (versionCreationLocks.has(dateLockKey)) {
         throw new Error(`日期 ${monthDate} 的版本正在创建中，请稍后重试`);
       }
       versionCreationLocks.add(dateLockKey);
+      let version = null;
       try {
-      // 获取当前日期的最大版本号（带锁）
-      const [maxVersionRow] = await connection.query(
-        `SELECT version 
-         FROM b_version 
-         WHERE DATE(b_date) = ? 
-         ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC 
-         LIMIT 1 FOR UPDATE`,
-        [monthDate]
-      );
-      
-      // 生成新版本号（fix#19: 使用 parseVersionNum 正则解析，与 SQL SUBSTRING_INDEX 排序逻辑一致）
-      let newVersionNum = 1;
-      if (maxVersionRow.length > 0) {
-        newVersionNum = parseVersionNum(maxVersionRow[0].version) + 1;
-      }
-      
-      const version = `${monthDate.replace(/-/g, '')}V${String(newVersionNum).padStart(2, '0')}`;
-      const id = await generateId('b_version', connection);
-      
-      // 插入版本记录：F_CreatorUserId 为触发生成数据的用户，F_CreatorTime 为触发时间
-      await connection.execute(
-        `INSERT INTO b_version 
-         (F_Id, version, b_date, F_CreatorUserId, F_CreatorTime, F_DeleteMark, F_Lock)
-         VALUES (?, ?, ?, ?, ?, 0, 0)`,
-        [id, version, monthDate, creatorId, creatorTimeStr]
-      );
-      
-      createdVersions.push(version);
-
-      // 按数据接口配置顺序执行 SQL，将数据写入各业务表
-      const [sqlRows] = await connection.query(
-        `SELECT F_Id, interface_name, sql_content, exec_order, external_db_config_id, target_table
-         FROM b_sql WHERE F_DeleteMark = 0 ORDER BY exec_order ASC`
-      );
-
-      for (const row of sqlRows) {
-        let sql = (row.sql_content || '').trim();
-        if (!sql) continue;
-        sql = replaceDateInSql(sql, monthDate);
-        sql = replaceVersionInSql(sql, version);
-        const firstKeyword = getSqlFirstKeyword(sql);
-        const isInsert = firstKeyword === 'INSERT';
-        const externalId = row.external_db_config_id || null;
-        const targetTable = row.target_table;
-
-        // b_version 版本元数据只由当前接口维护，若某些数据接口配置了 b_version 作为目标表，避免重复写入
-        // 加强校验：trim 后比较，且拒绝包含 schema 限定（含点号）的表名，防止绕过
-        const sanitizedTargetTable = targetTable ? String(targetTable).trim() : '';
-        if (sanitizedTargetTable && sanitizedTargetTable.toLowerCase() === 'b_version') {
-          continue;
-        }
-        if (sanitizedTargetTable && sanitizedTargetTable.includes('.')) {
-          throw new Error(`数据接口「${row.interface_name || row.F_Id}」目标表名包含非法字符（不允许 schema 限定）: ${targetTable}`);
-        }
-
-        if (externalId) {
-          const loadExternalConfig = async () => {
-            const cfgRows = await db.query(
-              'SELECT * FROM external_db_config WHERE F_Id = ? AND F_DeleteMark = 0 AND is_active = 1',
-              [externalId]
-            );
-            if (!cfgRows || cfgRows.length === 0) {
-              throw new Error(`外部数据源配置不存在或未启用: ${externalId}`);
-            }
-            return cfgRows[0];
-          };
-
-          const ensureExternalPoolReady = async () => {
-            const cfg = await loadExternalConfig();
-            await ensureExternalPool(cfg);
-          };
-
-          await ensureExternalPoolReady();
-          if (isInsert) {
-            throw new Error(`数据接口「${row.interface_name || row.F_Id}」使用外部数据源时仅支持 SELECT/WITH，请用 SELECT 取数后由系统写入目标表`);
+        const lockConn = await db.getConnection();
+        try {
+          await lockConn.beginTransaction();
+          const [maxVersionRow] = await lockConn.query(
+            `SELECT version 
+             FROM b_version 
+             WHERE DATE(b_date) = ? 
+             ORDER BY CAST(SUBSTRING_INDEX(version, 'V', -1) AS UNSIGNED) DESC 
+             LIMIT 1 FOR UPDATE`,
+            [monthDate]
+          );
+          let newVersionNum = 1;
+          if (maxVersionRow.length > 0) {
+            newVersionNum = parseVersionNum(maxVersionRow[0].version) + 1;
           }
-          let rows;
+          version = `${monthDate.replace(/-/g, '')}V${String(newVersionNum).padStart(2, '0')}`;
+          const id = await generateId('b_version', lockConn);
+          await lockConn.execute(
+            `INSERT INTO b_version 
+             (F_Id, version, b_date, status, F_CreatorUserId, F_CreatorTime, F_DeleteMark, F_Lock)
+             VALUES (?, ?, ?, 'extracting', ?, ?, 0, 0)`,
+            [id, version, monthDate, creatorId, creatorTimeStr]
+          );
+          await lockConn.commit();
+        } catch (lockErr) {
+          await lockConn.rollback();
+          throw lockErr;
+        } finally {
+          lockConn.release();
+        }
+
+        createdVersions.push(version);
+        await runVersionPipeline({
+          version, monthDate, creatorId, creatorTimeStr, sqlRows
+        });
+      } catch (err) {
+        if (version) {
           try {
-            rows = await queryExternal(externalId, sql, []);
-          } catch (err) {
-            if (
-              err &&
-              (err.code === 'ECONNRESET' ||
-                err.code === 'PROTOCOL_CONNECTION_LOST' ||
-                err.code === 'ETIMEDOUT' ||
-                err.errno === -4077)
-            ) {
-              console.warn(`外部数据库连接异常，将尝试重连后重试一次 (${externalId}):`, err.message);
-              await closeExternalPool(externalId);
-              await ensureExternalPoolReady();
-              rows = await queryExternal(externalId, sql, []);
-            } else {
-              throw err;
-            }
-          }
-          if (rows.length > 0 && sanitizedTargetTable) {
-            const withVersion = rows.map((r) => (typeof r === 'object' && r !== null ? { ...r, version } : { version, value: r }));
-            if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
-            const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
-            // 向下兼容：只写入目标表中实际存在的列
-            const filtered = await filterColumnsForInsert(withIds, sanitizedTargetTable, connection);
-            const cols = Object.keys(filtered[0]);
-            const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
-            const values = filtered.map((r) => cols.map((c) => r[c]));
-            await connection.query(
-              `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
-              [values]
-            );
-          }
-        } else {
-          if (isInsert) {
-            await connection.execute(sql, []);
-          } else {
-            const [rows] = await connection.query(sql, []);
-            if (rows.length > 0 && sanitizedTargetTable) {
-              const withVersion = rows.map((r) => ({ ...r, version }));
-              if (isBizTableWithAudit(sanitizedTargetTable)) injectCreatorAndModify(withVersion, creatorId, creatorTimeStr);
-              const withIds = await ensureRowIds(withVersion, sanitizedTargetTable, connection);
-              // 向下兼容：只写入目标表中实际存在的列
-              const filtered = await filterColumnsForInsert(withIds, sanitizedTargetTable, connection);
-              const cols = Object.keys(filtered[0]);
-              const quotedCols = cols.map((c) => '`' + String(c).replace(/`/g, '``') + '`').join(',');
-              const values = filtered.map((r) => cols.map((c) => r[c]));
-              await connection.query(
-                `INSERT INTO \`${sanitizedTargetTable.replace(/`/g, '``')}\` (${quotedCols}) VALUES ?`,
-                [values]
-              );
-            }
+            await setVersionStatus(version, 'failed', {
+              failedLayer: err.failedLayer || 'unknown',
+              message: err.message
+            });
+          } catch (statusErr) {
+            console.error('回写版本失败状态出错:', statusErr.message);
           }
         }
-      }
-
-      // b_transaction_indicator 写入完成后，基于 b_transaction 同版本数据计算 Gross IRR / Net IRR 并回写
-      await computeAndUpdateTransactionIrr(connection, version);
-
-      // 计算项目级 IRR 并回写 b_investment.irr（区分基金）和 b_investment_sum.irr（不区分基金）
-      try {
-        // 1. b_investment：按 fund + project 分组计算 IRR
-        const [fundCashflows] = await connection.query(
-          `SELECT fund, COALESCE(sub_fund, company) AS project, transaction_date,
-                  (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
-           FROM b_transaction
-           WHERE version = ? AND lp IS NULL AND transaction_type <> '认缴'
-             AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
-           ORDER BY fund, project, transaction_date ASC`,
-          [version]
-        );
-        const fundProjectMap = {};
-        for (const cf of fundCashflows) {
-          if (!cf.fund || !cf.project) continue;
-          const key = `${cf.fund}||${cf.project}`;
-          if (!fundProjectMap[key]) fundProjectMap[key] = { fund: cf.fund, project: cf.project, amounts: [], dates: [] };
-          fundProjectMap[key].amounts.push(Number(cf.amount));
-          fundProjectMap[key].dates.push(cf.transaction_date);
-        }
-        for (const { fund, project, amounts, dates } of Object.values(fundProjectMap)) {
-          const irr = computeIRR(amounts, dates);
-          await connection.query(
-            `UPDATE b_investment SET irr = ? WHERE version = ? AND fund = ? AND project = ? AND F_DeleteMark = 0`,
-            [irr, version, fund, project]
-          );
-        }
-
-        // 2. b_investment_sum：按 project 分组计算 IRR（不区分基金）
-        const [allCashflows] = await connection.query(
-          `SELECT COALESCE(sub_fund, company) AS project, transaction_date,
-                  (CASE WHEN transaction_type IN ('实缴','出资') THEN -1 ELSE 1 END) * transaction_amount AS amount
-           FROM b_transaction
-           WHERE version = ? AND fund <> '国方一期产品' AND lp IS NULL AND transaction_type <> '认缴'
-             AND ((fund IS NOT NULL AND sub_fund IS NULL AND company IS NOT NULL) OR (fund IS NOT NULL AND sub_fund IS NOT NULL AND company IS NULL))
-           ORDER BY project, transaction_date ASC`,
-          [version]
-        );
-        const allProjectMap = {};
-        for (const cf of allCashflows) {
-          if (!cf.project) continue;
-          if (!allProjectMap[cf.project]) allProjectMap[cf.project] = { amounts: [], dates: [] };
-          allProjectMap[cf.project].amounts.push(Number(cf.amount));
-          allProjectMap[cf.project].dates.push(cf.transaction_date);
-        }
-        for (const [project, { amounts, dates }] of Object.entries(allProjectMap)) {
-          const irr = computeIRR(amounts, dates);
-          await connection.query(
-            `UPDATE b_investment_sum SET irr = ? WHERE version = ? AND project = ? AND F_DeleteMark = 0`,
-            [irr, version, project]
-          );
-        }
-      } catch (irrErr) {
-        console.warn('版本创建时计算项目级IRR失败:', irrErr.message);
-      }
+        throw err;
       } finally {
         versionCreationLocks.delete(dateLockKey);
       }
     }
-
-    await connection.commit();
     
     res.json({
       success: true,
@@ -510,11 +738,8 @@ router.post('/', async (req, res) => {
       }
     });
   } catch (error) {
-    await connection.rollback();
     console.error('创建版本失败:', error);
     res.status(500).json({ success: false, message: '创建版本失败: ' + error.message });
-  } finally {
-    connection.release();
   }
 });
 
@@ -608,12 +833,7 @@ router.delete('/:version', async (req, res) => {
     
     // 软删除版本及关联数据（F_DeleteMark=1, F_DeleteUserId=操作人, F_DeleteTime=NOW()）
     // 使用事务保护：确保 17 张表要么全部删除成功，要么全部回滚
-    const tables = [
-      'b_version', 'b_investment_indicator', 'b_investment_sum', 'b_investor_list',
-      'b_manage_indicator', 'b_project_all', 'b_transaction_indicator', 'b_all_indicator',
-      'b_investment', 'b_investment_spv', 'b_ipo', 'b_manage', 'b_project', 'b_transaction',
-      'b_project_a', 'b_region_a', 'b_region', 'b_ipo_a', 'b_ipo_p'
-    ];
+    const tables = VERSION_DATA_TABLES;
     
     const conn = await db.getConnection();
     try {

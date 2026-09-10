@@ -405,7 +405,11 @@ function meetsPersistThreshold(c, finalScore, opts = {}) {
     candidateHasRadiopharmaSignal(c) &&
     ['direct', 'indirect', 'substitute', 'same_track'].includes(type) &&
     Number.isFinite(vs) &&
-    vs >= 32 &&
+    vs >=
+      Math.max(
+        32,
+        parseInt(process.env.COMPETITOR_RADIOPHARMA_PERSIST_MIN_VALIDATED || '50', 10) || 50
+      ) &&
     isPersistValidationPassed(c);
   if (hasOffTarget && Number(c?.validation?.validated_score) < 60 && !radiopharmaPeerPersist) {
     return false;

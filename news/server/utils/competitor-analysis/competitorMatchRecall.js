@@ -49,6 +49,9 @@ const RADIO_FINANCING_SEED_TERMS = [
   '核药',
   '放射性药物',
   '放射性治疗',
+  '靶向放射性治疗',
+  '靶向放射性',
+  '放射性核素',
   '核素偶联',
   'RDC药物',
   'PET显像剂',
@@ -318,23 +321,37 @@ async function recallFinancingByProductTerms(target, excludeCredit, excludeName,
   for (const term of uniq) {
     const like = `%${term}%`;
     termClauses.push(
-      `(ai_product_intro LIKE ? OR ai_company_tags_display LIKE ? OR CAST(IFNULL(ai_company_tags_json, '') AS CHAR) LIKE ? OR project_desc LIKE ? OR company_name LIKE ? OR project_name LIKE ?)`
+      `(e2.ai_product_intro LIKE ? OR e2.ai_company_tags_display LIKE ? OR CAST(IFNULL(e2.ai_company_tags_json, '') AS CHAR) LIKE ? OR e2.project_desc LIKE ? OR e2.company_name LIKE ? OR e2.project_name LIKE ?)`
     );
     params.push(like, like, like, like, like, like);
   }
   params.push(limit);
 
   const rows = await db.query(
-    `SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
-            e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
-            e.industry_std_lv1, e.industry_std_lv2, e.industry_category_4,
-            e.funding_amt_raw, e.estimated_amt_raw,
-            e.round, e.latest_round, e.event_date
-     FROM sourcing_financing_event e
-     WHERE e.F_DeleteMark = 0
-       AND e.event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
-       AND (${termClauses.join(' OR ')})
-     ORDER BY e.event_date DESC
+    `SELECT F_Id, company_name, company_credit_code, project_name, project_desc,
+            ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+            industry_std_lv1, industry_std_lv2, industry_category_4,
+            funding_amt_raw, estimated_amt_raw,
+            round, latest_round, event_date
+     FROM (
+       SELECT e.F_Id, e.company_name, e.company_credit_code, e.project_name, e.project_desc,
+              e.ai_product_intro, e.ai_company_tags_display, e.ai_company_tags_json,
+              e.industry_std_lv1, e.industry_std_lv2, e.industry_category_4,
+              e.funding_amt_raw, e.estimated_amt_raw,
+              e.round, e.latest_round, e.event_date,
+              ROW_NUMBER() OVER (
+                PARTITION BY COALESCE(NULLIF(TRIM(e.company_credit_code), ''), CONCAT('nm:', TRIM(e.company_name)))
+                ORDER BY CHAR_LENGTH(TRIM(IFNULL(e.ai_product_intro, ''))) DESC,
+                         CHAR_LENGTH(TRIM(IFNULL(e.ai_company_tags_display, ''))) DESC,
+                         e.event_date DESC
+              ) AS rn
+       FROM sourcing_financing_event e
+       WHERE e.F_DeleteMark = 0
+         AND e.event_date >= DATE_SUB(CURDATE(), INTERVAL ? YEAR)
+         AND (${termClauses.join(' OR ')})
+     ) ranked
+     WHERE ranked.rn = 1
+     ORDER BY ranked.event_date DESC
      LIMIT ?`,
     params
   );
@@ -658,6 +675,7 @@ async function buildInternalRecallPool({
   target,
   recallFlags,
   canFinancing = false,
+  goldRecallCtx = null,
 }) {
   const useNewShare = shouldUseNewShareForTarget(recallFlags, target);
   const enableIpo = !!recallFlags.enable_ipo_project;
@@ -709,7 +727,10 @@ async function buildInternalRecallPool({
       productMeta
     );
     finList = mergeRecalledCandidates(finList, finByProduct);
-    financingProductMeta = productMeta;
+    financingProductMeta = {
+      ...productMeta,
+      name_sample: (finByProduct || []).slice(0, 20).map((c) => c.display_name).filter(Boolean),
+    };
   }
 
   // 金标种子召回：同目标已有标注竞品时优先进入候选池，降低对 S4 联网方差的依赖
@@ -718,7 +739,8 @@ async function buildInternalRecallPool({
       const goldCandidates = await recallGoldStandardCandidates(
         target,
         excludeCredit,
-        excludeName
+        excludeName,
+        goldRecallCtx
       );
       if (goldCandidates?.length) {
         finList = mergeRecalledCandidates(finList, goldCandidates);
@@ -784,6 +806,7 @@ async function buildInternalRecallPool({
       financing_product_terms: financingProductMeta?.count || 0,
       financing_product_term_limit: financingProductMeta?.limit || null,
       financing_product_term_sample: financingProductMeta?.terms || [],
+      financing_product_name_sample: financingProductMeta?.name_sample || [],
       financing_skipped: financingSkipReason,
       merged: candidates.length,
       use_new_share_listed_recall: !!recallFlags.use_new_share_listed_recall,

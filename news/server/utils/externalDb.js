@@ -155,23 +155,46 @@ async function ensureExternalPool(config) {
  * @param {string} configId - 配置ID
  * @param {string} sql - SQL查询语句
  * @param {Array} params - 查询参数
+ * @param {{ timeoutMs?: number }} [options] - timeoutMs：查询超时（毫秒），超时后抛错
  * @returns {Promise<Array>} 查询结果
  */
-async function queryExternal(configId, sql, params = []) {
+async function queryExternal(configId, sql, params = [], options = {}) {
   const pool = getExternalPool(configId);
   if (!pool) {
     throw new Error(`外部数据库连接不存在: ${configId}`);
   }
+  const timeoutMs = options && options.timeoutMs > 0 ? options.timeoutMs : 0;
 
   try {
     // 判断是 PostgreSQL 还是 MySQL
     if (pool.constructor.name === 'Pool' && pool.query && typeof pool.query === 'function' && !pool.getConnection) {
       // PostgreSQL
+      if (timeoutMs) {
+        const client = await pool.connect();
+        let timer;
+        try {
+          const result = await Promise.race([
+            client.query(sql, params),
+            new Promise((_, reject) => {
+              timer = setTimeout(() => {
+                const err = new Error(`外部查询超时（${Math.round(timeoutMs / 1000)} 秒）`);
+                err.code = 'ETIMEDOUT';
+                reject(err);
+              }, timeoutMs);
+            })
+          ]);
+          return result.rows;
+        } finally {
+          if (timer) clearTimeout(timer);
+          client.release();
+        }
+      }
       const result = await pool.query(sql, params);
       return result.rows;
     } else {
-      // MySQL
-      const [rows] = await pool.query(sql, params);
+      // MySQL：timeout 需在 query 选项中设置
+      const queryArg = timeoutMs ? { sql, timeout: timeoutMs } : sql;
+      const [rows] = await pool.query(queryArg, params);
       return rows;
     }
   } catch (error) {

@@ -317,11 +317,11 @@ function looksLikeFactorId(s) {
 
 /** 产品形态 / 药物模态：必须对齐 */
 const LENS_FORM_KEEP_RE =
-  /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|诊疗一体化|镥|锕|砹|同位素药物|放射性配体/;
+  /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|PET示踪剂|诊疗一体化|镥|锕|砹|同位素药物|放射性配体/;
 
 /** 适应症 / 疾病方向：只加分，不得当排除门 */
 const LENS_INDICATION_RE =
-  /阿尔茨海默|帕金森|神经退行|适应症|适应证|早诊|筛查|肿瘤|癌症|癌$|瘤$|诊断$|病$|症$/;
+  /阿尔茨海默|帕金森|神经退行|适应症|适应证|早诊|筛查|肿瘤|癌症|癌$|瘤$|诊断$|病$|症$|tau蛋白|^tau$/i;
 
 /** 过宽技术词：与形态并列时会把非核药（小分子/ADC/CNS）抬进规则 Top */
 const LENS_GENERIC_TECH_RE =
@@ -596,7 +596,7 @@ function buildLensPromptAppendix(lens) {
       '**联网发现专令（有透镜时）**：除境内上市配额外，须主动检索与焦点同层的**未上市/早期**公司（种子/天使/Pre-A 优先），检索式须组合焦点短语 + 「创业公司/融资/天使轮/未上市」；禁止用单任务清洁电器或仅大赛道人形明星凑满候选。'
     );
   }
-  const RADIO_LENS_RE = /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|放射性配体/;
+  const RADIO_LENS_RE = /核药|放射性药物|核素偶联|RDC|PET成像|PET显像|PET示踪剂|放射性配体/;
   if (RADIO_LENS_RE.test(lensTextBlob)) {
     lines.push(
       '**核药同模态**：双方均为核药/RDC/放射性药物/PET显像剂时 modality_match=true；肿瘤 vs 神经退行/阿尔茨海默等适应症差异只影响适应症重合，不得判模态不一致，不得因此丢掉同赛道核药同行。',

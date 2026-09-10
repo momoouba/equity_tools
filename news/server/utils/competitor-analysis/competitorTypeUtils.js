@@ -503,16 +503,22 @@ function applyGoldStandardTypeGuard(validation, candidate = {}) {
     return validation;
   }
   if (validation.is_competitor === false && validation.competitor_type === 'not_competitor') {
-    // 信息缺失被误杀时，金标正样本抬回标注类型（低分待复核）
+    const introLen = strTrim(candidate.product_intro || candidate.qcc_intro).length;
+    const lifted =
+      introLen >= 40
+        ? Math.max(clampScore(validation.validated_score), goldType === 'direct' ? 55 : 45)
+        : clampScore(validation.validated_score);
     return {
       ...validation,
       competitor_type: goldType,
       is_competitor: true,
       is_upstream_downstream: false,
-      validated_score: Math.max(clampScore(validation.validated_score), goldType === 'direct' ? 70 : 55),
+      validated_score: lifted,
       reject_reason: '',
       rationale: strTrim(
-        `${validation.rationale ? `${validation.rationale}；` : ''}金标正样本护栏：信息不足时采用标注类型 ${goldType}`
+        `${validation.rationale ? `${validation.rationale}；` : ''}用户可比勾选：采用类型 ${goldType}${
+          introLen >= 40 ? '' : '（简介不足，不抬分）'
+        }`
       ).slice(0, 500),
     };
   }

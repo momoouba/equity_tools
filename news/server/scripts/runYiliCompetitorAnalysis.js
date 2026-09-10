@@ -70,33 +70,12 @@ async function main() {
   );
   fs.writeFileSync(path.join(OUT_DIR, `${runId}_relations.json`), JSON.stringify(relations, null, 2), 'utf8');
 
-  // 反馈表关键对照：漏召补竞品 / 模态误报 / 量级不可比
-  const { namesMatchLoosely } = require('../utils/competitor-analysis/competitorCompanyMatch');
-  const goldPairs = await db.query(
-    `SELECT candidate_display_name, candidate_credit_code, final_is_competitor, final_type, notes
-     FROM competitor_gold_standard_pair
-     WHERE batch_id = 'feedback_yili_20260825' AND F_DeleteMark = 0`
+  const comparable = relations.filter((r) => Number(r.include_in_comparable) === 1);
+  fs.writeFileSync(
+    path.join(OUT_DIR, `${runId}_user_comparable.json`),
+    JSON.stringify(comparable, null, 2),
+    'utf8'
   );
-  const checklist = goldPairs.map((g) => {
-    const gCredit = String(g.candidate_credit_code || '').trim().toUpperCase();
-    const rel =
-      relations.find((r) => {
-        const rc = String(r.unified_credit_code || '').trim().toUpperCase();
-        if (gCredit && rc && gCredit === rc) return true;
-        return namesMatchLoosely(r.competitor_display_name, g.candidate_display_name);
-      }) || null;
-    return {
-      candidate: g.candidate_display_name,
-      expected_competitor: g.final_is_competitor === 1,
-      expected_type: g.final_type,
-      recalled: !!rel,
-      actual_type: rel?.competitor_type || null,
-      score: rel?.relevance_score ?? null,
-      include_comparable: rel?.include_in_comparable ?? null,
-      notes: g.notes,
-    };
-  });
-  fs.writeFileSync(path.join(OUT_DIR, `${runId}_checklist.json`), JSON.stringify(checklist, null, 2), 'utf8');
 
   console.log('\n[yili-run] Top 20 竞品:');
   for (const r of relations.slice(0, 20)) {
@@ -105,11 +84,9 @@ async function main() {
     );
   }
 
-  console.log('\n[yili-run] 金标对照:');
-  for (const c of checklist) {
-    console.log(
-      `  ${c.candidate}: recalled=${c.recalled ? 'Y' : 'N'} type=${c.actual_type || '-'} expected=${c.expected_type}`
-    );
+  console.log(`\n[yili-run] 本轮用户可比 ${comparable.length} 条（金标只认勾选，不读人工金标表）:`);
+  for (const r of comparable) {
+    console.log(`  [${r.competitor_type}] ${r.competitor_display_name}`);
   }
 
   console.log(`\n[yili-run] 输出目录: ${OUT_DIR}`);

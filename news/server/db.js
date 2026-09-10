@@ -4255,7 +4255,9 @@ async function initializeTables(dbPool) {
       capital DECIMAL(30,10) NULL DEFAULT NULL COMMENT '分配成本-11',
       profit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '分配收益-12',
       dividend DECIMAL(30,10) NULL DEFAULT NULL COMMENT '其中:分红-13',
-      PRIMARY KEY (F_Id)
+      scene_tag VARCHAR(50) NULL DEFAULT NULL COMMENT '行级场景标签：上市前/上市后/SPV份额转让；版本仍用 version+b_date',
+      PRIMARY KEY (F_Id),
+      INDEX idx_b_transaction_version (version, F_DeleteMark)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-交易明细底表';
   `);
   // b_transaction_indicator - 定开看板-基金产品指标
@@ -4318,6 +4320,9 @@ async function initializeTables(dbPool) {
       F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
       b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件',
       version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      status VARCHAR(20) NULL DEFAULT 'ready' COMMENT 'extracting/washing/generating/ready/failed；看板只读 ready',
+      failed_layer VARCHAR(20) NULL DEFAULT NULL COMMENT '失败所在层 extract/wash/generate/legacy',
+      status_message VARCHAR(500) NULL DEFAULT NULL COMMENT '失败原因摘要',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='管理人看板版本管理';
@@ -4509,6 +4514,7 @@ async function initializeTables(dbPool) {
       interface_name VARCHAR(500) NULL DEFAULT NULL COMMENT '接口名称',
       sql_content LONGTEXT NULL COMMENT '查询sql',
       exec_order INT NULL DEFAULT 0 COMMENT '执行顺序',
+      sql_layer VARCHAR(20) NULL DEFAULT NULL COMMENT 'NULL=存量未分层; extract=L1; wash=b_transaction; generate=其余看板',
       external_db_config_id VARCHAR(50) NULL DEFAULT NULL COMMENT '外部数据库配置ID',
       target_table VARCHAR(300) NULL DEFAULT NULL COMMENT '目标表',
       remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
@@ -4549,6 +4555,241 @@ async function initializeTables(dbPool) {
       await dbPool.query('ALTER TABLE b_sql_change_log MODIFY COLUMN changes_json MEDIUMTEXT NULL');
     }
   } catch (e) { /* ignore */ }
+
+  // 取数分层：存量列补充（sql_layer 默认 NULL，不改写现网 19 条）
+  try {
+    const addColIfMissing = async (table, column, ddl) => {
+      const [cols] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [table, column]
+      );
+      if (cols.length === 0) {
+        await dbPool.query(ddl);
+      }
+    };
+    await addColIfMissing(
+      'b_sql',
+      'sql_layer',
+      `ALTER TABLE b_sql ADD COLUMN sql_layer VARCHAR(20) NULL DEFAULT NULL COMMENT 'NULL=存量未分层; extract=L1; wash=b_transaction; generate=其余看板' AFTER exec_order`
+    );
+    await addColIfMissing(
+      'b_version',
+      'status',
+      `ALTER TABLE b_version ADD COLUMN status VARCHAR(20) NULL DEFAULT 'ready' COMMENT 'extracting/washing/generating/ready/failed；看板只读 ready' AFTER version`
+    );
+    await addColIfMissing(
+      'b_version',
+      'failed_layer',
+      `ALTER TABLE b_version ADD COLUMN failed_layer VARCHAR(20) NULL DEFAULT NULL COMMENT '失败所在层 extract/wash/generate/legacy' AFTER status`
+    );
+    await addColIfMissing(
+      'b_version',
+      'status_message',
+      `ALTER TABLE b_version ADD COLUMN status_message VARCHAR(500) NULL DEFAULT NULL COMMENT '失败原因摘要' AFTER failed_layer`
+    );
+    await addColIfMissing(
+      'b_transaction',
+      'scene_tag',
+      `ALTER TABLE b_transaction ADD COLUMN scene_tag VARCHAR(50) NULL DEFAULT NULL COMMENT '行级场景标签：上市前/上市后/SPV份额转让；版本仍用 version+b_date' AFTER dividend`
+    );
+    await dbPool.query(
+      `UPDATE b_version SET status = 'ready' WHERE status IS NULL AND F_DeleteMark = 0`
+    );
+  } catch (e) {
+    console.warn('业绩看板分层列补充时出现警告:', e.message);
+  }
+
+  const perfAuditCols = `
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件'`;
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_fund (
+      ${perfAuditCols},
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金/SPV/子基金名称',
+      fund_type VARCHAR(50) NULL DEFAULT NULL COMMENT '母基金/直投基金/内部备案SPV/外部备案SPV/内部非备案SPV/外部非备案SPV/子基金',
+      set_up_date DATETIME NULL DEFAULT NULL COMMENT '成立日',
+      inv_start DATETIME NULL DEFAULT NULL COMMENT '投资期起始',
+      ba_num VARCHAR(300) NULL DEFAULT NULL COMMENT '备案号',
+      ba_date DATETIME NULL DEFAULT NULL COMMENT '备案日',
+      paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '仅子基金：sonfundpaidin 最新一行',
+      if_inter VARCHAR(50) NULL DEFAULT NULL COMMENT '仅 SPV：是否内部',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_fund_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-基金/SPV/子基金维度';
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_relation (
+      ${perfAuditCols},
+      lp VARCHAR(300) NULL DEFAULT NULL COMMENT '投资人展示名',
+      lp_type VARCHAR(32) NULL DEFAULT NULL COMMENT '有限合伙人/普通合伙人/母基金/SPV/直投基金',
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '被认缴主体名称',
+      sub_fund VARCHAR(300) NULL DEFAULT NULL COMMENT '对子基金认缴时的子基金名',
+      sign_date DATETIME NULL DEFAULT NULL COMMENT '签约日',
+      subscription_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额',
+      subscription_ratio DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴比例',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_relation_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-投资关系';
+  `);
+  try {
+    await dbPool.query(
+      `ALTER TABLE perf_relation MODIFY COLUMN lp_type VARCHAR(32) NULL DEFAULT NULL COMMENT '有限合伙人/普通合伙人/母基金/SPV/直投基金'`
+    );
+  } catch (e) {
+    console.warn('perf_relation.lp_type 注释调整时出现警告:', e.message);
+  }
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_company (
+      ${perfAuditCols},
+      company VARCHAR(300) NULL DEFAULT NULL COMMENT '企业简称',
+      company_full VARCHAR(500) NULL DEFAULT NULL COMMENT '企业全称',
+      region VARCHAR(300) NULL DEFAULT NULL COMMENT '区域',
+      sheng VARCHAR(300) NULL DEFAULT NULL COMMENT '行政省',
+      shi VARCHAR(300) NULL DEFAULT NULL COMMENT '行政市',
+      qu VARCHAR(300) NULL DEFAULT NULL COMMENT '行政区',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_company_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-被投企业';
+  `);
+  try {
+    const [perfCompanyCols] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'perf_company'`
+    );
+    const perfCompanyColSet = new Set((perfCompanyCols || []).map((c) => c.COLUMN_NAME));
+    if (perfCompanyColSet.has('city') && !perfCompanyColSet.has('shi')) {
+      await dbPool.query(
+        `ALTER TABLE perf_company CHANGE COLUMN city shi VARCHAR(300) NULL DEFAULT NULL COMMENT '行政市'`
+      );
+    } else if (!perfCompanyColSet.has('shi')) {
+      await dbPool.query(
+        `ALTER TABLE perf_company ADD COLUMN shi VARCHAR(300) NULL DEFAULT NULL COMMENT '行政市' AFTER region`
+      );
+    } else {
+      await dbPool.query(
+        `ALTER TABLE perf_company MODIFY COLUMN shi VARCHAR(300) NULL DEFAULT NULL COMMENT '行政市'`
+      );
+    }
+    if (!perfCompanyColSet.has('sheng')) {
+      await dbPool.query(
+        `ALTER TABLE perf_company ADD COLUMN sheng VARCHAR(300) NULL DEFAULT NULL COMMENT '行政省' AFTER region`
+      );
+    } else {
+      await dbPool.query(
+        `ALTER TABLE perf_company MODIFY COLUMN sheng VARCHAR(300) NULL DEFAULT NULL COMMENT '行政省'`
+      );
+    }
+    if (perfCompanyColSet.has('qu')) {
+      await dbPool.query(
+        `ALTER TABLE perf_company MODIFY COLUMN qu VARCHAR(300) NULL DEFAULT NULL COMMENT '行政区'`
+      );
+    }
+  } catch (e) {
+    console.warn('perf_company 行政区列调整时出现警告:', e.message);
+  }
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_ipo (
+      ${perfAuditCols},
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '基金名称',
+      sub_fund VARCHAR(300) NULL DEFAULT NULL COMMENT '子基金名称',
+      spv VARCHAR(300) NULL DEFAULT NULL COMMENT 'SPV名称',
+      company VARCHAR(300) NULL DEFAULT NULL COMMENT '被投企业简称',
+      ticker VARCHAR(100) NULL DEFAULT NULL COMMENT '证券代码',
+      ipo_date DATETIME NULL DEFAULT NULL COMMENT '上市日',
+      initialcost DECIMAL(30,10) NULL DEFAULT NULL COMMENT '初始成本',
+      stock_name VARCHAR(300) NULL DEFAULT NULL COMMENT '证券简称',
+      current_hold_shares DECIMAL(30,10) NULL DEFAULT NULL COMMENT '当前持股数',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_ipo_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-已上市持仓';
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_ipo_progress (
+      ${perfAuditCols},
+      company_full VARCHAR(500) NULL DEFAULT NULL COMMENT '公司全称 ← 本库 ipo_progress.company',
+      update_time DATETIME NULL DEFAULT NULL COMMENT '更新日期 ← ipo_progress.F_UpdateTime',
+      a_statue VARCHAR(100) NULL DEFAULT NULL COMMENT '审核状态 ← ipo_progress.status',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_ipo_progress_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-上市进展（本库 ipo_progress）';
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_fof_to_company_ratio (
+      ${perfAuditCols},
+      fund VARCHAR(300) NULL DEFAULT NULL COMMENT '母基金名称',
+      spv VARCHAR(300) NULL DEFAULT NULL COMMENT 'SPV名称',
+      company VARCHAR(300) NULL DEFAULT NULL COMMENT '企业简称',
+      initial_ratio DECIMAL(30,10) NULL DEFAULT NULL COMMENT '初始穿透比例',
+      end_ratio DECIMAL(30,10) NULL DEFAULT NULL COMMENT '期末穿透比例',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_ratio_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-母基金至企业穿透比例';
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_stock_price (
+      ${perfAuditCols},
+      f_tradedate DATETIME NULL DEFAULT NULL COMMENT '交易日',
+      f_ticker VARCHAR(100) NULL DEFAULT NULL COMMENT '证券代码',
+      f_close DECIMAL(30,10) NULL DEFAULT NULL COMMENT '收盘价',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_stock_price_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-股价';
+  `);
+  try {
+    const [thsCol] = await dbPool.query(
+      `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'perf_stock_price' AND COLUMN_NAME = 'ths_ticker'`
+    );
+    if (thsCol.length > 0) {
+      await dbPool.query(`ALTER TABLE perf_stock_price DROP COLUMN ths_ticker`);
+    }
+  } catch (e) {
+    console.warn('perf_stock_price.ths_ticker 删除时出现警告:', e.message);
+  }
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_exchange_rate (
+      ${perfAuditCols},
+      f_tradedate DATETIME NULL DEFAULT NULL COMMENT '交易日',
+      currency VARCHAR(50) NULL DEFAULT NULL COMMENT '币种',
+      rate DECIMAL(30,10) NULL DEFAULT NULL COMMENT '汇率',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_fx_version (version, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-汇率';
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS perf_mapping_config (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      map_type VARCHAR(50) NOT NULL COMMENT 'fund_alias/fund_exclude/fund_setup_date/indicator_patch/layout_id',
+      map_key VARCHAR(300) NULL DEFAULT NULL COMMENT '源名称或配置键',
+      map_value VARCHAR(500) NULL DEFAULT NULL COMMENT '映射值',
+      remark VARCHAR(500) NULL DEFAULT NULL COMMENT '备注',
+      PRIMARY KEY (F_Id),
+      INDEX idx_perf_mapping_type (map_type, F_DeleteMark)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板-口径映射（别名/排除/成立日等）';
+  `);
 
   console.log('  → 进度：业绩看板 b_* 表列清理与注释同步（数据多时可能需数十秒）…');
 
@@ -9528,7 +9769,9 @@ async function init() {
       database: DB_NAME,
       waitForConnections: true,
       connectionLimit: 10,
-      charset: 'utf8mb4',
+      // mysql2 的 utf8mb4 默认 collation_connection=utf8mb4_general_ci，
+      // 表字段是 utf8mb4_0900_ai_ci；generate SQL 的 UNION 会报 ER_CANT_AGGREGATE_NCOLLATIONS
+      charset: 'utf8mb4_0900_ai_ci',
       timezone: '+08:00',
       connectTimeout: 20000
     });

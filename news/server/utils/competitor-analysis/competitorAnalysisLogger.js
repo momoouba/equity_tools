@@ -3,8 +3,14 @@
  * 设置环境变量 COMPETITOR_ANALYSIS_LOG=0 可关闭控制台输出（仍写库）。
  */
 
+const { formatBeijingDateTime } = require('../listing/listingBeijingDate');
+
 const LOG_TAG = '[competitorRunner]';
 const AI_TAG = '[competitorAi]';
+
+function logStamp() {
+  return formatBeijingDateTime(new Date()) || '';
+}
 
 function isConsoleEnabled() {
   const v = process.env.COMPETITOR_ANALYSIS_LOG;
@@ -27,10 +33,11 @@ function logCompetitorRun(runId, stepCode, message, detail) {
   const rid = runId || '-';
   const step = stepCode || 'step';
   const msg = message || '';
+  const ts = logStamp();
   if (detail != null && detail !== '') {
-    console.log(`${LOG_TAG} run=${rid} [${step}] ${msg}`, stringifyDetail(detail));
+    console.log(`${LOG_TAG} ${ts} run=${rid} [${step}] ${msg}`, stringifyDetail(detail));
   } else {
-    console.log(`${LOG_TAG} run=${rid} [${step}] ${msg}`);
+    console.log(`${LOG_TAG} ${ts} run=${rid} [${step}] ${msg}`);
   }
 }
 
@@ -39,10 +46,11 @@ function logCompetitorAi(runId, phase, message, detail) {
   const rid = runId || '-';
   const ph = phase || 'ai';
   const msg = message || '';
+  const ts = logStamp();
   if (detail != null && detail !== '') {
-    console.log(`${AI_TAG} run=${rid} [${ph}] ${msg}`, stringifyDetail(detail));
+    console.log(`${AI_TAG} ${ts} run=${rid} [${ph}] ${msg}`, stringifyDetail(detail));
   } else {
-    console.log(`${AI_TAG} run=${rid} [${ph}] ${msg}`);
+    console.log(`${AI_TAG} ${ts} run=${rid} [${ph}] ${msg}`);
   }
 }
 
@@ -67,4 +75,5 @@ module.exports = {
   logCompetitorAi,
   summarizeCandidates,
   isConsoleEnabled,
+  formatBeijingDateTime,
 };

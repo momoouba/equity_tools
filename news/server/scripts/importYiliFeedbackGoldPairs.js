@@ -1,14 +1,10 @@
 'use strict';
 
 /**
- * P0：亦立生物 0824 反馈表 → competitor_gold_standard_pair
+ * 已停用：生产金标 = 用户勾选「放入可比公司」，由竞品分析召回读取 comparable_pref / relation。
+ * 不要再向 competitor_gold_standard_pair 人工导入批次。
  *
  * 用法（news 目录）：node server/scripts/importYiliFeedbackGoldPairs.js
- *
- * 数据说明：
- * - 6 家人工补漏召的核药同行 → final_is_competitor=1（进金标种子召回）
- * - 同赛道不同模态误报 → final_is_competitor=0（标注负样本，供回归）
- * - 竞品对但量级/阶段不可比（Curium 等）→ final_is_competitor=1 + notes 标注 stage 不可比
  */
 
 const db = require('../db');
@@ -55,81 +51,10 @@ const STAGE_MISMATCH = [
 ];
 
 async function main() {
-  let inserted = 0;
-
-  const insertPair = async ({ candName, candCredit, candSource, candRefId, isCompetitor, finalType, notes }) => {
-    await db.execute(
-      `INSERT INTO competitor_gold_standard_pair (
-        category_4, target_source, target_ref_id, target_display_name, target_credit_code,
-        candidate_source, candidate_ref_id, candidate_display_name, candidate_credit_code,
-        final_is_competitor, final_type, status, notes, batch_id, F_DeleteMark
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done', ?, ?, 0)`,
-      [
-        'bio',
-        TARGET.target_source,
-        TARGET.target_ref_id,
-        TARGET.target_display_name,
-        TARGET.target_credit_code,
-        candSource,
-        candRefId,
-        candName,
-        candCredit,
-        isCompetitor,
-        finalType,
-        notes,
-        BATCH_ID,
-      ]
-    );
-    inserted += 1;
-  };
-
-  for (const c of MISSED_COMPETITORS) {
-    await insertPair({
-      candName: c.name,
-      candCredit: c.credit,
-      candSource: c.source,
-      candRefId: c.refId,
-      isCompetitor: 1,
-      finalType: 'direct',
-      notes: c.note,
-    });
-  }
-
-  for (const c of MODALITY_FALSE_POSITIVES) {
-    await insertPair({
-      candName: c.name,
-      candCredit: null,
-      candSource: null,
-      candRefId: null,
-      isCompetitor: 0,
-      finalType: 'same_track',
-      notes: `业务反馈：同赛道不同模态，不可比。${c.note}`,
-    });
-  }
-
-  for (const c of STAGE_MISMATCH) {
-    await insertPair({
-      candName: c.name,
-      candCredit: null,
-      candSource: null,
-      candRefId: null,
-      isCompetitor: 1,
-      finalType: 'indirect',
-      notes: `业务反馈：竞品对但量级/阶段不可比，不应放入可比公司。${c.note}`,
-    });
-  }
-
-  console.log(`[importYiliFeedbackGoldPairs] 写入 ${inserted} 条，batch=${BATCH_ID}`);
-  console.log(`  漏召补竞品: ${MISSED_COMPETITORS.length}，模态负样本: ${MODALITY_FALSE_POSITIVES.length}，量级不可比: ${STAGE_MISMATCH.length}`);
-
-  const verify = await db.query(
-    `SELECT candidate_display_name, final_is_competitor, final_type FROM competitor_gold_standard_pair
-     WHERE batch_id = ? AND F_DeleteMark = 0 ORDER BY F_Id`,
-    [BATCH_ID]
+  console.error(
+    '[importYiliFeedbackGoldPairs] 已停用：生产金标只来自用户勾选「放入可比公司」，禁止向 competitor_gold_standard_pair 人工导入批次。'
   );
-  console.log('verify:', JSON.stringify(verify, null, 2));
-
-  await db.closePool();
+  process.exit(1);
 }
 
 main().catch(async (e) => {

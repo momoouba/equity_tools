@@ -73,6 +73,7 @@ const {
   parseIsListedFromCandidate,
 } = require('./competitorRelationPersistEnhance');
 const { defaultIncludeInComparable, autoSuggestIncludeInComparable, applyGoldStandardTypeGuard } = require('./competitorTypeUtils');
+const { applyPersistTypeQuota } = require('./competitorPersistQuota');
 const {
   loadGoldStandardAnnotations,
   annotateCandidatesWithGoldStandard,
@@ -1540,6 +1541,10 @@ async function executeCompetitorAnalysisRun(opts) {
     }
 
     const target = buildTargetProfile(row, readiness, subjectType);
+    target.invested_enterprise_id =
+      subjectType === 'invested_enterprise' ? investedEnterpriseId : null;
+    target.pre_investment_project_id =
+      subjectType === 'pre_investment_project' ? preInvestmentProjectId : null;
     await attachStrategyToTarget(target, row);
     let lensProposal = proposeCompetitionLens(target);
     const subjectIdForLens =
@@ -1624,10 +1629,16 @@ async function executeCompetitorAnalysisRun(opts) {
     const recallFlags = await getCompetitorRecallSourceFlags();
     const canFinancing = userId ? await canReadFinancingPoolForUser(userId) : false;
 
+    const goldRecallCtx = {
+      subjectType,
+      investedEnterpriseId: investedEnterpriseId || null,
+      preInvestmentProjectId: preInvestmentProjectId || null,
+    };
     const recallPool = await buildInternalRecallPool({
       target,
       recallFlags,
       canFinancing,
+      goldRecallCtx,
     });
     let candidates = recallPool.candidates;
 
@@ -2246,6 +2257,16 @@ async function executeCompetitorAnalysisRun(opts) {
       logCtx,
     });
     finalList = sortPersistRowsWithGoldPriority(finalList);
+    const quotaResult = applyPersistTypeQuota(finalList);
+    finalList = quotaResult.rows;
+    await appendStepLog({
+      runId,
+      subjectType,
+      stepCode: 'S5_quota',
+      status: 'ok',
+      message: `类型配额裁剪后 ${finalList.length} 条（上限 ${quotaResult.stats.cap}）`,
+      detail: quotaResult.stats,
+    });
 
     finalList = await finalizePersistRows(finalList, logCtx);
     if (!finalList.length) {
@@ -2349,7 +2370,8 @@ async function listCompetitorRunStepLogs(runId) {
   const id = String(runId || '').trim();
   if (!id) return [];
   return db.query(
-    `SELECT F_Id, run_id, subject_type, step_code, status, message, detail_json, F_CreatorTime
+    `SELECT F_Id, run_id, subject_type, step_code, status, message, detail_json,
+            DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS F_CreatorTime
      FROM sourcing_competitor_run_step_log
      WHERE run_id = ?
      ORDER BY F_CreatorTime ASC`,

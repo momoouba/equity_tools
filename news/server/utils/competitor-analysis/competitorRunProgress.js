@@ -2,6 +2,8 @@
  * 竞品分析异步任务进度：按流水线步骤权重估算百分比与 ETA（供说明弹窗轮询展示）。
  */
 
+const { formatBeijingDateTime } = require('../listing/listingBeijingDate');
+
 const STEP_PIPELINE = [
   { code: 'S0_profile', label: '准备主体画像', weight: 5 },
   { code: 'S1_recall', label: '内部数据召回', weight: 10 },
@@ -120,8 +122,8 @@ function computeRunProgress(run, steps) {
     current_step_label: currentLabel,
     eta_hint: etaHint,
     completed_steps: completedSteps,
-    started_at: run?.started_at || null,
-    finished_at: run?.finished_at || null,
+    started_at: formatBeijingDateTime(run?.started_at) || run?.started_at || null,
+    finished_at: formatBeijingDateTime(run?.finished_at) || run?.finished_at || null,
     step_total: STEP_PIPELINE.filter((s) => !s.optional || byCode.has(s.code)).length,
     step_done: completedSteps.length,
   };

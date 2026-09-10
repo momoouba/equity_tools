@@ -27,6 +27,7 @@ class WeChatArticleExtractor:
         """
         self.image_model_config = image_model_config
         self.session = requests.Session()
+        self.last_fetch_error = None
         # 设置请求头，模拟真实浏览器访问（更完整的浏览器标识）
         # 注意：微信公众号有严格的反爬机制，需要尽可能模拟真实浏览器
         self.session.headers.update({
@@ -69,7 +70,11 @@ class WeChatArticleExtractor:
             # 步骤2：爬取网页源码
             html_content = self._fetch_html(actual_url)
             if not html_content:
-                return {'success': False, 'error': '无法获取网页内容', 'content': ''}
+                return {
+                    'success': False,
+                    'error': self.last_fetch_error or '无法获取网页内容',
+                    'content': ''
+                }
             
             # 步骤3：解析HTML，提取正文和图片（使用实际URL作为base_url）
             # 保存原始HTML字符串，用于正则表达式提取图片（备用方案）
@@ -698,11 +703,12 @@ class WeChatArticleExtractor:
     
     def _fetch_html(self, url: str) -> Optional[str]:
         """
-        获取网页HTML内容
-        优先使用HTTP请求，如果检测到反爬页面，尝试使用Playwright无头浏览器
+        获取网页HTML内容（仅 HTTP）。
+        命中验证/反爬页时失败即停，不再走无头浏览器。
         :param url: 文章URL
         :return: HTML内容
         """
+        self.last_fetch_error = None
         try:
             # 处理验证页面URL：如果是wappoc_appmsgcaptcha验证页面，提取target_url参数
             actual_url = url
@@ -737,7 +743,7 @@ class WeChatArticleExtractor:
             if final_url != actual_url:
                 print(f"⚠️ URL被重定向: {actual_url} -> {final_url}", file=sys.stderr)
                 if is_captcha_page:
-                    print(f"⚠️ 检测到重定向到验证页面（wappoc_appmsgcaptcha），需要使用无头浏览器", file=sys.stderr)
+                    print(f"⚠️ 检测到重定向到验证页面（wappoc_appmsgcaptcha），失败即停", file=sys.stderr)
             
             # 检查是否是反爬页面
             html_content = response.text
@@ -776,7 +782,7 @@ class WeChatArticleExtractor:
                 print(f"⚠️ 检测到反爬页面指示词: {anti_crawl_indicators}", file=sys.stderr)
                 print(f"⚠️ 最终URL: {final_url}", file=sys.stderr)
                 print(f"⚠️ 这是微信公众号的反爬验证页面，无法直接获取文章内容", file=sys.stderr)
-                print(f"⚠️ 建议：需要使用无头浏览器（如Selenium/Playwright）或API方式获取内容", file=sys.stderr)
+                print(f"⚠️ 主链路失败即停，不走无头浏览器", file=sys.stderr)
             
             # 检查是否包含实际文章内容标识（优先检查）
             # 微信公众号文章通常包含这些标识之一
@@ -797,53 +803,12 @@ class WeChatArticleExtractor:
             
             if has_anti_crawl:
                 if is_captcha_page:
-                    print(f"⚠️ 检测到验证页面URL（wappoc_appmsgcaptcha），需要使用无头浏览器", file=sys.stderr)
+                    print(f"⚠️ 检测到验证页面URL（wappoc_appmsgcaptcha），失败即停，不走无头浏览器", file=sys.stderr)
                 else:
                     print(f"⚠️ 检测到反爬关键词: {[kw for kw in anti_crawl_keywords if kw in html_content]}", file=sys.stderr)
-                
-                # ========== 图片提取逻辑已禁用 ==========
-                # 即使检测到反爬页面，也检查是否包含图片URL（图片URL可能在JavaScript代码中）
-                # 但图片提取功能已禁用，不再尝试提取图片
-                # mmbiz_count = html_content.count('mmbiz.qpic.cn') + html_content.count('mmbiz&amp;.qpic.cn')
-                # if mmbiz_count > 0:
-                #     print(f"⚠️ 虽然检测到反爬页面，但HTML中包含 {mmbiz_count} 个图片URL，尝试提取图片", file=sys.stderr)
-                #     print(f"⚠️ 注意：即使无法提取正文，也可以尝试提取图片并进行OCR识别", file=sys.stderr)
-                #     # 返回HTML，让后续的图片提取逻辑处理
-                #     return html_content
-                
-                print(f"⚠️ HTTP请求获取到的是反爬验证页面，尝试使用Playwright无头浏览器...", file=sys.stderr)
-                
-                # 尝试使用Playwright无头浏览器
-                playwright_html = self._fetch_html_with_playwright(actual_url)
-                if playwright_html:
-                    # 检查Playwright获取的内容是否有效
-                    playwright_has_content = any(indicator in playwright_html for indicator in article_indicators)
-                    if playwright_has_content:
-                        print(f"✓ Playwright成功获取到有效内容", file=sys.stderr)
-                        return playwright_html
-                    else:
-                        print(f"⚠️ Playwright获取的内容仍然无效", file=sys.stderr)
-                else:
-                    print(f"⚠️ Playwright不可用，跳过Selenium（Firefox启动可能会卡住）", file=sys.stderr)
-                    print(f"⚠️ 建议：1) 使用第三方API服务 2) 手动处理需要验证的文章", file=sys.stderr)
-                    # 跳过Selenium，因为Firefox启动可能会卡住
-                    # selenium_html = self._fetch_html_with_selenium(actual_url)
-                    # if selenium_html:
-                    #     selenium_has_content = any(indicator in selenium_html for indicator in article_indicators)
-                    #     if selenium_has_content:
-                    #         print(f"✓ Selenium成功获取到有效内容", file=sys.stderr)
-                    #         return selenium_html
-                    #     else:
-                    #         print(f"⚠️ Selenium获取的内容仍然无效", file=sys.stderr)
-                
-                # 即使有反爬提示，如果HTML内容足够长，也尝试提取（可能包含部分内容或图片URL）
-                if len(html_content) > 5000:
-                    print(f"⚠️ 虽然有反爬提示，但HTML内容较长（{len(html_content)}字符），继续尝试提取", file=sys.stderr)
-                    return html_content
-                else:
-                    print(f"✗ 检测到微信公众号反爬页面且内容太短，无法直接获取内容", file=sys.stderr)
-                    print(f"✗ 建议：1) 使用无头浏览器（Playwright/Selenium） 2) 使用第三方API服务 3) 手动处理", file=sys.stderr)
-                    return None
+                print(f"✗ HTTP 拿到的是微信验证/反爬页，主链路失败即停", file=sys.stderr)
+                self.last_fetch_error = 'WEIXIN_CAPTCHA_BLOCKED'
+                return None
             
             # 检查HTML内容长度
             if len(html_content) < 500:
@@ -860,6 +825,7 @@ class WeChatArticleExtractor:
             return None
         except requests.exceptions.RequestException as e:
             print(f"请求失败: {str(e)}", file=sys.stderr)
+            self.last_fetch_error = f'请求失败: {str(e)}'
             return None
     
     def _extract_text(self, soup: BeautifulSoup) -> str:

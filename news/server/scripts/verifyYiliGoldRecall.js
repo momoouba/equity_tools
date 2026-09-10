@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * P9 回归：亦立生物金标种子召回是否生效
- * 用法（news 目录）：node server/scripts/verifyYiliGoldRecall.js
+ * 回归：用户勾选可比后，下一轮是否能按名称/信用代码召回。
+ * 用法（news 目录）：
+ *   YILI_IE_ID=投后企业ID node server/scripts/verifyYiliGoldRecall.js
  */
 
 const db = require('../db');
@@ -30,8 +31,15 @@ async function main() {
   clearCompetitorPromptCache();
   console.log('[verifyYiliGoldRecall] 提示词已同步并清缓存');
 
-  const candidates = await recallGoldStandardCandidates(TARGET, null, null);
-  console.log(`[verifyYiliGoldRecall] 金标召回 ${candidates.length} 条:`);
+  const ieId = process.env.YILI_IE_ID || process.env.YILI_INVESTED_ENTERPRISE_ID || '';
+  const candidates = await recallGoldStandardCandidates(TARGET, null, null, {
+    subjectType: 'invested_enterprise',
+    investedEnterpriseId: ieId || null,
+    preInvestmentProjectId: null,
+  });
+  console.log(
+    `[verifyYiliGoldRecall] 用户可比召回 ${candidates.length} 条（invested_enterprise_id=${ieId || '未设'}）:`
+  );
   for (const c of candidates) {
     console.log(`  - ${c.display_name} (source=${c.source}, gold=${!!c._fromGoldStandard})`);
   }
@@ -42,17 +50,13 @@ async function main() {
     hit: names.some((n) => n.includes(kw)),
   }));
   const missed = hits.filter((h) => !h.hit);
-  console.log('[verifyYiliGoldRecall] 漏召补竞品命中:', hits.map((h) => `${h.kw}:${h.hit ? 'Y' : 'N'}`).join(', '));
+  console.log('[verifyYiliGoldRecall] 漏召补竞品命中（仅当用户已勾选可比时才会出现）:', hits.map((h) => `${h.kw}:${h.hit ? 'Y' : 'N'}`).join(', '));
 
-  const pairs = await db.query(
-    `SELECT candidate_display_name, final_is_competitor, final_type
-     FROM competitor_gold_standard_pair
-     WHERE batch_id = 'feedback_yili_20260825' AND F_DeleteMark = 0
-     ORDER BY F_Id`
-  );
-  console.log(`[verifyYiliGoldRecall] DB 金标对 ${pairs.length} 条`);
-
-  if (missed.length) {
+  if (!ieId) {
+    console.log('[verifyYiliGoldRecall] 未设置 YILI_IE_ID，跳过命中断言（金标已改为用户可比勾选）');
+  } else if (!candidates.length) {
+    console.log('[verifyYiliGoldRecall] 该主体尚无用户勾选可比，金标种子为空（符合产品语义，跳过命中断言）');
+  } else if (missed.length) {
     console.warn('[verifyYiliGoldRecall] 未命中:', missed.map((m) => m.kw).join(', '));
     process.exitCode = 1;
   } else {

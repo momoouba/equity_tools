@@ -135,7 +135,7 @@ function SqlCodeEditor({ value = '', onChange, placeholder, minRows = 6 }) {
 
 // ================= SQL配置管理 Tab =================
 
-function SqlConfigTab() {
+function SqlConfigTab({ mode = 'local' }) {
   const [list, setList] = useState([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
@@ -160,12 +160,38 @@ function SqlConfigTab() {
 
   // 外部数据库列表
   const [dbConfigs, setDbConfigs] = useState([])
+  const [sqlMeta, setSqlMeta] = useState({
+    localDatabaseName: 'investment_tools',
+    extractTargets: [
+      'perf_fund', 'perf_relation', 'perf_company', 'perf_ipo',
+      'perf_ipo_progress', 'perf_fof_to_company_ratio',
+      'perf_stock_price', 'perf_exchange_rate', 'b_transaction'
+    ],
+    washTargets: ['b_transaction'],
+    generateTargets: [
+      'b_manage', 'b_manage_indicator', 'b_transaction_indicator', 'b_investor_list',
+      'b_investment', 'b_investment_spv', 'b_investment_indicator', 'b_investment_sum',
+      'b_all_indicator', 'b_ipo', 'b_ipo_a', 'b_ipo_p',
+      'b_project', 'b_project_a', 'b_project_all', 'b_region', 'b_region_a'
+    ],
+    localExtractTargets: ['perf_ipo_progress']
+  })
   const [tableScrollY, setTableScrollY] = useState(520)
+  const isExternal = mode === 'external'
+  const watchedLayer = Form.useWatch('sql_layer', form)
+  const watchedTarget = Form.useWatch('target_table', form)
+  const isLegacyEdit = !!(editRecord && !editRecord.sql_layer)
+  const localExtractTargets = sqlMeta.localExtractTargets || ['perf_ipo_progress']
+  const extDbRequired = isExternal && (
+    watchedLayer === 'wash'
+    || ((watchedLayer === 'extract' || !watchedLayer) && !localExtractTargets.includes(watchedTarget))
+  )
 
   useEffect(() => {
     fetchList()
     fetchDbConfigs()
-  }, [])
+    fetchSqlMeta()
+  }, [mode])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(list.length / pageSize))
@@ -187,7 +213,9 @@ function SqlConfigTab() {
   const fetchList = async () => {
     setLoading(true)
     try {
-      const res = await axios.get('/api/performance/config/sql-list')
+      const res = await axios.get('/api/performance/config/sql-list', {
+        params: { group: isExternal ? 'external' : 'local' }
+      })
       if (res.data.success) {
         setList(res.data.data.list || [])
       }
@@ -195,6 +223,17 @@ function SqlConfigTab() {
       Message.error('获取SQL配置列表失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchSqlMeta = async () => {
+    try {
+      const res = await axios.get('/api/performance/config/sql-meta')
+      if (res.data.success && res.data.data) {
+        setSqlMeta((prev) => ({ ...prev, ...res.data.data }))
+      }
+    } catch (err) {
+      // 白名单获取失败时用内置默认，不影响列表
     }
   }
 
@@ -214,6 +253,9 @@ function SqlConfigTab() {
   const handleAdd = () => {
     setEditRecord(null)
     form.resetFields()
+    form.setFieldsValue(isExternal
+      ? { sql_layer: 'extract', exec_order: 1, target_table: 'perf_fund' }
+      : { sql_layer: 'generate', exec_order: 1, target_table: 'b_manage' })
     setShowModal(true)
   }
 
@@ -221,7 +263,8 @@ function SqlConfigTab() {
     setEditRecord(record)
     form.setFieldsValue({
       interface_name: record.interface_name,
-      external_db_config_id: record.external_db_config_id || '',
+      sql_layer: record.sql_layer || (isExternal ? 'extract' : ''),
+      external_db_config_id: isExternal ? (record.external_db_config_id || '') : undefined,
       exec_order: record.exec_order,
       target_table: record.target_table,
       sql_content: record.sql_content,
@@ -248,16 +291,30 @@ function SqlConfigTab() {
     try {
       const values = await form.validate()
       // 后端接口使用 camelCase，将表单 snake_case 转为请求体
-      const dbId = values.external_db_config_id || null
-      const databaseName = dbId ? (dbConfigs.find(d => d.id === dbId)?.name || '') : ''
+      const sqlLayer = isExternal
+        ? (values.sql_layer || 'extract')
+        : (values.sql_layer === 'generate' || !editRecord ? 'generate' : undefined)
+      const dbId = isExternal ? (values.external_db_config_id || null) : null
+      const databaseName = isExternal
+        ? (dbId ? (dbConfigs.find(d => d.id === dbId)?.name || '') : '')
+        : (sqlMeta.localDatabaseName || 'investment_tools')
       const payload = {
         interfaceName: values.interface_name,
         sqlContent: values.sql_content,
-        targetTable: values.target_table,
+        targetTable: values.sql_layer === 'wash' ? 'b_transaction' : values.target_table,
         execOrder: values.exec_order ?? 0,
-        externalDbConfigId: dbId || undefined,
+        externalDbConfigId: dbId,
         databaseName,
         remark: values.remark || undefined
+      }
+      if (sqlLayer !== undefined) payload.sqlLayer = sqlLayer
+      if (isExternal && sqlLayer === 'extract' && !localExtractTargets.includes(payload.targetTable) && !dbId) {
+        Message.error('extract 须选择外部数据库')
+        return
+      }
+      if (isExternal && sqlLayer === 'wash' && !dbId) {
+        Message.error('wash 须选择外部数据库')
+        return
       }
       setSaving(true)
       let res
@@ -274,7 +331,8 @@ function SqlConfigTab() {
         Message.error(res.data.message || '保存失败')
       }
     } catch (err) {
-      if (err?.message) Message.error(err.message)
+      const msg = err?.response?.data?.message || err?.message
+      if (msg) Message.error(msg)
     } finally {
       setSaving(false)
     }
@@ -330,10 +388,38 @@ function SqlConfigTab() {
     { title: '执行顺序', dataIndex: 'exec_order', width: 80, sorter: (a, b) => a.exec_order - b.exec_order },
     { title: '接口名称', dataIndex: 'interface_name', width: 160 },
     {
+      title: (
+        <Tooltip
+          content={
+            isExternal
+              ? '本页在编辑里选 extract / wash，决定创建版本时先洗流水还是抽维度。'
+              : '本页新增自动为 generate。旧配置可在编辑里从「未分层」改成 generate（SQL 须已只读本系统表）。'
+          }
+        >
+          分层
+        </Tooltip>
+      ),
+      dataIndex: 'sql_layer',
+      width: 90,
+      render: (v) => {
+        if (v === 'extract') return <Tag color="orangered">extract</Tag>
+        if (v === 'wash') return <Tag color="purple">wash</Tag>
+        if (v === 'generate') return <Tag color="arcoblue">generate</Tag>
+        return (
+          <Tooltip content="存量未分层。编辑保存时可选 generate；未改则仍按原链路跑。">
+            <Tag>未分层</Tag>
+          </Tooltip>
+        )
+      }
+    },
+    {
       title: '数据库',
       dataIndex: 'external_db_config_id',
-      width: 80,
-      render: (v) => {
+      width: 120,
+      render: (v, record) => {
+        if (!isExternal) {
+          return <Tag color="blue">{sqlMeta.localDatabaseName || 'investment_tools'}</Tag>
+        }
         if (!v) return <Tag color="blue">主库</Tag>
         const db = dbConfigs.find(d => d.id === v)
         return <Tag color="orange">{db?.name || v}</Tag>
@@ -383,8 +469,15 @@ function SqlConfigTab() {
   return (
     <div className="perf-settings-tab">
       <div className="perf-settings-toolbar">
-        <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>新增SQL配置</Button>
+        <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
+          {isExternal ? '新增外部提取 SQL' : '新增SQL配置'}
+        </Button>
         <Button icon={<IconRefresh />} onClick={fetchList} loading={loading}>刷新</Button>
+        {!isExternal && (
+          <Text type="secondary" style={{ marginLeft: 8 }}>
+            分层：未分层＝旧 19 条仍按原链路。SQL 已改成只读本系统后，编辑里改成 generate。客户库取数请到「外部数据提取」。
+          </Text>
+        )}
       </div>
 
       <Table
@@ -418,7 +511,7 @@ function SqlConfigTab() {
 
       {/* 新增/编辑弹窗 */}
       <Modal
-        title={editRecord ? '编辑SQL配置' : '新增SQL配置'}
+        title={editRecord ? '编辑SQL配置' : (isExternal ? '新增外部提取 SQL' : '新增SQL配置')}
         visible={showModal}
         onCancel={() => setShowModal(false)}
         onOk={handleSave}
@@ -431,26 +524,114 @@ function SqlConfigTab() {
             <Input placeholder="请输入接口名称" />
           </FormItem>
           <FormItem label="执行顺序" field="exec_order" rules={[{ required: true, message: '请输入执行顺序' }]}>
-            <InputNumber min={1} max={9999} placeholder="数字越小越先执行" style={{ width: '100%' }} />
+            <InputNumber min={1} max={9999} placeholder="同层内数字越小越先执行" style={{ width: '100%' }} />
           </FormItem>
-          <FormItem label="数据库选择" field="external_db_config_id" help="不选则在主库执行">
-            <Select placeholder="默认主库" allowClear>
-              <Select.Option value="">主库（默认）</Select.Option>
-              {dbConfigs.map(d => (
-                <Select.Option key={d.id} value={d.id}>{d.name}</Select.Option>
-              ))}
-            </Select>
-          </FormItem>
-          <FormItem label="目标表" field="target_table" rules={[{ required: true, message: '请输入目标数据表名' }]}>
-            <Input placeholder="例如: b_manage_indicator" />
-          </FormItem>
+          {isExternal && (
+            <FormItem
+              label="分层"
+              field="sql_layer"
+              rules={[{ required: true, message: '请选择分层' }]}
+              help="创建版本时先写入本系统 b_version，再入库 b_transaction（wash 或目标表选 b_transaction），最后抽 perf_*。外层可用源库 b_version 或占位符 '${date}'/'${version}' 做时点；scene_tag 是流水行级场景标签。"
+            >
+              <Select
+                placeholder="选择分层"
+                onChange={(v) => {
+                  if (v === 'wash') form.setFieldValue('target_table', 'b_transaction')
+                  else if (form.getFieldValue('target_table') === 'b_transaction') {
+                    form.setFieldValue('target_table', 'perf_fund')
+                  }
+                }}
+              >
+                <Select.Option value="extract">extract（L1 维度 perf_*，也可先写 b_transaction）</Select.Option>
+                <Select.Option value="wash">wash（洗数，先入库 b_transaction）</Select.Option>
+              </Select>
+            </FormItem>
+          )}
+          {!isExternal && (
+            <FormItem
+              label="分层"
+              field="sql_layer"
+              help={
+                isLegacyEdit
+                  ? '旧配置默认未分层，创建版本仍按原链路跑。SQL 已改成只读本系统表后，选 generate 并保存。'
+                  : '本页新增固定为 generate，从本系统 investment_tools 生成看板。'
+              }
+            >
+              {isLegacyEdit ? (
+                <Select placeholder="选择分层">
+                  <Select.Option value="">未分层（旧配置，按原链路）</Select.Option>
+                  <Select.Option value="generate">generate（本系统生成看板）</Select.Option>
+                </Select>
+              ) : (
+                <Select disabled>
+                  <Select.Option value="generate">generate（本系统生成看板）</Select.Option>
+                </Select>
+              )}
+            </FormItem>
+          )}
+          {isExternal ? (
+            <FormItem
+              label="数据库选择"
+              field="external_db_config_id"
+              rules={extDbRequired ? [{ required: true, message: '请选择外部数据库' }] : []}
+              help={
+                localExtractTargets.includes(watchedTarget)
+                  ? '不选择则为主库（本系统 investment_tools）。perf_ipo_progress 从本库 ipo_progress 取数，请留空。'
+                  : '不选择则为主库（本系统 investment_tools）。从客户业务库取数时，请选择「系统配置-数据库连接」中的外部库。'
+              }
+            >
+              <Select placeholder="不选择则为主库" allowClear>
+                <Select.Option value="">主库（本系统 investment_tools）</Select.Option>
+                {dbConfigs.map(d => (
+                  <Select.Option key={d.id} value={d.id}>{d.name}</Select.Option>
+                ))}
+              </Select>
+            </FormItem>
+          ) : (
+            <FormItem
+              label="数据库"
+              help="本 Tab 固定连接当前业务库，默认 investment_tools，不使用外部库。需要抽客户库的 SQL 请到「外部数据提取」。"
+            >
+              <Input disabled value={sqlMeta.localDatabaseName || 'investment_tools'} />
+            </FormItem>
+          )}
+          {watchedLayer === 'wash' ? (
+            <FormItem label="目标表" field="target_table">
+              <Input disabled />
+            </FormItem>
+          ) : isExternal ? (
+            <FormItem label="目标表" field="target_table" rules={[{ required: true, message: '请选择目标表' }]}>
+              <Select placeholder="选择 perf_* 维度表">
+                {(sqlMeta.extractTargets || []).map((t) => (
+                  <Select.Option key={t} value={t}>{t}</Select.Option>
+                ))}
+              </Select>
+            </FormItem>
+          ) : isLegacyEdit && watchedLayer !== 'generate' ? (
+            <FormItem label="目标表" field="target_table" rules={[{ required: true, message: '请输入目标数据表名' }]}>
+              <Input placeholder="例如: b_manage_indicator" />
+            </FormItem>
+          ) : (
+            <FormItem label="目标表" field="target_table" rules={[{ required: true, message: '请选择目标表' }]}>
+              <Select placeholder="选择本系统看板表">
+                {(sqlMeta.generateTargets || []).map((t) => (
+                  <Select.Option key={t} value={t}>{t}</Select.Option>
+                ))}
+              </Select>
+            </FormItem>
+          )}
           <FormItem
             label="SQL代码"
             field="sql_content"
             rules={[{ required: true, message: '请输入SQL查询语句' }]}
             help={
               <span style={{ display: 'block', marginTop: 4 }}>
-                可使用 <code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;date&#125;&#39;</code> 作为日期参数，执行时会被替换为传入的日期，格式如 <code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;2025-06-30&#39;</code>；SQL 中多处 <code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;date&#125;&#39;</code> 均会替换为同一日期。
+                占位符：<code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;date&#125;&#39;</code>
+                、<code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;version&#125;&#39;</code>
+                {isExternal ? '；wash 可用 ' : '；环比可用 '}
+                <code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;prev_month_version&#125;&#39;</code>
+                、<code style={{ background: '#f2f3f5', padding: '0 4px', borderRadius: 2 }}>&#39;$&#123;prev_year_end_version&#125;&#39;</code>
+                （无上月 ready 版时替换为空字符串，首月不必算上月未实现）。
               </span>
             }
             extra={
@@ -1121,18 +1302,21 @@ function ScheduledTaskTab() {
 // ================= 主页面 =================
 
 function PerformanceSettingsPage() {
-  const [activeTab, setActiveTab] = useState('sql')
+  const [activeTab, setActiveTab] = useState('external')
 
   return (
     <div className="perf-settings-page">
       <div className="perf-settings-header">
         <h2 className="perf-settings-title">业绩看板设置</h2>
-        <div className="perf-settings-desc">管理业绩看板的数据接口配置和定时任务</div>
+        <div className="perf-settings-desc">外部数据提取写入 perf_* / b_transaction；数据接口配置从本系统 investment_tools 生成其余看板</div>
       </div>
 
       <Tabs activeTab={activeTab} onChange={setActiveTab} type="line" style={{ marginBottom: 8 }} className="perf-settings-tabs">
+        <TabPane key="external" title="外部数据提取">
+          <SqlConfigTab mode="external" />
+        </TabPane>
         <TabPane key="sql" title="数据接口配置">
-          <SqlConfigTab />
+          <SqlConfigTab mode="local" />
         </TabPane>
         <TabPane key="indicators" title="业绩看板说明配置">
           <IndicatorDescribeTab />

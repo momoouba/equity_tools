@@ -15,10 +15,28 @@ function pad2(n) {
   return String(n).padStart(2, '0')
 }
 
-/** 时间列：默认两行 YYYY-MM-DD / HH:mm:ss；oneLine 时同一行 */
+/** 时间列：默认两行 YYYY-MM-DD / HH:mm:ss（北京时间）；oneLine 时同一行 */
 export function formatAdminDateTime(value, { oneLine = false } = {}) {
   if (value == null || value === '') return '-'
-  let s = String(value).trim().replace('T', ' ')
+  const raw = String(value).trim()
+  const hasTz = /T/.test(raw) || /[zZ]$/.test(raw) || /[+-]\d{2}:\d{2}$/.test(raw)
+  if (hasTz) {
+    const d = value instanceof Date ? value : new Date(value)
+    if (!Number.isNaN(d.getTime())) {
+      const beijing = d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
+      const day = beijing.slice(0, 10)
+      const time = beijing.slice(11, 19)
+      if (oneLine) return `${day} ${time}`
+      return (
+        <span className="admin-dt">
+          {day}
+          <br />
+          {time}
+        </span>
+      )
+    }
+  }
+  let s = raw.replace('T', ' ')
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) s = `${s} 00:00:00`
   const m = s.match(/^(\d{4}-\d{2}-\d{2})\s+(\d{1,2}:\d{2}(?::\d{2})?)/)
   let day

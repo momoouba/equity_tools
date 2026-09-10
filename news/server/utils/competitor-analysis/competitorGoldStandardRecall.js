@@ -1,10 +1,10 @@
 'use strict';
 
 /**
- * 竞品分析：金标种子召回
+ * 竞品分析：用户可比金标种子召回
  *
- * 当某个目标企业已有标注过的金标竞品时，先把这些竞品加入内部召回池，
- * 避免因为早期公司简介稀疏或 S2 规则分不足而漏召，降低对 S4 联网方差的依赖。
+ * 金标只来自用户在竞品分析后勾选「放入可比公司」的企业，不读取人工导入的
+ * competitor_gold_standard_pair 批次。下一轮分析把这些公司优先召回、标注。
  */
 
 const db = require('../../db');
@@ -18,24 +18,33 @@ const {
 const { isDomesticExchange } = require('../listing/listedUniverseUtils');
 const { namesMatchLoosely } = require('./competitorCompanyMatch');
 
-/** 海外/简称金标：本地库无实体时的种子简介，避免 S3/S5「仅有名称」误杀 */
-const GOLD_SEED_PRODUCT_INTRO = {
-  ITM: '德国核药企业 ITM Isotope Technologies Munich，专注医用放射性同位素与核素偶联药物（RDC/TRT）的研发、生产与供应，覆盖镥-177 等治疗用核素及肿瘤靶向核药管线。',
-  Curium: '全球核药龙头 Curium，主营诊断与治疗用放射性药物的研发、生产与商业化，产品矩阵覆盖 PET/SPECT 显像剂与肿瘤核素治疗，规模显著大于早期核药初创。',
-  速康药业:
-    '核药/放射性药物方向企业（反馈表金标种子；本地融资库暂无可靠工商全称，以名称召回）。',
-  先通医药:
-    '创新放射性药物研发生产商，管线覆盖神经退行性疾病、心血管与肿瘤核药；已有 Aβ-PET 等商业化产品，阶段/量级通常高于早期初创。',
-};
+const FIN_SELECT = `F_Id, company_name, project_name, company_credit_code, project_desc,
+                ai_product_intro, ai_company_tags_display, ai_company_tags_json,
+                industry_std_lv1, industry_std_lv2, industry_category_4,
+                funding_amt_raw, estimated_amt_raw, round, latest_round, event_date`;
 
-function seedIntroForGoldName(name) {
-  const n = strTrim(name);
-  if (!n) return '';
-  if (GOLD_SEED_PRODUCT_INTRO[n]) return GOLD_SEED_PRODUCT_INTRO[n];
-  for (const [k, v] of Object.entries(GOLD_SEED_PRODUCT_INTRO)) {
-    if (namesMatchLoosely(n, k)) return v;
-  }
-  return '';
+function hasFinancingIntro(row) {
+  return !!(
+    strTrim(row?.ai_product_intro) ||
+    strTrim(row?.ai_company_tags_display) ||
+    row?.ai_company_tags_json
+  );
+}
+
+function searchNameToken(name) {
+  const n = strTrim(name)
+    .replace(/[（(].*?[）)]/g, '')
+    .replace(/(股份有限公司|有限责任公司|有限公司|集团|控股)$/g, '')
+    .trim();
+  if (n.length >= 2 && n.length <= 24) return n;
+  return strTrim(name).slice(0, 16);
+}
+
+function parsePrefCompetitorKey(key) {
+  const k = strTrim(key);
+  if (k.startsWith('cc:')) return { credit: normalizeCreditCode(k.slice(3)), name: '' };
+  if (k.startsWith('name:')) return { credit: '', name: strTrim(k.slice(5)) };
+  return { credit: '', name: k };
 }
 
 function parseFinancingTags(row) {
@@ -133,165 +142,159 @@ function mapNewShareRow(row) {
   };
 }
 
-async function recallGoldStandardCandidates(target, excludeCredit, excludeName) {
-  if (!target) return [];
-  const targetCredit = normalizeCreditCode(target.unified_credit_code);
-  const targetName = strTrim(target.display_name);
-  if (!targetCredit && !targetName) return [];
-
+async function resolveFinancingEntity(credit, name) {
+  const code = normalizeCreditCode(credit);
+  if (code) {
+    const rows = await db.query(
+      `SELECT ${FIN_SELECT}
+       FROM sourcing_financing_event
+       WHERE F_DeleteMark = 0 AND company_credit_code = ?
+       ORDER BY (TRIM(IFNULL(ai_product_intro, '')) <> '') DESC, event_date DESC, F_Id DESC
+       LIMIT 1`,
+      [code]
+    );
+    if (rows[0]) return mapFinancingRow(rows[0]);
+    const [ipo] = await db.query(
+      `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
+              ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
+              qcc_company_intro, biz_update_time, F_LastModifyTime, F_CreatorTime
+       FROM ipo_project
+       WHERE F_DeleteMark = 0 AND unified_credit_code = ?
+       LIMIT 1`,
+      [code]
+    );
+    if (ipo) return mapIpoRow(ipo);
+  }
+  const token = searchNameToken(name);
+  if (!token || token.length < 2) return null;
   const rows = await db.query(
-    `SELECT DISTINCT
-       g.candidate_source,
-       g.candidate_ref_id,
-       g.candidate_display_name,
-       g.candidate_credit_code,
-       g.final_type,
-       g.notes
-     FROM competitor_gold_standard_pair g
-     WHERE g.F_DeleteMark = 0
-       AND g.final_is_competitor = 1
-       AND (g.target_credit_code = ? OR g.target_display_name = ?)`,
-    [targetCredit || '', targetName]
+    `SELECT ${FIN_SELECT}
+     FROM sourcing_financing_event
+     WHERE F_DeleteMark = 0 AND company_name LIKE ?
+     ORDER BY (TRIM(IFNULL(ai_product_intro, '')) <> '') DESC, event_date DESC, F_Id DESC
+     LIMIT 8`,
+    [`%${token}%`]
   );
+  const hit =
+    (rows || []).find((r) => namesMatchLoosely(r.company_name, name) && hasFinancingIntro(r)) ||
+    (rows || []).find((r) => namesMatchLoosely(r.company_name, name)) ||
+    null;
+  return hit ? mapFinancingRow(hit) : null;
+}
 
-  if (!rows?.length) return [];
+function markUserComparable(candidate, type) {
+  if (!candidate) return null;
+  candidate.source = candidate.source || 'user_comparable';
+  candidate.sources = candidate.sources || [candidate.source, 'user_comparable'].filter(Boolean);
+  if (!candidate.sources.includes('user_comparable')) candidate.sources.push('user_comparable');
+  candidate._fromGoldStandard = true;
+  candidate._goldStandardIsCompetitor = true;
+  candidate._goldStandardType = type || candidate._goldStandardType || 'direct';
+  candidate._goldStandardNegative = false;
+  return candidate;
+}
+
+async function loadUserComparableSeeds(subjectCtx) {
+  const subjectType = strTrim(subjectCtx?.subjectType || subjectCtx?.subject_type);
+  const ieId = subjectCtx?.investedEnterpriseId || subjectCtx?.invested_enterprise_id || null;
+  const pipId = subjectCtx?.preInvestmentProjectId || subjectCtx?.pre_investment_project_id || null;
+  if (!subjectType || (!ieId && !pipId)) return [];
+
+  const seeds = [];
+  const seen = new Set();
+  const pushSeed = (credit, name, type) => {
+    const key = candidateDedupeKey({ unified_credit_code: credit, display_name: name });
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    seeds.push({
+      candidate_display_name: strTrim(name),
+      candidate_credit_code: normalizeCreditCode(credit),
+      final_is_competitor: 1,
+      final_type: type || 'direct',
+      notes: '用户勾选放入可比公司',
+    });
+  };
+
+  const rels = await db.query(
+    `SELECT competitor_display_name, unified_credit_code, competitor_type
+     FROM sourcing_competitor_relation
+     WHERE F_DeleteMark = 0
+       AND include_in_comparable = 1
+       AND subject_type = ?
+       AND (invested_enterprise_id <=> ?)
+       AND (pre_investment_project_id <=> ?)
+     ORDER BY F_LastModifyTime DESC`,
+    [subjectType, ieId ? String(ieId) : null, pipId ? String(pipId) : null]
+  );
+  for (const r of rels || []) {
+    pushSeed(r.unified_credit_code, r.competitor_display_name, r.competitor_type);
+  }
+
+  const prefs = await db.query(
+    `SELECT competitor_key
+     FROM sourcing_competitor_comparable_pref
+     WHERE include_in_comparable = 1
+       AND subject_type = ?
+       AND (invested_enterprise_id <=> ?)
+       AND (pre_investment_project_id <=> ?)`,
+    [subjectType, ieId ? String(ieId) : null, pipId ? String(pipId) : null]
+  );
+  for (const p of prefs || []) {
+    const parsed = parsePrefCompetitorKey(p.competitor_key);
+    if (!parsed.credit && !parsed.name) continue;
+    pushSeed(parsed.credit, parsed.name, 'direct');
+  }
+
+  return seeds;
+}
+
+async function recallGoldStandardCandidates(target, excludeCredit, excludeName, subjectCtx) {
+  const ctx = subjectCtx || {
+    subjectType: target?.subject_type,
+    investedEnterpriseId: target?.invested_enterprise_id,
+    preInvestmentProjectId: target?.pre_investment_project_id,
+  };
+  const seeds = await loadUserComparableSeeds(ctx);
+  if (!seeds.length) return [];
 
   const out = [];
   const exC = normalizeCreditCode(excludeCredit);
   const exN = strTrim(excludeName).toLowerCase();
 
-  for (const r of rows) {
-    const source = strTrim(r.candidate_source);
-    const refId = r.candidate_ref_id;
-    let candidate = null;
-
-    if (source === 'sourcing_financing_event' && refId) {
-      const [fin] = await db.query(
-        `SELECT F_Id, company_name, project_name, company_credit_code,
-                ai_product_intro, ai_company_tags_display, ai_company_tags_json,
-                industry_std_lv1, industry_std_lv2, industry_category_4,
-                funding_amt_raw, estimated_amt_raw, round, latest_round, event_date
-         FROM sourcing_financing_event
-         WHERE F_Id = ? AND F_DeleteMark = 0
-         LIMIT 1`,
-        [refId]
-      );
-      if (fin) candidate = mapFinancingRow(fin);
-    } else if (source === 'ipo_project' && refId) {
-      const [ipo] = await db.query(
-        `SELECT F_Id, project_name, company, unified_credit_code, sub,
-                ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
-                qcc_company_intro, biz_update_time, F_LastModifyTime, F_CreatorTime
-         FROM ipo_project
-         WHERE F_Id = ? AND F_DeleteMark = 0
-         LIMIT 1`,
-        [refId]
-      );
-      if (ipo) candidate = mapIpoRow(ipo);
-    } else if (source === 'ipo_new_share' && refId) {
-      const [ns] = await db.query(
-        `SELECT F_Id, stock_code, stock_name, exchange,
-                enterprise_full_name_cn, enterprise_full_name_display,
-                unified_credit_code, sw_industry_l1, sw_industry_l2, industry_category_4,
-                product_intro, company_intro, industry_tags_display, industry_tags_json,
-                public_date, F_LastModifyTime, F_CreatorTime
-         FROM ipo_new_share
-         WHERE F_Id = ?
-         LIMIT 1`,
-        [refId]
-      );
-      if (ns) candidate = mapNewShareRow(ns);
-    }
-
+  for (const r of seeds) {
+    let candidate = await resolveFinancingEntity(r.candidate_credit_code, r.candidate_display_name);
     if (!candidate) {
-      // 候选暂时查不到实体记录时，用金标信息构造一个轻量候选，后续 enrich 补齐
-      const seedIntro = seedIntroForGoldName(r.candidate_display_name);
       candidate = {
-        source: source || 'gold_standard',
-        source_id: String(refId || ''),
+        source: 'user_comparable',
+        source_id: '',
         display_name: strTrim(r.candidate_display_name),
         unified_credit_code: normalizeCreditCode(r.candidate_credit_code),
-        product_intro: seedIntro,
+        product_intro: '',
         qcc_intro: '',
-        tags: seedIntro ? ['核药', '放射性药物'] : [],
+        tags: [],
         industry_l1: null,
         industry_l2: null,
         industry_category_4: null,
         financing_amount_text: null,
         event_date: null,
         latest_round: null,
-        _fromGoldStandard: true,
-        _goldStandardType: r.final_type,
-        _goldStandardIsCompetitor: true,
-        ...(goldNotesExcludeComparable(r.notes) ? { _goldStandardComparableExclude: true } : {}),
       };
-    } else {
-      candidate._fromGoldStandard = true;
-      candidate._goldStandardType = r.final_type;
-      candidate._goldStandardIsCompetitor = true;
-      if (goldNotesExcludeComparable(r.notes)) {
-        candidate._goldStandardComparableExclude = true;
-      }
-      if (!strTrim(candidate.product_intro)) {
-        const seedIntro = seedIntroForGoldName(r.candidate_display_name) || seedIntroForGoldName(candidate.display_name);
-        if (seedIntro) candidate.product_intro = seedIntro;
-      }
     }
-
-    // 有信用代码但融资 ref 未命中时，按信用代码补一次融资画像
-    if (
-      candidate &&
-      !strTrim(candidate.product_intro) &&
-      normalizeCreditCode(r.candidate_credit_code)
-    ) {
-      const [finByCredit] = await db.query(
-        `SELECT F_Id, company_name, project_name, company_credit_code,
-                ai_product_intro, ai_company_tags_display, ai_company_tags_json,
-                industry_std_lv1, industry_std_lv2, industry_category_4,
-                funding_amt_raw, estimated_amt_raw, round, latest_round, event_date
-         FROM sourcing_financing_event
-         WHERE F_DeleteMark = 0 AND company_credit_code = ?
-         ORDER BY event_date DESC, F_Id DESC
-         LIMIT 1`,
-        [normalizeCreditCode(r.candidate_credit_code)]
-      );
-      if (finByCredit) {
-        const mapped = mapFinancingRow(finByCredit);
-        candidate = {
-          ...mapped,
-          _fromGoldStandard: true,
-          _goldStandardType: r.final_type,
-          _goldStandardIsCompetitor: true,
-          display_name: mapped.display_name || candidate.display_name,
-        };
-      }
-    }
-
+    markUserComparable(candidate, r.final_type);
     if (exC && candidate.unified_credit_code === exC) continue;
     if (exN && strTrim(candidate.display_name).toLowerCase() === exN) continue;
-
     out.push(candidate);
   }
-
   return out;
 }
 
-/**
- * 加载目标下全部金标标注（含非竞品），供落库过滤 / 类型护栏 / checklist 使用。
- */
-async function loadGoldStandardAnnotations(target) {
-  if (!target) return [];
-  const targetCredit = normalizeCreditCode(target.unified_credit_code);
-  const targetName = strTrim(target.display_name);
-  if (!targetCredit && !targetName) return [];
-  const rows = await db.query(
-    `SELECT candidate_display_name, candidate_credit_code, final_is_competitor, final_type, notes
-     FROM competitor_gold_standard_pair
-     WHERE F_DeleteMark = 0
-       AND (target_credit_code = ? OR target_display_name = ?)`,
-    [targetCredit || '', targetName]
-  );
-  return rows || [];
+async function loadGoldStandardAnnotations(target, subjectCtx) {
+  const ctx = subjectCtx || {
+    subjectType: target?.subject_type,
+    investedEnterpriseId: target?.invested_enterprise_id,
+    preInvestmentProjectId: target?.pre_investment_project_id,
+  };
+  return loadUserComparableSeeds(ctx);
 }
 
 function matchGoldAnnotation(candidate, annotations) {
@@ -306,14 +309,10 @@ function matchGoldAnnotation(candidate, annotations) {
   return null;
 }
 
-/** 金标备注：明确标注不应纳入可比（阶段/量级不可比等） */
-function goldNotesExcludeComparable(notes) {
-  const n = strTrim(notes);
-  if (!n) return false;
-  return /不应放入可比|量级不可比|阶段\/量级不可比|阶段差异.*不可比/.test(n);
+function goldNotesExcludeComparable() {
+  return false;
 }
 
-/** 在 scored 池上标注金标正/负样本，供类型护栏与落库过滤 */
 function annotateCandidatesWithGoldStandard(scored, annotations) {
   if (!scored?.length || !annotations?.length) return { positive: 0, negative: 0 };
   let positive = 0;
@@ -326,9 +325,6 @@ function annotateCandidatesWithGoldStandard(scored, annotations) {
     c._goldStandardType = hit.final_type || c._goldStandardType;
     c._goldStandardIsCompetitor = isComp;
     c._goldStandardNegative = !isComp;
-    if (goldNotesExcludeComparable(hit.notes)) {
-      c._goldStandardComparableExclude = true;
-    }
     if (isComp) positive += 1;
     else negative += 1;
   }
@@ -341,5 +337,8 @@ module.exports = {
   matchGoldAnnotation,
   annotateCandidatesWithGoldStandard,
   namesMatchLoosely,
-  GOLD_SEED_PRODUCT_INTRO,
+  mapFinancingRow,
+  mapIpoRow,
+  mapNewShareRow,
+  goldNotesExcludeComparable,
 };

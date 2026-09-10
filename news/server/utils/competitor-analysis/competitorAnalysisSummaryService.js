@@ -1,4 +1,5 @@
 const db = require('../../db');
+const { formatBeijingDateTime } = require('../listing/listingBeijingDate');
 const { listCompetitorRunStepLogs } = require('./competitorAnalysisRunner');
 const { computeRunProgress, buildProgressHeader } = require('./competitorRunProgress');
 const {
@@ -132,9 +133,8 @@ function formatRejectedSamples(arr, max = 20) {
 function buildProcessNarrative(steps, run) {
   const lines = [];
   if (run) {
-    lines.push(
-      `最近一次分析运行：${run.F_Id}，状态 ${run.status || '—'}，完成时间 ${run.finished_at || run.F_LastModifyTime || '—'}。`
-    );
+    const finished = formatBeijingDateTime(run.finished_at || run.F_LastModifyTime) || '—';
+    lines.push(`最近一次分析运行：${run.F_Id}，状态 ${run.status || '—'}，完成时间 ${finished}（北京时间）。`);
     if (run.message) lines.push(run.message);
   } else {
     lines.push('尚未找到竞品分析运行记录，请先发起「竞品分析」任务。');
@@ -265,7 +265,7 @@ function buildProcessNarrative(steps, run) {
   for (const code of order) {
     const s = byCode.get(code);
     if (!s) continue;
-    lines.push(`• ${code}：${s.message || ''}`);
+    lines.push(`• ${code}：${s.message || ''}（${formatBeijingDateTime(s.F_CreatorTime) || '—'}）`);
   }
   lines.push(
     '',
@@ -458,7 +458,7 @@ async function buildCompetitorAnalysisSummary(opts) {
     run_id: run?.F_Id || null,
     run_status: run?.status || null,
     run_message: run?.message || null,
-    finished_at: run?.finished_at || null,
+    finished_at: formatBeijingDateTime(run?.finished_at) || run?.finished_at || null,
     progress,
     process_text,
     why_text: why_lines.join('\n'),

@@ -6,6 +6,15 @@ const router = express.Router();
 const db = require('../../db');
 const { generateId } = require('../../utils/idGenerator');
 const { getCurrentUser } = require('../../middleware/auth');
+const {
+  LOCAL_DATABASE_NAME,
+  EXTRACT_TARGETS,
+  WASH_TARGETS,
+  GENERATE_TARGETS,
+  LOCAL_EXTRACT_TARGETS,
+  validateSqlLayerConfig,
+  normalizeLayer
+} = require('../../utils/performance/sqlLayers');
 
 router.use(getCurrentUser);
 
@@ -80,17 +89,25 @@ function checkForbiddenStatements(sql) {
 function getSqlFirstKeyword(sql) {
   let s = (sql || '').trim();
   if (!s) return null;
-  // 去掉开头的单行注释
-  while (s.startsWith('--')) {
-    const idx = s.indexOf('\n');
-    if (idx === -1) return null;
-    s = s.slice(idx + 1).trim();
-  }
-  // 去掉开头的块注释
-  while (s.startsWith('/*')) {
-    const end = s.indexOf('*/');
-    if (end === -1) return null;
-    s = s.slice(end + 2).trim();
+  for (let guard = 0; guard < 50 && s; guard++) {
+    if (s.startsWith('--')) {
+      const idx = s.indexOf('\n');
+      if (idx === -1) return null;
+      s = s.slice(idx + 1).trim();
+      continue;
+    }
+    if (s.startsWith('/*')) {
+      const end = s.indexOf('*/');
+      if (end === -1) return null;
+      s = s.slice(end + 2).trim();
+      continue;
+    }
+    // 允许 (SELECT ... UNION ...) 这种外包一层括号
+    if (s.startsWith('(')) {
+      s = s.slice(1).trim();
+      continue;
+    }
+    break;
   }
   const match = s.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
   return match ? match[1].toUpperCase() : null;
@@ -99,6 +116,64 @@ function getSqlFirstKeyword(sql) {
 function isAllowedSql(sql) {
   const first = getSqlFirstKeyword(sql);
   return first && ALLOWED_SQL_STARTS.includes(first);
+}
+
+/**
+ * 按语句级分号拆分（忽略字符串/注释里的 ;）。
+ * 末尾分号不算多一条。
+ */
+function splitSqlStatements(sql) {
+  const s = (sql || '').replace(/\r\n/g, '\n');
+  const statements = [];
+  let buf = '';
+  let i = 0;
+  const n = s.length;
+  const push = () => {
+    const t = buf.trim();
+    buf = '';
+    if (t && getSqlFirstKeyword(t)) statements.push(t);
+  };
+  while (i < n) {
+    if (s[i] === "'" || s[i] === '"') {
+      const q = s[i];
+      buf += s[i++];
+      while (i < n && s[i] !== q) {
+        if (s[i] === '\\') buf += s[i++];
+        if (i < n) buf += s[i++];
+      }
+      if (i < n) buf += s[i++];
+      continue;
+    }
+    if (s[i] === '-' && s[i + 1] === '-') {
+      buf += s[i++];
+      buf += s[i++];
+      while (i < n && s[i] !== '\n') buf += s[i++];
+      continue;
+    }
+    if (s[i] === '/' && s[i + 1] === '*') {
+      buf += s[i++];
+      buf += s[i++];
+      while (i < n - 1 && !(s[i] === '*' && s[i + 1] === '/')) buf += s[i++];
+      if (i < n) buf += s[i++];
+      if (i < n) buf += s[i++];
+      continue;
+    }
+    if (s[i] === ';') {
+      push();
+      i++;
+      continue;
+    }
+    buf += s[i++];
+  }
+  push();
+  return statements;
+}
+
+function extraSqlStatementMessage(sql) {
+  const stmts = splitSqlStatements(sql);
+  if (stmts.length <= 1) return null;
+  const second = getSqlFirstKeyword(stmts[1]) || '未知';
+  return `每条数据接口只能包含一条 SQL，当前检测到 ${stmts.length} 条（第二段以 ${second} 开头）。请删掉第一个分号后面的内容后再保存。`;
 }
 
 /**
@@ -296,17 +371,43 @@ router.put('/indicators', async (req, res) => {
 });
 
 /**
+ * 分层目标表白名单（设置页 Tab 用）
+ * GET /api/performance/config/sql-meta
+ */
+router.get('/sql-meta', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      localDatabaseName: LOCAL_DATABASE_NAME,
+      extractTargets: EXTRACT_TARGETS,
+      localExtractTargets: LOCAL_EXTRACT_TARGETS,
+      washTargets: WASH_TARGETS,
+      generateTargets: GENERATE_TARGETS
+    }
+  });
+});
+
+/**
  * 获取 SQL 配置列表
- * GET /api/performance/config/sql-list
+ * GET /api/performance/config/sql-list?group=external|local
+ * external = extract+wash；local = generate + 存量未分层（sql_layer IS NULL）
  */
 router.get('/sql-list', async (req, res) => {
   try {
+    const group = String(req.query.group || '').trim().toLowerCase();
+    let layerWhere = '';
+    if (group === 'external') {
+      layerWhere = ` AND sql_layer IN ('extract', 'wash')`;
+    } else if (group === 'local') {
+      layerWhere = ` AND (sql_layer = 'generate' OR sql_layer IS NULL OR sql_layer = '')`;
+    }
+
     const rows = await db.query(
       `SELECT F_Id as id, database_name, interface_name, sql_content, exec_order,
-              external_db_config_id, target_table, remark,
+              sql_layer, external_db_config_id, target_table, remark,
               F_CreatorUserId, F_CreatorTime, F_LastModifyUserId, F_LastModifyTime
        FROM b_sql
-       WHERE F_DeleteMark = 0
+       WHERE F_DeleteMark = 0${layerWhere}
        ORDER BY exec_order ASC`
     );
     
@@ -327,7 +428,7 @@ router.get('/sql/:id', async (req, res) => {
     
     const rows = await db.query(
       `SELECT F_Id as id, database_name, interface_name, sql_content, exec_order,
-              external_db_config_id, target_table, remark,
+              sql_layer, external_db_config_id, target_table, remark,
               F_CreatorUserId, F_CreatorTime, F_LastModifyUserId, F_LastModifyTime
        FROM b_sql WHERE F_Id = ? AND F_DeleteMark = 0`,
       [id]
@@ -356,7 +457,7 @@ router.post('/sql', async (req, res) => {
       : (req.currentUserId != null ? String(req.currentUserId) : null);
     const {
       databaseName, interfaceName, sqlContent, execOrder,
-      externalDbConfigId, targetTable
+      externalDbConfigId, targetTable, remark, sqlLayer
     } = req.body;
     
     if (!interfaceName || !sqlContent || !targetTable) {
@@ -370,20 +471,41 @@ router.post('/sql', async (req, res) => {
         message: '仅允许 SELECT、WITH（CTE）或 INSERT 开头的语句；禁止 UPDATE/DELETE/DROP/TRUNCATE/ALTER'
       });
     }
+    const extraSql = extraSqlStatementMessage(sqlContent);
+    if (extraSql) {
+      return res.status(400).json({ success: false, message: extraSql });
+    }
     const forbidden = checkForbiddenStatements(sqlContent);
     if (forbidden) {
       return res.status(400).json({ success: false, message: `SQL 中包含禁止的指令: ${forbidden}` });
     }
+
+    const layer = normalizeLayer(sqlLayer);
+    const layerCheck = validateSqlLayerConfig({
+      sqlLayer,
+      targetTable,
+      externalDbConfigId,
+      sqlContent
+    });
+    if (!layerCheck.ok) {
+      return res.status(400).json({ success: false, message: layerCheck.message });
+    }
+
+    const resolvedDbName = layer === 'generate'
+      ? LOCAL_DATABASE_NAME
+      : (databaseName || '');
+    const resolvedExternalId = layer === 'generate' ? null : (externalDbConfigId || null);
     
     const id = await generateId('b_sql');
     
     await db.execute(
       `INSERT INTO b_sql
-       (F_Id, database_name, interface_name, sql_content, exec_order,
-        external_db_config_id, target_table,
+       (F_Id, database_name, interface_name, sql_content, exec_order, sql_layer,
+        external_db_config_id, target_table, remark,
         F_CreatorUserId, F_CreatorTime, F_DeleteMark)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
-      [id, databaseName, interfaceName, sqlContent, execOrder || 0, externalDbConfigId, targetTable, creatorId]
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
+      [id, resolvedDbName, interfaceName, sqlContent, execOrder || 0, layer,
+        resolvedExternalId, targetTable, remark || null, creatorId]
     );
     
     res.json({ success: true, message: 'SQL配置已创建', data: { id } });
@@ -398,6 +520,7 @@ const SQL_FIELD_LABELS = {
   interface_name: '接口名称',
   sql_content: 'SQL内容',
   exec_order: '执行顺序',
+  sql_layer: '分层',
   external_db_config_id: '数据库选择',
   target_table: '目标表',
   remark: '备注'
@@ -420,7 +543,7 @@ router.put('/sql/:id', async (req, res) => {
       : (req.currentUserId != null ? String(req.currentUserId) : null);
     const {
       databaseName, interfaceName, sqlContent, execOrder,
-      externalDbConfigId, targetTable, remark
+      externalDbConfigId, targetTable, remark, sqlLayer
     } = req.body;
     
     // SQL 安全检查：仅允许 SELECT / WITH / INSERT
@@ -431,33 +554,57 @@ router.put('/sql/:id', async (req, res) => {
           message: '仅允许 SELECT、WITH（CTE）或 INSERT 开头的语句'
         });
       }
+      const extraSql = extraSqlStatementMessage(sqlContent);
+      if (extraSql) {
+        return res.status(400).json({ success: false, message: extraSql });
+      }
       const forbidden = checkForbiddenStatements(sqlContent);
       if (forbidden) {
         return res.status(400).json({ success: false, message: `SQL 中包含禁止的指令: ${forbidden}` });
       }
     }
     
+    const incomingLayer = sqlLayer === undefined ? undefined : normalizeLayer(sqlLayer);
+
     const newVals = {
       database_name: databaseName,
       interface_name: interfaceName,
       sql_content: sqlContent,
       exec_order: execOrder == null ? 0 : execOrder,
+      sql_layer: incomingLayer,
       external_db_config_id: externalDbConfigId || null,
       target_table: targetTable,
       remark: remark || null
     };
     
     const currentRows = await db.query(
-      'SELECT database_name, interface_name, sql_content, exec_order, external_db_config_id, target_table, remark FROM b_sql WHERE F_Id = ? AND F_DeleteMark = 0',
+      'SELECT database_name, interface_name, sql_content, exec_order, sql_layer, external_db_config_id, target_table, remark FROM b_sql WHERE F_Id = ? AND F_DeleteMark = 0',
       [id]
     );
     if (!currentRows || currentRows.length === 0) {
       return res.status(404).json({ success: false, message: '配置不存在' });
     }
     const old = currentRows[0];
+
+    if (incomingLayer === undefined) {
+      newVals.sql_layer = old.sql_layer || null;
+    }
+    const layerCheck = validateSqlLayerConfig({
+      sqlLayer: newVals.sql_layer,
+      targetTable: newVals.target_table,
+      externalDbConfigId: newVals.external_db_config_id,
+      sqlContent: newVals.sql_content
+    });
+    if (!layerCheck.ok) {
+      return res.status(400).json({ success: false, message: layerCheck.message });
+    }
+    if (normalizeLayer(newVals.sql_layer) === 'generate') {
+      newVals.database_name = LOCAL_DATABASE_NAME;
+      newVals.external_db_config_id = null;
+    }
     
     const changes = [];
-    const fields = ['database_name', 'interface_name', 'sql_content', 'exec_order', 'external_db_config_id', 'target_table', 'remark'];
+    const fields = ['database_name', 'interface_name', 'sql_content', 'exec_order', 'sql_layer', 'external_db_config_id', 'target_table', 'remark'];
     for (const field of fields) {
       const oldV = strVal(old[field]);
       const newV = strVal(newVals[field]);
@@ -482,10 +629,11 @@ router.put('/sql/:id', async (req, res) => {
     await db.execute(
       `UPDATE b_sql SET
         database_name = ?, interface_name = ?, sql_content = ?, exec_order = ?,
-        external_db_config_id = ?, target_table = ?, remark = ?,
+        sql_layer = ?, external_db_config_id = ?, target_table = ?, remark = ?,
         F_LastModifyUserId = ?, F_LastModifyTime = NOW()
        WHERE F_Id = ? AND F_DeleteMark = 0`,
-      [newVals.database_name, newVals.interface_name, newVals.sql_content, newVals.exec_order, newVals.external_db_config_id, newVals.target_table, newVals.remark, modifyUserId, id]
+      [newVals.database_name, newVals.interface_name, newVals.sql_content, newVals.exec_order,
+        newVals.sql_layer, newVals.external_db_config_id, newVals.target_table, newVals.remark, modifyUserId, id]
     );
     
     res.json({ success: true, message: 'SQL配置已更新' });
@@ -580,12 +728,28 @@ function replaceDateInSql(sql, dateStr) {
 }
 
 const VERSION_PLACEHOLDER = "'${version}'";
+const PREV_MONTH_VERSION_PLACEHOLDER = "'${prev_month_version}'";
+const PREV_YEAR_END_VERSION_PLACEHOLDER = "'${prev_year_end_version}'";
+
+function escapeSqlString(value) {
+  return String(value).replace(/'/g, "''");
+}
 
 function replaceVersionInSql(sql, versionStr) {
   if (!versionStr || typeof versionStr !== 'string') return sql;
   const safe = String(versionStr).trim();
   if (!safe) return sql;
-  return sql.split(VERSION_PLACEHOLDER).join(`'${safe.replace(/'/g, "''")}'`);
+  return sql.split(VERSION_PLACEHOLDER).join(`'${escapeSqlString(safe)}'`);
+}
+
+/** 无上月/上年年末 ready 版时替换为空字符串 ''，SQL 内自行判断（首月不算上月未实现） */
+function replacePrevVersionPlaceholders(sql, prevMonthVersion, prevYearEndVersion) {
+  if (!sql) return sql;
+  const monthVal = prevMonthVersion ? `'${escapeSqlString(prevMonthVersion)}'` : "''";
+  const yearVal = prevYearEndVersion ? `'${escapeSqlString(prevYearEndVersion)}'` : "''";
+  return sql
+    .split(PREV_MONTH_VERSION_PLACEHOLDER).join(monthVal)
+    .split(PREV_YEAR_END_VERSION_PLACEHOLDER).join(yearVal);
 }
 
 /**
@@ -623,11 +787,16 @@ router.post('/sql/:id/test', async (req, res) => {
         message: '仅允许 SELECT、WITH（CTE）或 INSERT 开头的语句'
       });
     }
+    const extraSql = extraSqlStatementMessage(sqlContent);
+    if (extraSql) {
+      return res.status(400).json({ success: false, message: extraSql });
+    }
 
     const hasDatePlaceholder = sqlContent.includes(DATE_PLACEHOLDER);
     if (hasDatePlaceholder) {
       sqlContent = replaceDateInSql(sqlContent, date);
     }
+    sqlContent = replacePrevVersionPlaceholders(sqlContent, '', '');
 
     const firstKeyword = getSqlFirstKeyword(sqlContent);
     const isInsert = firstKeyword === 'INSERT';
@@ -714,5 +883,8 @@ router.get('/databases', async (req, res) => {
 module.exports = router;
 module.exports.replaceDateInSql = replaceDateInSql;
 module.exports.replaceVersionInSql = replaceVersionInSql;
+module.exports.replacePrevVersionPlaceholders = replacePrevVersionPlaceholders;
 module.exports.DATE_PLACEHOLDER = DATE_PLACEHOLDER;
 module.exports.getSqlFirstKeyword = getSqlFirstKeyword;
+module.exports.splitSqlStatements = splitSqlStatements;
+module.exports.extraSqlStatementMessage = extraSqlStatementMessage;
