@@ -321,7 +321,7 @@ async function recallFinancingByProductTerms(target, excludeCredit, excludeName,
   for (const term of uniq) {
     const like = `%${term}%`;
     termClauses.push(
-      `(e2.ai_product_intro LIKE ? OR e2.ai_company_tags_display LIKE ? OR CAST(IFNULL(e2.ai_company_tags_json, '') AS CHAR) LIKE ? OR e2.project_desc LIKE ? OR e2.company_name LIKE ? OR e2.project_name LIKE ?)`
+      `(e.ai_product_intro LIKE ? OR e.ai_company_tags_display LIKE ? OR CAST(IFNULL(e.ai_company_tags_json, '') AS CHAR) LIKE ? OR e.project_desc LIKE ? OR e.company_name LIKE ? OR e.project_name LIKE ?)`
     );
     params.push(like, like, like, like, like, like);
   }

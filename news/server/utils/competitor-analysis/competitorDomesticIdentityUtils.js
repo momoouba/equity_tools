@@ -8,6 +8,9 @@ const { strTrim, normalizeCreditCode } = require('./competitorMatchUtils');
 const {
   isValidMainlandUscc,
   isOverseasOrExemptCreditName,
+  extractBrandSearchToken,
+  creditBoundNameConsistent,
+  nameMatchTightness,
 } = require('./competitorCompanyMatch');
 
 const OVERSEAS_LISTING_MARKETS = new Set([
@@ -112,48 +115,64 @@ function extractCompanyNameCore(name) {
   return n;
 }
 
-async function queryIdentityRowsByNameFuzzy(inputName, psAppId) {
+function identitySearchTokens(inputName) {
+  const tokens = [];
+  const brand = extractBrandSearchToken(inputName);
   const core = extractCompanyNameCore(inputName);
-  if (core.length < 3) return [];
+  if (brand) tokens.push(brand);
+  if (core && core.length >= 3 && !tokens.includes(core)) tokens.push(core);
+  return tokens;
+}
 
-  const like = `%${core}%`;
+async function queryIdentityRowsByNameFuzzy(inputName, psAppId) {
+  const tokens = identitySearchTokens(inputName);
+  if (!tokens.length) return [];
+
   const rows = [];
-
-  const finRows = await db.query(
-    `SELECT company_name AS nm, company_credit_code AS cc, event_date AS ts
-     FROM sourcing_financing_event
-     WHERE F_DeleteMark = 0 AND company_name LIKE ?
-     ORDER BY event_date DESC
-     LIMIT 8`,
-    [like]
-  );
-  rows.push(...finRows);
-
-  if (psAppId) {
-    const ipoRows = await db.query(
-      `SELECT company AS nm, unified_credit_code AS cc,
-              COALESCE(F_LastModifyTime, biz_update_time) AS ts
-       FROM ipo_project
-       WHERE F_DeleteMark = 0 AND data_app_id = ?
-         AND (company LIKE ? OR project_name LIKE ?)
-       ORDER BY COALESCE(F_LastModifyTime, biz_update_time) DESC
-       LIMIT 8`,
-      [psAppId, like, like]
+  for (const token of tokens) {
+    const like = `%${token}%`;
+    const finRows = await db.query(
+      `SELECT company_name AS nm, company_credit_code AS cc, event_date AS ts
+       FROM sourcing_financing_event
+       WHERE F_DeleteMark = 0 AND company_name LIKE ?
+       ORDER BY event_date DESC
+       LIMIT 40`,
+      [like]
     );
-    rows.push(...ipoRows);
+    rows.push(...finRows);
+
+    if (psAppId) {
+      const ipoRows = await db.query(
+        `SELECT company AS nm, unified_credit_code AS cc,
+                COALESCE(F_LastModifyTime, biz_update_time) AS ts
+         FROM ipo_project
+         WHERE F_DeleteMark = 0 AND data_app_id = ?
+           AND (company LIKE ? OR project_name LIKE ?)
+         ORDER BY COALESCE(F_LastModifyTime, biz_update_time) DESC
+         LIMIT 20`,
+        [psAppId, like, like]
+      );
+      rows.push(...ipoRows);
+    }
+
+    const pipRows = await db.query(
+      `SELECT enterprise_full_name AS nm, unified_credit_code AS cc, F_LastModifyTime AS ts
+       FROM pre_investment_project
+       WHERE F_DeleteMark = 0 AND enterprise_full_name LIKE ?
+       ORDER BY F_LastModifyTime DESC
+       LIMIT 10`,
+      [like]
+    );
+    rows.push(...pipRows);
   }
 
-  const pipRows = await db.query(
-    `SELECT enterprise_full_name AS nm, unified_credit_code AS cc, F_LastModifyTime AS ts
-     FROM pre_investment_project
-     WHERE F_DeleteMark = 0 AND enterprise_full_name LIKE ?
-     ORDER BY F_LastModifyTime DESC
-     LIMIT 5`,
-    [like]
-  );
-  rows.push(...pipRows);
-
-  return rows;
+  return rows
+    .filter((r) => creditBoundNameConsistent(inputName, r.nm))
+    .sort((a, b) => {
+      const td = nameMatchTightness(inputName, b.nm) - nameMatchTightness(inputName, a.nm);
+      if (td !== 0) return td;
+      return officialNameScore(b.nm) - officialNameScore(a.nm);
+    });
 }
 
 /**
@@ -172,57 +191,55 @@ async function resolveDomesticCompetitorIdentity({ displayName, unifiedCreditCod
   }
 
   const state = {
-    credit: isValidMainlandUscc(inputCredit) ? inputCredit.toUpperCase() : '',
+    credit: '',
     bestName: normalizeCompanyName(inputName),
     bestAt: null,
   };
 
-  const credit = state.credit;
+  const probedCredit = isValidMainlandUscc(inputCredit) ? inputCredit.toUpperCase() : '';
 
-  if (credit) {
+  if (probedCredit) {
     const pipRows = await db.query(
       `SELECT enterprise_full_name AS nm, unified_credit_code AS cc, F_LastModifyTime AS ts
        FROM pre_investment_project
        WHERE F_DeleteMark = 0 AND unified_credit_code = ?
        ORDER BY F_LastModifyTime DESC
        LIMIT 5`,
-      [credit]
+      [probedCredit]
     );
-    for (const r of pipRows) considerIdentity(state, r.nm, r.cc, r.ts);
-
     const ieRows = await db.query(
       `SELECT enterprise_full_name AS nm, unified_credit_code AS cc, F_LastModifyTime AS ts
        FROM invested_enterprises
        WHERE F_DeleteMark = 0 AND unified_credit_code = ?
        ORDER BY F_LastModifyTime DESC
        LIMIT 5`,
-      [credit]
+      [probedCredit]
     );
-    for (const r of ieRows) considerIdentity(state, r.nm, r.cc, r.ts);
-
     const psAppId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
+    let ipoRows = [];
     if (psAppId) {
-      const ipoRows = await db.query(
+      ipoRows = await db.query(
         `SELECT company AS nm, unified_credit_code AS cc,
                 COALESCE(F_LastModifyTime, biz_update_time) AS ts
          FROM ipo_project
          WHERE F_DeleteMark = 0 AND data_app_id = ? AND unified_credit_code = ?
          ORDER BY COALESCE(F_LastModifyTime, biz_update_time) DESC
          LIMIT 8`,
-        [psAppId, credit]
+        [psAppId, probedCredit]
       );
-      for (const r of ipoRows) considerIdentity(state, r.nm, r.cc, r.ts);
     }
-
     const finRows = await db.query(
       `SELECT company_name AS nm, company_credit_code AS cc, event_date AS ts
        FROM sourcing_financing_event
        WHERE F_DeleteMark = 0 AND company_credit_code = ?
        ORDER BY event_date DESC
        LIMIT 5`,
-      [credit]
+      [probedCredit]
     );
-    for (const r of finRows) considerIdentity(state, r.nm, r.cc, r.ts);
+    const creditRows = [...pipRows, ...ieRows, ...ipoRows, ...finRows].filter((r) =>
+      creditBoundNameConsistent(inputName, r.nm)
+    );
+    for (const r of creditRows) considerIdentity(state, r.nm, r.cc, r.ts);
   }
 
   if (!state.credit && inputName) {
@@ -402,4 +419,5 @@ module.exports = {
   filterDomesticCompetitorCandidates,
   finalizePersistRows,
   finalizeDomesticPersistRows,
+  officialNameScore,
 };

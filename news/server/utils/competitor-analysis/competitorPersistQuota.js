@@ -10,7 +10,7 @@ const {
   normalizeCreditCode,
   strTrim,
 } = require('./competitorMatchUtils');
-const { namesMatchLoosely, normalizeCompetitorCompanyNameForMatch } = require('./competitorCompanyMatch');
+const { namesMatchLoosely, extractBrandSearchToken } = require('./competitorCompanyMatch');
 const {
   MIN_DOMESTIC_LISTED_COMPETITORS,
   MIN_UNLISTED_COMPETITORS,
@@ -19,7 +19,7 @@ const {
   countDomesticListedInPersistRows,
   countUnlistedInPersistRows,
 } = require('./competitorListedDomestic');
-const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
+const { isOverseasCompetitorCandidate, officialNameScore } = require('./competitorDomesticIdentityUtils');
 
 const PERSIST_TOTAL_CAP = Math.max(
   12,
@@ -44,20 +44,8 @@ const MAX_DOMESTIC_UNLISTED = Math.max(
   parseInt(process.env.COMPETITOR_MAX_DOMESTIC_UNLISTED || '16', 10) || 16
 );
 
-const CITY_PREFIX_RE =
-  /^(北京|上海|杭州|嘉兴|烟台|苏州|无锡|宁波|成都|南京|广州|深圳|天津|重庆|武汉|西安|青岛|佛山|合肥|郑州|长沙|沈阳)/;
-
 function coreBrandName(name) {
-  let s = normalizeCompetitorCompanyNameForMatch(name);
-  if (!s) return '';
-  const SUF =
-    /(股份有限公司|有限责任公司|有限公司|集团|控股|药业|医药|生物技术|生物医药|生物|科技|医疗|技术)$/;
-  for (let i = 0; i < 8; i += 1) {
-    const next = s.replace(CITY_PREFIX_RE, '').replace(SUF, '');
-    if (next === s) break;
-    s = next;
-  }
-  return strTrim(s);
+  return extractBrandSearchToken(name);
 }
 
 function persistRowName(row) {
@@ -77,8 +65,7 @@ function samePersistEntity(a, b) {
   if (namesMatchLoosely(na, nb)) return true;
   const ca = coreBrandName(na);
   const cb = coreBrandName(nb);
-  if (ca.length >= 2 && ca === cb) return true;
-  if (ca.length >= 2 && cb.length >= 2 && (ca.includes(cb) || cb.includes(ca))) return true;
+  if (ca.length >= 3 && ca === cb) return true;
   return false;
 }
 
@@ -93,11 +80,43 @@ function isUserGoldRow(row) {
   return !!(c._fromGoldStandard && c._goldStandardNegative !== true);
 }
 
+function persistSourceQuality(row) {
+  const c = row._candidate || {};
+  const srcs = Array.isArray(c.sources) ? c.sources : c.source ? [c.source] : row.sources || [];
+  let q = 0;
+  if (srcs.includes('sourcing_financing_event') || srcs.includes('ipo_project')) q += 80;
+  if (c.hasInternal) q += 40;
+  if (persistRowCredit(row).length >= 18) q += 60;
+  q += officialNameScore(persistRowName(row));
+  return q;
+}
+
+function copyGoldFlags(winner, other) {
+  const w = winner._candidate;
+  const o = other._candidate;
+  if (!w || !o) return winner;
+  if (isUserGoldRow(other)) {
+    w._fromGoldStandard = true;
+    w._goldStandardNegative = false;
+    w._goldStandardIsCompetitor = w._goldStandardIsCompetitor || o._goldStandardIsCompetitor;
+    w._goldStandardType = w._goldStandardType || o._goldStandardType;
+    if (Array.isArray(w.sources) && !w.sources.includes('user_comparable')) {
+      w.sources = [...w.sources, 'user_comparable'];
+    }
+  }
+  return winner;
+}
+
+function pickCanonicalPersistRow(next, prev) {
+  const nq = persistSourceQuality(next);
+  const pq = persistSourceQuality(prev);
+  let winner = nq !== pq ? (nq > pq ? next : prev) : persistRowScore(next) > persistRowScore(prev) ? next : prev;
+  const loser = winner === next ? prev : next;
+  return copyGoldFlags(winner, loser);
+}
+
 function preferPersistRow(next, prev) {
-  const ng = isUserGoldRow(next) ? 1 : 0;
-  const pg = isUserGoldRow(prev) ? 1 : 0;
-  if (ng !== pg) return ng > pg;
-  return persistRowScore(next) > persistRowScore(prev);
+  return pickCanonicalPersistRow(next, prev) === next;
 }
 
 function dedupePersistRowsByEntity(rows) {
@@ -108,7 +127,7 @@ function dedupePersistRowsByEntity(rows) {
       kept.push(row);
       continue;
     }
-    if (preferPersistRow(row, kept[idx])) kept[idx] = row;
+    kept[idx] = pickCanonicalPersistRow(row, kept[idx]);
   }
   return kept;
 }

@@ -12,6 +12,7 @@ const {
 const { parseIsListedFromCandidate } = require('./competitorRelationPersistEnhance');
 const { hasStrongOffTargetSignals } = require('./competitorProductLineUtils');
 const { isOverseasCompetitorCandidate } = require('./competitorDomesticIdentityUtils');
+const { namesMatchLoosely } = require('./competitorCompanyMatch');
 
 /** 落库须包含的国内上市公司（上交所/深交所/北交所，含新三板）最少条数（交付客户≥5，用户可筛≥3） */
 const MIN_DOMESTIC_LISTED_COMPETITORS = Math.max(
@@ -157,7 +158,10 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
     };
     const key = credit || name.toLowerCase();
     const dupIdx = scored.findIndex(
-      (x) => (x.unified_credit_code && credit && x.unified_credit_code === credit) || x.display_name === name
+      (x) =>
+        (x.unified_credit_code && credit && x.unified_credit_code === credit) ||
+        x.display_name === name ||
+        namesMatchLoosely(x.display_name, name)
     );
     const domesticListed =
       !overseas &&
@@ -178,7 +182,7 @@ function mergeWebCandidatesIntoScored(scored, webList, { parseIsListedFromCandid
         if (market) x.listing_market = market;
         x.domestic_listed = isDomesticListedMarket(market) || domesticListed;
       }
-      if (credit && !x.unified_credit_code) x.unified_credit_code = credit;
+      // 联网信用代码未经验主数据核验，不得覆盖/补到内部主体上
       // 联网 core_products 优先覆盖库内错绑/企查查空话，避免 S5 用错误画像压分（如欧拉/破壳）
       const webIntro = strTrim(w.core_products);
       if (webIntro) {

@@ -16,7 +16,13 @@ const {
   strTrim,
 } = require('./competitorMatchUtils');
 const { isDomesticExchange } = require('../listing/listedUniverseUtils');
-const { namesMatchLoosely } = require('./competitorCompanyMatch');
+const {
+  namesMatchLoosely,
+  nameMatchTightness,
+  extractBrandSearchToken,
+  creditBoundNameConsistent,
+} = require('./competitorCompanyMatch');
+const { normalizeDomesticCandidateIdentity } = require('./competitorDomesticIdentityUtils');
 
 const FIN_SELECT = `F_Id, company_name, project_name, company_credit_code, project_desc,
                 ai_product_intro, ai_company_tags_display, ai_company_tags_json,
@@ -150,10 +156,11 @@ async function resolveFinancingEntity(credit, name) {
        FROM sourcing_financing_event
        WHERE F_DeleteMark = 0 AND company_credit_code = ?
        ORDER BY (TRIM(IFNULL(ai_product_intro, '')) <> '') DESC, event_date DESC, F_Id DESC
-       LIMIT 1`,
+       LIMIT 3`,
       [code]
     );
-    if (rows[0]) return mapFinancingRow(rows[0]);
+    const finHit = (rows || []).find((r) => creditBoundNameConsistent(name, r.company_name));
+    if (finHit) return mapFinancingRow(finHit);
     const [ipo] = await db.query(
       `SELECT F_Id AS f_id, project_name, company, unified_credit_code, sub,
               ai_product_intro, ai_industry_tags_display, ai_industry_tags_json,
@@ -163,23 +170,32 @@ async function resolveFinancingEntity(credit, name) {
        LIMIT 1`,
       [code]
     );
-    if (ipo) return mapIpoRow(ipo);
+    if (ipo && creditBoundNameConsistent(name, ipo.company || ipo.project_name)) {
+      return mapIpoRow(ipo);
+    }
   }
-  const token = searchNameToken(name);
-  if (!token || token.length < 2) return null;
-  const rows = await db.query(
-    `SELECT ${FIN_SELECT}
-     FROM sourcing_financing_event
-     WHERE F_DeleteMark = 0 AND company_name LIKE ?
-     ORDER BY (TRIM(IFNULL(ai_product_intro, '')) <> '') DESC, event_date DESC, F_Id DESC
-     LIMIT 8`,
-    [`%${token}%`]
+  const tokens = [extractBrandSearchToken(name), searchNameToken(name)].filter(
+    (t, i, arr) => t && t.length >= 2 && arr.indexOf(t) === i
   );
-  const hit =
-    (rows || []).find((r) => namesMatchLoosely(r.company_name, name) && hasFinancingIntro(r)) ||
-    (rows || []).find((r) => namesMatchLoosely(r.company_name, name)) ||
-    null;
-  return hit ? mapFinancingRow(hit) : null;
+  for (const token of tokens) {
+    const rows = await db.query(
+      `SELECT ${FIN_SELECT}
+       FROM sourcing_financing_event
+       WHERE F_DeleteMark = 0 AND company_name LIKE ?
+       ORDER BY (TRIM(IFNULL(ai_product_intro, '')) <> '') DESC, event_date DESC, F_Id DESC
+       LIMIT 40`,
+      [`%${token}%`]
+    );
+    const hits = (rows || [])
+      .filter((r) => namesMatchLoosely(r.company_name, name))
+      .sort(
+        (x, y) =>
+          nameMatchTightness(name, y.company_name) - nameMatchTightness(name, x.company_name)
+      );
+    const hit = hits.find((r) => hasFinancingIntro(r)) || hits[0] || null;
+    if (hit) return mapFinancingRow(hit);
+  }
+  return null;
 }
 
 function markUserComparable(candidate, type) {
@@ -268,7 +284,7 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName, 
         source: 'user_comparable',
         source_id: '',
         display_name: strTrim(r.candidate_display_name),
-        unified_credit_code: normalizeCreditCode(r.candidate_credit_code),
+        unified_credit_code: null,
         product_intro: '',
         qcc_intro: '',
         tags: [],
@@ -281,6 +297,7 @@ async function recallGoldStandardCandidates(target, excludeCredit, excludeName, 
       };
     }
     markUserComparable(candidate, r.final_type);
+    await normalizeDomesticCandidateIdentity(candidate);
     if (exC && candidate.unified_credit_code === exC) continue;
     if (exN && strTrim(candidate.display_name).toLowerCase() === exN) continue;
     out.push(candidate);

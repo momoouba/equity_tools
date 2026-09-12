@@ -14,6 +14,12 @@ const OVERSEAS_NAME_MARKERS =
 const SUBSIDIARY_SUFFIX_RE =
   /(分公司|分支机构|分店|办事处|代表处|经营部|支公司|子公司)$/;
 
+const CITY_PREFIX_RE =
+  /^(北京|上海|杭州|嘉兴|烟台|苏州|无锡|宁波|成都|南京|广州|深圳|天津|重庆|武汉|西安|青岛|佛山|合肥|郑州|长沙|沈阳)/;
+
+const ORG_SUFFIX_RE =
+  /(股份有限公司|有限责任公司|有限公司|集团|控股|药业|医药|生物技术|生物医药|生物|科技|医疗|技术)$/;
+
 function isValidMainlandUscc(code) {
   const c = normalizeCreditCode(code);
   return c.length === MAINLAND_USCC_LEN && USCC_RE.test(c);
@@ -110,24 +116,108 @@ function isComparablePreferred(comparablePrefs, fields) {
   return false;
 }
 
+function stripLegalSuffixes(s) {
+  let out = strTrim(s);
+  for (let i = 0; i < 4; i += 1) {
+    const next = out.replace(/(股份有限公司|有限责任公司|有限公司|集团)$/g, '');
+    if (next === out) break;
+    out = next;
+  }
+  return strTrim(out);
+}
+
+/** 去掉城市前缀与有限公司等形态，保留医药/科技等行业词，避免「核欣医药」误并「核欣生物」 */
+function legalCoreName(name) {
+  const n = stripLegalSuffixes(normalizeCompetitorCompanyNameForMatch(name));
+  return strTrim(n.replace(CITY_PREFIX_RE, ''));
+}
+
+const INDUSTRY_TAIL_RE = /^(科技|技术|生物|医药|医疗|药业|健康|制药)*$/;
+
+function coreContainsLoosely(shorter, longer) {
+  if (!shorter || !longer || !longer.includes(shorter)) return false;
+  if (shorter.length >= 3) return true;
+  return shorter.length >= 2 && longer.startsWith(shorter) && longer.length - shorter.length >= 2;
+}
+
 /**
- * 金标 checklist / 别名匹配：统一全半角括号、后缀后再比；支持短名包含。
- * 例：先通医药 ↔ 北京先通国际医药科技股份有限公司；艾博兹（上海）↔ 艾博兹(上海)
+ * 短核 = 品牌 + 行业词，长核 = 品牌 + 至少二字字号 + 同行词（可多带科技等尾巴）。
+ * 「核欣医药科技」↔「核欣迅明医药科技」；「新华医药」↛「新华联医药」。
+ */
+function hasBrandInfixExpansion(short, long) {
+  if (!short || !long || short.length < 4 || long.length <= short.length) return false;
+  for (let brandLen = 2; brandLen <= short.length - 2; brandLen += 1) {
+    const brand = short.slice(0, brandLen);
+    const industry = short.slice(brandLen);
+    if (!long.startsWith(brand)) continue;
+    const idx = long.lastIndexOf(industry);
+    if (idx < brand.length) continue;
+    const infix = long.slice(brand.length, idx);
+    const tail = long.slice(idx + industry.length);
+    if (infix.length >= 2 && INDUSTRY_TAIL_RE.test(tail)) return true;
+  }
+  return false;
+}
+
+/**
+ * 金标 / 联网 / 融资回查：法定全称、城市前缀、短名漏中间字号（品牌段插入 ≥2 字）。
+ * 例：先通医药 ↔ 北京先通国际医药科技；核欣医药科技 ↔ 北京核欣迅明医药科技。
+ * 不合并仅共享二字品牌的不同主体（核欣医药 ↛ 核欣生物；新华 ↛ 新华联）。
  */
 function namesMatchLoosely(a, b) {
   const na = normalizeCompetitorCompanyNameForMatch(a);
   const nb = normalizeCompetitorCompanyNameForMatch(b);
   if (!na || !nb) return false;
   if (na === nb) return true;
-  if (na.includes(nb) || nb.includes(na)) return true;
-  const stripSuffix = (s) =>
-    s
-      .replace(/(股份有限公司|有限责任公司|有限公司|集团|控股|药业|医药|生物|科技|医疗)$/g, '')
-      .replace(/(股份有限公司|有限责任公司|有限公司)$/g, '');
-  const ca = stripSuffix(na);
-  const cb = stripSuffix(nb);
-  if (ca && cb && (ca === cb || ca.includes(cb) || cb.includes(ca))) return true;
-  return false;
+  if (coreContainsLoosely(na, nb) || coreContainsLoosely(nb, na)) return true;
+
+  const la = legalCoreName(a);
+  const lb = legalCoreName(b);
+  if (!la || !lb) return false;
+  if (la === lb) return true;
+  if (coreContainsLoosely(la, lb) || coreContainsLoosely(lb, la)) return true;
+
+  const shorter = la.length <= lb.length ? la : lb;
+  const longer = la.length <= lb.length ? lb : la;
+  return hasBrandInfixExpansion(shorter, longer);
+}
+
+/** 越大越像同一主体，供多条 LIKE 命中时择优，避免先扫到弱匹配就定码 */
+function nameMatchTightness(inputName, storedName) {
+  const na = normalizeCompetitorCompanyNameForMatch(inputName);
+  const nb = normalizeCompetitorCompanyNameForMatch(storedName);
+  if (!na || !nb) return 0;
+  if (na === nb) return 100;
+  const la = legalCoreName(inputName);
+  const lb = legalCoreName(storedName);
+  if (la && lb && la === lb) return 90;
+  if (la && lb && (coreContainsLoosely(la, lb) || coreContainsLoosely(lb, la))) return 80;
+  if (namesMatchLoosely(inputName, storedName)) return 40;
+  return 0;
+}
+
+/**
+ * 品牌检索词：去掉行政区前缀与公司形态后缀，供 LIKE + namesMatchLoosely 回查。
+ * 「核欣医药科技有限公司」→「核欣」，才能命中「北京核欣迅明医药科技有限公司」。
+ */
+function extractBrandSearchToken(name) {
+  let s = normalizeCompetitorCompanyNameForMatch(name);
+  if (!s) return '';
+  for (let i = 0; i < 8; i += 1) {
+    const next = s.replace(CITY_PREFIX_RE, '').replace(ORG_SUFFIX_RE, '');
+    if (next === s) break;
+    s = next;
+  }
+  s = strTrim(s);
+  if (s.length < 2 || s.length > 16) return '';
+  return s;
+}
+
+/** 内部主数据名称与候选名是否同一主体；无候选名时只认信用代码命中 */
+function creditBoundNameConsistent(inputName, storedName) {
+  if (!strTrim(inputName)) return true;
+  if (!strTrim(storedName)) return false;
+  return namesMatchLoosely(inputName, storedName);
 }
 
 module.exports = {
@@ -141,4 +231,8 @@ module.exports = {
   isComparablePreferred,
   stripSubsidiarySuffixes,
   namesMatchLoosely,
+  nameMatchTightness,
+  legalCoreName,
+  extractBrandSearchToken,
+  creditBoundNameConsistent,
 };
