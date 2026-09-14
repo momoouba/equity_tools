@@ -438,18 +438,28 @@ export default function ListingProjectProgressPage() {
     try {
       const res = await postListingMatch(payload)
       if (res.data?.success) {
-        const d = res.data.data || {}
-        Message.success(
-          `匹配完成：上市信息${d.progressCount ?? 0}条，底层项目${d.projectCount ?? 0}条，新增${d.inserted ?? 0}条；` +
-          `昨日上市状态补齐${d.yesterdayStatusBackfilled ?? 0}条，来源补齐${d.yesterdaySourceBackfilled ?? 0}条`
-        )
+        if (res.data.accepted || res.status === 202) {
+          Message.success(res.data.message || '已受理匹配任务，后台执行中，请稍后刷新列表查看结果')
+        } else {
+          const d = res.data.data || {}
+          Message.success(
+            `匹配完成：上市信息${d.progressCount ?? 0}条，底层项目${d.projectCount ?? 0}条，新增${d.inserted ?? 0}条；` +
+            `昨日上市状态补齐${d.yesterdayStatusBackfilled ?? 0}条，来源补齐${d.yesterdaySourceBackfilled ?? 0}条`
+          )
+        }
         setPage(1)
         load()
       } else {
         Message.error(res.data?.message || '匹配失败')
       }
     } catch (e) {
-      Message.error(e.response?.data?.message || e.message || '匹配失败')
+      const status = e.response?.status
+      const msg = e.response?.data?.message || e.message || '匹配失败'
+      if (status === 409) {
+        Message.warning(msg)
+      } else {
+        Message.error(msg)
+      }
     } finally {
       setMatching(false)
     }

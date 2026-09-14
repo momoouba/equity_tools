@@ -31,7 +31,7 @@ export function fetchIpoProjectProgressList(params) {
 }
 
 export function postListingMatch(body) {
-  return axios.post(`${base}/match`, body)
+  return axios.post(`${base}/match`, body, { timeout: 60000 })
 }
 
 export function fetchListingConfig() {

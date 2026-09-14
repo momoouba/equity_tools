@@ -1,4 +1,4 @@
-const { runListingMatchBatch } = require('../../utils/listing/listingMatchRunner');
+const { runListingMatchBatch, tryBeginListingMatchBatch, releaseListingMatchBatchHold } = require('../../utils/listing/listingMatchRunner');
 const { getUserFromHeader, isAdminAccount, canAccessListing } = require('../../utils/listing/listingAuth');
 const db = require('../../db');
 
@@ -57,7 +57,14 @@ async function runMatch(req, res) {
     }
 
     const restrictProjectUserId = isAdminAccount(user.account) ? null : user.id;
-    const result = await runListingMatchBatch({
+    if (!tryBeginListingMatchBatch()) {
+      return res.status(409).json({
+        success: false,
+        message: '已有匹配任务在执行，请稍后再试',
+      });
+    }
+
+    const matchOpts = {
       startDate,
       endDate,
       restrictProjectUserId,
@@ -65,24 +72,34 @@ async function runMatch(req, res) {
       newShareEndDate,
       newShareLookbackDays,
       matchTypes: effectiveMatchTypes,
-    });
+    };
+    try {
+      setImmediate(() => {
+        runListingMatchBatch(matchOpts, { alreadyHeld: true })
+          .then((result) => {
+            if (result && result.skippedInFlight) {
+              console.warn('[listing-match] 手动匹配受理后被跳过（并发任务）');
+              return;
+            }
+            console.log('[listing-match] 手动匹配完成', {
+              progressCount: result?.progressCount,
+              projectCount: result?.projectCount,
+              inserted: result?.inserted,
+            });
+          })
+          .catch((err) => {
+            console.error('[listing-match] 手动匹配失败', err);
+          });
+      });
+    } catch (scheduleErr) {
+      releaseListingMatchBatchHold();
+      throw scheduleErr;
+    }
 
-    return res.json({
+    return res.status(202).json({
       success: true,
-      data: {
-        progressCount: result.progressCount,
-        projectCount: result.projectCount,
-        newShareCount: result.newShareCount || 0,
-        newShareMatchCount: result.newShareMatchCount || 0,
-        newShareSkipped: result.newShareSkipped || 0,
-        newSharePublicDate: result.newSharePublicDate || null,
-        insertedFromIpoProgress: result.insertedFromIpoProgress || 0,
-        skippedFromIpoProgress: result.skippedFromIpoProgress || 0,
-        insertedFromNewShare: result.insertedFromNewShare || 0,
-        yesterdayStatusBackfilled: result.yesterdayStatusBackfilled || 0,
-        yesterdaySourceBackfilled: result.yesterdaySourceBackfilled || 0,
-        inserted: result.inserted,
-      },
+      accepted: true,
+      message: '已受理匹配任务，后台执行中，请稍后刷新列表查看结果',
     });
   } catch (e) {
     console.error('runMatch', e);

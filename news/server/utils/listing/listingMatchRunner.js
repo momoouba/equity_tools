@@ -296,6 +296,93 @@ function isListingMatchSkipNewShareEnvOn() {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+function isHkIpoExchange(exchange) {
+  const s = String(exchange || '').trim();
+  return s === '港交所' || s === '香港联交所';
+}
+
+/** 长度差过大时 dice/包含相似度不可能达到 threshold，跳过模糊计算 */
+function canReachFuzzyThreshold(a, b, threshold) {
+  const sa = String(a || '');
+  const sb = String(b || '');
+  const shortLen = Math.min(sa.length, sb.length);
+  const longLen = Math.max(sa.length, sb.length);
+  if (!shortLen || !longLen) return false;
+  if (shortLen / longLen >= threshold) return true;
+  const minG = Math.max(1, shortLen - 1);
+  const maxG = Math.max(1, longLen - 1);
+  return (2 * minG) / (minG + maxG) >= threshold;
+}
+
+function attachProjectMatchKeys(projectRows) {
+  for (const p of projectRows) {
+    p._ccn = canonicalCompanyForMatchCross(p.company, '上交所');
+    p._chk = canonicalCompanyForMatchCross(p.company, '港交所');
+    p._ncn = canonicalCompanyForMatchCross(p.project_name, '上交所');
+    p._nhk = canonicalCompanyForMatchCross(p.project_name, '港交所');
+  }
+}
+
+function projectMatchKeys(p, exchange) {
+  const hk = isHkIpoExchange(exchange);
+  return {
+    company: hk ? p._chk : p._ccn,
+    projectName: hk ? p._nhk : p._ncn,
+  };
+}
+
+function ipoProgressMatchKey(projectFId, progressRowId, updateTime) {
+  return `${projectFId}|${progressRowId}|${normYmd(updateTime)}`;
+}
+
+async function loadExistingIpoProgressMatchKeys() {
+  const rows = await db.query(
+    `SELECT ipo_project_f_id, ipo_progress_row_id, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd
+     FROM ipo_project_progress
+     WHERE match_source = 'ipo_progress'`
+  );
+  const set = new Set();
+  for (const r of rows) {
+    set.add(ipoProgressMatchKey(r.ipo_project_f_id, r.ipo_progress_row_id, r.ymd));
+  }
+  return set;
+}
+
+function emptyMatchBatchResult(extra = {}) {
+  return {
+    skippedInFlight: false,
+    progressCount: 0,
+    projectCount: 0,
+    inserted: 0,
+    insertedFromIpoProgress: 0,
+    skippedFromIpoProgress: 0,
+    insertedFromNewShare: 0,
+    newShareCount: 0,
+    newShareMatchCount: 0,
+    newShareSkipped: 0,
+    newSharePublicDate: null,
+    yesterdayStatusBackfilled: 0,
+    yesterdaySourceBackfilled: 0,
+    ...extra,
+  };
+}
+
+let listingMatchBatchInFlight = false;
+
+function isListingMatchInFlight() {
+  return listingMatchBatchInFlight;
+}
+
+function tryBeginListingMatchBatch() {
+  if (listingMatchBatchInFlight) return false;
+  listingMatchBatchInFlight = true;
+  return true;
+}
+
+function releaseListingMatchBatchHold() {
+  listingMatchBatchInFlight = false;
+}
+
 /**
  * Match ipo_progress / ipo_new_share with ipo_project and write ipo_project_progress.
  * 仅 `ipo_project.data_app_id` = applications 中「上市进展」应用 id 的底层项目参与匹配，避免其它应用底层项目产生多余展示。
@@ -305,8 +392,25 @@ function isListingMatchSkipNewShareEnvOn() {
  * @param {string} opts.startDate YYYY-MM-DD
  * @param {string} opts.endDate YYYY-MM-DD
  * @param {string|null} [opts.restrictProjectUserId] Restrict project owner for non-admin
+ * @param {{ alreadyHeld?: boolean }} [runtime]
  */
-async function runListingMatchBatch({
+async function runListingMatchBatch(opts, runtime = {}) {
+  const alreadyHeld = runtime.alreadyHeld === true;
+  if (!alreadyHeld) {
+    if (listingMatchBatchInFlight) {
+      console.warn('[listing-match] 已有匹配任务在执行，本次跳过');
+      return emptyMatchBatchResult({ skippedInFlight: true });
+    }
+    listingMatchBatchInFlight = true;
+  }
+  try {
+    return await runListingMatchBatchImpl(opts || {});
+  } finally {
+    listingMatchBatchInFlight = false;
+  }
+}
+
+async function runListingMatchBatchImpl({
   startDate,
   endDate,
   restrictProjectUserId = null,
@@ -424,34 +528,48 @@ async function runListingMatchBatch({
   let inserted = 0;
   let skippedFromIpoProgress = 0;
 
+  attachProjectMatchKeys(projectRows);
+  const existingMatchKeys = progressRows.length && projectRows.length
+    ? await loadExistingIpoProgressMatchKeys()
+    : new Set();
+
   /** @type {Map<string, { ip: object, p: object }[]>} */
   const matchBuckets = new Map();
   const FUZZY_MATCH_THRESHOLD = 0.85;
+  const matchLoopStarted = Date.now();
+  let progressScanned = 0;
   for (const ip of progressRows) {
+    progressScanned += 1;
+    if (progressScanned % 80 === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
     const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
     if (!nip) continue;
+    const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
     for (const p of projectRows) {
-      const np = canonicalCompanyForMatchCross(p.company, ip.exchange);
+      const keys = projectMatchKeys(p, ip.exchange);
+      const np = keys.company;
       let matched = false;
       let matchScore = null;
       if (np && nip === np) {
         matched = true;
-      } else if (np) {
-        // #4: fuzzy fallback when strict canonical match fails
+      } else if (np && canReachFuzzyThreshold(nip, np, FUZZY_MATCH_THRESHOLD)) {
         const sim = fuzzySimilarity(nip, np);
         if (sim >= FUZZY_MATCH_THRESHOLD) {
           matched = true;
           matchScore = Math.round(sim * 1000) / 1000;
         }
       }
-      // #6: project_name as additional matching key
       if (!matched) {
-        const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
-        const pProjName = canonicalCompanyForMatchCross(p.project_name, ip.exchange);
+        const pProjName = keys.projectName;
         if (ipProjName && pProjName && ipProjName === pProjName) {
           matched = true;
           matchScore = matchScore || 1;
-        } else if (ipProjName && pProjName) {
+        } else if (
+          ipProjName &&
+          pProjName &&
+          canReachFuzzyThreshold(ipProjName, pProjName, FUZZY_MATCH_THRESHOLD)
+        ) {
           const projSim = fuzzySimilarity(ipProjName, pProjName);
           if (projSim >= FUZZY_MATCH_THRESHOLD) {
             matched = true;
@@ -473,6 +591,10 @@ async function runListingMatchBatch({
       matchBuckets.get(bucketKey).push({ ip, p, matchScore });
     }
   }
+  console.log(
+    `[listing-match] 笛卡尔扫描完成 progress=${progressRows.length} project=${projectRows.length}` +
+      ` buckets=${matchBuckets.size} elapsedMs=${Date.now() - matchLoopStarted}`
+  );
 
   for (const [, pairs] of matchBuckets) {
     if (!pairs.length) continue;
@@ -482,7 +604,8 @@ async function runListingMatchBatch({
     const ip = pickPreferredIpoProgressForProject(p, ips);
     if (!ip) continue;
 
-    if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime)) {
+    const existKey = ipoProgressMatchKey(p.F_Id, ip.F_Id, ip.F_UpdateTime);
+    if (existingMatchKeys.has(existKey)) {
       skippedFromIpoProgress += 1;
       continue;
     }
@@ -519,6 +642,7 @@ async function runListingMatchBatch({
       ]
     );
     inserted += 1;
+    existingMatchKeys.add(existKey);
   }
 
   const newShareResult = includeNewShare
@@ -641,4 +765,10 @@ async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null }
   return { inserted, skipped: inserted === 0, rowId };
 }
 
-module.exports = { runListingMatchBatch, matchSingleIpoProgressRow };
+module.exports = {
+  runListingMatchBatch,
+  matchSingleIpoProgressRow,
+  isListingMatchInFlight,
+  tryBeginListingMatchBatch,
+  releaseListingMatchBatchHold,
+};
