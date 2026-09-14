@@ -321,13 +321,20 @@ export default function CompetitionLensConfirmModal({
           <Text type="secondary" style={{ lineHeight: 1.6 }}>
             {proposal?.tip || '勾选本次对标最重要的因素，并可编辑描述、补充关键词。'}
           </Text>
-          {savedMeta?.version ? (
+          {savedMeta ? (
             <Text type="secondary" style={{ fontSize: 12 }}>
-              已载入上次保存的对标焦点（版本 v{savedMeta.version}
-              {savedMeta.saved_at
-                ? `，${String(savedMeta.saved_at).replace('T', ' ').slice(0, 19)}`
+              已载入上次保存的对标焦点
+              {savedMeta.version || savedMeta.saved_at
+                ? `（${[
+                    savedMeta.version ? `版本 v${savedMeta.version}` : '',
+                    savedMeta.saved_at
+                      ? String(savedMeta.saved_at).replace('T', ' ').slice(0, 19)
+                      : '',
+                  ]
+                    .filter(Boolean)
+                    .join('，')}）`
                 : ''}
-              ），可继续修改后分析。
+              ，含上次自定义关键词，可继续修改后分析。
             </Text>
           ) : null}
 

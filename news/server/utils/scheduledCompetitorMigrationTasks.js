@@ -229,6 +229,33 @@ async function migrateOneEnterprise(match, stats) {
     `, [newPrefId, ie_id, pref.competitor_key, pref.include_in_comparable]);
   }
 
+  const [ieLens] = await db.query(
+    `SELECT competition_lens_json FROM invested_enterprises WHERE F_Id = ? LIMIT 1`,
+    [ie_id]
+  );
+  if (!ieLens?.competition_lens_json) {
+    const [pipLens] = await db.query(
+      `SELECT competition_lens_json, competition_lens_version, competition_lens_at
+       FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
+      [pip_id]
+    );
+    if (pipLens?.competition_lens_json) {
+      const json =
+        typeof pipLens.competition_lens_json === 'object'
+          ? JSON.stringify(pipLens.competition_lens_json)
+          : pipLens.competition_lens_json;
+      await db.execute(
+        `UPDATE invested_enterprises
+         SET competition_lens_json = ?,
+             competition_lens_version = COALESCE(?, 1),
+             competition_lens_at = COALESCE(?, NOW()),
+             F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
+        [json, pipLens.competition_lens_version, pipLens.competition_lens_at, ie_id]
+      );
+    }
+  }
+
   stats.synced++;
   console.log(
     `[竞品迁移] ✓ ${enterprise_full_name}: 同步 ${relations.length} 条竞品关系 (run ${preRunId} → ${newRunId})`

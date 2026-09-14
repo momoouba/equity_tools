@@ -226,73 +226,8 @@ function proposeCompetitionLens(profile) {
 }
 
 /**
- * 将上次保存版本合并进提案：沿用勾选与已编辑描述，并补回上次独有因素
+ * 将上次保存版本合并进提案：沿用勾选、编辑描述与自定义关键词。
  */
-function mergeProposalWithSaved(proposal, saved) {
-  if (!proposal) return proposal;
-  if (!saved || typeof saved !== 'object') {
-    return { ...proposal, saved_lens: null };
-  }
-
-  const savedFactors = Array.isArray(saved.factors) ? saved.factors : [];
-  const byId = new Map(savedFactors.map((f) => [String(f.id), f]));
-  const selectedSet = new Set(
-    (Array.isArray(saved.selected_factor_ids) ? saved.selected_factor_ids : [])
-      .map((x) => String(x))
-      .concat(savedFactors.filter((f) => f.selected).map((f) => String(f.id)))
-  );
-
-  const factors = (proposal.factors || []).map((f) => {
-    const prev = byId.get(String(f.id));
-    if (!prev) {
-      return {
-        ...f,
-        default_selected: selectedSet.size ? selectedSet.has(String(f.id)) : f.default_selected,
-      };
-    }
-    const editedText = clipText(prev.text || f.text);
-    const baseText = clipText(prev.base_text || f.base_text || f.text);
-    return {
-      ...f,
-      base_text: baseText,
-      text: editedText || f.text,
-      edited: !!(prev.edited || (editedText && editedText !== baseText)),
-      default_selected: selectedSet.size ? selectedSet.has(String(f.id)) : !!prev.selected || f.default_selected,
-    };
-  });
-
-  const seenIds = new Set(factors.map((f) => String(f.id)));
-  for (const prev of savedFactors) {
-    const id = String(prev.id || '');
-    if (!id || seenIds.has(id)) continue;
-    const text = clipText(prev.text);
-    if (!text || text.length < 2) continue;
-    factors.push({
-      id,
-      text,
-      base_text: clipText(prev.base_text || text),
-      edited: true,
-      dimension: prev.dimension || 'custom',
-      dimension_label: prev.dimension_label || DIMENSION_LABEL.custom,
-      source: prev.source || 'user_saved',
-      reason: prev.reason || '上次保存·自定义',
-      default_selected: selectedSet.has(id) || !!prev.selected,
-    });
-    seenIds.add(id);
-  }
-
-  return {
-    ...proposal,
-    factors,
-    tip: proposal.tip,
-    saved_lens: {
-      version: saved.version || null,
-      saved_at: saved.saved_at || null,
-      custom_keywords: Array.isArray(saved.custom_keywords) ? saved.custom_keywords : [],
-    },
-    default_custom_keywords: Array.isArray(saved.custom_keywords) ? saved.custom_keywords : [],
-  };
-}
 
 function normalizePhraseList(arr, max = 14, maxLen = FACTOR_TEXT_MAX) {
   const out = [];
@@ -723,15 +658,165 @@ function applyLensValidationCap(validation, lens, candidate) {
 
 function parseJsonMaybe(v) {
   if (v == null) return null;
-  if (typeof v === 'object') return v;
+  if (Buffer.isBuffer(v)) {
+    try {
+      v = v.toString('utf8');
+    } catch {
+      return null;
+    }
+  }
+  if (typeof v === 'object' && !Array.isArray(v)) return v;
   try {
-    return JSON.parse(String(v));
+    const parsed = JSON.parse(String(v));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    return null;
   } catch {
     return null;
   }
 }
 
-async function loadSavedCompetitionLens(subjectType, subjectId) {
+function normalizeSavedLens(raw, meta = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const custom = Array.isArray(raw.custom_keywords) ? raw.custom_keywords : [];
+  const must = Array.isArray(raw.must_align) ? raw.must_align : [];
+  const prefer = Array.isArray(raw.prefer_align) ? raw.prefer_align : [];
+  const factors = Array.isArray(raw.factors) ? raw.factors : [];
+  const selected = Array.isArray(raw.selected_factor_ids) ? raw.selected_factor_ids : [];
+  if (
+    !custom.length &&
+    !must.length &&
+    !prefer.length &&
+    !factors.length &&
+    !selected.length
+  ) {
+    return null;
+  }
+  return {
+    ...raw,
+    custom_keywords: custom,
+    must_align: must,
+    prefer_align: prefer,
+    selected_factor_ids: selected,
+    factors,
+    version: meta.version != null ? meta.version : raw.version || null,
+    saved_at: meta.saved_at || raw.saved_at || null,
+  };
+}
+
+function phraseKey(s) {
+  return strTrim(s).toLowerCase();
+}
+
+/**
+ * 将上次保存版本合并进提案：沿用勾选、已编辑描述、自定义关键词；id 漂移时按文本对齐。
+ */
+function mergeProposalWithSaved(proposal, saved) {
+  if (!proposal) return proposal;
+  if (!saved || typeof saved !== 'object') {
+    return { ...proposal, saved_lens: null, default_custom_keywords: [] };
+  }
+
+  const savedFactors = Array.isArray(saved.factors) ? saved.factors : [];
+  const byId = new Map(savedFactors.map((f) => [String(f.id), f]));
+  const byText = new Map();
+  for (const f of savedFactors) {
+    const k = phraseKey(f.base_text || f.text);
+    if (k && !byText.has(k)) byText.set(k, f);
+  }
+  const selectedSet = new Set(
+    (Array.isArray(saved.selected_factor_ids) ? saved.selected_factor_ids : [])
+      .map((x) => String(x))
+      .concat(savedFactors.filter((f) => f.selected).map((f) => String(f.id)))
+  );
+  const selectedTextSet = new Set();
+  for (const t of [...(saved.must_align || []), ...(saved.prefer_align || [])]) {
+    const k = phraseKey(t);
+    if (k) selectedTextSet.add(k);
+  }
+  for (const f of savedFactors) {
+    if (!f.selected) continue;
+    const k = phraseKey(f.text || f.base_text);
+    if (k) selectedTextSet.add(k);
+  }
+  const hasSavedSelection = selectedSet.size > 0 || selectedTextSet.size > 0;
+
+  const isSelected = (f) => {
+    if (!hasSavedSelection) return !!f.default_selected;
+    if (selectedSet.has(String(f.id))) return true;
+    if (selectedTextSet.has(phraseKey(f.text)) || selectedTextSet.has(phraseKey(f.base_text))) {
+      return true;
+    }
+    return false;
+  };
+
+  const factors = (proposal.factors || []).map((f) => {
+    const prev = byId.get(String(f.id)) || byText.get(phraseKey(f.base_text || f.text));
+    if (!prev) {
+      return {
+        ...f,
+        default_selected: isSelected(f),
+      };
+    }
+    const editedText = clipText(prev.text || f.text);
+    const baseText = clipText(prev.base_text || f.base_text || f.text);
+    return {
+      ...f,
+      base_text: baseText,
+      text: editedText || f.text,
+      edited: !!(prev.edited || (editedText && editedText !== baseText)),
+      default_selected: isSelected({ ...f, id: prev.id, text: editedText || f.text, base_text: baseText }),
+    };
+  });
+
+  const seenIds = new Set(factors.map((f) => String(f.id)));
+  const seenTexts = new Set(factors.map((f) => phraseKey(f.text)).filter(Boolean));
+  for (const prev of savedFactors) {
+    const id = String(prev.id || '');
+    const text = clipText(prev.text);
+    if (!id || seenIds.has(id)) continue;
+    if (!text || text.length < 2) continue;
+    if (seenTexts.has(phraseKey(text))) continue;
+    factors.push({
+      id,
+      text,
+      base_text: clipText(prev.base_text || text),
+      edited: true,
+      dimension: prev.dimension || 'custom',
+      dimension_label: prev.dimension_label || DIMENSION_LABEL.custom,
+      source: prev.source || 'user_saved',
+      reason: prev.reason || '上次保存·自定义',
+      default_selected: selectedSet.has(id) || !!prev.selected || selectedTextSet.has(phraseKey(text)),
+    });
+    seenIds.add(id);
+    seenTexts.add(phraseKey(text));
+  }
+
+  const factorTextSet = new Set(
+    factors.flatMap((f) => [phraseKey(f.text), phraseKey(f.base_text)]).filter(Boolean)
+  );
+  const customFromSaved = Array.isArray(saved.custom_keywords) ? saved.custom_keywords : [];
+  const extrasFromAlign = [];
+  for (const p of [...(saved.must_align || []), ...(saved.prefer_align || [])]) {
+    const k = phraseKey(p);
+    if (!k || factorTextSet.has(k)) continue;
+    extrasFromAlign.push(p);
+  }
+  const defaultCustom = normalizePhraseList([...customFromSaved, ...extrasFromAlign], 12, KEYWORD_MAX);
+
+  return {
+    ...proposal,
+    factors,
+    tip: proposal.tip,
+    saved_lens: {
+      version: saved.version || null,
+      saved_at: saved.saved_at || null,
+      custom_keywords: defaultCustom,
+    },
+    default_custom_keywords: defaultCustom,
+  };
+}
+
+async function loadLensFromSubjectRow(subjectType, subjectId) {
   const id = String(subjectId || '').trim();
   if (!id) return null;
   if (subjectType === 'pre_investment_project') {
@@ -741,13 +826,10 @@ async function loadSavedCompetitionLens(subjectType, subjectId) {
       [id]
     );
     if (!rows.length) return null;
-    const raw = parseJsonMaybe(rows[0].competition_lens_json);
-    if (!raw) return null;
-    return {
-      ...raw,
-      version: rows[0].competition_lens_version || raw.version || null,
-      saved_at: rows[0].competition_lens_at || raw.saved_at || null,
-    };
+    return normalizeSavedLens(parseJsonMaybe(rows[0].competition_lens_json), {
+      version: rows[0].competition_lens_version,
+      saved_at: rows[0].competition_lens_at,
+    });
   }
   if (subjectType === 'invested_enterprise') {
     const rows = await db.query(
@@ -756,15 +838,135 @@ async function loadSavedCompetitionLens(subjectType, subjectId) {
       [id]
     );
     if (!rows.length) return null;
-    const raw = parseJsonMaybe(rows[0].competition_lens_json);
-    if (!raw) return null;
-    return {
-      ...raw,
-      version: rows[0].competition_lens_version || raw.version || null,
-      saved_at: rows[0].competition_lens_at || raw.saved_at || null,
-    };
+    return normalizeSavedLens(parseJsonMaybe(rows[0].competition_lens_json), {
+      version: rows[0].competition_lens_version,
+      saved_at: rows[0].competition_lens_at,
+    });
   }
   return null;
+}
+
+async function loadLensFromVersionHistory(subjectType, subjectId) {
+  const rows = await db.query(
+    `SELECT lens_json, version, F_CreatorTime
+     FROM sourcing_competition_lens_version
+     WHERE subject_type = ? AND subject_id = ?
+     ORDER BY version DESC, F_CreatorTime DESC
+     LIMIT 1`,
+    [subjectType, subjectId]
+  );
+  if (!rows.length) return null;
+  return normalizeSavedLens(parseJsonMaybe(rows[0].lens_json), {
+    version: rows[0].version,
+    saved_at: rows[0].F_CreatorTime,
+  });
+}
+
+async function loadLensFromLastRun(subjectType, subjectId) {
+  const sql =
+    subjectType === 'pre_investment_project'
+      ? `SELECT l.detail_json, l.F_CreatorTime
+         FROM sourcing_competitor_run_step_log l
+         INNER JOIN sourcing_pre_investment_competitor_run r
+           ON r.F_Id = l.run_id AND r.F_DeleteMark = 0
+         WHERE r.pre_investment_project_id = ?
+           AND l.step_code = 'S0_profile'
+         ORDER BY l.F_Id DESC
+         LIMIT 8`
+      : `SELECT l.detail_json, l.F_CreatorTime
+         FROM sourcing_competitor_run_step_log l
+         INNER JOIN sourcing_competitor_run r
+           ON r.F_Id = l.run_id AND r.F_DeleteMark = 0
+         WHERE r.invested_enterprise_id = ?
+           AND l.step_code = 'S0_profile'
+         ORDER BY l.F_Id DESC
+         LIMIT 8`;
+  const rows = await db.query(sql, [subjectId]);
+  for (const row of rows) {
+    const detail = parseJsonMaybe(row.detail_json);
+    const lens = detail?.competition_lens;
+    if (!lens || typeof lens !== 'object') continue;
+    const normalized = normalizeSavedLens(lens, {
+      version: lens.version,
+      saved_at: row.F_CreatorTime,
+    });
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+async function loadLinkedPreInvestmentLens(ieId) {
+  const ieRows = await db.query(
+    `SELECT enterprise_full_name, unified_credit_code, data_app_id
+     FROM invested_enterprises WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1`,
+    [ieId]
+  );
+  if (!ieRows.length) return null;
+  const ie = ieRows[0];
+  const credit = strTrim(ie.unified_credit_code);
+  const clauses = ['F_DeleteMark = 0', 'competition_lens_json IS NOT NULL'];
+  const params = [];
+  if (credit) {
+    clauses.push('(unified_credit_code = ? OR enterprise_full_name = ?)');
+    params.push(credit, ie.enterprise_full_name);
+  } else {
+    clauses.push('enterprise_full_name = ?');
+    params.push(ie.enterprise_full_name);
+  }
+  if (ie.data_app_id) {
+    clauses.push('data_app_id <=> ?');
+    params.push(ie.data_app_id);
+  }
+  const pipRows = await db.query(
+    `SELECT competition_lens_json, competition_lens_version, competition_lens_at
+     FROM pre_investment_project
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY competition_lens_at DESC
+     LIMIT 1`,
+    params
+  );
+  if (!pipRows.length) return null;
+  return normalizeSavedLens(parseJsonMaybe(pipRows[0].competition_lens_json), {
+    version: pipRows[0].competition_lens_version,
+    saved_at: pipRows[0].competition_lens_at,
+  });
+}
+
+async function loadSavedCompetitionLens(subjectType, subjectId) {
+  const id = String(subjectId || '').trim();
+  if (!id) return null;
+  const loaders = [
+    () => loadLensFromSubjectRow(subjectType, id),
+    () => loadLensFromVersionHistory(subjectType, id),
+    () => loadLensFromLastRun(subjectType, id),
+  ];
+  if (subjectType === 'invested_enterprise') {
+    loaders.push(() => loadLinkedPreInvestmentLens(id));
+  }
+  const candidates = [];
+  for (const fn of loaders) {
+    try {
+      const hit = await fn();
+      if (hit) candidates.push(hit);
+    } catch (e) {
+      console.warn('[competitionLens] load saved lens step failed', e.message);
+    }
+  }
+  if (!candidates.length) return null;
+  const primary = { ...candidates[0] };
+  if (!primary.custom_keywords?.length) {
+    const withKw = candidates.find((c) => c.custom_keywords?.length);
+    if (withKw) primary.custom_keywords = withKw.custom_keywords;
+  }
+  if (!primary.factors?.length) {
+    const withFactors = candidates.find((c) => c.factors?.length);
+    if (withFactors) primary.factors = withFactors.factors;
+  }
+  if (!primary.selected_factor_ids?.length) {
+    const withIds = candidates.find((c) => c.selected_factor_ids?.length);
+    if (withIds) primary.selected_factor_ids = withIds.selected_factor_ids;
+  }
+  return primary;
 }
 
 /**
