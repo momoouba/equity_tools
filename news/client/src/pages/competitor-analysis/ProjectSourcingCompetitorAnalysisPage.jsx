@@ -382,6 +382,11 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
         invested_enterprise_ids: exportAll ? [] : selectedIds,
         years: yearFilter,
         export_batch_mode: exportAll ? 'latest' : batchMode,
+        run_id_by_subject: exportAll || batchMode === 'all'
+          ? undefined
+          : Object.fromEntries(
+              selectedIds.map((id) => [id, selectedRunMap[id] || latestRunMap[id]]).filter(([, runId]) => runId)
+            ),
       })
       const blob = res.data
       const suffix = !exportAll && batchMode === 'all' ? '_所有批次' : ''
@@ -802,7 +807,7 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
           将导出当前勾选的 {selectedIds.length} 家被投企业竞品数据。
         </p>
         <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
-          <Radio value="latest">仅最新批次（当前有效竞品关系）</Radio>
+          <Radio value="latest">仅当前版本（页面所选分析批次，默认最新）</Radio>
           <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
         </Radio.Group>
       </Modal>

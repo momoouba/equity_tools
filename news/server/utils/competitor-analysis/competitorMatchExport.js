@@ -2,7 +2,14 @@ const xlsx = require('xlsx');
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { isInvestedEnterpriseCompetitorAnalysisApp } = require('../applicationIdResolve');
-const { buildVersionLabelMapForInvestedEnterprise, buildVersionLabelMapForPreInvestmentProject, listInvestedEnterpriseCompetitorRuns, listPreInvestmentCompetitorRuns } = require('./competitorRunVersionService');
+const {
+  buildVersionLabelMapForInvestedEnterprise,
+  buildVersionLabelMapForPreInvestmentProject,
+  listInvestedEnterpriseCompetitorRuns,
+  listPreInvestmentCompetitorRuns,
+  getLatestRunIdForInvestedEnterprise,
+  getLatestRunIdForPreInvestmentProject,
+} = require('./competitorRunVersionService');
 const { formatFinancingDate } = require('./competitorFinancingResolve');
 
 const EXPORT_HEADERS = [
@@ -206,6 +213,89 @@ function relationToRow(rel, versionLabel) {
   return base;
 }
 
+function requestedRunIdForSubject(subjectId, runIdBySubject) {
+  if (!runIdBySubject || typeof runIdBySubject !== 'object') return '';
+  return String(runIdBySubject[String(subjectId)] || '').trim();
+}
+
+function versionLabelForRun(runs, runId) {
+  if (!runId || !Array.isArray(runs)) return null;
+  const hit = runs.find((r) => String(r.id) === String(runId));
+  return hit?.version_label || null;
+}
+
+function yearSqlClause(years, column) {
+  if (!years?.length) return { sql: '', params: [] };
+  return {
+    sql: ` AND YEAR(${column}) IN (${years.map(() => '?').join(',')})`,
+    params: years.map(Number),
+  };
+}
+
+/**
+ * 单版本导出：只取指定 run（默认当前有效批次），不再把历史 run 的行拼进同一张表。
+ * 历史版本查看与列表接口一致，不过滤 F_DeleteMark，以便读出已归档行。
+ */
+async function loadInvestedRelationsForSingleRun(ieId, runId, years = []) {
+  if (!runId) return [];
+  const latestRunId = await getLatestRunIdForInvestedEnterprise(ieId);
+  const historical = !!(latestRunId && String(runId) !== String(latestRunId));
+  const del = historical ? '' : ' AND F_DeleteMark = 0';
+  const y = yearSqlClause(years, 'F_CreatorTime');
+  return db.query(
+    `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+            competitor_type, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, score_breakdown_json,
+            competitor_product_intro, competitor_tags_display, sub_fund_names,
+            data_sources_json, financing_amount_text, financing_history_text,
+            is_listed, include_in_comparable, F_CreatorTime, run_id
+     FROM sourcing_competitor_relation
+     WHERE invested_enterprise_id = ?
+       AND run_id = ?
+       AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+       ${del}
+       ${y.sql}
+     ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
+    [ieId, runId, ...y.params]
+  );
+}
+
+async function loadPreInvestmentRelationsForSingleRun(pipId, runId, years = []) {
+  if (!runId) return [];
+  const latestRunId = await getLatestRunIdForPreInvestmentProject(pipId);
+  const historical = !!(latestRunId && String(runId) !== String(latestRunId));
+  const del = historical ? '' : ' AND F_DeleteMark = 0';
+  const y = yearSqlClause(years, 'F_CreatorTime');
+  return db.query(
+    `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+            competitor_type, evidence_summary, evidence_confidence, needs_review,
+            evidence_breakdown_json, score_breakdown_json,
+            competitor_product_intro, competitor_tags_display, sub_fund_names,
+            data_sources_json, financing_amount_text, financing_history_text,
+            is_listed, include_in_comparable, F_CreatorTime, pre_investment_run_id
+     FROM sourcing_competitor_relation
+     WHERE pre_investment_project_id = ?
+       AND subject_type = 'pre_investment_project'
+       AND pre_investment_run_id = ?
+       ${del}
+       ${y.sql}
+     ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
+    [pipId, runId, ...y.params]
+  );
+}
+
+async function resolveInvestedExportRun(ieId, runIdBySubject) {
+  const requested = requestedRunIdForSubject(ieId, runIdBySubject);
+  if (requested) return requested;
+  return getLatestRunIdForInvestedEnterprise(ieId);
+}
+
+async function resolvePreInvestmentExportRun(pipId, runIdBySubject) {
+  const requested = requestedRunIdForSubject(pipId, runIdBySubject);
+  if (requested) return requested;
+  return getLatestRunIdForPreInvestmentProject(pipId);
+}
+
 /**
  * @param {string} [opts.exportBatchMode] latest | all（all 仅被投多选导出）
  */
@@ -215,6 +305,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
     exportAll = false,
     exportBatchMode = 'latest',
     years = [],
+    runIdBySubject = {},
     psUser,
     isAdmin,
   } = opts;
@@ -286,26 +377,8 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
         relParams
       );
     } else {
-      const relParams = [ie.F_Id];
-      let yearClause = '';
-      if (years.length) {
-        yearClause = ` AND YEAR(F_CreatorTime) IN (${years.map(() => '?').join(',')})`;
-        relParams.push(...years.map(Number));
-      }
-      rels = await db.query(
-        `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-                competitor_type, evidence_summary, evidence_confidence, needs_review,
-                evidence_breakdown_json, score_breakdown_json,
-                competitor_product_intro, competitor_tags_display, sub_fund_names,
-                data_sources_json, financing_amount_text, financing_history_text,
-                is_listed, include_in_comparable, F_CreatorTime
-         FROM sourcing_competitor_relation
-         WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
-           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-           ${yearClause}
-         ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
-        relParams
-      );
+      const runId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
+      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, runId, years);
     }
     if (!rels.length) {
       if (exportAll) continue;
@@ -363,6 +436,7 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
     exportAll = false,
     exportBatchMode = 'latest',
     years = [],
+    runIdBySubject = {},
     psUser,
     isAdmin,
   } = opts;
@@ -430,25 +504,8 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
         pipRelParams
       );
     } else {
-      const pipRelParams = [pip.F_Id];
-      let pipYearClause = '';
-      if (years.length) {
-        pipYearClause = ` AND YEAR(F_CreatorTime) IN (${years.map(() => '?').join(',')})`;
-        pipRelParams.push(...years.map(Number));
-      }
-      rels = await db.query(
-        `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
-                competitor_type, evidence_summary, evidence_confidence, needs_review,
-                evidence_breakdown_json, score_breakdown_json,
-                competitor_product_intro, competitor_tags_display, sub_fund_names,
-                data_sources_json, financing_amount_text, financing_history_text,
-                is_listed, include_in_comparable, F_CreatorTime
-         FROM sourcing_competitor_relation
-         WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0
-           ${pipYearClause}
-         ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
-        pipRelParams
-      );
+      const runId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
+      rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, runId, years);
     }
     if (!rels.length && exportAll) continue;
     const sheetLabel = sanitizeSheetName(
@@ -524,6 +581,7 @@ async function buildCompetitorExportFileList(opts) {
       preInvestmentProjectIds = [],
       exportAll = false,
       years = [],
+      runIdBySubject = {},
       psUser,
       isAdmin,
     } = opts;
@@ -571,14 +629,10 @@ async function buildCompetitorExportFileList(opts) {
           [pip.F_Id]
         );
       } else {
+        const runId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
         const runs = await listPreInvestmentCompetitorRuns(pip.F_Id);
-        latestLabel = runs[0]?.version_label || null;
-        rels = await db.query(
-          `SELECT * FROM sourcing_competitor_relation
-           WHERE pre_investment_project_id = ? AND subject_type = 'pre_investment_project' AND F_DeleteMark = 0
-           ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
-          [pip.F_Id]
-        );
+        latestLabel = versionLabelForRun(runs, runId) || runs[0]?.version_label || null;
+        rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, runId, years);
       }
       if (!rels.length && exportAll) continue;
       const abbrev = sanitizeExportFileBase(
@@ -612,6 +666,7 @@ async function buildCompetitorExportFileList(opts) {
     investedEnterpriseIds = [],
     exportAll = false,
     years = [],
+    runIdBySubject = {},
     psUser,
     isAdmin,
   } = opts;
@@ -661,15 +716,10 @@ async function buildCompetitorExportFileList(opts) {
         [ie.F_Id]
       );
     } else {
+      const runId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
       const runs = await listInvestedEnterpriseCompetitorRuns(ie.F_Id);
-      latestLabel = runs[0]?.version_label || null;
-      rels = await db.query(
-        `SELECT * FROM sourcing_competitor_relation
-         WHERE invested_enterprise_id = ? AND F_DeleteMark = 0
-           AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
-         ORDER BY include_in_comparable DESC, relevance_score DESC, F_CreatorTime DESC`,
-        [ie.F_Id]
-      );
+      latestLabel = versionLabelForRun(runs, runId) || runs[0]?.version_label || null;
+      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, runId, years);
     }
     if (!rels.length && exportAll) continue;
     const abbrev = sanitizeExportFileBase(

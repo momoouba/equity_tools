@@ -1292,6 +1292,15 @@ function registerCompetitorMatchRoutes(router) {
             .split(/[,，]/)
             .map((x) => x.trim())
             .filter((y) => /^\d{4}$/.test(y));
+      const rawRunMap = req.body?.run_id_by_subject || req.body?.runIdBySubject || {};
+      const runIdBySubject =
+        rawRunMap && typeof rawRunMap === 'object' && !Array.isArray(rawRunMap)
+          ? Object.fromEntries(
+              Object.entries(rawRunMap)
+                .map(([k, v]) => [String(k).trim(), String(v || '').trim()])
+                .filter(([k, v]) => k && v)
+            )
+          : {};
 
       const isPre = subjectType === 'pre_investment_project';
       const ids = isPre ? pipIds : ieIds;
@@ -1341,6 +1350,7 @@ function registerCompetitorMatchRoutes(router) {
         exportAll,
         exportBatchMode: batchModeAll ? 'all' : 'latest',
         years,
+        runIdBySubject: batchModeAll || exportAll ? {} : runIdBySubject,
         psUser: req.psUser,
         isAdmin: isAdminUser(req.psUser),
       });
