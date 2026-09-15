@@ -9,6 +9,7 @@ const {
   LISTING_LEVEL,
 } = require('./listingAuth');
 const { IPP_ORDER_BY_IPP } = require('./listingProjectProgressOrder');
+const { dedupeIpoProjectProgressRowsForMail } = require('./listingProjectProgressDedupe');
 const { syncNewShareCalendar, refreshFirstDayMetricsForRows } = require('./newShareService');
 
 /** 同一报告日内多收件人只触发一次打新补齐 */
@@ -382,6 +383,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
               ipp.inv_amount, ipp.residual_amount, ipp.ratio, ipp.ct_amount, ipp.ct_residual
        FROM ipo_project_progress ipp
        WHERE ipp.F_CreatorUserId = ?
+         AND IFNULL(ipp.F_DeleteMark, 0) = 0
          AND (
            (
              ipp.new_share_row_id IS NULL
@@ -405,6 +407,7 @@ async function executeListingEmailDigest(recipient, options = {}) {
        ORDER BY ${IPP_ORDER_BY_IPP}`,
       [recipient.user_id, reportDay, reportDay, reportDay]
     );
+    ipp = dedupeIpoProjectProgressRowsForMail(ipp);
   }
   if (includeListingProgress) {
     // 独立查询 IPO 审核数据，不依赖 ipo_project_progress 匹配表。

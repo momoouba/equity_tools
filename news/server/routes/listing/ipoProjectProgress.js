@@ -78,7 +78,7 @@ async function buildProgressWhere(req, user) {
   const startStr = (req.query.startDate || '').trim();
   const endStr = (req.query.endDate || '').trim();
 
-  const where = [];
+  const where = ['IFNULL(ipp.F_DeleteMark, 0) = 0'];
   const params = [];
 
   if (!isAdminAccount(user.account)) {

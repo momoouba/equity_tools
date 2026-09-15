@@ -236,7 +236,7 @@ function buildShareProjectProgressDateWhere(query) {
   const preset = (query.rangePreset || '').trim();
   const startStr = (query.startDate || '').trim();
   const endStr = (query.endDate || '').trim();
-  const where = [];
+  const where = ['IFNULL(F_DeleteMark, 0) = 0'];
   const params = [];
   let rangeStart = null;
   let rangeEnd = null;

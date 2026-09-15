@@ -87,7 +87,7 @@ function normYmd(v) {
 }
 
 /** 同一底层项目 + 同一 ipo_progress 行 + 同一进展更新日：已存在则跳过（增量幂等，不删历史） */
-async function existsIpoProgressMatch(projectFId, progressRowId, updateTime) {
+async function existsIpoProgressMatch(projectFId, progressRowId, updateTime, event = null) {
   const ymd = normYmd(updateTime);
   if (!ymd) {
     const rows = await db.query(
@@ -109,7 +109,26 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime) {
      LIMIT 1`,
     [projectFId, progressRowId, ymd]
   );
-  return rows.length > 0;
+  if (rows.length > 0) return true;
+  if (!event) return false;
+  const eventRows = await db.query(
+    `SELECT F_Id FROM ipo_project_progress
+     WHERE match_source = 'ipo_progress'
+       AND ipo_project_f_id = ?
+       AND DATE(F_UpdateTime) = ?
+       AND TRIM(IFNULL(status, '')) = ?
+       AND TRIM(IFNULL(board, '')) = ?
+       AND TRIM(IFNULL(exchange, '')) = ?
+     LIMIT 1`,
+    [
+      projectFId,
+      ymd,
+      String(event.status || '').trim(),
+      String(event.board || '').trim(),
+      String(event.exchange || '').trim(),
+    ]
+  );
+  return eventRows.length > 0;
 }
 
 async function runNewShareMatchBatch({
@@ -335,17 +354,30 @@ function ipoProgressMatchKey(projectFId, progressRowId, updateTime) {
   return `${projectFId}|${progressRowId}|${normYmd(updateTime)}`;
 }
 
+function ipoProgressEventMatchKey(projectFId, updateTime, status, board, exchange) {
+  return [
+    projectFId,
+    normYmd(updateTime),
+    String(status || '').trim(),
+    String(board || '').trim(),
+    String(exchange || '').trim(),
+  ].join('|');
+}
+
 async function loadExistingIpoProgressMatchKeys() {
   const rows = await db.query(
-    `SELECT ipo_project_f_id, ipo_progress_row_id, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd
+    `SELECT ipo_project_f_id, ipo_progress_row_id, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd,
+            status, board, exchange
      FROM ipo_project_progress
      WHERE match_source = 'ipo_progress'`
   );
-  const set = new Set();
+  const exact = new Set();
+  const byEvent = new Set();
   for (const r of rows) {
-    set.add(ipoProgressMatchKey(r.ipo_project_f_id, r.ipo_progress_row_id, r.ymd));
+    exact.add(ipoProgressMatchKey(r.ipo_project_f_id, r.ipo_progress_row_id, r.ymd));
+    byEvent.add(ipoProgressEventMatchKey(r.ipo_project_f_id, r.ymd, r.status, r.board, r.exchange));
   }
-  return set;
+  return { exact, byEvent };
 }
 
 function emptyMatchBatchResult(extra = {}) {
@@ -531,7 +563,7 @@ async function runListingMatchBatchImpl({
   attachProjectMatchKeys(projectRows);
   const existingMatchKeys = progressRows.length && projectRows.length
     ? await loadExistingIpoProgressMatchKeys()
-    : new Set();
+    : { exact: new Set(), byEvent: new Set() };
 
   /** @type {Map<string, { ip: object, p: object }[]>} */
   const matchBuckets = new Map();
@@ -585,7 +617,6 @@ async function runListingMatchBatchImpl({
         String(ip.status || '').trim(),
         String(ip.board || '').trim(),
         String(ip.exchange || '').trim(),
-        nip,
       ].join('|');
       if (!matchBuckets.has(bucketKey)) matchBuckets.set(bucketKey, []);
       matchBuckets.get(bucketKey).push({ ip, p, matchScore });
@@ -605,7 +636,8 @@ async function runListingMatchBatchImpl({
     if (!ip) continue;
 
     const existKey = ipoProgressMatchKey(p.F_Id, ip.F_Id, ip.F_UpdateTime);
-    if (existingMatchKeys.has(existKey)) {
+    const eventKey = ipoProgressEventMatchKey(p.F_Id, ip.F_UpdateTime, ip.status, ip.board, ip.exchange);
+    if (existingMatchKeys.exact.has(existKey) || existingMatchKeys.byEvent.has(eventKey)) {
       skippedFromIpoProgress += 1;
       continue;
     }
@@ -642,7 +674,8 @@ async function runListingMatchBatchImpl({
       ]
     );
     inserted += 1;
-    existingMatchKeys.add(existKey);
+    existingMatchKeys.exact.add(existKey);
+    existingMatchKeys.byEvent.add(eventKey);
   }
 
   const newShareResult = includeNewShare
@@ -727,7 +760,7 @@ async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null }
       }
     }
     if (!matched) continue;
-    if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime)) continue;
+    if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime, ip)) continue;
 
     await db.execute(
       `INSERT INTO ipo_project_progress (
