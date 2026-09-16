@@ -85,16 +85,41 @@ async function ensureValuationSchema(dbPool) {
       comparability VARCHAR(16) NULL COMMENT 'strong/medium/weak',
       in_pool TINYINT(1) NOT NULL DEFAULT 1,
       selected TINYINT(1) NOT NULL DEFAULT 1,
-      source VARCHAR(32) NOT NULL DEFAULT 'competitor_run' COMMENT 'competitor_run/manual/excel',
+      source VARCHAR(32) NOT NULL DEFAULT 'competitor_run' COMMENT 'competitor_run/manual/excel/industry_recommend',
       pe_median_override DECIMAL(20,6) NULL COMMENT '底稿 PE 中位，有值则进 POOL',
       ps_median_override DECIMAL(20,6) NULL COMMENT '底稿 PS 中位，有值则进 POOL',
       disabled_reason VARCHAR(255) NULL,
+      match_reason VARCHAR(255) NULL COMMENT '推荐匹配说明摘要',
+      match_reason_json JSON NULL COMMENT '推荐分维：行业/赛道/透镜/业务',
+      recommend_run_id VARCHAR(19) NULL COMMENT '确认来源的推荐 run',
       F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
       KEY idx_vcc_case (case_id, F_DeleteMark),
       KEY idx_vcc_code (stock_code)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目估值—案件可比快照'
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS valuation_case_recommend_run (
+      F_Id VARCHAR(19) NOT NULL PRIMARY KEY,
+      case_id VARCHAR(19) NOT NULL,
+      version_no INT NOT NULL DEFAULT 1,
+      status VARCHAR(32) NOT NULL DEFAULT 'queued' COMMENT 'queued/running/success/failed',
+      relax TINYINT(1) NOT NULL DEFAULT 0,
+      include_neeq TINYINT(1) NOT NULL DEFAULT 0,
+      result_limit INT NOT NULL DEFAULT 30,
+      profile_json JSON NULL COMMENT '标的画像快照',
+      result_json JSON NULL COMMENT '候选+分维+简介+业务理由',
+      error_message VARCHAR(500) NULL,
+      F_CreatorUserId VARCHAR(19) NULL,
+      started_at DATETIME NULL,
+      finished_at DATETIME NULL,
+      F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0,
+      KEY idx_vcrr_case (case_id, F_DeleteMark, status, version_no)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目估值—行业/赛道推荐版本'
   `);
 
   await dbPool.query(`
@@ -404,6 +429,15 @@ async function ensureValuationSchema(dbPool) {
     }
     if (!compCols.has('ps_median_override')) {
       await dbPool.query(`ALTER TABLE valuation_case_comparable ADD COLUMN ps_median_override DECIMAL(20,6) NULL COMMENT '底稿 PS 中位，有值则进 POOL'`);
+    }
+    if (!compCols.has('match_reason')) {
+      await dbPool.query(`ALTER TABLE valuation_case_comparable ADD COLUMN match_reason VARCHAR(255) NULL COMMENT '推荐匹配说明摘要'`);
+    }
+    if (!compCols.has('match_reason_json')) {
+      await dbPool.query(`ALTER TABLE valuation_case_comparable ADD COLUMN match_reason_json JSON NULL COMMENT '推荐分维：行业/赛道/透镜/业务'`);
+    }
+    if (!compCols.has('recommend_run_id')) {
+      await dbPool.query(`ALTER TABLE valuation_case_comparable ADD COLUMN recommend_run_id VARCHAR(19) NULL COMMENT '确认来源的推荐 run'`);
     }
   }
   if (await tableExists(dbPool, 'valuation_relative_row')) {

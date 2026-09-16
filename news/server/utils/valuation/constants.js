@@ -30,6 +30,18 @@ module.exports = {
     medium: '中',
     weak: '弱',
   },
+  CATEGORY_4_LABELS: {
+    ai: '人工智能',
+    bio: '生物医药',
+    semi_mfg: '半导体/先进制造',
+    other: '其他',
+  },
+  COMPARABLE_SOURCE: {
+    COMPETITOR: 'competitor_run',
+    MANUAL: 'manual',
+    EXCEL: 'excel',
+    INDUSTRY_RECOMMEND: 'industry_recommend',
+  },
 
   TERMINAL_PE: 'exit_pe',
   TERMINAL_PS: 'exit_ps',

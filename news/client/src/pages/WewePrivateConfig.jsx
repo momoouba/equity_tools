@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Button,
   Collapse,
@@ -16,6 +16,7 @@ import {
 } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions } from '../components/SheetModal'
 import './WewePrivateConfig.css'
 
 const TabPane = Tabs.TabPane
@@ -143,6 +144,8 @@ function WewePrivateConfig() {
   const [remindingPending, setRemindingPending] = useState(false)
   const [unsubscribingId, setUnsubscribingId] = useState('')
   const [enqueueBlockingId, setEnqueueBlockingId] = useState('')
+  const [tableScrollY, setTableScrollY] = useState(360)
+  const tableScrollAreaRef = useRef(null)
 
   const loadConfigAndSession = useCallback(async () => {
     setLoading(true)
@@ -190,6 +193,26 @@ function WewePrivateConfig() {
       loadAccounts()
     }
   }, [subTab, loadAccounts])
+
+  useLayoutEffect(() => {
+    if (subTab !== 'accounts') return undefined
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const head = el.querySelector('.arco-table-header')
+      const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
+      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
+    }
+    const raf = requestAnimationFrame(() => measure())
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [subTab, filterCollapsed, accountPageSize])
 
   const patchConfig = async (patch, okMsg = '已保存') => {
     setSaving(true)
@@ -842,12 +865,12 @@ function WewePrivateConfig() {
               </CollapseItem>
             </Collapse>
 
-            <Typography.Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
+            <Typography.Paragraph type="secondary" className="wewe-private-config__list-hint">
               待订阅账号点右侧「粘贴链接」，填入该号任意一篇文章的 mp.weixin 分享 URL。
               新榜已能抓到、但 wewe 仍在订阅的号，点「退订」（不要只在 wewe-rss 管理页点删除：那边删的是 wewe 自己的库，新闻专队列表不会变）。
             </Typography.Paragraph>
 
-            <div className="table-container">
+            <div ref={tableScrollAreaRef} className="table-container wewe-private-config__table-area">
               {accountsLoading && accounts.length === 0 ? (
                 <Skeleton loading animation text={{ rows: 8, width: ['100%'] }} />
               ) : (
@@ -859,6 +882,7 @@ function WewePrivateConfig() {
                   pagination={false}
                   page={accountPage}
                   pageSize={accountPageSize}
+                  scroll={{ y: tableScrollY }}
                 />
               )}
             </div>
@@ -892,27 +916,41 @@ function WewePrivateConfig() {
         </TabPane>
       </Tabs>
 
-      <Modal
-        title={mapTarget ? `粘贴分享链接 · ${mapTarget.wechat_account_id}` : '粘贴分享链接'}
+      <SheetModal
         visible={Boolean(mapTarget)}
-        onCancel={() => {
+        title={mapTarget ? `粘贴分享链接 · ${mapTarget.wechat_account_id}` : '粘贴分享链接'}
+        onClose={() => {
           setMapTarget(null)
           setSampleUrl('')
         }}
-        onOk={submitMapUrl}
-        confirmLoading={mapping}
-        okText="订阅映射"
       >
-        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          使用一篇该公众号文章的 <code>https://mp.weixin.qq.com/s/...</code> 链接完成 wewe feed 映射。
-        </Typography.Paragraph>
-        <Input.TextArea
-          value={sampleUrl}
-          onChange={setSampleUrl}
-          autoSize={{ minRows: 3, maxRows: 6 }}
-          placeholder="https://mp.weixin.qq.com/s/..."
-        />
-      </Modal>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <p className="form-hint form-span-4">
+              使用一篇该公众号文章的 https://mp.weixin.qq.com/s/... 链接完成 wewe feed 映射。
+            </p>
+            <div className="form-group form-span-4">
+              <label>文章链接</label>
+              <Input.TextArea
+                value={sampleUrl}
+                onChange={setSampleUrl}
+                autoSize={{ minRows: 3, maxRows: 5 }}
+                placeholder="https://mp.weixin.qq.com/s/..."
+              />
+            </div>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setMapTarget(null)
+              setSampleUrl('')
+            }}
+            submitLabel="订阅映射"
+            submitType="button"
+            onSubmitClick={submitMapUrl}
+            submitLoading={mapping}
+          />
+        </div>
+      </SheetModal>
     </div>
   )
 }

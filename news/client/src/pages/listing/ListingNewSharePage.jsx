@@ -6,6 +6,7 @@ import {
   postNewShareAiName,
   downloadNewShareExport,
 } from '../../api/listing'
+import '../../styles/listTable.css'
 import './listingTableColumns.css'
 import {
   buildListingNumericColumn,
@@ -182,9 +183,12 @@ export default function ListingNewSharePage() {
   const tableScrollX = useMemo(() => sumColumnWidths(columns) + ROW_SELECTION_WIDTH, [columns])
 
   return (
-    <div className="listing-new-share-page" style={{ padding: '0 16px 16px' }}>
-      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>打新日历</div>
-      <Space wrap style={{ marginBottom: 12 }}>
+    <div className="listing-new-share-page list-table-page" style={{ padding: '4px 16px 16px' }}>
+      <div className="listing-page-header" style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>
+        打新日历
+      </div>
+      <div className="listing-page-header" style={{ marginBottom: 12 }}>
+      <Space wrap>
         <Input
           style={{ width: 280 }}
           placeholder="股票代码/简称"
@@ -240,11 +244,13 @@ export default function ListingNewSharePage() {
         </Button>
         <Button onClick={handleExport}>导出 CSV</Button>
       </Space>
+      </div>
       <Table
         rowKey="id"
         loading={loading}
         columns={columns}
         data={data}
+        className="list-table"
         rowSelection={{
           type: 'checkbox',
           selectedRowKeys,

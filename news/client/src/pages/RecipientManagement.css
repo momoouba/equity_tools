@@ -14,10 +14,11 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
-  padding-bottom: 16px;
+  padding: 12px 0 12px 4px;
   border-bottom: 1px solid #e5e6eb;
   flex-wrap: wrap;
   gap: 16px;
+  box-sizing: border-box;
 }
 
 .management-title {

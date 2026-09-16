@@ -19,10 +19,11 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
-  padding-bottom: 16px;
+  padding: 12px 0 12px 4px;
   border-bottom: 1px solid #e5e6eb;
   flex-wrap: wrap;
   gap: 16px;
+  box-sizing: border-box;
 }
 
 .news-header h2 {
@@ -227,56 +228,16 @@
   word-break: break-word !important;
 }
 
-/* 操作列除外，保持原有样式 */
-.news-info .arco-table-td:last-child .arco-table-cell {
-  white-space: normal !important;
+/* 操作列：交给 list-table / ListOps 统一样式 */
+.news-info .list-table .arco-table-td.list-ops-col .arco-table-cell {
+  white-space: nowrap !important;
+  overflow: visible;
+  text-align: left;
 }
 
-/* 操作列样式 - 3个按钮居中，两侧各留4px，底纹与表格右侧对齐 */
-.news-info .arco-table-th:last-child,
-.news-info .arco-table-td:last-child {
-  padding: 12px 4px !important;
+.news-info .list-table .arco-table-th.list-ops-col,
+.news-info .list-table .arco-table-td.list-ops-col {
+  padding: 6px 8px !important;
   box-sizing: border-box;
-}
-
-.news-info .arco-table-th:last-child .arco-table-cell,
-.news-info .arco-table-td:last-child .arco-table-cell {
-  padding-left: 4px !important;
-  padding-right: 4px !important;
-  box-sizing: border-box;
-  text-align: center;
-}
-
-.news-info .arco-table-td:last-child > div {
-  width: 100%;
-  box-sizing: border-box;
-}
-
-/* 确保操作列的斑马纹背景与表格右侧对齐 - 继承行的背景色并延伸到边框 */
-.news-info .arco-table-tr-stripe .arco-table-td:last-child {
-  background-color: inherit !important;
-}
-
-/* 确保操作列单元格的背景色延伸到右侧边框 */
-.news-info .arco-table-td:last-child,
-.news-info .arco-table-th:last-child {
-  background-clip: padding-box;
-}
-
-/* 确保操作列的所有内容（包括按钮）都在单元格padding范围内 */
-.news-info .arco-table-td:last-child > * {
-  max-width: 100%;
-  box-sizing: border-box;
-}
-
-/* 确保操作列的表头和数据单元格的右侧边框与表格内容区域对齐 */
-.news-info .arco-table-thead .arco-table-th:last-child,
-.news-info .arco-table-tbody .arco-table-td:last-child {
-  border-right: 1px solid #e5e6eb;
-}
-
-/* 操作列表头样式 - 确保与右侧表框对齐，背景色正确 */
-.news-info .arco-table-th:last-child {
-  background-color: #f7f8fa !important;
 }
 

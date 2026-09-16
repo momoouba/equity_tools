@@ -517,7 +517,7 @@ function Dashboard() {
         <Content className="dashboard-content">
           <Routes>
             <Route path="/enterprises" element={
-              (isAdmin || hasNewsPermission) ? <EnterpriseManagement /> : <div>您没有访问权限</div>
+              (isAdmin || hasNewsPermission) ? <EnterpriseManagement viewportBoundTable /> : <div>您没有访问权限</div>
             } />
             <Route path="/news" element={
               (isAdmin || hasNewsPermission) ? <NewsInfo /> : <div>您没有访问权限</div>
@@ -674,7 +674,7 @@ function Dashboard() {
               }
             />
             <Route path="/" element={
-              (isAdmin || hasNewsPermission) ? <EnterpriseManagement /> : <CompanyManagement />
+              (isAdmin || hasNewsPermission) ? <EnterpriseManagement viewportBoundTable /> : <CompanyManagement />
             } />
           </Routes>
         </Content>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import axios from '../utils/axios'
+import SheetModal, { SheetActions } from '../components/SheetModal'
 import './EnterpriseForm.css'
 
 const DATA_APP_PROJECT = '项目挖掘'
@@ -22,13 +23,13 @@ function displayOrDash(v) {
   return s || '-'
 }
 
-function ReadonlyTextField({ label, value, multiline = false }) {
+function ReadonlyTextField({ label, value, multiline = false, className = '' }) {
   const text = displayOrDash(value)
   const lineCount = String(value ?? '').split('\n').length
   const approxRows = Math.ceil(text.length / 52)
-  const rows = multiline ? Math.min(20, Math.max(3, lineCount, approxRows)) : undefined
+  const rows = multiline ? Math.min(8, Math.max(3, lineCount, approxRows)) : undefined
   return (
-    <div className="form-group form-group-multiline">
+    <div className={`form-group${multiline ? ' form-group-multiline' : ''}${className ? ` ${className}` : ''}`}>
       <label>{label}</label>
       {multiline ? (
         <textarea
@@ -44,7 +45,16 @@ function ReadonlyTextField({ label, value, multiline = false }) {
   )
 }
 
-function MultilineTextField({ label, name, value, onChange, minRows = 4, placeholder }) {
+function MultilineTextField({
+  label,
+  name,
+  value,
+  onChange,
+  minRows = 4,
+  maxRows = 8,
+  placeholder,
+  className = '',
+}) {
   const ref = useRef(null)
   const text = value ?? ''
 
@@ -53,11 +63,14 @@ function MultilineTextField({ label, name, value, onChange, minRows = 4, placeho
     if (!el) return
     el.style.height = 'auto'
     const minPx = minRows * 26
-    el.style.height = `${Math.max(minPx, el.scrollHeight)}px`
-  }, [text, minRows])
+    const maxPx = maxRows * 26
+    const next = Math.min(maxPx, Math.max(minPx, el.scrollHeight))
+    el.style.height = `${next}px`
+    el.style.overflowY = el.scrollHeight > maxPx ? 'auto' : 'hidden'
+  }, [text, minRows, maxRows])
 
   return (
-    <div className="form-group form-group-multiline">
+    <div className={`form-group form-group-multiline${className ? ` ${className}` : ''}`}>
       <label>{label}</label>
       <textarea
         ref={ref}
@@ -303,15 +316,17 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
   }
 
   return (
-    <div className="modal-overlay">
-      <div className={`modal-content${isCompetitorInvestedForm ? ' modal-content-wide' : ''}`}>
-        <div className="modal-header">
-          <h3>{enterprise ? '编辑企业信息' : '新增企业信息'}</h3>
-          <button className="close-button" onClick={onClose}>×</button>
-        </div>
-
-        <form onSubmit={handleSubmit} className={`enterprise-form${isCompetitorInvestedForm ? ' enterprise-form--competitor' : ''}`}>
-          <div className="form-group">
+    <SheetModal
+      visible
+      title={enterprise ? '编辑企业信息' : '新增企业信息'}
+      onClose={onClose}
+    >
+        <form
+          onSubmit={handleSubmit}
+          className={`enterprise-form enterprise-form--sheet${isCompetitorInvestedForm ? ' enterprise-form--competitor' : ''}`}
+        >
+          <div className="modal-body enterprise-form-grid">
+          <div className={`form-group${isCompetitorInvestedForm ? '' : ' form-span-2'}`}>
             <label>项目编号</label>
             <input
               type="text"
@@ -343,7 +358,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
                 </div>
               )}
 
-              <div className="form-group">
+              <div className="form-group form-span-2">
                 <label>被投企业全称 *</label>
                 <input
                   type="text"
@@ -355,27 +370,47 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
                 />
               </div>
 
+              <div className="form-group">
+                <label>退出状态</label>
+                <select name="exit_status" value={formData.exit_status} onChange={handleChange}>
+                  <option value="未退出">未退出</option>
+                  <option value="部分退出">部分退出</option>
+                  <option value="完全退出">完全退出</option>
+                  <option value="继续观察">继续观察</option>
+                  <option value="不再观察">不再观察</option>
+                  <option value="已上市">已上市</option>
+                </select>
+              </div>
+
+              {enterprise ? <ReadonlyTextField label="AI状态" value={enterprise.ai_enrich_status} /> : null}
+
               <MultilineTextField
+                className="form-span-2"
                 label="产品简介(AI)"
                 name="ai_product_intro"
                 value={formData.ai_product_intro}
                 onChange={handleChange}
-                minRows={6}
+                minRows={5}
+                maxRows={8}
               />
               <MultilineTextField
+                className="form-span-2"
                 label="企业标签(AI)"
                 name="ai_industry_tags_display"
                 value={formData.ai_industry_tags_display}
                 onChange={handleChange}
-                minRows={4}
+                minRows={5}
+                maxRows={8}
                 placeholder="多个标签请用顿号、逗号分隔"
               />
               <MultilineTextField
+                className="form-span-4"
                 label="企业介绍（企查查）"
                 name="qcc_company_intro"
                 value={formData.qcc_company_intro}
                 onChange={handleChange}
-                minRows={8}
+                minRows={4}
+                maxRows={7}
               />
 
               {enterprise ? (
@@ -412,24 +447,10 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
                   </div>
                 </>
               )}
-
-              <div className="form-group">
-                <label>退出状态</label>
-                <select name="exit_status" value={formData.exit_status} onChange={handleChange}>
-                  <option value="未退出">未退出</option>
-                  <option value="部分退出">部分退出</option>
-                  <option value="完全退出">完全退出</option>
-                  <option value="继续观察">继续观察</option>
-                  <option value="不再观察">不再观察</option>
-                  <option value="已上市">已上市</option>
-                </select>
-              </div>
-
-              {enterprise ? <ReadonlyTextField label="AI状态" value={enterprise.ai_enrich_status} /> : null}
             </>
           ) : (
             <>
-          <div className="form-group" ref={dropdownRef}>
+          <div className="form-group form-span-2" ref={dropdownRef}>
             <label>企业简称</label>
             <div className="input-with-button">
               <input
@@ -492,7 +513,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             )}
           </div>
 
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>企业全称 *</label>
             <input
               type="text"
@@ -506,7 +527,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
 
           {!isCompetitorInvestedForm && dataAppName !== DATA_APP_PROJECT && (
           <>
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>统一信用代码</label>
             <input
               type="text"
@@ -517,7 +538,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             />
           </div>
 
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>微信公众号id</label>
             <input
               type="text"
@@ -528,7 +549,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             />
           </div>
 
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>官网地址</label>
             <input
               type="text"
@@ -594,7 +615,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             </>
           )}
 
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>企业类型</label>
             <select
               name="entity_type"
@@ -610,7 +631,7 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             </select>
           </div>
 
-          <div className="form-group">
+          <div className="form-group form-span-2">
             <label>退出状态</label>
             <select
               name="exit_status"
@@ -628,19 +649,16 @@ function EnterpriseForm({ enterprise, onClose, onSubmit, dataAppName = '新闻�
             </>
           )}
 
-          {error && <div className="error-message">{error}</div>}
-
-          <div className="form-actions">
-            <button type="button" className="btn-cancel" onClick={onClose}>
-              取消
-            </button>
-            <button type="submit" className="btn-confirm" disabled={loading}>
-              {loading ? '提交中...' : '确定'}
-            </button>
+          {error && <div className="error-message form-span-4">{error}</div>}
           </div>
+
+          <SheetActions
+            onCancel={onClose}
+            submitLabel="确定"
+            submitLoading={loading}
+          />
         </form>
-      </div>
-    </div>
+    </SheetModal>
   )
 }
 

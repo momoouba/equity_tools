@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import axios from '../utils/axios'
+import './EnterpriseForm.css'
 import './BatchImportModal.css'
 
 function BatchImportModal({ onClose, onSuccess, dataAppName = '新闻舆情' }) {
@@ -100,67 +101,68 @@ function BatchImportModal({ onClose, onSuccess, dataAppName = '新闻舆情' }) 
   }
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content batch-import-modal">
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        className="modal-content modal-content--sheet modal-content-wide batch-import-modal"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="modal-header">
           <h3>批量导入被投企业</h3>
-          <button className="close-button" onClick={onClose}>×</button>
-        </div>
-
-        <div className="batch-modal-body">
-          <section className="template-section">
-            <h4>1. 下载模板</h4>
-            <p>请先下载模板，按照模板要求填写企业信息，表头不可修改。</p>
-            <button className="btn-primary" onClick={handleDownloadTemplate}>
-              下载模板
-            </button>
-            <p className="template-tip">模板包含以下字段：项目简称、被投企业全称、统一信用代码、企业公众号id、企业官网、退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）。</p>
-          </section>
-
-          <section className="upload-section">
-            <h4>2. 上传文件</h4>
-            <p>选择填写好的 Excel 文件进行导入，仅支持 .xlsx/.xls 格式。</p>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleFileChange}
-            />
-            {selectedFile && (
-              <p className="selected-file">已选择：{selectedFile.name}</p>
-            )}
-            <button
-              className="btn-primary"
-              onClick={handleUpload}
-              disabled={uploading}
-            >
-              {uploading ? '上传中...' : '上传导入'}
-            </button>
-          </section>
-
-          {message && (
-            <div className="batch-message">
-              {message}
-            </div>
-          )}
-
-          {errors.length > 0 && (
-            <div className="batch-errors">
-              <p>以下数据导入失败：</p>
-              <ul>
-                {errors.map((err) => (
-                  <li key={err.row}>
-                    第 {err.row} 行：{err.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-
-        <div className="form-actions">
-          <button className="btn-cancel" onClick={onClose}>
-            关闭
+          <button type="button" className="close-button" aria-label="关闭" onClick={onClose}>
+            ×
           </button>
+        </div>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body batch-modal-body">
+            <section className="template-section">
+              <h4>1. 下载模板</h4>
+              <p>请先下载模板，按照模板要求填写企业信息，表头不可修改。</p>
+              <button type="button" className="btn-primary" onClick={handleDownloadTemplate}>
+                下载模板
+              </button>
+              <p className="template-tip">
+                模板包含以下字段：项目简称、被投企业全称、统一信用代码、企业公众号id、企业官网、退出状态（未退出/部分退出/完全退出/继续观察/不再观察/已上市）。
+              </p>
+            </section>
+
+            <section className="upload-section">
+              <h4>2. 上传文件</h4>
+              <p>选择填写好的 Excel 文件进行导入，仅支持 .xlsx/.xls 格式。</p>
+              <input type="file" accept=".xlsx,.xls" onChange={handleFileChange} />
+              {selectedFile && <p className="selected-file">已选择：{selectedFile.name}</p>}
+              <button type="button" className="btn-primary" onClick={handleUpload} disabled={uploading}>
+                {uploading ? '上传中...' : '上传导入'}
+              </button>
+            </section>
+
+            {message ? <div className="batch-message">{message}</div> : null}
+
+            {errors.length > 0 ? (
+              <div className="batch-errors">
+                <p>以下数据导入失败：</p>
+                <ul>
+                  {errors.map((err) => (
+                    <li key={err.row}>
+                      第 {err.row} 行：{err.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+          <div className="form-actions">
+            <button type="button" className="btn-cancel" onClick={onClose}>
+              关闭
+            </button>
+          </div>
         </div>
       </div>
     </div>

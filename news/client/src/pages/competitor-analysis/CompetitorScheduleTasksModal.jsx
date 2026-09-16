@@ -12,7 +12,10 @@ import {
   Checkbox,
   Tag,
 } from '@arco-design/web-react'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import CronGenerator from '../../components/CronGenerator'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
 import {
   fetchCompetitorScheduleStatusOptions,
   fetchCompetitorScheduleTasks,
@@ -340,23 +343,16 @@ export default function CompetitorScheduleTasksModal({ visible, onClose }) {
     },
     {
       title: '操作',
-      width: 260,
+      width: 280,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, row) => (
-        <Space size="mini" wrap>
-          <Button type="text" size="mini" onClick={() => openEdit(row)}>
-            编辑
-          </Button>
-          <Button type="text" size="mini" onClick={() => handleRunNow(row)}>
-            立即执行
-          </Button>
-          <Button type="text" size="mini" onClick={() => openLogs(row)}>
-            日志
-          </Button>
-          <Button type="text" size="mini" status="danger" onClick={() => handleDelete(row)}>
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => openEdit(row)} />
+          <ListOpButton name="立即执行" onClick={() => handleRunNow(row)} />
+          <ListOpButton name="日志" onClick={() => openLogs(row)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(row)} />
+        </ListOps>
       ),
     },
   ]
@@ -375,117 +371,128 @@ export default function CompetitorScheduleTasksModal({ visible, onClose }) {
 
   return (
     <>
-      <Modal
-        title="投后竞品分析 · 定时任务"
+      <SheetModal
         visible={visible}
-        onCancel={onClose}
-        footer={null}
-        style={{ width: 1360 }}
-        unmountOnExit
+        title="投后竞品分析 · 定时任务"
+        onClose={onClose}
       >
-        <Space style={{ marginBottom: 12 }}>
-          <Button type="primary" onClick={openCreate}>
-            新增定时任务
-          </Button>
-          <Button onClick={loadTasks} loading={loading}>
-            刷新
-          </Button>
-        </Space>
-        <Table
-          rowKey="id"
-          loading={loading}
-          columns={columns}
-          data={tasks}
-          scroll={{ x: 1200, y: 420 }}
-          pagination={false}
-          border={{ wrapper: true, cell: true }}
-        />
-      </Modal>
-
-      <Modal
-        title={editing ? '编辑定时任务' : '新增定时任务'}
-        visible={editVisible}
-        onCancel={() => setEditVisible(false)}
-        onOk={handleSave}
-        confirmLoading={saving}
-        okText="保存"
-        style={{ width: 640 }}
-        unmountOnExit
-      >
-        <Form form={form} layout="vertical">
-          <FormItem
-            label="收件人邮箱"
-            field="recipient_emails"
-            rules={[{ required: true, message: '请填写收件人' }]}
-            extra="多个邮箱用逗号或分号分隔"
-          >
-            <Input.TextArea
-              placeholder="例如：a@example.com, b@example.com"
-              autoSize={{ minRows: 2, maxRows: 4 }}
-            />
-          </FormItem>
-          <FormItem
-            label="邮件主题"
-            field="email_subject"
-            rules={[{ required: true, message: '请填写主题' }]}
-          >
-            <Input placeholder="邮件主题" />
-          </FormItem>
-          <FormItem label="邮件正文" field="email_body">
-            <Input.TextArea
-              placeholder={DEFAULT_BODY}
-              autoSize={{ minRows: 3, maxRows: 8 }}
-            />
-          </FormItem>
-          <FormItem
-            label="定时规则"
-            field="cron_expression"
-            rules={[{ required: true, message: '请配置定时规则' }]}
-          >
-            <Space>
-              <Input style={{ width: 280 }} value={cronValue} readOnly />
-              <Button
-                type="outline"
-                onClick={() => {
-                  setCronValue(form.getFieldValue('cron_expression') || cronValue)
-                  setCronModalOpen(true)
-                }}
-              >
-                配置 Cron
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <Space style={{ marginBottom: 12 }}>
+              <Button type="primary" onClick={openCreate}>
+                新增定时任务
               </Button>
-              <span style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
-                {formatCronExpression(cronValue)}
-              </span>
+              <Button onClick={loadTasks} loading={loading}>
+                刷新
+              </Button>
             </Space>
-          </FormItem>
-          <FormItem
-            label="项目状态"
-            field="project_status"
-            rules={[{ required: true, message: '请选择项目状态' }]}
-            extra="改状态将清空已保存的排除名单"
-          >
-            <Select
-              options={statusOptions.map((s) => ({ label: s, value: s }))}
-              onChange={() => setExcludedIds([])}
+            <Table
+              className="list-table"
+              rowKey="id"
+              loading={loading}
+              columns={columns}
+              data={tasks}
+              scroll={{ x: 1200, y: 360 }}
+              pagination={false}
+              border={{ wrapper: true, cell: true }}
             />
-          </FormItem>
-          <FormItem label="项目列表">
-            <Space>
-              <Button type="outline" onClick={openProjectPicker}>
+          </div>
+          <SheetActions onCancel={onClose} cancelLabel="关闭" submitLabel="" />
+        </div>
+      </SheetModal>
+
+      <SheetModal
+        visible={editVisible}
+        title={editing ? '编辑定时任务' : '新增定时任务'}
+        onClose={() => setEditVisible(false)}
+      >
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="收件人邮箱"
+              field="recipient_emails"
+              rules={[{ required: true, message: '请填写收件人' }]}
+              extra="多个邮箱用逗号或分号分隔"
+              className="form-span-2"
+            >
+              <Input.TextArea
+                placeholder="例如：a@example.com, b@example.com"
+                autoSize={{ minRows: 2, maxRows: 4 }}
+              />
+            </FormItem>
+            <FormItem
+              label="邮件主题"
+              field="email_subject"
+              rules={[{ required: true, message: '请填写主题' }]}
+              className="form-span-2"
+            >
+              <Input placeholder="邮件主题" />
+            </FormItem>
+            <FormItem
+              label="定时规则"
+              field="cron_expression"
+              rules={[{ required: true, message: '请配置定时规则' }]}
+              className="form-span-2"
+            >
+              <Input
+                value={cronValue}
+                readOnly
+                addAfter={
+                  <Button
+                    type="text"
+                    size="small"
+                    onClick={() => {
+                      setCronValue(form.getFieldValue('cron_expression') || cronValue)
+                      setCronModalOpen(true)
+                    }}
+                  >
+                    配置
+                  </Button>
+                }
+              />
+              <p className="form-hint">{formatCronExpression(cronValue)}</p>
+            </FormItem>
+            <FormItem
+              label="项目状态"
+              field="project_status"
+              rules={[{ required: true, message: '请选择项目状态' }]}
+              extra="改状态将清空已保存的排除名单"
+            >
+              <Select
+                options={statusOptions.map((s) => ({ label: s, value: s }))}
+                onChange={() => setExcludedIds([])}
+                getPopupContainer={sheetPopupContainer}
+              />
+            </FormItem>
+            <FormItem label="邮件正文" field="email_body" className="form-span-2">
+              <Input.TextArea
+                placeholder={DEFAULT_BODY}
+                autoSize={{ minRows: 3, maxRows: 6 }}
+              />
+            </FormItem>
+            <FormItem label="项目列表">
+              <Button type="outline" size="small" onClick={openProjectPicker}>
                 选择项目
               </Button>
-              <span style={{ fontSize: 13, color: 'var(--color-text-2)' }}>
+              <p className="form-hint">
                 {excludedIds.length
                   ? `已排除 ${excludedIds.length} 家（其余动态纳入）`
                   : '未排除（该状态下全部动态纳入）'}
-              </span>
-            </Space>
-          </FormItem>
-          <FormItem label="是否启用" field="is_active" triggerPropName="checked">
-            <Switch />
-          </FormItem>
+              </p>
+            </FormItem>
+            <FormItem label="是否启用" field="is_active" triggerPropName="checked">
+              <Switch />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setEditVisible(false)}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleSave}
+            submitLoading={saving}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       <CronGenerator
         visible={cronModalOpen}
@@ -498,45 +505,45 @@ export default function CompetitorScheduleTasksModal({ visible, onClose }) {
         onCancel={() => setCronModalOpen(false)}
       />
 
-      <Modal
-        title="选择项目（默认全选，取消勾选即长期排除）"
+      <SheetModal
         visible={projectPickerOpen}
-        onCancel={() => setProjectPickerOpen(false)}
-        onOk={confirmProjectPicker}
-        style={{ width: 560 }}
-        unmountOnExit
+        title="选择项目（默认全选，取消勾选即长期排除）"
+        onClose={() => setProjectPickerOpen(false)}
+        nested
       >
-        <Input.Search
-          allowClear
-          placeholder="搜索项目简称 / 企业全称"
-          value={pickerSearch}
-          onChange={setPickerSearch}
-          style={{ marginBottom: 12 }}
-        />
-        <div style={{ marginBottom: 8 }}>
-          <Checkbox
-            checked={
-              filteredPicker.length > 0 &&
-              filteredPicker.every((r) => pickerChecked.includes(r.id))
-            }
-            indeterminate={
-              filteredPicker.some((r) => pickerChecked.includes(r.id)) &&
-              !filteredPicker.every((r) => pickerChecked.includes(r.id))
-            }
-            onChange={(checked) => {
-              const ids = filteredPicker.map((r) => r.id)
-              if (checked) {
-                setPickerChecked((prev) => [...new Set([...prev, ...ids])])
-              } else {
-                const drop = new Set(ids.map(String))
-                setPickerChecked((prev) => prev.filter((id) => !drop.has(String(id))))
-              }
-            }}
-          >
-            全选当前列表
-          </Checkbox>
-        </div>
-        <div style={{ maxHeight: 360, overflow: 'auto' }}>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <Input.Search
+              allowClear
+              placeholder="搜索项目简称 / 企业全称"
+              value={pickerSearch}
+              onChange={setPickerSearch}
+              style={{ marginBottom: 12 }}
+            />
+            <div style={{ marginBottom: 8 }}>
+              <Checkbox
+                checked={
+                  filteredPicker.length > 0 &&
+                  filteredPicker.every((r) => pickerChecked.includes(r.id))
+                }
+                indeterminate={
+                  filteredPicker.some((r) => pickerChecked.includes(r.id)) &&
+                  !filteredPicker.every((r) => pickerChecked.includes(r.id))
+                }
+                onChange={(checked) => {
+                  const ids = filteredPicker.map((r) => r.id)
+                  if (checked) {
+                    setPickerChecked((prev) => [...new Set([...prev, ...ids])])
+                  } else {
+                    const drop = new Set(ids.map(String))
+                    setPickerChecked((prev) => prev.filter((id) => !drop.has(String(id))))
+                  }
+                }}
+              >
+                全选当前列表
+              </Checkbox>
+            </div>
+            <div style={{ maxHeight: 280, overflow: 'auto' }}>
           {pickerLoading ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--color-text-3)' }}>
               加载中…
@@ -585,27 +592,33 @@ export default function CompetitorScheduleTasksModal({ visible, onClose }) {
               </div>
             ))
           )}
+            </div>
+          </div>
+          <SheetActions
+            onCancel={() => setProjectPickerOpen(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={confirmProjectPicker}
+          />
         </div>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title={logsTask ? `执行日志 — ${logsTask.email_subject || logsTask.id}` : '执行日志'}
+      <SheetViewer
         visible={logsVisible}
-        onCancel={() => setLogsVisible(false)}
-        footer={null}
-        style={{ width: 800 }}
-        unmountOnExit
+        title={logsTask ? `执行日志 — ${logsTask.email_subject || logsTask.id}` : '执行日志'}
+        onClose={() => setLogsVisible(false)}
       >
         <Table
+          className="list-table"
           rowKey="id"
           loading={logsLoading}
           columns={logColumns}
           data={logs}
           pagination={false}
-          scroll={{ y: 400 }}
+          scroll={{ y: 360 }}
           border={{ wrapper: true, cell: true }}
         />
-      </Modal>
+      </SheetViewer>
     </>
   )
 }

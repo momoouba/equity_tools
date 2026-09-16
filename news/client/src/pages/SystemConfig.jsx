@@ -14,6 +14,7 @@ import FinancingSourceConfig from './project-sourcing/FinancingSourceConfig'
 import CompetitorRecallSourceConfig from './competitor-analysis/CompetitorRecallSourceConfig'
 import CompetitorMigrationConfig from './competitor-analysis/CompetitorMigrationConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
+import '../styles/listTable.css'
 import './SystemConfig.css'
 
 const TabPane = Tabs.TabPane
@@ -23,7 +24,7 @@ function SystemConfig({ isAdmin = true }) {
 
   if (!isAdmin) {
     return (
-      <div className="system-config">
+      <div className="system-config list-table-page" style={{ padding: '4px 16px 0', boxSizing: 'border-box' }}>
         <Card className="config-card" bordered={false}>
           <div className="config-content">
             <DatabaseConfig />
@@ -34,7 +35,7 @@ function SystemConfig({ isAdmin = true }) {
   }
 
   return (
-    <div className="system-config">
+    <div className="system-config list-table-page" style={{ padding: '4px 16px 0', boxSizing: 'border-box' }}>
       <Card className="config-card" bordered={false}>
         <Tabs
           activeTab={activeTab}

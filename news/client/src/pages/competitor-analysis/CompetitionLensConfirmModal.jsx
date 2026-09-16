@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import {
-  Modal,
   Checkbox,
   Input,
   Tag,
@@ -10,6 +9,7 @@ import {
   Message,
   Button,
 } from '@arco-design/web-react'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { IconEdit, IconLock } from '@arco-design/web-react/icon'
 
 const { Text } = Typography
@@ -301,17 +301,13 @@ export default function CompetitionLensConfirmModal({
   const savedMeta = proposal?.saved_lens
 
   return (
-    <Modal
-      title={`确认对标焦点${subjectTitle ? ` — ${subjectTitle}` : ''}`}
+    <SheetModal
       visible={visible}
-      onCancel={onClose}
-      onOk={handleOk}
-      confirmLoading={confirming}
-      okText="按此焦点分析"
-      cancelText="取消"
-      style={{ width: 1440 }}
-      unmountOnExit
+      title={`确认对标焦点${subjectTitle ? ` — ${subjectTitle}` : ''}`}
+      onClose={onClose}
     >
+      <div className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body">
       {loadingProposal ? (
         <div style={{ textAlign: 'center', padding: 32 }}>
           <Spin tip="正在提取项目重要因素…" />
@@ -433,6 +429,15 @@ export default function CompetitionLensConfirmModal({
           ) : null}
         </Space>
       )}
-    </Modal>
+        </div>
+        <SheetActions
+          onCancel={onClose}
+          submitLabel="按此焦点分析"
+          submitType="button"
+          onSubmitClick={handleOk}
+          submitLoading={confirming}
+        />
+      </div>
+    </SheetModal>
   )
 }

@@ -23,6 +23,7 @@ import {
   defaultYearRange,
   formatInt,
 } from './overview/buildYtdSummaryText'
+import '../../styles/listTable.css'
 import './ProjectSourcingPage.css'
 
 const { Row, Col } = Grid
@@ -367,7 +368,7 @@ function ProjectSourcingPage() {
   }, [kpi, investorTop20])
 
   return (
-    <div className="ps-overview-page">
+    <div className="ps-overview-page list-table-page">
       <div className="ps-overview-header">
         <Typography.Title heading={5} style={{ margin: 0 }}>
           融资与市场概览
@@ -648,6 +649,7 @@ function ProjectSourcingPage() {
                             <Empty description="无子赛道数据" />
                           ) : (
                             <Table
+                              className="list-table"
                               size="small"
                               rowKey="name"
                               pagination={false}
@@ -692,6 +694,7 @@ function ProjectSourcingPage() {
                 <Row gutter={16}>
                   <Col xs={24} lg={12}>
                     <Table
+                      className="list-table"
                       size="small"
                       rowKey="name"
                       pagination={false}

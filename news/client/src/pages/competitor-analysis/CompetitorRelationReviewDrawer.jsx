@@ -7,13 +7,13 @@ import {
   Grid,
   Input,
   Message,
-  Modal,
   Radio,
   Select,
   Space,
   Tag,
   Typography,
 } from '@arco-design/web-react'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { patchCompetitorRelationReview } from '../../api/competitor-analysis'
 import {
   COMPETITOR_TYPE_META,
@@ -151,39 +151,15 @@ export default function CompetitorRelationReviewDrawer({
   const hasRuleSubs =
     matchBasis && (matchBasis.productScore != null || matchBasis.tagScore != null)
 
-  const footer = readOnly ? (
-    <Button onClick={onClose}>关闭</Button>
-  ) : (
-    <Space>
-      <Button onClick={onClose}>取消</Button>
-      <Button type="outline" loading={refreshing} onClick={handleRefreshEvidence}>
-        刷新证据
-      </Button>
-      <Button type="primary" loading={submitting} onClick={handleSubmit}>
-        提交复核
-      </Button>
-    </Space>
-  )
-
   return (
-    <Modal
-      title={`竞品复核 · ${active?.competitor_display_name || ''}`}
+    <SheetModal
       visible={visible}
-      onCancel={onClose}
-      unmountOnExit
-      footer={footer}
-      style={{ width: 1040 }}
-      className="cr-rel-review-modal"
+      title={`竞品复核 · ${active?.competitor_display_name || ''}`}
+      onClose={onClose}
     >
+      <div className="enterprise-form enterprise-form--sheet">
       {active ? (
-        <div
-          style={{
-            maxHeight: 'calc(100vh - 180px)',
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            paddingRight: 2,
-          }}
-        >
+        <div className="modal-body">
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Descriptions
               column={4}
@@ -554,7 +530,26 @@ export default function CompetitorRelationReviewDrawer({
             ) : null}
           </Space>
         </div>
-      ) : null}
-    </Modal>
+      ) : (
+        <div className="modal-body" />
+      )}
+        {readOnly ? (
+          <SheetActions onCancel={onClose} cancelLabel="关闭" />
+        ) : (
+          <SheetActions
+            onCancel={onClose}
+            extra={
+              <button type="button" className="btn-cancel" onClick={handleRefreshEvidence} disabled={refreshing}>
+                {refreshing ? '处理中...' : '刷新证据'}
+              </button>
+            }
+            submitLabel="提交复核"
+            submitType="button"
+            onSubmitClick={handleSubmit}
+            submitLoading={submitting}
+          />
+        )}
+      </div>
+    </SheetModal>
   )
 }

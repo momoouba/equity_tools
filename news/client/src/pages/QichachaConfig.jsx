@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch, Tabs } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
 import LogModal from './LogModal'
 import QichachaNewsCategoryList from './QichachaNewsCategoryList'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './QichachaConfig.css'
 
 const Option = Select.Option
@@ -23,6 +24,8 @@ function QichachaConfig() {
   const [showLogModal, setShowLogModal] = useState(false)
   const [logConfigId, setLogConfigId] = useState(null)
   const [testingConfigId, setTestingConfigId] = useState(null)
+  const [tableScrollY, setTableScrollY] = useState(360)
+  const tableScrollAreaRef = useRef(null)
   const [formData, setFormData] = useState({
     app_id: '',
     qichacha_app_key: '',
@@ -36,6 +39,26 @@ function QichachaConfig() {
     fetchConfigs()
     fetchApplications()
   }, [currentPage])
+
+  useLayoutEffect(() => {
+    if (activeSubTab !== 'config') return undefined
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const head = el.querySelector('.arco-table-header')
+      const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
+      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
+    }
+    const raf = requestAnimationFrame(() => measure())
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [activeSubTab])
 
   const fetchConfigs = async () => {
     setLoading(true)
@@ -262,6 +285,7 @@ function QichachaConfig() {
     <div className="qichacha-config">
       <Tabs activeTab={activeSubTab} onChange={setActiveSubTab} type="line">
         <TabPane key="config" title="企查查接口配置">
+          <div className="qichacha-config-panel">
           <div className="config-header">
             <h3>企查查接口配置</h3>
             <Space>
@@ -280,7 +304,7 @@ function QichachaConfig() {
             </Space>
           </div>
 
-          <div className="table-container">
+          <div ref={tableScrollAreaRef} className="table-container qichacha-config-table-area">
             {loading && configs.length === 0 ? (
               <Skeleton
                 loading={true}
@@ -296,6 +320,7 @@ function QichachaConfig() {
                 rowKey="id"
                 page={currentPage}
                 pageSize={pageSize}
+                scroll={{ y: tableScrollY }}
               />
             )}
           </div>
@@ -313,109 +338,107 @@ function QichachaConfig() {
               />
             </div>
           )}
+          </div>
 
           {/* 新增/编辑表单 */}
-          <Modal
+          <SheetModal
             visible={showForm}
             title={editingConfig ? '编辑企查查配置' : '新增企查查配置'}
-            onCancel={() => {
+            onClose={() => {
               setShowForm(false)
               setEditingConfig(null)
             }}
-            footer={null}
-            style={{ width: 600 }}
           >
-            <form onSubmit={handleSubmit}>
-              <div className="form-group">
-                <label>应用 *</label>
-                <Select
-                  value={formData.app_id}
-                  onChange={(value) => handleChange('app_id', value)}
-                  placeholder="请选择应用"
-                  disabled={!!editingConfig}
-                >
-                  {applications.map((app) => (
-                    <Option key={app.id} value={app.id}>
-                      {app.app_name}
-                    </Option>
-                  ))}
-                </Select>
-                <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置企查查接口的应用'}</p>
-              </div>
+            <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+              <div className="modal-body enterprise-form-grid">
+                <div className="form-group">
+                  <label>应用 *</label>
+                  <Select
+                    value={formData.app_id}
+                    onChange={(value) => handleChange('app_id', value)}
+                    placeholder="请选择应用"
+                    disabled={!!editingConfig}
+                    getPopupContainer={sheetPopupContainer}
+                  >
+                    {applications.map((app) => (
+                      <Option key={app.id} value={app.id}>
+                        {app.app_name}
+                      </Option>
+                    ))}
+                  </Select>
+                  <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置企查查接口的应用'}</p>
+                </div>
 
-              <div className="form-group">
-                <label>接口类型 *</label>
-                <Select
-                  value={formData.interface_type}
-                  onChange={(value) => handleChange('interface_type', value)}
-                  disabled={!!editingConfig}
-                >
-                  <Option value="企业信息">企业信息</Option>
-                  <Option value="新闻舆情">新闻舆情</Option>
-                </Select>
-                <p className="form-hint">{editingConfig ? '编辑时不能修改接口类型' : '选择企查查接口类型'}</p>
-              </div>
+                <div className="form-group">
+                  <label>接口类型 *</label>
+                  <Select
+                    value={formData.interface_type}
+                    onChange={(value) => handleChange('interface_type', value)}
+                    disabled={!!editingConfig}
+                    getPopupContainer={sheetPopupContainer}
+                  >
+                    <Option value="企业信息">企业信息</Option>
+                    <Option value="新闻舆情">新闻舆情</Option>
+                  </Select>
+                  <p className="form-hint">{editingConfig ? '编辑时不能修改接口类型' : '选择企查查接口类型'}</p>
+                </div>
 
-              <div className="form-group">
-                <label>应用凭证 *</label>
-                <Input
-                  value={formData.qichacha_app_key}
-                  onChange={(value) => handleChange('qichacha_app_key', value)}
-                  placeholder="请输入企查查应用凭证"
-                />
-              </div>
-
-              <div className="form-group">
-                <label>密钥 *</label>
-                <Input.Password
-                  value={hasSecretKey && !formData.qichacha_secret_key ? '****' : formData.qichacha_secret_key}
-                  onChange={(value) => handleChange('qichacha_secret_key', value)}
-                  onFocus={(e) => {
-                    if (hasSecretKey && e.target.value === '****') {
-                      setHasSecretKey(false)
-                      setFormData({ ...formData, qichacha_secret_key: '' })
-                    }
-                  }}
-                  placeholder={editingConfig ? (hasSecretKey ? '****' : '留空则不更新密钥') : '请输入企查查密钥'}
-                />
-                <p className="form-hint">{editingConfig ? '留空则不更新密钥' : '请输入企查查密钥'}</p>
-              </div>
-
-              <div className="form-group">
-                <label>每日查询限制</label>
-                <InputNumber
-                  value={formData.qichacha_daily_limit}
-                  onChange={(value) => handleChange('qichacha_daily_limit', value)}
-                  min={1}
-                  style={{ width: '100%' }}
-                />
-                <p className="form-hint">设置每日最大查询次数，默认100次</p>
-              </div>
-
-              <div className="form-group">
-                <label>
-                  <Switch
-                    checked={formData.is_active}
-                    onChange={(checked) => handleChange('is_active', checked)}
-                    style={{ marginRight: 8 }}
+                <div className="form-group">
+                  <label>应用凭证 *</label>
+                  <Input
+                    value={formData.qichacha_app_key}
+                    onChange={(value) => handleChange('qichacha_app_key', value)}
+                    placeholder="请输入企查查应用凭证"
                   />
-                  启用配置
-                </label>
-              </div>
+                </div>
 
-              <div className="form-actions">
-                <Button type="secondary" onClick={() => {
+                <div className="form-group">
+                  <label>密钥 *</label>
+                  <Input.Password
+                    value={hasSecretKey && !formData.qichacha_secret_key ? '****' : formData.qichacha_secret_key}
+                    onChange={(value) => handleChange('qichacha_secret_key', value)}
+                    onFocus={(e) => {
+                      if (hasSecretKey && e.target.value === '****') {
+                        setHasSecretKey(false)
+                        setFormData({ ...formData, qichacha_secret_key: '' })
+                      }
+                    }}
+                    placeholder={editingConfig ? (hasSecretKey ? '****' : '留空则不更新密钥') : '请输入企查查密钥'}
+                  />
+                  <p className="form-hint">{editingConfig ? '留空则不更新密钥' : '请输入企查查密钥'}</p>
+                </div>
+
+                <div className="form-group">
+                  <label>每日查询限制</label>
+                  <InputNumber
+                    value={formData.qichacha_daily_limit}
+                    onChange={(value) => handleChange('qichacha_daily_limit', value)}
+                    min={1}
+                    style={{ width: '100%' }}
+                  />
+                  <p className="form-hint">设置每日最大查询次数，默认100次</p>
+                </div>
+
+                <div className="form-group">
+                  <label>
+                    <Switch
+                      checked={formData.is_active}
+                      onChange={(checked) => handleChange('is_active', checked)}
+                      style={{ marginRight: 8 }}
+                    />
+                    启用配置
+                  </label>
+                </div>
+              </div>
+              <SheetActions
+                onCancel={() => {
                   setShowForm(false)
                   setEditingConfig(null)
-                }}>
-                  取消
-                </Button>
-                <Button type="primary" htmlType="submit">
-                  {editingConfig ? '更新' : '创建'}
-                </Button>
-              </div>
+                }}
+                submitLabel={editingConfig ? '更新' : '创建'}
+              />
             </form>
-          </Modal>
+          </SheetModal>
 
           {/* 日志弹窗 */}
           {showLogModal && (

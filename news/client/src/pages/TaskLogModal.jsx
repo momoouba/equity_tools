@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Table, Pagination, Spin, Message } from '@arco-design/web-react'
+import { Table, Pagination, Spin, Message } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { SheetViewer } from '../components/SheetModal'
 import './TaskLogModal.css'
 
 /** 构造定时任务「新闻同步」日志列表中的过程说明（含投融资按日落库明细） */
@@ -130,13 +131,7 @@ function TaskLogModal({ taskId, taskType, onClose }) {
   ]
 
   return (
-    <Modal
-      visible={!!taskId}
-      title="定时任务日志"
-      onCancel={onClose}
-      footer={null}
-      style={{ width: 900 }}
-    >
+    <SheetViewer visible={!!taskId} title="定时任务日志" onClose={onClose}>
       <div className="task-log-content">
         {loading && logs.length === 0 ? (
           <Spin style={{ width: '100%', padding: '40px' }} />
@@ -155,6 +150,7 @@ function TaskLogModal({ taskId, taskType, onClose }) {
                 cell: true
               }}
               stripe
+              scroll={{ y: 320 }}
             />
             {total > 0 && (
               <div className="pagination-wrapper">
@@ -171,7 +167,7 @@ function TaskLogModal({ taskId, taskType, onClose }) {
           </>
         )}
       </div>
-    </Modal>
+    </SheetViewer>
   )
 }
 

@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react'
-import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Switch, Form } from '@arco-design/web-react'
+import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Switch } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './PromptConfig.css'
 
 const Option = Select.Option
 const TextArea = Input.TextArea
-const FormItem = Form.Item
 
 function formatAiModelOptionLabel(config, applicationTypeLabels, usageTypeLabels) {
   const app =
@@ -39,6 +39,15 @@ function filterAiModelConfigsForPrompt(configs, interfaceType, promptType) {
     return list.filter(
       (c) =>
         c.application_type === 'listing_progress_analysis' || c.usage_type === 'listing_data'
+    )
+  }
+  if (
+    interfaceType === '项目估值' ||
+    String(promptType || '').startsWith('valuation_comparable_')
+  ) {
+    return list.filter(
+      (c) =>
+        c.application_type === 'project_valuation' || c.usage_type === 'project_valuation'
     )
   }
   // 新榜 / 企查查 / 上海国际集团 / 打新其它：新闻侧为主，允许 general 兜底
@@ -76,6 +85,7 @@ function PromptConfig() {
     { value: '打新接口', label: '打新接口' },
     { value: '项目挖掘', label: '项目挖掘' },
     { value: '竞品分析', label: '竞品分析' },
+    { value: '项目估值', label: '项目估值' },
   ]
 
   const promptTypes = [
@@ -99,6 +109,14 @@ function PromptConfig() {
       value: 'competitor_validate',
       label: '竞品关系校验（竞品分析）',
     },
+    {
+      value: 'valuation_comparable_listed_propose',
+      label: '可比上市企业提名（项目估值）',
+    },
+    {
+      value: 'valuation_comparable_business_reason',
+      label: '可比推荐业务理由（项目估值）',
+    },
   ]
 
   const competitorPromptPlaceholderHelp = {
@@ -108,6 +126,10 @@ function PromptConfig() {
       '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。JSON 可含 product_intro、tags、industry_l1/l2 等；规则为跨行业通用产品相似度打分。',
     competitor_validate:
       '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}。JSON 可含 product_intro、tags、industry_l1/l2、subject_track_hint 等字段；规则为跨行业通用，勿写死具体赛道或企业名。',
+    valuation_comparable_listed_propose:
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{EXCLUDE_JSON}}、{{LIMIT}}。按产品/技术主业对标提名境内 A 股/北交所，禁止用大行业龙头凑数；other 四大类不可作同业依据。代码经上市主档核实，模型不参与打分。',
+    valuation_comparable_business_reason:
+      '格式：---SYSTEM--- / ---USER---。USER 占位符：{{TARGET_JSON}}、{{CANDIDATE_JSON}}、{{RULE_REASON_JSON}}。只写 1～2 句业务理由，不得改写规则命中事实。',
   }
 
   const filteredAiModelConfigs = useMemo(
@@ -414,17 +436,16 @@ function PromptConfig() {
         </div>
       )}
 
-      <Modal
+      <SheetModal
         visible={showModal}
         title={currentPrompt ? '编辑提示词配置' : '新增提示词配置'}
-        onCancel={() => {
+        onClose={() => {
           setShowModal(false)
           setCurrentPrompt(null)
         }}
-        footer={null}
-        style={{ width: 700 }}
       >
-        <form onSubmit={handleSubmit}>
+        <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+          <div className="modal-body enterprise-form-grid">
           <div className="form-group">
             <label>提示词名称 *</label>
             <Input
@@ -436,10 +457,11 @@ function PromptConfig() {
 
           <div className="form-group">
             <label>接口类型 *</label>
-            <Select
-              value={formData.interface_type}
-              onChange={(value) => handleChange('interface_type', value)}
-            >
+              <Select
+                value={formData.interface_type}
+                onChange={(value) => handleChange('interface_type', value)}
+                getPopupContainer={sheetPopupContainer}
+              >
               {interfaceTypes.map(t => (
                 <Option key={t.value} value={t.value}>{t.label}</Option>
               ))}
@@ -448,10 +470,11 @@ function PromptConfig() {
 
           <div className="form-group">
             <label>提示词类型 *</label>
-            <Select
-              value={formData.prompt_type}
-              onChange={(value) => handleChange('prompt_type', value)}
-            >
+              <Select
+                value={formData.prompt_type}
+                onChange={(value) => handleChange('prompt_type', value)}
+                getPopupContainer={sheetPopupContainer}
+              >
               {promptTypes.map(t => (
                 <Option key={t.value} value={t.value}>{t.label}</Option>
               ))}
@@ -460,12 +483,13 @@ function PromptConfig() {
 
           <div className="form-group">
             <label>大模型配置</label>
-            <Select
-              value={formData.ai_model_config_id}
-              onChange={(value) => handleChange('ai_model_config_id', value)}
-              placeholder="请选择大模型配置（可选）"
-              allowClear
-            >
+              <Select
+                value={formData.ai_model_config_id}
+                onChange={(value) => handleChange('ai_model_config_id', value)}
+                placeholder="请选择大模型配置（可选）"
+                allowClear
+                getPopupContainer={sheetPopupContainer}
+              >
               {filteredAiModelConfigs.map((config) => (
                 <Option key={String(config.id)} value={String(config.id)}>
                   {formatAiModelOptionLabel(config, applicationTypeLabels, usageTypeLabels)}
@@ -483,6 +507,9 @@ function PromptConfig() {
                     : formData.interface_type === '打新接口' &&
                       formData.prompt_type === 'enterprise_full_name'
                     ? '暂无「上市进展分析 / 上市数据」用途的启用模型，请先在「AI模型配置」中新增。'
+                    : formData.interface_type === '项目估值' ||
+                        String(formData.prompt_type || '').startsWith('valuation_comparable_')
+                      ? '暂无「项目估值」用途的启用模型，请先在「AI模型配置」中新增。'
                     : '暂无与当前接口类型匹配的启用模型（新闻分析或通用）。'}
               </div>
             ) : (
@@ -492,7 +519,7 @@ function PromptConfig() {
             )}
           </div>
 
-          <div className="form-group">
+          <div className="form-group form-span-4">
             <label>提示词内容 *</label>
             {competitorPromptPlaceholderHelp[formData.prompt_type] ? (
               <div style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)', lineHeight: 1.6 }}>
@@ -507,7 +534,7 @@ function PromptConfig() {
               value={formData.prompt_content}
               onChange={(value) => handleChange('prompt_content', value)}
               placeholder="请输入提示词内容（竞品分析请使用 ---SYSTEM--- 与 ---USER--- 分段）"
-              rows={14}
+              rows={6}
             />
           </div>
 
@@ -522,19 +549,17 @@ function PromptConfig() {
             </label>
           </div>
 
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowModal(false)
               setCurrentPrompt(null)
-            }}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              {currentPrompt ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            submitLabel={currentPrompt ? '更新' : '创建'}
+            submitLoading={loading}
+          />
         </form>
-      </Modal>
+      </SheetModal>
     </div>
   )
 }

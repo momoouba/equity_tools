@@ -3,6 +3,7 @@ import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select
 import axios from '../utils/axios'
 import LogModal from './LogModal'
 import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './EmailConfig.css'
 
 const Option = Select.Option
@@ -407,216 +408,214 @@ function EmailConfig() {
       )}
 
       {/* 新增/编辑表单 */}
-      <Modal
+      <SheetModal
         visible={showForm}
         title={editingConfig ? '编辑邮件配置' : '新增邮件配置'}
-        onCancel={() => {
+        onClose={() => {
           setShowForm(false)
           setEditingConfig(null)
           setTestResult('')
         }}
-        footer={null}
-        style={{ width: 700 }}
       >
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>应用 *</label>
-            <Select
-              value={formData.app_id}
-              onChange={(value) => handleChange('app_id', value)}
-              placeholder="请选择应用"
-              disabled={!!editingConfig}
-            >
-              {applications.map((app) => (
-                <Option key={app.id} value={app.id}>
-                  {app.app_name}
-                </Option>
-              ))}
-            </Select>
-            <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置邮件的应用'}</p>
-          </div>
-
-          <div className="form-group">
-            <label>SMTP服务器地址 *</label>
-            <Input
-              value={formData.smtp_host}
-              onChange={(value) => handleChange('smtp_host', value)}
-              placeholder="例如：smtp.qq.com"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>SMTP端口 *</label>
-            <InputNumber
-              value={formData.smtp_port}
-              onChange={(value) => handleChange('smtp_port', value)}
-              min={1}
-              max={65535}
-              style={{ width: '100%' }}
-            />
-            <p className="form-hint">常用端口：25, 465(SSL), 587(TLS)</p>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Switch
-                checked={formData.smtp_secure}
-                onChange={(checked) => handleChange('smtp_secure', checked)}
-                style={{ marginRight: 8 }}
-              />
-              使用SSL/TLS
-            </label>
-            <p className="form-hint">端口465通常需要启用，端口587通常不需要</p>
-          </div>
-
-          <div className="form-group">
-            <label>SMTP用户名（邮箱地址）*</label>
-            <Input
-              type="email"
-              value={formData.smtp_user}
-              onChange={(value) => handleChange('smtp_user', value)}
-              placeholder="例如：user@example.com"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>SMTP密码/授权码 *</label>
-            <Input.Password
-              value={hasSmtpPassword && !formData.smtp_password ? '****' : formData.smtp_password}
-              onChange={(value) => handleChange('smtp_password', value)}
-              onFocus={(e) => {
-                if (hasSmtpPassword && e.target.value === '****') {
-                  setHasSmtpPassword(false)
-                  setFormData({ ...formData, smtp_password: '' })
-                }
-              }}
-              placeholder={editingConfig ? (hasSmtpPassword ? '****' : '留空则不更新密码') : '请输入SMTP密码或授权码'}
-            />
-            <p className="form-hint">{editingConfig ? '留空则不更新密码' : '请输入SMTP密码或授权码'}</p>
-          </div>
-
-          <div className="form-group">
-            <label>发件人邮箱 *</label>
-            <Input
-              type="email"
-              value={formData.from_email}
-              onChange={(value) => handleChange('from_email', value)}
-              placeholder="例如：noreply@example.com"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>发件人名称</label>
-            <Input
-              value={formData.from_name}
-              onChange={(value) => handleChange('from_name', value)}
-              placeholder="例如：系统通知"
-            />
-          </div>
-
-          <div className="form-section-divider">
-            <h4>POP接收配置（可选）</h4>
-            <p className="form-hint">用于接收邮件的POP服务器配置，如不需要接收邮件可留空</p>
-          </div>
-
-          <div className="form-group">
-            <label>POP服务器地址</label>
-            <Input
-              value={formData.pop_host}
-              onChange={(value) => handleChange('pop_host', value)}
-              placeholder="例如：pop.qq.com"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>POP端口</label>
-            <InputNumber
-              value={formData.pop_port}
-              onChange={(value) => handleChange('pop_port', value)}
-              min={1}
-              max={65535}
-              style={{ width: '100%' }}
-            />
-            <p className="form-hint">常用端口：110, 995(SSL)</p>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Switch
-                checked={formData.pop_secure}
-                onChange={(checked) => handleChange('pop_secure', checked)}
-                style={{ marginRight: 8 }}
-              />
-              POP使用SSL/TLS
-            </label>
-            <p className="form-hint">端口995通常需要启用，端口110通常不需要</p>
-          </div>
-
-          <div className="form-group">
-            <label>POP用户名（邮箱地址）</label>
-            <Input
-              type="email"
-              value={formData.pop_user}
-              onChange={(value) => handleChange('pop_user', value)}
-              placeholder="例如：user@example.com"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>POP密码/授权码</label>
-            <Input.Password
-              value={hasPopPassword && !formData.pop_password ? '****' : formData.pop_password}
-              onChange={(value) => handleChange('pop_password', value)}
-              onFocus={(e) => {
-                if (hasPopPassword && e.target.value === '****') {
-                  setHasPopPassword(false)
-                  setFormData({ ...formData, pop_password: '' })
-                }
-              }}
-              placeholder={editingConfig ? (hasPopPassword ? '****' : '留空则不更新密码') : '请输入POP密码或授权码'}
-            />
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Switch
-                checked={formData.is_active}
-                onChange={(checked) => handleChange('is_active', checked)}
-                style={{ marginRight: 8 }}
-              />
-              启用配置
-            </label>
-          </div>
-
-          {testResult && (
-            <div className={`test-result ${testResult.startsWith('success') ? 'success' : 'error'}`}>
-              {testResult.startsWith('success') ? '✓ ' : '✗ '}
-              {testResult.replace(/^(success|error):\s*/, '')}
+        <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group">
+              <label>应用 *</label>
+              <Select
+                value={formData.app_id}
+                onChange={(value) => handleChange('app_id', value)}
+                placeholder="请选择应用"
+                disabled={!!editingConfig}
+                getPopupContainer={sheetPopupContainer}
+              >
+                {applications.map((app) => (
+                  <Option key={app.id} value={app.id}>
+                    {app.app_name}
+                  </Option>
+                ))}
+              </Select>
+              <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置邮件的应用'}</p>
             </div>
-          )}
 
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+            <div className="form-group">
+              <label>SMTP服务器地址 *</label>
+              <Input
+                value={formData.smtp_host}
+                onChange={(value) => handleChange('smtp_host', value)}
+                placeholder="例如：smtp.qq.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>SMTP端口 *</label>
+              <InputNumber
+                value={formData.smtp_port}
+                onChange={(value) => handleChange('smtp_port', value)}
+                min={1}
+                max={65535}
+                style={{ width: '100%' }}
+              />
+              <p className="form-hint">常用端口：25, 465(SSL), 587(TLS)</p>
+            </div>
+
+            <div className="form-group">
+              <label>
+                <Switch
+                  checked={formData.smtp_secure}
+                  onChange={(checked) => handleChange('smtp_secure', checked)}
+                  style={{ marginRight: 8 }}
+                />
+                使用SSL/TLS
+              </label>
+              <p className="form-hint">端口465通常需要启用，端口587通常不需要</p>
+            </div>
+
+            <div className="form-group">
+              <label>SMTP用户名（邮箱地址）*</label>
+              <Input
+                type="email"
+                value={formData.smtp_user}
+                onChange={(value) => handleChange('smtp_user', value)}
+                placeholder="例如：user@example.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>SMTP密码/授权码 *</label>
+              <Input.Password
+                value={hasSmtpPassword && !formData.smtp_password ? '****' : formData.smtp_password}
+                onChange={(value) => handleChange('smtp_password', value)}
+                onFocus={(e) => {
+                  if (hasSmtpPassword && e.target.value === '****') {
+                    setHasSmtpPassword(false)
+                    setFormData({ ...formData, smtp_password: '' })
+                  }
+                }}
+                placeholder={editingConfig ? (hasSmtpPassword ? '****' : '留空则不更新密码') : '请输入SMTP密码或授权码'}
+              />
+              <p className="form-hint">{editingConfig ? '留空则不更新密码' : '请输入SMTP密码或授权码'}</p>
+            </div>
+
+            <div className="form-group">
+              <label>发件人邮箱 *</label>
+              <Input
+                type="email"
+                value={formData.from_email}
+                onChange={(value) => handleChange('from_email', value)}
+                placeholder="例如：noreply@example.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>发件人名称</label>
+              <Input
+                value={formData.from_name}
+                onChange={(value) => handleChange('from_name', value)}
+                placeholder="例如：系统通知"
+              />
+            </div>
+
+            <div className="form-section-divider">
+              <h4>POP接收配置（可选）</h4>
+              <p className="form-hint">用于接收邮件的POP服务器配置，如不需要接收邮件可留空</p>
+            </div>
+
+            <div className="form-group">
+              <label>POP服务器地址</label>
+              <Input
+                value={formData.pop_host}
+                onChange={(value) => handleChange('pop_host', value)}
+                placeholder="例如：pop.qq.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>POP端口</label>
+              <InputNumber
+                value={formData.pop_port}
+                onChange={(value) => handleChange('pop_port', value)}
+                min={1}
+                max={65535}
+                style={{ width: '100%' }}
+              />
+              <p className="form-hint">常用端口：110, 995(SSL)</p>
+            </div>
+
+            <div className="form-group">
+              <label>
+                <Switch
+                  checked={formData.pop_secure}
+                  onChange={(checked) => handleChange('pop_secure', checked)}
+                  style={{ marginRight: 8 }}
+                />
+                POP使用SSL/TLS
+              </label>
+              <p className="form-hint">端口995通常需要启用，端口110通常不需要</p>
+            </div>
+
+            <div className="form-group">
+              <label>POP用户名（邮箱地址）</label>
+              <Input
+                type="email"
+                value={formData.pop_user}
+                onChange={(value) => handleChange('pop_user', value)}
+                placeholder="例如：user@example.com"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>POP密码/授权码</label>
+              <Input.Password
+                value={hasPopPassword && !formData.pop_password ? '****' : formData.pop_password}
+                onChange={(value) => handleChange('pop_password', value)}
+                onFocus={(e) => {
+                  if (hasPopPassword && e.target.value === '****') {
+                    setHasPopPassword(false)
+                    setFormData({ ...formData, pop_password: '' })
+                  }
+                }}
+                placeholder={editingConfig ? (hasPopPassword ? '****' : '留空则不更新密码') : '请输入POP密码或授权码'}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>
+                <Switch
+                  checked={formData.is_active}
+                  onChange={(checked) => handleChange('is_active', checked)}
+                  style={{ marginRight: 8 }}
+                />
+                启用配置
+              </label>
+            </div>
+
+            {testResult ? (
+              <div className={`test-result ${testResult.startsWith('success') ? 'success' : 'error'}`}>
+                {testResult.startsWith('success') ? '✓ ' : '✗ '}
+                {testResult.replace(/^(success|error):\s*/, '')}
+              </div>
+            ) : null}
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowForm(false)
               setEditingConfig(null)
               setTestResult('')
-            }}>
-              取消
-            </Button>
-            <Button
-              type="outline"
-              status="success"
-              onClick={handleTest}
-              loading={testing === 'form'}
-            >
-              测试
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingConfig ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            extra={
+              <button
+                type="button"
+                className="btn-test"
+                onClick={handleTest}
+                disabled={testing === 'form'}
+              >
+                {testing === 'form' ? '测试中...' : '测试'}
+              </button>
+            }
+            submitLabel={editingConfig ? '更新' : '创建'}
+          />
         </form>
-      </Modal>
+      </SheetModal>
 
       {/* 日志弹窗 */}
       {showLogModal && (

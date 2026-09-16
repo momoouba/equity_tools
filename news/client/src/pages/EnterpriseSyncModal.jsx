@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import axios from '../utils/axios'
+import './EnterpriseForm.css'
 import './EnterpriseSyncModal.css'
 
 function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' }) {
@@ -228,108 +229,110 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
   }
 
   return (
-    <div className="enterprise-sync-modal-overlay">
-      <div className="enterprise-sync-modal-content">
-        <div className="enterprise-sync-modal-header">
-          <div>
-            <h3>定时更新配置</h3>
-            <p style={{ margin: '4px 0 0', fontSize: 12, color: '#86909c' }}>当前应用：{dataAppName}（SQL 与定时按应用分别保存）</p>
-          </div>
-          <button className="close-btn" onClick={onClose}>×</button>
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        className="modal-content modal-content--sheet modal-content-wide enterprise-sync-modal-content"
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h3>定时更新配置</h3>
+          <button type="button" className="close-button" aria-label="关闭" onClick={onClose}>
+            ×
+          </button>
         </div>
-        <div className="enterprise-sync-modal-body">
-          <div className="form-group">
-            <label>选择数据库 *</label>
-            <select
-              name="db_config_id"
-              value={formData.db_config_id}
-              onChange={handleChange}
-              required
-              className="form-select"
-              disabled={databases.length === 0}
-            >
-              <option value="">
-                {databases.length === 0 ? '暂无可用的数据库配置，请先在系统配置中添加数据库连接' : '请选择数据库'}
-              </option>
-              {databases.map((db) => (
-                <option key={db.id} value={db.id}>
-                  {db.name} ({db.host}:{db.port}/{db.database})
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid enterprise-sync-modal-body">
+            <p className="form-hint form-span-4 enterprise-sync-app-hint">
+              当前应用：{dataAppName}（SQL 与定时按应用分别保存）
+            </p>
+            <div className="form-group form-span-2">
+              <label>选择数据库 *</label>
+              <select
+                name="db_config_id"
+                value={formData.db_config_id}
+                onChange={handleChange}
+                required
+                className="form-select"
+                disabled={databases.length === 0}
+              >
+                <option value="">
+                  {databases.length === 0 ? '暂无可用的数据库配置，请先在系统配置中添加数据库连接' : '请选择数据库'}
                 </option>
-              ))}
-            </select>
-            <p className="form-hint">
-              {databases.length === 0 
-                ? '没有可用的数据库配置，请先到"系统配置" -> "数据库连接"中添加数据库配置' 
-                : '选择要连接的外部数据库'}
-            </p>
-            {savedTask && (
-              <div style={{ marginTop: '8px', padding: '8px', background: '#e7f3ff', borderRadius: '4px', fontSize: '12px', color: '#0066cc' }}>
-                ✓ 已加载已保存的任务：{savedTask.description || '无描述'}
-                {loadedFromApp ? (
-                  <span style={{ display: 'block', marginTop: 4, color: '#d48806' }}>
-                    已从「{loadedFromApp}」读取历史 SQL；点击保存后将写入「{dataAppName}」
-                  </span>
-                ) : null}
-              </div>
-            )}
-          </div>
+                {databases.map((db) => (
+                  <option key={db.id} value={db.id}>
+                    {db.name} ({db.host}:{db.port}/{db.database})
+                  </option>
+                ))}
+              </select>
+              <p className="form-hint">
+                {databases.length === 0
+                  ? '没有可用的数据库配置，请先到"系统配置" -> "数据库连接"中添加数据库配置'
+                  : '选择要连接的外部数据库'}
+              </p>
+              {savedTask ? (
+                <div className="enterprise-sync-saved-task">
+                  ✓ 已加载已保存的任务：{savedTask.description || '无描述'}
+                  {loadedFromApp ? (
+                    <span>
+                      已从「{loadedFromApp}」读取历史 SQL；点击保存后将写入「{dataAppName}」
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
 
-          <div className="form-group">
-            <label>SQL查询语句 *</label>
-            <textarea
-              name="sql_query"
-              value={formData.sql_query}
-              onChange={handleChange}
-              placeholder="请输入SELECT查询语句，查询结果将同步到被投企业表"
-              rows="8"
-              required
-              className="form-textarea"
-            />
-            <p className="form-hint">
-              请输入SELECT或WITH查询语句。支持WITH语句的复杂查询（CTE，公共表表达式）。
-              <br />
-              查询结果字段需要匹配被投企业表的字段：
-              <br />
-              项目编号(project_number)、项目简称(project_abbreviation)、被投企业全称(enterprise_full_name)、
-              <br />
-              统一信用代码(unified_credit_code)、企业公众号id(wechat_official_account_id)、
-              <br />
-              企业官网(official_website)、退出状态(exit_status)
-            </p>
-          </div>
+            <div className="form-group">
+              <label>定时更新时间 *</label>
+              <input
+                type="time"
+                name="schedule_time"
+                value={formData.schedule_time}
+                onChange={handleTimeChange}
+                required
+                className="form-time"
+              />
+              <p className="form-hint">设置每天执行的时间，格式：HH:mm（如：00:00 表示每天凌晨执行）</p>
+            </div>
 
-          <div className="form-group">
-            <label>定时更新时间 *</label>
-            <input
-              type="time"
-              name="schedule_time"
-              value={formData.schedule_time}
-              onChange={handleTimeChange}
-              required
-              className="form-time"
-            />
-            <p className="form-hint">设置每天执行的时间，格式：HH:mm（如：00:00 表示每天凌晨执行）</p>
-          </div>
+            <div className="form-group">
+              <label>任务描述</label>
+              <input
+                type="text"
+                name="description"
+                value={formData.description}
+                onChange={handleChange}
+                placeholder="例如：每天凌晨同步被投企业数据"
+                className="form-input"
+              />
+            </div>
 
-          <div className="form-group">
-            <label>任务描述</label>
-            <input
-              type="text"
-              name="description"
-              value={formData.description}
-              onChange={handleChange}
-              placeholder="例如：每天凌晨同步被投企业数据"
-              className="form-input"
-            />
+            <div className="form-group form-span-4">
+              <label>SQL查询语句 *</label>
+              <textarea
+                name="sql_query"
+                value={formData.sql_query}
+                onChange={handleChange}
+                placeholder="请输入SELECT查询语句，查询结果将同步到被投企业表"
+                rows="8"
+                required
+                className="form-textarea"
+              />
+              <p className="form-hint">
+                请输入SELECT或WITH查询语句。支持WITH语句的复杂查询（CTE，公共表表达式）。
+                查询结果字段需要匹配被投企业表的字段：项目编号(project_number)、项目简称(project_abbreviation)、被投企业全称(enterprise_full_name)、统一信用代码(unified_credit_code)、企业公众号id(wechat_official_account_id)、企业官网(official_website)、退出状态(exit_status)
+              </p>
+            </div>
           </div>
-
           <div className="form-actions">
-            <button
-              type="button"
-              className="btn-cancel"
-              onClick={onClose}
-              disabled={loading || executing}
-            >
+            <button type="button" className="btn-cancel" onClick={onClose} disabled={loading || executing}>
               取消
             </button>
             <button
@@ -340,12 +343,7 @@ function EnterpriseSyncModal({ onClose, onSuccess, dataAppName = '新闻舆情' 
             >
               {executing ? '执行中...' : '手动执行'}
             </button>
-            <button
-              type="button"
-              className="btn-save"
-              onClick={handleSave}
-              disabled={loading || executing}
-            >
+            <button type="button" className="btn-confirm" onClick={handleSave} disabled={loading || executing}>
               {loading ? '保存中...' : '保存'}
             </button>
           </div>

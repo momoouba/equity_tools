@@ -10,7 +10,7 @@
 }
 
 .perf-app {
-  padding: 20px;
+  padding: 4px 20px 20px;
   background: #f5f7fa;
   min-height: 100%;
 }
@@ -593,30 +593,30 @@
   color: rgba(255, 255, 255, 0.85) !important;
 }
 
-/* 弹窗尺寸：宽 90vw、高由 --perf-modal-h 控制（默认 90vh，JS 按数据量动态设置） */
-.perf-data-modal.arco-modal {
-  position: fixed !important;
-  top: 50% !important;
-  left: 50% !important;
-  right: auto !important;
-  transform: translate(-50%, -50%) !important;
-  margin: 0 !important;
-  width: 90vw !important;
-  max-width: 90vw !important;
-  height: var(--perf-modal-h, 90vh) !important;
-  max-height: 90vh !important;
+.modal-content.modal-content--sheet.modal-content-wide.perf-data-modal,
+.modal-content.modal-content--sheet.modal-content-wide.perf-data-modal.perf-data-modal--xl,
+.modal-content.modal-content--sheet.modal-content-wide.perf-data-modal.perf-data-modal--md {
+  width: 96vw;
+  max-width: 96vw;
+  height: min(80vh, 720px);
+  max-height: min(80vh, 720px);
 }
-.perf-data-modal .arco-modal-content {
-  height: calc(var(--perf-modal-h, 90vh) - 56px);
+.modal-content--sheet.perf-data-modal .enterprise-form--sheet {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+.modal-content--sheet.perf-data-modal .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
+  padding: 12px 16px;
 }
-.perf-data-modal .arco-modal-body {
-  flex: 1 !important;
-  min-height: 0 !important;
-  overflow: hidden !important;
-  display: flex !important;
-  flex-direction: column !important;
+.modal-content--sheet.perf-data-modal .modal-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* 导出底稿按钮：深蓝底 #00024C，白色字 */
@@ -1110,8 +1110,8 @@
 
 /* 基金投资组合明细：单一滚动容器 + 单表 + sticky thead */
 .perf-fp-scroll {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 240px;
   overflow: auto;
   background: #fff;
   border: 1px solid #e5e6eb;
@@ -1212,8 +1212,8 @@
 
 /* 整体基金投资组合明细：单一滚动容器 + 单表 + sticky thead */
 .perf-pd-scroll {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 240px;
   overflow: auto;
   background: #fff;
   border: 1px solid #e5e6eb;

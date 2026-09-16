@@ -5,6 +5,7 @@ import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/Adm
 import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
 import dayjs from 'dayjs'
+import './EnterpriseForm.css'
 import './NewsConfig.css'
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './project-sourcing/financingConstants'
 
@@ -683,276 +684,298 @@ function NewsConfig({ financingSourceMode = false }) {
       )}
 
       {/* 新增/编辑表单 */}
-      <Modal
-        visible={showForm}
-        title={
-          financingSourceMode
-            ? (editingConfig ? '编辑融资接口配置' : '新增融资接口配置')
-            : (editingConfig ? '编辑新闻接口配置' : '新增新闻接口配置')
-        }
-        onCancel={() => {
-          setShowForm(false)
-          setEditingConfig(null)
-        }}
-        footer={null}
-        style={{ width: 600 }}
-        getChildrenPopupContainer={() => document.body}
-      >
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>应用 *</label>
-            <Select
-              value={formData.app_id}
-              onChange={(value) => handleChange('app_id', value)}
-              placeholder="请选择应用"
-              disabled={!!editingConfig}
-              getPopupContainer={() => document.body}
-              dropdownMenuStyle={{ zIndex: 1052 }}
-            >
-              {(financingSourceMode
-                ? applications.filter((a) => a.app_name === PROJECT_SOURCING_APP_NAME)
-                : applications
-              ).map(app => (
-                <Option key={app.id} value={app.id}>
-                  {app.app_name}
-                </Option>
-              ))}
-            </Select>
-            <p className="form-hint">
-              {editingConfig
-                ? '编辑时不能修改应用'
-                : financingSourceMode
-                  ? '项目挖掘应用下的融资数据接口（凭证见「上海国际集团接口配置」）'
-                  : '选择要配置新闻接口的应用'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>{financingSourceMode ? '接口类型 *' : '新闻接口类型 *'}</label>
-            <Select
-              value={formData.interface_type}
-              onChange={(value) => handleChange('interface_type', value)}
-              disabled={!!editingConfig || financingSourceMode}
-              getPopupContainer={() => document.body}
-              dropdownMenuStyle={{ zIndex: 1052 }}
-            >
-              {financingSourceMode ? (
-                <Option value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>
-              ) : (
-                [
-                  <Option key="iface-xinbang" value="新榜">新榜</Option>,
-                  <Option key="iface-qcc" value="企查查">企查查</Option>,
-                  <Option key="iface-shft" value="上海国际集团">上海国际集团</Option>,
-                  <Option key="iface-fin" value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>,
-                ]
-              )}
-            </Select>
-            <p className="form-hint">
-              {editingConfig
-                ? '编辑时不能修改接口类型'
-                : financingSourceMode
-                  ? '国际集团投融资接口（interface_type：shanghai_international_financing）'
-                  : '选择新闻接口类型；投融资请选「上海国际集团-投融资」，建议应用选「项目挖掘」'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>新闻类型 *</label>
-            <Select
-              value={formData.news_type}
-              onChange={(value) => handleChange('news_type', value)}
-              placeholder="请选择新闻类型"
-              getPopupContainer={() => document.body}
-              dropdownMenuStyle={{ zIndex: 1052 }}
-            >
-              {newsTypeOptions.map((opt) => (
-                <Option key={opt.value} value={opt.value} disabled={opt.disabled}>
-                  {opt.label}
-                  {opt.disabled && <span style={{ marginLeft: 8, color: '#86909c', fontSize: 12 }}>（未开发）</span>}
-                </Option>
-              ))}
-              {newsTypeOptions.length === 0 && (
-                <Option value="新闻舆情">新闻舆情</Option>
-              )}
-            </Select>
-            <p className="form-hint">
-              {formData.interface_type === '新榜'
-                ? '新榜接口仅支持新闻舆情类型'
-                : formData.interface_type === FINANCING_INTERFACE_TYPE
-                  ? '融资信息类型对应项目挖掘数据入库'
-                  : '灰色选项为尚未开发的类型，后续开发完成后可选用'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>请求地址 *</label>
-            <Input
-              value={formData.request_url}
-              onChange={(value) => handleChange('request_url', value)}
-              placeholder={
-                formData.interface_type === '企查查'
-                  ? 'https://api.qichacha.com/CompanyNews/SearchNews'
-                  : formData.interface_type === '上海国际集团'
-                    ? 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote'
-                    : formData.interface_type === FINANCING_INTERFACE_TYPE
-                      ? '请填写国际集团投融资查询接口 URL（见接口文档）'
-                      : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'
-              }
-            />
-            <p className="form-hint">
-              {formData.interface_type === '企查查'
-                ? '企查查舆情接口地址'
-                : formData.interface_type === '上海国际集团'
-                  ? '上海国际集团舆情和公司公告查询接口地址'
-                  : formData.interface_type === FINANCING_INTERFACE_TYPE
-                    ? '投融资接口地址；鉴权与「上海国际集团接口配置」一致（按应用维度）'
-                    : '新榜接口地址'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>Content-Type {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
-            <Input
-              value={formData.content_type}
-              onChange={(value) => handleChange('content_type', value)}
-              placeholder="application/x-www-form-urlencoded;charset=utf-8"
-              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
-            />
-            <p className="form-hint">
-              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE)
-                ? '该接口类型使用 application/json，无需单独配置 Content-Type'
-                : '请求的Content-Type'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>Key {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
-            <Input.Password
-              value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
-              onChange={(value) => handleChange('api_key', value)}
-              onFocus={(e) => {
-                if (hasApiKey && e.target.value === '****') {
-                  setHasApiKey(false)
-                  setFormData({ ...formData, api_key: '' })
-                }
-              }}
-              placeholder={
-                editingConfig
-                  ? (hasApiKey ? '****' : '留空则不更新密钥')
-                  : formData.interface_type === '企查查'
-                    ? '企查查接口使用企查查配置中的凭证'
-                    : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
-                      ? '上海国际集团接口使用「上海国际集团接口配置」中的凭证'
-                      : '请输入Key'
-              }
-              disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
-            />
-            <p className="form-hint">
-              {formData.interface_type === '企查查'
-                ? '企查查接口使用"企查查接口配置"中的新闻舆情接口凭证，无需在此填写'
-                : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
-                  ? '请在「上海国际集团接口配置」中为对应应用维护 X-App-Id、APIkey；此处无需填写'
-                  : editingConfig
-                    ? '留空则不更新密钥'
-                    : '在控制台获取的Key'}
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label>定时任务规则 *</label>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-              <Input
-                value={formData.cron_expression}
-                readOnly
-                placeholder="请配置Cron表达式"
-                style={{ flex: 1 }}
-              />
-              <Button
-                type="primary"
-                onClick={() => setShowCronModal(true)}
-              >
-                配置
-              </Button>
-            </div>
-            <p className="form-hint">
-              点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置
-              {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) && (
-                <span style={{ display: 'block', marginTop: '4px' }}>
-                  该接口定时规则可编辑，编辑后将同步更新到定时任务配置
-                </span>
-              )}
-            </p>
-          </div>
-
-          {formData.interface_type !== FINANCING_INTERFACE_TYPE && (
-          <div className="form-group">
-            <label>企业类型</label>
-            <Select
-              mode="multiple"
-              value={formData.entity_type}
-              onChange={(value) => handleChange('entity_type', value)}
-              placeholder={
-                formData.news_type === '同花顺订阅'
-                  ? '同花顺订阅不需要传企业类型，可不选'
-                  : '请选择企业类型（可多选）'
-              }
-              allowClear
-              disabled={formData.news_type === '同花顺订阅'}
-              getPopupContainer={() => document.body}
-              dropdownMenuStyle={{ zIndex: 1052 }}
-            >
-              <Option value="被投企业">被投企业</Option>
-              <Option value="基金相关主体">基金相关主体</Option>
-              <Option value="子基金">子基金</Option>
-              <Option value="子基金管理人">子基金管理人</Option>
-              <Option value="子基金GP">子基金GP</Option>
-              {(formData.interface_type === '新榜') && (
-                <Option value="额外公众号">额外公众号</Option>
-              )}
-            </Select>
-            <p className="form-hint">
-              {formData.news_type === '同花顺订阅' ? (
-                '同花顺订阅接口按 company 表 updated_at 筛选企业，不传企业类型参数，此处可不选。'
-              ) : formData.interface_type === '新榜' ? (
-                <>
-                  根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。
-                  <br />
-                  <strong>额外公众号</strong>：选择此项将只抓取 additional_wechat_accounts 表中状态为 active 的额外公众号数据。
-                  <br />
-                  留空表示抓取所有类型（包括企业公众号和额外公众号）。
-                </>
-              ) : (
-                '根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。留空表示抓取所有类型。（企查查、上海国际集团接口不支持"额外公众号"）'
-              )}
-            </p>
-          </div>
-          )}
-
-          <div className="form-group">
-            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', marginBottom: 0 }}>
-              <span>启用配置</span>
-              <input
-                type="checkbox"
-                checked={formData.is_active}
-                onChange={(e) => handleChange('is_active', e.target.checked)}
-                style={{ margin: 0, cursor: 'pointer', width: 'auto', flexShrink: 0 }}
-              />
-            </label>
-          </div>
-
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+      {showForm ? (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) {
               setShowForm(false)
               setEditingConfig(null)
-            }}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingConfig ? '更新' : '创建'}
-            </Button>
+            }
+          }}
+        >
+          <div
+            className="modal-content modal-content--sheet modal-content-wide"
+            role="dialog"
+            aria-modal="true"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3>
+                {financingSourceMode
+                  ? (editingConfig ? '编辑融资接口配置' : '新增融资接口配置')
+                  : (editingConfig ? '编辑新闻接口配置' : '新增新闻接口配置')}
+              </h3>
+              <button
+                type="button"
+                className="close-button"
+                aria-label="关闭"
+                onClick={() => {
+                  setShowForm(false)
+                  setEditingConfig(null)
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+              <div className="modal-body enterprise-form-grid news-config-form-grid">
+                <div className="form-group">
+                  <label>应用 *</label>
+                  <Select
+                    value={formData.app_id}
+                    onChange={(value) => handleChange('app_id', value)}
+                    placeholder="请选择应用"
+                    disabled={!!editingConfig}
+                    getPopupContainer={() => document.body}
+                    dropdownMenuStyle={{ zIndex: 1052 }}
+                  >
+                    {(financingSourceMode
+                      ? applications.filter((a) => a.app_name === PROJECT_SOURCING_APP_NAME)
+                      : applications
+                    ).map(app => (
+                      <Option key={app.id} value={app.id}>
+                        {app.app_name}
+                      </Option>
+                    ))}
+                  </Select>
+                  <p className="form-hint">
+                    {editingConfig
+                      ? '编辑时不能修改应用'
+                      : financingSourceMode
+                        ? '项目挖掘应用下的融资数据接口（凭证见「上海国际集团接口配置」）'
+                        : '选择要配置新闻接口的应用'}
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>{financingSourceMode ? '接口类型 *' : '新闻接口类型 *'}</label>
+                  <Select
+                    value={formData.interface_type}
+                    onChange={(value) => handleChange('interface_type', value)}
+                    disabled={!!editingConfig || financingSourceMode}
+                    getPopupContainer={() => document.body}
+                    dropdownMenuStyle={{ zIndex: 1052 }}
+                  >
+                    {financingSourceMode ? (
+                      <Option value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>
+                    ) : (
+                      [
+                        <Option key="iface-xinbang" value="新榜">新榜</Option>,
+                        <Option key="iface-qcc" value="企查查">企查查</Option>,
+                        <Option key="iface-shft" value="上海国际集团">上海国际集团</Option>,
+                        <Option key="iface-fin" value={FINANCING_INTERFACE_TYPE}>上海国际集团-投融资</Option>,
+                      ]
+                    )}
+                  </Select>
+                  <p className="form-hint">
+                    {editingConfig
+                      ? '编辑时不能修改接口类型'
+                      : financingSourceMode
+                        ? '国际集团投融资接口（interface_type：shanghai_international_financing）'
+                        : '选择新闻接口类型；投融资请选「上海国际集团-投融资」，建议应用选「项目挖掘」'}
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>新闻类型 *</label>
+                  <Select
+                    value={formData.news_type}
+                    onChange={(value) => handleChange('news_type', value)}
+                    placeholder="请选择新闻类型"
+                    getPopupContainer={() => document.body}
+                    dropdownMenuStyle={{ zIndex: 1052 }}
+                  >
+                    {newsTypeOptions.map((opt) => (
+                      <Option key={opt.value} value={opt.value} disabled={opt.disabled}>
+                        {opt.label}
+                        {opt.disabled && <span style={{ marginLeft: 8, color: '#86909c', fontSize: 12 }}>（未开发）</span>}
+                      </Option>
+                    ))}
+                    {newsTypeOptions.length === 0 && (
+                      <Option value="新闻舆情">新闻舆情</Option>
+                    )}
+                  </Select>
+                  <p className="form-hint">
+                    {formData.interface_type === '新榜'
+                      ? '新榜接口仅支持新闻舆情类型'
+                      : formData.interface_type === FINANCING_INTERFACE_TYPE
+                        ? '融资信息类型对应项目挖掘数据入库'
+                        : '灰色选项为尚未开发的类型，后续开发完成后可选用'}
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label className="news-config-enable-label">
+                    <span>启用配置</span>
+                    <input
+                      type="checkbox"
+                      checked={formData.is_active}
+                      onChange={(e) => handleChange('is_active', e.target.checked)}
+                    />
+                  </label>
+                </div>
+
+                <div className="form-group form-span-2">
+                  <label>请求地址 *</label>
+                  <Input
+                    value={formData.request_url}
+                    onChange={(value) => handleChange('request_url', value)}
+                    placeholder={
+                      formData.interface_type === '企查查'
+                        ? 'https://api.qichacha.com/CompanyNews/SearchNews'
+                        : formData.interface_type === '上海国际集团'
+                          ? 'http://114.141.181.181:8000/dofp/v2/ipaas/query/newsAndPubnote'
+                          : formData.interface_type === FINANCING_INTERFACE_TYPE
+                            ? '请填写国际集团投融资查询接口 URL（见接口文档）'
+                            : 'https://api.newrank.cn/api/sync/weixin/account/articles_content'
+                    }
+                  />
+                  <p className="form-hint">
+                    {formData.interface_type === '企查查'
+                      ? '企查查舆情接口地址'
+                      : formData.interface_type === '上海国际集团'
+                        ? '上海国际集团舆情和公司公告查询接口地址'
+                        : formData.interface_type === FINANCING_INTERFACE_TYPE
+                          ? '投融资接口地址；鉴权与「上海国际集团接口配置」一致（按应用维度）'
+                          : '新榜接口地址'}
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Content-Type {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
+                  <Input
+                    value={formData.content_type}
+                    onChange={(value) => handleChange('content_type', value)}
+                    placeholder="application/x-www-form-urlencoded;charset=utf-8"
+                    disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
+                  />
+                  <p className="form-hint">
+                    {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE)
+                      ? '该接口类型使用 application/json，无需单独配置 Content-Type'
+                      : '请求的Content-Type'}
+                  </p>
+                </div>
+
+                <div className="form-group">
+                  <label>Key {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) ? '' : '*'}</label>
+                  <Input.Password
+                    value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
+                    onChange={(value) => handleChange('api_key', value)}
+                    onFocus={(e) => {
+                      if (hasApiKey && e.target.value === '****') {
+                        setHasApiKey(false)
+                        setFormData({ ...formData, api_key: '' })
+                      }
+                    }}
+                    placeholder={
+                      editingConfig
+                        ? (hasApiKey ? '****' : '留空则不更新密钥')
+                        : formData.interface_type === '企查查'
+                          ? '企查查接口使用企查查配置中的凭证'
+                          : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
+                            ? '上海国际集团接口使用「上海国际集团接口配置」中的凭证'
+                            : '请输入Key'
+                    }
+                    disabled={formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE}
+                  />
+                  <p className="form-hint">
+                    {formData.interface_type === '企查查'
+                      ? '企查查接口使用"企查查接口配置"中的新闻舆情接口凭证，无需在此填写'
+                      : formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE
+                        ? '请在「上海国际集团接口配置」中为对应应用维护 X-App-Id、APIkey；此处无需填写'
+                        : editingConfig
+                          ? '留空则不更新密钥'
+                          : '在控制台获取的Key'}
+                  </p>
+                </div>
+
+                <div className="form-group form-span-2">
+                  <label>定时任务规则 *</label>
+                  <div className="news-config-cron-row">
+                    <Input
+                      value={formData.cron_expression}
+                      readOnly
+                      placeholder="请配置Cron表达式"
+                    />
+                    <Button type="primary" onClick={() => setShowCronModal(true)}>
+                      配置
+                    </Button>
+                  </div>
+                  <p className="form-hint">
+                    点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置
+                    {(formData.interface_type === '企查查' || formData.interface_type === '上海国际集团' || formData.interface_type === FINANCING_INTERFACE_TYPE) && (
+                      <span style={{ display: 'block', marginTop: '4px' }}>
+                        该接口定时规则可编辑，编辑后将同步更新到定时任务配置
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                {formData.interface_type !== FINANCING_INTERFACE_TYPE ? (
+                  <div className="form-group form-span-2">
+                    <label>企业类型</label>
+                    <Select
+                      mode="multiple"
+                      value={formData.entity_type}
+                      onChange={(value) => handleChange('entity_type', value)}
+                      placeholder={
+                        formData.news_type === '同花顺订阅'
+                          ? '同花顺订阅不需要传企业类型，可不选'
+                          : '请选择企业类型（可多选）'
+                      }
+                      allowClear
+                      disabled={formData.news_type === '同花顺订阅'}
+                      getPopupContainer={() => document.body}
+                      dropdownMenuStyle={{ zIndex: 1052 }}
+                    >
+                      <Option value="被投企业">被投企业</Option>
+                      <Option value="基金相关主体">基金相关主体</Option>
+                      <Option value="子基金">子基金</Option>
+                      <Option value="子基金管理人">子基金管理人</Option>
+                      <Option value="子基金GP">子基金GP</Option>
+                      {(formData.interface_type === '新榜') && (
+                        <Option value="额外公众号">额外公众号</Option>
+                      )}
+                    </Select>
+                    <p className="form-hint">
+                      {formData.news_type === '同花顺订阅' ? (
+                        '同花顺订阅接口按 company 表 updated_at 筛选企业，不传企业类型参数，此处可不选。'
+                      ) : formData.interface_type === '新榜' ? (
+                        <>
+                          根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。
+                          <br />
+                          <strong>额外公众号</strong>：选择此项将只抓取 additional_wechat_accounts 表中状态为 active 的额外公众号数据。
+                          <br />
+                          留空表示抓取所有类型（包括企业公众号和额外公众号）。
+                        </>
+                      ) : (
+                        '根据 invested_enterprises 表中 unified_credit_code 去重后的 entity_type 进行匹配，确定需要抓取哪些类型的企业信息。留空表示抓取所有类型。（企查查、上海国际集团接口不支持"额外公众号"）'
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => {
+                    setShowForm(false)
+                    setEditingConfig(null)
+                  }}
+                >
+                  取消
+                </button>
+                <button type="submit" className="btn-confirm">
+                  {editingConfig ? '更新' : '创建'}
+                </button>
+              </div>
+            </form>
           </div>
-        </form>
-      </Modal>
+        </div>
+      ) : null}
 
       {/* Cron表达式配置弹窗：回传 cron 与「跳过节假日」，便于保存到新闻接口配置 */}
       <CronGenerator
@@ -991,39 +1014,55 @@ function NewsConfig({ financingSourceMode = false }) {
           >
             <div className="news-config-sync-modal-header">
               <h2 id="news-config-sync-modal-title" className="news-config-sync-modal-title">同步时间范围</h2>
-            </div>
-            <p className="news-config-sync-modal-desc">
-              设置本次同步的查询时间范围，将作为参数传入接口（默认：前一天 0 点至今天 23:59:59）。
-            </p>
-            <div className="news-config-sync-modal-field">
-              <label htmlFor="news-config-sync-start-time" className="news-config-sync-modal-label">开始时间</label>
-              <input
-                id="news-config-sync-start-time"
-                name="news-config-sync-start-time"
-                type="datetime-local"
-                className="news-config-sync-modal-input"
-                value={toDatetimeLocalValue(syncStartTime)}
-                onChange={(e) => {
-                  const localTimeString = e.target.value
-                  const apiFormattedTime = toApiFormat(localTimeString)
-                  setSyncStartTime(apiFormattedTime)
+              <button
+                type="button"
+                className="news-config-sync-modal-close"
+                aria-label="关闭"
+                onClick={() => {
+                  setShowSyncModal(false)
+                  setSyncConfigId(null)
+                  setSyncInterfaceType(null)
                 }}
-              />
+              >
+                ×
+              </button>
             </div>
-            <div className="news-config-sync-modal-field">
-              <label htmlFor="news-config-sync-end-time" className="news-config-sync-modal-label">结束时间</label>
-              <input
-                id="news-config-sync-end-time"
-                name="news-config-sync-end-time"
-                type="datetime-local"
-                className="news-config-sync-modal-input"
-                value={toDatetimeLocalValue(syncEndTime)}
-                onChange={(e) => {
-                  const localTimeString = e.target.value
-                  const apiFormattedTime = toApiFormat(localTimeString)
-                  setSyncEndTime(apiFormattedTime)
-                }}
-              />
+            <div className="news-config-sync-modal-body">
+              <p className="news-config-sync-modal-desc">
+                设置本次同步的查询时间范围，将作为参数传入接口（默认：前一天 0 点至今天 23:59:59）。
+              </p>
+              <div className="news-config-sync-modal-fields">
+                <div className="news-config-sync-modal-field">
+                  <label htmlFor="news-config-sync-start-time" className="news-config-sync-modal-label">开始时间</label>
+                  <input
+                    id="news-config-sync-start-time"
+                    name="news-config-sync-start-time"
+                    type="datetime-local"
+                    className="news-config-sync-modal-input"
+                    value={toDatetimeLocalValue(syncStartTime)}
+                    onChange={(e) => {
+                      const localTimeString = e.target.value
+                      const apiFormattedTime = toApiFormat(localTimeString)
+                      setSyncStartTime(apiFormattedTime)
+                    }}
+                  />
+                </div>
+                <div className="news-config-sync-modal-field">
+                  <label htmlFor="news-config-sync-end-time" className="news-config-sync-modal-label">结束时间</label>
+                  <input
+                    id="news-config-sync-end-time"
+                    name="news-config-sync-end-time"
+                    type="datetime-local"
+                    className="news-config-sync-modal-input"
+                    value={toDatetimeLocalValue(syncEndTime)}
+                    onChange={(e) => {
+                      const localTimeString = e.target.value
+                      const apiFormattedTime = toApiFormat(localTimeString)
+                      setSyncEndTime(apiFormattedTime)
+                    }}
+                  />
+                </div>
+              </div>
             </div>
             <div className="news-config-sync-modal-footer">
               <button

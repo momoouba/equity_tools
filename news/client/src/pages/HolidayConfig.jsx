@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, DatePicker, Collapse, Upload } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './HolidayConfig.css'
 
 const Option = Select.Option
@@ -467,119 +468,119 @@ function HolidayConfig() {
         </div>
       )}
 
-      <Modal
+      <SheetModal
         visible={showModal}
         title={currentHoliday ? '编辑节假日' : '新增节假日'}
-        onCancel={() => {
+        onClose={() => {
           setShowModal(false)
           setCurrentHoliday(null)
         }}
-        footer={null}
-        style={{ width: 500 }}
       >
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>日期 *</label>
-            <DatePicker
-              value={formData.holiday_date}
-              onChange={(dateString, date) => {
-                const dateStr = (dateString && typeof dateString === 'string')
-                  ? dateString.trim()
-                  : (date && typeof date?.format === 'function')
-                    ? date.format('YYYY-MM-DD')
-                    : ''
-                setFormData(prev => ({ ...prev, holiday_date: dateStr }))
-              }}
-              format="YYYY-MM-DD"
-              style={{ width: '100%' }}
-            />
-          </div>
+        <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group">
+              <label>日期 *</label>
+              <DatePicker
+                value={formData.holiday_date}
+                onChange={(dateString, date) => {
+                  const dateStr = (dateString && typeof dateString === 'string')
+                    ? dateString.trim()
+                    : (date && typeof date?.format === 'function')
+                      ? date.format('YYYY-MM-DD')
+                      : ''
+                  setFormData(prev => ({ ...prev, holiday_date: dateStr }))
+                }}
+                format="YYYY-MM-DD"
+                style={{ width: '100%' }}
+                getPopupContainer={sheetPopupContainer}
+              />
+            </div>
 
-          <div className="form-group">
-            <label>是否工作日 *</label>
-            <Select
-              value={formData.is_workday}
-              onChange={(value) => {
-                setFormData(prev => {
-                  let nextType = prev.workday_type
-                  if (value === '1' && (prev.workday_type === '法定节假日' || prev.workday_type === '周末')) {
-                    nextType = '工作日'
-                  }
-                  if (value === '0' && prev.workday_type === '工作日') {
-                    nextType = '法定节假日'
-                  }
-                  return {
-                    ...prev,
-                    is_workday: value,
-                    workday_type: nextType
-                  }
-                })
-              }}
-            >
-              <Option value="0">否</Option>
-              <Option value="1">是</Option>
-            </Select>
-          </div>
+            <div className="form-group">
+              <label>是否工作日 *</label>
+              <Select
+                value={formData.is_workday}
+                getPopupContainer={sheetPopupContainer}
+                onChange={(value) => {
+                  setFormData(prev => {
+                    let nextType = prev.workday_type
+                    if (value === '1' && (prev.workday_type === '法定节假日' || prev.workday_type === '周末')) {
+                      nextType = '工作日'
+                    }
+                    if (value === '0' && prev.workday_type === '工作日') {
+                      nextType = '法定节假日'
+                    }
+                    return {
+                      ...prev,
+                      is_workday: value,
+                      workday_type: nextType
+                    }
+                  })
+                }}
+              >
+                <Option value="0">否</Option>
+                <Option value="1">是</Option>
+              </Select>
+            </div>
 
-          <div className="form-group">
-            <label>类型 *</label>
-            <Select
-              value={formData.workday_type}
-              onChange={(value) => handleChange('workday_type', value)}
-            >
-              {WORKDAY_TYPES.map(type => (
-                <Option key={type.value} value={type.value}>{type.label}</Option>
-              ))}
-            </Select>
-          </div>
+            <div className="form-group">
+              <label>类型 *</label>
+              <Select
+                value={formData.workday_type}
+                onChange={(value) => handleChange('workday_type', value)}
+                getPopupContainer={sheetPopupContainer}
+              >
+                {WORKDAY_TYPES.map(type => (
+                  <Option key={type.value} value={type.value}>{type.label}</Option>
+                ))}
+              </Select>
+            </div>
 
-          <div className="form-group">
-            <label>节假日名称</label>
-            <Input
-              value={formData.holiday_name}
-              onChange={(value) => handleChange('holiday_name', value)}
-              placeholder="请输入节假日名称（可选）"
-            />
+            <div className="form-group">
+              <label>节假日名称</label>
+              <Input
+                value={formData.holiday_name}
+                onChange={(value) => handleChange('holiday_name', value)}
+                placeholder="请输入节假日名称（可选）"
+              />
+            </div>
           </div>
-
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+          <SheetActions
+            onCancel={() => {
               setShowModal(false)
               setCurrentHoliday(null)
-            }}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {currentHoliday ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            submitLabel={currentHoliday ? '更新' : '创建'}
+          />
         </form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
+      <SheetModal
         visible={showGenerateModal}
         title="生成节假日"
-        onCancel={() => setShowGenerateModal(false)}
-        footer={null}
-        style={{ width: 400 }}
+        onClose={() => setShowGenerateModal(false)}
+        className="sheet-modal-narrow"
       >
-        <div className="form-group">
-          <label>年份 *</label>
-          <Input
-            value={generateYear}
-            onChange={(value) => setGenerateYear(value)}
-            placeholder="请输入年份，如：2024"
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group form-span-4">
+              <label>年份 *</label>
+              <Input
+                value={generateYear}
+                onChange={(value) => setGenerateYear(value)}
+                placeholder="请输入年份，如：2024"
+              />
+            </div>
+          </div>
+          <SheetActions
+            onCancel={() => setShowGenerateModal(false)}
+            submitLabel="生成"
+            submitType="button"
+            submitLoading={generating}
+            onSubmitClick={handleGenerate}
           />
         </div>
-        <div className="form-actions">
-          <Button type="secondary" onClick={() => setShowGenerateModal(false)}>
-            取消
-          </Button>
-          <Button type="primary" onClick={handleGenerate} loading={generating}>
-            生成
-          </Button>
-        </div>
-      </Modal>
+      </SheetModal>
     </div>
   )
 

@@ -15,6 +15,9 @@ import {
 } from '@arco-design/web-react'
 import './ListingProjectProgressPage.css'
 import './listingTableColumns.css'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import {
   buildListingNumericColumn,
   formatListingAmount,
@@ -244,90 +247,105 @@ function ListingRecipientsTab() {
     },
     {
       title: '操作',
-      width: 260,
+      width: 220,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, record) => (
-        <Space>
-          <Button type="primary" size="small" onClick={() => openEdit(record)}>
-            编辑
-          </Button>
-          <Button type="outline" size="small" onClick={() => handleSendTest(record)}>
-            发送邮件
-          </Button>
-          <Button type="outline" status="danger" size="small" onClick={() => handleDelete(record)}>
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => openEdit(record)} />
+          <ListOpButton name="发送邮件" onClick={() => handleSendTest(record)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record)} />
+        </ListOps>
       ),
     },
   ]
 
   return (
-    <div>
-      <Space style={{ marginBottom: 12 }}>
-        <Button type="primary" onClick={load} loading={loading}>
-          刷新
-        </Button>
-        <Button type="outline" onClick={openAdd}>
-          新增
-        </Button>
-      </Space>
-      <Table rowKey="id" loading={loading} columns={columns} data={data} border stripe scroll={{ x: 1100 }} />
+    <div className="list-table-page" style={{ '--list-ops-col-width': '220px' }}>
+      <div className="listing-page-header" style={{ marginBottom: 12, display: 'flex', alignItems: 'center' }}>
+        <Space>
+          <Button type="primary" onClick={load} loading={loading}>
+            刷新
+          </Button>
+          <Button type="outline" onClick={openAdd}>
+            新增
+          </Button>
+        </Space>
+      </div>
+      <Table
+        rowKey="id"
+        loading={loading}
+        columns={columns}
+        data={data}
+        className="list-table"
+        border
+        stripe
+        scroll={{ x: 1100 }}
+      />
 
-      <Modal
-        title={editing ? '编辑收件' : '新增收件'}
+      <SheetModal
         visible={showModal}
-        onOk={handleSubmit}
-        onCancel={() => setShowModal(false)}
-        style={{ width: 520 }}
+        title={editing ? '编辑收件' : '新增收件'}
+        onClose={() => setShowModal(false)}
       >
-        <Form form={form} layout="vertical">
-          <FormItem
-            label="收件人邮箱"
-            field="recipient_email"
-            rules={[{ required: true, message: '必填' }]}
-          >
-            <Input.TextArea placeholder="多个邮箱用逗号或换行分隔" autoSize={{ minRows: 2, maxRows: 6 }} />
-          </FormItem>
-          <FormItem label="邮件主题" field="email_subject">
-            <Input />
-          </FormItem>
-          <FormItem
-            label="发件内容"
-            field="listing_mail_types"
-            rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
-            extra="可多选：底层项目上市进展、上市进展（交易所IPO审核）、上市辅导（证监会辅导备案）、境外备案（仅周六邮件展示）、IPO上市（昨日）、上市日历（未来5天）、打新申购（本周）。"
-          >
-            <Select mode="multiple" placeholder="请选择发件内容">
-              <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>
-              <Select.Option value="listing_progress">上市进展</Select.Option>
-              <Select.Option value="listing_guidance">上市辅导</Select.Option>
-              <Select.Option value="overseas_filing">境外备案</Select.Option>
-              <Select.Option value="new_share_listed_yesterday">IPO上市（昨日）</Select.Option>
-              <Select.Option value="new_share_upcoming">上市日历</Select.Option>
-              <Select.Option value="new_share_apply">打新申购</Select.Option>
-            </Select>
-          </FormItem>
-          <FormItem
-            label="Cron 表达式"
-            field="cron_expression"
-            extra="与系统配置共用同一套可视化配置（Quartz 7 段）"
-          >
-            <Input
-              placeholder="点击右侧「配置」打开系统 Cron 配置器"
-              readOnly
-              addAfter={
-                <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
-                  配置
-                </Button>
-              }
-            />
-          </FormItem>
-          <FormItem label="启用" field="is_active" triggerPropName="checked">
-            <Switch />
-          </FormItem>
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="收件人邮箱"
+              field="recipient_email"
+              rules={[{ required: true, message: '必填' }]}
+              className="form-span-2"
+            >
+              <Input.TextArea placeholder="多个邮箱用逗号或换行分隔" autoSize={{ minRows: 2, maxRows: 4 }} />
+            </FormItem>
+            <FormItem label="邮件主题" field="email_subject" className="form-span-2">
+              <Input />
+            </FormItem>
+            <FormItem
+              label="发件内容"
+              field="listing_mail_types"
+              rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一个发件内容' }]}
+              extra="可多选：底层项目上市进展、上市进展、上市辅导、境外备案、IPO上市、上市日历、打新申购。"
+              className="form-span-2"
+            >
+              <Select mode="multiple" placeholder="请选择发件内容" getPopupContainer={sheetPopupContainer}>
+                <Select.Option value="listing_project_progress">底层项目上市进展</Select.Option>
+                <Select.Option value="listing_progress">上市进展</Select.Option>
+                <Select.Option value="listing_guidance">上市辅导</Select.Option>
+                <Select.Option value="overseas_filing">境外备案</Select.Option>
+                <Select.Option value="new_share_listed_yesterday">IPO上市（昨日）</Select.Option>
+                <Select.Option value="new_share_upcoming">上市日历</Select.Option>
+                <Select.Option value="new_share_apply">打新申购</Select.Option>
+              </Select>
+            </FormItem>
+            <FormItem
+              label="Cron 表达式"
+              field="cron_expression"
+              extra="与系统配置共用同一套可视化配置（Quartz 7 段）"
+              className="form-span-2"
+            >
+              <Input
+                placeholder="点击右侧「配置」打开系统 Cron 配置器"
+                readOnly
+                addAfter={
+                  <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
+                    配置
+                  </Button>
+                }
+              />
+            </FormItem>
+            <FormItem label="启用" field="is_active" triggerPropName="checked">
+              <Switch />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setShowModal(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={handleSubmit}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       <CronGenerator
         visible={showCronModal}
@@ -763,20 +781,15 @@ export default function ListingProjectProgressPage() {
       cols.push({
         title: '操作',
         key: 'actions',
-        width: 220,
+        width: 168,
         fixed: 'right',
+        className: 'list-ops-col',
         render: (_, record) => (
-          <Space size={8} wrap={false}>
-            <Button type="primary" size="small" onClick={() => openIppEdit(record)}>
-              编辑
-            </Button>
-            <Button type="outline" status="success" size="small" onClick={() => openIppLog(record)}>
-              日志
-            </Button>
-            <Button type="outline" status="danger" size="small" onClick={() => handleIppDelete(record)}>
-              删除
-            </Button>
-          </Space>
+          <ListOps>
+            <ListOpButton name="编辑" onClick={() => openIppEdit(record)} />
+            <ListOpButton name="日志" onClick={() => openIppLog(record)} />
+            <ListOpButton name="删除" onClick={() => handleIppDelete(record)} />
+          </ListOps>
         ),
       })
     }
@@ -786,10 +799,13 @@ export default function ListingProjectProgressPage() {
   const tableScrollX = useMemo(() => sumColumnWidths(columns), [columns])
 
   return (
-    <div className="listing-project-progress-page" style={{ padding: '0 16px' }}>
+    <div
+      className="listing-project-progress-page list-table-page"
+      style={{ padding: '4px 16px', '--list-ops-col-width': isAdmin ? '168px' : undefined }}
+    >
       <Tabs defaultActiveTab="progress" type="line" style={{ marginTop: 0, marginBottom: 8 }}>
         <TabPane key="progress" title="底层项目上市进展">
-          <div style={{ marginBottom: 8 }}>
+          <div className="listing-page-header" style={{ marginBottom: 8 }}>
             <Space wrap>
               <Button type="primary" onClick={load} loading={loading}>
                 刷新
@@ -860,6 +876,7 @@ export default function ListingProjectProgressPage() {
             loading={loading}
             columns={columns}
             data={data}
+            className="list-table"
             border
             stripe
             scroll={{ x: tableScrollX, y: tableScrollY }}
@@ -889,238 +906,241 @@ export default function ListingProjectProgressPage() {
         </TabPane>
       </Tabs>
 
-      <Modal
-        title="公共链接分享"
+      <SheetModal
         visible={shareOpen}
-        onOk={submitShare}
-        onCancel={() => setShareOpen(false)}
-        confirmLoading={shareLoading}
-        okText={shareLink ? '更新链接' : '创建链接'}
-        style={{ width: 520 }}
+        title="公共链接分享"
+        onClose={() => setShareOpen(false)}
       >
-        <div style={{ marginBottom: 12 }}>
-          <Space>
-            <span style={{ fontWeight: 500 }}>公共链接分享</span>
-            <Switch
-              checked={shareConfig.enabled}
-              onChange={(checked) => setShareConfig((prev) => ({ ...prev, enabled: checked }))}
-            />
-          </Space>
-        </div>
-        {shareLink && (
-          <div style={{ marginBottom: 12 }}>
-            <Input
-              value={shareLink}
-              readOnly
-              addAfter={
-                <Button
-                  type="text"
-                  size="small"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(shareLink)
-                      Message.success('链接已复制')
-                    } catch {
-                      Message.warning('复制失败，请手动复制')
-                    }
-                  }}
-                >
-                  复制链接
-                </Button>
-              }
-            />
-          </div>
-        )}
-        {shareConfig.enabled && (
-          <>
-            <div style={{ marginBottom: 10 }}>
-              <Space>
-                <Switch
-                  checked={shareConfig.hasExpiry}
-                  onChange={(checked) =>
-                    setShareConfig((prev) => ({
-                      ...prev,
-                      hasExpiry: checked,
-                      expiryTime: checked ? prev.expiryTime : '',
-                    }))
-                  }
-                />
-                <span>有效期</span>
-              </Space>
-              {shareConfig.hasExpiry && (
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group form-span-2">
+              <label>公共链接分享</label>
+              <Switch
+                checked={shareConfig.enabled}
+                onChange={(checked) => setShareConfig((prev) => ({ ...prev, enabled: checked }))}
+              />
+            </div>
+            {shareLink ? (
+              <div className="form-group form-span-4">
+                <label>分享链接</label>
                 <Input
-                  style={{ marginTop: 8 }}
-                  type="datetime-local"
-                  value={shareConfig.expiryTime}
-                  onChange={(v) => setShareConfig((prev) => ({ ...prev, expiryTime: v }))}
-                />
-              )}
-            </div>
-            <div>
-              <Space>
-                <Switch
-                  checked={shareConfig.hasPassword}
-                  onChange={(checked) =>
-                    setShareConfig((prev) => ({
-                      ...prev,
-                      hasPassword: checked,
-                      password: checked ? prev.password : '',
-                    }))
+                  value={shareLink}
+                  readOnly
+                  addAfter={
+                    <Button
+                      type="text"
+                      size="small"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(shareLink)
+                          Message.success('链接已复制')
+                        } catch {
+                          Message.warning('复制失败，请手动复制')
+                        }
+                      }}
+                    >
+                      复制链接
+                    </Button>
                   }
                 />
-                <span>密码保护</span>
-              </Space>
-              {shareConfig.hasPassword && (
-                <Input.Password
-                  style={{ marginTop: 8 }}
-                  value={shareConfig.password}
-                  onChange={(v) => setShareConfig((prev) => ({ ...prev, password: v }))}
-                  placeholder="留空将自动生成密码"
-                />
-              )}
-            </div>
-          </>
-        )}
-      </Modal>
+              </div>
+            ) : null}
+            {shareConfig.enabled ? (
+              <>
+                <div className="form-group form-span-2">
+                  <label>有效期</label>
+                  <Switch
+                    checked={shareConfig.hasExpiry}
+                    onChange={(checked) =>
+                      setShareConfig((prev) => ({
+                        ...prev,
+                        hasExpiry: checked,
+                        expiryTime: checked ? prev.expiryTime : '',
+                      }))
+                    }
+                  />
+                  {shareConfig.hasExpiry ? (
+                    <Input
+                      style={{ marginTop: 8 }}
+                      type="datetime-local"
+                      value={shareConfig.expiryTime}
+                      onChange={(v) => setShareConfig((prev) => ({ ...prev, expiryTime: v }))}
+                    />
+                  ) : null}
+                </div>
+                <div className="form-group form-span-2">
+                  <label>密码保护</label>
+                  <Switch
+                    checked={shareConfig.hasPassword}
+                    onChange={(checked) =>
+                      setShareConfig((prev) => ({
+                        ...prev,
+                        hasPassword: checked,
+                        password: checked ? prev.password : '',
+                      }))
+                    }
+                  />
+                  {shareConfig.hasPassword ? (
+                    <Input.Password
+                      style={{ marginTop: 8 }}
+                      value={shareConfig.password}
+                      onChange={(v) => setShareConfig((prev) => ({ ...prev, password: v }))}
+                      placeholder="留空将自动生成密码"
+                    />
+                  ) : null}
+                </div>
+              </>
+            ) : null}
+          </div>
+          <SheetActions
+            onCancel={() => setShareOpen(false)}
+            submitLabel={shareLink ? '更新链接' : '创建链接'}
+            submitType="button"
+            onSubmitClick={submitShare}
+            submitLoading={shareLoading}
+          />
+        </div>
+      </SheetModal>
 
-      <Modal
-        title="匹配数据"
+      <SheetModal
         visible={matchModalOpen}
-        onOk={submitMatchModal}
-        onCancel={() => setMatchModalOpen(false)}
-        confirmLoading={matching}
-        style={{ width: 520 }}
+        title="匹配数据"
+        onClose={() => setMatchModalOpen(false)}
       >
-        <Form form={matchForm} layout="vertical">
-          <FormItem shouldUpdate noStyle>
-            {() =>
-              (
-                <FormItem
-                  label="匹配类型"
-                  field="matchTypes"
-                  rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一种匹配类型' }]}
-                  extra="可多选：交易所IPO审核、上市辅导、境外上市备案、打新日历。"
-                >
-                  <Select mode="multiple" placeholder="请选择匹配类型">
-                    <Select.Option value="exchange_ipo">交易所IPO审核</Select.Option>
-                    <Select.Option value="guidance_progress">上市辅导</Select.Option>
-                    <Select.Option value="overseas_filing">境外上市备案</Select.Option>
-                    <Select.Option value="new_share">打新日历</Select.Option>
-                  </Select>
-                </FormItem>
-              )
-            }
-          </FormItem>
-          <FormItem shouldUpdate noStyle>
-            {() =>
-              hasIpoTypeSelected() ? (
-                <>
-                  <FormItem label="匹配数据范围（上市进展）" field="ipoRangeMode" initialValue="yesterday">
-                    <Select>
-                      <Select.Option value="yesterday">默认：仅匹配昨日更新</Select.Option>
-                      <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
-                      <Select.Option value="range">补跑：指定日期区间</Select.Option>
-                    </Select>
-                  </FormItem>
-                  {matchForm.getFieldValue('ipoRangeMode') === 'lookback' ? (
-                    <FormItem label="最近N天" field="ipoLookbackDays">
-                      <InputNumber min={1} max={180} style={{ width: 180 }} />
+        <Form form={matchForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="匹配类型"
+              field="matchTypes"
+              className="form-span-2"
+              rules={[{ required: true, type: 'array', minLength: 1, message: '请至少选择一种匹配类型' }]}
+              extra="可多选：交易所IPO审核、上市辅导、境外上市备案、打新日历。"
+            >
+              <Select mode="multiple" placeholder="请选择匹配类型" getPopupContainer={sheetPopupContainer}>
+                <Select.Option value="exchange_ipo">交易所IPO审核</Select.Option>
+                <Select.Option value="guidance_progress">上市辅导</Select.Option>
+                <Select.Option value="overseas_filing">境外上市备案</Select.Option>
+                <Select.Option value="new_share">打新日历</Select.Option>
+              </Select>
+            </FormItem>
+            <FormItem shouldUpdate noStyle>
+              {() =>
+                hasIpoTypeSelected() ? (
+                  <>
+                    <FormItem label="匹配数据范围（上市进展）" field="ipoRangeMode" initialValue="yesterday" className="form-span-2">
+                      <Select getPopupContainer={sheetPopupContainer}>
+                        <Select.Option value="yesterday">默认：仅匹配昨日更新</Select.Option>
+                        <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
+                        <Select.Option value="range">补跑：指定日期区间</Select.Option>
+                      </Select>
                     </FormItem>
-                  ) : null}
-                  {matchForm.getFieldValue('ipoRangeMode') === 'range' ? (
-                    <FormItem label="日期区间" field="ipoDateRange">
-                      <RangePicker style={{ width: 320 }} />
+                    {matchForm.getFieldValue('ipoRangeMode') === 'lookback' ? (
+                      <FormItem label="最近N天" field="ipoLookbackDays">
+                        <InputNumber min={1} max={180} style={{ width: '100%' }} />
+                      </FormItem>
+                    ) : null}
+                    {matchForm.getFieldValue('ipoRangeMode') === 'range' ? (
+                      <FormItem label="日期区间" field="ipoDateRange" className="form-span-2">
+                        <RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                      </FormItem>
+                    ) : null}
+                  </>
+                ) : null
+              }
+            </FormItem>
+            <FormItem shouldUpdate noStyle>
+              {() =>
+                hasNewShareSelected() ? (
+                  <>
+                    <FormItem label="打新上市匹配范围" field="newShareMode" initialValue="yesterday" className="form-span-2">
+                      <Select getPopupContainer={sheetPopupContainer}>
+                        <Select.Option value="yesterday">默认：仅匹配昨日上市</Select.Option>
+                        <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
+                        <Select.Option value="range">补跑：指定上市日期区间</Select.Option>
+                      </Select>
                     </FormItem>
-                  ) : null}
-                </>
-              ) : null
-            }
-          </FormItem>
-          <FormItem shouldUpdate noStyle>
-            {() =>
-              hasNewShareSelected() ? (
-                <>
-                  <FormItem label="打新上市匹配范围" field="newShareMode" initialValue="yesterday">
-                    <Select>
-                      <Select.Option value="yesterday">默认：仅匹配昨日上市</Select.Option>
-                      <Select.Option value="lookback">补跑：最近N天（截止昨日）</Select.Option>
-                      <Select.Option value="range">补跑：指定上市日期区间</Select.Option>
-                    </Select>
-                  </FormItem>
-                  {matchForm.getFieldValue('newShareMode') === 'lookback' ? (
-                    <FormItem label="打新最近N天" field="lookbackDays">
-                      <InputNumber min={1} max={60} style={{ width: 180 }} />
-                    </FormItem>
-                  ) : null}
-                  {matchForm.getFieldValue('newShareMode') === 'range' ? (
-                    <FormItem label="打新上市日期区间" field="dateRange">
-                      <RangePicker style={{ width: 320 }} />
-                    </FormItem>
-                  ) : null}
-                </>
-              ) : null
-            }
-          </FormItem>
+                    {matchForm.getFieldValue('newShareMode') === 'lookback' ? (
+                      <FormItem label="打新最近N天" field="lookbackDays">
+                        <InputNumber min={1} max={60} style={{ width: '100%' }} />
+                      </FormItem>
+                    ) : null}
+                    {matchForm.getFieldValue('newShareMode') === 'range' ? (
+                      <FormItem label="打新上市日期区间" field="dateRange" className="form-span-2">
+                        <RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                      </FormItem>
+                    ) : null}
+                  </>
+                ) : null
+              }
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setMatchModalOpen(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitMatchModal}
+            submitLoading={matching}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="编辑项目上市进展"
+      <SheetModal
         visible={editOpen}
-        onOk={submitIppEdit}
-        onCancel={() => setEditOpen(false)}
-        style={{ width: 560 }}
+        title="编辑项目上市进展"
+        onClose={() => setEditOpen(false)}
       >
-        <Form form={ippForm} layout="vertical">
-          <FormItem label="归属基金" field="fund" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="归属子基金" field="sub">
-            <Input />
-          </FormItem>
-          <FormItem label="项目简称" field="project_name" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="企业全称" field="company" rules={[{ required: true }]}>
-            <Input.TextArea />
-          </FormItem>
-          <FormItem label="投资金额" field="inv_amount" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="剩余金额" field="residual_amount" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="穿透权益占比" field="ratio" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="穿透投资金额" field="ct_amount" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="穿透剩余金额" field="ct_residual" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="审核状态" field="status" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="板块" field="board" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="交易所" field="exchange" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="更新日期时间" field="f_update_time" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
+        <Form form={ippForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="项目简称" field="project_name" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="归属基金" field="fund" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="归属子基金" field="sub">
+              <Input />
+            </FormItem>
+            <FormItem label="审核状态" field="status" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="企业全称" field="company" rules={[{ required: true }]} className="form-span-2">
+              <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
+            </FormItem>
+            <FormItem label="板块" field="board" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="交易所" field="exchange" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="投资金额" field="inv_amount" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="剩余金额" field="residual_amount" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="穿透权益占比" field="ratio" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="更新日期时间" field="f_update_time" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="穿透投资金额" field="ct_amount" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="穿透剩余金额" field="ct_residual" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setEditOpen(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitIppEdit}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="变更日志"
-        visible={logOpen}
-        footer={null}
-        onCancel={() => setLogOpen(false)}
-        style={{ width: 720 }}
-      >
+      <SheetViewer visible={logOpen} title="变更日志" onClose={() => setLogOpen(false)}>
         {logLoading ? (
           <div>加载中…</div>
         ) : logRows.length === 0 ? (
@@ -1138,9 +1158,10 @@ export default function ListingProjectProgressPage() {
             ]}
             data={logRows}
             pagination={false}
+            scroll={{ y: 360 }}
           />
         )}
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }

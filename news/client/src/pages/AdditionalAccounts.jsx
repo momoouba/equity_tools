@@ -3,6 +3,9 @@ import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Colla
 import axios from '../utils/axios'
 import { getUser } from '../utils/auth'
 import LogModal from './LogModal'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './AdditionalAccounts.css'
 
 const Option = Select.Option
@@ -473,39 +476,22 @@ function AdditionalAccounts() {
     },
     {
       title: '操作',
-      width: 250,
+      width: 168,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => handleViewLog(record.id)}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+          <ListOpButton name="日志" onClick={() => handleViewLog(record.id)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="additional-accounts">
+    <div className="additional-accounts list-table-page" style={{ '--list-ops-col-width': '168px' }}>
       <Card className="management-card" bordered={false}>
         <div className="management-header">
           <h2 className="management-title">第三方公众号管理</h2>
@@ -630,11 +616,13 @@ function AdditionalAccounts() {
               loading={loading}
               pagination={false}
               rowKey="id"
+              className="list-table"
               border={{
                 wrapper: true,
                 cell: true
               }}
               stripe
+              scroll={{ x: 'max-content' }}
             />
           )}
         </div>
@@ -654,149 +642,119 @@ function AdditionalAccounts() {
       </Card>
 
       {/* 新增/编辑模态框 */}
-      <Modal
+      <SheetModal
         visible={showAddModal || showEditModal}
         title={showEditModal ? '编辑公众号' : '新增公众号'}
-        onCancel={() => {
+        onClose={() => {
           setShowAddModal(false)
           setShowEditModal(false)
         }}
-        footer={null}
-        style={{ width: 500 }}
       >
         <Form
           key={showAddModal ? 'account-form-add' : `account-form-edit-${selectedAccount?.id || ''}`}
           initialValues={formData}
           onSubmit={handleSubmit}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
         >
-          <FormItem
-            label="公众号名称"
-            field="account_name"
-            rules={[{ required: true, message: '请输入公众号名称' }]}
-          >
-            <Input placeholder="请输入公众号名称" />
-          </FormItem>
-          <FormItem
-            label="账号ID"
-            field="wechat_account_id"
-            rules={[{ required: true, message: '请输入微信账号ID' }]}
-          >
-            <Input placeholder="请输入微信账号ID" />
-          </FormItem>
-          <FormItem
-            label="状态"
-            field="status"
-          >
-            <Select>
-              <Option value="active">生效</Option>
-              <Option value="inactive">失效</Option>
-            </Select>
-          </FormItem>
-          <FormItem
-            label="标签"
-            field="industry_tag_code"
-            extra="行业分类，选项来自管理员设置中的数据字典「行业」"
-          >
-            <Select placeholder="请选择行业标签" allowClear>
-              {industryTagOptions.map((o) => (
-                <Option key={o.value} value={o.value}>
-                  {o.label}
-                </Option>
-              ))}
-            </Select>
-          </FormItem>
-          <div className="form-actions">
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowAddModal(false)
-                setShowEditModal(false)
-              }}
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="公众号名称"
+              field="account_name"
+              rules={[{ required: true, message: '请输入公众号名称' }]}
+              className="form-span-2"
             >
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {showEditModal ? '更新' : '添加'}
-            </Button>
+              <Input placeholder="请输入公众号名称" />
+            </FormItem>
+            <FormItem
+              label="账号ID"
+              field="wechat_account_id"
+              rules={[{ required: true, message: '请输入微信账号ID' }]}
+              className="form-span-2"
+            >
+              <Input placeholder="请输入微信账号ID" />
+            </FormItem>
+            <FormItem label="状态" field="status">
+              <Select getPopupContainer={sheetPopupContainer}>
+                <Option value="active">生效</Option>
+                <Option value="inactive">失效</Option>
+              </Select>
+            </FormItem>
+            <FormItem
+              label="标签"
+              field="industry_tag_code"
+              extra="行业分类，选项来自管理员设置中的数据字典「行业」"
+              className="form-span-2"
+            >
+              <Select placeholder="请选择行业标签" allowClear getPopupContainer={sheetPopupContainer}>
+                {industryTagOptions.map((o) => (
+                  <Option key={o.value} value={o.value}>
+                    {o.label}
+                  </Option>
+                ))}
+              </Select>
+            </FormItem>
           </div>
+          <SheetActions
+            onCancel={() => {
+              setShowAddModal(false)
+              setShowEditModal(false)
+            }}
+            submitLabel={showEditModal ? '更新' : '添加'}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* 批量导入模态框 */}
-      <Modal
+      <SheetModal
         visible={showImportModal}
         title="批量导入公众号"
-        onCancel={() => {
+        onClose={() => {
           setShowImportModal(false)
           setImportFile(null)
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
-        <div className="import-steps">
-          <Card className="import-step-card" style={{ marginBottom: '16px' }}>
-            <h4 style={{ marginBottom: '12px' }}>第一步：下载导入模板</h4>
-            <Button
-              type="outline"
-              onClick={handleDownloadTemplate}
-            >
-              下载Excel模板
-            </Button>
-          </Card>
-          <Card className="import-step-card" style={{ marginBottom: '16px' }}>
-            <h4 style={{ marginBottom: '12px' }}>第二步：填写数据并上传</h4>
-            <Upload
-              accept=".xlsx,.xls"
-              showUploadList={false}
-              beforeUpload={(file) => {
-                setImportFile(file || null)
-                if (!file) {
-                  console.warn('[AdditionalAccounts] beforeUpload got empty file')
-                }
-                // 阻止自动上传，改为点击“开始导入”后手动提交 FormData
-                return false
-              }}
-            >
-              <Button>选择文件</Button>
-            </Upload>
-            {importFile && (
-              <p style={{ marginTop: '8px', color: '#165dff' }}>
-                已选择文件：{importFile.name}
-              </p>
-            )}
-          </Card>
-          <Card className="info-card" style={{ marginBottom: '16px' }}>
-            <h4 style={{ marginBottom: '12px' }}>导入说明：</h4>
-            <ul style={{ margin: 0, paddingLeft: '20px' }}>
-              <li>支持Excel格式文件（.xlsx, .xls）</li>
-              <li>必填字段：公众号名称、账号ID</li>
-              <li>选填字段：行业标签，优先填写数据字典「行业」中的中文标签名（也支持填写编码），留空表示不设置</li>
-              <li>重复的账号ID将被跳过，不会导入</li>
-              <li>导入后默认状态为"生效"</li>
-            </ul>
-          </Card>
-          <div className="form-actions">
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowImportModal(false)
-                setImportFile(null)
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              type="primary"
-              onClick={handleImport}
-              disabled={!importFile || importLoading}
-              loading={importLoading}
-            >
-              开始导入
-            </Button>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group form-span-2">
+              <label>1. 下载模板</label>
+              <p className="form-hint">表头固定，勿改列顺序。必填：公众号名称、账号ID。</p>
+              <Button type="outline" onClick={handleDownloadTemplate}>
+                下载Excel模板
+              </Button>
+            </div>
+            <div className="form-group form-span-2">
+              <label>2. 上传文件</label>
+              <p className="form-hint">填写后选择 .xlsx/.xls 文件导入。</p>
+              <Upload
+                accept=".xlsx,.xls"
+                showUploadList={false}
+                beforeUpload={(file) => {
+                  setImportFile(file || null)
+                  return false
+                }}
+              >
+                <Button>选择文件</Button>
+              </Upload>
+              {importFile ? <p className="form-hint">已选择：{importFile.name}</p> : null}
+            </div>
+            <p className="form-hint form-span-4">
+              行业标签优先填数据字典「行业」中文名（也支持编码），留空表示不设置。重复账号ID将跳过。导入后默认生效。
+            </p>
           </div>
+          <SheetActions
+            onCancel={() => {
+              setShowImportModal(false)
+              setImportFile(null)
+            }}
+            submitLabel="开始导入"
+            submitType="button"
+            submitDisabled={!importFile}
+            submitLoading={importLoading}
+            onSubmitClick={handleImport}
+          />
         </div>
-      </Modal>
+      </SheetModal>
 
       {/* 日志模态框 */}
       {showLogModal && (
@@ -811,44 +769,38 @@ function AdditionalAccounts() {
       )}
 
       {/* 导入错误明细 */}
-      <Modal
+      <SheetViewer
         visible={showImportErrorModal}
         title="导入错误明细"
-        onCancel={() => setShowImportErrorModal(false)}
-        footer={null}
-        style={{ width: 900 }}
+        onClose={() => setShowImportErrorModal(false)}
+        extra={
+          <button type="button" className="btn-cancel" onClick={handleDownloadRetryTemplate}>
+            导出失败重试模板
+          </button>
+        }
+        submitLabel="导出错误原因"
+        submitType="button"
+        onSubmitClick={handleDownloadImportErrors}
       >
         <div style={{ marginBottom: 12, color: '#4e5969' }}>
           导入结果：成功 {importSummary.successCount} 条，跳过 {importSummary.skipCount} 条，错误 {importSummary.errorCount} 条
           {importSummary.hasMoreErrors ? '（错误较多，仅展示/导出前1000条）' : ''}
         </div>
-        <div style={{ maxHeight: 360, overflow: 'auto', border: '1px solid #e5e6eb', borderRadius: 4 }}>
-          <Table
-            columns={[
-              { title: '行号', dataIndex: 'rowNum', width: 90 },
-              { title: '错误原因', dataIndex: 'message', width: 360 },
-              { title: '公众号名称', dataIndex: 'account_name', width: 180 },
-              { title: '账号ID', dataIndex: 'wechat_account_id', width: 180 },
-              { title: '行业标签', dataIndex: 'industry_tag_code', width: 140 }
-            ]}
-            data={importErrors}
-            pagination={false}
-            rowKey={(record, index) => `${record.rowNum || 'unknown'}-${index}`}
-            border={{ cell: true, wrapper: false }}
-          />
-        </div>
-        <div className="form-actions" style={{ marginTop: 16 }}>
-          <Button type="secondary" onClick={() => setShowImportErrorModal(false)}>
-            关闭
-          </Button>
-          <Button type="outline" onClick={handleDownloadRetryTemplate}>
-            导出失败重试模板
-          </Button>
-          <Button type="primary" onClick={handleDownloadImportErrors}>
-            导出错误原因
-          </Button>
-        </div>
-      </Modal>
+        <Table
+          columns={[
+            { title: '行号', dataIndex: 'rowNum', width: 90 },
+            { title: '错误原因', dataIndex: 'message', width: 360 },
+            { title: '公众号名称', dataIndex: 'account_name', width: 180 },
+            { title: '账号ID', dataIndex: 'wechat_account_id', width: 180 },
+            { title: '行业标签', dataIndex: 'industry_tag_code', width: 140 }
+          ]}
+          data={importErrors}
+          pagination={false}
+          rowKey={(record, index) => `${record.rowNum || 'unknown'}-${index}`}
+          border={{ cell: true, wrapper: false }}
+          scroll={{ y: 360 }}
+        />
+      </SheetViewer>
     </div>
   )
 }

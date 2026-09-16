@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Tabs, Card, Form } from '@arco-design/web-react'
+import { Table, Button, Space, Pagination, Message, Skeleton, Tag, Input, Select, Tabs, Card, Form } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import SheetModal, { SheetActions } from '../components/SheetModal'
+import '../styles/listTable.css'
 import './EmailManagement.css'
 
 const Option = Select.Option
@@ -270,9 +272,9 @@ function EmailManagement() {
   ]
 
   return (
-    <div className="email-management">
+    <div className="email-management list-table-page">
       <Card className="management-card" bordered={false}>
-        <div className="email-management-header">
+        <div className="email-management-header listing-page-header">
           <h2>邮件收发管理</h2>
           <Space>
             <div className="config-selector">
@@ -322,6 +324,7 @@ function EmailManagement() {
                   />
                 ) : (
                   <Table
+                    className="list-table"
                     columns={recordsColumns}
                     data={records}
                     loading={loading}
@@ -332,6 +335,7 @@ function EmailManagement() {
                       cell: true
                     }}
                     stripe
+                    scroll={{ x: 'max-content' }}
                   />
                 )}
               </div>
@@ -360,6 +364,7 @@ function EmailManagement() {
                   />
                 ) : (
                   <Table
+                    className="list-table"
                     columns={logsColumns}
                     data={logs}
                     loading={loading}
@@ -370,6 +375,7 @@ function EmailManagement() {
                       cell: true
                     }}
                     stripe
+                    scroll={{ x: 'max-content' }}
                   />
                 )}
               </div>
@@ -397,10 +403,10 @@ function EmailManagement() {
         )}
       </Card>
 
-      <Modal
+      <SheetModal
         visible={showSendForm}
         title="发送邮件"
-        onCancel={() => {
+        onClose={() => {
           setShowSendForm(false)
           setSendFormData({
             to_email: '',
@@ -410,82 +416,62 @@ function EmailManagement() {
             content: ''
           })
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
         <Form
           initialValues={sendFormData}
           onSubmit={handleSendEmail}
           layout="vertical"
           autoComplete="off"
+          className="enterprise-form enterprise-form--sheet"
         >
-          <Form.Item
-            label="收件人邮箱"
-            field="to_email"
-            rules={[{ required: true, message: '请输入收件人邮箱' }]}
-          >
-            <Input placeholder="多个邮箱用逗号分隔" />
-          </Form.Item>
-
-          <Form.Item
-            label="抄送邮箱"
-            field="cc_email"
-          >
-            <Input placeholder="多个邮箱用逗号分隔" />
-          </Form.Item>
-
-          <Form.Item
-            label="密送邮箱"
-            field="bcc_email"
-          >
-            <Input placeholder="多个邮箱用逗号分隔" />
-          </Form.Item>
-
-          <Form.Item
-            label="邮件主题"
-            field="subject"
-            rules={[{ required: true, message: '请输入邮件主题' }]}
-          >
-            <Input placeholder="请输入邮件主题" />
-          </Form.Item>
-
-          <Form.Item
-            label="邮件内容"
-            field="content"
-            rules={[{ required: true, message: '请输入邮件内容' }]}
-          >
-            <TextArea
-              placeholder="请输入邮件内容"
-              rows={10}
-            />
-          </Form.Item>
-
-          <div className="form-actions">
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowSendForm(false)
-                setSendFormData({
-                  to_email: '',
-                  cc_email: '',
-                  bcc_email: '',
-                  subject: '',
-                  content: ''
-                })
-              }}
+          <div className="modal-body enterprise-form-grid">
+            <Form.Item
+              label="收件人邮箱"
+              field="to_email"
+              rules={[{ required: true, message: '请输入收件人邮箱' }]}
+              className="form-span-2"
             >
-              取消
-            </Button>
-            <Button
-              type="primary"
-              htmlType="submit"
-              loading={loading}
+              <Input placeholder="多个邮箱用逗号分隔" />
+            </Form.Item>
+            <Form.Item label="抄送邮箱" field="cc_email">
+              <Input placeholder="多个邮箱用逗号分隔" />
+            </Form.Item>
+            <Form.Item label="密送邮箱" field="bcc_email">
+              <Input placeholder="多个邮箱用逗号分隔" />
+            </Form.Item>
+            <Form.Item
+              label="邮件主题"
+              field="subject"
+              rules={[{ required: true, message: '请输入邮件主题' }]}
+              className="form-span-4"
             >
-              发送
-            </Button>
+              <Input placeholder="请输入邮件主题" />
+            </Form.Item>
+            <Form.Item
+              label="邮件内容"
+              field="content"
+              rules={[{ required: true, message: '请输入邮件内容' }]}
+              className="form-span-4"
+            >
+              <TextArea placeholder="请输入邮件内容" rows={6} />
+            </Form.Item>
           </div>
+          <SheetActions
+            onCancel={() => {
+              setShowSendForm(false)
+              setSendFormData({
+                to_email: '',
+                cc_email: '',
+                bcc_email: '',
+                subject: '',
+                content: ''
+              })
+            }}
+            submitLabel="发送"
+            submitLoading={loading}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
     </div>
   )
 }

@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Form, Input, Button, Message } from '@arco-design/web-react'
+import { Modal, Form, Input, Message } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import { updateStoredUser } from '../utils/auth'
+import SheetModal, { SheetActions } from './SheetModal'
 import './UserProfileModal.css'
 
 const FormItem = Form.Item
@@ -89,112 +90,90 @@ function UserProfileModal({ isOpen, onClose, onUpdateUser }) {
 
   return (
     <>
-      <Modal
-        visible={isOpen}
-        title="个人信息"
-        onCancel={onClose}
-        footer={null}
-        style={{ width: 500 }}
-      >
+      <SheetModal visible={isOpen} title="个人信息" onClose={onClose} className="sheet-modal-narrow">
         <Form
           form={form}
           onSubmit={handleSubmit}
           layout="vertical"
           autoComplete="off"
+          className="enterprise-form enterprise-form--sheet"
         >
-          <FormItem
-            label="用户名"
-            field="account"
-          >
-            <Input disabled />
-          </FormItem>
-
-          <FormItem label="应用名称和会员等级（只读）">
-            {appMemberships && appMemberships.length > 0 ? (
-              <div style={{ border: '1px solid #e5e6eb', borderRadius: 4, padding: 0 }}>
-                {appMemberships.map((m, idx) => (
-                  <div
-                    key={`${m.app_id || m.app_name || idx}`}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      fontSize: 13,
-                      padding: '6px 12px',
-                      borderTop: idx === 0 ? 'none' : '1px solid #e5e6eb'
-                    }}
-                  >
-                    <span style={{ flex: 1 }}>{m.app_name || m.app_id || '-'}</span>
-                    <span
-                      style={{
-                        flexBasis: 100,
-                        textAlign: 'right',
-                        color: '#4e5969',
-                        borderLeft: '1px solid #e5e6eb',
-                        paddingLeft: 12,
-                        marginLeft: 12
-                      }}
-                    >
-                      {m.level_name || '无会员等级'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ color: '#86909c', fontSize: 13 }}>当前账号尚未配置任何应用会员等级</div>
-            )}
-          </FormItem>
-
-          <FormItem
-            label="手机号"
-            field="phone"
-            rules={[
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="用户名" field="account" className="form-span-2">
+              <Input disabled />
+            </FormItem>
+            <FormItem label="手机号" field="phone" rules={[
               { required: true, message: '请输入手机号' },
               { match: /^1[3-9]\d{9}$/, message: '请输入正确的手机号' }
-            ]}
-          >
-            <Input placeholder="请输入手机号" />
-          </FormItem>
-
-          <FormItem
-            label="邮箱"
-            field="email"
-            rules={[
+            ]}>
+              <Input placeholder="请输入手机号" />
+            </FormItem>
+            <FormItem label="邮箱" field="email" rules={[
               { type: 'email', message: '请输入正确的邮箱地址' }
-            ]}
-          >
-            <Input placeholder="请输入邮箱（可选）" />
-          </FormItem>
-
-          <div className="form-actions">
-            <Button
-              type="outline"
-              onClick={() => setShowChangePassword(true)}
-            >
-              修改密码
-            </Button>
-            <Button
-              type="text"
-              onClick={() => {
-                Modal.info({
-                  title: '忘记密码',
-                  content: '如需重置密码，请联系管理员处理。'
-                })
-              }}
-            >
-              忘记密码
-            </Button>
+            ]}>
+              <Input placeholder="请输入邮箱（可选）" />
+            </FormItem>
+            <FormItem label="应用名称和会员等级（只读）" className="form-span-4">
+              {appMemberships && appMemberships.length > 0 ? (
+                <div style={{ border: '1px solid #e5e6eb', borderRadius: 4, padding: 0 }}>
+                  {appMemberships.map((m, idx) => (
+                    <div
+                      key={`${m.app_id || m.app_name || idx}`}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        fontSize: 13,
+                        padding: '6px 12px',
+                        borderTop: idx === 0 ? 'none' : '1px solid #e5e6eb'
+                      }}
+                    >
+                      <span style={{ flex: 1 }}>{m.app_name || m.app_id || '-'}</span>
+                      <span
+                        style={{
+                          flexBasis: 100,
+                          textAlign: 'right',
+                          color: '#4e5969',
+                          borderLeft: '1px solid #e5e6eb',
+                          paddingLeft: 12,
+                          marginLeft: 12
+                        }}
+                      >
+                        {m.level_name || '无会员等级'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ color: '#86909c', fontSize: 13 }}>当前账号尚未配置任何应用会员等级</div>
+              )}
+            </FormItem>
           </div>
-
-          <div className="form-buttons">
-            <Button type="secondary" onClick={onClose}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit" loading={loading}>
-              保存
-            </Button>
-          </div>
+          <SheetActions
+            onCancel={onClose}
+            extra={
+              <>
+                <button type="button" className="btn-cancel" onClick={() => setShowChangePassword(true)}>
+                  修改密码
+                </button>
+                <button
+                  type="button"
+                  className="btn-cancel"
+                  onClick={() => {
+                    Modal.info({
+                      title: '忘记密码',
+                      content: '如需重置密码，请联系管理员处理。'
+                    })
+                  }}
+                >
+                  忘记密码
+                </button>
+              </>
+            }
+            submitLabel="保存"
+            submitLoading={loading}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {showChangePassword && (
         <ChangePasswordModal
@@ -255,65 +234,55 @@ function ChangePasswordModal({ isOpen, onClose }) {
   if (!isOpen) return null
 
   return (
-    <Modal
-      visible={isOpen}
-      title="修改密码"
-      onCancel={onClose}
-      footer={null}
-      style={{ width: 500 }}
-    >
+    <SheetModal nested visible={isOpen} title="修改密码" onClose={onClose} className="sheet-modal-narrow">
       <Form
         form={form}
         onSubmit={handleSubmit}
         layout="vertical"
         autoComplete="off"
+        className="enterprise-form enterprise-form--sheet"
       >
-        <FormItem
-          label="旧密码"
-          field="oldPassword"
-          rules={[{ required: true, message: '请输入旧密码' }]}
-        >
-          <Input.Password placeholder="请输入旧密码" />
-        </FormItem>
-
-        <FormItem
-          label="新密码"
-          field="newPassword"
-          rules={[
-            { required: true, message: '请输入新密码' },
-            { minLength: 6, message: '新密码至少6位' }
-          ]}
-        >
-          <Input.Password placeholder="请输入新密码（至少6位）" />
-        </FormItem>
-
-        <FormItem
-          label="确认新密码"
-          field="confirmPassword"
-          rules={[
-            { required: true, message: '请再次输入新密码' },
-            {
-              validator: (value, callback) => {
-                if (value !== form.getFieldValue('newPassword')) {
-                  callback('两次输入的密码不一致')
+        <div className="modal-body enterprise-form-grid">
+          <FormItem
+            label="旧密码"
+            field="oldPassword"
+            rules={[{ required: true, message: '请输入旧密码' }]}
+            className="form-span-4"
+          >
+            <Input.Password placeholder="请输入旧密码" />
+          </FormItem>
+          <FormItem
+            label="新密码"
+            field="newPassword"
+            className="form-span-2"
+            rules={[
+              { required: true, message: '请输入新密码' },
+              { minLength: 6, message: '新密码至少6位' }
+            ]}
+          >
+            <Input.Password placeholder="请输入新密码（至少6位）" />
+          </FormItem>
+          <FormItem
+            label="确认新密码"
+            field="confirmPassword"
+            className="form-span-2"
+            rules={[
+              { required: true, message: '请再次输入新密码' },
+              {
+                validator: (value, callback) => {
+                  if (value !== form.getFieldValue('newPassword')) {
+                    callback('两次输入的密码不一致')
+                  }
                 }
               }
-            }
-          ]}
-        >
-          <Input.Password placeholder="请再次输入新密码" />
-        </FormItem>
-
-        <div className="form-buttons">
-          <Button type="secondary" onClick={onClose}>
-            取消
-          </Button>
-          <Button type="primary" htmlType="submit" loading={loading}>
-            确认修改
-          </Button>
+            ]}
+          >
+            <Input.Password placeholder="请再次输入新密码" />
+          </FormItem>
         </div>
+        <SheetActions nested onCancel={onClose} submitLabel="确认修改" submitLoading={loading} />
       </Form>
-    </Modal>
+    </SheetModal>
   )
 }
 

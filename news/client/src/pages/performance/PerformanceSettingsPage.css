@@ -4,14 +4,22 @@
  */
 
 .perf-settings-page {
-  padding: 0 ;
+  box-sizing: border-box;
+  height: calc(100vh - 68px);
+  max-height: calc(100vh - 68px);
+  padding: 4px 16px 0;
   background: #f5f6f7;
-  min-height: calc(100vh - 74px);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .perf-settings-header {
-  margin-bottom: 20px;
+  margin-bottom: 12px;
+  padding: 8px 0 8px 4px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .perf-settings-title {
@@ -31,25 +39,81 @@
   border-radius: 8px;
   padding: 0;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .perf-settings-tabs .arco-tabs-nav {
   padding: 0 16px;
   border-bottom: 1px solid #e5e8ef;
+  flex-shrink: 0;
 }
 
-.perf-settings-tabs .arco-tabs-content-horizontal {
-  padding-top: 8px !important;
+.perf-settings-tabs .arco-tabs-content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  /* Arco 默认 padding-top:16px；收紧避免撑出整页滚动 */
+  padding-top: 0 !important;
+}
+
+.perf-settings-tabs .arco-tabs-content-inner {
+  height: 100%;
+}
+
+/* 仅抬高当前 Tab；勿改写 inactive 的 height:0，否则内容会空白 */
+.perf-settings-tabs .arco-tabs-content-item-active {
+  height: 100% !important;
+  overflow: hidden;
+}
+
+.perf-settings-tabs .arco-tabs-content-item-active > .arco-tabs-pane {
+  height: 100%;
+  overflow: hidden;
 }
 
 .perf-settings-tab {
-  padding: 16px;
+  padding: 12px 16px 8px;
+  height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .perf-settings-toolbar {
   display: flex;
-  gap: 0px;
-  margin-bottom: 0px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 8px 0 8px 4px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  flex-wrap: wrap;
+}
+
+.perf-settings-card-shrink {
+  flex-shrink: 0;
+}
+
+.perf-settings-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.perf-settings-pagination {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 0 4px;
+  border-top: 1px solid #e5e6eb;
+  margin-top: 0;
 }
 
 .perf-settings-tab .arco-table .arco-table-th,
@@ -214,11 +278,24 @@
 }
 
 /* 业绩看板说明配置 Tab */
+.perf-settings-tab--indicators {
+  gap: 0;
+  min-height: 0;
+}
+
+.perf-settings-tab--indicators .arco-card-body {
+  padding: 12px 16px;
+}
+
 .perf-indicator-desc-table-wrap {
-  max-height: calc(100vh - 260px);
+  flex: 1 1 0%;
+  min-height: 0;
+  height: 0; /* 配合 flex:1，强制吃剩余高度，否则内容撑开后没有内部滚动条 */
+  overflow-x: hidden;
   overflow-y: auto;
   border: 1px solid #e5e6eb;
   border-radius: 4px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .perf-indicator-desc-table {
@@ -236,9 +313,12 @@
 }
 
 .perf-indicator-desc-table th {
-  background: #f7f8fa;
-  font-weight: 500;
-  color: #4e5969;
+  background: #e8f3ff !important;
+  color: #0e42d2 !important;
+  font-weight: 700 !important;
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 
 .perf-indicator-desc-area {
@@ -246,6 +326,11 @@
   background: #f7f8fa;
   font-weight: 500;
   color: #4e5969;
+}
+
+.perf-indicator-desc-table th.perf-indicator-desc-area {
+  background: #e8f3ff !important;
+  color: #0e42d2 !important;
 }
 
 .perf-indicator-desc-name {
@@ -258,4 +343,8 @@
 
 .perf-indicator-desc-input .arco-textarea {
   min-height: 56px;
+}
+
+.perf-settings-table-area .arco-table {
+  height: 100%;
 }

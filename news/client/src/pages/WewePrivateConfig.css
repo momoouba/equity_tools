@@ -1,34 +1,78 @@
 .wewe-private-config {
   width: 100%;
-  min-height: 560px;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .wewe-private-config__tabs {
-  min-height: 560px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
 }
 
 .wewe-private-config__tabs .arco-tabs-header-nav-left {
   min-width: 132px;
+  flex-shrink: 0;
 }
 
-.wewe-private-config__tabs .arco-tabs-content {
-  padding-left: 16px;
+.wewe-private-config__tabs > .arco-tabs-content {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding-left: 16px;
+  padding-top: 0;
+}
+
+.wewe-private-config__tabs .arco-tabs-content-inner {
+  height: 100%;
+}
+
+.wewe-private-config__tabs .arco-tabs-content-list {
+  height: 100%;
+}
+
+.wewe-private-config__tabs .arco-tabs-content-item-active {
+  height: 100% !important;
+  overflow: hidden;
+}
+
+.wewe-private-config__tabs .arco-tabs-content-item-active > .arco-tabs-pane {
+  height: 100%;
+  overflow: hidden;
 }
 
 .wewe-private-config__pane {
   min-width: 0;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
+/* 专队配置表单：区内滚动，不撑整页 */
+.wewe-private-config__pane:not(.wewe-private-config__pane--list):not(.wewe-private-config__pane--embed) {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
 }
 
 .wewe-private-config__pane--list {
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .wewe-private-config__pane--embed {
-  height: calc(100vh - 220px);
-  min-height: 520px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .wewe-private-config__intro {
@@ -131,14 +175,17 @@
   color: var(--color-text-2);
 }
 
-/* 与 HolidayConfig / AdditionalAccounts 一致的列表页骨架 */
+/* 列表页骨架 */
 .wewe-private-config .config-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+  padding: 4px 0 4px 4px;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
+  flex-shrink: 0;
+  box-sizing: border-box;
 }
 
 .wewe-private-config .config-header h3 {
@@ -149,7 +196,8 @@
 }
 
 .wewe-private-config .filter-collapse {
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
 }
 
 .wewe-private-config .filter-collapse .arco-collapse-item-content-box {
@@ -187,15 +235,27 @@
   margin-left: auto;
 }
 
-.wewe-private-config .table-container {
-  margin-bottom: 16px;
+.wewe-private-config__list-hint {
+  margin-top: 0 !important;
+  margin-bottom: 8px !important;
+  flex-shrink: 0;
+}
+
+.wewe-private-config .table-container,
+.wewe-private-config .wewe-private-config__table-area {
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
 }
 
 .wewe-private-config .pagination-wrapper {
   display: flex;
   justify-content: center;
-  padding-top: 16px;
+  align-items: center;
+  padding: 8px 0 4px;
   border-top: 1px solid #e5e6eb;
+  flex-shrink: 0;
 }
 
 .wewe-private-config .arco-btn {
@@ -208,24 +268,27 @@
   height: 100%;
   min-height: 0;
   gap: 8px;
+  overflow: hidden;
 }
 
 .wewe-rss-embed__toolbar {
   display: flex;
   align-items: flex-start;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .wewe-rss-embed__url {
   font-size: 12px;
   color: var(--color-text-3);
   word-break: break-all;
+  flex-shrink: 0;
 }
 
 .wewe-rss-embed__frame {
   flex: 1;
   width: 100%;
-  min-height: 480px;
+  min-height: 0;
   border: 1px solid var(--color-border-2);
   border-radius: 6px;
   background: #fff;
@@ -243,4 +306,5 @@
   color: var(--color-text-2);
   padding: 24px;
   text-align: center;
+  min-height: 0;
 }

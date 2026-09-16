@@ -1,5 +1,6 @@
 ﻿import React, { useState } from 'react'
-import { Modal, Form, Input, Button, Message, Space } from '@arco-design/web-react'
+import { Form, Input, Button, Message } from '@arco-design/web-react'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import {
   postCompetitorExtractTagsFromNarrative,
   postInvestedEnterpriseCompetitorSupplement,
@@ -92,64 +93,56 @@ export default function CompetitorMatchSupplementModal({
     }
   }
 
+  const close = () => {
+    form.resetFields()
+    setExtractedTags([])
+    setShortSummary('')
+    onClose && onClose()
+  }
+
   return (
-    <Modal
-      title={`竞品匹配 — 补充业务信息${enterpriseName ? `（${enterpriseName}）` : ''}`}
+    <SheetModal
       visible={visible}
-      onCancel={() => {
-        form.resetFields()
-        setExtractedTags([])
-        setShortSummary('')
-        onClose && onClose()
-      }}
-      footer={
-        <Space>
-          <Button
-            onClick={() => {
-              form.resetFields()
-              setExtractedTags([])
-              setShortSummary('')
-              onClose && onClose()
-            }}
-          >
-            取消
-          </Button>
-          <Button type="primary" loading={saving} onClick={handleOk}>
-            保存并关闭
-          </Button>
-        </Space>
-      }
-      style={{ width: 640 }}
+      title={`竞品匹配 — 补充业务信息${enterpriseName ? `（${enterpriseName}）` : ''}`}
+      onClose={close}
     >
-      <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
-        若缺少产品介绍(AI)、企查查有效业务介绍且无标签，请补充贴近业务的标签（如人工智能、K12、跨境电商），或粘贴一段企业介绍后先「AI
-        抽标签」再保存。
-      </p>
-      <Form form={form} layout="vertical" initialValues={{ user_tags: [] }}>
-        <FormItem label="业务标签（可直接输入多个，回车或逗号分隔）" field="user_tags">
-          <Input.Tag placeholder="输入后回车添加" allowClear style={{ width: '100%' }} />
-        </FormItem>
-        <FormItem label="企业业务 / 产品介绍（可选，最多约 2000 字）" field="narrative">
-          <Input.TextArea
-            placeholder="粘贴一段企业自述…"
-            autoSize={{ minRows: 5, maxRows: 12 }}
-            maxLength={2000}
-            showWordLimit
-          />
-        </FormItem>
-        <Space style={{ marginBottom: 12 }}>
-          <Button type="outline" loading={extracting} onClick={handleExtract}>
-            AI 抽标签（基于上文）
-          </Button>
-        </Space>
-        {extractedTags.length > 0 ? (
-          <div style={{ marginBottom: 12, fontSize: 13 }}>
-            <div style={{ marginBottom: 4, color: 'var(--color-text-2)' }}>抽取结果（将一并保存）：</div>
-            <div>{extractedTags.join('、')}</div>
-            {shortSummary ? <div style={{ marginTop: 6 }}>摘要：{shortSummary}</div> : null}
+      <Form form={form} layout="vertical" initialValues={{ user_tags: [] }} className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body enterprise-form-grid">
+          <p className="form-hint form-span-4">
+            若缺少产品介绍(AI)、企查查有效业务介绍且无标签，请补充贴近业务的标签，或粘贴企业介绍后先「AI 抽标签」再保存。
+          </p>
+          <FormItem label="业务标签（回车或逗号分隔）" field="user_tags" className="form-span-2">
+            <Input.Tag placeholder="输入后回车添加" allowClear style={{ width: '100%' }} />
+          </FormItem>
+          <div className="form-group">
+            <label>AI 抽标签</label>
+            <Button type="outline" loading={extracting} onClick={handleExtract}>
+              基于上文抽取
+            </Button>
           </div>
-        ) : null}
+          <FormItem label="企业业务 / 产品介绍（可选，最多约 2000 字）" field="narrative" className="form-span-4">
+            <Input.TextArea
+              placeholder="粘贴一段企业自述…"
+              autoSize={{ minRows: 4, maxRows: 8 }}
+              maxLength={2000}
+              showWordLimit
+            />
+          </FormItem>
+          {extractedTags.length > 0 ? (
+            <div className="form-hint form-span-4">
+              抽取结果（将一并保存）：{extractedTags.join('、')}
+              {shortSummary ? `；摘要：${shortSummary}` : ''}
+            </div>
+          ) : null}
+        </div>
+        <SheetActions
+          onCancel={close}
+          submitLabel="保存并关闭"
+          submitType="button"
+          onSubmitClick={handleOk}
+          submitLoading={saving}
+        />
       </Form>
-    </Modal>
+    </SheetModal>
   )
 }

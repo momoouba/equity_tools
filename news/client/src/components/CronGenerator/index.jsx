@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Modal, Button, Message } from '@arco-design/web-react'
+import { Message } from '@arco-design/web-react'
 import CronConfig from './CronConfig'
 import CronPreview from './CronPreview'
 import CronSchedule from './CronSchedule'
 import { generateCron, parseCron } from './utils'
+import SheetModal, { SheetActions } from '../SheetModal'
 import './index.css'
 
 /**
@@ -129,44 +130,43 @@ function CronGenerator({ visible, value, skipHoliday: initialSkipHoliday, onChan
   }
 
   return (
-    <Modal
-      visible={visible}
-      title="Cron表达式"
-      onCancel={handleCancel}
-      footer={null}
-      style={{ width: 900 }}
-      className="cron-generator-modal"
-      zIndex={2000}
-    >
-      <div className="cron-generator">
-        <CronConfig
-          cronConfig={cronConfig}
-          activeTab={activeTab}
-          isSkipHoliday={isSkipHoliday}
-          onTabChange={setActiveTab}
-          onConfigChange={handleConfigChange}
-          onSkipHolidayChange={setIsSkipHoliday}
-        />
-        
-        <CronPreview
-          cronConfig={cronConfig}
-          fullCron={fullCron}
-          onCronChange={handleCronChange}
-          onConfigChange={handleConfigChange}
-        />
-        
-        <CronSchedule
-          cronExpression={fullCron}
-          isSkipHoliday={isSkipHoliday}
-        />
-        
-        <div className="cron-actions">
-          <Button onClick={handleCancel}>取消</Button>
-          <Button onClick={handleReset}>重置</Button>
-          <Button type="primary" onClick={handleConfirm}>确定</Button>
+    <SheetModal nested visible={visible} title="Cron表达式" onClose={handleCancel}>
+      <div className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body">
+          <div className="cron-generator">
+            <CronConfig
+              cronConfig={cronConfig}
+              activeTab={activeTab}
+              isSkipHoliday={isSkipHoliday}
+              onTabChange={setActiveTab}
+              onConfigChange={handleConfigChange}
+              onSkipHolidayChange={setIsSkipHoliday}
+            />
+            <CronPreview
+              cronConfig={cronConfig}
+              fullCron={fullCron}
+              onCronChange={handleCronChange}
+              onConfigChange={handleConfigChange}
+            />
+            <CronSchedule
+              cronExpression={fullCron}
+              isSkipHoliday={isSkipHoliday}
+            />
+          </div>
         </div>
+        <SheetActions
+          onCancel={handleCancel}
+          extra={
+            <button type="button" className="btn-cancel" onClick={handleReset}>
+              重置
+            </button>
+          }
+          submitLabel="确定"
+          submitType="button"
+          onSubmitClick={handleConfirm}
+        />
       </div>
-    </Modal>
+    </SheetModal>
   )
 }
 

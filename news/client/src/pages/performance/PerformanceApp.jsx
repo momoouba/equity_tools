@@ -4,12 +4,13 @@
  */
 import React, { useState, useEffect } from 'react'
 import {
-  Select, Button, Spin, Message, Modal, Tooltip, Input, Popover
+  Select, Button, Spin, Message, Tooltip, Input, Popover
 } from '@arco-design/web-react'
 import {
   IconBook, IconSettings, IconRefresh, IconShareAlt, IconDownload, IconLock, IconUnlock, IconDelete, IconPlus, IconClose, IconCalendar, IconInfoCircle
 } from '@arco-design/web-react/icon'
 import axios from '../../utils/axios'
+import SheetModal, { SheetActions, SheetViewer } from '../../components/SheetModal'
 import './PerformanceApp.css'
 
 const { Option } = Select
@@ -913,39 +914,6 @@ function PerformanceApp() {
       console.error('导出失败:', error)
       Message.error('导出失败')
     }
-  }
-
-  // 根据数据量动态计算弹窗高度，数据少时缩小弹窗减少留白
-  const getModalHeight = () => {
-    if (!modalData) return '90vh'
-    let rows = 0
-    if (Array.isArray(modalData.list)) rows = modalData.list.length
-    else if (Array.isArray(modalData.cashflow)) rows = modalData.cashflow.length
-    else if (Array.isArray(modalData.indicator)) rows = modalData.indicator.length
-    else if (modalData.indicator) rows = 1
-
-    // 三段式布局（header table + scroll + footer table）开销更大
-    // fundPerformance / projectCashflow 额外有指标表(~105px)在现金流表上方
-    const threeSectionTypes = ['managerFunds', 'spvDetail', 'fundPerformance', 'projectCashflow']
-    const hasIndicatorAbove = ['fundPerformance', 'projectCashflow'].includes(modal.type)
-    const CHROME = hasIndicatorAbove ? 430
-      : threeSectionTypes.includes(modal.type) ? 320
-      : ['underlyingCompanies', 'regionCompanies', 'listedEnterprises'].includes(modal.type) ? 350
-      : 250
-
-    // 有分组小计/合计的弹窗额外预留行数；投资人名录+3(合计行+冗余高度避免滚动条)
-    const extraRows = (modal.type === 'investors') ? 3
-      : ['fundPortfolio', 'portfolioDetail', 'spvDetail'].includes(modal.type) ? 3
-      : ['underlyingCompanies', 'regionCompanies', 'listedEnterprises'].includes(modal.type) ? 3
-      : 0
-    const ROW_H = 42
-    // 现金流弹窗保证最小高度，确保不同基金显示一致（projectCashflow~10行, fundPerformance~8行）
-    const MIN_H = (modal.type === 'projectCashflow') ? 1400
-      : (modal.type === 'fundPerformance') ? 1200
-      : 700
-    const content = (rows + extraRows) * ROW_H + CHROME
-    const max = window.innerHeight * 0.9
-    return Math.max(Math.min(content, max), MIN_H) + 'px'
   }
 
   // 渲染弹窗内容
@@ -2258,8 +2226,6 @@ function PerformanceApp() {
     return typeMap[modal.type] || ''
   }
 
-  const exportableModals = ['managerFunds', 'investors', 'fundPerformance']
-
   return (
     <div className="perf-app">
       {/* 工具栏 */}
@@ -2400,57 +2366,47 @@ function PerformanceApp() {
 
       {/* 数据弹窗 */}
       {modal.type && !['versionUpdate', 'share'].includes(modal.type) && (
-        <Modal
-          className={['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'listedEnterprises', 'regionCompanies'].includes(modal.type)
-            ? 'perf-data-modal perf-modal-body-flush'
-            : 'perf-data-modal'}
-          title={
+        <SheetViewer
+          className={[
+            'perf-data-modal',
+            modal.type === 'listedEnterprises' ? 'perf-data-modal--xl' : '',
+            ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type)
+              ? ''
+              : 'perf-data-modal--md',
+          ].filter(Boolean).join(' ')}
+          visible
+          title={getModalTitle()}
+          onClose={closeModal}
+          extra={
             ['underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) && systemConfig.redirectUrl ? (
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', paddingRight: 8 }}>
-                <span>{getModalTitle()}</span>
-                <a href={systemConfig.redirectUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--primary-6)', fontSize: 14 }}>详细报表</a>
-              </div>
-            ) : getModalTitle()
+              <a
+                href={systemConfig.redirectUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-cancel"
+                style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}
+              >
+                详细报表
+              </a>
+            ) : null
           }
-          visible={!!modal.type}
-          onCancel={closeModal}
-          footer={null}
-          style={{
-            width: modal.type === 'listedEnterprises'
-              ? 1280
-              : ['managerFunds', 'investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'regionCompanies'].includes(modal.type) ? 1125 : 900,
-            '--perf-modal-h': getModalHeight(),
-            ...(['investors', 'fundPerformance', 'fundPortfolio', 'portfolioDetail', 'spvDetail', 'projectCashflow', 'underlyingCompanies', 'ipoCompanies', 'listedEnterprises', 'regionCompanies'].includes(modal.type) ? { paddingBottom: 0, overflow: 'hidden' } : {})
-          }}
         >
           {renderModalContent()}
-          {exportableModals.includes(modal.type) && !['managerFunds', 'investors', 'fundPerformance'].includes(modal.type) && (
-            <div className="perf-modal-footer">
-              <Button
-                type="primary"
-                className="perf-export-btn"
-                icon={<IconDownload />}
-                onClick={() => handleExport(modal.type, modal.fund)}
-              >
-                导出底稿
-              </Button>
-            </div>
-          )}
-        </Modal>
+        </SheetViewer>
       )}
 
       {/* 数据版本更新弹窗：选择月份、预览版本、更新数据 */}
-      {modal.type === 'versionUpdate' && (
-        <Modal
-          className="perf-data-modal"
-          title="数据版本更新"
-          visible
-          onCancel={closeModal}
-          footer={null}
-          style={{ width: 640 }}
-          afterClose={() => setVersionUpdateMonths([{ value: new Date() }])}
-        >
-          <div style={{ padding: '16px 0' }}>
+      <SheetModal
+        visible={modal.type === 'versionUpdate'}
+        title="数据版本更新"
+        onClose={() => {
+          closeModal()
+          setVersionUpdateMonths([{ value: new Date() }])
+        }}
+        className="sheet-modal-narrow"
+      >
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
             <div style={{ marginBottom: 16 }}>
               <div style={{ marginBottom: 8, color: '#1d2129', fontWeight: 500 }}>选择月份</div>
               {versionUpdateMonths.map((item, index) => (
@@ -2505,79 +2461,84 @@ function PerformanceApp() {
                 </div>
               )
             })()}
-            <div style={{ textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <Button onClick={closeModal}>取消</Button>
-              <Button
-                type="primary"
-                loading={versionUpdateSubmitting}
-                onClick={async () => {
-                  const months = versionUpdateMonths
-                    .map((item) => getLastDayOfMonth(item.value))
-                    .filter(Boolean)
-                  if (months.length === 0) {
-                    Message.warning('请至少选择一个月份')
-                    return
-                  }
-                  setVersionUpdateSubmitting(true)
-                  try {
-                    const res = await performanceApi.createVersion({ date: months[0], months })
-                    if (res.data.success) {
-                      Message.success('版本创建成功')
-                      closeModal()
-                      // 刷新后默认显示最大日期的最大版本号，并重新加载看板数据
-                      const dateList = await loadDates()
-                      const targetDate = dateList[0] || selectedDate
-                      if (targetDate) {
-                        const versionList = await loadVersions(targetDate)
-                        const latestVer = versionList[0]?.version
-                        if (latestVer) {
-                          await loadDashboardData(latestVer)
-                        }
-                      }
-                    } else {
-                      Message.error(res.data.message || '版本创建失败')
-                    }
-                  } catch (e) {
-                    console.error(e)
-                    Message.error('版本创建失败')
-                  } finally {
-                    setVersionUpdateSubmitting(false)
-                  }
-                }}
-              >
-                更新数据
-              </Button>
-            </div>
           </div>
-        </Modal>
-      )}
+          <SheetActions
+            onCancel={() => {
+              closeModal()
+              setVersionUpdateMonths([{ value: new Date() }])
+            }}
+            submitLabel="更新数据"
+            submitType="button"
+            submitLoading={versionUpdateSubmitting}
+            onSubmitClick={async () => {
+              const months = versionUpdateMonths
+                .map((item) => getLastDayOfMonth(item.value))
+                .filter(Boolean)
+              if (months.length === 0) {
+                Message.warning('请至少选择一个月份')
+                return
+              }
+              setVersionUpdateSubmitting(true)
+              try {
+                const res = await performanceApi.createVersion({ date: months[0], months })
+                if (res.data.success) {
+                  Message.success('版本创建成功')
+                  closeModal()
+                  const dateList = await loadDates()
+                  const targetDate = dateList[0] || selectedDate
+                  if (targetDate) {
+                    const versionList = await loadVersions(targetDate)
+                    const latestVer = versionList[0]?.version
+                    if (latestVer) {
+                      await loadDashboardData(latestVer)
+                    }
+                  }
+                } else {
+                  Message.error(res.data.message || '版本创建失败')
+                }
+              } catch (e) {
+                console.error(e)
+                Message.error('版本创建失败')
+              } finally {
+                setVersionUpdateSubmitting(false)
+              }
+            }}
+          />
+        </div>
+      </SheetModal>
 
       {/* 分享弹窗（简化版） */}
-      {modal.type === 'share' && (
-        <Modal
-          className="perf-data-modal"
-          title="分享业绩看板"
-          visible
-          onCancel={closeModal}
-          onOk={async () => {
-            try {
-              const res = await performanceApi.createShare({ version: selectedVersion })
-              if (res.data.success) {
-                const shareUrl = window.location.origin + res.data.data.shareUrl
-                navigator.clipboard.writeText(shareUrl)
-                Message.success('分享链接已复制：' + shareUrl)
-                closeModal()
+      <SheetModal
+        visible={modal.type === 'share'}
+        title="分享业绩看板"
+        onClose={closeModal}
+        className="sheet-modal-narrow"
+      >
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <p>将当前版本 <strong>{selectedVersion}</strong> 的业绩看板分享给第三方查看。</p>
+            <p>点击确定将生成分享链接并复制到剪贴板。</p>
+          </div>
+          <SheetActions
+            onCancel={closeModal}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={async () => {
+              try {
+                const res = await performanceApi.createShare({ version: selectedVersion })
+                if (res.data.success) {
+                  const shareUrl = window.location.origin + res.data.data.shareUrl
+                  navigator.clipboard.writeText(shareUrl)
+                  Message.success('分享链接已复制：' + shareUrl)
+                  closeModal()
+                }
+              } catch (error) {
+                Message.error('创建分享链接失败')
               }
-            } catch (error) {
-              Message.error('创建分享链接失败')
-            }
-          }}
-          style={{ width: 500 }}
-        >
-          <p>将当前版本 <strong>{selectedVersion}</strong> 的业绩看板分享给第三方查看。</p>
-          <p>点击确定将生成分享链接并复制到剪贴板。</p>
-        </Modal>
-      )}
+            }}
+          />
+        </div>
+      </SheetModal>
     </div>
   )
 }

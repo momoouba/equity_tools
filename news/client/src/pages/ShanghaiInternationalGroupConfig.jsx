@@ -3,6 +3,7 @@ import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select
 import axios from '../utils/axios'
 import LogModal from './LogModal'
 import AdminListTable, { AdminOps, formatAdminDateTime } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './ShanghaiInternationalGroupConfig.css'
 
 const Option = Select.Option
@@ -296,95 +297,91 @@ function ShanghaiInternationalGroupConfig() {
         </div>
       )}
 
-      <Modal
+      <SheetModal
         visible={showForm}
         title={editingConfig ? '编辑上海国际集团配置' : '新增上海国际集团配置'}
-        onCancel={() => {
+        onClose={() => {
           setShowForm(false)
           setEditingConfig(null)
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>应用 *</label>
-            <Select
-              value={formData.app_id}
-              onChange={(value) => handleChange('app_id', value)}
-              placeholder="请选择应用"
-              disabled={!!editingConfig}
-            >
-              {applications.map((app) => (
-                <Option key={app.id} value={app.id}>
-                  {app.app_name}
-                </Option>
-              ))}
-            </Select>
-            <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置上海国际集团接口的应用'}</p>
-          </div>
+        <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group">
+              <label>应用 *</label>
+              <Select
+                value={formData.app_id}
+                onChange={(value) => handleChange('app_id', value)}
+                placeholder="请选择应用"
+                disabled={!!editingConfig}
+                getPopupContainer={sheetPopupContainer}
+              >
+                {applications.map((app) => (
+                  <Option key={app.id} value={app.id}>
+                    {app.app_name}
+                  </Option>
+                ))}
+              </Select>
+              <p className="form-hint">{editingConfig ? '编辑时不能修改应用' : '选择要配置上海国际集团接口的应用'}</p>
+            </div>
 
-          <div className="form-group">
-            <label>X-App-Id *</label>
-            <Input
-              value={formData.x_app_id}
-              onChange={(value) => handleChange('x_app_id', value)}
-              placeholder="请输入Ipass平台授权的消费方标识"
-            />
-            <p className="form-hint">Ipass平台授权的消费方标识，固定值</p>
-          </div>
-
-          <div className="form-group">
-            <label>APIkey *</label>
-            <Input.Password
-              value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
-              onChange={(value) => handleChange('api_key', value)}
-              onFocus={(e) => {
-                if (hasApiKey && e.target.value === '****') {
-                  setHasApiKey(false)
-                  setFormData({ ...formData, api_key: '' })
-                }
-              }}
-              placeholder={editingConfig ? (hasApiKey ? '****' : '留空则不更新APIkey') : '请输入消费方认证APIkey'}
-            />
-            <p className="form-hint">{editingConfig ? '留空则不更新APIkey' : '消费方认证，固定值'}</p>
-          </div>
-
-          <div className="form-group">
-            <label>每日查询限制</label>
-            <InputNumber
-              value={formData.daily_limit}
-              onChange={(value) => handleChange('daily_limit', value)}
-              min={1}
-              style={{ width: '100%' }}
-            />
-            <p className="form-hint">设置每日最大查询次数，默认100次</p>
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Switch
-                checked={formData.is_active}
-                onChange={(checked) => handleChange('is_active', checked)}
-                style={{ marginRight: 8 }}
+            <div className="form-group">
+              <label>X-App-Id *</label>
+              <Input
+                value={formData.x_app_id}
+                onChange={(value) => handleChange('x_app_id', value)}
+                placeholder="请输入Ipass平台授权的消费方标识"
               />
-              启用配置
-            </label>
-          </div>
+              <p className="form-hint">Ipass平台授权的消费方标识，固定值</p>
+            </div>
 
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+            <div className="form-group">
+              <label>APIkey *</label>
+              <Input.Password
+                value={hasApiKey && !formData.api_key ? '****' : formData.api_key}
+                onChange={(value) => handleChange('api_key', value)}
+                onFocus={(e) => {
+                  if (hasApiKey && e.target.value === '****') {
+                    setHasApiKey(false)
+                    setFormData({ ...formData, api_key: '' })
+                  }
+                }}
+                placeholder={editingConfig ? (hasApiKey ? '****' : '留空则不更新APIkey') : '请输入消费方认证APIkey'}
+              />
+              <p className="form-hint">{editingConfig ? '留空则不更新APIkey' : '消费方认证，固定值'}</p>
+            </div>
+
+            <div className="form-group">
+              <label>每日查询限制</label>
+              <InputNumber
+                value={formData.daily_limit}
+                onChange={(value) => handleChange('daily_limit', value)}
+                min={1}
+                style={{ width: '100%' }}
+              />
+              <p className="form-hint">设置每日最大查询次数，默认100次</p>
+            </div>
+
+            <div className="form-group">
+              <label>
+                <Switch
+                  checked={formData.is_active}
+                  onChange={(checked) => handleChange('is_active', checked)}
+                  style={{ marginRight: 8 }}
+                />
+                启用配置
+              </label>
+            </div>
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowForm(false)
               setEditingConfig(null)
-            }}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingConfig ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            submitLabel={editingConfig ? '更新' : '创建'}
+          />
         </form>
-      </Modal>
+      </SheetModal>
 
       {showLogModal && (
         <LogModal

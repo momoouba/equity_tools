@@ -9540,6 +9540,26 @@ async function initializeTables(dbPool) {
     }
   }
 
+  console.log('  → 项目估值可比推荐 AI 提示词默认种子…');
+  try {
+    const { seedValuationRecommendPrompts } = require('./utils/initPrompts');
+    const promptSeed = await seedValuationRecommendPrompts(dbPool);
+    if (promptSeed.skipped) {
+      console.warn('  跳过项目估值推荐提示词种子：ai_prompt_config 表不存在');
+    } else if (promptSeed.created > 0 || promptSeed.updated > 0) {
+      console.log(
+        `  ✓ 项目估值推荐提示词：创建 ${promptSeed.created} 条，更新 ${promptSeed.updated} 条`
+      );
+    } else {
+      console.log('  ✓ 项目估值推荐提示词已就绪');
+    }
+  } catch (err) {
+    console.warn('  项目估值推荐提示词种子时出现警告:', err.message);
+    if (err.stack) {
+      console.warn(err.stack);
+    }
+  }
+
   // ========== wewe 私有公众号专队（P1）==========
   try {
     await dbPool.query(`

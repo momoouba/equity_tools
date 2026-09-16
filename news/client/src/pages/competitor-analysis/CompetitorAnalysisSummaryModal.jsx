@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { Modal, Button, Space, Spin, Progress, Tag, Message } from '@arco-design/web-react'
+import { Button, Space, Spin, Progress, Tag, Message } from '@arco-design/web-react'
 import { fetchCompetitorAnalysisSummary } from '../../api/competitor-analysis'
 import { copyTextToClipboard } from './introPopoverAiCell'
+import { SheetViewer } from '../../components/SheetModal'
 
 const POLL_MS = 3000
 
@@ -78,12 +79,10 @@ export default function CompetitorAnalysisSummaryModal({
   const running = !!progress?.is_running
 
   return (
-    <Modal
-      title={subjectTitle ? `竞品分析说明 — ${subjectTitle}` : '竞品分析说明'}
+    <SheetViewer
       visible={visible}
-      style={{ width: 760 }}
-      footer={null}
-      onCancel={onClose}
+      title={subjectTitle ? `竞品分析说明 — ${subjectTitle}` : '竞品分析说明'}
+      onClose={onClose}
     >
       {loading && !summaryData ? (
         <div style={{ textAlign: 'center', padding: 32 }}>
@@ -165,6 +164,6 @@ export default function CompetitorAnalysisSummaryModal({
           </pre>
         </>
       )}
-    </Modal>
+    </SheetViewer>
   )
 }

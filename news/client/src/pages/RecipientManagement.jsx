@@ -4,6 +4,9 @@ import axios from '../utils/axios'
 import { getUser } from '../utils/auth'
 import LogModal from './LogModal'
 import CronGenerator from '../components/CronGenerator'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './RecipientManagement.css'
 
 const Option = Select.Option
@@ -562,47 +565,23 @@ function RecipientManagement() {
     },
     {
       title: '操作',
-      width: 320,
+      width: 220,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record.id)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => handleViewLog(record.id)}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            onClick={() => handleSendEmail(record.id)}
-          >
-            发送邮件
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record.id)} />
+          <ListOpButton name="日志" onClick={() => handleViewLog(record.id)} />
+          <ListOpButton name="发送邮件" onClick={() => handleSendEmail(record.id)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="recipient-management">
+    <div className="recipient-management list-table-page" style={{ '--list-ops-col-width': '220px' }}>
       <Card className="management-card" bordered={false}>
         <div className="management-header">
           <h2 className="management-title">收件管理</h2>
@@ -636,11 +615,13 @@ function RecipientManagement() {
               loading={loading}
               pagination={false}
               rowKey="id"
+              className="list-table"
               border={{
                 wrapper: true,
                 cell: true
               }}
               stripe
+              scroll={{ x: 'max-content' }}
             />
           )}
         </div>
@@ -660,31 +641,32 @@ function RecipientManagement() {
       </Card>
 
       {/* 新增/编辑表单 */}
-      <Modal
+      <SheetModal
         visible={showForm}
         title={editingRecipient ? '编辑收件管理' : '新增收件管理'}
-        onCancel={() => {
+        onClose={() => {
           setShowForm(false)
           setEditingRecipient(null)
         }}
-        footer={null}
-        style={{ width: 640 }}
       >
         <Form
           form={form}
           initialValues={formData}
           onSubmit={handleSubmit}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
         >
+          <div className="modal-body enterprise-form-grid">
           <FormItem
             label="收件人邮箱"
             field="recipient_email"
+            className="form-span-2"
             rules={[{ required: true, message: '请输入收件人邮箱' }]}
             extra="支持多个邮箱，可用逗号、分号或换行分隔"
           >
             <TextArea
               placeholder="请输入收件人邮箱，多个邮箱可用逗号、分号或换行分隔"
-              rows={4}
+              rows={3}
             />
           </FormItem>
 
@@ -698,6 +680,7 @@ function RecipientManagement() {
           <FormItem
             label="定时任务规则"
             field="cron_expression"
+            className="form-span-2"
             rules={[{ required: true, message: '请配置定时任务规则' }]}
             extra='点击"配置"按钮设置定时任务的执行规则，支持秒/分/时/日/月/周/年7个维度的可视化配置'
           >
@@ -720,12 +703,14 @@ function RecipientManagement() {
           <FormItem
             label="企业类型"
             field="entity_type"
+            className="form-span-2"
             extra="选择要发送的企业类型数据，可多选；不选择时不发送企业端信息（仅按第三方公众号配置发送）"
           >
             <Select
               mode="multiple"
               placeholder="请选择企业类型（可多选，不选择则不发送企业端信息）"
               allowClear
+              getPopupContainer={sheetPopupContainer}
               value={formData.entity_type}
               onChange={(value) => {
                 setFormData({
@@ -745,12 +730,14 @@ function RecipientManagement() {
           <FormItem
             label="第三方公众号"
             field="additional_account_tag_codes"
+            className="form-span-2"
             extra="按第三方公众号的「行业」标签筛选（与公众号管理中标签一致）。不选任何项时，邮件中不附带第三方公众号来源的新闻；选「无」可包含未设置标签的账号。历史「未配置」行保存一次后即按本规则生效。"
           >
             <Select
               mode="multiple"
               placeholder="不选择则不发送第三方公众号相关新闻"
               allowClear
+              getPopupContainer={sheetPopupContainer}
               value={formData.additional_account_tag_codes}
               onChange={(value) => {
                 setFormData({
@@ -799,22 +786,16 @@ function RecipientManagement() {
             )}
           </FormItem>
 
-          <div className="form-actions">
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowForm(false)
-                setEditingRecipient(null)
-              }}
-            >
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingRecipient ? '更新' : '创建'}
-            </Button>
           </div>
+          <SheetActions
+            onCancel={() => {
+              setShowForm(false)
+              setEditingRecipient(null)
+            }}
+            submitLabel={editingRecipient ? '更新' : '创建'}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* 日志弹窗 */}
       {showLogModal && (
@@ -846,14 +827,13 @@ function RecipientManagement() {
       />
 
       {/* 企查查类别选择弹窗 */}
-      <Modal
+      <SheetModal
         visible={showCategoryModal}
         title="选择企查查消息类型"
-        onCancel={() => setShowCategoryModal(false)}
-        footer={null}
-        style={{ width: 800 }}
+        onClose={() => setShowCategoryModal(false)}
       >
-        <div className="category-selection">
+        <div className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body category-selection">
           <div style={{ marginBottom: '16px', display: 'flex', gap: '8px' }}>
             <Button
               type="outline"
@@ -939,30 +919,21 @@ function RecipientManagement() {
           <div style={{ marginTop: '16px', fontSize: '14px', color: '#4e5969' }}>
             已选择 {selectedCategories.length} 个类别
           </div>
-          <div className="form-actions" style={{ marginTop: '16px' }}>
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowCategoryModal(false)
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              type="primary"
-              onClick={() => {
-                setFormData({
-                  ...formData,
-                  qichacha_category_codes: selectedCategories.length > 0 ? selectedCategories : null
-                })
-                setShowCategoryModal(false)
-              }}
-            >
-              确定
-            </Button>
-          </div>
         </div>
-      </Modal>
+          <SheetActions
+            onCancel={() => setShowCategoryModal(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={() => {
+              setFormData({
+                ...formData,
+                qichacha_category_codes: selectedCategories.length > 0 ? selectedCategories : null
+              })
+              setShowCategoryModal(false)
+            }}
+          />
+        </div>
+      </SheetModal>
     </div>
   )
 }

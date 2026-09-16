@@ -1,5 +1,8 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import React, { useEffect, useState, useCallback, useMemo, useLayoutEffect, useRef } from 'react'
 import { Table, Button, Message, Space, Input, Modal, Form, Select } from '@arco-design/web-react'
+import SheetModal, { SheetActions, SheetViewer } from '../../components/SheetModal'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import './ListingIpoProgressPage.css'
 import {
   fetchIpoProgressList,
@@ -69,7 +72,8 @@ export default function ListingIpoProgressPage() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmLoading, setConfirmLoading] = useState(false)
   const [confirmDetail, setConfirmDetail] = useState(null)
-  const [tableScrollY, setTableScrollY] = useState(520)
+  const [tableScrollY, setTableScrollY] = useState(360)
+  const tableScrollAreaRef = useRef(null)
   const [stats, setStats] = useState({
     yesterday: '',
     year: new Date().getFullYear(),
@@ -152,15 +156,19 @@ export default function ListingIpoProgressPage() {
     }
   }, [])
 
-  useEffect(() => {
-    const updateTableHeight = () => {
-      // 仅让“表头以下数据区”滚动，顶部标题/筛选区保持不动
-      const h = Math.max(340, window.innerHeight - 300)
-      setTableScrollY(h)
+  useLayoutEffect(() => {
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 120) return
+      // scroll.y 只作用于表体；需预留表头 + 底部分页高度，避免整页滚动
+      setTableScrollY(Math.max(200, Math.floor(h - 108)))
     }
-    updateTableHeight()
-    window.addEventListener('resize', updateTableHeight)
-    return () => window.removeEventListener('resize', updateTableHeight)
+    measure()
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [])
 
   const handleExport = async () => {
@@ -338,33 +346,43 @@ export default function ListingIpoProgressPage() {
   if (isAdmin) {
     columns.push({
       title: '操作',
-      width: 180,
+      width: 168,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, record) => (
-        <Space size={8} style={{ padding: '0 10px' }}>
-          <Button type="outline" size="small" onClick={() => openEdit(record)}>
-            编辑
-          </Button>
-          <Button type="outline" status="success" size="small" onClick={() => openLog(record)}>
-            日志
-          </Button>
-          <Button type="outline" status="danger" size="small" onClick={() => handleDelete(record)}>
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => openEdit(record)} />
+          <ListOpButton name="日志" onClick={() => openLog(record)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record)} />
+        </ListOps>
       ),
     })
   }
 
   return (
-    <div className="listing-ipo-progress-page" style={{ padding: '0 16px 16px' }}>
+    <div
+      className="listing-ipo-progress-page list-table-page"
+      style={{
+        boxSizing: 'border-box',
+        height: 'calc(100vh - 68px)',
+        maxHeight: 'calc(100vh - 68px)',
+        padding: '4px 16px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        overflow: 'hidden',
+        '--list-ops-col-width': isAdmin ? '168px' : undefined,
+      }}
+    >
       <div
+        className="listing-page-header"
         style={{
           marginBottom: 8,
           display: 'flex',
           alignItems: 'flex-end',
           justifyContent: 'space-between',
           gap: 12,
+          flexShrink: 0,
         }}
       >
         <div>
@@ -531,78 +549,94 @@ export default function ListingIpoProgressPage() {
           })}
         </div>
       </div>
-      <Table
-        rowKey={resolveRecordId}
-        loading={loading}
-        columns={columns}
-        data={data}
-        scroll={{ x: isAdmin ? 1400 : 1200, y: tableScrollY }}
-        stripe
-        pagination={{
-          current: page,
-          pageSize: Number(pageSize),
-          defaultPageSize: 15,
-          total,
-          sizeCanChange: true,
-          pageSizeChangeResetCurrent: true,
-          showTotal: true,
-          showJumper: true,
-          sizeOptions: LISTING_PAGE_SIZE_OPTIONS,
-          onChange: (p, ps) => {
-            setPage(p)
-            if (ps !== pageSize) setPageSize(ps)
-          },
-          onPageSizeChange: (ps) => {
-            setPage(1)
-            setPageSize(ps)
-          },
+      <div
+        ref={tableScrollAreaRef}
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}
-      />
-      
-      <Modal
-        title={editing ? '编辑上市信息' : '新增上市信息'}
-        visible={editOpen}
-        onOk={submitSave}
-        onCancel={() => setEditOpen(false)}
-        style={{ width: 560 }}
       >
-        <Form form={form} layout="vertical">
-          <FormItem label="证券代码" field="code">
-            <Input />
-          </FormItem>
-          <FormItem label="项目简称" field="project_name" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="审核状态" field="status" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="注册地" field="register_address">
-            <Input />
-          </FormItem>
-          <FormItem label="受理日期" field="receive_date">
-            <Input placeholder="YYYY-MM-DD" />
-          </FormItem>
-          <FormItem label="公司全称" field="company" rules={[{ required: true }]}>
-            <Input.TextArea />
-          </FormItem>
-          <FormItem label="板块" field="board">
-            <Input placeholder="选填" />
-          </FormItem>
-          <FormItem label="交易所" field="exchange" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="更新日期时间" field="f_update_time" rules={[{ required: true }]}>
-            <Input />
-          </FormItem>
+        <Table
+          rowKey={resolveRecordId}
+          loading={loading}
+          columns={columns}
+          data={data}
+          className="list-table"
+          scroll={{ x: isAdmin ? 1400 : 1200, y: tableScrollY }}
+          stripe
+          pagination={{
+            current: page,
+            pageSize: Number(pageSize),
+            defaultPageSize: 15,
+            total,
+            sizeCanChange: true,
+            pageSizeChangeResetCurrent: true,
+            showTotal: true,
+            showJumper: true,
+            sizeOptions: LISTING_PAGE_SIZE_OPTIONS,
+            onChange: (p, ps) => {
+              setPage(p)
+              if (ps !== pageSize) setPageSize(ps)
+            },
+            onPageSizeChange: (ps) => {
+              setPage(1)
+              setPageSize(ps)
+            },
+          }}
+        />
+      </div>
+      
+      <SheetModal
+        visible={editOpen}
+        title={editing ? '编辑上市信息' : '新增上市信息'}
+        onClose={() => setEditOpen(false)}
+      >
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="证券代码" field="code">
+              <Input />
+            </FormItem>
+            <FormItem label="项目简称" field="project_name" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="审核状态" field="status" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="交易所" field="exchange" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="板块" field="board">
+              <Input placeholder="选填" />
+            </FormItem>
+            <FormItem label="注册地" field="register_address">
+              <Input />
+            </FormItem>
+            <FormItem label="受理日期" field="receive_date">
+              <Input placeholder="YYYY-MM-DD" />
+            </FormItem>
+            <FormItem label="更新日期时间" field="f_update_time" rules={[{ required: true }]}>
+              <Input />
+            </FormItem>
+            <FormItem label="公司全称" field="company" rules={[{ required: true }]} className="form-span-2">
+              <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setEditOpen(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitSave}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="详情确认 / 待复核"
+      <SheetViewer
         visible={confirmOpen}
-        footer={null}
-        onCancel={() => setConfirmOpen(false)}
-        style={{ width: 560 }}
+        title="详情确认 / 待复核"
+        onClose={() => setConfirmOpen(false)}
       >
         {confirmLoading ? (
           <div>加载中…</div>
@@ -638,14 +672,12 @@ export default function ListingIpoProgressPage() {
             )}
           </div>
         )}
-      </Modal>
+      </SheetViewer>
 
-      <Modal
-        title="变更日志（data_change_log）"
+      <SheetViewer
         visible={logOpen}
-        footer={null}
-        onCancel={() => setLogOpen(false)}
-        style={{ width: 720 }}
+        title="变更日志（data_change_log）"
+        onClose={() => setLogOpen(false)}
       >
         {logLoading ? (
           <div>加载中…</div>
@@ -664,9 +696,10 @@ export default function ListingIpoProgressPage() {
             ]}
             data={logRows}
             pagination={false}
+            scroll={{ y: 360 }}
           />
         )}
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }

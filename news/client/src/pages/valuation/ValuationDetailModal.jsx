@@ -1,6 +1,7 @@
 import React from 'react'
-import { Modal, Tabs, Typography, Alert } from '@arco-design/web-react'
+import { Tabs, Typography, Alert } from '@arco-design/web-react'
 import { SheetByKey } from './valuationSheetTables'
+import { SheetViewer } from '../../components/SheetModal'
 
 const TabPane = Tabs.TabPane
 
@@ -22,12 +23,10 @@ const TAB_ORDER = [
 export default function ValuationDetailModal({ visible, onClose, sheets, unsaved, warnings }) {
   const sheetMap = sheets || {}
   return (
-    <Modal
-      title={unsaved ? '估值明细（当前草稿，未保存版本）' : '估值明细'}
+    <SheetViewer
       visible={visible}
-      onCancel={onClose}
-      footer={null}
-      style={{ width: '90vw', maxWidth: 1100 }}
+      title={unsaved ? '估值明细（当前草稿，未保存版本）' : '估值明细'}
+      onClose={onClose}
     >
       {(warnings || []).length ? (
         <Alert type="warning" content={(warnings || []).join('；')} style={{ marginBottom: 12 }} />
@@ -48,6 +47,6 @@ export default function ValuationDetailModal({ visible, onClose, sheets, unsaved
           )
         })}
       </Tabs>
-    </Modal>
+    </SheetViewer>
   )
 }

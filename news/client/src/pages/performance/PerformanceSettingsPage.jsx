@@ -4,16 +4,19 @@
  * Tab1: 数据接口配置（b_sql表 CRUD + SQL测试）
  * Tab2: 定时任务配置（复用现有定时任务）
  */
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react'
 import {
-  Tabs, Table, Button, Space, Modal, Form, Input, Select,
-  InputNumber, Message, Popconfirm, Tag, Spin, Tooltip, Card, Typography
+  Tabs, Table, Button, Space, Form, Input, Select,
+  InputNumber, Message, Popconfirm, Tag, Spin, Tooltip, Card, Typography, Pagination
 } from '@arco-design/web-react'
 import {
-  IconPlus, IconEdit, IconDelete, IconPlayArrow, IconRefresh, IconSearch, IconHistory, IconSave
+  IconPlus, IconRefresh, IconSave
 } from '@arco-design/web-react/icon'
 import axios from '../../utils/axios'
 import CronGenerator from '../../components/CronGenerator'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import './PerformanceSettingsPage.css'
 
 const { TabPane } = Tabs
@@ -135,7 +138,7 @@ function SqlCodeEditor({ value = '', onChange, placeholder, minRows = 6 }) {
 
 // ================= SQL配置管理 Tab =================
 
-function SqlConfigTab({ mode = 'local' }) {
+function SqlConfigTab({ mode = 'local', active = true }) {
   const [list, setList] = useState([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
@@ -176,7 +179,7 @@ function SqlConfigTab({ mode = 'local' }) {
     ],
     localExtractTargets: ['perf_ipo_progress']
   })
-  const [tableScrollY, setTableScrollY] = useState(520)
+  const [tableScrollY, setTableScrollY] = useState(360)
   const isExternal = mode === 'external'
   const watchedLayer = Form.useWatch('sql_layer', form)
   const watchedTarget = Form.useWatch('target_table', form)
@@ -198,17 +201,36 @@ function SqlConfigTab({ mode = 'local' }) {
     if (page > maxPage) setPage(maxPage)
   }, [list.length, page, pageSize])
 
-  useEffect(() => {
-    const calc = () => {
-      const y = Math.max(320, window.innerHeight - 370)
-      setTableScrollY(y)
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [])
+  const tableScrollAreaRef = useRef(null)
 
-  const pagedList = list.slice((page - 1) * pageSize, page * pageSize)
+  useLayoutEffect(() => {
+    if (!active) return undefined
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const head = el.querySelector('.arco-table-header')
+      const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
+      // 尽量吃满表体区域，避免「共 N 条」却少露一行
+      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
+    }
+    // Tab 切到本页后等布局完成再量
+    const raf = requestAnimationFrame(() => {
+      measure()
+    })
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [active])
+
+  const pagedList = useMemo(() => {
+    const sorted = [...list].sort((a, b) => (Number(a.exec_order) || 0) - (Number(b.exec_order) || 0))
+    return sorted.slice((page - 1) * pageSize, page * pageSize)
+  }, [list, page, pageSize])
 
   const fetchList = async () => {
     setLoading(true)
@@ -385,7 +407,7 @@ function SqlConfigTab({ mode = 'local' }) {
   }
 
   const columns = [
-    { title: '执行顺序', dataIndex: 'exec_order', width: 80, sorter: (a, b) => a.exec_order - b.exec_order },
+    { title: '执行顺序', dataIndex: 'exec_order', width: 80 },
     { title: '接口名称', dataIndex: 'interface_name', width: 160 },
     {
       title: (
@@ -451,24 +473,25 @@ function SqlConfigTab({ mode = 'local' }) {
     },
     {
       title: '操作',
-      width: 260,
+      width: 220,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, record) => (
-        <Space size={8} style={{ padding: '0 10px' }}>
-          <Button size="mini" type="outline" icon={<IconPlayArrow />} onClick={() => handleTest(record)}>测试</Button>
-          <Button size="mini" type="primary" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
-          <Button size="mini" type="outline" status="success" icon={<IconHistory />} onClick={() => handleOpenLog(record)}>日志</Button>
+        <ListOps>
+          <ListOpButton name="测试" onClick={() => handleTest(record)} />
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+          <ListOpButton name="日志" onClick={() => handleOpenLog(record)} />
           <Popconfirm title="确认删除该SQL配置？" onOk={() => handleDelete(record.id)}>
-            <Button size="mini" type="outline" status="danger" icon={<IconDelete />}>删除</Button>
+            <ListOpButton name="删除" />
           </Popconfirm>
-        </Space>
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="perf-settings-tab">
-      <div className="perf-settings-toolbar">
+    <div className="perf-settings-tab" style={{ '--list-ops-col-width': '220px' }}>
+      <div className="perf-settings-toolbar listing-page-header">
         <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>
           {isExternal ? '新增外部提取 SQL' : '新增SQL配置'}
         </Button>
@@ -480,47 +503,49 @@ function SqlConfigTab({ mode = 'local' }) {
         )}
       </div>
 
-      <Table
-        columns={columns}
-        data={pagedList}
-        loading={loading}
-        rowKey="id"
-        border
-        stripe
-        scroll={{ x: 1400, y: tableScrollY }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: list.length,
-          sizeCanChange: true,
-          pageSizeChangeResetCurrent: true,
-          showTotal: true,
-          showJumper: true,
-          pageSizeOptions: [10, 20, 50, 100, 200],
-          onChange: (p, ps) => {
+      <div ref={tableScrollAreaRef} className="perf-settings-table-area">
+        <Table
+          columns={columns}
+          data={pagedList}
+          loading={loading}
+          rowKey="id"
+          className="list-table"
+          border
+          stripe
+          scroll={{ x: 1400, y: tableScrollY }}
+          pagination={false}
+        />
+      </div>
+      <div className="perf-settings-pagination">
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={list.length}
+          sizeCanChange
+          pageSizeChangeResetCurrent
+          showTotal
+          showJumper
+          sizeOptions={[10, 20, 50, 100, 200]}
+          onChange={(p, ps) => {
             setPage(p)
             if (ps !== pageSize) setPageSize(ps)
-          },
-          onPageSizeChange: (ps) => {
+          }}
+          onPageSizeChange={(ps) => {
             setPage(1)
             setPageSize(ps)
-          },
-        }}
-        defaultSortOrder={[{ field: 'exec_order', order: 'asc' }]}
-      />
+          }}
+        />
+      </div>
 
       {/* 新增/编辑弹窗 */}
-      <Modal
-        title={editRecord ? '编辑SQL配置' : (isExternal ? '新增外部提取 SQL' : '新增SQL配置')}
+      <SheetModal
         visible={showModal}
-        onCancel={() => setShowModal(false)}
-        onOk={handleSave}
-        confirmLoading={saving}
-        style={{ width: 700 }}
-        unmountOnExit
+        title={editRecord ? '编辑SQL配置' : (isExternal ? '新增外部提取 SQL' : '新增SQL配置')}
+        onClose={() => setShowModal(false)}
       >
-        <Form form={form} layout="vertical">
-          <FormItem label="接口名称" field="interface_name" rules={[{ required: true, message: '请输入接口名称' }]}>
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+          <FormItem label="接口名称" field="interface_name" rules={[{ required: true, message: '请输入接口名称' }]} className="form-span-2">
             <Input placeholder="请输入接口名称" />
           </FormItem>
           <FormItem label="执行顺序" field="exec_order" rules={[{ required: true, message: '请输入执行顺序' }]}>
@@ -623,6 +648,7 @@ function SqlConfigTab({ mode = 'local' }) {
           <FormItem
             label="SQL代码"
             field="sql_content"
+            className="form-span-4"
             rules={[{ required: true, message: '请输入SQL查询语句' }]}
             help={
               <span style={{ display: 'block', marginTop: 4 }}>
@@ -645,26 +671,28 @@ function SqlConfigTab({ mode = 'local' }) {
               minRows={6}
             />
           </FormItem>
-          <FormItem label="备注" field="remark">
+          <FormItem label="备注" field="remark" className="form-span-2">
             <Input placeholder="可选备注" />
           </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setShowModal(false)}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleSave}
+            submitLoading={saving}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* SQL测试弹窗 */}
-      <Modal
-        title={`SQL测试 - ${testRecord?.interface_name || ''}`}
+      <SheetModal
         visible={showTestModal}
-        onCancel={() => { setShowTestModal(false); setTestResult(null) }}
-        footer={[
-          <Button key="cancel" onClick={() => { setShowTestModal(false); setTestResult(null) }}>关闭</Button>,
-          <Button key="run" type="primary" icon={<IconPlayArrow />} loading={testLoading} onClick={handleRunTest}>
-            执行测试
-          </Button>
-        ]}
-        style={{ width: 720 }}
-        unmountOnExit
+        title={`SQL测试 - ${testRecord?.interface_name || ''}`}
+        onClose={() => { setShowTestModal(false); setTestResult(null) }}
       >
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
         <Form form={testForm} layout="inline" style={{ marginBottom: 16 }}>
           <FormItem
             label="测试日期"
@@ -743,16 +771,23 @@ function SqlConfigTab({ mode = 'local' }) {
             )}
           </div>
         )}
-      </Modal>
+          </div>
+          <SheetActions
+            onCancel={() => { setShowTestModal(false); setTestResult(null) }}
+            cancelLabel="关闭"
+            submitLabel="执行测试"
+            submitType="button"
+            onSubmitClick={handleRunTest}
+            submitLoading={testLoading}
+          />
+        </div>
+      </SheetModal>
 
       {/* 数据接口配置 - 修改日志弹窗 */}
-      <Modal
-        title={`修改日志 - ${logRecord?.interface_name || ''}`}
+      <SheetViewer
         visible={showLogModal}
-        onCancel={() => { setShowLogModal(false); setLogRecord(null); setLogList([]) }}
-        footer={null}
-        style={{ width: 780 }}
-        unmountOnExit
+        title={`修改日志 - ${logRecord?.interface_name || ''}`}
+        onClose={() => { setShowLogModal(false); setLogRecord(null); setLogList([]) }}
       >
         {logLoading ? (
           <div style={{ textAlign: 'center', padding: '24px 0' }}>
@@ -765,7 +800,7 @@ function SqlConfigTab({ mode = 'local' }) {
             data={logList}
             rowKey="id"
             pagination={false}
-            scroll={{ y: 400 }}
+            scroll={{ y: 360 }}
             columns={[
               {
                 title: '修改时间',
@@ -797,7 +832,7 @@ function SqlConfigTab({ mode = 'local' }) {
             ]}
           />
         )}
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }
@@ -851,14 +886,25 @@ const INDICATOR_DESCRIBE_LIST = [
   { area: '底层资产', name: '【当前组合】上海地区企业', key: 'shNumDesc' }
 ]
 
-function IndicatorDescribeTab() {
+function IndicatorDescribeTab({ active = true }) {
   const [formData, setFormData] = useState({})
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const tableWrapRef = useRef(null)
 
   useEffect(() => {
     fetchData()
   }, [])
+
+  useLayoutEffect(() => {
+    if (!active || loading) return undefined
+    const el = tableWrapRef.current
+    if (!el) return undefined
+    const raf = requestAnimationFrame(() => {
+      el.style.overflowY = 'auto'
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [active, loading])
 
   const fetchData = async () => {
     setLoading(true)
@@ -906,7 +952,11 @@ function IndicatorDescribeTab() {
   }
 
   if (loading) {
-    return <Spin style={{ display: 'block', margin: '60px auto' }} />
+    return (
+      <div className="perf-settings-tab perf-settings-tab--indicators">
+        <Spin style={{ display: 'block', margin: '60px auto' }} />
+      </div>
+    )
   }
 
   const grouped = INDICATOR_DESCRIBE_LIST.reduce((acc, item) => {
@@ -916,15 +966,15 @@ function IndicatorDescribeTab() {
   }, {})
 
   return (
-    <div className="perf-settings-tab">
-      <div className="perf-settings-toolbar">
+    <div className="perf-settings-tab perf-settings-tab--indicators">
+      <div className="perf-settings-toolbar listing-page-header">
         <Button type="primary" icon={<IconSave />} onClick={handleSave} loading={saving}>
           保存
         </Button>
       </div>
       {/* 系统名称、操作手册地址、页面跳转地址 */}
-      <Card title="看板与弹窗配置" style={{ marginBottom: 24 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 24, maxWidth: 960 }}>
+      <Card title="看板与弹窗配置" className="perf-settings-card-shrink" style={{ marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, maxWidth: 960 }}>
           <div>
             <div style={{ marginBottom: 6, fontSize: 13, color: '#4e5969', fontWeight: 500 }}>系统名称</div>
             <Input
@@ -954,7 +1004,7 @@ function IndicatorDescribeTab() {
           </div>
         </div>
       </Card>
-      <div className="perf-indicator-desc-table-wrap">
+      <div ref={tableWrapRef} className="perf-indicator-desc-table-wrap">
         <table className="perf-indicator-desc-table">
           <thead>
             <tr>
@@ -994,7 +1044,7 @@ function IndicatorDescribeTab() {
 
 // ================= 定时任务配置 Tab =================
 
-function ScheduledTaskTab() {
+function ScheduledTaskTab({ active = true }) {
   const [tasks, setTasks] = useState([])
   const [loading, setLoading] = useState(false)
   const [page, setPage] = useState(1)
@@ -1004,7 +1054,7 @@ function ScheduledTaskTab() {
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
   const [showCronModal, setShowCronModal] = useState(false)
-  const [tableScrollY, setTableScrollY] = useState(520)
+  const [tableScrollY, setTableScrollY] = useState(360)
 
   useEffect(() => {
     fetchTasks()
@@ -1015,15 +1065,27 @@ function ScheduledTaskTab() {
     if (page > maxPage) setPage(maxPage)
   }, [tasks.length, page, pageSize])
 
-  useEffect(() => {
-    const calc = () => {
-      const y = Math.max(330, window.innerHeight - 340)
-      setTableScrollY(y)
+  const tableScrollAreaRef = useRef(null)
+
+  useLayoutEffect(() => {
+    if (!active) return undefined
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const head = el.querySelector('.arco-table-header')
+      const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
+      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
     }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [])
+    const raf = requestAnimationFrame(() => measure())
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [active])
 
   const pagedTasks = tasks.slice((page - 1) * pageSize, page * pageSize)
 
@@ -1154,31 +1216,30 @@ function ScheduledTaskTab() {
     { title: '备注', dataIndex: 'remark', width: 120 },
     {
       title: '操作',
-      width: 280,
+      width: 248,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, record) => (
-        <Space size={8} style={{ padding: '0 10px' }}>
-          <Button size="mini" type="outline" icon={<IconPlayArrow />} onClick={() => handleRunNow(record)}>立即执行</Button>
-          <Button size="mini" type="outline" onClick={() => handleToggle(record)}>
-            {record.is_active ? '停用' : '启用'}
-          </Button>
-          <Button size="mini" type="primary" icon={<IconEdit />} onClick={() => handleEdit(record)}>编辑</Button>
+        <ListOps>
+          <ListOpButton name="立即执行" onClick={() => handleRunNow(record)} />
+          <ListOpButton name={record.is_active ? '停用' : '启用'} onClick={() => handleToggle(record)} />
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
           <Popconfirm title="确认删除该定时任务？" onOk={() => handleDelete(record.id)}>
-            <Button size="mini" type="outline" status="danger" icon={<IconDelete />}>删除</Button>
+            <ListOpButton name="删除" />
           </Popconfirm>
-        </Space>
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="perf-settings-tab">
-      <div className="perf-settings-toolbar">
+    <div className="perf-settings-tab" style={{ '--list-ops-col-width': '248px' }}>
+      <div className="perf-settings-toolbar listing-page-header">
         <Button type="primary" icon={<IconPlus />} onClick={handleAdd}>新增定时任务</Button>
         <Button icon={<IconRefresh />} onClick={fetchTasks} loading={loading}>刷新</Button>
       </div>
 
-      <Card style={{ marginBottom: 16, background: '#e8f4fd' }}>
+      <Card className="perf-settings-card-shrink" style={{ marginBottom: 12, background: '#e8f4fd' }}>
         <div style={{ fontSize: 13, color: '#4e5969' }}>
           <strong>业绩看板定时任务说明：</strong>
           <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
@@ -1188,46 +1249,49 @@ function ScheduledTaskTab() {
         </div>
       </Card>
 
-      <Table
-        columns={columns}
-        data={pagedTasks}
-        loading={loading}
-        rowKey="id"
-        border
-        stripe
-        scroll={{ x: 1200, y: tableScrollY }}
-        pagination={{
-          current: page,
-          pageSize,
-          total: tasks.length,
-          sizeCanChange: true,
-          pageSizeChangeResetCurrent: true,
-          showTotal: true,
-          showJumper: true,
-          pageSizeOptions: [10, 20, 50, 100, 200],
-          onChange: (p, ps) => {
+      <div ref={tableScrollAreaRef} className="perf-settings-table-area">
+        <Table
+          columns={columns}
+          data={pagedTasks}
+          loading={loading}
+          rowKey="id"
+          className="list-table"
+          border
+          stripe
+          scroll={{ x: 1200, y: tableScrollY }}
+          pagination={false}
+        />
+      </div>
+      <div className="perf-settings-pagination">
+        <Pagination
+          current={page}
+          pageSize={pageSize}
+          total={tasks.length}
+          sizeCanChange
+          pageSizeChangeResetCurrent
+          showTotal
+          showJumper
+          sizeOptions={[10, 20, 50, 100, 200]}
+          onChange={(p, ps) => {
             setPage(p)
             if (ps !== pageSize) setPageSize(ps)
-          },
-          onPageSizeChange: (ps) => {
+          }}
+          onPageSizeChange={(ps) => {
             setPage(1)
             setPageSize(ps)
-          },
-        }}
-      />
+          }}
+        />
+      </div>
 
       {/* 新增/编辑弹窗 */}
-      <Modal
-        title={editTask ? '编辑定时任务' : '新增定时任务'}
+      <SheetModal
         visible={showModal}
-        onCancel={() => setShowModal(false)}
-        onOk={handleSave}
-        confirmLoading={saving}
-        style={{ width: 600 }}
-        unmountOnExit
+        title={editTask ? '编辑定时任务' : '新增定时任务'}
+        onClose={() => setShowModal(false)}
       >
-        <Form form={form} layout="vertical">
-          <FormItem label="应用名称" field="app_name" rules={[{ required: true }]}>
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+          <FormItem label="接口名称" field="app_name" rules={[{ required: true }]} className="form-span-2">
             <Input placeholder="业绩看板应用" />
           </FormItem>
           <FormItem label="接口类型" field="interface_type" rules={[{ required: true }]}>
@@ -1247,12 +1311,13 @@ function ScheduledTaskTab() {
               <Select.Option value="HTTP">HTTP请求</Select.Option>
             </Select>
           </FormItem>
-          <FormItem label="请求URL" field="request_url" rules={[{ required: true }]}>
+          <FormItem label="请求URL" field="request_url" rules={[{ required: true }]} className="form-span-2">
             <Input placeholder="例如: /api/performance/versions/auto-generate" />
           </FormItem>
           <FormItem
             label="Cron表达式"
             field="cron_expression"
+            className="form-span-2"
             rules={[{ required: true, message: '请输入Cron表达式' }]}
             help="格式: 秒 分 时 日 月 周 年，例如 0 0 0 1,4 * ? * 表示每月1日和4日凌晨0点"
           >
@@ -1274,16 +1339,24 @@ function ScheduledTaskTab() {
             <InputNumber min={0} max={3600} style={{ width: '100%' }} />
           </FormItem>
           <FormItem label="是否启用" field="is_active">
-            <Select>
+            <Select getPopupContainer={sheetPopupContainer}>
               <Select.Option value={true}>启用</Select.Option>
               <Select.Option value={false}>停用</Select.Option>
             </Select>
           </FormItem>
-          <FormItem label="备注" field="remark">
+          <FormItem label="备注" field="remark" className="form-span-2">
             <Input placeholder="可选备注" />
           </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setShowModal(false)}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleSave}
+            submitLoading={saving}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* Cron 表达式可视化配置弹窗 */}
       <CronGenerator
@@ -1305,24 +1378,29 @@ function PerformanceSettingsPage() {
   const [activeTab, setActiveTab] = useState('external')
 
   return (
-    <div className="perf-settings-page">
-      <div className="perf-settings-header">
+    <div className="perf-settings-page list-table-page">
+      <div className="perf-settings-header listing-page-header">
         <h2 className="perf-settings-title">业绩看板设置</h2>
         <div className="perf-settings-desc">外部数据提取写入 perf_* / b_transaction；数据接口配置从本系统 investment_tools 生成其余看板</div>
       </div>
 
-      <Tabs activeTab={activeTab} onChange={setActiveTab} type="line" style={{ marginBottom: 8 }} className="perf-settings-tabs">
+      <Tabs
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        type="line"
+        className="perf-settings-tabs"
+      >
         <TabPane key="external" title="外部数据提取">
-          <SqlConfigTab mode="external" />
+          <SqlConfigTab mode="external" active={activeTab === 'external'} />
         </TabPane>
         <TabPane key="sql" title="数据接口配置">
-          <SqlConfigTab mode="local" />
+          <SqlConfigTab mode="local" active={activeTab === 'sql'} />
         </TabPane>
         <TabPane key="indicators" title="业绩看板说明配置">
-          <IndicatorDescribeTab />
+          <IndicatorDescribeTab active={activeTab === 'indicators'} />
         </TabPane>
         <TabPane key="tasks" title="定时任务配置">
-          <ScheduledTaskTab />
+          <ScheduledTaskTab active={activeTab === 'tasks'} />
         </TabPane>
       </Tabs>
     </div>

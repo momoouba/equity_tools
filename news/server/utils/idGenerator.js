@@ -77,6 +77,7 @@ async function generateIdUnlocked(tableName, connection) {
       'valuation_pre_project',
       'valuation_case',
       'valuation_case_comparable',
+      'valuation_case_recommend_run',
       'valuation_target_financials',
       'valuation_target_pl_line',
       'valuation_target_bs',

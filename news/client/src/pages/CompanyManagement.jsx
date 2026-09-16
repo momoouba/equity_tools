@@ -3,6 +3,8 @@ import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Card, Colla
 import axios from '../utils/axios'
 import CompanyForm from './CompanyForm'
 import LogModal from './LogModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './CompanyManagement.css'
 
 const Option = Select.Option
@@ -147,39 +149,22 @@ function CompanyManagement() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 168,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => handleViewLog(record.id)}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+          <ListOpButton name="日志" onClick={() => handleViewLog(record.id)} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="company-management">
+    <div className="company-management list-table-page" style={{ '--list-ops-col-width': '168px' }}>
       <Card className="management-card" bordered={false}>
         <div className="management-header">
           <h2 className="management-title">企业列表管理</h2>
@@ -250,7 +235,8 @@ function CompanyManagement() {
                 cell: true
               }}
               stripe
-              className="company-table"
+              className="company-table list-table"
+              scroll={{ x: 'max-content' }}
             />
           )}
         </div>

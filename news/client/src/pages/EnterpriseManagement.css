@@ -21,10 +21,12 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
-  padding-bottom: 16px;
+  /* 左侧 4px 不贴边；上下等距，按钮在容器内纵向居中 */
+  padding: 12px 0 12px 4px;
   border-bottom: 1px solid #e5e6eb;
   flex-wrap: wrap;
   gap: 16px;
+  box-sizing: border-box;
 }
 
 .management-title {
@@ -312,10 +314,45 @@
 }
 
 /* 投前/投后主列表：fixed 列 + scroll 时表头/表体同步（避免横向滚动错列） */
+/* 投前/投后主列表：固定视口高度，仅表体右侧一条纵向滚动条 */
+.pre-inv-sourcing-page.list-table-page {
+  box-sizing: border-box;
+  height: calc(100vh - 68px);
+  max-height: calc(100vh - 68px);
+  padding: 4px 24px 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pre-inv-sourcing-page.list-table-page > .arco-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pre-inv-sourcing-page.list-table-page > .arco-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pre-inv-sourcing-page.list-table-page > .arco-card > .arco-card-body > p,
+.pre-inv-sourcing-page.list-table-page > .arco-card > .arco-card-body > .arco-space {
+  flex-shrink: 0;
+}
+
 .pre-inv-sourcing-page .pre-inv-sourcing-table-wrap {
   width: 100%;
   max-width: 100%;
-  overflow-x: hidden;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .pre-inv-sourcing-page .pre-inv-sourcing-table-wrap .pre-inv-sourcing-main-table .arco-table-container {
@@ -346,6 +383,10 @@
 .pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .arco-table-td .arco-table-cell {
   padding: 12px 16px;
   box-sizing: border-box;
+}
+
+.pre-inv-sourcing-page .pre-inv-sourcing-main-table.arco-table-layout-fixed .list-ops-col .arco-table-cell {
+  padding: 6px 8px !important;
 }
 
 /* 竞品分析-被投企业：fixed 列 + scroll 时保持表头/表体竖线对齐 */
@@ -395,26 +436,96 @@
   overflow: hidden !important;
 }
 
-/* 合并标签页公共样式（项目估值-投后 / 竞品分析-投后）：内边距由外层页容器提供 */
-.merged-tabs-page {
-  padding: 16px 24px;
+.enterprise-management.invested-enterprises-table-page > .arco-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.merged-tabs-page > .arco-tabs-header-nav {
-  margin-bottom: 12px;
+.enterprise-management.invested-enterprises-table-page > .arco-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.enterprise-management.invested-enterprises-table-page .management-header,
+.enterprise-management.invested-enterprises-table-page .entity-type-tabs,
+.enterprise-management.invested-enterprises-table-page .filter-collapse,
+.enterprise-management.invested-enterprises-table-page .pagination-wrapper {
+  flex-shrink: 0;
+}
+
+/* 舆情监控对象（含类型 Tab）：收紧顶栏/筛选间距，保证表体吃满剩余高度、底部分页可见 */
+.enterprise-management.invested-enterprises-table-page .management-header {
+  margin-bottom: 8px;
+}
+
+.enterprise-management.invested-enterprises-table-page .filter-collapse {
+  margin-bottom: 8px;
+}
+
+/* 合并标签页：顶对齐已由 .dashboard-content 统一处理
+ * 注意：勿覆盖 Arco Tabs 的 content-item height:0 / active:height:auto，否则会整页空白 */
+.merged-tabs-page {
+  padding: 4px 24px 0;
+  box-sizing: border-box;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+.merged-tabs-page .arco-tabs-header-nav {
+  margin-bottom: 4px;
+}
+
+.merged-tabs-page .arco-tabs-content {
+  /* Arco 默认 padding-top:16px；收紧避免被投企业页撑出整页滚动条 */
+  padding-top: 0;
 }
 
 .merged-tabs-page .valuation-page {
   padding: 0;
 }
 
-/* 嵌入标签页后，顶部多出页边距与 tab 头，需相应压缩视口锁定高度 */
+.merged-tabs-page .pre-inv-sourcing-page.list-table-page {
+  padding: 0;
+  /* 顶栏约 64px + 顶缝 4px + tab 头约 44px */
+  height: calc(100vh - 112px);
+  max-height: calc(100vh - 112px);
+}
+
+/* 嵌入被投企业：去掉 Card body 顶内边距（蓝区顶对齐绿区），并按剩余视口收高度 */
 .merged-tabs-page .enterprise-management.invested-enterprises-table-page {
-  height: calc(100vh - 140px) !important;
+  height: calc(100vh - 112px) !important;
+  max-height: calc(100vh - 112px) !important;
   padding: 0 !important;
 }
 
-/* 项目估值-被投企业：与投前/投后估值列表同一套表头与列线 */
+.merged-tabs-page .enterprise-management.invested-enterprises-table-page > .arco-card > .arco-card-body {
+  padding: 0 !important;
+}
+
+.merged-tabs-page .enterprise-management.invested-enterprises-table-page .management-header {
+  margin-bottom: 8px;
+  padding: 12px 0 12px 4px;
+}
+
+.merged-tabs-page .enterprise-management.invested-enterprises-table-page .filter-collapse {
+  margin-bottom: 8px;
+}
+
+.merged-tabs-page .enterprise-management.invested-enterprises-table-page .pagination-wrapper {
+  padding-top: 8px;
+  padding-bottom: 0;
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+/* 项目估值-被投企业：与统一列表表头一致 */
 .enterprise-management.valuation-invested-page .management-title {
   font-size: 18px;
 }
@@ -422,9 +533,9 @@
 .enterprise-management.valuation-invested-page .arco-table-th,
 .enterprise-management.valuation-invested-page .arco-table-header .arco-table-th,
 .enterprise-management.valuation-invested-page .arco-table-th:last-child {
-  background-color: #dbeafe !important;
-  color: #1e3a8a;
-  font-weight: 600;
+  background-color: #e8f3ff !important;
+  color: #0e42d2;
+  font-weight: 700;
 }
 
 .enterprise-management.valuation-invested-page .arco-table-td,

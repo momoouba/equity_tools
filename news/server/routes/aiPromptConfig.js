@@ -2,10 +2,11 @@ const express = require('express');
 const db = require('../db');
 const { generateId } = require('../utils/idGenerator');
 const { clearCompetitorPromptCache } = require('../utils/competitor-analysis/competitorAnalysisPromptService');
+const { clearValuationRecommendPromptCache } = require('../utils/valuation/listedIndustryRecommendPrompt');
 
 const router = express.Router();
 
-const VALID_INTERFACE_TYPES = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘', '竞品分析'];
+const VALID_INTERFACE_TYPES = ['新榜', '企查查', '上海国际集团', '打新接口', '项目挖掘', '竞品分析', '项目估值'];
 const VALID_PROMPT_TYPES = [
   'sentiment_analysis',
   'enterprise_relevance',
@@ -15,11 +16,16 @@ const VALID_PROMPT_TYPES = [
   'competitor_pair_similarity',
   'competitor_web_discover',
   'competitor_validate',
+  'valuation_comparable_business_reason',
+  'valuation_comparable_listed_propose',
 ];
 
 function maybeClearCompetitorPromptCache(record) {
   if (record && String(record.interface_type) === '竞品分析') {
     clearCompetitorPromptCache();
+  }
+  if (record && String(record.interface_type) === '项目估值') {
+    clearValuationRecommendPromptCache();
   }
 }
 

@@ -97,6 +97,36 @@ export function patchCaseComparable(caseId, cid, body) {
   return axios.patch(`${BASE}/cases/${caseId}/comparables/${cid}`, body)
 }
 
+export function deleteCaseComparable(caseId, cid) {
+  return axios.delete(`${BASE}/cases/${caseId}/comparables/${cid}`)
+}
+
+export function postComparablesFromCompetitor(caseId) {
+  return axios.post(`${BASE}/cases/${caseId}/comparables/from-competitor`)
+}
+
+export function postComparableRecommendRun(caseId, body) {
+  return axios.post(`${BASE}/cases/${caseId}/comparables/recommend/runs`, body)
+}
+
+export function fetchComparableRecommendRuns(caseId) {
+  return axios.get(`${BASE}/cases/${caseId}/comparables/recommend/runs`)
+}
+
+export function fetchComparableRecommendLatest(caseId) {
+  return axios.get(`${BASE}/cases/${caseId}/comparables/recommend/runs/latest`)
+}
+
+export function fetchComparableRecommendRun(caseId, runId) {
+  return axios.get(`${BASE}/cases/${caseId}/comparables/recommend/runs/${runId}`)
+}
+
+export function applyComparableRecommendRun(caseId, runId, stockCodes) {
+  return axios.post(`${BASE}/cases/${caseId}/comparables/recommend/runs/${runId}/apply`, {
+    stock_codes: stockCodes,
+  })
+}
+
 export function postValuationJob(caseId, body) {
   return axios.post(`${BASE}/cases/${caseId}/jobs`, body)
 }

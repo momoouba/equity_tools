@@ -189,6 +189,7 @@ const COST_ROW_FIELDS = ['investment_cost', 'exited_cost', 'remaining_cost', 're
 const INVESTED_ENTERPRISE_AI_SNAPSHOT_APPS = new Set([
   DATA_APP_PROJECT_SOURCING,
   DATA_APP_COMPETITOR_ANALYSIS,
+  DATA_APP_PROJECT_VALUATION,
 ]);
 
 function supportsInvestedEnterpriseAiSnapshot(dataAppName) {
@@ -2379,6 +2380,21 @@ async function executeSyncTask(
   }
   await pruneOldInvestedEnterpriseAiSnapshots();
 
+  let introBackfill = null;
+  if (targetDataAppName === DATA_APP_PROJECT_VALUATION) {
+    try {
+      const {
+        backfillValuationInvestedEnterpriseIntros,
+      } = require('../utils/valuation/investedEnterpriseIntroBackfill');
+      introBackfill = await backfillValuationInvestedEnterpriseIntros();
+      console.log(
+        `[企业同步任务] 项目估值介绍回填：按信用代码 ${introBackfill.by_credit} 行，按企业全称 ${introBackfill.by_name} 行`
+      );
+    } catch (introErr) {
+      console.warn('[企业同步任务] 项目估值介绍回填失败（不影响同步结果）', introErr.message);
+    }
+  }
+
   if (targetDataAppName === DATA_APP_COMPETITOR_ANALYSIS) {
     try {
       const { dedupeCompetitorInvestedEnterprises } = require('../utils/competitor-analysis/investedEnterpriseDedupe');
@@ -2400,6 +2416,10 @@ async function executeSyncTask(
     }
   }
 
+  const introNote =
+    introBackfill && (introBackfill.by_credit > 0 || introBackfill.by_name > 0)
+      ? `；已从同表其它行回填介绍 信用代码 ${introBackfill.by_credit} / 企业全称 ${introBackfill.by_name}`
+      : '';
   const snapshotNote =
     aiSnapshotBatchId != null
       ? `；AI 快照 batch_id=${aiSnapshotBatchId}，已回填 ${aiSnapshotRestored} 行`
@@ -2421,8 +2441,8 @@ async function executeSyncTask(
     success: true,
     message:
       deletedBeforeSync > 0
-        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}`
-        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}`,
+        ? `同步完成：已硬删除旧数据 ${deletedBeforeSync} 条；共处理 ${synced} 条，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}${introNote}`
+        : `同步完成：共处理 ${synced} 条数据，新增 ${inserted} 条，更新 ${updated} 条${snapshotNote}${competitorNote}${manualExitNote}${introNote}`,
     synced,
     updated,
     inserted,

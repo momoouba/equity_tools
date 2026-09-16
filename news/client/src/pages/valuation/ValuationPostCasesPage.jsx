@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Table, Button, Input, Pagination, Message } from '@arco-design/web-react'
+import { Card, Table, Input, Pagination, Message } from '@arco-design/web-react'
 import { fetchValuationPostCases } from '../../api/valuation'
 import './valuation.css'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import { formatChinaDateTime } from './valuationUnits'
 
 function fmtN(v) {
@@ -57,17 +59,22 @@ export default function ValuationPostCasesPage({ embedded = false }) {
     { title: '最近估值时间', dataIndex: 'latest_valued_at', width: 170, render: (v) => formatChinaDateTime(v) },
     {
       title: '操作',
-      width: 120,
+      width: 100,
+      fixed: 'right',
+      className: 'list-ops-col',
       render: (_, r) => (
-        <Button type="primary" size="small" onClick={() => navigate(`/dashboard/valuation/workbench/${r.id}`)}>
-          进入估值
-        </Button>
+        <ListOps>
+          <ListOpButton name="进入估值" onClick={() => navigate(`/dashboard/valuation/workbench/${r.id}`)} />
+        </ListOps>
       ),
     },
   ]
 
   return (
-    <div className={embedded ? undefined : 'valuation-page'}>
+    <div
+      className={embedded ? 'list-table-page' : 'valuation-page list-table-page'}
+      style={{ '--list-ops-col-width': '100px' }}
+    >
       <Card bordered={false}>
         <div className="valuation-page-header">
           {!embedded && <h2>投后项目估值</h2>}
@@ -84,11 +91,12 @@ export default function ValuationPostCasesPage({ embedded = false }) {
           columns={columns}
           data={list}
           pagination={false}
-          border
-          className="valuation-list-table"
+          border={{ wrapper: true, cell: true }}
+          stripe
+          className="valuation-list-table list-table"
           scroll={{ x: 1140 }}
         />
-        <div style={{ marginTop: 12, textAlign: 'right' }}>
+        <div className="valuation-list-pagination">
           <Pagination
             current={page}
             pageSize={pageSize}

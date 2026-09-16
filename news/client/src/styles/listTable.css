@@ -1,0 +1,251 @@
+/* 列表统一：浅蓝色表头、深蓝加粗列名、右侧固定操作列、同名操作按钮同色 */
+
+/* 列表页工具栏：左侧 4px、纵向居中（统一各业务页） */
+.list-table-page .management-header,
+.list-table-page .valuation-page-header,
+.list-table-page .ps-overview-header,
+.list-table-page .news-header,
+.list-table-page .listing-page-header,
+.list-table-page .perf-settings-toolbar,
+.list-table-page .perf-settings-header,
+.list-table-page .email-management-header,
+.list-table-page .config-header,
+.list-table-page .list-header {
+  padding-left: 4px;
+  box-sizing: border-box;
+  align-items: center;
+}
+
+.list-table-page > .arco-card > .arco-card-header {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.list-table-page > .arco-card > .arco-card-body {
+  padding-top: 0;
+}
+
+.list-table .arco-table-th,
+.list-table .arco-table-th .arco-table-cell,
+.list-table .arco-table-th .arco-table-th-item,
+.list-table .arco-table-th .arco-table-th-content {
+  background: #e8f3ff !important;
+  color: #0e42d2 !important;
+  font-weight: 700 !important;
+}
+
+.list-table .arco-table-th .arco-table-sorter,
+.list-table .arco-table-th .arco-icon {
+  color: #0e42d2;
+}
+
+.list-table .arco-table-th.arco-table-col-fixed-right,
+.list-table .arco-table-th.arco-table-col-fixed-right .arco-table-cell,
+.list-table .arco-table-th.arco-table-col-fixed-right .arco-table-th-item {
+  background: #e8f3ff !important;
+}
+
+.list-table .arco-table-td.arco-table-col-fixed-right,
+.list-table .arco-table-td.arco-table-col-fixed-right .arco-table-cell {
+  background: #fff;
+}
+
+.list-table .arco-table-stripe .arco-table-tr:nth-child(even) .arco-table-td.arco-table-col-fixed-right,
+.list-table .arco-table-stripe .arco-table-tr:nth-child(even) .arco-table-td.arco-table-col-fixed-right .arco-table-cell {
+  background: #f7f8fa;
+}
+
+.list-table .arco-table-tr:hover .arco-table-td.arco-table-col-fixed-right,
+.list-table .arco-table-tr:hover .arco-table-td.arco-table-col-fixed-right .arco-table-cell {
+  background: #f2f3f5;
+}
+
+.list-table .arco-table-th.arco-table-col-fixed-right,
+.list-table .arco-table-td.arco-table-col-fixed-right {
+  box-shadow: -6px 0 8px -4px rgba(0, 0, 0, 0.08);
+}
+
+.list-table .arco-table-th.list-ops-col,
+.list-table .arco-table-td.list-ops-col {
+  width: var(--list-ops-col-width, 108px) !important;
+  min-width: var(--list-ops-col-width, 108px) !important;
+  max-width: var(--list-ops-col-width, 108px) !important;
+}
+
+.list-table .list-ops-col .arco-table-cell {
+  padding: 6px 8px;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.list-ops {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: 100%;
+}
+
+.list-ops .list-op-btn {
+  height: 24px !important;
+  min-width: 0 !important;
+  padding: 0 8px !important;
+  font-size: 12px;
+  border-radius: 4px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.list-ops .list-op-btn--view {
+  color: #165dff !important;
+  border-color: #165dff !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--view:hover {
+  color: #fff !important;
+  background: #165dff !important;
+  border-color: #165dff !important;
+}
+
+.list-ops .list-op-btn--edit {
+  color: #0e42d2 !important;
+  border-color: #0e42d2 !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--edit:hover {
+  color: #fff !important;
+  background: #0e42d2 !important;
+  border-color: #0e42d2 !important;
+}
+
+.list-ops .list-op-btn--delete {
+  color: #f53f3f !important;
+  border-color: #f53f3f !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--delete:hover {
+  color: #fff !important;
+  background: #f53f3f !important;
+  border-color: #f53f3f !important;
+}
+
+.list-ops .list-op-btn--add {
+  color: #00b42a !important;
+  border-color: #00b42a !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--add:hover {
+  color: #fff !important;
+  background: #00b42a !important;
+  border-color: #00b42a !important;
+}
+
+.list-ops .list-op-btn--log {
+  color: #722ed1 !important;
+  border-color: #722ed1 !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--log:hover {
+  color: #fff !important;
+  background: #722ed1 !important;
+  border-color: #722ed1 !important;
+}
+
+.list-ops .list-op-btn--review {
+  color: #ff7d00 !important;
+  border-color: #ff7d00 !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--review:hover {
+  color: #fff !important;
+  background: #ff7d00 !important;
+  border-color: #ff7d00 !important;
+}
+
+.list-ops .list-op-btn--run {
+  color: #0fc6c2 !important;
+  border-color: #0fc6c2 !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--run:hover {
+  color: #fff !important;
+  background: #0fc6c2 !important;
+  border-color: #0fc6c2 !important;
+}
+
+.list-ops .list-op-btn--analyze {
+  color: #3491fa !important;
+  border-color: #3491fa !important;
+  background: #fff !important;
+}
+.list-ops .list-op-btn--analyze:hover {
+  color: #fff !important;
+  background: #3491fa !important;
+  border-color: #3491fa !important;
+}
+
+/* 盖过 enterprise-management 对最后一列的灰底/大 padding，避免操作列表头露白、按钮被裁切 */
+.list-table-page .list-table .arco-table-th:last-child,
+.list-table-page .list-table .arco-table-th.list-ops-col,
+.list-table-page .list-table .arco-table-th.arco-table-col-fixed-right,
+.list-table-page .list-table .arco-table-th.arco-table-col-fixed-right-last,
+.list-table-page.enterprise-management .list-table .arco-table-th:last-child,
+.list-table-page.enterprise-management .list-table .arco-table-th.list-ops-col,
+.list-table-page.ipo-projects-page .list-table .arco-table-th:last-child,
+.list-table-page.financing-events-page.ipo-projects-page.enterprise-management .list-table .arco-table-th:last-child {
+  background: #e8f3ff !important;
+  background-color: #e8f3ff !important;
+  color: #0e42d2 !important;
+  font-weight: 700 !important;
+}
+
+.list-table-page .list-table .arco-table-th:last-child .arco-table-cell,
+.list-table-page .list-table .arco-table-th.list-ops-col .arco-table-cell,
+.list-table-page .list-table .arco-table-th.arco-table-col-fixed-right .arco-table-cell,
+.list-table-page.enterprise-management .list-table .arco-table-th:last-child .arco-table-cell,
+.list-table-page.ipo-projects-page .list-table .arco-table-th:last-child .arco-table-cell {
+  background: #e8f3ff !important;
+  background-color: #e8f3ff !important;
+  color: #0e42d2 !important;
+  font-weight: 700 !important;
+  padding-right: 8px !important;
+}
+
+.list-table-page.enterprise-management .list-table .arco-table-th.list-ops-col .arco-table-cell,
+.list-table-page.enterprise-management .list-table .arco-table-td.list-ops-col .arco-table-cell {
+  padding-right: 13px !important;
+}
+
+.list-table-page .list-table .arco-table-th.list-ops-col,
+.list-table-page .list-table .arco-table-td.list-ops-col,
+.list-table-page.enterprise-management .list-table .arco-table-th:last-child,
+.list-table-page.enterprise-management .list-table .arco-table-td:last-child,
+.list-table-page.financing-events-page.ipo-projects-page.enterprise-management .list-table .arco-table-th:last-child,
+.list-table-page.financing-events-page.ipo-projects-page.enterprise-management .list-table .arco-table-td:last-child {
+  padding: 6px 8px !important;
+}
+
+.list-table-page.enterprise-management .list-table .arco-table-td:last-child > *,
+.list-table-page.ipo-projects-page .list-table .arco-table-td.list-ops-col > * {
+  max-width: none;
+}
+
+.list-table-page .list-table .list-ops-col .arco-table-cell,
+.list-table-page.enterprise-management .list-table .arco-table-td:last-child .arco-table-cell,
+.list-table-page.ipo-projects-page .list-table .arco-table-td:last-child .arco-table-cell {
+  padding: 6px 8px !important;
+  padding-right: 8px !important;
+  white-space: nowrap;
+  overflow: visible;
+}
+
+.list-table-page.enterprise-management .list-table .list-ops-col .arco-table-cell {
+  padding-right: 13px !important;
+}
+
+.list-table-page.enterprise-management .list-ops .list-op-btn {
+  min-width: 0 !important;
+  height: 24px !important;
+  padding: 0 8px !important;
+}

@@ -2,18 +2,19 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Button, Card, Input, InputNumber, Select, Switch, Message, Space,
-  Typography, Alert, Upload, Progress, Modal, Checkbox, Tag, DatePicker, Tabs,
+  Typography, Alert, Progress, Modal, Checkbox, Tag, DatePicker, Tabs,
 } from '@arco-design/web-react'
 import { IconClose } from '@arco-design/web-react/icon'
 import {
   fetchValuationCase, fetchValuationDraft, putValuationDraft, patchValuationCase,
-  fetchComparablePreview, fetchCaseComparables, fetchComparableFinancials, putCaseComparables, postManualComparable,
-  importComparablesExcel, patchCaseComparable, postValuationJob, fetchValuationJob,
+  fetchCaseComparables, fetchComparableFinancials,
+  patchCaseComparable, postValuationJob, fetchValuationJob,
   postValuationVersion, fetchValuationVersion, postValuationDraftFromVersion, downloadValuationExport,
   fetchIndustryMultiplesStatus,
   fetchSwIndustryNames,
 } from '../../api/valuation'
 import ValuationDetailModal from './ValuationDetailModal'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { coercePayloadToWan, fmtYi, fmtNum, fmtPct, fmtAmountWan, roundWanToFen, wanInputNumberProps, formatChinaDateTime, formatChinaYmd, previewWaccBreakdown } from './valuationUnits'
 import ValuationFootballField from './ValuationFootballField'
 import {
@@ -26,6 +27,7 @@ import ComparableFinancialTable from './ComparableFinancialTable'
 import { ListTable } from './valuationTable'
 import ValuationMethodGuide from './ValuationMethodGuide'
 import TargetFinancialImportBar from './TargetFinancialImportBar'
+import ComparableCompsPanel from './ComparableCompsPanel'
 import ValuationTieOutPanel from './ValuationTieOutPanel'
 import {
   BS_INPUT_FIELDS,
@@ -83,8 +85,6 @@ const NAV_GROUPS = [
   },
 ]
 const STEPS = NAV_GROUPS.flatMap((g) => g.items)
-
-const MARKET_LABEL = { sse: '上交所', szse: '深交所', bse: '北交所', neeq: '新三板' }
 
 function emptyPl() {
   return { years: ['2026', '2027'], revenue: [0, 0], cogs: [], selling: [], admin: [], rd: [], operating_profit: [], net_income: [], revenue_growth: [] }
@@ -561,12 +561,9 @@ export default function ValuationWorkbenchPage() {
   const [cse, setCse] = useState(null)
   const [payload, setPayload] = useState(null)
   const [comps, setComps] = useState([])
-  const [previewMsg, setPreviewMsg] = useState('')
-  const [refreshBlocked, setRefreshBlocked] = useState(false)
   const [loading, setLoading] = useState(true)
   const [job, setJob] = useState(null)
   const [detailOpen, setDetailOpen] = useState(false)
-  const [manualCode, setManualCode] = useState('')
   const [compFinancials, setCompFinancials] = useState([])
   const [compFinLoading, setCompFinLoading] = useState(false)
   const [viewingKey, setViewingKey] = useState('draft')
@@ -663,25 +660,6 @@ export default function ValuationWorkbenchPage() {
       setCompFinLoading(false)
     }
   }, [caseId])
-
-  const loadPreview = async () => {
-    try {
-      const res = await fetchComparablePreview(caseId)
-      if (!res.data?.success) return
-      const d = res.data.data
-      setPreviewMsg(d.message || '')
-      setRefreshBlocked(!!d.refresh_blocked || !!d.source_missing)
-      if (d.list?.length) {
-        const selected = d.list.filter((x) => x.selectable)
-        await putCaseComparables(caseId, selected.map((x) => ({ ...x, selected: 1 })))
-        const saved = await fetchCaseComparables(caseId)
-        setComps(saved.data?.data?.list || [])
-        Message.success(`已写入 ${selected.length} 家境内可比（港股/美股已排除）`)
-      }
-    } catch (e) {
-      Message.error(e.response?.data?.message || e.message || '加载可比失败')
-    }
-  }
 
   const startPoll = (jobId) => {
     clearInterval(pollRef.current)
@@ -1164,123 +1142,11 @@ export default function ValuationWorkbenchPage() {
 
         {step === 'comps' && (
           <Card title="可比上市公司" bordered={false}>
-            {previewMsg ? <Alert type="info" content={previewMsg} style={{ marginBottom: 12 }} /> : null}
-            {refreshBlocked ? (
-              <Alert type="warning" content="竞品分析来源已删除，无法刷新可比，仅可使用已勾选快照或手工导入" style={{ marginBottom: 12 }} />
-            ) : null}
-            <Space style={{ marginBottom: 12 }} wrap>
-              <Button disabled={refreshBlocked} onClick={loadPreview}>从最新成功竞品分析加载</Button>
-              <Input
-                value={manualCode}
-                placeholder="手工股票代码"
-                style={{ width: 140 }}
-                onChange={setManualCode}
-              />
-              <Button
-                onClick={async () => {
-                  try {
-                    const res = await postManualComparable(caseId, { stock_code: manualCode })
-                    if (res.data?.success) {
-                      setManualCode('')
-                      const saved = await fetchCaseComparables(caseId)
-                      setComps(saved.data?.data?.list || [])
-                    } else Message.error(res.data?.message || '添加失败')
-                  } catch (e) {
-                    Message.error(e.response?.data?.message || e.message || '添加失败')
-                  }
-                }}
-              >
-                添加
-              </Button>
-              <Upload
-                accept=".xlsx,.xls"
-                showUploadList={false}
-                customRequest={async ({ file }) => {
-                  try {
-                    const res = await importComparablesExcel(caseId, file)
-                    const skipped = res.data?.data?.skipped || []
-                    Message.success(`导入 ${res.data?.data?.added?.length || 0} 条${skipped.length ? `，跳过 ${skipped.length}` : ''}`)
-                    const saved = await fetchCaseComparables(caseId)
-                    setComps(saved.data?.data?.list || [])
-                  } catch (e) {
-                    Message.error(e.response?.data?.message || e.message || '导入失败')
-                  }
-                }}
-              >
-                <Button>Excel 导入代码</Button>
-              </Upload>
-            </Space>
-            <ListTable
-              rowKey="id"
-              pagination={false}
-              columns={[
-                {
-                  title: '勾选',
-                  width: 52,
-                  render: (_, r) => (
-                    <Checkbox
-                      checked={!!r.selected}
-                      disabled={!!r.disabled_reason}
-                      onChange={(v) => {
-                        patchCaseComparable(caseId, r.id, { selected: v }).then(() => {
-                          setComps((prev) => prev.map((x) => (x.id === r.id ? { ...x, selected: v ? 1 : 0 } : x)))
-                        })
-                      }}
-                    />
-                  ),
-                },
-                { title: '代码', dataIndex: 'stock_code', width: 72 },
-                { title: '名称', dataIndex: 'stock_name', width: 80, ellipsis: true },
-                { title: '市场', dataIndex: 'listing_market', width: 72, render: (v) => MARKET_LABEL[v] || v || '-' },
-                {
-                  title: '综合分',
-                  dataIndex: 'relevance_score',
-                  width: 72,
-                  align: 'right',
-                  render: (v) => (v == null || v === '' ? '-' : fmtNum(v, 2)),
-                },
-                {
-                  title: '可比程度',
-                  dataIndex: 'comparability',
-                  width: 88,
-                  render: (v, r) => (
-                    <Select
-                      size="mini"
-                      value={v}
-                      style={{ width: 72 }}
-                      options={[
-                        { value: 'strong', label: '强' },
-                        { value: 'medium', label: '中' },
-                        { value: 'weak', label: '弱' },
-                      ]}
-                      onChange={(nv) => {
-                        const inPool = nv === 'strong' || nv === 'medium'
-                        patchCaseComparable(caseId, r.id, { comparability: nv, in_pool: inPool }).then(() => {
-                          setComps((prev) => prev.map((x) => (x.id === r.id ? { ...x, comparability: nv, in_pool: inPool ? 1 : 0 } : x)))
-                        })
-                      }}
-                    />
-                  ),
-                },
-                {
-                  title: 'POOL',
-                  dataIndex: 'in_pool',
-                  width: 56,
-                  render: (v, r) => (
-                    <Switch
-                      size="small"
-                      checked={!!v}
-                      onChange={(nv) => {
-                        patchCaseComparable(caseId, r.id, { in_pool: nv }).then(() => {
-                          setComps((prev) => prev.map((x) => (x.id === r.id ? { ...x, in_pool: nv ? 1 : 0 } : x)))
-                        })
-                      }}
-                    />
-                  ),
-                },
-                { title: '说明', dataIndex: 'disabled_reason', width: 240, ellipsis: true, render: (v) => v || '-' },
-              ]}
-              data={comps}
+            <ComparableCompsPanel
+              caseId={caseId}
+              isDraftView={isDraftView}
+              comps={comps}
+              setComps={setComps}
             />
           </Card>
         )}
@@ -1844,31 +1710,38 @@ export default function ValuationWorkbenchPage() {
         unsaved={isDraftView}
         warnings={[...notices.info, ...notices.warn]}
       />
-      <Modal
-        title="导出 Excel"
+      <SheetModal
         visible={exportOpen}
-        onCancel={() => setExportOpen(false)}
-        onOk={confirmExport}
-        confirmLoading={exporting}
-        okText="导出"
-        unmountOnExit
+        title="导出 Excel"
+        onClose={() => setExportOpen(false)}
       >
-        <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-          可多选。每个版本（含草稿）各导出一个 xlsx。过程表含 Excel 公式：相对估值 ±1σ、市场法非流通权益、DCF 折现因子/现值/终值、结果对比增量。
-        </Typography.Paragraph>
-        <Checkbox.Group
-          value={exportIds}
-          onChange={setExportIds}
-          direction="vertical"
-        >
-          <Checkbox value="draft">当前草稿</Checkbox>
-          {archivedVersions.map((v) => (
-            <Checkbox key={v.id} value={v.id}>
-              {`v${v.version_no} · ${formatChinaDateTime(v.created_at)}`}
-            </Checkbox>
-          ))}
-        </Checkbox.Group>
-      </Modal>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <p className="form-hint">
+              可多选。每个版本（含草稿）各导出一个 xlsx。过程表含 Excel 公式。
+            </p>
+            <Checkbox.Group
+              value={exportIds}
+              onChange={setExportIds}
+              direction="vertical"
+            >
+              <Checkbox value="draft">当前草稿</Checkbox>
+              {archivedVersions.map((v) => (
+                <Checkbox key={v.id} value={v.id}>
+                  {`v${v.version_no} · ${formatChinaDateTime(v.created_at)}`}
+                </Checkbox>
+              ))}
+            </Checkbox.Group>
+          </div>
+          <SheetActions
+            onCancel={() => setExportOpen(false)}
+            submitLabel="导出"
+            submitType="button"
+            onSubmitClick={confirmExport}
+            submitLoading={exporting}
+          />
+        </div>
+      </SheetModal>
     </div>
   )
 }

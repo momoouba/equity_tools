@@ -24,6 +24,7 @@ import {
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import axios from '../../utils/axios'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
 import {
   fetchFinancingEvents,
   postFinancingSync,
@@ -34,6 +35,8 @@ import {
 import { FINANCING_INTERFACE_TYPE, PROJECT_SOURCING_APP_NAME } from './financingConstants'
 import { IntroPopoverCell } from './introPopoverAiCell'
 import { getUser } from '../../utils/auth'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import './FinancingEventsPage.css'
 
 const Option = Select.Option
@@ -338,13 +341,13 @@ export default function FinancingEventsPage() {
     { title: '统一社会信用代码', dataIndex: 'company_credit_code', width: 190, ellipsis: true },
     {
       title: '操作',
-      width: 100,
+      width: 88,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, row) => (
-        <Space size={8} style={{ padding: '0 10px' }}>
-          <Button
-            type="outline"
-            size="small"
+        <ListOps>
+          <ListOpButton
+            name="详情"
             onClick={() => {
               Modal.info({
                 title: '融资事件详情',
@@ -356,10 +359,8 @@ export default function FinancingEventsPage() {
                 ),
               })
             }}
-          >
-            详情
-          </Button>
-        </Space>
+          />
+        </ListOps>
       ),
     },
   ]
@@ -553,7 +554,7 @@ export default function FinancingEventsPage() {
   }
 
   return (
-    <div className="financing-events-page" style={{ padding: '16px 24px' }}>
+    <div className="financing-events-page list-table-page" style={{ padding: '4px 24px 0' }}>
       <Space direction="vertical" size={8} style={{ marginBottom: 8, width: '100%' }}>
         <Space wrap>
           <Input
@@ -795,6 +796,7 @@ export default function FinancingEventsPage() {
       </Space>
 
       <Table
+        className="list-table"
         rowKey="id"
         loading={loading}
         columns={columns}
@@ -831,24 +833,22 @@ export default function FinancingEventsPage() {
         }}
       />
 
-      <Modal
-        title={`AI 增强执行日志（已选 ${selectedRowKeys.length} 条融资事件，按时间降序）`}
+      <SheetViewer
         visible={aiLogVisible}
-        footer={null}
-        onCancel={() => setAiLogVisible(false)}
-        style={{ width: 960 }}
-        unmountOnExit
+        title={`AI 增强执行日志（已选 ${selectedRowKeys.length} 条融资事件，按时间降序）`}
+        onClose={() => setAiLogVisible(false)}
       >
-        <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
-          成功任务会在下列表中展示「产品简介」「企业标签」快照；「联网状态」记录本次是否带 enable_search、是否降级及批量/复用等调用方式。失败任务仅显示错误摘要。
+        <p className="form-hint">
+          成功任务会在下列表中展示「产品简介」「企业标签」快照；失败任务仅显示错误摘要。
         </p>
         <Table
+          className="list-table"
           rowKey="id"
           loading={aiLogLoading}
           data={aiLogRows}
           stripe
           border
-          scroll={{ x: 1000, y: 420 }}
+          scroll={{ x: 1000, y: 320 }}
           columns={[
             { title: '融资事件ID', dataIndex: 'financing_event_id', width: 120 },
             { title: '触发时间', dataIndex: 'triggered_at', width: 168, render: formatFinancingDateTime },
@@ -888,173 +888,189 @@ export default function FinancingEventsPage() {
           ]}
           pagination={false}
         />
-      </Modal>
+      </SheetViewer>
 
-      <Modal
-        title="重试失败 AI（仅 failed）"
+      <SheetModal
         visible={retryFailedVisible}
-        onOk={handleRetryFailedAiOk}
-        confirmLoading={retryFailedSubmitting}
-        onCancel={() => setRetryFailedVisible(false)}
-        style={{ width: 520 }}
-        okText="加入重试队列"
+        title="重试失败 AI（仅 failed）"
+        onClose={() => setRetryFailedVisible(false)}
       >
-        <Form form={retryFailedForm} layout="vertical">
-          <FormItem
-            label="融资日期范围（含首尾两天，仅筛选 AI 状态为 failed 的 sourcing_financing_event）"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </FormItem>
-        </Form>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          仅对 <strong>ai_enrich_status = failed</strong> 的融资事件重新排队；去重规则与「批量AI取数」相同（按统一社会信用代码或企业全称）。定时/手动投融资同步完成后，服务端也会<strong>自动</strong>对本同步区间内的失败记录尝试排队重试（无失败则跳过）。
-        </p>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
-          执行方式与批量 AI 一致（超阈值走百炼 Batch，否则并发 chat），日志中触发类型为 <code>batch_retry_failed</code>。
-        </p>
-      </Modal>
-
-      <Modal
-        title="批量 AI 取数"
-        visible={batchAiVisible}
-        onOk={handleBatchAiOk}
-        confirmLoading={batchAiSubmitting}
-        onCancel={() => setBatchAiVisible(false)}
-        style={{ width: 560 }}
-        okText="加入队列"
-      >
-        <Form form={batchAiForm} layout="vertical" initialValues={{ mode: 'date_range', force_refresh: true }}>
-          <FormItem label="取数范围" field="mode" rules={[{ required: true }]}>
-            <RadioGroup>
-              <Radio value="selected" disabled={!selectedRowKeys.length}>
-                按选中行（已选 {selectedRowKeys.length} 条）
-              </Radio>
-              <Radio value="date_range">按融资日期区间</Radio>
-            </RadioGroup>
-          </FormItem>
-          <Form.Item shouldUpdate noStyle>
-            {(values) =>
-              values.mode === 'selected' ? (
-                <FormItem label="强制重新取数" field="force_refresh" triggerPropName="checked">
-                  <Switch />
-                </FormItem>
-              ) : (
-                <FormItem
-                  label="融资日期范围（含首尾两天，筛选 sourcing_financing_event.event_date）"
-                  field="date_range"
-                  rules={[{ required: true, message: '请选择日期范围' }]}
-                >
-                  <DatePicker.RangePicker style={{ width: '100%' }} />
-                </FormItem>
-              )
-            }
-          </Form.Item>
-        </Form>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          先按<strong>统一社会信用代码</strong>（有则优先）或<strong>企业全称</strong>在当次范围内<strong>去重</strong>，每个主体最多调用一次模型。按日期区间时，若库内已有可复用的 AI 简介/标签则会直接复用；<strong>按选中行</strong>默认<strong>强制重新取数</strong>（适合修正错误简介，如蓝纳成）。写入成功后按信用代码扇出同步到该企业全部融资记录。
-        </p>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 4 }}>
-          <strong>服务端执行方式</strong>（与去重后的企业数有关，默认阈值 100，可由环境变量
-          FINANCING_AI_BATCH_FILE_THRESHOLD 调整）：超过阈值时走<strong>百炼 Batch File</strong>——接口会先完成上传与创建
-          Batch，HTTP 202 响应里会带上 <code>dashscope_batch_id</code>，随后在后台轮询结果并写库；不超过阈值时走<strong>并发
-          chat 请求</strong>（并发度 FINANCING_AI_CONCURRENCY，默认 4），波次之间间隔 FINANCING_AI_BATCH_GAP_MS（默认
-          500ms，下限 500ms）。手动单条「AI 取数」与上述并发共用同一并发上限。
-        </p>
-      </Modal>
-
-      <Modal
-        title="投融资数据同步（queryByDate）"
-        visible={syncVisible}
-        onOk={handleSyncOk}
-        confirmLoading={syncSubmitting}
-        onCancel={() => setSyncVisible(false)}
-        style={{ width: 520 }}
-      >
-        <Form form={syncForm} layout="vertical">
-          <FormItem
-            label="接口配置"
-            field="config_id"
-            rules={[{ required: true, message: '请选择配置' }]}
-          >
-            <Select
-              placeholder="请选择融资信息源接口配置"
-              loading={configsLoading}
-              allowClear={false}
+        <Form form={retryFailedForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="融资日期范围（含首尾两天，仅筛选 AI 状态为 failed 的事件）"
+              field="date_range"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+              className="form-span-2"
             >
-              {financingConfigs.map((c) => (
-                <Option key={c.id} value={c.id}>
-                  {c.id} · {c.request_url?.slice(0, 48) || '—'}…
-                </Option>
-              ))}
-            </Select>
-          </FormItem>
-          <FormItem
-            label="日期范围（按融资日期 queryByDate，逐日请求）"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </FormItem>
+              <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+            </FormItem>
+            <p className="form-hint form-span-4">
+              仅对 ai_enrich_status = failed 的融资事件重新排队；去重规则与「批量AI取数」相同。执行方式与批量 AI 一致，日志触发类型为 batch_retry_failed。
+            </p>
+          </div>
+          <SheetActions
+            onCancel={() => setRetryFailedVisible(false)}
+            submitLabel="加入重试队列"
+            submitType="button"
+            onSubmitClick={handleRetryFailedAiOk}
+            submitLoading={retryFailedSubmitting}
+          />
         </Form>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          使用「系统配置 → 融资信息源配置」中已启用的投融资接口；凭证取自对应应用的「上海国际集团接口配置」。
-        </p>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="批量百科查词"
-        visible={batchBaikeVisible}
-        onOk={async () => {
-          const values = await batchBaikeForm.validate()
-          const [d0, d1] = values.date_range || []
-          if (!d0 || !d1) {
-            Message.warning('请选择日期范围')
-            return
-          }
-          setBatchBaikeSubmitting(true)
-          try {
-            const res = await postFinancingBatchBaikeLookup({
-              start_date: dayjs(d0).format('YYYY-MM-DD'),
-              end_date: dayjs(d1).format('YYYY-MM-DD'),
-              force: Boolean(values.force),
-            })
-            if (res.data?.success) {
-              Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
-              load()
-            } else {
-              Message.error(res.data?.message || '批量查词失败')
-            }
-          } catch (e) {
-            Message.error(e.response?.data?.message || e.message || '批量查词失败')
-          } finally {
-            setBatchBaikeSubmitting(false)
-            setBatchBaikeVisible(false)
-          }
-        }}
-        confirmLoading={batchBaikeSubmitting}
-        onCancel={() => setBatchBaikeVisible(false)}
-        style={{ width: 520 }}
+      <SheetModal
+        visible={batchAiVisible}
+        title="批量 AI 取数"
+        onClose={() => setBatchAiVisible(false)}
       >
-        <Form form={batchBaikeForm} layout="vertical">
-          <FormItem
-            label="融资日期范围（按 event_date 筛选）"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </FormItem>
-          <FormItem label="强制重跑（覆盖已查词）" field="force" triggerPropName="checked">
-            <Switch />
-          </FormItem>
+        <Form form={batchAiForm} layout="vertical" initialValues={{ mode: 'date_range', force_refresh: true }} className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="取数范围" field="mode" rules={[{ required: true }]} className="form-span-2">
+              <RadioGroup>
+                <Radio value="selected" disabled={!selectedRowKeys.length}>
+                  按选中行（已选 {selectedRowKeys.length} 条）
+                </Radio>
+                <Radio value="date_range">按融资日期区间</Radio>
+              </RadioGroup>
+            </FormItem>
+            <Form.Item shouldUpdate noStyle>
+              {(values) =>
+                values.mode === 'selected' ? (
+                  <FormItem label="强制重新取数" field="force_refresh" triggerPropName="checked">
+                    <Switch />
+                  </FormItem>
+                ) : (
+                  <FormItem
+                    label="融资日期范围（含首尾两天）"
+                    field="date_range"
+                    rules={[{ required: true, message: '请选择日期范围' }]}
+                    className="form-span-2"
+                  >
+                    <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                  </FormItem>
+                )
+              }
+            </Form.Item>
+            <p className="form-hint form-span-4">
+              先按统一社会信用代码或企业全称去重，每个主体最多调用一次模型。按选中行默认强制重新取数。
+            </p>
+          </div>
+          <SheetActions
+            onCancel={() => setBatchAiVisible(false)}
+            submitLabel="加入队列"
+            submitType="button"
+            onSubmitClick={handleBatchAiOk}
+            submitLoading={batchAiSubmitting}
+          />
         </Form>
-        <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-          按企业名称调用百度百科查词（HTTP + Playwright），结果 fan-out 至同一信用代码下的全部融资记录。默认跳过已查词（baike_lookup_at
-          非空）；开启「强制重跑」会重新抓取并覆盖简介，并异步重跑结构化。任务后台执行，请稍后刷新；进度见服务器 docker
-          compose logs app -f。
-        </p>
-      </Modal>
+      </SheetModal>
+
+      <SheetModal
+        visible={syncVisible}
+        title="投融资数据同步（queryByDate）"
+        onClose={() => setSyncVisible(false)}
+      >
+        <Form form={syncForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="接口配置"
+              field="config_id"
+              rules={[{ required: true, message: '请选择配置' }]}
+              className="form-span-2"
+            >
+              <Select
+                placeholder="请选择融资信息源接口配置"
+                loading={configsLoading}
+                allowClear={false}
+                getPopupContainer={sheetPopupContainer}
+              >
+                {financingConfigs.map((c) => (
+                  <Option key={c.id} value={c.id}>
+                    {c.id} · {c.request_url?.slice(0, 48) || '—'}…
+                  </Option>
+                ))}
+              </Select>
+            </FormItem>
+            <FormItem
+              label="日期范围（按融资日期 queryByDate，逐日请求）"
+              field="date_range"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+              className="form-span-2"
+            >
+              <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+            </FormItem>
+            <p className="form-hint form-span-4">
+              使用「系统配置 → 融资信息源配置」中已启用的投融资接口；凭证取自对应应用的「上海国际集团接口配置」。
+            </p>
+          </div>
+          <SheetActions
+            onCancel={() => setSyncVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={handleSyncOk}
+            submitLoading={syncSubmitting}
+          />
+        </Form>
+      </SheetModal>
+
+      <SheetModal
+        visible={batchBaikeVisible}
+        title="批量百科查词"
+        onClose={() => setBatchBaikeVisible(false)}
+      >
+        <Form form={batchBaikeForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="融资日期范围（按 event_date 筛选）"
+              field="date_range"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+              className="form-span-2"
+            >
+              <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+            </FormItem>
+            <FormItem label="强制重跑（覆盖已查词）" field="force" triggerPropName="checked">
+              <Switch />
+            </FormItem>
+            <p className="form-hint form-span-4">
+              按企业名称调用百度百科查词。默认跳过已查词；开启「强制重跑」会覆盖简介。任务后台执行，请稍后刷新。
+            </p>
+          </div>
+          <SheetActions
+            onCancel={() => setBatchBaikeVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={async () => {
+              const values = await batchBaikeForm.validate()
+              const [d0, d1] = values.date_range || []
+              if (!d0 || !d1) {
+                Message.warning('请选择日期范围')
+                return
+              }
+              setBatchBaikeSubmitting(true)
+              try {
+                const res = await postFinancingBatchBaikeLookup({
+                  start_date: dayjs(d0).format('YYYY-MM-DD'),
+                  end_date: dayjs(d1).format('YYYY-MM-DD'),
+                  force: Boolean(values.force),
+                })
+                if (res.data?.success) {
+                  Message.success(res.data.message || '已受理百科批量查词，请稍后刷新列表')
+                  load()
+                } else {
+                  Message.error(res.data?.message || '批量查词失败')
+                }
+              } catch (e) {
+                Message.error(e.response?.data?.message || e.message || '批量查词失败')
+              } finally {
+                setBatchBaikeSubmitting(false)
+                setBatchBaikeVisible(false)
+              }
+            }}
+            submitLoading={batchBaikeSubmitting}
+          />
+        </Form>
+      </SheetModal>
     </div>
   )
 }

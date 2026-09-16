@@ -5,6 +5,9 @@ import { getUser } from '../utils/auth'
 import AdditionalAccounts from './AdditionalAccounts'
 import RecipientManagement from './RecipientManagement'
 import UserEmailRecords from './UserEmailRecords'
+import SheetModal, { SheetActions, SheetViewer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './NewsInfo.css'
 
 const Option = Select.Option
@@ -887,54 +890,24 @@ function NewsInfo() {
       render: (text) => formatDate(text)
     }, {
       title: '操作',
-      width: 100,
-      align: 'center',
+      width: 168,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <div style={{ 
-          display: 'flex', 
-          flexDirection: 'column',
-          justifyContent: 'center', 
-          alignItems: 'center',
-          gap: '4px',
-          paddingLeft: '4px',
-          paddingRight: '4px',
-          width: '100%'
-        }}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleViewDetail(record)}
-            style={{ width: '100%' }}
-          >
-            详情
-          </Button>
-          {record.content && (
-            <Button
-              type="outline"
-              size="small"
-              status="success"
-              onClick={() => handleViewContent(record)}
-              style={{ width: '100%' }}
-            >
-              正文
-            </Button>
-          )}
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-            style={{ width: '100%' }}
-          >
-            删除
-          </Button>
-        </div>
+        <ListOps>
+          <ListOpButton name="详情" onClick={() => handleViewDetail(record)} />
+          {record.content ? (
+            <ListOpButton name="正文" onClick={() => handleViewContent(record)} />
+          ) : null}
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+        </ListOps>
       )
     }] : [])
   ]
 
   return (
-    <div className="news-info">
+    <div className="news-info list-table-page" style={{ '--list-ops-col-width': isAdmin ? '168px' : undefined }}>
       <Tabs
         activeTab={adminActiveTab}
         onChange={setAdminActiveTab}
@@ -943,7 +916,7 @@ function NewsInfo() {
       >
         <TabPane key="news" title="舆情信息">
           <Card className="news-card" bordered={false}>
-            <div className="news-header">
+            <div className="news-header management-header">
               <h2>
                 舆情信息
                 {isAdmin && <Tag color="orange" style={{ marginLeft: '8px' }}>（管理员 - 全部数据）</Tag>}
@@ -1197,6 +1170,7 @@ function NewsInfo() {
                   loading={loading}
                   pagination={false}
                   rowKey="id"
+                  className="list-table"
                   border={{
                     wrapper: true,
                     cell: true
@@ -1276,10 +1250,10 @@ function NewsInfo() {
       </Tabs>
 
       {/* 分享链接对话框 */}
-      <Modal
+      <SheetModal
         visible={showShareModal}
         title="公共链接分享"
-        onCancel={() => {
+        onClose={() => {
           setShowShareModal(false)
           setShareConfig({
             enabled: false,
@@ -1291,10 +1265,9 @@ function NewsInfo() {
           setShareLink(null)
           setCurrentShareLinkId(null)
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
-        <div style={{ padding: '20px 0' }}>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
           {/* 开启/关闭开关 */}
           <div style={{ marginBottom: '24px', paddingBottom: '20px', borderBottom: '1px solid #e0e0e0' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
@@ -1422,43 +1395,33 @@ function NewsInfo() {
           )}
 
           {/* 操作按钮 */}
-          {shareConfig.enabled && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px', marginTop: '24px', paddingTop: '20px', borderTop: '1px solid #e0e0e0' }}>
-              <Button
-                onClick={() => {
-                  setShowShareModal(false)
-                  setShareConfig({
-                    enabled: false,
-                    hasExpiry: false,
-                    expiryTime: '',
-                    hasPassword: false,
-                    password: ''
-                  })
-                  setShareLink(null)
-                  setCurrentShareLinkId(null)
-                }}
-              >
-                取消
-              </Button>
-              <Button
-                type="primary"
-                onClick={handleCreateShareLink}
-                loading={shareLoading}
-              >
-                {shareLoading ? (currentShareLinkId ? '更新中...' : '创建中...') : (currentShareLinkId ? '更新链接' : '创建链接')}
-              </Button>
-            </div>
-          )}
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setShowShareModal(false)
+              setShareConfig({
+                enabled: false,
+                hasExpiry: false,
+                expiryTime: '',
+                hasPassword: false,
+                password: ''
+              })
+              setShareLink(null)
+              setCurrentShareLinkId(null)
+            }}
+            submitLabel={shareConfig.enabled ? (currentShareLinkId ? '更新链接' : '创建链接') : ''}
+            submitType="button"
+            onSubmitClick={handleCreateShareLink}
+            submitLoading={shareLoading}
+          />
         </div>
-      </Modal>
+      </SheetModal>
 
       {/* 详情模态框 */}
-      <Modal
+      <SheetViewer
         visible={showDetailModal}
         title="舆情详情"
-        onCancel={closeModal}
-        footer={null}
-        style={{ width: 600 }}
+        onClose={closeModal}
       >
         {selectedNews && (
           <div className="detail-content">
@@ -1514,15 +1477,13 @@ function NewsInfo() {
             )}
           </div>
         )}
-      </Modal>
+      </SheetViewer>
 
       {/* 正文模态框 */}
-      <Modal
+      <SheetViewer
         visible={showContentModal}
         title="文章正文"
-        onCancel={closeModal}
-        footer={null}
-        style={{ width: 800 }}
+        onClose={closeModal}
       >
         {selectedNews && (
           <div>
@@ -1542,15 +1503,13 @@ function NewsInfo() {
             </div>
           </div>
         )}
-      </Modal>
+      </SheetViewer>
 
       {/* 导出选择模态框 */}
-      <Modal
+      <SheetViewer
         visible={showExportModal}
         title="选择导出范围"
-        onCancel={() => setShowExportModal(false)}
-        footer={null}
-        style={{ width: 600 }}
+        onClose={() => setShowExportModal(false)}
       >
         <div className="export-options">
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -1600,7 +1559,7 @@ function NewsInfo() {
             </Button>
           </Space>
         </div>
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }

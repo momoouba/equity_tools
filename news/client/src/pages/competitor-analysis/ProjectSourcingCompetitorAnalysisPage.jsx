@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback, useMemo } from 'react'
+﻿import React, { useEffect, useState, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import {
   Card,
   Table,
@@ -32,18 +32,21 @@ import CompetitorRelationReviewDrawer from './CompetitorRelationReviewDrawer'
 import CompetitionLensConfirmModal from './CompetitionLensConfirmModal'
 import CompetitorMatchSupplementModal from './CompetitorMatchSupplementModal'
 import CompetitorScheduleTasksModal from './CompetitorScheduleTasksModal'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import {
   getCompetitorRelationColumns,
   downloadBlob,
   parseExportFilename,
   sortRelationsForDisplay,
 } from './competitorRelationColumns'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import '../EnterpriseManagement.css'
 
 const FormItem = Form.Item
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
 /** 展开列 40 + 勾选 48 + 各列 width 之和 + 操作列 */
-const POST_INV_MAIN_TABLE_SCROLL_X = 1508
+const POST_INV_MAIN_TABLE_SCROLL_X = 1516
 
 function rowLabel(row) {
   return row?.enterprise_full_name || row?.project_abbreviation || row?.project_number || row?.id || ''
@@ -62,7 +65,7 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [tableScrollY, setTableScrollY] = useState(520)
+  const [tableScrollY, setTableScrollY] = useState(360)
   const [expandedKeys, setExpandedKeys] = useState([])
   const [relMap, setRelMap] = useState({})
   const [relLoading, setRelLoading] = useState({})
@@ -103,6 +106,7 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
     enterpriseName: '',
   })
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false)
+  const tableWrapRef = useRef(null)
 
   const openReviewDrawer = useCallback((record, opts = {}) => {
     setReviewDrawer({ visible: true, record, readOnly: !!opts.readOnly })
@@ -253,14 +257,25 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
-    const calc = () => {
-      setTableScrollY(Math.max(320, window.innerHeight - 320))
+  useLayoutEffect(() => {
+    const el = tableWrapRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const headerH = el.querySelector('.arco-table-header')?.offsetHeight || 40
+      const paginationH = el.querySelector('.arco-table-pagination')?.offsetHeight || 56
+      setTableScrollY(Math.max(200, Math.floor(h - headerH - paginationH - 4)))
     }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [])
+    measure()
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [embedded])
 
   const loadRuns = async (enterpriseId) => {
     if (runMap[enterpriseId]?.loaded) {
@@ -672,17 +687,26 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
       title: '操作',
       width: 80,
       fixed: 'right',
+      className: 'list-ops-col',
       render: (_, row) => (
-        <Button type="text" size="mini" onClick={() => openEditModal(row)}>
-          编辑
-        </Button>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => openEditModal(row)} />
+        </ListOps>
       ),
     },
   ]
 
   return (
-    <div className="pre-inv-sourcing-page" style={embedded ? undefined : { padding: '16px 24px' }}>
-      <Card title={embedded ? undefined : '投后-竞品分析（被投企业 × 竞品）'} bordered={false}>
+    <div
+      className={`pre-inv-sourcing-page list-table-page${embedded ? ' pre-inv-sourcing-page--embedded' : ''}`}
+      style={{ '--list-ops-col-width': '80px' }}
+    >
+      <Card
+        title={embedded ? undefined : '投后-竞品分析（被投企业 × 竞品）'}
+        bordered={false}
+        style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+      >
         <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
           仅展示<strong>已做过竞品分析</strong>且<strong>未退出</strong>的被投企业；展开可查看竞品关系（含产品介绍、企业标签、子基金）。勾选后可发起新一轮竞品分析；行内「编辑」可补充产品介绍、企业标签与企查查介绍。
         </p>
@@ -718,8 +742,9 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
             全量导出{yearFilter.length ? `（${yearFilter.join('、')}）` : ''}
           </Button>
         </Space>
+        <div ref={tableWrapRef} className="pre-inv-sourcing-table-wrap" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <Table
-          className="pre-inv-sourcing-main-table"
+          className="pre-inv-sourcing-main-table list-table"
           rowKey="id"
           stripe
           loading={loading}
@@ -774,8 +799,7 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
           }}
           scroll={{
             x: POST_INV_MAIN_TABLE_SCROLL_X,
-            // 嵌入标签页时顶部多出 tab 头，压缩表体高度避免整页滚动
-            y: embedded ? Math.max(300, tableScrollY - 96) : tableScrollY,
+            y: tableScrollY,
           }}
           pagination={{
             current: page,
@@ -794,23 +818,32 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
           }}
           border={{ wrapper: true, cell: true }}
         />
+        </div>
       </Card>
-      <Modal
-        title="导出已选被投企业"
+      <SheetModal
         visible={exportModalOpen}
-        onCancel={() => setExportModalOpen(false)}
-        onOk={() => runExport({ exportAll: false, batchMode: exportBatchMode })}
-        confirmLoading={exporting}
-        okText="开始导出"
+        title="导出已选被投企业"
+        onClose={() => setExportModalOpen(false)}
       >
-        <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
-          将导出当前勾选的 {selectedIds.length} 家被投企业竞品数据。
-        </p>
-        <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
-          <Radio value="latest">仅当前版本（页面所选分析批次，默认最新）</Radio>
-          <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
-        </Radio.Group>
-      </Modal>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <p className="form-hint">
+              将导出当前勾选的 {selectedIds.length} 家被投企业竞品数据。
+            </p>
+            <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
+              <Radio value="latest">仅当前版本（页面所选分析批次，默认最新）</Radio>
+              <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
+            </Radio.Group>
+          </div>
+          <SheetActions
+            onCancel={() => setExportModalOpen(false)}
+            submitLabel="开始导出"
+            submitType="button"
+            onSubmitClick={() => runExport({ exportAll: false, batchMode: exportBatchMode })}
+            submitLoading={exporting}
+          />
+        </div>
+      </SheetModal>
       <CompetitorAnalysisSummaryModal
         visible={summaryOpen}
         onClose={() => {
@@ -844,48 +877,58 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
           loadRelations(manualAddSubject.id, manualAddSubject.runId, true)
         }}
       />
-      <Modal
-        title={editingRow ? `编辑 — ${rowLabel(editingRow)}` : '编辑被投企业'}
-        style={{ width: 640 }}
+      <SheetModal
         visible={editVisible}
-        onCancel={() => {
+        title={editingRow ? `编辑 — ${rowLabel(editingRow)}` : '编辑被投企业'}
+        onClose={() => {
           setEditVisible(false)
           setEditingRow(null)
           editForm.resetFields()
         }}
-        onOk={handleEditSave}
-        confirmLoading={editSubmitting}
-        okText="保存"
       >
-        <p style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
-          可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
-        </p>
-        <Form form={editForm} layout="vertical">
-          <FormItem label="产品介绍（AI）" field="ai_product_intro">
-            <Input.TextArea
-              placeholder="请输入或粘贴产品介绍"
-              autoSize={{ minRows: 4, maxRows: 12 }}
-              maxLength={8000}
-              showWordLimit
-            />
-          </FormItem>
-          <FormItem
-            label="企业标签（AI）"
-            field="ai_industry_tags"
-            extra="多个标签请用中文逗号、英文逗号或顿号分隔"
-          >
-            <Input placeholder="例如：半导体、光刻胶、先进封装" />
-          </FormItem>
-          <FormItem label="企业介绍（企查查）" field="qcc_company_intro">
-            <Input.TextArea
-              placeholder="请输入企查查企业介绍正文"
-              autoSize={{ minRows: 4, maxRows: 12 }}
-              maxLength={16000}
-              showWordLimit
-            />
-          </FormItem>
+        <Form form={editForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <p className="form-hint form-span-4">
+              可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
+            </p>
+            <FormItem label="产品介绍（AI）" field="ai_product_intro" className="form-span-2">
+              <Input.TextArea
+                placeholder="请输入或粘贴产品介绍"
+                autoSize={{ minRows: 3, maxRows: 6 }}
+                maxLength={8000}
+                showWordLimit
+              />
+            </FormItem>
+            <FormItem
+              label="企业标签（AI）"
+              field="ai_industry_tags"
+              extra="多个标签请用中文逗号、英文逗号或顿号分隔"
+              className="form-span-2"
+            >
+              <Input placeholder="例如：半导体、光刻胶、先进封装" />
+            </FormItem>
+            <FormItem label="企业介绍（企查查）" field="qcc_company_intro" className="form-span-4">
+              <Input.TextArea
+                placeholder="请输入企查查企业介绍正文"
+                autoSize={{ minRows: 3, maxRows: 6 }}
+                maxLength={16000}
+                showWordLimit
+              />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setEditVisible(false)
+              setEditingRow(null)
+              editForm.resetFields()
+            }}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleEditSave}
+            submitLoading={editSubmitting}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
       <CompetitorMatchSupplementModal
         visible={competitorSupplementModal.visible}
         investedEnterpriseId={competitorSupplementModal.enterpriseId}

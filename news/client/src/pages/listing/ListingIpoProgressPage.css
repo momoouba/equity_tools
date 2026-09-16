@@ -1,7 +1,17 @@
+.listing-ipo-progress-page {
+  width: 100%;
+}
+
 .listing-ipo-progress-page .arco-table .arco-table-td {
   border-right: 1px solid #e5e6eb;
 }
 
 .listing-ipo-progress-page .arco-table .arco-table-th {
   border-right: 1px solid #e5e6eb;
+}
+
+.listing-ipo-progress-page .arco-table-pagination {
+  margin-top: 8px;
+  margin-bottom: 4px;
+  flex-shrink: 0;
 }

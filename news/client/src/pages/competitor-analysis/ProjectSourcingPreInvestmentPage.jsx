@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
+﻿import React, { useEffect, useState, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import {
   Card,
   Table,
@@ -34,6 +34,7 @@ import {
   patchCompetitorRelationComparable,
   deleteCompetitorRelation,
 } from '../../api/competitor-analysis'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { IntroPopoverCell } from './introPopoverAiCell'
 import CompetitorAnalysisSummaryModal from './CompetitorAnalysisSummaryModal'
 import CompetitorRelationManualAddModal from './CompetitorRelationManualAddModal'
@@ -45,8 +46,9 @@ import {
   downloadBlob,
   parseExportFilename,
   sortRelationsForDisplay,
-  adaptCompetitorRelationColumnsForEmbedded,
 } from './competitorRelationColumns'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
 
@@ -127,7 +129,7 @@ export default function ProjectSourcingPreInvestmentPage() {
   const tableWrapRef = useRef(null)
   const [tableLayoutWidth, setTableLayoutWidth] = useState(0)
   const [projectNoPreview, setProjectNoPreview] = useState('')
-  const [tableScrollY, setTableScrollY] = useState(520)
+  const [tableScrollY, setTableScrollY] = useState(360)
   const [batchBusy, setBatchBusy] = useState(null)
   const [baikeSubmitting, setBaikeSubmitting] = useState(false)
   const [batchBaikeSubmitting, setBatchBaikeSubmitting] = useState(false)
@@ -382,26 +384,24 @@ export default function ProjectSourcingPreInvestmentPage() {
     }
   }
 
-  useEffect(() => {
-    const calc = () => {
-      setTableScrollY(Math.max(320, window.innerHeight - 320))
-    }
-    calc()
-    window.addEventListener('resize', calc)
-    return () => window.removeEventListener('resize', calc)
-  }, [])
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = tableWrapRef.current
-    if (!el) return undefined
-    const syncWidth = () => setTableLayoutWidth(Math.floor(el.clientWidth))
-    syncWidth()
-    const ro = new ResizeObserver(syncWidth)
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      setTableLayoutWidth(Math.floor(el.clientWidth))
+      const h = el.clientHeight
+      if (h < 80) return
+      const headerH = el.querySelector('.arco-table-header')?.offsetHeight || 40
+      const paginationH = el.querySelector('.arco-table-pagination')?.offsetHeight || 56
+      setTableScrollY(Math.max(200, Math.floor(h - headerH - paginationH - 4)))
+    }
+    measure()
+    const ro = new ResizeObserver(() => measure())
     ro.observe(el)
-    window.addEventListener('resize', syncWidth)
+    window.addEventListener('resize', measure)
     return () => {
       ro.disconnect()
-      window.removeEventListener('resize', syncWidth)
+      window.removeEventListener('resize', measure)
     }
   }, [])
 
@@ -1004,27 +1004,22 @@ export default function ProjectSourcingPreInvestmentPage() {
     { title: '状态', dataIndex: 'pipeline_status', width: 80 },
     {
       title: '操作',
-      width: 100,
+      width: 86,
+      fixed: 'right',
+      className: 'list-ops-col',
       render: (_, row) => (
-        <Space size="mini">
-          <Button type="text" size="mini" onClick={() => openEditModal(row)}>
-            编辑
-          </Button>
-          <Button type="text" size="mini" status="danger" onClick={() => handleDeleteRow(row)}>
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => openEditModal(row)} />
+          <ListOpButton name="删除" onClick={() => handleDeleteRow(row)} />
+        </ListOps>
       ),
     },
   ]
 
-  const displayColumns = useMemo(
-    () => adaptCompetitorRelationColumnsForEmbedded(columns, tableLayoutWidth),
-    [columns, tableLayoutWidth]
-  )
+  const mainScrollX = columns.reduce((sum, col) => sum + (Number(col.width) || 0), 0) + 88
 
   return (
-    <div className="pre-inv-sourcing-page" style={{ padding: '16px 24px' }}>
+    <div className="pre-inv-sourcing-page list-table-page" style={{ '--list-ops-col-width': '86px' }}>
       <Card
         title="投前-竞品分析"
         bordered={false}
@@ -1033,6 +1028,8 @@ export default function ProjectSourcingPreInvestmentPage() {
             新增
           </Button>
         }
+        style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+        bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
       >
         <p style={{ color: 'var(--color-text-2)', marginBottom: 12, fontSize: 13 }}>
           新增成功后将自动依次同步企查查简介并受理 AI 取数；勾选项目后可在工具栏批量操作；AI 无法取数时可在行内「编辑」人工补充产品介绍、企业标签与企查查介绍。
@@ -1091,14 +1088,14 @@ export default function ProjectSourcingPreInvestmentPage() {
             批量百科查词
           </Button>
         </Space>
-        <div ref={tableWrapRef} className="pre-inv-sourcing-table-wrap">
+        <div ref={tableWrapRef} className="pre-inv-sourcing-table-wrap" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <Table
-          className="pre-inv-sourcing-main-table"
+          className="pre-inv-sourcing-main-table list-table"
           rowKey="id"
           stripe
           loading={loading}
           data={displayList}
-          columns={displayColumns}
+          columns={columns}
           expandedRowKeys={expandedKeys}
           onExpandedRowsChange={onExpandedRowsChange}
           expandProps={{ width: 36 }}
@@ -1147,7 +1144,7 @@ export default function ProjectSourcingPreInvestmentPage() {
               />
             )
           }}
-          scroll={{ y: tableScrollY }}
+          scroll={{ x: mainScrollX, y: tableScrollY }}
           pagination={{
             current: page,
             pageSize,
@@ -1168,27 +1165,25 @@ export default function ProjectSourcingPreInvestmentPage() {
         </div>
       </Card>
 
-      <Modal
-        title={editingRow ? `编辑 — ${rowLabel(editingRow)}` : '编辑投前项目'}
-        style={{ width: 640 }}
+      <SheetModal
         visible={editVisible}
-        onCancel={() => {
+        title={editingRow ? `编辑 — ${rowLabel(editingRow)}` : '编辑投前项目'}
+        onClose={() => {
           setEditVisible(false)
           setEditingRow(null)
           editForm.resetFields()
           setEditBpFile(null)
           setEditBpFileList([])
         }}
-        onOk={handleEditSave}
-        confirmLoading={editSubmitting}
-        okText="保存"
       >
-        <p style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
-          可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
-        </p>
-        <Form form={editForm} layout="vertical">
+        <Form form={editForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <p className="form-hint form-span-4">
+              可人工补充或修正以下字段，保存后立即用于竞品分析与列表展示。
+            </p>
           <FormItem
             label="上传BP"
+            className="form-span-4"
             extra={editingRow?.bp_filename && !editBpFile
               ? `当前BP：${editingRow.bp_filename}；重新选择文件将作为新版本保存`
               : editBpFile
@@ -1310,10 +1305,10 @@ export default function ProjectSourcingPreInvestmentPage() {
               </div>
             )}
           </FormItem>
-          <FormItem label="产品介绍（AI）" field="ai_product_intro">
+          <FormItem label="产品介绍（AI）" field="ai_product_intro" className="form-span-2">
             <Input.TextArea
               placeholder="请输入或粘贴产品介绍"
-              autoSize={{ minRows: 4, maxRows: 12 }}
+              autoSize={{ minRows: 3, maxRows: 6 }}
               maxLength={8000}
               showWordLimit
             />
@@ -1322,176 +1317,211 @@ export default function ProjectSourcingPreInvestmentPage() {
             label="企业标签（AI）"
             field="ai_industry_tags"
             extra="多个标签请用中文逗号、英文逗号或顿号分隔"
+            className="form-span-2"
           >
             <Input placeholder="例如：半导体、光刻胶、先进封装" />
           </FormItem>
-          <FormItem label="企业介绍（企查查）" field="qcc_company_intro">
+          <FormItem label="企业介绍（企查查）" field="qcc_company_intro" className="form-span-4">
             <Input.TextArea
               placeholder="请输入企查查企业介绍正文"
-              autoSize={{ minRows: 4, maxRows: 12 }}
+              autoSize={{ minRows: 3, maxRows: 6 }}
               maxLength={16000}
               showWordLimit
             />
           </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setEditVisible(false)
+              setEditingRow(null)
+              editForm.resetFields()
+              setEditBpFile(null)
+              setEditBpFileList([])
+            }}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleEditSave}
+            submitLoading={editSubmitting}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="新增企业信息"
-        style={{ width: 520 }}
+      <SheetModal
         visible={createVisible}
-        onCancel={() => {
+        title="新增企业信息"
+        onClose={() => {
           setCreateVisible(false)
           form.resetFields()
           clearQccDropdown()
           setBpFile(null)
           setBpFileList([])
         }}
-        onOk={async () => {
-          try {
-            const v = await form.validate()
-            setCreateSubmitting(true)
-            const payload = {
-              enterprise_full_name: v.enterprise_full_name,
-              unified_credit_code: v.unified_credit_code || '',
-              project_abbreviation: v.project_abbreviation || '',
-              project_no: projectNoPreview,
-            }
-            let res
-            if (bpFile) {
-              const fd = new FormData()
-              Object.entries(payload).forEach(([k, val]) => fd.append(k, val))
-              fd.append('bp_file', bpFile)
-              res = await postPreInvestmentProject(fd)
-            } else {
-              res = await postPreInvestmentProject(payload)
-            }
-            if (res.data?.success) {
-              const savedNo = res.data.data?.project_no || projectNoPreview
-              const projectId = res.data.data?.id
-              if (projectId) {
-                await runPostCreatePipeline(projectId, savedNo, { hasBpFile: !!bpFile })
-              } else {
-                Message.success(`已创建（项目编号 ${savedNo}）`)
-              }
-              setCreateVisible(false)
-              form.resetFields()
-              clearQccDropdown()
-              setBpFile(null)
-              setBpFileList([])
-              load()
-            } else {
-              Message.error(res.data?.message || '创建失败')
-              return false
-            }
-          } catch (e) {
-            if (e?.errors) return false
-            Message.error(e.response?.data?.message || e.message || '创建失败')
-            return false
-          } finally {
-            setCreateSubmitting(false)
-          }
-        }}
-        confirmLoading={createSubmitting}
       >
         <Form
           form={form}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
           onValuesChange={(changed) => {
             if (Object.prototype.hasOwnProperty.call(changed, 'project_abbreviation')) {
               clearQccDropdown()
             }
           }}
         >
-          <FormItem label="项目编号">
-            <Input value={projectNoPreview} disabled placeholder="自动生成" />
-          </FormItem>
-          <FormItem label="企业简称">
-            <div ref={qccDropdownRef} style={{ position: 'relative', width: '100%' }}>
-              <div style={{ display: 'flex', gap: 8, width: '100%' }}>
-                <FormItem field="project_abbreviation" noStyle>
-                  <Input placeholder="请输入企业简称" style={{ flex: 1 }} />
-                </FormItem>
-                <Button type="primary" loading={lookupLoading} onClick={handleQccLookup}>
-                  查询
-                </Button>
-              </div>
-              {showQccDropdown && qccCandidates.length > 0 && (
-                <div className="dropdown-menu" style={{ zIndex: 1100 }}>
-                  {qccCandidates.map((company, index) => (
-                    <div
-                      key={`${company.unified_credit_code || company.enterprise_full_name}-${index}`}
-                      className="dropdown-item"
-                      onClick={() => handleSelectQccCandidate(company)}
-                    >
-                      <div className="dropdown-item-main">{company.enterprise_full_name}</div>
-                      {company.unified_credit_code ? (
-                        <div className="dropdown-item-sub">
-                          统一社会信用代码：{company.unified_credit_code}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="项目编号">
+              <Input value={projectNoPreview} disabled placeholder="自动生成" />
+            </FormItem>
+            <FormItem label="企业简称" className="form-span-2">
+              <div ref={qccDropdownRef} style={{ position: 'relative', width: '100%' }}>
+                <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                  <FormItem field="project_abbreviation" noStyle>
+                    <Input placeholder="请输入企业简称" style={{ flex: 1 }} />
+                  </FormItem>
+                  <Button type="primary" loading={lookupLoading} onClick={handleQccLookup}>
+                    查询
+                  </Button>
                 </div>
-              )}
-            </div>
-          </FormItem>
-          <FormItem
-            label="企业全称"
-            field="enterprise_full_name"
-            rules={[{ required: true, message: '必填' }]}
-          >
-            <Input placeholder="请输入企业全称（查询后请从列表中选择）" />
-          </FormItem>
-          <FormItem label="统一信用代码" field="unified_credit_code">
-            <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
-          </FormItem>
-          <FormItem label="上传BP" extra="非必填，支持任意格式文件">
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Upload
-                limit={1}
-                fileList={bpFileList}
-                autoUpload={false}
-                showUploadList={false}
-                onChange={(fileList) => {
-                  setBpFileList(fileList)
-                  const item = fileList.length > 0 ? fileList[0] : null
-                  const rawFile = item?.originFile || item?.file || null
-                  setBpFile(rawFile)
-                }}
-              >
-                <Button type="outline" size="small">选择文件</Button>
-              </Upload>
-              {bpFile && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 13 }}>
-                  <span style={{ color: 'rgb(var(--primary-6))' }}>{bpFile.name}</span>
-                  <span
-                    onClick={() => { setBpFile(null); setBpFileList([]) }}
-                    style={{ cursor: 'pointer', color: 'var(--color-text-3)', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
-                    title="移除文件"
-                  >×</span>
-                </span>
-              )}
-            </div>
-          </FormItem>
+                {showQccDropdown && qccCandidates.length > 0 && (
+                  <div className="dropdown-menu" style={{ zIndex: 1100 }}>
+                    {qccCandidates.map((company, index) => (
+                      <div
+                        key={`${company.unified_credit_code || company.enterprise_full_name}-${index}`}
+                        className="dropdown-item"
+                        onClick={() => handleSelectQccCandidate(company)}
+                      >
+                        <div className="dropdown-item-main">{company.enterprise_full_name}</div>
+                        {company.unified_credit_code ? (
+                          <div className="dropdown-item-sub">
+                            统一社会信用代码：{company.unified_credit_code}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </FormItem>
+            <FormItem
+              label="企业全称"
+              field="enterprise_full_name"
+              rules={[{ required: true, message: '必填' }]}
+              className="form-span-2"
+            >
+              <Input placeholder="请输入企业全称（查询后请从列表中选择）" />
+            </FormItem>
+            <FormItem label="统一信用代码" field="unified_credit_code">
+              <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
+            </FormItem>
+            <FormItem label="上传BP" extra="非必填，支持任意格式文件" className="form-span-2">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Upload
+                  limit={1}
+                  fileList={bpFileList}
+                  autoUpload={false}
+                  showUploadList={false}
+                  onChange={(fileList) => {
+                    setBpFileList(fileList)
+                    const item = fileList.length > 0 ? fileList[0] : null
+                    const rawFile = item?.originFile || item?.file || null
+                    setBpFile(rawFile)
+                  }}
+                >
+                  <Button type="outline" size="small">选择文件</Button>
+                </Upload>
+                {bpFile && (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                    <span style={{ color: 'rgb(var(--primary-6))' }}>{bpFile.name}</span>
+                    <span
+                      onClick={() => { setBpFile(null); setBpFileList([]) }}
+                      style={{ cursor: 'pointer', color: 'var(--color-text-3)', fontSize: 16, lineHeight: 1, padding: '0 2px' }}
+                      title="移除文件"
+                    >×</span>
+                  </span>
+                )}
+              </div>
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setCreateVisible(false)
+              form.resetFields()
+              clearQccDropdown()
+              setBpFile(null)
+              setBpFileList([])
+            }}
+            submitLabel="确定"
+            submitType="button"
+            submitLoading={createSubmitting}
+            onSubmitClick={async () => {
+              try {
+                const v = await form.validate()
+                setCreateSubmitting(true)
+                const payload = {
+                  enterprise_full_name: v.enterprise_full_name,
+                  unified_credit_code: v.unified_credit_code || '',
+                  project_abbreviation: v.project_abbreviation || '',
+                  project_no: projectNoPreview,
+                }
+                let res
+                if (bpFile) {
+                  const fd = new FormData()
+                  Object.entries(payload).forEach(([k, val]) => fd.append(k, val))
+                  fd.append('bp_file', bpFile)
+                  res = await postPreInvestmentProject(fd)
+                } else {
+                  res = await postPreInvestmentProject(payload)
+                }
+                if (res.data?.success) {
+                  const savedNo = res.data.data?.project_no || projectNoPreview
+                  const projectId = res.data.data?.id
+                  if (projectId) {
+                    await runPostCreatePipeline(projectId, savedNo, { hasBpFile: !!bpFile })
+                  } else {
+                    Message.success(`已创建（项目编号 ${savedNo}）`)
+                  }
+                  setCreateVisible(false)
+                  form.resetFields()
+                  clearQccDropdown()
+                  setBpFile(null)
+                  setBpFileList([])
+                  load()
+                } else {
+                  Message.error(res.data?.message || '创建失败')
+                }
+              } catch (e) {
+                if (e?.errors) return
+                Message.error(e.response?.data?.message || e.message || '创建失败')
+              } finally {
+                setCreateSubmitting(false)
+              }
+            }}
+          />
         </Form>
-      </Modal>
-      <Modal
-        title="导出已选投前项目"
+      </SheetModal>
+      <SheetModal
         visible={exportModalOpen}
-        onCancel={() => setExportModalOpen(false)}
-        onOk={() => runExport({ exportAll: false, batchMode: exportBatchMode })}
-        confirmLoading={exporting}
-        okText="开始导出"
+        title="导出已选投前项目"
+        onClose={() => setExportModalOpen(false)}
       >
-        <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
-          将导出当前勾选的 {selectedIds.length} 个投前项目竞品数据。
-        </p>
-        <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
-          <Radio value="latest">仅当前版本（页面所选分析批次，默认最新）</Radio>
-          <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
-        </Radio.Group>
-      </Modal>
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <p className="form-hint">
+              将导出当前勾选的 {selectedIds.length} 个投前项目竞品数据。
+            </p>
+            <Radio.Group value={exportBatchMode} onChange={setExportBatchMode} direction="vertical">
+              <Radio value="latest">仅当前版本（页面所选分析批次，默认最新）</Radio>
+              <Radio value="all">所有批次（含历史分析，Excel 增加「版本号」列）</Radio>
+            </Radio.Group>
+          </div>
+          <SheetActions
+            onCancel={() => setExportModalOpen(false)}
+            submitLabel="开始导出"
+            submitType="button"
+            onSubmitClick={() => runExport({ exportAll: false, batchMode: exportBatchMode })}
+            submitLoading={exporting}
+          />
+        </div>
+      </SheetModal>
       <CompetitorAnalysisSummaryModal
         visible={summaryOpen}
         onClose={() => {

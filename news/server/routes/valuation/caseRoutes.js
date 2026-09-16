@@ -21,12 +21,22 @@ const {
   listCaseComparables,
   addManualComparable,
   listComparableFinancials,
+  mergeFromCompetitor,
+  patchComparable,
+  softDeleteComparable,
 } = require('../../utils/valuation/comparableService');
+const {
+  startRecommendRun,
+  listRecommendRuns,
+  getRecommendRun,
+  getLatestRecommendState,
+  applyRecommendRun,
+  enrichExistingRun,
+} = require('../../utils/valuation/listedIndustryRecommendRunner');
 const { enqueueValuationJob, getJob } = require('../../utils/valuation/jobRunner');
 const { listSwIndustryNames } = require('../../utils/valuation/financialFetch');
 const { buildWorkbookBuffer } = require('../../utils/valuation/exportService');
 const { defaultMethodConfig } = require('../../utils/valuation/defaults');
-const { comparabilityFromScore, defaultInPool } = require('../../utils/valuation/defaults');
 const C = require('../../utils/valuation/constants');
 const { fetchQichachaFuzzyCompanies } = require('../../utils/qichachaFuzzySearch');
 const {
@@ -47,9 +57,11 @@ function paging(req) {
 }
 
 function sendErr(res, e) {
-  const code = e.code === 400 || e.code === 403 || e.code === 404 ? e.code : 500;
+  const code = [400, 403, 404, 409].includes(e.code) ? e.code : 500;
   if (code === 500) console.error('[valuation]', e);
-  return res.status(code).json({ success: false, message: e.message || '服务器错误' });
+  const body = { success: false, message: e.message || '服务器错误' };
+  if (code === 409) body.accepted = false;
+  return res.status(code).json(body);
 }
 
 function registerValuationRoutes(router) {
@@ -243,6 +255,82 @@ function registerValuationRoutes(router) {
     }
   });
 
+  router.post('/cases/:id/comparables/from-competitor', requireProjectValuationAccess, async (req, res) => {
+    try {
+      const cse = await getCase(req, req.params.id);
+      if (!cse) return res.status(404).json({ success: false, message: '案件不存在' });
+      const data = await mergeFromCompetitor(cse);
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.post('/cases/:id/comparables/recommend/runs', requireProjectValuationAccess, async (req, res) => {
+    try {
+      const cse = await getCase(req, req.params.id);
+      if (!cse) return res.status(404).json({ success: false, message: '案件不存在' });
+      const data = await startRecommendRun(req, cse, req.body || {});
+      res.status(202).json({ success: true, accepted: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.get('/cases/:id/comparables/recommend/runs', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const list = await listRecommendRuns(req.params.id);
+      res.json({ success: true, data: { list } });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.get('/cases/:id/comparables/recommend/runs/latest', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const data = await getLatestRecommendState(req.params.id);
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.get('/cases/:id/comparables/recommend/runs/:runId', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const data = await getRecommendRun(req.params.id, req.params.runId);
+      if (!data) return res.status(404).json({ success: false, message: '推荐版本不存在' });
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.post('/cases/:id/comparables/recommend/runs/:runId/apply', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const codes = Array.isArray(req.body?.stock_codes) ? req.body.stock_codes : [];
+      const data = await applyRecommendRun(req.params.id, req.params.runId, codes);
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.post('/cases/:id/comparables/recommend/ai-enrich', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const runId = req.body?.run_id || req.body?.runId;
+      if (!runId) return res.status(400).json({ success: false, message: '缺少 run_id' });
+      const data = await enrichExistingRun(req.params.id, runId);
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
   router.post('/cases/:id/comparables/manual', requireProjectValuationAccess, async (req, res) => {
     try {
       await getCase(req, req.params.id);
@@ -372,52 +460,18 @@ function registerValuationRoutes(router) {
   router.patch('/cases/:id/comparables/:cid', requireProjectValuationAccess, async (req, res) => {
     try {
       await getCase(req, req.params.id);
-      const sets = [];
-      const params = [];
-      if (req.body?.comparability) {
-        sets.push('comparability = ?');
-        params.push(req.body.comparability);
-      }
-      if (req.body?.in_pool != null) {
-        sets.push('in_pool = ?');
-        params.push(req.body.in_pool ? 1 : 0);
-      }
-      if (req.body?.selected != null) {
-        sets.push('selected = ?');
-        params.push(req.body.selected ? 1 : 0);
-      }
-      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'pe_median_override')) {
-        const n = Number(req.body.pe_median_override);
-        sets.push('pe_median_override = ?');
-        params.push(req.body.pe_median_override == null || req.body.pe_median_override === '' || !Number.isFinite(n) ? null : n);
-      }
-      if (Object.prototype.hasOwnProperty.call(req.body || {}, 'ps_median_override')) {
-        const n = Number(req.body.ps_median_override);
-        sets.push('ps_median_override = ?');
-        params.push(req.body.ps_median_override == null || req.body.ps_median_override === '' || !Number.isFinite(n) ? null : n);
-      }
-      if (req.body?.relevance_score != null) {
-        const score = Number(req.body.relevance_score);
-        sets.push('relevance_score = ?');
-        params.push(score);
-        if (!req.body.comparability) {
-          const deg = comparabilityFromScore(score);
-          sets.push('comparability = ?');
-          params.push(deg);
-          if (req.body.in_pool == null) {
-            sets.push('in_pool = ?');
-            params.push(defaultInPool(deg) ? 1 : 0);
-          }
-        }
-      }
-      if (!sets.length) return res.json({ success: true });
-      params.push(req.params.cid, req.params.id);
-      await db.execute(
-        `UPDATE valuation_case_comparable SET ${sets.join(', ')}, F_LastModifyTime = NOW()
-         WHERE F_Id = ? AND case_id = ? AND F_DeleteMark = 0`,
-        params
-      );
-      res.json({ success: true });
+      const data = await patchComparable(req.params.id, req.params.cid, req.body || {});
+      res.json({ success: true, data });
+    } catch (e) {
+      sendErr(res, e);
+    }
+  });
+
+  router.delete('/cases/:id/comparables/:cid', requireProjectValuationAccess, async (req, res) => {
+    try {
+      await getCase(req, req.params.id);
+      const data = await softDeleteComparable(req.params.id, req.params.cid);
+      res.json({ success: true, data });
     } catch (e) {
       sendErr(res, e);
     }

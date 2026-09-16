@@ -5,14 +5,13 @@ import {
   Input,
   InputNumber,
   Message,
-  Modal,
   Popconfirm,
-  Space,
   Switch,
   Tag
 } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions } from '../components/SheetModal'
 
 const FormItem = Form.Item
 
@@ -203,7 +202,7 @@ function BaseDictionaryConfig() {
     },
     {
       title: '操作',
-      width: 132,
+      width: 200,
       className: 'admin-ops-col',
       render: (_, row) => (
         <AdminOps>
@@ -259,7 +258,7 @@ function BaseDictionaryConfig() {
     },
     {
       title: '操作',
-      width: 132,
+      width: 200,
       className: 'admin-ops-col',
       render: (_, row) => (
         <AdminOps>
@@ -337,6 +336,7 @@ function BaseDictionaryConfig() {
             columns={dictColumns}
             data={dictList}
             pagination={false}
+            fixOps={false}
             onRow={(record) => ({
               onClick: () => setActiveDictId(record.F_Id)
             })}
@@ -373,6 +373,7 @@ function BaseDictionaryConfig() {
             columns={itemColumns}
             data={itemList}
             pagination={false}
+            fixOps={false}
             scroll={{ y: 460 }}
             style={{ width: '100%' }}
             noDataElement={
@@ -384,107 +385,103 @@ function BaseDictionaryConfig() {
         </div>
       </div>
 
-      <Modal
+      <SheetModal
         visible={dictModalVisible}
         title={editingDict ? '修改字典类型' : '新增字典类型'}
-        onCancel={() => {
+        onClose={() => {
           setDictModalVisible(false)
           setEditingDict(null)
         }}
-        footer={null}
       >
         <Form
           key={editingDict ? `dict-${editingDict.F_Id}` : `dict-new-${dictFormKey}`}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
           initialValues={
             editingDict || { dict_code: '', dict_name: '', sort_order: 0, is_enabled: 1 }
           }
           onSubmit={submitDict}
         >
-          <FormItem
-            label="字典编码"
-            field="dict_code"
-            rules={[{ required: true, message: '请输入字典编码' }]}
-          >
-            <Input placeholder="例如：news_source_type" />
-          </FormItem>
-          <FormItem
-            label="字典名称"
-            field="dict_name"
-            rules={[{ required: true, message: '请输入字典名称' }]}
-          >
-            <Input placeholder="例如：新闻来源类型" />
-          </FormItem>
-          <FormItem label="排序" field="sort_order">
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </FormItem>
-          <FormItem label="启用" field="is_enabled" triggerPropName="checked">
-            <Switch checkedText="启用" uncheckedText="停用" />
-          </FormItem>
-          <Space>
-            <Button htmlType="submit" type="primary">保存</Button>
-            <Button
-              onClick={() => {
-                setDictModalVisible(false)
-                setEditingDict(null)
-              }}
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="字典编码"
+              field="dict_code"
+              rules={[{ required: true, message: '请输入字典编码' }]}
             >
-              取消
-            </Button>
-          </Space>
+              <Input placeholder="例如：news_source_type" />
+            </FormItem>
+            <FormItem
+              label="字典名称"
+              field="dict_name"
+              rules={[{ required: true, message: '请输入字典名称' }]}
+            >
+              <Input placeholder="例如：新闻来源类型" />
+            </FormItem>
+            <FormItem label="排序" field="sort_order">
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </FormItem>
+            <FormItem label="启用" field="is_enabled" triggerPropName="checked">
+              <Switch checkedText="启用" uncheckedText="停用" />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setDictModalVisible(false)
+              setEditingDict(null)
+            }}
+            submitLabel="保存"
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
+      <SheetModal
         visible={itemModalVisible}
         title={editingItem ? '修改字典选项' : '新增字典选项'}
-        onCancel={() => {
+        onClose={() => {
           setItemModalVisible(false)
           setEditingItem(null)
         }}
-        footer={null}
       >
         <Form
           key={editingItem ? `item-${editingItem.F_Id}` : `item-new-${itemFormKey}`}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
           initialValues={
             editingItem || { item_code: '', item_name: '', sort_order: 0, is_enabled: 1 }
           }
           onSubmit={submitItem}
         >
-          <FormItem
-            label="选项编码"
-            field="item_code"
-            rules={[{ required: true, message: '请输入选项编码' }]}
-          >
-            <Input placeholder="例如：third_party" />
-          </FormItem>
-          <FormItem
-            label="选项名称"
-            field="item_name"
-            rules={[{ required: true, message: '请输入选项名称' }]}
-          >
-            <Input placeholder="例如：第三方公众号" />
-          </FormItem>
-          <FormItem label="排序" field="sort_order">
-            <InputNumber min={0} style={{ width: '100%' }} />
-          </FormItem>
-          <FormItem label="启用" field="is_enabled" triggerPropName="checked">
-            <Switch checkedText="启用" uncheckedText="停用" />
-          </FormItem>
-          <Space>
-            <Button htmlType="submit" type="primary">保存</Button>
-            <Button
-              onClick={() => {
-                setItemModalVisible(false)
-                setEditingItem(null)
-              }}
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="选项编码"
+              field="item_code"
+              rules={[{ required: true, message: '请输入选项编码' }]}
             >
-              取消
-            </Button>
-          </Space>
+              <Input placeholder="例如：third_party" />
+            </FormItem>
+            <FormItem
+              label="选项名称"
+              field="item_name"
+              rules={[{ required: true, message: '请输入选项名称' }]}
+            >
+              <Input placeholder="例如：第三方公众号" />
+            </FormItem>
+            <FormItem label="排序" field="sort_order">
+              <InputNumber min={0} style={{ width: '100%' }} />
+            </FormItem>
+            <FormItem label="启用" field="is_enabled" triggerPropName="checked">
+              <Switch checkedText="启用" uncheckedText="停用" />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setItemModalVisible(false)
+              setEditingItem(null)
+            }}
+            submitLabel="保存"
+          />
         </Form>
-      </Modal>
+      </SheetModal>
     </div>
   )
 }

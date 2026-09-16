@@ -4,6 +4,9 @@ import axios from '../utils/axios'
 import TaskProgressModal from '../components/TaskProgressModal'
 import TaskLogModal from './TaskLogModal'
 import CronGenerator from '../components/CronGenerator'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './ScheduledTaskManagement.css'
 
 const Option = Select.Option
@@ -561,44 +564,17 @@ function ScheduledTaskManagement() {
     },
     {
       title: '操作',
-      width: 280,
+      width: 248,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-            disabled={record.isDeleted}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => handleViewLog(record.id)}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            onClick={() => handleExecute(record.id)}
-            disabled={record.isDeleted || !record.isActive}
-          >
-            立即执行
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-            disabled={record.isDeleted}
-          >
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} disabled={record.isDeleted} />
+          <ListOpButton name="日志" onClick={() => handleViewLog(record.id)} />
+          <ListOpButton name="立即执行" onClick={() => handleExecute(record.id)} disabled={record.isDeleted || !record.isActive} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} disabled={record.isDeleted} />
+        </ListOps>
       )
     }
   ]
@@ -661,56 +637,27 @@ function ScheduledTaskManagement() {
     },
     {
       title: '操作',
-      width: 320,
+      width: 280,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => handleViewLog(record.id)}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            onClick={() => handleCopy(record)}
-          >
-            复制
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            onClick={() => handleExecute(record.id)}
-            disabled={!record.isActive}
-          >
-            立即执行
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+          <ListOpButton name="日志" onClick={() => handleViewLog(record.id)} />
+          <ListOpButton name="复制" onClick={() => handleCopy(record)} />
+          <ListOpButton name="立即执行" onClick={() => handleExecute(record.id)} disabled={!record.isActive} />
+          <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="scheduled-task-management">
+    <div
+      className="scheduled-task-management list-table-page"
+      style={{ '--list-ops-col-width': activeTab === 'news_sync' ? '280px' : '248px' }}
+    >
       <Card className="management-card" bordered={false}>
         <div className="management-header">
           <h2 className="management-title">定时任务管理</h2>
@@ -745,6 +692,7 @@ function ScheduledTaskManagement() {
                 />
               ) : (
                 <Table
+                  className="list-table"
                   columns={emailColumns}
                   data={tasks.filter(task => !task.isDeleted)}
                   loading={loading}
@@ -755,6 +703,7 @@ function ScheduledTaskManagement() {
                     cell: true
                   }}
                   stripe
+                  scroll={{ x: 'max-content' }}
                 />
               )}
             </div>
@@ -783,6 +732,7 @@ function ScheduledTaskManagement() {
                 />
               ) : (
                 <Table
+                  className="list-table"
                   columns={newsSyncColumns}
                   data={tasks}
                   loading={loading}
@@ -793,6 +743,7 @@ function ScheduledTaskManagement() {
                     cell: true
                   }}
                   stripe
+                  scroll={{ x: 'max-content' }}
                 />
               )}
             </div>
@@ -913,34 +864,32 @@ function ScheduledTaskManagement() {
       )}
 
       {/* 编辑任务弹窗 */}
-      <Modal
+      <SheetModal
         visible={showEditModal}
         title={activeTab === 'email' ? (isNewTask ? '新增定时任务' : '编辑定时任务') : (isCopyTask ? '复制新闻接口同步' : (isNewTask ? '新增新闻接口同步' : '编辑新闻接口同步'))}
-        onCancel={() => {
+        onClose={() => {
           setShowEditModal(false)
           setEditingTask(null)
           setIsNewTask(false)
           setIsCopyTask(false)
           setOriginalCopyData(null)
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
         <Form
           key={activeTab === 'email' ? (editingTask ? `email-${editingTask.id}` : 'email-new') : (editingTask ? `sync-${editingTask.id}` : 'sync-new')}
           initialValues={formData}
           onSubmit={handleSave}
           layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
         >
-          {activeTab === 'email' && editingTask && (
-            <Card className="info-card" style={{ marginBottom: '16px' }}>
-              <p><strong>用户账号：</strong>{editingTask.userAccount || '-'}</p>
-              <p><strong>收件人邮箱：</strong>{editingTask.recipientEmail || '-'}</p>
-              <p><strong>邮件主题：</strong>{editingTask.emailSubject || '-'}</p>
-            </Card>
-          )}
+          <div className="modal-body enterprise-form-grid">
+          {activeTab === 'email' && editingTask ? (
+            <div className="form-group form-span-4">
+              <p className="form-hint">用户账号：{editingTask.userAccount || '-'}　收件人：{editingTask.recipientEmail || '-'}　主题：{editingTask.emailSubject || '-'}</p>
+            </div>
+          ) : null}
 
-          {activeTab === 'news_sync' && (
+          {activeTab === 'news_sync' ? (
             <>
               <FormItem
                 label="应用名称"
@@ -949,10 +898,11 @@ function ScheduledTaskManagement() {
               >
                 <Select
                   placeholder="请选择应用"
+                  getPopupContainer={sheetPopupContainer}
                   onChange={(value) => {
                     const selectedApp = applications.find(app => app.id === value)
-                    setFormData({ 
-                      ...formData, 
+                    setFormData({
+                      ...formData,
                       app_id: value,
                       app_name: selectedApp ? selectedApp.app_name : ''
                     })
@@ -968,7 +918,7 @@ function ScheduledTaskManagement() {
                 field="interface_type"
                 rules={[{ required: true, message: '请选择接口类型' }]}
               >
-                <Select>
+                <Select getPopupContainer={sheetPopupContainer}>
                   <Option value="新榜">新榜</Option>
                   <Option value="企查查">企查查</Option>
                   <Option value="上海国际集团">上海国际集团</Option>
@@ -978,31 +928,32 @@ function ScheduledTaskManagement() {
                 label="请求地址"
                 field="request_url"
                 rules={[{ required: true, message: '请输入请求地址' }]}
+                className="form-span-2"
               >
                 <Input placeholder="请输入请求地址" />
               </FormItem>
             </>
-          )}
+          ) : null}
 
           <FormItem
             label={activeTab === 'email' ? '发送频率' : '同步频率'}
             field="send_frequency"
             rules={[{ required: true, message: '请选择频率' }]}
           >
-            <Select>
+            <Select getPopupContainer={sheetPopupContainer}>
               <Option value="daily">每天</Option>
               <Option value="weekly">每周</Option>
               <Option value="monthly">每月</Option>
             </Select>
           </FormItem>
 
-          {activeTab === 'news_sync' && formData.send_frequency === 'weekly' && (
+          {activeTab === 'news_sync' && formData.send_frequency === 'weekly' ? (
             <FormItem
               label="星期"
               field="weekday"
               rules={[{ required: true, message: '请选择星期' }]}
             >
-              <Select>
+              <Select getPopupContainer={sheetPopupContainer}>
                 <Option value="monday">星期一</Option>
                 <Option value="tuesday">星期二</Option>
                 <Option value="wednesday">星期三</Option>
@@ -1012,21 +963,21 @@ function ScheduledTaskManagement() {
                 <Option value="sunday">星期日</Option>
               </Select>
             </FormItem>
-          )}
+          ) : null}
 
-          {activeTab === 'news_sync' && formData.send_frequency === 'monthly' && (
+          {activeTab === 'news_sync' && formData.send_frequency === 'monthly' ? (
             <FormItem
               label="日期"
               field="month_day"
               rules={[{ required: true, message: '请选择日期' }]}
             >
-              <Select>
+              <Select getPopupContainer={sheetPopupContainer}>
                 <Option value="first">第一天</Option>
                 <Option value="last">最后一天</Option>
                 <Option value="15">15日</Option>
               </Select>
             </FormItem>
-          )}
+          ) : null}
 
           <FormItem
             label={activeTab === 'email' ? '发送时间' : '同步时间'}
@@ -1040,10 +991,7 @@ function ScheduledTaskManagement() {
             />
           </FormItem>
 
-          <FormItem
-            label="启用"
-            field="is_active"
-          >
+          <FormItem label="启用" field="is_active">
             <Switch checked={formData.is_active} />
           </FormItem>
 
@@ -1051,6 +999,7 @@ function ScheduledTaskManagement() {
             label="跳过节假日"
             field="skip_holiday"
             extra="开启后，定时任务在节假日将不会执行；节假日表中标记为工作日的日期会照常执行"
+            className="form-span-2"
           >
             <Switch
               checked={formData.skip_holiday}
@@ -1058,44 +1007,37 @@ function ScheduledTaskManagement() {
             />
           </FormItem>
 
-          {activeTab === 'news_sync' && (
+          {activeTab === 'news_sync' ? (
             <>
               <FormItem
                 label="重新抓取次数"
                 field="retry_count"
                 extra="当接口调用后未返回任何数据时，将根据此配置进行重试。设置为0表示不重试。"
               >
-                <InputNumber min={0} placeholder="未获取数据时的重新抓取次数" />
+                <InputNumber min={0} placeholder="未获取数据时的重新抓取次数" style={{ width: '100%' }} />
               </FormItem>
               <FormItem
                 label="重新抓取间隔（分钟）"
                 field="retry_interval"
                 extra="每次重试之间的等待时间（单位：分钟）。例如设置为5，表示在第一次调用后5分钟再次调用。"
               >
-                <InputNumber min={0} placeholder="重新抓取的时间间隔" />
+                <InputNumber min={0} placeholder="重新抓取的时间间隔" style={{ width: '100%' }} />
               </FormItem>
             </>
-          )}
-
-          <div className="form-actions">
-            <Button
-              type="secondary"
-              onClick={() => {
-                setShowEditModal(false)
-                setEditingTask(null)
-                setIsNewTask(false)
-                setIsCopyTask(false)
-                setOriginalCopyData(null)
-              }}
-            >
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              保存
-            </Button>
+          ) : null}
           </div>
+          <SheetActions
+            onCancel={() => {
+              setShowEditModal(false)
+              setEditingTask(null)
+              setIsNewTask(false)
+              setIsCopyTask(false)
+              setOriginalCopyData(null)
+            }}
+            submitLabel="保存"
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* 日志弹窗 */}
       <TaskLogModal

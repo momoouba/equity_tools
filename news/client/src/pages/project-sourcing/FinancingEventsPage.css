@@ -96,3 +96,46 @@
 .financing-events-page.ipo-projects-page .arco-table-col-fixed-right .arco-table-cell {
   white-space: nowrap;
 }
+
+/* 底层项目：标题+操作按钮在头部区域内纵向居中（原仅有底 padding，内容贴顶） */
+.financing-events-page.ipo-projects-page .management-header {
+  padding: 16px 0 16px 4px;
+  box-sizing: border-box;
+  align-items: center;
+}
+
+/* 底层项目：翻页条贴容器底边，表体占满中间剩余高度 */
+.financing-events-page.ipo-projects-page > .arco-card > .arco-card-body {
+  padding-bottom: 0 !important;
+}
+
+.financing-events-page.ipo-projects-page .arco-table-pagination {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  min-height: 44px;
+  margin-top: auto !important;
+  margin-bottom: 0 !important;
+  padding-top: 8px;
+  padding-bottom: 0 !important;
+  overflow: visible;
+}
+
+.financing-events-page.ipo-projects-page .ipo-projects-table-container,
+.financing-events-page.ipo-projects-page .ipo-projects-table-container .arco-table,
+.financing-events-page.ipo-projects-page .ipo-projects-table-container .arco-spin,
+.financing-events-page.ipo-projects-page .ipo-projects-table-container .arco-spin-children {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  flex: 1;
+}
+
+.financing-events-page.ipo-projects-page .ipo-projects-table-container .arco-table-container {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.financing-events-page.ipo-projects-page .ipo-projects-table-container .arco-table-pagination {
+  flex: 0 0 auto;
+}

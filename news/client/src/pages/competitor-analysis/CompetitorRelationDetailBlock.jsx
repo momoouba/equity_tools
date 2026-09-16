@@ -16,6 +16,7 @@ import {
   shouldAutoShowSameTrack,
 } from './competitorRelationDisplayUtils'
 import './competitorRelationDetailBlock.css'
+import '../../styles/listTable.css'
 
 const PRIMARY_OUTLINE_BTN = {
   color: 'rgb(var(--primary-6))',
@@ -279,7 +280,7 @@ export default function CompetitorRelationDetailBlock({
           </Space>
         </div>
         <Table
-          className={CR_REL_CSS.table}
+          className={`${CR_REL_CSS.table} list-table`}
           rowKey="id"
           stripe
           loading={relationLoading}

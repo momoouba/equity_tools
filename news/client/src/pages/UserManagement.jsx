@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react'
-import { Table, Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, Form } from '@arco-design/web-react'
+import { Table, Button, Pagination, Modal, Message, Skeleton, Tag, Select, Form } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import './UserManagement.css'
 
 const Option = Select.Option
@@ -227,31 +230,21 @@ function UserManagement() {
     },
     {
       title: '操作',
-      width: 200,
+      width: 168,
+      fixed: 'right',
+      className: 'list-ops-col',
+      align: 'left',
       render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="warning"
-            onClick={() => handleResetPassword(record)}
-          >
-            重置密码
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+          <ListOpButton name="重置密码" onClick={() => handleResetPassword(record)} />
+        </ListOps>
       )
     }
   ]
 
   return (
-    <div className="user-management">
+    <div className="user-management list-table-page" style={{ '--list-ops-col-width': '168px' }}>
       <div className="management-header">
         <h2>用户管理</h2>
         <Button
@@ -271,6 +264,7 @@ function UserManagement() {
           />
         ) : (
           <Table
+            className="list-table"
             columns={columns}
             data={users}
             loading={loading}
@@ -281,6 +275,7 @@ function UserManagement() {
               cell: true
             }}
             stripe
+            scroll={{ x: 'max-content' }}
           />
         )}
       </div>
@@ -298,26 +293,26 @@ function UserManagement() {
         </div>
       )}
 
-      <Modal
+      <SheetModal
         visible={showEditModal}
         title={`编辑用户会员等级配置 - ${editingUser?.account || ''}`}
-        onCancel={() => {
+        onClose={() => {
           setShowEditModal(false)
           setEditingUser(null)
           setUserMembershipConfig({})
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
-        {editingUser && (
-          <div>
-            <div style={{ marginBottom: '24px', padding: '16px', background: '#f7f8fa', borderRadius: '4px' }}>
-              <p><strong>账号：</strong>{editingUser.account}</p>
-              <p><strong>邮箱：</strong>{editingUser.email || '-'}</p>
-            </div>
-
-            <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ marginBottom: '16px' }}>应用会员等级配置</h4>
+        {editingUser ? (
+          <div className="enterprise-form enterprise-form--sheet">
+            <div className="modal-body enterprise-form-grid">
+              <div className="form-group form-span-2">
+                <label>账号</label>
+                <input type="text" readOnly className="readonly-input" value={editingUser.account || ''} />
+              </div>
+              <div className="form-group form-span-2">
+                <label>邮箱</label>
+                <input type="text" readOnly className="readonly-input" value={editingUser.email || '-'} />
+              </div>
               {applications.map((app) => {
                 const levels = membershipLevels[app.id] || []
                 const currentLevelId = userMembershipConfig[app.id] || null
@@ -327,18 +322,15 @@ function UserManagement() {
                     : app.app_name === '上市进展'
                       ? '上市进展'
                       : app.app_name
-                
                 return (
-                  <div key={app.id} style={{ marginBottom: '16px', padding: '16px', border: '1px solid #e5e6eb', borderRadius: '4px' }}>
-                    <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600 }}>
-                      {displayAppName}
-                    </label>
+                  <div key={app.id} className="form-group">
+                    <label>{displayAppName}</label>
                     <Select
                       value={currentLevelId || ''}
                       onChange={(value) => handleMembershipChange(app.id, value || null)}
                       placeholder="无"
-                      style={{ width: '100%' }}
                       allowClear
+                      getPopupContainer={sheetPopupContainer}
                     >
                       {levels.map((level) => (
                         <Option key={level.id} value={level.id}>
@@ -350,28 +342,19 @@ function UserManagement() {
                 )
               })}
             </div>
-
-            <div className="form-actions">
-              <Button
-                type="secondary"
-                onClick={() => {
-                  setShowEditModal(false)
-                  setEditingUser(null)
-                  setUserMembershipConfig({})
-                }}
-              >
-                取消
-              </Button>
-              <Button
-                type="primary"
-                onClick={handleSave}
-              >
-                保存
-              </Button>
-            </div>
+            <SheetActions
+              onCancel={() => {
+                setShowEditModal(false)
+                setEditingUser(null)
+                setUserMembershipConfig({})
+              }}
+              submitLabel="保存"
+              submitType="button"
+              onSubmitClick={handleSave}
+            />
           </div>
-        )}
-      </Modal>
+        ) : null}
+      </SheetModal>
     </div>
   )
 }

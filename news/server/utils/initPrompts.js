@@ -140,12 +140,34 @@ async function resolveCompetitorAnalysisModelId(exec, { log = false } = {}) {
   return null;
 }
 
+async function resolveProjectValuationModelId(exec, { log = false } = {}) {
+  try {
+    const rows = await exec.query(
+      `SELECT F_Id AS id FROM ai_model_config
+       WHERE application_type = 'project_valuation'
+         AND usage_type = 'project_valuation'
+         AND is_active = 1 AND F_DeleteMark = 0
+       ORDER BY F_LastModifyTime DESC LIMIT 1`
+    );
+    if (rows.length > 0) {
+      if (log) {
+        console.log(`  ✓ 项目估值默认模型（project_valuation）: ${rows[0].id}`);
+      }
+      return rows[0].id;
+    }
+  } catch (e) {
+    if (log) console.warn('  读取 project_valuation 模型时出现警告:', e.message);
+  }
+  return null;
+}
+
 function resolveModelIdForPrompt(prompt, modelIds) {
   const {
     defaultAiModelConfigId,
     projectSourcingAnalysisModelId,
     newShareListingDataModelId,
     competitorAnalysisModelId,
+    projectValuationModelId,
   } = modelIds;
   if (
     prompt.interface_type === '项目挖掘' &&
@@ -163,6 +185,9 @@ function resolveModelIdForPrompt(prompt, modelIds) {
   }
   if (prompt.interface_type === '竞品分析' && competitorAnalysisModelId) {
     return competitorAnalysisModelId;
+  }
+  if (prompt.interface_type === '项目估值' && projectValuationModelId) {
+    return projectValuationModelId;
   }
   return defaultAiModelConfigId;
 }
@@ -266,11 +291,47 @@ async function seedCompetitorAnalysisPrompts(dbPool) {
     competitorAnalysisModelId,
     projectSourcingAnalysisModelId: null,
     newShareListingDataModelId: null,
+    projectValuationModelId: null,
   };
 
   let created = 0;
   let updated = 0;
   for (const prompt of buildAllCompetitorPromptSeeds()) {
+    const resolvedModelId = resolveModelIdForPrompt(prompt, modelIds);
+    const result = await upsertOnePrompt(exec, prompt, resolvedModelId, adminUserId, {
+      log: false,
+      connection: dbPool,
+    });
+    created += result.created;
+    updated += result.updated;
+  }
+  return { created, updated, skipped: false };
+}
+
+async function seedValuationRecommendPrompts(dbPool) {
+  const { buildValuationRecommendPromptSeeds } = require('./valuation/listedIndustryRecommendPrompt');
+  const exec = createDbPoolExec(dbPool);
+
+  if (!(await tableExists(exec, 'ai_prompt_config'))) {
+    return { created: 0, updated: 0, skipped: true };
+  }
+
+  const [defaultAiModelConfigId, projectValuationModelId, adminUserId] = await Promise.all([
+    resolveDefaultAiModelConfigId(exec),
+    resolveProjectValuationModelId(exec),
+    resolveAdminUserId(exec),
+  ]);
+  const modelIds = {
+    defaultAiModelConfigId,
+    competitorAnalysisModelId: null,
+    projectSourcingAnalysisModelId: null,
+    newShareListingDataModelId: null,
+    projectValuationModelId,
+  };
+
+  let created = 0;
+  let updated = 0;
+  for (const prompt of buildValuationRecommendPromptSeeds()) {
     const resolvedModelId = resolveModelIdForPrompt(prompt, modelIds);
     const result = await upsertOnePrompt(exec, prompt, resolvedModelId, adminUserId, {
       log: false,
@@ -290,6 +351,7 @@ async function initPrompts() {
     console.log('开始初始化提示词配置...');
     const { buildBuiltinPromptContentForDb } = require('./project-sourcing/financingAiEnrichService');
     const { buildAllCompetitorPromptSeeds } = require('./competitor-analysis/competitorAnalysisPromptService');
+    const { buildValuationRecommendPromptSeeds } = require('./valuation/listedIndustryRecommendPrompt');
     const exec = createDbModuleExec();
 
     const [
@@ -297,17 +359,20 @@ async function initPrompts() {
       projectSourcingAnalysisModelId,
       newShareListingDataModelId,
       competitorAnalysisModelId,
+      projectValuationModelId,
     ] = await Promise.all([
       resolveDefaultAiModelConfigId(exec, { log: true }),
       resolveProjectSourcingAnalysisModelId(exec, { log: true }),
       resolveNewShareListingDataModelId(exec, { log: true }),
       resolveCompetitorAnalysisModelId(exec, { log: true }),
+      resolveProjectValuationModelId(exec, { log: true }),
     ]);
     const modelIds = {
       defaultAiModelConfigId,
       projectSourcingAnalysisModelId,
       newShareListingDataModelId,
       competitorAnalysisModelId,
+      projectValuationModelId,
     };
 
     // 检查每个必需的提示词是否存在，如果不存在则创建
@@ -610,6 +675,7 @@ async function initPrompts() {
         prompt_content: buildBuiltinPromptContentForDb(),
       },
       ...buildAllCompetitorPromptSeeds(),
+      ...buildValuationRecommendPromptSeeds(),
     ];
 
     // 获取系统用户ID（admin用户）
@@ -661,5 +727,5 @@ async function initPrompts() {
   }
 }
 
-module.exports = { initPrompts, seedCompetitorAnalysisPrompts };
+module.exports = { initPrompts, seedCompetitorAnalysisPrompts, seedValuationRecommendPrompts };
 

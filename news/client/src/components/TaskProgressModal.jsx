@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Modal, Table, Progress, Spin, Button, Tag } from '@arco-design/web-react'
+import { Table, Progress, Spin, Tag } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import SheetModal, { SheetActions } from './SheetModal'
 import './TaskProgressModal.css'
 
 function TaskProgressModal({ taskId, taskType, onClose }) {
@@ -203,32 +204,29 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
     }
   ]
 
+  const canClose = progress.status !== 'processing'
+
   return (
-    <Modal
+    <SheetModal
       visible={!!taskId}
       title="任务执行进度"
-      onCancel={progress.status !== 'processing' ? onClose : undefined}
-      footer={progress.status !== 'processing' ? (
-        <Button type="primary" onClick={onClose}>
-          关闭
-        </Button>
-      ) : null}
-      style={{ width: 600 }}
-      closable={progress.status !== 'processing'}
+      onClose={canClose ? onClose : () => {}}
     >
-      <div className="task-progress-content">
-        <div className="progress-status">
-          {progress.status === 'processing' && (
-            <Spin style={{ marginRight: 8 }} />
-          )}
-          {progress.status === 'success' && (
-            <Tag color="green" style={{ marginRight: 8 }}>成功</Tag>
-          )}
-          {progress.status === 'failed' && (
-            <Tag color="red" style={{ marginRight: 8 }}>失败</Tag>
-          )}
-          <span className="status-message">{progress.message}</span>
-        </div>
+      <div className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body">
+          <div className="task-progress-content">
+            <div className="progress-status">
+              {progress.status === 'processing' && (
+                <Spin style={{ marginRight: 8 }} />
+              )}
+              {progress.status === 'success' && (
+                <Tag color="green" style={{ marginRight: 8 }}>成功</Tag>
+              )}
+              {progress.status === 'failed' && (
+                <Tag color="red" style={{ marginRight: 8 }}>失败</Tag>
+              )}
+              <span className="status-message">{progress.message}</span>
+            </div>
         
         {progress.details && progress.details.length > 0 && (
           <div className="progress-details">
@@ -253,8 +251,11 @@ function TaskProgressModal({ taskId, taskType, onClose }) {
             </p>
           </div>
         )}
+          </div>
+        </div>
+        {canClose ? <SheetActions onCancel={onClose} cancelLabel="关闭" submitLabel="" /> : null}
       </div>
-    </Modal>
+    </SheetModal>
   )
 }
 

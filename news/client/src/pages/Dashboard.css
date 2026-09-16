@@ -158,9 +158,43 @@
 }
 
 .dashboard-content {
-  padding: 10px 10px 0;
+  /* 顶栏下方背景；4px 可见间隙由子页面 padding-top 露出 */
+  padding: 0;
   background: #f7f8fa;
-  min-height: calc(100vh - 64px);
+  height: calc(100vh - 64px);
+  min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* 各业务页相对背景露出 4px 顶缝（白/蓝内容与灰绿底之间） */
+.dashboard-content > .enterprise-management,
+.dashboard-content > .valuation-page,
+.dashboard-content > .listing-ipo-project-page,
+.dashboard-content > .listing-ipo-progress-page,
+.dashboard-content > .listing-project-progress-page,
+.dashboard-content > .listing-new-share-page,
+.dashboard-content > .ps-overview-page,
+.dashboard-content > .financing-events-page,
+.dashboard-content > .list-table-page,
+.dashboard-content > .pre-inv-sourcing-page,
+.dashboard-content > .merged-tabs-page,
+.dashboard-content > .perf-app,
+.dashboard-content > .perf-settings-page,
+.dashboard-content > .news-info,
+.dashboard-content > .system-config,
+.dashboard-content > .user-management,
+.dashboard-content > .company-management,
+.dashboard-content > .scheduled-task-management,
+.dashboard-content > .email-management {
+  padding-top: 4px !important;
+  box-sizing: border-box;
+}
+
+/* 管理员系统配置：填满内容区，避免 100vh 叠算出整页滚动条 */
+.dashboard-content > .system-config {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
 }
 

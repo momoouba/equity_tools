@@ -1,12 +1,69 @@
 .valuation-page {
-  padding: 16px 24px;
+  padding: 4px 24px 16px;
+  box-sizing: border-box;
+  height: calc(100vh - 68px);
+  max-height: calc(100vh - 68px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.valuation-page > .arco-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.valuation-page > .arco-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 
 .valuation-page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
+  padding: 8px 0 8px 4px;
+  box-sizing: border-box;
+}
+
+.valuation-list-pagination {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 8px;
+  padding-bottom: 4px;
+  text-align: right;
+}
+
+.merged-tabs-page .list-table-page .valuation-list-pagination {
+  padding-bottom: 0;
+}
+
+.merged-tabs-page .list-table-page > .arco-card {
+  height: calc(100vh - 112px);
+  max-height: calc(100vh - 112px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.merged-tabs-page .list-table-page > .arco-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
 }
 
 .valuation-page-header h2 {
@@ -371,14 +428,14 @@
 }
 
 .valuation-list-table .arco-table-th {
-  background-color: #dbeafe !important;
-  color: #1e3a8a;
-  font-weight: 600;
+  background-color: #e8f3ff !important;
+  color: #0e42d2;
+  font-weight: 700;
   white-space: nowrap;
 }
 
 .valuation-list-table .arco-table-header .arco-table-th {
-  background-color: #dbeafe !important;
+  background-color: #e8f3ff !important;
 }
 
 .valuation-page .arco-table-td,
@@ -767,4 +824,33 @@
 .valuation-qcc-dropdown-sub {
   font-size: 12px;
   color: #999;
+}
+
+.valuation-reason-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: 4.5em;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: default;
+}
+
+.valuation-reason-tooltip {
+  max-width: 420px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.valuation-pool-hint {
+  font-size: 11px;
+  color: #86909c;
+  line-height: 1.2;
+  margin-top: 2px;
+}
+
+.valuation-recommend-modal .arco-modal-content {
+  max-width: 96vw;
 }

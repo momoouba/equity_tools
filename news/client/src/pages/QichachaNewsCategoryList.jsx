@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { Button, Space, Pagination, Modal, Message, Skeleton, Input, Form, Upload } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions } from '../components/SheetModal'
 import './QichachaNewsCategoryList.css'
 
 const InputSearch = Input.Search
@@ -19,10 +20,31 @@ function QichachaNewsCategoryList() {
   const [showImportModal, setShowImportModal] = useState(false)
   const [importFile, setImportFile] = useState(null)
   const [importing, setImporting] = useState(false)
+  const [tableScrollY, setTableScrollY] = useState(360)
+  const tableScrollAreaRef = useRef(null)
 
   useEffect(() => {
     fetchCategories()
   }, [currentPage, searchKeyword])
+
+  useLayoutEffect(() => {
+    const el = tableScrollAreaRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return undefined
+    const measure = () => {
+      const h = el.clientHeight
+      if (h < 80) return
+      const head = el.querySelector('.arco-table-header')
+      const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
+      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
+    }
+    const raf = requestAnimationFrame(() => measure())
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => {
+      cancelAnimationFrame(raf)
+      ro.disconnect()
+    }
+  }, [])
 
   const fetchCategories = async () => {
     setLoading(true)
@@ -193,7 +215,7 @@ function QichachaNewsCategoryList() {
         </Space>
       </div>
 
-      <div className="table-container">
+      <div ref={tableScrollAreaRef} className="table-container qichacha-category-table-area">
         {loading && categories.length === 0 ? (
           <Skeleton
             loading={true}
@@ -209,6 +231,7 @@ function QichachaNewsCategoryList() {
             rowKey="id"
             page={currentPage}
             pageSize={pageSize}
+            scroll={{ y: tableScrollY }}
           />
         )}
       </div>
@@ -228,99 +251,90 @@ function QichachaNewsCategoryList() {
       )}
 
       {/* 新增/编辑表单 */}
-      <Modal
+      <SheetModal
         visible={showForm}
         title={editingCategory ? '编辑类别' : '新增类别'}
-        onCancel={() => {
+        onClose={() => {
           setShowForm(false)
           setEditingCategory(null)
           form.resetFields()
         }}
-        footer={null}
-        style={{ width: 500 }}
       >
         <Form
           form={form}
           onSubmit={handleSubmit}
           layout="vertical"
           autoComplete="off"
+          className="enterprise-form enterprise-form--sheet"
         >
-          <Form.Item
-            label="类别代码"
-            field="category_code"
-            rules={[{ required: true, message: '请输入类别代码' }]}
-          >
-            <Input placeholder="请输入类别代码" />
-          </Form.Item>
-
-          <Form.Item
-            label="类别名称"
-            field="category_name"
-            rules={[{ required: true, message: '请输入类别名称' }]}
-          >
-            <Input placeholder="请输入类别名称" />
-          </Form.Item>
-
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+          <div className="modal-body enterprise-form-grid">
+            <Form.Item
+              label="类别代码"
+              field="category_code"
+              rules={[{ required: true, message: '请输入类别代码' }]}
+            >
+              <Input placeholder="请输入类别代码" />
+            </Form.Item>
+            <Form.Item
+              label="类别名称"
+              field="category_name"
+              rules={[{ required: true, message: '请输入类别名称' }]}
+            >
+              <Input placeholder="请输入类别名称" />
+            </Form.Item>
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowForm(false)
               setEditingCategory(null)
               form.resetFields()
-            }}>
-              取消
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingCategory ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            submitLabel={editingCategory ? '更新' : '创建'}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       {/* 批量导入弹窗 */}
-      <Modal
+      <SheetModal
         visible={showImportModal}
         title="批量导入类别"
-        onCancel={() => {
+        onClose={() => {
           setShowImportModal(false)
           setImportFile(null)
         }}
-        footer={null}
-        style={{ width: 500 }}
+        className="sheet-modal-narrow"
       >
-        <div className="import-content">
-          <p>请上传Excel文件，格式要求：</p>
-          <ul>
-            <li>第一列：类别代码</li>
-            <li>第二列：类别名称</li>
-          </ul>
-          <Upload
-            accept=".xlsx,.xls"
-            fileList={importFile ? [importFile] : []}
-            onChange={(fileList) => {
-              setImportFile(fileList[0]?.originFile || null)
-            }}
-            beforeUpload={() => false}
-          >
-            <Button type="outline">选择文件</Button>
-          </Upload>
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
+            <p>请上传Excel文件，格式要求：</p>
+            <ul>
+              <li>第一列：类别代码</li>
+              <li>第二列：类别名称</li>
+            </ul>
+            <Upload
+              accept=".xlsx,.xls"
+              fileList={importFile ? [importFile] : []}
+              onChange={(fileList) => {
+                setImportFile(fileList[0]?.originFile || null)
+              }}
+              beforeUpload={() => false}
+            >
+              <Button type="outline">选择文件</Button>
+            </Upload>
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowImportModal(false)
               setImportFile(null)
-            }}>
-              取消
-            </Button>
-            <Button
-              type="primary"
-              onClick={handleImport}
-              loading={importing}
-              disabled={!importFile}
-            >
-              导入
-            </Button>
-          </div>
+            }}
+            submitLabel="导入"
+            submitType="button"
+            submitDisabled={!importFile}
+            submitLoading={importing}
+            onSubmitClick={handleImport}
+          />
         </div>
-      </Modal>
+      </SheetModal>
     </div>
   )
 }

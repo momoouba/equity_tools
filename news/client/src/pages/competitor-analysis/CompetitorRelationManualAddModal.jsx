@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react'
-import { Modal, Form, Input, Select, InputNumber, Checkbox, Message } from '@arco-design/web-react'
+import { Form, Input, Select, InputNumber, Checkbox, Message } from '@arco-design/web-react'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../../components/SheetModal'
 import { postCompetitorRelation, putCompetitorRelation } from '../../api/competitor-analysis'
 import {
   formatCompetitorDataSources,
@@ -123,86 +124,87 @@ export default function CompetitorRelationManualAddModal({
   const titlePrefix = isEdit ? '编辑竞品' : '新增竞品'
 
   return (
-    <Modal
-      title={subjectLabel ? `${titlePrefix} — ${subjectLabel}` : titlePrefix}
+    <SheetModal
       visible={visible}
-      style={{ width: 640 }}
-      onCancel={onClose}
-      onOk={handleOk}
-      confirmLoading={submitting}
-      okText="保存"
-      unmountOnExit
+      title={subjectLabel ? `${titlePrefix} — ${subjectLabel}` : titlePrefix}
+      onClose={onClose}
     >
-      <p style={{ fontSize: 13, color: 'var(--color-text-2)', marginBottom: 12 }}>
-        {isEdit
-          ? '修改竞品信息，保存后立即更新列表。'
-          : '手动录入竞品公司信息；保存后数据源为「用户新增」，并立即出现在竞品明细列表中。'}
-      </p>
-      <Form form={form} layout="vertical">
-        <FormItem
-          label="竞品名称"
-          field="competitor_display_name"
-          rules={[{ required: true, message: '请输入竞品名称' }]}
-        >
-          <Input placeholder="竞品公司全称或常用名" maxLength={255} />
-        </FormItem>
-        <FormItem label="信用代码" field="unified_credit_code">
-          <Input placeholder="统一社会信用代码（选填）" maxLength={64} />
-        </FormItem>
-        <FormItem label="是否上市" field="is_listed">
-          <Select
-            options={[
-              { label: '否', value: 0 },
-              { label: '是', value: 1 },
-            ]}
-          />
-        </FormItem>
-        <FormItem label="等级" field="confidence_grade">
-          <Select allowClear placeholder="选填" options={GRADE_OPTIONS} />
-        </FormItem>
-        <FormItem
-          label="综合分"
-          field="relevance_score"
-          extra={GRADE_SCORE_RELATION_HINT}
-        >
-          <InputNumber
-            min={0}
-            max={100}
-            precision={0}
-            placeholder="0-100"
-            style={{ width: '100%' }}
-            onChange={(v) => {
-              const grade = scoreToConfidenceGrade(v)
-              if (grade && !form.getFieldValue('confidence_grade')) {
-                form.setFieldValue('confidence_grade', grade)
-              }
-            }}
-          />
-        </FormItem>
-        <FormItem label="产品介绍" field="competitor_product_intro">
-          <Input.TextArea placeholder="竞品产品介绍" autoSize={{ minRows: 2, maxRows: 6 }} />
-        </FormItem>
-        <FormItem label="企业标签" field="competitor_tags_display" extra="多个标签可用逗号、顿号或换行分隔">
-          <Input.TextArea placeholder="如：工业软件、智能制造" autoSize={{ minRows: 2, maxRows: 4 }} />
-        </FormItem>
-        <FormItem label="子基金名称" field="sub_fund_names">
-          <Input placeholder="选填" maxLength={1000} />
-        </FormItem>
-        <FormItem label="数据源" field="data_source_display">
-          <Input disabled />
-        </FormItem>
-        <FormItem label="融资" field="financing_history_text" extra="多轮次可用换行分隔，如：2023-02-02 定增 1亿元">
-          <Input.TextArea placeholder="融资轮次信息" autoSize={{ minRows: 2, maxRows: 6 }} />
-        </FormItem>
-        <FormItem style={{ marginBottom: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 14, color: 'var(--color-text-2)' }}>是否放入可比公司</span>
-            <FormItem field="include_in_comparable" triggerPropName="checked" noStyle>
-              <Checkbox />
-            </FormItem>
-          </div>
-        </FormItem>
+      <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body enterprise-form-grid">
+          <p className="form-hint form-span-4">
+            {isEdit
+              ? '修改竞品信息，保存后立即更新列表。'
+              : '手动录入竞品公司信息；保存后数据源为「用户新增」，并立即出现在竞品明细列表中。'}
+          </p>
+          <FormItem
+            label="竞品名称"
+            field="competitor_display_name"
+            rules={[{ required: true, message: '请输入竞品名称' }]}
+            className="form-span-2"
+          >
+            <Input placeholder="竞品公司全称或常用名" maxLength={255} />
+          </FormItem>
+          <FormItem label="信用代码" field="unified_credit_code">
+            <Input placeholder="统一社会信用代码（选填）" maxLength={64} />
+          </FormItem>
+          <FormItem label="是否上市" field="is_listed">
+            <Select
+              getPopupContainer={sheetPopupContainer}
+              options={[
+                { label: '否', value: 0 },
+                { label: '是', value: 1 },
+              ]}
+            />
+          </FormItem>
+          <FormItem label="等级" field="confidence_grade">
+            <Select allowClear placeholder="选填" options={GRADE_OPTIONS} getPopupContainer={sheetPopupContainer} />
+          </FormItem>
+          <FormItem
+            label="综合分"
+            field="relevance_score"
+            extra={GRADE_SCORE_RELATION_HINT}
+          >
+            <InputNumber
+              min={0}
+              max={100}
+              precision={0}
+              placeholder="0-100"
+              style={{ width: '100%' }}
+              onChange={(v) => {
+                const grade = scoreToConfidenceGrade(v)
+                if (grade && !form.getFieldValue('confidence_grade')) {
+                  form.setFieldValue('confidence_grade', grade)
+                }
+              }}
+            />
+          </FormItem>
+          <FormItem label="子基金名称" field="sub_fund_names">
+            <Input placeholder="选填" maxLength={1000} />
+          </FormItem>
+          <FormItem label="数据源" field="data_source_display">
+            <Input disabled />
+          </FormItem>
+          <FormItem label="产品介绍" field="competitor_product_intro" className="form-span-2">
+            <Input.TextArea placeholder="竞品产品介绍" autoSize={{ minRows: 2, maxRows: 4 }} />
+          </FormItem>
+          <FormItem label="企业标签" field="competitor_tags_display" extra="多个标签可用逗号、顿号或换行分隔" className="form-span-2">
+            <Input.TextArea placeholder="如：工业软件、智能制造" autoSize={{ minRows: 2, maxRows: 4 }} />
+          </FormItem>
+          <FormItem label="融资" field="financing_history_text" extra="多轮次可用换行分隔" className="form-span-2">
+            <Input.TextArea placeholder="融资轮次信息" autoSize={{ minRows: 2, maxRows: 4 }} />
+          </FormItem>
+          <FormItem field="include_in_comparable" triggerPropName="checked">
+            <Checkbox>放入可比公司</Checkbox>
+          </FormItem>
+        </div>
+        <SheetActions
+          onCancel={onClose}
+          submitLabel="保存"
+          submitType="button"
+          onSubmitClick={handleOk}
+          submitLoading={submitting}
+        />
       </Form>
-    </Modal>
+    </SheetModal>
   )
 }

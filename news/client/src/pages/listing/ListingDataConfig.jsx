@@ -19,6 +19,7 @@ import {
   fetchListingSyncExecutionLog,
 } from '../../api/listing'
 import CronGenerator from '../../components/CronGenerator'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
 import AdminListTable, { formatAdminDateTime, AdminOps } from '../../components/AdminListTable'
 import './listingTableColumns.css'
 
@@ -491,24 +492,23 @@ export default function ListingDataConfig() {
         data={data}
       />
 
-      <Modal
-        title={editing ? '编辑配置' : '新增配置'}
+      <SheetModal
         visible={showModal}
-        onOk={handleSubmit}
-        onCancel={() => setShowModal(false)}
-        style={{ width: 560 }}
+        title={editing ? '编辑配置' : '新增配置'}
+        onClose={() => setShowModal(false)}
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
           <FormItem label="配置名称" field="name" rules={[{ required: true }]}>
             <Input placeholder="请输入" />
           </FormItem>
           <FormItem label="接口类型" field="interface_type" rules={[{ required: true }]}>
-            <Select>
+            <Select getPopupContainer={sheetPopupContainer}>
               <Option value="crawler">爬虫</Option>
               <Option value="api">数据接口</Option>
             </Select>
           </FormItem>
-          <FormItem label="请求地址" field="request_url">
+          <FormItem label="请求地址" field="request_url" className="form-span-2">
             <Input
               placeholder={
                 watchNewsSubType === 'guidance_progress' || watchNewsSubType === 'overseas_filing'
@@ -523,14 +523,14 @@ export default function ListingDataConfig() {
             rules={[{ required: true, message: '请选择最早同步日期' }]}
             extra="该日期之前的数据将不会同步；建议所有上市接口统一设置。"
           >
-            <DatePicker style={{ width: '100%' }} />
+            <DatePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
           </FormItem>
           {watchNewsSubType ? (
             <div style={{ marginTop: -4, marginBottom: 12, color: 'var(--color-text-2)', fontSize: 12 }}>
               {LISTING_REQUEST_URL_HINTS[watchNewsSubType] || '请按当前接口子类型填写配置。'}
             </div>
           ) : null}
-          <FormItem label="Cron 表达式" field="cron_expression" extra="与新闻接口、收件管理等共用同一套可视化配置（Quartz 7 段），保存后由服务端转为 node-cron 调度">
+          <FormItem label="Cron 表达式" field="cron_expression" className="form-span-2" extra="与新闻接口、收件管理等共用同一套可视化配置（Quartz 7 段），保存后由服务端转为 node-cron 调度">
             <Input
               placeholder="点击右侧「配置」打开系统 Cron 配置器"
               readOnly
@@ -553,7 +553,7 @@ export default function ListingDataConfig() {
             <Input placeholder="如 active" />
           </FormItem>
           <FormItem label="接口子类型（数据接口时）" field="news_interface_type">
-            <Select allowClear placeholder="请选择上市进展接口子类型">
+            <Select allowClear placeholder="请选择上市进展接口子类型" getPopupContainer={sheetPopupContainer}>
               {LISTING_INTERFACE_SUB_TYPES.map((x) => (
                 <Option key={x.value} value={x.value}>
                   {x.label}
@@ -588,14 +588,14 @@ export default function ListingDataConfig() {
           <FormItem label="THS_DR 数据集编码" field="ifind_dr_code">
             <Input placeholder="默认 p04920" />
           </FormItem>
-          <FormItem label="THS_DR 入参" field="ifind_query_params">
+          <FormItem label="THS_DR 入参" field="ifind_query_params" className="form-span-2">
             <Input placeholder="iv_sfss=0;iv_sqlx=0;iv_sqzt=0" />
           </FormItem>
-          <FormItem label="THS_DR 字段" field="ifind_fields">
+          <FormItem label="THS_DR 字段" field="ifind_fields" className="form-span-2">
             <Input.TextArea autoSize={{ minRows: 2, maxRows: 5 }} />
           </FormItem>
           <FormItem label="THS_DR 格式" field="ifind_format">
-            <Select>
+            <Select getPopupContainer={sheetPopupContainer}>
               <Option value="json">json</Option>
               <Option value="dataframe">dataframe</Option>
               <Option value="list">list</Option>
@@ -612,8 +612,15 @@ export default function ListingDataConfig() {
           <FormItem label="启用" field="is_active" triggerPropName="checked">
             <Switch />
           </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setShowModal(false)}
+            submitLabel="保存"
+            submitType="button"
+            onSubmitClick={handleSubmit}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       <CronGenerator
         visible={showCronModal}
@@ -629,77 +636,88 @@ export default function ListingDataConfig() {
         onCancel={() => setShowCronModal(false)}
       />
 
-      <Modal
-        title="上市数据同步 — 时间范围"
+      <SheetModal
         visible={syncOpen}
-        onOk={runSync}
-        onCancel={() => {
+        title="上市数据同步 — 时间范围"
+        onClose={() => {
+          if (syncing) return
           stopSyncPolling()
           setSyncOpen(false)
         }}
-        confirmLoading={syncing}
-        style={{ width: 700 }}
       >
-        <p style={{ marginBottom: 12, color: 'var(--color-text-2)' }}>
-          {syncRow?.news_interface_type === 'new_share'
-            ? '打新日历：只需选择「开始日期」（含当日）。将同步 A 股申购日 / 港股上市日从该日起的数据；已入库记录按字段比对更新。未传结束日时服务端上界为远期。'
-            : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所；若启用 iFinD，则同步港交所上市申请（失败可按配置回退网页抓取）。'}
-        </p>
-        <p style={{ marginBottom: 10, color: 'var(--color-text-2)', fontSize: 12 }}>
-          当前配置最早同步时间：{formatYmd(syncRow?.min_sync_date, '2026-01-01')} 00:00:00
-        </p>
-        {syncSubmittedRange?.startDate ? (
-          <p style={{ marginBottom: 10, color: 'rgb(var(--primary-6))', fontSize: 13, fontWeight: 500 }}>
-            本次已提交区间：{syncSubmittedRange.startDate}
-            {syncSubmittedRange.endDate ? ` ~ ${syncSubmittedRange.endDate}` : '（打新：起日含当日）'}
-            {syncing ? '（执行中，日期选择已锁定）' : ''}
-          </p>
-        ) : null}
-        {syncRow?.news_interface_type === 'new_share' ? (
-          <DatePicker
-            style={{ width: '100%' }}
-            value={syncSingleDate}
-            disabled={syncing}
-            onChange={(v) => setSyncSingleDate(v ? dayjs(v) : dayjs())}
-            allowClear={false}
-          />
-        ) : (
-          <DatePicker.RangePicker
-            style={{ width: '100%' }}
-            value={syncRange}
-            disabled={syncing}
-            onChange={(dateString, date) => {
-              const start = date?.[0] ?? dateString?.[0]
-              const end = date?.[1] ?? dateString?.[1]
-              if (!start || !end) {
-                setSyncRange([])
-                return
-              }
-              setSyncRange([dayjs(start), dayjs(end)])
-            }}
-            allowClear={false}
-          />
-        )}
-        <div style={{ marginTop: 12 }}>
-          <div style={{ marginBottom: 6, color: 'var(--color-text-2)', fontSize: 12 }}>
-            {syncLiveStartedAt ? `任务开始：${String(syncLiveStartedAt).replace('T', ' ').slice(0, 19)}；` : ''}
-            {syncLiveStatus ? `状态：${syncLiveStatus}` : ''}
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <p className="form-hint form-span-4">
+              {syncRow?.news_interface_type === 'new_share'
+                ? '打新日历：只需选择「开始日期」（含当日）。将同步 A 股申购日 / 港股上市日从该日起的数据；已入库记录按字段比对更新。'
+                : '与新闻接口配置一致：选择闭区间日期。爬虫类型将按「更新日期」落在该区间内抓取深交所、上交所、北交所。'}
+            </p>
+            <p className="form-hint form-span-4">
+              当前配置最早同步时间：{formatYmd(syncRow?.min_sync_date, '2026-01-01')} 00:00:00
+            </p>
+            {syncSubmittedRange?.startDate ? (
+              <p className="form-hint form-span-4">
+                本次已提交区间：{syncSubmittedRange.startDate}
+                {syncSubmittedRange.endDate ? ` ~ ${syncSubmittedRange.endDate}` : '（打新：起日含当日）'}
+                {syncing ? '（执行中，日期选择已锁定）' : ''}
+              </p>
+            ) : null}
+            <div className="form-group form-span-2">
+              <label>{syncRow?.news_interface_type === 'new_share' ? '开始日期' : '同步区间'}</label>
+              {syncRow?.news_interface_type === 'new_share' ? (
+                <DatePicker
+                  style={{ width: '100%' }}
+                  value={syncSingleDate}
+                  disabled={syncing}
+                  onChange={(v) => setSyncSingleDate(v ? dayjs(v) : dayjs())}
+                  allowClear={false}
+                  getPopupContainer={sheetPopupContainer}
+                />
+              ) : (
+                <DatePicker.RangePicker
+                  style={{ width: '100%' }}
+                  value={syncRange}
+                  disabled={syncing}
+                  onChange={(dateString, date) => {
+                    const start = date?.[0] ?? dateString?.[0]
+                    const end = date?.[1] ?? dateString?.[1]
+                    if (!start || !end) {
+                      setSyncRange([])
+                      return
+                    }
+                    setSyncRange([dayjs(start), dayjs(end)])
+                  }}
+                  allowClear={false}
+                  getPopupContainer={sheetPopupContainer}
+                />
+              )}
+            </div>
+            <div className="form-group form-span-4">
+              <label>
+                {syncLiveStartedAt ? `任务开始：${String(syncLiveStartedAt).replace('T', ' ').slice(0, 19)}；` : ''}
+                {syncLiveStatus ? `状态：${syncLiveStatus}` : '执行日志'}
+              </label>
+              <Input.TextArea
+                value={syncLiveLog || (syncing ? '正在获取执行日志...' : '点击“同步”后将显示实时执行日志')}
+                readOnly
+                autoSize={{ minRows: 4, maxRows: 8 }}
+              />
+            </div>
           </div>
-          <Input.TextArea
-            value={syncLiveLog || (syncing ? '正在获取执行日志...' : '点击“同步”后将显示实时执行日志')}
-            readOnly
-            autoSize={{ minRows: 10, maxRows: 16 }}
+          <SheetActions
+            onCancel={() => {
+              stopSyncPolling()
+              setSyncOpen(false)
+            }}
+            submitLabel="同步"
+            submitType="button"
+            onSubmitClick={runSync}
+            submitLoading={syncing}
           />
         </div>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="同步说明（日志）"
-        visible={logOpen}
-        footer={null}
-        onCancel={() => setLogOpen(false)}
-        style={{ width: 520 }}
-      >
+      <SheetViewer visible={logOpen} title="同步说明（日志）" onClose={() => setLogOpen(false)}>
         {logRecord && (
           <div style={{ lineHeight: 1.8 }}>
             <p>
@@ -716,12 +734,12 @@ export default function ListingDataConfig() {
               <strong>上次同步区间结束日：</strong>
               {logRecord.last_sync_range_end || '—'}
             </p>
-            <p style={{ color: 'var(--color-text-2)', fontSize: 13 }}>
+            <p className="form-hint">
               详细执行日志与新闻侧「同步日志」策略对齐；后续可接入独立执行表。当前可在服务器控制台查看「上市进展定时」关键字日志。
             </p>
           </div>
         )}
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }

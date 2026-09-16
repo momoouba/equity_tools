@@ -20,6 +20,9 @@ import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import { useNavigate } from 'react-router-dom'
 import axios from '../utils/axios'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../components/SheetModal'
+import { ListOpButton, ListOps } from '../components/listTableOps'
+import '../styles/listTable.css'
 import { getUser } from '../utils/auth'
 import EnterpriseForm from './EnterpriseForm'
 import BatchImportModal from './BatchImportModal'
@@ -197,6 +200,17 @@ function EnterpriseManagement({
 
   const showInvestedEnterpriseAi = dataAppName === DATA_APP_PROJECT && hideEntityTabs
   const showValuationAction = dataAppName === DATA_APP_VALUATION && hideEntityTabs
+  /** 列表统一样式：浅蓝表头、固定操作列、ListOps 同色按钮（新闻舆情 / 竞品 / 估值） */
+  const useListTableStyle =
+    showInvestedEnterpriseAi || showValuationAction || dataAppName === DATA_APP_NEWS
+  const listOpsColWidth =
+    showInvestedEnterpriseAi && isAdmin
+      ? 213
+      : showValuationAction
+        ? 220
+        : showInvestedEnterpriseAi
+          ? 173
+          : 168
   const navigate = useNavigate()
 
   const tableScrollAreaRef = useRef(null)
@@ -210,7 +224,7 @@ function EnterpriseManagement({
       const h = el.clientHeight
       if (h < 80) return
       // scroll.y 仅作用于表体；分页在表格外，此处高度已不含分页区
-      setTableScrollY(Math.max(200, Math.floor(h - 52)))
+      setTableScrollY(Math.max(160, Math.floor(h - 48)))
     }
     measure()
     const ro = new ResizeObserver(() => measure())
@@ -796,75 +810,58 @@ function EnterpriseManagement({
     }
     const actionCol = {
       title: '操作',
-      width: showInvestedEnterpriseAi && isAdmin ? 340 : showValuationAction ? 280 : 220,
-      fixed: showInvestedEnterpriseAi ? 'right' : undefined,
+      width: listOpsColWidth,
+      fixed: useListTableStyle ? 'right' : undefined,
+      className: useListTableStyle ? 'list-ops-col' : undefined,
       align: 'left',
-      render: (_, record) => (
-        <Space size={8} wrap={false}>
-          {showValuationAction ? (
-            <Button
-              type="primary"
-              size="small"
-              onClick={async () => {
-                try {
-                  const res = await openValuationCaseFromInvested(record.id)
-                  if (res.data?.success) {
-                    const cid = res.data.data.id
-                    if (onValuationClick) onValuationClick(cid)
-                    else navigate(`/dashboard/valuation/workbench/${cid}`)
-                  } else {
-                    Message.error(res.data?.message || '打开估值案件失败')
+      render: (_, record) => {
+        const buttons = (
+          <>
+            {showValuationAction ? (
+              <ListOpButton
+                name="进行估值"
+                onClick={async () => {
+                  try {
+                    const res = await openValuationCaseFromInvested(record.id)
+                    if (res.data?.success) {
+                      const cid = res.data.data.id
+                      if (onValuationClick) onValuationClick(cid)
+                      else navigate(`/dashboard/valuation/workbench/${cid}`)
+                    } else {
+                      Message.error(res.data?.message || '打开估值案件失败')
+                    }
+                  } catch (e) {
+                    Message.error(e.response?.data?.message || e.message || '打开估值案件失败')
                   }
-                } catch (e) {
-                  Message.error(e.response?.data?.message || e.message || '打开估值案件失败')
+                }}
+              />
+            ) : null}
+            {showInvestedEnterpriseAi && isAdmin ? (
+              <ListOpButton
+                name="竞品"
+                onClick={() =>
+                  runCompetitorFlowForEnterprise(
+                    record.id,
+                    record.enterprise_full_name || record.project_abbreviation
+                  )
                 }
+              />
+            ) : null}
+            <ListOpButton name="编辑" onClick={() => handleEdit(record)} />
+            <ListOpButton
+              name="日志"
+              onClick={() => {
+                setLogEnterpriseId(record.id)
+                setShowLogModal(true)
               }}
-            >
-              进行估值
-            </Button>
-          ) : null}
-          {showInvestedEnterpriseAi && isAdmin ? (
-            <Button
-              type="outline"
-              size="small"
-              onClick={() =>
-                runCompetitorFlowForEnterprise(
-                  record.id,
-                  record.enterprise_full_name || record.project_abbreviation
-                )
-              }
-            >
-              竞品
-            </Button>
-          ) : null}
-          <Button
-            type="outline"
-            size="small"
-            onClick={() => handleEdit(record)}
-          >
-            编辑
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="success"
-            onClick={() => {
-              setLogEnterpriseId(record.id)
-              setShowLogModal(true)
-            }}
-          >
-            日志
-          </Button>
-          <Button
-            type="outline"
-            size="small"
-            status="danger"
-            onClick={() => handleDelete(record.id)}
-          >
-            删除
-          </Button>
-        </Space>
-      )
+            />
+            <ListOpButton name="删除" onClick={() => handleDelete(record.id)} />
+          </>
+        )
+        return useListTableStyle
+          ? <ListOps>{buttons}</ListOps>
+          : <Space size={8} wrap={false}>{buttons}</Space>
+      }
     }
 
     if (dataAppName === DATA_APP_PROJECT) {
@@ -934,22 +931,27 @@ function EnterpriseManagement({
           ellipsis: true,
           tooltip: true,
         },
-        {
-          title: '企业类型',
-          dataIndex: 'entity_type',
-          width: 100,
-          fixed: 'left',
-          ellipsis: true,
-          tooltip: true,
-          render: (text) => text || '-',
-        },
+        ...(showInvestedEnterpriseAi
+          ? []
+          : [
+              {
+                title: '企业类型',
+                dataIndex: 'entity_type',
+                width: 128,
+                fixed: 'left',
+                ellipsis: false,
+                headerCellStyle: { whiteSpace: 'nowrap' },
+                render: (text) => text || '-',
+              },
+            ]),
         {
           title: '项目简称',
           dataIndex: 'project_abbreviation',
-          width: 120,
+          width: showInvestedEnterpriseAi ? 148 : 120,
           fixed: 'left',
           ellipsis: true,
           tooltip: true,
+          headerCellStyle: { whiteSpace: 'nowrap' },
           render: (text) => text || '-',
         },
         {
@@ -1070,9 +1072,9 @@ function EnterpriseManagement({
       {
         title: '企业类型',
         dataIndex: 'entity_type',
-        width: vw(112),
-        ellipsis: true,
-        tooltip: true,
+        width: 128,
+        ellipsis: false,
+        headerCellStyle: { whiteSpace: 'nowrap' },
         render: (text) => text || '-'
       },
       {
@@ -1161,6 +1163,8 @@ function EnterpriseManagement({
     pageSize,
     showInvestedEnterpriseAi,
     showValuationAction,
+    useListTableStyle,
+    listOpsColWidth,
     isAdmin,
     enterprises,
     competitorSelectedKeys,
@@ -1176,19 +1180,25 @@ function EnterpriseManagement({
 
   return (
     <div
-      className={`enterprise-management${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-page' : ''}${showValuationAction ? ' valuation-invested-page' : ''}`}
+      className={`enterprise-management${viewportBoundTable ? ' invested-enterprises-table-page' : ''}${showValuationAction ? ' valuation-invested-page' : ''}${useListTableStyle ? ' list-table-page' : ''}`}
       style={
         viewportBoundTable
           ? {
               boxSizing: 'border-box',
-              height: 'calc(100vh - 72px)',
-              padding: '16px 24px',
+              height: 'calc(100vh - 68px)',
+              maxHeight: 'calc(100vh - 68px)',
+              padding: '4px 24px 0',
               display: 'flex',
               flexDirection: 'column',
               minHeight: 0,
               overflow: 'hidden',
+              '--list-ops-col-width': `${listOpsColWidth}px`,
             }
-          : undefined
+          : useListTableStyle
+            ? {
+                '--list-ops-col-width': `${listOpsColWidth}px`,
+              }
+            : undefined
       }
     >
       <Card
@@ -1207,6 +1217,7 @@ function EnterpriseManagement({
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
+                padding: 0,
               }
             : undefined
         }
@@ -1397,7 +1408,7 @@ function EnterpriseManagement({
           onChange={handleTabChange}
           type="line"
           className="entity-type-tabs"
-          style={{ marginBottom: 16 }}
+          style={{ marginBottom: viewportBoundTable ? 8 : 16, flexShrink: 0 }}
         >
           <TabPane key="all" title="全部" />
           <TabPane key="invested" title="被投企业" />
@@ -1473,7 +1484,7 @@ function EnterpriseManagement({
               ? {
                   flex: 1,
                   minHeight: 0,
-                  marginTop: 16,
+                  marginTop: 8,
                   display: 'flex',
                   flexDirection: 'column',
                   overflow: 'hidden',
@@ -1484,7 +1495,7 @@ function EnterpriseManagement({
           <div
             className={`table-container${
               showInvestedEnterpriseAi && !viewportBoundTable ? ' invested-enterprises-horizontal-scroll' : ''
-            }${showInvestedEnterpriseAi && viewportBoundTable ? ' invested-enterprises-table-container' : ''}`}
+            }${viewportBoundTable ? ' invested-enterprises-table-container' : ''}`}
             style={
               viewportBoundTable
                 ? {
@@ -1509,7 +1520,12 @@ function EnterpriseManagement({
               loading={loading}
               pagination={false}
               rowKey="id"
-              className={showValuationAction ? 'valuation-list-table' : undefined}
+              className={
+                [
+                  showValuationAction ? 'valuation-list-table' : '',
+                  useListTableStyle ? 'list-table' : '',
+                ].filter(Boolean).join(' ') || undefined
+              }
               border={{
                 wrapper: true,
                 cell: true
@@ -1524,7 +1540,14 @@ function EnterpriseManagement({
           </div>
         </div>
 
-        <div className="pagination-wrapper">
+        <div
+          className="pagination-wrapper"
+          style={
+            viewportBoundTable
+              ? { flexShrink: 0, marginTop: 0, paddingTop: 12, paddingBottom: 4 }
+              : undefined
+          }
+        >
           <div className="page-size-selector">
             <span className="page-size-label">每页显示：</span>
             <Select
@@ -1617,18 +1640,16 @@ function EnterpriseManagement({
 
       {showInvestedEnterpriseAi && (
         <>
-          <Modal
-            title={`AI 增强执行日志（已选 ${ieAiLogEnterpriseId ? ieAiLogEnterpriseId.split(',').length : 0} 条被投企业，按时间降序）`}
+          <SheetViewer
             visible={ieAiLogVisible}
-            footer={null}
-            onCancel={() => setIeAiLogVisible(false)}
-            style={{ width: 1060 }}
-            unmountOnExit
+            title={`AI 增强执行日志（已选 ${ieAiLogEnterpriseId ? ieAiLogEnterpriseId.split(',').length : 0} 条被投企业，按时间降序）`}
+            onClose={() => setIeAiLogVisible(false)}
           >
-            <p style={{ marginBottom: 8, fontSize: 12, color: 'var(--color-text-3)' }}>
+            <p className="form-hint">
               成功任务展示「产品简介」「企业标签」快照及「联网状态」；失败任务显示错误摘要。大模型提示词与融资事件联网 AI 一致。
             </p>
             <Table
+              className="list-table"
               rowKey="id"
               loading={ieAiLogLoading}
               data={ieAiLogRows}
@@ -1687,76 +1708,97 @@ function EnterpriseManagement({
               ]}
               pagination={false}
             />
-          </Modal>
+          </SheetViewer>
 
-          <Modal
-            title="重试失败 AI（仅 failed）"
+          <SheetModal
             visible={retryFailedIeAiVisible}
-            onOk={handleRetryFailedIeAiOk}
-            confirmLoading={retryFailedIeAiSubmitting}
-            onCancel={() => setRetryFailedIeAiVisible(false)}
-            style={{ width: 520 }}
-            okText="加入重试队列"
+            title="重试失败 AI（仅 failed）"
+            onClose={() => setRetryFailedIeAiVisible(false)}
+            className="sheet-modal-narrow"
           >
-            <Form form={retryFailedIeAiForm} layout="vertical">
-              <FormItem
-                label="创建日期范围（含首尾两天，仅筛选 ai_enrich_status = failed 的 invested_enterprises）"
-                field="date_range"
-                rules={[{ required: true, message: '请选择日期范围' }]}
-              >
-                <DatePicker.RangePicker style={{ width: '100%' }} />
-              </FormItem>
+            <Form form={retryFailedIeAiForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+              <div className="modal-body enterprise-form-grid">
+                <FormItem
+                  label="创建日期范围（含首尾两天，仅筛选 ai_enrich_status = failed 的 invested_enterprises）"
+                  field="date_range"
+                  rules={[{ required: true, message: '请选择日期范围' }]}
+                  className="form-span-4"
+                >
+                  <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                </FormItem>
+                <p className="form-hint form-span-4">
+                  仅对区间内创建且 AI 状态为 failed 的被投企业重新排队；去重规则与「批量AI取数」一致（按企业全称）。
+                </p>
+              </div>
+              <SheetActions
+                onCancel={() => setRetryFailedIeAiVisible(false)}
+                submitLabel="加入重试队列"
+                submitType="button"
+                onSubmitClick={handleRetryFailedIeAiOk}
+                submitLoading={retryFailedIeAiSubmitting}
+              />
             </Form>
-            <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              仅对区间内创建且 AI 状态为 failed 的被投企业重新排队；去重规则与「批量AI取数」一致（按企业全称）。
-            </p>
-          </Modal>
+          </SheetModal>
 
-          <Modal
-            title="批量 AI 取数（按创建日期）"
+          <SheetModal
             visible={batchIeAiVisible}
-            onOk={handleBatchIeAiOk}
-            confirmLoading={batchIeAiSubmitting}
-            onCancel={() => setBatchIeAiVisible(false)}
-            style={{ width: 520 }}
-            okText="加入队列"
+            title="批量 AI 取数（按创建日期）"
+            onClose={() => setBatchIeAiVisible(false)}
+            className="sheet-modal-narrow"
           >
-            <Form form={batchIeAiForm} layout="vertical">
-              <FormItem
-                label="创建日期范围（含首尾两天，筛选 invested_enterprises.created_at 的日历日）"
-                field="date_range"
-                rules={[{ required: true, message: '请选择日期范围' }]}
-              >
-                <DatePicker.RangePicker style={{ width: '100%' }} />
-              </FormItem>
+            <Form form={batchIeAiForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+              <div className="modal-body enterprise-form-grid">
+                <FormItem
+                  label="创建日期范围（含首尾两天，筛选 invested_enterprises.created_at 的日历日）"
+                  field="date_range"
+                  rules={[{ required: true, message: '请选择日期范围' }]}
+                  className="form-span-4"
+                >
+                  <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                </FormItem>
+                <p className="form-hint form-span-4">
+                  与融资事件使用同一套联网大模型提示词与模型配置；任务以<strong>被投企业全称</strong>为主键参与去重与模板填充。
+                </p>
+              </div>
+              <SheetActions
+                onCancel={() => setBatchIeAiVisible(false)}
+                submitLabel="加入队列"
+                submitType="button"
+                onSubmitClick={handleBatchIeAiOk}
+                submitLoading={batchIeAiSubmitting}
+              />
             </Form>
-            <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              与融资事件使用同一套联网大模型提示词与模型配置；任务以<strong>被投企业全称</strong>为主键参与去重与模板填充。
-            </p>
-          </Modal>
+          </SheetModal>
 
-          <Modal
-            title="批量百科查词（按创建日期）"
+          <SheetModal
             visible={batchIeBaikeVisible}
-            onOk={handleBatchIeBaikeOk}
-            confirmLoading={batchIeBaikeSubmitting}
-            onCancel={() => setBatchIeBaikeVisible(false)}
-            style={{ width: 520 }}
-            okText="开始查词"
+            title="批量百科查词（按创建日期）"
+            onClose={() => setBatchIeBaikeVisible(false)}
+            className="sheet-modal-narrow"
           >
-            <Form form={batchIeBaikeForm} layout="vertical">
-              <FormItem
-                label="创建日期范围（含首尾两天，仅筛选 qcc_company_intro 为空的被投企业）"
-                field="date_range"
-                rules={[{ required: true, message: '请选择日期范围' }]}
-              >
-                <DatePicker.RangePicker style={{ width: '100%' }} />
-              </FormItem>
+            <Form form={batchIeBaikeForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+              <div className="modal-body enterprise-form-grid">
+                <FormItem
+                  label="创建日期范围（含首尾两天，仅筛选 qcc_company_intro 为空的被投企业）"
+                  field="date_range"
+                  rules={[{ required: true, message: '请选择日期范围' }]}
+                  className="form-span-4"
+                >
+                  <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+                </FormItem>
+                <p className="form-hint form-span-4">
+                  对区间内创建且尚未查词的被投企业，后台批量查询百度百科（HTTP + Playwright）。单次上限 200 条；请稍后刷新列表，进度见服务器日志。
+                </p>
+              </div>
+              <SheetActions
+                onCancel={() => setBatchIeBaikeVisible(false)}
+                submitLabel="开始查词"
+                submitType="button"
+                onSubmitClick={handleBatchIeBaikeOk}
+                submitLoading={batchIeBaikeSubmitting}
+              />
             </Form>
-            <p style={{ color: 'var(--color-text-3)', fontSize: 12, marginTop: 8 }}>
-              对区间内创建且尚未查词的被投企业，后台批量查询百度百科（HTTP + Playwright）。单次上限 200 条；请稍后刷新列表，进度见服务器日志。
-            </p>
-          </Modal>
+          </SheetModal>
         </>
       )}
 

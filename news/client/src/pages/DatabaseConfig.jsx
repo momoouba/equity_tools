@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select, InputNumber, Switch } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import AdminListTable, { formatAdminDateTime, AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './DatabaseConfig.css'
 
 const Option = Select.Option
@@ -358,134 +359,132 @@ function DatabaseConfig() {
       )}
 
       {/* 新增/编辑表单 */}
-      <Modal
+      <SheetModal
         visible={showForm}
         title={editingConfig ? '编辑数据库配置' : '新增数据库配置'}
-        onCancel={() => {
+        onClose={() => {
           setShowForm(false)
           setEditingConfig(null)
           setTestResult('')
         }}
-        footer={null}
-        style={{ width: 600 }}
       >
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label>配置名称 *</label>
-            <Input
-              value={formData.name}
-              onChange={(value) => handleChange('name', value)}
-              placeholder="请输入配置名称"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>数据库类型 *</label>
-            <Select
-              value={formData.db_type}
-              onChange={(value) => handleChange('db_type', value)}
-            >
-              <Option value="mysql">MySQL</Option>
-              <Option value="postgresql">PostgreSQL</Option>
-              <Option value="sqlite">SQLite</Option>
-            </Select>
-          </div>
-
-          <div className="form-group">
-            <label>主机地址 *</label>
-            <Input
-              value={formData.host}
-              onChange={(value) => handleChange('host', value)}
-              placeholder="例如：localhost 或 192.168.1.100"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>端口 *</label>
-            <InputNumber
-              value={formData.port}
-              onChange={(value) => handleChange('port', value)}
-              min={1}
-              max={65535}
-              style={{ width: '100%' }}
-            />
-            <p className="form-hint">MySQL默认3306，PostgreSQL默认5432</p>
-          </div>
-
-          <div className="form-group">
-            <label>用户名 *</label>
-            <Input
-              value={formData.user}
-              onChange={(value) => handleChange('user', value)}
-              placeholder="请输入数据库用户名"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>密码 *</label>
-            <Input.Password
-              value={hasPassword && !formData.password ? '****' : formData.password}
-              onChange={(value) => handleChange('password', value)}
-              onFocus={(e) => {
-                if (hasPassword && e.target.value === '****') {
-                  setHasPassword(false)
-                  setFormData({ ...formData, password: '' })
-                }
-              }}
-              placeholder={editingConfig ? (hasPassword ? '****' : '留空则不更新密码') : '请输入数据库密码'}
-            />
-            <p className="form-hint">{editingConfig ? '留空则不更新密码' : '请输入数据库密码'}</p>
-          </div>
-
-          <div className="form-group">
-            <label>数据库名 *</label>
-            <Input
-              value={formData.database}
-              onChange={(value) => handleChange('database', value)}
-              placeholder="请输入数据库名称"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>
-              <Switch
-                checked={formData.is_active}
-                onChange={(checked) => handleChange('is_active', checked)}
-                style={{ marginRight: 8 }}
+        <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group">
+              <label>配置名称 *</label>
+              <Input
+                value={formData.name}
+                onChange={(value) => handleChange('name', value)}
+                placeholder="请输入配置名称"
               />
-              启用配置
-            </label>
-          </div>
-
-          {testResult && (
-            <div className={`test-result ${testResult.startsWith('success') ? 'success' : 'error'}`}>
-              {testResult.startsWith('success') ? '✓ ' : '✗ '}
-              {testResult.replace(/^(success|error):\s*/, '')}
             </div>
-          )}
 
-          <div className="form-actions">
-            <Button type="secondary" onClick={() => {
+            <div className="form-group">
+              <label>数据库类型 *</label>
+              <Select
+                value={formData.db_type}
+                onChange={(value) => handleChange('db_type', value)}
+                getPopupContainer={sheetPopupContainer}
+              >
+                <Option value="mysql">MySQL</Option>
+                <Option value="postgresql">PostgreSQL</Option>
+                <Option value="sqlite">SQLite</Option>
+              </Select>
+            </div>
+
+            <div className="form-group">
+              <label>主机地址 *</label>
+              <Input
+                value={formData.host}
+                onChange={(value) => handleChange('host', value)}
+                placeholder="例如：localhost 或 192.168.1.100"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>端口 *</label>
+              <InputNumber
+                value={formData.port}
+                onChange={(value) => handleChange('port', value)}
+                min={1}
+                max={65535}
+                style={{ width: '100%' }}
+              />
+              <p className="form-hint">MySQL默认3306，PostgreSQL默认5432</p>
+            </div>
+
+            <div className="form-group">
+              <label>用户名 *</label>
+              <Input
+                value={formData.user}
+                onChange={(value) => handleChange('user', value)}
+                placeholder="请输入数据库用户名"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>密码 *</label>
+              <Input.Password
+                value={hasPassword && !formData.password ? '****' : formData.password}
+                onChange={(value) => handleChange('password', value)}
+                onFocus={(e) => {
+                  if (hasPassword && e.target.value === '****') {
+                    setHasPassword(false)
+                    setFormData({ ...formData, password: '' })
+                  }
+                }}
+                placeholder={editingConfig ? (hasPassword ? '****' : '留空则不更新密码') : '请输入数据库密码'}
+              />
+              <p className="form-hint">{editingConfig ? '留空则不更新密码' : '请输入数据库密码'}</p>
+            </div>
+
+            <div className="form-group">
+              <label>数据库名 *</label>
+              <Input
+                value={formData.database}
+                onChange={(value) => handleChange('database', value)}
+                placeholder="请输入数据库名称"
+              />
+            </div>
+
+            <div className="form-group">
+              <label>
+                <Switch
+                  checked={formData.is_active}
+                  onChange={(checked) => handleChange('is_active', checked)}
+                  style={{ marginRight: 8 }}
+                />
+                启用配置
+              </label>
+            </div>
+
+            {testResult ? (
+              <div className={`test-result ${testResult.startsWith('success') ? 'success' : 'error'}`}>
+                {testResult.startsWith('success') ? '✓ ' : '✗ '}
+                {testResult.replace(/^(success|error):\s*/, '')}
+              </div>
+            ) : null}
+          </div>
+          <SheetActions
+            onCancel={() => {
               setShowForm(false)
               setEditingConfig(null)
               setTestResult('')
-            }}>
-              取消
-            </Button>
-            <Button
-              type="outline"
-              status="success"
-              onClick={handleTest}
-              loading={testing === 'form'}
-            >
-              测试
-            </Button>
-            <Button type="primary" htmlType="submit">
-              {editingConfig ? '更新' : '创建'}
-            </Button>
-          </div>
+            }}
+            extra={
+              <button
+                type="button"
+                className="btn-test"
+                onClick={handleTest}
+                disabled={testing === 'form'}
+              >
+                {testing === 'form' ? '测试中...' : '测试'}
+              </button>
+            }
+            submitLabel={editingConfig ? '更新' : '创建'}
+          />
         </form>
-      </Modal>
+      </SheetModal>
     </div>
   )
 }

@@ -2,6 +2,14 @@
 
 .system-config {
   width: 100%;
+  box-sizing: border-box;
+  /* 填满 dashboard-content，勿再用 100vh 自算，否则会叠出整页右侧滚动条 */
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .config-card {
@@ -9,39 +17,78 @@
   border-radius: 4px;
   padding: 0;
   overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.system-config > .arco-card > .arco-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
 }
 
 .config-tabs {
   width: 100%;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .config-tabs .arco-tabs-nav {
   flex-direction: row;
   margin-bottom: 0;
+  flex-shrink: 0;
 }
 
 .config-tabs .arco-tabs-content-list {
   display: block;
   width: 100%;
+  height: 100%;
 }
 
 .config-tabs .arco-tabs-content {
-  padding: 24px;
-  min-height: 400px;
+  padding: 12px 16px 8px;
+  min-height: 0;
+  flex: 1;
   display: block;
   width: 100%;
+  overflow: hidden;
+}
+
+.config-tabs .arco-tabs-content-inner {
+  height: 100%;
+}
+
+.config-tabs .arco-tabs-content-item-active {
+  height: 100% !important;
+  overflow: hidden;
+}
+
+.config-tabs .arco-tabs-content-item-active > .arco-tabs-pane {
+  height: 100%;
+  overflow: hidden;
 }
 
 .config-tabs .arco-tabs-content-wrapper {
   display: block;
   width: 100%;
+  height: 100%;
 }
 
 .config-content {
   width: 100%;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .system-config .arco-table-container {
@@ -58,9 +105,9 @@
 }
 
 .system-config .arco-table-th {
-  background-color: #dbeafe !important;
-  color: #1e3a8a;
-  font-weight: 600;
+  background-color: #e8f3ff !important;
+  color: #0e42d2 !important;
+  font-weight: 700 !important;
   white-space: nowrap !important;
 }
 
@@ -75,7 +122,7 @@
 }
 
 .system-config .arco-table-header .arco-table-th {
-  background-color: #dbeafe !important;
+  background-color: #e8f3ff !important;
 }
 
 .system-config .arco-table-body .arco-table-tr:nth-child(even) .arco-table-td {
@@ -105,7 +152,7 @@
 
 .system-config .admin-ops-col,
 .system-config .admin-ops-col .arco-table-cell {
-  white-space: normal !important;
+  white-space: nowrap !important;
   word-break: keep-all;
   overflow-wrap: normal;
   overflow: visible;
@@ -113,18 +160,18 @@
 }
 
 .system-config .admin-ops-col .arco-table-cell {
-  padding: 6px 4px;
+  padding: 6px 8px;
 }
 
 .system-config .admin-ops,
 .system-config .admin-ops-col .arco-space {
   display: flex !important;
   flex-direction: row;
-  flex-wrap: wrap !important;
+  flex-wrap: nowrap !important;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
-  width: 100%;
+  gap: 6px;
+  width: max-content;
   max-width: 100%;
 }
 

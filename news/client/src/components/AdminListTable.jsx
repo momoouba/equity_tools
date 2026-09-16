@@ -1,5 +1,7 @@
 import React from 'react'
-import { Table } from '@arco-design/web-react'
+import { Table, Button } from '@arco-design/web-react'
+import { ListOps, ListOpButton } from './listTableOps'
+import '../styles/listTable.css'
 
 export function adminSeqColumn({ page = 1, pageSize = 0 } = {}) {
   return {
@@ -62,29 +64,112 @@ export function formatAdminDateTime(value, { oneLine = false } = {}) {
   )
 }
 
-/** 操作列按钮：紧凑排列，超过 3 个时按一行 3 个换行 */
-export function AdminOps({ children }) {
-  return <div className="admin-ops">{children}</div>
+function extractButtonLabel(node) {
+  const ch = node?.props?.children
+  if (typeof ch === 'string') return ch.trim()
+  if (Array.isArray(ch)) {
+    return ch.filter((c) => typeof c === 'string').join('').trim()
+  }
+  return String(node?.props?.name || '').trim()
 }
 
-/** 管理员设置列表：序号、斑马纹、单元格竖线；列宽与操作按钮样式由 SystemConfig.css 控制 */
+function isArcoButton(type) {
+  if (type === Button) return true
+  if (!type) return false
+  const name = type.displayName || type.name || ''
+  return name === 'Button'
+}
+
+function shouldUnwrapOpWrapper(type) {
+  if (type === React.Fragment) return true
+  if (!type) return false
+  const name = type.displayName || type.name || ''
+  // forwardRef 组件名可能带 memo/forwardRef 前缀
+  return /Popconfirm|Tooltip|Trigger/i.test(name)
+}
+
+/** 把 AdminOps 内的 Button 自动换成 ListOpButton；勿递归进 Switch 等非包裹组件 */
+function enhanceAdminOpNode(node) {
+  if (!React.isValidElement(node)) return node
+  if (isArcoButton(node.type)) {
+    const label = extractButtonLabel(node)
+    const { status, type: _t, size: _s, className, children, ...rest } = node.props
+    return (
+      <ListOpButton name={label || '查看'} className={className} {...rest}>
+        {children}
+      </ListOpButton>
+    )
+  }
+  if (shouldUnwrapOpWrapper(node.type) && node.props?.children != null) {
+    const enhanced = React.Children.map(node.props.children, enhanceAdminOpNode)
+    // Popconfirm/Tooltip 必须是单个可持 ref 的子节点，不能传数组
+    const arr = React.Children.toArray(enhanced)
+    const nextChild = arr.length === 1 ? arr[0] : enhanced
+    return React.cloneElement(node, { children: nextChild })
+  }
+  return node
+}
+
+/** 操作列：统一 ListOps 同色按钮 */
+export function AdminOps({ children, className = '' }) {
+  return (
+    <ListOps className={['admin-ops', className].filter(Boolean).join(' ')}>
+      {React.Children.map(children, enhanceAdminOpNode)}
+    </ListOps>
+  )
+}
+
+function withFixedOpsColumn(col) {
+  if (!col || typeof col !== 'object') return col
+  const title = col.title
+  const isOps =
+    title === '操作' ||
+    col.key === 'actions' ||
+    (typeof col.className === 'string' && col.className.includes('admin-ops-col'))
+  if (!isOps) return col
+  return {
+    ...col,
+    fixed: col.fixed || 'right',
+    className: [col.className, 'list-ops-col'].filter(Boolean).join(' '),
+  }
+}
+
+/** 管理员设置列表：浅蓝表头、斑马纹、操作列右侧固定、同名按钮同色 */
 export default function AdminListTable({
   columns = [],
   className,
   page,
   pageSize,
   showSeq = true,
+  scroll,
+  /** 为 false 时不自动 fixed 操作列（双表/单选等特殊布局避免白屏） */
+  fixOps = true,
   ...rest
 }) {
-  const cols = showSeq ? [adminSeqColumn({ page, pageSize }), ...columns] : columns
+  const cols = (showSeq ? [adminSeqColumn({ page, pageSize }), ...columns] : columns).map((col) =>
+    fixOps ? withFixedOpsColumn(col) : col
+  )
+  const hasFixed = cols.some((c) => c && c.fixed)
+  const hasScrollY = scroll != null && scroll.y != null
+  // 有固定列时需要横向 scroll；默认表体高度偏保守，避免嵌套 Tab 撑出整页滚动条
+  const defaultY =
+    typeof window !== 'undefined' ? Math.max(200, window.innerHeight - 380) : 280
+  const mergedScroll = {
+    ...(hasFixed ? { x: true } : {}),
+    ...(hasFixed && !hasScrollY ? { y: defaultY } : {}),
+    ...(scroll || {}),
+  }
+  const scrollProp = Object.keys(mergedScroll).length ? mergedScroll : undefined
+
   return (
     <Table
       stripe
       border
       size="small"
-      className={['admin-list-table', className].filter(Boolean).join(' ')}
+      className={['admin-list-table', 'list-table', className].filter(Boolean).join(' ')}
       columns={cols}
       {...rest}
+      scroll={scrollProp}
     />
   )
 }

@@ -32,6 +32,9 @@ import {
   updateTrackLv2,
   updateTrackLv3,
 } from '../../api/project-sourcing'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../../components/SheetModal'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -569,17 +572,11 @@ export default function TrackConfigPage() {
         赛道
       </Tag>,
       t.name,
-      <Space size={4}>
-        <Button type="text" size="mini" onClick={() => openLv1Modal(null, t.id)}>
-          添加一级
-        </Button>
-        <Button type="text" size="mini" onClick={() => openTrackModal(t)}>
-          编辑
-        </Button>
-        <Button type="text" size="mini" status="danger" onClick={() => handleDeleteTrack(t)}>
-          删除
-        </Button>
-      </Space>
+      <ListOps>
+        <ListOpButton name="添加一级" onClick={() => openLv1Modal(null, t.id)} />
+        <ListOpButton name="编辑" onClick={() => openTrackModal(t)} />
+        <ListOpButton name="删除" onClick={() => handleDeleteTrack(t)} />
+      </ListOps>
     ),
     children: (t.lv1_list || []).map((l1) => ({
       key: `l1-${l1.id}`,
@@ -588,17 +585,11 @@ export default function TrackConfigPage() {
           一级
         </Tag>,
         l1.name,
-        <Space size={4}>
-          <Button type="text" size="mini" onClick={() => openLv2Modal(null, l1.id)}>
-            添加二级
-          </Button>
-          <Button type="text" size="mini" onClick={() => openLv1Modal({ ...l1, track_id: t.id })}>
-            编辑
-          </Button>
-          <Button type="text" size="mini" status="danger" onClick={() => handleDeleteLv1(l1)}>
-            删除
-          </Button>
-        </Space>
+        <ListOps>
+          <ListOpButton name="添加二级" onClick={() => openLv2Modal(null, l1.id)} />
+          <ListOpButton name="编辑" onClick={() => openLv1Modal({ ...l1, track_id: t.id })} />
+          <ListOpButton name="删除" onClick={() => handleDeleteLv1(l1)} />
+        </ListOps>
       ),
       children: (l1.lv2_list || []).map((l2) => ({
         key: `l2-${l2.id}`,
@@ -607,17 +598,11 @@ export default function TrackConfigPage() {
             二级
           </Tag>,
           l2.name,
-          <Space size={4}>
-            <Button type="text" size="mini" onClick={() => openLv3Modal(null, l2.id)}>
-              添加三级
-            </Button>
-            <Button type="text" size="mini" onClick={() => openLv2Modal({ ...l2, lv1_id: l1.id })}>
-              编辑
-            </Button>
-            <Button type="text" size="mini" status="danger" onClick={() => handleDeleteLv2(l2)}>
-              删除
-            </Button>
-          </Space>
+          <ListOps>
+            <ListOpButton name="添加三级" onClick={() => openLv3Modal(null, l2.id)} />
+            <ListOpButton name="编辑" onClick={() => openLv2Modal({ ...l2, lv1_id: l1.id })} />
+            <ListOpButton name="删除" onClick={() => handleDeleteLv2(l2)} />
+          </ListOps>
         ),
         children: (l2.lv3_list || []).map((l3) => {
           const { full, short, hasRule } = buildLv3RuleSummary(l3)
@@ -634,14 +619,10 @@ export default function TrackConfigPage() {
                   </Tag>
                   <span className="track-tree-name">{l3.name}</span>
                   <span className="track-tree-actions" onClick={(e) => e.stopPropagation()}>
-                    <Space size={4}>
-                      <Button type="text" size="mini" onClick={() => openLv3Modal({ ...l3, lv2_id: l2.id })}>
-                        编辑
-                      </Button>
-                      <Button type="text" size="mini" status="danger" onClick={() => handleDeleteLv3(l3)}>
-                        删除
-                      </Button>
-                    </Space>
+                    <ListOps>
+                      <ListOpButton name="编辑" onClick={() => openLv3Modal({ ...l3, lv2_id: l2.id })} />
+                      <ListOpButton name="删除" onClick={() => handleDeleteLv3(l3)} />
+                    </ListOps>
                   </span>
                 </span>
                 <Tooltip
@@ -661,10 +642,11 @@ export default function TrackConfigPage() {
 
   return (
     <div
+      className="list-table-page"
       style={{
-        height: 'calc(100vh - 128px)',
+        height: 'calc(100vh - 68px)',
         maxWidth: '100%',
-        padding: '8px 12px 12px',
+        padding: '4px 12px 12px',
         boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
@@ -770,164 +752,213 @@ export default function TrackConfigPage() {
         }
       `}</style>
 
-      <Modal
-        title="Excel 导入赛道配置"
+      <SheetModal
         visible={importVisible}
-        onCancel={() => {
+        title="Excel 导入赛道配置"
+        onClose={() => {
           setImportVisible(false)
           setImportFile(null)
           setImportErrors([])
         }}
-        footer={
-          <Space>
-            <Button onClick={() => setImportVisible(false)}>关闭</Button>
-            <Button type="primary" loading={importLoading} onClick={handleImportUpload}>
-              上传导入
-            </Button>
-          </Space>
-        }
-        style={{ width: 560 }}
       >
-        <Typography.Paragraph style={{ fontSize: 13 }}>
-          1. 下载模板（表头固定，勿改列顺序）；每行表示<strong>一条三级匹配节点</strong>及其完整路径，缺失的赛道/一级/二级将自动创建。
-        </Typography.Paragraph>
-        <Typography.Paragraph style={{ fontSize: 13 }}>
-          2. 同一「二级 + 三级名称」已存在时将<strong>更新</strong>排序与匹配字段。
-        </Typography.Paragraph>
-        <Space direction="vertical" style={{ width: '100%' }}>
-          <Button type="outline" onClick={downloadImportTemplate}>
-            下载导入模板
-          </Button>
-          <input
-            type="file"
-            accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            onChange={(e) => {
-              setImportFile(e.target.files?.[0] || null)
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <div className="form-group form-span-2">
+              <label>1. 下载模板</label>
+              <p className="form-hint">
+                表头固定，勿改列顺序。每行表示一条三级匹配节点及其完整路径，缺失的赛道/一级/二级将自动创建。
+              </p>
+              <Button type="outline" onClick={downloadImportTemplate}>
+                下载导入模板
+              </Button>
+            </div>
+            <div className="form-group form-span-2">
+              <label>2. 上传文件</label>
+              <p className="form-hint">同一「二级 + 三级名称」已存在时将更新排序与匹配字段。</p>
+              <input
+                type="file"
+                accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(e) => {
+                  setImportFile(e.target.files?.[0] || null)
+                  setImportErrors([])
+                }}
+              />
+              {importFile ? (
+                <p className="form-hint">已选择：{importFile.name}</p>
+              ) : null}
+            </div>
+            {importErrors.length > 0 ? (
+              <div className="form-span-4" style={{ maxHeight: 160, overflow: 'auto', fontSize: 12 }}>
+                <p className="form-hint">失败行：</p>
+                <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                  {importErrors.slice(0, 50).map((err, idx) => (
+                    <li key={idx}>
+                      第 {err.row} 行：{err.message}
+                    </li>
+                  ))}
+                  {importErrors.length > 50 ? <li>…共 {importErrors.length} 条</li> : null}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+          <SheetActions
+            onCancel={() => {
+              setImportVisible(false)
+              setImportFile(null)
               setImportErrors([])
             }}
+            cancelLabel="关闭"
+            submitLabel="上传导入"
+            submitType="button"
+            onSubmitClick={handleImportUpload}
+            submitLoading={importLoading}
           />
-          {importFile && (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              已选择：{importFile.name}
-            </Typography.Text>
-          )}
-        </Space>
-        {importErrors.length > 0 && (
-          <div style={{ marginTop: 12, maxHeight: 180, overflow: 'auto', fontSize: 12 }}>
-            <Typography.Text type="secondary">失败行：</Typography.Text>
-            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
-              {importErrors.slice(0, 50).map((err, idx) => (
-                <li key={idx}>
-                  第 {err.row} 行：{err.message}
-                </li>
-              ))}
-              {importErrors.length > 50 && <li>…共 {importErrors.length} 条</li>}
-            </ul>
-          </div>
-        )}
-      </Modal>
+        </div>
+      </SheetModal>
 
-      <Modal title={trackEditing ? '编辑赛道' : '新增赛道'} visible={trackModalVisible} onOk={submitTrack} onCancel={() => setTrackModalVisible(false)}>
-        {trackEditing ? hierarchyHint(nodeBreadcrumb(tree, 'track', trackEditing.id)) : null}
-        <Form form={trackForm} layout="vertical">
-          <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]}>
-            <Input placeholder="赛道名称" maxLength={100} />
-          </FormItem>
-          <FormItem label="排序" field="sort_order" initialValue={0}>
-            <InputNumber min={0} step={1} style={{ width: '100%' }} />
-          </FormItem>
-        </Form>
-      </Modal>
-
-      <Modal title={lv1Editing ? '编辑一级分类' : '新增一级分类'} visible={lv1ModalVisible} onOk={submitLv1} onCancel={() => setLv1ModalVisible(false)}>
-        {lv1Editing ? hierarchyHint(nodeBreadcrumb(tree, 'lv1', lv1Editing.id)) : null}
-        <Form form={lv1Form} layout="vertical">
-          {lv1Editing ? (
-            <FormItem label="归属赛道（可调整挂错位置）" field="track_id" rules={[{ required: true, message: '必选' }]}>
-              <Select placeholder="选择赛道" allowClear={false}>
-                {tree.map((tn) => (
-                  <Option key={tn.id} value={tn.id}>
-                    {tn.name}
-                  </Option>
-                ))}
-              </Select>
-            </FormItem>
-          ) : null}
-          <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]}>
-            <Input placeholder="一级分类名称" maxLength={100} />
-          </FormItem>
-          <FormItem label="排序" field="sort_order" initialValue={0}>
-            <InputNumber min={0} step={1} style={{ width: '100%' }} />
-          </FormItem>
-        </Form>
-      </Modal>
-
-      <Modal title={lv2Editing ? '编辑二级分类' : '新增二级分类'} visible={lv2ModalVisible} onOk={submitLv2} onCancel={() => setLv2ModalVisible(false)}>
-        {lv2Editing ? hierarchyHint(nodeBreadcrumb(tree, 'lv2', lv2Editing.id)) : null}
-        <Form form={lv2Form} layout="vertical">
-          {lv2Editing ? (
-            <FormItem label="归属一级（可调整挂错位置）" field="lv1_id" rules={[{ required: true, message: '必选' }]}>
-              <Select placeholder="选择一级分类" allowClear={false} showSearch optionFilterProp="label">
-                {lv1Options.map((o) => (
-                  <Option key={o.value} value={o.value}>
-                    {o.label}
-                  </Option>
-                ))}
-              </Select>
-            </FormItem>
-          ) : null}
-          <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]}>
-            <Input placeholder="二级分组名称" maxLength={100} />
-          </FormItem>
-          <FormItem label="排序" field="sort_order" initialValue={0}>
-            <InputNumber min={0} step={1} style={{ width: '100%' }} />
-          </FormItem>
-        </Form>
-      </Modal>
-
-      <Modal
-        title={lv3Editing ? '编辑三级（匹配规则）' : '新增三级（匹配规则）'}
-        style={{ width: 560 }}
-        visible={lv3ModalVisible}
-        onOk={submitLv3}
-        onCancel={() => setLv3ModalVisible(false)}
+      <SheetModal
+        visible={trackModalVisible}
+        title={trackEditing ? '编辑赛道' : '新增赛道'}
+        onClose={() => setTrackModalVisible(false)}
       >
-        {lv3Editing ? hierarchyHint(nodeBreadcrumb(tree, 'lv3', lv3Editing.id)) : null}
-        <Form form={lv3Form} layout="vertical">
-          {lv3Editing ? (
-            <FormItem label="归属二级（可调整挂错位置）" field="lv2_id" rules={[{ required: true, message: '必选' }]}>
-              <Select placeholder="选择二级分类" allowClear={false} showSearch optionFilterProp="label">
-                {lv2Options.map((o) => (
-                  <Option key={o.value} value={o.value}>
-                    {o.label}
-                  </Option>
-                ))}
-              </Select>
+        <Form form={trackForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            {trackEditing ? <div className="form-span-4">{hierarchyHint(nodeBreadcrumb(tree, 'track', trackEditing.id))}</div> : null}
+            <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]} className="form-span-2">
+              <Input placeholder="赛道名称" maxLength={100} />
             </FormItem>
-          ) : null}
-          <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]}>
-            <Input placeholder="三级节点名称" maxLength={100} />
-          </FormItem>
-          <FormItem label="排序" field="sort_order" initialValue={0}>
-            <InputNumber min={0} step={1} style={{ width: '100%' }} />
-          </FormItem>
-          <FormItem label="匹配行业（一级）" field="match_industry_lv1">
-            <Input placeholder="与融资事件来源/标准一级行业精确相等" maxLength={100} />
-          </FormItem>
-          <FormItem label="匹配行业（二级）" field="match_industry_lv2">
-            <Input placeholder="与融资事件来源/标准二级行业精确相等" maxLength={100} />
-          </FormItem>
-          <FormItem label="关键词" field="match_keywords">
-            <Input
-              placeholder="逗号/分号分隔；任一命中即可。仅在行业（L1/L2 来源与标准标签文案）与项目简介中做非严格匹配，不含企业名与项目名称"
-              maxLength={500}
-            />
-          </FormItem>
-          <FormItem label="优先级" field="match_priority" initialValue={0}>
-            <InputNumber min={0} max={9999} step={1} style={{ width: '100%' }} />
-          </FormItem>
+            <FormItem label="排序" field="sort_order" initialValue={0}>
+              <InputNumber min={0} step={1} style={{ width: '100%' }} />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setTrackModalVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitTrack}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
+
+      <SheetModal
+        visible={lv1ModalVisible}
+        title={lv1Editing ? '编辑一级分类' : '新增一级分类'}
+        onClose={() => setLv1ModalVisible(false)}
+      >
+        <Form form={lv1Form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            {lv1Editing ? <div className="form-span-4">{hierarchyHint(nodeBreadcrumb(tree, 'lv1', lv1Editing.id))}</div> : null}
+            {lv1Editing ? (
+              <FormItem label="归属赛道（可调整挂错位置）" field="track_id" rules={[{ required: true, message: '必选' }]} className="form-span-2">
+                <Select placeholder="选择赛道" allowClear={false} getPopupContainer={sheetPopupContainer}>
+                  {tree.map((tn) => (
+                    <Option key={tn.id} value={tn.id}>
+                      {tn.name}
+                    </Option>
+                  ))}
+                </Select>
+              </FormItem>
+            ) : null}
+            <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]} className="form-span-2">
+              <Input placeholder="一级分类名称" maxLength={100} />
+            </FormItem>
+            <FormItem label="排序" field="sort_order" initialValue={0}>
+              <InputNumber min={0} step={1} style={{ width: '100%' }} />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setLv1ModalVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitLv1}
+          />
+        </Form>
+      </SheetModal>
+
+      <SheetModal
+        visible={lv2ModalVisible}
+        title={lv2Editing ? '编辑二级分类' : '新增二级分类'}
+        onClose={() => setLv2ModalVisible(false)}
+      >
+        <Form form={lv2Form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            {lv2Editing ? <div className="form-span-4">{hierarchyHint(nodeBreadcrumb(tree, 'lv2', lv2Editing.id))}</div> : null}
+            {lv2Editing ? (
+              <FormItem label="归属一级（可调整挂错位置）" field="lv1_id" rules={[{ required: true, message: '必选' }]} className="form-span-2">
+                <Select placeholder="选择一级分类" allowClear={false} showSearch optionFilterProp="label" getPopupContainer={sheetPopupContainer}>
+                  {lv1Options.map((o) => (
+                    <Option key={o.value} value={o.value}>
+                      {o.label}
+                    </Option>
+                  ))}
+                </Select>
+              </FormItem>
+            ) : null}
+            <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]} className="form-span-2">
+              <Input placeholder="二级分组名称" maxLength={100} />
+            </FormItem>
+            <FormItem label="排序" field="sort_order" initialValue={0}>
+              <InputNumber min={0} step={1} style={{ width: '100%' }} />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setLv2ModalVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitLv2}
+          />
+        </Form>
+      </SheetModal>
+
+      <SheetModal
+        visible={lv3ModalVisible}
+        title={lv3Editing ? '编辑三级（匹配规则）' : '新增三级（匹配规则）'}
+        onClose={() => setLv3ModalVisible(false)}
+      >
+        <Form form={lv3Form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            {lv3Editing ? <div className="form-span-4">{hierarchyHint(nodeBreadcrumb(tree, 'lv3', lv3Editing.id))}</div> : null}
+            {lv3Editing ? (
+              <FormItem label="归属二级（可调整挂错位置）" field="lv2_id" rules={[{ required: true, message: '必选' }]} className="form-span-2">
+                <Select placeholder="选择二级分类" allowClear={false} showSearch optionFilterProp="label" getPopupContainer={sheetPopupContainer}>
+                  {lv2Options.map((o) => (
+                    <Option key={o.value} value={o.value}>
+                      {o.label}
+                    </Option>
+                  ))}
+                </Select>
+              </FormItem>
+            ) : null}
+            <FormItem label="名称" field="name" rules={[{ required: true, message: '必填' }]} className="form-span-2">
+              <Input placeholder="三级节点名称" maxLength={100} />
+            </FormItem>
+            <FormItem label="排序" field="sort_order" initialValue={0}>
+              <InputNumber min={0} step={1} style={{ width: '100%' }} />
+            </FormItem>
+            <FormItem label="优先级" field="match_priority" initialValue={0}>
+              <InputNumber min={0} max={9999} step={1} style={{ width: '100%' }} />
+            </FormItem>
+            <FormItem label="匹配行业（一级）" field="match_industry_lv1" className="form-span-2">
+              <Input placeholder="与融资事件来源/标准一级行业精确相等" maxLength={100} />
+            </FormItem>
+            <FormItem label="匹配行业（二级）" field="match_industry_lv2" className="form-span-2">
+              <Input placeholder="与融资事件来源/标准二级行业精确相等" maxLength={100} />
+            </FormItem>
+            <FormItem label="关键词" field="match_keywords" className="form-span-4">
+              <Input
+                placeholder="逗号/分号分隔；任一命中即可。仅在行业与项目简介中做非严格匹配"
+                maxLength={500}
+              />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setLv3ModalVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={submitLv3}
+          />
+        </Form>
+      </SheetModal>
     </div>
   )
 }

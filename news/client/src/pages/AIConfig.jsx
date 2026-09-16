@@ -3,6 +3,7 @@ import { Button, Space, Pagination, Modal, Message, Skeleton, Tag, Input, Select
 import axios from '../utils/axios'
 import PromptConfig from './PromptConfig'
 import AdminListTable, { AdminOps } from '../components/AdminListTable'
+import SheetModal, { SheetActions, sheetPopupContainer } from '../components/SheetModal'
 import './AIConfig.css'
 
 const Option = Select.Option
@@ -477,19 +478,17 @@ function AIConfig() {
             </div>
           )}
 
-          <Modal
-            key={currentConfig?.id || 'new'}
+          <SheetModal
             visible={showModal}
             title={currentConfig ? '编辑AI模型配置' : '新增AI模型配置'}
-            onCancel={() => {
+            onClose={() => {
               setShowModal(false)
               setCurrentConfig(null)
               setTestResult(null)
             }}
-            footer={null}
-            style={{ width: 700 }}
           >
-            <form onSubmit={handleSubmit}>
+            <form className="enterprise-form enterprise-form--sheet" onSubmit={handleSubmit}>
+              <div className="modal-body enterprise-form-grid">
               <div className="form-group">
                 <label>配置名称 *</label>
                 <Input
@@ -565,7 +564,7 @@ function AIConfig() {
                 />
               </div>
 
-              <div className="form-group">
+              <div className="form-group form-span-2">
                 <label>API端点</label>
                 <Input
                   value={formData.api_endpoint}
@@ -663,7 +662,7 @@ function AIConfig() {
               </div>
 
               {formData.provider === 'alibaba' && (
-                <div className="form-group">
+                <div className="form-group form-span-2">
                   <label>
                     <Switch
                       checked={formData.enable_thinking === 1}
@@ -709,27 +708,24 @@ function AIConfig() {
                 </label>
               </div>
 
-              {testResult && (
+              {testResult ? (
                 <div className={`test-result ${testResult.success ? 'success' : 'error'}`}>
                   {testResult.success ? '✓ ' : '✗ '}
                   {testResult.message}
                 </div>
-              )}
-
-              <div className="form-actions">
-                <Button type="secondary" onClick={() => {
+              ) : null}
+              </div>
+              <SheetActions
+                onCancel={() => {
                   setShowModal(false)
                   setCurrentConfig(null)
                   setTestResult(null)
-                }}>
-                  取消
-                </Button>
-                <Button type="primary" htmlType="submit" loading={loading}>
-                  {currentConfig ? '更新' : '创建'}
-                </Button>
-              </div>
+                }}
+                submitLabel={currentConfig ? '更新' : '创建'}
+                submitLoading={loading}
+              />
             </form>
-          </Modal>
+          </SheetModal>
         </TabPane>
 
         <TabPane key="prompt" title="模型提示词设置">

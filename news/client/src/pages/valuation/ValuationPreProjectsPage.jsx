@@ -9,6 +9,9 @@ import {
   openValuationCaseFromPreProject,
 } from '../../api/valuation'
 import './valuation.css'
+import SheetModal, { SheetActions } from '../../components/SheetModal'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 import { formatChinaDateTime } from './valuationUnits'
 
 const FormItem = Form.Item
@@ -220,15 +223,19 @@ export default function ValuationPreProjectsPage() {
     { title: '本轮交易估值', dataIndex: 'round_deal_value_yi', width: 120, render: (v) => fmtN(v) },
     {
       title: '操作',
-      width: 120,
+      width: 100,
+      fixed: 'right',
+      className: 'list-ops-col',
       render: (_, r) => (
-        <Button type="primary" size="small" onClick={() => openCase(r.id)}>进入估值</Button>
+        <ListOps>
+          <ListOpButton name="进入估值" onClick={() => openCase(r.id)} />
+        </ListOps>
       ),
     },
   ]
 
   return (
-    <div className="valuation-page">
+    <div className="valuation-page list-table-page" style={{ '--list-ops-col-width': '100px' }}>
       <Card bordered={false}>
         <div className="valuation-page-header">
           <h2>投前项目估值</h2>
@@ -249,11 +256,12 @@ export default function ValuationPreProjectsPage() {
           columns={columns}
           data={list}
           pagination={false}
-          border
-          className="valuation-list-table"
+          border={{ wrapper: true, cell: true }}
+          stripe
+          className="valuation-list-table list-table"
           scroll={{ x: 1240 }}
         />
-        <div style={{ marginTop: 12, textAlign: 'right' }}>
+        <div className="valuation-list-pagination">
           <Pagination
             current={page}
             pageSize={pageSize}
@@ -265,48 +273,55 @@ export default function ValuationPreProjectsPage() {
         </div>
       </Card>
 
-      <Modal
-        title="手工新建投前主体"
+      <SheetModal
         visible={createVisible}
-        onCancel={() => setCreateVisible(false)}
-        onOk={async () => {
-          const values = await form.validate()
-          try {
-            const res = await postValuationPreProject(values)
-            if (res.data?.success) {
-              Message.success('已创建')
-              setCreateVisible(false)
-              form.resetFields()
-              load()
-              await openCase(res.data.data.id)
-            } else {
-              Message.error(res.data?.message || '创建失败')
-            }
-          } catch (e) {
-            Message.error(e.response?.data?.message || e.message || '创建失败')
-          }
-        }}
+        title="手工新建投前主体"
+        onClose={() => setCreateVisible(false)}
       >
-        <Form form={form} layout="vertical">
-          <FormItem label="企业全称" field="enterprise_full_name" rules={[{ required: true, message: '请填写企业全称' }]}>
-            <Input />
-          </FormItem>
-          <FormItem label="项目简称" field="project_abbreviation">
-            <Input />
-          </FormItem>
-          <FormItem label="统一社会信用代码" field="unified_credit_code">
-            <Input />
-          </FormItem>
+        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem label="企业全称" field="enterprise_full_name" rules={[{ required: true, message: '请填写企业全称' }]} className="form-span-2">
+              <Input />
+            </FormItem>
+            <FormItem label="项目简称" field="project_abbreviation">
+              <Input />
+            </FormItem>
+            <FormItem label="统一社会信用代码" field="unified_credit_code">
+              <Input />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setCreateVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={async () => {
+              const values = await form.validate()
+              try {
+                const res = await postValuationPreProject(values)
+                if (res.data?.success) {
+                  Message.success('已创建')
+                  setCreateVisible(false)
+                  form.resetFields()
+                  load()
+                  await openCase(res.data.data.id)
+                } else {
+                  Message.error(res.data?.message || '创建失败')
+                }
+              } catch (e) {
+                Message.error(e.response?.data?.message || e.message || '创建失败')
+              }
+            }}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="从竞品分析选择投前项目"
+      <SheetModal
         visible={pickVisible}
-        onCancel={() => setPickVisible(false)}
-        footer={null}
-        style={{ width: 720 }}
+        title="从竞品分析选择投前项目"
+        onClose={() => setPickVisible(false)}
       >
+        <div className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body">
         <Input.Search
           allowClear
           placeholder="搜索竞品分析投前项目"
@@ -315,48 +330,54 @@ export default function ValuationPreProjectsPage() {
         />
         <Table
           rowKey="id"
-          border
-          className="valuation-list-table"
+          border={{ wrapper: true, cell: true }}
+          stripe
+          className="valuation-list-table list-table"
           columns={[
             { title: '项目编号', dataIndex: 'project_no', width: 140 },
             { title: '企业全称', dataIndex: 'enterprise_full_name' },
             { title: '简称', dataIndex: 'project_abbreviation', width: 140 },
             {
               title: '操作',
-              width: 100,
+              width: 88,
+              fixed: 'right',
+              className: 'list-ops-col',
               render: (_, r) => (
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={async () => {
-                    try {
-                      const created = await postValuationPreProject({
-                        competitor_pre_project_id: r.id,
-                        snapshot_name: r.enterprise_full_name,
-                      })
-                      if (!created.data?.success) {
-                        Message.error(created.data?.message || '创建失败')
-                        return
+                <ListOps>
+                  <ListOpButton
+                    name="选择"
+                    onClick={async () => {
+                      try {
+                        const created = await postValuationPreProject({
+                          competitor_pre_project_id: r.id,
+                          snapshot_name: r.enterprise_full_name,
+                        })
+                        if (!created.data?.success) {
+                          Message.error(created.data?.message || '创建失败')
+                          return
+                        }
+                        setPickVisible(false)
+                        await openCase(created.data.data.id)
+                      } catch (e) {
+                        Message.error(e.response?.data?.message || e.message || '创建失败')
                       }
-                      setPickVisible(false)
-                      await openCase(created.data.data.id)
-                    } catch (e) {
-                      Message.error(e.response?.data?.message || e.message || '创建失败')
-                    }
-                  }}
-                >
-                  选择
-                </Button>
+                    }}
+                  />
+                </ListOps>
               ),
             },
           ]}
           data={caList}
           pagination={false}
+          scroll={{ x: 600 }}
         />
-        <div style={{ marginTop: 12, textAlign: 'right' }}>
+        <div className="valuation-list-pagination">
           <Pagination current={caPage} pageSize={10} total={caTotal} onChange={setCaPage} />
         </div>
-      </Modal>
+          </div>
+          <SheetActions onCancel={() => setPickVisible(false)} cancelLabel="关闭" submitLabel="" />
+        </div>
+      </SheetModal>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
-import { Modal, Table, Message, Spin } from '@arco-design/web-react'
+import { Table, Message, Spin } from '@arco-design/web-react'
 import axios from '../utils/axios'
+import { SheetViewer } from '../components/SheetModal'
 import './LogModal.css'
 
 function LogModal({ type, id, onClose }) {
@@ -145,13 +146,7 @@ function LogModal({ type, id, onClose }) {
   ]
 
   return (
-    <Modal
-      visible={true}
-      title="变更日志"
-      onCancel={onClose}
-      footer={null}
-      style={{ width: 900 }}
-    >
+    <SheetViewer visible title="变更日志" onClose={onClose}>
       <div className="log-content">
         {loading ? (
           <Spin style={{ width: '100%', padding: '40px' }} />
@@ -168,10 +163,11 @@ function LogModal({ type, id, onClose }) {
               cell: true
             }}
             stripe
+            scroll={{ y: 360 }}
           />
         )}
       </div>
-    </Modal>
+    </SheetViewer>
   )
 }
 

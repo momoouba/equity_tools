@@ -1,8 +1,10 @@
-import { Button, Checkbox, Space, Tag, Tooltip } from '@arco-design/web-react'
+import { Checkbox, Space, Tag, Tooltip } from '@arco-design/web-react'
 
 import { IntroPopoverCell } from './introPopoverAiCell'
 import { formatFinancingDateTime } from './financingDateUtils'
 import { isReviewPending } from './competitorRelationDisplayUtils'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 
 const SOURCE_LABELS = { ipo_project: '底层', sourcing_financing_event: '融资', ai_web: '联网', user_added: '用户新增' }
 
@@ -568,7 +570,7 @@ export const CR_REL_COL_WIDTH = {
   credit: { col: 106 },
   financing: { col: 68, inner: 52 },
   comparable: { col: 50 },
-  action: { col: 132 },
+  action: { col: 176 },
 }
 
 /** 竞品明细独立样式前缀（cr-rel-*），避免通用表格样式干扰 */
@@ -904,44 +906,32 @@ export function getCompetitorRelationColumns(opts = {}) {
     {
       title: '操作',
       width: CR_REL_COL_WIDTH.action.col,
-      className: CR_REL_CSS.colActions,
+      className: `${CR_REL_CSS.colActions} list-ops-col`,
+      fixed: 'right',
       render: (_, record) => {
         if (actionReadOnly) {
           return (
-            <div className={CR_REL_CSS.actionCell}>
+            <ListOps className={CR_REL_CSS.actionCell}>
               {onReview ? (
-                <Button type="outline" size="small" onClick={() => onReview(record, { readOnly: true })}>
-                  查看
-                </Button>
+                <ListOpButton name="查看" onClick={() => onReview(record, { readOnly: true })} />
               ) : (
                 '-'
               )}
-            </div>
+            </ListOps>
           )
         }
-        const pending = isReviewPending(record)
         return (
-          <div className={CR_REL_CSS.actionCell}>
+          <ListOps className={CR_REL_CSS.actionCell}>
             {onReview ? (
-              <Button
-                type={pending ? 'primary' : 'outline'}
-                size="small"
-                onClick={() => onReview(record)}
-              >
-                复核
-              </Button>
+              <ListOpButton name="复核" onClick={() => onReview(record)} />
             ) : null}
             {onEdit ? (
-              <Button type="outline" size="small" onClick={() => onEdit(record)}>
-                编辑
-              </Button>
+              <ListOpButton name="编辑" onClick={() => onEdit(record)} />
             ) : null}
             {onDelete ? (
-              <Button type="outline" size="small" status="danger" onClick={() => onDelete(record)}>
-                删除
-              </Button>
+              <ListOpButton name="删除" onClick={() => onDelete(record)} />
             ) : null}
-          </div>
+          </ListOps>
         )
       },
     },

@@ -126,6 +126,46 @@
   border-top: 1px solid #e5e6eb;
 }
 
+.news-config-form-grid .arco-select,
+.news-config-form-grid .arco-input,
+.news-config-form-grid .arco-input-password,
+.news-config-form-grid .arco-input-group {
+  width: 100%;
+}
+
+.news-config-cron-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.news-config-cron-row .arco-input {
+  flex: 1;
+}
+
+.news-config-cron-row .arco-btn {
+  flex-shrink: 0;
+  height: 32px;
+  min-width: 64px;
+}
+
+.news-config-enable-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  margin-bottom: 0;
+  min-height: 32px;
+}
+
+.news-config-enable-label input {
+  margin: 0;
+  cursor: pointer;
+  width: auto;
+  flex-shrink: 0;
+}
+
 /* 同步时间范围弹窗 - 独立实现，仅用 news-config-sync- 前缀，避免与 Arco 组件冲突 */
 .news-config-sync-modal-overlay {
   position: fixed;
@@ -140,21 +180,63 @@
   background: rgba(0, 0, 0, 0.5);
 }
 .news-config-sync-modal-box {
-  width: 460px;
-  max-width: 90vw;
+  width: 640px;
+  max-width: 92vw;
+  max-height: min(80vh, 720px);
+  height: auto;
   background: #fff;
-  border-radius: 4px;
+  border-radius: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
-  padding: 20px 24px;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 .news-config-sync-modal-header {
-  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 0;
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e0e0e0;
 }
 .news-config-sync-modal-title {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
   color: #1d2129;
+  flex: 0 1 auto;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.news-config-sync-modal-close {
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: #999;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  line-height: 1;
+}
+.news-config-sync-modal-close:hover {
+  background: #f5f5f5;
+  color: #333;
+}
+.news-config-sync-modal-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px;
 }
 .news-config-sync-modal-desc {
   margin: 0 0 16px;
@@ -162,8 +244,14 @@
   color: #4e5969;
   line-height: 1.5;
 }
+.news-config-sync-modal-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
 .news-config-sync-modal-field {
-  margin-bottom: 16px;
+  margin-bottom: 0;
+  min-width: 0;
 }
 .news-config-sync-modal-label {
   display: block;
@@ -187,19 +275,36 @@
   box-shadow: 0 0 0 2px rgba(22, 93, 255, 0.2);
 }
 .news-config-sync-modal-footer {
-  margin-top: 24px;
+  flex: 0 0 auto;
+  margin: 0;
+  min-height: 48px;
+  padding: 8px 16px;
+  box-sizing: border-box;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
+  border-top: 1px solid #e0e0e0;
+  background: #fff;
+  border-radius: 0 0 8px 8px;
 }
 .news-config-sync-modal-btn {
   min-width: 64px;
   height: 32px;
   padding: 0 16px;
   font-size: 14px;
-  border-radius: 2px;
+  border-radius: 6px;
   cursor: pointer;
   border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+@media (max-width: 640px) {
+  .news-config-sync-modal-fields {
+    grid-template-columns: 1fr;
+  }
 }
 .news-config-sync-modal-btn:disabled {
   opacity: 0.6;

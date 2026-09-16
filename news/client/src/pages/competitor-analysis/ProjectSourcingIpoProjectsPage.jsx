@@ -17,6 +17,7 @@ import dayjs from 'dayjs'
 import { saveAs } from 'file-saver'
 import axios from '../../utils/axios'
 import CronGenerator from '../../components/CronGenerator'
+import SheetModal, { SheetActions, SheetViewer, sheetPopupContainer } from '../../components/SheetModal'
 import {
   formatFinancingYmd,
   financingNow,
@@ -46,6 +47,8 @@ import { getUser } from '../../utils/auth'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
 import '../project-sourcing/FinancingEventsPage.css'
+import { ListOpButton, ListOps } from '../../components/listTableOps'
+import '../../styles/listTable.css'
 
 const FormItem = Form.Item
 const Option = Select.Option
@@ -58,6 +61,56 @@ function csvCell(v) {
   const s = String(v)
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
   return s
+}
+
+function IpoProjectSheetModal({ title, projectNo, form, onClose, onSubmit }) {
+  return (
+    <SheetModal visible title={title} onClose={onClose}>
+      <div className="enterprise-form enterprise-form--sheet">
+        <div className="modal-body enterprise-form-grid">
+          <div className="form-group">
+            <label>项目编号</label>
+            <input type="text" readOnly className="readonly-input" value={projectNo} />
+          </div>
+          <Form form={form} layout="vertical">
+            <FormItem label="项目简称" field="project_name" rules={[{ required: true, message: '请填写项目简称' }]}>
+              <Input placeholder="请输入项目简称" />
+            </FormItem>
+            <FormItem label="归属基金" field="fund" rules={[{ required: true, message: '请填写归属基金' }]}>
+              <Input placeholder="请输入归属基金" />
+            </FormItem>
+            <FormItem label="归属子基金" field="sub">
+              <Input placeholder="可选" allowClear />
+            </FormItem>
+            <div className="form-span-2">
+              <FormItem label="企业全称" field="company" rules={[{ required: true, message: '请填写企业全称' }]}>
+                <Input.TextArea autoSize={{ minRows: 2, maxRows: 4 }} placeholder="请输入企业全称" />
+              </FormItem>
+            </div>
+            <FormItem label="统一社会信用代码" field="unified_credit_code">
+              <Input placeholder="可选" allowClear />
+            </FormItem>
+            <FormItem label="穿透权益占比" field="ratio" rules={[{ required: true, message: '请填写穿透权益占比' }]}>
+              <Input placeholder="小数，如 0.05 表示 5%" />
+            </FormItem>
+            <FormItem label="投资成本" field="inv_amount" rules={[{ required: true, message: '请填写投资成本' }]}>
+              <Input placeholder="数字" />
+            </FormItem>
+            <FormItem label="剩余成本" field="residual_amount" rules={[{ required: true, message: '请填写剩余成本' }]}>
+              <Input placeholder="数字" />
+            </FormItem>
+            <FormItem label="穿透投资成本" field="ct_amount" rules={[{ required: true, message: '请填写穿透投资成本' }]}>
+              <Input placeholder="数字" />
+            </FormItem>
+            <FormItem label="穿透剩余成本" field="ct_residual" rules={[{ required: true, message: '请填写穿透剩余成本' }]}>
+              <Input placeholder="数字" />
+            </FormItem>
+          </Form>
+        </div>
+        <SheetActions onCancel={onClose} submitLabel="确定" submitType="button" onSubmitClick={onSubmit} />
+      </div>
+    </SheetModal>
+  )
 }
 
 function downloadIpoProjectsCurrentPageCsv(rows) {
@@ -215,11 +268,17 @@ export default function ProjectSourcingIpoProjectsPage() {
     const measure = () => {
       const h = el.clientHeight
       if (h < 80) return
-      // 表头 + 分页 + 边框余量（scroll.y 仅作用于表体）
-      setTableScrollY(Math.max(200, Math.floor(h - 118)))
+      const headerH = el.querySelector('.arco-table-header')?.offsetHeight || 44
+      const paginationEl = el.querySelector('.arco-table-pagination')
+      const paginationH = paginationEl?.offsetHeight || 52
+      // 横向滚动条 + 分页底边距，避免翻页条被裁切
+      const extra = 28
+      setTableScrollY(Math.max(160, Math.floor(h - headerH - paginationH - extra)))
     }
     measure()
-    const ro = new ResizeObserver(() => measure())
+    const ro = new ResizeObserver(() => {
+      requestAnimationFrame(measure)
+    })
     ro.observe(el)
     return () => ro.disconnect()
   }, [filterCollapsed])
@@ -466,23 +525,18 @@ export default function ProjectSourcingIpoProjectsPage() {
       {
         title: '操作',
         key: 'actions',
-        width: 240,
+        width: 168,
         fixed: 'right',
+        className: 'list-ops-col',
         render: (_, row) => {
           const canEdit = canMutateRow(row)
           if (!canEdit) return <span style={{ color: 'var(--color-text-3)' }}>-</span>
           return (
-            <Space size={8} wrap={false}>
-              <Button type="primary" size="small" onClick={() => openEdit(row)}>
-                编辑
-              </Button>
-              <Button type="outline" size="small" status="success" onClick={() => openRowLog(row)}>
-                日志
-              </Button>
-              <Button type="outline" size="small" status="danger" onClick={() => handleDeleteRow(row)}>
-                删除
-              </Button>
-            </Space>
+            <ListOps>
+              <ListOpButton name="编辑" onClick={() => openEdit(row)} />
+              <ListOpButton name="日志" onClick={() => openRowLog(row)} />
+              <ListOpButton name="删除" onClick={() => handleDeleteRow(row)} />
+            </ListOps>
           )
         },
       },
@@ -739,15 +793,16 @@ export default function ProjectSourcingIpoProjectsPage() {
 
   return (
     <div
-      className="enterprise-management financing-events-page ipo-projects-page"
+      className="enterprise-management financing-events-page ipo-projects-page list-table-page"
       style={{
         boxSizing: 'border-box',
-        height: 'calc(100vh - 72px)',
-        padding: '16px 24px',
+        height: 'calc(100vh - 68px)',
+        padding: '4px 24px 0',
         display: 'flex',
         flexDirection: 'column',
         minHeight: 0,
         overflow: 'hidden',
+        '--list-ops-col-width': '168px',
       }}
     >
       <Card
@@ -1033,6 +1088,7 @@ export default function ProjectSourcingIpoProjectsPage() {
 
         <div
           ref={tableScrollAreaRef}
+          className="ipo-projects-table-scroll-area"
           style={{
             flex: 1,
             minHeight: 0,
@@ -1042,8 +1098,9 @@ export default function ProjectSourcingIpoProjectsPage() {
             overflow: 'hidden',
           }}
         >
-          <div className="table-container ipo-projects-table-container" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div className="table-container ipo-projects-table-container" style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <Table
+            className="list-table"
             rowKey={resolveRecordId}
             loading={loading}
             data={data}
@@ -1092,142 +1149,30 @@ export default function ProjectSourcingIpoProjectsPage() {
         />
       ) : null}
 
-      {newOpen && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setNewOpen(false)
-          }}
-        >
-          <div className="modal-content" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>新增底层项目</h3>
-              <button type="button" className="close-button" aria-label="关闭" onClick={() => setNewOpen(false)}>
-                ×
-              </button>
-            </div>
-            <div className="enterprise-form">
-              <div className="form-group">
-                <label>项目编号</label>
-                <input type="text" readOnly className="readonly-input" value="保存后由系统自动生成" />
-              </div>
-              <Form form={newForm} layout="vertical" style={{ width: '100%' }}>
-                <FormItem label="项目简称" field="project_name" rules={[{ required: true, message: '请填写项目简称' }]}>
-                  <Input placeholder="请输入项目简称" />
-                </FormItem>
-                <FormItem label="企业全称" field="company" rules={[{ required: true, message: '请填写企业全称' }]}>
-                  <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder="请输入企业全称" />
-                </FormItem>
-                <FormItem label="统一社会信用代码" field="unified_credit_code">
-                  <Input placeholder="可选" allowClear />
-                </FormItem>
-                <FormItem label="归属基金" field="fund" rules={[{ required: true, message: '请填写归属基金' }]}>
-                  <Input placeholder="请输入归属基金" />
-                </FormItem>
-                <FormItem label="归属子基金" field="sub">
-                  <Input placeholder="可选" allowClear />
-                </FormItem>
-                <FormItem label="投资成本" field="inv_amount" rules={[{ required: true, message: '请填写投资成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="剩余成本" field="residual_amount" rules={[{ required: true, message: '请填写剩余成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="穿透权益占比" field="ratio" rules={[{ required: true, message: '请填写穿透权益占比' }]}>
-                  <Input placeholder="小数，如 0.05 表示 5%" />
-                </FormItem>
-                <FormItem label="穿透投资成本" field="ct_amount" rules={[{ required: true, message: '请填写穿透投资成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="穿透剩余成本" field="ct_residual" rules={[{ required: true, message: '请填写穿透剩余成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-              </Form>
-              <div className="form-actions">
-                <button type="button" className="btn-cancel" onClick={() => setNewOpen(false)}>
-                  取消
-                </button>
-                <button type="button" className="btn-confirm" onClick={submitNew}>
-                  确定
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {newOpen ? (
+        <IpoProjectSheetModal
+          title="新增底层项目"
+          projectNo="保存后由系统自动生成"
+          form={newForm}
+          onClose={() => setNewOpen(false)}
+          onSubmit={submitNew}
+        />
+      ) : null}
 
-      {editOpen && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setEditOpen(false)
-          }}
-        >
-          <div className="modal-content" role="dialog" aria-modal="true" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>编辑底层项目</h3>
-              <button type="button" className="close-button" aria-label="关闭" onClick={() => setEditOpen(false)}>
-                ×
-              </button>
-            </div>
-            <div className="enterprise-form">
-              <div className="form-group">
-                <label>项目编号</label>
-                <input type="text" readOnly className="readonly-input" value={editing?.project_no || ''} />
-              </div>
-              <Form form={editForm} layout="vertical" style={{ width: '100%' }}>
-                <FormItem label="项目简称" field="project_name" rules={[{ required: true, message: '请填写项目简称' }]}>
-                  <Input placeholder="请输入项目简称" />
-                </FormItem>
-                <FormItem label="企业全称" field="company" rules={[{ required: true, message: '请填写企业全称' }]}>
-                  <Input.TextArea autoSize={{ minRows: 2, maxRows: 6 }} placeholder="请输入企业全称" />
-                </FormItem>
-                <FormItem label="统一社会信用代码" field="unified_credit_code">
-                  <Input placeholder="可选" allowClear />
-                </FormItem>
-                <FormItem label="归属基金" field="fund" rules={[{ required: true, message: '请填写归属基金' }]}>
-                  <Input placeholder="请输入归属基金" />
-                </FormItem>
-                <FormItem label="归属子基金" field="sub">
-                  <Input placeholder="可选" allowClear />
-                </FormItem>
-                <FormItem label="投资成本" field="inv_amount" rules={[{ required: true, message: '请填写投资成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="剩余成本" field="residual_amount" rules={[{ required: true, message: '请填写剩余成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="穿透权益占比" field="ratio" rules={[{ required: true, message: '请填写穿透权益占比' }]}>
-                  <Input placeholder="小数，如 0.05 表示 5%" />
-                </FormItem>
-                <FormItem label="穿透投资成本" field="ct_amount" rules={[{ required: true, message: '请填写穿透投资成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-                <FormItem label="穿透剩余成本" field="ct_residual" rules={[{ required: true, message: '请填写穿透剩余成本' }]}>
-                  <Input placeholder="数字" />
-                </FormItem>
-              </Form>
-              <div className="form-actions">
-                <button type="button" className="btn-cancel" onClick={() => setEditOpen(false)}>
-                  取消
-                </button>
-                <button type="button" className="btn-confirm" onClick={submitEdit}>
-                  确定
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {editOpen ? (
+        <IpoProjectSheetModal
+          title="编辑底层项目"
+          projectNo={editing?.project_no || ''}
+          form={editForm}
+          onClose={() => setEditOpen(false)}
+          onSubmit={submitEdit}
+        />
+      ) : null}
 
-      <Modal
-        title={editing?.f_id != null ? `变更日志（f_id=${editing.f_id}）` : '变更日志'}
+      <SheetViewer
         visible={logOpen}
-        footer={null}
-        onCancel={() => setLogOpen(false)}
-        style={{ width: 720 }}
+        title={editing?.f_id != null ? `变更日志（f_id=${editing.f_id}）` : '变更日志'}
+        onClose={() => setLogOpen(false)}
       >
         {logLoading ? (
           <div>加载中…</div>
@@ -1235,6 +1180,7 @@ export default function ProjectSourcingIpoProjectsPage() {
           <div>暂无变更记录</div>
         ) : (
           <Table
+            className="list-table"
             size="small"
             rowKey={(r, idx) => (r.id != null ? String(r.id) : `log-${idx}`)}
             columns={[
@@ -1249,93 +1195,98 @@ export default function ProjectSourcingIpoProjectsPage() {
             scroll={{ y: 360 }}
           />
         )}
-      </Modal>
+      </SheetViewer>
 
-      <Modal
-        title="业务库 SQL 同步（竞品分析 · 底层项目）"
+      <SheetModal
         visible={sqlModalOpen}
-        onCancel={() => setSqlModalOpen(false)}
-        style={{ width: 720 }}
-        footer={
-          <Space>
-            <Button onClick={() => setSqlModalOpen(false)}>关闭</Button>
-            <Button onClick={handleSaveSqlSetting} loading={sqlSaving}>
-              保存配置
-            </Button>
-            <Button onClick={handleSqlPreview} loading={sqlPreviewing}>
-              预览结果
-            </Button>
-            <Button type="primary" onClick={handleRunSqlSync} loading={sqlRunning}>
-              执行同步
-            </Button>
-          </Space>
-        }
+        title="业务库 SQL 同步（竞品分析 · 底层项目）"
+        onClose={() => setSqlModalOpen(false)}
       >
-        <p style={{ marginBottom: 12, color: 'var(--color-text-2)', fontSize: 13 }}>
-          与「上市进展 → 底层项目表」的 SQL 同步规则相同（仅只读 SELECT/WITH，字段映射一致）。差异：同步结果写入{' '}
-          <strong>ipo_project.data_app_id = 竞品分析</strong>
-          ，且仅清空/覆盖<strong>当前用户</strong>在该应用下的底层项目行，不影响上市进展菜单中的底层项目数据。请在 SQL 中尽量提供{' '}
-          <strong>unified_credit_code</strong>
-          （统一社会信用代码），以便同步后自动回填本次清空前已存在的 AI 与企查查简介。若开启「同步后企查查简介」，写入完成后仅对<strong>18 位有效</strong>统一码自动拉取企查查企业简介，错误或非标准长度代码会跳过。
-        </p>
-        <p style={{ marginBottom: 12, color: 'var(--color-text-3)', fontSize: 12 }}>
-          字段：project_name、company、unified_credit_code（可选，用于回填 AI/企查查）、fund、sub（可选）、inv_amount、residual_amount、ratio、ct_amount、ct_residual。
-        </p>
-        <Form form={sqlForm} layout="vertical">
-          <FormItem
-            label="业务数据库连接"
-            field="external_db_config_id"
-            rules={[{ required: true, message: '请选择连接' }]}
-          >
-            <Select
-              placeholder="请选择"
-              allowClear
-              showSearch
-              onChange={(v) => {
-                loadSqlSettingByDb(v || '')
-              }}
+        <Form form={sqlForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <p className="form-hint form-span-4">
+              与「上市进展 → 底层项目表」的 SQL 同步规则相同（仅只读 SELECT/WITH）。结果写入 ipo_project.data_app_id = 竞品分析，且仅覆盖当前用户在该应用下的底层项目。请尽量提供 unified_credit_code。
+            </p>
+            <FormItem
+              label="业务数据库连接"
+              field="external_db_config_id"
+              rules={[{ required: true, message: '请选择连接' }]}
+              className="form-span-2"
             >
-              {dbList.map((d) => (
-                <Option key={d.id} value={d.id}>
-                  {d.name} ({d.host})
-                </Option>
-              ))}
-            </Select>
-          </FormItem>
-          <FormItem label="只读 SQL" field="sql_text" rules={[{ required: true, message: '请填写 SQL' }]}>
-            <Input.TextArea
-              placeholder="仅支持 SELECT / WITH"
-              autoSize={{ minRows: 6, maxRows: 16 }}
-            />
-          </FormItem>
-          <FormItem label="是否启用" field="is_enabled" triggerPropName="checked">
-            <Switch checkedText="启用" uncheckedText="禁用" />
-          </FormItem>
-          <FormItem
-            label="同步后企查查简介"
-            field="qcc_brief_after_sync_enabled"
-            triggerPropName="checked"
-            extra="每次 SQL 全量写入并提交成功后，对本用户在竞品分析下的底层项目中「18 位有效统一社会信用代码」按码去重调用企查查 CompanyBrief 并写回简介；无效码跳过。与定时任务共用本开关。"
-          >
-            <Switch checkedText="启用" uncheckedText="关闭" />
-          </FormItem>
-          <FormItem
-            label="底层项目同步 Cron（可选）"
-            field="cron_expression"
-            extra="定时任务将本配置的外部库数据同步至 ipo_project（data_app_id=竞品分析），与上市进展侧 SQL 定时任务独立。"
-          >
-            <Input
-              placeholder="点击右侧按钮配置 Cron（Quartz）"
-              readOnly
-              addAfter={
-                <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
-                  配置
-                </Button>
-              }
-            />
-          </FormItem>
+              <Select
+                placeholder="请选择"
+                allowClear
+                showSearch
+                getPopupContainer={sheetPopupContainer}
+                onChange={(v) => {
+                  loadSqlSettingByDb(v || '')
+                }}
+              >
+                {dbList.map((d) => (
+                  <Option key={d.id} value={d.id}>
+                    {d.name} ({d.host})
+                  </Option>
+                ))}
+              </Select>
+            </FormItem>
+            <FormItem label="是否启用" field="is_enabled" triggerPropName="checked">
+              <Switch checkedText="启用" uncheckedText="禁用" />
+            </FormItem>
+            <FormItem
+              label="同步后企查查简介"
+              field="qcc_brief_after_sync_enabled"
+              triggerPropName="checked"
+            >
+              <Switch checkedText="启用" uncheckedText="关闭" />
+            </FormItem>
+            <FormItem
+              label="底层项目同步 Cron（可选）"
+              field="cron_expression"
+              extra="定时任务将本配置的外部库数据同步至 ipo_project（data_app_id=竞品分析）。"
+              className="form-span-2"
+            >
+              <Input
+                placeholder="点击右侧按钮配置 Cron（Quartz）"
+                readOnly
+                addAfter={
+                  <Button type="text" size="small" onClick={() => setShowCronModal(true)}>
+                    配置
+                  </Button>
+                }
+              />
+            </FormItem>
+            <FormItem
+              label="只读 SQL"
+              field="sql_text"
+              rules={[{ required: true, message: '请填写 SQL' }]}
+              className="form-span-4"
+            >
+              <Input.TextArea
+                placeholder="仅支持 SELECT / WITH"
+                autoSize={{ minRows: 5, maxRows: 8 }}
+              />
+            </FormItem>
+          </div>
+          <SheetActions
+            onCancel={() => setSqlModalOpen(false)}
+            cancelLabel="关闭"
+            extra={
+              <>
+                <button type="button" className="btn-test" onClick={handleSaveSqlSetting} disabled={sqlSaving}>
+                  {sqlSaving ? '处理中...' : '保存配置'}
+                </button>
+                <button type="button" className="btn-test" onClick={handleSqlPreview} disabled={sqlPreviewing}>
+                  {sqlPreviewing ? '处理中...' : '预览结果'}
+                </button>
+              </>
+            }
+            submitLabel="执行同步"
+            submitType="button"
+            onSubmitClick={handleRunSqlSync}
+            submitLoading={sqlRunning}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
       <CronGenerator
         visible={showCronModal}
@@ -1347,63 +1298,71 @@ export default function ProjectSourcingIpoProjectsPage() {
         onCancel={() => setShowCronModal(false)}
       />
 
-      <Modal
-        title="批量AI取数（按底层项目创建日期）"
+      <SheetModal
         visible={batchAiVisible}
-        onCancel={() => setBatchAiVisible(false)}
-        onOk={handleBatchAiOk}
-        confirmLoading={batchAiSubmitting}
-        unmountOnExit
+        title="批量AI取数（按底层项目创建日期）"
+        onClose={() => setBatchAiVisible(false)}
       >
-        <Form form={batchAiForm} layout="vertical">
-          <FormItem
-            label="创建日期范围"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </FormItem>
-          <div style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
-            仅处理 data_app_id 为「竞品分析」的底层项目；按<strong>统一社会信用代码</strong>去重（无有效代码时按企业全称）；模型成功后同源代码的多行会一并写入。
+        <Form form={batchAiForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="创建日期范围"
+              field="date_range"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+              className="form-span-2"
+            >
+              <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+            </FormItem>
+            <p className="form-hint form-span-4">
+              仅处理 data_app_id 为「竞品分析」的底层项目；按统一社会信用代码去重（无有效代码时按企业全称）。
+            </p>
           </div>
+          <SheetActions
+            onCancel={() => setBatchAiVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={handleBatchAiOk}
+            submitLoading={batchAiSubmitting}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title="重试失败AI"
+      <SheetModal
         visible={retryFailedVisible}
-        onCancel={() => setRetryFailedVisible(false)}
-        onOk={handleRetryFailedAiOk}
-        confirmLoading={retryFailedSubmitting}
-        unmountOnExit
+        title="重试失败AI"
+        onClose={() => setRetryFailedVisible(false)}
       >
-        <Form form={retryFailedForm} layout="vertical">
-          <FormItem
-            label="创建日期范围"
-            field="date_range"
-            rules={[{ required: true, message: '请选择日期范围' }]}
-          >
-            <DatePicker.RangePicker style={{ width: '100%' }} />
-          </FormItem>
-          <div style={{ color: 'var(--color-text-3)', fontSize: 12 }}>
-            仅 ai_enrich_status = failed 的记录；去重规则与「批量AI取数」一致（统一社会信用代码优先，否则企业全称）。
+        <Form form={retryFailedForm} layout="vertical" className="enterprise-form enterprise-form--sheet">
+          <div className="modal-body enterprise-form-grid">
+            <FormItem
+              label="创建日期范围"
+              field="date_range"
+              rules={[{ required: true, message: '请选择日期范围' }]}
+              className="form-span-2"
+            >
+              <DatePicker.RangePicker style={{ width: '100%' }} getPopupContainer={sheetPopupContainer} />
+            </FormItem>
+            <p className="form-hint form-span-4">
+              仅 ai_enrich_status = failed 的记录；去重规则与「批量AI取数」一致。
+            </p>
           </div>
+          <SheetActions
+            onCancel={() => setRetryFailedVisible(false)}
+            submitLabel="确定"
+            submitType="button"
+            onSubmitClick={handleRetryFailedAiOk}
+            submitLoading={retryFailedSubmitting}
+          />
         </Form>
-      </Modal>
+      </SheetModal>
 
-      <Modal
-        title={`AI 执行日志（f_id=${aiLogFid}）`}
+      <SheetViewer
         visible={aiLogVisible}
-        onCancel={() => setAiLogVisible(false)}
-        footer={
-          <Button type="primary" onClick={() => setAiLogVisible(false)}>
-            关闭
-          </Button>
-        }
-        style={{ width: 900 }}
-        unmountOnExit
+        title={`AI 执行日志（f_id=${aiLogFid}）`}
+        onClose={() => setAiLogVisible(false)}
       >
         <Table
+          className="list-table"
           rowKey="id"
           loading={aiLogLoading}
           data={aiLogRows}
@@ -1431,7 +1390,7 @@ export default function ProjectSourcingIpoProjectsPage() {
             },
           ]}
         />
-      </Modal>
+      </SheetViewer>
     </div>
   )
 }
