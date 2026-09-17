@@ -466,17 +466,20 @@ function RecipientManagement() {
     ...(isAdmin ? [{
       title: '用户名称',
       dataIndex: 'user_account',
-      width: 150,
+      width: 120,
+      ellipsis: true,
       render: (text) => text || '-'
     }] : []),
     {
       title: '收件人邮箱',
       dataIndex: 'recipient_email',
-      width: 250,
+      width: 200,
+      ellipsis: true,
+      tooltip: true,
       render: (text) => text ? (
-        <div>
+        <div className="recipient-email-cell">
           {text.split(',').map((email, index) => (
-            <div key={index} style={{ marginBottom: index < text.split(',').length - 1 ? '4px' : '0' }}>
+            <div key={index} className="recipient-email-line">
               {email.trim()}
             </div>
           ))}
@@ -486,7 +489,7 @@ function RecipientManagement() {
     {
       title: '邮件主题',
       dataIndex: 'email_subject',
-      width: 200,
+      width: 160,
       ellipsis: true,
       tooltip: true,
       render: (text) => text || '-'
@@ -494,7 +497,9 @@ function RecipientManagement() {
     {
       title: 'Cron表达式',
       dataIndex: 'cron_expression',
-      width: 200,
+      width: 150,
+      ellipsis: true,
+      tooltip: true,
       render: (text, record) => {
         // 兼容旧数据：如果有 send_frequency，显示旧的格式
         if (record.send_frequency && !text) {
@@ -508,7 +513,7 @@ function RecipientManagement() {
     {
       title: '第三方公众号',
       dataIndex: 'additional_account_tag_codes',
-      width: 160,
+      width: 110,
       ellipsis: true,
       render: (val) => {
         if (val === null || val === undefined) return <span style={{ color: '#86909c' }}>未配置</span>
@@ -528,7 +533,8 @@ function RecipientManagement() {
     {
       title: '企业类型',
       dataIndex: 'entity_type',
-      width: 200,
+      width: 170,
+      className: 'recipient-entity-type-col',
       render: (text) => {
         if (!text) return '全部'
         // 处理JSON字符串或数组
@@ -544,13 +550,17 @@ function RecipientManagement() {
         if (!Array.isArray(types)) {
           types = [types]
         }
-        return types.length > 0 ? types.join('、') : '全部'
+        return (
+          <span className="recipient-entity-type-text">
+            {types.length > 0 ? types.join('、') : '全部'}
+          </span>
+        )
       }
     },
     {
       title: '状态',
       dataIndex: 'is_active',
-      width: 100,
+      width: 72,
       render: (isActive) => (
         <Tag color={isActive ? 'green' : 'red'}>
           {isActive ? '启用' : '禁用'}
@@ -560,12 +570,12 @@ function RecipientManagement() {
     {
       title: '创建时间',
       dataIndex: 'created_at',
-      width: 180,
+      width: 150,
       render: (text) => formatDate(text)
     },
     {
       title: '操作',
-      width: 220,
+      width: 198,
       fixed: 'right',
       className: 'list-ops-col',
       align: 'left',
@@ -580,8 +590,10 @@ function RecipientManagement() {
     }
   ]
 
+  const tableScrollX = columns.reduce((sum, col) => sum + (Number(col.width) || 0), 0)
+
   return (
-    <div className="recipient-management list-table-page" style={{ '--list-ops-col-width': '220px' }}>
+    <div className="recipient-management list-table-page" style={{ '--list-ops-col-width': '198px' }}>
       <Card className="management-card" bordered={false}>
         <div className="management-header">
           <h2 className="management-title">收件管理</h2>
@@ -621,7 +633,7 @@ function RecipientManagement() {
                 cell: true
               }}
               stripe
-              scroll={{ x: 'max-content' }}
+              scroll={{ x: tableScrollX }}
             />
           )}
         </div>

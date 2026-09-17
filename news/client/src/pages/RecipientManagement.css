@@ -2,6 +2,7 @@
 
 .recipient-management {
   width: 100%;
+  min-width: 0;
 }
 
 .management-card {
@@ -30,6 +31,63 @@
 
 .table-container {
   margin-bottom: 16px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* 企业类型等长文案：列宽内省略，避免撑开表宽 */
+.recipient-management .list-table .arco-table-td .arco-table-cell {
+  overflow: hidden;
+}
+
+.recipient-email-cell {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.recipient-email-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 2px;
+}
+
+.recipient-email-line:last-child {
+  margin-bottom: 0;
+}
+
+/* 企业类型：缩窄列内换行，不再省略号截断 */
+.recipient-management .recipient-entity-type-col .arco-table-cell {
+  white-space: normal !important;
+  word-break: break-word;
+  overflow: visible !important;
+  line-height: 1.4;
+}
+
+.recipient-management .recipient-entity-type-text {
+  display: block;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+/* 操作列缩窄后允许按钮两行排布，避免裁切 */
+.recipient-management .list-ops-col .list-ops {
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 100%;
+  gap: 4px 6px;
+}
+
+/* 消除右侧固定操作列表头旁白条 / 滚动占位错位 */
+.recipient-management .list-table .arco-table-col-fixed-right-last::after,
+.recipient-management .list-table .arco-table-col-fixed-right::after {
+  display: none !important;
+}
+
+.recipient-management .list-table .arco-table-header .arco-table-col-fixed-right,
+.recipient-management .list-table .arco-table-body .arco-table-col-fixed-right {
+  right: 0 !important;
 }
 
 .pagination-wrapper {
@@ -79,4 +137,3 @@
 .recipient-management .arco-btn-outline:hover {
   border-color: currentColor;
 }
-

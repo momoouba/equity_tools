@@ -897,17 +897,37 @@ async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
   const groupedDedup = new Set();
   // 未选企业类型时不写入被投企业/子基金等分组，仅展示当前用户第三方公众号区块（与 getUserVisibleYesterdayNews 收窄一致）
   const enableEnterpriseGrouping = hasEntityTypeSelection(recipient);
+
+  // 与收件「第三方公众号」一致：空数组/未配置 = 不发送，禁止再挂到第三方区块
+  let rawTags = recipient ? recipient.additional_account_tag_codes : null;
+  if (rawTags === null || rawTags === undefined || rawTags === '') {
+    rawTags = [];
+  } else if (typeof rawTags === 'string') {
+    try {
+      rawTags = JSON.parse(rawTags);
+    } catch (e) {
+      rawTags = [];
+    }
+  }
+  if (!Array.isArray(rawTags)) rawTags = [];
+  const allowThirdPartySection = rawTags.length > 0;
+
   const additionalRows = await db.query(
-    `SELECT DISTINCT wechat_account_id
+    `SELECT DISTINCT wechat_account_id, account_name
      FROM additional_wechat_accounts
-     WHERE F_CreatorUserId = ?
-       AND status = 'active'
+     WHERE status = 'active'
        AND F_DeleteMark = 0
-       AND wechat_account_id IS NOT NULL
-       AND wechat_account_id != ''`,
-    [recipient.user_id]
+       AND (
+         (wechat_account_id IS NOT NULL AND wechat_account_id != '')
+         OR (account_name IS NOT NULL AND TRIM(account_name) != '')
+       )`
   );
-  const additionalSet = new Set(additionalRows.map((r) => r.wechat_account_id));
+  const additionalIdSet = new Set(
+    additionalRows.map((r) => (r.wechat_account_id != null ? String(r.wechat_account_id).trim() : '')).filter(Boolean)
+  );
+  const additionalNameSet = new Set(
+    additionalRows.map((r) => (r.account_name != null ? String(r.account_name).trim() : '')).filter(Boolean)
+  );
 
   const addToGroup = (groupName, enterpriseName, news) => {
     if (!grouped[groupName]) grouped[groupName] = {};
@@ -925,8 +945,12 @@ async function buildNewsByEntityTypeAndEnterprise(newsList, recipient) {
       addToGroup(entityType, enterpriseName, news);
     }
 
-    // 同一条新闻若来自第三方公众号，同时在「第三方公众号」区块再展示一次
-    const isAdditionalSource = news.wechat_account && additionalSet.has(news.wechat_account);
+    // 仅当收件配置选择了第三方标签时，才把额外公众号来源挂到「第三方公众号」区块
+    if (!allowThirdPartySection) continue;
+    const wid = news.wechat_account != null ? String(news.wechat_account).trim() : '';
+    const an = news.account_name != null ? String(news.account_name).trim() : '';
+    const isAdditionalSource =
+      (wid && additionalIdSet.has(wid)) || (an && additionalNameSet.has(an));
     if (isAdditionalSource) {
       const thirdPartyName = news.account_name || news.wechat_account || enterpriseName;
       addToGroup('第三方公众号', thirdPartyName, news);

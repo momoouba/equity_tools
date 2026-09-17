@@ -39,69 +39,99 @@ function isAdditionalAccountNewsLinkedToEnterprise(news) {
   return !!(et && enterpriseEntityTypes.includes(et));
 }
 
+/** 解析收件配置中的第三方标签；null/undefined/非法 → []（表示不发送第三方） */
+function parseAdditionalAccountTagCodes(raw) {
+  if (raw === null || raw === undefined || raw === '') return [];
+  let selected = raw;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(selected)) {
+    try {
+      selected = JSON.parse(selected.toString('utf8'));
+    } catch (e) {
+      return [];
+    }
+  }
+  if (typeof selected === 'string') {
+    try {
+      selected = JSON.parse(selected);
+    } catch (e) {
+      return [];
+    }
+  }
+  if (!Array.isArray(selected)) return [];
+  return selected.map((x) => String(x));
+}
+
 /**
- * 按收件管理配置的 industry 标签筛选「当前用户名下第三方公众号」相关新闻。
- * - additional_account_tag_codes 为 NULL 或 []：未选标签时筛掉纯第三方来源；
- *   但已匹配企业全称/企业类型的第三方新闻仍保留（按企业舆情发送）
- * - 非空：仅保留 wechat_account 命中所选标签（含 __NONE__ 表示 industry_tag_code 为空）；
- *   已挂企业的同样放行
+ * 按收件管理配置的 industry 标签筛选第三方公众号来源新闻。
+ * - additional_account_tag_codes 为 NULL 或 []（前端「不发送」）：排除所有「未挂企业」的额外公众号新闻
+ *   （按全库 active 额外号匹配 wechat_account / account_name，避免 admin 全库捞数后漏网）
+ * - 非空：仅保留标签命中（含 __NONE__）或已挂企业的额外号新闻；非额外号来源照常保留
  * @param {Array} newsList
  * @param {{ user_id?: string, additional_account_tag_codes?: any }} recipientConfig
  * @returns {Promise<Array>}
  */
 async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfig) {
-  if (!recipientConfig || !recipientConfig.user_id || !Array.isArray(newsList)) {
+  if (!recipientConfig || !Array.isArray(newsList)) {
     return newsList;
   }
-  let raw = recipientConfig.additional_account_tag_codes;
-  // 与前端默认 [] 一致：null/undefined 与空数组同为「未选标签」，走同一套筛选逻辑
-  if (raw === null || raw === undefined) {
-    raw = [];
-  }
-  let selected = raw;
-  if (typeof selected === 'string') {
-    try {
-      selected = JSON.parse(selected);
-    } catch (e) {
-      return newsList;
-    }
-  }
-  if (!Array.isArray(selected)) {
-    return newsList;
-  }
+  const selected = parseAdditionalAccountTagCodes(recipientConfig.additional_account_tag_codes);
 
-  let scopedRows;
+  let accountRows;
   try {
-    scopedRows = await db.query(
-      `SELECT wechat_account_id, industry_tag_code
+    // 全库 active：管理员发信会捞全库额外号，空标签排除必须覆盖全部，不能仅限当前 user
+    accountRows = await db.query(
+      `SELECT wechat_account_id, account_name, industry_tag_code
        FROM additional_wechat_accounts
-       WHERE F_CreatorUserId = ? AND status = 'active' AND F_DeleteMark = 0
-         AND wechat_account_id IS NOT NULL AND wechat_account_id != ''`,
-      [recipientConfig.user_id]
+       WHERE status = 'active' AND F_DeleteMark = 0
+         AND (
+           (wechat_account_id IS NOT NULL AND wechat_account_id != '')
+           OR (account_name IS NOT NULL AND TRIM(account_name) != '')
+         )`
     );
   } catch (err) {
-    console.warn(`[邮件发送] 加载当前用户第三方公众号失败: ${err.message}`);
+    console.warn(`[邮件发送] 加载第三方公众号失败: ${err.message}`);
     return newsList;
   }
 
-  const scopedSet = new Set(scopedRows.map((r) => r.wechat_account_id));
-  const tagByAccount = new Map(
-    scopedRows.map((r) => {
-      const c = r.industry_tag_code;
-      const normalized = c != null && String(c).trim() !== '' ? String(c).trim() : null;
-      return [r.wechat_account_id, normalized];
-    })
-  );
+  const idSet = new Set();
+  const nameSet = new Set();
+  const tagById = new Map();
+  const tagByName = new Map();
+  for (const r of accountRows) {
+    const id = r.wechat_account_id != null ? String(r.wechat_account_id).trim() : '';
+    const name = r.account_name != null ? String(r.account_name).trim() : '';
+    const c = r.industry_tag_code;
+    const tag = c != null && String(c).trim() !== '' ? String(c).trim() : null;
+    if (id) {
+      idSet.add(id);
+      tagById.set(id, tag);
+    }
+    if (name) {
+      nameSet.add(name);
+      if (!tagByName.has(name)) tagByName.set(name, tag);
+    }
+  }
+
+  const resolveAdditionalMeta = (n) => {
+    const wid = n.wechat_account != null ? String(n.wechat_account).trim() : '';
+    const an = n.account_name != null ? String(n.account_name).trim() : '';
+    const byId = wid && idSet.has(wid);
+    const byName = an && nameSet.has(an);
+    if (!byId && !byName) return null;
+    const tag = (wid && tagById.has(wid) ? tagById.get(wid) : null) ?? (an ? tagByName.get(an) : null) ?? null;
+    return { tag };
+  };
 
   if (selected.length === 0) {
     const filtered = newsList.filter((n) => {
-      if (!n.wechat_account || !scopedSet.has(n.wechat_account)) return true;
-      // 已挂企业：按企业新闻保留
+      const meta = resolveAdditionalMeta(n);
+      if (!meta) return true;
+      // 已挂企业：按企业新闻保留，不进「第三方公众号」纯展示
       if (isAdditionalAccountNewsLinkedToEnterprise(n)) return true;
       return false;
     });
     console.log(
-      `[邮件发送] 第三方公众号标签：未选标签，排除纯第三方来源（已挂企业的保留） ${newsList.length} -> ${filtered.length}`
+      `[邮件发送] 第三方公众号标签：未选/不发送，排除纯第三方来源（全库额外号+已挂企业保留） ${newsList.length} -> ${filtered.length}`
     );
     return filtered;
   }
@@ -110,23 +140,16 @@ async function applyRecipientAdditionalAccountTagFilter(newsList, recipientConfi
   const codes = new Set(selected.filter((x) => x !== ADDITIONAL_ACCOUNT_TAG_NONE).map(String));
 
   const filtered = newsList.filter((n) => {
-    if (!n.wechat_account || !scopedSet.has(n.wechat_account)) {
-      return true;
-    }
-    if (isAdditionalAccountNewsLinkedToEnterprise(n)) {
-      return true;
-    }
-    const tc = tagByAccount.get(n.wechat_account);
-    if (allowNone && !tc) {
-      return true;
-    }
-    if (tc && codes.has(tc)) {
-      return true;
-    }
+    const meta = resolveAdditionalMeta(n);
+    if (!meta) return true;
+    if (isAdditionalAccountNewsLinkedToEnterprise(n)) return true;
+    const tc = meta.tag;
+    if (allowNone && !tc) return true;
+    if (tc && codes.has(tc)) return true;
     return false;
   });
   console.log(
-    `[邮件发送] 第三方公众号标签筛选（已选 ${selected.length} 项，已挂企业放行）：${newsList.length} -> ${filtered.length} 条`
+    `[邮件发送] 第三方公众号标签筛选（已选 ${selected.length} 项，全库额外号+已挂企业放行）：${newsList.length} -> ${filtered.length} 条`
   );
   return filtered;
 }
@@ -2768,6 +2791,9 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
     
     // 分组逻辑：优先以 entity_type 判断归属（企业类型模式只看 entity_type + 企业简称，不考虑来源公众号）；
     // 仅当 entity_type 为空且无企业全称时，才归入「第三方公众号」按公众号分组。
+    // 收件「第三方公众号」为不发送（空标签）时，禁止写入第三方区块。
+    const allowThirdPartySection =
+      parseAdditionalAccountTagCodes(recipientConfig?.additional_account_tag_codes).length > 0;
     const newsByEntityTypeAndEnterprise = {};
     const validEntityTypesForEmail = ['被投企业', '基金', '基金相关主体', '子基金', '子基金管理人', '子基金GP', '其他'];
     filteredNewsList.forEach((news, idx) => {
@@ -2798,6 +2824,12 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
         categoryKey = '被投企业';
         groupKey = news.enterprise_full_name.trim();
         console.log(`[邮件发送] ⚠️ 新闻ID=${news.id} 有企业全称"${groupKey}"但entity_type为空/无效("${news.entity_type || '(NULL)'}")，默认归为被投企业`);
+      } else if (!allowThirdPartySection) {
+        // 配置为不发送第三方：无企业归属的稿直接丢弃，避免再进第三方区块
+        if (idx < 10) {
+          console.log(`[邮件发送] 跳过无企业归属新闻（收件未选第三方标签）: ID=${news.id}, account=${news.account_name || news.wechat_account || '-'}`);
+        }
+        return;
       } else {
         // 无 entity_type 且无企业全称 → 归入第三方公众号
         categoryKey = '第三方公众号';
@@ -3037,6 +3069,10 @@ async function executeEmailTask(recipientId) {
     }
     
     const recipient = recipients[0];
+    // 统一解析第三方标签：[] / null → 不发送（避免 JSON 字符串/Buffer 导致筛选被跳过）
+    recipient.additional_account_tag_codes = parseAdditionalAccountTagCodes(
+      recipient.additional_account_tag_codes
+    );
 
     const listingAppRows = await db.query(
       `SELECT F_Id AS id FROM applications WHERE BINARY app_name = BINARY ? LIMIT 1`,
@@ -3561,6 +3597,9 @@ async function executeEmailTask(recipientId) {
       newsListToSend = await deduplicateNewsBySemanticSimilarity(finalFilteredNewsList, '[邮件发送]');
       logWithTimestamp(`[邮件发送] ========== 语义相似度去重结束，将发送 ${newsListToSend.length} 条 ==========`);
     }
+
+    // 发信前再套一层第三方标签过滤，防止 AI 重取/补查后漏网
+    newsListToSend = await applyRecipientAdditionalAccountTagFilter(newsListToSend, recipient);
     
     // 发送邮件（包含Excel附件），使用最终过滤并去重后的新闻列表
     await sendNewsEmailWithExcel(recipient, emailConfig, newsListToSend);
