@@ -59,7 +59,7 @@ async function generateIdUnlocked(tableName, connection) {
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log', 'news_fetch_day_log',
       'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'interface_news_type_enabled',
       // 业绩看板相关表
-      'b_version', 'b_indicator_describe', 'b_sql', 'b_sql_change_log',
+      'b_version', 'b_version_run_log', 'b_indicator_describe', 'b_sql', 'b_sql_change_log',
       'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',
       'b_all_indicator', 'b_investment', 'b_investment_spv', 'b_investment_sum', 'b_investor_list',
       'b_transaction', 'b_project', 'b_project_a', 'b_project_all',

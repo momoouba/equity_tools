@@ -4600,6 +4600,34 @@ async function initializeTables(dbPool) {
     console.warn('业绩看板分层列补充时出现警告:', e.message);
   }
 
+  // 版本创建执行日志（失败回滚不删，便于排查是否跑过各表）
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS b_version_run_log (
+        F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+        F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+        F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+        version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号',
+        b_date DATETIME NULL DEFAULT NULL COMMENT '版本日期',
+        layer VARCHAR(20) NULL DEFAULT NULL COMMENT 'wash/extract/generate/legacy/pipeline',
+        step_no INT NULL DEFAULT 0 COMMENT '步骤序号',
+        sql_id VARCHAR(50) NULL DEFAULT NULL COMMENT 'b_sql.F_Id',
+        interface_name VARCHAR(200) NULL DEFAULT NULL COMMENT '数据接口名称',
+        target_table VARCHAR(100) NULL DEFAULT NULL COMMENT '目标表',
+        event VARCHAR(20) NULL DEFAULT NULL COMMENT 'start/success/skip/fail/info',
+        query_rows INT NULL DEFAULT NULL COMMENT '查询行数',
+        inserted_rows INT NULL DEFAULT NULL COMMENT '写入行数',
+        duration_ms INT NULL DEFAULT NULL COMMENT '耗时毫秒',
+        message VARCHAR(1000) NULL DEFAULT NULL COMMENT '说明/错误',
+        PRIMARY KEY (F_Id),
+        INDEX idx_b_version_run_log_version (version, step_no),
+        INDEX idx_b_version_run_log_time (F_CreatorTime)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板版本创建执行日志'
+    `);
+  } catch (e) {
+    console.warn('b_version_run_log 建表时出现警告:', e.message);
+  }
+
   const perfAuditCols = `
       F_Id VARCHAR(50) NOT NULL COMMENT '主键',
       F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',

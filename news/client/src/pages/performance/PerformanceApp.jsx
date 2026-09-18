@@ -4,7 +4,7 @@
  */
 import React, { useState, useEffect } from 'react'
 import {
-  Select, Button, Spin, Message, Tooltip, Input, Popover
+  Select, Button, Spin, Message, Tooltip, Input, Popover, Modal
 } from '@arco-design/web-react'
 import {
   IconBook, IconSettings, IconRefresh, IconShareAlt, IconDownload, IconLock, IconUnlock, IconDelete, IconPlus, IconClose, IconCalendar, IconInfoCircle
@@ -114,7 +114,8 @@ const performanceApi = {
   getDates: () => axios.get('/api/performance/versions/dates'),
   getVersions: (date) => axios.get(`/api/performance/versions?date=${date}`),
   getVersionHistory: (date) => axios.get(`/api/performance/versions/history?date=${date}`),
-  createVersion: (data) => axios.post('/api/performance/versions', data),
+  createVersion: (data) => axios.post('/api/performance/versions', data, { timeout: 0 }),
+  getVersionRunLogs: (version) => axios.get(`/api/performance/versions/${encodeURIComponent(version)}/logs`),
   lockVersion: (version, locked) => axios.patch(`/api/performance/versions/${encodeURIComponent(version)}/lock`, { locked }),
   deleteVersion: (version) => axios.delete(`/api/performance/versions/${encodeURIComponent(version)}`),
   getManagerIndicator: (version) => axios.get(`/api/performance/dashboard/manager?version=${encodeURIComponent(version)}`),
@@ -573,6 +574,9 @@ function PerformanceApp() {
   const [versionUpdateMonths, setVersionUpdateMonths] = useState([{ value: new Date() }])
   const [versionUpdateExisting, setVersionUpdateExisting] = useState({})
   const [versionUpdateSubmitting, setVersionUpdateSubmitting] = useState(false)
+  const [versionRunLogVisible, setVersionRunLogVisible] = useState(false)
+  const [versionRunLogTitle, setVersionRunLogTitle] = useState('')
+  const [versionRunLogLines, setVersionRunLogLines] = useState([])
   const [permissions, setPermissions] = useState({
     levelName: null,
     canView: false,
@@ -580,6 +584,30 @@ function PerformanceApp() {
     canOpenModal: false,
     canExport: false
   })
+
+  const formatVersionRunLogs = (logs) => {
+    if (!Array.isArray(logs) || logs.length === 0) return ['（暂无执行日志）']
+    return logs.map((l) => {
+      const parts = [
+        `#${l.step_no ?? '-'}`,
+        `[${l.layer || '-'}]`,
+        l.event || '-',
+        l.interface_name || l.target_table || '-',
+      ]
+      if (l.target_table) parts.push(`→ ${l.target_table}`)
+      if (l.query_rows != null) parts.push(`查询=${l.query_rows}`)
+      if (l.inserted_rows != null) parts.push(`写入=${l.inserted_rows}`)
+      if (l.duration_ms != null) parts.push(`${l.duration_ms}ms`)
+      if (l.message) parts.push(l.message)
+      return parts.join(' ')
+    })
+  }
+
+  const showVersionRunLogs = (title, logs) => {
+    setVersionRunLogTitle(title)
+    setVersionRunLogLines(formatVersionRunLogs(logs))
+    setVersionRunLogVisible(true)
+  }
 
   const openModal = (type, fund = null, modalType = null) => {
     // 数据版本更新、分享等配置类弹窗不受 canOpenModal 限制
@@ -2482,7 +2510,11 @@ function PerformanceApp() {
               try {
                 const res = await performanceApi.createVersion({ date: months[0], months })
                 if (res.data.success) {
-                  Message.success('版本创建成功')
+                  const versions = res.data.data?.versions || []
+                  const runLogsMap = res.data.data?.runLogs || {}
+                  const flatLogs = versions.flatMap((v) => runLogsMap[v] || [])
+                  Message.success(`版本创建成功${versions.length ? `：${versions.join('、')}` : ''}`)
+                  showVersionRunLogs(`版本创建执行日志${versions.length ? `（${versions.join('、')}）` : ''}`, flatLogs)
                   closeModal()
                   const dateList = await loadDates()
                   const targetDate = dateList[0] || selectedDate
@@ -2494,11 +2526,19 @@ function PerformanceApp() {
                     }
                   }
                 } else {
+                  const failLogs = res.data.data?.runLogs || []
                   Message.error(res.data.message || '版本创建失败')
+                  showVersionRunLogs('版本创建失败 · 执行日志', Array.isArray(failLogs) ? failLogs : [])
                 }
               } catch (e) {
                 console.error(e)
-                Message.error('版本创建失败')
+                const failLogs = e?.response?.data?.data?.runLogs || []
+                const failVer = e?.response?.data?.data?.version
+                Message.error(e?.response?.data?.message || '版本创建失败')
+                showVersionRunLogs(
+                  `版本创建失败 · 执行日志${failVer ? `（${failVer}）` : ''}`,
+                  Array.isArray(failLogs) ? failLogs : []
+                )
               } finally {
                 setVersionUpdateSubmitting(false)
               }
@@ -2506,6 +2546,33 @@ function PerformanceApp() {
           />
         </div>
       </SheetModal>
+
+      <Modal
+        title={versionRunLogTitle || '版本创建执行日志'}
+        visible={versionRunLogVisible}
+        onCancel={() => setVersionRunLogVisible(false)}
+        footer={
+          <Button type="primary" onClick={() => setVersionRunLogVisible(false)}>关闭</Button>
+        }
+        style={{ width: 720 }}
+      >
+        <pre
+          style={{
+            maxHeight: 420,
+            overflow: 'auto',
+            margin: 0,
+            padding: 12,
+            background: '#f7f8fa',
+            borderRadius: 6,
+            fontSize: 12,
+            lineHeight: 1.6,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all'
+          }}
+        >
+          {versionRunLogLines.join('\n')}
+        </pre>
+      </Modal>
 
       {/* 分享弹窗（简化版） */}
       <SheetModal
