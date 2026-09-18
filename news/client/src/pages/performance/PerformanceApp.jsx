@@ -1391,11 +1391,10 @@ function PerformanceApp() {
           </colgroup>
         )
 
-        const renderSummaryRow = (sum, label, count, colSpanFirst) => (
+        const renderSummaryRow = (sum, label, count) => (
           <tr className="perf-table-summary">
             <td className="perf-col-index">{label}</td>
-            <td className="perf-col-type">{count}</td>
-            <td className="perf-col-project" />
+            <td className="perf-col-type perf-summary-count" colSpan={2}>{count}</td>
             <td className="perf-col-date" />
             <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.acc_sub)}</td>
             <td className="perf-td-num perf-col-amount">{formatAmountYuan(sum.change_sub)}</td>
@@ -1466,15 +1465,15 @@ function PerformanceApp() {
                 </thead>
                 <tbody>
                   {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
-                  {subFundRows.length > 0 && renderSummaryRow(subFundSum, '小计（子基金）', `子基金个数：${subFundRows.length} 个`, 2)}
+                  {subFundRows.length > 0 && renderSummaryRow(subFundSum, '小计', `子基金个数：${subFundRows.length} 个`)}
                 </tbody>
                 <tbody>
                   {directRows.map((row, idx) => renderDataRow(row, subFundRows.length + idx + 1))}
-                  {directRows.length > 0 && renderSummaryRow(directSum, '小计（直投项目）', `直投项目个数：${directRows.length} 个`, 2)}
+                  {directRows.length > 0 && renderSummaryRow(directSum, '小计', `直投项目个数：${directRows.length} 个`)}
                 </tbody>
                 {list.length > 0 && (
                   <tbody>
-                    {renderSummaryRow(allSum, '合计', `总项目个数：${list.length} 个`, 2)}
+                    {renderSummaryRow(allSum, '合计', `总项目个数：${list.length} 个`)}
                   </tbody>
                 )}
               </table>

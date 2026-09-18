@@ -189,13 +189,15 @@ router.get('/investors', async (req, res) => {
       return res.status(400).json({ success: false, message: '版本号和基金名称不能为空' });
     }
     
+    // 国方一期产品是国方一期流水复制出来的产品列，合伙人挂在国方一期上
+    const lookupFund = fund === '国方一期产品' ? '国方一期' : fund;
     const rows = await db.query(
       `SELECT fund, lp, lp_type, subscription_amount, subscription_ratio,
               paidin, distribution, first_date, first_amount,
               second_date, second_amount, third_date, third_amount
        FROM b_investor_list
        WHERE version = ? AND fund = ? AND F_DeleteMark = 0`,
-      [version, fund]
+      [version, lookupFund]
     );
     
     res.json({ success: true, data: { list: rows } });

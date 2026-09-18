@@ -1185,6 +1185,13 @@
 .perf-fp-scroll .perf-fp-table .perf-table-summary td.perf-col-date {
   background: #1AA8E9; color: #fff;
 }
+.perf-fp-scroll .perf-fp-table .perf-table-summary td.perf-summary-count {
+  max-width: none;
+  width: auto;
+  white-space: nowrap;
+  text-align: left;
+  overflow: visible;
+}
 
 /* 冻结列右侧阴影 */
 .perf-fp-scroll .perf-fp-table td.perf-col-date::after,

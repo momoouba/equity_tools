@@ -260,10 +260,11 @@ router.post('/investors', checkExportPermission, async (req, res) => {
     }
     
     // 获取投资人名录
+    const investorFund = fund === '国方一期产品' ? '国方一期' : fund;
     const investorRows = await db.query(
       `SELECT * FROM b_investor_list
        WHERE version = ? AND fund = ? AND F_DeleteMark = 0`,
-      [version, fund]
+      [version, investorFund]
     );
     
     // 获取数据明细
