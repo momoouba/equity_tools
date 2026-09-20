@@ -113,19 +113,37 @@ function mapRelationToComparable(rel, listing) {
   };
 }
 
-async function findCompetitorInvestedEnterprise({ creditCode, fullName }) {
+function normCreditCode(v) {
+  return String(v || '').replace(/\s+/g, '').replace(/　/g, '').trim();
+}
+
+const CREDIT_EQ_SQL = `UPPER(REPLACE(REPLACE(TRIM(IFNULL(unified_credit_code,'')),' ',''),'　','')) = UPPER(?)`;
+
+async function competitorAnalysisAppFilter(alias = '') {
+  const p = alias ? `${alias}.` : '';
   const caId = await getApplicationIdByAppName(DATA_APP_COMPETITOR_ANALYSIS);
-  const credit = String(creditCode || '').replace(/\s+/g, '').trim();
+  if (caId) {
+    return {
+      sql: `(${p}data_app_id <=> ? OR (${p}data_app_id IS NULL AND ${p}data_app_name = ?))`,
+      params: [caId, DATA_APP_COMPETITOR_ANALYSIS],
+    };
+  }
+  return { sql: `${p}data_app_name = ?`, params: [DATA_APP_COMPETITOR_ANALYSIS] };
+}
+
+async function findCompetitorInvestedEnterprise({ creditCode, fullName }) {
+  const app = await competitorAnalysisAppFilter();
+  const credit = normCreditCode(creditCode);
   if (credit) {
     const rows = await db.query(
       `SELECT F_Id AS id, enterprise_full_name, unified_credit_code
        FROM invested_enterprises
        WHERE F_DeleteMark = 0
-         AND (data_app_id <=> ? OR (data_app_id IS NULL AND data_app_name = ?))
-         AND REPLACE(IFNULL(unified_credit_code,''), ' ', '') = ?
+         AND ${app.sql}
+         AND ${CREDIT_EQ_SQL}
        ORDER BY F_LastModifyTime DESC
        LIMIT 1`,
-      [caId, DATA_APP_COMPETITOR_ANALYSIS, credit]
+      [...app.params, credit]
     );
     if (rows.length) return rows[0];
   }
@@ -135,11 +153,40 @@ async function findCompetitorInvestedEnterprise({ creditCode, fullName }) {
       `SELECT F_Id AS id, enterprise_full_name, unified_credit_code
        FROM invested_enterprises
        WHERE F_DeleteMark = 0
-         AND (data_app_id <=> ? OR (data_app_id IS NULL AND data_app_name = ?))
+         AND ${app.sql}
          AND enterprise_full_name = ?
        ORDER BY F_LastModifyTime DESC
        LIMIT 1`,
-      [caId, DATA_APP_COMPETITOR_ANALYSIS, name]
+      [...app.params, name]
+    );
+    if (rows.length) return rows[0];
+  }
+  return null;
+}
+
+/** 投前竞品分析项目：信用代码优先，全称其次；同码多条时优先有成功 run 的最新一条。 */
+async function findCompetitorPreInvestmentProject({ creditCode, fullName }) {
+  const app = await competitorAnalysisAppFilter('p');
+  const credit = normCreditCode(creditCode);
+  const selectSql = `SELECT p.F_Id AS id, p.enterprise_full_name, p.unified_credit_code
+       FROM pre_investment_project p
+       LEFT JOIN sourcing_pre_investment_competitor_run r
+         ON r.pre_investment_project_id = p.F_Id AND r.F_DeleteMark = 0 AND r.status = 'success'
+       WHERE p.F_DeleteMark = 0
+         AND ${app.sql}`;
+  const orderSql = `ORDER BY r.F_CreatorTime DESC, p.F_LastModifyTime DESC LIMIT 1`;
+  if (credit) {
+    const rows = await db.query(
+      `${selectSql} AND ${CREDIT_EQ_SQL.replace('unified_credit_code', 'p.unified_credit_code')} ${orderSql}`,
+      [...app.params, credit]
+    );
+    if (rows.length) return rows[0];
+  }
+  const name = String(fullName || '').trim();
+  if (name) {
+    const rows = await db.query(
+      `${selectSql} AND p.enterprise_full_name = ? ${orderSql}`,
+      [...app.params, name]
     );
     if (rows.length) return rows[0];
   }
@@ -209,7 +256,10 @@ async function previewComparablesFromCompetitor({
 
   if (caseType === C.CASE_TYPE_PRE) {
     subjectType = 'pre_investment_project';
-    if (pipId) {
+    const matched = await findCompetitorPreInvestmentProject({ creditCode, fullName });
+    if (matched?.id) {
+      pipId = matched.id;
+    } else if (pipId) {
       const exists = await db.query(
         'SELECT F_Id FROM pre_investment_project WHERE F_Id = ? AND F_DeleteMark = 0 LIMIT 1',
         [pipId]
@@ -794,6 +844,7 @@ module.exports = {
   patchComparable,
   listComparableFinancials,
   findCompetitorInvestedEnterprise,
+  findCompetitorPreInvestmentProject,
   latestSuccessRun,
   padStockCode,
 };

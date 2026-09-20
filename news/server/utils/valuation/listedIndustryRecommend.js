@@ -15,6 +15,7 @@ const {
   listDeletedCodes,
   latestSuccessRun,
   findCompetitorInvestedEnterprise,
+  findCompetitorPreInvestmentProject,
   parseJson,
 } = require('./comparableService');
 const { resolveCategory4FromSw } = require('../project-sourcing/swIndustryCategoryMap');
@@ -141,6 +142,11 @@ async function loadS0Detail(cse) {
   let pipId = cse.subject?.competitor_pre_project_id;
   if (cse.case_type === C.CASE_TYPE_PRE) {
     subjectType = 'pre_investment_project';
+    const matched = await findCompetitorPreInvestmentProject({
+      creditCode: cse.subject?.unified_credit_code,
+      fullName: cse.subject?.enterprise_full_name || cse.subject?.display_name,
+    });
+    if (matched?.id) pipId = matched.id;
   } else {
     subjectType = 'invested_enterprise';
     if (!ieId) {
@@ -217,8 +223,13 @@ async function assembleProfile(cse, draft) {
   if (profile.sw_industry_l3) sources.sw_industry_l3 = 'draft_method';
 
   let subjectRow = null;
-  if (cse.case_type === C.CASE_TYPE_PRE && cse.subject?.competitor_pre_project_id) {
-    subjectRow = await queryRowById('pre_investment_project', cse.subject.competitor_pre_project_id);
+  if (cse.case_type === C.CASE_TYPE_PRE) {
+    const matched = await findCompetitorPreInvestmentProject({
+      creditCode: profile.unified_credit_code,
+      fullName: profile.display_name,
+    });
+    const pipId = matched?.id || cse.subject?.competitor_pre_project_id;
+    if (pipId) subjectRow = await queryRowById('pre_investment_project', pipId);
   } else if (cse.invested_enterprise_id) {
     subjectRow = await queryRowById('invested_enterprises', cse.invested_enterprise_id);
     const ca = await findCompetitorInvestedEnterprise({

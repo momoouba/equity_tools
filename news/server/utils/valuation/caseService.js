@@ -19,6 +19,7 @@ const {
 const { recordPayloadChanges, recordChangeEvent, listChangeLog } = require('./changeLog');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
 const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
+const { findCompetitorPreInvestmentProject } = require('./comparableService');
 
 function parseJson(v, fallback) {
   if (v == null) return fallback;
@@ -90,7 +91,7 @@ async function livePreProjectName(pre) {
 
 async function createPreProject(req, body) {
   const uid = String(req.valUser.id);
-  const fromCa = String(body.competitor_pre_project_id || '').trim();
+  let fromCa = String(body.competitor_pre_project_id || '').trim();
   let fullName = String(body.enterprise_full_name || '').trim();
   let abbr = String(body.project_abbreviation || '').trim() || null;
   let credit = String(body.unified_credit_code || '').replace(/\s+/g, '').trim() || null;
@@ -110,6 +111,15 @@ async function createPreProject(req, body) {
     abbr = src[0].project_abbreviation || abbr;
     credit = src[0].unified_credit_code || credit;
     snapshot = snapshot || fullName;
+  } else {
+    const matched = await findCompetitorPreInvestmentProject({
+      creditCode: credit,
+      fullName,
+    });
+    if (matched?.id) {
+      fromCa = matched.id;
+      snapshot = snapshot || fullName;
+    }
   }
   if (!fullName) {
     const err = new Error('请填写企业全称，或从竞品分析选择投前项目');

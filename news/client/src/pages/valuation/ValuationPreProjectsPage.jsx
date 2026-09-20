@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Card, Table, Button, Message, Modal, Form, Input, Space, Pagination } from '@arco-design/web-react'
+import { Card, Table, Button, Message, Form, Input, Space, Pagination } from '@arco-design/web-react'
 import {
   fetchValuationPreProjects,
   fetchCompetitorPreProjectsForValuation,
@@ -15,13 +15,6 @@ import '../../styles/listTable.css'
 import { formatChinaDateTime } from './valuationUnits'
 
 const FormItem = Form.Item
-
-function genPreviewProjectNo() {
-  const d = new Date()
-  const pad = (n) => String(n).padStart(2, '0')
-  const ymd = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
-  return `P${ymd}${String(Math.floor(1000 + Math.random() * 9000))}`
-}
 
 function fmtRange(conclusion) {
   const yi = conclusion?.display_yi
@@ -54,7 +47,6 @@ export default function ValuationPreProjectsPage() {
   const [lookupLoading, setLookupLoading] = useState(false)
   const [qccCandidates, setQccCandidates] = useState([])
   const [showQccDropdown, setShowQccDropdown] = useState(false)
-  const [projectNoPreview, setProjectNoPreview] = useState('')
   const qccDropdownRef = useRef(null)
   const [caList, setCaList] = useState([])
   const [caTotal, setCaTotal] = useState(0)
@@ -112,7 +104,6 @@ export default function ValuationPreProjectsPage() {
   }
 
   const openCreateModal = () => {
-    setProjectNoPreview(genPreviewProjectNo())
     form.resetFields()
     clearQccDropdown()
     setCreateVisible(true)
@@ -247,7 +238,7 @@ export default function ValuationPreProjectsPage() {
               onSearch={(v) => { setKeyword(v); setPage(1) }}
             />
             <Button onClick={() => setPickVisible(true)}>从竞品分析选择</Button>
-            <Button type="primary" onClick={() => setCreateVisible(true)}>手工新建</Button>
+            <Button type="primary" onClick={openCreateModal}>手工新建</Button>
           </Space>
         </div>
         <Table
@@ -275,42 +266,68 @@ export default function ValuationPreProjectsPage() {
 
       <SheetModal
         visible={createVisible}
-        title="手工新建投前主体"
-        onClose={() => setCreateVisible(false)}
+        title="新增企业信息"
+        onClose={closeCreateModal}
       >
-        <Form form={form} layout="vertical" className="enterprise-form enterprise-form--sheet">
+        <Form
+          form={form}
+          layout="vertical"
+          className="enterprise-form enterprise-form--sheet"
+          onValuesChange={(changed) => {
+            if (Object.prototype.hasOwnProperty.call(changed, 'project_abbreviation')) {
+              clearQccDropdown()
+            }
+          }}
+        >
           <div className="modal-body enterprise-form-grid">
-            <FormItem label="企业全称" field="enterprise_full_name" rules={[{ required: true, message: '请填写企业全称' }]} className="form-span-2">
-              <Input />
+            <FormItem label="企业简称" className="form-span-4">
+              <div ref={qccDropdownRef} style={{ position: 'relative', width: '100%' }}>
+                <div style={{ display: 'flex', gap: 8, width: '100%' }}>
+                  <FormItem field="project_abbreviation" noStyle>
+                    <Input placeholder="请输入企业简称" style={{ flex: 1 }} />
+                  </FormItem>
+                  <Button type="primary" loading={lookupLoading} onClick={handleQccLookup}>
+                    查询
+                  </Button>
+                </div>
+                {showQccDropdown && qccCandidates.length > 0 && (
+                  <div className="dropdown-menu" style={{ zIndex: 1100 }}>
+                    {qccCandidates.map((company, index) => (
+                      <div
+                        key={`${company.unified_credit_code || company.enterprise_full_name}-${index}`}
+                        className="dropdown-item"
+                        onClick={() => handleSelectQccCandidate(company)}
+                      >
+                        <div className="dropdown-item-main">{company.enterprise_full_name}</div>
+                        {company.unified_credit_code ? (
+                          <div className="dropdown-item-sub">
+                            统一社会信用代码：{company.unified_credit_code}
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </FormItem>
-            <FormItem label="项目简称" field="project_abbreviation">
-              <Input />
+            <FormItem
+              label="企业全称"
+              field="enterprise_full_name"
+              rules={[{ required: true, message: '必填' }]}
+              className="form-span-2"
+            >
+              <Input placeholder="请输入企业全称（查询后请从列表中选择）" />
             </FormItem>
-            <FormItem label="统一社会信用代码" field="unified_credit_code">
-              <Input />
+            <FormItem label="统一信用代码" field="unified_credit_code">
+              <Input placeholder="请输入统一信用代码（查询后请从列表中选择）" />
             </FormItem>
           </div>
           <SheetActions
-            onCancel={() => setCreateVisible(false)}
+            onCancel={closeCreateModal}
             submitLabel="确定"
             submitType="button"
-            onSubmitClick={async () => {
-              const values = await form.validate()
-              try {
-                const res = await postValuationPreProject(values)
-                if (res.data?.success) {
-                  Message.success('已创建')
-                  setCreateVisible(false)
-                  form.resetFields()
-                  load()
-                  await openCase(res.data.data.id)
-                } else {
-                  Message.error(res.data?.message || '创建失败')
-                }
-              } catch (e) {
-                Message.error(e.response?.data?.message || e.message || '创建失败')
-              }
-            }}
+            submitLoading={createSubmitting}
+            onSubmitClick={handleCreateSubmit}
           />
         </Form>
       </SheetModal>
