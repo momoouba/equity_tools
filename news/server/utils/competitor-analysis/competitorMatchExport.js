@@ -10,6 +10,11 @@ const {
   getLatestRunIdForInvestedEnterprise,
   getLatestRunIdForPreInvestmentProject,
 } = require('./competitorRunVersionService');
+const {
+  decorateRelationsForExport,
+  excelFillRowsFromRels,
+} = require('./competitorPrevVersionRepeat');
+const { applyRepeatRowFills } = require('./xlsxRepeatRowFill');
 const { formatFinancingDate } = require('./competitorFinancingResolve');
 
 const EXPORT_HEADERS = [
@@ -213,6 +218,43 @@ function relationToRow(rel, versionLabel) {
   return base;
 }
 
+function writeXlsxBuffer(workbook, fillsBySheetIndex = []) {
+  const buf = xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+  return applyRepeatRowFills(buf, fillsBySheetIndex);
+}
+
+async function toExportSheetData(rels, {
+  subjectType,
+  subjectId,
+  allBatches,
+  exportRunId,
+  versionMap,
+  headers,
+}) {
+  if (!rels || !rels.length) {
+    return {
+      data: [Object.fromEntries(headers.map((h) => [h, '']))],
+      fillExcelRows: [],
+    };
+  }
+  const decorated = await decorateRelationsForExport({
+    rels,
+    subjectType,
+    subjectId,
+    allBatches,
+    exportRunId,
+  });
+  const data = decorated.map((rel) =>
+    relationToRow(
+      rel,
+      allBatches
+        ? (versionMap && versionMap.get(String(rel.run_id || rel.pre_investment_run_id))) || ''
+        : null
+    )
+  );
+  return { data, fillExcelRows: excelFillRowsFromRels(decorated) };
+}
+
 function requestedRunIdForSubject(subjectId, runIdBySubject) {
   if (!runIdBySubject || typeof runIdBySubject !== 'object') return '';
   return String(runIdBySubject[String(subjectId)] || '').trim();
@@ -243,7 +285,7 @@ async function loadInvestedRelationsForSingleRun(ieId, runId, years = []) {
   const del = historical ? '' : ' AND F_DeleteMark = 0';
   const y = yearSqlClause(years, 'F_CreatorTime');
   return db.query(
-    `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+    `SELECT competitor_display_name, unified_credit_code, competitor_weak_key, confidence_grade, relevance_score,
             competitor_type, evidence_summary, evidence_confidence, needs_review,
             evidence_breakdown_json, score_breakdown_json,
             competitor_product_intro, competitor_tags_display, sub_fund_names,
@@ -267,7 +309,7 @@ async function loadPreInvestmentRelationsForSingleRun(pipId, runId, years = []) 
   const del = historical ? '' : ' AND F_DeleteMark = 0';
   const y = yearSqlClause(years, 'F_CreatorTime');
   return db.query(
-    `SELECT competitor_display_name, unified_credit_code, confidence_grade, relevance_score,
+    `SELECT competitor_display_name, unified_credit_code, competitor_weak_key, confidence_grade, relevance_score,
             competitor_type, evidence_summary, evidence_confidence, needs_review,
             evidence_breakdown_json, score_breakdown_json,
             competitor_product_intro, competitor_tags_display, sub_fund_names,
@@ -348,10 +390,12 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
   const workbook = xlsx.utils.book_new();
   const usedNames = new Set();
   let sheetCount = 0;
+  const sheetFills = [];
 
   for (const ie of ieRows) {
     let rels;
     let versionMap = null;
+    let exportRunId = null;
     if (allBatches) {
       versionMap = await buildVersionLabelMapForInvestedEnterprise(ie.F_Id);
       const relParams = [ie.F_Id];
@@ -361,7 +405,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
         relParams.push(...years.map(Number));
       }
       rels = await db.query(
-        `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+        `SELECT r.competitor_display_name, r.unified_credit_code, r.competitor_weak_key, r.confidence_grade, r.relevance_score,
                 r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
                 r.evidence_breakdown_json, r.score_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
@@ -377,23 +421,24 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
         relParams
       );
     } else {
-      const runId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
-      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, runId, years);
+      exportRunId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
+      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, exportRunId, years);
     }
     if (!rels.length) {
       if (exportAll) continue;
     }
     const sheetLabel = sanitizeSheetName(ie.project_abbreviation || ie.enterprise_full_name || ie.F_Id, usedNames);
-    const data = rels.length
-      ? rels.map((rel) =>
-          relationToRow(
-            rel,
-            allBatches ? versionMap.get(String(rel.run_id)) || '' : null
-          )
-        )
-      : [Object.fromEntries(headers.map((h) => [h, '']))];
+    const { data, fillExcelRows } = await toExportSheetData(rels, {
+      subjectType: 'invested_enterprise',
+      subjectId: ie.F_Id,
+      allBatches,
+      exportRunId,
+      versionMap,
+      headers,
+    });
     const ws = xlsx.utils.json_to_sheet(data, { header: headers });
     xlsx.utils.book_append_sheet(workbook, ws, sheetLabel);
+    sheetFills.push(fillExcelRows);
     sheetCount += 1;
   }
 
@@ -402,7 +447,7 @@ async function buildCompetitorRelationsExportWorkbook(opts) {
     xlsx.utils.book_append_sheet(workbook, ws, '无数据');
   }
 
-  return { workbook, sheetCount, enterpriseCount: sheetCount };
+  return { workbook, sheetCount, enterpriseCount: sheetCount, sheetFills };
 }
 
 /** 可选年度列表（被投项目编号前四位） */
@@ -473,10 +518,12 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
   const workbook = xlsx.utils.book_new();
   const usedNames = new Set();
   let sheetCount = 0;
+  const sheetFills = [];
 
   for (const pip of pipRows) {
     let rels;
     let versionMap = null;
+    let exportRunId = null;
     if (allBatches) {
       versionMap = await buildVersionLabelMapForPreInvestmentProject(pip.F_Id);
       const pipRelParams = [pip.F_Id];
@@ -486,7 +533,7 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
         pipRelParams.push(...years.map(Number));
       }
       rels = await db.query(
-        `SELECT r.competitor_display_name, r.unified_credit_code, r.confidence_grade, r.relevance_score,
+        `SELECT r.competitor_display_name, r.unified_credit_code, r.competitor_weak_key, r.confidence_grade, r.relevance_score,
                 r.competitor_type, r.evidence_summary, r.evidence_confidence, r.needs_review,
                 r.evidence_breakdown_json, r.score_breakdown_json,
                 r.competitor_product_intro, r.competitor_tags_display, r.sub_fund_names,
@@ -504,24 +551,25 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
         pipRelParams
       );
     } else {
-      const runId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
-      rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, runId, years);
+      exportRunId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
+      rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, exportRunId, years);
     }
     if (!rels.length && exportAll) continue;
     const sheetLabel = sanitizeSheetName(
       pip.project_abbreviation || pip.enterprise_full_name || pip.project_no || pip.F_Id,
       usedNames
     );
-    const data = rels.length
-      ? rels.map((rel) =>
-          relationToRow(
-            rel,
-            allBatches ? versionMap.get(String(rel.pre_investment_run_id)) || '' : null
-          )
-        )
-      : [Object.fromEntries(headers.map((h) => [h, '']))];
+    const { data, fillExcelRows } = await toExportSheetData(rels, {
+      subjectType: 'pre_investment_project',
+      subjectId: pip.F_Id,
+      allBatches,
+      exportRunId,
+      versionMap,
+      headers,
+    });
     const ws = xlsx.utils.json_to_sheet(data, { header: headers });
     xlsx.utils.book_append_sheet(workbook, ws, sheetLabel);
+    sheetFills.push(fillExcelRows);
     sheetCount += 1;
   }
 
@@ -530,16 +578,16 @@ async function buildPreInvestmentCompetitorExportWorkbook(opts) {
     xlsx.utils.book_append_sheet(workbook, ws, '无数据');
   }
 
-  return { workbook, sheetCount, enterpriseCount: pipRows.length };
+  return { workbook, sheetCount, enterpriseCount: pipRows.length, sheetFills };
 }
 
 async function exportCompetitorRelationsToBuffer(opts) {
   const subjectType = opts.subjectType || 'invested_enterprise';
-  const { workbook } =
+  const { workbook, sheetFills } =
     subjectType === 'pre_investment_project'
       ? await buildPreInvestmentCompetitorExportWorkbook(opts)
       : await buildCompetitorRelationsExportWorkbook(opts);
-  return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+  return writeXlsxBuffer(workbook, sheetFills);
 }
 
 function sanitizeExportFileBase(name) {
@@ -553,7 +601,7 @@ function sanitizeExportFileBase(name) {
 /**
  * 单主体一张表 → 独立 xlsx buffer（用于 ZIP 分文件导出）
  */
-function workbookBufferFromRows(headers, rows, sheetName) {
+function workbookBufferFromRows(headers, rows, sheetName, fillExcelRows = []) {
   const workbook = xlsx.utils.book_new();
   const used = new Set();
   const label = sanitizeSheetName(sheetName, used);
@@ -563,7 +611,7 @@ function workbookBufferFromRows(headers, rows, sheetName) {
       : [Object.fromEntries(headers.map((h) => [h, '']))];
   const ws = xlsx.utils.json_to_sheet(data, { header: headers });
   xlsx.utils.book_append_sheet(workbook, ws, label);
-  return xlsx.write(workbook, { bookType: 'xlsx', type: 'buffer' });
+  return writeXlsxBuffer(workbook, [fillExcelRows]);
 }
 
 /**
@@ -615,6 +663,7 @@ async function buildCompetitorExportFileList(opts) {
       let rels;
       let versionMap = null;
       let latestLabel = null;
+      let exportRunId = null;
       if (allBatches) {
         versionMap = await buildVersionLabelMapForPreInvestmentProject(pip.F_Id);
         rels = await db.query(
@@ -629,10 +678,10 @@ async function buildCompetitorExportFileList(opts) {
           [pip.F_Id]
         );
       } else {
-        const runId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
+        exportRunId = await resolvePreInvestmentExportRun(pip.F_Id, runIdBySubject);
         const runs = await listPreInvestmentCompetitorRuns(pip.F_Id);
-        latestLabel = versionLabelForRun(runs, runId) || runs[0]?.version_label || null;
-        rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, runId, years);
+        latestLabel = versionLabelForRun(runs, exportRunId) || runs[0]?.version_label || null;
+        rels = await loadPreInvestmentRelationsForSingleRun(pip.F_Id, exportRunId, years);
       }
       if (!rels.length && exportAll) continue;
       const abbrev = sanitizeExportFileBase(
@@ -642,17 +691,17 @@ async function buildCompetitorExportFileList(opts) {
         ? `${abbrev}-所有批次.xlsx`
         : `${abbrev}-${latestLabel || '未命名版本'}.xlsx`;
       const uniqueName = uniquifyFileName(fileName, usedNames);
-      const rows = rels.length
-        ? rels.map((rel) =>
-            relationToRow(
-              rel,
-              allBatches ? versionMap.get(String(rel.pre_investment_run_id)) || '' : null
-            )
-          )
-        : [];
+      const { data, fillExcelRows } = await toExportSheetData(rels, {
+        subjectType: 'pre_investment_project',
+        subjectId: pip.F_Id,
+        allBatches,
+        exportRunId,
+        versionMap,
+        headers,
+      });
       files.push({
         name: uniqueName,
-        data: workbookBufferFromRows(headers, rows, abbrev),
+        data: workbookBufferFromRows(headers, rels.length ? data : [], abbrev, fillExcelRows),
         subjectId: String(pip.F_Id),
         abbrev,
         versionLabel: allBatches ? null : latestLabel,
@@ -704,6 +753,7 @@ async function buildCompetitorExportFileList(opts) {
     let rels;
     let versionMap = null;
     let latestLabel = null;
+    let exportRunId = null;
     if (allBatches) {
       versionMap = await buildVersionLabelMapForInvestedEnterprise(ie.F_Id);
       rels = await db.query(
@@ -716,10 +766,10 @@ async function buildCompetitorExportFileList(opts) {
         [ie.F_Id]
       );
     } else {
-      const runId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
+      exportRunId = await resolveInvestedExportRun(ie.F_Id, runIdBySubject);
       const runs = await listInvestedEnterpriseCompetitorRuns(ie.F_Id);
-      latestLabel = versionLabelForRun(runs, runId) || runs[0]?.version_label || null;
-      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, runId, years);
+      latestLabel = versionLabelForRun(runs, exportRunId) || runs[0]?.version_label || null;
+      rels = await loadInvestedRelationsForSingleRun(ie.F_Id, exportRunId, years);
     }
     if (!rels.length && exportAll) continue;
     const abbrev = sanitizeExportFileBase(
@@ -729,14 +779,17 @@ async function buildCompetitorExportFileList(opts) {
       ? `${abbrev}-所有批次.xlsx`
       : `${abbrev}-${latestLabel || '未命名版本'}.xlsx`;
     const uniqueName = uniquifyFileName(fileName, usedNames);
-    const rows = rels.length
-      ? rels.map((rel) =>
-          relationToRow(rel, allBatches ? versionMap.get(String(rel.run_id)) || '' : null)
-        )
-      : [];
+    const { data, fillExcelRows } = await toExportSheetData(rels, {
+      subjectType: 'invested_enterprise',
+      subjectId: ie.F_Id,
+      allBatches,
+      exportRunId,
+      versionMap,
+      headers,
+    });
     files.push({
       name: uniqueName,
-      data: workbookBufferFromRows(headers, rows, abbrev),
+      data: workbookBufferFromRows(headers, rels.length ? data : [], abbrev, fillExcelRows),
       subjectId: String(ie.F_Id),
       abbrev,
       versionLabel: allBatches ? null : latestLabel,

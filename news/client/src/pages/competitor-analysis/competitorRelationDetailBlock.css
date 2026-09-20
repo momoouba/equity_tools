@@ -177,22 +177,7 @@
   background-color: var(--color-bg-2);
 }
 
-/* 斑马纹：底色设在 td 铺满线框；ellipsis 内层透明，避免仅文字条带变色 */
-.cr-rel-scope .cr-rel-table.arco-table-stripe .arco-table-thead .arco-table-th {
-  background-color: var(--color-fill-1) !important;
-}
-
-.cr-rel-scope .cr-rel-table.arco-table-stripe .arco-table-tbody .arco-table-td {
-  background-color: var(--color-bg-2) !important;
-}
-
-.cr-rel-scope .cr-rel-table.arco-table-stripe .arco-table-tbody .arco-table-tr-striped .arco-table-td {
-  background-color: var(--color-fill-1) !important;
-}
-
-.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell,
-.cr-rel-scope .cr-rel-table .arco-table-td .arco-table-cell-wrap-value,
-.cr-rel-scope .cr-rel-table .arco-table-td .arco-typography,
+/* 表头内层透明，蓝色底在 th 上（list-table） */
 .cr-rel-scope .cr-rel-table .arco-table-th .arco-table-cell,
 .cr-rel-scope .cr-rel-table .arco-table-th .arco-table-th-item {
   background-color: transparent !important;
@@ -206,28 +191,20 @@
   box-sizing: border-box;
 }
 
-.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td {
-  background-color: var(--color-fill-1) !important;
-}
-
-.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell,
-.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-table-cell-wrap-value,
-.cr-rel-scope .cr-rel-table .arco-table-tbody .arco-table-tr:hover .arco-table-td .arco-typography {
+/*
+ * 行底色由 RelBodyTd 写在 td 的 inline style 上（含 inset box-shadow）。
+ * 内层 cell 必须透明，否则 list-table 固定列的 #fff 会盖住 td。
+ * 不要用 .arco-table-tbody：Arco 的 tbody 没有这个 class，选择器永远匹配不到。
+ */
+.cr-rel-scope .cr-rel-table tbody td .arco-table-cell,
+.cr-rel-scope .cr-rel-table tbody td .arco-table-cell-wrap-value,
+.cr-rel-scope .cr-rel-table tbody td .arco-typography,
+.cr-rel-scope .cr-rel-table tbody td.arco-table-col-fixed-right .arco-table-cell,
+.arco-table-expand-content .cr-rel-scope .cr-rel-table tbody td .arco-table-cell,
+.arco-table-expand-content .cr-rel-scope .cr-rel-table tbody td.arco-table-col-fixed-right .arco-table-cell {
+  background: transparent !important;
   background-color: transparent !important;
-}
-
-/* 已勾选可比公司：浅蓝底色；未勾选保持默认斑马纹 */
-.cr-rel-scope .cr-rel-table .cr-rel-row-comparable .arco-table-td {
-  background-color: rgb(var(--primary-1)) !important;
-}
-
-.cr-rel-scope .cr-rel-table.arco-table-stripe .cr-rel-row-comparable .arco-table-td,
-.cr-rel-scope .cr-rel-table.arco-table-stripe .cr-rel-row-comparable.arco-table-tr-striped .arco-table-td {
-  background-color: rgb(var(--primary-1)) !important;
-}
-
-.cr-rel-scope .cr-rel-table .cr-rel-row-comparable:hover .arco-table-td {
-  background-color: rgb(var(--primary-2)) !important;
+  box-shadow: none !important;
 }
 
 .cr-rel-scope .cr-rel-table .cr-rel-cell-mono {

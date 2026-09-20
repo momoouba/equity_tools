@@ -249,6 +249,43 @@ async function buildVersionLabelMapForPreInvestmentProject(preInvestmentProjectI
   return map;
 }
 
+/** 版本号：YYYYMMDD-V00N 或 YYYYMMDD_V00N */
+function parseVersionLabelSortKey(versionLabel) {
+  const m = String(versionLabel || '').trim().match(/^(\d{8})[-_]V(\d+)$/i);
+  if (!m) return null;
+  return { ymd: m[1], n: parseInt(m[2], 10) };
+}
+
+/** 按版本日期、再按当日版本编号升序 */
+function sortRunsByVersionLabel(runs) {
+  return [...(runs || [])].sort((a, b) => {
+    const ka = parseVersionLabelSortKey(a.version_label);
+    const kb = parseVersionLabelSortKey(b.version_label);
+    if (ka && kb) {
+      if (ka.ymd !== kb.ymd) return ka.ymd.localeCompare(kb.ymd);
+      if (ka.n !== kb.n) return ka.n - kb.n;
+    } else if (ka && !kb) return -1;
+    else if (!ka && kb) return 1;
+    const ta = String(a.created_at || a.finished_at || '');
+    const tb = String(b.created_at || b.finished_at || '');
+    if (ta !== tb) return ta.localeCompare(tb);
+    return String(a.id || '').localeCompare(String(b.id || ''));
+  });
+}
+
+/**
+ * 相对指定版本（默认最新）的上一个有效版本。
+ * @returns {string|null} previous run id
+ */
+function getPreviousRunIdByVersionLabel(runs, currentRunId) {
+  const currentId = String(currentRunId || '').trim();
+  if (!currentId) return null;
+  const sorted = sortRunsByVersionLabel(runs);
+  const idx = sorted.findIndex((r) => String(r.id) === currentId);
+  if (idx <= 0) return null;
+  return String(sorted[idx - 1].id);
+}
+
 module.exports = {
   parseYmdFromRunId,
   assignVersionLabels,
@@ -259,4 +296,7 @@ module.exports = {
   listPreInvestmentCompetitorRuns,
   getLatestRunIdForPreInvestmentProject,
   buildVersionLabelMapForPreInvestmentProject,
+  parseVersionLabelSortKey,
+  sortRunsByVersionLabel,
+  getPreviousRunIdByVersionLabel,
 };

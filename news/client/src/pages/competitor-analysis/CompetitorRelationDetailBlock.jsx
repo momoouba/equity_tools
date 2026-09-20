@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Checkbox, Link, Space, Select, Table, Typography } from '@arco-design/web-react'
 import { AiIntroFullText } from './introPopoverAiCell'
 import {
@@ -24,6 +24,59 @@ const PRIMARY_OUTLINE_BTN = {
 }
 
 const REL_PAGE_SIZE_OPTIONS = [20, 50, 100, 200]
+
+const REL_BG_COMPARABLE = '#E8F3FF'
+const REL_BG_PREV_REPEAT = '#FFECE8'
+const REL_BG_STRIPE = '#F7F8FA'
+const REL_BG_ODD = '#FFFFFF'
+
+const RelRowBgContext = createContext(REL_BG_ODD)
+
+function relationRowBackground(record, index) {
+  if (Number(record?.include_in_comparable) === 1) return REL_BG_COMPARABLE
+  if (Number(record?.appeared_in_prev_version) === 1) return REL_BG_PREV_REPEAT
+  return index % 2 === 1 ? REL_BG_STRIPE : REL_BG_ODD
+}
+
+const RelBodyRow = React.forwardRef(function RelBodyRow(
+  { record, index, children, className, style, ...rest },
+  ref
+) {
+  const origin = record?.__ORIGIN_DATA || record || {}
+  const bg = relationRowBackground(origin, index)
+  return (
+    <RelRowBgContext.Provider value={bg}>
+      <tr ref={ref} className={className} style={{ ...style, backgroundColor: bg }} {...rest}>
+        {children}
+      </tr>
+    </RelRowBgContext.Provider>
+  )
+})
+
+function RelBodyTd({ children, className, style, ...rest }) {
+  const bg = useContext(RelRowBgContext)
+  return (
+    <td
+      className={className}
+      style={{
+        ...style,
+        backgroundColor: bg,
+        background: bg,
+        boxShadow: `inset 0 0 0 100vmax ${bg}`,
+      }}
+      {...rest}
+    >
+      {children}
+    </td>
+  )
+}
+
+const RELATION_TABLE_COMPONENTS = {
+  body: {
+    row: RelBodyRow,
+    td: RelBodyTd,
+  },
+}
 
 /**
  * 竞品明细展开区（投前/投后共用，cr-rel-* 独立样式域）。
@@ -148,8 +201,12 @@ export default function CompetitorRelationDetailBlock({
     return adaptCompetitorRelationColumnsForEmbedded(relationColumns, embeddedContainerWidth)
   }, [embedded, relationColumns, embeddedContainerWidth])
 
-  const getRelationRowClassName = (record) =>
-    Number(record?.include_in_comparable) === 1 ? CR_REL_CSS.rowComparable : ''
+  const getRelationRowClassName = (_record, index) => {
+    const record = pagedRelationData[index] || _record || {}
+    if (Number(record.include_in_comparable) === 1) return CR_REL_CSS.rowComparable
+    if (Number(record.appeared_in_prev_version) === 1) return CR_REL_CSS.rowPrevRepeat
+    return ''
+  }
 
   const emptyHint = useMemo(() => {
     if (relationLoading) return '加载中…'
@@ -282,10 +339,10 @@ export default function CompetitorRelationDetailBlock({
         <Table
           className={`${CR_REL_CSS.table} list-table`}
           rowKey="id"
-          stripe
           loading={relationLoading}
           data={pagedRelationData}
           columns={displayColumns}
+          components={RELATION_TABLE_COMPONENTS}
           rowClassName={getRelationRowClassName}
           border={{ wrapper: true, cell: true }}
           scroll={embedded ? undefined : { x: relationScrollX }}

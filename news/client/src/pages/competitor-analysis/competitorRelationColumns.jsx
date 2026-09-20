@@ -538,12 +538,23 @@ export function isDefaultComparableVisible(row) {
   return Number(row?.include_in_comparable) === 1
 }
 
-/** 列表排序：已纳入可比公司置顶，组内按综合分降序；其余按综合分降序 */
+function relationDisplayTier(row) {
+  if (Number(row?.include_in_comparable) === 1) return 1
+  if (Number(row?.appeared_in_prev_version) === 1) return 3
+  return 2
+}
+
+/**
+ * 列表排序：
+ * 1. 已勾选可比公司置顶，组内综合分降序
+ * 2. 未标记上轮重复，综合分降序
+ * 3. 上轮重复且未勾选可比，综合分降序（仅最新版会带 appeared_in_prev_version）
+ */
 export function sortRelationsForDisplay(list) {
   return [...(list || [])].sort((a, b) => {
-    const ca = Number(a.include_in_comparable) === 1 ? 1 : 0
-    const cb = Number(b.include_in_comparable) === 1 ? 1 : 0
-    if (cb !== ca) return cb - ca
+    const ta = relationDisplayTier(a)
+    const tb = relationDisplayTier(b)
+    if (ta !== tb) return ta - tb
     const sa = Number(a.relevance_score) || 0
     const sb = Number(b.relevance_score) || 0
     if (sb !== sa) return sb - sa
@@ -593,6 +604,7 @@ export const CR_REL_CSS = {
   sourceText: 'cr-rel-source-text',
   colNumeric: 'cr-rel-col-numeric',
   rowComparable: 'cr-rel-row-comparable',
+  rowPrevRepeat: 'cr-rel-row-prev-repeat',
 }
 
 function renderMonoEllipsis(raw, empty = '-') {

@@ -58,6 +58,9 @@ const {
   listPreInvestmentCompetitorRuns,
   getLatestRunIdForPreInvestmentProject,
 } = require('../../utils/competitor-analysis/competitorRunVersionService');
+const {
+  annotateLatestViewPrevRepeats,
+} = require('../../utils/competitor-analysis/competitorPrevVersionRepeat');
 const CA_C = require('../../utils/competitor-analysis/constants');
 const {
   restoreCompetitorDataAfterInsert,
@@ -789,10 +792,17 @@ function registerCompetitorMatchRoutes(router) {
       for (const row of deduped) {
         hydrated.push(await hydrateRelationRow(row));
       }
+      const marked = await annotateLatestViewPrevRepeats({
+        list: hydrated,
+        subjectType: ieId ? 'invested_enterprise' : 'pre_investment_project',
+        subjectId: ieId || pipId,
+        latestRunId,
+        isHistoricalView,
+      });
       res.json({
         success: true,
         data: {
-          list: hydrated,
+          list: marked,
           run_id: runId || latestRunId,
           latest_run_id: latestRunId,
           is_historical_view: isHistoricalView,
