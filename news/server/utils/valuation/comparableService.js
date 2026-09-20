@@ -168,7 +168,8 @@ async function findCompetitorInvestedEnterprise({ creditCode, fullName }) {
 async function findCompetitorPreInvestmentProject({ creditCode, fullName }) {
   const app = await competitorAnalysisAppFilter('p');
   const credit = normCreditCode(creditCode);
-  const selectSql = `SELECT p.F_Id AS id, p.enterprise_full_name, p.unified_credit_code
+  const selectSql = `SELECT p.F_Id AS id, p.enterprise_full_name, p.unified_credit_code,
+              p.project_abbreviation, p.project_no
        FROM pre_investment_project p
        LEFT JOIN sourcing_pre_investment_competitor_run r
          ON r.pre_investment_project_id = p.F_Id AND r.F_DeleteMark = 0 AND r.status = 'success'

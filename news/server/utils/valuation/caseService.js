@@ -89,6 +89,70 @@ async function livePreProjectName(pre) {
   };
 }
 
+async function persistSnapshotLink(preId, { competitorPreProjectId, snapshotName }) {
+  const id = String(preId || '').trim();
+  if (!id) return;
+  const sets = [];
+  const params = [];
+  if (competitorPreProjectId) {
+    sets.push('competitor_pre_project_id = COALESCE(competitor_pre_project_id, ?)');
+    params.push(competitorPreProjectId);
+  }
+  if (snapshotName) {
+    sets.push("snapshot_name = COALESCE(NULLIF(snapshot_name, ''), ?)");
+    params.push(snapshotName);
+  }
+  if (!sets.length) return;
+  params.push(id);
+  await db.execute(
+    `UPDATE valuation_pre_project
+     SET ${sets.join(', ')}, F_LastModifyTime = NOW()
+     WHERE F_Id = ? AND F_DeleteMark = 0`,
+    params
+  );
+}
+
+/** 手工新建若能匹配竞品分析投前项目，回填关联与快照名称后再展示 */
+async function hydratePreProjectNames(pre) {
+  if (!pre) return livePreProjectName(pre);
+  let competitorId = pre.competitor_pre_project_id || null;
+  let snapshot = String(pre.snapshot_name || '').trim() || null;
+
+  if (!competitorId) {
+    const matched = await findCompetitorPreInvestmentProject({
+      creditCode: pre.unified_credit_code,
+      fullName: pre.enterprise_full_name,
+    });
+    if (matched?.id) {
+      competitorId = matched.id;
+      snapshot = snapshot || matched.enterprise_full_name || pre.enterprise_full_name || null;
+      await persistSnapshotLink(pre.id, {
+        competitorPreProjectId: competitorId,
+        snapshotName: snapshot,
+      });
+    }
+  }
+
+  const names = await livePreProjectName({
+    ...pre,
+    competitor_pre_project_id: competitorId,
+    snapshot_name: snapshot,
+  });
+
+  if (competitorId && !String(names.snapshot_name || '').trim()) {
+    const filled = names.live_name || pre.enterprise_full_name || snapshot || null;
+    if (filled) {
+      await persistSnapshotLink(pre.id, { snapshotName: filled });
+      names.snapshot_name = filled;
+    }
+  }
+
+  return {
+    ...names,
+    competitor_pre_project_id: competitorId,
+  };
+}
+
 async function createPreProject(req, body) {
   const uid = String(req.valUser.id);
   let fromCa = String(body.competitor_pre_project_id || '').trim();
@@ -118,7 +182,7 @@ async function createPreProject(req, body) {
     });
     if (matched?.id) {
       fromCa = matched.id;
-      snapshot = snapshot || fullName;
+      snapshot = snapshot || matched.enterprise_full_name || fullName;
     }
   }
   if (!fullName) {
@@ -147,12 +211,7 @@ async function getPreProject(req, id) {
   );
   if (!rows.length) return null;
   assertOwner(req, rows[0]);
-  const names = await livePreProjectName({
-    competitor_pre_project_id: rows[0].competitor_pre_project_id,
-    enterprise_full_name: rows[0].enterprise_full_name,
-    project_abbreviation: rows[0].project_abbreviation,
-    snapshot_name: rows[0].snapshot_name,
-  });
+  const names = await hydratePreProjectNames(rows[0]);
   return { ...rows[0], ...names };
 }
 
@@ -190,7 +249,7 @@ async function listPreProjects(req, { page, pageSize, keyword }) {
   );
   const out = [];
   for (const row of list) {
-    const names = await livePreProjectName(row);
+    const names = await hydratePreProjectNames(row);
     out.push({
       ...row,
       ...names,
