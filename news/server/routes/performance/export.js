@@ -828,9 +828,15 @@ router.post('/listed-enterprises', checkExportPermission, async (req, res) => {
     }
 
     const rows = await db.query(
-      `SELECT * FROM b_ipo_p
-       WHERE version = ? AND F_DeleteMark = 0 AND ipo_status = ?
-       ORDER BY ipo_date DESC, fund ASC, project ASC`,
+      `SELECT p.*
+       FROM b_ipo_p p
+       INNER JOIN (
+         SELECT fund, project, MAX(F_Id) AS max_id
+         FROM b_ipo_p
+         WHERE version = ? AND F_DeleteMark = 0 AND ipo_status = ?
+         GROUP BY fund, project
+       ) d ON d.max_id = p.F_Id
+       ORDER BY p.ipo_date DESC, p.fund ASC, p.project ASC`,
       [version, status]
     );
 

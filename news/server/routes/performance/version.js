@@ -427,6 +427,16 @@ async function executeConfiguredSql(row, ctx) {
   }
 
   const runInsert = async (localConn, resultRows) => {
+    // 同版本重跑 wash/extract/generate 时先软删旧行，避免弹窗出现完全重复行
+    if (sanitizedTargetTable && version && !isInsert) {
+      const tableSql = sanitizedTargetTable.replace(/`/g, '``');
+      await localConn.execute(
+        `UPDATE \`${tableSql}\`
+         SET F_DeleteMark = 1, F_DeleteUserId = ?, F_DeleteTime = NOW()
+         WHERE version = ? AND F_DeleteMark = 0`,
+        [creatorId || null, version]
+      );
+    }
     return insertRowsToTarget(localConn, resultRows, sanitizedTargetTable, version, monthDate, creatorId, creatorTimeStr);
   };
 

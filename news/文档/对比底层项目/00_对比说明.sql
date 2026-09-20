@@ -1,0 +1,17 @@
+-- 对比用文件索引（客户 vs 小工具）
+--
+-- 【客户源库】直接跑：
+--   07_客户环境_底层明细_完整sql.sql   ← 你要的客户环境完整 SQL（默认出明细）
+--   同文件末尾注释掉的 B=按基金汇总，C=国方一二期
+--
+-- 【小工具生产库 investment_tools】：
+--   02_我方生产_底层明细_当前.sql
+--   02c_我方生产_国方一二期_底层明细.sql
+--
+-- 对齐键：fund + IFNULL(investor,'') + company + fund_type
+--
+-- 金额口径提醒：
+--   当前投资金额 total_amount ≈ sum(cost) where net_cost>0
+--   当前穿透金额 ≈ sum(net_cost_1) where net_cost>0
+--   上市金额 ipo_amount ≈ sum(cost) where is_listed=1 and cost>0
+--   客户 SQL 的 B 汇总已同时输出两套，避免比错列

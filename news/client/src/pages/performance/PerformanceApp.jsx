@@ -516,13 +516,13 @@ function UnderlyingSection({ data, config, onCompanies, onIpo, onRegion }) {
   const cumulativeCards = [
     { label: '底层资产/数量', v1: formatNumber(cumulative?.project_num_a), s1: '项目数量', v2: formatNumber(cumulative?.company_num_a), s2: '企业数量', onClick: () => onCompanies('cumulative'), descKey: 'projectNumADesc' },
     { label: '底层资产/金额', v1: formatAmount(cumulative?.total_amount_a), s1: '投资金额', v2: formatAmount(cumulative?.ct_amount_a), s2: '穿透成本', onClick: () => onCompanies('cumulative'), descKey: 'totalAmountADesc' },
-    { label: '上市企业', v1: formatNumber(cumulative?.ipo_num_a), s1: '数量', v2: formatAmount(cumulative?.ipo_amount_a), s2: '投资金额', onClick: () => onIpo('cumulative'), descKey: 'ipoNumADesc' },
+    { label: '上市企业', v1: formatNumber(cumulative?.ipo_num_a), s1: '数量', v2: formatAmount(cumulative?.ipo_amount_a), s2: '穿透成本', onClick: () => onIpo('cumulative'), descKey: 'ipoNumADesc' },
     { label: '上海地区企业', v1: formatNumber(cumulative?.sh_num_a), s1: '数量', v2: formatAmount(cumulative?.sh_amount_a), s2: '投资金额', onClick: () => onRegion('cumulative'), descKey: 'shNumADesc' },
   ]
   const currentCards = [
     { label: '底层资产/数量', v1: formatNumber(current?.project_num), s1: '项目数量', v2: formatNumber(current?.company_num), s2: '企业数量', onClick: () => onCompanies('current'), descKey: 'projectNumDesc' },
     { label: '底层资产/金额', v1: formatAmount(current?.total_amount), s1: '投资金额', v2: formatAmount(current?.ct_amount), s2: '穿透成本', onClick: () => onCompanies('current'), descKey: 'totalAmountDesc' },
-    { label: '上市企业', v1: formatNumber(current?.ipo_num), s1: '数量', v2: formatAmount(current?.ipo_amount), s2: '投资金额', onClick: () => onIpo('current'), descKey: 'ipoNumDesc' },
+    { label: '上市企业', v1: formatNumber(current?.ipo_num), s1: '数量', v2: formatAmount(current?.ipo_amount), s2: '穿透成本', onClick: () => onIpo('current'), descKey: 'ipoNumDesc' },
     { label: '上海地区企业', v1: formatNumber(current?.sh_num), s1: '数量', v2: formatAmount(current?.sh_amount), s2: '投资金额', onClick: () => onRegion('current'), descKey: 'shNumDesc' },
   ]
 
