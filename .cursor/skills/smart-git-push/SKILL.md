@@ -54,6 +54,10 @@ backup                ← 独立历史，仅 equity_tools，含 news-backup-2026
 ## Workflow（执行顺序固定）
 
 0. **先提交工作区改动（必须）**：`git status`；有未提交改动则先 `commit`，再推送。不得在工作区脏时直接推送并报告「已是最新」。
+0.1. **提交后清掉不需要的残留（必须）**：`git status` 再看一遍。本次 **有意不纳入 commit** 的未跟踪/临时文件（现网 SQL dump、试跑产物、误生成快照等）**立刻删除**，推送前工作区须干净。禁止把「不进 git 的垃圾」留在磁盘上等人再喊清理。
+    - **要删**：Agent 已判定「非本次功能 / 不该入库」却仍躺在 untracked 里的文件。
+    - **勿盲删**：用户正在写、尚未表态要丢的未跟踪文件；不确定就先问一句再删。
+    - **禁止** `git clean -fd` 一把梭；按路径逐个删。
 1. **判定推送类型**：
    - 当前分支为 **`backup`**，或意图为备份 → **§备份分支推送**，结束。
    - 当前分支为 **`release/clean`** → **§干净生产线推送**（仍走新闻域判定，但默认建议推 `origin` 以更新部署仓）。
@@ -165,11 +169,12 @@ git push equity_tools backup
 ## 执行步骤（Agent — 常规 / clean 分支）
 
 1. `git status` → 有改动则先 commit。
-2. 识别当前分支 → `backup` / `release/clean` / 其他。
-3. `git fetch equity_tools`（可选）；计算 `equity_tools/<branch>..HEAD` 文件列表 → `need_equity_news`。
-4. `git push equity_tools HEAD`（无 upstream 则 `-u`）。
-5. 若 `need_equity_news`：`git push origin HEAD`（无 upstream 则 `-u`）；否则打印跳过原因。
-6. 推送失败则说明原因并停止；**不要**对 `main`/`master` `push --force`，除非用户明确要求。
+2. 再 `git status`：对已决定不提交的残留（dump、试跑 SQL、临时快照）逐个删除；工作区干净后再推。不确定是否该留的文件先问用户。
+3. 识别当前分支 → `backup` / `release/clean` / 其他。
+4. `git fetch equity_tools`（可选）；计算 `equity_tools/<branch>..HEAD` 文件列表 → `need_equity_news`。
+5. `git push equity_tools HEAD`（无 upstream 则 `-u`）。
+6. 若 `need_equity_news`：`git push origin HEAD`（无 upstream 则 `-u`）；否则打印跳过原因。
+7. 推送失败则说明原因并停止；**不要**对 `main`/`master` `push --force`，除非用户明确要求。
 
 ## 输出示例
 
@@ -217,6 +222,7 @@ git push equity_tools backup
 
 ## 注意事项
 
+- **提交 ≠ 工作区干净**：未纳入 commit 的 dump/临时文件仍算脏；推送摘要前须 `git status` 为 clean（或只剩用户明确要留的文件）。
 - 推送的是 **当前分支 HEAD** 的 commit 集合，不是按路径拆 push。
 - **`release/clean` 与 `sync-issue-5849a` 可同名不同 commit**；部署 equity_news 时以 **`release/clean`** 为准（用户已明确要干净分支时）。
 - **漏推 origin** 会导致 news 服务器缺 commit；**误推** 非 news 专用 commit 到 origin 应尽量避免，故保留新闻域判定。
