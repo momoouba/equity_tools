@@ -173,7 +173,7 @@ function SqlConfigTab({ mode = 'local', active = true }) {
     washTargets: ['b_transaction'],
     generateTargets: [
       'b_manage', 'b_manage_indicator', 'b_transaction_indicator', 'b_investor_list',
-      'b_investment', 'b_investment_spv', 'b_investment_indicator', 'b_investment_sum',
+      'b_investment', 'b_investment_spv', 'b_investment_indicator', 'b_investment_sf', 'b_investment_sum',
       'b_all_indicator', 'b_ipo', 'b_ipo_a', 'b_ipo_p',
       'b_project', 'b_project_a', 'b_project_all', 'b_region', 'b_region_a'
     ],

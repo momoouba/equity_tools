@@ -101,6 +101,94 @@ function loadPerformanceComments() {
   return performanceCommentsCache;
 }
 
+function loadGenerateSqlTemplate(fileName) {
+  const candidates = [
+    path.join(__dirname, 'utils/performance/sql', fileName),
+    path.join(__dirname, '../../需求文档/业绩看板应用', fileName)
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const raw = fs.readFileSync(p, 'utf8');
+        const m = String(raw || '').match(/\bWITH\b[\s\S]*/i);
+        return (m ? m[0] : raw).trim().replace(/;\s*$/, '');
+      }
+    } catch (e) {
+      /* try next */
+    }
+  }
+  return '';
+}
+
+/** 一次性：更新 b_all_indicator generate SQL，插入 b_investment_sf 并排在 b_investment_sum 之前 */
+async function ensureExternalSubfundSqlConfig(dbPool) {
+  try {
+    const { generateId } = require('./utils/idGenerator');
+    const { LOCAL_DATABASE_NAME } = require('./utils/performance/sqlLayers');
+
+    const allIndicatorSql = loadGenerateSqlTemplate('b_all_indicator.sql');
+    if (allIndicatorSql) {
+      const [rows] = await dbPool.query(
+        `SELECT F_Id, sql_content FROM b_sql
+         WHERE target_table = 'b_all_indicator' AND sql_layer = 'generate' AND F_DeleteMark = 0
+         ORDER BY exec_order ASC
+         LIMIT 1`
+      );
+      if (rows.length && !String(rows[0].sql_content || '').includes('fund_inv_w')) {
+        const logId = await generateId('b_sql_change_log', dbPool);
+        await dbPool.query(
+          'INSERT INTO b_sql_change_log (F_Id, b_sql_id, modify_time, modify_user_id, changes_json) VALUES (?, ?, NOW(), ?, ?)',
+          [logId, rows[0].F_Id, null, JSON.stringify([{
+            field: 'sql_content',
+            fieldLabel: 'SQL内容',
+            oldVal: '(已省略)',
+            newVal: '增加纯外部子基金 *_w 字段'
+          }])]
+        );
+        await dbPool.query(
+          `UPDATE b_sql SET sql_content = ?, F_LastModifyTime = NOW()
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [allIndicatorSql, rows[0].F_Id]
+        );
+        console.log('  ✓ 已更新 b_all_indicator generate SQL（外部子基金 *_w）');
+      }
+    }
+
+    const sfSql = loadGenerateSqlTemplate('b_investment_sf.sql');
+    if (sfSql) {
+      const [existing] = await dbPool.query(
+        `SELECT F_Id FROM b_sql WHERE target_table = 'b_investment_sf' AND F_DeleteMark = 0 LIMIT 1`
+      );
+      if (!existing.length) {
+        const [sumRows] = await dbPool.query(
+          `SELECT exec_order FROM b_sql
+           WHERE target_table = 'b_investment_sum' AND F_DeleteMark = 0
+           ORDER BY exec_order ASC LIMIT 1`
+        );
+        const n = sumRows.length ? Number(sumRows[0].exec_order) || 12 : 12;
+        await dbPool.query(
+          `UPDATE b_sql SET exec_order = exec_order + 1
+           WHERE F_DeleteMark = 0 AND exec_order >= ?`,
+          [n]
+        );
+        const id = await generateId('b_sql', dbPool);
+        await dbPool.query(
+          `INSERT INTO b_sql
+           (F_Id, database_name, interface_name, sql_content, exec_order, sql_layer,
+            external_db_config_id, target_table, remark,
+            F_CreatorUserId, F_CreatorTime, F_DeleteMark)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)`,
+          [id, LOCAL_DATABASE_NAME, '投资组合-整体组合-外部子基金', sfSql, n, 'generate',
+            null, 'b_investment_sf', '纯外部子基金投资组合明细', null]
+        );
+        console.log('  ✓ 已插入 b_investment_sf generate SQL');
+      }
+    }
+  } catch (err) {
+    console.warn('初始化外部子基金 b_sql 配置时出现了警告:', err.message);
+  }
+}
+
 // 为已有的 b_* 表（除 b_sql、b_sql_change_log、b_indicator_describe 外）补齐列注释
 async function ensureBTableComments(dbPool) {
   const commentDefs = loadPerformanceComments();
@@ -3615,6 +3703,24 @@ async function initializeTables(dbPool) {
       fund_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额',
       lm_fund_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计回款金额',
       fund_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额变动',
+      fund_inv_w INT NULL DEFAULT NULL COMMENT '子基金累计投资数量（外）',
+      lm_fund_inv_w INT NULL DEFAULT NULL COMMENT '上月累计子基金投资数量（外）',
+      fund_inv_change_w INT NULL DEFAULT NULL COMMENT '子基金累计投资数量变动（外）',
+      fund_sub_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计认缴金额（外）',
+      lm_fund_sub_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计认缴金额（外）',
+      fund_sub_change_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计认缴金额变动（外）',
+      fund_paidin_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计实缴金额（外）',
+      lm_fund_paidin_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计实缴金额（外）',
+      fund_paidin_change_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计实缴金额变动（外）',
+      fund_exit_w INT NULL DEFAULT NULL COMMENT '子基金累计退出数量（外）',
+      lm_fund_exit_w INT NULL DEFAULT NULL COMMENT '上月子基金累计退出数量（外）',
+      fund_exit_change_w INT NULL DEFAULT NULL COMMENT '子基金累计退出数量变动（外）',
+      fund_exit_amount_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计退出金额（外）',
+      lm_fund_exit_amount_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计退出金额（外）',
+      fund_exit_amount_change_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计退出金额变动（外）',
+      fund_receive_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额（外）',
+      lm_fund_receive_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月子基金累计回款金额（外）',
+      fund_receive_change_w DECIMAL(30,10) NULL DEFAULT NULL COMMENT '子基金累计回款金额变动（外）',
       project_inv INT NULL DEFAULT NULL COMMENT '累计直投项目数量',
       lm_project_inv INT NULL DEFAULT NULL COMMENT '上月累计直投项目数量',
       project_inv_change INT NULL DEFAULT NULL COMMENT '累计直投项目数量变动',
@@ -3797,6 +3903,37 @@ async function initializeTables(dbPool) {
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-基金投资组合明细汇总';
+  `);
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS b_investment_sf (
+      F_Id VARCHAR(50) NOT NULL COMMENT '主键',
+      F_CreatorUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '创建用户',
+      F_CreatorTime DATETIME NULL DEFAULT NULL COMMENT '创建时间',
+      F_DeleteUserId VARCHAR(50) NULL DEFAULT NULL COMMENT '删除用户',
+      F_DeleteMark INT NULL DEFAULT 0 COMMENT '删除状态',
+      F_DeleteTime DATETIME NULL DEFAULT NULL COMMENT '删除时间',
+      version VARCHAR(300) NULL DEFAULT NULL COMMENT '版本号-2',
+      b_date DATETIME NULL DEFAULT NULL COMMENT '时间条件-1',
+      transaction_type VARCHAR(300) NULL DEFAULT NULL COMMENT '投资类别-3',
+      first_date DATETIME NULL DEFAULT NULL COMMENT '首次投资日期-05',
+      acc_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额累计-06',
+      change_sub DECIMAL(30,10) NULL DEFAULT NULL COMMENT '认缴金额本月变动-07',
+      acc_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额累计-08',
+      change_paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '实缴金额本月变动-09',
+      acc_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额累计-10',
+      change_exit DECIMAL(30,10) NULL DEFAULT NULL COMMENT '退出金额本月变动-11',
+      acc_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额累计-12',
+      change_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '回款金额本月变动-13',
+      project VARCHAR(300) NULL DEFAULT NULL COMMENT '项目名称-4',
+      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-14',
+      change_unrealized DECIMAL(30,10) NULL DEFAULT 0 COMMENT '未实现价值变动-15',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-16',
+      moc DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-17',
+      dpi DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-18',
+      irr DECIMAL(20,10) NULL DEFAULT NULL COMMENT 'IRR-19',
+      F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      PRIMARY KEY (F_Id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-纯外部子基金投资组合明细汇总';
   `);
   // 为已存在的 b_investment / b_investment_sum 表补充 irr 字段（若缺失），或扩容已有字段
   try {
@@ -4650,6 +4787,7 @@ async function initializeTables(dbPool) {
       ba_date DATETIME NULL DEFAULT NULL COMMENT '备案日',
       paidin DECIMAL(30,10) NULL DEFAULT NULL COMMENT '仅子基金：sonfundpaidin 最新一行',
       if_inter VARCHAR(50) NULL DEFAULT NULL COMMENT '仅 SPV：是否内部',
+      sub_fund VARCHAR(300) NULL DEFAULT NULL COMMENT '直投基金对应子基金',
       PRIMARY KEY (F_Id),
       INDEX idx_perf_fund_version (version, F_DeleteMark)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='业绩看板L1-基金/SPV/子基金维度';
@@ -4924,6 +5062,54 @@ async function initializeTables(dbPool) {
     await addIndCol('sl_cost', 'DECIMAL(30,2)', '直投受理项目累计成本');
     await addIndCol('sl_valuation', 'DECIMAL(30,2)', '直投受理项目总价值');
   } catch (e) { /* ignore */ }
+
+  // b_all_indicator 表：补充纯外部子基金指标列（若缺失）
+  try {
+    const wFields = [
+      ['fund_inv_w', 'INT', '子基金累计投资数量（外）'],
+      ['lm_fund_inv_w', 'INT', '上月累计子基金投资数量（外）'],
+      ['fund_inv_change_w', 'INT', '子基金累计投资数量变动（外）'],
+      ['fund_sub_w', 'DECIMAL(30,10)', '子基金累计认缴金额（外）'],
+      ['lm_fund_sub_w', 'DECIMAL(30,10)', '上月子基金累计认缴金额（外）'],
+      ['fund_sub_change_w', 'DECIMAL(30,10)', '子基金累计认缴金额变动（外）'],
+      ['fund_paidin_w', 'DECIMAL(30,10)', '子基金累计实缴金额（外）'],
+      ['lm_fund_paidin_w', 'DECIMAL(30,10)', '上月子基金累计实缴金额（外）'],
+      ['fund_paidin_change_w', 'DECIMAL(30,10)', '子基金累计实缴金额变动（外）'],
+      ['fund_exit_w', 'INT', '子基金累计退出数量（外）'],
+      ['lm_fund_exit_w', 'INT', '上月子基金累计退出数量（外）'],
+      ['fund_exit_change_w', 'INT', '子基金累计退出数量变动（外）'],
+      ['fund_exit_amount_w', 'DECIMAL(30,10)', '子基金累计退出金额（外）'],
+      ['lm_fund_exit_amount_w', 'DECIMAL(30,10)', '上月子基金累计退出金额（外）'],
+      ['fund_exit_amount_change_w', 'DECIMAL(30,10)', '子基金累计退出金额变动（外）'],
+      ['fund_receive_w', 'DECIMAL(30,10)', '子基金累计回款金额（外）'],
+      ['lm_fund_receive_w', 'DECIMAL(30,10)', '上月子基金累计回款金额（外）'],
+      ['fund_receive_change_w', 'DECIMAL(30,10)', '子基金累计回款金额变动（外）']
+    ];
+    const wNames = wFields.map(([name]) => name);
+    const [wCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_all_indicator' AND COLUMN_NAME IN (${wNames.map(() => '?').join(',')})
+    `, wNames);
+    const wExisting = new Set(wCols.map(c => c.COLUMN_NAME));
+    for (const [name, type, comment] of wFields) {
+      if (!wExisting.has(name)) {
+        await dbPool.query(`ALTER TABLE b_all_indicator ADD COLUMN ${name} ${type} NULL DEFAULT NULL COMMENT '${comment}'`);
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  // perf_fund 表：补充直投基金对应子基金列（若缺失）
+  try {
+    const [pfCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'perf_fund' AND COLUMN_NAME = 'sub_fund'
+    `);
+    if (!pfCols.length) {
+      await dbPool.query(`ALTER TABLE perf_fund ADD COLUMN sub_fund VARCHAR(300) NULL DEFAULT NULL COMMENT '直投基金对应子基金' AFTER if_inter`);
+    }
+  } catch (e) { /* ignore */ }
+
+  await ensureExternalSubfundSqlConfig(dbPool);
 
   // 为已有的 b_* 表补齐列注释（除 b_sql、b_sql_change_log、b_indicator_describe 外）
   await ensureBTableComments(dbPool);

@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:visible="visible"
-    title="整体基金投资组合明细"
+    :title="modalTitle"
     :width="1200"
     :footer="false"
     @cancel="handleClose"
@@ -75,7 +75,7 @@
               <td class="td-num col-ratio">{{ formatRatio(row.dpi) }}</td>
               <td class="td-num col-ratio">{{ formatPercentRatio(row.irr) }}</td>
             </tr>
-            <tr v-if="subFundRows.length > 0" class="row-summary">
+            <tr v-if="subFundRows.length > 0 && !isExternalSf" class="row-summary">
               <td class="col-index" colspan="2">小计（子基金）</td>
               <td>子基金个数：{{ subFundRows.length }} 个</td>
               <td class="td-num col-amount">{{ formatAmount(subFundSum.acc_sub) }}</td>
@@ -94,6 +94,7 @@
               <td class="td-num col-ratio">-</td>
             </tr>
             <!-- 直投项目明细 -->
+            <template v-if="!isExternalSf">
             <tr v-for="(row, idx) in directRows" :key="'dir-' + idx">
               <td class="col-index">{{ subFundRows.length + idx + 1 }}</td>
               <td class="col-type">{{ row.transaction_type || '-' }}</td>
@@ -131,12 +132,13 @@
               <td class="td-num col-ratio">{{ formatRatio(directSum.dpi) }}</td>
               <td class="td-num col-ratio">-</td>
             </tr>
+            </template>
           </tbody>
           <!-- 合计（吸底） -->
           <tfoot v-if="tableData.length > 0">
             <tr class="row-summary row-total">
               <td class="col-index" colspan="2">合计</td>
-              <td>总项目个数：{{ tableData.length }} 个</td>
+              <td>{{ isExternalSf ? ('子基金个数：' + subFundRows.length + ' 个') : ('总项目个数：' + tableData.length + ' 个') }}</td>
               <td class="td-num col-amount">{{ formatAmount(allSum.acc_sub) }}</td>
               <td class="td-num col-amount">{{ formatAmount(allSum.change_sub) }}</td>
               <td class="td-num col-amount">{{ formatAmount(allSum.acc_paidin) }}</td>
@@ -163,7 +165,11 @@
 import { ref, computed, watch } from 'vue';
 import { dashboardApi } from '../../../api/performance';
 
-const props = defineProps({ visible: Boolean, version: String });
+const props = defineProps({
+  visible: Boolean,
+  version: String,
+  mode: { type: String, default: 'all' }
+});
 const emit = defineEmits(['update:visible']);
 
 const loading = ref(false);
@@ -179,6 +185,11 @@ const versionDate = computed(() => {
   const d = props.version.substring(0, 8);
   return `${d.substring(0, 4)}-${d.substring(4, 6)}-${d.substring(6, 8)}`;
 });
+
+const isExternalSf = computed(() => props.mode === 'externalSf');
+const modalTitle = computed(() =>
+  isExternalSf.value ? '整体基金投资组合明细-外部子基金' : '整体基金投资组合明细'
+);
 
 const subFundRows = computed(() =>
   (tableData.value || []).filter(r => r.transaction_type === '子基金')
@@ -238,7 +249,9 @@ const loadData = async () => {
   if (!props.version) return;
   loading.value = true;
   try {
-    const res = await dashboardApi.getPortfolioDetail(props.version);
+    const res = isExternalSf.value
+      ? await dashboardApi.getPortfolioDetailSf(props.version)
+      : await dashboardApi.getPortfolioDetail(props.version);
     if (res.success) {
       tableData.value = res.data.list || [];
     }
@@ -270,7 +283,7 @@ const formatPercentRatio = (val) => {
 
 const handleClose = () => { visible.value = false; };
 
-watch(() => props.visible, (val) => { if (val) loadData(); });
+watch(() => [props.visible, props.mode], ([val]) => { if (val) loadData(); });
 </script>
 
 <style scoped>

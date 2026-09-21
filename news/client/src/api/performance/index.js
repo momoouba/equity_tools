@@ -79,6 +79,7 @@ export const dashboardApi = {
   
   // 获取整体投资组合明细
   getPortfolioDetail: (version) => api.get('/dashboard/portfolio-detail', { params: { version } }),
+  getPortfolioDetailSf: (version) => api.get('/dashboard/portfolio-detail-sf', { params: { version } }),
 
   // 获取SPV投资组合明细
   getSpvDetail: (version) => api.get('/dashboard/spv-detail', { params: { version } }),
@@ -148,6 +149,7 @@ export const exportApi = {
   
   // 导出整体投资组合明细
   exportPortfolioDetail: (version) => api.post('/exports/portfolio-detail', { version }, { responseType: 'blob' }),
+  exportPortfolioDetailSf: (version) => api.post('/exports/portfolio-detail-sf', { version }, { responseType: 'blob' }),
 
   // 导出SPV投资组合明细
   exportSpvDetail: (version) => api.post('/exports/spv-detail', { version }, { responseType: 'blob' }),

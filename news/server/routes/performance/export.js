@@ -503,6 +503,42 @@ router.post('/portfolio-detail', checkExportPermission, async (req, res) => {
 });
 
 /**
+ * 导出纯外部子基金投资组合明细
+ * POST /api/performance/exports/portfolio-detail-sf
+ */
+router.post('/portfolio-detail-sf', checkExportPermission, async (req, res) => {
+  try {
+    const { version } = req.body;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const portfolioRows = await db.query(
+      `SELECT * FROM b_investment_sf
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY first_date DESC`,
+      [version]
+    );
+
+    const wb = XLSX.utils.book_new();
+    const ws1 = await buildSheetFromRows('b_investment_sf', portfolioRows);
+    XLSX.utils.book_append_sheet(wb, ws1, '外部子基金投资组合明细');
+
+    const date = new Date().toISOString().split('T')[0].replace(/-/g, '');
+    const filename = `${version}-外部子基金投资组合明细-${date}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', buildContentDisposition(filename));
+
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.send(buffer);
+  } catch (error) {
+    console.error('导出外部子基金投资组合明细失败:', error);
+    res.status(500).json({ success: false, message: '导出失败' });
+  }
+});
+
+/**
  * 导出SPV投资组合明细
  * POST /api/performance/exports/spv-detail
  */

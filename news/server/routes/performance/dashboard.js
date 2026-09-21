@@ -354,6 +354,9 @@ router.get('/portfolio', async (req, res) => {
       `SELECT fund_inv, fund_inv_change, fund_sub, fund_sub_change,
               fund_paidin, fund_paidin_change, fund_exit, fund_exit_change,
               fund_exit_amount, fund_exit_amount_change, fund_receive, fund_receive_change,
+              fund_inv_w, fund_inv_change_w, fund_sub_w, fund_sub_change_w,
+              fund_paidin_w, fund_paidin_change_w, fund_exit_w, fund_exit_change_w,
+              fund_exit_amount_w, fund_exit_amount_change_w, fund_receive_w, fund_receive_change_w,
               project_inv, project_inv_change, project_paidin, project_paidin_change,
               project_exit, project_exit_change, project_receive, project_receive_change,
               spv_paidin, spv_paidin_change, spv_receive, spv_receive_change,
@@ -403,6 +406,34 @@ router.get('/portfolio-detail', async (req, res) => {
   } catch (error) {
     console.error('获取整体投资组合明细失败:', error);
     res.status(500).json({ success: false, message: '获取整体投资组合明细失败' });
+  }
+});
+
+/**
+ * 获取纯外部子基金投资组合明细
+ * GET /api/performance/dashboard/portfolio-detail-sf?version=xxx
+ */
+router.get('/portfolio-detail-sf', async (req, res) => {
+  try {
+    const { version } = req.query;
+    if (!version) {
+      return res.status(400).json({ success: false, message: '版本号不能为空' });
+    }
+
+    const rows = await db.query(
+      `SELECT transaction_type, project, first_date, acc_sub, change_sub, acc_paidin,
+              change_paidin, acc_exit, change_exit, acc_receive, change_receive,
+              unrealized, change_unrealized, total_value, moc, dpi, irr
+       FROM b_investment_sf
+       WHERE version = ? AND F_DeleteMark = 0
+       ORDER BY first_date DESC`,
+      [version]
+    );
+
+    res.json({ success: true, data: { list: rows } });
+  } catch (error) {
+    console.error('获取外部子基金投资组合明细失败:', error);
+    res.status(500).json({ success: false, message: '获取外部子基金投资组合明细失败' });
   }
 });
 

@@ -202,11 +202,68 @@
           </div>
         </div>
       </div>
+      <div class="overall-grid" style="margin-top: 12px;" @click="$emit('overall-click-sf')">
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计投资数量（外部）<a-tooltip v-if="config.fundInvAccDesc" :content="config.fundInvAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatNumber(overall?.fund_inv_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_inv_change_w)">
+            {{ formatChange(overall?.fund_inv_change_w) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计认缴金额（外部）<a-tooltip v-if="config.fundSubAccDesc" :content="config.fundSubAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatAmount(overall?.fund_sub_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_sub_change_w)">
+            {{ formatChange(overall?.fund_sub_change_w) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计实缴金额（外部）<a-tooltip v-if="config.fundPaidinAccDesc" :content="config.fundPaidinAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value">{{ formatAmount(overall?.fund_paidin_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_paidin_change_w)">
+            {{ formatChange(overall?.fund_paidin_change_w) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计退出数量（外部）<a-tooltip v-if="config.fundExitAccDesc" :content="config.fundExitAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatNumber(overall?.fund_exit_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_change_w)">
+            {{ formatChange(overall?.fund_exit_change_w) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计退出金额（外部）<a-tooltip v-if="config.fundExitAmountAccDesc" :content="config.fundExitAmountAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_exit_amount_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_exit_amount_change_w)">
+            {{ formatChange(overall?.fund_exit_amount_change_w) }}
+          </div>
+        </div>
+        <div class="overall-item clickable">
+          <div class="overall-label">
+            <span class="indicator-label-wrap">累计回款金额（外部）<a-tooltip v-if="config.fundReceiveAccDesc" :content="config.fundReceiveAccDesc"><icon-info-circle class="indicator-desc-icon" /></a-tooltip></span>
+          </div>
+          <div class="overall-value overall-value-blue">{{ formatAmount(overall?.fund_receive_w) }}</div>
+          <div class="overall-change" :class="getChangeClass(overall?.fund_receive_change_w)">
+            {{ formatChange(overall?.fund_receive_change_w) }}
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { computed } from 'vue';
 import { IconInfoCircle } from '@arco-design/web-vue/es/icon';
 
 const props = defineProps({
@@ -224,7 +281,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['fund-click', 'overall-click']);
+const emit = defineEmits(['fund-click', 'overall-click', 'overall-click-sf']);
 
 // 基金列表
 const fundList = computed(() => {

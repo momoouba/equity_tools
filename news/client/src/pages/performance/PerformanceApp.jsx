@@ -127,6 +127,7 @@ const performanceApi = {
   getProjectCashflow: (version, fund) => axios.get(`/api/performance/dashboard/project-cashflow?version=${encodeURIComponent(version)}&fund=${encodeURIComponent(fund)}`),
   getPortfolio: (version) => axios.get(`/api/performance/dashboard/portfolio?version=${encodeURIComponent(version)}`),
   getPortfolioDetail: (version) => axios.get(`/api/performance/dashboard/portfolio-detail?version=${encodeURIComponent(version)}`),
+  getPortfolioDetailSf: (version) => axios.get(`/api/performance/dashboard/portfolio-detail-sf?version=${encodeURIComponent(version)}`),
   getSpvDetail: (version) => axios.get(`/api/performance/dashboard/spv-detail?version=${encodeURIComponent(version)}`),
   getUnderlying: (version) => axios.get(`/api/performance/dashboard/underlying?version=${encodeURIComponent(version)}`),
   getUnderlyingCompanies: (version, type) => axios.get(`/api/performance/dashboard/underlying-companies?version=${encodeURIComponent(version)}&type=${type}`),
@@ -142,6 +143,7 @@ const performanceApi = {
   exportFundPortfolio: (version, fund) => axios.post('/api/performance/exports/fund-portfolio', { version, fund }, { responseType: 'blob' }),
   exportProjectCashflow: (version, fund) => axios.post('/api/performance/exports/project-cashflow', { version, fund }, { responseType: 'blob' }),
   exportPortfolioDetail: (version) => axios.post('/api/performance/exports/portfolio-detail', { version }, { responseType: 'blob' }),
+  exportPortfolioDetailSf: (version) => axios.post('/api/performance/exports/portfolio-detail-sf', { version }, { responseType: 'blob' }),
   exportSpvDetail: (version) => axios.post('/api/performance/exports/spv-detail', { version }, { responseType: 'blob' }),
   exportPortfolio: (version) => axios.post('/api/performance/exports/portfolio', { version }, { responseType: 'blob' }),
   exportFundProducts: (version) => axios.post('/api/performance/exports/fund-products', { version }, { responseType: 'blob' }),
@@ -482,6 +484,24 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
               </div>
             ))}
           </div>
+          <div className="perf-indicator-grid perf-indicator-grid-6" style={{ marginTop: 12 }}>
+            {[
+              { label: '累计投资数量（外部）', value: formatNumber(overall.fund_inv_w), change: overall.fund_inv_change_w, descKey: 'fundInvAccDesc' },
+              { label: '累计认缴金额（外部）', value: formatAmount(overall.fund_sub_w), change: overall.fund_sub_change_w, descKey: 'fundSubAccDesc' },
+              { label: '累计实缴金额（外部）', value: formatAmount(overall.fund_paidin_w), change: overall.fund_paidin_change_w, descKey: 'fundPaidinAccDesc' },
+              { label: '累计退出数量（外部）', value: formatNumber(overall.fund_exit_w), change: overall.fund_exit_change_w, isExit: true, descKey: 'fundExitAccDesc' },
+              { label: '累计退出金额（外部）', value: formatAmount(overall.fund_exit_amount_w), change: overall.fund_exit_amount_change_w, isExit: true, descKey: 'fundExitAmountAccDesc' },
+              { label: '累计回款金额（外部）', value: formatAmount(overall.fund_receive_w), change: overall.fund_receive_change_w, isExit: true, descKey: 'fundReceiveAccDesc' },
+            ].map((item, idx) => (
+              <div key={`sf-${idx}`} className="perf-indicator-item perf-clickable" onClick={() => onPortfolioDetail('externalSf')}>
+                <div className="perf-indicator-label">
+                  <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
+                </div>
+                <div className={`perf-indicator-value ${item.isExit ? 'perf-exit-value' : ''}`}>{item.value}</div>
+                <div className="perf-indicator-sub">较上月末{item.change != null && toNum(item.change) !== 0 ? (toNum(item.change) > 0 ? '+' : '') + formatAmount(item.change) : '-'}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -756,7 +776,9 @@ function PerformanceApp() {
             res = await performanceApi.getProjectCashflow(selectedVersion, modal.fund)
             break
           case 'portfolioDetail':
-            res = await performanceApi.getPortfolioDetail(selectedVersion)
+            res = modal.modalType === 'externalSf'
+              ? await performanceApi.getPortfolioDetailSf(selectedVersion)
+              : await performanceApi.getPortfolioDetail(selectedVersion)
             break
           case 'spvDetail':
             res = await performanceApi.getSpvDetail(selectedVersion)
@@ -898,8 +920,13 @@ function PerformanceApp() {
           filename = `${selectedVersion}-${fund}-项目现金流及业绩指标-${date}.xlsx`
           break
         case 'portfolioDetail':
-          res = await performanceApi.exportPortfolioDetail(selectedVersion)
-          filename = `${selectedVersion}-基金投资组合明细-${date}.xlsx`
+          if (modal.modalType === 'externalSf') {
+            res = await performanceApi.exportPortfolioDetailSf(selectedVersion)
+            filename = `${selectedVersion}-外部子基金投资组合明细-${date}.xlsx`
+          } else {
+            res = await performanceApi.exportPortfolioDetail(selectedVersion)
+            filename = `${selectedVersion}-基金投资组合明细-${date}.xlsx`
+          }
           break
         case 'spvDetail':
           res = await performanceApi.exportSpvDetail(selectedVersion)
@@ -1521,6 +1548,7 @@ function PerformanceApp() {
         const subFundSum = sumGroup(subFundRows)
         const directSum = sumGroup(directRows)
         const isDirectOnly = modal.modalType === 'directOnly'
+        const isExternalSf = modal.modalType === 'externalSf'
         const allSum = isDirectOnly ? { ...directSum } : sumGroup(list)
         allSum.moc = allSum.acc_paidin ? allSum.total_value / allSum.acc_paidin : null
         allSum.dpi = allSum.acc_paidin ? allSum.acc_receive / allSum.acc_paidin : null
@@ -1599,7 +1627,13 @@ function PerformanceApp() {
                 导出底稿
               </Button>
             </div>
-            <div className="perf-fundperf-section-title">{isDirectOnly ? '整体基金投资组合明细-直投项目' : '整体基金投资组合明细'}</div>
+            <div className="perf-fundperf-section-title">{
+              isDirectOnly
+                ? '整体基金投资组合明细-直投项目'
+                : isExternalSf
+                  ? '整体基金投资组合明细-外部子基金'
+                  : '整体基金投资组合明细'
+            }</div>
             {/* 单一滚动容器：横向+纵向，单表+sticky thead */}
             <div className="perf-pd-scroll">
               <table className="perf-table perf-table-bordered perf-table-portfolio-detail perf-pd-table" style={{ tableLayout: 'fixed' }}>
@@ -1640,6 +1674,17 @@ function PerformanceApp() {
                     {directRows.length > 0 && (
                       <tfoot>
                         {renderSummaryRow(allSum, '合计', `直投项目个数：${directRows.length} 个`)}
+                      </tfoot>
+                    )}
+                  </>
+                ) : isExternalSf ? (
+                  <>
+                    <tbody>
+                      {subFundRows.map((row, idx) => renderDataRow(row, idx + 1))}
+                    </tbody>
+                    {subFundRows.length > 0 && (
+                      <tfoot>
+                        {renderSummaryRow(subFundSum, '合计', `子基金个数：${subFundRows.length} 个`)}
                       </tfoot>
                     )}
                   </>
@@ -2239,7 +2284,11 @@ function PerformanceApp() {
       fundPerformance: `${modal.fund} - 基金业绩指标及现金流底表`,
       fundPortfolio: `${modal.fund} - 基金投资组合明细`,
       projectCashflow: `${modal.fund} - 项目现金流及业绩指标`,
-      portfolioDetail: modal.modalType === 'directOnly' ? '整体基金投资组合明细-直投项目' : '整体基金投资组合明细',
+      portfolioDetail: modal.modalType === 'directOnly'
+        ? '整体基金投资组合明细-直投项目'
+        : modal.modalType === 'externalSf'
+          ? '整体基金投资组合明细-外部子基金'
+          : '整体基金投资组合明细',
       spvDetail: 'SPV投资组合明细',
       underlyingCompanies: `底层企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,
       ipoCompanies: `上市企业明细【${modal.modalType === 'cumulative' ? '累计' : '当前'}】`,

@@ -66,6 +66,7 @@
       :config="systemConfig"
       @fund-click="showFundPortfolio"
       @overall-click="showPortfolioDetail"
+      @overall-click-sf="showPortfolioDetailSf"
     />
 
     <!-- 底层资产 -->
@@ -84,7 +85,7 @@
     <FundPerformanceModal v-model:visible="modals.fundPerformance" :version="selectedVersion" :fund="selectedFund" />
     <FundPortfolioModal v-model:visible="modals.fundPortfolio" :version="selectedVersion" :fund="selectedFund" />
     <ProjectCashflowModal v-model:visible="modals.projectCashflow" :version="selectedVersion" :fund="selectedFund" />
-    <PortfolioDetailModal v-model:visible="modals.portfolioDetail" :version="selectedVersion" />
+    <PortfolioDetailModal v-model:visible="modals.portfolioDetail" :version="selectedVersion" :mode="portfolioDetailMode" />
     <UnderlyingCompaniesModal v-model:visible="modals.underlyingCompanies" :version="selectedVersion" :type="modalType" />
     <IpoCompaniesModal v-model:visible="modals.ipoCompanies" :version="selectedVersion" :type="modalType" />
     <RegionCompaniesModal v-model:visible="modals.regionCompanies" :version="selectedVersion" :type="modalType" />
@@ -139,6 +140,7 @@ const selectedDate = ref('');
 const selectedVersion = ref('');
 const selectedFund = ref('');
 const modalType = ref('cumulative');
+const portfolioDetailMode = ref('all');
 
 const managerData = ref({});
 const fundsData = ref({ funds: [], indicators: {} });
@@ -351,6 +353,12 @@ const showProjectCashflow = (fund) => {
 
 // 显示整体投资组合明细
 const showPortfolioDetail = () => {
+  portfolioDetailMode.value = 'all';
+  modals.value.portfolioDetail = true;
+};
+
+const showPortfolioDetailSf = () => {
+  portfolioDetailMode.value = 'externalSf';
   modals.value.portfolioDetail = true;
 };
 

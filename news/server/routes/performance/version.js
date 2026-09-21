@@ -726,10 +726,14 @@ async function runVersionPipeline({
           `UPDATE b_investment_sum SET irr = ? WHERE version = ? AND project = ? AND F_DeleteMark = 0`,
           [irr, version, project]
         );
+        await localConn.query(
+          `UPDATE b_investment_sf SET irr = ? WHERE version = ? AND project = ? AND F_DeleteMark = 0`,
+          [irr, version, project]
+        );
       }
       await appendVersionRunLog({
         version, bDate: monthDate, layer: 'generate', stepNo: nextStepNo(),
-        event: 'success', interfaceName: 'IRR回写', targetTable: 'b_investment/b_investment_sum',
+        event: 'success', interfaceName: 'IRR回写', targetTable: 'b_investment/b_investment_sum/b_investment_sf',
         message: `基金项目=${Object.keys(fundProjectMap).length} 去重项目=${Object.keys(allProjectMap).length}`,
         userId: creatorId
       });

@@ -220,6 +220,24 @@ function PortfolioSection({ funds, portfolioFunds, overall, config }) {
                   </div>
                 ))}
               </div>
+              <div className="perf-indicator-grid perf-indicator-grid-6" style={{ marginTop: 12 }}>
+                {[
+                  { label: '累计投资数量（外部）', value: formatNumber(overall.fund_inv_w), change: overall.fund_inv_change_w, descKey: 'fundInvAccDesc' },
+                  { label: '累计认缴金额（外部）', value: formatAmount(overall.fund_sub_w), change: overall.fund_sub_change_w, descKey: 'fundSubAccDesc' },
+                  { label: '累计实缴金额（外部）', value: formatAmount(overall.fund_paidin_w), change: overall.fund_paidin_change_w, descKey: 'fundPaidinAccDesc' },
+                  { label: '累计退出数量（外部）', value: formatNumber(overall.fund_exit_w), change: overall.fund_exit_change_w, isExit: true, descKey: 'fundExitAccDesc' },
+                  { label: '累计退出金额（外部）', value: formatAmount(overall.fund_exit_amount_w), change: overall.fund_exit_amount_change_w, isExit: true, descKey: 'fundExitAmountAccDesc' },
+                  { label: '累计回款金额（外部）', value: formatAmount(overall.fund_receive_w), change: overall.fund_receive_change_w, isExit: true, descKey: 'fundReceiveAccDesc' },
+                ].map((item, idx) => (
+                  <div key={`sf-${idx}`} className="perf-indicator-item">
+                    <div className="perf-indicator-label">
+                      <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
+                    </div>
+                    <div className={`perf-indicator-value ${item.isExit ? 'perf-exit-value' : ''}`}>{item.value}</div>
+                    <div className="perf-indicator-sub">较上月末{item.change != null && toNum(item.change) !== 0 ? (toNum(item.change) > 0 ? '+' : '') + formatAmount(item.change) : '-'}</div>
+                  </div>
+                ))}
+              </div>
               </div>
             </div>
             <div className="perf-portfolio-block">
