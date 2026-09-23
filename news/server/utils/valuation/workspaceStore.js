@@ -328,16 +328,17 @@ async function saveRelative(caseId, versionId, rows, pool) {
     const id = await generateId('valuation_relative_row', d.idConn);
     await d.execute(
       `INSERT INTO valuation_relative_row (
-         F_Id, case_id, version_id, stock_code, stock_name, in_pool,
+         F_Id, case_id, version_id, stock_code, stock_name, in_pool, comparability,
          pe_latest, pe_median, pe_median_override, pe_stdev, pe_minus_1s, pe_plus_1s, pe_usable,
          ps_latest, ps_median, ps_median_override, ps_stdev, ps_minus_1s, ps_plus_1s, ps_usable,
          asof_date, asof_trade_date, quality_warning, F_CreatorTime
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
       [
         id, caseId, versionId,
         strOrNull(r.stock_code, 32),
         strOrNull(r.stock_name, 200),
         r.in_pool ? 1 : 0,
+        strOrNull(r.comparability, 16),
         numOrNull(r.pe_latest), numOrNull(r.pe_median), numOrNull(r.pe_median_override), numOrNull(r.pe_stdev),
         numOrNull(r.pe_minus_1s), numOrNull(r.pe_plus_1s), r.pe_usable === false ? 0 : 1,
         numOrNull(r.ps_latest), numOrNull(r.ps_median), numOrNull(r.ps_median_override), numOrNull(r.ps_stdev),
@@ -360,6 +361,7 @@ async function loadRelative(caseId, versionId, pool) {
     stock_code: r.stock_code,
     stock_name: r.stock_name,
     in_pool: Number(r.in_pool) === 1,
+    comparability: r.comparability || null,
     pe_latest: numOrNull(r.pe_latest),
     pe_median: numOrNull(r.pe_median),
     pe_median_override: numOrNull(r.pe_median_override),
@@ -442,6 +444,89 @@ async function saveRatios(caseId, versionId, sheets, pool) {
       );
     }
   }
+  await saveMetricCompanies(d, caseId, versionId, 'fees', fees.companies);
+  await saveMetricCompanies(d, caseId, versionId, 'working_capital', wc.companies);
+}
+
+async function saveMetricCompanies(d, caseId, versionId, sheetKind, companies) {
+  await d.execute(
+    `DELETE p FROM valuation_ratio_metric_period p
+     INNER JOIN valuation_ratio_metric_row r ON r.F_Id = p.row_id
+     WHERE r.case_id = ? AND r.version_id = ? AND r.sheet_kind = ?`,
+    [caseId, versionId, sheetKind]
+  );
+  await d.execute(
+    'DELETE FROM valuation_ratio_metric_row WHERE case_id = ? AND version_id = ? AND sheet_kind = ?',
+    [caseId, versionId, sheetKind]
+  );
+  let seq = 0;
+  for (const c of companies || []) {
+    for (const item of c.items || []) {
+      const rid = await generateId('valuation_ratio_metric_row', d.idConn);
+      await d.execute(
+        `INSERT INTO valuation_ratio_metric_row (
+           F_Id, case_id, version_id, sheet_kind, stock_code, stock_name,
+           metric_key, metric_name, latest_value, median_value, seq_no, F_CreatorTime
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+        [
+          rid, caseId, versionId, sheetKind,
+          strOrNull(c.stock_code, 32),
+          strOrNull(c.stock_name, 200),
+          strOrNull(item.key, 32),
+          strOrNull(item.name, 64),
+          numOrNull(item.latest),
+          numOrNull(item.median),
+          seq,
+        ]
+      );
+      seq += 1;
+      const years = Object.keys(item.by_year || {}).sort();
+      for (let i = 0; i < years.length; i += 1) {
+        const pid = await generateId('valuation_ratio_metric_period', d.idConn);
+        await d.execute(
+          `INSERT INTO valuation_ratio_metric_period (F_Id, row_id, seq_no, fiscal_year, metric_value, F_CreatorTime)
+           VALUES (?,?,?,?,?,NOW())`,
+          [pid, rid, i, strOrNull(years[i], 16), numOrNull(item.by_year[years[i]])]
+        );
+      }
+    }
+  }
+}
+
+async function loadMetricCompanies(d, caseId, versionId, sheetKind) {
+  const rows = await d.query(
+    `SELECT * FROM valuation_ratio_metric_row
+     WHERE case_id = ? AND version_id = ? AND sheet_kind = ?
+     ORDER BY seq_no ASC, F_CreatorTime ASC`,
+    [caseId, versionId, sheetKind]
+  );
+  const byCode = new Map();
+  for (const r of rows) {
+    const code = r.stock_code || '';
+    let company = byCode.get(code);
+    if (!company) {
+      company = { stock_code: r.stock_code, stock_name: r.stock_name, items: [] };
+      byCode.set(code, company);
+    }
+    const periods = await d.query(
+      `SELECT fiscal_year, metric_value FROM valuation_ratio_metric_period WHERE row_id = ? ORDER BY seq_no ASC`,
+      [r.F_Id]
+    );
+    const byYear = {};
+    for (const p of periods) {
+      const year = p.fiscal_year ? String(p.fiscal_year) : null;
+      const value = numOrNull(p.metric_value);
+      if (year && value != null) byYear[year] = value;
+    }
+    company.items.push({
+      key: r.metric_key,
+      name: r.metric_name,
+      latest: numOrNull(r.latest_value),
+      median: numOrNull(r.median_value),
+      by_year: byYear,
+    });
+  }
+  return [...byCode.values()];
 }
 
 async function loadRatios(caseId, versionId, pool) {
@@ -481,10 +566,13 @@ async function loadRatios(caseId, versionId, pool) {
     return { fees: null, gross_margin: null, working_capital: null };
   }
   const row = s || {};
+  const feeCompanies = await loadMetricCompanies(d, caseId, versionId, 'fees');
+  const wcCompanies = await loadMetricCompanies(d, caseId, versionId, 'working_capital');
   return {
     fees: {
       title: '三费',
       payload: {
+        companies: feeCompanies,
         selling_median: numOrNull(row.selling_median),
         admin_median: numOrNull(row.admin_median),
         rd_median: numOrNull(row.rd_median),
@@ -502,6 +590,7 @@ async function loadRatios(caseId, versionId, pool) {
     working_capital: {
       title: '营运',
       payload: {
+        companies: wcCompanies,
         dso_median: numOrNull(row.dso_median),
         dpo_median: numOrNull(row.dpo_median),
         dio_median: numOrNull(row.dio_median),

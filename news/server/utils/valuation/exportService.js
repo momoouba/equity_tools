@@ -597,7 +597,7 @@ function buildDcf(sheet, title, payload, refs) {
 function buildMarket(sheet, title, _payload, refs) {
   const p = sheet?.payload || {};
   const b = sheetBuilder(title, sheet?.formula || '非流通权益（亿元）=倍数×基数（万元）×(1−折扣)/10000');
-  b.start(5);
+  b.start(6);
   const revWan = wanFromYuan(p.revenue_base);
   const peBaseWan = wanFromYuan(p.net_income_base ?? p.operating_profit_base);
   const disc = num(p.liquidity_discount, 0.3);
@@ -608,99 +608,112 @@ function buildMarket(sheet, title, _payload, refs) {
   b.data(['P/E 基数（万元）', peBaseWan], ['text', 'wan']);
   const discExcel = b.aoa.length + 1;
   b.data(['市场法缺乏流动性折扣（小数，0.3=30%）', disc], ['text', 'num']);
-  b.gap(1, 5);
-  b.header(['序号', '项目', '−1σ', '中位', '+1σ']);
+  b.gap(1, 6);
+  b.header(['序号', '项目', '低端倍数', '高端倍数', '低端非流通权益（亿元）', '高端非流通权益（亿元）']);
   const peM = p.pe_multiples || {};
   const psM = p.ps_multiples || {};
-  const psMulExcel = b.aoa.length + 1;
-  b.data([1, 'P/S 倍数', num(psM.min), num(psM.median), num(psM.max)], ['seq', 'text', 'num', 'num', 'num']);
-  const psIlliqExcel = b.aoa.length + 1;
+  const psExcel = b.aoa.length + 1;
   b.data([
-    2, 'P/S 非流通权益（亿元）',
-    F(p.ps?.low?.illiquid_yi ?? asYi(p.ps?.low?.illiquid), `C${psMulExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
-    F(p.ps?.mid?.illiquid_yi ?? asYi(p.ps?.mid?.illiquid), `D${psMulExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
-    F(p.ps?.high?.illiquid_yi ?? asYi(p.ps?.high?.illiquid), `E${psMulExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
-  ], ['seq', 'text', 'yi', 'yi', 'yi']);
-  const peMulExcel = b.aoa.length + 1;
-  b.data([3, 'P/E 倍数', num(peM.min), num(peM.median), num(peM.max)], ['seq', 'text', 'num', 'num', 'num']);
-  const peIlliqExcel = b.aoa.length + 1;
+    1, 'P/S',
+    num(psM.min), num(psM.median),
+    F(p.ps?.low?.illiquid_yi ?? asYi(p.ps?.low?.illiquid), `C${psExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
+    F(p.ps?.mid?.illiquid_yi ?? asYi(p.ps?.mid?.illiquid), `D${psExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
+  ], ['seq', 'text', 'num', 'num', 'yi', 'yi']);
+  const peExcelRow = b.aoa.length + 1;
   b.data([
-    4, 'P/E 非流通权益（亿元）',
-    F(p.pe?.low?.illiquid_yi ?? asYi(p.pe?.low?.illiquid), `C${peMulExcel}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
-    F(p.pe?.mid?.illiquid_yi ?? asYi(p.pe?.mid?.illiquid), `D${peMulExcel}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
-    F(p.pe?.high?.illiquid_yi ?? asYi(p.pe?.high?.illiquid), `E${peMulExcel}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
-  ], ['seq', 'text', 'yi', 'yi', 'yi']);
+    2, 'P/E',
+    num(peM.min), num(peM.median),
+    F(p.pe?.low?.illiquid_yi ?? asYi(p.pe?.low?.illiquid), `C${peExcelRow}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
+    F(p.pe?.mid?.illiquid_yi ?? asYi(p.pe?.mid?.illiquid), `D${peExcelRow}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
+  ], ['seq', 'text', 'num', 'num', 'yi', 'yi']);
   if (refs) {
-    refs.psIlliqLow = `C${psIlliqExcel}`;
-    refs.psIlliqMid = `D${psIlliqExcel}`;
-    refs.peIlliqLow = `C${peIlliqExcel}`;
-    refs.peIlliqMid = `D${peIlliqExcel}`;
+    refs.psIlliqLow = `E${psExcel}`;
+    refs.psIlliqMid = `F${psExcel}`;
+    refs.peIlliqLow = `E${peExcelRow}`;
+    refs.peIlliqMid = `F${peExcelRow}`;
   }
-  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 });
+  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 24 });
   return b;
-}
-
-function usedMultiple(r, kind) {
-  const ov = num(r?.[`${kind}_median_override`]);
-  if (ov != null) return ov;
-  return num(r?.[`${kind}_median`]) ?? num(r?.[`${kind}_latest`]);
 }
 
 function buildRelative(sheet, title) {
   const rows = Array.isArray(sheet?.payload) ? sheet.payload : [];
-  const b = sheetBuilder(title, sheet?.formula || 'PE/PS −1σ=中位−σ；+1σ=中位+σ。POOL 用底稿中位（空则东财历史中位）的 MEDIAN / STDEV.S');
+  const b = sheetBuilder(title, sheet?.formula || '单家取数：底稿中位，否则历史中位，否则锚定截面。低端=取用值中位数−σ，高端=中位数。可比强度只作标记');
   const headers = [
-    '序号', '代码', '名称', '入池', '截面日',
+    '序号', '代码', '名称', '入池', '可比强度', '截面日',
     'PE 锚定截面', 'PE 中位', 'PE 底稿中位', 'PE σ', 'PE −1σ', 'PE +1σ',
     'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ', '提示',
   ];
   b.start(headers.length);
   b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', 'text', ...Array(12).fill('num'), 'text'];
+  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(12).fill('num'), 'text'];
   const dataStart = b.aoa.length + 1;
+  const degreeLabel = { strong: '强', medium: '中', weak: '弱' };
   rows.forEach((r, i) => {
     const excel = dataStart + i;
     const hint = [r.quality_warning, r.pe_usable === false ? 'PE 未入统计' : null, r.ps_usable === false ? 'PS 未入统计' : null]
       .filter(Boolean).join('；') || null;
     b.data([
-      i + 1, r.stock_code, r.stock_name, r.in_pool ? '是' : '否', r.asof_trade_date || r.asof_date || null,
+      i + 1, r.stock_code, r.stock_name, r.in_pool ? '是' : '否',
+      degreeLabel[r.comparability] || '中',
+      r.asof_trade_date || r.asof_date || null,
       num(r.pe_latest), num(r.pe_median), num(r.pe_median_override), num(r.pe_stdev),
-      F(num(r.pe_minus_1s), `G${excel}-I${excel}`),
-      F(num(r.pe_plus_1s), `G${excel}+I${excel}`),
+      F(num(r.pe_minus_1s), `H${excel}-J${excel}`),
+      F(num(r.pe_plus_1s), `H${excel}+J${excel}`),
       num(r.ps_latest), num(r.ps_median), num(r.ps_median_override), num(r.ps_stdev),
-      F(num(r.ps_minus_1s), `M${excel}-O${excel}`),
-      F(num(r.ps_plus_1s), `M${excel}+O${excel}`),
+      F(num(r.ps_minus_1s), `N${excel}-P${excel}`),
+      F(num(r.ps_plus_1s), `N${excel}+P${excel}`),
       hint,
     ], kinds);
   });
   if (!rows.length) {
-    b.data(['', '暂无相对估值结果', ...Array(16).fill(null)], kinds);
+    b.data(['', '暂无相对估值结果', ...Array(17).fill(null)], kinds);
     return b;
   }
   const poolPe = [];
   const poolPs = [];
+  let poolCount = 0;
   rows.forEach((r, i) => {
-    if (!r.in_pool) return;
+    if (!r.in_pool || r._summary) return;
+    poolCount += 1;
     const excel = dataStart + i;
-    poolPe.push(`IF(H${excel}="",G${excel},H${excel})`);
-    poolPs.push(`IF(N${excel}="",M${excel},N${excel})`);
+    if (poolUsedNumber(r, 'pe') != null) poolPe.push(`IF(I${excel}="",IF(H${excel}="",G${excel},H${excel}),I${excel})`);
+    if (poolUsedNumber(r, 'ps') != null) poolPs.push(`IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`);
   });
   b.gap(1, headers.length);
-  const peMed = medianNums(rows.filter((r) => r.in_pool).map((r) => usedMultiple(r, 'pe')));
-  const psMed = medianNums(rows.filter((r) => r.in_pool).map((r) => usedMultiple(r, 'ps')));
-  const peSd = stdevNums(rows.filter((r) => r.in_pool).map((r) => usedMultiple(r, 'pe')));
-  const psSd = stdevNums(rows.filter((r) => r.in_pool).map((r) => usedMultiple(r, 'ps')));
+  const peVals = rows.map((r) => poolUsedNumber(r, 'pe')).filter((n) => n != null);
+  const psVals = rows.map((r) => poolUsedNumber(r, 'ps')).filter((n) => n != null);
+  const peMed = medianNums(peVals);
+  const psMed = medianNums(psVals);
+  const peSd = stdevNums(peVals);
+  const psSd = stdevNums(psVals);
+  const takeExcel = b.aoa.length + 1;
   const peMedF = poolPe.length ? `MEDIAN(${poolPe.join(',')})` : null;
   const psMedF = poolPs.length ? `MEDIAN(${poolPs.join(',')})` : null;
   const peSdF = poolPe.length >= 2 ? `STDEV.S(${poolPe.join(',')})` : null;
   const psSdF = poolPs.length >= 2 ? `STDEV.S(${poolPs.join(',')})` : null;
+  const peLow = peMed != null && peSd != null ? peMed - peSd : peMed;
+  const psLow = psMed != null && psSd != null ? psMed - psSd : psMed;
   b.data([
-    '', 'POOL（入池）', null, `${poolPe.length} 家`, null,
-    null, F(peMed, peMedF), null, F(peSd, peSdF), null, null,
-    null, F(psMed, psMedF), null, F(psSd, psSdF), null, null,
-    '市场法倍数取底稿中位（空则东财中位）的 MEDIAN 与 σ；低端=中位−σ（结果对比高端用中位，不用 +1σ）',
+    '', '取用结果', null, `${poolCount} 家入池`, null, null,
+    null, F(peMed, peMedF), null, F(peSd, peSdF), F(peLow, `H${takeExcel}-J${takeExcel}`), null,
+    null, F(psMed, psMedF), null, F(psSd, psSdF), F(psLow, `N${takeExcel}-P${takeExcel}`), null,
+    '单家取数：底稿中位，否则历史中位，否则锚定截面。本行中位=高端倍数，−1σ=低端倍数。可比强度不参与',
   ], kinds);
   return b;
+}
+
+function poolUsedNumber(r, kind) {
+  if (!r?.in_pool || r._summary) return null;
+  const ov = num(r[`${kind}_median_override`]);
+  if (ov != null) return ov;
+  const med = num(r[`${kind}_median`]);
+  const latest = num(r[`${kind}_latest`]);
+  const v = med != null ? med : latest;
+  if (v == null) return null;
+  if (kind === 'pe' && (v === 0 || Math.abs(v) > 500)) return null;
+  if (kind === 'ps' && (v <= 0 || v > 80)) return null;
+  return v;
 }
 
 function medianNums(arr) {
@@ -719,17 +732,15 @@ function stdevNums(arr) {
 }
 
 function buildFees(sheet, title) {
-  const p = sheet?.payload || {};
-  const b = sheetBuilder(title, sheet?.formula);
-  b.start(3);
-  b.header(['序号', '项目', '可比集中位数（%）']);
-  [
-    ['销售费用率', p.selling_median],
-    ['管理费用率', p.admin_median],
-    ['研发费用率', p.rd_median],
-  ].forEach((r, i) => b.data([i + 1, r[0], asPct(r[1])], ['seq', 'text', 'num']));
-  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 16 }, { wch: 16 });
-  return b;
+  return buildMetricYearSheet(sheet, title, true, {
+    selling: '销售费用率',
+    admin: '管理费用率',
+    rd: '研发费用率',
+  }, [
+    ['销售费用率可比集中位数', sheet?.payload?.selling_median],
+    ['管理费用率可比集中位数', sheet?.payload?.admin_median],
+    ['研发费用率可比集中位数', sheet?.payload?.rd_median],
+  ]);
 }
 
 function buildGross(sheet, title) {
@@ -753,17 +764,54 @@ function buildGross(sheet, title) {
 }
 
 function buildWc(sheet, title) {
+  return buildMetricYearSheet(sheet, title, false, {
+    dso: 'DSO（应收周转天数）',
+    dpo: 'DPO（应付周转天数）',
+    dio: 'DIO（存货周转天数）',
+  }, [
+    ['DSO 可比集中位数（天）', sheet?.payload?.dso_median],
+    ['DPO 可比集中位数（天）', sheet?.payload?.dpo_median],
+    ['DIO 可比集中位数（天）', sheet?.payload?.dio_median],
+  ]);
+}
+
+function buildMetricYearSheet(sheet, title, asPercent, nameByKey, setLines) {
   const p = sheet?.payload || {};
+  const companies = Array.isArray(p.companies) ? p.companies : [];
+  const years = collectItemYears(companies);
   const b = sheetBuilder(title, sheet?.formula);
-  b.start(3);
-  b.header(['序号', '项目', '可比集中位数（天）']);
-  [
-    ['DSO（应收周转天数）', p.dso_median],
-    ['DPO（应付周转天数）', p.dpo_median],
-    ['DIO（存货周转天数）', p.dio_median],
-  ].forEach((r, i) => b.data([i + 1, r[0], num(r[1])], ['seq', 'text', 'num']));
-  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 24 }, { wch: 20 });
+  const headers = ['序号', '代码', '名称', '项目', asPercent ? '最新（%）' : '最新', asPercent ? '中位数（%）' : '中位数', ...years.map((y) => (asPercent ? `${y}（%）` : String(y)))];
+  b.start(Math.max(headers.length, 6));
+  (setLines || []).forEach(([label, value]) => {
+    if (value == null) return;
+    b.note(`${label}：${asPercent ? `${(Number(value) * 100).toFixed(2)}%` : Number(value).toFixed(1)}`, headers.length);
+  });
+  b.header(headers);
+  const kinds = ['seq', 'text', 'text', 'text', ...Array(2 + years.length).fill('num')];
+  let seq = 0;
+  companies.forEach((c) => {
+    (c.items || []).forEach((item) => {
+      seq += 1;
+      const byYear = item.by_year || {};
+      const cell = (v) => (asPercent ? asPct(v) : num(v));
+      b.data([
+        seq, c.stock_code, c.stock_name, item.name || nameByKey[item.key] || item.key,
+        cell(item.latest), cell(item.median), ...years.map((y) => cell(byYear[y])),
+      ], kinds);
+    });
+  });
+  if (!seq) b.data(['', '暂无结果', null, null, null, null], ['seq', 'text', 'text', 'text', 'num', 'num']);
   return b;
+}
+
+function collectItemYears(companies) {
+  const set = new Set();
+  for (const c of companies || []) {
+    for (const item of c.items || []) {
+      Object.keys(item.by_year || {}).forEach((y) => set.add(String(y)));
+    }
+  }
+  return [...set].filter((y) => /^\d{4}/.test(y)).sort();
 }
 
 function buildPl(sheet, title) {

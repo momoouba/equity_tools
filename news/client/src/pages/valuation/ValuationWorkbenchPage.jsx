@@ -362,11 +362,9 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
       },
     })
   }
-  const fields = [
-    { key: 'ps_low_multiple', label: 'P/S 低端（−1σ）' },
-    { key: 'ps_median_multiple', label: 'P/S 中位' },
-    { key: 'pe_low_multiple', label: 'P/E 低端（−1σ）' },
-    { key: 'pe_median_multiple', label: 'P/E 中位' },
+  const rows = [
+    { name: 'P/S', low: 'ps_low_multiple', high: 'ps_median_multiple' },
+    { name: 'P/E', low: 'pe_low_multiple', high: 'pe_median_multiple' },
   ]
   return (
     <div className="valuation-dcf-param-block">
@@ -377,22 +375,22 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
           <Button size="mini" type="text" onClick={followPool}>跟随 POOL</Button>
         ) : null}
       </div>
-      <div className="valuation-dcf-param-grid">
-        {fields.map((f) => (
-          <div key={f.key} className="valuation-dcf-param-item">
-            <span>{f.label}</span>
-            <DcfNumInput
-              precision={2}
-              value={shown[f.key]}
-              onChange={(v) => patchOne(f.key, v)}
-            />
+      {rows.map((row) => (
+        <div key={row.name} className="valuation-dcf-param-grid">
+          <div className="valuation-dcf-param-item">
+            <span>{row.name} 低端</span>
+            <DcfNumInput precision={2} value={shown[row.low]} onChange={(v) => patchOne(row.low, v)} />
           </div>
-        ))}
-      </div>
+          <div className="valuation-dcf-param-item">
+            <span>{row.name} 高端</span>
+            <DcfNumInput precision={2} value={shown[row.high]} onChange={(v) => patchOne(row.high, v)} />
+          </div>
+        </div>
+      ))}
       <Typography.Paragraph className="valuation-dcf-terminal-hint">
         {locked
-          ? '已按填写值覆盖 POOL。点「跟随 POOL」后再只计算，会重新用可比股算出的 −1σ / 中位。'
-          : '数字由下方表同一套 POOL 填入：低端 = 中位 − σ，中位 = POOL 中位。改数字会锁定，只计算时不再跟 POOL。'}
+          ? '已按填写值覆盖 POOL。点「跟随 POOL」后再只计算，会重新用可比股算出的低端和高端。'
+          : 'P/S、P/E 各一行。低端 = POOL 中位数 − σ，高端 = POOL 中位数。改数字会锁定，只计算时不再跟 POOL。'}
       </Typography.Paragraph>
     </div>
   )
@@ -1534,7 +1532,7 @@ export default function ValuationWorkbenchPage() {
                 <Alert
                   type="info"
                   style={{ marginBottom: 12 }}
-                  content="PE/PS 中位是东财历史中位。底稿中位有数的公司用该数进 POOL，空着仍用东财。贴完请点「只计算」刷新市场法。"
+                  content="最下面一行是取用结果：单家有底稿中位用底稿，否则用历史中位，再否则用锚定截面。取用列是这些数的中位数（高端倍数），−1σ 列是低端倍数。贴完底稿请点「只计算」刷新市场法。可比强度不参与计算。"
                 />
                 <RelativeValuationTable
                   rows={mergeRelativeOverrides(payload.sheets?.relative?.payload, comps)}
@@ -1569,8 +1567,8 @@ export default function ValuationWorkbenchPage() {
                 <div className="valuation-output-page">
                   <section className="valuation-output-section">
                     <Typography.Title heading={6} className="valuation-ratio-col-title">结果对比（亿元）</Typography.Title>
-                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法用已实现最近一年的营收与净利润。低端为 POOL −1σ、高端为中位数。">
-                      市场法用已实现最近一年营收/净利润。倍数取锚定日及以前各股历史中位，低端=POOL −1σ、高端=中位。
+                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法用已实现最近一年的营收与净利润。低端为中位数减 σ，高端为中位数。">
+                      市场法用已实现最近一年营收/净利润。倍数取锚定日及以前各股历史中位，低端 = 中位数 − σ，高端 = 中位数。
                       {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时 P/S、P/E 仍这一套（只用市场法折扣）；仅 DCF 分两列（并购用并购折扣，上市不扣）。' : ''}
                     </Typography.Paragraph>
                     {!isDefaultMethodConfig(method) ? (

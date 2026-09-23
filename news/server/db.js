@@ -6528,6 +6528,29 @@ async function initializeTables(dbPool) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='上市进展项目进展分享链接';
   `);
 
+  // 竞品分析 / 项目估值发布链接：用 app_id 区分应用，公开访问沿用发布人鉴权
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS app_publish_links (
+      F_Id VARCHAR(19) PRIMARY KEY COMMENT '数据ID',
+      app_id VARCHAR(19) NOT NULL COMMENT '应用ID，区分是哪个应用的发布',
+      user_id VARCHAR(19) NOT NULL COMMENT '点击发布的用户，公开链接沿用其鉴权',
+      share_token VARCHAR(64) NOT NULL COMMENT '发布令牌',
+      status VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态：active/inactive',
+      has_expiry TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用过期时间',
+      expiry_time DATETIME NULL COMMENT '过期时间',
+      has_password TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否启用访问密码',
+      password_hash VARCHAR(255) NULL COMMENT '访问密码哈希',
+      F_CreatorTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+      F_LastModifyTime TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+      UNIQUE KEY uk_app_publish_token (share_token),
+      UNIQUE KEY uk_app_publish_user_app (user_id, app_id),
+      INDEX idx_app_publish_app (app_id),
+      INDEX idx_app_publish_status (status),
+      FOREIGN KEY (app_id) REFERENCES applications(F_Id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(F_Id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='应用发布链接（竞品分析、项目估值）';
+  `);
+
   try {
     const [nslDm] = await dbPool.query(`
       SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS

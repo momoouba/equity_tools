@@ -7,6 +7,7 @@
 
 const USER_KEY = 'user'
 const REMEMBER_KEY = 'auth_remember_me'
+const PUBLISH_SESSION_KEY = 'app_publish_session'
 export const REMEMBER_DAYS = 30
 const REMEMBER_MS = REMEMBER_DAYS * 24 * 60 * 60 * 1000
 
@@ -41,9 +42,54 @@ export function isRememberMeEnabled() {
 }
 
 /**
- * 读取原始用户对象（不做续期）；过期则清理并返回 null
+ * 发布嵌入页的会话。
+ * 菜单 iframe 里第三方存储可能被浏览器拦住，所以先放内存，sessionStorage 只是刷新后的备份。
  */
-export function getUser() {
+let memoryPublishSession = null
+
+export function isPublishPath(pathname) {
+  const path = pathname != null
+    ? pathname
+    : (typeof window !== 'undefined' ? window.location.pathname : '')
+  return path.startsWith('/publish/') || path.startsWith('/share/app/')
+}
+
+export function getPublishSession() {
+  if (memoryPublishSession?.token && memoryPublishSession?.user) return memoryPublishSession
+  try {
+    const raw = sessionStorage.getItem(PUBLISH_SESSION_KEY)
+    if (!raw) return memoryPublishSession
+    const parsed = JSON.parse(raw)
+    if (!parsed?.token || !parsed?.user) return memoryPublishSession
+    memoryPublishSession = parsed
+    return parsed
+  } catch {
+    return memoryPublishSession
+  }
+}
+
+export function setPublishSession(session) {
+  memoryPublishSession = session && session.token ? session : null
+  try {
+    if (!memoryPublishSession) sessionStorage.removeItem(PUBLISH_SESSION_KEY)
+    else sessionStorage.setItem(PUBLISH_SESSION_KEY, JSON.stringify(memoryPublishSession))
+  } catch {
+    /* 嵌入 iframe 时 sessionStorage 可能抛 SecurityError，内存会话仍然有效 */
+  }
+}
+
+export function clearPublishSession() {
+  setPublishSession(null)
+}
+
+function onPublishPage() {
+  return isPublishPath()
+}
+
+/**
+ * 读取已登录用户（忽略发布嵌入覆盖）
+ */
+function readStoredUser() {
   try {
     const remember = isRememberMeEnabled()
     const store = getStore(remember)
@@ -89,6 +135,17 @@ export function getUser() {
 }
 
 /**
+ * 读取当前用户。发布嵌入页返回发布人，供页面内权限展示与请求头使用。
+ */
+export function getUser() {
+  if (onPublishPage()) {
+    const pub = getPublishSession()
+    if (pub?.user) return pub.user
+  }
+  return readStoredUser()
+}
+
+/**
  * 登录成功后写入会话
  * @param {object} user - 后端返回的 user
  * @param {boolean} rememberMe - 是否记住 30 天
@@ -127,7 +184,7 @@ export function setUserSession(user, rememberMe = false) {
  * 更新已登录用户信息（保留 remember / expires 元数据）
  */
 export function updateStoredUser(partialOrFull) {
-  const current = getUser()
+  const current = readStoredUser()
   if (!current) return null
   const remember = isRememberMeEnabled()
   const next = {
@@ -153,8 +210,8 @@ export function updateStoredUser(partialOrFull) {
  * 滑动续期：仅「记住我」模式；有操作则将过期时间延后 30 天并写回
  */
 export function touchSession() {
-  if (!isRememberMeEnabled()) return getUser()
-  const user = getUser()
+  if (!isRememberMeEnabled()) return readStoredUser()
+  const user = readStoredUser()
   if (!user) return null
   user.expiresAt = Date.now() + REMEMBER_MS
   try {

@@ -311,7 +311,7 @@ export default function ComparableCompsPanel({ caseId, isDraftView, comps, setCo
                     })
                   }}
                 />
-                <div className="valuation-pool-hint">改可比程度不会自动改 POOL</div>
+                <div className="valuation-pool-hint">只是标记，不改变计算结果，也不自动改 POOL</div>
               </div>
             ),
           },
@@ -531,7 +531,7 @@ export default function ComparableCompsPanel({ caseId, isDraftView, comps, setCo
                 onChange={setEditComparability}
                 getPopupContainer={sheetPopupContainer}
               />
-              <p className="form-hint">改可比程度不会自动改 POOL</p>
+              <p className="form-hint">只是标记，不改变计算结果，也不自动改 POOL</p>
             </div>
             <div className="form-group">
               <label>采集</label>

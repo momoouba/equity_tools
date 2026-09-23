@@ -454,6 +454,9 @@ async function ensureValuationSchema(dbPool) {
     if (!relCols.has('ps_median_override')) {
       await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN ps_median_override DECIMAL(20,6) NULL COMMENT '底稿 PS 中位'`);
     }
+    if (!relCols.has('comparability')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN comparability VARCHAR(16) NULL COMMENT 'strong/medium/weak，仅标记，不参与计算'`);
+    }
   }
   try {
     await migrateListedMetricsJson(dbPool);
@@ -666,6 +669,7 @@ async function createStructuredResultTables(dbPool) {
       stock_code VARCHAR(32) NULL,
       stock_name VARCHAR(200) NULL,
       in_pool TINYINT(1) NOT NULL DEFAULT 1,
+      comparability VARCHAR(16) NULL COMMENT 'strong/medium/weak，仅标记，不参与计算',
       pe_latest DECIMAL(20,6) NULL,
       pe_median DECIMAL(20,6) NULL,
       pe_median_override DECIMAL(20,6) NULL COMMENT '底稿 PE 中位',
@@ -733,6 +737,36 @@ async function createStructuredResultTables(dbPool) {
       F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       KEY idx_vgmp (row_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目估值—可比各期毛利率'
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS valuation_ratio_metric_row (
+      F_Id VARCHAR(19) NOT NULL PRIMARY KEY,
+      case_id VARCHAR(19) NOT NULL,
+      version_id VARCHAR(19) NOT NULL DEFAULT '0',
+      sheet_kind VARCHAR(32) NOT NULL COMMENT 'fees|working_capital',
+      stock_code VARCHAR(32) NULL,
+      stock_name VARCHAR(200) NULL,
+      metric_key VARCHAR(32) NOT NULL,
+      metric_name VARCHAR(64) NULL,
+      latest_value DECIMAL(20,8) NULL,
+      median_value DECIMAL(20,8) NULL,
+      seq_no INT NOT NULL DEFAULT 0,
+      F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_vrmr (case_id, version_id, sheet_kind)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目估值—三费/营运各公司'
+  `);
+
+  await dbPool.query(`
+    CREATE TABLE IF NOT EXISTS valuation_ratio_metric_period (
+      F_Id VARCHAR(19) NOT NULL PRIMARY KEY,
+      row_id VARCHAR(19) NOT NULL,
+      seq_no INT NOT NULL,
+      fiscal_year VARCHAR(16) NULL,
+      metric_value DECIMAL(20,8) NULL,
+      F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_vrmp (row_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='项目估值—三费/营运各年'
   `);
 
   await dbPool.query(`

@@ -21,8 +21,7 @@ import ProjectSourcingPage from './project-sourcing/ProjectSourcingPage'
 import CompetitorAnalysisPostPage from './competitor-analysis/CompetitorAnalysisPostPage'
 import ProjectSourcingIpoProjectsPage from './competitor-analysis/ProjectSourcingIpoProjectsPage'
 import ProjectSourcingPreInvestmentPage from './competitor-analysis/ProjectSourcingPreInvestmentPage'
-import ValuationPostPage from './valuation/ValuationPostPage'
-import ValuationPreProjectsPage from './valuation/ValuationPreProjectsPage'
+import ValuationHubPage from './valuation/ValuationHubPage'
 import ValuationWorkbenchPage from './valuation/ValuationWorkbenchPage'
 import ValuationDbConfigPage from './valuation/ValuationDbConfigPage'
 import FinancingEventsPage from './project-sourcing/FinancingEventsPage'
@@ -40,8 +39,7 @@ const COMPETITOR_MENU_ROUTES = {
 }
 
 const VALUATION_MENU_ROUTES = {
-  'valuation-pre-projects': 'valuation/pre-projects',
-  'valuation-post-cases': 'valuation/post-cases',
+  valuation: 'valuation',
   'valuation-system-db': 'valuation/system-db',
 }
 
@@ -183,24 +181,13 @@ function Dashboard() {
 
   useEffect(() => {
     const p = location.pathname
-    if (p.includes('valuation/')) {
-      if (p.includes('workbench')) {
-        setSelectedKeys(['valuation-post-cases'])
-        setActiveAppKey('valuation-app')
-      } else if (p.includes('pre-projects')) {
-        setSelectedKeys(['valuation-pre-projects'])
-        setActiveAppKey('valuation-app')
-      } else if (p.includes('invested-enterprises')) {
-        // 旧「被投企业」路由已并入「投后项目估值」标签页
-        setSelectedKeys(['valuation-post-cases'])
-        setActiveAppKey('valuation-app')
-      } else if (p.includes('post-cases')) {
-        setSelectedKeys(['valuation-post-cases'])
-        setActiveAppKey('valuation-app')
-      } else if (p.includes('system-db')) {
+    if (p.includes('/valuation')) {
+      if (p.includes('system-db')) {
         setSelectedKeys(['valuation-system-db'])
-        setActiveAppKey('valuation-app')
+      } else {
+        setSelectedKeys(['valuation'])
       }
+      setActiveAppKey('valuation-app')
     } else if (p.includes('competitor-analysis/')) {
       if (p.includes('invested-enterprises')) {
         // 旧「被投企业」路由已并入「投后-竞品分析」标签页
@@ -376,8 +363,7 @@ function Dashboard() {
       icon: <IconSafe />,
       visible: isAdmin || hasProjectValuationPermission,
       children: [
-        { key: 'valuation-pre-projects', title: '投前项目估值' },
-        { key: 'valuation-post-cases', title: '投后项目估值' },
+        { key: 'valuation', title: '项目估值' },
         { key: 'valuation-system-db', title: '数据库连接配置' }
       ]
     },
@@ -609,22 +595,16 @@ function Dashboard() {
               }
             />
             <Route
-              path="/valuation/pre-projects"
+              path="/valuation"
               element={
                 (isAdmin || hasProjectValuationPermission)
-                  ? <ValuationPreProjectsPage />
+                  ? <ValuationHubPage />
                   : <div>您没有访问权限</div>
               }
             />
-            <Route
-              path="/valuation/post-cases"
-              element={
-                (isAdmin || hasProjectValuationPermission)
-                  ? <ValuationPostPage />
-                  : <div>您没有访问权限</div>
-              }
-            />
-            <Route path="/valuation/invested-enterprises" element={<Navigate to="/dashboard/valuation/post-cases" replace />} />
+            <Route path="/valuation/pre-projects" element={<Navigate to="/dashboard/valuation?tab=pre" replace />} />
+            <Route path="/valuation/post-cases" element={<Navigate to="/dashboard/valuation?tab=post" replace />} />
+            <Route path="/valuation/invested-enterprises" element={<Navigate to="/dashboard/valuation?tab=invested" replace />} />
             <Route
               path="/valuation/workbench/:caseId"
               element={

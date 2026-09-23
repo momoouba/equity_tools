@@ -8,14 +8,80 @@ function asArray(data) {
   return Array.isArray(data) ? data : []
 }
 
+function finite(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+function medianOf(values) {
+  const arr = values.filter((n) => n != null).sort((a, b) => a - b)
+  if (!arr.length) return null
+  const mid = Math.floor(arr.length / 2)
+  return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2
+}
+
+function stdevOf(values) {
+  const arr = values.filter((n) => n != null)
+  if (arr.length < 2) return null
+  const mean = arr.reduce((s, x) => s + x, 0) / arr.length
+  const v = arr.reduce((s, x) => s + (x - mean) ** 2, 0) / (arr.length - 1)
+  return Math.sqrt(v)
+}
+
+/** 与引擎 POOL 一致：底稿中位，否则历史中位，否则锚定截面。可比强度不参与。 */
+function poolUsed(r, kind) {
+  if (!r?.in_pool || r._summary) return null
+  const ov = finite(r[`${kind}_median_override`])
+  if (ov != null) return ov
+  const med = finite(r[`${kind}_median`])
+  const latest = finite(r[`${kind}_latest`])
+  const v = med != null ? med : latest
+  if (v == null) return null
+  if (kind === 'pe' && (v === 0 || Math.abs(v) > 500)) return null
+  if (kind === 'ps' && (v <= 0 || v > 80)) return null
+  return v
+}
+
+function poolBand(values) {
+  const mid = medianOf(values)
+  if (mid == null) return { high: null, low: null }
+  const capped = mid > 0
+    ? values.map((v) => {
+      if (v > mid * 3) return mid * 3
+      if (v > 0 && v < mid / 3) return mid / 3
+      return v
+    })
+    : values
+  const sd = stdevOf(capped)
+  let low = sd == null ? mid : mid - sd
+  if (low != null && low <= 0) low = 0.01
+  return { high: mid, low }
+}
+
 export function RelativeValuationTable({ rows, editable = false, onOverrideChange }) {
-  const data = asArray(rows)
-  if (!data.length) return <Empty description="暂无相对估值结果，请先采集/计算" />
+  const source = asArray(rows).filter((r) => !r._summary)
+  if (!source.length) return <Empty description="暂无相对估值结果，请先采集/计算" />
+  const peBand = poolBand(source.map((r) => poolUsed(r, 'pe')).filter((n) => n != null))
+  const psBand = poolBand(source.map((r) => poolUsed(r, 'ps')).filter((n) => n != null))
+  const data = [
+    ...source,
+    {
+      _summary: true,
+      stock_code: '',
+      stock_name: '取用结果',
+      pe_used: peBand.high,
+      pe_minus_1s: peBand.low,
+      ps_used: psBand.high,
+      ps_minus_1s: psBand.low,
+      quality_warning: '取用列=高端倍数，−1σ列=低端倍数。单家：底稿中位，否则历史中位，否则锚定截面',
+    },
+  ]
   const overrideCol = (title, field) => ({
     title,
     dataIndex: field,
     width: 108,
-    render: (v, r) => (editable && onOverrideChange ? (
+    render: (v, r) => (editable && onOverrideChange && !r._summary ? (
       <InputNumber
         hideControl
         precision={2}
@@ -28,24 +94,42 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
   })
   return (
     <ListTable
-      rowKey={(r, i) => r.stock_code || String(i)}
+      rowKey={(r, i) => (r._summary ? 'pool-take' : (r.stock_code || String(i)))}
       pagination={false}
       size="small"
-      scroll={{ x: 1680 }}
+      scroll={{ x: 1900 }}
       columns={[
         { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
         { title: '名称', dataIndex: 'stock_name', width: 88, ellipsis: true, fixed: 'left' },
-        { title: '入池', dataIndex: 'in_pool', width: 52, render: (v) => (v ? '是' : '否') },
+        { title: '入池', dataIndex: 'in_pool', width: 52, render: (v, r) => (r._summary ? '—' : (v ? '是' : '否')) },
+        {
+          title: '可比',
+          dataIndex: 'comparability',
+          width: 52,
+          render: (v) => ({ strong: '强', medium: '中', weak: '弱' }[v] || '-'),
+        },
         { title: '截面日', dataIndex: 'asof_trade_date', width: 96, render: (v, r) => v || r.asof_date || '-' },
         { title: 'PE 锚定截面', dataIndex: 'pe_latest', width: 96, render: (v) => fmtNum(v, 2) },
         { title: 'PE 中位', dataIndex: 'pe_median', width: 80, render: (v) => fmtNum(v, 2) },
         overrideCol('PE 底稿中位', 'pe_median_override'),
+        {
+          title: 'PE 取用',
+          dataIndex: 'pe_used',
+          width: 80,
+          render: (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'pe'), 2),
+        },
         { title: 'PE σ', dataIndex: 'pe_stdev', width: 72, render: (v) => fmtNum(v, 2) },
         { title: 'PE −1σ', dataIndex: 'pe_minus_1s', width: 80, render: (v) => fmtNum(v, 2) },
         { title: 'PE +1σ', dataIndex: 'pe_plus_1s', width: 80, render: (v) => fmtNum(v, 2) },
         { title: 'PS 锚定截面', dataIndex: 'ps_latest', width: 96, render: (v) => fmtNum(v, 2) },
         { title: 'PS 中位', dataIndex: 'ps_median', width: 80, render: (v) => fmtNum(v, 2) },
         overrideCol('PS 底稿中位', 'ps_median_override'),
+        {
+          title: 'PS 取用',
+          dataIndex: 'ps_used',
+          width: 80,
+          render: (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'ps'), 2),
+        },
         { title: 'PS σ', dataIndex: 'ps_stdev', width: 72, render: (v) => fmtNum(v, 2) },
         { title: 'PS −1σ', dataIndex: 'ps_minus_1s', width: 80, render: (v) => fmtNum(v, 2) },
         { title: 'PS +1σ', dataIndex: 'ps_plus_1s', width: 80, render: (v) => fmtNum(v, 2) },
@@ -66,26 +150,75 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
   )
 }
 
+function collectItemYears(companies) {
+  const set = new Set()
+  for (const c of companies) {
+    for (const item of c.items || []) {
+      Object.keys(item.by_year || {}).forEach((y) => set.add(String(y)))
+    }
+  }
+  return [...set].filter((y) => /^\d{4}/.test(y)).sort()
+}
+
+function MetricYearTable({ companies, format, empty }) {
+  const list = asArray(companies)
+  if (!list.length) return <Empty description={empty} />
+  const yearKeys = collectItemYears(list)
+  const data = []
+  list.forEach((c) => {
+    (c.items || []).forEach((item) => {
+      const row = {
+        _key: `${c.stock_code || ''}-${item.key}`,
+        stock_code: c.stock_code,
+        stock_name: c.stock_name,
+        item: item.name,
+        latest: item.latest,
+        median: item.median,
+      }
+      yearKeys.forEach((y) => {
+        row[`y_${y}`] = item.by_year?.[y]
+      })
+      data.push(row)
+    })
+  })
+  if (!data.length) return <Empty description={empty} />
+  return (
+    <ListTable
+      rowKey="_key"
+      pagination={false}
+      size="small"
+      scroll={{ x: 520 + yearKeys.length * 76 }}
+      columns={[
+        { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
+        { title: '名称', dataIndex: 'stock_name', width: 80, ellipsis: true, fixed: 'left' },
+        { title: '项目', dataIndex: 'item', width: 168, fixed: 'left' },
+        { title: '最新', dataIndex: 'latest', width: 76, align: 'right', render: (v) => format(v) },
+        { title: '中位数', dataIndex: 'median', width: 76, align: 'right', render: (v) => format(v) },
+        ...yearKeys.map((y) => ({
+          title: y,
+          dataIndex: `y_${y}`,
+          width: 76,
+          align: 'right',
+          render: (v) => (v == null ? '—' : format(v)),
+        })),
+      ]}
+      data={data}
+    />
+  )
+}
+
 export function FeesTable({ payload }) {
-  if (!payload || (payload.selling_median == null && payload.admin_median == null && payload.rd_median == null)) {
+  const companies = asArray(payload?.companies)
+  if (!companies.length && payload?.selling_median == null && payload?.admin_median == null && payload?.rd_median == null) {
     return <Empty description="暂无三费结果" />
   }
   return (
-    <ListTable
-      className="valuation-ratio-table"
-      rowKey="name"
-      pagination={false}
-      size="small"
-      columns={[
-        { title: '项目', dataIndex: 'name', width: 132 },
-        { title: '可比集中位数', dataIndex: 'value', className: 'valuation-ratio-num', align: 'right', render: (v) => fmtPct(v, 2) },
-      ]}
-      data={[
-        { name: '销售费用率', value: payload.selling_median },
-        { name: '管理费用率', value: payload.admin_median },
-        { name: '研发费用率', value: payload.rd_median },
-      ]}
-    />
+    <div>
+      <Typography.Paragraph style={{ marginBottom: 8 }}>
+        可比集中位数：销售费用率 {fmtPct(payload?.selling_median, 2)}，管理费用率 {fmtPct(payload?.admin_median, 2)}，研发费用率 {fmtPct(payload?.rd_median, 2)}
+      </Typography.Paragraph>
+      <MetricYearTable companies={companies} format={(v) => fmtPct(v, 2)} empty="暂无三费分年数据，请重新计算" />
+    </div>
   )
 }
 
@@ -162,52 +295,36 @@ export function GrossMarginTable({ payload }) {
 }
 
 export function WorkingCapitalTable({ payload }) {
-  if (!payload || (payload.dso_median == null && payload.dpo_median == null && payload.dio_median == null)) {
+  const companies = asArray(payload?.companies)
+  if (!companies.length && payload?.dso_median == null && payload?.dpo_median == null && payload?.dio_median == null) {
     return <Empty description="暂无营运天数结果" />
   }
   return (
-    <ListTable
-      className="valuation-ratio-table"
-      rowKey="name"
-      pagination={false}
-      size="small"
-      columns={[
-        { title: '项目', dataIndex: 'name', width: 168 },
-        { title: '可比集中位数（天）', dataIndex: 'value', className: 'valuation-ratio-num', align: 'right', render: (v) => fmtNum(v, 1) },
-      ]}
-      data={[
-        { name: 'DSO（应收周转天数）', value: payload.dso_median },
-        { name: 'DPO（应付周转天数）', value: payload.dpo_median },
-        { name: 'DIO（存货周转天数）', value: payload.dio_median },
-      ]}
-    />
+    <div>
+      <Typography.Paragraph style={{ marginBottom: 8 }}>
+        可比集中位数：DSO {fmtNum(payload?.dso_median, 1)} 天，DPO {fmtNum(payload?.dpo_median, 1)} 天，DIO {fmtNum(payload?.dio_median, 1)} 天
+      </Typography.Paragraph>
+      <MetricYearTable companies={companies} format={(v) => fmtNum(v, 1)} empty="暂无营运分年数据，请重新计算" />
+    </div>
   )
 }
 
 export function RatiosTables({ fees, grossMargin, workingCapital }) {
   const hasAny = fees || grossMargin || workingCapital
   if (!hasAny) return <Empty description="暂无计算结果，请先采集/计算" />
+  const feePayload = fees?.payload || fees
+  const gmPayload = grossMargin?.payload || grossMargin
+  const wcPayload = workingCapital?.payload || workingCapital
   return (
     <div className="valuation-sheet-stack">
-      <div className="valuation-ratio-top">
-        <div className="valuation-ratio-col">
-          <Typography.Title heading={6} className="valuation-ratio-col-title">三费</Typography.Title>
-          {fees?.formula ? (
-            <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title={fees.formula}>
-              {fees.formula}
-            </Typography.Paragraph>
-          ) : null}
-          <FeesTable payload={fees?.payload || fees} />
-        </div>
-        <div className="valuation-ratio-col">
-          <Typography.Title heading={6} className="valuation-ratio-col-title">营运天数</Typography.Title>
-          {workingCapital?.formula ? (
-            <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title={workingCapital.formula}>
-              {workingCapital.formula}
-            </Typography.Paragraph>
-          ) : null}
-          <WorkingCapitalTable payload={workingCapital?.payload || workingCapital} />
-        </div>
+      <div className="valuation-gm-block">
+        <Typography.Title heading={6} className="valuation-ratio-col-title">三费</Typography.Title>
+        {fees?.formula ? (
+          <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title={fees.formula}>
+            {fees.formula}
+          </Typography.Paragraph>
+        ) : null}
+        <FeesTable payload={feePayload} />
       </div>
       <div className="valuation-gm-block">
         <Typography.Title heading={6} className="valuation-ratio-col-title">毛利率</Typography.Title>
@@ -216,7 +333,16 @@ export function RatiosTables({ fees, grossMargin, workingCapital }) {
             {grossMargin.formula}
           </Typography.Paragraph>
         ) : null}
-        <GrossMarginTable payload={grossMargin?.payload || grossMargin} />
+        <GrossMarginTable payload={gmPayload} />
+      </div>
+      <div className="valuation-gm-block">
+        <Typography.Title heading={6} className="valuation-ratio-col-title">营运天数</Typography.Title>
+        {workingCapital?.formula ? (
+          <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title={workingCapital.formula}>
+            {workingCapital.formula}
+          </Typography.Paragraph>
+        ) : null}
+        <WorkingCapitalTable payload={wcPayload} />
       </div>
     </div>
   )
@@ -230,23 +356,34 @@ export function MarketMethodTable({ payload }) {
     <div>
       <Typography.Paragraph type="secondary" className="valuation-formula-wrap" style={{ fontSize: 12 }}>
         基数年份 {payload.base_year || '-'}；营业收入 {fmtWan(payload.revenue_base)}；P/E 基数（净利润） {fmtWan(payload.operating_profit_base)}；
-        市场法流动性折扣 {fmtPct(payload.liquidity_discount, 0)}
+        市场法流动性折扣 {fmtPct(payload.liquidity_discount, 0)}。P/S、P/E 各一行：低端 = 中位数 − σ，高端 = 中位数。
       </Typography.Paragraph>
       <ListTable
         rowKey="row"
         pagination={false}
         size="small"
         columns={[
-          { title: '项目', dataIndex: 'row', width: 180 },
-          { title: '−1σ', dataIndex: 'low', render: (v, r) => (r.kind === 'yi' ? fmtNum(v, 2) : fmtNum(v, 2)) },
-          { title: '中位', dataIndex: 'mid', render: (v) => fmtNum(v, 2) },
-          { title: '+1σ', dataIndex: 'high', render: (v) => fmtNum(v, 2) },
+          { title: '项目', dataIndex: 'row', width: 88 },
+          { title: '低端倍数', dataIndex: 'lowX', render: (v) => fmtNum(v, 2) },
+          { title: '高端倍数', dataIndex: 'highX', render: (v) => fmtNum(v, 2) },
+          { title: '低端非流通权益（亿元）', dataIndex: 'lowYi', render: (v) => fmtNum(v, 2) },
+          { title: '高端非流通权益（亿元）', dataIndex: 'highYi', render: (v) => fmtNum(v, 2) },
         ]}
         data={[
-          { row: 'P/S 倍数', kind: 'x', low: psM.min, mid: psM.median, high: psM.max },
-          { row: 'P/S 非流通权益（亿元）', kind: 'yi', low: payload.ps?.low?.illiquid_yi, mid: payload.ps?.mid?.illiquid_yi, high: payload.ps?.high?.illiquid_yi },
-          { row: 'P/E 倍数', kind: 'x', low: peM.min, mid: peM.median, high: peM.max },
-          { row: 'P/E 非流通权益（亿元）', kind: 'yi', low: payload.pe?.low?.illiquid_yi, mid: payload.pe?.mid?.illiquid_yi, high: payload.pe?.high?.illiquid_yi },
+          {
+            row: 'P/S',
+            lowX: psM.min,
+            highX: psM.median,
+            lowYi: payload.ps?.low?.illiquid_yi,
+            highYi: payload.ps?.mid?.illiquid_yi,
+          },
+          {
+            row: 'P/E',
+            lowX: peM.min,
+            highX: peM.median,
+            lowYi: payload.pe?.low?.illiquid_yi,
+            highYi: payload.pe?.mid?.illiquid_yi,
+          },
         ]}
       />
     </div>

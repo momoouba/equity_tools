@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { devApiOrigin } from '../config/devApiPort'
-import { clearUser, getUser, touchSession } from './auth'
+import { clearUser, getPublishSession, getUser, isPublishPath, touchSession } from './auth'
 
 // 创建axios实例
 // 开发环境下优先直连后端，避免代理偶发未生效导致 404
@@ -25,6 +25,17 @@ const axiosInstance = axios.create({
 // 请求拦截器：自动添加用户ID和角色到请求头；记住我模式下滑动续期
 axiosInstance.interceptors.request.use(
   (config) => {
+    const onPublish = isPublishPath()
+    if (onPublish) {
+      const pub = getPublishSession()
+      if (pub?.token) {
+        config.headers['x-publish-token'] = pub.token
+        if (pub.password) {
+          config.headers['x-publish-password'] = btoa(unescape(encodeURIComponent(pub.password)))
+        }
+      }
+      return config
+    }
     const user = touchSession() || getUser()
     if (user) {
       const id = user.id || user.F_Id
@@ -52,11 +63,13 @@ axiosInstance.interceptors.response.use(
     const isOnLoginPage = window.location.pathname === '/login'
 
     // 401：登录失败留在登录页展示错误；已登录会话过期则跳转登录
-    if (error.response?.status === 401 && !isLoginRequest && !isOnLoginPage) {
+    const path = window.location.pathname
+    const isPublicShare = isPublishPath(path)
+      || path.startsWith('/share/')
+      || path.startsWith('/performance/share/')
+    if (error.response?.status === 401 && !isLoginRequest && !isOnLoginPage && !isPublicShare) {
       clearUser()
-      if (!window.location.pathname.startsWith('/share/')) {
-        window.location.href = '/login'
-      }
+      window.location.href = '/login'
     }
     return Promise.reject(error)
   }

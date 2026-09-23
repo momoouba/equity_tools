@@ -23,7 +23,7 @@ function fmtRange(conclusion) {
   return `${fmtN(yi.market_ps?.low)} / ${fmtN(yi.market_pe?.low)} / ${fmtN(dcf?.low)}  ~  ${fmtN(yi.market_ps?.high)} / ${fmtN(yi.market_pe?.high)} / ${fmtN(dcf?.high)}`
 }
 
-export default function ValuationPostCasesPage({ embedded = false }) {
+export default function ValuationPostCasesPage({ embedded = false, onOpenWorkbench }) {
   const navigate = useNavigate()
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
@@ -64,7 +64,7 @@ export default function ValuationPostCasesPage({ embedded = false }) {
       className: 'list-ops-col',
       render: (_, r) => (
         <ListOps>
-          <ListOpButton name="进入估值" onClick={() => navigate(`/dashboard/valuation/workbench/${r.id}`)} />
+          <ListOpButton name="进入估值" onClick={() => (onOpenWorkbench ? onOpenWorkbench(r.id) : navigate(`/dashboard/valuation/workbench/${r.id}`))} />
         </ListOps>
       ),
     },

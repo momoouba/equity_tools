@@ -126,6 +126,7 @@ async function runJob(jobId) {
         stock_code: c.stock_code,
         stock_name: c.stock_name,
         in_pool: Number(c.in_pool) === 1,
+        comparability: c.comparability,
         pe_median_override: c.pe_median_override,
         ps_median_override: c.ps_median_override,
       });

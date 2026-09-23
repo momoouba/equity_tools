@@ -34,6 +34,8 @@ const newsDetailRoutes = require('./routes/newsDetail');
 const performanceRoutes = require('./routes/performance');
 const listingRoutes = require('./routes/listing');
 const listingShareRoutes = require('./routes/listingShare');
+const appPublishRoutes = require('./routes/appPublish');
+const { publishAuthMiddleware } = require('./middleware/publishAuth');
 const projectSourcingRoutes = require('./routes/project-sourcing');
 const weweProbeRoutes = require('./routes/weweProbe');
 const { router: weweLiveQrRoutes, liveQrHtml } = require('./routes/weweLiveQr');
@@ -96,6 +98,9 @@ app.use((req, res, next) => {
     urlencodedParser(req, res, next);
   });
 });
+
+// 发布嵌入：在业务路由之前把 x-publish-token 解析成发布人身份
+app.use('/api', publishAuthMiddleware);
 
 // API 路由禁用 Etag/304 缓存，避免浏览器缓存旧 JSON 响应
 app.use('/api', (req, res, next) => {
@@ -240,6 +245,7 @@ app.use('/api/news-detail', newsDetailRoutes);
 app.use('/api/performance', performanceRoutes);
 app.use('/api/listing', listingRoutes);
 app.use('/api/listing-share', listingShareRoutes);
+app.use('/api/app-publish', appPublishRoutes);
 app.use('/api/project-sourcing', projectSourcingRoutes);
 app.use('/api/wewe-probe', weweProbeRoutes);
 app.use('/api/wewe-live-qr', weweLiveQrRoutes);
@@ -284,6 +290,10 @@ if (isProduction) {
     // 对于其他路径（如 /share/:token），返回index.html
     const indexPath = path.join(clientDistPath, 'index.html');
     if (fs.existsSync(indexPath)) {
+      if (req.path.startsWith('/share') || req.path.startsWith('/publish')) {
+        res.removeHeader('X-Frame-Options');
+        res.setHeader('Content-Security-Policy', 'frame-ancestors *');
+      }
       res.sendFile(indexPath);
     } else {
       next();

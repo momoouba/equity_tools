@@ -32,7 +32,7 @@ function fmtN(v) {
   return Number.isFinite(n) ? n.toFixed(2) : '-'
 }
 
-export default function ValuationPreProjectsPage() {
+export default function ValuationPreProjectsPage({ embedded = false, onOpenWorkbench }) {
   const navigate = useNavigate()
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
@@ -184,7 +184,9 @@ export default function ValuationPreProjectsPage() {
     try {
       const res = await openValuationCaseFromPreProject(preId)
       if (res.data?.success) {
-        navigate(`/dashboard/valuation/workbench/${res.data.data.id}`)
+        const caseId = res.data.data.id
+        if (onOpenWorkbench) onOpenWorkbench(caseId)
+        else navigate(`/dashboard/valuation/workbench/${caseId}`)
       } else {
         Message.error(res.data?.message || '打开案件失败')
       }
@@ -226,10 +228,10 @@ export default function ValuationPreProjectsPage() {
   ]
 
   return (
-    <div className="valuation-page list-table-page" style={{ '--list-ops-col-width': '100px' }}>
+    <div className={embedded ? 'list-table-page' : 'valuation-page list-table-page'} style={{ '--list-ops-col-width': '100px' }}>
       <Card bordered={false}>
         <div className="valuation-page-header">
-          <h2>投前项目估值</h2>
+          {!embedded && <h2>投前项目估值</h2>}
           <Space>
             <Input.Search
               allowClear

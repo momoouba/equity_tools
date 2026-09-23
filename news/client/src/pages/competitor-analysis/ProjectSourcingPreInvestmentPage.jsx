@@ -48,6 +48,7 @@ import {
   sortRelationsForDisplay,
 } from './competitorRelationColumns'
 import { ListOpButton, ListOps } from '../../components/listTableOps'
+import AppPublishButton from '../../components/AppPublishButton'
 import '../../styles/listTable.css'
 import '../EnterpriseManagement.css'
 import '../EnterpriseForm.css'
@@ -108,7 +109,7 @@ async function waitForPreInvAiEnrich(projectId) {
   throw new Error('AI 取数等待超时，请稍后点击「刷新」查看')
 }
 
-export default function ProjectSourcingPreInvestmentPage() {
+export default function ProjectSourcingPreInvestmentPage({ showPublish = true }) {
   const [loading, setLoading] = useState(false)
   const [list, setList] = useState([])
   const [total, setTotal] = useState(0)
@@ -1024,9 +1025,12 @@ export default function ProjectSourcingPreInvestmentPage() {
         title="投前-竞品分析"
         bordered={false}
         extra={
-          <Button type="primary" onClick={openCreateModal}>
-            新增
-          </Button>
+          <Space>
+            {showPublish ? <AppPublishButton appName="竞品分析" /> : null}
+            <Button type="primary" onClick={openCreateModal}>
+              新增
+            </Button>
+          </Space>
         }
         style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
         bodyStyle={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}

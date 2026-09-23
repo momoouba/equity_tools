@@ -477,69 +477,118 @@ function turnoverDays(ttmFlow, stock) {
   return 360 / (flow / Math.max(st, 1e-9));
 }
 
+function rememberYear(map, year, rank, value) {
+  const n = toNumber(value);
+  if (n == null || !year) return;
+  const prev = map.get(year);
+  if (!prev || rank >= prev.rank) map.set(year, { value: n, rank });
+}
+
+function seriesFromYearMap(map) {
+  const years = [...map.keys()].sort();
+  const by_year = {};
+  const values = [];
+  for (const y of years) {
+    by_year[y] = map.get(y).value;
+    values.push(map.get(y).value);
+  }
+  return {
+    by_year,
+    latest: years.length ? map.get(years[years.length - 1]).value : null,
+    median: median(values),
+  };
+}
+
+function rememberStatement(map, stmt) {
+  if (!stmt || stmt.report_type === 'interim') return;
+  const year = fiscalYearFromPeriod(stmt.report_period);
+  if (!year) return;
+  const rank = reportTypeRank(stmt.report_type);
+  const prev = map.get(year);
+  if (!prev || rank >= prev.rank) map.set(year, { stmt, rank });
+}
+
 function computeComparableStats(compsFinancials, opts = {}) {
   const asOfYmd = resolveValuationDate(opts.asOfDate);
-  const feeMedians = { selling: [], admin: [], rd: [] };
+  const feeCompanies = [];
   const gmByCompany = [];
-  const wc = { dso: [], dpo: [], dio: [] };
+  const wcCompanies = [];
   const relative = [];
 
   for (const c of compsFinancials || []) {
     const pls = (c.statements || []).filter((s) => s.statement_type === 'pl');
     const annual = pls.filter((s) => s.report_type !== 'interim');
-    const sellingRates = [];
-    const adminRates = [];
-    const rdRates = [];
-    const gmByYear = new Map();
+    const sellMap = new Map();
+    const adminMap = new Map();
+    const rdMap = new Map();
+    const gmMap = new Map();
+    const plByYear = new Map();
+    const bsByYear = new Map();
+    for (const s of c.statements || []) {
+      if (s.statement_type === 'pl') rememberStatement(plByYear, s);
+      if (s.statement_type === 'bs') rememberStatement(bsByYear, s);
+    }
     for (const s of annual) {
       const m = s.metrics || {};
       const rev = toNumber(m.revenue);
-      if (!rev) continue;
-      const sell = toNumber(m.selling);
-      const adm = toNumber(m.admin);
-      const rd = toNumber(m.rd);
-      const gp = toNumber(m.gross_profit) ?? (rev - num(m.cogs));
-      if (sell != null) sellingRates.push(sell / rev);
-      if (adm != null) adminRates.push(adm / rev);
-      if (rd != null) rdRates.push(rd / rev);
-      if (gp == null) continue;
       const year = fiscalYearFromPeriod(s.report_period);
-      if (!year) continue;
       const rank = reportTypeRank(s.report_type);
-      const prev = gmByYear.get(year);
-      if (!prev || rank >= prev.rank) gmByYear.set(year, { value: gp / rev, rank });
+      if (rev) {
+        rememberYear(sellMap, year, rank, toNumber(m.selling) != null ? toNumber(m.selling) / rev : null);
+        rememberYear(adminMap, year, rank, toNumber(m.admin) != null ? toNumber(m.admin) / rev : null);
+        rememberYear(rdMap, year, rank, toNumber(m.rd) != null ? toNumber(m.rd) / rev : null);
+        const gp = toNumber(m.gross_profit) ?? (rev - num(m.cogs));
+        if (gp != null) rememberYear(gmMap, year, rank, gp / rev);
+      }
     }
-    feeMedians.selling.push(median(sellingRates));
-    feeMedians.admin.push(median(adminRates));
-    feeMedians.rd.push(median(rdRates));
-    const years = [...gmByYear.keys()].sort();
-    const gms = years.map((y) => gmByYear.get(y).value);
-    const byYear = {};
-    const grossMargins = years.map((y) => {
-      byYear[y] = gmByYear.get(y).value;
-      return { year: y, value: gmByYear.get(y).value };
+    const selling = seriesFromYearMap(sellMap);
+    const admin = seriesFromYearMap(adminMap);
+    const rd = seriesFromYearMap(rdMap);
+    feeCompanies.push({
+      stock_code: c.stock_code,
+      stock_name: c.stock_name,
+      items: [
+        { key: 'selling', name: '销售费用率', ...selling },
+        { key: 'admin', name: '管理费用率', ...admin },
+        { key: 'rd', name: '研发费用率', ...rd },
+      ],
     });
+    const gmSeries = seriesFromYearMap(gmMap);
+    const gmYears = Object.keys(gmSeries.by_year).sort();
     gmByCompany.push({
       stock_code: c.stock_code,
       stock_name: c.stock_name,
-      gross_margins: grossMargins,
-      by_year: byYear,
-      latest: years.length ? gmByYear.get(years[years.length - 1]).value : null,
-      median: median(gms),
+      gross_margins: gmYears.map((y) => ({ year: y, value: gmSeries.by_year[y] })),
+      by_year: gmSeries.by_year,
+      latest: gmSeries.latest,
+      median: gmSeries.median,
     });
 
-    const latestBs = latestOfType(c.statements, 'bs');
-    const asOfPl = latestBs
-      ? (findPl(pls, fiscalYearFromPeriod(latestBs.report_period), latestBs.report_type) || latestOfType(c.statements, 'pl'))
-      : latestOfType(c.statements, 'pl');
-    const revTtm = ttmYtdItem(pls, 'revenue', asOfPl);
-    const cogsTtm = ttmYtdItem(pls, 'cogs', asOfPl);
-    const dso = turnoverDays(revTtm, stmtField(latestBs, 'accounts_receivable'));
-    const dpo = turnoverDays(cogsTtm, stmtField(latestBs, 'accounts_payable'));
-    const dio = turnoverDays(cogsTtm, stmtField(latestBs, 'inventory'));
-    if (dso != null) wc.dso.push(dso);
-    if (dpo != null) wc.dpo.push(dpo);
-    if (dio != null) wc.dio.push(dio);
+    const dsoMap = new Map();
+    const dpoMap = new Map();
+    const dioMap = new Map();
+    const wcYears = [...new Set([...plByYear.keys(), ...bsByYear.keys()])].sort();
+    for (const year of wcYears) {
+      const plStmt = plByYear.get(year)?.stmt;
+      const bsStmt = bsByYear.get(year)?.stmt;
+      const revTtm = ttmYtdItem(pls, 'revenue', plStmt);
+      const cogsTtm = ttmYtdItem(pls, 'cogs', plStmt);
+      rememberYear(dsoMap, year, 1, turnoverDays(revTtm, stmtField(bsStmt, 'accounts_receivable')));
+      rememberYear(dpoMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'accounts_payable')));
+      rememberYear(dioMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'inventory')));
+    }
+    const dso = seriesFromYearMap(dsoMap);
+    const dpo = seriesFromYearMap(dpoMap);
+    const dio = seriesFromYearMap(dioMap);
+    wcCompanies.push({
+      stock_code: c.stock_code,
+      stock_name: c.stock_name,
+      items: [
+        { key: 'dso', name: 'DSO（应收周转天数）', ...dso },
+        { key: 'dpo', name: 'DPO（应付周转天数）', ...dpo },
+        { key: 'dio', name: 'DIO（存货周转天数）', ...dio },
+      ],
+    });
 
     const sliced = multiplesOnOrBefore(c.multiples, asOfYmd);
     const latestRow = sliced.length ? sliced[sliced.length - 1] : null;
@@ -586,26 +635,32 @@ function computeComparableStats(compsFinancials, opts = {}) {
       ps_usable: psOverride != null ? true : psUsable,
       quality_warning: [c.quality_warning, ...extraWarn].filter(Boolean).join('；') || null,
       in_pool: !!c.in_pool,
+      comparability: c.comparability || null,
     });
   }
 
+  const itemMedian = (companies, key) => median(
+    companies.map((c) => c.items.find((item) => item.key === key)?.median)
+  );
   return {
     fees: {
-      selling_median: median(feeMedians.selling),
-      admin_median: median(feeMedians.admin),
-      rd_median: median(feeMedians.rd),
-      formula: '三费：各公司多期费率中位数（默认排除半年报）→ 可比集中位数',
+      companies: feeCompanies,
+      selling_median: itemMedian(feeCompanies, 'selling'),
+      admin_median: itemMedian(feeCompanies, 'admin'),
+      rd_median: itemMedian(feeCompanies, 'rd'),
+      formula: '三费：每家按年列出销售/管理/研发费用率（不含半年报，同年取最新报告）。公司中位数是这些年的中位，可比集再取中位。可比强度不参与',
     },
     gross_margin: {
       companies: gmByCompany,
       set_median: median(gmByCompany.map((x) => x.median)),
-      formula: '毛利率：按公司、按年及最新一期，汇总中位数',
+      formula: '毛利率：每家按年及最新一期，公司中位数后再取可比集中位。可比强度不参与',
     },
     working_capital: {
-      dso_median: median(wc.dso),
-      dpo_median: median(wc.dpo),
-      dio_median: median(wc.dio),
-      formula: 'DSO=360/(TTM营收/净应收)；DPO/DIO 用 TTM 营业成本。TTM=上年年报+本期累计−去年同期，缺同期则按报告期年化（Q1×4）',
+      companies: wcCompanies,
+      dso_median: itemMedian(wcCompanies, 'dso'),
+      dpo_median: itemMedian(wcCompanies, 'dpo'),
+      dio_median: itemMedian(wcCompanies, 'dio'),
+      formula: 'DSO=360/(TTM营收/净应收)；DPO/DIO 用 TTM 营业成本。按年取该年最新报告（不含半年报）。TTM=上年年报+本期累计−去年同期，缺同期则按报告期年化（Q1×4）。可比强度不参与',
     },
     relative,
   };
@@ -746,7 +801,7 @@ function alignCfToYears(targetCf, years, overrides) {
   };
 }
 
-/** POOL 各公司历史中位数 → MEDIAN / STDEV。不剔除公司；σ 对超过 3×中位的点截尾（避免极端高倍数把 −1σ 打成负数）。 */
+/** POOL 各公司历史中位数 → MEDIAN / STDEV。可比强度不参与。不剔除公司；σ 对超过 3×中位的点截尾。 */
 function poolSigmaSet(pool, medianKey, latestKey, saneFn, overrideKey) {
   const raw = [];
   let insane = 0;
@@ -864,7 +919,7 @@ function marketMethod({
   const peSet = peBand || defaults.peSet;
   const psSet = psBand || defaults.psSet;
   if (peBand || psBand) {
-    warnings.push('市场法倍数已按填写值覆盖 POOL 的 −1σ / 中位');
+    warnings.push('市场法倍数已按填写值覆盖 POOL 的低端 / 高端');
   }
   if (!peBand) warnings.push(...defaults.peWarnings);
   if (!psBand) warnings.push(...defaults.psWarnings);
@@ -896,7 +951,7 @@ function marketMethod({
     pe: { low: peLow, mid: peMid, high: peHigh },
     ps: { low: psLow, mid: psMid, high: psHigh },
     warnings,
-    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。倍数默认取可比 POOL（低端=中位−σ，高端=中位）；改过市场法倍数则覆盖 POOL',
+    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。倍数默认取可比 POOL：低端=中位数−σ，高端=中位数。可比强度只作标记。改过市场法倍数则覆盖 POOL',
   };
 }
 
@@ -963,8 +1018,8 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
           },
     },
     formula: scenarioMode === C.SCENARIO_DUAL
-      ? '增量=高端−低端。市场法 P/S、P/E 仍用同一套（低端=POOL −1σ、高端=中位，均×(1−市场法折扣)）。DCF 并购扣并购折扣，上市不扣'
-      : '增量=高端−低端（堆叠区间，不是第三种方法）。市场法低端=POOL −1σ×基数×(1−市场法折扣)，高端=POOL 中位×基数×(1−市场法折扣)',
+      ? '增量=高端−低端。市场法 P/S、P/E 仍用同一套（低端=POOL 中位数−σ，高端=POOL 中位数，均×(1−市场法折扣)）。DCF 并购扣并购折扣，上市不扣'
+      : '增量=高端−低端（堆叠区间，不是第三种方法）。市场法低端=(中位数−σ)×基数×(1−市场法折扣)，高端=中位数×基数×(1−市场法折扣)',
   };
 }
 
@@ -1213,7 +1268,7 @@ function runValuationEngine(input) {
     relative: {
       title: '相对估值',
       payload: input.compStats?.relative || [],
-      formula: '公司：最新倍数、历史中位数、标准差、±1σ。底稿中位有数则进 POOL，空着仍用东财历史中位。市场法 POOL：各公司所用中位的 MEDIAN 与 STDEV（不剔除围栏外点）',
+      formula: '公司：最新倍数、历史中位数、标准差、±1σ。单家取数：有底稿中位用底稿，否则用历史中位，再否则用锚定截面。市场法低端=这些取用值的中位数−σ，高端=中位数。可比强度只作标记',
     },
     fees: {
       title: '三费',

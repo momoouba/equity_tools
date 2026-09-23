@@ -1,0 +1,71 @@
+/* 与新闻分享页一致：白底、文档流高度，供其他系统菜单 iframe 撑开 */
+html.app-publish-root,
+html.app-publish-root body,
+html.app-publish-root #root {
+  height: auto;
+  min-height: 100%;
+  background: #fff;
+}
+
+.app-publish-gate {
+  min-height: 100vh;
+  min-height: 720px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  box-sizing: border-box;
+}
+
+.app-publish-fallback {
+  width: 420px;
+  max-width: calc(100% - 32px);
+  padding: 24px;
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+}
+
+.app-publish-fallback h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.app-publish-fallback p {
+  margin: 0 0 16px;
+  color: #4e5969;
+}
+
+.app-publish-shell {
+  min-height: 100vh;
+  min-height: 720px;
+  height: auto;
+  overflow: visible;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.app-publish-shell > .pre-inv-sourcing-page.list-table-page,
+.app-publish-shell > .merged-tabs-page,
+.app-publish-shell > .valuation-workbench {
+  flex: 1 0 auto;
+  min-height: 640px;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+}
+
+.app-publish-shell .pre-inv-sourcing-page.list-table-page,
+.app-publish-shell .merged-tabs-page,
+.app-publish-shell .merged-tabs-page .list-table-page,
+.app-publish-shell .merged-tabs-page .pre-inv-sourcing-page.list-table-page,
+.app-publish-shell .merged-tabs-page .enterprise-management.invested-enterprises-table-page,
+.app-publish-shell .merged-tabs-page .list-table-page > .arco-card,
+.app-publish-shell .valuation-workbench {
+  height: auto !important;
+  max-height: none !important;
+  min-height: 480px;
+  overflow: visible !important;
+}
