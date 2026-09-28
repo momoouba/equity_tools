@@ -10,6 +10,7 @@ const XLSX = require('xlsx');
 const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
 const { convertQuartzCronToNodeCron } = require('./cronQuartzToNode');
 const { IE_NEWS_APP_FILTER_SQL, IE_NEWS_APP_FILTER_SQL_IE } = require('./investedEnterpriseNewsAppSql');
+const { isChineseStatutoryHolidayNews } = require('./chineseStatutoryHoliday');
 
 /**
  * 拆分逗号分隔的公众号ID字符串，返回去重后的ID数组
@@ -2738,10 +2739,15 @@ async function sendNewsEmailWithExcel(recipientConfig, emailConfig, newsList) {
       console.error('[邮件发送] 查询额外公众号列表失败:', e.message);
     }
 
-    // 过滤掉广告类型的新闻：仅「节假日类官方营销」会打这三种标签（节日庆祝、节日工作安排、节日放假安排，含春节/中秋及母亲节/圣诞等）；
-    // 例外：企业公众号（有企业归属且非额外公众号）即使带营销推广/节假日营销类标签也发送
+    // 节日新闻一律不推送（法定节假日，以及母亲节、圣诞等），含企业公众号。
+    // 非节日的营销标签：企业公众号（有企业归属且非额外公众号）仍发送。
     const advertisementKeywords = ['广告推广', '商业广告', '营销推广'];
     const filteredNewsList = newsList.filter(news => {
+      if (isChineseStatutoryHolidayNews(news)) {
+        console.log(`[邮件发送] 过滤节日新闻: ${news.title}`);
+        return false;
+      }
+
       const hasEnterpriseName = news.enterprise_full_name && news.enterprise_full_name.trim() !== '';
       const isFromAdditionalAccount = news.wechat_account && additionalAccountIds.includes(news.wechat_account);
       // 企业公众号：已关联被投企业等主体，且不是额外/第三方公众号
@@ -3749,6 +3755,7 @@ module.exports = {
   filterNewsByCategory,
   deduplicateNewsBySemanticSimilarity,
   isHolidayContentTaggedNews,
+  isChineseStatutoryHolidayNews,
   mergeShanghaiLitigationIntoNewsList,
   normalizeNewsListIds
 };

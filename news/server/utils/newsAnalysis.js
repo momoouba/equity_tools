@@ -3,6 +3,11 @@ const iconv = require('iconv-lite');
 const db = require('../db');
 const { logWithTag, errorWithTag, warnWithTag } = require('./logUtils');
 const { IE_NEWS_APP_FILTER_SQL } = require('./investedEnterpriseNewsAppSql');
+const {
+  isChineseStatutoryHolidayNews,
+  forceStatutoryHolidayKeywords,
+  STATUTORY_HOLIDAY_TAG_RULE
+} = require('./chineseStatutoryHoliday');
 
 /** 编码敏感站点（格隆汇、新浪、21经济网、新浪财经、腾讯科技、中新经纬等），抓取时需尝试 UTF-8 / GBK 解码 */
 const ENCODING_SENSITIVE_DOMAINS = [
@@ -3915,6 +3920,64 @@ class NewsAnalysis {
   }
 
   /**
+   * 正文提取不到、标题又没有节日名称时，用 AI 判断标题是否为节日祝福或放假问候。
+   * @param {string} title
+   * @returns {Promise<boolean>}
+   */
+  async isHolidayGreetingTitle(title) {
+    const t = String(title || '').trim();
+    if (!t) return false;
+    if (/五一劳动奖章|五一劳动奖状|全国五一劳动奖|三八红旗手/.test(t) && !isChineseStatutoryHolidayNews({ title: t })) {
+      return false;
+    }
+    if (!this._holidayTitleCache) this._holidayTitleCache = new Map();
+    if (this._holidayTitleCache.has(t)) return this._holidayTitleCache.get(t);
+
+    const prompt = `判断下面这条新闻标题是否属于节日祝福、节日放假通知或节日慰问。标题里可以不出现节日名称。
+属于：节日贺卡、祝福海报、假期问候、团圆/佳节氛围的文案。例如「月圆人团圆」「愿所有的美好不期而遇」「假期愉快，注意安全」「致最爱的她」。
+不属于：融资、产品、业务、人事、财报，以及「荣获五一劳动奖章」「荣获三八红旗手」这类荣誉。
+只返回 JSON：{"holiday_greeting": true} 或 {"holiday_greeting": false}
+标题：${t}`;
+
+    let yes = false;
+    try {
+      const raw = await this.callAIModel(prompt);
+      const text = String(raw || '');
+      const matched = text.match(/\{[\s\S]*?\}/);
+      if (matched) {
+        const parsed = JSON.parse(matched[0]);
+        yes = parsed.holiday_greeting === true || parsed.holiday_greeting === 'true';
+      }
+      console.log(`[节日标题] 「${t.slice(0, 60)}」AI判断节日祝福: ${yes}`);
+    } catch (error) {
+      console.warn(`[节日标题] AI判断失败，不按节日处理: ${error.message}`);
+      yes = false;
+    }
+    if (this._holidayTitleCache.size > 1000) this._holidayTitleCache.clear();
+    this._holidayTitleCache.set(t, yes);
+    return yes;
+  }
+
+  /**
+   * 先按节日关键词改标签；正文不可用且关键词未命中时，再按标题做节日祝福判断。
+   */
+  async keywordsWithTitleHolidayCheck(keywords, title, content) {
+    const news = { title, content, keywords };
+    const forced = forceStatutoryHolidayKeywords(keywords, news);
+    if (Array.isArray(forced) && forced.length === 1 && forced[0] === '节假日') return forced;
+
+    const plain = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const contentMissing = plain.length < 20
+      || /无法提取正文|正文无文字|无正文内容|请直接查看原文|该新闻为图片/.test(plain);
+    if (!contentMissing) return forced;
+    if (await this.isHolidayGreetingTitle(title)) {
+      console.log(`[节日标题] 正文不可用，标题判定为节日祝福，标签改为「节假日」: ${String(title || '').slice(0, 60)}`);
+      return ['节假日'];
+    }
+    return forced;
+  }
+
+  /**
    * 分析新闻情绪和类型
    */
   async analyzeNewsSentimentAndType(title, content, sourceUrl, isAdditionalAccount = false, interfaceType = '新榜') {
@@ -4034,7 +4097,10 @@ class NewsAnalysis {
         
         console.log(`[analyzeNewsSentimentAndType] 图片内容处理 - 情绪: ${imageResult.sentiment}, 情绪原因: ${imageResult.sentiment_reason}`);
         
-        return imageResult;
+        return {
+          ...imageResult,
+          keywords: await this.keywordsWithTitleHolidayCheck(imageResult.keywords, title, '')
+        };
     }
     
     // 获取提示词配置（包含关联的AI模型配置）
@@ -4306,6 +4372,8 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       // 移除未替换的变量，避免发送给AI
       finalPrompt = finalPrompt.replace(/\$\{[^}]+\}/g, '');
     }
+
+    finalPrompt += STATUTORY_HOLIDAY_TAG_RULE;
     
     // 记录最终Prompt的长度（用于调试）
     console.log(`[analyzeNewsSentimentAndType] 最终Prompt长度: ${finalPrompt.length}字符`);
@@ -4929,6 +4997,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         }
       }
       
+      finalResult.keywords = await this.keywordsWithTitleHolidayCheck(finalResult.keywords, title, content);
       return finalResult;
     } catch (error) {
       console.error('新闻分析失败:', error);
@@ -5033,7 +5102,7 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
       const errorResult = {
         sentiment: inferredSentiment,
         sentiment_reason: inferredReason,
-        keywords: finalKeywords,
+        keywords: await this.keywordsWithTitleHolidayCheck(finalKeywords, title, content),
         news_abstract: defaultAbstract,
         _aiAnalysisFailed: true, // 标记AI分析失败，用于任务统计
         _errorMessage: error.message
@@ -6187,6 +6256,20 @@ ${enterpriseList}
       logWithTag('[validateAnalysisResult]', '✓ 校验通过，分析结果正常');
     }
     
+    const holidayNews = {
+      title,
+      content,
+      news_abstract: validatedAbstract,
+      keywords: validatedKeywords
+    };
+    if (isChineseStatutoryHolidayNews(holidayNews)) {
+      const before = JSON.stringify(validatedKeywords);
+      validatedKeywords = forceStatutoryHolidayKeywords(validatedKeywords, holidayNews);
+      if (before !== JSON.stringify(validatedKeywords)) {
+        logWithTag('[validateAnalysisResult]', `节日内容，标签强制为「节假日」（原标签: ${before}）`);
+      }
+    }
+
     return {
       sentiment: analysis.sentiment,
       sentiment_reason: analysis.sentiment_reason,
@@ -6547,7 +6630,7 @@ ${enterpriseList}
         analysis = {
           sentiment: 'neutral',
           sentiment_reason: '由于新闻链接中有反爬虫程序，无法获取正文',
-          keywords: ['政策信息'],
+          keywords: await this.keywordsWithTitleHolidayCheck(['政策信息'], newsItem.title, ''),
           news_abstract: '由于新闻链接中有反爬虫程序，请直接查看原文'
         };
         console.log(`[processNewsWithEnterprise] 反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
@@ -6868,7 +6951,7 @@ ${enterpriseList}
         analysis = {
           sentiment: 'neutral',
           sentiment_reason: '由于新闻链接中有反爬虫程序，无法获取正文',
-          keywords: ['政策信息'],
+          keywords: await this.keywordsWithTitleHolidayCheck(['政策信息'], newsItem.title, ''),
           news_abstract: '由于新闻链接中有反爬虫程序，请直接查看原文'
         };
         logWithTag('[processNewsWithoutEnterprise]', `反爬虫阻塞 - 情绪: ${analysis.sentiment}, 情绪原因: ${analysis.sentiment_reason || '(无)'}, 摘要: ${analysis.news_abstract}`);
@@ -7464,7 +7547,11 @@ ${enterpriseList}
                   // 提取失败，使用默认处理
                   logWithTag('[补充新榜分析]', '从微信公众号提取内容失败，使用默认处理');
                   const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-                  const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+                  const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+                    inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+                    newsItem.title,
+                    ''
+                  );
                   const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
                   
                   analysisResult = {
@@ -7478,7 +7565,11 @@ ${enterpriseList}
                 errorWithTag('[补充新榜分析]', `从微信公众号提取内容时出错: ${extractError.message}`);
                 // 提取失败，使用默认处理
                 const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-                const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+                const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+  inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+  newsItem.title,
+  ''
+);
                 const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
                 
                 analysisResult = {
@@ -7492,7 +7583,11 @@ ${enterpriseList}
               // 不是微信公众号URL或没有source_url，使用默认处理
               logWithTag('[补充新榜分析]', `新闻ID ${newsItem.F_Id} 内容被污染，且不是微信公众号URL，使用默认处理`);
               const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-              const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+              const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+  inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+  newsItem.title,
+  ''
+);
               const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
               
               analysisResult = {
@@ -7834,7 +7929,11 @@ ${enterpriseList}
               // 提取失败，使用默认处理
               logWithTag('[立即分析新榜新闻]', '从微信公众号提取内容失败，使用默认处理');
               const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-              const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+              const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+  inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+  newsItem.title,
+  ''
+);
               const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
               
               analysisResult = {
@@ -7848,7 +7947,11 @@ ${enterpriseList}
             errorWithTag('[立即分析新榜新闻]', `从微信公众号提取内容时出错: ${extractError.message}`);
             // 提取失败，使用默认处理
             const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-            const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+            const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+  inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+  newsItem.title,
+  ''
+);
             const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
             
             analysisResult = {
@@ -7862,7 +7965,11 @@ ${enterpriseList}
           // 不是微信公众号URL或没有source_url，使用默认处理
           console.log(`[立即分析新榜新闻] content为空或包含乱码，且不是微信公众号URL，使用默认处理`);
           const inferredKeywords = this.inferKeywordsFromContent(newsItem.title, '');
-          const finalKeywords = inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'];
+          const finalKeywords = await this.keywordsWithTitleHolidayCheck(
+  inferredKeywords.length > 0 ? inferredKeywords : ['图片内容'],
+  newsItem.title,
+  ''
+);
           const finalAbstract = '无正文内容，该新闻为图片，请查看详情';
           
           analysisResult = {
@@ -8290,6 +8397,10 @@ ${enterpriseList}
    * 从标题和内容推断关键词标签
    */
   inferKeywordsFromContent(title, content) {
+    if (isChineseStatutoryHolidayNews({ title, content })) {
+      return ['节假日'];
+    }
+
     const fullText = ((title || '') + ' ' + (content || '')).toLowerCase();
     const keywords = [];
     
