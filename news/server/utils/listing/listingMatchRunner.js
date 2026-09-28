@@ -92,7 +92,8 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime, eve
   if (!ymd) {
     const rows = await db.query(
       `SELECT F_Id FROM ipo_project_progress
-       WHERE match_source = 'ipo_progress'
+       WHERE IFNULL(F_DeleteMark, 0) = 0
+         AND match_source = 'ipo_progress'
          AND ipo_project_f_id = ?
          AND ipo_progress_row_id = ?
        LIMIT 1`,
@@ -102,7 +103,8 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime, eve
   }
   const rows = await db.query(
     `SELECT F_Id FROM ipo_project_progress
-     WHERE match_source = 'ipo_progress'
+     WHERE IFNULL(F_DeleteMark, 0) = 0
+       AND match_source = 'ipo_progress'
        AND ipo_project_f_id = ?
        AND ipo_progress_row_id = ?
        AND DATE(F_UpdateTime) = ?
@@ -113,7 +115,8 @@ async function existsIpoProgressMatch(projectFId, progressRowId, updateTime, eve
   if (!event) return false;
   const eventRows = await db.query(
     `SELECT F_Id FROM ipo_project_progress
-     WHERE match_source = 'ipo_progress'
+     WHERE IFNULL(F_DeleteMark, 0) = 0
+       AND match_source = 'ipo_progress'
        AND ipo_project_f_id = ?
        AND DATE(F_UpdateTime) = ?
        AND TRIM(IFNULL(status, '')) = ?
@@ -369,7 +372,7 @@ async function loadExistingIpoProgressMatchKeys() {
     `SELECT ipo_project_f_id, ipo_progress_row_id, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS ymd,
             status, board, exchange
      FROM ipo_project_progress
-     WHERE match_source = 'ipo_progress'`
+     WHERE IFNULL(F_DeleteMark, 0) = 0 AND match_source = 'ipo_progress'`
   );
   const exact = new Set();
   const byEvent = new Set();
@@ -395,8 +398,42 @@ function emptyMatchBatchResult(extra = {}) {
     newSharePublicDate: null,
     yesterdayStatusBackfilled: 0,
     yesterdaySourceBackfilled: 0,
+    duplicateEventSoftDeleted: 0,
     ...extra,
   };
+}
+
+/**
+ * 同一底层项目 + 同一业务日 + 同一状态/板块/交易所：只保留 F_Id 最小的一条有效匹配行。
+ * 历史在幂等键不完整时可能写入多条，列表会看起来像大量重复。
+ */
+async function softDeleteDuplicateIpoProgressMatches() {
+  const dups = await db.query(
+    `SELECT a.F_Id
+     FROM ipo_project_progress a
+     INNER JOIN ipo_project_progress b
+       ON IFNULL(a.F_DeleteMark, 0) = 0
+      AND IFNULL(b.F_DeleteMark, 0) = 0
+      AND a.match_source = 'ipo_progress'
+      AND b.match_source = 'ipo_progress'
+      AND a.ipo_project_f_id = b.ipo_project_f_id
+      AND DATE(a.F_UpdateTime) = DATE(b.F_UpdateTime)
+      AND TRIM(IFNULL(a.status, '')) = TRIM(IFNULL(b.status, ''))
+      AND TRIM(IFNULL(a.board, '')) = TRIM(IFNULL(b.board, ''))
+      AND TRIM(IFNULL(a.exchange, '')) = TRIM(IFNULL(b.exchange, ''))
+      AND a.F_Id > b.F_Id`
+  );
+  let n = 0;
+  for (const r of dups) {
+    await db.execute(
+      `UPDATE ipo_project_progress
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system_match_dedupe'
+       WHERE F_Id = ? AND IFNULL(F_DeleteMark, 0) = 0`,
+      [r.F_Id]
+    );
+    n += 1;
+  }
+  return n;
 }
 
 let listingMatchBatchInFlight = false;
@@ -492,6 +529,16 @@ async function runListingMatchBatchImpl({
         listingDataAppId: listingAppId,
       });
 
+  let duplicateEventSoftDeleted = 0;
+  try {
+    duplicateEventSoftDeleted = await softDeleteDuplicateIpoProgressMatches();
+    if (duplicateEventSoftDeleted) {
+      console.log(`[listing-match] 软删同事件重复匹配 ${duplicateEventSoftDeleted} 条`);
+    }
+  } catch (e) {
+    console.warn('[listing-match] 同事件去重失败（继续匹配）:', e.message);
+  }
+
   if (listingAppId && (includeIpoProgress || includeNewShare)) {
     const delParams = [listingAppId];
     let delSql = `UPDATE ipo_project_progress ipp
@@ -513,14 +560,17 @@ async function runListingMatchBatchImpl({
     const clauses = [];
     const params = [];
     if (exchangeIpoIncluded) {
+      // 用业务日（receive_date / F_UpdateTime）划窗口，勿用 timeline_confirmed_at（抓取确认时刻）。
+      // 否则「业务日=昨日、次日才确认」的终止/问询等会漏进 ipo_project_progress。
+      // 同时保留「确认日落在窗口内」：补抓补确认后仍能落库。
       clauses.push(`(
         COALESCE(exchange, '') <> '证监会辅导备案'
         AND COALESCE(exchange, '') <> '境外发行备案'
         AND COALESCE(board, '') <> '境外发行备案'
         AND COALESCE(timeline_confirmed, 1) = 1
         AND (
-          (timeline_confirmed_at IS NOT NULL AND DATE(timeline_confirmed_at) >= ? AND DATE(timeline_confirmed_at) <= ?)
-          OR (timeline_confirmed_at IS NULL AND DATE(F_UpdateTime) >= ? AND DATE(F_UpdateTime) <= ?)
+          DATE(COALESCE(receive_date, F_UpdateTime)) >= ? AND DATE(COALESCE(receive_date, F_UpdateTime)) <= ?
+          OR (timeline_confirmed_at IS NOT NULL AND DATE(timeline_confirmed_at) >= ? AND DATE(timeline_confirmed_at) <= ?)
         )
       )`);
       params.push(startDate, endDate, startDate, endDate);
@@ -708,6 +758,7 @@ async function runListingMatchBatchImpl({
     newShareSkipped: Number(newShareResult.skipped || 0),
     yesterdayStatusBackfilled: Number(backfillResult.statusBackfilled || 0),
     yesterdaySourceBackfilled: Number(backfillResult.sourceBackfilled || 0),
+    duplicateEventSoftDeleted,
   };
 }
 
@@ -780,8 +831,8 @@ async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null }
         matchScore,
         p.fund,
         p.sub,
-        ip.project_name || ip.company,
-        ip.company,
+        p.project_name,
+        p.company,
         p.inv_amount,
         p.residual_amount,
         p.ratio,
