@@ -235,11 +235,12 @@ const ALTER_SQL = [
   "ALTER TABLE b_ipo_p MODIFY COLUMN ipo_status varchar(255) NULL DEFAULT NULL COMMENT '上市状态-7';",
   "ALTER TABLE b_ipo_p MODIFY COLUMN ipo_progress varchar(255) NULL DEFAULT NULL COMMENT '上市进展-8';",
   "ALTER TABLE b_ipo_p MODIFY COLUMN paid_amount decimal(30,10) NULL DEFAULT NULL COMMENT '投资成本-9';",
-  "ALTER TABLE b_ipo_p MODIFY COLUMN realized decimal(30,10) NULL DEFAULT NULL COMMENT '已实现价值-10';",
-  "ALTER TABLE b_ipo_p MODIFY COLUMN unrealized decimal(30,10) NULL DEFAULT NULL COMMENT '未实现价值-11';",
-  "ALTER TABLE b_ipo_p MODIFY COLUMN total_value decimal(30,10) NULL DEFAULT NULL COMMENT '总价值-12';",
-  "ALTER TABLE b_ipo_p MODIFY COLUMN DPI decimal(30,10) NULL DEFAULT NULL COMMENT 'DPI-13';",
-  "ALTER TABLE b_ipo_p MODIFY COLUMN MOC decimal(30,10) NULL DEFAULT NULL COMMENT 'MOC-14';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN rest_cost decimal(30,10) NULL DEFAULT NULL COMMENT '剩余成本-10';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN realized decimal(30,10) NULL DEFAULT NULL COMMENT '已实现价值-11';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN unrealized decimal(30,10) NULL DEFAULT NULL COMMENT '未实现价值-12';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN total_value decimal(30,10) NULL DEFAULT NULL COMMENT '总价值-13';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN DPI decimal(30,10) NULL DEFAULT NULL COMMENT 'DPI-14';",
+  "ALTER TABLE b_ipo_p MODIFY COLUMN MOC decimal(30,10) NULL DEFAULT NULL COMMENT 'MOC-15';",
   "ALTER TABLE b_ipo_p MODIFY COLUMN F_Lock int NULL DEFAULT NULL COMMENT '锁定状态';",
   "ALTER TABLE b_project MODIFY COLUMN F_Id varchar(50) NOT NULL COMMENT '主键';",
   "ALTER TABLE b_project MODIFY COLUMN F_CreatorUserId varchar(50) NULL DEFAULT NULL COMMENT '创建用户';",
@@ -367,7 +368,19 @@ const ALTER_SQL = [
   "ALTER TABLE b_all_indicator MODIFY COLUMN lm_spv_paidin decimal(30,10) NULL DEFAULT NULL COMMENT '上月SPV累计投资金额';",
   "ALTER TABLE b_all_indicator MODIFY COLUMN spv_paidin_change decimal(30,10) NULL DEFAULT NULL COMMENT 'SPV累计投资金额变动';",
   "ALTER TABLE b_all_indicator MODIFY COLUMN lm_spv_receive decimal(30,10) NULL DEFAULT NULL COMMENT '上月SPV累计回款金额';",
-  "ALTER TABLE b_all_indicator MODIFY COLUMN spv_receive_change decimal(30,10) NULL DEFAULT NULL COMMENT 'SPV累计回款金额变动';"
+  "ALTER TABLE b_all_indicator MODIFY COLUMN spv_receive_change decimal(30,10) NULL DEFAULT NULL COMMENT 'SPV累计回款金额变动';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN project_h int NULL DEFAULT NULL COMMENT '在持投资数量';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN lm_project_h int NULL DEFAULT NULL COMMENT '上月在持投资数量';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN project_h_change int NULL DEFAULT NULL COMMENT '在持投资数量变动';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN rest_cost_h decimal(30,10) NULL DEFAULT NULL COMMENT '在持剩余成本';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN lm_rest_cost_h decimal(30,10) NULL DEFAULT NULL COMMENT '上月在持剩余成本';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN rest_cost_h_change decimal(30,10) NULL DEFAULT NULL COMMENT '在持剩余成本变动';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN unrealized_h decimal(30,10) NULL DEFAULT NULL COMMENT '在持剩余价值';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN lm_unrealized_h decimal(30,10) NULL DEFAULT NULL COMMENT '上月在持剩余价值';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN unrealized_h_change decimal(30,10) NULL DEFAULT NULL COMMENT '在持剩余价值变动';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN ipo_value_h decimal(30,10) NULL DEFAULT NULL COMMENT '在持上市企业剩余价值';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN ipo_cost_h decimal(30,10) NULL DEFAULT NULL COMMENT '在持上市企业剩余成本';",
+  "ALTER TABLE b_all_indicator MODIFY COLUMN ipo_num_h int NULL DEFAULT NULL COMMENT '在持上市企业数量';"
 ];
 
 const SYNC_MARKER = { table: 'b_transaction_indicator', column: 'fund', comment: '基金名称-3' };

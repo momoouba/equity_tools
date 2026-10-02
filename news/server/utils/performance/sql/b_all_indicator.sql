@@ -6,6 +6,8 @@
 -- 外部子基金 *_w：同一套子基金口径，再排除 perf_fund.sub_fund 有值的内部子基金名
 -- SPV：b_investment_spv 中 lp_paid>0 的 SPV项目
 -- 上市/辅导/受理：b_ipo_p
+-- 在持：b_investment 中 acc_paidin - acc_exit_capital > 1000（本月/上月最新版本）
+-- 在持上市：b_ipo_p 已上市且 rest_cost > 1000（project 去重，金额按行求和）
 -- 数量/金额变动 = 本月累计 − 上月累计；子基金退出/回款变动、直投回款变动沿用现网：取本月 change_* 合计
 -- 本地试跑可把 '${date}' 临时改成 '2026-08-31'；创建版本时会替换
 WITH input_params AS (
@@ -67,7 +69,10 @@ cur_inv AS (
         SUM(CASE WHEN acc_paidin IS NOT NULL AND transaction_type = '直投项目' THEN COALESCE(acc_paidin, 0) ELSE 0 END) AS project_paidin,
         COUNT(DISTINCT CASE WHEN acc_exit > 0 AND transaction_type = '直投项目' THEN project END) AS project_exit,
         SUM(CASE WHEN acc_receive IS NOT NULL AND transaction_type = '直投项目' THEN COALESCE(acc_receive, 0) ELSE 0 END) AS project_receive,
-        SUM(CASE WHEN change_receive > 0 AND transaction_type = '直投项目' THEN COALESCE(change_receive, 0) ELSE 0 END) AS project_receive_change
+        SUM(CASE WHEN change_receive > 0 AND transaction_type = '直投项目' THEN COALESCE(change_receive, 0) ELSE 0 END) AS project_receive_change,
+        COUNT(DISTINCT CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN project END) AS project_h,
+        SUM(CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) ELSE 0 END) AS rest_cost_h,
+        SUM(CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN COALESCE(unrealized, 0) ELSE 0 END) AS unrealized_h
     FROM b_investment
     WHERE version = (SELECT current_version FROM current_version)
       AND F_DeleteMark = 0
@@ -90,7 +95,10 @@ lm_inv AS (
         COUNT(DISTINCT CASE WHEN acc_sub > 0 AND transaction_type = '直投项目' THEN project END) AS project_inv,
         SUM(CASE WHEN acc_paidin IS NOT NULL AND transaction_type = '直投项目' THEN COALESCE(acc_paidin, 0) ELSE 0 END) AS project_paidin,
         COUNT(DISTINCT CASE WHEN acc_exit > 0 AND transaction_type = '直投项目' THEN project END) AS project_exit,
-        SUM(CASE WHEN acc_receive IS NOT NULL AND transaction_type = '直投项目' THEN COALESCE(acc_receive, 0) ELSE 0 END) AS project_receive
+        SUM(CASE WHEN acc_receive IS NOT NULL AND transaction_type = '直投项目' THEN COALESCE(acc_receive, 0) ELSE 0 END) AS project_receive,
+        COUNT(DISTINCT CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN project END) AS project_h,
+        SUM(CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) ELSE 0 END) AS rest_cost_h,
+        SUM(CASE WHEN COALESCE(acc_paidin, 0) - COALESCE(acc_exit_capital, 0) > 1000 THEN COALESCE(unrealized, 0) ELSE 0 END) AS unrealized_h
     FROM b_investment
     WHERE version = (SELECT last_month_version FROM last_month_version)
       AND F_DeleteMark = 0
@@ -122,7 +130,10 @@ cur_ipo AS (
         SUM(CASE WHEN ipo_status = '辅导备案' THEN COALESCE(total_value, 0) ELSE 0 END) AS fd_valuation,
         COUNT(DISTINCT CASE WHEN ipo_status = '已受理' THEN project END) AS sl_num,
         SUM(CASE WHEN ipo_status = '已受理' THEN COALESCE(paid_amount, 0) ELSE 0 END) AS sl_cost,
-        SUM(CASE WHEN ipo_status = '已受理' THEN COALESCE(total_value, 0) ELSE 0 END) AS sl_valuation
+        SUM(CASE WHEN ipo_status = '已受理' THEN COALESCE(total_value, 0) ELSE 0 END) AS sl_valuation,
+        COUNT(DISTINCT CASE WHEN ipo_status = '已上市' AND COALESCE(rest_cost, 0) > 1000 THEN project END) AS ipo_num_h,
+        SUM(CASE WHEN ipo_status = '已上市' AND COALESCE(rest_cost, 0) > 1000 THEN COALESCE(rest_cost, 0) ELSE 0 END) AS ipo_cost_h,
+        SUM(CASE WHEN ipo_status = '已上市' AND COALESCE(rest_cost, 0) > 1000 THEN COALESCE(unrealized, 0) ELSE 0 END) AS ipo_value_h
     FROM b_ipo_p
     WHERE version = (SELECT current_version FROM current_version)
       AND F_DeleteMark = 0
@@ -193,7 +204,19 @@ SELECT
     COALESCE(i.fd_valuation, 0) AS fd_valuation,
     COALESCE(i.sl_num, 0) AS sl_num,
     COALESCE(i.sl_cost, 0) AS sl_cost,
-    COALESCE(i.sl_valuation, 0) AS sl_valuation
+    COALESCE(i.sl_valuation, 0) AS sl_valuation,
+    COALESCE(c.project_h, 0) AS project_h,
+    COALESCE(l.project_h, 0) AS lm_project_h,
+    COALESCE(c.project_h, 0) - COALESCE(l.project_h, 0) AS project_h_change,
+    COALESCE(c.rest_cost_h, 0) AS rest_cost_h,
+    COALESCE(l.rest_cost_h, 0) AS lm_rest_cost_h,
+    COALESCE(c.rest_cost_h, 0) - COALESCE(l.rest_cost_h, 0) AS rest_cost_h_change,
+    COALESCE(c.unrealized_h, 0) AS unrealized_h,
+    COALESCE(l.unrealized_h, 0) AS lm_unrealized_h,
+    COALESCE(c.unrealized_h, 0) - COALESCE(l.unrealized_h, 0) AS unrealized_h_change,
+    COALESCE(i.ipo_value_h, 0) AS ipo_value_h,
+    COALESCE(i.ipo_cost_h, 0) AS ipo_cost_h,
+    COALESCE(i.ipo_num_h, 0) AS ipo_num_h
 FROM cur_inv c
 LEFT JOIN lm_inv l ON 1 = 1
 LEFT JOIN cur_spv s ON 1 = 1

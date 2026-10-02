@@ -77,6 +77,15 @@ const formatNumber = (val) => {
   return Math.round(n).toLocaleString()
 }
 
+// 较上月末：数量用整数，金额用亿元
+const formatSignedChange = (change, asCount) => {
+  const n = toNum(change)
+  if (n === null || n === 0) return '-'
+  const body = asCount ? formatNumber(Math.abs(n)) : formatAmount(Math.abs(n))
+  if (body === '-' || body === '/') return '-'
+  return `${n > 0 ? '+' : '-'}${body}`
+}
+
 // 工具函数 - 格式化比例（后加x）
 const formatRatio = (val) => {
   const n = toNum(val)
@@ -417,52 +426,90 @@ function PortfolioSection({ funds, portfolioFunds, overall, config, onFundPortfo
       {overall && (
         <div className="perf-portfolio-overall-section">
           <div className="perf-section-title">直投项目</div>
-          <div className="perf-indicator-grid perf-indicator-grid-6">
-            {[
-              { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc' },
-              { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
-              { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc', isSpv: true },
-              { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, isExit: true, descKey: 'projectExitAccDesc' },
-              { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, isExit: true, descKey: 'projectReceiveAccDesc' },
-              { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, isExit: true, descKey: 'spvReceiveAccDesc', isSpv: true },
-            ].map((item, idx) => (
-              <div key={idx} className="perf-indicator-item perf-clickable" onClick={item.isSpv ? onSpvDetail : () => onPortfolioDetail('directOnly')}>
-                <div className="perf-indicator-label">
-                  <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
-                </div>
-                <div className={`perf-indicator-value ${item.isExit ? 'perf-exit-value' : ''}`}>{item.value}</div>
-                <div className="perf-indicator-sub">较上月末{item.change != null && toNum(item.change) !== 0 ? (toNum(item.change) > 0 ? '+' : '') + formatAmount(item.change) : '-'}</div>
+          <div className="perf-direct-layout">
+            <div className="perf-direct-left">
+              <div className="perf-indicator-grid perf-direct-grid">
+                {[
+                  { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc', isCount: true },
+                  { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
+                  { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc', isSpv: true },
+                  { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, descKey: 'projectExitAccDesc', isCount: true },
+                  { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, descKey: 'projectReceiveAccDesc' },
+                  { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, descKey: 'spvReceiveAccDesc', isSpv: true },
+                  { label: '在持投资数量', value: formatNumber(overall.project_h), change: overall.project_h_change, isCount: true },
+                  { label: '在持剩余成本', value: formatAmount(overall.rest_cost_h), change: overall.rest_cost_h_change },
+                  { label: '在持剩余价值', value: formatAmount(overall.unrealized_h), change: overall.unrealized_h_change },
+                ].map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="perf-indicator-item perf-clickable"
+                    onClick={item.isSpv ? onSpvDetail : () => onPortfolioDetail('directOnly')}
+                  >
+                    <div className="perf-indicator-label">
+                      <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
+                    </div>
+                    <div className="perf-indicator-value">{item.value}</div>
+                    <div className="perf-indicator-sub">较上月末{formatSignedChange(item.change, item.isCount)}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="perf-ipo-cards">
-            {[
-              { label: '已上市企业', num: overall.ipo_num, cost: overall.ipo_cost, valuation: overall.ipo_valuation, status: '已上市' },
-              { label: '已受理企业', num: overall.sl_num, cost: overall.sl_cost, valuation: overall.sl_valuation, status: '已受理' },
-              { label: '已辅导企业', num: overall.fd_num, cost: overall.fd_cost, valuation: overall.fd_valuation, status: '辅导备案' },
-            ].map((item, idx) => (
-              <div
-                key={idx}
-                className={`perf-ipo-card${onIpoProgressDetail ? ' perf-clickable' : ''}`}
-                onClick={onIpoProgressDetail ? () => onIpoProgressDetail(item.status) : undefined}
-              >
-                <div className="perf-ipo-card-title">{item.label}</div>
-                <div className="perf-ipo-card-metrics">
-                  <div className="perf-ipo-card-metric">
-                    <span className="perf-ipo-card-sub">数量</span>
-                    <span className="perf-ipo-card-num">{formatNumber(item.num)}</span>
-                  </div>
-                  <div className="perf-ipo-card-metric">
-                    <span className="perf-ipo-card-sub">成本</span>
-                    <span className="perf-ipo-card-num">{formatAmount(item.cost)}</span>
-                  </div>
-                  <div className="perf-ipo-card-metric">
-                    <span className="perf-ipo-card-sub">总市值</span>
-                    <span className="perf-ipo-card-num">{formatAmount(item.valuation)}</span>
+            </div>
+            <div className="perf-ipo-cards perf-direct-right">
+              {[
+                {
+                  label: '已上市企业',
+                  status: '已上市',
+                  metrics: [
+                    { label: '数量', value: formatNumber(overall.ipo_num) },
+                    { label: '成本', value: formatAmount(overall.ipo_cost) },
+                    { label: '总价值', value: formatAmount(overall.ipo_valuation) },
+                  ],
+                },
+                {
+                  label: '在持上市企业',
+                  status: '已上市',
+                  metrics: [
+                    { label: '数量', value: formatNumber(overall.ipo_num_h) },
+                    { label: '剩余成本', value: formatAmount(overall.ipo_cost_h) },
+                    { label: '剩余价值', value: formatAmount(overall.ipo_value_h) },
+                  ],
+                },
+                {
+                  label: '已受理企业',
+                  status: '已受理',
+                  metrics: [
+                    { label: '数量', value: formatNumber(overall.sl_num) },
+                    { label: '成本', value: formatAmount(overall.sl_cost) },
+                    { label: '总价值', value: formatAmount(overall.sl_valuation) },
+                  ],
+                },
+                {
+                  label: '已辅导企业',
+                  status: '辅导备案',
+                  metrics: [
+                    { label: '数量', value: formatNumber(overall.fd_num) },
+                    { label: '成本', value: formatAmount(overall.fd_cost) },
+                    { label: '总价值', value: formatAmount(overall.fd_valuation) },
+                  ],
+                },
+              ].map((item, idx) => (
+                <div
+                  key={idx}
+                  className={`perf-ipo-card${onIpoProgressDetail && item.status ? ' perf-clickable' : ''}`}
+                  onClick={onIpoProgressDetail && item.status ? () => onIpoProgressDetail(item.status) : undefined}
+                >
+                  <div className="perf-ipo-card-title">{item.label}</div>
+                  <div className="perf-ipo-card-metrics">
+                    {item.metrics.map((metric) => (
+                      <div key={metric.label} className="perf-ipo-card-metric">
+                        <span className="perf-ipo-card-num">{metric.value}</span>
+                        <span className="perf-ipo-card-sub">{metric.label}</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
           <div className="perf-section-title" style={{ marginTop: 20 }}>子基金组合</div>

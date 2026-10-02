@@ -362,7 +362,10 @@ router.get('/portfolio', async (req, res) => {
               spv_paidin, spv_paidin_change, spv_receive, spv_receive_change,
               ipo_num, ipo_cost, ipo_valuation,
               fd_num, fd_cost, fd_valuation,
-              sl_num, sl_cost, sl_valuation
+              sl_num, sl_cost, sl_valuation,
+              project_h, project_h_change, rest_cost_h, rest_cost_h_change,
+              unrealized_h, unrealized_h_change,
+              ipo_num_h, ipo_cost_h, ipo_value_h
        FROM b_all_indicator
        WHERE version = ? AND F_DeleteMark = 0`,
       [version]

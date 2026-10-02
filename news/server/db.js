@@ -134,15 +134,18 @@ async function ensureExternalSubfundSqlConfig(dbPool) {
          ORDER BY exec_order ASC
          LIMIT 1`
       );
-      if (rows.length && !String(rows[0].sql_content || '').includes('fund_inv_w')) {
+      if (rows.length && !String(rows[0].sql_content || '').includes('ipo_num_h')) {
         const logId = await generateId('b_sql_change_log', dbPool);
+        const note = String(rows[0].sql_content || '').includes('fund_inv_w')
+          ? '增加在持投资 project_h / rest_cost_h / unrealized_h 与在持上市 ipo_*_h'
+          : '增加纯外部子基金 *_w，以及在持投资与在持上市指标';
         await dbPool.query(
           'INSERT INTO b_sql_change_log (F_Id, b_sql_id, modify_time, modify_user_id, changes_json) VALUES (?, ?, NOW(), ?, ?)',
           [logId, rows[0].F_Id, null, JSON.stringify([{
             field: 'sql_content',
             fieldLabel: 'SQL内容',
             oldVal: '(已省略)',
-            newVal: '增加纯外部子基金 *_w 字段'
+            newVal: note
           }])]
         );
         await dbPool.query(
@@ -150,7 +153,35 @@ async function ensureExternalSubfundSqlConfig(dbPool) {
            WHERE F_Id = ? AND F_DeleteMark = 0`,
           [allIndicatorSql, rows[0].F_Id]
         );
-        console.log('  ✓ 已更新 b_all_indicator generate SQL（外部子基金 *_w）');
+        console.log('  ✓ 已更新 b_all_indicator generate SQL（在持指标）');
+      }
+    }
+
+    const ipoPSql = loadGenerateSqlTemplate('b_ipo_p.sql');
+    if (ipoPSql) {
+      const [ipoRows] = await dbPool.query(
+        `SELECT F_Id, sql_content FROM b_sql
+         WHERE target_table = 'b_ipo_p' AND sql_layer = 'generate' AND F_DeleteMark = 0
+         ORDER BY exec_order ASC
+         LIMIT 1`
+      );
+      if (ipoRows.length && !String(ipoRows[0].sql_content || '').includes('AS rest_cost')) {
+        const logId = await generateId('b_sql_change_log', dbPool);
+        await dbPool.query(
+          'INSERT INTO b_sql_change_log (F_Id, b_sql_id, modify_time, modify_user_id, changes_json) VALUES (?, ?, NOW(), ?, ?)',
+          [logId, ipoRows[0].F_Id, null, JSON.stringify([{
+            field: 'sql_content',
+            fieldLabel: 'SQL内容',
+            oldVal: '(已省略)',
+            newVal: '增加 rest_cost：每个 fund+project 的投资成本减退出成本'
+          }])]
+        );
+        await dbPool.query(
+          `UPDATE b_sql SET sql_content = ?, F_LastModifyTime = NOW()
+           WHERE F_Id = ? AND F_DeleteMark = 0`,
+          [ipoPSql, ipoRows[0].F_Id]
+        );
+        console.log('  ✓ 已更新 b_ipo_p generate SQL（rest_cost）');
       }
     }
 
@@ -3740,6 +3771,18 @@ async function initializeTables(dbPool) {
       lm_spv_receive DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月SPV累计回款金额',
       spv_receive_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'SPV累计回款金额变动',
       F_Lock INT NULL DEFAULT 0 COMMENT '锁定状态',
+      project_h INT NULL DEFAULT NULL COMMENT '在持投资数量',
+      lm_project_h INT NULL DEFAULT NULL COMMENT '上月在持投资数量',
+      project_h_change INT NULL DEFAULT NULL COMMENT '在持投资数量变动',
+      rest_cost_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持剩余成本',
+      lm_rest_cost_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月在持剩余成本',
+      rest_cost_h_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持剩余成本变动',
+      unrealized_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持剩余价值',
+      lm_unrealized_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '上月在持剩余价值',
+      unrealized_h_change DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持剩余价值变动',
+      ipo_value_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持上市企业剩余价值',
+      ipo_cost_h DECIMAL(30,10) NULL DEFAULT NULL COMMENT '在持上市企业剩余成本',
+      ipo_num_h INT NULL DEFAULT NULL COMMENT '在持上市企业数量',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-管理人整体指标';
   `);
@@ -4110,11 +4153,12 @@ async function initializeTables(dbPool) {
       ipo_status VARCHAR(255) NULL DEFAULT NULL COMMENT '上市状态-7',
       ipo_progress VARCHAR(255) NULL DEFAULT NULL COMMENT '上市进展-8',
       paid_amount DECIMAL(30,10) NULL DEFAULT NULL COMMENT '投资成本-9',
-      realized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '已实现价值-10',
-      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-11',
-      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-12',
-      DPI DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-13',
-      MOC DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-14',
+      rest_cost DECIMAL(30,10) NULL DEFAULT NULL COMMENT '剩余成本-10',
+      realized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '已实现价值-11',
+      unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-12',
+      total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-13',
+      DPI DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-14',
+      MOC DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-15',
       F_Lock INT NULL DEFAULT NULL COMMENT '锁定状态',
       PRIMARY KEY (F_Id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='定开看板-上市进展项目数据表';
@@ -4143,6 +4187,18 @@ async function initializeTables(dbPool) {
     if (bIpoPStatusComment[0] && bIpoPStatusComment[0].COLUMN_COMMENT !== '上市状态-7') {
       await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN ipo_status VARCHAR(255) NULL DEFAULT NULL COMMENT '上市状态-7'`);
     }
+    const [bIpoPRestCost] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_ipo_p' AND COLUMN_NAME = 'rest_cost'
+    `);
+    if (bIpoPRestCost.length === 0) {
+      await dbPool.query(`ALTER TABLE b_ipo_p ADD COLUMN rest_cost DECIMAL(30,10) NULL DEFAULT NULL COMMENT '剩余成本-10' AFTER paid_amount`);
+    }
+    await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN realized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '已实现价值-11'`);
+    await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN unrealized DECIMAL(30,10) NULL DEFAULT NULL COMMENT '未实现价值-12'`);
+    await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN total_value DECIMAL(30,10) NULL DEFAULT NULL COMMENT '总价值-13'`);
+    await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN DPI DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'DPI-14'`);
+    await dbPool.query(`ALTER TABLE b_ipo_p MODIFY COLUMN MOC DECIMAL(30,10) NULL DEFAULT NULL COMMENT 'MOC-15'`);
   } catch (e) { /* ignore */ }
   // b_manage
   await dbPool.query(`
@@ -5095,6 +5151,37 @@ async function initializeTables(dbPool) {
       if (!wExisting.has(name)) {
         await dbPool.query(`ALTER TABLE b_all_indicator ADD COLUMN ${name} ${type} NULL DEFAULT NULL COMMENT '${comment}'`);
       }
+    }
+  } catch (e) { /* ignore */ }
+
+  // b_all_indicator 表：补充在持投资指标列（若缺失）
+  try {
+    const hFields = [
+      ['project_h', 'INT', '在持投资数量'],
+      ['lm_project_h', 'INT', '上月在持投资数量'],
+      ['project_h_change', 'INT', '在持投资数量变动'],
+      ['rest_cost_h', 'DECIMAL(30,10)', '在持剩余成本'],
+      ['lm_rest_cost_h', 'DECIMAL(30,10)', '上月在持剩余成本'],
+      ['rest_cost_h_change', 'DECIMAL(30,10)', '在持剩余成本变动'],
+      ['unrealized_h', 'DECIMAL(30,10)', '在持剩余价值'],
+      ['lm_unrealized_h', 'DECIMAL(30,10)', '上月在持剩余价值'],
+      ['unrealized_h_change', 'DECIMAL(30,10)', '在持剩余价值变动'],
+      ['ipo_value_h', 'DECIMAL(30,10)', '在持上市企业剩余价值'],
+      ['ipo_cost_h', 'DECIMAL(30,10)', '在持上市企业剩余成本'],
+      ['ipo_num_h', 'INT', '在持上市企业数量']
+    ];
+    const hNames = hFields.map(([name]) => name);
+    const [hCols] = await dbPool.query(`
+      SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b_all_indicator' AND COLUMN_NAME IN (${hNames.map(() => '?').join(',')})
+    `, hNames);
+    const hExisting = new Set(hCols.map(c => c.COLUMN_NAME));
+    let afterCol = 'F_Lock';
+    for (const [name, type, comment] of hFields) {
+      if (!hExisting.has(name)) {
+        await dbPool.query(`ALTER TABLE b_all_indicator ADD COLUMN ${name} ${type} NULL DEFAULT NULL COMMENT '${comment}' AFTER \`${afterCol}\``);
+      }
+      afterCol = name;
     }
   } catch (e) { /* ignore */ }
 

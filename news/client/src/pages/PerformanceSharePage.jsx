@@ -35,6 +35,14 @@ const formatNumber = (val) => {
   return Math.round(n).toLocaleString()
 }
 
+const formatSignedChange = (change, asCount) => {
+  const n = toNum(change)
+  if (n === null || n === 0) return '-'
+  const body = asCount ? formatNumber(Math.abs(n)) : formatAmount(Math.abs(n))
+  if (body === '-' || body === '/') return '-'
+  return `${n > 0 ? '+' : '-'}${body}`
+}
+
 // 工具函数 - 格式化比例（后加x）
 const formatRatio = (val) => {
   const n = toNum(val)
@@ -242,25 +250,78 @@ function PortfolioSection({ funds, portfolioFunds, overall, config }) {
             </div>
             <div className="perf-portfolio-block">
               <div className="perf-portfolio-block-title">直投项目</div>
-              <div className="perf-portfolio-block-cards">
-              <div className="perf-indicator-grid perf-indicator-grid-6">
-                {[
-                  { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc' },
-                  { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
-                  { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc' },
-                  { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, isExit: true, descKey: 'projectExitAccDesc' },
-                  { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, isExit: true, descKey: 'projectReceiveAccDesc' },
-                  { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, isExit: true, descKey: 'spvReceiveAccDesc' },
-                ].map((item, idx) => (
-                  <div key={idx} className="perf-indicator-item">
-                    <div className="perf-indicator-label">
-                      <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
-                    </div>
-                    <div className={`perf-indicator-value ${item.isExit ? 'perf-exit-value' : ''}`}>{item.value}</div>
-                    <div className="perf-indicator-sub">较上月末{item.change != null && toNum(item.change) !== 0 ? (toNum(item.change) > 0 ? '+' : '') + formatAmount(item.change) : '-'}</div>
+              <div className="perf-direct-layout">
+                <div className="perf-direct-left">
+                  <div className="perf-indicator-grid perf-direct-grid">
+                    {[
+                      { label: '累计投资数量', value: formatNumber(overall.project_inv), change: overall.project_inv_change, descKey: 'projectInvAccDesc', isCount: true },
+                      { label: '累计投资金额', value: formatAmount(overall.project_paidin), change: overall.project_paidin_change, descKey: 'projectPaidinAccDesc' },
+                      { label: 'SPV累计投资金额', value: formatAmount(overall.spv_paidin), change: overall.spv_paidin_change, descKey: 'spvPaidinAccDesc' },
+                      { label: '累计退出数量', value: formatNumber(overall.project_exit), change: overall.project_exit_change, descKey: 'projectExitAccDesc', isCount: true },
+                      { label: '累计回款金额', value: formatAmount(overall.project_receive), change: overall.project_receive_change, descKey: 'projectReceiveAccDesc' },
+                      { label: 'SPV累计回款金额', value: formatAmount(overall.spv_receive), change: overall.spv_receive_change, descKey: 'spvReceiveAccDesc' },
+                      { label: '在持投资数量', value: formatNumber(overall.project_h), change: overall.project_h_change, isCount: true },
+                      { label: '在持剩余成本', value: formatAmount(overall.rest_cost_h), change: overall.rest_cost_h_change },
+                      { label: '在持剩余价值', value: formatAmount(overall.unrealized_h), change: overall.unrealized_h_change },
+                    ].map((item, idx) => (
+                      <div key={idx} className="perf-indicator-item">
+                        <div className="perf-indicator-label">
+                          <IndicatorLabel label={item.label} desc={config?.[item.descKey]} />
+                        </div>
+                        <div className="perf-indicator-value">{item.value}</div>
+                        <div className="perf-indicator-sub">较上月末{formatSignedChange(item.change, item.isCount)}</div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+                <div className="perf-ipo-cards perf-direct-right">
+                  {[
+                    {
+                      label: '已上市企业',
+                      metrics: [
+                        { label: '数量', value: formatNumber(overall.ipo_num) },
+                        { label: '成本', value: formatAmount(overall.ipo_cost) },
+                        { label: '总价值', value: formatAmount(overall.ipo_valuation) },
+                      ],
+                    },
+                    {
+                      label: '在持上市企业',
+                      metrics: [
+                        { label: '数量', value: formatNumber(overall.ipo_num_h) },
+                        { label: '剩余成本', value: formatAmount(overall.ipo_cost_h) },
+                        { label: '剩余价值', value: formatAmount(overall.ipo_value_h) },
+                      ],
+                    },
+                    {
+                      label: '已受理企业',
+                      metrics: [
+                        { label: '数量', value: formatNumber(overall.sl_num) },
+                        { label: '成本', value: formatAmount(overall.sl_cost) },
+                        { label: '总价值', value: formatAmount(overall.sl_valuation) },
+                      ],
+                    },
+                    {
+                      label: '已辅导企业',
+                      metrics: [
+                        { label: '数量', value: formatNumber(overall.fd_num) },
+                        { label: '成本', value: formatAmount(overall.fd_cost) },
+                        { label: '总价值', value: formatAmount(overall.fd_valuation) },
+                      ],
+                    },
+                  ].map((item, idx) => (
+                    <div key={idx} className="perf-ipo-card">
+                      <div className="perf-ipo-card-title">{item.label}</div>
+                      <div className="perf-ipo-card-metrics">
+                        {item.metrics.map((metric) => (
+                          <div key={metric.label} className="perf-ipo-card-metric">
+                            <span className="perf-ipo-card-num">{metric.value}</span>
+                            <span className="perf-ipo-card-sub">{metric.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
