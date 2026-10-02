@@ -3959,7 +3959,42 @@ class NewsAnalysis {
   }
 
   /**
+   * 网络安全企业对外发布的漏洞/风险通告（CVE、在野利用、应急响应），不是企业自身经营出了问题。
+   */
+  isThirdPartySecurityAdvisory(title, content) {
+    const titleStr = String(title || '');
+    const body = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const text = `${titleStr}\n${body}`;
+    const advisory = /CVE-\d{4}-\d+|在野利用|漏洞通告|安全通告|应急响应|命令注入|漏洞危害|漏洞描述|漏洞成因|受影响用户|修复版本/.test(text)
+      || (/漏洞/.test(titleStr) && /风险|利用|修复|通告|预警|监测/.test(text));
+    if (!advisory) return false;
+    const selfIncident = /(?:本公司|我司|公司自身).{0,16}(?:被攻击|遭入侵|数据泄露)|数据泄露事件|系统被攻破/.test(text);
+    const advisoryFraming = /CVE-\d{4}-\d+|应急响应|监测到|受影响用户|修复版本|在野利用/.test(text);
+    if (selfIncident && !advisoryFraming) return false;
+    return true;
+  }
+
+  /**
+   * 漏洞/风险通告去掉「经营风险」。没有其他具体标签时改为「安全防护」。
+   */
+  rewriteSecurityAdvisoryKeywords(keywords, title, content) {
+    if (!this.isThirdPartySecurityAdvisory(title, content)) return keywords;
+    const list = (Array.isArray(keywords) ? keywords : [])
+      .map((k) => String(k || '').trim())
+      .filter(Boolean);
+    const kept = list.filter((k) => k !== '经营风险' && k !== '其他' && k !== '其它');
+    if (!list.includes('经营风险') && kept.length > 0) return list;
+    if (kept.length === 0) {
+      console.log(`[安全通告] 漏洞/风险通告不标经营风险，改为「安全防护」: ${String(title || '').slice(0, 60)}`);
+      return ['安全防护'];
+    }
+    console.log(`[安全通告] 已去掉「经营风险」: ${String(title || '').slice(0, 60)}`);
+    return kept;
+  }
+
+  /**
    * 先按节日关键词改标签；正文不可用且关键词未命中时，再按标题做节日祝福判断。
+   * 网络安全企业发布的漏洞/风险通告不保留「经营风险」。
    */
   async keywordsWithTitleHolidayCheck(keywords, title, content) {
     const news = { title, content, keywords };
@@ -3969,12 +4004,12 @@ class NewsAnalysis {
     const plain = String(content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
     const contentMissing = plain.length < 20
       || /无法提取正文|正文无文字|无正文内容|请直接查看原文|该新闻为图片/.test(plain);
-    if (!contentMissing) return forced;
+    if (!contentMissing) return this.rewriteSecurityAdvisoryKeywords(forced, title, content);
     if (await this.isHolidayGreetingTitle(title)) {
       console.log(`[节日标题] 正文不可用，标题判定为节日祝福，标签改为「节假日」: ${String(title || '').slice(0, 60)}`);
       return ['节假日'];
     }
-    return forced;
+    return this.rewriteSecurityAdvisoryKeywords(forced, title, content);
   }
 
   /**
@@ -5067,7 +5102,9 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         const fullText = titleLower + ' ' + contentLower.substring(0, 500); // 只检查前500字
         
         // 根据关键词推断标签
-        if (/财务|收入|利润|亏损|债务|现金流|毛利率|应收款/.test(fullText)) {
+        if (this.isThirdPartySecurityAdvisory(title, content)) {
+          inferredKeywords = ['安全防护'];
+        } else if (/财务|收入|利润|亏损|债务|现金流|毛利率|应收款/.test(fullText)) {
           inferredKeywords = ['财务数据'];
         } else if (/风险|挑战|困境|存疑|质疑|担忧/.test(fullText)) {
           inferredKeywords = ['经营风险'];
@@ -6267,6 +6304,12 @@ ${enterpriseList}
       validatedKeywords = forceStatutoryHolidayKeywords(validatedKeywords, holidayNews);
       if (before !== JSON.stringify(validatedKeywords)) {
         logWithTag('[validateAnalysisResult]', `节日内容，标签强制为「节假日」（原标签: ${before}）`);
+      }
+    } else {
+      const beforeAdvisory = JSON.stringify(validatedKeywords);
+      validatedKeywords = this.rewriteSecurityAdvisoryKeywords(validatedKeywords, title, content);
+      if (beforeAdvisory !== JSON.stringify(validatedKeywords)) {
+        logWithTag('[validateAnalysisResult]', `漏洞/风险通告不标经营风险（原标签: ${beforeAdvisory}）`);
       }
     }
 
