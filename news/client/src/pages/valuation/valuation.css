@@ -84,11 +84,11 @@
 }
 
 .valuation-workbench-nav {
-  width: 216px;
+  width: 148px;
   flex-shrink: 0;
   background: #f2f3f5;
   border-right: 1px solid #e5e6eb;
-  padding: 12px 8px;
+  padding: 8px 4px;
   overflow-y: auto;
 }
 
@@ -115,16 +115,17 @@
 }
 
 .valuation-nav-divider {
-  margin: 10px 4px 8px;
-  padding: 6px 8px;
+  margin: 8px 2px 6px;
+  padding: 4px 4px;
   text-align: center;
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0;
   color: #4e5969;
   background: #fff;
   border: 1px dashed #c9cdd4;
   border-radius: 6px;
+  white-space: nowrap;
 }
 
 .valuation-nav-group {
@@ -136,8 +137,9 @@
 .valuation-nav-group-label {
   font-size: 11px;
   font-weight: 600;
-  padding: 2px 10px 8px;
-  letter-spacing: 0.04em;
+  padding: 2px 8px 6px;
+  letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .valuation-nav-group-input {
@@ -167,8 +169,12 @@
 .valuation-workbench-main {
   flex: 1;
   min-width: 0;
-  padding: 16px 20px;
+  padding: 12px;
   overflow: auto;
+}
+
+.valuation-workbench-main > .arco-card > .arco-card-body {
+  padding: 12px 12px 16px;
 }
 
 .valuation-pl-year-head {
@@ -183,6 +189,11 @@
   min-width: 0;
 }
 
+.valuation-pl-year-e {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
 .valuation-pl-year-remove {
   flex-shrink: 0;
   padding: 0 4px;
@@ -195,11 +206,12 @@
   text-align: left;
   border: none;
   background: transparent;
-  padding: 8px 12px;
+  padding: 6px 8px;
   border-radius: 6px;
   cursor: pointer;
   color: #1d2129;
-  font-size: 13px;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .valuation-nav-group-input .valuation-step-item:hover {
@@ -408,6 +420,17 @@
   margin-top: 16px;
 }
 
+.valuation-adopted {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  background: #5dce8c;
+  border-radius: 4px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.6;
+}
+
 @media (max-width: 900px) {
   .valuation-ratio-top {
     grid-template-columns: 1fr;
@@ -420,6 +443,12 @@
   flex-wrap: wrap;
   margin-bottom: 12px;
   align-items: center;
+}
+
+.valuation-comp-fin-table .valuation-comp-fin-num,
+.valuation-comp-fin-table .arco-table-th,
+.valuation-comp-fin-table .arco-table-td {
+  white-space: nowrap;
 }
 
 .valuation-comp-fin-table .valuation-comp-fin-num {
@@ -470,10 +499,88 @@
   white-space: nowrap;
 }
 
+.valuation-list-table .arco-table-th.valuation-num-cell,
+.valuation-list-table .arco-table-td.valuation-num-cell {
+  text-align: right;
+}
+
+.valuation-pl-stack-table .arco-table-th {
+  white-space: nowrap;
+}
+
+.valuation-pl-stack-note-row td {
+  text-align: left !important;
+  white-space: normal;
+  vertical-align: top;
+  font-size: 12px;
+  color: #86909c;
+  line-height: 1.45;
+}
+
+.valuation-list-table .arco-table-td.valuation-num-cell {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.valuation-bs-total-row td {
+  background: #f3f7fb;
+  font-weight: 600;
+}
+
+.valuation-list-table .arco-table-td .arco-input-number {
+  width: 100% !important;
+  max-width: 100%;
+  box-sizing: border-box;
+  vertical-align: middle;
+}
+
+.valuation-list-table .arco-table-td .arco-input-number input {
+  text-align: right;
+}
+
+.valuation-pct-input .arco-input-group-suffix {
+  flex: none;
+  padding-right: 8px;
+  color: #4e5969;
+}
+
 .valuation-dcf-param-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px 12px;
+}
+
+.valuation-dcf-param-line {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: end;
+  gap: 10px 12px;
+}
+
+.valuation-dcf-param-line .valuation-dcf-param-item {
+  width: auto;
+  min-width: 0;
+}
+
+.valuation-dcf-param-line-single {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: flex-end;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.valuation-dcf-param-line-single .valuation-dcf-param-item {
+  flex: 0 0 128px;
+  width: 128px;
+}
+
+.valuation-dcf-param-line-single .valuation-dcf-param-item > span {
+  white-space: nowrap;
+}
+
+.valuation-day-default .arco-input-number input {
+  text-align: right;
 }
 
 .valuation-dcf-param-item {
@@ -543,25 +650,27 @@
   border-top: 1px dashed #94bfff;
 }
 
-.valuation-output-dcf .valuation-list-table .arco-table-th {
-  white-space: normal !important;
-  word-break: break-word;
-  line-height: 1.35;
+.valuation-output-dcf .valuation-dcf-year-table .arco-table-th,
+.valuation-output-dcf .valuation-dcf-year-table .arco-table-td,
+.valuation-market-result-table .arco-table-th,
+.valuation-market-result-table .arco-table-td {
+  white-space: nowrap !important;
+  word-break: normal;
 }
 
-.valuation-output-dcf .valuation-list-table table,
-.valuation-output-dcf .valuation-list-table .arco-table-element {
-  table-layout: fixed;
-  width: 100%;
+.valuation-output-dcf .valuation-dcf-year-table .arco-table-th,
+.valuation-output-dcf .valuation-dcf-year-table .arco-table-td {
+  text-align: right;
 }
 
-.valuation-output-dcf .arco-table-container,
-.valuation-output-dcf .arco-table-content,
-.valuation-output-dcf .arco-table-header,
-.valuation-output-dcf .arco-table-body,
-.valuation-output-dcf .arco-table-content-scroll,
-.valuation-output-dcf .arco-table-content-inner {
-  overflow-x: hidden !important;
+.valuation-dcf-bridge-table .arco-table-th,
+.valuation-dcf-bridge-table .arco-table-td {
+  white-space: nowrap !important;
+}
+
+.valuation-dcf-bridge-table .arco-table-th:not(:first-child),
+.valuation-dcf-bridge-table .arco-table-td:not(:first-child) {
+  text-align: right;
 }
 
 .valuation-output-page {
@@ -581,11 +690,21 @@
   margin-bottom: 6px !important;
 }
 
-.valuation-output-split {
+.valuation-output-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.valuation-market-output-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.15fr);
   gap: 16px;
   align-items: start;
+}
+
+.valuation-market-output-side {
+  min-width: 0;
 }
 
 .valuation-output-card > .arco-card-body {
@@ -617,7 +736,7 @@
 }
 
 @media (max-width: 1100px) {
-  .valuation-output-split,
+  .valuation-market-output-row,
   .valuation-result-top {
     grid-template-columns: 1fr;
   }
@@ -646,6 +765,18 @@
   font-size: 12px;
   color: #4e5969;
   font-weight: 600;
+}
+
+.valuation-anchor-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.valuation-help-icon {
+  color: #86909c;
+  font-size: 14px;
+  cursor: help;
 }
 
 .valuation-method-field-wide {

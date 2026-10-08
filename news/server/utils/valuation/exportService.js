@@ -2,13 +2,14 @@ const XLSX = require('xlsx');
 const zlib = require('zlib');
 const { yuanToYi } = require('./marketUtils');
 const {
-  BS_INPUT_FIELDS,
+  BS_VISIBLE_FIELDS,
   BS_INPUT_KEYS,
   nwcStockFromBs,
   currentAssetsFromBs,
   totalAssetsFromBs,
   currentLiabFromBs,
   totalLiabFromBs,
+  equityBookFromBs,
   debtRatioFromBs,
   currentRatioFromBs,
 } = require('./targetBsFields');
@@ -840,16 +841,16 @@ function buildBs(sheet, title) {
   const amt = (v) => toWan(v, yuan);
   const scaled = {};
   for (const k of BS_INPUT_KEYS) scaled[k] = amt(p[k]);
-  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+长期借款−货币资金；营运资本占用=(应收票据+应收账款+预付款项+存货)−(应付票据+应付账款+预收款项)');
+  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金；营运资本=应收账款（含票据）+存货−应付账款（含票据）');
   b.start(3);
   b.header(['序号', '科目', '金额（万元）']);
   const startExcel = b.aoa.length + 1;
   const rowOf = {};
-  BS_INPUT_FIELDS.forEach((f, i) => {
+  BS_VISIBLE_FIELDS.forEach((f, i) => {
     rowOf[f.key] = startExcel + i;
     b.data([i + 1, f.label, amt(p[f.key])], ['seq', 'text', 'wan']);
   });
-  const n = BS_INPUT_FIELDS.length;
+  const n = BS_VISIBLE_FIELDS.length;
   const nd = (amt(p.short_term_loan) || 0) + (amt(p.long_term_loan) || 0) - (amt(p.cash) || 0);
   const nwc = (nwcStockFromBs(scaled) || 0);
   const ca = currentAssetsFromBs(scaled);
@@ -859,17 +860,19 @@ function buildBs(sheet, title) {
   const cSt = `C${rowOf.short_term_loan}`;
   const cLt = `C${rowOf.long_term_loan}`;
   const cCash = `C${rowOf.cash}`;
-  const nwcF = `C${rowOf.notes_receivable}+C${rowOf.accounts_receivable}+C${rowOf.prepayment}+C${rowOf.inventory}-C${rowOf.notes_payable}-C${rowOf.accounts_payable}-C${rowOf.advance_receipt}`;
+  const nwcF = `C${rowOf.accounts_receivable}+C${rowOf.inventory}-C${rowOf.accounts_payable}`;
+  const eq = equityBookFromBs(scaled);
   b.data([n + 1, '流动资产合计（自动）', ca], ['seq', 'text', 'wan']);
   b.data([n + 2, '资产总计（自动）', ta], ['seq', 'text', 'wan']);
   b.data([n + 3, '流动负债合计（自动）', cl], ['seq', 'text', 'wan']);
-  b.data([n + 4, '负债合计（自动）', tl], ['seq', 'text', 'wan']);
-  b.data([n + 5, '净负债（自动）', F(nd, `${cSt}+${cLt}-${cCash}`)], ['seq', 'text', 'wan']);
-  b.data([n + 6, '期末营运资本占用（自动）', F(nwc, nwcF)], ['seq', 'text', 'wan']);
+  b.data([n + 4, '负债总计（自动）', tl], ['seq', 'text', 'wan']);
+  b.data([n + 5, '所有者权益总计（自动）', eq], ['seq', 'text', 'wan']);
+  b.data([n + 6, '净负债（自动）', F(nd, `${cSt}+${cLt}-${cCash}`)], ['seq', 'text', 'wan']);
+  b.data([n + 7, '期末营运资本占用（自动）', F(nwc, nwcF)], ['seq', 'text', 'wan']);
   const dr = debtRatioFromBs(scaled);
   const cr = currentRatioFromBs(scaled);
-  b.data([n + 7, '资产负债率（自动）', dr], ['seq', 'text', 'num']);
-  b.data([n + 8, '流动比率（自动）', cr], ['seq', 'text', 'num']);
+  b.data([n + 8, '资产负债率（自动）', dr], ['seq', 'text', 'num']);
+  b.data([n + 9, '流动比率（自动）', cr], ['seq', 'text', 'num']);
   b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 22 }, { wch: 16 });
   return b;
 }
@@ -919,7 +922,7 @@ function buildTieOut(sheet, title, payload) {
   const ndDcf = wanFromYuan(dcf.net_debt);
   b.data(['净负债（资产负债表）', '短贷+长贷−货币资金', ndBs, '进入 DCF 扣减'], ['text', 'text', 'wan', 'text']);
   b.data(['净负债（DCF）', '引擎扣减额', ndDcf, Math.abs((ndBs || 0) - (ndDcf || 0)) > 0.5 ? '与资产负债表不一致' : '一致'], ['text', 'text', 'wan', 'text']);
-  b.data(['期末营运资本占用', '(应收票据+应收账款+预付款项+存货)−(应付票据+应付账款+预收款项)', nwc, '时点余额，不是 ΔNWC'], ['text', 'text', 'wan', 'text']);
+  b.data(['期末营运资本占用', '应收账款（含票据）+存货−应付账款（含票据）', nwc, '时点余额，不是 ΔNWC'], ['text', 'text', 'wan', 'text']);
   b.gap(1);
   const years = pvs.length ? pvs.map((x) => x.year) : (pl.years || []);
   b.section('自由现金流勾稽（万元）');

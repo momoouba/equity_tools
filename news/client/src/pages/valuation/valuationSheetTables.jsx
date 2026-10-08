@@ -1,11 +1,21 @@
 import React from 'react'
 import { Typography, Empty, InputNumber } from '@arco-design/web-react'
-import { fmtNum, fmtPct, fmtWan, fmtYiFromYuan } from './valuationUnits'
+import { fmtNum, fmtPct, fmtWan, fmtWanPlain, fmtYiFromYuan, fmtYuanAsWan } from './valuationUnits'
 import { ListTable } from './valuationTable'
-import { BS_LABELS, BS_INPUT_KEYS } from './valuationBsFields'
+import {
+  BS_GROUPS,
+  BS_INPUT_FIELDS,
+  totalAssetsFromBs,
+  totalLiabFromBs,
+  equityBookFromBs,
+} from './valuationBsFields'
 
 function asArray(data) {
   return Array.isArray(data) ? data : []
+}
+
+function AdoptedLine({ children }) {
+  return <div className="valuation-adopted">{children}</div>
 }
 
 function finite(v) {
@@ -59,6 +69,29 @@ function poolBand(values) {
   return { high: mid, low }
 }
 
+function eastMoneyMedian(row, kind) {
+  const med = finite(row?.[`${kind}_median`])
+  if (med != null) return med
+  return finite(row?.[`${kind}_latest`])
+}
+
+function shownDraftMedian(row, field) {
+  const own = finite(row?.[field])
+  if (own != null) return own
+  return eastMoneyMedian(row, field.startsWith('pe') ? 'pe' : 'ps')
+}
+
+function numCol(title, dataIndex, width, render) {
+  return {
+    title,
+    dataIndex,
+    width,
+    align: 'right',
+    className: 'valuation-num-cell',
+    render,
+  }
+}
+
 export function RelativeValuationTable({ rows, editable = false, onOverrideChange }) {
   const source = asArray(rows).filter((r) => !r._summary)
   if (!source.length) return <Empty description="暂无相对估值结果，请先采集/计算" />
@@ -74,80 +107,83 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
       pe_minus_1s: peBand.low,
       ps_used: psBand.high,
       ps_minus_1s: psBand.low,
-      quality_warning: '取用列=高端倍数，−1σ列=低端倍数。单家：底稿中位，否则历史中位，否则锚定截面',
     },
   ]
-  const overrideCol = (title, field) => ({
-    title,
-    dataIndex: field,
-    width: 108,
-    render: (v, r) => (editable && onOverrideChange && !r._summary ? (
+  const rowNotes = source.flatMap((r) => {
+    const bits = []
+    if (r.quality_warning) bits.push(r.quality_warning)
+    if (r.pe_usable === false) bits.push('PE 未入统计')
+    if (r.ps_usable === false) bits.push('PS 未入统计')
+    if (!bits.length) return []
+    return [`${r.stock_code || ''} ${r.stock_name || ''}：${bits.join('；')}`.trim()]
+  })
+  const overrideCol = (title, field) => numCol(title, field, 120, (v, r) => {
+    if (r._summary) return '—'
+    const shown = shownDraftMedian(r, field)
+    if (!(editable && onOverrideChange)) return fmtNum(shown, 2)
+    return (
       <InputNumber
         hideControl
         precision={2}
-        style={{ width: 96 }}
-        placeholder="东财"
-        value={v == null || v === '' ? undefined : v}
+        style={{ width: '100%' }}
+        value={shown == null ? undefined : shown}
         onChange={(nv) => onOverrideChange(r.stock_code, field, nv == null || nv === '' ? null : nv)}
       />
-    ) : fmtNum(v, 2)),
+    )
   })
   return (
-    <ListTable
-      rowKey={(r, i) => (r._summary ? 'pool-take' : (r.stock_code || String(i)))}
-      pagination={false}
-      size="small"
-      scroll={{ x: 1900 }}
-      columns={[
-        { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
-        { title: '名称', dataIndex: 'stock_name', width: 88, ellipsis: true, fixed: 'left' },
-        { title: '入池', dataIndex: 'in_pool', width: 52, render: (v, r) => (r._summary ? '—' : (v ? '是' : '否')) },
-        {
-          title: '可比',
-          dataIndex: 'comparability',
-          width: 52,
-          render: (v) => ({ strong: '强', medium: '中', weak: '弱' }[v] || '-'),
-        },
-        { title: '截面日', dataIndex: 'asof_trade_date', width: 96, render: (v, r) => v || r.asof_date || '-' },
-        { title: 'PE 锚定截面', dataIndex: 'pe_latest', width: 96, render: (v) => fmtNum(v, 2) },
-        { title: 'PE 中位', dataIndex: 'pe_median', width: 80, render: (v) => fmtNum(v, 2) },
-        overrideCol('PE 底稿中位', 'pe_median_override'),
-        {
-          title: 'PE 取用',
-          dataIndex: 'pe_used',
-          width: 80,
-          render: (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'pe'), 2),
-        },
-        { title: 'PE σ', dataIndex: 'pe_stdev', width: 72, render: (v) => fmtNum(v, 2) },
-        { title: 'PE −1σ', dataIndex: 'pe_minus_1s', width: 80, render: (v) => fmtNum(v, 2) },
-        { title: 'PE +1σ', dataIndex: 'pe_plus_1s', width: 80, render: (v) => fmtNum(v, 2) },
-        { title: 'PS 锚定截面', dataIndex: 'ps_latest', width: 96, render: (v) => fmtNum(v, 2) },
-        { title: 'PS 中位', dataIndex: 'ps_median', width: 80, render: (v) => fmtNum(v, 2) },
-        overrideCol('PS 底稿中位', 'ps_median_override'),
-        {
-          title: 'PS 取用',
-          dataIndex: 'ps_used',
-          width: 80,
-          render: (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'ps'), 2),
-        },
-        { title: 'PS σ', dataIndex: 'ps_stdev', width: 72, render: (v) => fmtNum(v, 2) },
-        { title: 'PS −1σ', dataIndex: 'ps_minus_1s', width: 80, render: (v) => fmtNum(v, 2) },
-        { title: 'PS +1σ', dataIndex: 'ps_plus_1s', width: 80, render: (v) => fmtNum(v, 2) },
-        {
-          title: '提示',
-          dataIndex: 'quality_warning',
-          width: 220,
-          render: (v, r) => {
-            const bits = [v]
-            if (r.pe_usable === false) bits.push('PE 未入统计')
-            if (r.ps_usable === false) bits.push('PS 未入统计')
-            return bits.filter(Boolean).join('；') || '-'
+    <div>
+      <ListTable
+        rowKey={(r, i) => (r._summary ? 'pool-take' : (r.stock_code || String(i)))}
+        pagination={false}
+        size="small"
+        scroll={{ x: 1680 }}
+        columns={[
+          { title: '代码', dataIndex: 'stock_code', width: 96, fixed: 'left', className: 'valuation-nowrap-cell' },
+          { title: '名称', dataIndex: 'stock_name', width: 88, ellipsis: true, fixed: 'left' },
+          { title: '入池', dataIndex: 'in_pool', width: 52, render: (v, r) => (r._summary ? '—' : (v ? '是' : '否')) },
+          {
+            title: '可比',
+            dataIndex: 'comparability',
+            width: 52,
+            render: (v) => ({ strong: '强', medium: '中', weak: '弱' }[v] || '-'),
           },
-        },
-      ]}
-      data={data}
-    />
+          { title: '截面日', dataIndex: 'asof_trade_date', width: 108, className: 'valuation-nowrap-cell', render: (v, r) => v || r.asof_date || '-' },
+          numCol('PE 锚定截面', 'pe_latest', 108, (v) => fmtNum(v, 2)),
+          numCol('PE 中位', 'pe_median', 88, (v) => fmtNum(v, 2)),
+          overrideCol('PE 底稿中位', 'pe_median_override'),
+          numCol('PE 取用', 'pe_used', 88, (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'pe'), 2)),
+          numCol('PE σ', 'pe_stdev', 80, (v) => fmtNum(v, 2)),
+          numCol('PE −1σ', 'pe_minus_1s', 88, (v) => fmtNum(v, 2)),
+          numCol('PE +1σ', 'pe_plus_1s', 88, (v) => fmtNum(v, 2)),
+          numCol('PS 锚定截面', 'ps_latest', 108, (v) => fmtNum(v, 2)),
+          numCol('PS 中位', 'ps_median', 88, (v) => fmtNum(v, 2)),
+          overrideCol('PS 底稿中位', 'ps_median_override'),
+          numCol('PS 取用', 'ps_used', 88, (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'ps'), 2)),
+          numCol('PS σ', 'ps_stdev', 80, (v) => fmtNum(v, 2)),
+          numCol('PS −1σ', 'ps_minus_1s', 88, (v) => fmtNum(v, 2)),
+          numCol('PS +1σ', 'ps_plus_1s', 88, (v) => fmtNum(v, 2)),
+        ]}
+        data={data}
+      />
+      <Typography.Paragraph type="secondary" className="valuation-ratio-formula" style={{ marginTop: 8, marginBottom: 0 }}>
+        取用列是高端倍数，−1σ 列是低端倍数。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。底稿中位已写入东财历史中位，可以直接改；改过的数会保存。
+      </Typography.Paragraph>
+      {rowNotes.length ? (
+        <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }}>
+          {rowNotes.join('；')}
+        </Typography.Paragraph>
+      ) : null}
+    </div>
   )
+}
+
+export function forecastYearLabel(year) {
+  const text = String(year ?? '').trim()
+  if (!text) return '—'
+  if (/e$/i.test(text)) return text.replace(/e$/i, 'E')
+  const matched = text.match(/(20\d{2})/)
+  return matched ? `${matched[1]}E` : text
 }
 
 function collectItemYears(companies) {
@@ -214,9 +250,9 @@ export function FeesTable({ payload }) {
   }
   return (
     <div>
-      <Typography.Paragraph style={{ marginBottom: 8 }}>
+      <AdoptedLine>
         可比集中位数：销售费用率 {fmtPct(payload?.selling_median, 2)}，管理费用率 {fmtPct(payload?.admin_median, 2)}，研发费用率 {fmtPct(payload?.rd_median, 2)}
-      </Typography.Paragraph>
+      </AdoptedLine>
       <MetricYearTable companies={companies} format={(v) => fmtPct(v, 2)} empty="暂无三费分年数据，请重新计算" />
     </div>
   )
@@ -266,9 +302,9 @@ export function GrossMarginTable({ payload }) {
   return (
     <div>
       {payload?.set_median != null ? (
-        <Typography.Paragraph style={{ marginBottom: 8 }}>
+        <AdoptedLine>
           可比集毛利率中位数：{fmtPct(payload.set_median, 2)}
-        </Typography.Paragraph>
+        </AdoptedLine>
       ) : null}
       <ListTable
         rowKey="_key"
@@ -301,22 +337,71 @@ export function WorkingCapitalTable({ payload }) {
   }
   return (
     <div>
-      <Typography.Paragraph style={{ marginBottom: 8 }}>
-        可比集中位数：DSO {fmtNum(payload?.dso_median, 1)} 天，DPO {fmtNum(payload?.dpo_median, 1)} 天，DIO {fmtNum(payload?.dio_median, 1)} 天
-      </Typography.Paragraph>
+      <AdoptedLine>
+        {payload?.complete_year ? `${payload.complete_year} 年报截面中位数` : '年报截面中位数'}：DSO {fmtNum(payload?.dso_median, 1)} 天，DPO {fmtNum(payload?.dpo_median, 1)} 天，DIO {fmtNum(payload?.dio_median, 1)} 天
+      </AdoptedLine>
+      {Array.isArray(payload?.dso_prior) && payload.dso_prior.length ? (
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+          前两年 DSO {payload.dso_prior.map((r) => `${r.year}:${fmtNum(r.median, 1)}`).join('，')}
+        </Typography.Paragraph>
+      ) : null}
       <MetricYearTable companies={companies} format={(v) => fmtNum(v, 1)} empty="暂无营运分年数据，请重新计算" />
     </div>
   )
 }
 
-export function RatiosTables({ fees, grossMargin, workingCapital }) {
-  const hasAny = fees || grossMargin || workingCapital
+export function ForecastDaysResult({ forecastDays }) {
+  const years = asArray(forecastDays?.years)
+  const rows = asArray(forecastDays?.rows)
+  return (
+    <div className="valuation-gm-block">
+      <Typography.Title heading={6} className="valuation-ratio-col-title">周转天数预测</Typography.Title>
+      <Typography.Paragraph type="secondary" className="valuation-ratio-formula">
+        {forecastDays?.fromCalc
+          ? '各预测年计算采用的天数。带 E 的是预测年。某一格在计算输出里改过，就用改过的数；没改的用统一默认值，再没有就用可比年报中位数。'
+          : '还没有计算结果。下面是按当前填写会采用的天数，计算后改为实际采用的数。'}
+      </Typography.Paragraph>
+      {!years.length || !rows.length ? (
+        <Empty description="请先在标的利润表保留预测年" />
+      ) : (
+        <ListTable
+          className="valuation-forecast-days"
+          rowKey="key"
+          pagination={false}
+          size="small"
+          showSeq={false}
+          scroll={{ x: 160 + years.length * 88 }}
+          columns={[
+            { title: '天数', dataIndex: 'name', width: 140, fixed: 'left', className: 'valuation-nowrap-cell' },
+            ...years.map((year, i) => ({
+              title: forecastYearLabel(year),
+              dataIndex: `y${i}`,
+              width: 88,
+              align: 'right',
+              className: 'valuation-nowrap-cell',
+              render: (v) => (v == null || v === '' ? '—' : fmtNum(v, 1)),
+            })),
+          ]}
+          data={rows.map((row) => {
+            const item = { key: row.key, name: row.name }
+            years.forEach((_, i) => { item[`y${i}`] = row.values?.[i] })
+            return item
+          })}
+        />
+      )}
+    </div>
+  )
+}
+
+export function RatiosTables({ fees, grossMargin, workingCapital, forecastDays }) {
+  const hasAny = fees || grossMargin || workingCapital || asArray(forecastDays?.years).length
   if (!hasAny) return <Empty description="暂无计算结果，请先采集/计算" />
   const feePayload = fees?.payload || fees
   const gmPayload = grossMargin?.payload || grossMargin
   const wcPayload = workingCapital?.payload || workingCapital
   return (
     <div className="valuation-sheet-stack">
+      <ForecastDaysResult forecastDays={forecastDays} />
       <div className="valuation-gm-block">
         <Typography.Title heading={6} className="valuation-ratio-col-title">三费</Typography.Title>
         {fees?.formula ? (
@@ -359,15 +444,17 @@ export function MarketMethodTable({ payload }) {
         市场法流动性折扣 {fmtPct(payload.liquidity_discount, 0)}。P/S、P/E 各一行：低端 = 中位数 − σ，高端 = 中位数。
       </Typography.Paragraph>
       <ListTable
+        className="valuation-market-result-table"
         rowKey="row"
         pagination={false}
         size="small"
+        scroll={{ x: 720 }}
         columns={[
-          { title: '项目', dataIndex: 'row', width: 88 },
-          { title: '低端倍数', dataIndex: 'lowX', render: (v) => fmtNum(v, 2) },
-          { title: '高端倍数', dataIndex: 'highX', render: (v) => fmtNum(v, 2) },
-          { title: '低端非流通权益（亿元）', dataIndex: 'lowYi', render: (v) => fmtNum(v, 2) },
-          { title: '高端非流通权益（亿元）', dataIndex: 'highYi', render: (v) => fmtNum(v, 2) },
+          { title: '项目', dataIndex: 'row', width: 72, className: 'valuation-nowrap-cell' },
+          { title: '低端倍数', dataIndex: 'lowX', width: 96, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
+          { title: '高端倍数', dataIndex: 'highX', width: 96, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
+          { title: '低端非流通权益（亿元）', dataIndex: 'lowYi', width: 168, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
+          { title: '高端非流通权益（亿元）', dataIndex: 'highYi', width: 168, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
         ]}
         data={[
           {
@@ -399,13 +486,101 @@ function fmtAxis(kind, v) {
 function terminalFormulaText(dcf, terminalType) {
   const usePs = (dcf?.terminal_base_kind || (terminalType === 'exit_ps' ? 'revenue' : 'net_income')) === 'revenue'
   const year = dcf?.terminal_year || (asArray(dcf?.pvs).slice(-1)[0]?.year) || ''
-  const kind = usePs ? '末期收入' : '末期净利润'
+  const kind = usePs ? '末期全年营业收入' : '末期全年税后经营利润'
   const multipleName = usePs ? '退出 P/S' : '退出 P/E'
   if (dcf?.exit_multiple == null || dcf?.terminal_base == null) {
-    return `终值 = ${multipleName} × ${kind}`
+    return `退出企业价值 = ${multipleName} × ${kind} + 锚定日净负债`
   }
-  const yearBit = year ? `${year}年` : ''
-  return `终值 = ${fmtNum(dcf.exit_multiple, 2)} × ${yearBit}${kind} ${fmtWan(dcf.terminal_base)} = ${fmtWan(dcf.terminal_value)}`
+  const yearBit = year ? `${forecastYearLabel(year)} ` : ''
+  return `退出企业价值 = ${fmtNum(dcf.exit_multiple, 2)} × ${yearBit}${kind} ${fmtYuanAsWan(dcf.terminal_base)} + 净负债 ${fmtYuanAsWan(dcf.net_debt)} = ${fmtYuanAsWan(dcf.terminal_value)}`
+}
+
+const BRIDGE_ROWS = [
+  { key: 'revenue_growth', label: '收入增速', kind: 'pct' },
+  { key: 'revenue', label: '营业收入', kind: 'wan' },
+  { key: 'cogs', label: '营业成本', kind: 'wan' },
+  { key: 'gross_profit', label: '毛利', kind: 'wan' },
+  { key: 'surtax', label: '税金及附加', kind: 'wan' },
+  { key: 'selling', label: '销售费用', kind: 'wan' },
+  { key: 'admin', label: '管理费用', kind: 'wan' },
+  { key: 'rd', label: '研发费用', kind: 'wan' },
+  { key: 'finance_expense', label: '财务费用', kind: 'wan' },
+  { key: 'other_income', label: '其他收益', kind: 'wan' },
+  { key: 'other', label: '其他', kind: 'wan' },
+  { key: 'da', label: '折旧摊销', kind: 'wan' },
+  { key: 'ebitda', label: 'EBITDA', kind: 'wan' },
+  { key: 'pretax', label: '税前经营利润', kind: 'wan' },
+  { key: 'nopat', label: '税后经营利润', kind: 'wan' },
+  { key: 'esop', label: 'ESOP', kind: 'wan' },
+  { key: 'capex', label: '资本开支', kind: 'wan' },
+  { key: 'flow_scale', label: '流量比例', kind: 'num' },
+  { key: 'fcff_before_nwc', label: '扣营运资本前现金流', kind: 'wan' },
+  { key: 'dso', label: 'DSO（天）', kind: 'day' },
+  { key: 'dpo', label: 'DPO（天）', kind: 'day' },
+  { key: 'dio', label: '存货周转（天）', kind: 'day' },
+  { key: 'ar', label: '应收账款', kind: 'wan' },
+  { key: 'inventory', label: '存货', kind: 'wan' },
+  { key: 'ap', label: '应付账款', kind: 'wan' },
+  { key: 'nwc', label: '营运资本', kind: 'wan' },
+  { key: 'dnwc', label: 'ΔNWC', kind: 'wan' },
+  { key: 'fcf', label: '自由现金流', kind: 'wan' },
+]
+
+function bridgeValue(series, pvs, key, index) {
+  if (key === 'ar') return pvs[index]?.ar_balance
+  if (key === 'inventory') return pvs[index]?.inventory_balance
+  if (key === 'ap') return pvs[index]?.ap_balance
+  if (key === 'fcf') return pvs[index]?.fcf
+  const arr = series?.[key]
+  return Array.isArray(arr) ? arr[index] : null
+}
+
+function formatBridge(kind, value) {
+  if (kind === 'pct') return fmtPct(value, 1)
+  if (kind === 'day') return fmtNum(value, 1)
+  if (kind === 'num') return fmtNum(value, 2)
+  return fmtYuanAsWan(value)
+}
+
+function ForecastBridge({ dcf }) {
+  const series = dcf?.series
+  const pvs = asArray(dcf?.pvs)
+  const years = asArray(series?.years).length ? series.years : pvs.map((p) => p.year)
+  if (!years.length || !series) return null
+  const rows = BRIDGE_ROWS.map((row) => {
+    const item = { key: row.key, label: row.label }
+    years.forEach((year, i) => {
+      item[`y${i}`] = formatBridge(row.kind, bridgeValue(series, pvs, row.key, i))
+    })
+    return item
+  })
+  return (
+    <div style={{ marginTop: 12 }}>
+      <Typography.Title heading={6}>预测计算明细（单位：万元）</Typography.Title>
+      <Typography.Paragraph type="secondary" className="valuation-formula-wrap" style={{ fontSize: 12 }}>
+        收入 = 年化累计营业收入 ×（1+增速），以后各年用上一年全年收入 ×（1+增速）。营业成本、销售费用、管理费用、研发费用在锚定日有当期金额时，同样先年化再按增速滚动；没有当期金额才用占当年收入的比例。税金及附加、其他收益、其他、折旧摊销、资本开支按当年收入乘比例。EBITDA = 收入 − 成本 − 税金 − 销售 − 管理 − 研发 + 其他收益 + 其他 + 折旧。税前大于 0 时，税后 = 税前 ×（1−税率）；税前小于等于 0 时不退税。扣营运资本前现金流 =（税后经营利润 + 折旧摊销 + ESOP − 资本开支）× 流量比例。锚定年且不是 12 月时，流量比例 =（12−锚定月）/12，以后各年为 1。ΔNWC = 当年末营运资本 − 上一年末；第一年的上一年末是锚定日实际营运资本 {fmtYuanAsWan(series.opening_nwc)}。应收 = DSO/360 × 收入，存货和应付 = 天数/360 × 营业成本。自由现金流 = 扣营运资本前现金流 − ΔNWC。
+      </Typography.Paragraph>
+      <ListTable
+        className="valuation-dcf-bridge-table"
+        rowKey="key"
+        pagination={false}
+        size="small"
+        showSeq={false}
+        scroll={{ x: 160 + years.length * 120 }}
+        columns={[
+          { title: '项目', dataIndex: 'label', width: 168, fixed: 'left', className: 'valuation-nowrap-cell' },
+          ...years.map((year, i) => ({
+            title: forecastYearLabel(year),
+            dataIndex: `y${i}`,
+            width: 120,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+          })),
+        ]}
+        data={rows}
+      />
+    </div>
+  )
 }
 
 function DcfOne({ title, dcf, terminalType }) {
@@ -416,21 +591,29 @@ function DcfOne({ title, dcf, terminalType }) {
     <div style={{ marginBottom: 16 }}>
       {title ? <Typography.Title heading={6}>{title}</Typography.Title> : null}
       <ListTable
+        className="valuation-dcf-year-table"
         rowKey={(r, i) => r.year || String(i)}
         pagination={false}
         size="small"
         showSeq={false}
+        scroll={{ x: 1180 }}
         columns={[
-          { title: '年份', dataIndex: 'year' },
-          { title: '自由现金流（万元）', dataIndex: 'fcf', render: (v) => fmtWan(v) },
-          { title: '折现因子', dataIndex: 'factor', render: (v) => fmtNum(v, 6) },
-          { title: '现值（万元）', dataIndex: 'pv', render: (v) => fmtWan(v) },
+          { title: '年份', dataIndex: 'year', width: 88, align: 'right', className: 'valuation-nowrap-cell', render: (v) => forecastYearLabel(v) },
+          { title: '期数', dataIndex: 'periods', width: 72, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
+          { title: '税后经营利润', dataIndex: 'nopat', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: '折旧摊销', dataIndex: 'da', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: '资本开支', dataIndex: 'capex', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: 'ΔNWC', dataIndex: 'dnwc', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: '自由现金流', dataIndex: 'fcf', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: '折现因子', dataIndex: 'factor', width: 100, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 6) },
+          { title: '现值', dataIndex: 'pv', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
         ]}
         data={pvs}
       />
+      <ForecastBridge dcf={dcf} />
       <Typography.Paragraph className="valuation-formula-wrap" style={{ marginTop: 8, fontSize: 13 }}>
-        {terminalFormulaText(dcf, terminalType)}；终值现值 {fmtWan(dcf.terminal_pv)}；
-        企业价值 {fmtYiFromYuan(dcf.enterprise_value)}；净负债 {fmtWan(dcf.net_debt)}；
+        {terminalFormulaText(dcf, terminalType)}；终值现值 {fmtYuanAsWan(dcf.terminal_pv)}；
+        企业价值 {fmtYiFromYuan(dcf.enterprise_value)}；净负债 {fmtYuanAsWan(dcf.net_debt)}；
         股权价值 {fmtNum(dcf.equity_value_yi, 2)} 亿元
         {dcf.apply_liquidity
           ? `（已扣并购流动性折扣 ${fmtPct(dcf.liquidity_discount ?? 0.3, 0)}）`
@@ -462,13 +645,18 @@ function DcfOne({ title, dcf, terminalType }) {
   )
 }
 
+function dcfWanTitle(name, fallback) {
+  const text = name || fallback
+  return text.includes('单位：万元') ? text : `${text}（单位：万元）`
+}
+
 export function DcfProcessTables({ payload }) {
   if (!payload?.primary) return <Empty description="暂无 DCF 结果，请先采集/计算" />
   const dual = Boolean(payload.secondary)
   return (
     <div className={dual ? 'valuation-dcf-process-grid' : undefined}>
-      <DcfOne title={payload.primary.scenario_name || '基准'} dcf={payload.primary} terminalType={payload.terminal_type} />
-      {dual ? <DcfOne title={payload.secondary.scenario_name || '第二情景'} dcf={payload.secondary} terminalType={payload.terminal_type} /> : null}
+      <DcfOne title={dcfWanTitle(payload.primary.scenario_name, '基准')} dcf={payload.primary} terminalType={payload.terminal_type} />
+      {dual ? <DcfOne title={dcfWanTitle(payload.secondary.scenario_name, '第二情景')} dcf={payload.secondary} terminalType={payload.terminal_type} /> : null}
     </div>
   )
 }
@@ -482,12 +670,12 @@ export function TargetPlReadTable({ payload }) {
       pagination={false}
       size="small"
       columns={[
-        { title: '年份', dataIndex: 'year', width: 90 },
-        { title: '营业收入（万元）', dataIndex: 'revenue', render: (v) => fmtWan(v) },
-        { title: '营业成本（万元）', dataIndex: 'cogs', render: (v) => fmtWan(v) },
-        { title: '毛利（万元）', dataIndex: 'gross_profit', render: (v) => fmtWan(v) },
-        { title: '营业利润（万元）', dataIndex: 'operating_profit', render: (v) => fmtWan(v) },
-        { title: '净利润（万元）', dataIndex: 'net_income', render: (v) => fmtWan(v) },
+        { title: '年份', dataIndex: 'year', width: 90, render: (v) => forecastYearLabel(v) },
+        { title: '营业收入', dataIndex: 'revenue', render: (v) => fmtWanPlain(v) },
+        { title: '营业成本', dataIndex: 'cogs', render: (v) => fmtWanPlain(v) },
+        { title: '毛利', dataIndex: 'gross_profit', render: (v) => fmtWanPlain(v) },
+        { title: '营业利润', dataIndex: 'operating_profit', render: (v) => fmtWanPlain(v) },
+        { title: '净利润', dataIndex: 'net_income', render: (v) => fmtWanPlain(v) },
         { title: '收入增速', dataIndex: 'revenue_growth', render: (v) => fmtPct(v, 1) },
       ]}
       data={years.map((year, i) => ({
@@ -505,7 +693,16 @@ export function TargetPlReadTable({ payload }) {
 
 export function TargetBsReadTable({ payload }) {
   if (!payload || !Object.keys(payload).length) return <Empty description="暂无资产负债表" />
-  const rows = BS_INPUT_KEYS.map((k) => ({ name: BS_LABELS[k] || k, value: payload[k] }))
+  const rows = BS_GROUPS.flatMap((g) => {
+    const items = BS_INPUT_FIELDS.filter((f) => f.group === g.key).map((f) => ({
+      name: f.label,
+      value: payload[f.key],
+    }))
+    if (g.key === 'noncurrent_assets') items.push({ name: '资产总计', value: totalAssetsFromBs(payload) })
+    if (g.key === 'noncurrent_liab') items.push({ name: '负债总计', value: totalLiabFromBs(payload) })
+    if (g.key === 'equity') items.push({ name: '所有者权益总计', value: equityBookFromBs(payload) })
+    return items
+  })
   return (
     <ListTable
       rowKey="name"
@@ -513,7 +710,7 @@ export function TargetBsReadTable({ payload }) {
       size="small"
       columns={[
         { title: '科目', dataIndex: 'name', width: 160 },
-        { title: '金额（万元）', dataIndex: 'value', render: (v) => fmtWan(v) },
+        { title: '金额', dataIndex: 'value', render: (v) => fmtWanPlain(v) },
       ]}
       data={rows}
     />
@@ -532,10 +729,10 @@ export function TargetCfReadTable({ payload }) {
         pagination={false}
         size="small"
         columns={[
-          { title: '年份', dataIndex: 'year', width: 90 },
-          { title: '折旧摊销（万元）', dataIndex: 'da', render: (v) => fmtWan(v) },
-          { title: '资本性支出（万元）', dataIndex: 'capex', render: (v) => fmtWan(v) },
-          { title: '营运资本增加（万元）', dataIndex: 'dnwc', render: (v) => fmtWan(v) },
+          { title: '年份', dataIndex: 'year', width: 90, render: (v) => forecastYearLabel(v) },
+          { title: '折旧摊销', dataIndex: 'da', render: (v) => fmtWanPlain(v) },
+          { title: '资本性支出', dataIndex: 'capex', render: (v) => fmtWanPlain(v) },
+          { title: '营运资本增加', dataIndex: 'dnwc', render: (v) => fmtWanPlain(v) },
         ]}
         data={Array.from({ length: n }, (_, i) => ({
           year: years[i] || `T${i + 1}`,

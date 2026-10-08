@@ -6,7 +6,7 @@
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const { defaultMethodConfig, defaultAssumptions, defaultScenarioSet, seedDcfLiquidityDiscount } = require('./defaults');
-const { toNumber, yuanToYi, resolveValuationDate, parseYmd, sqlDate } = require('./marketUtils');
+const { toNumber, yuanToYi, parseYmd, sqlDate } = require('./marketUtils');
 const { parseJson } = require('./listedMetrics');
 
 const DRAFT_VERSION_ID = '0';
@@ -104,21 +104,17 @@ async function loadMethod(caseId, versionId, pool) {
   };
 }
 
-async function caseCreatedAt(d, caseId) {
-  const rows = await d.query('SELECT F_CreatorTime FROM valuation_case WHERE F_Id = ? LIMIT 1', [caseId]);
-  return rows[0]?.F_CreatorTime || null;
-}
-
 async function saveAssumptions(caseId, versionId, assumptions, pool) {
   const d = wrapDb(pool);
   const a = seedDcfLiquidityDiscount({ ...defaultAssumptions(), ...(assumptions || {}) });
-  a.valuation_date = resolveValuationDate(assumptions?.valuation_date, await caseCreatedAt(d, caseId));
+  a.valuation_date = parseYmd(assumptions?.valuation_date);
   const w = a.wacc_breakdown || {};
   await upsertByCaseVersion(d, 'valuation_assumption', caseId, versionId, [
     'discount_rate', 'exit_pe', 'exit_ps', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
-    'esop', 'valuation_date', 'round_deal_value_yi', 'display_unit',
+    'esop', 'valuation_date', 'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
     'pe_low_multiple', 'pe_median_multiple', 'ps_low_multiple', 'ps_median_multiple',
+    'forecast_dso', 'forecast_dpo', 'forecast_dio',
   ], [
     numOrNull(a.discount_rate),
     numOrNull(a.exit_pe),
@@ -129,6 +125,9 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     a.forecast_years == null ? null : Number(a.forecast_years),
     numOrNull(a.esop),
     sqlDate(a.valuation_date),
+    numOrNull(a.ytd_revenue),
+    numOrNull(a.market_revenue),
+    numOrNull(a.market_net_income),
     numOrNull(a.round_deal_value_yi),
     strOrNull(a.display_unit, 16) || 'yi',
     numOrNull(w.risk_free_rate),
@@ -141,6 +140,9 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(a.pe_median_multiple),
     numOrNull(a.ps_low_multiple),
     numOrNull(a.ps_median_multiple),
+    numOrNull(a.forecast_dso),
+    numOrNull(a.forecast_dpo),
+    numOrNull(a.forecast_dio),
   ]);
 }
 
@@ -151,28 +153,22 @@ async function loadAssumptions(caseId, versionId, pool) {
     [caseId, versionId]
   );
   if (!rows.length) {
-    const created = await caseCreatedAt(d, caseId);
-    return { ...defaultAssumptions(), valuation_date: resolveValuationDate(null, created) };
+    return { ...defaultAssumptions(), valuation_date: null };
   }
   const r = rows[0];
-  const created = await caseCreatedAt(d, caseId);
-  const valuationDate = resolveValuationDate(r.valuation_date, created);
-  if (!parseYmd(r.valuation_date) && valuationDate) {
-    await d.execute(
-      'UPDATE valuation_assumption SET valuation_date = ? WHERE case_id = ? AND version_id = ?',
-      [valuationDate, caseId, versionId]
-    );
-  }
   return {
     discount_rate: numOrNull(r.discount_rate),
     exit_pe: numOrNull(r.exit_pe),
     exit_ps: numOrNull(r.exit_ps),
     liquidity_discount: numOrNull(r.liquidity_discount),
-    dcf_liquidity_discount: numOrNull(r.dcf_liquidity_discount) ?? numOrNull(r.liquidity_discount) ?? 0.3,
+    dcf_liquidity_discount: numOrNull(r.dcf_liquidity_discount),
     tax_rate: numOrNull(r.tax_rate),
     forecast_years: r.forecast_years == null ? 5 : Number(r.forecast_years),
     esop: numOrNull(r.esop) ?? 0,
-    valuation_date: valuationDate,
+    valuation_date: parseYmd(r.valuation_date),
+    ytd_revenue: numOrNull(r.ytd_revenue),
+    market_revenue: numOrNull(r.market_revenue),
+    market_net_income: numOrNull(r.market_net_income),
     round_deal_value_yi: numOrNull(r.round_deal_value_yi),
     display_unit: r.display_unit || 'yi',
     wacc_breakdown: {
@@ -187,6 +183,9 @@ async function loadAssumptions(caseId, versionId, pool) {
     pe_median_multiple: numOrNull(r.pe_median_multiple),
     ps_low_multiple: numOrNull(r.ps_low_multiple),
     ps_median_multiple: numOrNull(r.ps_median_multiple),
+    forecast_dso: numOrNull(r.forecast_dso),
+    forecast_dpo: numOrNull(r.forecast_dpo),
+    forecast_dio: numOrNull(r.forecast_dio),
   };
 }
 
@@ -296,7 +295,7 @@ async function saveCalcMeta(caseId, versionId, payload, pool) {
     'relative_formula', 'dcf_formula',
   ], [
     strOrNull(payload.last_job_id, 19),
-    strOrNull(payload.amount_unit, 16) || 'wan',
+    strOrNull(payload.amount_unit, 16) || 'yuan',
     strOrNull(payload.sw_industry_l3, 128),
     numOrNull(wacc.rate),
     wacc.used_breakdown ? 1 : 0,
@@ -741,8 +740,8 @@ async function saveDcfRun(d, caseId, versionId, role, dcf, extras) {
        F_Id, case_id, version_id, role_key, scenario_name, discount_rate,
        equity_value, enterprise_value, net_debt, terminal_value, terminal_pv,
        terminal_base, exit_multiple, fcf_method, terminal_type,
-       sens_row_kind, sens_col_kind, sens_low, sens_high, formula, F_CreatorTime
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+       sens_row_kind, sens_col_kind, sens_low, sens_high, formula, series_json, F_CreatorTime
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
     [
       id, caseId, versionId, role,
       strOrNull(dcf.scenario_name, 64),
@@ -761,15 +760,23 @@ async function saveDcfRun(d, caseId, versionId, role, dcf, extras) {
       numOrNull(dcf.sensitivity?.low),
       numOrNull(dcf.sensitivity?.high),
       strOrNull(extras?.formula, 1000),
+      dcf.series ? JSON.stringify(dcf.series) : null,
     ]
   );
   for (let i = 0; i < (dcf.pvs || []).length; i += 1) {
     const p = dcf.pvs[i];
     const yid = await generateId('valuation_dcf_year', d.idConn);
     await d.execute(
-      `INSERT INTO valuation_dcf_year (F_Id, run_id, line_no, fiscal_year, fcf, factor, pv, F_CreatorTime)
-       VALUES (?,?,?,?,?,?,?,NOW())`,
-      [yid, id, i, strOrNull(p.year, 16), numOrNull(p.fcf), numOrNull(p.factor), numOrNull(p.pv)]
+      `INSERT INTO valuation_dcf_year (
+         F_Id, run_id, line_no, fiscal_year, fcf, factor, pv,
+         periods, nopat, da, capex, dnwc, ar_balance, inventory_balance, ap_balance, imbalance,
+         F_CreatorTime
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+      [
+        yid, id, i, strOrNull(p.year, 16), numOrNull(p.fcf), numOrNull(p.factor), numOrNull(p.pv),
+        numOrNull(p.periods), numOrNull(p.nopat), numOrNull(p.da), numOrNull(p.capex), numOrNull(p.dnwc),
+        numOrNull(p.ar_balance), numOrNull(p.inventory_balance), numOrNull(p.ap_balance), numOrNull(p.imbalance),
+      ]
     );
   }
   const sens = dcf.sensitivity || {};
@@ -814,7 +821,9 @@ async function saveDcf(caseId, versionId, dcfSheet, pool) {
 
 async function loadOneDcf(d, run) {
   const years = await d.query(
-    `SELECT fiscal_year, fcf, factor, pv FROM valuation_dcf_year WHERE run_id = ? ORDER BY line_no ASC`,
+    `SELECT fiscal_year, fcf, factor, pv, periods, nopat, da, capex, dnwc,
+            ar_balance, inventory_balance, ap_balance, imbalance
+     FROM valuation_dcf_year WHERE run_id = ? ORDER BY line_no ASC`,
     [run.F_Id]
   );
   const cells = await d.query(
@@ -847,6 +856,14 @@ async function loadOneDcf(d, run) {
     };
   }
   const equity = numOrNull(run.equity_value);
+  let series = null;
+  if (run.series_json) {
+    try {
+      series = typeof run.series_json === 'string' ? JSON.parse(run.series_json) : run.series_json;
+    } catch {
+      series = null;
+    }
+  }
   return {
     scenario_name: run.scenario_name,
     discount_rate: numOrNull(run.discount_rate),
@@ -866,8 +883,18 @@ async function loadOneDcf(d, run) {
       fcf: numOrNull(y.fcf),
       factor: numOrNull(y.factor),
       pv: numOrNull(y.pv),
+      periods: numOrNull(y.periods),
+      nopat: numOrNull(y.nopat),
+      da: numOrNull(y.da),
+      capex: numOrNull(y.capex),
+      dnwc: numOrNull(y.dnwc),
+      ar_balance: numOrNull(y.ar_balance),
+      inventory_balance: numOrNull(y.inventory_balance),
+      ap_balance: numOrNull(y.ap_balance),
+      imbalance: numOrNull(y.imbalance),
     })),
     fcf: years.map((y) => numOrNull(y.fcf)),
+    series,
     sensitivity,
   };
 }
@@ -1183,6 +1210,7 @@ async function migrateValuationJsonStores(pool) {
 module.exports = {
   DRAFT_VERSION_ID,
   saveWorkspace,
+  saveAssumptions,
   loadWorkspace,
   loadMethod,
   saveMethod,

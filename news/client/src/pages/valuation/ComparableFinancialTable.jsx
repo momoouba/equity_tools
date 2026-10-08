@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Radio, Empty, Typography, Alert, Button, Message, Space } from '@arco-design/web-react'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
-import { fmtWanPlain, wanNumberFromYuan } from './valuationUnits'
+import { fmtWanPlain } from './valuationUnits'
 import { ListTable } from './valuationTable'
 
 const REPORT_LABEL = { annual: '年报', q1: '一季报', interim: '中报', q3: '三季报' }
@@ -25,10 +25,14 @@ const COLS = {
     { key: 'net_income', title: '净利润' },
   ],
   bs: [
-    { key: 'cash', title: '货币资金' },
     { key: 'accounts_receivable', title: '应收账款' },
+    { key: 'notes_receivable', title: '应收票据' },
+    { key: 'revenue', title: '营业收入' },
     { key: 'inventory', title: '存货' },
     { key: 'accounts_payable', title: '应付账款' },
+    { key: 'notes_payable', title: '应付票据' },
+    { key: 'cogs', title: '营业成本' },
+    { key: 'cash', title: '货币资金' },
     { key: 'short_term_loan', title: '短期借款' },
     { key: 'long_term_loan', title: '长期借款' },
     { key: 'equity', title: '净资产' },
@@ -47,8 +51,8 @@ const COLS = {
 
 const HINT = {
   pl: '系统入库近几期公开年报/季报。东方财富利润表一般不提供毛利字段，本表按「营业收入 − 营业成本」计算。市场法用历史 PE/PS，不用当天行情。',
-  bs: '系统入库近几期公开资产负债表。营运天数用最新一期应收/应付/存货，对应当期或 TTM 利润表。不用当天行情。',
-  cf: '系统入库近几期公开现金流量表。标的 DCF 用你在「标的现金流量表」填的三项，不直接用这些数。',
+  bs: '金额单位为元。DSO = 360 ×（应收账款 + 应收票据）÷ 同期营业收入，DPO = 360 ×（应付账款 + 应付票据）÷ 同期营业成本，DIO = 360 × 存货 ÷ 同期营业成本。营业收入和营业成本取同一报告期的利润表。',
+  cf: '系统入库近几期公开现金流量表。折旧摊销按补充资料加总：固定资产折旧（含油气资产折耗、生产性生物资产折旧，同一金额只计一次）、无形资产摊销、长期待摊费用摊销、使用权资产折旧。标的 DCF 不直接用这些数。',
 }
 
 function metricValue(row, key) {
@@ -69,6 +73,22 @@ function withComputedMetrics(rows) {
   ))
 }
 
+function attachSamePeriodPl(bsRows, allRows) {
+  const plByKey = new Map()
+  for (const r of allRows || []) {
+    if (r?.statement_type !== 'pl') continue
+    plByKey.set(`${r.stock_code}|${r.report_period}|${r.report_type}`, r)
+  }
+  return (bsRows || []).map((r) => {
+    const pl = plByKey.get(`${r.stock_code}|${r.report_period}|${r.report_type}`)
+    return {
+      ...r,
+      revenue: pl ? metricValue(pl, 'revenue') : null,
+      cogs: pl ? metricValue(pl, 'cogs') : null,
+    }
+  })
+}
+
 function exportComparableSheet({ statementType, rows, filePrefix }) {
   const cols = COLS[statementType] || COLS.pl
   const title = TABLE_TITLE[statementType] || '可比财报'
@@ -79,10 +99,13 @@ function exportComparableSheet({ statementType, rows, filePrefix }) {
     r.stock_name || '',
     r.report_period || '',
     REPORT_LABEL[r.report_type] || r.report_type || '',
-    ...cols.map((c) => wanNumberFromYuan(metricValue(r, c.key), 2)),
+    ...cols.map((c) => {
+      const n = Number(metricValue(r, c.key))
+      return Number.isFinite(n) ? Number(n.toFixed(2)) : null
+    }),
   ])
   const aoa = [
-    [`${title}（万元）`],
+    [`${title}（元）`],
     header,
     ...body,
   ]
@@ -102,8 +125,10 @@ export default function ComparableFinancialTable({ statementType, rows, loading,
   const cols = COLS[statementType] || COLS.pl
   const title = TABLE_TITLE[statementType] || '可比财报'
   const data = useMemo(() => {
-    const list = withComputedMetrics((rows || []).filter((r) => r.statement_type === statementType))
-    if (periodFilter === 'annual') return list.filter((r) => r.report_type === 'annual')
+    const source = withComputedMetrics(rows || [])
+    let list = source.filter((r) => r.statement_type === statementType)
+    if (periodFilter === 'annual') list = list.filter((r) => r.report_type === 'annual')
+    if (statementType === 'bs') list = attachSamePeriodPl(list, source)
     return list
   }, [rows, statementType, periodFilter])
 
@@ -119,7 +144,7 @@ export default function ComparableFinancialTable({ statementType, rows, loading,
       rows: data,
       filePrefix: filePrefix || title,
     })
-    Message.success(`已导出 ${data.length} 条（万元）`)
+    Message.success(`已导出 ${data.length} 条（元）`)
   }
 
   if (!loading && !(rows || []).some((r) => r.statement_type === statementType)) {
@@ -155,21 +180,22 @@ export default function ComparableFinancialTable({ statementType, rows, loading,
         page={page}
         pageSize={20}
         pagination={{ pageSize: 20, current: page, onChange: setPage, showTotal: true }}
-        scroll={{ x: 1100 }}
+        scroll={{ x: 48 + 72 + 96 + 112 + 64 + cols.length * 148 }}
         columns={[
-          { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
-          { title: '名称', dataIndex: 'stock_name', width: 80, ellipsis: true, fixed: 'left' },
-          { title: '报告期', dataIndex: 'report_period', width: 96 },
+          { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left', className: 'valuation-nowrap-cell' },
+          { title: '名称', dataIndex: 'stock_name', width: 96, fixed: 'left', className: 'valuation-nowrap-cell' },
+          { title: '报告期', dataIndex: 'report_period', width: 112, className: 'valuation-nowrap-cell' },
           {
             title: '类型',
             dataIndex: 'report_type',
             width: 64,
+            className: 'valuation-nowrap-cell',
             render: (v) => REPORT_LABEL[v] || v || '-',
           },
           ...cols.map((c) => ({
             title: c.title,
             dataIndex: c.key,
-            width: 108,
+            width: 148,
             align: 'right',
             className: 'valuation-comp-fin-num',
             render: (v, r) => fmtWanPlain(metricValue(r, c.key), 2),

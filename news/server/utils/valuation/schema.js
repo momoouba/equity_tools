@@ -396,6 +396,7 @@ async function ensureValuationSchema(dbPool) {
   await createStructuredResultTables(dbPool);
   await addListedMetricColumnsIfMissing(dbPool);
   await addTargetBsColumnsIfMissing(dbPool);
+  await addValuationForecastColumnsIfMissing(dbPool);
   if (await tableExists(dbPool, 'valuation_gross_margin_period')) {
     const gmCols = await listColumns(dbPool, 'valuation_gross_margin_period');
     if (!gmCols.has('fiscal_year')) {
@@ -497,6 +498,60 @@ async function addListedMetricColumnsIfMissing(dbPool) {
       `ALTER TABLE listed_company_financials ADD COLUMN \`${name}\` ${metricColumnDdl(name)}`
     );
   }
+}
+
+async function addColumnsIfMissing(dbPool, table, cols) {
+  if (!(await tableExists(dbPool, table))) return;
+  const have = await listColumns(dbPool, table);
+  for (const [name, ddl] of cols) {
+    if (have.has(name)) continue;
+    await dbPool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${name}\` ${ddl}`);
+  }
+}
+
+async function addValuationForecastColumnsIfMissing(dbPool) {
+  await addColumnsIfMissing(dbPool, 'valuation_target_pl_line', [
+    ['cogs_ratio', "DECIMAL(20,8) NULL COMMENT '营业成本占收入'"],
+    ['surtax_ratio', "DECIMAL(20,8) NULL COMMENT '税金及附加占收入'"],
+    ['selling_ratio', "DECIMAL(20,8) NULL COMMENT '销售费用占收入'"],
+    ['admin_ratio', "DECIMAL(20,8) NULL COMMENT '管理费用占收入'"],
+    ['rd_ratio', "DECIMAL(20,8) NULL COMMENT '研发费用占收入'"],
+    ['finance_expense', "DECIMAL(24,4) NULL COMMENT '财务费用，元。可为负，表示净利息收入'"],
+    ['finance_expense_ratio', "DECIMAL(20,8) NULL COMMENT '财务费用增速或占收入。空则按 0，不进入自由现金流'"],
+    ['other_income_ratio', "DECIMAL(20,8) NULL COMMENT '其他收益占收入'"],
+    ['other_ratio', "DECIMAL(20,8) NULL COMMENT '其他占收入'"],
+    ['da_ratio', "DECIMAL(20,8) NULL COMMENT '折旧摊销占收入'"],
+    ['capex_ratio', "DECIMAL(20,8) NULL COMMENT '资本开支占收入'"],
+    ['dso', "DECIMAL(20,4) NULL COMMENT 'DSO 手填天数'"],
+    ['dpo', "DECIMAL(20,4) NULL COMMENT 'DPO 手填天数'"],
+    ['dio', "DECIMAL(20,4) NULL COMMENT '存货周转天数手填'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_assumption', [
+    ['ytd_revenue', "DECIMAL(24,4) NULL COMMENT '锚定日累计营业收入，与界面单位一致'"],
+    ['market_revenue', "DECIMAL(24,4) NULL COMMENT '市场法营业收入基数，与界面单位一致'"],
+    ['market_net_income', "DECIMAL(24,4) NULL COMMENT '市场法净利润基数，与界面单位一致'"],
+    ['forecast_dso', "DECIMAL(20,4) NULL COMMENT '预测默认 DSO，天；空则用可比中位数'"],
+    ['forecast_dpo', "DECIMAL(20,4) NULL COMMENT '预测默认 DPO，天；空则用可比中位数'"],
+    ['forecast_dio', "DECIMAL(20,4) NULL COMMENT '预测默认存货周转天数；空则用可比中位数'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_dcf_run', [
+    ['series_json', "JSON NULL COMMENT '预测明细：收入到自由现金流的分年序列，元'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_target_bs', [
+    ['forecast_json', "JSON NULL COMMENT '预测年手改资产负债表，键为年份，值为科目金额，元'"],
+    ['forecast_pl_json', "JSON NULL COMMENT '预测利润表金额，元。manual 列出用户改过的科目，未列出的下次计算按比例重写'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_dcf_year', [
+    ['periods', 'DECIMAL(20,8) NULL COMMENT \'折现期数\''],
+    ['nopat', "DECIMAL(24,4) NULL COMMENT '税后经营利润，元'"],
+    ['da', "DECIMAL(24,4) NULL COMMENT '折旧摊销，元'"],
+    ['capex', "DECIMAL(24,4) NULL COMMENT '资本开支，元'"],
+    ['dnwc', "DECIMAL(24,4) NULL COMMENT '营运资本增加，元'"],
+    ['ar_balance', "DECIMAL(24,4) NULL COMMENT '预测年末应收账款，元'"],
+    ['inventory_balance', "DECIMAL(24,4) NULL COMMENT '预测年末存货，元'"],
+    ['ap_balance', "DECIMAL(24,4) NULL COMMENT '预测年末应付账款，元'"],
+    ['imbalance', "DECIMAL(24,4) NULL COMMENT '未配平差额，元'"],
+  ]);
 }
 
 async function addTargetBsColumnsIfMissing(dbPool) {

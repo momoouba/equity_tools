@@ -12,8 +12,10 @@ const {
   stdev,
   isHistPe,
   isSanePs,
+  beijingYmd,
 } = require('./marketUtils');
 const { LISTED_METRIC_COLS, metricsFromRow, metricInsertValues } = require('./listedMetrics');
+const { sumCashflowDa } = require('./cashflowDa');
 const C = require('./constants');
 
 const EM_HEADERS = {
@@ -140,7 +142,7 @@ function mapCfRow(row) {
     cfo: toNumber(pick(row, ['NETCASH_OPERATE', '经营活动产生的现金流量净额'])),
     cfi: toNumber(pick(row, ['NETCASH_INVEST', '投资活动产生的现金流量净额'])),
     cff: toNumber(pick(row, ['NETCASH_FINANCE', '筹资活动产生的现金流量净额'])),
-    da: toNumber(pick(row, ['DEPRECIATION_ETC', '折旧摊销'])),
+    da: sumCashflowDa(row),
     capex: toNumber(pick(row, ['CONSTRUCT_LONG_ASSET', '购建固定资产、无形资产和其他长期资产支付的现金'])),
     cash_begin: toNumber(pick(row, ['BEGIN_CASH', '期初现金'])),
     cash_end: toNumber(pick(row, ['END_CASH', '期末现金'])),
@@ -154,7 +156,17 @@ async function upsertStatement({ stockCode, listingMarket, reportPeriod, reportT
      LIMIT 1`,
     [stockCode, reportPeriod, reportType, statementType]
   );
-  if (exist.length) return { id: exist[0].F_Id, inserted: false };
+  if (exist.length) {
+    if (statementType === 'cf' && metrics?.da != null) {
+      await db.execute(
+        `UPDATE listed_company_financials
+         SET da = ?, fetched_at = NOW(), F_LastModifyTime = NOW()
+         WHERE F_Id = ? AND da IS NULL`,
+        [metrics.da, exist[0].F_Id]
+      );
+    }
+    return { id: exist[0].F_Id, inserted: false };
+  }
   const id = await generateId('listed_company_financials');
   const metricPh = LISTED_METRIC_COLS.map(() => '?').join(',');
   await db.execute(
@@ -335,14 +347,14 @@ async function fetchHistoryMultiples(stockCode, listingMarket, opts = {}) {
   }
 }
 
-async function fetchStatementsIfMissing(stockCode, listingMarket, logCtx) {
+async function fetchStatementsIfMissing(stockCode, listingMarket, logCtx, onlyTypes) {
   const code = padStockCode(stockCode);
   const market = listingMarket || listingMarketFromCode(code);
   const specs = [
     { reportName: 'RPT_F10_FINANCE_GINCOME', type: 'pl', map: mapPlRow },
     { reportName: 'RPT_F10_FINANCE_GBALANCE', type: 'bs', map: mapBsRow },
     { reportName: 'RPT_F10_FINANCE_GCASHFLOW', alt: 'RPT_F10_FINANCE_GCFSTATE', type: 'cf', map: mapCfRow },
-  ];
+  ].filter((spec) => !onlyTypes || onlyTypes.includes(spec.type));
   const warnings = [];
   for (const spec of specs) {
     try {
@@ -697,7 +709,7 @@ async function ensureIndustryMultiples(swIndustryL3, statMethod, asOfDate, onPro
 
   const row = {
     sw_industry_l3: name,
-    trade_date: asOf || new Date().toISOString().slice(0, 10),
+    trade_date: asOf || beijingYmd(),
     stat_method: method,
     pe_median: peBand.median,
     ps_median: psBand.median,
@@ -746,6 +758,19 @@ async function fetchIndustryMultiples(swIndustryL3, statMethod, asOfDate, onProg
 
 const MIN_USABLE_MULTIPLES = 2;
 
+async function listedCfDaMissing(stockCode) {
+  const rows = await db.query(
+    `SELECT COUNT(*) AS n,
+            SUM(CASE WHEN da IS NULL THEN 1 ELSE 0 END) AS missing
+     FROM listed_company_financials
+     WHERE stock_code = ? AND statement_type = 'cf'`,
+    [padStockCode(stockCode)]
+  );
+  const n = Number(rows[0]?.n || 0);
+  const missing = Number(rows[0]?.missing || 0);
+  return n === 0 || missing > 0;
+}
+
 async function inspectLocalCoverage(stockCode) {
   const code = padStockCode(stockCode);
   const stmts = await db.query(
@@ -791,7 +816,8 @@ async function ensureComparablesFetched(comps, logCtx, onProgress) {
     if (typeof onProgress === 'function') onProgress(i, comps.length, code);
 
     const cov = await inspectLocalCoverage(code);
-    if (cov.statementsReady && cov.multiplesReady) {
+    const daMissing = await listedCfDaMissing(code);
+    if (cov.statementsReady && cov.multiplesReady && !daMissing) {
       skipped.push(code);
       continue;
     }
@@ -799,6 +825,9 @@ async function ensureComparablesFetched(comps, logCtx, onProgress) {
     fetched += 1;
     if (!cov.statementsReady) {
       const w = await fetchStatementsIfMissing(code, market, logCtx);
+      warnings.push(...w);
+    } else if (daMissing) {
+      const w = await fetchStatementsIfMissing(code, market, logCtx, ['cf']);
       warnings.push(...w);
     }
 

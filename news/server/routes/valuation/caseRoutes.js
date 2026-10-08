@@ -50,6 +50,32 @@ const multer = require('multer');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+function templatePayloadForDownload(payload, query) {
+  const next = { ...(payload || {}) };
+  if (!query || !Object.prototype.hasOwnProperty.call(query, 'valuation_date')) return payload || null;
+  const raw = String(query.valuation_date || '').trim();
+  next.assumptions = { ...(next.assumptions || {}), valuation_date: raw || null };
+  return next;
+}
+
+function financialTemplateFileName(cse) {
+  const subject = cse?.subject || {};
+  const raw = String(
+    subject.enterprise_full_name
+    || subject.live_name
+    || subject.display_name
+    || cse?.subject_display_name
+    || ''
+  ).trim().replace(/[\\/:*?"<>|]/g, '').replace(/\s+/g, '');
+  return `${raw ? `${raw}财务报表导入模板` : '财务报表导入模板'}.xlsx`;
+}
+
+function sendTemplate(res, buf, filename) {
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(buf);
+}
+
 function paging(req) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 20));
@@ -399,12 +425,10 @@ function registerValuationRoutes(router) {
     }
   });
 
-  router.get('/target-financials/template', requireProjectValuationAccess, async (_req, res) => {
+  router.get('/target-financials/template', requireProjectValuationAccess, async (req, res) => {
     try {
-      const buf = buildTargetFinancialTemplateBuffer();
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''%E6%A0%87%E7%9A%84%E4%B8%89%E8%A1%A8%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx");
-      res.send(buf);
+      const buf = buildTargetFinancialTemplateBuffer(templatePayloadForDownload(null, req.query));
+      sendTemplate(res, buf, '财务报表导入模板.xlsx');
     } catch (e) {
       sendErr(res, e);
     }
@@ -412,12 +436,10 @@ function registerValuationRoutes(router) {
 
   router.get('/cases/:id/target-financials/template', requireProjectValuationAccess, async (req, res) => {
     try {
-      await getCase(req, req.params.id);
+      const cse = await getCase(req, req.params.id);
       const draft = await getDraft(req.params.id);
-      const buf = buildTargetFinancialTemplateBuffer(draft.payload);
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''%E6%A0%87%E7%9A%84%E4%B8%89%E8%A1%A8%E5%AF%BC%E5%85%A5%E6%A8%A1%E6%9D%BF.xlsx");
-      res.send(buf);
+      const buf = buildTargetFinancialTemplateBuffer(templatePayloadForDownload(draft.payload, req.query));
+      sendTemplate(res, buf, financialTemplateFileName(cse));
     } catch (e) {
       sendErr(res, e);
     }
@@ -434,7 +456,7 @@ function registerValuationRoutes(router) {
           return res.status(400).json({ success: false, message: '请上传 Excel 文件' });
         }
         const parsed = parseTargetFinancialWorkbook(req.file.buffer);
-        if (!parsed.targetPl && !parsed.targetBs && !parsed.targetCf) {
+        if (!parsed.targetPl && !parsed.targetBs && !parsed.targetBsSeries && !parsed.targetCf && !parsed.forecast && !parsed.assumptions?.valuation_date) {
           return res.status(400).json({
             success: false,
             message: parsed.warnings[0] || '未能识别三表科目',

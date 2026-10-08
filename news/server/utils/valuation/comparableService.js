@@ -8,6 +8,7 @@ const {
   isAllowedListingMarket,
   isLikelyHkOrUs,
   HK_US_HINT,
+  parseYmd,
 } = require('./marketUtils');
 const { generateId } = require('../idGenerator');
 const { DATA_APP_COMPETITOR_ANALYSIS } = require('../enterpriseDataApp');
@@ -778,15 +779,7 @@ async function patchComparable(caseId, cid, body) {
 }
 
 function periodLabel(period) {
-  if (period instanceof Date && !Number.isNaN(period.getTime())) {
-    const y = period.getFullYear();
-    const mo = String(period.getMonth() + 1).padStart(2, '0');
-    const da = String(period.getDate()).padStart(2, '0');
-    return `${y}-${mo}-${da}`;
-  }
-  const s = String(period || '');
-  const m = s.match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : s;
+  return parseYmd(period) || '';
 }
 
 async function listComparableFinancials(caseId) {

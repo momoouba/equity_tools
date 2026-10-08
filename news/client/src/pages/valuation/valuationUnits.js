@@ -1,4 +1,4 @@
-/** 与服务端 constants.YUAN_PER_WAN 对齐：界面与草稿用万元，引擎再换成元 */
+/** 界面、草稿、库表都是元。YUAN_PER_WAN 只把旧的万元草稿换回元。 */
 import { BS_INPUT_KEYS } from './valuationBsFields'
 
 export const YUAN_PER_WAN = 10000
@@ -15,41 +15,37 @@ export function wanToYuan(v) {
   return Number.isFinite(n) ? n * YUAN_PER_WAN : null
 }
 
-function coerceNumberToWan(v) {
+function wanNumberToYuan(v) {
   if (v == null || v === '') return v
-  let n = Number(v)
-  if (!Number.isFinite(n)) return v
-  if (n === 0) return 0
-  while (n >= 1e12) n /= YUAN_PER_WAN
-  if (n >= 1e7) n /= YUAN_PER_WAN
-  return n
+  const n = Number(v)
+  return Number.isFinite(n) ? n * YUAN_PER_WAN : v
 }
 
-function mapToWan(obj, keys) {
+function mapWanToYuan(obj, keys) {
   if (!obj || typeof obj !== 'object') return obj || {}
   const out = { ...obj }
   for (const k of keys) {
-    if (Array.isArray(out[k])) out[k] = out[k].map(coerceNumberToWan)
-    else if (out[k] != null && out[k] !== '') out[k] = coerceNumberToWan(out[k])
+    if (Array.isArray(out[k])) out[k] = out[k].map(wanNumberToYuan)
+    else if (out[k] != null && out[k] !== '') out[k] = wanNumberToYuan(out[k])
   }
   return out
 }
 
-/** 旧草稿按元存储；纠正「元数字填进万元框」后的多余 0，统一成万元。 */
-export function coercePayloadToWan(payload) {
-  if (!payload || payload.amount_unit === 'wan') return payload
+/** 旧草稿 amount_unit 为万元时，把金额乘 10000。已经是元则不动。 */
+export function coercePayloadToYuan(payload) {
+  if (!payload || payload.amount_unit === 'yuan') return payload
   const assumptions = { ...(payload.assumptions || {}) }
-  if (assumptions.esop != null && assumptions.esop !== '') {
-    assumptions.esop = coerceNumberToWan(assumptions.esop)
+  for (const key of ['esop', 'ytd_revenue', 'market_revenue', 'market_net_income']) {
+    assumptions[key] = wanNumberToYuan(assumptions[key])
   }
   return {
     ...payload,
-    amount_unit: 'wan',
+    amount_unit: 'yuan',
     assumptions,
-    targetPl: mapToWan(payload.targetPl || {}, ['revenue', 'cogs', 'selling', 'admin', 'rd', 'operating_profit', 'net_income']),
-    targetBs: mapToWan(payload.targetBs || {}, BS_INPUT_KEYS),
-    targetCf: mapToWan(payload.targetCf || {}, ['da', 'capex', 'dnwc']),
-    overrides: mapToWan(payload.overrides || {}, ['da', 'capex', 'dnwc', 'net_debt']),
+    targetPl: mapWanToYuan(payload.targetPl || {}, ['revenue', 'cogs', 'selling', 'admin', 'rd', 'operating_profit', 'net_income']),
+    targetBs: mapWanToYuan(payload.targetBs || {}, BS_INPUT_KEYS),
+    targetCf: mapWanToYuan(payload.targetCf || {}, ['da', 'capex', 'dnwc']),
+    overrides: mapWanToYuan(payload.overrides || {}, ['da', 'capex', 'dnwc', 'net_debt']),
   }
 }
 
@@ -68,7 +64,7 @@ export function fmtPct(v, digits = 2) {
     : '-'
 }
 
-/** 列表金额显示：万元保留 2 位小数，千分位 */
+/** 列表金额显示：元，保留 2 位小数，千分位 */
 export const WAN_DECIMALS = 2
 
 export function roundWanToFen(v) {
@@ -82,7 +78,8 @@ export function fmtAmountWan(v, digits = WAN_DECIMALS) {
   if (v == null || v === '') return '-'
   const n = Number(v)
   if (!Number.isFinite(n)) return '-'
-  return n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  const text = n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  return `${text}元`
 }
 
 export function wanNumberFromYuan(yuan, digits = WAN_DECIMALS) {
@@ -91,14 +88,22 @@ export function wanNumberFromYuan(yuan, digits = WAN_DECIMALS) {
   return Number(w.toFixed(digits))
 }
 
+/** 库内仍是元。计算输出的基准表按万元显示，不带单位后缀。 */
+export function fmtYuanAsWan(yuan, digits = WAN_DECIMALS) {
+  const w = yuanToWan(yuan)
+  if (w == null || !Number.isFinite(w)) return '-'
+  return w.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+}
+
 export function fmtWanPlain(yuan, digits = WAN_DECIMALS) {
-  const w = wanNumberFromYuan(yuan, digits)
-  return w == null ? '-' : fmtAmountWan(w, digits)
+  if (yuan == null || yuan === '') return '-'
+  const n = Number(yuan)
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString('zh-CN', { minimumFractionDigits: digits, maximumFractionDigits: digits })
 }
 
 export function fmtWan(yuan, digits = WAN_DECIMALS) {
-  const w = yuanToWan(yuan)
-  return w == null ? '-' : `${fmtAmountWan(w, digits)} 万`
+  return fmtAmountWan(yuan, digits)
 }
 
 export function fmtYiFromYuan(yuan, digits = 2) {
@@ -163,14 +168,25 @@ export const wanInputNumberProps = {
   parser: (value) => String(value || '').replace(/,/g, ''),
 }
 
-/** ISO/UTC 时间转为中国时区 datetime：YYYY-MM-DD HH:mm:ss */
+function chinaInstant(value) {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value : null
+  const raw = String(value ?? '').trim()
+  if (!raw) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return null
+  const wall = raw.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}(?::\d{2})?)$/)
+  const d = new Date(wall ? `${wall[1]}T${wall[2].length === 5 ? `${wall[2]}:00` : wall[2]}+08:00` : raw)
+  return Number.isFinite(d.getTime()) ? d : null
+}
+
+/** 时间转为北京时间：YYYY-MM-DD HH:mm:ss。无时区的日期时间按北京墙钟。无效值返回 -。 */
 export function formatChinaDateTime(value) {
   if (value == null || value === '') return '-'
-  const d = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(d.getTime())) return '-'
+  const d = chinaInstant(value)
+  if (!d) return '-'
   return d.toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
 }
 
+/** 日期按北京时间取 YYYY-MM-DD。纯日期原样保留。日期选择器的日历日用其自身格式。无效值返回空字符串。 */
 export function formatChinaYmd(value) {
   if (value == null || value === '') return ''
   if (typeof value?.format === 'function') {
@@ -179,12 +195,11 @@ export function formatChinaYmd(value) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(f)) return f
     } catch { /* ignore */ }
   }
-  if (value instanceof Date && Number.isFinite(value.getTime())) {
-    return value.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
-  }
   const raw = String(value).trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw.slice(0, 10))) return raw.slice(0, 10)
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  const wall = raw.match(/^(\d{4}-\d{2}-\d{2}) \d{2}:\d{2}/)
+  if (wall) return wall[1]
+  const d = chinaInstant(value)
+  if (!d) return ''
   return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' })
 }

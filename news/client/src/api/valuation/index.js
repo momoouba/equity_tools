@@ -86,11 +86,14 @@ export function fetchSwIndustryNames() {
   return axios.get(`${BASE}/industry-multiples/industries`)
 }
 
-export function downloadTargetFinancialsTemplate(caseId) {
+export function downloadTargetFinancialsTemplate(caseId, valuationDate) {
   const path = caseId
     ? `${BASE}/cases/${caseId}/target-financials/template`
     : `${BASE}/target-financials/template`
-  return axios.get(path, { responseType: 'blob' })
+  return axios.get(path, {
+    responseType: 'blob',
+    params: { valuation_date: valuationDate || '' },
+  })
 }
 
 export function patchCaseComparable(caseId, cid, body) {

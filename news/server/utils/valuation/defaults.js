@@ -1,5 +1,4 @@
 const C = require('./constants');
-const { beijingYmd } = require('./marketUtils');
 
 function defaultMethodConfig() {
   return {
@@ -13,15 +12,9 @@ function defaultMethodConfig() {
   };
 }
 
-/** 旧草稿只有市场法折扣时，把并购 DCF 折扣填成同一值，之后两格互不影响。 */
+/** 不把空的 DCF 流动性折扣填成 30% 或市场法折扣。已保存的数保持原值。 */
 function seedDcfLiquidityDiscount(assumptions) {
-  const a = { ...(assumptions || {}) };
-  if (a.dcf_liquidity_discount == null || a.dcf_liquidity_discount === '') {
-    a.dcf_liquidity_discount = a.liquidity_discount != null && a.liquidity_discount !== ''
-      ? a.liquidity_discount
-      : 0.3;
-  }
-  return a;
+  return { ...(assumptions || {}) };
 }
 
 function defaultAssumptions() {
@@ -34,7 +27,13 @@ function defaultAssumptions() {
     tax_rate: 0.15,
     forecast_years: 5,
     esop: 0,
-    valuation_date: beijingYmd(),
+    valuation_date: null,
+    ytd_revenue: null,
+    market_revenue: null,
+    market_net_income: null,
+    forecast_dso: null,
+    forecast_dpo: null,
+    forecast_dio: null,
     round_deal_value_yi: null,
     display_unit: 'yi',
     wacc_breakdown: {
@@ -52,13 +51,13 @@ function defaultScenarioSet() {
   return {
     ma: {
       name: '并购预期',
-      discount_rate: 0.3,
+      discount_rate: null,
       exit_pe: 40,
       exit_ps: 20,
     },
     ipo: {
       name: '上市预期',
-      discount_rate: 0.3,
+      discount_rate: null,
       exit_pe: 40,
       exit_ps: 20,
     },

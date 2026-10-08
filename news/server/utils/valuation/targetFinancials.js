@@ -3,13 +3,18 @@ const { generateId } = require('../idGenerator');
 const {
   toNumber,
   prepareAmountsForEngine,
-  mapAmountFieldsToWan,
+  alignAssumptionMoney,
 } = require('./marketUtils');
-const { BS_INPUT_KEYS, pickBsSnapshot } = require('./targetBsFields');
+const { BS_INPUT_KEYS, pickBsSnapshot, normalizeBs } = require('./targetBsFields');
 
 const DRAFT_VERSION_ID = '0';
 
-const PL_KEYS = ['revenue', 'cogs', 'selling', 'admin', 'rd', 'operating_profit', 'net_income'];
+const PL_KEYS = ['revenue', 'cogs', 'selling', 'admin', 'rd', 'finance_expense', 'operating_profit', 'net_income'];
+const PL_RATIO_KEYS = [
+  'cogs_ratio', 'surtax_ratio', 'selling_ratio', 'admin_ratio', 'rd_ratio', 'finance_expense_ratio',
+  'other_income_ratio', 'other_ratio', 'da_ratio', 'capex_ratio',
+  'dso', 'dpo', 'dio',
+];
 const OV_KEYS = ['da', 'capex', 'dnwc', 'net_debt'];
 const CF_KEYS = ['da', 'capex', 'dnwc'];
 
@@ -56,6 +61,7 @@ async function replacePlLines(caseId, versionId, plYuan, pool) {
   const n = Math.max(
     years.length,
     ...PL_KEYS.map((k) => (Array.isArray(plYuan?.[k]) ? plYuan[k].length : 0)),
+    ...PL_RATIO_KEYS.map((k) => (Array.isArray(plYuan?.[k]) ? plYuan[k].length : 0)),
     Array.isArray(plYuan?.revenue_growth) ? plYuan.revenue_growth.length : 0
   );
   for (let i = 0; i < n; i += 1) {
@@ -66,9 +72,11 @@ async function replacePlLines(caseId, versionId, plYuan, pool) {
     await d.execute(
       `INSERT INTO valuation_target_pl_line (
          F_Id, case_id, version_id, line_no, fiscal_year,
-         revenue, cogs, gross_profit, selling, admin, rd, operating_profit, net_income, revenue_growth,
+         revenue, cogs, gross_profit, selling, admin, rd, finance_expense, operating_profit, net_income, revenue_growth,
+         cogs_ratio, surtax_ratio, selling_ratio, admin_ratio, rd_ratio, finance_expense_ratio,
+         other_income_ratio, other_ratio, da_ratio, capex_ratio, dso, dpo, dio,
          F_CreatorTime, F_LastModifyTime
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
       [
         id,
         caseId,
@@ -81,25 +89,86 @@ async function replacePlLines(caseId, versionId, plYuan, pool) {
         numOrNull(plYuan.selling?.[i]),
         numOrNull(plYuan.admin?.[i]),
         numOrNull(plYuan.rd?.[i]),
+        numOrNull(plYuan.finance_expense?.[i]),
         numOrNull(plYuan.operating_profit?.[i]),
         numOrNull(plYuan.net_income?.[i]),
         numOrNull(plYuan.revenue_growth?.[i]),
+        numOrNull(plYuan.cogs_ratio?.[i]),
+        numOrNull(plYuan.surtax_ratio?.[i]),
+        numOrNull(plYuan.selling_ratio?.[i]),
+        numOrNull(plYuan.admin_ratio?.[i]),
+        numOrNull(plYuan.rd_ratio?.[i]),
+        numOrNull(plYuan.finance_expense_ratio?.[i]),
+        numOrNull(plYuan.other_income_ratio?.[i]),
+        numOrNull(plYuan.other_ratio?.[i]),
+        numOrNull(plYuan.da_ratio?.[i]),
+        numOrNull(plYuan.capex_ratio?.[i]),
+        numOrNull(plYuan.dso?.[i]),
+        numOrNull(plYuan.dpo?.[i]),
+        numOrNull(plYuan.dio?.[i]),
       ]
     );
   }
 }
 
-async function upsertBs(caseId, versionId, bsYuan, netDebtOverride, pool) {
+const FORECAST_PL_AMOUNT_KEYS = ['revenue', 'cogs', 'surtax', 'selling', 'admin', 'rd', 'finance_expense', 'other_income', 'other', 'da', 'capex'];
+
+function forecastPlJson(forecastPl) {
+  if (!forecastPl || typeof forecastPl !== 'object' || Array.isArray(forecastPl)) return null;
+  const cleaned = {};
+  Object.entries(forecastPl).forEach(([year, row]) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+    const next = {};
+    FORECAST_PL_AMOUNT_KEYS.forEach((key) => {
+      const n = numOrNull(row[key]);
+      if (n != null) next[key] = n;
+    });
+    const manual = Array.isArray(row.manual)
+      ? row.manual.filter((key) => FORECAST_PL_AMOUNT_KEYS.includes(key) && next[key] != null)
+      : [];
+    if (manual.length) next.manual = manual;
+    if (Object.keys(next).length) cleaned[String(year)] = next;
+  });
+  return Object.keys(cleaned).length ? JSON.stringify(cleaned) : null;
+}
+
+function forecastBsJson(forecastBs) {
+  if (!forecastBs || typeof forecastBs !== 'object' || Array.isArray(forecastBs)) return null;
+  const cleaned = {};
+  Object.entries(forecastBs).forEach(([year, row]) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return;
+    const next = {};
+    Object.entries(row).forEach(([key, value]) => {
+      if (!BS_INPUT_KEYS.includes(key)) return;
+      const n = numOrNull(value);
+      if (n != null) next[key] = n;
+    });
+    if (Object.keys(next).length) cleaned[String(year)] = next;
+  });
+  return Object.keys(cleaned).length ? JSON.stringify(cleaned) : null;
+}
+
+function parseForecastBs(raw) {
+  if (raw == null || raw === '') return {};
+  const value = typeof raw === 'string' ? (() => {
+    try { return JSON.parse(raw); } catch { return {}; }
+  })() : raw;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+async function upsertBs(caseId, versionId, bsYuan, netDebtOverride, forecastBs, forecastPl, pool) {
   const d = wrapDb(pool);
   const exist = await d.query(
     'SELECT F_Id FROM valuation_target_bs WHERE case_id = ? AND version_id = ? LIMIT 1',
     [caseId, versionId]
   );
-  const snap = pickBsSnapshot(bsYuan);
+  const snap = pickBsSnapshot(normalizeBs(bsYuan));
+  const forecastJson = forecastBsJson(forecastBs);
+  const forecastPlStored = forecastPlJson(forecastPl);
   const vals = BS_INPUT_KEYS.map((k) => numOrNull(snap[k]));
-  vals.push(numOrNull(netDebtOverride));
-  const colSql = [...BS_INPUT_KEYS, 'net_debt_override'].join(', ');
-  const setSql = [...BS_INPUT_KEYS, 'net_debt_override'].map((k) => `${k}=?`).join(', ');
+  vals.push(numOrNull(netDebtOverride), forecastJson, forecastPlStored);
+  const colSql = [...BS_INPUT_KEYS, 'net_debt_override', 'forecast_json', 'forecast_pl_json'].join(', ');
+  const setSql = [...BS_INPUT_KEYS, 'net_debt_override', 'forecast_json', 'forecast_pl_json'].map((k) => `${k}=?`).join(', ');
   if (exist.length) {
     await d.execute(
       `UPDATE valuation_target_bs SET ${setSql}, F_LastModifyTime=NOW() WHERE F_Id=?`,
@@ -179,7 +248,7 @@ async function saveTargetFinancials(caseId, versionId, payload, pool) {
   const vid = versionId || DRAFT_VERSION_ID;
   const yuan = prepareAmountsForEngine(payload || {});
   await replacePlLines(caseId, vid, yuan.targetPl || {}, pool);
-  await upsertBs(caseId, vid, yuan.targetBs || {}, yuan.overrides?.net_debt, pool);
+  await upsertBs(caseId, vid, yuan.targetBs || {}, yuan.overrides?.net_debt, payload?.forecastBs, payload?.forecastPl, pool);
   await upsertCf(caseId, vid, yuan.targetCf || {}, yuan.overrides || {}, pool);
 }
 
@@ -201,10 +270,12 @@ function linesToPl(rows) {
     selling: [],
     admin: [],
     rd: [],
+    finance_expense: [],
     operating_profit: [],
     net_income: [],
     revenue_growth: [],
   };
+  for (const k of PL_RATIO_KEYS) pl[k] = [];
   for (let i = 0; i < sorted.length; i += 1) {
     const r = sorted[i];
     pl.years.push(normalizeFiscalYear(r.fiscal_year, i));
@@ -214,9 +285,11 @@ function linesToPl(rows) {
     pl.selling.push(numOrNull(r.selling));
     pl.admin.push(numOrNull(r.admin));
     pl.rd.push(numOrNull(r.rd));
+    pl.finance_expense.push(numOrNull(r.finance_expense));
     pl.operating_profit.push(numOrNull(r.operating_profit));
     pl.net_income.push(numOrNull(r.net_income));
     pl.revenue_growth.push(numOrNull(r.revenue_growth));
+    for (const k of PL_RATIO_KEYS) pl[k].push(numOrNull(r[k]));
   }
   return pl;
 }
@@ -224,15 +297,17 @@ function linesToPl(rows) {
 async function loadTargetFinancialsYuan(caseId, versionId) {
   const vid = versionId || DRAFT_VERSION_ID;
   const plRows = await db.query(
-    `SELECT line_no, fiscal_year, revenue, cogs, gross_profit, selling, admin, rd,
-            operating_profit, net_income, revenue_growth
+    `SELECT line_no, fiscal_year, revenue, cogs, gross_profit, selling, admin, rd, finance_expense,
+            operating_profit, net_income, revenue_growth,
+            cogs_ratio, surtax_ratio, selling_ratio, admin_ratio, rd_ratio, finance_expense_ratio,
+            other_income_ratio, other_ratio, da_ratio, capex_ratio, dso, dpo, dio
      FROM valuation_target_pl_line
      WHERE case_id = ? AND version_id = ?
      ORDER BY line_no ASC`,
     [caseId, vid]
   );
   const bsRows = await db.query(
-    `SELECT ${[...BS_INPUT_KEYS, 'net_debt_override'].join(', ')}
+    `SELECT ${[...BS_INPUT_KEYS, 'net_debt_override', 'forecast_json', 'forecast_pl_json'].join(', ')}
      FROM valuation_target_bs WHERE case_id = ? AND version_id = ? LIMIT 1`,
     [caseId, vid]
   );
@@ -264,7 +339,9 @@ async function loadTargetFinancialsYuan(caseId, versionId) {
   return {
     hasRows: true,
     targetPl: linesToPl(plRows),
-    targetBs: pickBsSnapshot(bs),
+    targetBs: pickBsSnapshot(normalizeBs(bs)),
+    forecastBs: parseForecastBs(bs.forecast_json),
+    forecastPl: parseForecastBs(bs.forecast_pl_json),
     targetCf,
     overrides: {
       net_debt: numOrNull(bs.net_debt_override),
@@ -272,15 +349,6 @@ async function loadTargetFinancialsYuan(caseId, versionId) {
       capex: numOrNull(cfHead.capex_default),
       dnwc: numOrNull(cfHead.dnwc_default),
     },
-  };
-}
-
-function toWanPayloadSlice(yuanSlice) {
-  return {
-    targetPl: mapAmountFieldsToWan(yuanSlice.targetPl || {}, [...PL_KEYS, 'gross_profit']),
-    targetBs: mapAmountFieldsToWan(yuanSlice.targetBs || {}, BS_INPUT_KEYS),
-    targetCf: mapAmountFieldsToWan(yuanSlice.targetCf || {}, [...CF_KEYS, 'da_default', 'capex_default', 'dnwc_default']),
-    overrides: mapAmountFieldsToWan(yuanSlice.overrides || {}, OV_KEYS),
   };
 }
 
@@ -301,17 +369,41 @@ async function hydrateDraftPayload(caseId, payload, versionId) {
     await saveTargetFinancials(caseId, vid, base);
     stored = await loadTargetFinancialsYuan(caseId, vid);
   }
-  if (!stored.hasRows) {
-    return { ...base, amount_unit: base.amount_unit || 'wan' };
+  const aligned = alignAssumptionMoney(base.assumptions, stored.targetPl, base.amount_unit || 'wan');
+  const assumptions = aligned.assumptions;
+  if (aligned.changed) {
+    await db.execute(
+      `UPDATE valuation_assumption
+       SET esop = ?, ytd_revenue = ?, market_revenue = ?, market_net_income = ?, F_LastModifyTime = NOW()
+       WHERE case_id = ? AND version_id = ?`,
+      [
+        assumptions.esop ?? null,
+        assumptions.ytd_revenue ?? null,
+        assumptions.market_revenue ?? null,
+        assumptions.market_net_income ?? null,
+        caseId,
+        vid,
+      ]
+    );
+    await db.execute(
+      `UPDATE valuation_calc_meta SET amount_unit = 'yuan', F_LastModifyTime = NOW()
+       WHERE case_id = ? AND version_id = ?`,
+      [caseId, vid]
+    );
   }
-  const wan = toWanPayloadSlice(stored);
+  if (!stored.hasRows) {
+    return { ...base, assumptions, amount_unit: 'yuan' };
+  }
   return {
     ...base,
-    amount_unit: 'wan',
-    targetPl: wan.targetPl,
-    targetBs: wan.targetBs,
-    targetCf: wan.targetCf,
-    overrides: wan.overrides,
+    assumptions,
+    amount_unit: 'yuan',
+    targetPl: stored.targetPl,
+    targetBs: stored.targetBs,
+    forecastBs: stored.forecastBs || {},
+    forecastPl: stored.forecastPl || {},
+    targetCf: stored.targetCf,
+    overrides: stored.overrides,
   };
 }
 

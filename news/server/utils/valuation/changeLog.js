@@ -3,6 +3,7 @@
  */
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
+const { parseYmd } = require('./marketUtils');
 
 const SOURCE_LABELS = {
   draft: '草稿',
@@ -74,15 +75,7 @@ function getPath(obj, path) {
 
 function toYmd(v) {
   if (v == null || v === '') return '';
-  if (v instanceof Date && Number.isFinite(v.getTime())) {
-    const y = v.getFullYear();
-    const m = String(v.getMonth() + 1).padStart(2, '0');
-    const d = String(v.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }
-  const s = String(v).trim();
-  const m = s.match(/(\d{4}-\d{2}-\d{2})/);
-  return m ? m[1] : s.slice(0, 10);
+  return parseYmd(v) || '';
 }
 
 function trimNum(n) {

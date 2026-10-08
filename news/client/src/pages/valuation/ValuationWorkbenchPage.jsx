@@ -2,9 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Button, Card, Input, InputNumber, Select, Switch, Message, Space,
-  Typography, Alert, Progress, Modal, Checkbox, Tag, DatePicker, Tabs,
+  Typography, Alert, Progress, Modal, Checkbox, Tag, DatePicker, Tabs, Tooltip,
 } from '@arco-design/web-react'
-import { IconClose } from '@arco-design/web-react/icon'
+import { IconClose, IconQuestionCircle } from '@arco-design/web-react/icon'
 import {
   fetchValuationCase, fetchValuationDraft, putValuationDraft, patchValuationCase,
   fetchCaseComparables, fetchComparableFinancials,
@@ -15,13 +15,14 @@ import {
 } from '../../api/valuation'
 import ValuationDetailModal from './ValuationDetailModal'
 import SheetModal, { SheetActions } from '../../components/SheetModal'
-import { coercePayloadToWan, fmtYi, fmtNum, fmtPct, fmtAmountWan, roundWanToFen, wanInputNumberProps, formatChinaDateTime, formatChinaYmd, previewWaccBreakdown } from './valuationUnits'
+import { coercePayloadToYuan, fmtYi, fmtNum, fmtPct, fmtAmountWan, fmtWanPlain, roundWanToFen, wanInputNumberProps, formatChinaDateTime, formatChinaYmd, previewWaccBreakdown } from './valuationUnits'
 import ValuationFootballField from './ValuationFootballField'
 import {
   RelativeValuationTable,
   RatiosTables,
   MarketMethodTable,
   DcfProcessTables,
+  forecastYearLabel,
 } from './valuationSheetTables'
 import ComparableFinancialTable from './ComparableFinancialTable'
 import { ListTable } from './valuationTable'
@@ -40,6 +41,8 @@ import {
   debtRatioFromBs,
   currentRatioFromBs,
   equityImpliedFromBs,
+  equityBookFromBs,
+  displayBs,
 } from './valuationBsFields'
 import VersionComparePanel from './VersionComparePanel'
 import ValuationChangeLog from './ValuationChangeLog'
@@ -86,13 +89,401 @@ const NAV_GROUPS = [
 ]
 const STEPS = NAV_GROUPS.flatMap((g) => g.items)
 
+const PL_RATIO_KEYS = [
+  'revenue_growth', 'cogs_ratio', 'surtax_ratio', 'selling_ratio', 'admin_ratio', 'rd_ratio', 'finance_expense_ratio',
+  'other_income_ratio', 'other_ratio', 'da_ratio', 'capex_ratio', 'dso', 'dpo', 'dio',
+]
+
 function emptyPl() {
-  return { years: ['2026', '2027'], revenue: [0, 0], cogs: [], selling: [], admin: [], rd: [], operating_profit: [], net_income: [], revenue_growth: [] }
+  const pl = { years: [], revenue: [], cogs: [], selling: [], admin: [], rd: [], operating_profit: [], net_income: [] }
+  for (const k of PL_RATIO_KEYS) pl[k] = []
+  return pl
 }
 
 const PL_SERIES_KEYS = [
-  'revenue', 'cogs', 'gross_profit', 'selling', 'admin', 'rd',
-  'operating_profit', 'net_income', 'revenue_growth',
+  'revenue', 'cogs', 'gross_profit', 'selling', 'admin', 'rd', 'finance_expense',
+  'operating_profit', 'net_income', ...PL_RATIO_KEYS,
+]
+
+function statementAnchor(ymd) {
+  const s = String(ymd || '').slice(0, 10)
+  if (!/^\d{4}-(03-31|06-30|09-30|12-31)$/.test(s)) return null
+  return { ymd: s, year: Number(s.slice(0, 4)), month: Number(s.slice(5, 7)) }
+}
+
+function yearNum(y) {
+  const m = String(y || '').match(/(20\d{2})/)
+  return m ? Number(m[1]) : null
+}
+
+function forecastStartYear(ymd) {
+  const a = statementAnchor(ymd)
+  if (!a) return null
+  return a.month === 12 ? a.year + 1 : a.year
+}
+
+function currentPlIndex(pl, ymd) {
+  const years = pl?.years || []
+  const a = statementAnchor(ymd)
+  if (a) {
+    const i = years.findIndex((y) => yearNum(y) === a.year)
+    if (i >= 0) return i
+  }
+  for (let i = years.length - 1; i >= 0; i -= 1) {
+    if (pl?.revenue?.[i] != null && pl.revenue[i] !== '') return i
+  }
+  return -1
+}
+
+const CURRENT_PL_ROWS = [
+  { key: 'revenue', name: '营业收入', note: '锚定日当期累计营业收入，元' },
+  { key: 'cogs', name: '营业成本', note: '当期利润表' },
+  { key: 'selling', name: '销售费用', note: '当期利润表，含已分摊的折旧摊销' },
+  { key: 'admin', name: '管理费用', note: '当期利润表，含已分摊的折旧摊销' },
+  { key: 'rd', name: '研发费用', note: '当期利润表，含已分摊的折旧摊销' },
+  { key: 'finance_expense', name: '财务费用', note: '当期利润表。利息收入大于利息支出时填负数。不进入自由现金流' },
+  { key: 'operating_profit', name: '营业利润', note: '当期利润表' },
+  { key: 'net_income', name: '净利润', note: '当期利润表' },
+]
+
+const CURRENT_AMOUNT_KEYS = CURRENT_PL_ROWS.map((r) => r.key)
+
+function setPlYearAmount(pl, year, key, value) {
+  const label = String(year)
+  let next = { ...(pl || {}) }
+  let years = [...(next.years || [])].map(String)
+  let idx = years.findIndex((y) => yearNum(y) === Number(year))
+  if (idx < 0) {
+    const ordered = [...years, label].sort((a, b) => (yearNum(a) || 0) - (yearNum(b) || 0))
+    next = realignPl(next, ordered)
+    years = next.years || []
+    idx = years.findIndex((y) => yearNum(y) === Number(year))
+  }
+  const arr = [...(next[key] || [])]
+  arr[idx] = value
+  next[key] = arr
+  next.years = years
+  return next
+}
+
+function setCurrentAmount(pl, ymd, key, value) {
+  const next = { ...(pl || {}) }
+  let years = [...(next.years || [])].map(String)
+  let idx = currentPlIndex({ ...next, years }, ymd)
+  if (idx < 0) {
+    const a = statementAnchor(ymd)
+    years = [a ? String(a.year) : '当期', ...years]
+    for (const k of [...CURRENT_AMOUNT_KEYS, ...PL_RATIO_KEYS]) {
+      if (Array.isArray(next[k])) next[k] = [undefined, ...next[k]]
+    }
+    idx = 0
+  }
+  const arr = [...(next[key] || [])]
+  arr[idx] = value
+  next[key] = arr
+  next.years = years
+  return next
+}
+
+function forecastYearEntries(pl, ymd) {
+  const start = forecastStartYear(ymd)
+  return (pl?.years || []).map((y, i) => ({ y: String(y), i })).filter(({ y }) => {
+    if (start == null) return true
+    const n = yearNum(y)
+    return n != null && n >= start
+  })
+}
+
+function realignPl(pl, nextYears) {
+  const oldYears = (pl?.years || []).map(String)
+  const years = nextYears.map(String)
+  const next = { ...(pl || {}), years }
+  for (const k of [...CURRENT_AMOUNT_KEYS, ...PL_RATIO_KEYS, 'gross_profit']) {
+    const src = Array.isArray(pl?.[k]) ? pl[k] : []
+    next[k] = years.map((y) => {
+      const i = oldYears.findIndex((oy) => oy === y || yearNum(oy) === yearNum(y))
+      return i >= 0 ? src[i] : undefined
+    })
+  }
+  return next
+}
+
+function bsAutoValue(name, values, imbalance) {
+  if (!values) return null
+  if (name === '流动资产合计') return currentAssetsFromBs(values)
+  if (name === '资产总计') return totalAssetsFromBs(values)
+  if (name === '流动负债合计') return currentLiabFromBs(values)
+  if (name === '负债合计' || name === '负债总计') return totalLiabFromBs(values)
+  if (name === '所有者权益（反算）') return equityImpliedFromBs(values)
+  if (name === '账面所有者权益' || name === '所有者权益总计') return equityBookFromBs(values)
+  if (name === '配平差额') {
+    if (imbalance != null) return imbalance
+    const assets = totalAssetsFromBs(values)
+    const liab = totalLiabFromBs(values)
+    const book = equityBookFromBs(values)
+    if (assets == null || liab == null || book == null) return null
+    return roundWanToFen(assets - liab - book)
+  }
+  if (name === '净负债') return computedNetDebtWan(values)
+  if (name === '期末营运资本占用') {
+    const n = nwcStockFromBs(values)
+    return n == null ? null : roundWanToFen(n)
+  }
+  if (name === '资产负债率') return debtRatioFromBs(values)
+  if (name === '流动比率') return currentRatioFromBs(values)
+  return null
+}
+
+function forecastBsColumn(actual, pv, yearOverrides) {
+  const values = { ...displayBs(actual) }
+  const overrides = yearOverrides || {}
+  Object.entries(overrides).forEach(([key, value]) => {
+    if (value != null && value !== '') values[key] = value
+  })
+  if (pv && pv.ar_balance != null) {
+    if (overrides.accounts_receivable == null || overrides.accounts_receivable === '') values.accounts_receivable = pv.ar_balance
+    if (overrides.inventory == null || overrides.inventory === '') values.inventory = pv.inventory_balance
+    if (overrides.accounts_payable == null || overrides.accounts_payable === '') values.accounts_payable = pv.ap_balance
+  }
+  return { values, forecast: Boolean(pv && pv.ar_balance != null) }
+}
+
+function defaultForecastYears(ymd, count = 5) {
+  const a = statementAnchor(ymd)
+  if (!a) return []
+  const start = a.month === 12 ? a.year + 1 : a.year
+  const n = Math.min(15, Math.max(1, Number(count) || 5))
+  return Array.from({ length: n }, (_, i) => String(start + i))
+}
+
+function finiteOrNull(v) {
+  if (v == null || v === '') return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
+function carrySeries(arr) {
+  const values = []
+  let last = null
+  let seen = false
+  ;(arr || []).forEach((raw) => {
+    const v = finiteOrNull(raw)
+    if (v != null) {
+      last = v
+      seen = true
+    }
+    values.push(seen ? last : null)
+  })
+  return values
+}
+
+function forecastStatement(pl, assumptions) {
+  const anchor = statementAnchor(assumptions?.valuation_date)
+  const entries = forecastYearEntries(pl, assumptions?.valuation_date)
+  const years = entries.map(({ y }) => String(yearNum(y) || y))
+  if (!anchor || !years.length) return null
+  const ytd = finiteOrNull(assumptions?.ytd_revenue)
+  let base = ytd != null && ytd > 0 ? ytd : null
+  if (base == null) {
+    const idx = (pl?.years || []).findIndex((y) => yearNum(y) === anchor.year)
+    const revenue = finiteOrNull(pl?.revenue?.[idx])
+    if (revenue != null && revenue > 0) base = revenue
+  }
+  const picked = (key) => entries.map(({ i }) => pl?.[key]?.[i])
+  const growth = carrySeries(picked('revenue_growth'))
+  let prev = base == null ? null : base * 12 / anchor.month
+  const revenue = growth.map((g) => {
+    if (prev == null || g == null) return null
+    const next = prev * (1 + g)
+    prev = next
+    return next
+  })
+  const amountAt = (key) => {
+    const idx = (pl?.years || []).findIndex((y) => yearNum(y) === anchor.year)
+    return idx >= 0 ? finiteOrNull(pl?.[key]?.[idx]) : null
+  }
+  const growOrShare = (ratioKey, amountKey) => {
+    const rates = carrySeries(picked(ratioKey))
+    const current = amountAt(amountKey)
+    if (current != null) {
+      let rolling = current * 12 / anchor.month
+      return rates.map((g) => {
+        if (g == null) return null
+        const next = rolling * (1 + g)
+        rolling = next
+        return next
+      })
+    }
+    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
+  }
+  const share = (ratioKey) => {
+    const rates = carrySeries(picked(ratioKey))
+    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
+  }
+  const cogs = growOrShare('cogs_ratio', 'cogs')
+  const surtax = share('surtax_ratio')
+  const selling = growOrShare('selling_ratio', 'selling')
+  const admin = growOrShare('admin_ratio', 'admin')
+  const rd = growOrShare('rd_ratio', 'rd')
+  const financeExpense = (() => {
+    const pickedRates = picked('finance_expense_ratio')
+    const seen = pickedRates.some((v) => finiteOrNull(v) != null)
+    const rates = seen ? carrySeries(pickedRates) : revenue.map(() => 0)
+    const current = amountAt('finance_expense')
+    if (current != null) {
+      let rolling = current * 12 / anchor.month
+      return rates.map((g) => {
+        if (g == null) return null
+        const next = rolling * (1 + g)
+        rolling = next
+        return next
+      })
+    }
+    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
+  })()
+  const otherIncome = share('other_income_ratio')
+  const other = share('other_ratio')
+  const da = share('da_ratio')
+  const capex = share('capex_ratio')
+  const taxRaw = finiteOrNull(assumptions?.tax_rate)
+  const tax = taxRaw == null ? 0.15 : taxRaw
+  const gross = revenue.map((rev, i) => (rev == null || cogs[i] == null ? null : rev - cogs[i]))
+  const pretax = revenue.map((rev, i) => {
+    const parts = [cogs[i], surtax[i], selling[i], admin[i], rd[i], otherIncome[i], other[i]]
+    if (rev == null || parts.some((v) => v == null)) return null
+    return rev - cogs[i] - surtax[i] - selling[i] - admin[i] - rd[i] + otherIncome[i] + other[i]
+  })
+  const nopat = pretax.map((p) => (p == null ? null : (p > 0 ? p * (1 - tax) : p)))
+  return {
+    years, revenue, cogs, gross, surtax, selling, admin, rd, financeExpense, otherIncome, other, da, pretax, nopat, capex, tax,
+    entries,
+  }
+}
+
+const FORECAST_PL_DRIVERS = [
+  ['revenue', 'revenue'],
+  ['cogs', 'cogs'],
+  ['surtax', 'surtax'],
+  ['selling', 'selling'],
+  ['admin', 'admin'],
+  ['rd', 'rd'],
+  ['financeExpense', 'finance_expense'],
+  ['otherIncome', 'other_income'],
+  ['other', 'other'],
+  ['da', 'da'],
+  ['capex', 'capex'],
+]
+
+function overlayForecastStatement(statement, forecastPl) {
+  if (!statement) return null
+  const next = { ...statement }
+  FORECAST_PL_DRIVERS.forEach(([clientKey, engineKey]) => {
+    next[clientKey] = statement[clientKey].map((formula, i) => {
+      const stored = finiteOrNull(forecastPl?.[statement.years[i]]?.[engineKey])
+      return stored != null ? stored : formula
+    })
+  })
+  next.gross = next.revenue.map((rev, i) => (rev == null || next.cogs[i] == null ? null : rev - next.cogs[i]))
+  next.pretax = next.revenue.map((rev, i) => {
+    const parts = [next.cogs[i], next.surtax[i], next.selling[i], next.admin[i], next.rd[i], next.otherIncome[i], next.other[i]]
+    if (rev == null || parts.some((v) => v == null)) return null
+    return rev - next.cogs[i] - next.surtax[i] - next.selling[i] - next.admin[i] - next.rd[i] + next.otherIncome[i] + next.other[i]
+  })
+  const tax = statement.tax == null ? 0.15 : statement.tax
+  next.nopat = next.pretax.map((p) => (p == null ? null : (p > 0 ? p * (1 - tax) : p)))
+  return next
+}
+
+function withWorkingCapital(statement, pl, assumptions, payload) {
+  if (!statement) return null
+  const next = { ...statement }
+  const wc = payload?.sheets?.working_capital?.payload
+  const bs = payload?.targetBs || {}
+  const entries = statement.entries || []
+  const day = (key, i) => {
+    const index = entries[i]?.i
+    if (index == null) return null
+    const shown = shownForecastDay(pl, assumptions, wc, key, index)
+    return shown == null || shown === '' ? null : Number(shown)
+  }
+  const stock = (flow, days) => flow.map((amount, i) => {
+    const d = days[i]
+    if (amount == null || d == null) return null
+    return (d / 360) * amount
+  })
+  const dso = next.revenue.map((_, i) => day('dso', i))
+  const dpo = next.revenue.map((_, i) => day('dpo', i))
+  const dio = next.revenue.map((_, i) => day('dio', i))
+  next.netAr = stock(next.revenue, dso)
+  next.inventory = stock(next.cogs, dio)
+  next.netAp = stock(next.cogs, dpo)
+  next.nwc = next.netAr.map((ar, i) => {
+    const inv = next.inventory[i]
+    const ap = next.netAp[i]
+    if (ar == null || inv == null || ap == null) return null
+    return ar + inv - ap
+  })
+  const openingAr = finiteOrNull(bs.accounts_receivable)
+  const openingInv = finiteOrNull(bs.inventory)
+  const openingAp = finiteOrNull(bs.accounts_payable)
+  const opening = openingAr == null && openingInv == null && openingAp == null
+    ? null
+    : (openingAr || 0) + (openingInv || 0) - (openingAp || 0)
+  next.dnwc = next.nwc.map((balance, i) => {
+    if (balance == null) return null
+    const prev = i === 0 ? opening : next.nwc[i - 1]
+    if (prev == null) return null
+    return balance - prev
+  })
+  return next
+}
+
+function editForecastPl(forecastPl, year, engineKey, value, formula) {
+  const next = { ...(forecastPl || {}) }
+  const row = { ...(next[year] || {}) }
+  const manual = new Set(Array.isArray(row.manual) ? row.manual : [])
+  const stored = finiteOrNull(row[engineKey])
+  const formulaN = finiteOrNull(formula)
+  const shown = stored != null ? stored : formulaN
+  const typed = finiteOrNull(value)
+  const cleared = value == null || value === ''
+  if (cleared || (formulaN != null && typed === formulaN)) {
+    delete row[engineKey]
+    manual.delete(engineKey)
+  } else if (typed != null && shown != null && typed === shown && !manual.has(engineKey)) {
+    return forecastPl || {}
+  } else if (typed == null) {
+    delete row[engineKey]
+    manual.delete(engineKey)
+  } else {
+    row[engineKey] = typed
+    manual.add(engineKey)
+  }
+  if (manual.size) row.manual = [...manual]
+  else delete row.manual
+  if (Object.keys(row).some((key) => key !== 'manual')) next[year] = row
+  else delete next[year]
+  return next
+}
+
+function ratiosTouched(pl) {
+  return PL_RATIO_KEYS.some((k) => (pl?.[k] || []).some((v) => v != null && v !== ''))
+}
+
+const ANCHOR_DATE_HELP = '只能选最近一期报表日：3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。新建时按案件创建日预填，与下载模板相同：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。可以改。市场法倍数、DCF 折现起点和资产负债表实际列都用这一天。'
+
+const FORECAST_RATIO_ROWS = [
+  { key: 'revenue_growth', name: '收入增速', note: '基数已按锚定月年化。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
+  { key: 'cogs_ratio', name: '营业成本', note: '增速。当期有金额时，年底 = 年化当期 ×（1+增速），以后 = 上一年 ×（1+增速）。没填当期金额时按占收入。', min: -500 },
+  { key: 'surtax_ratio', name: '税金及附加', note: '占当年全年收入。填 0 视为已填，小于 0 会拦截。', min: -100 },
+  { key: 'selling_ratio', name: '销售费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
+  { key: 'admin_ratio', name: '管理费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
+  { key: 'rd_ratio', name: '研发费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
+  { key: 'finance_expense_ratio', name: '财务费用', note: '增速。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。可为负，未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
+  { key: 'other_income_ratio', name: '其他收益', note: '多含政府补助。空白年份沿用最近一次比例，终值按最后一年计算，补助会被永久资本化。不可持续时把后续年份改低或改为 0。可为负，填 0 视为已填。', min: -500 },
+  { key: 'other_ratio', name: '其他', note: '只放经营性项目。不含投资收益、公允价值变动、信用减值、资产减值、资产处置、营业外收支。可为负，填 0 视为已填。', min: -500 },
+  { key: 'da_ratio', name: '折旧摊销', note: '填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。占收入。', min: -100 },
+  { key: 'capex_ratio', name: '资本开支', note: '占收入。未填不按 0，会拦截。DCF 不再使用现金流量表上的手填金额。', min: -100 },
 ]
 
 function splicePlYear(pl, index) {
@@ -123,14 +514,17 @@ function isDefaultMethodConfig(method) {
     && (method?.multiple_source || 'stock_pool') === 'stock_pool'
 }
 
-function hasBsDebtInputs(bs) {
-  if (!bs) return false
-  return [bs.cash, bs.short_term_loan, bs.long_term_loan].some((v) => v != null && v !== '')
-}
-
 function computedNetDebtWan(bs) {
-  if (!hasBsDebtInputs(bs)) return null
-  return roundWanToFen(numOrZero(bs.short_term_loan) + numOrZero(bs.long_term_loan) - numOrZero(bs.cash))
+  if (!bs) return null
+  const keys = ['cash', 'short_term_loan', 'current_portion_noncurrent', 'long_term_loan', 'lease_liability']
+  if (!keys.some((k) => bs[k] != null && bs[k] !== '')) return null
+  return roundWanToFen(
+    numOrZero(bs.short_term_loan)
+    + numOrZero(bs.current_portion_noncurrent)
+    + numOrZero(bs.long_term_loan)
+    + numOrZero(bs.lease_liability)
+    - numOrZero(bs.cash)
+  )
 }
 
 function computedNwcWan(bs) {
@@ -145,9 +539,54 @@ function cfYearsFrom(pl, cf) {
   return (cf?.years || []).map(String).filter(Boolean)
 }
 
+function impliedDaView(pl, assumptions) {
+  const anchor = statementAnchor(assumptions?.valuation_date)
+  const entries = forecastYearEntries(pl, assumptions?.valuation_date)
+  if (!anchor || !entries.length) return { actual: undefined, byYear: {} }
+  const ytd = Number(assumptions?.ytd_revenue)
+  let revenueBase = Number.isFinite(ytd) && ytd > 0 ? ytd : null
+  if (revenueBase == null) {
+    const idx = (pl?.years || []).findIndex((y) => yearNum(y) === anchor.year)
+    const n = Number(pl?.revenue?.[idx])
+    if (Number.isFinite(n) && n > 0) revenueBase = n
+  }
+  if (!(revenueBase > 0)) return { actual: undefined, byYear: {} }
+  let ratioLast = null
+  let ratioFilled = false
+  const ratios = entries.map(({ i }) => {
+    const n = Number(pl?.da_ratio?.[i])
+    if (Number.isFinite(n)) {
+      ratioLast = n
+      ratioFilled = true
+    }
+    return ratioLast
+  })
+  if (!ratioFilled) return { actual: undefined, byYear: {} }
+  let growthLast = null
+  let growthFilled = false
+  const growth = entries.map(({ i }) => {
+    const n = Number(pl?.revenue_growth?.[i])
+    if (Number.isFinite(n)) {
+      growthLast = n
+      growthFilled = true
+    }
+    return growthLast
+  })
+  const byYear = {}
+  if (growthFilled) {
+    let prev = revenueBase * 12 / anchor.month
+    entries.forEach(({ y }, i) => {
+      const rev = prev * (1 + (growth[i] || 0))
+      prev = rev
+      byYear[yearNum(y)] = rev * (ratios[i] || 0)
+    })
+  }
+  return { actual: revenueBase * (ratios[0] || 0), byYear }
+}
+
 function cfValueAtYear(cf, year, key) {
   const years = (cf?.years || []).map(String)
-  const i = years.findIndex((y) => y === String(year))
+  const i = years.findIndex((y) => yearNum(y) === yearNum(year) || y === String(year))
   if (i < 0) return undefined
   return cf?.[key]?.[i]
 }
@@ -159,7 +598,7 @@ function patchCfYear(payload, year, key, value) {
   const years = aligned.length ? [...aligned] : [...oldYears]
   if (!years.includes(String(year))) years.push(String(year))
   const fromOld = (arr, y) => {
-    const j = oldYears.findIndex((ey) => ey === y)
+    const j = oldYears.findIndex((ey) => yearNum(ey) === yearNum(y) || ey === y)
     return j >= 0 ? arr?.[j] : undefined
   }
   ;['da', 'capex', 'dnwc'].forEach((k) => {
@@ -172,8 +611,50 @@ function patchCfYear(payload, year, key, value) {
   return { targetCf: cf }
 }
 
-function WanInput(props) {
-  return <InputNumber {...wanInputNumberProps} {...props} />
+function StackedFieldTable({ items, style }) {
+  return (
+    <ListTable
+      className="valuation-pl-stack-table"
+      showSeq={false}
+      pagination={false}
+      size="small"
+      scroll={{ x: Math.max(items.length * 168, 480) }}
+      rowKey="kind"
+      style={style}
+      rowClassName={(row) => (row.kind === 'note' ? 'valuation-pl-stack-note-row' : '')}
+      columns={items.map((item, i) => ({
+        title: item.name,
+        dataIndex: `c${i}`,
+        width: 168,
+        align: 'right',
+        className: 'valuation-num-cell',
+        render: (value) => value,
+      }))}
+      data={[
+        {
+          kind: 'value',
+          ...Object.fromEntries(items.map((item, i) => [`c${i}`, item.editor])),
+        },
+        {
+          kind: 'note',
+          ...Object.fromEntries(items.map((item, i) => [`c${i}`, item.note])),
+        },
+      ]}
+    />
+  )
+}
+
+function WanInput({ style, className, ...props }) {
+  return (
+    <InputNumber
+      {...wanInputNumberProps}
+      hideControl
+      size="small"
+      {...props}
+      className={['valuation-cell-input', className].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...style }}
+    />
+  )
 }
 
 function ratioToPct(v) {
@@ -182,18 +663,20 @@ function ratioToPct(v) {
   return Number.isFinite(n) ? Number((n * 100).toFixed(2)) : undefined
 }
 
-function PctInput({ value, onChange, ...props }) {
+function PctInput({ value, onChange, className, style, ...props }) {
   return (
     <InputNumber
       hideControl
+      size="small"
+      step={1}
       min={0}
       max={100}
-      step={1}
-      suffix="%"
-      style={{ width: '100%' }}
-      value={ratioToPct(value)}
-      onChange={(v) => onChange(v == null || v === '' ? v : Number(v) / 100)}
       {...props}
+      className={['valuation-pct-input', className].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...style }}
+      suffix="%"
+      value={ratioToPct(value)}
+      onChange={(v) => onChange?.(v == null || v === '' ? null : Number(v) / 100)}
     />
   )
 }
@@ -251,60 +734,169 @@ function patchWacc(assumptions, patchPayload, key, v) {
   })
 }
 
-function WaccBreakdownBlock({ assumptions, payload, patchPayload }) {
+function buildWaccFields({ assumptions, patchPayload }) {
+  const w = assumptions.wacc_breakdown || {}
+  return [
+    {
+      label: '无风险利率',
+      control: <PctInput value={w.risk_free_rate} onChange={(v) => patchWacc(assumptions, patchPayload, 'risk_free_rate', v)} />,
+    },
+    {
+      label: 'ERP',
+      control: <PctInput value={w.erp} onChange={(v) => patchWacc(assumptions, patchPayload, 'erp', v)} />,
+    },
+    {
+      label: 'Beta',
+      control: (
+        <DcfNumInput precision={2} value={w.beta} onChange={(v) => patchWacc(assumptions, patchPayload, 'beta', v)} />
+      ),
+    },
+    {
+      label: 'D/E',
+      control: (
+        <DcfNumInput precision={4} value={w.debt_equity} onChange={(v) => patchWacc(assumptions, patchPayload, 'debt_equity', v)} />
+      ),
+    },
+    {
+      label: '债务成本',
+      control: <PctInput value={w.debt_cost} onChange={(v) => patchWacc(assumptions, patchPayload, 'debt_cost', v)} />,
+    },
+    {
+      label: '所得税率',
+      control: (
+        <PctInput
+          value={assumptions.tax_rate}
+          onChange={(v) => patchPayload({ assumptions: { ...assumptions, tax_rate: v } })}
+        />
+      ),
+    },
+  ]
+}
+
+function dayFallback(assumptions, wc, key) {
+  const own = assumptions?.[`forecast_${key}`]
+  if (own != null && own !== '') return own
+  const median = wc?.[`${key}_median`]
+  return median == null || median === '' ? null : median
+}
+
+function shownForecastDay(pl, assumptions, wc, key, index) {
+  const own = pl?.[key]?.[index]
+  if (own != null && own !== '') return own
+  const fallback = dayFallback(assumptions, wc, key)
+  return fallback == null ? undefined : fallback
+}
+
+function forecastDaysView(payload) {
+  const assumptions = payload?.assumptions || {}
+  const pl = payload?.targetPl || {}
+  const wc = payload?.sheets?.working_capital?.payload || {}
+  const series = payload?.sheets?.dcf?.payload?.primary?.series
+  const entries = forecastYearEntries(pl, assumptions.valuation_date)
+  const fromCalc = Array.isArray(series?.years) && series.years.length > 0
+  const years = fromCalc
+    ? series.years.map((year) => String(year))
+    : entries.map(({ y }) => String(yearNum(y) || y))
+  const rows = [
+    { key: 'dso', name: 'DSO' },
+    { key: 'dpo', name: 'DPO' },
+    { key: 'dio', name: '存货周转天数' },
+  ].map((row) => ({
+    ...row,
+    values: years.map((_, i) => {
+      if (fromCalc && series[row.key]?.[i] != null && series[row.key][i] !== '') return series[row.key][i]
+      const index = entries[i]?.i
+      return index == null ? null : shownForecastDay(pl, assumptions, wc, row.key, index)
+    }),
+  }))
+  return { years, rows, fromCalc }
+}
+
+function TurnoverDefaultRow({ assumptions, payload, patchPayload, payloadRef }) {
+  const wc = payload?.sheets?.working_capital?.payload || {}
+  const pl = payload?.targetPl || {}
+  const years = forecastYearEntries(pl, assumptions?.valuation_date)
+  const rows = [
+    { key: 'dso', name: 'DSO' },
+    { key: 'dpo', name: 'DPO' },
+    { key: 'dio', name: '存货周转天数' },
+  ]
+  return (
+    <div className="valuation-dcf-param-block valuation-day-default">
+      <div className="valuation-dcf-param-head">
+        <Typography.Title heading={6} className="valuation-ratio-col-title">周转天数预测默认值</Typography.Title>
+        <Tag className="valuation-edit-tag" size="small">可编辑</Tag>
+      </div>
+      {!years.length ? (
+        <Typography.Paragraph className="valuation-dcf-terminal-hint">请先在标的利润表保留预测年。</Typography.Paragraph>
+      ) : (
+        <ListTable
+          className="valuation-forecast-days"
+          rowKey="key"
+          pagination={false}
+          size="small"
+          showSeq={false}
+          scroll={{ x: 160 + years.length * 112 }}
+          columns={[
+            { title: '天数', dataIndex: 'name', width: 140, fixed: 'left', className: 'valuation-nowrap-cell' },
+            ...years.map(({ y, i }) => ({
+              title: forecastYearLabel(y),
+              width: 112,
+              align: 'right',
+              className: 'valuation-num-cell valuation-nowrap-cell',
+              render: (_, row) => (
+                <InputNumber
+                  hideControl
+                  size="small"
+                  precision={1}
+                  style={{ width: '100%' }}
+                  value={shownForecastDay(pl, assumptions, wc, row.key, i)}
+                  onChange={(nv) => {
+                    const base = payloadRef.current || {}
+                    const plNow = base.targetPl || pl
+                    const arr = [...(plNow[row.key] || [])]
+                    const fallback = dayFallback(base.assumptions || assumptions, wc, row.key)
+                    const cleared = nv == null || nv === '' || (fallback != null && Number(nv) === Number(fallback))
+                    arr[i] = cleared ? null : nv
+                    patchPayload({ targetPl: { [row.key]: arr } })
+                  }}
+                />
+              ),
+            })),
+          ]}
+          data={rows}
+        />
+      )}
+      <Typography.Paragraph className="valuation-dcf-terminal-hint">
+        按预测年填写，年份后的 E 表示预测。某一格清空后，沿用原来的统一默认值；统一默认也空着时，用可比公司年报截面中位数。填 0 视为已填，并优先于默认值和中位数。
+      </Typography.Paragraph>
+    </div>
+  )
+}
+
+function waccHint(assumptions, payload) {
   const w = assumptions.wacc_breakdown || {}
   const preview = previewWaccBreakdown(w, assumptions.discount_rate, assumptions.tax_rate)
+  const body = preview.used_breakdown
+    ? `Ke = 无风险利率 + Beta × ERP = ${fmtPct(preview.ke, 1)}；WACC = We×Ke + Wd×Kd×(1−t) = ${fmtPct(preview.rate, 1)}。填齐无风险利率、ERP、Beta 后覆盖汇总折现率。D/E、债务成本可空。`
+    : 'WACC 分项可空。填齐无风险利率、ERP、Beta 后覆盖汇总折现率，否则用汇总折现率（默认 30%）。'
+  const last = payload?.wacc?.used_breakdown ? ` 上次计算：WACC ${fmtPct(payload.wacc.rate, 1)}。` : ''
+  return body + last
+}
+
+function DiscountWaccLine({ method, assumptions, payload, patchPayload, singleRow = false }) {
+  const fields = [
+    ...buildDcfParamFields({ method, assumptions, payload, patchPayload }),
+    ...buildWaccFields({ assumptions, patchPayload }),
+  ]
   return (
-    <div className="valuation-wacc-block">
-      <div className="valuation-dcf-param-head">
-        <Typography.Title heading={6} className="valuation-ratio-col-title">WACC 分项</Typography.Title>
-        <Tag size="small">{preview.used_breakdown ? '已覆盖汇总折现率' : '可空'}</Tag>
-      </div>
-      <div className="valuation-dcf-param-grid">
-        <div className="valuation-dcf-param-item">
-          <span>无风险利率</span>
-          <PctInput value={w.risk_free_rate} onChange={(v) => patchWacc(assumptions, patchPayload, 'risk_free_rate', v)} />
+    <div className={singleRow ? 'valuation-dcf-param-line valuation-dcf-param-line-single' : 'valuation-dcf-param-line'}>
+      {fields.map((f) => (
+        <div key={f.label} className="valuation-dcf-param-item">
+          <span title={f.label}>{f.label}</span>
+          {f.control}
         </div>
-        <div className="valuation-dcf-param-item">
-          <span>ERP</span>
-          <PctInput value={w.erp} onChange={(v) => patchWacc(assumptions, patchPayload, 'erp', v)} />
-        </div>
-        <div className="valuation-dcf-param-item">
-          <span>Beta</span>
-          <DcfNumInput
-            precision={2}
-            value={w.beta}
-            onChange={(v) => patchWacc(assumptions, patchPayload, 'beta', v)}
-          />
-        </div>
-        <div className="valuation-dcf-param-item">
-          <span>D/E（债务/权益）</span>
-          <DcfNumInput
-            precision={4}
-            value={w.debt_equity}
-            onChange={(v) => patchWacc(assumptions, patchPayload, 'debt_equity', v)}
-          />
-        </div>
-        <div className="valuation-dcf-param-item">
-          <span>债务成本</span>
-          <PctInput value={w.debt_cost} onChange={(v) => patchWacc(assumptions, patchPayload, 'debt_cost', v)} />
-        </div>
-        <div className="valuation-dcf-param-item">
-          <span>所得税率（税盾）</span>
-          <PctInput
-            value={assumptions.tax_rate}
-            onChange={(v) => patchPayload({ assumptions: { ...assumptions, tax_rate: v } })}
-          />
-        </div>
-      </div>
-      <Typography.Paragraph className="valuation-dcf-terminal-hint">
-        {preview.used_breakdown
-          ? `Ke = 无风险利率 + Beta × ERP = ${fmtPct(preview.ke, 1)}；WACC = We×Ke + Wd×Kd×(1−t) = ${fmtPct(preview.rate, 1)}。只计算后 DCF 用这个折现率。D/E、债务成本可空，空则按全权益（WACC=Ke）。`
-          : preview.incomplete
-            ? '请填齐无风险利率、ERP、Beta，才会用分项 WACC；只填一部分仍用上面的汇总折现率。'
-            : '三项都空则用汇总折现率（默认 30%）。填齐无风险利率、ERP、Beta 后覆盖汇总折现率。'}
-        {payload?.wacc?.used_breakdown ? ` 上次计算：WACC ${fmtPct(payload.wacc.rate, 1)}。` : ''}
-      </Typography.Paragraph>
+      ))}
     </div>
   )
 }
@@ -401,11 +993,11 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
   const waccPreview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
   const fields = [
     {
-      label: waccPreview.used_breakdown ? '汇总折现率（已由 WACC 分项计算）' : '汇总折现率（默认 30%）',
+      label: '汇总折现率',
       control: (
         <PctInput
           disabled={waccPreview.used_breakdown}
-          value={waccPreview.used_breakdown ? waccPreview.rate : assumptions.discount_rate}
+          value={waccPreview.used_breakdown ? waccPreview.rate : (assumptions.discount_rate ?? 0.3)}
           onChange={(v) => patchPayload({ assumptions: { ...assumptions, discount_rate: v } })}
         />
       ),
@@ -414,29 +1006,29 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
   if (method.scenario_mode !== 'ma_and_ipo') {
     fields.push(usePs
       ? {
-        label: '退出 P/S（终值用此项 × 末期收入）',
+        label: '退出 P/S',
         control: (
           <DcfNumInput
-            value={assumptions.exit_ps}
+            value={assumptions.exit_ps ?? 20}
             onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_ps: v } })}
           />
         ),
       }
       : {
-        label: '退出 P/E（终值用此项 × 末期净利润）',
+        label: '退出 P/E',
         control: (
           <DcfNumInput
-            value={assumptions.exit_pe}
+            value={assumptions.exit_pe ?? 40}
             onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_pe: v } })}
           />
         ),
       })
   }
   fields.push({
-    label: '市场法流动性折扣',
+    label: '市场法折扣',
     control: (
       <PctInput
-        value={assumptions.liquidity_discount}
+        value={assumptions.liquidity_discount ?? 0.3}
         onChange={(v) => patchPayload({ assumptions: { ...assumptions, liquidity_discount: v } })}
       />
     ),
@@ -444,10 +1036,10 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
   const dcfLiqApplies = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
   if (dcfLiqApplies) {
     fields.push({
-      label: method.scenario_mode === 'ma_and_ipo' ? '并购 DCF 流动性折扣' : 'DCF 流动性折扣',
+      label: method.scenario_mode === 'ma_and_ipo' ? '并购折扣' : 'DCF 折扣',
       control: (
         <PctInput
-          value={assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount}
+          value={assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3}
           onChange={(v) => patchPayload({ assumptions: { ...assumptions, dcf_liquidity_discount: v } })}
         />
       ),
@@ -458,8 +1050,7 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
     control: (
       <DcfNumInput
         {...wanInputNumberProps}
-        suffix="万元"
-        value={assumptions.esop}
+        value={assumptions.esop ?? 0}
         onChange={(v) => patchPayload({ assumptions: { ...assumptions, esop: v ?? 0 } })}
       />
     ),
@@ -470,7 +1061,7 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
         label: '上市折现率',
         control: (
           <PctInput
-            value={payload.scenarios?.ipo?.discount_rate ?? assumptions.discount_rate}
+            value={payload.scenarios?.ipo?.discount_rate}
             onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'discount_rate', v))}
           />
         ),
@@ -479,7 +1070,7 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
         label: '并购折现率',
         control: (
           <PctInput
-            value={payload.scenarios?.ma?.discount_rate ?? assumptions.discount_rate}
+            value={payload.scenarios?.ma?.discount_rate}
             onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'discount_rate', v))}
           />
         ),
@@ -489,19 +1080,19 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
     if (method.terminal_type === 'exit_ps') {
       fields.push(
         {
-          label: '上市退出 P/S（终值 × 末期收入）',
+          label: '上市退出 P/S',
           control: (
             <DcfNumInput
-              value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps}
+              value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps ?? 20}
               onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_ps', v))}
             />
           ),
         },
         {
-          label: '并购退出 P/S（终值 × 末期收入）',
+          label: '并购退出 P/S',
           control: (
             <DcfNumInput
-              value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps}
+              value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps ?? 20}
               onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_ps', v))}
             />
           ),
@@ -510,19 +1101,19 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
     } else {
       fields.push(
         {
-          label: '上市退出 P/E（终值 × 末期净利润）',
+          label: '上市退出 P/E',
           control: (
             <DcfNumInput
-              value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe}
+              value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe ?? 40}
               onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_pe', v))}
             />
           ),
         },
         {
-          label: '并购退出 P/E（终值 × 末期净利润）',
+          label: '并购退出 P/E',
           control: (
             <DcfNumInput
-              value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe}
+              value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe ?? 40}
               onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_pe', v))}
             />
           ),
@@ -543,6 +1134,7 @@ function splitValuationNotices(list) {
     if (/实时截面超时|东方财富(实时)?行情超时|东方财富接口超时|socket hang up|本次不会写入失败行情|可能不是今日截面|实时截面无效/i.test(m)) {
       continue
     }
+    if (m.startsWith('待补：')) continue
     if (/已跳过抓取|仅用库内数据重算|市场法按(锚定日|今天)|折现率已用 WACC|WACC 分项未填齐|行业法：/.test(m)) {
       info.push(m)
       continue
@@ -571,8 +1163,10 @@ export default function ValuationWorkbenchPage() {
   const [industryStatus, setIndustryStatus] = useState({ available: true, message: '' })
   const [industryNames, setIndustryNames] = useState([])
   const [draftYi, setDraftYi] = useState(null)
+  const [anchorTipOpen, setAnchorTipOpen] = useState(false)
   const pollRef = useRef(null)
   const saveTimer = useRef(null)
+  const payloadRef = useRef(null)
   const viewingKeyRef = useRef('draft')
   viewingKeyRef.current = viewingKey
   const isDraftView = viewingKey === 'draft'
@@ -580,6 +1174,11 @@ export default function ValuationWorkbenchPage() {
 
   const method = payload?.methodConfig || {}
   const assumptions = payload?.assumptions || {}
+  const enterpriseName = cse?.subject?.enterprise_full_name
+    || cse?.subject?.live_name
+    || cse?.subject?.display_name
+    || cse?.subject_display_name
+    || ''
 
   const refreshIndustryMeta = useCallback(() => {
     fetchIndustryMultiplesStatus().then((r) => {
@@ -605,16 +1204,10 @@ export default function ValuationWorkbenchPage() {
       }
       setCse(cRes.data.data)
       const raw = dRes.data?.data?.payload || {}
-      const next = coercePayloadToWan(raw)
-      const created = formatChinaYmd(cRes.data.data?.created_at)
-      const stored = String(next.assumptions?.valuation_date || '').slice(0, 10)
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(stored) && created) {
-        next.assumptions = { ...(next.assumptions || {}), valuation_date: created }
-        putValuationDraft(caseId, { ...next, amount_unit: 'wan' }).catch(() => {})
-      }
+      const next = coercePayloadToYuan(raw)
       setPayload(next)
       setDraftYi(next.comparison?.display_yi || null)
-      if (next !== raw && next.amount_unit === 'wan' && raw.amount_unit !== 'wan') {
+      if (next !== raw && next.amount_unit === 'yuan' && raw.amount_unit !== 'yuan') {
         putValuationDraft(caseId, next).catch(() => {})
       }
       setComps(cmpRes.data?.data?.list || [])
@@ -636,7 +1229,8 @@ export default function ValuationWorkbenchPage() {
   }, [method.multiple_source, refreshIndustryMeta])
 
   const persist = useCallback((next) => {
-    const withUnit = { ...(next || {}), amount_unit: 'wan' }
+    const withUnit = { ...(next || {}), amount_unit: 'yuan' }
+    payloadRef.current = withUnit
     setPayload(withUnit)
     if (viewingKeyRef.current !== 'draft') return
     clearTimeout(saveTimer.current)
@@ -645,7 +1239,36 @@ export default function ValuationWorkbenchPage() {
     }, 600)
   }, [caseId])
 
-  const patchPayload = (partial) => persist({ ...(payload || {}), ...partial })
+  useEffect(() => {
+    payloadRef.current = payload
+  }, [payload])
+
+  const patchPayload = (partial) => {
+    const base = payloadRef.current || payload || {}
+    const next = { ...base }
+    Object.entries(partial || {}).forEach(([key, value]) => {
+      const prev = base[key]
+      if (key === 'forecastBs' || key === 'forecastPl') {
+        next[key] = value
+      } else if (
+        value && prev
+        && typeof value === 'object' && typeof prev === 'object'
+        && !Array.isArray(value) && !Array.isArray(prev)
+      ) {
+        next[key] = { ...prev, ...value }
+      } else {
+        next[key] = value
+      }
+    })
+    persist(next)
+  }
+
+  const adoptImportedPayload = (next) => {
+    clearTimeout(saveTimer.current)
+    const withUnit = { ...(next || {}), amount_unit: 'yuan' }
+    payloadRef.current = withUnit
+    setPayload(withUnit)
+  }
 
   const loadCompFinancials = useCallback(async () => {
     setCompFinLoading(true)
@@ -670,7 +1293,7 @@ export default function ValuationWorkbenchPage() {
           clearInterval(pollRef.current)
           if (j.status === 'success') {
             const dRes = await fetchValuationDraft(caseId)
-            const next = coercePayloadToWan(dRes.data?.data?.payload || {})
+            const next = coercePayloadToYuan(dRes.data?.data?.payload || {})
             setPayload(next)
             setDraftYi(next.comparison?.display_yi || null)
             loadCompFinancials()
@@ -703,7 +1326,14 @@ export default function ValuationWorkbenchPage() {
       return
     }
     try {
-      await putValuationDraft(caseId, payload)
+      const focused = document.activeElement
+      if (focused && focused !== document.body && typeof focused.blur === 'function') focused.blur()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      clearTimeout(saveTimer.current)
+      const body = { ...(payloadRef.current || payload), amount_unit: 'yuan' }
+      payloadRef.current = body
+      setPayload(body)
+      await putValuationDraft(caseId, body)
       const res = await postValuationJob(caseId, { job_type: 'fetch_and_calc' })
       if (res.status === 202 || res.data?.success) {
         const jobId = res.data.data.job_id
@@ -749,7 +1379,7 @@ export default function ValuationWorkbenchPage() {
     try {
       if (key === 'draft') {
         const dRes = await fetchValuationDraft(caseId)
-        const next = coercePayloadToWan(dRes.data?.data?.payload || {})
+        const next = coercePayloadToYuan(dRes.data?.data?.payload || {})
         setPayload(next)
         setDraftYi(next.comparison?.display_yi || draftYi)
       } else {
@@ -759,7 +1389,7 @@ export default function ValuationWorkbenchPage() {
           setViewingKey('draft')
           return
         }
-        setPayload(coercePayloadToWan(res.data.data.payload || {}))
+        setPayload(coercePayloadToYuan(res.data.data.payload || {}))
       }
     } catch (e) {
       Message.error(e.response?.data?.message || e.message || '加载版本失败')
@@ -788,7 +1418,7 @@ export default function ValuationWorkbenchPage() {
           }
           Message.success(`已从 v${fromNo} 生成新草稿，可继续编辑`)
           setViewingKey('draft')
-          setPayload(coercePayloadToWan(res.data.data.payload || {}))
+          setPayload(coercePayloadToYuan(res.data.data.payload || {}))
           const cRes = await fetchValuationCase(caseId)
           if (cRes.data?.success) setCse(cRes.data.data)
         } catch (e) {
@@ -845,6 +1475,10 @@ export default function ValuationWorkbenchPage() {
   const comparison = payload?.comparison?.display_yi
   const liveDraftYi = isDraftView ? (comparison || draftYi) : draftYi
   const notices = splitValuationNotices(payload?.warnings || [])
+  const blockerLines = (payload?.warnings || [])
+    .map((w) => String(w))
+    .filter((w) => w.startsWith('待补：'))
+    .map((w) => w.replace(/^待补：/, ''))
   const industrySelectOptions = (() => {
     const opts = industryNames.map((x) => ({
       value: x.name,
@@ -914,7 +1548,15 @@ export default function ValuationWorkbenchPage() {
               </Select.Option>
             ))}
           </Select>
-          <Button type="primary" onClick={runJob} disabled={!isDraftView || (!!job && (job.status === 'queued' || job.status === 'running'))}>
+          <Button
+            type="primary"
+            disabled={!isDraftView || (!!job && (job.status === 'queued' || job.status === 'running'))}
+            onMouseDown={() => {
+              const focused = document.activeElement
+              if (focused && focused !== document.body && typeof focused.blur === 'function') focused.blur()
+            }}
+            onClick={runJob}
+          >
             开始采集/计算
           </Button>
           <Button onClick={() => setDetailOpen(true)} disabled={!payload.sheets}>明细</Button>
@@ -993,7 +1635,7 @@ export default function ValuationWorkbenchPage() {
                     }
                     const seed = (key, name) => ({
                       name,
-                      discount_rate: payload.scenarios?.[key]?.discount_rate ?? assumptions.discount_rate ?? 0.3,
+                      discount_rate: payload.scenarios?.[key]?.discount_rate ?? null,
                       exit_pe: payload.scenarios?.[key]?.exit_pe ?? assumptions.exit_pe ?? 40,
                       exit_ps: payload.scenarios?.[key]?.exit_ps ?? assumptions.exit_ps ?? 20,
                     })
@@ -1024,23 +1666,41 @@ export default function ValuationWorkbenchPage() {
                 />
               </div>
               <div className="valuation-method-field">
-                <span>市场法锚定日</span>
+                <span className="valuation-anchor-label">
+                  估值锚定日 <span style={{ color: '#f53f3f' }}>*</span>
+                  <Tooltip
+                    content={ANCHOR_DATE_HELP}
+                    position="top"
+                    getPopupContainer={() => document.body}
+                    popupVisible={(!!payload && !statementAnchor(assumptions.valuation_date)) || anchorTipOpen}
+                    onVisibleChange={setAnchorTipOpen}
+                  >
+                    <IconQuestionCircle className="valuation-help-icon" />
+                  </Tooltip>
+                </span>
                 <DatePicker
                   size="small"
                   style={{ width: '100%' }}
                   allowClear
                   format="YYYY-MM-DD"
-                  placeholder="默认案件创建日"
+                  placeholder="请选择最近一期报表日"
                   getPopupContainer={() => document.body}
+                  disabledDate={(current) => {
+                    const ymd = formatChinaYmd(current)
+                    return !ymd || !/-(03-31|06-30|09-30|12-31)$/.test(ymd)
+                  }}
+                  status={statementAnchor(assumptions.valuation_date) ? undefined : 'error'}
                   value={assumptions.valuation_date || undefined}
                   onChange={(dateString, date) => {
-                    const ymd = formatChinaYmd(date)
-                      || formatChinaYmd(dateString)
-                      || formatChinaYmd(cse?.created_at)
-                      || null
+                    const ymd = formatChinaYmd(date) || formatChinaYmd(dateString) || null
+                    const nextPl = { ...(payload.targetPl || emptyPl()) }
+                    if (!ratiosTouched(nextPl)) {
+                      nextPl.years = defaultForecastYears(ymd, assumptions.forecast_years)
+                    }
                     patchPayload({
                       assumptions: { ...assumptions, valuation_date: ymd },
                       methodConfig: { ...method, confirmed: false },
+                      targetPl: nextPl,
                     })
                   }}
                 />
@@ -1095,16 +1755,16 @@ export default function ValuationWorkbenchPage() {
                   type="primary"
                   size="small"
                   onClick={() => {
-                    const filled = formatChinaYmd(assumptions.valuation_date) || formatChinaYmd(cse?.created_at)
                     if (method.multiple_source === 'sw_industry_median' && !String(payload.sw_industry_l3 || '').trim()) {
                       Message.warning('请先选择申万三级行业')
                       return
                     }
+                    if (!statementAnchor(assumptions.valuation_date)) {
+                      Message.warning('请选择估值锚定日，须为最近一期报表日')
+                      return
+                    }
                     const next = { ...method, confirmed: true }
-                    patchPayload({
-                      methodConfig: next,
-                      assumptions: { ...assumptions, valuation_date: filled },
-                    })
+                    patchPayload({ methodConfig: next })
                     patchValuationCase(caseId, { method_config: next }).catch(() => {})
                     Message.success('已确认方法配置，可以开跑')
                   }}
@@ -1116,16 +1776,26 @@ export default function ValuationWorkbenchPage() {
                 </Typography.Text>
               </div>
             </div>
+            <div className="valuation-dcf-param-block" style={{ marginTop: 16 }}>
+              <div className="valuation-dcf-param-head">
+                <Typography.Title heading={6} className="valuation-ratio-col-title">折现、退出与 WACC</Typography.Title>
+                <Tag className="valuation-edit-tag" size="small">未填用默认值</Tag>
+              </div>
+              <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
+              <Typography.Paragraph className="valuation-dcf-terminal-hint">
+                折现率默认 30%，退出 P/E 默认 40，退出 P/S 默认 20，流动性折扣默认 30%，ESOP 默认 0。这里改完，计算输出用同一组数。{waccHint(assumptions, payload)}
+              </Typography.Paragraph>
+            </div>
             <Typography.Paragraph type="secondary" className="valuation-dcf-terminal-hint">
               {method.terminal_type === 'exit_ps'
-                ? 'DCF 终值只用退出 P/S × 末期营业收入；计算输出里不会出现退出 P/E。要用默认口径请改回「退出 P/E × 末期净利润」。'
-                : 'DCF 终值只用退出 P/E × 末期净利润；计算输出里不会出现退出 P/S。'}
+                ? 'DCF 终值 = 退出 P/S × 末期全年营业收入 + 锚定日净负债，再按最后一列期数折现。退出 P/E 不参与。'
+                : 'DCF 终值 = 退出 P/E × 末期全年税后经营利润 + 锚定日净负债，再按最后一列期数折现。退出 P/S 不参与。'}
             </Typography.Paragraph>
             {!isDefaultMethodConfig(method) ? (
               <Alert
                 type="warning"
                 style={{ marginTop: 12, marginBottom: 12 }}
-                content="当前不是系统默认口径（退出 P/E × 末期净利润、净利润桥、退出倍数 × 收入 CAGR、个股 POOL）。要用默认口径请改回这三项后再确认并计算。"
+                content="自由现金流已统一为税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。方法里的「净利润桥 / NOPAT」只决定单套情景是否乘 DCF 流动性折扣：选 NOPAT 才乘，选净利润桥不乘。双情景仍只有并购乘。"
               />
             ) : null}
             {method.multiple_source === 'sw_industry_median' ? (
@@ -1150,57 +1820,142 @@ export default function ValuationWorkbenchPage() {
         )}
 
         {step === 'pl' && (
-          <Card title="标的利润表（录入单位：万元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} onImported={setPayload} />
+          <Card title="标的利润表（录入单位：元）" bordered={false}>
+            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="录入哪些年：① 已实现最近一年（如 2025）——市场法 P/S 用该年营业收入，P/E 用该年净利润；② 预测前两年（如 2026E、2027E）——DCF 起点。后面年份按收入增速外推到「预测年数」（默认 5 年）。中间空列（全空或全 0）会跳过，不会当成 0 再往后外推。可用「导入 Excel」一次写入利润表/资产负债/现金流，或先下载模板。"
+              content="上面是锚定日当期金额。后面各预测列都可以改：填百分数，10 表示 10%。收入、营业成本、销售、管理、研发、财务费用是增速：6 月 30 日这类期内数据先按 12/锚定月年化，年底数 = 年化值 ×（1+增速），以后各年 = 上一年 ×（1+增速）。没有当期金额的科目仍按占收入。财务费用不进入自由现金流。改完点「开始采集/计算」，会先保存再按保存后的数计算。"
             />
-            <ListTable
-              rowKey="name"
-              pagination={false}
-              size="small"
+            <StackedFieldTable
               style={{ marginBottom: 12 }}
-              columns={[
-                { title: '项目', dataIndex: 'name', width: 120 },
-                {
-                  title: '数值',
-                  dataIndex: 'value',
-                  width: 160,
-                  render: (_, r) => r.editor,
-                },
-                { title: '说明', dataIndex: 'note' },
-              ]}
-              data={[
+              items={[
                 {
                   name: '所得税率',
                   editor: (
-                    <InputNumber
+                    <PctInput
                       min={0}
-                      max={1}
-                      step={0.01}
-                      style={{ width: 140 }}
+                      max={100}
                       value={assumptions.tax_rate}
                       onChange={(v) => patchPayload({ assumptions: { ...assumptions, tax_rate: v } })}
                     />
                   ),
-                  note: '小数，如 0.15 表示 15%',
+                  note: '直接填数字，15 表示 15%。未填按 15%。已填须在 0 到 100 之间',
                 },
                 {
-                  name: '预测年数',
+                  name: '累计营业收入',
                   editor: (
-                    <InputNumber
-                      min={1}
-                      max={10}
-                      style={{ width: 140 }}
-                      value={assumptions.forecast_years}
-                      onChange={(v) => patchPayload({ assumptions: { ...assumptions, forecast_years: v } })}
+                    <WanInput
+                      value={assumptions.ytd_revenue}
+                      onChange={(v) => patchPayload({ assumptions: { ...assumptions, ytd_revenue: v } })}
                     />
                   ),
-                  note: '默认 5 年；本表可只填前 2 年，其后按收入增速外推。空年跳过，不按 0 占位',
+                  note: '估值锚定日当期利润表累计营业收入，须为正数。收入增速的基数已按月年化',
+                },
+                {
+                  name: '市场法营业收入',
+                  editor: (
+                    <WanInput
+                      value={assumptions.market_revenue}
+                      onChange={(v) => patchPayload({ assumptions: { ...assumptions, market_revenue: v } })}
+                    />
+                  ),
+                  note: '只给市场法 P/S 用，不进入 DCF 预测',
+                },
+                {
+                  name: '市场法净利润',
+                  editor: (
+                    <WanInput
+                      value={assumptions.market_net_income}
+                      onChange={(v) => patchPayload({ assumptions: { ...assumptions, market_net_income: v } })}
+                    />
+                  ),
+                  note: '只给市场法 P/E 用，不进入 DCF',
                 },
               ]}
+            />
+            <Typography.Title heading={6}>当期（导入）</Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              {(() => {
+                const anchor = statementAnchor(assumptions.valuation_date)
+                return anchor
+                  ? `左边是 ${anchor.year - 1}-12-31 上一年年末，右边是 ${anchor.ymd} 当期累计，单位元。改当期营业收入或净利润时，累计营业收入和市场法基数为空会一并带出。`
+                  : '请先选择估值锚定日。上一年年末和当期金额都可以导入或手填。'
+              })()}
+            </Typography.Paragraph>
+            <ListTable
+              style={{ marginBottom: 16 }}
+              rowKey="key"
+              pagination={false}
+              size="small"
+              showSeq={false}
+              scroll={{ x: 760 }}
+              columns={[
+                { title: '科目', dataIndex: 'name', width: 120, fixed: 'left', className: 'valuation-nowrap-cell' },
+                {
+                  title: (() => {
+                    const anchor = statementAnchor(assumptions.valuation_date)
+                    return anchor ? `${anchor.year - 1}-12-31` : '上一年年末'
+                  })(),
+                  width: 160,
+                  align: 'right',
+                  className: 'valuation-num-cell',
+                  render: (_, row) => {
+                    const anchor = statementAnchor(assumptions.valuation_date)
+                    const year = anchor ? anchor.year - 1 : null
+                    const idx = year == null ? -1 : (pl.years || []).findIndex((y) => yearNum(y) === year)
+                    return (
+                      <WanInput
+                        value={idx >= 0 ? pl[row.key]?.[idx] : undefined}
+                        onChange={(nv) => {
+                          if (year == null) return
+                          const base = payloadRef.current || {}
+                          const nextPl = setPlYearAmount(base.targetPl || pl, year, row.key, nv)
+                          patchPayload({ targetPl: nextPl })
+                        }}
+                      />
+                    )
+                  },
+                },
+                {
+                  title: assumptions.valuation_date || '当期',
+                  width: 160,
+                  align: 'right',
+                  className: 'valuation-num-cell',
+                  render: (_, row) => (
+                    <WanInput
+                      value={(() => {
+                        const idx = currentPlIndex(pl, assumptions.valuation_date)
+                        return idx >= 0 ? pl[row.key]?.[idx] : undefined
+                      })()}
+                      onChange={(nv) => {
+                        const base = payloadRef.current || {}
+                        const plNow = base.targetPl || pl
+                        const assumptionsNow = base.assumptions || assumptions
+                        const beforeYears = (plNow.years || []).join('|')
+                        const nextPl = setCurrentAmount(plNow, assumptionsNow.valuation_date, row.key, nv)
+                        const yearInserted = (nextPl.years || []).join('|') !== beforeYears
+                        const assumptionsPatch = {}
+                        if (row.key === 'revenue' && (assumptionsNow.ytd_revenue == null || assumptionsNow.ytd_revenue === '')) {
+                          assumptionsPatch.ytd_revenue = nv
+                        }
+                        if (row.key === 'revenue' && (assumptionsNow.market_revenue == null || assumptionsNow.market_revenue === '')) {
+                          assumptionsPatch.market_revenue = nv
+                        }
+                        if (row.key === 'net_income' && (assumptionsNow.market_net_income == null || assumptionsNow.market_net_income === '')) {
+                          assumptionsPatch.market_net_income = nv
+                        }
+                        patchPayload({
+                          targetPl: yearInserted ? nextPl : { years: nextPl.years, [row.key]: nextPl[row.key] },
+                          assumptions: assumptionsPatch,
+                        })
+                      }}
+                    />
+                  ),
+                },
+                { title: '说明', dataIndex: 'note', width: 280 },
+              ]}
+              data={CURRENT_PL_ROWS}
             />
             <ListTable
               rowKey="name"
@@ -1209,20 +1964,23 @@ export default function ValuationWorkbenchPage() {
               scroll={{ x: true }}
               columns={[
                 { title: '科目', dataIndex: 'name', width: 120, fixed: 'left' },
-                { title: '说明', dataIndex: 'note', width: 220 },
-                ...(pl.years?.length ? pl.years : ['2026', '2027']).map((y, i) => ({
+                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
+                  align: 'right',
+                  className: 'valuation-num-cell',
                   title: (
                     <div className="valuation-pl-year-head">
                       <Input
                         size="small"
                         value={y}
                         onChange={(nv) => {
-                          const years = [...(pl.years || [])]
+                          const plNow = payloadRef.current?.targetPl || pl
+                          const years = [...(plNow.years || [])]
                           years[i] = nv
-                          patchPayload({ targetPl: { ...pl, years } })
+                          patchPayload({ targetPl: { years } })
                         }}
-                      />
-                      {(pl.years || []).length > 1 ? (
+                        />
+                      <span className="valuation-pl-year-e">E</span>
+                      {forecastYearEntries(pl, assumptions.valuation_date).length > 1 && i === (pl.years || []).length - 1 ? (
                         <Button
                           className="valuation-pl-year-remove"
                           type="text"
@@ -1230,7 +1988,10 @@ export default function ValuationWorkbenchPage() {
                           size="mini"
                           icon={<IconClose />}
                           aria-label={`删除${y}年`}
-                          onClick={() => patchPayload({ targetPl: splicePlYear(pl, i) })}
+                          onClick={() => {
+                            const plNow = payloadRef.current?.targetPl || pl
+                            patchPayload({ targetPl: splicePlYear(plNow, i) })
+                          }}
                         />
                       ) : null}
                     </div>
@@ -1238,98 +1999,210 @@ export default function ValuationWorkbenchPage() {
                   dataIndex: `y${i}`,
                   width: 132,
                   render: (_, r) => (
-                    r.computed ? (
-                      <span>{r.values[i] == null || r.values[i] === '' ? '—' : fmtAmountWan(r.values[i])}</span>
-                    ) : (
-                      <WanInput
-                        style={{ width: 168 }}
-                        value={r.values[i]}
-                        onChange={(nv) => r.onChange(i, nv)}
-                      />
-                    )
+                    <PctInput
+                      min={r.min}
+                      max={500}
+                      value={r.values[i]}
+                      onChange={(nv) => r.onChange(i, nv)}
+                    />
                   ),
                 })),
               ]}
-              data={[
-                {
-                  name: '营业收入',
-                  note: '利润表「营业收入」合计，万元',
-                  values: pl.revenue || [],
-                  onChange: (i, nv) => {
-                    const revenue = [...(pl.revenue || [])]
-                    revenue[i] = nv
-                    patchPayload({ targetPl: { ...pl, revenue } })
-                  },
+              data={FORECAST_RATIO_ROWS.map((row) => ({
+                name: row.name,
+                note: row.note,
+                min: row.min,
+                values: pl[row.key] || [],
+                onChange: (i, nv) => {
+                  const plNow = payloadRef.current?.targetPl || pl
+                  const arr = [...(plNow[row.key] || [])]
+                  arr[i] = nv
+                  patchPayload({ targetPl: { [row.key]: arr } })
                 },
-                {
-                  name: '营业利润',
-                  note: '利润表「营业利润」；市场法 P/E 用锚定年净利润',
-                  values: pl.operating_profit || [],
-                  onChange: (i, nv) => {
-                    const operating_profit = [...(pl.operating_profit || [])]
-                    operating_profit[i] = nv
-                    patchPayload({ targetPl: { ...pl, operating_profit } })
-                  },
-                },
-                {
-                  name: '净利润',
-                  note: '利润表「净利润」。市场法 P/E 优先用锚定日所在年；预测年是 DCF 净利润桥起点',
-                  values: pl.net_income || [],
-                  onChange: (i, nv) => {
-                    const net_income = [...(pl.net_income || [])]
-                    net_income[i] = nv
-                    patchPayload({ targetPl: { ...pl, net_income } })
-                  },
-                },
-              ]}
+              }))}
             />
             <Space style={{ marginTop: 8 }}>
               <Button
+                disabled={forecastYearEntries(pl, assumptions.valuation_date).length >= 15}
                 onClick={() => {
-                  const years = [...(pl.years || []), String(Number(pl.years?.[pl.years.length - 1] || 2026) + 1)]
-                  patchPayload({ targetPl: { ...pl, years } })
+                  const base = payloadRef.current || {}
+                  const plNow = base.targetPl || pl
+                  const assumptionsNow = base.assumptions || assumptions
+                  const years = [...(plNow.years || [])]
+                  const last = Number(years[years.length - 1])
+                  const anchor = statementAnchor(assumptionsNow.valuation_date)
+                  const nextYear = Number.isFinite(last)
+                    ? last + 1
+                    : (anchor ? (anchor.month === 12 ? anchor.year + 1 : anchor.year) : null)
+                  if (nextYear == null) {
+                    Message.warning('请先选择估值锚定日')
+                    return
+                  }
+                  years.push(String(nextYear))
+                  patchPayload({
+                    targetPl: { ...plNow, years },
+                    assumptions: {
+                      forecast_years: forecastYearEntries({ ...plNow, years }, assumptionsNow.valuation_date).length,
+                    },
+                  })
                 }}
               >
                 增加一年
               </Button>
               <Button
+                onClick={() => {
+                  if (!statementAnchor(assumptions.valuation_date)) {
+                    Message.warning('请先选择估值锚定日')
+                    return
+                  }
+                  const base = payloadRef.current || {}
+                  const plNow = base.targetPl || pl
+                  const assumptionsNow = base.assumptions || assumptions
+                  const forecast = defaultForecastYears(assumptionsNow.valuation_date, assumptionsNow.forecast_years || 5)
+                  const anchor = statementAnchor(assumptionsNow.valuation_date)
+                  const current = anchor ? String(anchor.year) : null
+                  const prior = anchor ? String(anchor.year - 1) : null
+                  const keepPrior = prior && (plNow.years || []).some((y) => yearNum(y) === anchor.year - 1)
+                  let years = current && anchor.month === 12
+                    ? [current, ...forecast.filter((y) => y !== current)]
+                    : [...forecast]
+                  if (keepPrior) years = [prior, ...years.filter((y) => yearNum(y) !== anchor.year - 1)]
+                  patchPayload({
+                    targetPl: realignPl(plNow, years),
+                    assumptions: { forecast_years: forecast.length },
+                  })
+                }}
+              >
+                按锚定日排年
+              </Button>
+              <Button
                 status="danger"
-                disabled={(pl.years || []).length <= 1}
-                onClick={() => patchPayload({ targetPl: splicePlYear(pl, (pl.years || []).length - 1) })}
+                disabled={forecastYearEntries(pl, assumptions.valuation_date).length <= 1}
+                onClick={() => {
+                  const base = payloadRef.current || {}
+                  const plNow = base.targetPl || pl
+                  const assumptionsNow = base.assumptions || assumptions
+                  const next = splicePlYear(plNow, (plNow.years || []).length - 1)
+                  patchPayload({
+                    targetPl: next,
+                    assumptions: {
+                      forecast_years: forecastYearEntries(next, assumptionsNow.valuation_date).length,
+                    },
+                  })
+                }}
               >
                 删除最后一年
               </Button>
             </Space>
+            <Typography.Title heading={6} style={{ marginTop: 16 }}>预测利润表</Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+              计算成功后写入金额，可以直接改。点开始采集会先保存这些修改再计算。改过的格子按手改数，清空或改回比例结果后重新跟着上面的比例走。毛利、税前和税后由各行重算。净应收款、净应付款、存货、营运资本余额和营运资本变动按周转天数与收入、成本现算，改收入、成本或周转天数后会跟着变。
+            </Typography.Paragraph>
+            {(() => {
+              const formula = forecastStatement(pl, assumptions)
+              const statement = withWorkingCapital(
+                overlayForecastStatement(formula, payload.forecastPl),
+                pl,
+                assumptions,
+                payload,
+              )
+              const noteOf = (key) => FORECAST_RATIO_ROWS.find((row) => row.key === key)?.note || ''
+              const rows = [
+                { key: 'revenue', engineKey: 'revenue', name: '营业收入', note: noteOf('revenue_growth'), editable: true },
+                { key: 'cogs', engineKey: 'cogs', name: '营业成本', note: noteOf('cogs_ratio'), editable: true },
+                { key: 'gross', name: '毛利', note: '营业收入 − 营业成本', total: true },
+                { key: 'surtax', engineKey: 'surtax', name: '税金及附加', note: noteOf('surtax_ratio'), editable: true },
+                { key: 'selling', engineKey: 'selling', name: '销售费用', note: noteOf('selling_ratio'), editable: true },
+                { key: 'admin', engineKey: 'admin', name: '管理费用', note: noteOf('admin_ratio'), editable: true },
+                { key: 'rd', engineKey: 'rd', name: '研发费用', note: noteOf('rd_ratio'), editable: true },
+                { key: 'financeExpense', engineKey: 'finance_expense', name: '财务费用', note: noteOf('finance_expense_ratio'), editable: true },
+                { key: 'otherIncome', engineKey: 'other_income', name: '其他收益', note: noteOf('other_income_ratio'), editable: true },
+                { key: 'other', engineKey: 'other', name: '其他', note: noteOf('other_ratio'), editable: true },
+                { key: 'da', engineKey: 'da', name: '折旧摊销', note: noteOf('da_ratio'), editable: true },
+                { key: 'pretax', name: '税前经营利润', note: '收入 − 成本 − 税金及附加 − 销售 − 管理 − 研发 + 其他收益 + 其他。折旧已含在三项费用中，这里不再扣。', total: true },
+                { key: 'nopat', name: '税后经营利润', note: '税前大于 0 时乘（1 − 所得税率）。税前小于等于 0 时不退税。所得税率未填按 15%。', total: true },
+                { key: 'capex', engineKey: 'capex', name: '资本开支', note: noteOf('capex_ratio'), editable: true },
+                { key: 'netAr', name: '净应收款', note: 'DSO / 360 × 当年全年收入。DSO 优先用手填年，其次预测默认值，再其次可比中位数。' },
+                { key: 'netAp', name: '净应付款', note: 'DPO / 360 × 当年营业成本。' },
+                { key: 'inventory', name: '存货', note: '存货周转天数 / 360 × 当年营业成本。' },
+                { key: 'nwc', name: '营运资本余额', note: '净应收款 + 存货 − 净应付款。', total: true },
+                { key: 'dnwc', name: '营运资本变动', note: '当年余额 − 上一年余额。第一年的上一年是锚定日实际营运资本：应收账款（含票据）+ 存货 − 应付账款（含票据）。', total: true },
+              ]
+              if (!statement) {
+                return <Typography.Paragraph type="secondary">请先选择估值锚定日，并保留预测年。</Typography.Paragraph>
+              }
+              return (
+                <ListTable
+                  className="valuation-forecast-pl"
+                  rowKey="key"
+                  pagination={false}
+                  size="small"
+                  showSeq={false}
+                  scroll={{ x: 160 + statement.years.length * 150 + 280 }}
+                  rowClassName={(row) => (row.total ? 'valuation-bs-total-row' : '')}
+                  columns={[
+                    { title: '科目', dataIndex: 'name', width: 120, fixed: 'left', className: 'valuation-nowrap-cell' },
+                    ...statement.years.map((year, i) => ({
+                      title: `${year}E`,
+                      width: 150,
+                      align: 'right',
+                      className: 'valuation-num-cell valuation-nowrap-cell',
+                      render: (_, row) => {
+                        const value = statement[row.key]?.[i]
+                        if (!row.editable) return value == null ? '—' : fmtWanPlain(value)
+                        return (
+                          <WanInput
+                            value={value == null ? undefined : value}
+                            onChange={(v) => {
+                              const base = payloadRef.current || {}
+                              patchPayload({
+                                forecastPl: editForecastPl(base.forecastPl, year, row.engineKey, v, formula[row.key]?.[i]),
+                              })
+                            }}
+                          />
+                        )
+                      },
+                    })),
+                    { title: '说明', dataIndex: 'note', width: 280 },
+                  ]}
+                  data={rows}
+                />
+              )
+            })()}
           </Card>
         )}
 
         {step === 'bs' && (
-          <Card title="标的资产负债表（录入单位：万元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} onImported={setPayload} />
+          <Card title="标的资产负债表（录入单位：元）" bordered={false}>
+            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="录入哪个时点：估值时点最近一期已实现资产负债表（不是按年预测表）。核心科目包括货币资金、应收/预付、存货、固资/在建/无形、短贷/长贷、应付/预收。净负债 = 短贷 + 长贷 − 货币资金。单位万元。"
+              content="第一列是锚定日实际数，必须配平。后面带 E 的预测列都可以改。没改过的科目沿用实际列；应收账款、存货、应付账款在计算后按周转天数显示，手改后以手改数为准。预测列的配平差额不是错误。"
             />
             <ListTable
               rowKey={(r) => r.key || r.name}
               pagination={false}
               size="small"
               showSeq={false}
+              scroll={{ x: true }}
+              rowClassName={(r) => (r.total ? 'valuation-bs-total-row' : '')}
               columns={[
                 {
                   title: '科目',
                   dataIndex: 'name',
                   width: 228,
                   className: 'valuation-nowrap-cell',
-                  render: (v, r) => (r.section
+                  render: (v, r) => (r.section || r.total
                     ? <Typography.Text bold>{v}</Typography.Text>
                     : v),
                 },
                 {
-                  title: '金额（万元）',
+                  title: assumptions.valuation_date ? `实际 ${assumptions.valuation_date}` : '实际（锚定日）',
                   dataIndex: 'value',
-                  width: 180,
+                  width: 168,
+                  align: 'right',
+                  className: 'valuation-num-cell',
                   render: (_, r) => {
                     if (r.section) return null
                     if (r.ratio) {
@@ -1339,57 +2212,131 @@ export default function ValuationWorkbenchPage() {
                       return <Typography.Text bold>{r.value == null ? '—' : `${fmtNum(r.value, 2)}x`}</Typography.Text>
                     }
                     if (r.auto) {
-                      return <Typography.Text bold>{r.value == null ? '—' : fmtAmountWan(r.value)}</Typography.Text>
+                      return <Typography.Text bold>{r.value == null ? '—' : fmtWanPlain(r.value)}</Typography.Text>
                     }
                     return (
                       <WanInput
-                        style={{ width: 176 }}
-                        value={payload.targetBs?.[r.key]}
+                        value={displayBs(payload.targetBs)?.[r.key]}
                         onChange={(v) => patchPayload({
-                          targetBs: { ...(payload.targetBs || {}), [r.key]: v },
-                          overrides: { ...(payload.overrides || {}), net_debt: null },
+                          targetBs: { [r.key]: v },
+                          overrides: { net_debt: null },
                         })}
                       />
                     )
                   },
                 },
+                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y }) => {
+                  const yearKey = String(yearNum(y) || y)
+                  const pv = (payload?.sheets?.dcf?.payload?.primary?.pvs || []).find((p) => yearNum(p.year) === yearNum(y))
+                  const yearOverrides = payload.forecastBs?.[yearKey]
+                  const col = forecastBsColumn(payload.targetBs, pv, yearOverrides)
+                  return {
+                    title: `${yearKey}E`,
+                    width: 148,
+                    align: 'right',
+                    className: 'valuation-num-cell',
+                    render: (_, r) => {
+                      if (r.section) return null
+                      if (r.auto || r.ratio || r.multiple) {
+                        const v = bsAutoValue(r.name, col.values, null)
+                        if (r.ratio) return v == null ? '—' : fmtPct(v, 1)
+                        if (r.multiple) return v == null ? '—' : `${fmtNum(v, 2)}x`
+                        return v == null || v === '' ? '—' : fmtWanPlain(v)
+                      }
+                      const shown = col.values?.[r.key]
+                      return (
+                        <WanInput
+                          value={shown}
+                          onChange={(v) => {
+                            const base = payloadRef.current || {}
+                            const forecastBs = { ...(base.forecastBs || {}) }
+                            const row = { ...(forecastBs[yearKey] || {}) }
+                            const fallback = forecastBsColumn(base.targetBs, pv, {}).values?.[r.key]
+                            const unchanged = v == null || v === '' || Number(v) === Number(fallback)
+                            if (unchanged) delete row[r.key]
+                            else row[r.key] = v
+                            if (Object.keys(row).length) forecastBs[yearKey] = row
+                            else delete forecastBs[yearKey]
+                            patchPayload({ forecastBs })
+                          }}
+                        />
+                      )
+                    },
+                  }
+                }),
                 { title: '说明', dataIndex: 'note' },
               ]}
               data={[
-                ...BS_GROUPS.flatMap((g) => [
-                  { section: true, name: g.label },
-                  ...BS_INPUT_FIELDS.filter((f) => f.group === g.key).map((f) => ({
-                    key: f.key,
-                    name: f.label,
-                    note: f.note,
-                  })),
-                ]),
+                ...BS_GROUPS.flatMap((g) => {
+                  const rows = [
+                    { section: true, name: g.label },
+                    ...BS_INPUT_FIELDS.filter((f) => f.group === g.key).map((f) => ({
+                      key: f.key,
+                      name: f.label,
+                      note: f.note,
+                    })),
+                  ]
+                  if (g.key === 'noncurrent_assets') {
+                    rows.push({
+                      auto: true,
+                      total: true,
+                      name: '资产总计',
+                      value: totalAssetsFromBs(payload.targetBs),
+                      note: '流动资产 + 非流动资产。与负债总计、所有者权益总计核对',
+                    })
+                  }
+                  if (g.key === 'noncurrent_liab') {
+                    rows.push({
+                      auto: true,
+                      total: true,
+                      name: '负债总计',
+                      value: totalLiabFromBs(payload.targetBs),
+                      note: '流动负债 + 非流动负债',
+                    })
+                  }
+                  if (g.key === 'equity') {
+                    rows.push({
+                      auto: true,
+                      total: true,
+                      name: '所有者权益总计',
+                      value: equityBookFromBs(payload.targetBs),
+                      note: '实收资本 + 资本公积 + 盈余公积 + 未分配利润',
+                    })
+                  }
+                  return rows
+                }),
                 { section: true, name: '自动计算' },
                 { auto: true, name: '流动资产合计', value: currentAssetsFromBs(payload.targetBs), note: '预计一年内变现或耗用的资产合计' },
-                { auto: true, name: '资产总计', value: totalAssetsFromBs(payload.targetBs), note: '企业拥有或控制的全部资产' },
                 { auto: true, name: '流动负债合计', value: currentLiabFromBs(payload.targetBs), note: '预计一年内偿还的负债合计' },
-                { auto: true, name: '负债合计', value: totalLiabFromBs(payload.targetBs), note: '企业承担的全部负债' },
                 {
                   auto: true,
                   name: '所有者权益（反算）',
                   value: equityImpliedFromBs(payload.targetBs),
-                  note: payload.targetBs?.equity != null && payload.targetBs?.equity !== ''
-                    ? `净资产（资产 − 负债）。已填所有者权益 ${fmtAmountWan(payload.targetBs.equity)}`
-                    : '净资产，等于资产减去负债',
+                  note: '资产总计减负债总计。与所有者权益总计的差就是配平差额',
+                },
+                {
+                  auto: true,
+                  name: '配平差额',
+                  value: (() => {
+                    const assets = totalAssetsFromBs(payload.targetBs)
+                    const liab = totalLiabFromBs(payload.targetBs)
+                    const book = equityBookFromBs(payload.targetBs)
+                    if (assets == null || liab == null || book == null) return null
+                    return roundWanToFen(assets - liab - book)
+                  })(),
+                  note: '实际列不为 0 时 DCF 不计算。预测列这一行是累计营运资本变动，不是错误',
                 },
                 {
                   auto: true,
                   name: '净负债',
                   value: computedNetDebtWan(payload.targetBs),
-                  note: hasBsDebtInputs(payload.targetBs)
-                    ? `有息负债减去货币资金。短期借款 ${fmtAmountWan(numOrZero(payload.targetBs?.short_term_loan))} + 长期借款 ${fmtAmountWan(numOrZero(payload.targetBs?.long_term_loan))} − 货币资金 ${fmtAmountWan(numOrZero(payload.targetBs?.cash))}`
-                    : '有息负债减去货币资金；填入货币资金或借款后自动计算',
+                  note: '短期借款 + 一年内到期的非流动负债 + 长期借款 + 租赁负债 − 货币资金。预计负债和递延收益不计入',
                 },
                 {
                   auto: true,
                   name: '期末营运资本占用',
                   value: computedNwcWan(payload.targetBs),
-                  note: '经营性流动资产减去经营性流动负债的时点余额，不是现金流量表「营运资本增加」',
+                  note: '应收账款（含票据）+ 存货 − 应付账款（含票据）。第一笔 ΔNWC 用这个实际余额',
                 },
                 {
                   auto: true,
@@ -1407,99 +2354,133 @@ export default function ValuationWorkbenchPage() {
                 },
               ]}
             />
-            <ValuationTieOutPanel payload={payload} />
-          </Card>
-        )}
-
-        {step === 'cf' && (
-          <Card title="标的现金流量表 / DCF 联动项（录入单位：万元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} onImported={setPayload} />
-            <Alert
-              type="info"
-              style={{ marginBottom: 12 }}
-              content="录入哪些年：与标的利润表预测期对齐（已实现年不参与 DCF；默认从 2026E 起共 5 年）。按年名对齐，缺年不拿错列。后面未填年份沿用最后已填年的折旧/资本支出/营运资本增加，不再按 0。"
-            />
-            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
-              自由现金流 = 净利润 + 折旧摊销 − 资本性支出 − 营运资本增加。
-              {nwcWan != null
-                ? ` 资产负债表期末营运资本占用 ${fmtAmountWan(nwcWan)} 万元（应收票据+应收账款+预付款项+存货 − 应付票据+应付账款+预收款项），下面填的是每年增加额。`
-                : ' 请先在「标的资产负债表」填写应收/预付、存货或应付/预收，占用额会按该页自动带出。下面填的是每年增加额。'}
+            <Typography.Title heading={6} style={{ marginTop: 16 }}>周转天数</Typography.Title>
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+              {(() => {
+                const wc = payload?.sheets?.working_capital?.payload
+                const prior = (key) => (wc?.[`${key}_prior`] || [])
+                  .map((row) => `${row.year} ${row.median == null ? '—' : fmtNum(row.median, 1)}`)
+                  .join('，')
+                if (!wc?.complete_year) return '计算后在这里看到最近一个完整会计年度年报的中位数。没有中位数时，下面各年都要手填，填 0 视为已填。存货周转天数和 DSO、DPO 一样，可以直接改。'
+                return (
+                  <>
+                    默认用 {wc.complete_year} 年报截面中位数：
+                    <span className="valuation-adopted">
+                      DSO {fmtNum(wc.dso_median, 1)}，DPO {fmtNum(wc.dpo_median, 1)}，存货 {fmtNum(wc.dio_median, 1)} 天
+                    </span>
+                    。前两年只读，不写入预测：DSO {prior('dso') || '—'}；DPO {prior('dpo') || '—'}；存货 {prior('dio') || '—'}。
+                  </>
+                )
+              })()}
             </Typography.Paragraph>
             <ListTable
               rowKey="key"
               pagination={false}
               size="small"
+              scroll={{ x: true }}
               columns={[
-                { title: '科目', dataIndex: 'field', width: 220, className: 'valuation-nowrap-cell' },
-                { title: '对应现金流量表科目', dataIndex: 'cf' },
-                { title: 'DCF', dataIndex: 'dcf', width: 70 },
-                {
-                  title: '金额（万元/年）',
-                  dataIndex: 'key',
-                  width: 200,
+                { title: '天数', dataIndex: 'name', width: 140, fixed: 'left' },
+                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
+                  title: forecastYearLabel(y),
+                  width: 112,
+                  align: 'right',
+                  className: 'valuation-num-cell',
                   render: (_, r) => (
-                    <WanInput
-                      style={{ width: 176 }}
-                      value={payload.overrides?.[r.key]}
-                      onChange={(v) => patchPayload({ overrides: { ...(payload.overrides || {}), [r.key]: v } })}
+                    <InputNumber
+                      hideControl
+                      size="small"
+                      precision={1}
+                      style={{ width: '100%' }}
+                      value={shownForecastDay(pl, assumptions, payload?.sheets?.working_capital?.payload, r.key, i)}
+                      onChange={(nv) => {
+                        const base = payloadRef.current || {}
+                        const plNow = base.targetPl || pl
+                        const arr = [...(plNow[r.key] || [])]
+                        const fallback = dayFallback(base.assumptions || assumptions, base.sheets?.working_capital?.payload, r.key)
+                        const cleared = nv == null || nv === '' || (fallback != null && Number(nv) === Number(fallback))
+                        arr[i] = cleared ? null : nv
+                        patchPayload({ targetPl: { [r.key]: arr } })
+                      }}
                     />
                   ),
-                },
+                })),
               ]}
               data={[
-                { key: 'da', field: '折旧摊销（缺年沿用）', cf: '固定资产折旧 + 无形资产摊销 + 长期待摊费用摊销（间接法加回）', dcf: '加回' },
-                { key: 'capex', field: '资本性支出（缺年沿用）', cf: '购建固定资产、无形资产和其他长期资产支付的现金', dcf: '扣除' },
-                { key: 'dnwc', field: '营运资本增加 ΔNWC（缺年沿用）', cf: '存货增加 + 经营性应收增加 − 经营性应付增加。不是期末余额', dcf: '扣除' },
+                { key: 'dso', name: 'DSO' },
+                { key: 'dpo', name: 'DPO' },
+                { key: 'dio', name: '存货周转天数' },
               ]}
             />
-            <Typography.Paragraph type="secondary" style={{ fontSize: 12, margin: '12px 0 8px' }}>
-              按年明细（万元）。有数的年份优先生效；中间空年沿用上一已填年；再空着的（含开头几年）才用上面的缺年沿用。
+            <ValuationTieOutPanel payload={payload} />
+          </Card>
+        )}
+
+        {step === 'cf' && (
+          <Card title="标的现金流量表 / DCF 联动项（录入单位：元）" bordered={false}>
+            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
+            <Alert
+              type="info"
+              style={{ marginBottom: 12 }}
+              content="第一列是实际数，后面带 E 的是预测年，三项都可以改。模板没有现金流量表时，折旧摊销按预测里的占收入比例和营业收入算出默认金额。开始采集/计算完成后，预测年再按本次 DCF 结果覆盖。实际列里已有的数不会被盖掉。"
+            />
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
+              自由现金流 = 税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。
+              {nwcWan != null
+                ? ` 锚定日营运资本占用 ${fmtWanPlain(nwcWan)}（应收账款含票据 + 存货 − 应付账款含票据）。`
+                : ' 请先在资产负债表填写应收账款、存货或应付账款。'}
             </Typography.Paragraph>
             <ListTable
-              rowKey="year"
+              rowKey="key"
               pagination={false}
               size="small"
               scroll={{ x: true }}
               columns={[
-                { title: '年份', dataIndex: 'year', width: 88, className: 'valuation-nowrap-cell' },
+                { title: '科目', dataIndex: 'field', width: 140, fixed: 'left', className: 'valuation-nowrap-cell' },
+                { title: '对应现金流量表科目', dataIndex: 'cf', width: 280 },
+                { title: 'DCF', dataIndex: 'dcf', width: 70 },
                 {
-                  title: '折旧摊销',
-                  dataIndex: 'da',
-                  width: 160,
+                  title: assumptions.valuation_date ? `实际 ${assumptions.valuation_date}` : '实际',
+                  width: 148,
+                  align: 'right',
+                  className: 'valuation-num-cell',
                   render: (_, r) => (
                     <WanInput
-                      style={{ width: 144 }}
-                      value={cfValueAtYear(payload.targetCf, r.year, 'da')}
-                      onChange={(v) => patchPayload(patchCfYear(payload, r.year, 'da', v))}
+                      value={(() => {
+                        const stored = payload.overrides?.[r.key]
+                        if (stored != null && stored !== '') return stored
+                        if (r.key !== 'da') return undefined
+                        return impliedDaView(pl, assumptions).actual
+                      })()}
+                      onChange={(v) => patchPayload({ overrides: { [r.key]: v } })}
                     />
                   ),
                 },
-                {
-                  title: '资本性支出',
-                  dataIndex: 'capex',
-                  width: 160,
+                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y }) => ({
+                  title: `${yearNum(y) || y}E`,
+                  width: 148,
+                  align: 'right',
+                  className: 'valuation-num-cell',
                   render: (_, r) => (
                     <WanInput
-                      style={{ width: 144 }}
-                      value={cfValueAtYear(payload.targetCf, r.year, 'capex')}
-                      onChange={(v) => patchPayload(patchCfYear(payload, r.year, 'capex', v))}
+                      value={(() => {
+                        const stored = cfValueAtYear(payload.targetCf, y, r.key)
+                        if (stored != null && stored !== '') return stored
+                        if (r.key !== 'da') return undefined
+                        return impliedDaView(pl, assumptions).byYear[yearNum(y)]
+                      })()}
+                      onChange={(v) => {
+                        const base = payloadRef.current || payload
+                        patchPayload(patchCfYear(base, y, r.key, v))
+                      }}
                     />
                   ),
-                },
-                {
-                  title: '营运资本增加',
-                  dataIndex: 'dnwc',
-                  width: 160,
-                  render: (_, r) => (
-                    <WanInput
-                      style={{ width: 144 }}
-                      value={cfValueAtYear(payload.targetCf, r.year, 'dnwc')}
-                      onChange={(v) => patchPayload(patchCfYear(payload, r.year, 'dnwc', v))}
-                    />
-                  ),
-                },
+                })),
               ]}
-              data={cfYearsFrom(pl, payload.targetCf).map((year) => ({ year }))}
+              data={[
+                { key: 'da', field: '折旧摊销', cf: '固定资产折旧 + 无形资产摊销 + 长期待摊费用摊销（间接法加回）', dcf: '加回' },
+                { key: 'capex', field: '资本性支出', cf: '购建固定资产、无形资产和其他长期资产支付的现金', dcf: '扣除' },
+                { key: 'dnwc', field: '营运资本增加', cf: '存货增加 + 经营性应收增加 − 经营性应付增加。不是期末余额', dcf: '扣除' },
+              ]}
             />
             <ValuationTieOutPanel payload={payload} />
           </Card>
@@ -1512,7 +2493,7 @@ export default function ValuationWorkbenchPage() {
         )}
 
         {(step === 'comp_pl' || step === 'comp_bs' || step === 'comp_cf') && (
-          <Card title={`${STEPS.find((s) => s.key === step)?.title}（万元）`} bordered={false}>
+          <Card title={`${STEPS.find((s) => s.key === step)?.title}（元）`} bordered={false}>
             <ComparableFinancialTable
               statementType={step === 'comp_pl' ? 'pl' : step === 'comp_bs' ? 'bs' : 'cf'}
               rows={compFinancials}
@@ -1555,6 +2536,7 @@ export default function ValuationWorkbenchPage() {
                 fees={payload.sheets?.fees}
                 grossMargin={payload.sheets?.gross_margin}
                 workingCapital={payload.sheets?.working_capital}
+                forecastDays={forecastDaysView(payload)}
               />
             ) : null}
           </Card>
@@ -1565,8 +2547,33 @@ export default function ValuationWorkbenchPage() {
             <Tabs type="line" size="small" defaultActiveTab="present" className="valuation-output-page-tabs">
               <TabPane key="present" title="结果呈现">
                 <div className="valuation-output-page">
+                  {blockerLines.length ? (
+                    <Alert
+                      type="error"
+                      style={{ marginBottom: 12 }}
+                      title="计算未完成，请补下面这些"
+                      content={(
+                        <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                          {blockerLines.map((line) => <li key={line}>{line}</li>)}
+                        </ul>
+                      )}
+                    />
+                  ) : null}
                   <section className="valuation-output-section">
                     <Typography.Title heading={6} className="valuation-ratio-col-title">结果对比（亿元）</Typography.Title>
+                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula">
+                      {(() => {
+                        const preview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
+                        const shownRate = preview.used_breakdown ? preview.rate : (assumptions.discount_rate ?? 0.3)
+                        const exitLabel = method.terminal_type === 'exit_ps'
+                          ? `退出 P/S ${assumptions.exit_ps ?? 20}`
+                          : `退出 P/E ${assumptions.exit_pe ?? 40}`
+                        const liq = assumptions.liquidity_discount ?? 0.3
+                        const dcfLiq = assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3
+                        const dcfOn = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
+                        return `本次参数：折现率 ${(shownRate * 100).toFixed(1)}%，${exitLabel}，市场法流动性折扣 ${(liq * 100).toFixed(1)}%${dcfOn ? `，DCF 流动性折扣 ${(dcfLiq * 100).toFixed(1)}%` : ''}，ESOP ${assumptions.esop ?? 0} 元。与方法配置是同一组数。`
+                      })()}
+                    </Typography.Paragraph>
                     <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法用已实现最近一年的营收与净利润。低端为中位数减 σ，高端为中位数。">
                       市场法用已实现最近一年营收/净利润。倍数取锚定日及以前各股历史中位，低端 = 中位数 − σ，高端 = 中位数。
                       {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时 P/S、P/E 仍这一套（只用市场法折扣）；仅 DCF 分两列（并购用并购折扣，上市不扣）。' : ''}
@@ -1634,20 +2641,26 @@ export default function ValuationWorkbenchPage() {
                     </div>
                   </section>
 
-                  <div className="valuation-output-split">
+                  <div className="valuation-output-stack">
                     <section className="valuation-output-section">
                       <Typography.Title heading={6} className="valuation-ratio-col-title">市场法</Typography.Title>
-                      {payload.sheets?.market?.formula ? (
-                        <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
-                          {payload.sheets.market.formula}
-                        </Typography.Paragraph>
-                      ) : null}
-                      <MarketMultiplesBlock
-                        assumptions={assumptions}
-                        payload={payload}
-                        patchPayload={patchPayload}
-                      />
-                      <MarketMethodTable payload={payload.sheets?.market?.payload} />
+                      <div className="valuation-market-output-row">
+                        <div>
+                          {payload.sheets?.market?.formula ? (
+                            <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
+                              {payload.sheets.market.formula}
+                            </Typography.Paragraph>
+                          ) : null}
+                          <MarketMultiplesBlock
+                            assumptions={assumptions}
+                            payload={payload}
+                            patchPayload={patchPayload}
+                          />
+                        </div>
+                        <div className="valuation-market-output-side">
+                          <MarketMethodTable payload={payload.sheets?.market?.payload} />
+                        </div>
+                      </div>
                     </section>
 
                     <section className="valuation-output-section valuation-output-dcf">
@@ -1657,20 +2670,13 @@ export default function ValuationWorkbenchPage() {
                           <Typography.Title heading={6} className="valuation-ratio-col-title">可调整参数</Typography.Title>
                           <Tag className="valuation-edit-tag" size="small">可编辑</Tag>
                         </div>
-                        <div className="valuation-dcf-param-grid">
-                          {buildDcfParamFields({ method, assumptions, payload, patchPayload }).map((f) => (
-                            <div key={f.label} className="valuation-dcf-param-item">
-                              <span>{f.label}</span>
-                              {f.control}
-                            </div>
-                          ))}
-                        </div>
+                        <DiscountWaccLine singleRow method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
                         <Typography.Paragraph className="valuation-dcf-terminal-hint">
                           {method.terminal_type === 'exit_ps'
-                            ? '当前终值 = 退出 P/S × 末期营业收入。退出 P/E 不参与 DCF。要用默认口径：方法配置改成「退出 P/E × 末期净利润」后确认并计算。'
-                            : '当前终值 = 退出 P/E × 末期净利润。退出 P/S 不参与 DCF 终值。'}
+                            ? '当前终值 = 退出 P/S × 末期全年营业收入 + 锚定日净负债，再折现。终值会加回净负债。'
+                            : '当前终值 = 退出 P/E × 末期全年税后经营利润 + 锚定日净负债，再折现。终值会加回净负债。'}
+                          {waccHint(assumptions, payload)}
                         </Typography.Paragraph>
-                        <WaccBreakdownBlock assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
                         {method.scenario_mode === 'ma_and_ipo' ? (
                           <Alert
                             type="info"
@@ -1681,6 +2687,7 @@ export default function ValuationWorkbenchPage() {
                           />
                         ) : null}
                       </div>
+                      <TurnoverDefaultRow assumptions={assumptions} payload={payload} patchPayload={patchPayload} payloadRef={payloadRef} />
                       {payload.sheets?.dcf?.formula ? (
                         <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
                           {payload.sheets.dcf.formula}

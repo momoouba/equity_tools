@@ -54,7 +54,7 @@ module.exports = {
   SCENARIO_DUAL: 'ma_and_ipo',
   MULTIPLE_POOL: 'stock_pool',
   MULTIPLE_INDUSTRY: 'sw_industry_median',
-  /** 界面录入万元；内部存储与引擎一律用元 */
+  /** 界面、库表与引擎一律用元。YUAN_PER_WAN 只用于把旧的万元草稿换回元。 */
   YUAN_PER_WAN: 10000,
   /** POOL 倍数统计：排除负值与极端截面（失败行情/亏损股） */
   PE_SANE_MIN: 0,

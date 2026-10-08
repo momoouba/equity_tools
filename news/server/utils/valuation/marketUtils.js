@@ -118,21 +118,57 @@ function wanToYuan(v) {
   return n == null ? null : n * C.YUAN_PER_WAN;
 }
 
+const ASSUMPTION_MONEY_KEYS = ['esop', 'ytd_revenue', 'market_revenue', 'market_net_income'];
+
+function firstAmount(arr) {
+  if (!Array.isArray(arr)) return null;
+  for (const v of arr) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n !== 0) return n;
+  }
+  return null;
+}
+
+function matchedScale(stored, reference) {
+  const s = Number(stored);
+  const r = Number(reference);
+  if (!Number.isFinite(s) || !Number.isFinite(r) || r === 0 || s === 0) return null;
+  const ratio = s / r;
+  for (const factor of [1, 10000, 1e8, 0.0001]) {
+    if (Math.abs(ratio - factor) / factor < 1e-4) return factor;
+  }
+  return null;
+}
+
 /**
- * 界面按万元录入。旧草稿可能是元，或把元数字又填进万元框（多 4 个 0）。
- * 换算成引擎用的元，并去掉明显多出来的 0000。
+ * 利润表库值是元。假设里的收入若已是同一元数，不再乘 10000。
+ * 若是元再乘了 10000 或 1 亿，除回去。只有相对利润表约为 1/10000 时，才是旧的万元。
  */
+function alignAssumptionMoney(assumptions, pl, unit) {
+  const next = { ...(assumptions || {}) };
+  const revenue = firstAmount(pl?.revenue);
+  const factor = matchedScale(next.market_revenue, revenue) ?? matchedScale(next.ytd_revenue, revenue);
+  const divideBy = factor === 10000 || factor === 1e8 ? factor : null;
+  const multiplyWan = unit !== 'yuan' && (factor === 0.0001 || (factor == null && revenue == null));
+  if (!divideBy && !multiplyWan) return { assumptions: next, changed: false };
+  const scale = divideBy ? (1 / divideBy) : 10000;
+  let changed = false;
+  for (const key of ASSUMPTION_MONEY_KEYS) {
+    if (next[key] == null || next[key] === '') continue;
+    const n = Number(next[key]);
+    if (!Number.isFinite(n) || n === 0) continue;
+    next[key] = n * scale;
+    changed = true;
+  }
+  return { assumptions: next, changed };
+}
+
+/** 界面、草稿、库表都按元。只有旧的万元草稿才乘 10000。 */
 function scaleAmountToYuan(value, unit) {
   const x = toNumber(value);
   if (x == null) return null;
-  if (unit === 'wan') {
-    let wan = x;
-    while (wan >= 1e8) wan /= C.YUAN_PER_WAN;
-    return wan * C.YUAN_PER_WAN;
-  }
-  let yuan = x;
-  while (yuan >= 1e12) yuan /= C.YUAN_PER_WAN;
-  return yuan;
+  if (unit === 'wan') return x * C.YUAN_PER_WAN;
+  return x;
 }
 
 function mapAmountFields(obj, keys, unit) {
@@ -171,14 +207,16 @@ function mapAmountFieldsToWan(obj, keys) {
 
 function prepareAmountsForEngine(payload) {
   const unit = payload?.amount_unit === 'wan' ? 'wan' : 'yuan';
-  const plKeys = ['revenue', 'cogs', 'selling', 'admin', 'rd', 'operating_profit', 'net_income'];
+  const plKeys = ['revenue', 'cogs', 'selling', 'admin', 'rd', 'finance_expense', 'operating_profit', 'net_income'];
   const bsKeys = BS_INPUT_KEYS;
   const ovKeys = ['da', 'capex', 'dnwc', 'net_debt'];
   const cfKeys = ['da', 'capex', 'dnwc', 'da_default', 'capex_default', 'dnwc_default'];
   const assumptions = { ...(payload?.assumptions || {}) };
-  if (assumptions.esop != null && assumptions.esop !== '') {
-    const esop = scaleAmountToYuan(assumptions.esop, unit);
-    if (esop != null) assumptions.esop = esop;
+  for (const key of ['esop', 'ytd_revenue', 'market_revenue', 'market_net_income']) {
+    if (assumptions[key] != null && assumptions[key] !== '') {
+      const scaled = scaleAmountToYuan(assumptions[key], unit);
+      if (scaled != null) assumptions[key] = scaled;
+    }
   }
   return {
     targetPl: mapAmountFields(payload?.targetPl || {}, plKeys, unit),
@@ -189,20 +227,31 @@ function prepareAmountsForEngine(payload) {
   };
 }
 
-function beijingYmd(d = new Date()) {
-  const date = d instanceof Date ? d : new Date(d);
-  const src = Number.isFinite(date.getTime()) ? date : new Date();
+function formatShanghaiYmd(date) {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
-  }).format(src);
+  }).format(date);
 }
 
+function beijingYmd(d = new Date()) {
+  const date = d instanceof Date ? d : new Date(d);
+  const src = Number.isFinite(date.getTime()) ? date : new Date();
+  return formatShanghaiYmd(src);
+}
+
+/**
+ * 日历日按北京时间取值。纯 YYYY-MM-DD 原样保留。
+ * 不带时区的日期时间（MySQL DATETIME，会话为 +08:00）按北京墙钟。
+ * 带 Z 或时区偏移的时刻先换算到北京再取日期。无效值返回 null，不抛错。
+ */
 function parseYmd(value) {
   if (value == null || value === '') return null;
-  if (value instanceof Date && Number.isFinite(value.getTime())) return beijingYmd(value);
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? formatShanghaiYmd(value) : null;
+  }
   if (typeof value.format === 'function') {
     try {
       const f = value.format('YYYY-MM-DD');
@@ -210,11 +259,17 @@ function parseYmd(value) {
     } catch { /* ignore */ }
   }
   const raw = String(value).trim();
-  const iso = raw.slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const parsed = new Date(raw);
-  if (Number.isFinite(parsed.getTime()) && /[a-z]{3}/i.test(raw) && raw.length > 10) {
-    return beijingYmd(parsed);
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const wall = raw.match(/^(\d{4}-\d{2}-\d{2})[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/);
+  if (wall) return wall[1];
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw) || /(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(raw)) {
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? formatShanghaiYmd(parsed) : null;
+  }
+  if (/[a-z]{3}/i.test(raw)) {
+    const parsed = new Date(raw);
+    return Number.isFinite(parsed.getTime()) ? formatShanghaiYmd(parsed) : null;
   }
   return null;
 }
@@ -263,6 +318,7 @@ module.exports = {
   yuanToWan,
   wanToYuan,
   scaleAmountToYuan,
+  alignAssumptionMoney,
   prepareAmountsForEngine,
   mapAmountFieldsToWan,
   isSanePe,

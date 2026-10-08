@@ -1,6 +1,7 @@
 const C = require('./constants');
 const { toNumber, median, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd, resolveValuationDate, parseYmd } = require('./marketUtils');
-const { nwcStockFromBs } = require('./targetBsFields');
+const { nwcStockFromBs, netDebtAmount } = require('./targetBsFields');
+const { buildDcfForecast, parseAnchor } = require('./dcfForecast');
 
 function num(v, fallback = 0) {
   const n = toNumber(v);
@@ -93,7 +94,7 @@ function extrapolatePl(pl, forecastYears, taxRate) {
   const n = Math.max(1, Number(forecastYears) || 5);
 
   while (years.length < n) {
-    const lastYear = years.length ? Number(String(years[years.length - 1]).slice(0, 4)) : new Date().getFullYear();
+    const lastYear = years.length ? Number(String(years[years.length - 1]).slice(0, 4)) : Number(beijingYmd().slice(0, 4));
     years.push(String(lastYear + 1));
   }
 
@@ -388,15 +389,9 @@ function sensitivityGrid({
 }
 
 function periodIso(period) {
-  if (period instanceof Date && !Number.isNaN(period.getTime())) {
-    const y = period.getFullYear();
-    const mo = String(period.getMonth() + 1).padStart(2, '0');
-    const da = String(period.getDate()).padStart(2, '0');
-    return `${y}-${mo}-${da}`;
-  }
+  const ymd = parseYmd(period);
+  if (ymd) return ymd;
   const s = String(period || '');
-  const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const d = s.replace(/[^\d]/g, '');
   if (d.length >= 8) return `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
   return s;
@@ -510,10 +505,36 @@ function rememberStatement(map, stmt) {
 
 function computeComparableStats(compsFinancials, opts = {}) {
   const asOfYmd = resolveValuationDate(opts.asOfDate);
+  const anchorForWc = parseAnchor(opts.asOfDate);
+  const wcCompleteYear = anchorForWc.ok
+    ? (anchorForWc.month === 12 ? anchorForWc.year : anchorForWc.year - 1)
+    : null;
+  const annualDso = new Map();
+  const annualDpo = new Map();
+  const annualDio = new Map();
   const feeCompanies = [];
   const gmByCompany = [];
   const wcCompanies = [];
   const relative = [];
+
+  const pushAnnual = (map, year, value) => {
+    const n = toNumber(value);
+    if (n == null || !year) return;
+    if (!map.has(year)) map.set(year, []);
+    map.get(year).push(n);
+  };
+  const stockSum = (stmt, keys) => {
+    let any = false;
+    let s = 0;
+    for (const k of keys) {
+      const n = stmtField(stmt, k);
+      if (n != null) {
+        any = true;
+        s += n;
+      }
+    }
+    return any ? s : null;
+  };
 
   for (const c of compsFinancials || []) {
     const pls = (c.statements || []).filter((s) => s.statement_type === 'pl');
@@ -589,6 +610,20 @@ function computeComparableStats(compsFinancials, opts = {}) {
         { key: 'dio', name: 'DIO（存货周转天数）', ...dio },
       ],
     });
+    if (c.in_pool) {
+      for (const year of wcYears) {
+        const plStmt = plByYear.get(year)?.stmt;
+        const bsStmt = bsByYear.get(year)?.stmt;
+        if (!plStmt || !bsStmt) continue;
+        if (String(plStmt.report_type || '').toLowerCase() !== 'annual') continue;
+        if (String(bsStmt.report_type || '').toLowerCase() !== 'annual') continue;
+        const rev = stmtField(plStmt, 'revenue');
+        const cogsAmt = stmtField(plStmt, 'cogs');
+        pushAnnual(annualDso, year, turnoverDays(rev, stockSum(bsStmt, ['accounts_receivable', 'notes_receivable'])));
+        pushAnnual(annualDpo, year, turnoverDays(cogsAmt, stockSum(bsStmt, ['accounts_payable', 'notes_payable'])));
+        pushAnnual(annualDio, year, turnoverDays(cogsAmt, stmtField(bsStmt, 'inventory')));
+      }
+    }
 
     const sliced = multiplesOnOrBefore(c.multiples, asOfYmd);
     const latestRow = sliced.length ? sliced[sliced.length - 1] : null;
@@ -642,6 +677,19 @@ function computeComparableStats(compsFinancials, opts = {}) {
   const itemMedian = (companies, key) => median(
     companies.map((c) => c.items.find((item) => item.key === key)?.median)
   );
+  const yearMedian = (map, year) => {
+    if (year == null) return null;
+    const arr = map.get(String(year));
+    return arr && arr.length ? median(arr) : null;
+  };
+  const priorMedians = (map) => (
+    wcCompleteYear == null
+      ? []
+      : [wcCompleteYear - 1, wcCompleteYear - 2].map((year) => ({
+        year,
+        median: yearMedian(map, year),
+      }))
+  );
   return {
     fees: {
       companies: feeCompanies,
@@ -657,10 +705,17 @@ function computeComparableStats(compsFinancials, opts = {}) {
     },
     working_capital: {
       companies: wcCompanies,
-      dso_median: itemMedian(wcCompanies, 'dso'),
-      dpo_median: itemMedian(wcCompanies, 'dpo'),
-      dio_median: itemMedian(wcCompanies, 'dio'),
-      formula: 'DSO=360/(TTM营收/净应收)；DPO/DIO 用 TTM 营业成本。按年取该年最新报告（不含半年报）。TTM=上年年报+本期累计−去年同期，缺同期则按报告期年化（Q1×4）。可比强度不参与',
+      dso_median: yearMedian(annualDso, wcCompleteYear),
+      dpo_median: yearMedian(annualDpo, wcCompleteYear),
+      dio_median: yearMedian(annualDio, wcCompleteYear),
+      complete_year: wcCompleteYear,
+      dso_prior: priorMedians(annualDso),
+      dpo_prior: priorMedians(annualDpo),
+      dio_prior: priorMedians(annualDio),
+      company_dso_median: itemMedian(wcCompanies, 'dso'),
+      company_dpo_median: itemMedian(wcCompanies, 'dpo'),
+      company_dio_median: itemMedian(wcCompanies, 'dio'),
+      formula: 'DCF 默认天数：已入池公司、最近一个完整会计年度年报的截面中位数。DSO 用应收账款+应收票据，DPO 用应付账款+应付票据，存货用存货，分母为该年全年收入或成本，天数=360/(全年流量/余额)。前两个完整会计年度只读展示，不写入预测。',
     },
     relative,
   };
@@ -1023,25 +1078,12 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
   };
 }
 
-function netDebtFromBs(bs, overrideYuan) {
-  const cash = toNumber(bs?.cash);
-  const st = toNumber(bs?.short_term_loan);
-  const lt = toNumber(bs?.long_term_loan);
-  const hasBs = cash != null || st != null || lt != null;
-  if (hasBs) {
-    return {
-      net_debt: num(st) + num(lt) - num(cash),
-      source: 'bs',
-      warning: null,
-    };
-  }
-  if (toNumber(overrideYuan) != null) {
-    return { net_debt: num(overrideYuan), source: 'manual', warning: null };
-  }
+function netDebtFromBs(bs) {
+  const amount = netDebtAmount(bs);
   return {
-    net_debt: 0,
-    source: 'missing_bs',
-    warning: '缺少资产负债表，净负债已按 0，请补录货币资金与借款',
+    net_debt: amount == null ? 0 : amount,
+    source: amount == null ? 'missing_bs' : 'bs',
+    warning: null,
   };
 }
 
@@ -1088,122 +1130,56 @@ function runValuationEngine(input) {
   const assumptions = input.assumptions || {};
   const warnings = [...(input.warnings || [])];
   const taxRate = num(assumptions.tax_rate, 0.15);
-  const forecastYears = Math.max(1, Number(assumptions.forecast_years) || 5);
-  const wacc = waccFromBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, taxRate);
-  const discountRate = wacc.rate;
-  if (wacc.incomplete) {
-    warnings.push('WACC 分项未填齐无风险利率、ERP、Beta，仍用汇总折现率');
-  }
-  if (wacc.used_breakdown) {
+  const wacc = waccFromBreakdown(assumptions.wacc_breakdown, null, taxRate);
+  let baseRate = null;
+  const filledRate = toNumber(assumptions.discount_rate);
+  if (wacc.used_breakdown && wacc.rate > 0) {
+    baseRate = wacc.rate;
     warnings.push(`折现率已用 WACC 分项 ${(wacc.rate * 100).toFixed(1)}%（Ke=${(wacc.ke * 100).toFixed(1)}%）`);
+  } else if (filledRate == null) {
+    baseRate = 0.3;
+    warnings.push('折现率未填，按默认 30%');
+  } else if (filledRate > 0) {
+    baseRate = filledRate;
+    if (wacc.incomplete) {
+      warnings.push('WACC 分项未填齐无风险利率、ERP、Beta，仍用案例折现率');
+    }
+  } else {
+    baseRate = filledRate;
   }
 
-  const asOfYmd = resolveValuationDate(assumptions.valuation_date);
-  const asOf = asOfDateObj(asOfYmd);
-  warnings.push(`市场法按锚定日 ${asOfYmd} 及以前各股历史中位（无中位则回退该日截面）`);
+  const anchor = parseAnchor(assumptions.valuation_date);
   const rawPl = compactYearSeries(input.targetPl || {}, [
     'revenue', 'cogs', 'selling', 'admin', 'rd', 'operating_profit', 'net_income', 'revenue_growth', 'gross_profit',
   ]);
-  const rawCf = compactYearSeries(input.targetCf || {}, ['da', 'capex', 'dnwc']);
-  const droppedPlYears = (input.targetPl?.years || [])
-    .map((y) => String(y || '').trim())
-    .filter((y) => y && !(rawPl.years || []).map((x) => String(x)).includes(y));
-  if (droppedPlYears.length) {
-    warnings.push(`已跳过无有效数字的年份 ${droppedPlYears.join('、')}，不按 0 插入外推`);
-  }
-  const originYear = dcfOriginYear(rawPl, asOf);
-  const baseYearIndex = marketBaseYearIndex(rawPl, asOf);
-  const forecastStart = firstForecastIndex(rawPl, asOf);
-  const marketBaseYear = yearNum(rawPl.years?.[baseYearIndex]);
-  const asOfYear = asOf.getFullYear();
-  if (marketBaseYear != null && marketBaseYear === asOfYear) {
-    warnings.push(`市场法基数用锚定日所在年 ${marketBaseYear}`);
-  } else if (marketBaseYear != null && marketBaseYear > asOfYear) {
-    warnings.push(`利润表没有锚定年 ${asOfYear} 的营收，市场法基数暂用 ${marketBaseYear}，P/S、P/E 会偏高。请补录锚定年或已实现年`);
-  }
-  const forecastRaw = slicePlFrom(rawPl, forecastStart);
-  const firstForecastYear = yearNum(forecastRaw.years?.[0]);
-  if (firstForecastYear != null) {
-    warnings.push(`DCF 以预测首年 ${firstForecastYear} 为第 1 期（已实现年不折现）`);
-  }
-  const yoyA = toNumber(forecastRaw.revenue?.[0]);
-  const yoyB = toNumber(forecastRaw.revenue?.[1]);
-  const filledYoy = yearOnYear(yoyB, yoyA);
-  const pl = extrapolatePl(forecastRaw, forecastYears, taxRate);
-  if (filledYoy != null && Math.abs(filledYoy) > 1) {
-    warnings.push('已填两年营业收入增速超过 100%，请核对第 2 年是否多写一个 0（如 73550 写成 735500）');
-  } else if (pl.growth_capped) {
-    warnings.push('利润表相邻两年收入增速超过 ±50%~100%，外推已封顶。请检查是否多填了一个 0');
-  }
-  const firstRev = toNumber(input.targetPl?.revenue?.[0]) ?? toNumber(pl.revenue?.[0]);
-  if (firstRev != null && firstRev > 1e11) {
-    warnings.push('营业收入超过 1000 亿元，请确认利润表是否按万元录入（不要把「元」数字再填进万元框）');
-  }
-  if (input.compStats?.fees) {
-    if (toNumber(input.targetPl?.selling_ratio) == null && input.compStats.fees.selling_median != null) {
-      pl.selling_ratio = input.compStats.fees.selling_median;
-    }
-  }
-
-  const extras = alignCfToYears(rawCf, pl.years, input.overrides);
-  if (!extras.capex.length && extras.capex_default === 0 && extras.dnwc_default === 0 && extras.da_default === 0) {
-    warnings.push('现金流量表三项（折旧摊销 / 资本性支出 / 营运资本增加）当前为 0，DCF 将按「仅用净利润±终值」计算');
-  }
-
-  const nd = netDebtFromBs(input.targetBs, input.overrides?.net_debt);
-  if (nd.warning) warnings.push(nd.warning);
+  const nd = netDebtFromBs(input.targetBs);
   if (nd.net_debt < 0) {
-    warnings.push('净负债为负（净现金）。DCF 按该净现金加回权益；请按万元核对货币资金与短贷/长贷');
+    warnings.push('净负债为负（净现金）。终值会加回这笔净现金，股权价值再减一次同一笔净负债');
   }
-  warnings.push(...collectTieOutWarnings({ pl, extras, bs: input.targetBs }));
 
   const fcfMethod = method.fcf_method || C.FCF_NI_BRIDGE;
   const terminalType = method.terminal_type || C.TERMINAL_PE;
-  const axes = method.sensitivity_axes || C.SENS_EXIT_CAGR;
 
   const runOne = (scenario, scenarioKey) => {
-    const rate = num(scenario?.discount_rate, discountRate);
-    const exitPe = num(scenario?.exit_pe, assumptions.exit_pe);
-    const exitPs = num(scenario?.exit_ps, assumptions.exit_ps);
-    const applyScenarioLiq = dcfApplyLiquidity(method, scenarioKey);
-    const dcfLiq = resolveDcfLiquidityDiscount(assumptions);
-    const fcf = buildFcfSeries(pl, extras, fcfMethod, taxRate, assumptions.esop);
-    const dcf = runDcf({
-      pl,
-      fcf,
-      discountRate: rate,
+    const label = scenarioKey === 'ma' ? '并购' : scenarioKey === 'ipo' ? '上市' : '';
+    const exitMultiple = terminalType === C.TERMINAL_PS
+      ? (scenario?.exit_ps ?? assumptions.exit_ps ?? 20)
+      : (scenario?.exit_pe ?? assumptions.exit_pe ?? 40);
+    return buildDcfForecast({
+      assumptions,
+      targetPl: input.targetPl || {},
+      targetBs: input.targetBs || {},
+      workingCapital: input.compStats?.working_capital,
+      baseRate,
+      scenarioRate: label ? scenario?.discount_rate : null,
+      scenarioLabel: label,
+      scenarioName: scenario?.name || null,
       terminalType,
-      exitPe,
-      exitPs,
-      netDebt: nd.net_debt,
-      liquidityDiscount: dcfLiq,
-      applyLiquidity: applyScenarioLiq,
-      originYear,
+      exitMultiple,
+      applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
+      liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
+      forecastPl: input.forecastPl || {},
     });
-    const sensitivity = sensitivityGrid({
-      axes,
-      pl,
-      extras,
-      method: fcfMethod,
-      taxRate,
-      esop: assumptions.esop,
-      discountRate: rate,
-      terminalType,
-      exitPe,
-      exitPs,
-      netDebt: nd.net_debt,
-      liquidityDiscount: dcfLiq,
-      applyLiquidity: applyScenarioLiq,
-      originYear,
-    });
-    return {
-      ...dcf,
-      sensitivity,
-      scenario_name: scenario?.name || null,
-      discount_rate: rate,
-      apply_liquidity: applyScenarioLiq,
-      liquidity_discount: dcfLiq,
-    };
   };
 
   if (method.scenario_mode === C.SCENARIO_DUAL) {
@@ -1213,28 +1189,68 @@ function runValuationEngine(input) {
   const primary = runOne(
     method.scenario_mode === C.SCENARIO_DUAL
       ? (input.scenarios?.ma || { name: '并购预期' })
-      : { name: '基准', discount_rate: discountRate, exit_pe: assumptions.exit_pe, exit_ps: assumptions.exit_ps },
+      : { name: '基准', exit_pe: assumptions.exit_pe, exit_ps: assumptions.exit_ps },
     method.scenario_mode === C.SCENARIO_DUAL ? 'ma' : 'base'
   );
   const secondary = method.scenario_mode === C.SCENARIO_DUAL
     ? runOne(input.scenarios?.ipo || { name: '上市预期' }, 'ipo')
     : null;
+  const blockerTexts = [...new Set([
+    ...(primary.blockers || []),
+    ...(secondary?.blockers || []),
+  ])];
+  for (const msg of blockerTexts) warnings.push(`待补：${msg}`);
 
-  const market = marketMethod({
-    multipleSource: method.multiple_source,
-    poolRelatives: input.compStats?.relative,
-    industryMultiples: input.industryMultiples,
-    pl: rawPl,
-    liquidityDiscount: assumptions.liquidity_discount,
-    baseYearIndex,
-    multipleBand: {
-      pe_min: assumptions.pe_low_multiple,
-      pe_median: assumptions.pe_median_multiple,
-      ps_min: assumptions.ps_low_multiple,
-      ps_median: assumptions.ps_median_multiple,
-    },
-  });
-  warnings.push(...(market.warnings || []));
+  const pl = primary.series || secondary?.series || { years: input.targetPl?.years || [] };
+  let market;
+  if (!anchor.ok) {
+    market = {
+      blocked: true,
+      warnings: [anchor.message],
+      pe: {},
+      ps: {},
+      formula: '估值锚定日不是报表日，市场法与 DCF 都未计算',
+    };
+  } else {
+    const asOf = asOfDateObj(anchor.ymd);
+    warnings.push(`市场法按锚定日 ${anchor.ymd} 及以前各股历史中位（无中位则回退该日截面）`);
+    const explicitRev = toNumber(assumptions.market_revenue);
+    const explicitNi = toNumber(assumptions.market_net_income);
+    const marketPl = (explicitRev != null || explicitNi != null)
+      ? {
+        years: [String(anchor.year)],
+        revenue: [explicitRev],
+        net_income: [explicitNi],
+        operating_profit: [null],
+      }
+      : rawPl;
+    const baseYearIndex = (explicitRev != null || explicitNi != null)
+      ? 0
+      : marketBaseYearIndex(rawPl, asOf);
+    if (explicitRev == null && explicitNi == null) {
+      const marketBaseYear = yearNum(rawPl.years?.[baseYearIndex]);
+      if (marketBaseYear != null && marketBaseYear === anchor.year) {
+        warnings.push(`市场法基数用锚定日所在年 ${marketBaseYear}`);
+      } else if (marketBaseYear != null && marketBaseYear > anchor.year) {
+        warnings.push(`利润表没有锚定年 ${anchor.year} 的营收，市场法基数暂用 ${marketBaseYear}。可在标的利润表填写市场法基数`);
+      }
+    }
+    market = marketMethod({
+      multipleSource: method.multiple_source,
+      poolRelatives: input.compStats?.relative,
+      industryMultiples: input.industryMultiples,
+      pl: marketPl,
+      liquidityDiscount: assumptions.liquidity_discount,
+      baseYearIndex,
+      multipleBand: {
+        pe_min: assumptions.pe_low_multiple,
+        pe_median: assumptions.pe_median_multiple,
+        ps_min: assumptions.ps_low_multiple,
+        ps_median: assumptions.ps_median_multiple,
+      },
+    });
+    warnings.push(...(market.warnings || []));
+  }
 
   const comparison = resultComparison({
     market,
@@ -1252,13 +1268,7 @@ function runValuationEngine(input) {
     dcf: {
       title: 'DCF',
       payload: { primary, secondary, fcf_method: fcfMethod, terminal_type: terminalType },
-      formula: method.scenario_mode === C.SCENARIO_DUAL
-        ? (fcfMethod === C.FCF_NOPAT
-          ? `FCFF=NOPAT+折旧摊销−营运资金变化−资本支出。${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}。并购股权价值=(EV−净负债)×(1−并购流动性折扣)；上市股权价值=EV−净负债。市场法用另一套折扣`
-          : `自由现金流=净利润+折旧摊销+ESOP−资本性支出−营运资本增加。${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}。并购股权价值=(EV−净负债)×(1−并购流动性折扣)；上市股权价值=EV−净负债，不扣折扣。市场法用另一套折扣`)
-        : (fcfMethod === C.FCF_NOPAT
-          ? `NOPAT=EBIT×(1−税率)（EBIT≤0 时税额为 0）；FCFF=NOPAT+折旧摊销−营运资金变化−资本支出；${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}；股权价值=(EV−净负债)×(1−DCF流动性折扣)`
-          : `自由现金流=净利润+折旧摊销+ESOP−资本性支出−营运资本增加；${terminalType === C.TERMINAL_PS ? '终值=退出P/S×末期营业收入' : '终值=退出P/E×末期净利润'}；股东权益=企业价值−净负债（净利润桥不再乘流动性折扣）。折现期数以预测首年为第 1 期，已实现年不折现`)
+      formula: 'FCFF=税后经营利润+折旧摊销+ESOP−资本开支−ΔNWC。锚定年流量乘剩余月比例。终值=退出倍数×末期全年基数+锚定日净负债，再按最后一列期数折现。股权价值=企业价值−同一笔净负债。',
     },
     market: {
       title: '市场法',
@@ -1288,22 +1298,22 @@ function runValuationEngine(input) {
     target_pl: {
       title: '标的利润表',
       payload: pl,
-      formula: '预测期默认 5 年；可只填前 2 年，其后用收入增速与费用率外推。空白/全 0 年份跳过，不按 0 占位',
+      formula: '第一年全年收入=当期累计营业收入×12/锚定月×(1+增速)，其后=上一年×(1+增速)。营业成本、销售、管理、研发有当期金额时同样先年化再乘增速；没有当期金额时仍按占收入。税金、其他、折旧摊销、资本开支按占收入。',
     },
     target_bs: {
       title: '资产负债表',
       payload: input.targetBs || {},
-      formula: '净负债=短期借款+长期借款−货币资金；营运资本占用=(应收票据+应收账款+预付款项+存货)−(应付票据+应付账款+预收款项)',
+      formula: '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金。营运资本=应收账款（含票据）+存货−应付账款（含票据）',
     },
     target_cf: {
       title: '现金流量表',
       payload: input.targetCf || {},
-      formula: '折旧摊销供 DCF 加回；资本性支出与营运资金变动供扣减',
+      formula: 'DCF 的折旧摊销、资本开支、ΔNWC 来自利润表比例和周转天数，不再使用本表手填金额',
     },
     tie_out: {
       title: '三表勾稽',
       payload: { net_debt: nd.net_debt, nwc_stock: nwcStockFromBs(input.targetBs) },
-      formula: '净负债=短贷+长贷−货币资金；营运资本占用=(应收票据+应收账款+预付款项+存货)−(应付票据+应付账款+预收款项)；ΔNWC 是增加额，不是期末占用',
+      formula: '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金。ΔNWC 由预测年末周转余额减去上一期，第一期起点是锚定日实际余额',
     },
   };
   if (method.multiple_source === C.MULTIPLE_INDUSTRY) {

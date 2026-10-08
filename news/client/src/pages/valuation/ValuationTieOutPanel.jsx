@@ -1,8 +1,9 @@
 import React from 'react'
 import { Alert, Typography } from '@arco-design/web-react'
-import { fmtAmountWan } from './valuationUnits'
+import { fmtWanPlain } from './valuationUnits'
 import { ListTable } from './valuationTable'
 import { buildValuationTieOut } from './valuationTieOut'
+import { forecastYearLabel } from './valuationSheetTables'
 
 export default function ValuationTieOutPanel({ payload }) {
   const t = buildValuationTieOut(payload)
@@ -12,8 +13,8 @@ export default function ValuationTieOutPanel({ payload }) {
     <div className="valuation-tieout">
       <Typography.Title heading={6} className="valuation-ratio-col-title">三表勾稽</Typography.Title>
       <Typography.Paragraph type="secondary" className="valuation-ratio-formula">
-        净负债 = 短贷 + 长贷 − 货币资金。营运资本占用 = (应收票据+应收账款+预付款项+存货) − (应付票据+应付账款+预收款项)。
-        自由现金流 = {t.nopat ? 'NOPAT' : '净利润'} + 折旧摊销 − 资本性支出 − 营运资本增加。ΔNWC 是当年增加额，不是期末占用。
+        净负债 = 短期借款 + 一年内到期的非流动负债 + 长期借款 + 租赁负债 − 货币资金。
+        营运资本占用 = 应收账款（含票据）+ 存货 − 应付账款（含票据）。
       </Typography.Paragraph>
       {t.issues.length ? (
         <Alert type="warning" style={{ marginBottom: 12 }} content={t.issues.join('；')} />
@@ -26,14 +27,14 @@ export default function ValuationTieOutPanel({ payload }) {
         size="small"
         columns={[
           { title: '项目', dataIndex: 'name', width: 200 },
-          { title: '金额（万元）', dataIndex: 'value', width: 140, render: (v) => (v == null ? '—' : fmtAmountWan(v)) },
+          { title: '金额', dataIndex: 'value', width: 140, render: (v) => (v == null ? '—' : fmtWanPlain(v)) },
           { title: '说明', dataIndex: 'note' },
         ]}
         data={[
           {
             name: '净负债（资产负债表）',
             value: t.ndBs,
-            note: '短贷 + 长贷 − 货币资金，DCF 扣减项',
+            note: '短期借款 + 一年内到期的非流动负债 + 长期借款 + 租赁负债 − 货币资金',
           },
           {
             name: '净负债（DCF）',
@@ -54,14 +55,14 @@ export default function ValuationTieOutPanel({ payload }) {
           size="small"
           style={{ marginTop: 12 }}
           columns={[
-            { title: '年份', dataIndex: 'year', width: 88 },
-            { title: t.nopat ? 'NOPAT（万元）' : '净利润（万元）', dataIndex: 'earn', render: (v) => fmtAmountWan(v) },
-            { title: '折旧摊销', dataIndex: 'da', render: (v) => fmtAmountWan(v) },
-            { title: '资本性支出', dataIndex: 'capex', render: (v) => fmtAmountWan(v) },
-            { title: 'ΔNWC', dataIndex: 'dnwc', render: (v) => fmtAmountWan(v) },
-            { title: 'FCF 勾稽', dataIndex: 'expected', render: (v) => fmtAmountWan(v) },
-            { title: 'FCF（DCF）', dataIndex: 'actual', render: (v) => (v == null ? '—' : fmtAmountWan(v)) },
-            { title: '差额', dataIndex: 'gap', render: (v) => (v == null ? '—' : fmtAmountWan(v)) },
+            { title: '年份', dataIndex: 'year', width: 88, render: (v) => forecastYearLabel(v) },
+            { title: t.nopat ? 'NOPAT' : '净利润', dataIndex: 'earn', render: (v) => fmtWanPlain(v) },
+            { title: '折旧摊销', dataIndex: 'da', render: (v) => fmtWanPlain(v) },
+            { title: '资本性支出', dataIndex: 'capex', render: (v) => fmtWanPlain(v) },
+            { title: 'ΔNWC', dataIndex: 'dnwc', render: (v) => fmtWanPlain(v) },
+            { title: 'FCF 勾稽', dataIndex: 'expected', render: (v) => fmtWanPlain(v) },
+            { title: 'FCF（DCF）', dataIndex: 'actual', render: (v) => (v == null ? '—' : fmtWanPlain(v)) },
+            { title: '差额', dataIndex: 'gap', render: (v) => (v == null ? '—' : fmtWanPlain(v)) },
           ]}
           data={t.rows}
         />

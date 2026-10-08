@@ -3,7 +3,8 @@ const { generateId } = require('../idGenerator');
 const C = require('./constants');
 const { runValuationEngine, computeComparableStats } = require('./engine');
 const { defaultMethodConfig, defaultAssumptions, defaultScenarioSet, seedDcfLiquidityDiscount } = require('./defaults');
-const { prepareAmountsForEngine, resolveValuationDate } = require('./marketUtils');
+const { prepareAmountsForEngine, parseYmd } = require('./marketUtils');
+const { isStatementAnchor, applyForecastCashflow, applyForecastPl } = require('./dcfForecast');
 const { listCaseComparables } = require('./comparableService');
 const {
   ensureComparablesFetched,
@@ -77,10 +78,11 @@ async function runJob(jobId) {
       });
       return;
     }
-    const asOfDate = resolveValuationDate(payload.assumptions?.valuation_date);
+    const asOfDate = parseYmd(payload.assumptions?.valuation_date);
+    const anchorOk = isStatementAnchor(asOfDate);
     payload.assumptions = { ...(payload.assumptions || {}), valuation_date: asOfDate };
     let industryNote = '';
-    if (methodConfig.multiple_source === C.MULTIPLE_INDUSTRY) {
+    if (anchorOk && methodConfig.multiple_source === C.MULTIPLE_INDUSTRY) {
       await updateJob(jobId, { progress: 12, message: `汇总申万行业「${payload.sw_industry_l3 || ''}」倍数…` });
       const industry = await fetchIndustryMultiples(
         payload.sw_industry_l3,
@@ -104,7 +106,7 @@ async function runJob(jobId) {
     let fetchNotes = industryNote ? [industryNote] : [];
     let skippedCount = 0;
     let fetchedCount = 0;
-    if (job.job_type !== 'calc_only') {
+    if (anchorOk && job.job_type !== 'calc_only') {
       const fetched = await ensureComparablesFetched(comps, { case_id: job.case_id, job_id: jobId }, (i, n, code) => {
         const p = 15 + Math.round((i / Math.max(n, 1)) * 50);
         updateJob(jobId, { progress: p, message: `核验/采集 ${code}（${i}/${n}）` }).catch(() => {});
@@ -117,27 +119,27 @@ async function runJob(jobId) {
       fetchedCount = fetched.fetchedCount || 0;
     }
 
-    await updateJob(jobId, { progress: 70, message: '计算可比比率与估值…' });
-    const bundles = [];
-    for (const c of comps) {
-      const bundle = await loadCompanyFinancialBundle(c.stock_code);
-      bundles.push({
-        ...bundle,
-        stock_code: c.stock_code,
-        stock_name: c.stock_name,
-        in_pool: Number(c.in_pool) === 1,
-        comparability: c.comparability,
-        pe_median_override: c.pe_median_override,
-        ps_median_override: c.ps_median_override,
-      });
+    await updateJob(jobId, { progress: 70, message: anchorOk ? '计算可比比率与估值…' : '估值锚定日未就绪，先列出待补项…' });
+    let compStats = null;
+    if (anchorOk) {
+      const bundles = [];
+      for (const c of comps) {
+        const bundle = await loadCompanyFinancialBundle(c.stock_code);
+        bundles.push({
+          ...bundle,
+          stock_code: c.stock_code,
+          stock_name: c.stock_name,
+          in_pool: Number(c.in_pool) === 1,
+          comparability: c.comparability,
+          pe_median_override: c.pe_median_override,
+          ps_median_override: c.ps_median_override,
+        });
+      }
+      compStats = computeComparableStats(bundles, { asOfDate });
     }
-    const compStats = computeComparableStats(bundles, {
-      asOfDate,
-    });
     const assumptions = seedDcfLiquidityDiscount({
       ...(defaultAssumptions()),
       ...(payload.assumptions || {}),
-      valuation_date: asOfDate,
     });
     const amounts = prepareAmountsForEngine({ ...payload, assumptions });
     const engineOut = runValuationEngine({
@@ -148,6 +150,7 @@ async function runJob(jobId) {
       targetBs: amounts.targetBs || {},
       targetCf: amounts.targetCf || {},
       overrides: amounts.overrides || {},
+      forecastPl: payload.forecastPl || {},
       compStats,
       industryMultiples: payload.industryMultiples,
       warnings: [
@@ -156,11 +159,21 @@ async function runJob(jobId) {
       ],
     });
 
+    const targetCf = applyForecastCashflow(payload.targetCf, engineOut.dcf?.primary);
+    const forecastPl = applyForecastPl(payload.forecastPl, engineOut.dcf?.primary);
+    const sheets = engineOut.sheets
+      ? {
+        ...engineOut.sheets,
+        target_cf: { ...(engineOut.sheets.target_cf || {}), payload: targetCf },
+      }
+      : engineOut.sheets;
     const nextPayload = {
       ...payload,
+      targetCf,
+      forecastPl,
       methodConfig,
       assumptions,
-      sheets: engineOut.sheets,
+      sheets,
       comparison: engineOut.comparison,
       warnings: [...fetchNotes, ...(engineOut.warnings || [])],
       wacc: engineOut.wacc,
@@ -168,11 +181,14 @@ async function runJob(jobId) {
       last_job_id: jobId,
     };
     await saveDraft(job.case_id, nextPayload, job.creator_user_id, { source: 'compute' });
-    const doneMsg = skippedCount && !fetchedCount
-      ? `计算完成（${skippedCount} 家用库内数据，未再抓取）`
-      : skippedCount
-        ? `计算完成（${skippedCount} 家跳过抓取，${fetchedCount} 家补采）`
-        : '计算完成（草稿未保存版本）';
+    const blockerWarns = (engineOut.warnings || []).filter((w) => String(w).startsWith('待补：'));
+    const doneMsg = blockerWarns.length
+      ? blockerWarns[0].replace(/^待补：/, '')
+      : skippedCount && !fetchedCount
+        ? `计算完成（${skippedCount} 家用库内数据，未再抓取）`
+        : skippedCount
+          ? `计算完成（${skippedCount} 家跳过抓取，${fetchedCount} 家补采）`
+          : '计算完成（草稿未保存版本）';
     await updateJob(jobId, {
       status: C.JOB_STATUS.SUCCESS,
       progress: 100,

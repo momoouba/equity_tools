@@ -2,6 +2,7 @@ const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const C = require('./constants');
 const { defaultMethodConfig, defaultAssumptions, defaultScenarioSet } = require('./defaults');
+const { suggestAnchorYmd } = require('./targetImport');
 const { isAdminUser } = require('./routeAuth');
 const { APP_NAME_PROJECT_VALUATION, PROJECT_VALUATION_APP_ID } = require('./constants');
 const {
@@ -11,6 +12,7 @@ const {
 } = require('./targetFinancials');
 const {
   saveWorkspace,
+  saveAssumptions,
   loadWorkspace,
   loadMethod,
   saveMethod,
@@ -383,6 +385,21 @@ function emptyDraftPayload() {
   };
 }
 
+async function caseCreatedAt(caseId) {
+  const rows = await db.query(
+    'SELECT F_CreatorTime AS created_at FROM valuation_case WHERE F_Id = ? LIMIT 1',
+    [caseId]
+  );
+  return rows[0]?.created_at || new Date();
+}
+
+function withDefaultAnchor(assumptions, createdAt) {
+  const next = { ...(assumptions || {}) };
+  if (next.valuation_date) return next;
+  next.valuation_date = suggestAnchorYmd(createdAt || new Date());
+  return next;
+}
+
 async function ensureDraft(caseId, userId) {
   const rows = await db.query('SELECT F_Id FROM valuation_draft WHERE case_id = ? LIMIT 1', [caseId]);
   if (rows.length) return rows[0].F_Id;
@@ -392,7 +409,15 @@ async function ensureDraft(caseId, userId) {
      VALUES (?,?,?,NOW(),NOW())`,
     [id, caseId, userId || null]
   );
-  await saveWorkspace(caseId, DRAFT_VERSION_ID, emptyDraftPayload());
+  const payload = emptyDraftPayload();
+  payload.assumptions = withDefaultAnchor(payload.assumptions, await caseCreatedAt(caseId));
+  const ymd = payload.assumptions.valuation_date;
+  const year = Number(String(ymd).slice(0, 4));
+  const month = Number(String(ymd).slice(5, 7));
+  const start = month === 12 ? year + 1 : year;
+  payload.targetPl.years = Array.from({ length: 5 }, (_, i) => String(start + i));
+  await saveTargetFinancials(caseId, DRAFT_VERSION_ID, payload);
+  await saveWorkspace(caseId, DRAFT_VERSION_ID, payload);
   return id;
 }
 
@@ -421,6 +446,10 @@ async function getDraft(caseId) {
   const payload = await attachSheetFinancials(
     await hydrateDraftPayload(caseId, { ...emptyDraftPayload(), ...ws })
   );
+  if (!payload.assumptions?.valuation_date) {
+    payload.assumptions = withDefaultAnchor(payload.assumptions, await caseCreatedAt(caseId));
+    await saveAssumptions(caseId, DRAFT_VERSION_ID, payload.assumptions);
+  }
   return {
     id: rows[0].id,
     payload,
