@@ -194,6 +194,15 @@ function forecastYearEntries(pl, ymd) {
   })
 }
 
+/** 百分比表不含当年年底。锚定日不是 12 月 31 日时，当年金额在预测利润表里填。 */
+function ratioYearEntries(pl, ymd) {
+  const anchor = statementAnchor(ymd)
+  return forecastYearEntries(pl, ymd).filter(({ y }) => {
+    if (!anchor || anchor.month === 12) return true
+    return yearNum(y) !== anchor.year
+  })
+}
+
 function realignPl(pl, nextYears) {
   const oldYears = (pl?.years || []).map(String)
   const years = nextYears.map(String)
@@ -244,6 +253,7 @@ function forecastBsColumn(actual, pv, yearOverrides) {
     if (overrides.accounts_receivable == null || overrides.accounts_receivable === '') values.accounts_receivable = pv.ar_balance
     if (overrides.inventory == null || overrides.inventory === '') values.inventory = pv.inventory_balance
     if (overrides.accounts_payable == null || overrides.accounts_payable === '') values.accounts_payable = pv.ap_balance
+    values.ar_is_net = true
   }
   return { values, forecast: Boolean(pv && pv.ar_balance != null) }
 }
@@ -277,11 +287,14 @@ function carrySeries(arr) {
   return values
 }
 
-function forecastStatement(pl, assumptions) {
+function forecastStatement(pl, assumptions, forecastPl) {
   const anchor = statementAnchor(assumptions?.valuation_date)
   const entries = forecastYearEntries(pl, assumptions?.valuation_date)
   const years = entries.map(({ y }) => String(yearNum(y) || y))
   if (!anchor || !years.length) return null
+  const stub = anchor.month < 12 && yearNum(years[0]) === anchor.year
+  const yearEndRow = (forecastPl && (forecastPl[years[0]] || forecastPl[yearNum(years[0])])) || {}
+  const entered = (key) => finiteOrNull(yearEndRow[key])
   const ytd = finiteOrNull(assumptions?.ytd_revenue)
   let base = ytd != null && ytd > 0 ? ytd : null
   if (base == null) {
@@ -291,60 +304,62 @@ function forecastStatement(pl, assumptions) {
   }
   const picked = (key) => entries.map(({ i }) => pl?.[key]?.[i])
   const growth = carrySeries(picked('revenue_growth'))
-  let prev = base == null ? null : base * 12 / anchor.month
-  const revenue = growth.map((g) => {
-    if (prev == null || g == null) return null
-    const next = prev * (1 + g)
-    prev = next
-    return next
-  })
-  const amountAt = (key) => {
-    const idx = (pl?.years || []).findIndex((y) => yearNum(y) === anchor.year)
-    return idx >= 0 ? finiteOrNull(pl?.[key]?.[idx]) : null
+  const revenue = []
+  if (stub) {
+    let prev = entered('revenue')
+    growth.forEach((g, i) => {
+      if (i === 0) {
+        revenue.push(prev)
+        return
+      }
+      if (prev == null || g == null) {
+        revenue.push(null)
+        prev = null
+        return
+      }
+      const next = prev * (1 + g)
+      revenue.push(next)
+      prev = next
+    })
+  } else {
+    let prev = base == null ? null : base * 12 / anchor.month
+    growth.forEach((g) => {
+      if (prev == null || g == null) {
+        revenue.push(null)
+        prev = null
+        return
+      }
+      const next = prev * (1 + g)
+      revenue.push(next)
+      prev = next
+    })
   }
-  const growOrShare = (ratioKey, amountKey) => {
-    const rates = carrySeries(picked(ratioKey))
-    const current = amountAt(amountKey)
-    if (current != null) {
-      let rolling = current * 12 / anchor.month
-      return rates.map((g) => {
-        if (g == null) return null
-        const next = rolling * (1 + g)
-        rolling = next
-        return next
-      })
-    }
-    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
+  const fromRevenue = (ratioKey, amountKey, optional = false) => {
+    const seen = picked(ratioKey).some((v) => finiteOrNull(v) != null)
+    const rates = seen ? carrySeries(picked(ratioKey)) : years.map(() => (optional ? 0 : null))
+    return years.map((_, i) => {
+      if (stub && i === 0) {
+        const v = entered(amountKey)
+        if (v != null) return v
+        return optional ? 0 : null
+      }
+      const rate = rates[i]
+      if (rate != null && Math.abs(rate) > 10000) return rate
+      const rev = revenue[i]
+      if (rate == null || rev == null) return null
+      return rev * rate
+    })
   }
-  const share = (ratioKey) => {
-    const rates = carrySeries(picked(ratioKey))
-    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
-  }
-  const cogs = growOrShare('cogs_ratio', 'cogs')
-  const surtax = share('surtax_ratio')
-  const selling = growOrShare('selling_ratio', 'selling')
-  const admin = growOrShare('admin_ratio', 'admin')
-  const rd = growOrShare('rd_ratio', 'rd')
-  const financeExpense = (() => {
-    const pickedRates = picked('finance_expense_ratio')
-    const seen = pickedRates.some((v) => finiteOrNull(v) != null)
-    const rates = seen ? carrySeries(pickedRates) : revenue.map(() => 0)
-    const current = amountAt('finance_expense')
-    if (current != null) {
-      let rolling = current * 12 / anchor.month
-      return rates.map((g) => {
-        if (g == null) return null
-        const next = rolling * (1 + g)
-        rolling = next
-        return next
-      })
-    }
-    return revenue.map((rev, i) => (rev == null || rates[i] == null ? null : rev * rates[i]))
-  })()
-  const otherIncome = share('other_income_ratio')
-  const other = share('other_ratio')
-  const da = share('da_ratio')
-  const capex = share('capex_ratio')
+  const cogs = fromRevenue('cogs_ratio', 'cogs')
+  const surtax = fromRevenue('surtax_ratio', 'surtax')
+  const selling = fromRevenue('selling_ratio', 'selling')
+  const admin = fromRevenue('admin_ratio', 'admin')
+  const rd = fromRevenue('rd_ratio', 'rd')
+  const financeExpense = fromRevenue('finance_expense_ratio', 'finance_expense', true)
+  const otherIncome = fromRevenue('other_income_ratio', 'other_income')
+  const other = fromRevenue('other_ratio', 'other')
+  const da = fromRevenue('da_ratio', 'da')
+  const capex = fromRevenue('capex_ratio', 'capex')
   const taxRaw = finiteOrNull(assumptions?.tax_rate)
   const tax = taxRaw == null ? 0.15 : taxRaw
   const gross = revenue.map((rev, i) => (rev == null || cogs[i] == null ? null : rev - cogs[i]))
@@ -379,7 +394,10 @@ function overlayForecastStatement(statement, forecastPl) {
   const next = { ...statement }
   FORECAST_PL_DRIVERS.forEach(([clientKey, engineKey]) => {
     next[clientKey] = statement[clientKey].map((formula, i) => {
-      const stored = finiteOrNull(forecastPl?.[statement.years[i]]?.[engineKey])
+      const row = forecastPl?.[statement.years[i]]
+      const manual = Array.isArray(row?.manual) ? row.manual : []
+      if (!manual.includes(engineKey)) return formula
+      const stored = finiteOrNull(row?.[engineKey])
       return stored != null ? stored : formula
     })
   })
@@ -423,12 +441,7 @@ function withWorkingCapital(statement, pl, assumptions, payload) {
     if (ar == null || inv == null || ap == null) return null
     return ar + inv - ap
   })
-  const openingAr = finiteOrNull(bs.accounts_receivable)
-  const openingInv = finiteOrNull(bs.inventory)
-  const openingAp = finiteOrNull(bs.accounts_payable)
-  const opening = openingAr == null && openingInv == null && openingAp == null
-    ? null
-    : (openingAr || 0) + (openingInv || 0) - (openingAp || 0)
+  const opening = nwcStockFromBs(bs)
   next.dnwc = next.nwc.map((balance, i) => {
     if (balance == null) return null
     const prev = i === 0 ? opening : next.nwc[i - 1]
@@ -438,7 +451,7 @@ function withWorkingCapital(statement, pl, assumptions, payload) {
   return next
 }
 
-function editForecastPl(forecastPl, year, engineKey, value, formula) {
+function editForecastPl(forecastPl, year, engineKey, value, formula, inputYear = false) {
   const next = { ...(forecastPl || {}) }
   const row = { ...(next[year] || {}) }
   const manual = new Set(Array.isArray(row.manual) ? row.manual : [])
@@ -447,10 +460,10 @@ function editForecastPl(forecastPl, year, engineKey, value, formula) {
   const shown = stored != null ? stored : formulaN
   const typed = finiteOrNull(value)
   const cleared = value == null || value === ''
-  if (cleared || (formulaN != null && typed === formulaN)) {
+  if (cleared || (!inputYear && formulaN != null && typed === formulaN)) {
     delete row[engineKey]
     manual.delete(engineKey)
-  } else if (typed != null && shown != null && typed === shown && !manual.has(engineKey)) {
+  } else if (!inputYear && typed != null && shown != null && typed === shown && !manual.has(engineKey)) {
     return forecastPl || {}
   } else if (typed == null) {
     delete row[engineKey]
@@ -473,13 +486,13 @@ function ratiosTouched(pl) {
 const ANCHOR_DATE_HELP = '只能选最近一期报表日：3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。新建时按案件创建日预填，与下载模板相同：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。可以改。市场法倍数、DCF 折现起点和资产负债表实际列都用这一天。'
 
 const FORECAST_RATIO_ROWS = [
-  { key: 'revenue_growth', name: '收入增速', note: '基数已按锚定月年化。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
-  { key: 'cogs_ratio', name: '营业成本', note: '增速。当期有金额时，年底 = 年化当期 ×（1+增速），以后 = 上一年 ×（1+增速）。没填当期金额时按占收入。', min: -500 },
-  { key: 'surtax_ratio', name: '税金及附加', note: '占当年全年收入。填 0 视为已填，小于 0 会拦截。', min: -100 },
-  { key: 'selling_ratio', name: '销售费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
-  { key: 'admin_ratio', name: '管理费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
-  { key: 'rd_ratio', name: '研发费用', note: '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。', min: -500 },
-  { key: 'finance_expense_ratio', name: '财务费用', note: '增速。有当期金额时先年化再乘（1+增速）。没填当期金额时按占收入。可为负，未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
+  { key: 'revenue_growth', name: '收入增速', note: '锚定日不是 12 月 31 日时，当年年底收入在预测利润表填写，本表从下一年起填增速。12 月 31 日时，第一年 = 当年全年收入 ×（1+增速）。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
+  { key: 'cogs_ratio', name: '营业成本', note: '占当年营业收入。95 表示 95%。绝对值大于 10000 时按该年实际金额（元），不再乘收入。当年年底金额仍在预测利润表填写。', min: -500 },
+  { key: 'surtax_ratio', name: '税金及附加', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额。填 0 视为已填，小于 0 会拦截。', min: -100 },
+  { key: 'selling_ratio', name: '销售费用', note: '占当年营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
+  { key: 'admin_ratio', name: '管理费用', note: '占当年营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
+  { key: 'rd_ratio', name: '研发费用', note: '占当年营业收入，含已分摊折旧。95 表示收入的 95%；10000000 表示该年研发费用 10000000 元。', min: -500 },
+  { key: 'finance_expense_ratio', name: '财务费用', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额，可为负。未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
   { key: 'other_income_ratio', name: '其他收益', note: '多含政府补助。空白年份沿用最近一次比例，终值按最后一年计算，补助会被永久资本化。不可持续时把后续年份改低或改为 0。可为负，填 0 视为已填。', min: -500 },
   { key: 'other_ratio', name: '其他', note: '只放经营性项目。不含投资收益、公允价值变动、信用减值、资产减值、资产处置、营业外收支。可为负，填 0 视为已填。', min: -500 },
   { key: 'da_ratio', name: '折旧摊销', note: '填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。占收入。', min: -100 },
@@ -562,6 +575,9 @@ function impliedDaView(pl, assumptions) {
     return ratioLast
   })
   if (!ratioFilled) return { actual: undefined, byYear: {} }
+  if (anchor.month < 12 && yearNum(entries[0].y) === anchor.year) {
+    return { actual: revenueBase * (ratios[0] || 0), byYear: {} }
+  }
   let growthLast = null
   let growthFilled = false
   const growth = entries.map(({ i }) => {
@@ -661,6 +677,26 @@ function ratioToPct(v) {
   if (v == null || v === '') return undefined
   const n = Number(v)
   return Number.isFinite(n) ? Number((n * 100).toFixed(2)) : undefined
+}
+
+function MixedRatioInput({ value, onChange, className, style }) {
+  const n = finiteOrNull(value)
+  const asAmount = n != null && Math.abs(n) > 10000
+  return (
+    <InputNumber
+      hideControl
+      size="small"
+      className={['valuation-pct-input', className].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...style }}
+      suffix={asAmount ? undefined : '%'}
+      value={asAmount ? n : ratioToPct(n)}
+      onChange={(v) => {
+        if (v == null || v === '') onChange?.(null)
+        else if (Math.abs(Number(v)) > 10000) onChange?.(Number(v))
+        else onChange?.(Number(v) / 100)
+      }}
+    />
+  )
 }
 
 function PctInput({ value, onChange, className, style, ...props }) {
@@ -1825,7 +1861,7 @@ export default function ValuationWorkbenchPage() {
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="上面是锚定日当期金额。后面各预测列都可以改：填百分数，10 表示 10%。收入、营业成本、销售、管理、研发、财务费用是增速：6 月 30 日这类期内数据先按 12/锚定月年化，年底数 = 年化值 ×（1+增速），以后各年 = 上一年 ×（1+增速）。没有当期金额的科目仍按占收入。财务费用不进入自由现金流。改完点「开始采集/计算」，会先保存再按保存后的数计算。"
+              content="上面是锚定日当期金额。锚定日不是 12 月 31 日时，当年年底预估不在这张表里，请填在下面的预测利润表。收入增速按上一年营业收入，10 表示增长 10%。营业成本及后面的科目按当年营业收入的比例，95 表示 95%；填入的绝对值大于 10000 时，当作该年实际金额（元），不再乘收入。改当年年底收入后，按收入比例计算的后面年份会跟着变。财务费用不进入自由现金流。改完点「开始采集/计算」，会先保存再计算。"
             />
             <StackedFieldTable
               style={{ marginBottom: 12 }}
@@ -1850,7 +1886,7 @@ export default function ValuationWorkbenchPage() {
                       onChange={(v) => patchPayload({ assumptions: { ...assumptions, ytd_revenue: v } })}
                     />
                   ),
-                  note: '估值锚定日当期利润表累计营业收入，须为正数。收入增速的基数已按月年化',
+                  note: '估值锚定日当期累计营业收入，须为正数。锚定日不是 12 月 31 日时，DCF 当年年底收入改在预测利润表填写，不再用这里年化',
                 },
                 {
                   name: '市场法营业收入',
@@ -1964,7 +2000,7 @@ export default function ValuationWorkbenchPage() {
               scroll={{ x: true }}
               columns={[
                 { title: '科目', dataIndex: 'name', width: 120, fixed: 'left' },
-                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
+                ...ratioYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
                   align: 'right',
                   className: 'valuation-num-cell',
                   title: (
@@ -1999,16 +2035,24 @@ export default function ValuationWorkbenchPage() {
                   dataIndex: `y${i}`,
                   width: 132,
                   render: (_, r) => (
-                    <PctInput
-                      min={r.min}
-                      max={500}
-                      value={r.values[i]}
-                      onChange={(nv) => r.onChange(i, nv)}
-                    />
+                    r.key === 'revenue_growth' ? (
+                      <PctInput
+                        min={r.min}
+                        max={500}
+                        value={r.values[i]}
+                        onChange={(nv) => r.onChange(i, nv)}
+                      />
+                    ) : (
+                      <MixedRatioInput
+                        value={r.values[i]}
+                        onChange={(nv) => r.onChange(i, nv)}
+                      />
+                    )
                   ),
                 })),
               ]}
               data={FORECAST_RATIO_ROWS.map((row) => ({
+                key: row.key,
                 name: row.name,
                 note: row.note,
                 min: row.min,
@@ -2096,10 +2140,10 @@ export default function ValuationWorkbenchPage() {
             </Space>
             <Typography.Title heading={6} style={{ marginTop: 16 }}>预测利润表</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-              计算成功后写入金额，可以直接改。点开始采集会先保存这些修改再计算。改过的格子按手改数，清空或改回比例结果后重新跟着上面的比例走。毛利、税前和税后由各行重算。净应收款、净应付款、存货、营运资本余额和营运资本变动按周转天数与收入、成本现算，改收入、成本或周转天数后会跟着变。
+              锚定日不是 12 月 31 日时，第一列是当年年底预估，直接填金额。后面各年的收入按上一年收入和增速滚动；营业成本、费用、折旧和资本开支按当年收入乘上面的比例。比例格里填大于 10000 的数时，该年直接用这个金额。改当年年底收入后，按收入比例计算的年份会跟着变。手改过的后面年份保持手改，清空后重新按比例算。毛利、税前和税后由各行重算。净应收款、净应付款、存货、营运资本余额和营运资本变动按周转天数与收入、成本现算。
             </Typography.Paragraph>
             {(() => {
-              const formula = forecastStatement(pl, assumptions)
+              const formula = forecastStatement(pl, assumptions, payload.forecastPl)
               const statement = withWorkingCapital(
                 overlayForecastStatement(formula, payload.forecastPl),
                 pl,
@@ -2122,11 +2166,11 @@ export default function ValuationWorkbenchPage() {
                 { key: 'pretax', name: '税前经营利润', note: '收入 − 成本 − 税金及附加 − 销售 − 管理 − 研发 + 其他收益 + 其他。折旧已含在三项费用中，这里不再扣。', total: true },
                 { key: 'nopat', name: '税后经营利润', note: '税前大于 0 时乘（1 − 所得税率）。税前小于等于 0 时不退税。所得税率未填按 15%。', total: true },
                 { key: 'capex', engineKey: 'capex', name: '资本开支', note: noteOf('capex_ratio'), editable: true },
-                { key: 'netAr', name: '净应收款', note: 'DSO / 360 × 当年全年收入。DSO 优先用手填年，其次预测默认值，再其次可比中位数。' },
+                { key: 'netAr', name: '净应收款', note: 'DSO / 360 × 当年全年收入，已是扣除预收款后的净值。DSO 优先用手填年，其次预测默认值，再其次可比中位数。' },
                 { key: 'netAp', name: '净应付款', note: 'DPO / 360 × 当年营业成本。' },
                 { key: 'inventory', name: '存货', note: '存货周转天数 / 360 × 当年营业成本。' },
                 { key: 'nwc', name: '营运资本余额', note: '净应收款 + 存货 − 净应付款。', total: true },
-                { key: 'dnwc', name: '营运资本变动', note: '当年余额 − 上一年余额。第一年的上一年是锚定日实际营运资本：应收账款（含票据）+ 存货 − 应付账款（含票据）。', total: true },
+                { key: 'dnwc', name: '营运资本变动', note: '当年余额 − 上一年余额。第一年的上一年是锚定日净值：应收账款（含票据）− 合同负债 − 预收款项 + 存货 − 应付账款（含票据）。', total: true },
               ]
               if (!statement) {
                 return <Typography.Paragraph type="secondary">请先选择估值锚定日，并保留预测年。</Typography.Paragraph>
@@ -2156,7 +2200,15 @@ export default function ValuationWorkbenchPage() {
                             onChange={(v) => {
                               const base = payloadRef.current || {}
                               patchPayload({
-                                forecastPl: editForecastPl(base.forecastPl, year, row.engineKey, v, formula[row.key]?.[i]),
+                                forecastPl: editForecastPl(
+                                  base.forecastPl,
+                                  year,
+                                  row.engineKey,
+                                  v,
+                                  formula[row.key]?.[i],
+                                  statementAnchor(assumptions.valuation_date)?.month < 12
+                                    && yearNum(year) === statementAnchor(assumptions.valuation_date)?.year,
+                                ),
                               })
                             }}
                           />
@@ -2336,7 +2388,7 @@ export default function ValuationWorkbenchPage() {
                   auto: true,
                   name: '期末营运资本占用',
                   value: computedNwcWan(payload.targetBs),
-                  note: '应收账款（含票据）+ 存货 − 应付账款（含票据）。第一笔 ΔNWC 用这个实际余额',
+                  note: '应收账款（含票据）− 合同负债 − 预收款项 + 存货 − 应付账款（含票据）。第一笔 ΔNWC 用这个净值',
                 },
                 {
                   auto: true,
@@ -2426,7 +2478,7 @@ export default function ValuationWorkbenchPage() {
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
               自由现金流 = 税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。
               {nwcWan != null
-                ? ` 锚定日营运资本占用 ${fmtWanPlain(nwcWan)}（应收账款含票据 + 存货 − 应付账款含票据）。`
+                ? ` 锚定日营运资本占用 ${fmtWanPlain(nwcWan)}（应收账款含票据 − 合同负债 − 预收款项 + 存货 − 应付账款含票据）。`
                 : ' 请先在资产负债表填写应收账款、存货或应付账款。'}
             </Typography.Paragraph>
             <ListTable

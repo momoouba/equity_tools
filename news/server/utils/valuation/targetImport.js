@@ -195,6 +195,26 @@ const FORECAST_ROW_ALIASES = [
 /** 空白不按 0：增速沿用已填值，资本开支未填不计算，周转天数空着用可比中位数。 */
 const FORECAST_BLANK_KEEPS_LOGIC = new Set(['revenue_growth', 'capex_ratio', 'dso', 'dpo', 'dio']);
 
+/** 预测表 `2026E` 列：利润科目是当年年底金额（元），周转天数仍是天。 */
+const YEAR_END_AMOUNT_KEY = {
+  revenue_growth: 'revenue',
+  cogs_ratio: 'cogs',
+  surtax_ratio: 'surtax',
+  selling_ratio: 'selling',
+  admin_ratio: 'admin',
+  rd_ratio: 'rd',
+  finance_expense_ratio: 'finance_expense',
+  other_income_ratio: 'other_income',
+  other_ratio: 'other',
+  da_ratio: 'da',
+  capex_ratio: 'capex',
+};
+
+function isYearEndHeader(cell) {
+  const m = String(cell ?? '').trim().match(/^(20\d{2})\s*E$/i);
+  return m ? m[1] : null;
+}
+
 function anchorFromBeijingMonth(y, m) {
   if (m <= 4) return `${y - 1}-12-31`;
   if (m <= 7) return `${y}-03-31`;
@@ -392,29 +412,83 @@ function parseAnchorSheet(aoa) {
   return Object.keys(out).length ? out : null;
 }
 
-function parseForecastSheet(aoa) {
-  const header = findYearHeader(aoa);
+function findForecastHeader(aoa) {
+  let best = null;
+  const limit = Math.min(aoa.length, 16);
+  for (let r = 0; r < limit; r += 1) {
+    const map = {};
+    (aoa[r] || []).forEach((cell, c) => {
+      const y = isYearEndHeader(cell) || yearFromCell(cell);
+      if (y && map[c] == null) map[c] = y;
+    });
+    const score = Object.keys(map).length;
+    if (!best || score > best.score) best = { row: r, map, score };
+  }
+  return best && best.score > 0 ? best : null;
+}
+
+/** 绝对值大于 10000 的填写值是该年金额（元），否则是百分数。收入增速不走这条规则。 */
+function forecastPercentCell(raw, key) {
+  if (raw == null || raw === '') return FORECAST_BLANK_KEEPS_LOGIC.has(key) ? null : 0;
+  const text = String(raw).trim();
+  const n = toNumber(text.endsWith('%') ? text.slice(0, -1) : raw);
+  if (n == null) return FORECAST_BLANK_KEEPS_LOGIC.has(key) ? null : 0;
+  if (key !== 'revenue_growth' && Math.abs(n) > 10000) return n;
+  const ratio = percentToRatio(raw);
+  if (ratio == null) return FORECAST_BLANK_KEEPS_LOGIC.has(key) ? null : 0;
+  return ratio;
+}
+
+function parseForecastSheet(aoa, anchorYmd) {
+  const header = findForecastHeader(aoa);
   if (!header) return null;
-  const years = [...new Set(Object.values(header.map))].sort();
+  const anchorYear = yearNum(anchorYmd);
+  const month = anchorYmd ? Number(String(anchorYmd).slice(5, 7)) : null;
+  const yearEndYear = month != null && month < 12 && anchorYear ? String(anchorYear) : null;
   const colOf = {};
   Object.entries(header.map).forEach(([c, y]) => {
     if (colOf[y] == null) colOf[y] = Number(c);
   });
+  const hasYearEnd = Boolean(yearEndYear && colOf[yearEndYear] != null);
+  const years = [...new Set(Object.values(header.map))]
+    .filter((y) => !hasYearEnd || y !== yearEndYear)
+    .sort();
   const series = { years };
+  const amounts = {};
+  const days = {};
   for (let r = header.row + 1; r < aoa.length; r += 1) {
     const row = aoa[r] || [];
     const label = String(row[0] || row[1] || '').trim();
     const key = matchAlias(label, FORECAST_ROW_ALIASES);
     if (!key || series[key]) continue;
     const spec = FORECAST_ROW_ALIASES.find((a) => a.key === key);
-    series[key] = years.map((y) => {
-      const raw = row[colOf[y]];
-      if (raw == null || raw === '') return FORECAST_BLANK_KEEPS_LOGIC.has(key) ? null : 0;
-      const n = spec.percent ? percentToRatio(raw) : toNumber(raw);
-      if (n == null) return FORECAST_BLANK_KEEPS_LOGIC.has(key) ? null : 0;
-      return n;
-    });
+    if (years.length) {
+      series[key] = years.map((y) => {
+        const raw = row[colOf[y]];
+        if (!spec.percent) {
+          if (raw == null || raw === '') return null;
+          return toNumber(raw);
+        }
+        return forecastPercentCell(raw, key);
+      });
+    }
+    if (!hasYearEnd) continue;
+    const rawEnd = row[colOf[yearEndYear]];
+    const blank = rawEnd == null || rawEnd === '';
+    if (YEAR_END_AMOUNT_KEY[key]) {
+      if (!blank) {
+        const n = toNumber(rawEnd);
+        if (n != null) amounts[YEAR_END_AMOUNT_KEY[key]] = n;
+      }
+    } else if (!spec.percent && !blank) {
+      const n = toNumber(rawEnd);
+      if (n != null) days[key] = n;
+    }
   }
+  if (hasYearEnd && (Object.keys(amounts).length || Object.keys(days).length)) {
+    series.yearEnd = { year: yearEndYear, amounts, days };
+  }
+  if (!years.length && !series.yearEnd) return null;
   return series;
 }
 
@@ -468,6 +542,8 @@ function parseTargetFinancialWorkbook(buffer) {
   let targetCf = null;
   let assumptions = null;
   let forecast = null;
+  let forecastAoa = null;
+  let forecastSheetName = null;
 
   for (const name of wb.SheetNames) {
     const aoa = sheetToCalculatedAoa(wb.Sheets[name]);
@@ -482,11 +558,8 @@ function parseTargetFinancialWorkbook(buffer) {
       continue;
     }
     if (kind === 'forecast') {
-      const found = parseForecastSheet(aoa);
-      if (found?.years?.length) {
-        forecast = found;
-        used.push(name);
-      }
+      forecastAoa = aoa;
+      forecastSheetName = name;
       continue;
     }
     if (kind === 'unknown' && /结果对比|相对估值|三费|毛利|营运|市场法/.test(name)) continue;
@@ -534,6 +607,14 @@ function parseTargetFinancialWorkbook(buffer) {
       };
       targetCf = mergeYearSeries(targetCf, cf, ['da', 'capex', 'dnwc']);
       used.push(name);
+    }
+  }
+
+  if (forecastAoa) {
+    const found = parseForecastSheet(forecastAoa, assumptions?.valuation_date);
+    if (found && (found.years?.length || found.yearEnd)) {
+      forecast = found;
+      used.push(forecastSheetName);
     }
   }
 
@@ -708,6 +789,35 @@ function seedDaIntoCashflow(targetCf, pl, assumptions) {
   };
 }
 
+function applyYearEndForecast(payload, yearEnd) {
+  if (!yearEnd?.year) return payload;
+  const next = { ...payload };
+  const y = String(yearEnd.year);
+  const row = { ...(next.forecastPl?.[y] || {}) };
+  const manual = new Set(Array.isArray(row.manual) ? row.manual : []);
+  Object.entries(yearEnd.amounts || {}).forEach(([key, value]) => {
+    if (value == null) return;
+    row[key] = value;
+    manual.add(key);
+  });
+  if (manual.size) row.manual = [...manual];
+  if (Object.keys(row).some((key) => key !== 'manual')) {
+    next.forecastPl = { ...(next.forecastPl || {}), [y]: row };
+  }
+  let pl = next.targetPl || { years: [] };
+  ['dso', 'dpo', 'dio'].forEach((key) => {
+    const value = yearEnd.days?.[key];
+    if (value == null) return;
+    pl = insertPlYear(pl, y);
+    const i = (pl.years || []).findIndex((oy) => yearNum(oy) === yearNum(y));
+    const arr = Array.isArray(pl[key]) ? [...pl[key]] : [];
+    if (i >= 0) arr[i] = value;
+    pl[key] = arr;
+  });
+  next.targetPl = pl;
+  return next;
+}
+
 function mergeTargetFinancials(payload, parsed) {
   const next = { ...(payload || {}), amount_unit: 'yuan' };
   const assumptions = { ...(next.assumptions || {}) };
@@ -784,6 +894,11 @@ function mergeTargetFinancials(payload, parsed) {
     next.overrides = { ...(next.overrides || {}), net_debt: null };
   }
   if (parsed.forecast?.years?.length) next.targetPl = mergeForecastIntoPl(next.targetPl, parsed.forecast);
+  if (parsed.forecast?.yearEnd) {
+    const applied = applyYearEndForecast(next, parsed.forecast.yearEnd);
+    next.forecastPl = applied.forecastPl;
+    next.targetPl = applied.targetPl;
+  }
   if (parsed.targetCf?.years?.length) next.targetCf = parsed.targetCf;
   else {
     const seeded = seedDaIntoCashflow(next.targetCf, next.targetPl, next.assumptions);
@@ -1167,6 +1282,7 @@ function ratioPercentCell(v) {
   if (v == null || v === '') return '';
   const n = Number(v);
   if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) > 10000) return n;
   return Math.round(n * 10000) / 100;
 }
 
@@ -1188,13 +1304,13 @@ const CURRENT_PL_TEMPLATE_ROWS = [
 ];
 
 const FORECAST_TEMPLATE_ROWS = [
-  ['收入增速', '百分数，10 表示 10%。可为负或 0。空白年份沿用最近一次已填数。'],
-  ['营业成本', '增速。当期有营业成本时，年底数 = 年化后的当期金额 ×（1+增速），以后各年 = 上一年 ×（1+增速）。当期没填金额时仍按占收入。未填按 0。'],
-  ['税金及附加', '占当年全年收入的百分数。未填按 0，小于 0 会拦截。'],
-  ['销售费用', '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速），以后各年 = 上一年 ×（1+增速）。没填当期金额时按占收入。未填按 0。'],
-  ['管理费用', '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速），以后各年 = 上一年 ×（1+增速）。没填当期金额时按占收入。未填按 0。'],
-  ['研发费用', '增速，含已分摊折旧。有当期金额时先年化再乘（1+增速），以后各年 = 上一年 ×（1+增速）。没填当期金额时按占收入。未填按 0。'],
-  ['财务费用', '增速。当期有金额时先年化再乘（1+增速），以后各年 = 上一年 ×（1+增速）。没填当期金额时按占收入。可为负。未填按 0，不进入自由现金流。'],
+  ['收入增速', '百分数，10 表示在上一年营业收入上增长 10%。可为负或 0。空白年份沿用最近一次已填数。锚定日不是 12 月 31 日时，当年年底 E 列填年底营业收入（元），不要填百分数。'],
+  ['营业成本', '占当年营业收入的百分数，95 表示 95%。绝对值大于 10000 时按该年实际金额（元）。当年年底 E 列始终填金额。未填按 0。'],
+  ['税金及附加', '占当年营业收入的百分数。绝对值大于 10000 时按该年实际金额。未填按 0，小于 0 会拦截。'],
+  ['销售费用', '占当年营业收入的百分数，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
+  ['管理费用', '占当年营业收入的百分数，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
+  ['研发费用', '占当年营业收入的百分数，含已分摊折旧。95 表示收入的 95%；10000000 表示该年研发费用 10000000 元。未填按 0。'],
+  ['财务费用', '占当年营业收入的百分数。绝对值大于 10000 时按该年实际金额，可为负。未填按 0，不进入自由现金流。'],
   ['其他收益', '占收入的百分数。可为负。未填按 0。补助不可持续时把后续年份改低。'],
   ['其他', '占收入的百分数。只放经营性项目，可为负。未填按 0。'],
   ['折旧摊销', '占收入的百分数。填现金流量表补充资料里的折旧摊销合计。未填按 0。'],
@@ -1221,6 +1337,16 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
   const plYears = (pl.years || []).map(String);
   const forecastYears = forecastYearsForTemplate(anchor, plYears);
   const anchorYear = yearNum(anchor);
+  const anchorMonth = Number(String(anchor).slice(5, 7));
+  const yearEndLabel = anchorMonth < 12 ? `${anchorYear}E` : null;
+  const percentStart = yearEndLabel ? anchorYear + 1 : null;
+  const savedLater = percentStart == null ? [] : plYears.map((y) => yearNum(y)).filter((n) => n != null && n >= percentStart);
+  const percentHeaders = !yearEndLabel
+    ? forecastYears
+    : (savedLater.length
+      ? [...new Set(savedLater)].sort((a, b) => a - b).map(String)
+      : Array.from({ length: 5 }, (_, i) => String(percentStart + i)));
+  const forecastPl = payload?.forecastPl || {};
   const assumptions = payload?.assumptions || {};
   const tax = assumptions.tax_rate == null || assumptions.tax_rate === '' ? '' : ratioPercentCell(assumptions.tax_rate);
   const bs = payload?.targetBs || {};
@@ -1229,12 +1355,12 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['填写说明', [
       '按工作表分别填写：锚定日、当期利润表、预测、资产负债表。科目名称请保持与模板一致，否则无法导入。',
-      '金额单位为元，与页面和数据库一致。预测表里的比例填百分数，10 表示 10%。',
+      '金额单位为元，与页面和数据库一致。预测表表头年份都带 E。收入增速填百分数，10 表示比上一年收入增长 10%。营业成本及后面的科目也填百分数，95 表示占当年营业收入 95%；这些格子里绝对值大于 10000 的数按该年实际金额，不再乘收入。',
       `估值锚定日只能是 3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。页面已选日期时按所选日期预填；未选时按当前月份：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。本次为 ${anchor}，可直接改「锚定日」表里的日期。`,
       '改锚定日时，请把「当期利润表」的当期列表头改成同一天。上一列是上一年 12 月 31 日的年末数，按锚定年自动前推一年。',
-      '预测列默认从当前年份对应的预测首年起共 5 年。锚定日不是 12 月 31 日时，预测首年就是锚定日所在年；是 12 月 31 日时从下一年起。表头年份可改。',
+      '预测列默认 5 年，表头都写成 2027E 这种形式。锚定日不是 12 月 31 日时，最左侧当年年底 E 列填当年年底金额（元），不要填百分数；周转天数那三行的这一列仍填天数。后面各列填占营业收入的百分数，绝对值大于 10000 时改为该年实际金额。锚定日是 12 月 31 日时没有单独的当年金额列，预测从下一年的 E 列起。',
       '资产负债表只填锚定日当天的实际数。右侧校验区汇总资产、负债和所有者权益，配平结果为已配平即可。',
-      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额，单元格空着按 0。收入、营业成本、销售、管理、研发、财务费用的百分比是增速：锚定月不是 12 月时，先把当期累计按 12/锚定月年化，年底数 = 年化值 ×（1+增速），以后各年 = 上一年 ×（1+增速）。财务费用可为负。资本开支空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
+      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。营业成本、费用、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
     ].join('\n')],
   ], 1, NOTE_COL_WCH * 3.5), '说明');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
@@ -1258,16 +1384,19 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
     }),
   ], 1, NOTE_COL_WCH, { 2: FILL_COL_WCH * 1.5, 3: FILL_COL_WCH * 1.5 }), '当期利润表');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
-    ['科目', '科目说明', ...forecastYears],
+    ['科目', '科目说明', ...(yearEndLabel ? [yearEndLabel] : []), ...percentHeaders.map((y) => `${yearNum(y)}E`)],
     ...FORECAST_TEMPLATE_ROWS.map(([name, note]) => {
       const spec = FORECAST_ROW_ALIASES.find((a) => a.key === matchAlias(name, FORECAST_ROW_ALIASES));
-      const cells = forecastYears.map((y) => {
+      const endCell = !yearEndLabel ? null : (YEAR_END_AMOUNT_KEY[spec.key]
+        ? cellOrEmpty(forecastPl[String(anchorYear)]?.[YEAR_END_AMOUNT_KEY[spec.key]])
+        : valueAtYear(pl[spec.key], plYears, anchorYear));
+      const cells = percentHeaders.map((y) => {
         const raw = valueAtYear(pl[spec.key], plYears, yearNum(y));
         return spec.percent ? ratioPercentCell(raw) : raw;
       });
-      return [name, note, ...cells];
+      return [name, note, ...(yearEndLabel ? [endCell] : []), ...cells];
     }),
-  ]), '预测');
+  ], 1, NOTE_COL_WCH, yearEndLabel ? { 2: FILL_COL_WCH * 1.5 } : {}), '预测');
   const bsSheet = sheetFromAoa([
     ['科目', '科目说明', '金额（元）'],
     ...BS_VISIBLE_FIELDS.map((f) => [f.label, f.note || f.label, cellOrEmpty(bs[f.key])]),

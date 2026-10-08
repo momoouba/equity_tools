@@ -2,7 +2,7 @@
  * DCF 预测：锚定日折现、年化收入、占收入比例、FCFF、周转天数倒推的 ΔNWC。
  * 金额单位：元。比例为小数（0.15 = 15%）。天数单位：天。
  */
-const { normalizeBs, netDebtAmount, equityBookFromBs, totalAssetsFromBs, totalLiabFromBs } = require('./targetBsFields');
+const { normalizeBs, netDebtAmount, nwcStockFromBs, equityBookFromBs, totalAssetsFromBs, totalLiabFromBs } = require('./targetBsFields');
 const { parseYmd } = require('./marketUtils');
 
 const STATEMENT_MD = new Set(['03-31', '06-30', '09-30', '12-31']);
@@ -273,7 +273,22 @@ function buildDcfForecast({
 
   let ytd = toNumber(assumptions.ytd_revenue);
   if (!(ytd > 0) && anchor.ok) ytd = yearAmount(sourcePl, 'revenue', anchor.year);
-  if (ytd == null || ytd <= 0) {
+  const stub = anchor.ok && years.length > 0 && anchor.month < 12 && Number(years[0]) === anchor.year;
+  if (stub) {
+    const yLabel = years[0];
+    for (const spec of STUB_YEAR_END_LINES) {
+      const v = yearEndAmount(forecastPl, yLabel, spec.key);
+      if (v == null) {
+        if (!spec.optional) {
+          blockers.push(`请在预测利润表填写 ${yLabel} 年底预估${spec.label}，单位元。当年年底不再按当期累计年化`);
+        }
+      } else if (spec.positive && !(v > 0)) {
+        blockers.push(`${yLabel} 年底预估${spec.label}须为正数`);
+      } else if (spec.nonNegative && v < 0) {
+        blockers.push(`${yLabel} 年底预估${spec.label}不能为负`);
+      }
+    }
+  } else if (ytd == null || ytd <= 0) {
     blockers.push('请到标的利润表填写估值锚定日当期累计营业收入，须为正数');
   }
 
@@ -304,8 +319,7 @@ function buildDcfForecast({
       if (spec.optional) {
         carriedRatios[spec.key] = { values: Array(n).fill(0), filled: true };
       } else {
-        const kind = spec.growth ? '增速' : '占收入比例';
-        blockers.push(`标的利润表的「${spec.label}」${kind}从未填写，请到标的利润表补上`);
+        blockers.push(`标的利润表的「${spec.label}」占营业收入比例从未填写，请到标的利润表补上`);
       }
     }
     if (!spec.nonNegative) continue;
@@ -369,20 +383,36 @@ function buildDcfForecast({
     }
   }
 
-  const canProject = anchor.ok && yearCheck.ok && ytd != null && ytd > 0 && growth.filled && n > 0;
+  const stubRev = stub ? yearEndAmount(forecastPl, years[0], 'revenue') : null;
+  const canProject = anchor.ok && yearCheck.ok && growth.filled && n > 0
+    && (stub ? stubRev > 0 : (ytd != null && ytd > 0));
   const revenues = [];
   if (canProject) {
-    const annualized = ytd * 12 / anchor.month;
-    let prev = annualized;
-    for (let i = 0; i < n; i += 1) {
-      const g = growth.values[i];
-      const manualRev = manualPlAmount(forecastPl, years[i], 'revenue');
-      const rev = manualRev != null ? manualRev : prev * (1 + num0(g));
-      revenues.push(rev);
-      if (rev <= 0) {
-        blockers.push(`${years[i]} 年全年营业收入小于等于 0，请修改该年收入增速或预测利润表中的营业收入，使全年收入为正`);
+    if (stub) {
+      let prev = stubRev;
+      for (let i = 0; i < n; i += 1) {
+        const g = growth.values[i];
+        const manualRev = i === 0 ? null : manualPlAmount(forecastPl, years[i], 'revenue');
+        const rev = i === 0 ? prev : (manualRev != null ? manualRev : prev * (1 + num0(g)));
+        revenues.push(rev);
+        if (rev <= 0) {
+          blockers.push(`${years[i]} 年全年营业收入小于等于 0，请修改该年收入增速或预测利润表中的营业收入，使全年收入为正`);
+        }
+        prev = rev;
       }
-      prev = rev;
+    } else {
+      const annualized = ytd * 12 / anchor.month;
+      let prev = annualized;
+      for (let i = 0; i < n; i += 1) {
+        const g = growth.values[i];
+        const manualRev = manualPlAmount(forecastPl, years[i], 'revenue');
+        const rev = manualRev != null ? manualRev : prev * (1 + num0(g));
+        revenues.push(rev);
+        if (rev <= 0) {
+          blockers.push(`${years[i]} 年全年营业收入小于等于 0，请修改该年收入增速或预测利润表中的营业收入，使全年收入为正`);
+        }
+        prev = rev;
+      }
     }
   }
 
@@ -408,16 +438,9 @@ function buildDcfForecast({
     });
   }
 
-  const growthBase = {};
-  for (const spec of RATIOS) {
-    if (!spec.growth || !anchor.ok) continue;
-    growthBase[spec.key] = yearAmount(sourcePl, spec.amountKey, anchor.year);
-  }
-  const usedGrowth = {};
-
   const esopAnnual = toNumber(assumptions.esop) ?? 0;
   const nd = netDebtAmount(bs) ?? 0;
-  const openingNwc = num0(bs.accounts_receivable) + num0(bs.inventory) - num0(bs.accounts_payable);
+  const openingNwc = nwcStockFromBs(bs) ?? 0;
   const series = {
     years: [...years],
     revenue: [],
@@ -451,18 +474,18 @@ function buildDcfForecast({
   let prevNwc = openingNwc;
   for (let i = 0; i < n; i += 1) {
     const rev = revenues[i];
-    const ratioOf = (key) => num0(carriedRatios[key].values[i]);
     const line = (ratioKey) => {
       const seriesKey = FORECAST_PL_SERIES[ratioKey];
+      if (stub && i === 0) {
+        const entered = yearEndAmount(forecastPl, years[i], seriesKey);
+        if (entered != null) return entered;
+        return 0;
+      }
       const manual = manualPlAmount(forecastPl, years[i], seriesKey);
       if (manual != null) return manual;
-      const ratio = ratioOf(ratioKey);
-      const base = growthBase[ratioKey];
-      if (base != null) {
-        if (i === 0) return base * (12 / anchor.month) * (1 + ratio);
-        return usedGrowth[ratioKey][i - 1] * (1 + ratio);
-      }
-      return rev * ratio;
+      const raw = toNumber(carriedRatios[ratioKey].values[i]);
+      if (raw != null && Math.abs(raw) > 10000) return raw;
+      return rev * num0(raw);
     };
     const cogs = line('cogs_ratio');
     const surtax = line('surtax_ratio');
@@ -474,16 +497,6 @@ function buildDcfForecast({
     const other = line('other_ratio');
     const da = line('da_ratio');
     const capex = line('capex_ratio');
-    usedGrowth.cogs_ratio = usedGrowth.cogs_ratio || [];
-    usedGrowth.selling_ratio = usedGrowth.selling_ratio || [];
-    usedGrowth.admin_ratio = usedGrowth.admin_ratio || [];
-    usedGrowth.rd_ratio = usedGrowth.rd_ratio || [];
-    usedGrowth.finance_expense_ratio = usedGrowth.finance_expense_ratio || [];
-    usedGrowth.cogs_ratio.push(cogs);
-    usedGrowth.selling_ratio.push(selling);
-    usedGrowth.admin_ratio.push(admin);
-    usedGrowth.rd_ratio.push(rd);
-    usedGrowth.finance_expense_ratio.push(financeExpense);
     const ebitda = rev - cogs - surtax - selling - admin - rd + otherIncome + other + da;
     const pretax = ebitda - da;
     const nopat = pretax > 0 ? pretax * (1 - tax) : pretax;
@@ -616,6 +629,27 @@ function manualPlAmount(forecastPl, year, key) {
   return toNumber(cell[key]);
 }
 
+/** 当年年底预估直接读金额，不要求 manual。0 是有效输入。 */
+function yearEndAmount(forecastPl, year, key) {
+  const cell = forecastPl && typeof forecastPl === 'object' ? forecastPl[forecastYearKey(year)] : null;
+  if (!cell || typeof cell !== 'object') return null;
+  return toNumber(cell[key]);
+}
+
+const STUB_YEAR_END_LINES = [
+  { key: 'revenue', label: '营业收入', positive: true },
+  { key: 'surtax', label: '税金及附加' },
+  { key: 'cogs', label: '营业成本' },
+  { key: 'selling', label: '销售费用' },
+  { key: 'admin', label: '管理费用' },
+  { key: 'rd', label: '研发费用' },
+  { key: 'finance_expense', label: '财务费用', optional: true },
+  { key: 'other_income', label: '其他收益' },
+  { key: 'other', label: '其他' },
+  { key: 'da', label: '折旧摊销' },
+  { key: 'capex', label: '资本开支', nonNegative: true },
+];
+
 /**
  * 计算成功后，把预测利润表金额写回未手改的格子。手改格子保留。
  * 被拦截时不写，避免把没算完的序列盖掉用户刚保存的数。
@@ -673,6 +707,8 @@ function impliedForecastDa(pl, assumptions) {
     : years.map(() => null);
   const da = revenues.map((rev, i) => (rev == null ? null : rev * num0(ratios.values[i])));
   const actualDa = revenueBase * num0(ratios.values[0]);
+  const stub = anchor.month < 12 && Number(years[0]) === anchor.year;
+  if (stub) return { years, da: years.map(() => null), actualDa };
   return { years, da, actualDa };
 }
 

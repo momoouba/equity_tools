@@ -54,7 +54,29 @@ const base = {
   terminalType: 'exit_pe',
   exitMultiple: 10,
   applyLiquidity: false,
+  forecastPl: {
+    2026: {
+      revenue: 440,
+      cogs: 220,
+      surtax: 0,
+      selling: 0,
+      admin: 0,
+      rd: 0,
+      finance_expense: 0,
+      other_income: 0,
+      other: 0,
+      da: 44,
+      capex: 44,
+    },
+  },
 };
+
+function yearEndRow(extra = {}) {
+  const row = { ...base.forecastPl['2026'], ...extra };
+  delete row.manual;
+  if (extra.manual) row.manual = extra.manual;
+  return row;
+}
 
 const dayDefault = buildDcfForecast({
   ...base,
@@ -75,13 +97,34 @@ eq(out.series.revenue[0], 440, 'rev2026');
 eq(out.series.revenue[1], 484, 'rev2027');
 eq(out.series.finance_expense[0], 0, 'blank finance expense is 0');
 eq(out.series.pretax[0], 220, 'finance expense stays out of pretax');
+eq(out.series.opening_nwc, 7, 'opening nwc without advances');
+const netted = buildDcfForecast({
+  ...base,
+  targetBs: { ...bs, contract_liability: 4, advance_receipt: 1 },
+});
+assert.strictEqual(netted.blocked, false, (netted.blockers || []).join('；'));
+eq(netted.series.opening_nwc, 2, 'opening nwc nets contract liability and advances');
+eq(netted.series.nwc[0], 44, 'forecast net receivable is still days times revenue');
+eq(netted.series.dnwc[0], 42, 'first dnwc uses the net opening');
 const financeOut = buildDcfForecast({
   ...base,
   targetPl: { ...base.targetPl, finance_expense: [10, null], finance_expense_ratio: [0.1, 0] },
+  forecastPl: { 2026: yearEndRow({ finance_expense: 44 }) },
 });
 assert.strictEqual(financeOut.blocked, false, (financeOut.blockers || []).join('；'));
-eq(financeOut.series.finance_expense[0], 44, 'annualized finance expense');
-eq(financeOut.series.finance_expense[1], 44, 'next finance expense uses zero growth');
+eq(financeOut.series.finance_expense[0], 44, 'year-end finance expense');
+eq(financeOut.series.finance_expense[1], 0, 'zero ratio is zero percent of revenue');
+const amountRd = buildDcfForecast({
+  ...base,
+  targetPl: { ...base.targetPl, rd_ratio: [0, 10000000] },
+});
+eq(amountRd.series.rd[0], 0, 'stub rd stays the year-end amount');
+eq(amountRd.series.rd[1], 10000000, 'input above 10000 is the year amount');
+const pctRd = buildDcfForecast({
+  ...base,
+  targetPl: { ...base.targetPl, rd_ratio: [0.95] },
+});
+eq(pctRd.series.rd[1], 484 * 0.95, 'rd below 10000 is percent of that year revenue');
 eq(financeOut.series.pretax[0], out.series.pretax[0], 'pretax ignores finance expense');
 eq(out.pvs[0].fcf, 103.25, 'fcf2026');
 eq(out.pvs[1].fcf, 201.3, 'fcf2027');
@@ -146,13 +189,17 @@ const june = buildDcfForecast({
     selling: [10],
     selling_ratio: [0],
   },
+  forecastPl: { 2026: yearEndRow({ revenue: 500, cogs: 70, selling: 15 }) },
 });
 assert.strictEqual(june.blocked, false, (june.blockers || []).join('；'));
-eq(june.series.revenue[0], 220, 'june rev annualized then grown');
-eq(june.series.revenue[1], 242, 'next year rev');
-eq(june.series.cogs[0], 88, 'june cogs annualized then grown');
-eq(june.series.cogs[1], 96.8, 'next year cogs');
-eq(june.series.selling[0], 20, 'june selling annualized flat');
+eq(june.series.revenue[0], 500, 'june year-end revenue is the entered amount');
+eq(june.series.revenue[1], 550, 'next year grows from year-end revenue');
+eq(june.series.cogs[0], 70, 'june cogs is the entered year-end amount');
+eq(june.series.cogs[1], 55, 'next year cogs is percent of that year revenue');
+eq(june.series.selling[0], 15, 'june selling is the entered year-end amount');
+const missingYearEnd = buildDcfForecast({ ...base, forecastPl: {} });
+assert.strictEqual(missingYearEnd.blocked, true);
+assert.ok(missingYearEnd.blockers.some((m) => m.includes('年底预估')));
 
 const scenarioBad = buildDcfForecast({ ...base, scenarioLabel: '并购', scenarioRate: 0 });
 assert.ok(scenarioBad.blockers.some((m) => m.includes('并购折现率')));
@@ -197,10 +244,12 @@ const merged = mergeTargetFinancials({
   targetPl: { years: ['2024', '2025', '2026'], revenue: [1, 2, 30], cogs: [4, 5, 9], net_income: [6, 7, 8] },
   targetBsSeries: { years: ['2024', '2026'], cash: [1, 20], accounts_receivable: [2, 11] },
 });
-assert.strictEqual(merged.targetPl.years[0], '2026');
-assert.strictEqual(merged.targetPl.revenue[0], 30);
-assert.strictEqual(merged.targetPl.cogs_ratio[0], 0.5);
-assert.strictEqual(merged.targetPl.revenue_growth[0], 0.1);
+assert.strictEqual(merged.targetPl.years[0], '2025');
+assert.strictEqual(merged.targetPl.years[1], '2026');
+assert.strictEqual(merged.targetPl.revenue[0], 2);
+assert.strictEqual(merged.targetPl.revenue[1], 30);
+assert.strictEqual(merged.targetPl.cogs_ratio[1], 0.5);
+assert.strictEqual(merged.targetPl.revenue_growth[1], 0.1);
 assert.strictEqual(merged.assumptions.ytd_revenue, 30);
 assert.strictEqual(merged.assumptions.market_net_income, 8);
 assert.strictEqual(merged.targetBs.cash, 20);
@@ -237,14 +286,54 @@ assert.strictEqual(selected.assumptions.valuation_date, '2025-09-30');
 
 const template = parseTargetFinancialWorkbook(buildTargetFinancialTemplateBuffer(null, '2026-10-02'));
 assert.strictEqual(template.assumptions.valuation_date, '2026-06-30');
-assert.deepStrictEqual(template.forecast.years, ['2026', '2027', '2028', '2029', '2030']);
+assert.deepStrictEqual(template.forecast.years, ['2027', '2028', '2029', '2030', '2031']);
 assert.ok(template.sheets.includes('锚定日'));
 assert.ok(template.sheets.includes('当期利润表'));
 assert.ok(template.sheets.includes('预测'));
 
 const XLSX = require('xlsx');
+const yearEndBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(yearEndBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-06-30'],
+]), '锚定日');
+XLSX.utils.book_append_sheet(yearEndBook, XLSX.utils.aoa_to_sheet([
+  ['科目', '科目说明', '2026E', '2027'],
+  ['收入增速', '年底金额，其后为增速', 500, 10],
+  ['营业成本', '年底金额，其后为增速', 70, 10],
+  ['DSO', '天', 40, 36],
+]), '预测');
+const yearEndApplied = mergeTargetFinancials(
+  { assumptions: {}, targetPl: { years: [] }, forecastPl: {} },
+  parseTargetFinancialWorkbook(XLSX.write(yearEndBook, { type: 'buffer', bookType: 'xlsx' })),
+);
+assert.strictEqual(yearEndApplied.forecastPl['2026'].revenue, 500);
+assert.strictEqual(yearEndApplied.forecastPl['2026'].cogs, 70);
+assert.ok(yearEndApplied.forecastPl['2026'].manual.includes('revenue'));
+assert.strictEqual(yearEndApplied.targetPl.revenue_growth[yearEndApplied.targetPl.years.map(String).indexOf('2027')], 0.1);
+assert.strictEqual(yearEndApplied.targetPl.dso[yearEndApplied.targetPl.years.map(String).indexOf('2026')], 40);
+const mixedBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(mixedBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-06-30'],
+]), '锚定日');
+XLSX.utils.book_append_sheet(mixedBook, XLSX.utils.aoa_to_sheet([
+  ['科目', '科目说明', '2027E'],
+  ['研发费用', '', 10000000],
+  ['营业成本', '', 95],
+]), '预测');
+const mixedApplied = mergeTargetFinancials(
+  { assumptions: {}, targetPl: { years: [] } },
+  parseTargetFinancialWorkbook(XLSX.write(mixedBook, { type: 'buffer', bookType: 'xlsx' })),
+);
+const mixedRd = mixedApplied.targetPl.rd_ratio[mixedApplied.targetPl.years.map(String).indexOf('2027')];
+const mixedCogs = mixedApplied.targetPl.cogs_ratio[mixedApplied.targetPl.years.map(String).indexOf('2027')];
+assert.strictEqual(mixedRd, 10000000);
+assert.strictEqual(mixedCogs, 0.95);
 const templateBook = XLSX.read(buildTargetFinancialTemplateBuffer(null, '2026-10-02'), { type: 'buffer', cellStyles: true });
 assert.deepStrictEqual(templateBook.SheetNames, ['说明', '锚定日', '当期利润表', '预测', '资产负债表']);
+assert.strictEqual(templateBook.Sheets['预测'].C1.v, '2026E');
+assert.strictEqual(templateBook.Sheets['预测'].D1.v, '2027E');
 assert.strictEqual(templateBook.Sheets['说明']['!cols'][1].wch, 52 * 1.5 * 3.5);
 assert.strictEqual(templateBook.Sheets['锚定日']['!cols'][1].wch, 12 * 3);
 assert.strictEqual(templateBook.Sheets['当期利润表']['!cols'][2].wch, 12 * 1.5);
@@ -447,8 +536,8 @@ const impliedDa = impliedForecastDa({
 }, { valuation_date: '2026-06-30', ytd_revenue: 100 });
 assert.deepStrictEqual(impliedDa.years, ['2026', '2027']);
 eq(impliedDa.actualDa, 10, 'actual da');
-eq(impliedDa.da[0], 22, '2026 da');
-eq(impliedDa.da[1], 22, '2027 da');
+assert.strictEqual(impliedDa.da[0], null, 'stub year da is not annualized');
+assert.strictEqual(impliedDa.da[1], null, 'later da waits for year-end revenue');
 const seededDa = mergeTargetFinancials({
   assumptions: { valuation_date: '2026-06-30', ytd_revenue: 100 },
   targetPl: {
@@ -459,26 +548,26 @@ const seededDa = mergeTargetFinancials({
   },
 }, {});
 eq(seededDa.overrides.da, 10, 'imported actual da');
-eq(seededDa.targetCf.da[0], 22, 'imported 2026 da');
+assert.ok(seededDa.targetCf == null || seededDa.targetCf.da?.[0] == null, 'imported stub da stays empty');
 
 const manualPl = {
-  2026: { revenue: 500, manual: ['revenue'] },
+  2026: yearEndRow({ revenue: 500, manual: ['revenue'] }),
   2027: { capex: 10, manual: ['capex'] },
 };
 const manualOut = buildDcfForecast({ ...base, forecastPl: manualPl });
 assert.strictEqual(manualOut.blocked, false, (manualOut.blockers || []).join('；'));
 eq(manualOut.series.revenue[0], 500, 'manual revenue');
 eq(manualOut.series.revenue[1], 550, 'next year grows from manual revenue');
-eq(manualOut.series.capex[0], 50, 'capex still follows overridden revenue');
+eq(manualOut.series.capex[0], 44, 'stub capex stays the entered year-end amount');
 eq(manualOut.series.capex[1], 10, 'manual capex');
 const grownManual = buildDcfForecast({
   ...base,
   targetPl: { ...base.targetPl, cogs: [40, null] },
-  forecastPl: { 2026: { cogs: 100, manual: ['cogs'] } },
+  forecastPl: { 2026: yearEndRow({ cogs: 100 }) },
 });
 assert.strictEqual(grownManual.blocked, false, (grownManual.blockers || []).join('；'));
 eq(grownManual.series.cogs[0], 100, 'manual cogs');
-eq(grownManual.series.cogs[1], 150, 'next cogs grows from manual amount');
+eq(grownManual.series.cogs[1], 242, 'next cogs is percent of that year revenue');
 const writtenPl = applyForecastPl(manualPl, manualOut);
 assert.strictEqual(writtenPl['2026'].revenue, 500);
 assert.ok(writtenPl['2026'].manual.includes('revenue'));
@@ -486,6 +575,7 @@ eq(writtenPl['2026'].cogs, manualOut.series.cogs[0], 'writeback fills untouched 
 assert.strictEqual(writtenPl['2027'].capex, 10);
 eq(writtenPl['2027'].revenue, 550, 'writeback fills grown revenue');
 const blockedPl = applyForecastPl(manualPl, { blocked: true, series: manualOut.series });
-assert.strictEqual(blockedPl['2026'].cogs, undefined);
+assert.strictEqual(blockedPl['2026'].cogs, 220);
+assert.strictEqual(blockedPl['2028'], undefined);
 
 console.log('dcfForecast.test.js ok');

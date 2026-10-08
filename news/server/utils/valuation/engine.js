@@ -465,10 +465,17 @@ function ttmYtdItem(pls, field, asOf) {
   return null;
 }
 
+function netReceivableStock(stmt, gross) {
+  const advance = stmtField(stmt, 'advance_receipt');
+  if (gross == null && advance == null) return null;
+  return (gross || 0) - (advance || 0);
+}
+
 function turnoverDays(ttmFlow, stock) {
   const flow = toNumber(ttmFlow);
   const st = toNumber(stock);
   if (flow == null || flow === 0 || st == null) return null;
+  if (st < 0) return (360 * st) / flow;
   return 360 / (flow / Math.max(st, 1e-9));
 }
 
@@ -594,7 +601,7 @@ function computeComparableStats(compsFinancials, opts = {}) {
       const bsStmt = bsByYear.get(year)?.stmt;
       const revTtm = ttmYtdItem(pls, 'revenue', plStmt);
       const cogsTtm = ttmYtdItem(pls, 'cogs', plStmt);
-      rememberYear(dsoMap, year, 1, turnoverDays(revTtm, stmtField(bsStmt, 'accounts_receivable')));
+      rememberYear(dsoMap, year, 1, turnoverDays(revTtm, netReceivableStock(bsStmt, stmtField(bsStmt, 'accounts_receivable'))));
       rememberYear(dpoMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'accounts_payable')));
       rememberYear(dioMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'inventory')));
     }
@@ -619,7 +626,7 @@ function computeComparableStats(compsFinancials, opts = {}) {
         if (String(bsStmt.report_type || '').toLowerCase() !== 'annual') continue;
         const rev = stmtField(plStmt, 'revenue');
         const cogsAmt = stmtField(plStmt, 'cogs');
-        pushAnnual(annualDso, year, turnoverDays(rev, stockSum(bsStmt, ['accounts_receivable', 'notes_receivable'])));
+        pushAnnual(annualDso, year, turnoverDays(rev, netReceivableStock(bsStmt, stockSum(bsStmt, ['accounts_receivable', 'notes_receivable']))));
         pushAnnual(annualDpo, year, turnoverDays(cogsAmt, stockSum(bsStmt, ['accounts_payable', 'notes_payable'])));
         pushAnnual(annualDio, year, turnoverDays(cogsAmt, stmtField(bsStmt, 'inventory')));
       }

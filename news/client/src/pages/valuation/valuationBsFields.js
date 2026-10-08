@@ -24,8 +24,8 @@ export const BS_INPUT_FIELDS = [
   { key: 'deferred_tax_assets', label: '递延所得税资产', group: 'noncurrent_assets', note: '可抵扣暂时性差异确认的所得税资产' },
   { key: 'other_noncurrent_assets', label: '其他非流动资产', group: 'noncurrent_assets', note: '预测年沿用实际列' },
   { key: 'short_term_loan', label: '短期借款', group: 'current_liab', note: '计入净负债' },
-  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', note: '应付账款与应付票据合计。预收不并入本行' },
-  { key: 'contract_liability', label: '合同负债', group: 'current_liab', note: '预测年沿用实际列，不进营运资本' },
+  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', note: '应付账款与应付票据合计。预收不并入本行，从应收账款里扣除' },
+  { key: 'contract_liability', label: '合同负债', group: 'current_liab', note: '预收款。锚定日净应收要减合同负债和预收款项。预测年净应收按周转天数重算，不再减一次' },
   { key: 'staff_payable', label: '应付职工薪酬', group: 'current_liab', note: '应付职工的工资、奖金、社会保险及公积金等' },
   { key: 'tax_payable', label: '应交税费', group: 'current_liab', note: '应交未交的增值税、企业所得税等税费' },
   { key: 'other_payables', label: '其他应付款', group: 'current_liab', note: '不进营运资本' },
@@ -132,13 +132,19 @@ export function totalLiabFromBs(bs) {
   return num0(a) + num0(b)
 }
 
+function customerAdvances(bs) {
+  const n = displayBs(bs)
+  return num0(n.contract_liability) + num0(n.advance_receipt)
+}
+
 export function nwcStockFromBs(bs) {
   const n = displayBs(bs)
   const ar = toNum(n.accounts_receivable)
   const inv = toNum(n.inventory)
   const ap = toNum(n.accounts_payable)
-  if (ar == null && inv == null && ap == null) return null
-  return num0(ar) + num0(inv) - num0(ap)
+  const advance = bs?.ar_is_net ? 0 : customerAdvances(n)
+  if (ar == null && inv == null && ap == null && advance === 0) return null
+  return num0(ar) - advance + num0(inv) - num0(ap)
 }
 
 export function equityBookFromBs(bs) {

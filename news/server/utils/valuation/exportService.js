@@ -841,7 +841,7 @@ function buildBs(sheet, title) {
   const amt = (v) => toWan(v, yuan);
   const scaled = {};
   for (const k of BS_INPUT_KEYS) scaled[k] = amt(p[k]);
-  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金；营运资本=应收账款（含票据）+存货−应付账款（含票据）');
+  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金；营运资本=应收账款（含票据）−合同负债−预收款项+存货−应付账款（含票据）');
   b.start(3);
   b.header(['序号', '科目', '金额（万元）']);
   const startExcel = b.aoa.length + 1;
@@ -860,7 +860,7 @@ function buildBs(sheet, title) {
   const cSt = `C${rowOf.short_term_loan}`;
   const cLt = `C${rowOf.long_term_loan}`;
   const cCash = `C${rowOf.cash}`;
-  const nwcF = `C${rowOf.accounts_receivable}+C${rowOf.inventory}-C${rowOf.accounts_payable}`;
+  const nwcF = `C${rowOf.accounts_receivable}-C${rowOf.contract_liability}+C${rowOf.inventory}-C${rowOf.accounts_payable}`;
   const eq = equityBookFromBs(scaled);
   b.data([n + 1, '流动资产合计（自动）', ca], ['seq', 'text', 'wan']);
   b.data([n + 2, '资产总计（自动）', ta], ['seq', 'text', 'wan']);
