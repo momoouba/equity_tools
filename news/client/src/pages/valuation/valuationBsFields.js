@@ -3,7 +3,7 @@
 export const BS_INPUT_FIELDS = [
   { key: 'cash', label: '货币资金', group: 'current_assets', note: '库存现金、银行存款及其他货币资金，含交易性金融资产、衍生金融资产' },
   { key: 'accounts_receivable', label: '应收账款（含应收票据）', group: 'current_assets', note: '应收账款、应收票据与应收款项融资合计，不另列这些科目' },
-  { key: 'prepayment', label: '预付款项', group: 'current_assets', note: '不进营运资本' },
+  { key: 'prepayment', label: '预付款项', group: 'current_assets', note: '冲抵应付账款。净应付款 = 应付账款（含票据）− 预付款项' },
   { key: 'other_receivables', label: '其他应收款', group: 'current_assets', note: '不进营运资本' },
   { key: 'inventory', label: '存货', group: 'current_assets', note: '原材料、在产品、库存商品及周转材料等' },
   { key: 'contract_assets', label: '合同资产', group: 'current_assets', note: '不进营运资本' },
@@ -24,8 +24,8 @@ export const BS_INPUT_FIELDS = [
   { key: 'deferred_tax_assets', label: '递延所得税资产', group: 'noncurrent_assets', note: '可抵扣暂时性差异确认的所得税资产' },
   { key: 'other_noncurrent_assets', label: '其他非流动资产', group: 'noncurrent_assets', note: '预测年沿用实际列' },
   { key: 'short_term_loan', label: '短期借款', group: 'current_liab', note: '计入净负债' },
-  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', note: '应付账款与应付票据合计。预收不并入本行，从应收账款里扣除' },
-  { key: 'contract_liability', label: '合同负债', group: 'current_liab', note: '预收款。锚定日净应收要减合同负债和预收款项。预测年净应收按周转天数重算，不再减一次' },
+  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', note: '应付账款与应付票据合计。净应付款再减预付款项' },
+  { key: 'contract_liability', label: '合同负债', group: 'current_liab', note: '冲抵应收账款。净应收款 = 应收账款（含票据）− 合同负债。预测年按周转天数重算，不再减一次' },
   { key: 'staff_payable', label: '应付职工薪酬', group: 'current_liab', note: '应付职工的工资、奖金、社会保险及公积金等' },
   { key: 'tax_payable', label: '应交税费', group: 'current_liab', note: '应交未交的增值税、企业所得税等税费' },
   { key: 'other_payables', label: '其他应付款', group: 'current_liab', note: '不进营运资本' },
@@ -134,7 +134,7 @@ export function totalLiabFromBs(bs) {
 
 function customerAdvances(bs) {
   const n = displayBs(bs)
-  return num0(n.contract_liability) + num0(n.advance_receipt)
+  return num0(n.contract_liability)
 }
 
 export function nwcStockFromBs(bs) {
@@ -142,9 +142,11 @@ export function nwcStockFromBs(bs) {
   const ar = toNum(n.accounts_receivable)
   const inv = toNum(n.inventory)
   const ap = toNum(n.accounts_payable)
+  const prepay = toNum(n.prepayment)
   const advance = bs?.ar_is_net ? 0 : customerAdvances(n)
-  if (ar == null && inv == null && ap == null && advance === 0) return null
-  return num0(ar) - advance + num0(inv) - num0(ap)
+  const prepayCut = bs?.ap_is_net ? 0 : num0(prepay)
+  if (ar == null && inv == null && ap == null && prepay == null && advance === 0) return null
+  return num0(ar) - advance + num0(inv) - (num0(ap) - prepayCut)
 }
 
 export function equityBookFromBs(bs) {

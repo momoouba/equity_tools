@@ -466,9 +466,16 @@ function ttmYtdItem(pls, field, asOf) {
 }
 
 function netReceivableStock(stmt, gross) {
-  const advance = stmtField(stmt, 'advance_receipt');
+  const contract = stmtField(stmt, 'contract_liability');
+  const advance = contract != null ? contract : stmtField(stmt, 'advance_receipt');
   if (gross == null && advance == null) return null;
   return (gross || 0) - (advance || 0);
+}
+
+function netPayableStock(stmt, gross) {
+  const prepay = stmtField(stmt, 'prepayment');
+  if (gross == null && prepay == null) return null;
+  return (gross || 0) - (prepay || 0);
 }
 
 function turnoverDays(ttmFlow, stock) {
@@ -602,7 +609,7 @@ function computeComparableStats(compsFinancials, opts = {}) {
       const revTtm = ttmYtdItem(pls, 'revenue', plStmt);
       const cogsTtm = ttmYtdItem(pls, 'cogs', plStmt);
       rememberYear(dsoMap, year, 1, turnoverDays(revTtm, netReceivableStock(bsStmt, stmtField(bsStmt, 'accounts_receivable'))));
-      rememberYear(dpoMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'accounts_payable')));
+      rememberYear(dpoMap, year, 1, turnoverDays(cogsTtm, netPayableStock(bsStmt, stmtField(bsStmt, 'accounts_payable'))));
       rememberYear(dioMap, year, 1, turnoverDays(cogsTtm, stmtField(bsStmt, 'inventory')));
     }
     const dso = seriesFromYearMap(dsoMap);
@@ -627,7 +634,7 @@ function computeComparableStats(compsFinancials, opts = {}) {
         const rev = stmtField(plStmt, 'revenue');
         const cogsAmt = stmtField(plStmt, 'cogs');
         pushAnnual(annualDso, year, turnoverDays(rev, netReceivableStock(bsStmt, stockSum(bsStmt, ['accounts_receivable', 'notes_receivable']))));
-        pushAnnual(annualDpo, year, turnoverDays(cogsAmt, stockSum(bsStmt, ['accounts_payable', 'notes_payable'])));
+        pushAnnual(annualDpo, year, turnoverDays(cogsAmt, netPayableStock(bsStmt, stockSum(bsStmt, ['accounts_payable', 'notes_payable']))));
         pushAnnual(annualDio, year, turnoverDays(cogsAmt, stmtField(bsStmt, 'inventory')));
       }
     }
@@ -1022,27 +1029,41 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
   const psHigh = market?.ps?.mid?.illiquid ?? null;
   const peLow = market?.pe?.low?.illiquid ?? null;
   const peHigh = market?.pe?.mid?.illiquid ?? null;
-  const dcfLow = dcfPrimary?.sensitivity?.low ?? dcfPrimary?.equity_value ?? null;
-  const dcfHigh = dcfPrimary?.sensitivity?.high ?? dcfPrimary?.equity_value ?? null;
 
   const row = (low, high) => ({
     low,
     increment: (low != null && high != null) ? high - low : null,
     high,
   });
+  const dcfExitRow = (run) => {
+    const exitPe = toNumber(run?.exit_range?.exit_pe);
+    const exitPs = toNumber(run?.exit_range?.exit_ps);
+    const vals = [exitPe, exitPs].filter((v) => v != null);
+    const span = vals.length
+      ? row(Math.min(...vals), Math.max(...vals))
+      : row(toNumber(run?.equity_value), toNumber(run?.equity_value));
+    return { ...span, exit_pe: exitPe, exit_ps: exitPs };
+  };
+  const yiExit = (band) => ({
+    low: yuanToYi(band.low),
+    increment: yuanToYi(band.increment),
+    high: yuanToYi(band.high),
+    exit_pe: yuanToYi(band.exit_pe),
+    exit_ps: yuanToYi(band.exit_ps),
+  });
 
   const dcfCol = scenarioMode === C.SCENARIO_DUAL
     ? {
         ma: {
-          ...row(dcfPrimary?.sensitivity?.low, dcfPrimary?.sensitivity?.high),
+          ...dcfExitRow(dcfPrimary),
           name: dcfPrimary?.scenario_name || '并购预期',
         },
         ipo: {
-          ...row(dcfSecondary?.sensitivity?.low, dcfSecondary?.sensitivity?.high),
+          ...dcfExitRow(dcfSecondary),
           name: dcfSecondary?.scenario_name || '上市预期',
         },
       }
-    : row(dcfLow, dcfHigh);
+    : dcfExitRow(dcfPrimary);
 
   return {
     rows: ['low', 'increment', 'high'],
@@ -1061,27 +1082,12 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
         high: yuanToYi(peHigh),
       },
       dcf: scenarioMode === C.SCENARIO_DUAL
-        ? {
-            ma: {
-              low: yuanToYi(dcfCol.ma.low),
-              increment: yuanToYi(dcfCol.ma.increment),
-              high: yuanToYi(dcfCol.ma.high),
-            },
-            ipo: {
-              low: yuanToYi(dcfCol.ipo.low),
-              increment: yuanToYi(dcfCol.ipo.increment),
-              high: yuanToYi(dcfCol.ipo.high),
-            },
-          }
-        : {
-            low: yuanToYi(dcfLow),
-            increment: yuanToYi((dcfLow != null && dcfHigh != null) ? dcfHigh - dcfLow : null),
-            high: yuanToYi(dcfHigh),
-          },
+        ? { ma: yiExit(dcfCol.ma), ipo: yiExit(dcfCol.ipo) }
+        : yiExit(dcfCol),
     },
     formula: scenarioMode === C.SCENARIO_DUAL
-      ? '增量=高端−低端。市场法 P/S、P/E 仍用同一套（低端=POOL 中位数−σ，高端=POOL 中位数，均×(1−市场法折扣)）。DCF 并购扣并购折扣，上市不扣'
-      : '增量=高端−低端（堆叠区间，不是第三种方法）。市场法低端=(中位数−σ)×基数×(1−市场法折扣)，高端=中位数×基数×(1−市场法折扣)',
+      ? '增量=高端−低端。市场法 P/S、P/E 用可比公司自己的倍数（低端=POOL 中位数−σ，高端=POOL 中位数，均×(1−市场法折扣)），不用 DCF 的退出倍数。DCF 低端和高端是退出 P/E 与退出 P/S 两套终值的股权价值。并购扣并购折扣，上市不扣'
+      : '增量=高端−低端。市场法低端=(中位数−σ)×基数×(1−市场法折扣)，高端=中位数×基数×(1−市场法折扣)，P/E 与 P/S 各用各的倍数。DCF 低端和高端是退出 P/E 与退出 P/S 两套终值算出来的股权价值',
   };
 }
 
@@ -1167,9 +1173,10 @@ function runValuationEngine(input) {
   const fcfMethod = method.fcf_method || C.FCF_NI_BRIDGE;
   const terminalType = method.terminal_type || C.TERMINAL_PE;
 
-  const runOne = (scenario, scenarioKey) => {
+  const runOne = (scenario, scenarioKey, type) => {
     const label = scenarioKey === 'ma' ? '并购' : scenarioKey === 'ipo' ? '上市' : '';
-    const exitMultiple = terminalType === C.TERMINAL_PS
+    const usePs = type === C.TERMINAL_PS;
+    const exitMultiple = usePs
       ? (scenario?.exit_ps ?? assumptions.exit_ps ?? 20)
       : (scenario?.exit_pe ?? assumptions.exit_pe ?? 40);
     return buildDcfForecast({
@@ -1181,30 +1188,46 @@ function runValuationEngine(input) {
       scenarioRate: label ? scenario?.discount_rate : null,
       scenarioLabel: label,
       scenarioName: scenario?.name || null,
-      terminalType,
+      terminalType: type,
       exitMultiple,
       applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
       liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
       forecastPl: input.forecastPl || {},
+      overrides: input.overrides || {},
     });
+  };
+
+  const withExitRange = (scenario, scenarioKey) => {
+    const peRun = runOne(scenario, scenarioKey, C.TERMINAL_PE);
+    const psRun = runOne(scenario, scenarioKey, C.TERMINAL_PS);
+    const selected = terminalType === C.TERMINAL_PS ? psRun : peRun;
+    selected.exit_range = {
+      exit_pe: peRun && !peRun.blocked ? toNumber(peRun.equity_value) : null,
+      exit_ps: psRun && !psRun.blocked ? toNumber(psRun.equity_value) : null,
+    };
+    return { selected, peRun, psRun };
   };
 
   if (method.scenario_mode === C.SCENARIO_DUAL) {
     warnings.push('并购 DCF 用「并购流动性折扣」，上市 DCF 不扣。市场法 P/S、P/E 只用「市场法流动性折扣」');
   }
 
-  const primary = runOne(
+  const primaryPack = withExitRange(
     method.scenario_mode === C.SCENARIO_DUAL
       ? (input.scenarios?.ma || { name: '并购预期' })
       : { name: '基准', exit_pe: assumptions.exit_pe, exit_ps: assumptions.exit_ps },
     method.scenario_mode === C.SCENARIO_DUAL ? 'ma' : 'base'
   );
-  const secondary = method.scenario_mode === C.SCENARIO_DUAL
-    ? runOne(input.scenarios?.ipo || { name: '上市预期' }, 'ipo')
+  const primary = primaryPack.selected;
+  const secondaryPack = method.scenario_mode === C.SCENARIO_DUAL
+    ? withExitRange(input.scenarios?.ipo || { name: '上市预期' }, 'ipo')
     : null;
+  const secondary = secondaryPack?.selected || null;
   const blockerTexts = [...new Set([
-    ...(primary.blockers || []),
-    ...(secondary?.blockers || []),
+    ...(primaryPack.peRun?.blockers || []),
+    ...(primaryPack.psRun?.blockers || []),
+    ...(secondaryPack?.peRun?.blockers || []),
+    ...(secondaryPack?.psRun?.blockers || []),
   ])];
   for (const msg of blockerTexts) warnings.push(`待补：${msg}`);
 
@@ -1275,7 +1298,7 @@ function runValuationEngine(input) {
     dcf: {
       title: 'DCF',
       payload: { primary, secondary, fcf_method: fcfMethod, terminal_type: terminalType },
-      formula: 'FCFF=税后经营利润+折旧摊销+ESOP−资本开支−ΔNWC。锚定年流量乘剩余月比例。终值=退出倍数×末期全年基数+锚定日净负债，再按最后一列期数折现。股权价值=企业价值−同一笔净负债。',
+      formula: 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。终值=退出倍数×末期全年基数+锚定日净负债，再按最后一列期数折现。股权价值=企业价值−同一笔净负债。',
     },
     market: {
       title: '市场法',
@@ -1305,7 +1328,7 @@ function runValuationEngine(input) {
     target_pl: {
       title: '标的利润表',
       payload: pl,
-      formula: '第一年全年收入=当期累计营业收入×12/锚定月×(1+增速)，其后=上一年×(1+增速)。营业成本、销售、管理、研发有当期金额时同样先年化再乘增速；没有当期金额时仍按占收入。税金、其他、折旧摊销、资本开支按占收入。',
+      formula: '锚定日不是12月31日时，当年年底金额在预测利润表填写，不按当期累计年化。收入以后各年=上一年×(1+增速)。12月31日时，第一年=当年全年实际×(1+增速)。营业成本、税金及附加、销售、管理、研发、财务费用、其他收益、其他、折旧摊销、资本开支=当年营业收入×比例；绝对值大于10000按该年金额。财务费用不进入自由现金流。',
     },
     target_bs: {
       title: '资产负债表',

@@ -6,10 +6,14 @@ const { impliedForecastDa } = require('./dcfForecast');
 const PL_ALIASES = [
   { key: 'revenue', labels: ['营业收入', '营业总收入', '营收'] },
   { key: 'cogs', labels: ['营业成本', '成本'] },
+  { key: 'surtax', labels: ['税金及附加', '营业税金及附加'] },
   { key: 'selling', labels: ['销售费用'] },
   { key: 'admin', labels: ['管理费用'] },
   { key: 'rd', labels: ['研发费用'] },
   { key: 'finance_expense', labels: ['财务费用'] },
+  { key: 'other_income', labels: ['其他收益'] },
+  { key: 'other', labels: ['其他'] },
+  { key: 'da', labels: ['折旧摊销', '折旧及摊销'] },
   { key: 'operating_profit', labels: ['营业利润', '经营利润'] },
   { key: 'net_income', labels: ['净利润'] },
 ];
@@ -25,7 +29,7 @@ const BS_ALIASES = [
   { key: 'net_debt', labels: ['净负债'] },
 ];
 
-const EXPENSE_KEYS = new Set(['cogs', 'selling', 'admin', 'rd', 'capex']);
+const EXPENSE_KEYS = new Set(['cogs', 'surtax', 'selling', 'admin', 'rd', 'capex']);
 
 function yearFromCell(v) {
   const m = String(v == null ? '' : v).match(/(20\d{2})/);
@@ -401,6 +405,15 @@ function parseAnchorSheet(aoa) {
     } else if (/所得税/.test(label)) {
       const rate = percentToRatio(raw);
       if (rate != null) out.tax_rate = rate;
+    } else if (/折现率|贴现率/.test(label) && !/无风险|债务/.test(label)) {
+      const rate = percentToRatio(raw);
+      if (rate != null) out.discount_rate = rate;
+    } else if (/退出\s*P\s*[/／]\s*S|退出市销/i.test(label)) {
+      const n = toNumber(raw);
+      if (n != null) out.exit_ps = n;
+    } else if (/退出\s*P\s*[/／]\s*E|退出市盈/i.test(label)) {
+      const n = toNumber(raw);
+      if (n != null) out.exit_pe = n;
     } else if (/市场法营业收入|市场营业收入/.test(label)) {
       const n = toNumber(raw);
       if (n != null) out.market_revenue = n;
@@ -627,13 +640,20 @@ function parseTargetFinancialWorkbook(buffer) {
 
   const overrides = {};
   if (targetCf) {
-    const last = (arr) => {
+    const anchorYear = yearNum(assumptions?.valuation_date);
+    const atAnchor = (arr) => {
+      const years = targetCf.years || [];
+      const i = anchorYear == null ? -1 : years.findIndex((y) => yearNum(y) === anchorYear);
+      if (i >= 0) {
+        const n = toNumber(arr?.[i]);
+        return n == null ? 0 : n;
+      }
       const nums = (arr || []).map(toNumber).filter((n) => n != null);
       return nums.length ? nums[nums.length - 1] : 0;
     };
-    overrides.da = last(targetCf.da);
-    overrides.capex = last(targetCf.capex);
-    overrides.dnwc = last(targetCf.dnwc);
+    overrides.da = atAnchor(targetCf.da);
+    overrides.capex = atAnchor(targetCf.capex);
+    overrides.dnwc = atAnchor(targetCf.dnwc);
   }
 
   return {
@@ -649,7 +669,7 @@ function parseTargetFinancialWorkbook(buffer) {
   };
 }
 
-const PL_AMOUNT_KEYS = ['revenue', 'cogs', 'selling', 'admin', 'rd', 'finance_expense', 'operating_profit', 'net_income'];
+const PL_AMOUNT_KEYS = ['revenue', 'cogs', 'surtax', 'selling', 'admin', 'rd', 'finance_expense', 'other_income', 'other', 'da', 'operating_profit', 'net_income'];
 const YUAN_PER_WAN = 10000;
 
 function detectWorkbookAmountUnit(wb) {
@@ -823,6 +843,9 @@ function mergeTargetFinancials(payload, parsed) {
   const assumptions = { ...(next.assumptions || {}) };
   if (parsed.assumptions?.valuation_date) assumptions.valuation_date = parsed.assumptions.valuation_date;
   if (parsed.assumptions?.tax_rate != null) assumptions.tax_rate = parsed.assumptions.tax_rate;
+  if (parsed.assumptions?.discount_rate != null) assumptions.discount_rate = parsed.assumptions.discount_rate;
+  if (parsed.assumptions?.exit_pe != null) assumptions.exit_pe = parsed.assumptions.exit_pe;
+  if (parsed.assumptions?.exit_ps != null) assumptions.exit_ps = parsed.assumptions.exit_ps;
   if (parsed.assumptions?.market_revenue != null) assumptions.market_revenue = parsed.assumptions.market_revenue;
   if (parsed.assumptions?.market_net_income != null) assumptions.market_net_income = parsed.assumptions.market_net_income;
   next.assumptions = assumptions;
@@ -1292,13 +1315,23 @@ function valueAtYear(arr, years, year) {
   return cellOrEmpty(arr?.[i]);
 }
 
+const CF_TEMPLATE_ROWS = [
+  ['折旧摊销', '截至锚定日已经发生的累计，元。固定资产折旧、无形资产摊销、长期待摊费用摊销。空着按 0。这是已发生数，不是预测表里的全年数。'],
+  ['资本性支出', '截至锚定日已经发生的购建长期资产支付的现金，元。空着按 0。全年预测仍填在预测表的资本开支。'],
+  ['营运资本增加', '截至锚定日的营运资本增加额，元，不是期末余额。空着按 0。DCF 的 ΔNWC 仍按资产负债表两个时点计算。'],
+];
+
 const CURRENT_PL_TEMPLATE_ROWS = [
   ['营业收入', '锚定日当期累计营业收入，元。未填按 0。导入后写入累计营业收入；市场法营业收入为空时一并带出。'],
   ['营业成本', '当期利润表营业成本，元。未填按 0。'],
+  ['税金及附加', '当期利润表税金及附加，元。未填按 0。进入税前经营利润。'],
   ['销售费用', '当期利润表销售费用，元，含已分摊折旧。填正数。'],
   ['管理费用', '当期利润表管理费用，元，含已分摊折旧。填正数。'],
   ['研发费用', '当期利润表研发费用，元，含已分摊折旧。填正数。'],
   ['财务费用', '当期利润表财务费用，元。利息收入大于利息支出时填负数。未填按 0。不进入自由现金流。'],
+  ['其他收益', '当期利润表其他收益，元。多为政府补助，可为负。未填按 0。进入税前经营利润。'],
+  ['其他', '当期利润表其他，元。只放经营性项目，可为负。未填按 0。不含投资收益、公允价值变动、减值、营业外收支。进入税前经营利润。'],
+  ['折旧摊销', '截至该列日期已经发生的折旧摊销，元。含固定资产折旧、无形资产摊销、长期待摊费用摊销。未填按 0。'],
   ['营业利润', '当期利润表营业利润，元。'],
   ['净利润', '当期利润表净利润，元。市场法净利润为空时一并带出。'],
 ];
@@ -1320,14 +1353,15 @@ const FORECAST_TEMPLATE_ROWS = [
   ['存货周转天数', '天。空着则用可比公司年报中位数。'],
 ];
 
-function forecastYearsForTemplate(anchorYmd, plYears) {
+function forecastYearsForTemplate(anchorYmd, plYears, count = 5) {
   const anchorYear = yearNum(anchorYmd);
   const month = Number(String(anchorYmd).slice(5, 7));
   const start = month === 12 ? anchorYear + 1 : anchorYear;
-  const saved = (plYears || []).map((y) => yearNum(y)).filter((n) => n != null && n >= start);
-  const unique = [...new Set(saved)].sort((a, b) => a - b);
-  if (unique.length) return unique.map(String);
-  return Array.from({ length: 5 }, (_, i) => String(start + i));
+  const saved = [...new Set((plYears || []).map((y) => yearNum(y)).filter((n) => n != null && n >= start))].sort((a, b) => a - b);
+  const last = Math.max(start + count - 1, saved.length ? saved[saved.length - 1] : start);
+  const years = [];
+  for (let y = start; y <= last; y += 1) years.push(String(y));
+  return years;
 }
 
 function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
@@ -1339,34 +1373,36 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
   const anchorYear = yearNum(anchor);
   const anchorMonth = Number(String(anchor).slice(5, 7));
   const yearEndLabel = anchorMonth < 12 ? `${anchorYear}E` : null;
-  const percentStart = yearEndLabel ? anchorYear + 1 : null;
-  const savedLater = percentStart == null ? [] : plYears.map((y) => yearNum(y)).filter((n) => n != null && n >= percentStart);
-  const percentHeaders = !yearEndLabel
-    ? forecastYears
-    : (savedLater.length
-      ? [...new Set(savedLater)].sort((a, b) => a - b).map(String)
-      : Array.from({ length: 5 }, (_, i) => String(percentStart + i)));
+  const percentHeaders = yearEndLabel
+    ? forecastYears.filter((y) => yearNum(y) !== anchorYear)
+    : forecastYears;
   const forecastPl = payload?.forecastPl || {};
   const assumptions = payload?.assumptions || {};
   const tax = assumptions.tax_rate == null || assumptions.tax_rate === '' ? '' : ratioPercentCell(assumptions.tax_rate);
+  const discount = assumptions.discount_rate == null || assumptions.discount_rate === '' ? '' : ratioPercentCell(assumptions.discount_rate);
   const bs = payload?.targetBs || {};
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['填写说明', [
-      '按工作表分别填写：锚定日、当期利润表、预测、资产负债表。科目名称请保持与模板一致，否则无法导入。',
+      '按工作表分别填写：锚定日、当期利润表、预测、现金流量表、资产负债表。科目名称请保持与模板一致，否则无法导入。',
       '金额单位为元，与页面和数据库一致。预测表表头年份都带 E。收入增速填百分数，10 表示比上一年收入增长 10%。营业成本及后面的科目也填百分数，95 表示占当年营业收入 95%；这些格子里绝对值大于 10000 的数按该年实际金额，不再乘收入。',
       `估值锚定日只能是 3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。页面已选日期时按所选日期预填；未选时按当前月份：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。本次为 ${anchor}，可直接改「锚定日」表里的日期。`,
-      '改锚定日时，请把「当期利润表」的当期列表头改成同一天。上一列是上一年 12 月 31 日的年末数，按锚定年自动前推一年。',
-      '预测列默认 5 年，表头都写成 2027E 这种形式。锚定日不是 12 月 31 日时，最左侧当年年底 E 列填当年年底金额（元），不要填百分数；周转天数那三行的这一列仍填天数。后面各列填占营业收入的百分数，绝对值大于 10000 时改为该年实际金额。锚定日是 12 月 31 日时没有单独的当年金额列，预测从下一年的 E 列起。',
+      '改锚定日时，请把「当期利润表」的当期列表头和「现金流量表」的列表头改成同一天。当期利润表上一列是上一年 12 月 31 日的年末数，按锚定年自动前推一年。',
+      '预测从当年年底起连续 5 年，已保存的年份更少时也会补齐到 5 年，表头都写成 2026E、2027E 这种形式。锚定日不是 12 月 31 日时，第一列是当年年底金额（元），不要填百分数；周转天数那三行的这一列仍填天数。后面各列填占营业收入的百分数，绝对值大于 10000 时改为该年实际金额。锚定日是 12 月 31 日时，预测从下一年起，同样连续 5 年。',
       '资产负债表只填锚定日当天的实际数。右侧校验区汇总资产、负债和所有者权益，配平结果为已配平即可。',
-      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。营业成本、费用、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
+      '现金流量表只填截至锚定日已经发生的折旧摊销、资本性支出和营运资本增加，单位元，表头日期与锚定日相同。空着按 0。全年折旧和资本开支仍填在预测表，不要把全年数填进这一列。',
+      '锚定日表里的折现率、退出 P/E、退出 P/S 是 DCF 参数。折现率填百分数，20 表示 20%。退出倍数填倍数本身，40 表示 40 倍。空着分别按 30%、40 倍、20 倍。这两套退出倍数都会进入结果区间，和市场法用的可比公司市盈率、市销率不是同一组数。',
+      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额、现金流量表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。营业成本、费用、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支比例空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
     ].join('\n')],
   ], 1, NOTE_COL_WCH * 3.5), '说明');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['项目', '填写', '说明'],
     ['估值锚定日', anchor, '只能填 3 月 31 日、6 月 30 日、9 月 30 日、12 月 31 日。可改。'],
     ['所得税率', tax, '百分数，15 表示 15%。空着按 15%。'],
+    ['折现率', discount, '百分数，20 表示 20%。空着按 30%。DCF 各年现金流和终值都用这个折现率。'],
+    ['退出 P/E', cellOrEmpty(assumptions.exit_pe), '倍数，40 表示 40 倍。乘最后一年税后经营利润。空着按 40。'],
+    ['退出 P/S', cellOrEmpty(assumptions.exit_ps), '倍数，14 表示 14 倍。乘最后一年营业收入。空着按 20。'],
     ['市场法营业收入', cellOrEmpty(assumptions.market_revenue), '可选，元。空着则导入时用当期营业收入。'],
     ['市场法净利润', cellOrEmpty(assumptions.market_net_income), '可选，元。空着则导入时用当期净利润。'],
   ], 2, NOTE_COL_WCH, { 1: FILL_COL_WCH * 3 }), '锚定日');
@@ -1397,6 +1433,20 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
       return [name, note, ...(yearEndLabel ? [endCell] : []), ...cells];
     }),
   ], 1, NOTE_COL_WCH, yearEndLabel ? { 2: FILL_COL_WCH * 1.5 } : {}), '预测');
+  const cf = payload?.targetCf || {};
+  const cfYears = (cf.years || []).map(String);
+  const ov = payload?.overrides || {};
+  const cfActual = (key) => {
+    if (ov[key] != null && ov[key] !== '') return cellOrEmpty(ov[key]);
+    return valueAtYear(cf[key], cfYears, anchorYear);
+  };
+  XLSX.utils.book_append_sheet(wb, sheetFromAoa([
+    ['科目', '科目说明', anchor],
+    ...CF_TEMPLATE_ROWS.map(([name, note]) => {
+      const key = matchAlias(name, CF_ALIASES);
+      return [name, note, cfActual(key)];
+    }),
+  ], 1, NOTE_COL_WCH, { 2: FILL_COL_WCH * 1.5 }), '现金流量表');
   const bsSheet = sheetFromAoa([
     ['科目', '科目说明', '金额（元）'],
     ...BS_VISIBLE_FIELDS.map((f) => [f.label, f.note || f.label, cellOrEmpty(bs[f.key])]),

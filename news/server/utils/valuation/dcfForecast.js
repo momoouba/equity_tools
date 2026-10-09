@@ -1,6 +1,7 @@
 /**
- * DCF 预测：锚定日折现、年化收入、占收入比例、FCFF、周转天数倒推的 ΔNWC。
+ * DCF 预测：锚定日折现、年底全年预测、占收入比例、期间 FCFF、周转天数倒推的 ΔNWC。
  * 金额单位：元。比例为小数（0.15 = 15%）。天数单位：天。
+ * 锚定年不是 12 月时，扣营运资本前现金流用年底全年减去锚定日累计，不乘剩余月比例。
  */
 const { normalizeBs, netDebtAmount, nwcStockFromBs, equityBookFromBs, totalAssetsFromBs, totalLiabFromBs } = require('./targetBsFields');
 const { parseYmd } = require('./marketUtils');
@@ -97,6 +98,47 @@ function flowScale(forecastYear, anchor) {
   const y = Number(forecastYear);
   if (y === anchor.year && anchor.month < 12) return (12 - anchor.month) / 12;
   return 1;
+}
+
+const PRETAY_CUMULATIVE_KEYS = [
+  { key: 'revenue', label: '营业收入', required: true },
+  { key: 'cogs', label: '营业成本', required: true },
+  { key: 'selling', label: '销售费用', required: true },
+  { key: 'admin', label: '管理费用', required: true },
+  { key: 'rd', label: '研发费用', required: true },
+  { key: 'surtax', label: '税金及附加' },
+  { key: 'other_income', label: '其他收益' },
+  { key: 'other', label: '其他' },
+];
+
+const STUB_COVER_KEYS = [
+  { key: 'revenue', label: '营业收入' },
+  { key: 'cogs', label: '营业成本' },
+  { key: 'selling', label: '销售费用' },
+  { key: 'admin', label: '管理费用' },
+  { key: 'rd', label: '研发费用' },
+];
+
+/**
+ * 锚定日累计。当期利润表只有收入、成本、销售、管理、研发；税金及附加、其他收益、其他没有这一列，空着按 0。
+ * 折旧和资本开支读现金流量表「实际」列（overrides），不读预测年列。实际列空着按 0。
+ */
+function cumulativeAt(sourcePl, assumptions, year, cashActual) {
+  const lines = {};
+  PRETAY_CUMULATIVE_KEYS.forEach((spec) => {
+    let v = yearAmount(sourcePl, spec.key, year);
+    if (v == null && spec.key === 'revenue') v = toNumber(assumptions?.ytd_revenue);
+    if (v == null && !spec.required) v = 0;
+    lines[spec.key] = v;
+  });
+  const da = toNumber(cashActual?.da) ?? 0;
+  const capex = toNumber(cashActual?.capex) ?? 0;
+  const ready = PRETAY_CUMULATIVE_KEYS.every((spec) => lines[spec.key] != null);
+  const pretax = ready
+    ? lines.revenue - lines.cogs - lines.surtax - lines.selling - lines.admin - lines.rd
+      + lines.other_income + lines.other
+    : null;
+  return { ...lines, da, capex, pretax };
 }
 
 function expectedFirstYear(anchor) {
@@ -257,6 +299,7 @@ function buildDcfForecast({
   applyLiquidity = false,
   liquidityDiscount = null,
   forecastPl = {},
+  overrides = {},
 } = {}) {
   const blockers = [];
   const anchor = parseAnchor(assumptions.valuation_date);
@@ -274,6 +317,7 @@ function buildDcfForecast({
   let ytd = toNumber(assumptions.ytd_revenue);
   if (!(ytd > 0) && anchor.ok) ytd = yearAmount(sourcePl, 'revenue', anchor.year);
   const stub = anchor.ok && years.length > 0 && anchor.month < 12 && Number(years[0]) === anchor.year;
+  let anchorYtd = null;
   if (stub) {
     const yLabel = years[0];
     for (const spec of STUB_YEAR_END_LINES) {
@@ -288,6 +332,26 @@ function buildDcfForecast({
         blockers.push(`${yLabel} 年底预估${spec.label}不能为负`);
       }
     }
+    anchorYtd = cumulativeAt(sourcePl, assumptions, anchor.year, overrides);
+    PRETAY_CUMULATIVE_KEYS.forEach((spec) => {
+      if (!spec.required || anchorYtd[spec.key] != null) return;
+      blockers.push(`请到标的利润表填写 ${anchor.year} 年锚定日当期累计${spec.label}`);
+    });
+    STUB_COVER_KEYS.forEach((spec) => {
+      const yearEnd = yearEndAmount(forecastPl, yLabel, spec.key);
+      const actual = anchorYtd[spec.key];
+      if (yearEnd == null || actual == null || yearEnd >= actual) return;
+      blockers.push(`${yLabel} 年底预估${spec.label}小于锚定日当期累计，全年预测没有覆盖已实现数`);
+    });
+    [
+      { key: 'da', label: '折旧摊销' },
+      { key: 'capex', label: '资本开支' },
+    ].forEach((spec) => {
+      const yearEnd = yearEndAmount(forecastPl, yLabel, spec.key);
+      const actual = toNumber(overrides?.[spec.key]);
+      if (yearEnd == null || actual == null || yearEnd >= actual) return;
+      blockers.push(`预测利润表 ${yLabel} 年底${spec.label}小于现金流量表实际列，全年预测没有覆盖已发生数`);
+    });
   } else if (ytd == null || ytd <= 0) {
     blockers.push('请到标的利润表填写估值锚定日当期累计营业收入，须为正数');
   }
@@ -440,6 +504,8 @@ function buildDcfForecast({
 
   const esopAnnual = toNumber(assumptions.esop) ?? 0;
   const nd = netDebtAmount(bs) ?? 0;
+  const priorYear = years.length ? Number(years[0]) - 1 : null;
+  const openingIsPriorActual = anchor.ok && priorYear != null && anchor.year === priorYear;
   const openingNwc = nwcStockFromBs(bs) ?? 0;
   const series = {
     years: [...years],
@@ -465,10 +531,18 @@ function buildDcfForecast({
     dio: [],
     gross_profit: [],
     flow_scale: [],
+    period_nopat: [],
+    period_da: [],
+    period_capex: [],
+    period_esop: [],
     nwc: [],
     fcff_before_nwc: [],
     opening_nwc: openingNwc,
+    opening_is_prior_actual: openingIsPriorActual,
     tax_rate: tax,
+    anchor_year: anchor.year,
+    anchor_month: anchor.month,
+    anchor_ytd: anchorYtd,
   };
   const forecastBs = [];
   let prevNwc = openingNwc;
@@ -508,8 +582,18 @@ function buildDcfForecast({
     const ap = (dpo / 360) * cogs;
     const nwc = ar + inv - ap;
     const dnwc = nwc - prevNwc;
-    const scale = flowScale(years[i], anchor);
-    const beforeNwc = (nopat + da + esopAnnual - capex) * scale;
+    let periodNopat = nopat;
+    let periodDa = da;
+    let periodCapex = capex;
+    let periodEsop = esopAnnual;
+    if (stub && i === 0 && anchorYtd) {
+      const periodPretax = pretax - anchorYtd.pretax;
+      periodNopat = periodPretax > 0 ? periodPretax * (1 - tax) : periodPretax;
+      periodDa = da - anchorYtd.da;
+      periodCapex = capex - anchorYtd.capex;
+      periodEsop = esopAnnual * (12 - anchor.month) / 12;
+    }
+    const beforeNwc = periodNopat + periodDa + periodEsop - periodCapex;
     prevNwc = nwc;
     series.revenue.push(rev);
     series.cogs.push(cogs);
@@ -531,10 +615,22 @@ function buildDcfForecast({
     series.dpo.push(dpo);
     series.dio.push(dio);
     series.gross_profit.push(rev - cogs);
-    series.flow_scale.push(scale);
+    series.flow_scale.push(1);
+    series.period_nopat.push(periodNopat);
+    series.period_da.push(periodDa);
+    series.period_capex.push(periodCapex);
+    series.period_esop.push(periodEsop);
     series.nwc.push(nwc);
     series.fcff_before_nwc.push(beforeNwc);
-    const col = { ...bs, accounts_receivable: ar, inventory: inv, accounts_payable: ap, year: years[i] };
+    const col = {
+      ...bs,
+      accounts_receivable: ar,
+      inventory: inv,
+      accounts_payable: ap,
+      ar_is_net: true,
+      ap_is_net: true,
+      year: years[i],
+    };
     const assets = totalAssetsFromBs(col);
     const liab = totalLiabFromBs(col);
     const equity = equityBookFromBs(col);
@@ -560,9 +656,7 @@ function buildDcfForecast({
   const pvs = [];
   let ev = 0;
   for (let i = 0; i < n; i += 1) {
-    const scale = flowScale(years[i], anchor);
-    const flow = (series.nopat[i] + series.da[i] + esopAnnual - series.capex[i]) * scale;
-    const fcf = flow - series.dnwc[i];
+    const fcf = series.fcff_before_nwc[i] - series.dnwc[i];
     const periods = discountYears(years[i], anchor);
     const factor = pvFactor(rate, periods);
     const pv = fcf * factor;
@@ -575,6 +669,10 @@ function buildDcfForecast({
       da: series.da[i],
       capex: series.capex[i],
       esop: esopAnnual,
+      period_nopat: series.period_nopat[i],
+      period_da: series.period_da[i],
+      period_capex: series.period_capex[i],
+      period_esop: series.period_esop[i],
       dnwc: series.dnwc[i],
       fcf,
       factor,
@@ -685,7 +783,7 @@ function applyForecastPl(forecastPl, dcf) {
 
 /**
  * 模板没有现金流量表时，用预测表里的折旧摊销占收入，乘对应全年收入，得到现金流量表金额。
- * 实际列用锚定日当期营业收入 × 该比例。预测年用年化后再按增速滚动的全年收入。
+ * 实际列用锚定日当期营业收入 × 该比例。锚定年有年底预估时不推预测年折旧；12 月 31 日锚定则按全年收入 × 比例。
  */
 function impliedForecastDa(pl, assumptions) {
   const anchor = parseAnchor(assumptions?.valuation_date);

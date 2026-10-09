@@ -513,7 +513,13 @@ const BRIDGE_ROWS = [
   { key: 'nopat', label: '税后经营利润', kind: 'wan' },
   { key: 'esop', label: 'ESOP', kind: 'wan' },
   { key: 'capex', label: '资本开支', kind: 'wan' },
-  { key: 'flow_scale', label: '流量比例', kind: 'num' },
+  { key: 'ytd_pretax', label: '锚定日累计税前经营利润', kind: 'wan' },
+  { key: 'ytd_da', label: '锚定日累计折旧摊销', kind: 'wan' },
+  { key: 'ytd_capex', label: '锚定日累计资本开支', kind: 'wan' },
+  { key: 'period_nopat', label: '期间税后经营利润', kind: 'wan' },
+  { key: 'period_da', label: '期间折旧摊销', kind: 'wan' },
+  { key: 'period_esop', label: '期间ESOP', kind: 'wan' },
+  { key: 'period_capex', label: '期间资本开支', kind: 'wan' },
   { key: 'fcff_before_nwc', label: '扣营运资本前现金流', kind: 'wan' },
   { key: 'dso', label: 'DSO（天）', kind: 'day' },
   { key: 'dpo', label: 'DPO（天）', kind: 'day' },
@@ -531,6 +537,12 @@ function bridgeValue(series, pvs, key, index) {
   if (key === 'inventory') return pvs[index]?.inventory_balance
   if (key === 'ap') return pvs[index]?.ap_balance
   if (key === 'fcf') return pvs[index]?.fcf
+  if (key === 'ytd_pretax' || key === 'ytd_da' || key === 'ytd_capex') {
+    if (index !== 0 || !series?.anchor_ytd) return null
+    if (key === 'ytd_pretax') return series.anchor_ytd.pretax
+    if (key === 'ytd_da') return series.anchor_ytd.da
+    return series.anchor_ytd.capex
+  }
   const arr = series?.[key]
   return Array.isArray(arr) ? arr[index] : null
 }
@@ -554,12 +566,22 @@ function ForecastBridge({ dcf }) {
     })
     return item
   })
+  const openingNwc = fmtYuanAsWan(series.opening_nwc)
+  const formulaLines = [
+    'EBITDA = 营业收入 − 营业成本 − 税金及附加 − 销售费用 − 管理费用 − 研发费用 + 其他收益 + 其他 + 折旧摊销。',
+    '税前经营利润 = EBITDA − 折旧摊销。销售、管理、研发已含分摊的折旧，税前不再扣一次。财务费用不进入。',
+    '税后经营利润：税前经营利润大于 0 时，税后 = 税前 ×（1 − 所得税率）；税前小于等于 0 时，税后 = 税前，不退税。',
+    '扣营运资本前现金流 = 期间税后经营利润 + 期间折旧摊销 + 期间 ESOP − 期间资本开支。锚定年且不是 12 月时，期间税前 = 年底全年税前 − 锚定日当期利润表累计税前，大于 0 再乘（1 − 所得税率）。当期表没有税金及附加、其他收益、其他时，这三项累计按 0。期间折旧和期间资本开支 = 年底全年 − 现金流量表实际列；实际列空着按 0。ESOP 没有累计数，期间 ESOP = 全年 ESOP ×（12 − 锚定月）/ 12。以后各年的期间数就是全年数。',
+    '净应收款：上一年实际 = 应收账款（含票据）− 合同负债。预测年 = DSO / 360 × 当年全年营业收入，不再减合同负债。',
+    '净应付款：上一年实际 = 应付账款（含票据）− 预付款项。预测年 = DPO / 360 × 当年营业成本。',
+    '存货 = 存货周转天数 / 360 × 当年营业成本。',
+    '营运资本 = 净应收款 + 存货 − 净应付款。',
+    `ΔNWC = 当年末营运资本 − 上一年末营运资本。第一年的上一年末是实际净营运资本（应收账款含票据 − 合同负债 + 存货 −（应付账款含票据 − 预付款项）），本次为 ${openingNwc} 万元。ΔNWC 用两个时点的余额差。`,
+    '自由现金流 = 扣营运资本前现金流 − ΔNWC。',
+  ]
   return (
     <div style={{ marginTop: 12 }}>
       <Typography.Title heading={6}>预测计算明细（单位：万元）</Typography.Title>
-      <Typography.Paragraph type="secondary" className="valuation-formula-wrap" style={{ fontSize: 12 }}>
-        收入 = 年化累计营业收入 ×（1+增速），以后各年用上一年全年收入 ×（1+增速）。营业成本、销售费用、管理费用、研发费用在锚定日有当期金额时，同样先年化再按增速滚动；没有当期金额才用占当年收入的比例。税金及附加、其他收益、其他、折旧摊销、资本开支按当年收入乘比例。EBITDA = 收入 − 成本 − 税金 − 销售 − 管理 − 研发 + 其他收益 + 其他 + 折旧。税前大于 0 时，税后 = 税前 ×（1−税率）；税前小于等于 0 时不退税。扣营运资本前现金流 =（税后经营利润 + 折旧摊销 + ESOP − 资本开支）× 流量比例。锚定年且不是 12 月时，流量比例 =（12−锚定月）/12，以后各年为 1。ΔNWC = 当年末营运资本 − 上一年末；第一年的上一年末是锚定日净营运资本（应收账款含票据 − 合同负债 − 预收款项 + 存货 − 应付账款含票据） {fmtYuanAsWan(series.opening_nwc)}。应收 = DSO/360 × 收入，存货和应付 = 天数/360 × 营业成本。自由现金流 = 扣营运资本前现金流 − ΔNWC。
-      </Typography.Paragraph>
       <ListTable
         className="valuation-dcf-bridge-table"
         rowKey="key"
@@ -579,6 +601,13 @@ function ForecastBridge({ dcf }) {
         ]}
         data={rows}
       />
+      <div className="valuation-formula-wrap" style={{ marginTop: 8 }}>
+        {formulaLines.map((line) => (
+          <Typography.Paragraph key={line} type="secondary" style={{ fontSize: 12, marginBottom: 4 }}>
+            {line}
+          </Typography.Paragraph>
+        ))}
+      </div>
     </div>
   )
 }
@@ -600,9 +629,9 @@ function DcfOne({ title, dcf, terminalType }) {
         columns={[
           { title: '年份', dataIndex: 'year', width: 88, align: 'right', className: 'valuation-nowrap-cell', render: (v) => forecastYearLabel(v) },
           { title: '期数', dataIndex: 'periods', width: 72, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
-          { title: '税后经营利润', dataIndex: 'nopat', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
-          { title: '折旧摊销', dataIndex: 'da', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
-          { title: '资本开支', dataIndex: 'capex', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
+          { title: '期间税后经营利润', dataIndex: 'period_nopat', width: 140, align: 'right', className: 'valuation-nowrap-cell', render: (v, row) => fmtYuanAsWan(v ?? row.nopat) },
+          { title: '期间折旧摊销', dataIndex: 'period_da', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v, row) => fmtYuanAsWan(v ?? row.da) },
+          { title: '期间资本开支', dataIndex: 'period_capex', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v, row) => fmtYuanAsWan(v ?? row.capex) },
           { title: 'ΔNWC', dataIndex: 'dnwc', width: 110, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
           { title: '自由现金流', dataIndex: 'fcf', width: 120, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtYuanAsWan(v) },
           { title: '折现因子', dataIndex: 'factor', width: 100, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 6) },

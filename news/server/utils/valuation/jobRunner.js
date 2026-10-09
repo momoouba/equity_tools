@@ -101,7 +101,7 @@ async function runJob(jobId) {
     }
 
     const comps = (await listCaseComparables(job.case_id)).filter((c) => Number(c.selected) === 1 && c.stock_code);
-    await updateJob(jobId, { progress: 15, message: `检查库内财报（${comps.length} 家）…` });
+    await updateJob(jobId, { progress: 15, message: `按锚定日检查库内财报（${comps.length} 家）…` });
     let fetchWarnings = [];
     let fetchNotes = industryNote ? [industryNote] : [];
     let skippedCount = 0;
@@ -110,7 +110,7 @@ async function runJob(jobId) {
       const fetched = await ensureComparablesFetched(comps, { case_id: job.case_id, job_id: jobId }, (i, n, code) => {
         const p = 15 + Math.round((i / Math.max(n, 1)) * 50);
         updateJob(jobId, { progress: p, message: `核验/采集 ${code}（${i}/${n}）` }).catch(() => {});
-      });
+      }, asOfDate);
       fetchWarnings = fetched.warnings || [];
       fetchNotes = industryNote
         ? [industryNote, ...(fetched.notes || [])]

@@ -5,6 +5,7 @@ const {
   BS_VISIBLE_FIELDS,
   BS_INPUT_KEYS,
   nwcStockFromBs,
+  netDebtAmount,
   currentAssetsFromBs,
   totalAssetsFromBs,
   currentLiabFromBs,
@@ -379,14 +380,9 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
   const exitM = num(dcf.exit_multiple);
   const terminalType = ctx?.terminalType || 'exit_pe';
   const nopat = ctx?.fcfMethod === 'nopat_fcff';
-  const pl = ctx?.pl || {};
-  const cf = ctx?.cf || {};
-  const overrides = ctx?.overrides || {};
   const tax = num(ctx?.taxRate, 0.15);
   const esop = wanFromInput(ctx?.esop) ?? 0;
   const liq = num(dcf.liquidity_discount, num(ctx?.liquidityDiscount, 0.3));
-  const plYuan = !!ctx?.plYuan;
-  const cfYuan = !!ctx?.cfYuan;
 
   b.section(heading, colCount);
   const rateExcel = b.aoa.length + 1;
@@ -402,79 +398,165 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
   b.data(['净负债（万元）', wanFromYuan(dcf.net_debt)], ['text', 'wan']);
   const applyLiq = dcf.apply_liquidity != null ? !!dcf.apply_liquidity : !!nopat;
   let liqExcel = null;
-  let taxExcel = null;
-  let esopExcel = null;
+  const taxExcel = b.aoa.length + 1;
+  b.data(['所得税率（小数）', tax], ['text', 'num']);
+  const series = dcf.series || {};
+  const esopWan = wanFromYuan(series.esop?.[0] ?? pvs[0]?.esop) ?? esop ?? 0;
+  const esopExcel = b.aoa.length + 1;
+  b.data(['ESOP（万元/年）', esopWan], ['text', 'wan']);
+  const hasPeriod = Array.isArray(series.period_nopat) && series.period_nopat.length === n;
+  const ytd = series.anchor_ytd;
+  const stubIndex = hasPeriod && ytd && series.anchor_month < 12 && Number(years[0]) === Number(series.anchor_year) ? 0 : -1;
+  let ytdPretaxExcel = null;
+  let ytdDaExcel = null;
+  let ytdCapexExcel = null;
+  if (stubIndex === 0) {
+    ytdPretaxExcel = b.aoa.length + 1;
+    b.data(['锚定日累计税前经营利润（万元）', wanFromYuan(ytd.pretax) ?? 0], ['text', 'wan']);
+    ytdDaExcel = b.aoa.length + 1;
+    b.data(['锚定日累计折旧摊销（万元）', wanFromYuan(ytd.da) ?? 0], ['text', 'wan']);
+    ytdCapexExcel = b.aoa.length + 1;
+    b.data(['锚定日累计资本开支（万元）', wanFromYuan(ytd.capex) ?? 0], ['text', 'wan']);
+  }
   if (applyLiq) {
     liqExcel = b.aoa.length + 1;
     b.data(['并购缺乏流动性折扣（小数）', liq], ['text', 'num']);
-  }
-  if (nopat) {
-    taxExcel = b.aoa.length + 1;
-    b.data(['所得税率（小数）', tax], ['text', 'num']);
-  } else if (esop) {
-    esopExcel = b.aoa.length + 1;
-    b.data(['ESOP（万元/年）', esop], ['text', 'wan']);
   }
   b.gap(1, colCount);
 
   b.header(['项目', ...years.map((y) => String(y ?? ''))]);
   const yearKinds = ['text', ...years.map(() => 'wan')];
   const numKinds = ['text', ...years.map(() => 'num')];
+  const cell = (row, i) => `${colLetter(i + 1)}${row}`;
+  const wanLine = (key, i) => wanFromYuan(series[key]?.[i]) ?? 0;
+  const hasSeries = Array.isArray(series.revenue) && series.revenue.length === n;
 
-  const niRow = [];
-  const opRow = [];
-  const revRow = [];
-  const daRow = cfSeriesWan(cf, overrides, years, 'da', cfYuan);
-  const capexRow = cfSeriesWan(cf, overrides, years, 'capex', cfYuan);
-  const dnwcRow = cfSeriesWan(cf, overrides, years, 'dnwc', cfYuan);
-  years.forEach((year) => {
-    niRow.push(lookupByYear(pl.net_income, pl.years, year, plYuan) ?? 0);
-    opRow.push(lookupByYear(pl.operating_profit, pl.years, year, plYuan) ?? 0);
-    revRow.push(lookupByYear(pl.revenue, pl.years, year, plYuan) ?? 0);
-  });
-
-  const revExcel = b.aoa.length + 1;
-  b.data(['营业收入（万元）', ...revRow], yearKinds);
-
-  let opExcel = null;
+  let revExcel = null;
   let nopatExcel = null;
-  let niExcel = null;
-  if (nopat) {
-    opExcel = b.aoa.length + 1;
-    b.data(['营业利润（万元）', ...opRow], yearKinds);
+  let daExcel = null;
+  let capexExcel = null;
+  let scaleExcel = null;
+  let beforeExcel = null;
+  let dnwcExcel = null;
+
+  if (hasSeries && n) {
+    revExcel = b.aoa.length + 1;
+    b.data(['营业收入（万元）', ...years.map((_, i) => wanLine('revenue', i))], yearKinds);
+    const cogsExcel = b.aoa.length + 1;
+    b.data(['营业成本（万元）', ...years.map((_, i) => wanLine('cogs', i))], yearKinds);
+    const surtaxExcel = b.aoa.length + 1;
+    b.data(['税金及附加（万元）', ...years.map((_, i) => wanLine('surtax', i))], yearKinds);
+    const sellingExcel = b.aoa.length + 1;
+    b.data(['销售费用（万元）', ...years.map((_, i) => wanLine('selling', i))], yearKinds);
+    const adminExcel = b.aoa.length + 1;
+    b.data(['管理费用（万元）', ...years.map((_, i) => wanLine('admin', i))], yearKinds);
+    const rdExcel = b.aoa.length + 1;
+    b.data(['研发费用（万元）', ...years.map((_, i) => wanLine('rd', i))], yearKinds);
+    const otherIncomeExcel = b.aoa.length + 1;
+    b.data(['其他收益（万元）', ...years.map((_, i) => wanLine('other_income', i))], yearKinds);
+    const otherExcel = b.aoa.length + 1;
+    b.data(['其他（万元）', ...years.map((_, i) => wanLine('other', i))], yearKinds);
+    daExcel = b.aoa.length + 1;
+    b.data(['折旧摊销（万元）', ...years.map((_, i) => wanLine('da', i))], yearKinds);
+    const ebitdaExcel = b.aoa.length + 1;
+    b.data(['EBITDA（万元）', ...years.map((_, i) => F(
+      wanLine('ebitda', i),
+      `${cell(revExcel, i)}-${cell(cogsExcel, i)}-${cell(surtaxExcel, i)}-${cell(sellingExcel, i)}-${cell(adminExcel, i)}-${cell(rdExcel, i)}+${cell(otherIncomeExcel, i)}+${cell(otherExcel, i)}+${cell(daExcel, i)}`,
+    ))], yearKinds);
+    const pretaxExcel = b.aoa.length + 1;
+    b.data(['税前经营利润（万元）', ...years.map((_, i) => F(
+      wanLine('pretax', i),
+      `${cell(ebitdaExcel, i)}-${cell(daExcel, i)}`,
+    ))], yearKinds);
     nopatExcel = b.aoa.length + 1;
-    b.data([
-      'NOPAT（万元）',
-      ...opRow.map((v, i) => {
-        const col = colLetter(i + 1);
-        return F(v * (1 - ((v > 0) ? tax : 0)), `${col}${opExcel}*(1-IF(${col}${opExcel}>0,$B$${taxExcel},0))`);
-      }),
-    ], yearKinds);
-  } else {
-    niExcel = b.aoa.length + 1;
-    b.data(['净利润（万元）', ...niRow], yearKinds);
+    b.data(['税后经营利润（万元）', ...years.map((_, i) => F(
+      wanLine('nopat', i),
+      `IF(${cell(pretaxExcel, i)}>0,${cell(pretaxExcel, i)}*(1-$B$${taxExcel}),${cell(pretaxExcel, i)})`,
+    ))], yearKinds);
+    capexExcel = b.aoa.length + 1;
+    b.data(['资本开支（万元）', ...years.map((_, i) => wanLine('capex', i))], yearKinds);
+    if (hasPeriod) {
+      const periodPretaxExcel = b.aoa.length + 1;
+      b.data(['期间税前经营利润（万元）', ...years.map((_, i) => {
+        const full = wanLine('pretax', i);
+        const ytdPretax = wanFromYuan(ytd?.pretax) ?? 0;
+        const value = i === stubIndex ? full - ytdPretax : full;
+        const formula = i === stubIndex ? `${cell(pretaxExcel, i)}-$B$${ytdPretaxExcel}` : `${cell(pretaxExcel, i)}`;
+        return F(value, formula);
+      })], yearKinds);
+      const periodNopatExcel = b.aoa.length + 1;
+      b.data(['期间税后经营利润（万元）', ...years.map((_, i) => F(
+        wanFromYuan(series.period_nopat?.[i]) ?? 0,
+        `IF(${cell(periodPretaxExcel, i)}>0,${cell(periodPretaxExcel, i)}*(1-$B$${taxExcel}),${cell(periodPretaxExcel, i)})`,
+      ))], yearKinds);
+      const periodDaExcel = b.aoa.length + 1;
+      b.data(['期间折旧摊销（万元）', ...years.map((_, i) => {
+        const full = wanLine('da', i);
+        const ytdDa = wanFromYuan(ytd?.da) ?? 0;
+        const value = i === stubIndex ? full - ytdDa : full;
+        const formula = i === stubIndex ? `${cell(daExcel, i)}-$B$${ytdDaExcel}` : `${cell(daExcel, i)}`;
+        return F(value, formula);
+      })], yearKinds);
+      const periodEsopExcel = b.aoa.length + 1;
+      const esopFactor = `(12-${Number(series.anchor_month) || 12})/12`;
+      b.data(['期间ESOP（万元）', ...years.map((_, i) => {
+        const value = wanFromYuan(series.period_esop?.[i]) ?? esopWan;
+        const formula = i === stubIndex ? `$B$${esopExcel}*${esopFactor}` : `$B$${esopExcel}`;
+        return F(value, formula);
+      })], yearKinds);
+      const periodCapexExcel = b.aoa.length + 1;
+      b.data(['期间资本开支（万元）', ...years.map((_, i) => {
+        const full = wanLine('capex', i);
+        const ytdCapex = wanFromYuan(ytd?.capex) ?? 0;
+        const value = i === stubIndex ? full - ytdCapex : full;
+        const formula = i === stubIndex ? `${cell(capexExcel, i)}-$B$${ytdCapexExcel}` : `${cell(capexExcel, i)}`;
+        return F(value, formula);
+      })], yearKinds);
+      beforeExcel = b.aoa.length + 1;
+      b.data(['扣营运资本前现金流（万元）', ...years.map((_, i) => F(
+        wanLine('fcff_before_nwc', i),
+        `${cell(periodNopatExcel, i)}+${cell(periodDaExcel, i)}+${cell(periodEsopExcel, i)}-${cell(periodCapexExcel, i)}`,
+      ))], yearKinds);
+    } else {
+      scaleExcel = b.aoa.length + 1;
+      b.data(['流量比例', ...years.map((_, i) => num(series.flow_scale?.[i], 1))], numKinds);
+      beforeExcel = b.aoa.length + 1;
+      b.data(['扣营运资本前现金流（万元）', ...years.map((_, i) => F(
+        wanLine('fcff_before_nwc', i),
+        `(${cell(nopatExcel, i)}+${cell(daExcel, i)}+$B$${esopExcel}-${cell(capexExcel, i)})*${cell(scaleExcel, i)}`,
+      ))], yearKinds);
+    }
+    dnwcExcel = b.aoa.length + 1;
+    b.data(['ΔNWC（万元）', ...years.map((_, i) => wanLine('dnwc', i))], yearKinds);
+  } else if (n) {
+    nopatExcel = b.aoa.length + 1;
+    b.data(['税后经营利润（万元）', ...pvs.map((p) => wanFromYuan(p.nopat) ?? 0)], yearKinds);
+    daExcel = b.aoa.length + 1;
+    b.data(['折旧摊销（万元）', ...pvs.map((p) => wanFromYuan(p.da) ?? 0)], yearKinds);
+    capexExcel = b.aoa.length + 1;
+    b.data(['资本开支（万元）', ...pvs.map((p) => wanFromYuan(p.capex) ?? 0)], yearKinds);
+    scaleExcel = b.aoa.length + 1;
+    b.data(['流量比例', ...years.map(() => 1)], numKinds);
+    beforeExcel = b.aoa.length + 1;
+    b.data(['扣营运资本前现金流（万元）', ...pvs.map((p, i) => {
+      const before = ((wanFromYuan(p.nopat) ?? 0) + (wanFromYuan(p.da) ?? 0) + esopWan - (wanFromYuan(p.capex) ?? 0));
+      return F(before, `(${cell(nopatExcel, i)}+${cell(daExcel, i)}+$B$${esopExcel}-${cell(capexExcel, i)})*${cell(scaleExcel, i)}`);
+    })], yearKinds);
+    dnwcExcel = b.aoa.length + 1;
+    b.data(['ΔNWC（万元）', ...pvs.map((p) => wanFromYuan(p.dnwc) ?? 0)], yearKinds);
+    revExcel = b.aoa.length + 1;
+    b.data(['营业收入（万元）', ...pvs.map((p) => wanFromYuan(p.revenue) ?? 0)], yearKinds);
   }
-  if (nopat) {
-    niExcel = b.aoa.length + 1;
-    b.data(['净利润（万元，终值用）', ...niRow], yearKinds);
-  }
-  const daExcel = b.aoa.length + 1;
-  b.data(['折旧摊销（万元）', ...daRow], yearKinds);
-  const capexExcel = b.aoa.length + 1;
-  b.data(['资本性支出（万元）', ...capexRow], yearKinds);
-  const dnwcExcel = b.aoa.length + 1;
-  b.data(['营运资本增加（万元）', ...dnwcRow], yearKinds);
 
   const fcfExcel = b.aoa.length + 1;
   const fcfVals = years.map((_, i) => wanFromYuan(pvs[i]?.fcf));
   b.data([
     '自由现金流（万元）',
-    ...fcfVals.map((v, i) => {
-      const col = colLetter(i + 1);
-      const earn = nopat ? `${col}${nopatExcel}` : `${col}${niExcel}`;
-      const esopRef = esopExcel ? `+$B$${esopExcel}` : '';
-      return F(v, `${earn}+${col}${daExcel}${esopRef}-${col}${capexExcel}-${col}${dnwcExcel}`);
-    }),
+    ...fcfVals.map((v, i) => (
+      beforeExcel && dnwcExcel
+        ? F(v, `${cell(beforeExcel, i)}-${cell(dnwcExcel, i)}`)
+        : v
+    )),
   ], yearKinds);
 
   const periodExcel = b.aoa.length + 1;
@@ -508,12 +590,12 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
     ['text', 'wan'],
   );
   const tvExcel = b.aoa.length + 1;
-  const lastEarnExcel = terminalType === 'exit_ps' ? revExcel : niExcel;
+  const lastEarnExcel = terminalType === 'exit_ps' ? revExcel : nopatExcel;
   const tvLabel = terminalType === 'exit_ps'
-    ? '终值（万元，退出P/S×末期收入）'
-    : '终值（万元，退出P/E×末期净利润）';
+    ? '终值（万元，退出P/S×末期营业收入+净负债）'
+    : '终值（万元，退出P/E×末期税后经营利润+净负债）';
   b.data(
-    [tvLabel, F(wanFromYuan(dcf.terminal_value), n && lastEarnExcel ? `$B$${exitExcel}*${lastCol}${lastEarnExcel}` : null)],
+    [tvLabel, F(wanFromYuan(dcf.terminal_value), n && lastEarnExcel ? `$B$${exitExcel}*${lastCol}${lastEarnExcel}+$B$${ndExcel}` : null)],
     ['text', 'wan'],
   );
   const tvPvExcel = b.aoa.length + 1;
@@ -562,7 +644,7 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
 
 function buildDcf(sheet, title, payload, refs) {
   const p = sheet?.payload || {};
-  const formula = sheet?.formula || '自由现金流=净利润+折旧摊销−资本性支出−营运资本增加；折现因子=1/(1+折现率)^期数；终值=退出P/E×末期净利润或退出P/S×末期收入；股权价值=企业价值−净负债';
+  const formula = sheet?.formula || 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。终值=退出倍数×末期全年基数+锚定日净负债。股权价值=企业价值−同一笔净负债';
   const pickedPl = pickPl(payload);
   const pickedCf = pickCf(payload);
   const ctx = {
@@ -841,7 +923,7 @@ function buildBs(sheet, title) {
   const amt = (v) => toWan(v, yuan);
   const scaled = {};
   for (const k of BS_INPUT_KEYS) scaled[k] = amt(p[k]);
-  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金；营运资本=应收账款（含票据）−合同负债−预收款项+存货−应付账款（含票据）');
+  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金；净应收=应收账款（含票据）−合同负债；净应付=应付账款（含票据）−预付款项；营运资本=净应收+存货−净应付');
   b.start(3);
   b.header(['序号', '科目', '金额（万元）']);
   const startExcel = b.aoa.length + 1;
@@ -851,23 +933,27 @@ function buildBs(sheet, title) {
     b.data([i + 1, f.label, amt(p[f.key])], ['seq', 'text', 'wan']);
   });
   const n = BS_VISIBLE_FIELDS.length;
-  const nd = (amt(p.short_term_loan) || 0) + (amt(p.long_term_loan) || 0) - (amt(p.cash) || 0);
+  const nd = netDebtAmount(scaled) || 0;
   const nwc = (nwcStockFromBs(scaled) || 0);
   const ca = currentAssetsFromBs(scaled);
   const ta = totalAssetsFromBs(scaled);
   const cl = currentLiabFromBs(scaled);
   const tl = totalLiabFromBs(scaled);
   const cSt = `C${rowOf.short_term_loan}`;
+  const cCp = `C${rowOf.current_portion_noncurrent}`;
   const cLt = `C${rowOf.long_term_loan}`;
+  const cLease = `C${rowOf.lease_liability}`;
   const cCash = `C${rowOf.cash}`;
-  const nwcF = `C${rowOf.accounts_receivable}-C${rowOf.contract_liability}+C${rowOf.inventory}-C${rowOf.accounts_payable}`;
+  const clFilled = scaled.contract_liability != null && scaled.contract_liability !== '';
+  const advExtra = clFilled ? 0 : (Number(scaled.advance_receipt) || 0);
+  const nwcF = `C${rowOf.accounts_receivable}-C${rowOf.contract_liability}-${advExtra}+C${rowOf.inventory}-C${rowOf.accounts_payable}+C${rowOf.prepayment}`;
   const eq = equityBookFromBs(scaled);
   b.data([n + 1, '流动资产合计（自动）', ca], ['seq', 'text', 'wan']);
   b.data([n + 2, '资产总计（自动）', ta], ['seq', 'text', 'wan']);
   b.data([n + 3, '流动负债合计（自动）', cl], ['seq', 'text', 'wan']);
   b.data([n + 4, '负债总计（自动）', tl], ['seq', 'text', 'wan']);
   b.data([n + 5, '所有者权益总计（自动）', eq], ['seq', 'text', 'wan']);
-  b.data([n + 6, '净负债（自动）', F(nd, `${cSt}+${cLt}-${cCash}`)], ['seq', 'text', 'wan']);
+  b.data([n + 6, '净负债（自动）', F(nd, `${cSt}+${cCp}+${cLt}+${cLease}-${cCash}`)], ['seq', 'text', 'wan']);
   b.data([n + 7, '期末营运资本占用（自动）', F(nwc, nwcF)], ['seq', 'text', 'wan']);
   const dr = debtRatioFromBs(scaled);
   const cr = currentRatioFromBs(scaled);
@@ -898,79 +984,113 @@ function buildCf(sheet, title) {
 
 function buildTieOut(sheet, title, payload) {
   const p = sheet?.payload || {};
-  const b = sheetBuilder(title, sheet?.formula || '净负债=短贷+长贷−货币资金；FCF=净利润+折旧−资本支出−ΔNWC；ΔNWC 是增加额，不是期末占用');
+  const b = sheetBuilder(title, sheet?.formula || '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金。FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。ΔNWC是增加额，不是期末占用');
   const pickedBs = pickBs(payload);
-  const pickedPl = pickPl(payload);
-  const pickedCf = pickCf(payload);
   const bs = pickedBs.bs;
-  const pl = pickedPl.pl;
-  const cf = pickedCf.cf;
-  const ov = payload?.overrides || {};
   const dcf = payload?.sheets?.dcf?.payload?.primary || {};
   const pvs = Array.isArray(dcf.pvs) ? dcf.pvs : [];
-  const nopat = payload?.sheets?.dcf?.payload?.fcf_method === 'nopat_fcff';
-  const tax = num(payload?.assumptions?.tax_rate, 0.15);
   const bsAmt = (v) => toWan(v, pickedBs.yuan);
 
-  b.start(8);
+  b.start(11);
   b.section('资产负债勾稽（万元）');
   b.header(['项目', '公式', '金额（万元）', '说明']);
-  const ndBs = (bsAmt(bs.short_term_loan) || 0) + (bsAmt(bs.long_term_loan) || 0) - (bsAmt(bs.cash) || 0);
   const scaledBs = {};
   for (const k of BS_INPUT_KEYS) scaledBs[k] = bsAmt(bs[k]);
+  const ndBs = netDebtAmount(scaledBs);
   const nwc = nwcStockFromBs(scaledBs);
   const ndDcf = wanFromYuan(dcf.net_debt);
-  b.data(['净负债（资产负债表）', '短贷+长贷−货币资金', ndBs, '进入 DCF 扣减'], ['text', 'text', 'wan', 'text']);
+  b.data(['净负债（资产负债表）', '短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金', ndBs, '进入 DCF 扣减'], ['text', 'text', 'wan', 'text']);
   b.data(['净负债（DCF）', '引擎扣减额', ndDcf, Math.abs((ndBs || 0) - (ndDcf || 0)) > 0.5 ? '与资产负债表不一致' : '一致'], ['text', 'text', 'wan', 'text']);
-  b.data(['期末营运资本占用', '应收账款（含票据）+存货−应付账款（含票据）', nwc, '时点余额，不是 ΔNWC'], ['text', 'text', 'wan', 'text']);
+  b.data(['期末营运资本占用', '（应收账款−合同负债）+存货−（应付账款−预付款项）', nwc, '时点余额，不是 ΔNWC'], ['text', 'text', 'wan', 'text']);
   b.gap(1);
-  const years = pvs.length ? pvs.map((x) => x.year) : (pl.years || []);
+  const series = dcf.series || {};
+  const years = pvs.map((x) => x.year);
+  const hasPeriod = Array.isArray(series.period_nopat) && series.period_nopat.length === years.length && years.length > 0;
   b.section('自由现金流勾稽（万元）');
-  b.header(['年份', nopat ? 'NOPAT' : '净利润（万元）', '折旧摊销（万元）', '资本性支出（万元）', '营运资本增加（万元）', 'FCF（勾稽）', 'FCF（DCF）', '差额']);
-  const kinds = ['text', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan'];
-  const dataStart = b.aoa.length + 1;
-  const issues = [];
-  const daList = cfSeriesWan(cf, ov, years, 'da', pickedCf.yuan);
-  const capexList = cfSeriesWan(cf, ov, years, 'capex', pickedCf.yuan);
-  const dnwcList = cfSeriesWan(cf, ov, years, 'dnwc', pickedCf.yuan);
-  years.forEach((year, i) => {
-    const op = lookupByYear(pl.operating_profit, pl.years, year, pickedPl.yuan) ?? 0;
-    const ni = lookupByYear(pl.net_income, pl.years, year, pickedPl.yuan) ?? 0;
-    const earn = nopat ? op * (1 - (op > 0 ? tax : 0)) : ni;
-    const da = daList[i];
-    const capex = capexList[i];
-    const dnwc = dnwcList[i];
-    const expected = earn + da - capex - dnwc;
-    const actual = wanFromYuan(pvs[i]?.fcf);
-    const gap = (actual == null ? null : expected - actual);
-    if (nwc != null && Math.abs(dnwc) > Math.abs(nwc) * 3 + 1) {
-      issues.push(`${year} 的 ΔNWC 远大于资产负债表占用`);
-    }
-    if (nwc != null && Math.abs(nwc) > 1 && Math.abs(dnwc - nwc) / Math.abs(nwc) < 0.08) {
-      issues.push(`${year} 的 ΔNWC 与期末占用几乎相同，可能把余额当成增加额`);
-    }
-    const excel = dataStart + i;
-    b.data([
-      year, earn, da, capex, dnwc,
-      F(expected, `B${excel}+C${excel}-D${excel}-E${excel}`),
-      actual,
-      F(gap, `F${excel}-G${excel}`),
-    ], kinds);
-  });
-  if (!years.length) b.data(['暂无 DCF 年', null, null, null, null, null, null, null], kinds);
+  if (hasPeriod) {
+    b.header(['年份', '期间税后经营利润', '期间折旧摊销', '期间ESOP', '期间资本开支', '扣营运资本前现金流', 'ΔNWC', 'FCF（勾稽）', 'FCF（DCF）', '差额']);
+    const kinds = ['text', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan', 'wan'];
+    const dataStart = b.aoa.length + 1;
+    const issues = [];
+    years.forEach((year, i) => {
+      const nopatWan = wanFromYuan(series.period_nopat?.[i] ?? pvs[i]?.period_nopat) ?? 0;
+      const da = wanFromYuan(series.period_da?.[i] ?? pvs[i]?.period_da) ?? 0;
+      const esopWan = wanFromYuan(series.period_esop?.[i] ?? pvs[i]?.period_esop) ?? 0;
+      const capex = wanFromYuan(series.period_capex?.[i] ?? pvs[i]?.period_capex) ?? 0;
+      const dnwc = wanFromYuan(series.dnwc?.[i] ?? pvs[i]?.dnwc) ?? 0;
+      const before = nopatWan + da + esopWan - capex;
+      const expected = before - dnwc;
+      const actual = wanFromYuan(pvs[i]?.fcf);
+      const gap = (actual == null ? null : expected - actual);
+      if (nwc != null && Math.abs(dnwc) > Math.abs(nwc) * 3 + 1) {
+        issues.push(`${year} 的 ΔNWC 远大于资产负债表占用`);
+      }
+      if (nwc != null && Math.abs(nwc) > 1 && Math.abs(dnwc - nwc) / Math.abs(nwc) < 0.08) {
+        issues.push(`${year} 的 ΔNWC 与期末占用几乎相同，可能把余额当成增加额`);
+      }
+      const excel = dataStart + i;
+      b.data([
+        year, nopatWan, da, esopWan, capex,
+        F(before, `B${excel}+C${excel}+D${excel}-E${excel}`),
+        dnwc,
+        F(expected, `F${excel}-G${excel}`),
+        actual,
+        F(gap, `H${excel}-I${excel}`),
+      ], kinds);
+    });
+    const uniqueIssues = [...new Set(issues)];
+    if (uniqueIssues.length) uniqueIssues.forEach((t) => b.note(t));
+    else b.note('未发现 ΔNWC 与期末占用明显串科目。差额列应接近 0。');
+  } else {
+    b.header(['年份', '税后经营利润', '折旧摊销', 'ESOP', '资本开支', '流量比例', '扣营运资本前现金流', 'ΔNWC', 'FCF（勾稽）', 'FCF（DCF）', '差额']);
+    const kinds = ['text', 'wan', 'wan', 'wan', 'wan', 'num', 'wan', 'wan', 'wan', 'wan', 'wan'];
+    const dataStart = b.aoa.length + 1;
+    const issues = [];
+    years.forEach((year, i) => {
+      const nopatWan = wanFromYuan(series.nopat?.[i] ?? pvs[i]?.nopat) ?? 0;
+      const da = wanFromYuan(series.da?.[i] ?? pvs[i]?.da) ?? 0;
+      const esopWan = wanFromYuan(series.esop?.[i] ?? pvs[i]?.esop) ?? 0;
+      const capex = wanFromYuan(series.capex?.[i] ?? pvs[i]?.capex) ?? 0;
+      const scale = num(series.flow_scale?.[i], 1);
+      const dnwc = wanFromYuan(series.dnwc?.[i] ?? pvs[i]?.dnwc) ?? 0;
+      const before = (nopatWan + da + esopWan - capex) * scale;
+      const expected = before - dnwc;
+      const actual = wanFromYuan(pvs[i]?.fcf);
+      const gap = (actual == null ? null : expected - actual);
+      if (nwc != null && Math.abs(dnwc) > Math.abs(nwc) * 3 + 1) {
+        issues.push(`${year} 的 ΔNWC 远大于资产负债表占用`);
+      }
+      if (nwc != null && Math.abs(nwc) > 1 && Math.abs(dnwc - nwc) / Math.abs(nwc) < 0.08) {
+        issues.push(`${year} 的 ΔNWC 与期末占用几乎相同，可能把余额当成增加额`);
+      }
+      const excel = dataStart + i;
+      b.data([
+        year, nopatWan, da, esopWan, capex, scale,
+        F(before, `(B${excel}+C${excel}+D${excel}-E${excel})*F${excel}`),
+        dnwc,
+        F(expected, `G${excel}-H${excel}`),
+        actual,
+        F(gap, `I${excel}-J${excel}`),
+      ], kinds);
+    });
+    if (!years.length) b.data(['暂无 DCF 年', null, null, null, null, null, null, null, null, null, null], kinds);
+    const uniqueIssues = [...new Set(issues)];
+    if (uniqueIssues.length) uniqueIssues.forEach((t) => b.note(t));
+    else b.note('未发现 ΔNWC 与期末占用明显串科目。差额列应接近 0。');
+  }
   b.gap(1);
-  const uniqueIssues = [...new Set(issues)];
-  if (uniqueIssues.length) uniqueIssues.forEach((t) => b.note(t));
-  else b.note('未发现 ΔNWC 与期末占用明显串科目。差额列应接近 0。');
   (p.warnings || []).forEach((w) => b.note(String(w)));
   b.widths.splice(0, b.widths.length,
-    { wch: 26 },
     { wch: 22 },
     { wch: 16 },
-    { wch: 20 },
+    { wch: 14 },
+    { wch: 12 },
+    { wch: 14 },
+    { wch: 12 },
     { wch: 22 },
-    { wch: 16 },
-    { wch: 16 },
+    { wch: 14 },
+    { wch: 14 },
+    { wch: 14 },
     { wch: 12 },
   );
   return b;
@@ -1032,7 +1152,7 @@ function ensureSheets(sheets, payload) {
     s.tie_out = {
       title: '三表勾稽',
       payload: {},
-      formula: '净负债=短贷+长贷−货币资金；FCF=净利润+折旧−资本支出−ΔNWC；ΔNWC 是增加额，不是期末占用',
+      formula: '净负债=短期借款+一年内到期的非流动负债+长期借款+租赁负债−货币资金。FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。ΔNWC是增加额，不是期末占用',
     };
   }
   return s;

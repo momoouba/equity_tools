@@ -12,7 +12,7 @@ function toNumber(v) {
 const BS_INPUT_FIELDS = [
   { key: 'cash', label: '货币资金', group: 'current_assets', comment: '货币资金，元', note: '库存现金、银行存款及其他货币资金，含交易性金融资产、衍生金融资产' },
   { key: 'accounts_receivable', label: '应收账款（含应收票据）', group: 'current_assets', comment: '应收账款含应收票据，元', note: '应收账款、应收票据与应收款项融资合计，不另列这些科目' },
-  { key: 'prepayment', label: '预付款项', group: 'current_assets', comment: '预付款项，元', note: '预先支付给供应商的货款或劳务款，不进营运资本' },
+  { key: 'prepayment', label: '预付款项', group: 'current_assets', comment: '预付款项，元', note: '冲抵应付账款。净应付款 = 应付账款（含票据）− 预付款项' },
   { key: 'other_receivables', label: '其他应收款', group: 'current_assets', comment: '其他应收款，元', note: '不进营运资本' },
   { key: 'inventory', label: '存货', group: 'current_assets', comment: '存货，元', note: '原材料、在产品、库存商品及周转材料等' },
   { key: 'contract_assets', label: '合同资产', group: 'current_assets', comment: '合同资产，元', note: '不进营运资本' },
@@ -33,8 +33,8 @@ const BS_INPUT_FIELDS = [
   { key: 'deferred_tax_assets', label: '递延所得税资产', group: 'noncurrent_assets', comment: '递延所得税资产，元', note: '可抵扣暂时性差异确认的所得税资产' },
   { key: 'other_noncurrent_assets', label: '其他非流动资产', group: 'noncurrent_assets', comment: '其他非流动资产，元', note: '预测年沿用实际列' },
   { key: 'short_term_loan', label: '短期借款', group: 'current_liab', comment: '短期借款，元', note: '计入净负债' },
-  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', comment: '应付账款含应付票据，元', note: '应付账款与应付票据合计，不另列票据。预收不并入本行，从应收账款里扣除' },
-  { key: 'contract_liability', label: '合同负债', group: 'current_liab', comment: '合同负债，元', note: '预收款。锚定日净应收 = 应收账款（含票据）− 合同负债 − 预收款项。预测年净应收按周转天数重算，不再减一次' },
+  { key: 'accounts_payable', label: '应付账款（含应付票据）', group: 'current_liab', comment: '应付账款含应付票据，元', note: '应付账款与应付票据合计。净应付款再减预付款项' },
+  { key: 'contract_liability', label: '合同负债', group: 'current_liab', comment: '合同负债，元', note: '冲抵应收账款。净应收款 = 应收账款（含票据）− 合同负债。合同负债为空时，预收款项并入本行。预测年净应收按周转天数重算，不再减一次' },
   { key: 'staff_payable', label: '应付职工薪酬', group: 'current_liab', comment: '应付职工薪酬，元', note: '应付职工的工资、奖金、社会保险及公积金等' },
   { key: 'tax_payable', label: '应交税费', group: 'current_liab', comment: '应交税费，元', note: '应交未交的增值税、企业所得税等税费' },
   { key: 'other_payables', label: '其他应付款', group: 'current_liab', comment: '其他应付款，元', note: '不进营运资本' },
@@ -164,10 +164,10 @@ function totalLiabFromBs(bs) {
   return num(a) + num(b);
 }
 
-/** 预收款抵减应收。合同负债为空时，预收款项已并入合同负债，不会减两次。 */
+/** 合同负债冲抵应收。合同负债为空时，预收款项已并入合同负债，不会减两次。 */
 function customerAdvances(bs) {
   const n = normalizeBs(bs);
-  return num(n.contract_liability) + num(n.advance_receipt);
+  return num(n.contract_liability);
 }
 
 function nwcStockFromBs(bs) {
@@ -175,9 +175,11 @@ function nwcStockFromBs(bs) {
   const ar = toNumber(n.accounts_receivable);
   const inv = toNumber(n.inventory);
   const ap = toNumber(n.accounts_payable);
+  const prepay = toNumber(n.prepayment);
   const advance = bs?.ar_is_net ? 0 : customerAdvances(n);
-  if (ar == null && inv == null && ap == null && advance === 0) return null;
-  return num(ar) - advance + num(inv) - num(ap);
+  const prepayCut = bs?.ap_is_net ? 0 : num(prepay);
+  if (ar == null && inv == null && ap == null && prepay == null && advance === 0) return null;
+  return num(ar) - advance + num(inv) - (num(ap) - prepayCut);
 }
 
 function equityBookFromBs(bs) {

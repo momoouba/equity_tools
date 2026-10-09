@@ -101,12 +101,13 @@ function emptyPl() {
 }
 
 const PL_SERIES_KEYS = [
-  'revenue', 'cogs', 'gross_profit', 'selling', 'admin', 'rd', 'finance_expense',
-  'operating_profit', 'net_income', ...PL_RATIO_KEYS,
+  'revenue', 'cogs', 'surtax', 'gross_profit', 'selling', 'admin', 'rd', 'finance_expense',
+  'other_income', 'other', 'da', 'operating_profit', 'net_income', ...PL_RATIO_KEYS,
 ]
 
 function statementAnchor(ymd) {
-  const s = String(ymd || '').slice(0, 10)
+  const formatted = formatChinaYmd(ymd)
+  const s = String(formatted || ymd || '').slice(0, 10)
   if (!/^\d{4}-(03-31|06-30|09-30|12-31)$/.test(s)) return null
   return { ymd: s, year: Number(s.slice(0, 4)), month: Number(s.slice(5, 7)) }
 }
@@ -138,10 +139,14 @@ function currentPlIndex(pl, ymd) {
 const CURRENT_PL_ROWS = [
   { key: 'revenue', name: '营业收入', note: '锚定日当期累计营业收入，元' },
   { key: 'cogs', name: '营业成本', note: '当期利润表' },
+  { key: 'surtax', name: '税金及附加', note: '当期利润表。未填按 0。进入税前经营利润' },
   { key: 'selling', name: '销售费用', note: '当期利润表，含已分摊的折旧摊销' },
   { key: 'admin', name: '管理费用', note: '当期利润表，含已分摊的折旧摊销' },
   { key: 'rd', name: '研发费用', note: '当期利润表，含已分摊的折旧摊销' },
   { key: 'finance_expense', name: '财务费用', note: '当期利润表。利息收入大于利息支出时填负数。不进入自由现金流' },
+  { key: 'other_income', name: '其他收益', note: '当期利润表。多为政府补助，可为负。未填按 0。进入税前经营利润' },
+  { key: 'other', name: '其他', note: '当期利润表。只放经营性项目，可为负。未填按 0。不含投资收益、公允价值变动、减值、营业外收支' },
+  { key: 'da', name: '折旧摊销', note: '当期利润表或现金流量表补充资料。固定资产折旧、无形资产摊销、长期待摊费用摊销。未填按 0' },
   { key: 'operating_profit', name: '营业利润', note: '当期利润表' },
   { key: 'net_income', name: '净利润', note: '当期利润表' },
 ]
@@ -194,12 +199,51 @@ function forecastYearEntries(pl, ymd) {
   })
 }
 
-/** 百分比表不含当年年底。锚定日不是 12 月 31 日时，当年金额在预测利润表里填。 */
-function ratioYearEntries(pl, ymd) {
+const RATIO_FILL_KEYS = [
+  'revenue_growth', 'cogs_ratio', 'surtax_ratio', 'selling_ratio', 'admin_ratio', 'rd_ratio',
+  'finance_expense_ratio', 'other_income_ratio', 'other_ratio', 'da_ratio', 'capex_ratio',
+]
+
+function ratioCellBlank(pl, key, index) {
+  const v = pl?.[key]?.[index]
+  return v == null || v === ''
+}
+
+const YEAR_END_AMOUNT_KEYS = [
+  'revenue', 'cogs', 'surtax', 'selling', 'admin', 'rd', 'finance_expense',
+  'other_income', 'other', 'da', 'capex',
+]
+
+function yearEndAmountYear(forecastPl, year, key) {
+  const row = forecastPl?.[String(year)]
+  if (!row || typeof row !== 'object') return false
+  const manual = Array.isArray(row.manual) ? row.manual : []
+  const keys = key ? [key] : YEAR_END_AMOUNT_KEYS
+  return keys.some((item) => manual.includes(item) && row[item] != null && row[item] !== '')
+}
+
+function statementAmountYear(pl, index) {
+  return ['revenue', 'cogs', 'selling', 'admin', 'rd'].some((key) => {
+    const v = pl?.[key]?.[index]
+    return v != null && v !== ''
+  })
+}
+
+/** 百分比表不含当年年底。那一列是录入的金额，在预测利润表里改。 */
+function ratioYearEntries(pl, ymd, forecastPl) {
   const anchor = statementAnchor(ymd)
-  return forecastYearEntries(pl, ymd).filter(({ y }) => {
-    if (!anchor || anchor.month === 12) return true
-    return yearNum(y) !== anchor.year
+  return forecastYearEntries(pl, ymd).filter(({ y, i }, idx, list) => {
+    const n = yearNum(y)
+    if (yearEndAmountYear(forecastPl, n, 'revenue')) return false
+    if (anchor && anchor.month === 12) return true
+    if (anchor && n === anchor.year) return false
+    if (anchor) return true
+    const blank = RATIO_FILL_KEYS.every((key) => ratioCellBlank(pl, key, i))
+    const laterFilled = list.slice(idx + 1).some((entry) => (
+      RATIO_FILL_KEYS.some((key) => !ratioCellBlank(pl, key, entry.i))
+    ))
+    if (blank && laterFilled && (yearEndAmountYear(forecastPl, n) || statementAmountYear(pl, i))) return false
+    return true
   })
 }
 
@@ -254,6 +298,7 @@ function forecastBsColumn(actual, pv, yearOverrides) {
     if (overrides.inventory == null || overrides.inventory === '') values.inventory = pv.inventory_balance
     if (overrides.accounts_payable == null || overrides.accounts_payable === '') values.accounts_payable = pv.ap_balance
     values.ar_is_net = true
+    values.ap_is_net = true
   }
   return { values, forecast: Boolean(pv && pv.ar_balance != null) }
 }
@@ -293,6 +338,7 @@ function forecastStatement(pl, assumptions, forecastPl) {
   const years = entries.map(({ y }) => String(yearNum(y) || y))
   if (!anchor || !years.length) return null
   const stub = anchor.month < 12 && yearNum(years[0]) === anchor.year
+  const amountYear = stub || yearEndAmountYear(forecastPl, years[0], 'revenue')
   const yearEndRow = (forecastPl && (forecastPl[years[0]] || forecastPl[yearNum(years[0])])) || {}
   const entered = (key) => finiteOrNull(yearEndRow[key])
   const ytd = finiteOrNull(assumptions?.ytd_revenue)
@@ -305,7 +351,7 @@ function forecastStatement(pl, assumptions, forecastPl) {
   const picked = (key) => entries.map(({ i }) => pl?.[key]?.[i])
   const growth = carrySeries(picked('revenue_growth'))
   const revenue = []
-  if (stub) {
+  if (amountYear) {
     let prev = entered('revenue')
     growth.forEach((g, i) => {
       if (i === 0) {
@@ -338,7 +384,7 @@ function forecastStatement(pl, assumptions, forecastPl) {
     const seen = picked(ratioKey).some((v) => finiteOrNull(v) != null)
     const rates = seen ? carrySeries(picked(ratioKey)) : years.map(() => (optional ? 0 : null))
     return years.map((_, i) => {
-      if (stub && i === 0) {
+      if (amountYear && i === 0) {
         const v = entered(amountKey)
         if (v != null) return v
         return optional ? 0 : null
@@ -369,8 +415,14 @@ function forecastStatement(pl, assumptions, forecastPl) {
     return rev - cogs[i] - surtax[i] - selling[i] - admin[i] - rd[i] + otherIncome[i] + other[i]
   })
   const nopat = pretax.map((p) => (p == null ? null : (p > 0 ? p * (1 - tax) : p)))
+  const operatingProfit = revenue.map((rev, i) => {
+    const parts = [cogs[i], surtax[i], selling[i], admin[i], rd[i], financeExpense[i], otherIncome[i], other[i]]
+    if (rev == null || parts.some((v) => v == null)) return null
+    return rev - cogs[i] - surtax[i] - selling[i] - admin[i] - rd[i] - financeExpense[i] + otherIncome[i] + other[i]
+  })
+  const ebitda = pretax.map((p, i) => (p == null || da[i] == null ? null : p + da[i]))
   return {
-    years, revenue, cogs, gross, surtax, selling, admin, rd, financeExpense, otherIncome, other, da, pretax, nopat, capex, tax,
+    years, revenue, cogs, gross, surtax, selling, admin, rd, financeExpense, otherIncome, other, operatingProfit, da, ebitda, pretax, nopat, capex, tax,
     entries,
   }
 }
@@ -409,7 +461,92 @@ function overlayForecastStatement(statement, forecastPl) {
   })
   const tax = statement.tax == null ? 0.15 : statement.tax
   next.nopat = next.pretax.map((p) => (p == null ? null : (p > 0 ? p * (1 - tax) : p)))
+  next.operatingProfit = next.revenue.map((rev, i) => {
+    const parts = [next.cogs[i], next.surtax[i], next.selling[i], next.admin[i], next.rd[i], next.financeExpense[i], next.otherIncome[i], next.other[i]]
+    if (rev == null || parts.some((v) => v == null)) return null
+    return rev - next.cogs[i] - next.surtax[i] - next.selling[i] - next.admin[i] - next.rd[i] - next.financeExpense[i] + next.otherIncome[i] + next.other[i]
+  })
+  next.ebitda = next.pretax.map((p, i) => (p == null || next.da[i] == null ? null : p + next.da[i]))
   return next
+}
+
+function plAmountAtYear(pl, year, key) {
+  const idx = (pl?.years || []).findIndex((y) => yearNum(y) === year)
+  if (idx < 0) return null
+  return finiteOrNull(pl?.[key]?.[idx])
+}
+
+function bsNwcParts(bs) {
+  const n = displayBs(bs)
+  const num = (v) => {
+    const x = Number(v)
+    return Number.isFinite(x) ? x : null
+  }
+  const ar = num(n?.accounts_receivable)
+  const inv = num(n?.inventory)
+  const ap = num(n?.accounts_payable)
+  const prepay = num(n?.prepayment)
+  const advance = bs?.ar_is_net ? 0 : (num(n?.contract_liability) || 0)
+  const prepayCut = bs?.ap_is_net ? 0 : (prepay || 0)
+  if (ar == null && inv == null && ap == null && prepay == null && !advance) return null
+  return {
+    netAr: ar == null && !advance ? null : (ar || 0) - advance,
+    inventory: inv,
+    netAp: ap == null && !prepayCut ? null : (ap || 0) - prepayCut,
+    nwc: nwcStockFromBs(bs),
+  }
+}
+
+function priorActualStatement(pl, assumptions, bs, firstYear) {
+  const year = yearNum(firstYear) - 1
+  if (!Number.isFinite(year)) return null
+  const amt = (key) => plAmountAtYear(pl, year, key)
+  const revenue = amt('revenue')
+  const cogs = amt('cogs')
+  const surtax = amt('surtax')
+  const selling = amt('selling')
+  const admin = amt('admin')
+  const rd = amt('rd')
+  const financeExpense = amt('finance_expense')
+  const otherIncome = amt('other_income')
+  const other = amt('other')
+  const da = amt('da')
+  const gross = revenue == null || cogs == null ? null : revenue - cogs
+  const storedProfit = amt('operating_profit')
+  const operatingProfit = storedProfit != null ? storedProfit : (
+    gross == null ? null : gross - (surtax || 0) - (selling || 0) - (admin || 0) - (rd || 0) - (financeExpense || 0) + (otherIncome || 0) + (other || 0)
+  )
+  const pretax = revenue == null ? null : revenue - (cogs || 0) - (surtax || 0) - (selling || 0) - (admin || 0) - (rd || 0) + (otherIncome || 0) + (other || 0)
+  const taxRaw = finiteOrNull(assumptions?.tax_rate)
+  const tax = taxRaw == null ? 0.15 : taxRaw
+  const nopat = pretax == null ? null : (pretax > 0 ? pretax * (1 - tax) : pretax)
+  const ebitda = pretax == null || da == null ? null : pretax + da
+  const anchor = statementAnchor(assumptions?.valuation_date)
+  const stocks = anchor && anchor.year === year ? bsNwcParts(bs) : null
+  return {
+    year,
+    revenue,
+    cogs,
+    gross,
+    surtax,
+    selling,
+    admin,
+    rd,
+    financeExpense,
+    otherIncome,
+    other,
+    operatingProfit,
+    da,
+    ebitda,
+    pretax,
+    nopat,
+    capex: null,
+    netAr: stocks?.netAr ?? null,
+    netAp: stocks?.netAp ?? null,
+    inventory: stocks?.inventory ?? null,
+    nwc: stocks?.nwc ?? null,
+    dnwc: null,
+  }
 }
 
 function withWorkingCapital(statement, pl, assumptions, payload) {
@@ -441,7 +578,11 @@ function withWorkingCapital(statement, pl, assumptions, payload) {
     if (ar == null || inv == null || ap == null) return null
     return ar + inv - ap
   })
-  const opening = nwcStockFromBs(bs)
+  const firstYear = yearNum(next.years?.[0])
+  const anchor = statementAnchor(assumptions?.valuation_date)
+  const priorYear = Number.isFinite(firstYear) ? firstYear - 1 : null
+  const priorStocks = anchor && priorYear != null && anchor.year === priorYear ? bsNwcParts(bs) : null
+  const opening = priorStocks?.nwc != null ? priorStocks.nwc : nwcStockFromBs(bs)
   next.dnwc = next.nwc.map((balance, i) => {
     if (balance == null) return null
     const prev = i === 0 ? opening : next.nwc[i - 1]
@@ -495,8 +636,8 @@ const FORECAST_RATIO_ROWS = [
   { key: 'finance_expense_ratio', name: '财务费用', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额，可为负。未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
   { key: 'other_income_ratio', name: '其他收益', note: '多含政府补助。空白年份沿用最近一次比例，终值按最后一年计算，补助会被永久资本化。不可持续时把后续年份改低或改为 0。可为负，填 0 视为已填。', min: -500 },
   { key: 'other_ratio', name: '其他', note: '只放经营性项目。不含投资收益、公允价值变动、信用减值、资产减值、资产处置、营业外收支。可为负，填 0 视为已填。', min: -500 },
-  { key: 'da_ratio', name: '折旧摊销', note: '填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。占收入。', min: -100 },
-  { key: 'capex_ratio', name: '资本开支', note: '占收入。未填不按 0，会拦截。DCF 不再使用现金流量表上的手填金额。', min: -100 },
+  { key: 'da_ratio', name: '折旧摊销', note: '填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。占当年营业收入。绝对值大于 10000 时按该年实际金额。', min: -100 },
+  { key: 'capex_ratio', name: '资本开支', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额。未填不按 0，会拦截。DCF 不再使用现金流量表上的手填金额。', min: -100 },
 ]
 
 function splicePlYear(pl, index) {
@@ -519,7 +660,7 @@ function numOrZero(v) {
   return Number.isFinite(n) ? n : 0
 }
 
-/** 系统默认口径：退出 PE × 末期净利润、净利润桥、退出倍数 × 收入 CAGR、个股 POOL */
+/** 系统默认口径：退出 PE × 末期税后经营利润、净利润桥、退出倍数 × 收入 CAGR、个股 POOL */
 function isDefaultMethodConfig(method) {
   return method?.terminal_type === 'exit_pe'
     && method?.fcf_method === 'ni_bridge'
@@ -1025,7 +1166,6 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
 }
 
 function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
-  const usePs = method.terminal_type === 'exit_ps'
   const waccPreview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
   const fields = [
     {
@@ -1040,17 +1180,8 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
     },
   ]
   if (method.scenario_mode !== 'ma_and_ipo') {
-    fields.push(usePs
-      ? {
-        label: '退出 P/S',
-        control: (
-          <DcfNumInput
-            value={assumptions.exit_ps ?? 20}
-            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_ps: v } })}
-          />
-        ),
-      }
-      : {
+    fields.push(
+      {
         label: '退出 P/E',
         control: (
           <DcfNumInput
@@ -1058,7 +1189,17 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
             onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_pe: v } })}
           />
         ),
-      })
+      },
+      {
+        label: '退出 P/S',
+        control: (
+          <DcfNumInput
+            value={assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_ps: v } })}
+          />
+        ),
+      },
+    )
   }
   fields.push({
     label: '市场法折扣',
@@ -1113,49 +1254,44 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
       },
       esopField,
     )
-    if (method.terminal_type === 'exit_ps') {
-      fields.push(
-        {
-          label: '上市退出 P/S',
-          control: (
-            <DcfNumInput
-              value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps ?? 20}
-              onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_ps', v))}
-            />
-          ),
-        },
-        {
-          label: '并购退出 P/S',
-          control: (
-            <DcfNumInput
-              value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps ?? 20}
-              onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_ps', v))}
-            />
-          ),
-        },
-      )
-    } else {
-      fields.push(
-        {
-          label: '上市退出 P/E',
-          control: (
-            <DcfNumInput
-              value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe ?? 40}
-              onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_pe', v))}
-            />
-          ),
-        },
-        {
-          label: '并购退出 P/E',
-          control: (
-            <DcfNumInput
-              value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe ?? 40}
-              onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_pe', v))}
-            />
-          ),
-        },
-      )
-    }
+    fields.push(
+      {
+        label: '上市退出 P/E',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe ?? 40}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_pe', v))}
+          />
+        ),
+      },
+      {
+        label: '上市退出 P/S',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_ps', v))}
+          />
+        ),
+      },
+      {
+        label: '并购退出 P/E',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe ?? 40}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_pe', v))}
+          />
+        ),
+      },
+      {
+        label: '并购退出 P/S',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_ps', v))}
+          />
+        ),
+      },
+    )
   } else {
     fields.push(esopField)
   }
@@ -1619,7 +1755,7 @@ export default function ValuationWorkbenchPage() {
                   value={method.terminal_type}
                   onChange={(v) => patchPayload({ methodConfig: { ...method, terminal_type: v, confirmed: false } })}
                   options={[
-                    { value: 'exit_pe', label: '退出 P/E × 末期净利润' },
+                    { value: 'exit_pe', label: '退出 P/E × 末期税后经营利润' },
                     { value: 'exit_ps', label: '退出 P/S × 末期收入' },
                   ]}
                 />
@@ -1823,15 +1959,13 @@ export default function ValuationWorkbenchPage() {
               </Typography.Paragraph>
             </div>
             <Typography.Paragraph type="secondary" className="valuation-dcf-terminal-hint">
-              {method.terminal_type === 'exit_ps'
-                ? 'DCF 终值 = 退出 P/S × 末期全年营业收入 + 锚定日净负债，再按最后一列期数折现。退出 P/E 不参与。'
-                : 'DCF 终值 = 退出 P/E × 末期全年税后经营利润 + 锚定日净负债，再按最后一列期数折现。退出 P/S 不参与。'}
+              退出 P/E 和退出 P/S 都会算一笔终值。结果对比里的 DCF 区间，低端和高端就是这两笔股权价值。明细表按上面「终值」选定的那一套展开。
             </Typography.Paragraph>
             {!isDefaultMethodConfig(method) ? (
               <Alert
                 type="warning"
                 style={{ marginTop: 12, marginBottom: 12 }}
-                content="自由现金流已统一为税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。方法里的「净利润桥 / NOPAT」只决定单套情景是否乘 DCF 流动性折扣：选 NOPAT 才乘，选净利润桥不乘。双情景仍只有并购乘。"
+                content="自由现金流 = 期间税后经营利润 + 期间折旧摊销 + 期间 ESOP − 期间资本开支 − ΔNWC。锚定年且不是 12 月时，期间数 = 年底全年 − 锚定日累计，ESOP 按剩余月。方法里的「净利润桥 / NOPAT」只决定单套情景是否乘 DCF 流动性折扣：选 NOPAT 才乘，选净利润桥不乘。双情景仍只有并购乘。"
               />
             ) : null}
             {method.multiple_source === 'sw_industry_median' ? (
@@ -2000,7 +2134,7 @@ export default function ValuationWorkbenchPage() {
               scroll={{ x: true }}
               columns={[
                 { title: '科目', dataIndex: 'name', width: 120, fixed: 'left' },
-                ...ratioYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
+                ...ratioYearEntries(pl, assumptions.valuation_date, payload.forecastPl).map(({ y, i }) => ({
                   align: 'right',
                   className: 'valuation-num-cell',
                   title: (
@@ -2140,10 +2274,11 @@ export default function ValuationWorkbenchPage() {
             </Space>
             <Typography.Title heading={6} style={{ marginTop: 16 }}>预测利润表</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-              锚定日不是 12 月 31 日时，第一列是当年年底预估，直接填金额。后面各年的收入按上一年收入和增速滚动；营业成本、费用、折旧和资本开支按当年收入乘上面的比例。比例格里填大于 10000 的数时，该年直接用这个金额。改当年年底收入后，按收入比例计算的年份会跟着变。手改过的后面年份保持手改，清空后重新按比例算。毛利、税前和税后由各行重算。净应收款、净应付款、存货、营运资本余额和营运资本变动按周转天数与收入、成本现算。
+              最左一列是上一年实际，不带 E。利润表取该年导入数，营运资本取该年资产负债表。第一年营运资本变动 = 当年预测余额 − 这一列实际余额。后面各年再减上一年预测余额。锚定日不是 12 月 31 日时，第一列预测是当年年底预估，直接填金额。后面各年的收入按上一年收入和增速滚动；营业成本、费用、折旧和资本开支按当年收入乘上面的比例。比例格里填大于 10000 的数时，该年直接用这个金额。改当年年底收入后，按收入比例计算的年份会跟着变。手改过的后面年份保持手改，清空后重新按比例算。毛利、营业利润、EBITDA、税前和税后由各行重算。
             </Typography.Paragraph>
             {(() => {
               const formula = forecastStatement(pl, assumptions, payload.forecastPl)
+              const prior = formula ? priorActualStatement(pl, assumptions, payload.targetBs, formula.years[0]) : null
               const statement = withWorkingCapital(
                 overlayForecastStatement(formula, payload.forecastPl),
                 pl,
@@ -2162,15 +2297,17 @@ export default function ValuationWorkbenchPage() {
                 { key: 'financeExpense', engineKey: 'finance_expense', name: '财务费用', note: noteOf('finance_expense_ratio'), editable: true },
                 { key: 'otherIncome', engineKey: 'other_income', name: '其他收益', note: noteOf('other_income_ratio'), editable: true },
                 { key: 'other', engineKey: 'other', name: '其他', note: noteOf('other_ratio'), editable: true },
+                { key: 'operatingProfit', name: '营业利润', note: '毛利 − 税金及附加 − 销售 − 管理 − 研发 − 财务费用 + 其他收益 + 其他。', total: true },
                 { key: 'da', engineKey: 'da', name: '折旧摊销', note: noteOf('da_ratio'), editable: true },
+                { key: 'ebitda', name: 'EBITDA', note: '税前经营利润 + 折旧摊销。财务费用不在里面。', total: true },
                 { key: 'pretax', name: '税前经营利润', note: '收入 − 成本 − 税金及附加 − 销售 − 管理 − 研发 + 其他收益 + 其他。折旧已含在三项费用中，这里不再扣。', total: true },
                 { key: 'nopat', name: '税后经营利润', note: '税前大于 0 时乘（1 − 所得税率）。税前小于等于 0 时不退税。所得税率未填按 15%。', total: true },
                 { key: 'capex', engineKey: 'capex', name: '资本开支', note: noteOf('capex_ratio'), editable: true },
-                { key: 'netAr', name: '净应收款', note: 'DSO / 360 × 当年全年收入，已是扣除预收款后的净值。DSO 优先用手填年，其次预测默认值，再其次可比中位数。' },
-                { key: 'netAp', name: '净应付款', note: 'DPO / 360 × 当年营业成本。' },
+                { key: 'netAr', name: '净应收款', note: '预测年 = DSO / 360 × 当年全年收入，已是净值，不再减合同负债。上一年实际 = 应收账款（含票据）− 合同负债。' },
+                { key: 'netAp', name: '净应付款', note: '预测年 = DPO / 360 × 当年营业成本。上一年实际 = 应付账款（含票据）− 预付款项。' },
                 { key: 'inventory', name: '存货', note: '存货周转天数 / 360 × 当年营业成本。' },
                 { key: 'nwc', name: '营运资本余额', note: '净应收款 + 存货 − 净应付款。', total: true },
-                { key: 'dnwc', name: '营运资本变动', note: '当年余额 − 上一年余额。第一年的上一年是锚定日净值：应收账款（含票据）− 合同负债 − 预收款项 + 存货 − 应付账款（含票据）。', total: true },
+                { key: 'dnwc', name: '营运资本变动', note: '当年预测余额 − 上一年余额。第一年的上一年实际 =（应收账款 − 合同负债）+ 存货 −（应付账款 − 预付款项）。估值锚定日要落在这一年，资产负债表填该年实际数。', total: true },
               ]
               if (!statement) {
                 return <Typography.Paragraph type="secondary">请先选择估值锚定日，并保留预测年。</Typography.Paragraph>
@@ -2182,10 +2319,17 @@ export default function ValuationWorkbenchPage() {
                   pagination={false}
                   size="small"
                   showSeq={false}
-                  scroll={{ x: 160 + statement.years.length * 150 + 280 }}
+                  scroll={{ x: 160 + (prior ? 150 : 0) + statement.years.length * 150 + 280 }}
                   rowClassName={(row) => (row.total ? 'valuation-bs-total-row' : '')}
                   columns={[
                     { title: '科目', dataIndex: 'name', width: 120, fixed: 'left', className: 'valuation-nowrap-cell' },
+                    ...(prior ? [{
+                      title: String(prior.year),
+                      width: 150,
+                      align: 'right',
+                      className: 'valuation-num-cell valuation-nowrap-cell',
+                      render: (_, row) => (prior[row.key] == null ? '—' : fmtWanPlain(prior[row.key])),
+                    }] : []),
                     ...statement.years.map((year, i) => ({
                       title: `${year}E`,
                       width: 150,
@@ -2388,7 +2532,7 @@ export default function ValuationWorkbenchPage() {
                   auto: true,
                   name: '期末营运资本占用',
                   value: computedNwcWan(payload.targetBs),
-                  note: '应收账款（含票据）− 合同负债 − 预收款项 + 存货 − 应付账款（含票据）。第一笔 ΔNWC 用这个净值',
+                  note: '净应收 = 应收账款（含票据）− 合同负债。净应付 = 应付账款（含票据）− 预付款项。营运资本 = 净应收 + 存货 − 净应付。第一笔 ΔNWC 用这个净值',
                 },
                 {
                   auto: true,
@@ -2478,7 +2622,7 @@ export default function ValuationWorkbenchPage() {
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
               自由现金流 = 税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。
               {nwcWan != null
-                ? ` 锚定日营运资本占用 ${fmtWanPlain(nwcWan)}（应收账款含票据 − 合同负债 − 预收款项 + 存货 − 应付账款含票据）。`
+                ? ` 锚定日营运资本占用 ${fmtWanPlain(nwcWan)}（应收账款含票据 − 合同负债 + 存货 −（应付账款含票据 − 预付款项））。`
                 : ' 请先在资产负债表填写应收账款、存货或应付账款。'}
             </Typography.Paragraph>
             <ListTable
@@ -2617,9 +2761,7 @@ export default function ValuationWorkbenchPage() {
                       {(() => {
                         const preview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
                         const shownRate = preview.used_breakdown ? preview.rate : (assumptions.discount_rate ?? 0.3)
-                        const exitLabel = method.terminal_type === 'exit_ps'
-                          ? `退出 P/S ${assumptions.exit_ps ?? 20}`
-                          : `退出 P/E ${assumptions.exit_pe ?? 40}`
+                        const exitLabel = `退出 P/E ${assumptions.exit_pe ?? 40}，退出 P/S ${assumptions.exit_ps ?? 20}`
                         const liq = assumptions.liquidity_discount ?? 0.3
                         const dcfLiq = assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3
                         const dcfOn = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
@@ -2627,14 +2769,15 @@ export default function ValuationWorkbenchPage() {
                       })()}
                     </Typography.Paragraph>
                     <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法用已实现最近一年的营收与净利润。低端为中位数减 σ，高端为中位数。">
-                      市场法用已实现最近一年营收/净利润。倍数取锚定日及以前各股历史中位，低端 = 中位数 − σ，高端 = 中位数。
-                      {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时 P/S、P/E 仍这一套（只用市场法折扣）；仅 DCF 分两列（并购用并购折扣，上市不扣）。' : ''}
+                      市场法用已实现最近一年营收/净利润。P/E 用可比公司的市盈率，P/S 用可比公司的市销率，两套倍数互不相通，也不使用上面的退出 P/E、退出 P/S。低端 = 中位数 − σ，高端 = 中位数。
+                      DCF 区间的两端是退出 P/E 和退出 P/S 各自算出的股权价值。
+                      {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时市场法仍这一套（只用市场法折扣）；DCF 分两列，每列仍是该情景的两套退出终值（并购用并购折扣，上市不扣）。' : ''}
                     </Typography.Paragraph>
                     {!isDefaultMethodConfig(method) ? (
                       <Alert
                         type="warning"
                         style={{ marginBottom: 12 }}
-                        content="本次 DCF 不是系统默认口径。默认是退出 P/E × 末期净利润、净利润桥、退出倍数 × 收入 CAGR；当前若是退出 P/S + NOPAT + 折现率轴，区间口径会不同。"
+                        content="本次 DCF 不是系统默认口径。默认是退出 P/E × 末期税后经营利润、净利润桥、退出倍数 × 收入 CAGR；当前若是退出 P/S + NOPAT + 折现率轴，区间口径会不同。"
                       />
                     ) : null}
                     <div className="valuation-result-top">
@@ -2656,12 +2799,14 @@ export default function ValuationWorkbenchPage() {
                               {comparison.dcf?.ma ? (
                                 <>
                                   <div>并购 {fmtYi(comparison.dcf.ma.low)} ~ {fmtYi(comparison.dcf.ma.high)}</div>
+                                  <div>并购退出 P/E {fmtYi(comparison.dcf.ma.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf.ma.exit_ps)}</div>
                                   <div>上市 {fmtYi(comparison.dcf.ipo.low)} ~ {fmtYi(comparison.dcf.ipo.high)}</div>
+                                  <div>上市退出 P/E {fmtYi(comparison.dcf.ipo.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf.ipo.exit_ps)}</div>
                                 </>
                               ) : (
                                 <>
                                   <div className="num">{fmtYi(comparison.dcf?.low)} ~ {fmtYi(comparison.dcf?.high)}</div>
-                                  <div>增量 {fmtYi(comparison.dcf?.increment)}</div>
+                                  <div>退出 P/E {fmtYi(comparison.dcf?.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf?.exit_ps)}</div>
                                 </>
                               )}
                             </div>

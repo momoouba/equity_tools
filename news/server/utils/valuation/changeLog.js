@@ -15,7 +15,7 @@ const SOURCE_LABELS = {
 };
 
 const ENUM_LABELS = {
-  terminal_type: { exit_pe: '退出 P/E × 末期净利润', exit_ps: '退出 P/S × 末期营业收入' },
+  terminal_type: { exit_pe: '退出 P/E × 末期税后经营利润', exit_ps: '退出 P/S × 末期营业收入' },
   fcf_method: { ni_bridge: '净利润桥', nopat_fcff: 'NOPAT / FCFF' },
   sensitivity_axes: {
     exit_x_cagr: '退出倍数 × 收入 CAGR',

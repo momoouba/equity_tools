@@ -14,7 +14,7 @@ export default function ValuationTieOutPanel({ payload }) {
       <Typography.Title heading={6} className="valuation-ratio-col-title">三表勾稽</Typography.Title>
       <Typography.Paragraph type="secondary" className="valuation-ratio-formula">
         净负债 = 短期借款 + 一年内到期的非流动负债 + 长期借款 + 租赁负债 − 货币资金。
-        营运资本占用 = 应收账款（含票据）− 合同负债 − 预收款项 + 存货 − 应付账款（含票据）。
+        营运资本占用 =（应收账款含票据 − 合同负债）+ 存货 −（应付账款含票据 − 预付款项）。
       </Typography.Paragraph>
       {t.issues.length ? (
         <Alert type="warning" style={{ marginBottom: 12 }} content={t.issues.join('；')} />

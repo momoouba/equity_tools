@@ -14,8 +14,16 @@ const {
   isSanePs,
   beijingYmd,
 } = require('./marketUtils');
-const { LISTED_METRIC_COLS, metricsFromRow, metricInsertValues } = require('./listedMetrics');
+const { LISTED_METRIC_COLS, LISTED_METRIC_COMMENTS, metricsFromRow, metricInsertValues } = require('./listedMetrics');
 const { sumCashflowDa } = require('./cashflowDa');
+const {
+  REQUIRED_FIELDS,
+  statementNeeds,
+  statementGaps,
+  multiplesCovered,
+  periodKey,
+  earlierYmd,
+} = require('./comparableCoverage');
 const C = require('./constants');
 
 const EM_HEADERS = {
@@ -157,12 +165,21 @@ async function upsertStatement({ stockCode, listingMarket, reportPeriod, reportT
     [stockCode, reportPeriod, reportType, statementType]
   );
   if (exist.length) {
-    if (statementType === 'cf' && metrics?.da != null) {
+    const sets = [];
+    const params = [];
+    for (const key of LISTED_METRIC_COLS) {
+      const n = toNumber(metrics?.[key]);
+      if (n == null) continue;
+      sets.push(`${key} = COALESCE(${key}, ?)`);
+      params.push(n);
+    }
+    if (sets.length) {
+      params.push(exist[0].F_Id);
       await db.execute(
         `UPDATE listed_company_financials
-         SET da = ?, fetched_at = NOW(), F_LastModifyTime = NOW()
-         WHERE F_Id = ? AND da IS NULL`,
-        [metrics.da, exist[0].F_Id]
+         SET ${sets.join(', ')}, fetched_at = NOW(), F_LastModifyTime = NOW()
+         WHERE F_Id = ?`,
+        params
       );
     }
     return { id: exist[0].F_Id, inserted: false };
@@ -358,9 +375,9 @@ async function fetchStatementsIfMissing(stockCode, listingMarket, logCtx, onlyTy
   const warnings = [];
   for (const spec of specs) {
     try {
-      let rows = await fetchF10Table(spec.reportName, code, 16);
+      let rows = await fetchF10Table(spec.reportName, code, 32);
       if (!rows.length && spec.alt) {
-        rows = await fetchF10Table(spec.alt, code, 16);
+        rows = await fetchF10Table(spec.alt, code, 32);
       }
       for (const row of rows) {
         const period = String(row.REPORT_DATE || row.report_date || '').slice(0, 10);
@@ -756,54 +773,46 @@ async function fetchIndustryMultiples(swIndustryL3, statMethod, asOfDate, onProg
   return computed || { unavailable: true, message: '暂无该申万三级行业 PE/PS 序列，已禁用行业中位数，请改用个股 POOL' };
 }
 
-const MIN_USABLE_MULTIPLES = 2;
+const COVERAGE_METRIC_COLS = [...new Set(Object.values(REQUIRED_FIELDS).flat())];
 
-async function listedCfDaMissing(stockCode) {
-  const rows = await db.query(
-    `SELECT COUNT(*) AS n,
-            SUM(CASE WHEN da IS NULL THEN 1 ELSE 0 END) AS missing
-     FROM listed_company_financials
-     WHERE stock_code = ? AND statement_type = 'cf'`,
-    [padStockCode(stockCode)]
-  );
-  const n = Number(rows[0]?.n || 0);
-  const missing = Number(rows[0]?.missing || 0);
-  return n === 0 || missing > 0;
-}
-
-async function inspectLocalCoverage(stockCode) {
+async function inspectLocalCoverage(stockCode, asOfYmd) {
   const code = padStockCode(stockCode);
+  const today = beijingYmd();
+  const asOf = periodKey(asOfYmd) || today;
+  const needs = statementNeeds(asOf, today);
   const stmts = await db.query(
-    `SELECT statement_type, COUNT(*) AS n
+    `SELECT report_period, report_type, statement_type, ${COVERAGE_METRIC_COLS.join(', ')}
      FROM listed_company_financials
-     WHERE stock_code = ?
-     GROUP BY statement_type`,
-    [code]
-  );
-  const byType = {};
-  for (const r of stmts) byType[r.statement_type] = Number(r.n) || 0;
-  const mult = await db.query(
-    `SELECT COUNT(*) AS n,
-            MIN(trade_date) AS mn,
-            SUM(CASE WHEN pe_ttm IS NOT NULL OR ps_ttm IS NOT NULL THEN 1 ELSE 0 END) AS usable
-     FROM listed_company_market_multiples
      WHERE stock_code = ?`,
     [code]
   );
+  const gap = statementGaps(stmts, needs);
+  const target = earlierYmd(asOf, today);
+  const mult = await db.query(
+    `SELECT MIN(trade_date) AS mn,
+            MAX(trade_date) AS mx,
+            SUM(CASE WHEN pe_ttm IS NOT NULL OR ps_ttm IS NOT NULL THEN 1 ELSE 0 END) AS usable
+     FROM listed_company_market_multiples
+     WHERE stock_code = ? AND trade_date <= ?`,
+    [code, target || asOf]
+  );
   const usable = Number(mult[0]?.usable || 0);
-  const mnRaw = mult[0]?.mn;
-  const mn = mnRaw ? String(mnRaw).slice(0, 10) : null;
-  const historyDeepEnough = (mn && mn <= MULTIPLES_HISTORY_START) || usable >= 700;
   return {
-    hasPl: (byType.pl || 0) > 0,
-    hasBs: (byType.bs || 0) > 0,
     usableMultiples: usable,
-    statementsReady: (byType.pl || 0) > 0 && (byType.bs || 0) > 0,
-    multiplesReady: usable >= MIN_USABLE_MULTIPLES && historyDeepEnough,
+    missingTypes: gap.missingTypes,
+    gaps: gap.gaps,
+    statementsReady: needs.length > 0 && gap.missingTypes.length === 0,
+    multiplesReady: multiplesCovered({
+      minDate: mult[0]?.mn,
+      maxDate: mult[0]?.mx,
+      usable,
+      asOf,
+      today,
+    }),
   };
 }
 
-async function ensureComparablesFetched(comps, logCtx, onProgress) {
+async function ensureComparablesFetched(comps, logCtx, onProgress, asOfYmd) {
   const warnings = [];
   const notes = [];
   const skipped = [];
@@ -815,27 +824,35 @@ async function ensureComparablesFetched(comps, logCtx, onProgress) {
     const market = c.listing_market || listingMarketFromCode(code);
     if (typeof onProgress === 'function') onProgress(i, comps.length, code);
 
-    const cov = await inspectLocalCoverage(code);
-    const daMissing = await listedCfDaMissing(code);
-    if (cov.statementsReady && cov.multiplesReady && !daMissing) {
+    const cov = await inspectLocalCoverage(code, asOfYmd);
+    if (cov.statementsReady && cov.multiplesReady) {
       skipped.push(code);
       continue;
     }
 
     fetched += 1;
     if (!cov.statementsReady) {
-      const w = await fetchStatementsIfMissing(code, market, logCtx);
+      const onlyTypes = cov.missingTypes.length && cov.missingTypes.length < 3 ? cov.missingTypes : null;
+      const w = await fetchStatementsIfMissing(code, market, logCtx, onlyTypes);
       warnings.push(...w);
-    } else if (daMissing) {
-      const w = await fetchStatementsIfMissing(code, market, logCtx, ['cf']);
-      warnings.push(...w);
+      const afterStmt = await inspectLocalCoverage(code, asOfYmd);
+      const stmtLabel = { pl: '利润表', bs: '资产负债表', cf: '现金流量表' };
+      const still = (afterStmt.gaps || []).slice(0, 4).map((g) => {
+        const fields = g.fields?.length
+          ? `缺${g.fields.map((key) => LISTED_METRIC_COMMENTS[key] || key).join('、')}`
+          : '无该期';
+        return `${g.report_period}${stmtLabel[g.statement_type] || g.statement_type}${fields}`;
+      });
+      if (still.length) {
+        warnings.push(`${code}：锚定日所需财报仍缺 ${still.join('，')}`);
+      }
     }
 
     if (!cov.multiplesReady) {
       const hist = await fetchHistoryMultiples(code, market);
-      const after = await inspectLocalCoverage(code);
+      const after = await inspectLocalCoverage(code, asOfYmd);
       if (!after.multiplesReady) {
-        warnings.push(`${code}：历史 PE/PS 不足 2 期，不入 POOL`);
+        warnings.push(`${code}：截至锚定日的历史 PE/PS 不足，不入 POOL`);
         if (!hist.ok && hist.message) {
           warnings.push(`${code}：${hist.message}`);
         }
