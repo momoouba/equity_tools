@@ -9,6 +9,7 @@ const DEFAULT_RATE_STEP = 0.02;
 function normalizeAxes(axes) {
   if (axes === 'exit_x_wacc' || axes === 'wacc_x_exit') return 'exit_x_wacc';
   if (axes === 'exit_x_rd_cagr') return 'exit_x_rd_cagr';
+  if (axes === 'rev_cagr_x_rd_cagr') return 'rev_cagr_x_rd_cagr';
   return 'exit_x_cagr';
 }
 
@@ -89,19 +90,25 @@ function baseRateOf(peRun, psRun) {
   return Number.isFinite(n) ? n : null;
 }
 
-function cagrRows(values, step, mode) {
+function cagrLevels(values, step) {
   const cagr = impliedCagr(values);
   const first = Number(values[0]);
   const n = values.length;
   if (cagr == null || !(first > 0)) {
-    return [{ center: true, label: '当前预测' }];
+    return [{ center: true, label: '当前预测', path: undefined }];
   }
   return [-2, -1, 0, 1, 2].map((k) => {
-    if (k === 0) return { center: true, label: '当前预测' };
+    if (k === 0) return { center: true, label: '当前预测', path: undefined };
     const next = cagr + k * step;
-    const row = { center: false, label: pctLabel(next) };
-    if (mode === 'exit_x_rd_cagr') row.rdOverride = shockPath(first, next, n);
-    else row.revenueOverride = shockPath(first, next, n);
+    return { center: false, label: pctLabel(next), path: shockPath(first, next, n) };
+  });
+}
+
+function cagrRows(values, step, mode) {
+  return cagrLevels(values, step).map((level) => {
+    const row = { center: level.center, label: level.label };
+    if (!level.center && mode === 'exit_x_rd_cagr') row.rdOverride = level.path;
+    else if (!level.center) row.revenueOverride = level.path;
     return row;
   });
 }
@@ -135,6 +142,8 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode } = {}
   const mode = normalizeAxes(axes);
   const rate = baseRateOf(peRun, psRun);
   const stepSet = steps || {};
+  const revenueStep = positiveStep(stepSet.cagrStep, DEFAULT_CAGR_STEP);
+  const rdStep = positiveStep(stepSet.rdCagrStep, DEFAULT_CAGR_STEP);
   let waccFloored = false;
   let rows;
   if (mode === 'exit_x_wacc') {
@@ -143,11 +152,17 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode } = {}
     waccFloored = built.floored;
   } else if (mode === 'exit_x_rd_cagr') {
     const values = seriesOf(peRun, psRun, 'rd');
-    rows = cagrRows(values, positiveStep(stepSet.cagrStep, DEFAULT_CAGR_STEP), mode);
+    rows = cagrRows(values, rdStep, mode);
+  } else if (mode === 'rev_cagr_x_rd_cagr') {
+    const values = seriesOf(peRun, psRun, 'revenue');
+    rows = cagrRows(values, revenueStep, 'exit_x_cagr');
   } else {
     const values = seriesOf(peRun, psRun, 'revenue');
-    rows = cagrRows(values, positiveStep(stepSet.cagrStep, DEFAULT_CAGR_STEP), mode);
+    rows = cagrRows(values, revenueStep, mode);
   }
+  const rdLevels = mode === 'rev_cagr_x_rd_cagr'
+    ? cagrLevels(seriesOf(peRun, psRun, 'rd'), rdStep)
+    : null;
 
   const buildSide = (run, terminalType, ok) => {
     const multiple = Number(run?.exit_multiple);
@@ -168,15 +183,23 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode } = {}
       terminalType === 'exit_pe' ? stepSet.peStep : stepSet.psStep,
       terminalType === 'exit_pe' ? DEFAULT_PE_STEP : DEFAULT_PS_STEP,
     );
-    const cols = [-2, -1, 0, 1, 2].map((k) => {
-      const next = multiple + k * step;
-      return {
-        center: k === 0,
-        multiple: next,
-        blank: !(next > 0),
-        label: next > 0 ? multipleLabel(next) : '',
-      };
-    });
+    const cols = rdLevels
+      ? rdLevels.map((level) => ({
+        center: level.center,
+        multiple,
+        blank: false,
+        label: level.label,
+        rdOverride: level.path,
+      }))
+      : [-2, -1, 0, 1, 2].map((k) => {
+        const next = multiple + k * step;
+        return {
+          center: k === 0,
+          multiple: next,
+          blank: !(next > 0),
+          label: next > 0 ? multipleLabel(next) : '',
+        };
+      });
     const center = copyCell(run);
     const cells = rows.map((row) => cols.map((col) => {
       if (col.blank) return { equity_yi: null, cap_yi: null, blank: 'multiple' };
@@ -189,7 +212,7 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode } = {}
         multiple: col.multiple,
         terminalType,
         revenueOverride: row.revenueOverride,
-        rdOverride: row.rdOverride,
+        rdOverride: col.rdOverride || row.rdOverride,
       });
       return cellFromRun(next, terminalType);
     }));

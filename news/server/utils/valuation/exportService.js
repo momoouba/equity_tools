@@ -264,7 +264,14 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
   if (!view) return;
   b.colCount = Math.max(b.colCount || 1, 13);
   const years = view.holding_years;
-  const axis = view.axes === 'exit_x_wacc' ? '折现率' : (view.axes === 'exit_x_rd_cagr' ? '研发费用 CAGR' : '营收 CAGR');
+  const axis = view.axes === 'exit_x_wacc'
+    ? '折现率'
+    : (view.axes === 'exit_x_rd_cagr' ? '研发费用 CAGR' : '营收 CAGR');
+  const axisPair = view.axes === 'exit_x_wacc'
+    ? '折现率 × 退出倍数'
+    : (view.axes === 'exit_x_rd_cagr'
+      ? '研发费用 CAGR × 退出倍数'
+      : (view.axes === 'rev_cagr_x_rd_cagr' ? '营收 CAGR × 研发费用 CAGR' : '营收 CAGR × 退出倍数'));
   const deal = num(dealYi);
   const showReturn = deal > 0 && (dilution == null || dilution === '' || (Number(dilution) >= 0 && Number(dilution) <= 1));
   const sides = [
@@ -288,10 +295,10 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
     b.data([`${name} 退出 MOC`, m.moc == null ? m.note : m.moc], ['text', m.moc == null ? 'text' : 'num']);
     b.data([`${name} 退出 IRR（%）`, m.irr == null ? (m.note || null) : m.irr], ['text', m.irr == null ? 'text' : 'num']);
   });
-  const blocks = [{ key: 'equity', title: `估值（亿元）：${axis} × 退出倍数` }];
+  const blocks = [{ key: 'equity', title: `估值（亿元）：${axisPair}` }];
   if (showReturn) {
-    blocks.push({ key: 'moc', title: `退出 MOC：${axis} × 退出倍数` });
-    blocks.push({ key: 'irr', title: `退出 IRR（%）：${axis} × 退出倍数。持有 ${years == null ? '' : Number(years).toFixed(2)} 年` });
+    blocks.push({ key: 'moc', title: `退出 MOC：${axisPair}` });
+    blocks.push({ key: 'irr', title: `退出 IRR（%）：${axisPair}。持有 ${years == null ? '' : Number(years).toFixed(2)} 年` });
   } else {
     const note = !(deal > 0)
       ? '待填写本轮交易估值（投前），退出 MOC 与退出 IRR 不出表'

@@ -1216,6 +1216,7 @@ function runValuationEngine(input) {
         peStep: method.pe_multiple_step,
         psStep: method.ps_multiple_step,
         cagrStep: method.cagr_step,
+        rdCagrStep: method.rd_cagr_step,
         rateStep: method.rate_step,
       },
       rebuild: (patch) => buildDcfForecast({

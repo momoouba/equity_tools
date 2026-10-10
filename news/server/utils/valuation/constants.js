@@ -50,6 +50,7 @@ module.exports = {
   SENS_EXIT_CAGR: 'exit_x_cagr',
   SENS_EXIT_WACC: 'exit_x_wacc',
   SENS_WACC_EXIT: 'wacc_x_exit',
+  SENS_REV_RD_CAGR: 'rev_cagr_x_rd_cagr',
   SCENARIO_SINGLE: 'single',
   SCENARIO_DUAL: 'ma_and_ipo',
   MULTIPLE_POOL: 'stock_pool',

@@ -72,7 +72,7 @@ async function saveMethod(caseId, versionId, method, pool) {
   await upsertByCaseVersion(d, 'valuation_method', caseId, versionId, [
     'terminal_type', 'fcf_method', 'sensitivity_axes', 'scenario_mode',
     'multiple_source', 'industry_stat_method', 'confirmed',
-    'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rate_step',
+    'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rd_cagr_step', 'rate_step',
   ], [
     strOrNull(m.terminal_type, 32),
     strOrNull(m.fcf_method, 32),
@@ -84,6 +84,7 @@ async function saveMethod(caseId, versionId, method, pool) {
     numOrNull(m.pe_multiple_step),
     numOrNull(m.ps_multiple_step),
     numOrNull(m.cagr_step),
+    numOrNull(m.rd_cagr_step),
     numOrNull(m.rate_step),
   ]);
 }
@@ -93,7 +94,7 @@ async function loadMethod(caseId, versionId, pool) {
   const rows = await d.query(
     `SELECT terminal_type, fcf_method, sensitivity_axes, scenario_mode,
             multiple_source, industry_stat_method, confirmed,
-            pe_multiple_step, ps_multiple_step, cagr_step, rate_step
+            pe_multiple_step, ps_multiple_step, cagr_step, rd_cagr_step, rate_step
      FROM valuation_method WHERE case_id = ? AND version_id = ? LIMIT 1`,
     [caseId, versionId]
   );
@@ -110,6 +111,7 @@ async function loadMethod(caseId, versionId, pool) {
     pe_multiple_step: numOrNull(r.pe_multiple_step),
     ps_multiple_step: numOrNull(r.ps_multiple_step),
     cagr_step: numOrNull(r.cagr_step),
+    rd_cagr_step: numOrNull(r.rd_cagr_step),
     rate_step: numOrNull(r.rate_step),
   };
 }

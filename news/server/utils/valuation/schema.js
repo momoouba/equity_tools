@@ -554,7 +554,8 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
   await addColumnsIfMissing(dbPool, 'valuation_method', [
     ['pe_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长'"],
     ['ps_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/S 倍数步长'"],
-    ['cagr_step', "DECIMAL(20,8) NULL COMMENT '营收与研发 CAGR 步长，小数'"],
+    ['cagr_step', "DECIMAL(20,8) NULL COMMENT '营收 CAGR 步长，小数'"],
+    ['rd_cagr_step', "DECIMAL(20,8) NULL COMMENT '研发费用 CAGR 步长，小数'"],
     ['rate_step', "DECIMAL(20,8) NULL COMMENT '折现率步长，小数'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_dcf_run', [
@@ -651,7 +652,8 @@ async function createStructuredResultTables(dbPool) {
       sensitivity_axes VARCHAR(32) NULL,
       pe_multiple_step DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长',
       ps_multiple_step DECIMAL(20,6) NULL COMMENT '敏感性 P/S 倍数步长',
-      cagr_step DECIMAL(20,8) NULL COMMENT '营收与研发 CAGR 步长，小数',
+      cagr_step DECIMAL(20,8) NULL COMMENT '营收 CAGR 步长，小数',
+      rd_cagr_step DECIMAL(20,8) NULL COMMENT '研发费用 CAGR 步长，小数',
       rate_step DECIMAL(20,8) NULL COMMENT '折现率步长，小数',
       scenario_mode VARCHAR(32) NULL,
       multiple_source VARCHAR(32) NULL,

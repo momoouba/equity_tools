@@ -988,6 +988,52 @@ eq(rdShock.series.rd[1], 150, 'rd shock replaces the later year');
 eq(rdShock.series.revenue[1], rdPs.series.revenue[1], 'rd shock keeps revenue');
 eq(rdShock.exit_equity_value, rdPs.exit_equity_value, 'ps exit cap ignores rd');
 assert.notStrictEqual(rdShock.equity_value, rdPs.equity_value);
+const bothSeen = [];
+const bothView = buildExitView({
+  peRun: rdPe,
+  psRun: rdPs,
+  axes: 'rev_cagr_x_rd_cagr',
+  steps: { cagrStep: 0.05, rdCagrStep: 0.025 },
+  scenarioMode: 'single',
+  rebuild: (patch) => {
+    bothSeen.push(patch);
+    return rdRebuild(patch);
+  },
+});
+assert.strictEqual(bothView.axes, 'rev_cagr_x_rd_cagr');
+const peShocks = bothSeen.filter((patch) => patch.terminalType === 'exit_pe');
+assert.ok(peShocks.length > 0);
+assert.ok(peShocks.every((patch) => patch.multiple === 40));
+assert.ok(peShocks.some((patch) => patch.revenueOverride && !patch.rdOverride));
+assert.ok(peShocks.some((patch) => patch.rdOverride && !patch.revenueOverride));
+assert.ok(peShocks.some((patch) => patch.revenueOverride && patch.rdOverride));
+const revenueBase = rdPs.series.revenue;
+const rdBase = rdPs.series.rd;
+const revGaps = peShocks
+  .filter((patch) => patch.revenueOverride && !patch.rdOverride)
+  .map((patch) => Math.abs(patch.revenueOverride[1] - revenueBase[1]) / revenueBase[0]);
+const rdGaps = peShocks
+  .filter((patch) => patch.rdOverride && !patch.revenueOverride)
+  .map((patch) => Math.abs(patch.rdOverride[1] - rdBase[1]) / rdBase[0]);
+assert.ok(revGaps.some((gap) => Math.abs(gap - 0.05) < 1e-9));
+assert.ok(rdGaps.some((gap) => Math.abs(gap - 0.025) < 1e-9));
+assert.strictEqual(bothView.pe.row_labels[bothView.pe.center_row], '当前预测');
+assert.strictEqual(bothView.pe.col_labels[bothView.pe.center_col], '当前预测');
+assert.ok(bothView.pe.row_labels.some((label) => label.endsWith('%')));
+assert.ok(bothView.pe.col_labels.some((label) => label.endsWith('%')));
+assert.strictEqual(
+  bothView.pe.cells[bothView.pe.center_row][bothView.pe.center_col].equity_yi,
+  bothView.pe.equity_yi,
+);
+const bothShock = rdRebuild({
+  rate: rdPs.discount_rate,
+  multiple: 14,
+  terminalType: 'exit_ps',
+  revenueOverride: [440, 440 * 1.2],
+  rdOverride: [100, 150],
+});
+eq(bothShock.series.revenue[1], 440 * 1.2, 'both axes shock revenue');
+eq(bothShock.series.rd[1], 150, 'both axes shock rd');
 
 eq(exitMocIrr(100, 0.7, 50, 5).moc, 1.4, 'moc');
 eq(exitMocIrr(100, null, 50, 5).moc, 2, 'blank dilution is 100%');
@@ -1045,8 +1091,10 @@ assert.ok(diffCalcStamp(loaded, touchedPl).some((line) => line.includes('预测�
 assert.ok(!diffCalcStamp(loaded, touchedPl).some((line) => line.includes('现金流量表')));
 const legacyStamp = { ...stamp };
 delete legacyStamp.pe_multiple_step;
+delete legacyStamp.rd_cagr_step;
 delete legacyStamp.rd_growth_mode;
 assert.ok(diffCalcStamp(legacyStamp, stamp).some((line) => line.includes('P/E 倍数步长已改为 10')));
+assert.ok(diffCalcStamp(legacyStamp, stamp).some((line) => line.includes('研发费用 CAGR 步长已改为 5%')));
 assert.ok(diffCalcStamp(legacyStamp, stamp).some((line) => line.includes('研发费用口径已改为 较上一年')));
 const growthStamp = buildCalcStamp({
   assumptions: { rd_growth_mode: 'growth' },

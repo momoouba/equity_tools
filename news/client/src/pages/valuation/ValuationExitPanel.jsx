@@ -96,8 +96,8 @@ function SensTable({ title, side, block, dealYi, dilution, years }) {
 }
 
 function Block({ title, subtitle, pe, ps, block, dealYi, dilution, years, axis }) {
-  const peTitle = `退出 P/E · ${axis} × 退出倍数`
-  const psTitle = `退出 P/S · ${axis} × 退出倍数`
+  const peTitle = `退出 P/E · ${axis}`
+  const psTitle = `退出 P/S · ${axis}`
   if (!pe?.cells && !ps?.cells) return null
   return (
     <div className="valuation-sens-block">
@@ -113,7 +113,11 @@ function Block({ title, subtitle, pe, ps, block, dealYi, dilution, years, axis }
 
 function OneScenario({ view, dealYi, dilution }) {
   if (!view) return <Typography.Text type="secondary">请点「开始采集/计算/保存」后显示敏感性</Typography.Text>
-  const axis = view.axes === 'exit_x_wacc' ? '折现率' : (view.axes === 'exit_x_rd_cagr' ? '研发费用 CAGR' : '营收 CAGR')
+  const axis = view.axes === 'exit_x_wacc'
+    ? '折现率 × 退出倍数'
+    : (view.axes === 'exit_x_rd_cagr'
+      ? '研发费用 CAGR × 退出倍数'
+      : (view.axes === 'rev_cagr_x_rd_cagr' ? '营收 CAGR × 研发费用 CAGR' : '营收 CAGR × 退出倍数'))
   const deal = Number(dealYi)
   const d = dilution == null || dilution === '' ? 1 : Number(dilution)
   const showReturn = deal > 0 && Number.isFinite(d) && d >= 0 && d <= 1
@@ -170,6 +174,7 @@ const AXIS_OPTIONS = [
   { value: 'exit_x_cagr', label: '营收 CAGR × 退出倍数' },
   { value: 'exit_x_wacc', label: '折现率 × 退出倍数' },
   { value: 'exit_x_rd_cagr', label: '研发费用 CAGR × 退出倍数' },
+  { value: 'rev_cagr_x_rd_cagr', label: '营收 CAGR × 研发费用 CAGR' },
 ]
 
 function shownStep(value, fallback, percent) {
@@ -223,10 +228,10 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
     <div className="valuation-result-sens">
       <div className="valuation-sens-controls">
         <div className="valuation-sens-step">
-          <span>行轴</span>
+          <span>敏感性</span>
           <Select
             size="small"
-            style={{ width: 220 }}
+            style={{ width: 260 }}
             disabled={!!readOnly}
             getPopupContainer={() => document.body}
             value={axes}
@@ -236,11 +241,19 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
         </div>
         {axes === 'exit_x_wacc' ? (
           <StepControl label="折现率步长" value={method?.rate_step} fallback={0.02} presets={[2, 4]} percent disabled={!!readOnly} onChange={(v) => setMethod({ rate_step: v })} />
-        ) : (
-          <StepControl label="CAGR 步长" value={method?.cagr_step} fallback={0.05} presets={[2.5, 5]} percent disabled={!!readOnly} onChange={(v) => setMethod({ cagr_step: v })} />
+        ) : null}
+        {axes === 'exit_x_cagr' || axes === 'rev_cagr_x_rd_cagr' ? (
+          <StepControl label="营收 CAGR 步长" value={method?.cagr_step} fallback={0.05} presets={[2.5, 5]} percent disabled={!!readOnly} onChange={(v) => setMethod({ cagr_step: v })} />
+        ) : null}
+        {axes === 'exit_x_rd_cagr' || axes === 'rev_cagr_x_rd_cagr' ? (
+          <StepControl label="研发费用 CAGR 步长" value={method?.rd_cagr_step} fallback={0.05} presets={[2.5, 5]} percent disabled={!!readOnly} onChange={(v) => setMethod({ rd_cagr_step: v })} />
+        ) : null}
+        {axes === 'rev_cagr_x_rd_cagr' ? null : (
+          <>
+            <StepControl label="P/E 步长" value={method?.pe_multiple_step} fallback={10} presets={[5, 10]} disabled={!!readOnly} onChange={(v) => setMethod({ pe_multiple_step: v })} />
+            <StepControl label="P/S 步长" value={method?.ps_multiple_step} fallback={2} presets={[2, 5]} disabled={!!readOnly} onChange={(v) => setMethod({ ps_multiple_step: v })} />
+          </>
         )}
-        <StepControl label="P/E 步长" value={method?.pe_multiple_step} fallback={10} presets={[5, 10]} disabled={!!readOnly} onChange={(v) => setMethod({ pe_multiple_step: v })} />
-        <StepControl label="P/S 步长" value={method?.ps_multiple_step} fallback={2} presets={[2, 5]} disabled={!!readOnly} onChange={(v) => setMethod({ ps_multiple_step: v })} />
       </div>
       {storedDual ? (
         <Radio.Group
