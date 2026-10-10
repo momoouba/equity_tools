@@ -28,7 +28,7 @@ export default function ValuationChangeLog({ caseId }) {
       <Alert
         type="info"
         style={{ marginBottom: 12 }}
-        content="只记录会影响估值区间的关键项：锚定日、折现率、退出倍数、流动性折扣、WACC 分项、方法配置、申万三级、本轮交易估值，以及保存/发起版本。利润表、资产负债、现金流的数字改动不记入本表。"
+        content="只记录会影响估值区间的关键项：锚定日、折现率、退出倍数、流动性折扣、后续股权稀释、WACC 分项、方法配置、申万三级、本轮交易估值（投前），以及保存/发起版本。利润表、资产负债、现金流的数字改动不记入本表。"
       />
       <ListTable
         rowKey="id"

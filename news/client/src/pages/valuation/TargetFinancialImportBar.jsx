@@ -25,7 +25,7 @@ export default function TargetFinancialImportBar({ caseId, valuationDate, enterp
               return
             }
             const payload = coercePayloadToYuan(res.data.data?.payload || {})
-            onImported?.(payload)
+            onImported?.(payload, res.data.data)
             const sheets = (res.data.data?.sheets || []).join('、')
             Message.success(sheets ? `已导入：${sheets}` : '已导入标的三表')
           } catch (e) {

@@ -36,6 +36,7 @@ const {
 const { enqueueValuationJob, getJob } = require('../../utils/valuation/jobRunner');
 const { listSwIndustryNames } = require('../../utils/valuation/financialFetch');
 const { buildWorkbookBuffer } = require('../../utils/valuation/exportService');
+const { buildCalcStamp, diffCalcStamp } = require('../../utils/valuation/calcStamp');
 const { defaultMethodConfig } = require('../../utils/valuation/defaults');
 const C = require('../../utils/valuation/constants');
 const { fetchQichachaFuzzyCompanies } = require('../../utils/qichachaFuzzySearch');
@@ -438,7 +439,11 @@ function registerValuationRoutes(router) {
     try {
       const cse = await getCase(req, req.params.id);
       const draft = await getDraft(req.params.id);
-      const buf = buildTargetFinancialTemplateBuffer(templatePayloadForDownload(draft.payload, req.query));
+      const base = templatePayloadForDownload(draft.payload, req.query) || {};
+      const buf = buildTargetFinancialTemplateBuffer({
+        ...base,
+        assumptions: { ...(base.assumptions || {}), round_deal_value_yi: cse.round_deal_value_yi },
+      });
       sendTemplate(res, buf, financialTemplateFileName(cse));
     } catch (e) {
       sendErr(res, e);
@@ -465,12 +470,22 @@ function registerValuationRoutes(router) {
         const draft = await getDraft(req.params.id);
         const payload = mergeTargetFinancials(draft.payload, parsed);
         const saved = await saveDraft(req.params.id, payload, req.valUser.id);
+        const dealFilled = parsed.assumptions?.round_deal_value_yi != null;
+        let caseRound = null;
+        if (dealFilled) {
+          const updated = await updateCaseMeta(req, req.params.id, {
+            round_deal_value_yi: parsed.assumptions.round_deal_value_yi,
+          });
+          caseRound = updated?.round_deal_value_yi ?? parsed.assumptions.round_deal_value_yi;
+        }
         res.json({
           success: true,
           data: {
             payload: saved.payload,
             warnings: parsed.warnings,
             sheets: parsed.sheets,
+            case_round_updated: dealFilled,
+            case_round_deal_value_yi: caseRound,
           },
         });
       } catch (e) {
@@ -575,12 +590,22 @@ function registerValuationRoutes(router) {
           return res.status(404).json({ success: false, message: '版本不存在' });
         }
         sheets = ver.sheets;
-        payload = ver.payload;
+        payload = {
+          ...(ver.payload || {}),
+          export_deal_yi: ver.round_deal_value_yi,
+          export_stale_lines: null,
+        };
         title = `${title}-v${ver.version_no}`;
       } else {
         const draft = await getDraft(req.params.id);
         sheets = draft.payload?.sheets || {};
-        payload = draft.payload;
+        const comps = await listCaseComparables(cse.id);
+        const current = buildCalcStamp(draft.payload, comps);
+        payload = {
+          ...(draft.payload || {}),
+          export_deal_yi: cse.round_deal_value_yi,
+          export_stale_lines: diffCalcStamp(draft.payload?.calc_stamp, current),
+        };
         title = `${title}-草稿`;
       }
       const buf = buildWorkbookBuffer({ title, sheets, payload });

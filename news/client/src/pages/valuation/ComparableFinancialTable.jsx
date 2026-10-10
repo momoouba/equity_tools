@@ -149,7 +149,7 @@ export default function ComparableFinancialTable({ statementType, rows, loading,
 
   if (!loading && !(rows || []).some((r) => r.statement_type === statementType)) {
     return (
-      <Empty description="暂无入库财报。请先在「可比与采集」勾选公司，再点「开始采集/计算」。" />
+      <Empty description="暂无入库财报。请先在「可比与采集」勾选公司，再点「开始采集/计算/保存」。" />
     )
   }
 

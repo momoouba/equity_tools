@@ -140,9 +140,9 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
         </div>
       </div>
       {num(dealYi) != null && num(dealYi) > 0 ? (
-        <div className="valuation-football-legend">红色虚线为本轮交易估值 {fmt1(dealYi)} 亿</div>
+        <div className="valuation-football-legend">红色虚线为本轮交易估值（投前） {fmt1(dealYi)} 亿</div>
       ) : (
-        <div className="valuation-football-legend">录入本轮交易估值后显示对照虚线</div>
+        <div className="valuation-football-legend">录入本轮交易估值（投前）后显示对照虚线</div>
       )}
     </div>
   )

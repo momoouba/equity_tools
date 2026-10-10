@@ -1,6 +1,7 @@
 const XLSX = require('xlsx');
 const zlib = require('zlib');
 const { yuanToYi } = require('./marketUtils');
+const { exitMocIrr } = require('./exitReturn');
 const {
   BS_VISIBLE_FIELDS,
   BS_INPUT_KEYS,
@@ -245,28 +246,120 @@ function qSheet(name) {
   return `'${n.replace(/'/g, "''")}'`;
 }
 
-function buildResult(sheet, title, _payload, refs) {
+function sensDisplay(cell, block, dealYi, dilution, years) {
+  if (!cell || cell.blank === 'revenue' || cell.blank === 'other' || cell.blank === 'multiple') return { v: null, text: false };
+  if (cell.blank === 'nopat') return { v: '税后经营利润小于等于 0', text: true };
+  if (block === 'equity') return { v: cell.equity_yi, text: false };
+  const m = exitMocIrr(cell.cap_yi, dilution, dealYi, years);
+  if (block === 'moc') {
+    if (m.note && m.moc == null) return { v: m.note, text: true };
+    return { v: m.moc, text: false };
+  }
+  if (m.note === 'MOC 不为正，无 IRR') return { v: m.note, text: true };
+  if (m.note && m.irr == null) return { v: m.note, text: true };
+  return { v: m.irr, text: false };
+}
+
+function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
+  if (!view) return;
+  b.colCount = Math.max(b.colCount || 1, 13);
+  const years = view.holding_years;
+  const axis = view.axes === 'exit_x_wacc' ? '折现率' : (view.axes === 'exit_x_rd_cagr' ? '研发费用 CAGR' : '营收 CAGR');
+  const deal = num(dealYi);
+  const showReturn = deal > 0 && (dilution == null || dilution === '' || (Number(dilution) >= 0 && Number(dilution) <= 1));
+  const sides = [
+    ['退出 P/E', view.pe],
+    ['退出 P/S', view.ps],
+  ].filter(([, side]) => side && !side.blocked && side.cells);
+  if (!sides.length) return;
+  b.gap(1);
+  b.section(heading || '基准情形');
+  if (includeDeal) {
+    const dilPct = dilution == null || dilution === '' ? 100 : Math.round(Number(dilution) * 10000) / 100;
+    b.data(['本轮交易估值（投前）（亿元）', deal], ['text', 'num']);
+    b.data(['后续股权稀释（%）', Number.isFinite(dilPct) ? dilPct : null], ['text', 'num']);
+  }
+  b.data(['持有年数', years], ['text', 'num']);
+  sides.forEach(([name, side]) => {
+    const m = exitMocIrr(side.cap_yi, dilution, dealYi, years);
+    b.data([`${name}（倍）`, side.multiple], ['text', 'num']);
+    b.data([`${name} 股权价值（亿元）`, side.equity_yi], ['text', 'num']);
+    b.data([`${name} 退出市值（亿元）`, side.cap_yi], ['text', 'num']);
+    b.data([`${name} 退出 MOC`, m.moc == null ? m.note : m.moc], ['text', m.moc == null ? 'text' : 'num']);
+    b.data([`${name} 退出 IRR（%）`, m.irr == null ? (m.note || null) : m.irr], ['text', m.irr == null ? 'text' : 'num']);
+  });
+  const blocks = [{ key: 'equity', title: `估值（亿元）：${axis} × 退出倍数` }];
+  if (showReturn) {
+    blocks.push({ key: 'moc', title: `退出 MOC：${axis} × 退出倍数` });
+    blocks.push({ key: 'irr', title: `退出 IRR（%）：${axis} × 退出倍数。持有 ${years == null ? '' : Number(years).toFixed(2)} 年` });
+  } else {
+    const note = !(deal > 0)
+      ? '待填写本轮交易估值（投前），退出 MOC 与退出 IRR 不出表'
+      : '后续股权稀释需在 0% 到 100%，退出 MOC 与退出 IRR 不出表';
+    blocks.push({ key: 'note', title: note });
+  }
+  blocks.forEach((block) => {
+    b.gap(1);
+    b.section(block.title);
+    if (block.key === 'note') return;
+    const pe = sides.find(([name]) => name === '退出 P/E')?.[1];
+    const ps = sides.find(([name]) => name === '退出 P/S')?.[1];
+    const rowCount = Math.max(pe?.row_labels?.length || 0, ps?.row_labels?.length || 0);
+    const header = [
+      ...(pe ? [axis, ...pe.col_labels] : []),
+      ...(pe && ps ? [null] : []),
+      ...(ps ? [axis, ...ps.col_labels] : []),
+    ];
+    b.data(header, header.map(() => 'text'));
+    for (let i = 0; i < rowCount; i += 1) {
+      const row = [];
+      const kinds = [];
+      const pushSide = (side) => {
+        if (!side) return;
+        row.push(side.row_labels?.[i] ?? null);
+        kinds.push('text');
+        (side.cells?.[i] || []).forEach((cell, j) => {
+          const shown = sensDisplay(cell, block.key, dealYi, dilution, years);
+          const center = i === side.center_row && j === side.center_col;
+          row.push(shown.v);
+          kinds.push(shown.text ? (center ? 'centerText' : 'text') : (center ? 'centerNum' : 'num'));
+        });
+      };
+      pushSide(pe);
+      if (pe && ps) {
+        row.push(null);
+        kinds.push('text');
+      }
+      pushSide(ps);
+      b.data(row, kinds);
+    }
+  });
+  if (view.wacc_floored) b.note('折现率低于 1% 的档已按 1% 计算。');
+}
+
+function buildResult(sheet, title, payload, refs) {
   const yi = sheet?.payload?.display_yi;
-  const b = sheetBuilder(title, sheet?.formula || '增量=高端−低端。市场法低端=−1σ×基数×(1−折扣)，高端=中位×基数×(1−折扣)；DCF 低/高端=敏感性内圈四角 MIN/MAX');
+  const b = sheetBuilder(title, sheet?.formula || '增量=高端−低端。市场法低端=−1σ×基数×(1−折扣)，高端=中位×基数×(1−折扣)。DCF 低端和高端是退出 P/E 与退出 P/S 的股权价值');
   const dual = !!(yi && yi.dcf?.ma);
   const headers = dual
     ? ['序号', '区间', '市场法 P/S（亿元）', '市场法 P/E（亿元）', 'DCF 并购预期（亿元）', 'DCF 上市预期（亿元）']
     : ['序号', '区间', '市场法 P/S（亿元）', '市场法 P/E（亿元）', 'DCF（亿元）'];
-  b.start(headers.length);
+  b.start(Math.max(headers.length, 13));
+  if (payload?.export_stale_lines?.length) {
+    b.note(`输入已修改，表内为上次计算。${payload.export_stale_lines.join('；')}`);
+  }
   b.header(headers);
   if (!yi) {
     b.data(['', '暂无结果对比', '', '', ''], headers.map(() => 'text'));
     return b;
   }
   const mkt = refs?.marketSheet ? qSheet(refs.marketSheet) : null;
-  const dcfSh = refs?.dcfSheet ? qSheet(refs.dcfSheet) : null;
   const psLowF = mkt && refs.psIlliqLow ? `${mkt}!${refs.psIlliqLow}` : null;
   const psHighF = mkt && refs.psIlliqMid ? `${mkt}!${refs.psIlliqMid}` : null;
   const peLowF = mkt && refs.peIlliqLow ? `${mkt}!${refs.peIlliqLow}` : null;
   const peHighF = mkt && refs.peIlliqMid ? `${mkt}!${refs.peIlliqMid}` : null;
-  const dcfCorners = (refs?.dcfInner || []).map((addr) => `${dcfSh}!${addr}`);
-  const dcfLowF = !dual && dcfCorners.length ? `MIN(${dcfCorners.join(',')})` : null;
-  const dcfHighF = !dual && dcfCorners.length ? `MAX(${dcfCorners.join(',')})` : null;
+  const dcfLowF = null;
+  const dcfHighF = null;
 
   const lowExcel = b.aoa.length + 1;
   const kinds = dual
@@ -306,8 +399,32 @@ function buildResult(sheet, title, _payload, refs) {
       F(yi.dcf?.high, dcfHighF),
     ];
   b.data(highCells, kinds);
-  b.note('改「市场法」「DCF」过程格后，本表低端/高端/增量会跟着重算。敏感性矩阵仍是引擎输出，改折现率后矩阵需回系统重算。');
-  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 10 }, { wch: 22 }, { wch: 22 }, { wch: 24 }, { wch: 24 });
+  b.note('DCF 低端和高端是退出 P/E 与退出 P/S 的股权价值。下面三块表是敏感性，改折现率或倍数后需回系统重算再导出。');
+  const dcfPayload = payload?.sheets?.dcf?.payload;
+  const dealYi = payload?.export_deal_yi != null ? payload.export_deal_yi : payload?.assumptions?.round_deal_value_yi;
+  const dilution = payload?.assumptions?.follow_on_dilution;
+  if (dcfPayload?.primary?.exit_view) {
+    const dualExit = !!dcfPayload.secondary?.exit_view;
+    appendExitBlock(
+      b,
+      dcfPayload.primary.exit_view,
+      dealYi,
+      dilution,
+      dualExit ? (dcfPayload.primary.scenario_name || '并购') : null,
+      true,
+    );
+    if (dualExit) {
+      appendExitBlock(
+        b,
+        dcfPayload.secondary.exit_view,
+        dealYi,
+        dilution,
+        dcfPayload.secondary.scenario_name || '上市',
+        false,
+      );
+    }
+  }
+  b.widths.splice(0, b.widths.length, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 4 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 });
   return b;
 }
 
@@ -615,30 +732,6 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
     : `B${evExcel}-B${ndExcel}`;
   b.data(['股权价值（万元）', F(eqWan, eqF)], ['text', 'wan']);
   b.data(['股权价值（亿元）', F(num(dcf.equity_value_yi) ?? asYi(dcf.equity_value), `B${eqExcel}/10000`)], ['text', 'yi']);
-
-  const sens = dcf.sensitivity;
-  if (sens?.grid) {
-    b.gap(1, colCount);
-    b.note('敏感性矩阵为引擎输出（亿元）。结果对比 DCF 区间取内圈四角 MIN/MAX；改左侧折现率/退出倍数不会自动重算本矩阵。', colCount);
-    const colLabels = sens.col_labels || [];
-    const headers = [`${sens.row_kind} \\ ${sens.col_kind}（亿元）`, ...colLabels.map((c) => fmtAxisLabel(sens.col_kind, c))];
-    b.header(headers);
-    const dataStartExcel = b.aoa.length + 1;
-    (sens.grid || []).forEach((row, i) => {
-      b.data(
-        [fmtAxisLabel(sens.row_kind, sens.row_labels?.[i]), ...row.map((v) => asYi(v))],
-        ['text', ...row.map(() => 'yi')],
-      );
-    });
-    if (refs && !refs.dcfInner) {
-      const lastR = (sens.grid || []).length - 1;
-      const lastC = (sens.grid[0] || []).length - 1;
-      const corners = lastR >= 3 && lastC >= 3
-        ? [[1, 1], [1, 3], [3, 1], [3, 3]]
-        : [[0, 0], [0, lastC], [lastR, 0], [lastR, lastC]];
-      refs.dcfInner = corners.map(([ri, ci]) => `${colLetter(ci + 1)}${dataStartExcel + ri}`);
-    }
-  }
   b.gap(1, colCount);
 }
 
@@ -725,17 +818,26 @@ function buildRelative(sheet, title) {
   const headers = [
     '序号', '代码', '名称', '入池', '可比强度', '截面日',
     'PE 锚定截面', 'PE 中位', 'PE 底稿中位', 'PE σ', 'PE −1σ', 'PE +1σ',
-    'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ', '提示',
+    'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ',
+    'PE 取用', 'PS 取用', '提示',
   ];
   b.start(headers.length);
   b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(12).fill('num'), 'text'];
+  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(14).fill('num'), 'text'];
   const dataStart = b.aoa.length + 1;
   const degreeLabel = { strong: '强', medium: '中', weak: '弱' };
+  let poolCount = 0;
+  let peTakeCount = 0;
+  let psTakeCount = 0;
   rows.forEach((r, i) => {
     const excel = dataStart + i;
     const hint = [r.quality_warning, r.pe_usable === false ? 'PE 未入统计' : null, r.ps_usable === false ? 'PS 未入统计' : null]
       .filter(Boolean).join('；') || null;
+    const peUsed = poolUsedNumber(r, 'pe');
+    const psUsed = poolUsedNumber(r, 'ps');
+    if (r.in_pool && !r._summary) poolCount += 1;
+    if (peUsed != null) peTakeCount += 1;
+    if (psUsed != null) psTakeCount += 1;
     b.data([
       i + 1, r.stock_code, r.stock_name, r.in_pool ? '是' : '否',
       degreeLabel[r.comparability] || '中',
@@ -746,23 +848,15 @@ function buildRelative(sheet, title) {
       num(r.ps_latest), num(r.ps_median), num(r.ps_median_override), num(r.ps_stdev),
       F(num(r.ps_minus_1s), `N${excel}-P${excel}`),
       F(num(r.ps_plus_1s), `N${excel}+P${excel}`),
+      peUsed != null ? F(peUsed, `IF(I${excel}="",IF(H${excel}="",G${excel},H${excel}),I${excel})`) : null,
+      psUsed != null ? F(psUsed, `IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`) : null,
       hint,
     ], kinds);
   });
   if (!rows.length) {
-    b.data(['', '暂无相对估值结果', ...Array(17).fill(null)], kinds);
+    b.data(['', '暂无相对估值结果', ...Array(19).fill(null)], kinds);
     return b;
   }
-  const poolPe = [];
-  const poolPs = [];
-  let poolCount = 0;
-  rows.forEach((r, i) => {
-    if (!r.in_pool || r._summary) return;
-    poolCount += 1;
-    const excel = dataStart + i;
-    if (poolUsedNumber(r, 'pe') != null) poolPe.push(`IF(I${excel}="",IF(H${excel}="",G${excel},H${excel}),I${excel})`);
-    if (poolUsedNumber(r, 'ps') != null) poolPs.push(`IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`);
-  });
   b.gap(1, headers.length);
   const peVals = rows.map((r) => poolUsedNumber(r, 'pe')).filter((n) => n != null);
   const psVals = rows.map((r) => poolUsedNumber(r, 'ps')).filter((n) => n != null);
@@ -771,16 +865,18 @@ function buildRelative(sheet, title) {
   const peSd = stdevNums(peVals);
   const psSd = stdevNums(psVals);
   const takeExcel = b.aoa.length + 1;
-  const peMedF = poolPe.length ? `MEDIAN(${poolPe.join(',')})` : null;
-  const psMedF = poolPs.length ? `MEDIAN(${poolPs.join(',')})` : null;
-  const peSdF = poolPe.length >= 2 ? `STDEV.S(${poolPe.join(',')})` : null;
-  const psSdF = poolPs.length >= 2 ? `STDEV.S(${poolPs.join(',')})` : null;
+  const lastData = dataStart + rows.length - 1;
+  const peMedF = peTakeCount ? `MEDIAN(S${dataStart}:S${lastData})` : null;
+  const psMedF = psTakeCount ? `MEDIAN(T${dataStart}:T${lastData})` : null;
+  const peSdF = peTakeCount >= 2 ? `STDEV.S(S${dataStart}:S${lastData})` : null;
+  const psSdF = psTakeCount >= 2 ? `STDEV.S(T${dataStart}:T${lastData})` : null;
   const peLow = peMed != null && peSd != null ? peMed - peSd : peMed;
   const psLow = psMed != null && psSd != null ? psMed - psSd : psMed;
   b.data([
     '', '取用结果', null, `${poolCount} 家入池`, null, null,
     null, F(peMed, peMedF), null, F(peSd, peSdF), F(peLow, `H${takeExcel}-J${takeExcel}`), null,
     null, F(psMed, psMedF), null, F(psSd, psSdF), F(psLow, `N${takeExcel}-P${takeExcel}`), null,
+    null, null,
     '单家取数：底稿中位，否则历史中位，否则锚定截面。本行中位=高端倍数，−1σ=低端倍数。可比强度不参与',
   ], kinds);
   return b;
@@ -1241,12 +1337,13 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <font><sz val="10"/><color rgb="FF4E5969"/><name val="微软雅黑"/><family val="2"/></font>
 <font><sz val="11"/><b/><color rgb="FF1E3A8A"/><name val="微软雅黑"/><family val="2"/></font>
 </fonts>
-<fills count="5">
+<fills count="6">
 <fill><patternFill patternType="none"/></fill>
 <fill><patternFill patternType="gray125"/></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFDBEAFE"/><bgColor indexed="64"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFF3F8FF"/><bgColor indexed="64"/></patternFill></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FFE8F3FF"/><bgColor indexed="64"/></patternFill></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FFFFF3CD"/><bgColor indexed="64"/></patternFill></fill>
 </fills>
 <borders count="2">
 <border><left/><right/><top/><bottom/><diagonal/></border>
@@ -1259,7 +1356,7 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </border>
 </borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="14">
+<cellXfs count="18">
 <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
 <xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
@@ -1274,6 +1371,10 @@ const STYLES_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <xf numFmtId="177" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
 <xf numFmtId="178" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
 <xf numFmtId="178" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="1" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="1" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>
+<xf numFmtId="4" fontId="0" fillId="5" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="5" borderId="1" xfId="0" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
 </cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`;
@@ -1292,6 +1393,10 @@ const XF = {
   evenYi: 11,
   oddPct: 12,
   evenPct: 13,
+  oddSeq: 14,
+  evenSeq: 15,
+  centerNum: 16,
+  centerText: 17,
 };
 
 function xfFor(rowType, colKind, stripeEven) {
@@ -1303,7 +1408,10 @@ function xfFor(rowType, colKind, stripeEven) {
   if (colKind === 'wan') return XF[`${even}Wan`];
   if (colKind === 'yi') return XF[`${even}Yi`];
   if (colKind === 'pct') return XF[`${even}Pct`];
-  if (colKind === 'num' || colKind === 'seq') return XF[`${even}Num`];
+  if (colKind === 'seq') return XF[`${even}Seq`];
+  if (colKind === 'num') return XF[`${even}Num`];
+  if (colKind === 'centerNum') return XF.centerNum;
+  if (colKind === 'centerText') return XF.centerText;
   return XF[even];
 }
 

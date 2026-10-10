@@ -252,10 +252,107 @@
 
 .valuation-result-top {
   display: grid;
-  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.18fr);
+  grid-template-columns: minmax(320px, 0.9fr) minmax(0, 1.2fr);
   gap: 16px;
-  align-items: stretch;
+  align-items: start;
   margin-top: 8px;
+}
+
+.valuation-result-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.valuation-result-sens {
+  min-width: 0;
+}
+
+.valuation-sens-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.valuation-sens-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: #4e5969;
+}
+
+.valuation-sens-step .arco-input-number {
+  width: 72px;
+}
+
+.valuation-sens-block {
+  margin-bottom: 14px;
+}
+
+.valuation-sens-block-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 4px;
+}
+
+.valuation-sens-block-sub {
+  font-size: 12px;
+  color: #86909c;
+  margin-bottom: 6px;
+}
+
+.valuation-sens-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.valuation-sens-table-title {
+  font-size: 12px;
+  color: #4e5969;
+  margin-bottom: 4px;
+}
+
+.valuation-sens-table-wrap {
+  overflow-x: auto;
+}
+
+.valuation-sens-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.valuation-sens-table th,
+.valuation-sens-table td {
+  border: 1px solid #e5e6eb;
+  padding: 4px 6px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.valuation-sens-table th {
+  background: #f7f8fa;
+  color: #4e5969;
+  font-weight: 500;
+  text-align: center;
+}
+
+.valuation-sens-table td.is-center {
+  background: #fff3cd;
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .valuation-result-top,
+  .valuation-sens-pair {
+    grid-template-columns: 1fr;
+  }
 }
 
 .valuation-result-grid {
@@ -335,6 +432,13 @@
 .valuation-result-card .num {
   font-size: 20px;
   font-weight: 600;
+}
+
+.valuation-exit-line {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 4px;
+  white-space: normal;
 }
 
 .valuation-result-card-head {

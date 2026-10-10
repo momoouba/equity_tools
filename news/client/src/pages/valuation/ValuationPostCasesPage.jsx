@@ -54,7 +54,7 @@ export default function ValuationPostCasesPage({ embedded = false, onOpenWorkben
     { title: '简称', dataIndex: 'project_abbreviation', width: 140, render: (v) => v || '-' },
     { title: '版本数', dataIndex: 'version_count', width: 80, render: (v) => v || 0 },
     { title: '最近低/增量/高(亿元)', dataIndex: 'latest_conclusion', width: 280, render: (v) => fmtRange(v) },
-    { title: '本轮交易估值', dataIndex: 'round_deal_value_yi', width: 120, render: (v) => fmtN(v) },
+    { title: '本轮交易估值（投前）', dataIndex: 'round_deal_value_yi', width: 150, render: (v) => fmtN(v) },
     { title: '状态', dataIndex: 'status', width: 90 },
     { title: '最近估值时间', dataIndex: 'latest_valued_at', width: 170, render: (v) => formatChinaDateTime(v) },
     {

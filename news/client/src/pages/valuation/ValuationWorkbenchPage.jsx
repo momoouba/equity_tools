@@ -17,6 +17,8 @@ import ValuationDetailModal from './ValuationDetailModal'
 import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { coercePayloadToYuan, fmtYi, fmtNum, fmtPct, fmtAmountWan, fmtWanPlain, roundWanToFen, wanInputNumberProps, formatChinaDateTime, formatChinaYmd, previewWaccBreakdown } from './valuationUnits'
 import ValuationFootballField from './ValuationFootballField'
+import ValuationExitPanel, { DcfExitCard } from './ValuationExitPanel'
+import { buildCalcStamp, diffCalcStamp, needsRefetch } from './valuationCalcStamp'
 import {
   RelativeValuationTable,
   RatiosTables,
@@ -400,7 +402,37 @@ function forecastStatement(pl, assumptions, forecastPl) {
   const surtax = fromRevenue('surtax_ratio', 'surtax')
   const selling = fromRevenue('selling_ratio', 'selling')
   const admin = fromRevenue('admin_ratio', 'admin')
-  const rd = fromRevenue('rd_ratio', 'rd')
+  const rdRates = carrySeries(picked('rd_ratio'))
+  const manualRd = (i) => {
+    const row = forecastPl?.[years[i]]
+    if (!Array.isArray(row?.manual) || !row.manual.includes('rd')) return null
+    return finiteOrNull(row.rd)
+  }
+  const rd = assumptions?.rd_growth_mode === 'share'
+    ? fromRevenue('rd_ratio', 'rd')
+    : years.map((_, i) => i).reduce((acc, i) => {
+      const rate = rdRates[i]
+      const manual = i === 0 && amountYear ? null : manualRd(i)
+      let next = null
+      if (amountYear && i === 0) {
+        next = entered('rd')
+      } else if (manual != null) {
+        next = manual
+      } else if (rate != null && Math.abs(rate) > 10000) {
+        next = rate
+      } else if (!amountYear && i === 0) {
+        const idx = (pl?.years || []).findIndex((y) => yearNum(y) === anchor.year)
+        const actual = finiteOrNull(pl?.rd?.[idx])
+        next = actual == null || rate == null ? null : actual * (1 + rate)
+      } else if (acc.prev == null || rate == null) {
+        next = null
+      } else {
+        next = acc.prev * (1 + rate)
+      }
+      acc.values.push(next)
+      acc.prev = next
+      return acc
+    }, { values: [], prev: null }).values
   const financeExpense = fromRevenue('finance_expense_ratio', 'finance_expense', true)
   const otherIncome = fromRevenue('other_income_ratio', 'other_income')
   const other = fromRevenue('other_ratio', 'other')
@@ -627,17 +659,17 @@ function ratiosTouched(pl) {
 const ANCHOR_DATE_HELP = '只能选最近一期报表日：3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。新建时按案件创建日预填，与下载模板相同：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。可以改。市场法倍数、DCF 折现起点和资产负债表实际列都用这一天。'
 
 const FORECAST_RATIO_ROWS = [
-  { key: 'revenue_growth', name: '收入增速', note: '锚定日不是 12 月 31 日时，当年年底收入在预测利润表填写，本表从下一年起填增速。12 月 31 日时，第一年 = 当年全年收入 ×（1+增速）。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
-  { key: 'cogs_ratio', name: '营业成本', note: '占当年营业收入。95 表示 95%。绝对值大于 10000 时按该年实际金额（元），不再乘收入。当年年底金额仍在预测利润表填写。', min: -500 },
-  { key: 'surtax_ratio', name: '税金及附加', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额。填 0 视为已填，小于 0 会拦截。', min: -100 },
-  { key: 'selling_ratio', name: '销售费用', note: '占当年营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
-  { key: 'admin_ratio', name: '管理费用', note: '占当年营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
-  { key: 'rd_ratio', name: '研发费用', note: '占当年营业收入，含已分摊折旧。95 表示收入的 95%；10000000 表示该年研发费用 10000000 元。', min: -500 },
-  { key: 'finance_expense_ratio', name: '财务费用', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额，可为负。未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
-  { key: 'other_income_ratio', name: '其他收益', note: '多含政府补助。空白年份沿用最近一次比例，终值按最后一年计算，补助会被永久资本化。不可持续时把后续年份改低或改为 0。可为负，填 0 视为已填。', min: -500 },
-  { key: 'other_ratio', name: '其他', note: '只放经营性项目。不含投资收益、公允价值变动、信用减值、资产减值、资产处置、营业外收支。可为负，填 0 视为已填。', min: -500 },
-  { key: 'da_ratio', name: '折旧摊销', note: '填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。占当年营业收入。绝对值大于 10000 时按该年实际金额。', min: -100 },
-  { key: 'capex_ratio', name: '资本开支', note: '占当年营业收入。绝对值大于 10000 时按该年实际金额。未填不按 0，会拦截。DCF 不再使用现金流量表上的手填金额。', min: -100 },
+  { key: 'revenue_growth', name: '收入增速（较上一年）', note: '较上一年。锚定日不是 12 月 31 日时，当年年底收入在预测利润表填写，本表从下一年起填增速。12 月 31 日时，第一年 = 当年全年收入 ×（1+增速）。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
+  { key: 'cogs_ratio', name: '营业成本（占营业收入）', note: '占营业收入。95 表示当年收入的 95%。绝对值大于 10000 时按该年实际金额（元），不再乘收入。当年年底金额仍在预测利润表填写。', min: -500 },
+  { key: 'surtax_ratio', name: '税金及附加（占营业收入）', note: '占营业收入。绝对值大于 10000 时按该年实际金额。填 0 视为已填，小于 0 会拦截。', min: -100 },
+  { key: 'selling_ratio', name: '销售费用（占营业收入）', note: '占营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
+  { key: 'admin_ratio', name: '管理费用（占营业收入）', note: '占营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。', min: -500 },
+  { key: 'rd_ratio', name: '研发费用（较上一年）', note: '较上一年。10 表示增长 10%。绝对值大于 10000 时按该年金额（元）。锚定日不是 12 月 31 日时，第一列年底金额在预测利润表填写。锚定日是 12 月 31 日、第一年填百分数时，用已结年全年实际研发 ×（1+增速）。', min: -500 },
+  { key: 'finance_expense_ratio', name: '财务费用（占营业收入）', note: '占营业收入。绝对值大于 10000 时按该年实际金额，可为负。未填按 0。不进入税前经营利润和自由现金流。', min: -500 },
+  { key: 'other_income_ratio', name: '其他收益（占营业收入）', note: '占营业收入。多含政府补助。空白年份沿用最近一次比例，终值按最后一年计算，补助会被永久资本化。不可持续时把后续年份改低或改为 0。可为负，填 0 视为已填。', min: -500 },
+  { key: 'other_ratio', name: '其他（占营业收入）', note: '占营业收入。只放经营性项目。不含投资收益、公允价值变动、信用减值、资产减值、资产处置、营业外收支。可为负，填 0 视为已填。', min: -500 },
+  { key: 'da_ratio', name: '折旧摊销（占营业收入）', note: '占营业收入。填现金流量表补充资料或附注中的折旧摊销合计，不要从三项费用里扣掉再填。绝对值大于 10000 时按该年实际金额。', min: -100 },
+  { key: 'capex_ratio', name: '资本开支（占营业收入）', note: '占营业收入。绝对值大于 10000 时按该年实际金额。未填不按 0，会拦截。DCF 不再使用现金流量表上的手填金额。', min: -100 },
 ]
 
 function splicePlYear(pl, index) {
@@ -1158,8 +1190,8 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
       ))}
       <Typography.Paragraph className="valuation-dcf-terminal-hint">
         {locked
-          ? '已按填写值覆盖 POOL。点「跟随 POOL」后再只计算，会重新用可比股算出的低端和高端。'
-          : 'P/S、P/E 各一行。低端 = POOL 中位数 − σ，高端 = POOL 中位数。改数字会锁定，只计算时不再跟 POOL。'}
+          ? '已按填写值覆盖 POOL。点「跟随 POOL」后再点「开始采集/计算/保存」，会重新用可比股算出的低端和高端。'
+          : 'P/S、P/E 各一行。低端 = POOL 中位数 − σ，高端 = POOL 中位数。改数字会锁定，点「开始采集/计算/保存」时不再跟 POOL。'}
       </Typography.Paragraph>
     </div>
   )
@@ -1329,6 +1361,7 @@ export default function ValuationWorkbenchPage() {
   const [compFinancials, setCompFinancials] = useState([])
   const [compFinLoading, setCompFinLoading] = useState(false)
   const [viewingKey, setViewingKey] = useState('draft')
+  const [archiveDealYi, setArchiveDealYi] = useState(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [exportIds, setExportIds] = useState(['draft'])
   const [exporting, setExporting] = useState(false)
@@ -1435,11 +1468,14 @@ export default function ValuationWorkbenchPage() {
     persist(next)
   }
 
-  const adoptImportedPayload = (next) => {
+  const adoptImportedPayload = (next, meta) => {
     clearTimeout(saveTimer.current)
     const withUnit = { ...(next || {}), amount_unit: 'yuan' }
     payloadRef.current = withUnit
     setPayload(withUnit)
+    if (meta?.case_round_updated) {
+      setCse((prev) => ({ ...(prev || {}), round_deal_value_yi: meta.case_round_deal_value_yi }))
+    }
   }
 
   const loadCompFinancials = useCallback(async () => {
@@ -1506,7 +1542,11 @@ export default function ValuationWorkbenchPage() {
       payloadRef.current = body
       setPayload(body)
       await putValuationDraft(caseId, body)
-      const res = await postValuationJob(caseId, { job_type: 'fetch_and_calc' })
+      const currentStamp = buildCalcStamp(body, comps)
+      const jobType = !body.calc_stamp || needsRefetch(body.calc_stamp, currentStamp)
+        ? 'fetch_and_calc'
+        : 'calc_only'
+      const res = await postValuationJob(caseId, { job_type: jobType })
       if (res.status === 202 || res.data?.success) {
         const jobId = res.data.data.job_id
         setJob({ id: jobId, status: 'queued', progress: 0, message: res.data.message })
@@ -1522,6 +1562,13 @@ export default function ValuationWorkbenchPage() {
   const saveVersion = async () => {
     if (!isDraftView) {
       Message.warning('请切换到当前草稿后再保存版本')
+      return
+    }
+    const staleNow = payload?.calc_stamp
+      ? diffCalcStamp(payload.calc_stamp, buildCalcStamp(payload, comps))
+      : []
+    if (staleNow.length) {
+      Message.warning('输入已修改，请先点「开始采集/计算/保存」')
       return
     }
     Modal.confirm({
@@ -1553,6 +1600,7 @@ export default function ValuationWorkbenchPage() {
         const dRes = await fetchValuationDraft(caseId)
         const next = coercePayloadToYuan(dRes.data?.data?.payload || {})
         setPayload(next)
+        setArchiveDealYi(null)
         setDraftYi(next.comparison?.display_yi || draftYi)
       } else {
         const res = await fetchValuationVersion(key)
@@ -1561,6 +1609,7 @@ export default function ValuationWorkbenchPage() {
           setViewingKey('draft')
           return
         }
+        setArchiveDealYi(res.data.data.round_deal_value_yi)
         setPayload(coercePayloadToYuan(res.data.data.payload || {}))
       }
     } catch (e) {
@@ -1645,6 +1694,11 @@ export default function ValuationWorkbenchPage() {
   }
 
   const comparison = payload?.comparison?.display_yi
+  const staleLines = isDraftView && payload?.calc_stamp
+    ? diffCalcStamp(payload.calc_stamp, buildCalcStamp(payload, comps))
+    : []
+  const dealYi = isDraftView ? cse?.round_deal_value_yi : archiveDealYi
+  const dilution = payload?.assumptions?.follow_on_dilution
   const liveDraftYi = isDraftView ? (comparison || draftYi) : draftYi
   const notices = splitValuationNotices(payload?.warnings || [])
   const blockerLines = (payload?.warnings || [])
@@ -1729,10 +1783,10 @@ export default function ValuationWorkbenchPage() {
             }}
             onClick={runJob}
           >
-            开始采集/计算
+            开始采集/计算/保存
           </Button>
           <Button onClick={() => setDetailOpen(true)} disabled={!payload.sheets}>明细</Button>
-          <Button onClick={saveVersion} disabled={!isDraftView}>保存版本</Button>
+          <Button onClick={saveVersion} disabled={!isDraftView || staleLines.length > 0}>保存版本</Button>
           <Button onClick={startNewVersion} disabled={!archivedVersions.length}>发起新版本</Button>
           <Button onClick={openExportModal}>导出 xlsx</Button>
         </div>
@@ -1772,22 +1826,6 @@ export default function ValuationWorkbenchPage() {
                   options={[
                     { value: 'ni_bridge', label: '净利润桥' },
                     { value: 'nopat_fcff', label: 'NOPAT / FCFF' },
-                  ]}
-                />
-              </div>
-              <div className="valuation-method-field">
-                <span>敏感性</span>
-                <Select
-                  size="small"
-                  style={{ width: '100%' }}
-                  getPopupContainer={() => document.body}
-                  triggerProps={{ autoAlignPopupWidth: true }}
-                  value={method.sensitivity_axes}
-                  onChange={(v) => patchPayload({ methodConfig: { ...method, sensitivity_axes: v, confirmed: false } })}
-                  options={[
-                    { value: 'exit_x_cagr', label: '退出倍数 × 收入 CAGR' },
-                    { value: 'exit_x_wacc', label: '退出倍数 × 折现率' },
-                    { value: 'wacc_x_exit', label: '折现率 × 退出倍数' },
                   ]}
                 />
               </div>
@@ -1995,7 +2033,7 @@ export default function ValuationWorkbenchPage() {
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="上面是锚定日当期金额。锚定日不是 12 月 31 日时，当年年底预估不在这张表里，请填在下面的预测利润表。收入增速按上一年营业收入，10 表示增长 10%。营业成本及后面的科目按当年营业收入的比例，95 表示 95%；填入的绝对值大于 10000 时，当作该年实际金额（元），不再乘收入。改当年年底收入后，按收入比例计算的后面年份会跟着变。财务费用不进入自由现金流。改完点「开始采集/计算」，会先保存再计算。"
+              content="上面是锚定日当期金额。锚定日不是 12 月 31 日时，当年年底预估不在这张表里，请填在下面的预测利润表。收入增速按上一年营业收入，10 表示增长 10%。营业成本及后面的科目按当年营业收入的比例，95 表示 95%；填入的绝对值大于 10000 时，当作该年实际金额（元），不再乘收入。改当年年底收入后，按收入比例计算的后面年份会跟着变。财务费用不进入自由现金流。改完点「开始采集/计算/保存」，会先保存再计算。"
             />
             <StackedFieldTable
               style={{ marginBottom: 12 }}
@@ -2133,7 +2171,7 @@ export default function ValuationWorkbenchPage() {
               size="small"
               scroll={{ x: true }}
               columns={[
-                { title: '科目', dataIndex: 'name', width: 120, fixed: 'left' },
+                { title: '科目', dataIndex: 'name', width: 200, fixed: 'left', className: 'valuation-nowrap-cell' },
                 ...ratioYearEntries(pl, assumptions.valuation_date, payload.forecastPl).map(({ y, i }) => ({
                   align: 'right',
                   className: 'valuation-num-cell',
@@ -2185,19 +2223,33 @@ export default function ValuationWorkbenchPage() {
                   ),
                 })),
               ]}
-              data={FORECAST_RATIO_ROWS.map((row) => ({
-                key: row.key,
-                name: row.name,
-                note: row.note,
-                min: row.min,
-                values: pl[row.key] || [],
-                onChange: (i, nv) => {
-                  const plNow = payloadRef.current?.targetPl || pl
-                  const arr = [...(plNow[row.key] || [])]
-                  arr[i] = nv
-                  patchPayload({ targetPl: { [row.key]: arr } })
-                },
-              }))}
+              data={FORECAST_RATIO_ROWS.map((row) => {
+                const rdGrowth = assumptions.rd_growth_mode !== 'share'
+                const shown = row.key === 'rd_ratio' && !rdGrowth
+                  ? {
+                    ...row,
+                    name: '研发费用（占营业收入）',
+                    note: '占营业收入，含已分摊折旧。95 表示当年收入的 95%；10000000 表示该年研发费用 10000000 元。',
+                  }
+                  : row
+                return {
+                  key: shown.key,
+                  name: shown.name,
+                  note: shown.note,
+                  min: shown.min,
+                  values: pl[shown.key] || [],
+                  onChange: (i, nv) => {
+                    const plNow = payloadRef.current?.targetPl || pl
+                    const arr = [...(plNow[shown.key] || [])]
+                    arr[i] = nv
+                    const assumptionsPatch = shown.key === 'rd_ratio' ? { rd_growth_mode: 'growth' } : null
+                    patchPayload({
+                      targetPl: { [shown.key]: arr },
+                      ...(assumptionsPatch ? { assumptions: assumptionsPatch } : {}),
+                    })
+                  },
+                }
+              })}
             />
             <Space style={{ marginTop: 8 }}>
               <Button
@@ -2274,7 +2326,9 @@ export default function ValuationWorkbenchPage() {
             </Space>
             <Typography.Title heading={6} style={{ marginTop: 16 }}>预测利润表</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
-              最左一列是上一年实际，不带 E。利润表取该年导入数，营运资本取该年资产负债表。第一年营运资本变动 = 当年预测余额 − 这一列实际余额。后面各年再减上一年预测余额。锚定日不是 12 月 31 日时，第一列预测是当年年底预估，直接填金额。后面各年的收入按上一年收入和增速滚动；营业成本、费用、折旧和资本开支按当年收入乘上面的比例。比例格里填大于 10000 的数时，该年直接用这个金额。改当年年底收入后，按收入比例计算的年份会跟着变。手改过的后面年份保持手改，清空后重新按比例算。毛利、营业利润、EBITDA、税前和税后由各行重算。
+              最左一列是上一年实际，不带 E。利润表取该年导入数，营运资本取该年资产负债表。第一年营运资本变动 = 当年预测余额 − 这一列实际余额。后面各年再减上一年预测余额。锚定日不是 12 月 31 日时，第一列预测是当年年底预估，直接填金额。后面各年的收入按上一年收入和增速滚动；营业成本、销售、管理、税金、折旧和资本开支按当年收入乘上面的比例。
+              研发费用的百分数是较上一年的增速，下一年 = 上一年研发费用 ×（1+增速）。
+              比例格里填大于 10000 的数时，该年直接用这个金额。改当年年底收入后，按收入比例计算的年份会跟着变。手改过的后面年份保持手改，清空后重新按比例算。毛利、营业利润、EBITDA、税前和税后由各行重算。
             </Typography.Paragraph>
             {(() => {
               const formula = forecastStatement(pl, assumptions, payload.forecastPl)
@@ -2285,7 +2339,13 @@ export default function ValuationWorkbenchPage() {
                 assumptions,
                 payload,
               )
-              const noteOf = (key) => FORECAST_RATIO_ROWS.find((row) => row.key === key)?.note || ''
+              const rdGrowth = assumptions.rd_growth_mode !== 'share'
+              const noteOf = (key) => {
+                if (key === 'rd_ratio' && rdGrowth) {
+                  return '较上一年研发费用。10 表示增长 10%。绝对值大于 10000 时按该年金额（元）。锚定日不是 12 月 31 日时，第一列年底金额在预测利润表填写。锚定日是 12 月 31 日、第一年填百分数时，用已结年全年实际研发 ×（1+增速）。'
+                }
+                return FORECAST_RATIO_ROWS.find((row) => row.key === key)?.note || ''
+              }
               const rows = [
                 { key: 'revenue', engineKey: 'revenue', name: '营业收入', note: noteOf('revenue_growth'), editable: true },
                 { key: 'cogs', engineKey: 'cogs', name: '营业成本', note: noteOf('cogs_ratio'), editable: true },
@@ -2293,7 +2353,7 @@ export default function ValuationWorkbenchPage() {
                 { key: 'surtax', engineKey: 'surtax', name: '税金及附加', note: noteOf('surtax_ratio'), editable: true },
                 { key: 'selling', engineKey: 'selling', name: '销售费用', note: noteOf('selling_ratio'), editable: true },
                 { key: 'admin', engineKey: 'admin', name: '管理费用', note: noteOf('admin_ratio'), editable: true },
-                { key: 'rd', engineKey: 'rd', name: '研发费用', note: noteOf('rd_ratio'), editable: true },
+                { key: 'rd', engineKey: 'rd', name: rdGrowth ? '研发费用（较上一年）' : '研发费用（占收入）', note: noteOf('rd_ratio'), editable: true },
                 { key: 'financeExpense', engineKey: 'finance_expense', name: '财务费用', note: noteOf('finance_expense_ratio'), editable: true },
                 { key: 'otherIncome', engineKey: 'other_income', name: '其他收益', note: noteOf('other_income_ratio'), editable: true },
                 { key: 'other', engineKey: 'other', name: '其他', note: noteOf('other_ratio'), editable: true },
@@ -2353,6 +2413,7 @@ export default function ValuationWorkbenchPage() {
                                   statementAnchor(assumptions.valuation_date)?.month < 12
                                     && yearNum(year) === statementAnchor(assumptions.valuation_date)?.year,
                                 ),
+                                ...(row.engineKey === 'rd' ? { assumptions: { rd_growth_mode: 'growth' } } : {}),
                               })
                             }}
                           />
@@ -2617,7 +2678,7 @@ export default function ValuationWorkbenchPage() {
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
-              content="第一列是实际数，后面带 E 的是预测年，三项都可以改。模板没有现金流量表时，折旧摊销按预测里的占收入比例和营业收入算出默认金额。开始采集/计算完成后，预测年再按本次 DCF 结果覆盖。实际列里已有的数不会被盖掉。"
+              content="第一列是实际数，后面带 E 的是预测年，三项都可以改。模板没有现金流量表时，折旧摊销按预测里的占收入比例和营业收入算出默认金额。开始采集/计算/保存完成后，预测年再按本次 DCF 结果覆盖。实际列里已有的数不会被盖掉。"
             />
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 12 }}>
               自由现金流 = 税后经营利润 + 折旧摊销 + ESOP − 资本开支 − ΔNWC。
@@ -2702,14 +2763,14 @@ export default function ValuationWorkbenchPage() {
         {(step === 'relative' || step === 'ratios') && (
           <Card title={STEPS.find((s) => s.key === step)?.title} bordered={false}>
             <Typography.Paragraph>
-              点击「开始采集/计算」后，本页展示过程表。也可打开「明细」查看全部 Tab 与公式说明。
+              点击「开始采集/计算/保存」后，本页展示过程表。也可打开「明细」查看全部 Tab 与公式说明。
             </Typography.Paragraph>
             {step === 'relative' ? (
               <>
                 <Alert
                   type="info"
                   style={{ marginBottom: 12 }}
-                  content="最下面一行是取用结果：单家有底稿中位用底稿，否则用历史中位，再否则用锚定截面。取用列是这些数的中位数（高端倍数），−1σ 列是低端倍数。贴完底稿请点「只计算」刷新市场法。可比强度不参与计算。"
+                  content="最下面一行是取用结果：单家有底稿中位用底稿，否则用历史中位，再否则用锚定截面。取用列是这些数的中位数（高端倍数），−1σ 列是低端倍数。贴完底稿请点「开始采集/计算/保存」刷新市场法。可比强度不参与计算。"
                 />
                 <RelativeValuationTable
                   rows={mergeRelativeOverrides(payload.sheets?.relative?.payload, comps)}
@@ -2777,63 +2838,100 @@ export default function ValuationWorkbenchPage() {
                       <Alert
                         type="warning"
                         style={{ marginBottom: 12 }}
-                        content="本次 DCF 不是系统默认口径。默认是退出 P/E × 末期税后经营利润、净利润桥、退出倍数 × 收入 CAGR；当前若是退出 P/S + NOPAT + 折现率轴，区间口径会不同。"
+                        content="本次 DCF 不是系统默认口径。默认是退出 P/E × 末期税后经营利润、净利润桥、营收 CAGR × 退出倍数；当前若是退出 P/S + NOPAT + 折现率轴，区间口径会不同。"
+                      />
+                    ) : null}
+                    {staleLines.length ? (
+                      <Alert
+                        type="warning"
+                        style={{ marginBottom: 12 }}
+                        title="输入已修改，需要重新计算"
+                        content={(
+                          <div>
+                            <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
+                              {staleLines.map((line) => <li key={line}>{line}</li>)}
+                            </ul>
+                            <div>请点「开始采集/计算/保存」。</div>
+                          </div>
+                        )}
                       />
                     ) : null}
                     <div className="valuation-result-top">
-                      <div className="valuation-result-grid">
-                        {comparison ? (
-                          <>
-                            <div className="valuation-result-card">
-                              <h4>市场法 P/S</h4>
-                              <div className="num">{fmtYi(comparison.market_ps?.low)} ~ {fmtYi(comparison.market_ps?.high)}</div>
-                              <div>增量 {fmtYi(comparison.market_ps?.increment)}</div>
-                            </div>
-                            <div className="valuation-result-card">
-                              <h4>市场法 P/E</h4>
-                              <div className="num">{fmtYi(comparison.market_pe?.low)} ~ {fmtYi(comparison.market_pe?.high)}</div>
-                              <div>增量 {fmtYi(comparison.market_pe?.increment)}</div>
-                            </div>
-                            <div className="valuation-result-card">
-                              <h4>DCF</h4>
-                              {comparison.dcf?.ma ? (
-                                <>
-                                  <div>并购 {fmtYi(comparison.dcf.ma.low)} ~ {fmtYi(comparison.dcf.ma.high)}</div>
-                                  <div>并购退出 P/E {fmtYi(comparison.dcf.ma.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf.ma.exit_ps)}</div>
-                                  <div>上市 {fmtYi(comparison.dcf.ipo.low)} ~ {fmtYi(comparison.dcf.ipo.high)}</div>
-                                  <div>上市退出 P/E {fmtYi(comparison.dcf.ipo.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf.ipo.exit_ps)}</div>
-                                </>
-                              ) : (
-                                <>
+                      <div className="valuation-result-left">
+                        <div className="valuation-result-grid">
+                          {comparison ? (
+                            <>
+                              <div className="valuation-result-card">
+                                <h4>市场法 P/S</h4>
+                                <div className="num">{fmtYi(comparison.market_ps?.low)} ~ {fmtYi(comparison.market_ps?.high)}</div>
+                                <div>增量 {fmtYi(comparison.market_ps?.increment)}</div>
+                              </div>
+                              <div className="valuation-result-card">
+                                <h4>市场法 P/E</h4>
+                                <div className="num">{fmtYi(comparison.market_pe?.low)} ~ {fmtYi(comparison.market_pe?.high)}</div>
+                                <div>增量 {fmtYi(comparison.market_pe?.increment)}</div>
+                              </div>
+                              <div className="valuation-result-card">
+                                <h4>DCF</h4>
+                                {payload.sheets?.dcf?.payload?.primary?.exit_view ? (
+                                  <DcfExitCard
+                                    primary={payload.sheets.dcf.payload.primary}
+                                    secondary={payload.sheets.dcf.payload.secondary}
+                                    dealYi={dealYi}
+                                    dilution={dilution}
+                                  />
+                                ) : comparison.dcf?.ma ? (
+                                  <>
+                                    <div>并购 {fmtYi(comparison.dcf.ma.low)} ~ {fmtYi(comparison.dcf.ma.high)}</div>
+                                    <div>上市 {fmtYi(comparison.dcf.ipo.low)} ~ {fmtYi(comparison.dcf.ipo.high)}</div>
+                                  </>
+                                ) : (
                                   <div className="num">{fmtYi(comparison.dcf?.low)} ~ {fmtYi(comparison.dcf?.high)}</div>
-                                  <div>退出 P/E {fmtYi(comparison.dcf?.exit_pe)} · 退出 P/S {fmtYi(comparison.dcf?.exit_ps)}</div>
-                                </>
-                              )}
+                                )}
+                              </div>
+                            </>
+                          ) : (
+                            <Typography.Text type="secondary">请先确认方法配置并开跑计算</Typography.Text>
+                          )}
+                          <div className="valuation-result-card valuation-result-card-edit">
+                            <div className="valuation-result-card-head">
+                              <h4>本轮交易估值（投前）</h4>
+                              {isDraftView ? <Tag className="valuation-edit-tag" size="small">可输入</Tag> : null}
                             </div>
-                          </>
-                        ) : (
-                          <Typography.Text type="secondary">请先确认方法配置并开跑计算</Typography.Text>
-                        )}
-                        <div className="valuation-result-card valuation-result-card-edit">
-                          <div className="valuation-result-card-head">
-                            <h4>本轮交易估值</h4>
-                            <Tag className="valuation-edit-tag" size="small">可输入</Tag>
+                            <InputNumber
+                              className="valuation-result-card-input"
+                              placeholder="输入对照值"
+                              disabled={!isDraftView}
+                              value={dealYi}
+                              onChange={(v) => {
+                                if (!isDraftView) return
+                                setCse((prev) => ({ ...prev, round_deal_value_yi: v }))
+                                patchValuationCase(caseId, { round_deal_value_yi: v })
+                              }}
+                            />
+                            <div>亿元。对照虚线，并作为退出 MOC、退出 IRR 的分母，不进入股权价值。</div>
+                            <div style={{ marginTop: 8 }}>后续股权稀释</div>
+                            <PctInput
+                              disabled={!isDraftView}
+                              value={dilution}
+                              onChange={(v) => patchPayload({ assumptions: { ...assumptions, follow_on_dilution: v } })}
+                            />
+                            <div>空着按 100%。不进入股权价值。</div>
                           </div>
-                          <InputNumber
-                            className="valuation-result-card-input"
-                            placeholder="输入对照值"
-                            value={cse?.round_deal_value_yi}
-                            onChange={(v) => {
-                              setCse((prev) => ({ ...prev, round_deal_value_yi: v }))
-                              patchValuationCase(caseId, { round_deal_value_yi: v })
-                            }}
-                          />
-                          <div>亿元，只对照，不参与计算</div>
                         </div>
+                        <ValuationFootballField
+                          comparison={comparison}
+                          dealYi={dealYi}
+                        />
                       </div>
-                      <ValuationFootballField
-                        comparison={comparison}
-                        dealYi={cse?.round_deal_value_yi}
+                      <ValuationExitPanel
+                        primary={payload.sheets?.dcf?.payload?.primary}
+                        secondary={payload.sheets?.dcf?.payload?.secondary}
+                        dealYi={dealYi}
+                        dilution={dilution}
+                        method={method}
+                        readOnly={!isDraftView}
+                        onMethodChange={(patch) => patchPayload({ methodConfig: { ...method, ...patch } })}
                       />
                     </div>
                   </section>

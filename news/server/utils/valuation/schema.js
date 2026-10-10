@@ -57,7 +57,7 @@ async function ensureValuationSchema(dbPool) {
       pre_project_id VARCHAR(19) NULL COMMENT 'valuation_pre_project.F_Id',
       invested_enterprise_id VARCHAR(19) NULL COMMENT 'invested_enterprises.F_Id（项目估值域）',
       subject_display_name VARCHAR(255) NULL COMMENT '主体展示名快照',
-      round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（亿元），只对照',
+      round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元；对照虚线，并作为退出 MOC、退出 IRR 的分母',
       status VARCHAR(32) NOT NULL DEFAULT 'draft' COMMENT 'draft/ready/archived',
       F_CreatorUserId VARCHAR(19) NOT NULL,
       F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -350,7 +350,7 @@ async function ensureValuationSchema(dbPool) {
       F_Id VARCHAR(19) NOT NULL PRIMARY KEY,
       case_id VARCHAR(19) NOT NULL,
       version_no INT NOT NULL COMMENT 'v1/v2 序号',
-      round_deal_value_yi DECIMAL(20,6) NULL,
+      round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元；保存版本时的对照虚线与退出 MOC、退出 IRR 分母',
       remark VARCHAR(500) NULL,
       F_CreatorUserId VARCHAR(19) NULL,
       F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -421,6 +421,21 @@ async function ensureValuationSchema(dbPool) {
     }
     if (!assCols.has('ps_median_multiple')) {
       await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN ps_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 中位倍数，有值则覆盖 POOL'`);
+    }
+    if (!assCols.has('follow_on_dilution')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption ADD COLUMN follow_on_dilution DECIMAL(20,8) NULL COMMENT '后续股权稀释，空值表示 100%'`);
+    }
+  }
+  if (await tableExists(dbPool, 'valuation_case')) {
+    await dbPool.query(`ALTER TABLE valuation_case MODIFY COLUMN round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元；对照虚线，并作为退出 MOC、退出 IRR 的分母'`);
+  }
+  if (await tableExists(dbPool, 'valuation_version')) {
+    await dbPool.query(`ALTER TABLE valuation_version MODIFY COLUMN round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元；保存版本时的对照虚线与退出 MOC、退出 IRR 分母'`);
+  }
+  if (await tableExists(dbPool, 'valuation_assumption')) {
+    const dealCols = await listColumns(dbPool, 'valuation_assumption');
+    if (dealCols.has('round_deal_value_yi')) {
+      await dbPool.query(`ALTER TABLE valuation_assumption MODIFY COLUMN round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元'`);
     }
   }
   if (await tableExists(dbPool, 'valuation_case_comparable')) {
@@ -533,9 +548,21 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['forecast_dso', "DECIMAL(20,4) NULL COMMENT '预测默认 DSO，天；空则用可比中位数'"],
     ['forecast_dpo', "DECIMAL(20,4) NULL COMMENT '预测默认 DPO，天；空则用可比中位数'"],
     ['forecast_dio', "DECIMAL(20,4) NULL COMMENT '预测默认存货周转天数；空则用可比中位数'"],
+    ['follow_on_dilution', "DECIMAL(20,8) NULL COMMENT '后续股权稀释，空值表示 100%'"],
+    ['rd_growth_mode', "VARCHAR(16) NULL COMMENT '研发费用百分数口径：growth 为较上一年，空为占收入'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_method', [
+    ['pe_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长'"],
+    ['ps_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/S 倍数步长'"],
+    ['cagr_step', "DECIMAL(20,8) NULL COMMENT '营收与研发 CAGR 步长，小数'"],
+    ['rate_step', "DECIMAL(20,8) NULL COMMENT '折现率步长，小数'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_dcf_run', [
     ['series_json', "JSON NULL COMMENT '预测明细：收入到自由现金流的分年序列，元'"],
+    ['exit_view_json', "JSON NULL COMMENT '退出市值、持有年数与敏感性矩阵，金额已换算为亿元并保留 2 位'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_calc_meta', [
+    ['calc_stamp_json', "JSON NULL COMMENT '上次计算成功时的输入指纹，不含本轮交易估值和后续股权稀释'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_target_bs', [
     ['forecast_json', "JSON NULL COMMENT '预测年手改资产负债表，键为年份，值为科目金额，元'"],
@@ -622,6 +649,10 @@ async function createStructuredResultTables(dbPool) {
       terminal_type VARCHAR(32) NULL,
       fcf_method VARCHAR(32) NULL,
       sensitivity_axes VARCHAR(32) NULL,
+      pe_multiple_step DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长',
+      ps_multiple_step DECIMAL(20,6) NULL COMMENT '敏感性 P/S 倍数步长',
+      cagr_step DECIMAL(20,8) NULL COMMENT '营收与研发 CAGR 步长，小数',
+      rate_step DECIMAL(20,8) NULL COMMENT '折现率步长，小数',
       scenario_mode VARCHAR(32) NULL,
       multiple_source VARCHAR(32) NULL,
       industry_stat_method VARCHAR(32) NULL,
@@ -647,10 +678,12 @@ async function createStructuredResultTables(dbPool) {
       ps_low_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 低端倍数，有值则覆盖 POOL',
       ps_median_multiple DECIMAL(20,6) NULL COMMENT '市场法 P/S 中位倍数，有值则覆盖 POOL',
       tax_rate DECIMAL(20,8) NULL,
+      follow_on_dilution DECIMAL(20,8) NULL COMMENT '后续股权稀释，空值表示 100%',
+      rd_growth_mode VARCHAR(16) NULL COMMENT '研发费用百分数口径：growth 为较上一年，空为占收入',
       forecast_years INT NULL,
       esop DECIMAL(24,4) NULL,
       valuation_date VARCHAR(16) NULL,
-      round_deal_value_yi DECIMAL(20,6) NULL,
+      round_deal_value_yi DECIMAL(20,6) NULL COMMENT '本轮交易估值（投前），亿元',
       display_unit VARCHAR(16) NULL,
       wacc_risk_free_rate DECIMAL(20,8) NULL,
       wacc_erp DECIMAL(20,8) NULL,

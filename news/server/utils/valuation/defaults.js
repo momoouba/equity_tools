@@ -35,6 +35,7 @@ function defaultAssumptions() {
     forecast_dpo: null,
     forecast_dio: null,
     round_deal_value_yi: null,
+    follow_on_dilution: null,
     display_unit: 'yi',
     wacc_breakdown: {
       risk_free_rate: null,

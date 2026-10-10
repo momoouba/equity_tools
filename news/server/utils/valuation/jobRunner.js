@@ -13,6 +13,7 @@ const {
 } = require('./financialFetch');
 const { getDraft, saveDraft } = require('./caseService');
 const { loadWorkspace } = require('./workspaceStore');
+const { buildCalcStamp } = require('./calcStamp');
 
 const running = new Set();
 
@@ -167,19 +168,33 @@ async function runJob(jobId) {
         target_cf: { ...(engineOut.sheets.target_cf || {}), payload: targetCf },
       }
       : engineOut.sheets;
+    const primaryView = sheets?.dcf?.payload?.primary?.exit_view;
+    const secondaryView = sheets?.dcf?.payload?.secondary?.exit_view;
+    const exitOk = !!(primaryView?.pe?.cells || primaryView?.ps?.cells || secondaryView?.pe?.cells || secondaryView?.ps?.cells);
+    const keepPrevious = !exitOk && payload.sheets?.dcf;
+    const nextSheets = keepPrevious
+      ? {
+        ...(sheets || {}),
+        dcf: payload.sheets.dcf,
+        result_compare: payload.sheets.result_compare || sheets?.result_compare,
+        target_cf: payload.sheets?.target_cf || sheets?.target_cf,
+      }
+      : sheets;
     const nextPayload = {
       ...payload,
-      targetCf,
-      forecastPl,
+      targetCf: keepPrevious ? payload.targetCf : targetCf,
+      forecastPl: keepPrevious ? payload.forecastPl : forecastPl,
       methodConfig,
       assumptions,
-      sheets,
-      comparison: engineOut.comparison,
+      sheets: nextSheets,
+      comparison: keepPrevious ? (payload.comparison || engineOut.comparison) : engineOut.comparison,
       warnings: [...fetchNotes, ...(engineOut.warnings || [])],
       wacc: engineOut.wacc,
       net_debt: engineOut.net_debt,
       last_job_id: jobId,
+      calc_stamp: exitOk ? null : (payload.calc_stamp || null),
     };
+    if (exitOk) nextPayload.calc_stamp = buildCalcStamp(nextPayload, comps);
     await saveDraft(job.case_id, nextPayload, job.creator_user_id, { source: 'compute' });
     const blockerWarns = (engineOut.warnings || []).filter((w) => String(w).startsWith('待补：'));
     const doneMsg = blockerWarns.length

@@ -2,6 +2,7 @@ const C = require('./constants');
 const { toNumber, median, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd, resolveValuationDate, parseYmd } = require('./marketUtils');
 const { nwcStockFromBs, netDebtAmount } = require('./targetBsFields');
 const { buildDcfForecast, parseAnchor } = require('./dcfForecast');
+const { buildExitView } = require('./sensitivityTables');
 
 function num(v, fallback = 0) {
   const n = toNumber(v);
@@ -384,7 +385,7 @@ function sensitivityGrid({
     grid,
     low,
     high,
-    formula: '二维敏感性：退出倍数 0.5x～1.5x、收入 CAGR ±5%；结果对比 DCF 低端/高端取内圈四角，不是整张表最外极端点',
+    formula: '旧敏感性函数，当前计算不调用。结果对比用退出 P/E 与退出 P/S 的股权价值，敏感性在 exit_view',
   };
 }
 
@@ -1205,6 +1206,37 @@ function runValuationEngine(input) {
       exit_pe: peRun && !peRun.blocked ? toNumber(peRun.equity_value) : null,
       exit_ps: psRun && !psRun.blocked ? toNumber(psRun.equity_value) : null,
     };
+    const label = scenarioKey === 'ma' ? '并购' : scenarioKey === 'ipo' ? '上市' : '';
+    selected.exit_view = buildExitView({
+      peRun,
+      psRun,
+      axes: method.sensitivity_axes,
+      scenarioMode: method.scenario_mode,
+      steps: {
+        peStep: method.pe_multiple_step,
+        psStep: method.ps_multiple_step,
+        cagrStep: method.cagr_step,
+        rateStep: method.rate_step,
+      },
+      rebuild: (patch) => buildDcfForecast({
+        assumptions,
+        targetPl: input.targetPl || {},
+        targetBs: input.targetBs || {},
+        workingCapital: input.compStats?.working_capital,
+        baseRate: patch.rate,
+        scenarioRate: label ? patch.rate : null,
+        scenarioLabel: label,
+        scenarioName: scenario?.name || null,
+        terminalType: patch.terminalType,
+        exitMultiple: patch.multiple,
+        applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
+        liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
+        forecastPl: input.forecastPl || {},
+        overrides: input.overrides || {},
+        revenueOverride: patch.revenueOverride,
+        rdOverride: patch.rdOverride,
+      }),
+    });
     return { selected, peRun, psRun };
   };
 
@@ -1328,7 +1360,9 @@ function runValuationEngine(input) {
     target_pl: {
       title: '标的利润表',
       payload: pl,
-      formula: '锚定日不是12月31日时，当年年底金额在预测利润表填写，不按当期累计年化。收入以后各年=上一年×(1+增速)。12月31日时，第一年=当年全年实际×(1+增速)。营业成本、税金及附加、销售、管理、研发、财务费用、其他收益、其他、折旧摊销、资本开支=当年营业收入×比例；绝对值大于10000按该年金额。财务费用不进入自由现金流。',
+      formula: assumptions.rd_growth_mode !== 'share'
+        ? '锚定日不是12月31日时，当年年底金额在预测利润表填写，不按当期累计年化。收入以后各年=上一年×(1+增速)。12月31日时，第一年=当年全年实际×(1+增速)。研发费用百分数是较上一年的增速；绝对值大于10000按该年金额。12月31日且第一年填百分数时，用已结年全年实际研发×(1+增速)。营业成本、税金及附加、销售、管理、财务费用、其他收益、其他、折旧摊销、资本开支=当年营业收入×比例。财务费用不进入自由现金流。'
+        : '锚定日不是12月31日时，当年年底金额在预测利润表填写，不按当期累计年化。收入以后各年=上一年×(1+增速)。12月31日时，第一年=当年全年实际×(1+增速)。营业成本、税金及附加、销售、管理、研发、财务费用、其他收益、其他、折旧摊销、资本开支=当年营业收入×比例；绝对值大于10000按该年金额。财务费用不进入自由现金流。',
     },
     target_bs: {
       title: '资产负债表',

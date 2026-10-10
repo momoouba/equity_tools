@@ -72,6 +72,7 @@ async function saveMethod(caseId, versionId, method, pool) {
   await upsertByCaseVersion(d, 'valuation_method', caseId, versionId, [
     'terminal_type', 'fcf_method', 'sensitivity_axes', 'scenario_mode',
     'multiple_source', 'industry_stat_method', 'confirmed',
+    'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rate_step',
   ], [
     strOrNull(m.terminal_type, 32),
     strOrNull(m.fcf_method, 32),
@@ -80,6 +81,10 @@ async function saveMethod(caseId, versionId, method, pool) {
     strOrNull(m.multiple_source, 32),
     strOrNull(m.industry_stat_method, 32),
     m.confirmed ? 1 : 0,
+    numOrNull(m.pe_multiple_step),
+    numOrNull(m.ps_multiple_step),
+    numOrNull(m.cagr_step),
+    numOrNull(m.rate_step),
   ]);
 }
 
@@ -87,7 +92,8 @@ async function loadMethod(caseId, versionId, pool) {
   const d = wrapDb(pool);
   const rows = await d.query(
     `SELECT terminal_type, fcf_method, sensitivity_axes, scenario_mode,
-            multiple_source, industry_stat_method, confirmed
+            multiple_source, industry_stat_method, confirmed,
+            pe_multiple_step, ps_multiple_step, cagr_step, rate_step
      FROM valuation_method WHERE case_id = ? AND version_id = ? LIMIT 1`,
     [caseId, versionId]
   );
@@ -101,6 +107,10 @@ async function loadMethod(caseId, versionId, pool) {
     multiple_source: r.multiple_source,
     industry_stat_method: r.industry_stat_method,
     confirmed: Number(r.confirmed) === 1,
+    pe_multiple_step: numOrNull(r.pe_multiple_step),
+    ps_multiple_step: numOrNull(r.ps_multiple_step),
+    cagr_step: numOrNull(r.cagr_step),
+    rate_step: numOrNull(r.rate_step),
   };
 }
 
@@ -114,7 +124,7 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     'esop', 'valuation_date', 'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
     'pe_low_multiple', 'pe_median_multiple', 'ps_low_multiple', 'ps_median_multiple',
-    'forecast_dso', 'forecast_dpo', 'forecast_dio',
+    'forecast_dso', 'forecast_dpo', 'forecast_dio', 'follow_on_dilution', 'rd_growth_mode',
   ], [
     numOrNull(a.discount_rate),
     numOrNull(a.exit_pe),
@@ -143,6 +153,8 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(a.forecast_dso),
     numOrNull(a.forecast_dpo),
     numOrNull(a.forecast_dio),
+    numOrNull(a.follow_on_dilution),
+    a.rd_growth_mode === 'growth' ? 'growth' : null,
   ]);
 }
 
@@ -186,6 +198,8 @@ async function loadAssumptions(caseId, versionId, pool) {
     forecast_dso: numOrNull(r.forecast_dso),
     forecast_dpo: numOrNull(r.forecast_dpo),
     forecast_dio: numOrNull(r.forecast_dio),
+    follow_on_dilution: numOrNull(r.follow_on_dilution),
+    rd_growth_mode: r.rd_growth_mode === 'growth' ? 'growth' : null,
   };
 }
 
@@ -292,7 +306,7 @@ async function saveCalcMeta(caseId, versionId, payload, pool) {
     'wacc_rate', 'wacc_used_breakdown', 'wacc_ke', 'wacc_we', 'wacc_wd',
     'net_debt', 'net_debt_source',
     'industry_unavailable', 'industry_message',
-    'relative_formula', 'dcf_formula',
+    'relative_formula', 'dcf_formula', 'calc_stamp_json',
   ], [
     strOrNull(payload.last_job_id, 19),
     strOrNull(payload.amount_unit, 16) || 'yuan',
@@ -308,6 +322,7 @@ async function saveCalcMeta(caseId, versionId, payload, pool) {
     strOrNull(payload.industryUnavailable || payload.industryMultiples?.message, 500),
     strOrNull(payload.sheets?.relative?.formula, 1000),
     strOrNull(payload.sheets?.dcf?.formula, 1000),
+    payload.calc_stamp ? JSON.stringify(payload.calc_stamp) : null,
   ]);
 }
 
@@ -740,8 +755,8 @@ async function saveDcfRun(d, caseId, versionId, role, dcf, extras) {
        F_Id, case_id, version_id, role_key, scenario_name, discount_rate,
        equity_value, enterprise_value, net_debt, terminal_value, terminal_pv,
        terminal_base, exit_multiple, fcf_method, terminal_type,
-       sens_row_kind, sens_col_kind, sens_low, sens_high, formula, series_json, F_CreatorTime
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+       sens_row_kind, sens_col_kind, sens_low, sens_high, formula, series_json, exit_view_json, F_CreatorTime
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
     [
       id, caseId, versionId, role,
       strOrNull(dcf.scenario_name, 64),
@@ -761,6 +776,7 @@ async function saveDcfRun(d, caseId, versionId, role, dcf, extras) {
       numOrNull(dcf.sensitivity?.high),
       strOrNull(extras?.formula, 1000),
       dcf.series ? JSON.stringify(dcf.series) : null,
+      dcf.exit_view ? JSON.stringify(dcf.exit_view) : null,
     ]
   );
   for (let i = 0; i < (dcf.pvs || []).length; i += 1) {
@@ -864,6 +880,14 @@ async function loadOneDcf(d, run) {
       series = null;
     }
   }
+  let exitView = null;
+  if (run.exit_view_json) {
+    try {
+      exitView = typeof run.exit_view_json === 'string' ? JSON.parse(run.exit_view_json) : run.exit_view_json;
+    } catch {
+      exitView = null;
+    }
+  }
   return {
     scenario_name: run.scenario_name,
     discount_rate: numOrNull(run.discount_rate),
@@ -896,6 +920,7 @@ async function loadOneDcf(d, run) {
     fcf: years.map((y) => numOrNull(y.fcf)),
     series,
     sensitivity,
+    exit_view: exitView,
   };
 }
 
@@ -1112,7 +1137,18 @@ async function loadWorkspace(caseId, versionId, pool) {
     last_job_id: meta?.last_job_id || null,
     amount_unit: meta?.amount_unit || 'wan',
     industryUnavailable: meta?.industry_unavailable ? (meta.industry_message || '行业倍数不可用') : null,
+    calc_stamp: parseStoredJson(meta?.calc_stamp_json),
   };
+}
+
+function parseStoredJson(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 async function listColumns(pool, table) {

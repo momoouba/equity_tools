@@ -137,9 +137,64 @@ eq(amountRd.series.rd[0], 0, 'stub rd stays the year-end amount');
 eq(amountRd.series.rd[1], 10000000, 'input above 10000 is the year amount');
 const pctRd = buildDcfForecast({
   ...base,
+  assumptions: { ...base.assumptions, rd_growth_mode: 'share' },
   targetPl: { ...base.targetPl, rd_ratio: [0.95] },
 });
 eq(pctRd.series.rd[1], 484 * 0.95, 'rd below 10000 is percent of that year revenue');
+const grownRd = buildDcfForecast({
+  ...base,
+  assumptions: { ...base.assumptions, rd_growth_mode: 'growth' },
+  forecastPl: { 2026: yearEndRow({ rd: 100 }) },
+  targetPl: { ...base.targetPl, rd_ratio: [0.1] },
+});
+assert.strictEqual(grownRd.blocked, false, (grownRd.blockers || []).join('；'));
+eq(grownRd.series.rd[0], 100, 'growth mode keeps the year-end rd');
+eq(grownRd.series.rd[1], 110, 'later rd grows from the prior year');
+const closedRd = buildDcfForecast({
+  ...base,
+  assumptions: { ...base.assumptions, valuation_date: '2025-12-31', rd_growth_mode: 'growth' },
+  targetPl: {
+    ...base.targetPl,
+    years: ['2025', '2026', '2027'],
+    revenue: [80, null, null],
+    rd: [20, null, null],
+    revenue_growth: [9, 0.1, null],
+    cogs_ratio: [9, 0.5],
+    surtax_ratio: [9, 0],
+    selling_ratio: [9, 0],
+    admin_ratio: [9, 0],
+    rd_ratio: [9, 0.05, 0.1],
+    other_income_ratio: [9, 0],
+    other_ratio: [9, 0],
+    da_ratio: [9, 0.1],
+    capex_ratio: [9, 0.1],
+  },
+});
+assert.strictEqual(closedRd.blocked, false, (closedRd.blockers || []).join('；'));
+eq(closedRd.series.rd[0], 21, 'december first rd grows from the closed year');
+eq(closedRd.series.rd[1], 23.1, 'next rd grows from the prior forecast year');
+const missingRdBase = buildDcfForecast({
+  ...base,
+  assumptions: { ...base.assumptions, valuation_date: '2025-12-31', rd_growth_mode: 'growth' },
+  targetPl: {
+    ...base.targetPl,
+    years: ['2025', '2026', '2027'],
+    revenue: [80, null, null],
+    rd: [null, null, null],
+    revenue_growth: [9, 0.1, null],
+    rd_ratio: [9, 0.05, 0.1],
+    cogs_ratio: [9, 0.5],
+    surtax_ratio: [9, 0],
+    selling_ratio: [9, 0],
+    admin_ratio: [9, 0],
+    other_income_ratio: [9, 0],
+    other_ratio: [9, 0],
+    da_ratio: [9, 0.1],
+    capex_ratio: [9, 0.1],
+  },
+});
+assert.strictEqual(missingRdBase.blocked, true);
+assert.ok(missingRdBase.blockers.some((m) => m.includes('研发费用')));
 eq(financeOut.series.pretax[0], out.series.pretax[0], 'pretax ignores finance expense');
 eq(out.series.period_nopat[0], 136, 'stub period nopat is year-end pretax minus ytd pretax, then tax');
 eq(out.series.period_da[0], 34, 'stub period da');
@@ -757,6 +812,7 @@ const ranged = runValuationEngine({
     valuation_date: '2025-12-31',
     discount_rate: 0.2,
     tax_rate: 0.25,
+    rd_growth_mode: 'share',
     exit_pe: 10,
     exit_ps: 1,
     esop: 0,
@@ -791,5 +847,282 @@ const band = ranged.comparison.display_yi.dcf;
 assert.strictEqual(band.low, Math.min(band.exit_pe, band.exit_ps));
 assert.strictEqual(band.high, Math.max(band.exit_pe, band.exit_ps));
 assert.ok(band.high > band.low);
+
+const { buildWorkbookBuffer } = require('./exportService');
+const relativeBuf = buildWorkbookBuffer({
+  title: '相对估值公式',
+  sheets: {
+    relative: {
+      title: '相对估值',
+      payload: [
+        { in_pool: true, stock_code: '002371', stock_name: '北方华创', pe_latest: 52.94, pe_median: 58.76, ps_latest: 8, ps_median: 9 },
+        { in_pool: true, stock_code: '688012', stock_name: '中微公司', pe_latest: 89.22, pe_median: 74.3, pe_median_override: 70, ps_latest: 12, ps_median: 11 },
+        { in_pool: false, stock_code: '688072', stock_name: '拓荆科技', pe_latest: 95.32, pe_median: 93.19, ps_latest: 15, ps_median: 14 },
+      ],
+    },
+  },
+});
+const relativeWb = XLSX.read(relativeBuf, { type: 'buffer' });
+const relativeWs = relativeWb.Sheets['相对估值'];
+const relativeFormulas = Object.values(relativeWs).map((c) => c && c.f).filter(Boolean);
+assert.ok(relativeFormulas.some((f) => f === 'STDEV.S(S5:S7)'), relativeFormulas.join('\n'));
+assert.ok(relativeFormulas.some((f) => f === 'MEDIAN(S5:S7)'));
+assert.ok(relativeFormulas.some((f) => f === 'STDEV.S(T5:T7)'));
+assert.ok(relativeFormulas.every((f) => !f.includes('@') && !/STDEV\.S\(IF/.test(f) && !/MEDIAN\(IF/.test(f)));
+assert.strictEqual(relativeWs.S5.f, 'IF(I5="",IF(H5="",G5,H5),I5)');
+assert.ok(!relativeWs.S7 || !relativeWs.S7.f);
+const styled = XLSX.read(relativeBuf, { type: 'buffer', cellStyles: true });
+const seqCell = styled.Sheets['相对估值'].A5;
+const seqFmt = seqCell.z || seqCell.s?.numFmt;
+assert.strictEqual(seqFmt, '0', JSON.stringify(seqCell));
+const amountCell = styled.Sheets['相对估值'].G5;
+const amountFmt = amountCell.z || amountCell.s?.numFmt;
+assert.ok(amountFmt && amountFmt.includes('0.00'), JSON.stringify(amountCell));
+
+const { round2, yuanToYi2, exitMocIrr } = require('./exitReturn');
+const { buildExitView, blankReason } = require('./sensitivityTables');
+const { buildCalcStamp, diffCalcStamp, needsRefetch } = require('./calcStamp');
+
+eq(out.exit_equity_value, out.exit_multiple * out.terminal_base, 'exit cap excludes net debt');
+eq(out.terminal_value, out.exit_equity_value + out.net_debt, 'terminal adds net debt');
+const psRun = buildDcfForecast({ ...base, terminalType: 'exit_ps', exitMultiple: 2 });
+const rebuild = (patch) => buildDcfForecast({
+  ...base,
+  baseRate: patch.rate,
+  scenarioRate: null,
+  scenarioLabel: '',
+  terminalType: patch.terminalType,
+  exitMultiple: patch.multiple,
+  revenueOverride: patch.revenueOverride,
+});
+const view = buildExitView({
+  peRun: out,
+  psRun,
+  axes: 'exit_x_cagr',
+  scenarioMode: 'single',
+  rebuild,
+});
+assert.strictEqual(view.pe.equity_yi, yuanToYi2(out.equity_value));
+assert.strictEqual(view.pe.cap_yi, yuanToYi2(out.exit_equity_value));
+assert.strictEqual(view.pe.row_labels[view.pe.center_row], '当前预测');
+assert.strictEqual(
+  view.pe.cells[view.pe.center_row][view.pe.center_col].equity_yi,
+  view.pe.equity_yi,
+);
+assert.strictEqual(view.holding_years, round2(out.pvs[out.pvs.length - 1].periods));
+assert.ok(view.pe.col_labels.filter(Boolean).every((label) => label.includes('倍')));
+assert.strictEqual(view.pe.cells[view.pe.center_row][0].blank, 'multiple');
+if (view.pe.row_labels.length > 1) {
+  assert.notStrictEqual(view.pe.cells[0][view.pe.center_col].blank, undefined);
+}
+
+const waccView = buildExitView({
+  peRun: out,
+  psRun,
+  axes: 'wacc_x_exit',
+  scenarioMode: 'single',
+  rebuild,
+});
+assert.strictEqual(waccView.axes, 'exit_x_wacc');
+assert.ok(waccView.pe.row_labels.every((label) => label.endsWith('%')));
+assert.ok(waccView.pe.col_labels.filter(Boolean).every((label) => label.includes('倍')));
+assert.strictEqual(
+  waccView.pe.cells[waccView.pe.center_row][waccView.pe.center_col].equity_yi,
+  view.pe.equity_yi,
+);
+
+assert.strictEqual(blankReason({ blocked: true, blockers: ['税后经营利润小于等于 0'] }, 'exit_pe'), 'nopat');
+assert.strictEqual(blankReason({ blocked: true, blockers: ['全年营业收入小于等于 0'] }, 'exit_ps'), 'revenue');
+const lossView = buildExitView({
+  peRun: lossExit,
+  psRun: psOk,
+  axes: 'exit_x_cagr',
+  scenarioMode: 'single',
+  rebuild: (patch) => buildDcfForecast({
+    ...base,
+    targetPl: { ...base.targetPl, cogs_ratio: [1.2] },
+    baseRate: patch.rate,
+    terminalType: patch.terminalType,
+    exitMultiple: patch.multiple,
+    revenueOverride: patch.revenueOverride,
+  }),
+});
+assert.strictEqual(lossView.pe.cells, null);
+assert.ok(lossView.ps.cells);
+
+const rdFixture = {
+  ...base,
+  forecastPl: { 2026: yearEndRow({ rd: 100 }) },
+  targetPl: { ...base.targetPl, rd_ratio: [0, 0.2] },
+};
+const rdPe = buildDcfForecast({ ...rdFixture, exitMultiple: 40 });
+const rdPs = buildDcfForecast({ ...rdFixture, terminalType: 'exit_ps', exitMultiple: 14 });
+const rdRebuild = (patch) => buildDcfForecast({
+  ...rdFixture,
+  baseRate: patch.rate,
+  terminalType: patch.terminalType,
+  exitMultiple: patch.multiple,
+  revenueOverride: patch.revenueOverride,
+  rdOverride: patch.rdOverride,
+});
+const rdView = buildExitView({
+  peRun: rdPe,
+  psRun: rdPs,
+  axes: 'exit_x_rd_cagr',
+  steps: { peStep: 10, psStep: 2, cagrStep: 0.05, rateStep: 0.02 },
+  scenarioMode: 'single',
+  rebuild: rdRebuild,
+});
+assert.strictEqual(rdView.axes, 'exit_x_rd_cagr');
+assert.deepStrictEqual(rdView.pe.col_labels, ['20 倍', '30 倍', '40 倍', '50 倍', '60 倍']);
+assert.deepStrictEqual(rdView.ps.col_labels, ['10 倍', '12 倍', '14 倍', '16 倍', '18 倍']);
+assert.strictEqual(rdView.pe.row_labels[rdView.pe.center_row], '当前预测');
+const rdShock = rdRebuild({
+  rate: rdPs.discount_rate,
+  multiple: 14,
+  terminalType: 'exit_ps',
+  rdOverride: rdView.ps.cells && [100, 150],
+});
+eq(rdShock.series.rd[0], 100, 'rd shock keeps the first year');
+eq(rdShock.series.rd[1], 150, 'rd shock replaces the later year');
+eq(rdShock.series.revenue[1], rdPs.series.revenue[1], 'rd shock keeps revenue');
+eq(rdShock.exit_equity_value, rdPs.exit_equity_value, 'ps exit cap ignores rd');
+assert.notStrictEqual(rdShock.equity_value, rdPs.equity_value);
+
+eq(exitMocIrr(100, 0.7, 50, 5).moc, 1.4, 'moc');
+eq(exitMocIrr(100, null, 50, 5).moc, 2, 'blank dilution is 100%');
+assert.strictEqual(exitMocIrr(100, 0.7, 0, 5).note, '待填写本轮交易估值（投前）');
+assert.strictEqual(exitMocIrr(100, 1.2, 50, 5).note, '后续股权稀释需在 0% 到 100%');
+assert.strictEqual(exitMocIrr(0, 0.7, 50, 5).note, 'MOC 不为正，无 IRR');
+eq(exitMocIrr(100, null, 50, 5).irr, round2((2 ** (1 / 5) - 1) * 100), 'irr percent');
+
+assert.ok(ranged.dcf.primary.exit_view?.ps?.cells || ranged.dcf.primary.exit_view?.pe?.cells);
+
+const stamp = buildCalcStamp({
+  assumptions: { valuation_date: '2026-03-31', exit_pe: 40, round_deal_value_yi: 10, follow_on_dilution: 0.7 },
+  methodConfig: { sensitivity_axes: 'exit_x_cagr' },
+}, [{ stock_code: '000001', selected: 1, in_pool: 1 }]);
+const edited = buildCalcStamp({
+  assumptions: { valuation_date: '2026-03-31', exit_pe: 50, round_deal_value_yi: 99, follow_on_dilution: 0.2 },
+  methodConfig: { sensitivity_axes: 'exit_x_cagr' },
+}, [{ stock_code: '000001', selected: 1, in_pool: 0 }]);
+const editedLines = diffCalcStamp(stamp, edited);
+assert.ok(editedLines.some((line) => line.includes('退出 P/E已改为 50 倍')));
+assert.ok(!editedLines.some((line) => line.includes('本轮') || line.includes('稀释')));
+assert.ok(editedLines.some((line) => line.includes('相对估值')));
+assert.strictEqual(needsRefetch(stamp, edited), false);
+const added = buildCalcStamp({
+  assumptions: { valuation_date: '2026-06-30', exit_pe: 40 },
+  methodConfig: { sensitivity_axes: 'exit_x_cagr' },
+}, [{ stock_code: '000001', selected: 1 }, { stock_code: '000002', selected: 1 }]);
+assert.strictEqual(needsRefetch(stamp, added), true);
+
+const written = buildCalcStamp({
+  forecastPl: { '2026E': { revenue: 100.00004, extra: 1, manual: ['capex', 'revenue'], capex: 20, cogs: 40 } },
+  targetCf: { years: ['2026'], da: [10.00004], capex: [3], dnwc: [1], note: 'skip' },
+  overrides: { da: 8, capex: null, dnwc: null, net_debt: null, extra: 1 },
+}, []);
+const loaded = buildCalcStamp({
+  forecastPl: { 2026: { capex: 20, revenue: 100, cogs: 40, manual: ['revenue', 'capex'] } },
+  targetCf: {
+    years: ['2026'], da: [10], capex: [3], dnwc: [1],
+    da_default: 8, capex_default: null, dnwc_default: null,
+  },
+  overrides: { da: 8, capex: null, dnwc: null, net_debt: null },
+}, []);
+assert.strictEqual(written.forecast_pl, loaded.forecast_pl);
+assert.strictEqual(written.cashflow, loaded.cashflow);
+assert.deepStrictEqual(diffCalcStamp(written, loaded), []);
+const touchedPl = buildCalcStamp({
+  forecastPl: { 2026: { capex: 20, revenue: 101, cogs: 40, manual: ['revenue', 'capex'] } },
+  targetCf: {
+    years: ['2026'], da: [10], capex: [3], dnwc: [1],
+    da_default: 8, capex_default: null, dnwc_default: null,
+  },
+  overrides: { da: 8, capex: null, dnwc: null, net_debt: null },
+}, []);
+assert.ok(diffCalcStamp(loaded, touchedPl).some((line) => line.includes('预测利润表')));
+assert.ok(!diffCalcStamp(loaded, touchedPl).some((line) => line.includes('现金流量表')));
+const legacyStamp = { ...stamp };
+delete legacyStamp.pe_multiple_step;
+delete legacyStamp.rd_growth_mode;
+assert.ok(diffCalcStamp(legacyStamp, stamp).some((line) => line.includes('P/E 倍数步长已改为 10')));
+assert.ok(diffCalcStamp(legacyStamp, stamp).some((line) => line.includes('研发费用口径已改为 较上一年')));
+const growthStamp = buildCalcStamp({
+  assumptions: { rd_growth_mode: 'growth' },
+  methodConfig: { sensitivity_axes: 'exit_x_rd_cagr', cagr_step: 0.025 },
+}, []);
+assert.ok(!diffCalcStamp(stamp, growthStamp).some((line) => line.includes('研发费用口径')));
+assert.ok(diffCalcStamp(stamp, growthStamp).some((line) => line.includes('研发费用 CAGR')));
+assert.ok(diffCalcStamp(stamp, growthStamp).some((line) => line.includes('CAGR 步长已改为 2.5%')));
+
+const blankBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(blankBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-03-31'],
+  ['本轮交易估值（投前）', ''],
+  ['后续股权稀释', ''],
+]), '锚定日');
+const blankParsed = parseTargetFinancialWorkbook(XLSX.write(blankBook, { type: 'buffer', bookType: 'xlsx' }));
+const keptDeal = mergeTargetFinancials({
+  assumptions: { round_deal_value_yi: 616.3, follow_on_dilution: 0.7 },
+  targetPl: { years: [] },
+}, blankParsed);
+assert.strictEqual(keptDeal.assumptions.round_deal_value_yi, 616.3);
+assert.strictEqual(keptDeal.assumptions.follow_on_dilution, 0.7);
+const flippedRd = mergeTargetFinancials(
+  { assumptions: {}, targetPl: { years: [] } },
+  { forecast: { years: ['2026'], rd_ratio: [0.05] }, assumptions: {} },
+);
+assert.strictEqual(flippedRd.assumptions.rd_growth_mode, 'growth');
+const untouchedRd = mergeTargetFinancials(
+  { assumptions: {}, targetPl: { years: [] } },
+  { forecast: { years: ['2026'], revenue_growth: [0.1] }, assumptions: {} },
+);
+assert.notStrictEqual(untouchedRd.assumptions.rd_growth_mode, 'growth');
+
+const filledBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(filledBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['本轮交易估值（投前）', 12.5],
+  ['后续股权稀释', '70%'],
+]), '锚定日');
+const filledParsed = parseTargetFinancialWorkbook(XLSX.write(filledBook, { type: 'buffer', bookType: 'xlsx' }));
+const replaced = mergeTargetFinancials({
+  assumptions: { round_deal_value_yi: 1, follow_on_dilution: 1 },
+  targetPl: { years: [] },
+}, filledParsed);
+assert.strictEqual(replaced.assumptions.round_deal_value_yi, 12.5);
+eq(replaced.assumptions.follow_on_dilution, 0.7, 'dilution percent');
+
+const sensBuf = buildWorkbookBuffer({
+  title: '敏感性',
+  payload: {
+    assumptions: { follow_on_dilution: 0.7 },
+    export_deal_yi: 100,
+    export_stale_lines: ['退出 P/E已改为 50 倍，需要重新计算'],
+    sheets: {
+      dcf: {
+        payload: {
+          primary: {
+            scenario_name: '基准',
+            exit_view: view,
+          },
+        },
+      },
+    },
+  },
+  sheets: {
+    result_compare: {
+      title: '结果对比',
+      payload: { display_yi: { market_ps: {}, market_pe: {}, dcf: { low: 1, high: 2, increment: 1 } } },
+    },
+  },
+});
+const sensWb = XLSX.read(sensBuf, { type: 'buffer' });
+const sensSheet = XLSX.utils.sheet_to_csv(sensWb.Sheets['结果对比']);
+assert.ok(sensSheet.includes('输入已修改，表内为上次计算'));
+assert.ok(sensSheet.includes('本轮交易估值（投前）'));
+assert.ok(!sensSheet.includes('内圈四角'));
 
 console.log('dcfForecast.test.js ok');

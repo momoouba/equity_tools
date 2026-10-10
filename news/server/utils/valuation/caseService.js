@@ -674,7 +674,7 @@ async function updateCaseMeta(req, caseId, body) {
     params.push(round === null || round === '' ? null : Number(round));
     await recordChangeEvent(caseId, userId, {
       field_key: 'round_deal_value_yi',
-      field_label: '本轮交易估值',
+      field_label: '本轮交易估值（投前）',
       old_value: cse.round_deal_value_yi == null || cse.round_deal_value_yi === '' ? '（空）' : `${cse.round_deal_value_yi} 亿元`,
       new_value: round === null || round === '' ? '（空）' : `${round} 亿元`,
       source: 'case',

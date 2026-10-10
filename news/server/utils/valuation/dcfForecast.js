@@ -300,6 +300,8 @@ function buildDcfForecast({
   liquidityDiscount = null,
   forecastPl = {},
   overrides = {},
+  revenueOverride = null,
+  rdOverride = null,
 } = {}) {
   const blockers = [];
   const anchor = parseAnchor(assumptions.valuation_date);
@@ -382,6 +384,8 @@ function buildDcfForecast({
     if (n && !carried.filled) {
       if (spec.optional) {
         carriedRatios[spec.key] = { values: Array(n).fill(0), filled: true };
+      } else if (spec.key === 'rd_ratio' && assumptions.rd_growth_mode !== 'share') {
+        blockers.push('标的利润表的「研发费用」较上一年增速从未填写，请到标的利润表补上');
       } else {
         blockers.push(`标的利润表的「${spec.label}」占营业收入比例从未填写，请到标的利润表补上`);
       }
@@ -480,6 +484,24 @@ function buildDcfForecast({
     }
   }
 
+  if (Array.isArray(revenueOverride) && revenueOverride.length === n && revenues.length === n) {
+    for (let i = 0; i < n; i += 1) {
+      revenues[i] = toNumber(revenueOverride[i]);
+      if (!(revenues[i] > 0)) {
+        blockers.push(`${years[i]} 年全年营业收入小于等于 0，请修改该年收入增速或预测利润表中的营业收入，使全年收入为正`);
+      }
+    }
+  }
+
+  if (assumptions.rd_growth_mode !== 'share' && anchor.ok && n > 0 && !stub) {
+    const firstRaw = toNumber(carriedRatios.rd_ratio?.values?.[0]);
+    const firstManual = manualPlAmount(forecastPl, years[0], 'rd');
+    const firstIsAmount = firstManual != null || (firstRaw != null && Math.abs(firstRaw) > 10000);
+    if (!firstIsAmount && yearAmount(sourcePl, 'rd', anchor.year) == null) {
+      blockers.push(`请到标的利润表填写 ${anchor.year} 年研发费用，作为第一预测年的增速起点`);
+    }
+  }
+
   const ratiosOk = RATIOS.every((spec) => carriedRatios[spec.key]?.filled)
     && RATIOS.filter((spec) => spec.nonNegative).every((spec) => (
       (targetPl[spec.key] || []).every((v) => {
@@ -546,6 +568,9 @@ function buildDcfForecast({
   };
   const forecastBs = [];
   let prevNwc = openingNwc;
+  let prevRd = null;
+  let rdBaseMissing = false;
+  const rdGrowth = assumptions.rd_growth_mode !== 'share';
   for (let i = 0; i < n; i += 1) {
     const rev = revenues[i];
     const line = (ratioKey) => {
@@ -565,7 +590,36 @@ function buildDcfForecast({
     const surtax = line('surtax_ratio');
     const selling = line('selling_ratio');
     const admin = line('admin_ratio');
-    const rd = line('rd_ratio');
+    let rd;
+    const rdOver = Array.isArray(rdOverride) && rdOverride.length === n ? toNumber(rdOverride[i]) : null;
+    if (rdOver != null) {
+      rd = rdOver;
+    } else if (!rdGrowth) {
+      rd = line('rd_ratio');
+    } else if (stub && i === 0) {
+      const entered = yearEndAmount(forecastPl, years[i], 'rd');
+      rd = entered != null ? entered : 0;
+    } else {
+      const manual = manualPlAmount(forecastPl, years[i], 'rd');
+      const raw = toNumber(carriedRatios.rd_ratio.values[i]);
+      if (manual != null) rd = manual;
+      else if (raw != null && Math.abs(raw) > 10000) rd = raw;
+      else if (!stub && i === 0) {
+        const actual = yearAmount(sourcePl, 'rd', anchor.year);
+        if (actual == null) {
+          if (!rdBaseMissing) {
+            blockers.push(`请到标的利润表填写 ${anchor.year} 年研发费用，作为第一预测年的增速起点`);
+            rdBaseMissing = true;
+          }
+          rd = 0;
+        } else {
+          rd = actual * (1 + num0(raw));
+        }
+      } else {
+        rd = num0(prevRd) * (1 + num0(raw));
+      }
+    }
+    prevRd = rd;
     const financeExpense = line('finance_expense_ratio');
     const otherIncome = line('other_income_ratio');
     const other = line('other_ratio');
@@ -684,7 +738,8 @@ function buildDcfForecast({
     });
   }
   const terminalBase = usePs ? series.revenue[n - 1] : lastNopat;
-  const exitEv = multiple * terminalBase + nd;
+  const exitEquity = multiple * terminalBase;
+  const exitEv = exitEquity + nd;
   const tvPeriods = pvs[n - 1].periods;
   const tvPv = exitEv * pvFactor(rate, tvPeriods);
   ev += tvPv;
@@ -704,6 +759,7 @@ function buildDcfForecast({
     terminal_base_kind: usePs ? 'revenue' : 'after_tax_operating_profit',
     terminal_base: terminalBase,
     exit_multiple: multiple,
+    exit_equity_value: exitEquity,
     terminal_value: exitEv,
     terminal_pv: tvPv,
     enterprise_value: ev,

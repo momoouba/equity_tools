@@ -213,7 +213,7 @@ export default function ValuationPreProjectsPage({ embedded = false, onOpenWorkb
     { title: '版本数', dataIndex: 'version_count', width: 80, render: (v) => v || 0 },
     { title: '最近估值', dataIndex: 'latest_valued_at', width: 170, render: (v) => formatChinaDateTime(v) },
     { title: '最近区间(亿元)', dataIndex: 'latest_conclusion', width: 220, render: (v) => fmtRange(v) },
-    { title: '本轮交易估值', dataIndex: 'round_deal_value_yi', width: 120, render: (v) => fmtN(v) },
+    { title: '本轮交易估值（投前）', dataIndex: 'round_deal_value_yi', width: 150, render: (v) => fmtN(v) },
     {
       title: '操作',
       width: 100,

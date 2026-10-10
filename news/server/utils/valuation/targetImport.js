@@ -414,6 +414,12 @@ function parseAnchorSheet(aoa) {
     } else if (/退出\s*P\s*[/／]\s*E|退出市盈/i.test(label)) {
       const n = toNumber(raw);
       if (n != null) out.exit_pe = n;
+    } else if (/本轮交易估值/.test(label)) {
+      const n = toNumber(raw);
+      if (n != null) out.round_deal_value_yi = n;
+    } else if (/后续股权稀释|股权稀释/.test(label)) {
+      const rate = percentToRatio(raw);
+      if (rate != null) out.follow_on_dilution = rate;
     } else if (/市场法营业收入|市场营业收入/.test(label)) {
       const n = toNumber(raw);
       if (n != null) out.market_revenue = n;
@@ -846,6 +852,8 @@ function mergeTargetFinancials(payload, parsed) {
   if (parsed.assumptions?.discount_rate != null) assumptions.discount_rate = parsed.assumptions.discount_rate;
   if (parsed.assumptions?.exit_pe != null) assumptions.exit_pe = parsed.assumptions.exit_pe;
   if (parsed.assumptions?.exit_ps != null) assumptions.exit_ps = parsed.assumptions.exit_ps;
+  if (parsed.assumptions?.round_deal_value_yi != null) assumptions.round_deal_value_yi = parsed.assumptions.round_deal_value_yi;
+  if (parsed.assumptions?.follow_on_dilution != null) assumptions.follow_on_dilution = parsed.assumptions.follow_on_dilution;
   if (parsed.assumptions?.market_revenue != null) assumptions.market_revenue = parsed.assumptions.market_revenue;
   if (parsed.assumptions?.market_net_income != null) assumptions.market_net_income = parsed.assumptions.market_net_income;
   next.assumptions = assumptions;
@@ -917,6 +925,7 @@ function mergeTargetFinancials(payload, parsed) {
     next.overrides = { ...(next.overrides || {}), net_debt: null };
   }
   if (parsed.forecast?.years?.length) next.targetPl = mergeForecastIntoPl(next.targetPl, parsed.forecast);
+  if (Array.isArray(parsed.forecast?.rd_ratio)) assumptions.rd_growth_mode = 'growth';
   if (parsed.forecast?.yearEnd) {
     const applied = applyYearEndForecast(next, parsed.forecast.yearEnd);
     next.forecastPl = applied.forecastPl;
@@ -1337,17 +1346,17 @@ const CURRENT_PL_TEMPLATE_ROWS = [
 ];
 
 const FORECAST_TEMPLATE_ROWS = [
-  ['收入增速', '百分数，10 表示在上一年营业收入上增长 10%。可为负或 0。空白年份沿用最近一次已填数。锚定日不是 12 月 31 日时，当年年底 E 列填年底营业收入（元），不要填百分数。'],
-  ['营业成本', '占当年营业收入的百分数，95 表示 95%。绝对值大于 10000 时按该年实际金额（元）。当年年底 E 列始终填金额。未填按 0。'],
-  ['税金及附加', '占当年营业收入的百分数。绝对值大于 10000 时按该年实际金额。未填按 0，小于 0 会拦截。'],
-  ['销售费用', '占当年营业收入的百分数，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
-  ['管理费用', '占当年营业收入的百分数，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
-  ['研发费用', '占当年营业收入的百分数，含已分摊折旧。95 表示收入的 95%；10000000 表示该年研发费用 10000000 元。未填按 0。'],
-  ['财务费用', '占当年营业收入的百分数。绝对值大于 10000 时按该年实际金额，可为负。未填按 0，不进入自由现金流。'],
-  ['其他收益', '占收入的百分数。可为负。未填按 0。补助不可持续时把后续年份改低。'],
-  ['其他', '占收入的百分数。只放经营性项目，可为负。未填按 0。'],
-  ['折旧摊销', '占收入的百分数。填现金流量表补充资料里的折旧摊销合计。未填按 0。'],
-  ['资本开支', '占收入的百分数。未填不会按 0 计算。'],
+  ['收入增速（较上一年）', '较上一年。百分数，10 表示在上一年营业收入上增长 10%。可为负或 0。空白年份沿用最近一次已填数。锚定日不是 12 月 31 日时，当年年底 E 列填年底营业收入（元），不要填百分数。'],
+  ['营业成本（占营业收入）', '占营业收入。95 表示当年收入的 95%。绝对值大于 10000 时按该年实际金额（元）。当年年底 E 列始终填金额。未填按 0。'],
+  ['税金及附加（占营业收入）', '占营业收入。绝对值大于 10000 时按该年实际金额。未填按 0，小于 0 会拦截。'],
+  ['销售费用（占营业收入）', '占营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
+  ['管理费用（占营业收入）', '占营业收入，含已分摊折旧。绝对值大于 10000 时按该年实际金额。未填按 0。'],
+  ['研发费用（较上一年）', '较上一年。10 表示比上一年研发费用增长 10%。绝对值大于 10000 时按该年金额（元）。锚定日不是 12 月 31 日时，当年年底 E 列填金额。锚定日是 12 月 31 日且该年填百分数时，用已结年全年实际研发 ×（1+增速）。'],
+  ['财务费用（占营业收入）', '占营业收入。绝对值大于 10000 时按该年实际金额，可为负。未填按 0，不进入自由现金流。'],
+  ['其他收益（占营业收入）', '占营业收入。可为负。未填按 0。补助不可持续时把后续年份改低。'],
+  ['其他（占营业收入）', '占营业收入。只放经营性项目，可为负。未填按 0。'],
+  ['折旧摊销（占营业收入）', '占营业收入。填现金流量表补充资料里的折旧摊销合计。未填按 0。'],
+  ['资本开支（占营业收入）', '占营业收入。未填不会按 0 计算。'],
   ['DSO', '天。空着则用可比公司年报中位数。'],
   ['DPO', '天。空着则用可比公司年报中位数。'],
   ['存货周转天数', '天。空着则用可比公司年报中位数。'],
@@ -1386,14 +1395,14 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['填写说明', [
       '按工作表分别填写：锚定日、当期利润表、预测、现金流量表、资产负债表。科目名称请保持与模板一致，否则无法导入。',
-      '金额单位为元，与页面和数据库一致。预测表表头年份都带 E。收入增速填百分数，10 表示比上一年收入增长 10%。营业成本及后面的科目也填百分数，95 表示占当年营业收入 95%；这些格子里绝对值大于 10000 的数按该年实际金额，不再乘收入。',
+      '金额单位为元，与页面和数据库一致。预测表表头年份都带 E。收入增速填百分数，10 表示比上一年收入增长 10%。研发费用的百分数也是较上一年的增速，10 表示研发增长 10%。营业成本、税金及附加、销售、管理及后面的科目填占当年营业收入的百分数，95 表示 95%。这些格子里绝对值大于 10000 的数按该年实际金额，不再乘收入或上一年。',
       `估值锚定日只能是 3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。页面已选日期时按所选日期预填；未选时按当前月份：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。本次为 ${anchor}，可直接改「锚定日」表里的日期。`,
       '改锚定日时，请把「当期利润表」的当期列表头和「现金流量表」的列表头改成同一天。当期利润表上一列是上一年 12 月 31 日的年末数，按锚定年自动前推一年。',
       '预测从当年年底起连续 5 年，已保存的年份更少时也会补齐到 5 年，表头都写成 2026E、2027E 这种形式。锚定日不是 12 月 31 日时，第一列是当年年底金额（元），不要填百分数；周转天数那三行的这一列仍填天数。后面各列填占营业收入的百分数，绝对值大于 10000 时改为该年实际金额。锚定日是 12 月 31 日时，预测从下一年起，同样连续 5 年。',
       '资产负债表只填锚定日当天的实际数。右侧校验区汇总资产、负债和所有者权益，配平结果为已配平即可。',
       '现金流量表只填截至锚定日已经发生的折旧摊销、资本性支出和营运资本增加，单位元，表头日期与锚定日相同。空着按 0。全年折旧和资本开支仍填在预测表，不要把全年数填进这一列。',
-      '锚定日表里的折现率、退出 P/E、退出 P/S 是 DCF 参数。折现率填百分数，20 表示 20%。退出倍数填倍数本身，40 表示 40 倍。空着分别按 30%、40 倍、20 倍。这两套退出倍数都会进入结果区间，和市场法用的可比公司市盈率、市销率不是同一组数。',
-      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额、现金流量表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。营业成本、费用、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支比例空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
+      '锚定日表里的折现率、退出 P/E、退出 P/S 是 DCF 参数。折现率填百分数，20 表示 20%。退出倍数填倍数本身，40 表示 40 倍。空着分别按 30%、40 倍、20 倍。这两套退出倍数都会进入结果区间，和市场法用的可比公司市盈率、市销率不是同一组数。本轮交易估值（投前）和后续股权稀释不进入股权价值：前者单位亿元，后者填百分数，70 或 70% 都表示 70%。这两格空着不会覆盖案件里已有的数。',
+      '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额、现金流量表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。研发费用以后各年 = 上一年研发费用 ×（1+增速）；12 月 31 日且第一年填百分数时，用已结年全年实际研发 ×（1+增速）。营业成本、销售、管理、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支比例空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
     ].join('\n')],
   ], 1, NOTE_COL_WCH * 3.5), '说明');
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
@@ -1403,6 +1412,8 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
     ['折现率', discount, '百分数，20 表示 20%。空着按 30%。DCF 各年现金流和终值都用这个折现率。'],
     ['退出 P/E', cellOrEmpty(assumptions.exit_pe), '倍数，40 表示 40 倍。乘最后一年税后经营利润。空着按 40。'],
     ['退出 P/S', cellOrEmpty(assumptions.exit_ps), '倍数，14 表示 14 倍。乘最后一年营业收入。空着按 20。'],
+    ['本轮交易估值（投前）', cellOrEmpty(assumptions.round_deal_value_yi), '亿元，例如 616.3。只作对照虚线，并作为退出 MOC、退出 IRR 的分母。不乘 10,000。空着不覆盖已有的数。'],
+    ['后续股权稀释', assumptions.follow_on_dilution == null || assumptions.follow_on_dilution === '' ? '' : ratioPercentCell(assumptions.follow_on_dilution), '百分数，70 或 70% 都表示 70%。空着按 100%，再次导入空着不覆盖已有的数。不进入股权价值。'],
     ['市场法营业收入', cellOrEmpty(assumptions.market_revenue), '可选，元。空着则导入时用当期营业收入。'],
     ['市场法净利润', cellOrEmpty(assumptions.market_net_income), '可选，元。空着则导入时用当期净利润。'],
   ], 2, NOTE_COL_WCH, { 1: FILL_COL_WCH * 3 }), '锚定日');
