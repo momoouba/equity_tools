@@ -411,6 +411,16 @@ const anchorLabels = XLSX.utils.sheet_to_json(templateBook.Sheets['锚定日'], 
 assert.ok(anchorLabels.includes('折现率'));
 assert.ok(anchorLabels.includes('退出 P/E'));
 assert.ok(anchorLabels.includes('退出 P/S'));
+assert.ok(anchorLabels.includes('敏感性'));
+assert.ok(anchorLabels.includes('敏感参数1步长'));
+assert.ok(anchorLabels.includes('敏感参数2步长'));
+const anchorNotes = XLSX.utils.sheet_to_json(templateBook.Sheets['锚定日'], { header: 1 }).slice(1);
+const noteOf = (label) => String(anchorNotes.find((row) => row[0] === label)?.[2] || '');
+assert.ok(noteOf('敏感性').includes('1 = 营收 CAGR × 退出倍数'));
+assert.ok(noteOf('敏感性').includes('4 = 营收 CAGR × 研发费用 CAGR'));
+assert.ok(noteOf('敏感参数1步长').includes('30%、35%、当前预测、45%、50%'));
+assert.ok(noteOf('敏感参数2步长').includes('20、30、40、50、60'));
+assert.ok(noteOf('敏感参数2步长').includes('0%、2.5%、当前预测、7.5%、10%'));
 const cfLabels = XLSX.utils.sheet_to_json(templateBook.Sheets['现金流量表'], { header: 1 }).slice(1).map((row) => row[0]);
 assert.deepStrictEqual(cfLabels, ['折旧摊销', '资本性支出', '营运资本增加']);
 assert.strictEqual(XLSX.utils.sheet_to_json(templateBook.Sheets['现金流量表'], { header: 1 })[0][2], '2026-06-30');
@@ -437,7 +447,10 @@ const shortBook = XLSX.read(buildTargetFinancialTemplateBuffer({
 assert.strictEqual(shortBook.Sheets['预测'].C1.v, '2026E');
 assert.strictEqual(shortBook.Sheets['预测'].G1.v, '2030E');
 assert.strictEqual(templateBook.Sheets['说明']['!cols'][1].wch, 52 * 1.5 * 3.5);
-assert.strictEqual(templateBook.Sheets['锚定日']['!cols'][1].wch, 12 * 3);
+assert.strictEqual(templateBook.Sheets['锚定日']['!cols'][1].wch, 18);
+assert.ok(Math.abs(templateBook.Sheets['锚定日']['!cols'][2].wch - 52 * 1.5 * 1.5 * 1.25) < 0.2);
+assert.strictEqual(templateBook.Sheets['锚定日']['!rows'][0].hpt, 22 * 3 / 2);
+assert.deepStrictEqual(anchorLabels.slice(-3), ['敏感性', '敏感参数1步长', '敏感参数2步长']);
 assert.strictEqual(templateBook.Sheets['当期利润表']['!cols'][2].wch, 12 * 1.5);
 assert.strictEqual(templateBook.Sheets['资产负债表']['!cols'][2].wch, 12 * 1.5);
 assert.strictEqual(templateBook.Sheets['当期利润表']['!rows'][0].hpt, 22 * 3);
@@ -474,6 +487,19 @@ const anchorXml = unzipEntry(styledBuf, 'xl/worksheets/sheet2.xml');
 assert.ok(anchorXml.includes('>2026-06-30</v>'));
 assert.ok(anchorXml.includes('<v>15</v>'));
 assert.ok(anchorXml.includes('<v>12345.6</v>'));
+const sensFmtXml = unzipEntry(buildTargetFinancialTemplateBuffer({
+  assumptions: { valuation_date: '2026-06-30', tax_rate: 0.15 },
+  methodConfig: { sensitivity_axes: 'rev_cagr_x_rd_cagr', cagr_step: 0.05, rd_cagr_step: 0.025 },
+}, '2026-10-02'), 'xl/worksheets/sheet2.xml');
+const cellStyle = (xml, ref) => {
+  const m = xml.match(new RegExp(`<c r="${ref}"([^>]*?)(?:/>|>)`));
+  const s = m && m[1].match(/\ss="(\d+)"/);
+  return s ? s[1] : null;
+};
+assert.notStrictEqual(cellStyle(sensFmtXml, 'B3'), cellStyle(sensFmtXml, 'B11'));
+assert.strictEqual(cellStyle(sensFmtXml, 'B11'), cellStyle(sensFmtXml, 'B13'));
+assert.ok(sensFmtXml.includes('<v>4</v>'));
+assert.ok(sensFmtXml.includes('<v>2.5</v>'));
 const bsXml = unzipEntry(styledBuf, 'xl/worksheets/sheet6.xml');
 assert.ok(bsXml.includes('金额（元）'));
 assert.ok(bsXml.includes('SUM(C'));
@@ -1143,6 +1169,76 @@ const replaced = mergeTargetFinancials({
 assert.strictEqual(replaced.assumptions.round_deal_value_yi, 12.5);
 eq(replaced.assumptions.follow_on_dilution, 0.7, 'dilution percent');
 
+const sensTemplate = XLSX.read(buildTargetFinancialTemplateBuffer({
+  assumptions: { valuation_date: '2026-06-30' },
+  methodConfig: {
+    sensitivity_axes: 'rev_cagr_x_rd_cagr',
+    cagr_step: 0.05,
+    rd_cagr_step: 0.025,
+    pe_multiple_step: 10,
+    ps_multiple_step: 2,
+  },
+}, '2026-10-02'), { type: 'buffer' });
+const sensFilled = Object.fromEntries(
+  XLSX.utils.sheet_to_json(sensTemplate.Sheets['锚定日'], { header: 1 }).slice(1).map((row) => [row[0], row[1]]),
+);
+assert.strictEqual(sensFilled['敏感性'], 4);
+assert.strictEqual(sensFilled['敏感参数1步长'], 5);
+assert.strictEqual(sensFilled['敏感参数2步长'], 2.5);
+const sensImported = mergeTargetFinancials({
+  assumptions: {},
+  methodConfig: { sensitivity_axes: 'exit_x_cagr', pe_multiple_step: 10, ps_multiple_step: 2, cagr_step: 0.08 },
+  targetPl: { years: [] },
+}, parseTargetFinancialWorkbook(XLSX.write(sensTemplate, { type: 'buffer', bookType: 'xlsx' })));
+assert.strictEqual(sensImported.methodConfig.sensitivity_axes, 'rev_cagr_x_rd_cagr');
+eq(sensImported.methodConfig.cagr_step, 0.05, 'revenue cagr step from template');
+eq(sensImported.methodConfig.rd_cagr_step, 0.025, 'rd cagr step from template');
+assert.strictEqual(sensImported.methodConfig.pe_multiple_step, 10);
+assert.strictEqual(sensImported.methodConfig.ps_multiple_step, 2);
+const choice1Book = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(choice1Book, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-06-30'],
+  ['敏感性', 1],
+  ['敏感参数1步长', 5],
+  ['敏感参数2步长', 10],
+]), '锚定日');
+const choice1 = mergeTargetFinancials({
+  assumptions: {},
+  methodConfig: { ps_multiple_step: 2 },
+  targetPl: { years: [] },
+}, parseTargetFinancialWorkbook(XLSX.write(choice1Book, { type: 'buffer', bookType: 'xlsx' })));
+assert.strictEqual(choice1.methodConfig.sensitivity_axes, 'exit_x_cagr');
+eq(choice1.methodConfig.cagr_step, 0.05, 'choice 1 revenue step');
+assert.strictEqual(choice1.methodConfig.pe_multiple_step, 10);
+assert.strictEqual(choice1.methodConfig.ps_multiple_step, 10);
+const blankStepsBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(blankStepsBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-06-30'],
+  ['敏感性', 2],
+  ['敏感参数1步长', ''],
+  ['敏感参数2步长', ''],
+]), '锚定日');
+const blankSteps = mergeTargetFinancials({
+  assumptions: {},
+  methodConfig: { rate_step: 0.02, pe_multiple_step: 5, ps_multiple_step: 2 },
+  targetPl: { years: [] },
+}, parseTargetFinancialWorkbook(XLSX.write(blankStepsBook, { type: 'buffer', bookType: 'xlsx' })));
+assert.strictEqual(blankSteps.methodConfig.sensitivity_axes, 'exit_x_wacc');
+assert.strictEqual(blankSteps.methodConfig.rate_step, 0.02);
+assert.strictEqual(blankSteps.methodConfig.pe_multiple_step, 5);
+assert.strictEqual(blankSteps.methodConfig.ps_multiple_step, 2);
+const badChoiceBook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(badChoiceBook, XLSX.utils.aoa_to_sheet([
+  ['项目', '填写'],
+  ['估值锚定日', '2026-06-30'],
+  ['敏感性', 9],
+]), '锚定日');
+const badChoice = parseTargetFinancialWorkbook(XLSX.write(badChoiceBook, { type: 'buffer', bookType: 'xlsx' }));
+assert.ok(badChoice.warnings.some((line) => line.includes('1、2、3 或 4')));
+assert.strictEqual(badChoice.method, null);
+
 const sensBuf = buildWorkbookBuffer({
   title: '敏感性',
   payload: {
@@ -1167,10 +1263,18 @@ const sensBuf = buildWorkbookBuffer({
     },
   },
 });
-const sensWb = XLSX.read(sensBuf, { type: 'buffer' });
+const sensWb = XLSX.read(sensBuf, { type: 'buffer', cellStyles: true });
 const sensSheet = XLSX.utils.sheet_to_csv(sensWb.Sheets['结果对比']);
 assert.ok(sensSheet.includes('输入已修改，表内为上次计算'));
 assert.ok(sensSheet.includes('本轮交易估值（投前）'));
+assert.ok(sensSheet.includes('本轮估值(亿)'));
+assert.ok(sensSheet.includes('P/E股权'));
 assert.ok(!sensSheet.includes('内圈四角'));
+const resultCols = sensWb.Sheets['结果对比']['!cols'];
+assert.strictEqual(resultCols[0].wch, 16);
+assert.strictEqual(resultCols[1].wch, 11);
+assert.strictEqual(resultCols[6].wch, 2);
+assert.strictEqual(resultCols[7].wch, 16);
+assert.ok(resultCols.reduce((sum, col) => sum + col.wch, 0) <= 144);
 
 console.log('dcfForecast.test.js ok');

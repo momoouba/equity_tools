@@ -393,13 +393,83 @@ function percentToRatio(raw) {
   return n;
 }
 
+const SENSITIVITY_CHOICE = {
+  1: 'exit_x_cagr',
+  2: 'exit_x_wacc',
+  3: 'exit_x_rd_cagr',
+  4: 'rev_cagr_x_rd_cagr',
+};
+
+function positivePercentStep(raw) {
+  const n = percentToRatio(raw);
+  return n != null && n > 0 ? n : null;
+}
+
+function positiveMultipleStep(raw) {
+  if (raw == null || raw === '') return null;
+  const n = toNumber(raw);
+  return n != null && n > 0 ? n : null;
+}
+
+/** 1–4 决定两个步长分别写入哪一项。空着的步长不写入。 */
+function sensitivityMethodFromCells(choiceRaw, step1Raw, step2Raw) {
+  const method = {};
+  const warnings = [];
+  const choiceBlank = choiceRaw == null || choiceRaw === '';
+  const step1Blank = step1Raw == null || step1Raw === '';
+  const step2Blank = step2Raw == null || step2Raw === '';
+  if (choiceBlank) {
+    if (!step1Blank || !step2Blank) warnings.push('未填敏感性编号，敏感参数步长未导入');
+    return { method, warnings };
+  }
+  const choice = toNumber(choiceRaw);
+  const axes = SENSITIVITY_CHOICE[choice];
+  if (!axes) {
+    warnings.push(`敏感性请填 1、2、3 或 4，已忽略「${choiceRaw}」`);
+    return { method, warnings };
+  }
+  method.sensitivity_axes = axes;
+  const pct1 = positivePercentStep(step1Raw);
+  const pct2 = positivePercentStep(step2Raw);
+  const multiple = positiveMultipleStep(step2Raw);
+  if (!step1Blank && pct1 == null) warnings.push('敏感参数1步长需为正数，已忽略');
+  if (!step2Blank && (choice === 4 ? pct2 == null : multiple == null)) warnings.push('敏感参数2步长需为正数，已忽略');
+  if (choice === 1 || choice === 4) {
+    if (pct1 != null) method.cagr_step = pct1;
+  } else if (choice === 2) {
+    if (pct1 != null) method.rate_step = pct1;
+  } else if (pct1 != null) method.rd_cagr_step = pct1;
+  if (choice === 4) {
+    if (pct2 != null) method.rd_cagr_step = pct2;
+  } else if (multiple != null) {
+    method.pe_multiple_step = multiple;
+    method.ps_multiple_step = multiple;
+  }
+  return { method, warnings };
+}
+
 function parseAnchorSheet(aoa) {
   const out = {};
+  let choiceRaw;
+  let step1Raw;
+  let step2Raw;
+  let sawChoice = false;
+  let sawStep1 = false;
+  let sawStep2 = false;
   for (const row of aoa || []) {
     const label = normLabel(row?.[0]);
     if (!label) continue;
     const raw = row[1];
-    if (/估值锚定日|锚定日/.test(label)) {
+    if (/敏感参数1|敏感性参数1/.test(label)) {
+      sawStep1 = true;
+      step1Raw = raw;
+    } else if (/敏感参数2|敏感性参数2/.test(label)) {
+      sawStep2 = true;
+      step2Raw = raw;
+    } else if (/^敏感性/.test(label)) {
+      sawChoice = true;
+      choiceRaw = raw;
+    } else if (/估值锚定日|锚定日/.test(label)) {
       const ymd = formatCellDate(raw);
       if (ymd) out.valuation_date = ymd;
     } else if (/所得税/.test(label)) {
@@ -428,7 +498,13 @@ function parseAnchorSheet(aoa) {
       if (n != null) out.market_net_income = n;
     }
   }
-  return Object.keys(out).length ? out : null;
+  const sensitivity = (sawChoice || sawStep1 || sawStep2)
+    ? sensitivityMethodFromCells(choiceRaw, step1Raw, step2Raw)
+    : { method: {}, warnings: [] };
+  const assumptions = Object.keys(out).length ? out : null;
+  const method = Object.keys(sensitivity.method).length ? sensitivity.method : null;
+  if (!assumptions && !method && !sensitivity.warnings.length) return null;
+  return { assumptions, method, warnings: sensitivity.warnings };
 }
 
 function findForecastHeader(aoa) {
@@ -560,6 +636,7 @@ function parseTargetFinancialWorkbook(buffer) {
   let targetBsSeries = null;
   let targetCf = null;
   let assumptions = null;
+  let method = null;
   let forecast = null;
   let forecastAoa = null;
   let forecastSheetName = null;
@@ -571,7 +648,9 @@ function parseTargetFinancialWorkbook(buffer) {
     if (kind === 'anchor') {
       const found = parseAnchorSheet(aoa);
       if (found) {
-        assumptions = { ...(assumptions || {}), ...found };
+        if (found.assumptions) assumptions = { ...(assumptions || {}), ...found.assumptions };
+        if (found.method) method = { ...(method || {}), ...found.method };
+        warnings.push(...(found.warnings || []));
         used.push(name);
       }
       continue;
@@ -668,6 +747,7 @@ function parseTargetFinancialWorkbook(buffer) {
     targetBsSeries,
     targetCf,
     assumptions,
+    method,
     forecast,
     overrides: Object.keys(overrides).length ? overrides : null,
     warnings,
@@ -857,6 +937,7 @@ function mergeTargetFinancials(payload, parsed) {
   if (parsed.assumptions?.market_revenue != null) assumptions.market_revenue = parsed.assumptions.market_revenue;
   if (parsed.assumptions?.market_net_income != null) assumptions.market_net_income = parsed.assumptions.market_net_income;
   next.assumptions = assumptions;
+  if (parsed.method) next.methodConfig = { ...(next.methodConfig || {}), ...parsed.method };
   const prefer = yearNum(assumptions.valuation_date);
   if (parsed.targetPl?.years?.length) {
     const src = parsed.targetPl;
@@ -955,7 +1036,7 @@ function displayWidth(text) {
   return [...String(text || '')].reduce((n, ch) => n + (/[\u4e00-\u9fff]/.test(ch) ? 2 : 1), 0);
 }
 
-function noteRowHeight(text, colWch = NOTE_COL_WCH, cap = 110) {
+function noteRowHeight(text, colWch = NOTE_COL_WCH, cap = 220) {
   const lines = String(text || '').split('\n');
   const wrapped = lines.reduce((n, line) => n + Math.max(1, Math.ceil(displayWidth(line) / Math.max(8, colWch - 2))), 0);
   return Math.min(cap, 18 + wrapped * 16);
@@ -976,7 +1057,8 @@ function wrapNoteSheet(ws, noteCol = 1, noteWch = NOTE_COL_WCH) {
     const name = ws[XLSX.utils.encode_cell({ r, c: 0 })];
     const label = String(name?.v || '');
     let hpt = noteRowHeight(note?.v, noteWch);
-    if (r === range.s.r && (label === '科目' || label === '项目')) hpt = HEADER_ROW_HPT;
+    if (r === range.s.r && label === '项目') hpt = HEADER_ROW_HPT / 2;
+    else if (r === range.s.r && label === '科目') hpt = HEADER_ROW_HPT;
     if (r === range.s.r && label === '填写说明') hpt = Math.min(420, noteRowHeight(note?.v, noteWch, 10000) * 3);
     rows[r] = { hpt };
   }
@@ -1108,7 +1190,11 @@ function inputCellsForSheet(sheetNo, maxCol, maxRow) {
   };
   if (sheetNo === 2) {
     texts.push('B2');
-    pushCols(1, 1, 3, nums);
+    const sensFrom = Math.max(3, maxRow - 2);
+    for (let r = 3; r <= maxRow; r += 1) {
+      if (r >= sensFrom) texts.push(`B${r}`);
+      else nums.push(`B${r}`);
+    }
   } else if (sheetNo === 3 || sheetNo === 4) {
     pushCols(2, Math.max(2, maxCol), 2, nums);
   } else if (sheetNo === 5) {
@@ -1318,6 +1404,36 @@ function ratioPercentCell(v) {
   return Math.round(n * 10000) / 100;
 }
 
+function sensitivityChoiceNumber(axes) {
+  if (axes === 'exit_x_wacc' || axes === 'wacc_x_exit') return 2;
+  if (axes === 'exit_x_rd_cagr') return 3;
+  if (axes === 'rev_cagr_x_rd_cagr') return 4;
+  if (axes === 'exit_x_cagr') return 1;
+  return '';
+}
+
+function templateMultipleStep(pe, ps) {
+  const a = toNumber(pe);
+  const b = toNumber(ps);
+  if (a != null && b != null && a !== b) return '';
+  if (a != null && a > 0) return a;
+  if (b != null && b > 0) return b;
+  return '';
+}
+
+function sensitivityStep1Cell(choice, method) {
+  if (choice === 2) return ratioPercentCell(method.rate_step);
+  if (choice === 3) return ratioPercentCell(method.rd_cagr_step);
+  if (choice === 1 || choice === 4) return ratioPercentCell(method.cagr_step);
+  return '';
+}
+
+function sensitivityStep2Cell(choice, method) {
+  if (choice === 4) return ratioPercentCell(method.rd_cagr_step);
+  if (choice === 1 || choice === 2 || choice === 3) return templateMultipleStep(method.pe_multiple_step, method.ps_multiple_step);
+  return '';
+}
+
 function valueAtYear(arr, years, year) {
   const i = (years || []).findIndex((y) => yearNum(y) === year);
   if (i < 0) return '';
@@ -1387,6 +1503,8 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
     : forecastYears;
   const forecastPl = payload?.forecastPl || {};
   const assumptions = payload?.assumptions || {};
+  const method = payload?.methodConfig || {};
+  const sensitivityChoice = sensitivityChoiceNumber(method.sensitivity_axes);
   const tax = assumptions.tax_rate == null || assumptions.tax_rate === '' ? '' : ratioPercentCell(assumptions.tax_rate);
   const discount = assumptions.discount_rate == null || assumptions.discount_rate === '' ? '' : ratioPercentCell(assumptions.discount_rate);
   const bs = payload?.targetBs || {};
@@ -1402,6 +1520,7 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
       '资产负债表只填锚定日当天的实际数。右侧校验区汇总资产、负债和所有者权益，配平结果为已配平即可。',
       '现金流量表只填截至锚定日已经发生的折旧摊销、资本性支出和营运资本增加，单位元，表头日期与锚定日相同。空着按 0。全年折旧和资本开支仍填在预测表，不要把全年数填进这一列。',
       '锚定日表里的折现率、退出 P/E、退出 P/S 是 DCF 参数。折现率填百分数，20 表示 20%。退出倍数填倍数本身，40 表示 40 倍。空着分别按 30%、40 倍、20 倍。这两套退出倍数都会进入结果区间，和市场法用的可比公司市盈率、市销率不是同一组数。本轮交易估值（投前）和后续股权稀释不进入股权价值：前者单位亿元，后者填百分数，70 或 70% 都表示 70%。这两格空着不会覆盖案件里已有的数。',
+      '「敏感性」填 1、2、3、4，对应营收 CAGR × 退出倍数、折现率 × 退出倍数、研发费用 CAGR × 退出倍数、营收 CAGR × 研发费用 CAGR。「敏感参数1步长」「敏感参数2步长」的含义随这个编号变化，例子写在这两行的说明里。这三格空着不覆盖页面上已有的选项和步长。',
       '当期利润表金额、预测里的比例和折旧摊销、资产负债表金额、现金流量表金额，单元格空着按 0。锚定日不是 12 月 31 日时，当年年底金额在当年 E 列填写，不再把当期累计年化。收入以后各年 = 上一年收入 ×（1+增速）。研发费用以后各年 = 上一年研发费用 ×（1+增速）；12 月 31 日且第一年填百分数时，用已结年全年实际研发 ×（1+增速）。营业成本、销售、管理、折旧摊销、资本开支 = 当年收入 × 百分数；这些格子绝对值大于 10000 时直接作为该年金额。财务费用可为负。资本开支比例空着不按 0。DSO、DPO、存货周转天数空着用可比公司年报中位数。',
     ].join('\n')],
   ], 1, NOTE_COL_WCH * 3.5), '说明');
@@ -1416,7 +1535,10 @@ function buildTargetFinancialTemplateBuffer(payload, now = new Date()) {
     ['后续股权稀释', assumptions.follow_on_dilution == null || assumptions.follow_on_dilution === '' ? '' : ratioPercentCell(assumptions.follow_on_dilution), '百分数，70 或 70% 都表示 70%。空着按 100%，再次导入空着不覆盖已有的数。不进入股权价值。'],
     ['市场法营业收入', cellOrEmpty(assumptions.market_revenue), '可选，元。空着则导入时用当期营业收入。'],
     ['市场法净利润', cellOrEmpty(assumptions.market_net_income), '可选，元。空着则导入时用当期净利润。'],
-  ], 2, NOTE_COL_WCH, { 1: FILL_COL_WCH * 3 }), '锚定日');
+    ['敏感性', sensitivityChoice, '填 1、2、3、4 中的一个。空着不改页面上已选的组。\n1 = 营收 CAGR × 退出倍数。例：营收 CAGR 40% 为行，退出 P/E 40 倍为列。\n2 = 折现率 × 退出倍数。例：折现率 20% 为行，退出 P/E 40 倍为列。\n3 = 研发费用 CAGR × 退出倍数。例：研发费用 CAGR 5% 为行，退出 P/E 40 倍为列。\n4 = 营收 CAGR × 研发费用 CAGR。例：营收 CAGR 40% 为行，研发费用 CAGR 5% 为列，退出倍数停在本表的退出 P/E、退出 P/S。'],
+    ['敏感参数1步长', sensitivityStep1Cell(sensitivityChoice, method), '含义看「敏感性」的编号。百分数，5 表示 5 个百分点，与折现率同一读法。空着不覆盖已有步长。\n填 1 或 4：营收 CAGR 步长。反推营收 CAGR 为 40%、步长填 5 时，五档是 30%、35%、当前预测、45%、50%。\n填 2：折现率步长。折现率 20%、步长填 2 时，五档是 16%、18%、20%、22%、24%。算出低于 1% 的档按 1%。\n填 3：研发费用 CAGR 步长。反推研发费用 CAGR 为 5%、步长填 5 时，五档是 -5%、0%、当前预测、10%、15%。'],
+    ['敏感参数2步长', sensitivityStep2Cell(sensitivityChoice, method), '含义看「敏感性」的编号。空着不覆盖已有步长。\n填 1、2 或 3：退出倍数步长，填数字本身，10 表示一档差 10 倍，不要写成百分数。退出 P/E 步长和退出 P/S 步长都会改成这个数。退出 P/E 为 40、步长填 10 时，五列是 20、30、40、50、60 倍。退出 P/S 为 14、步长填 2 时，五列是 10、12、14、16、18 倍。这一格只能填一个数；P/E 用 10、P/S 用 2 时，导入后到结果对比里分别改。小于等于 0 的列留空。\n填 4：研发费用 CAGR 步长，百分数。反推研发费用 CAGR 为 5%、步长填 2.5 时，五列是 0%、2.5%、当前预测、7.5%、10%。退出倍数不随这两格变化。'],
+  ], 2, NOTE_COL_WCH * 1.5 * 1.25, { 1: (FILL_COL_WCH * 3) / 2 }), '锚定日');
   const priorYearEnd = `${anchorYear - 1}-12-31`;
   XLSX.utils.book_append_sheet(wb, sheetFromAoa([
     ['科目', '科目说明', priorYearEnd, anchor],

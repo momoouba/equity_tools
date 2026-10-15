@@ -214,8 +214,8 @@ function sheetBuilder(title, formula) {
         headers.forEach((h) => widths.push({ wch: Math.min(36, Math.max(12, String(h || '').length * 2 + 4)) }));
       }
     },
-    data(row, colKinds) {
-      push(row, colKinds, 'data');
+    data(row, colKinds, rowType = 'data') {
+      push(row, colKinds, rowType);
     },
     note(text, colCount) {
       const n = Math.max(1, colCount || this.colCount || 1);
@@ -280,21 +280,46 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
   ].filter(([, side]) => side && !side.blocked && side.cells);
   if (!sides.length) return;
   b.gap(1);
-  b.section(heading || '基准情形');
+  const yearText = years == null ? '' : Number(years).toFixed(2);
+  b.section(`${heading || '基准情形'}。本轮交易估值（投前）单位亿元。持有 ${yearText} 年。`);
+  const labels = [];
+  const values = [];
+  const valueKinds = [];
+  const addBase = (label, value, kind) => {
+    labels.push(label);
+    values.push(value);
+    valueKinds.push(kind);
+  };
   if (includeDeal) {
     const dilPct = dilution == null || dilution === '' ? 100 : Math.round(Number(dilution) * 10000) / 100;
-    b.data(['本轮交易估值（投前）（亿元）', deal], ['text', 'num']);
-    b.data(['后续股权稀释（%）', Number.isFinite(dilPct) ? dilPct : null], ['text', 'num']);
+    addBase('本轮估值(亿)', deal, 'num');
+    addBase('稀释%', Number.isFinite(dilPct) ? dilPct : null, 'num');
+  } else {
+    addBase('持有年', years, 'num');
   }
-  b.data(['持有年数', years], ['text', 'num']);
-  sides.forEach(([name, side]) => {
+  const sideCells = (name, side) => {
     const m = exitMocIrr(side.cap_yi, dilution, dealYi, years);
-    b.data([`${name}（倍）`, side.multiple], ['text', 'num']);
-    b.data([`${name} 股权价值（亿元）`, side.equity_yi], ['text', 'num']);
-    b.data([`${name} 退出市值（亿元）`, side.cap_yi], ['text', 'num']);
-    b.data([`${name} 退出 MOC`, m.moc == null ? m.note : m.moc], ['text', m.moc == null ? 'text' : 'num']);
-    b.data([`${name} 退出 IRR（%）`, m.irr == null ? (m.note || null) : m.irr], ['text', m.irr == null ? 'text' : 'num']);
-  });
+    return [
+      [`${name}倍`, side.multiple, 'num'],
+      [`${name}股权`, side.equity_yi, 'num'],
+      [`${name}市值`, side.cap_yi, 'num'],
+      [`${name} MOC`, m.moc == null ? m.note : m.moc, m.moc == null ? 'text' : 'num'],
+      [`${name} IRR`, m.irr == null ? (m.note || null) : m.irr, m.irr == null ? 'text' : 'num'],
+    ];
+  };
+  const peSide = sides.find(([name]) => name === '退出 P/E');
+  const psSide = sides.find(([name]) => name === '退出 P/S');
+  const left = peSide ? sideCells('P/E', peSide[1]).slice(0, includeDeal ? 4 : 5) : [];
+  const right = [];
+  if (includeDeal && peSide) right.push(sideCells('P/E', peSide[1])[4]);
+  if (psSide) right.push(...sideCells('P/S', psSide[1]));
+  left.forEach((item) => addBase(...item));
+  while (labels.length < 6) addBase(null, null, 'text');
+  addBase(null, null, 'text');
+  right.forEach((item) => addBase(...item));
+  while (labels.length < 13) addBase(null, null, 'text');
+  b.data(labels.slice(0, 13), labels.slice(0, 13).map(() => 'text'), 'tight');
+  b.data(values.slice(0, 13), valueKinds.slice(0, 13), 'tight');
   const blocks = [{ key: 'equity', title: `估值（亿元）：${axisPair}` }];
   if (showReturn) {
     blocks.push({ key: 'moc', title: `退出 MOC：${axisPair}` });
@@ -306,7 +331,6 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
     blocks.push({ key: 'note', title: note });
   }
   blocks.forEach((block) => {
-    b.gap(1);
     b.section(block.title);
     if (block.key === 'note') return;
     const pe = sides.find(([name]) => name === '退出 P/E')?.[1];
@@ -317,7 +341,7 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
       ...(pe && ps ? [null] : []),
       ...(ps ? [axis, ...ps.col_labels] : []),
     ];
-    b.data(header, header.map(() => 'text'));
+    b.data(header, header.map(() => 'text'), 'tight');
     for (let i = 0; i < rowCount; i += 1) {
       const row = [];
       const kinds = [];
@@ -338,7 +362,7 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
         kinds.push('text');
       }
       pushSide(ps);
-      b.data(row, kinds);
+      b.data(row, kinds, 'tight');
     }
   });
   if (view.wacc_floored) b.note('折现率低于 1% 的档已按 1% 计算。');
@@ -431,7 +455,15 @@ function buildResult(sheet, title, payload, refs) {
       );
     }
   }
-  b.widths.splice(0, b.widths.length, { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 4 }, { wch: 28 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 });
+  const labelW = 16;
+  const numW = 11;
+  b.widths.splice(0, b.widths.length,
+    { wch: labelW },
+    ...Array(5).fill({ wch: numW }),
+    { wch: 2 },
+    { wch: labelW },
+    ...Array(5).fill({ wch: numW }),
+  );
   return b;
 }
 
@@ -1426,6 +1458,7 @@ function rowHeightPt(kind, row, colCount) {
   if (kind?.type === 'title') return 26;
   if (kind?.type === 'header') return 36;
   if (kind?.type === 'section') return 24;
+  if (kind?.type === 'tight') return 14;
   if (kind?.type === 'formula') {
     const text = String(row?.[0] == null ? '' : row[0]);
     const charsPerLine = Math.max(24, (colCount || 5) * 8);
@@ -1470,7 +1503,7 @@ function applyExportStyles(buffer, metas) {
 function withStripe(built) {
   let n = 0;
   built.stripe = built.kinds.map((k) => {
-    if (k.type !== 'data') return false;
+    if (k.type !== 'data' && k.type !== 'tight') return false;
     const even = n % 2 === 1;
     n += 1;
     return even;
