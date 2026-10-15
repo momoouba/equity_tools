@@ -4346,5 +4346,44 @@ router.put('/competitor-recall-source-config', [
   }
 });
 
+function assertSmsConfigAdmin(req, res) {
+  const userId = req.headers['x-user-id'] || null;
+  const userRole = req.headers['x-user-role'] || 'user';
+  if (!userId) {
+    res.status(401).json({ success: false, message: '未登录' });
+    return false;
+  }
+  if (userRole !== 'admin') {
+    res.status(403).json({ success: false, message: '仅管理员可配置短信通知' });
+    return false;
+  }
+  return true;
+}
+
+router.get('/sms-notify-config', async (req, res) => {
+  try {
+    if (!assertSmsConfigAdmin(req, res)) return;
+    const { getSmsNotifyConfigPublic } = require('../utils/sms/smsNotifyService');
+    const data = await getSmsNotifyConfigPublic();
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('获取短信通知配置失败：', error);
+    res.status(500).json({ success: false, message: '获取短信通知配置失败' });
+  }
+});
+
+router.put('/sms-notify-config', async (req, res) => {
+  try {
+    if (!assertSmsConfigAdmin(req, res)) return;
+    const { saveSmsNotifyConfig } = require('../utils/sms/smsNotifyService');
+    const data = await saveSmsNotifyConfig(req.body || {});
+    res.json({ success: true, message: '短信通知配置已保存', data });
+  } catch (error) {
+    const code = error.code === 400 ? 400 : 500;
+    if (code === 500) console.error('保存短信通知配置失败：', error);
+    res.status(code).json({ success: false, message: error.message || '保存短信通知配置失败' });
+  }
+});
+
 module.exports = router;
 

@@ -529,13 +529,16 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
     }
   }, [])
 
-  const handleInvestedLensConfirm = async (competitionLens) => {
+  const handleInvestedLensConfirm = async (payload) => {
     const { enterpriseId, enterpriseName } = lensModal
     if (!enterpriseId) return
+    const competitionLens = payload?.competition_lens
+    const notifyPhone = payload?.notify_phone
     setLensModal((prev) => ({ ...prev, confirming: true }))
     try {
       const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, {
         competition_lens: competitionLens,
+        notify_phone: notifyPhone || undefined,
       })
       if (r2.status === 202 && r2.data?.success) {
         Message.success(r2.data.message || '已受理')
@@ -728,7 +731,8 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
             定时任务
           </Button>
           <Button
-            type="outline"
+            type="primary"
+            status="danger"
             disabled={!selectedIds.length}
             loading={competitorRunSubmitting}
             onClick={handleBatchCompetitor}
@@ -952,6 +956,8 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
           })
         }
         subjectTitle={lensModal.enterpriseName}
+        subjectType="invested_enterprise"
+        subjectId={lensModal.enterpriseId}
         loadingProposal={lensModal.loading}
         proposal={lensModal.proposal}
         confirming={lensModal.confirming}

@@ -9136,6 +9136,79 @@ async function initializeTables(dbPool) {
     console.warn('创建 sourcing_competitor_run_step_log 时出现警告:', err.message);
   }
 
+  const ensureSmsColumn = async (table, colName, ddl) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+        [table, colName]
+      );
+      if (c.length === 0) {
+        await dbPool.query(`ALTER TABLE \`${table}\` ${ddl}`);
+        console.log(`  ✓ ${table} 已添加列 ${colName}`);
+      }
+    } catch (err) {
+      console.warn(`迁移 ${table}.${colName} 时出现警告:`, err.message);
+    }
+  };
+  await ensureSmsColumn(
+    'sourcing_competitor_run',
+    'notify_phone',
+    `ADD COLUMN notify_phone VARCHAR(20) NULL COMMENT '竞品分析完成通知手机号' AFTER triggered_by_user_id`
+  );
+  await ensureSmsColumn(
+    'sourcing_pre_investment_competitor_run',
+    'notify_phone',
+    `ADD COLUMN notify_phone VARCHAR(20) NULL COMMENT '竞品分析完成通知手机号' AFTER triggered_by_user_id`
+  );
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sms_notify_config (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        provider VARCHAR(16) NOT NULL COMMENT '短信厂家：aliyun|tencent',
+        access_key_id VARCHAR(128) NOT NULL COMMENT '用户编号',
+        access_key_secret VARCHAR(255) NOT NULL COMMENT '用户密钥',
+        sign_name VARCHAR(64) NOT NULL COMMENT '签名内容',
+        template_code VARCHAR(64) NOT NULL COMMENT '模板编号',
+        sdk_app_id VARCHAR(64) NULL COMMENT '腾讯云短信应用编号',
+        is_active TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用：1启用 0停用',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        F_LastModifyTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        F_DeleteMark TINYINT(1) NOT NULL DEFAULT 0 COMMENT '删除标记',
+        F_DeleteTime DATETIME NULL COMMENT '删除时间',
+        F_DeleteUserId VARCHAR(19) NULL COMMENT '删除人'
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析完成通知短信配置';
+    `);
+    console.log('✓ sms_notify_config 表已就绪');
+  } catch (err) {
+    console.warn('创建 sms_notify_config 时出现警告:', err.message);
+  }
+
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS sms_notify_log (
+        F_Id VARCHAR(19) NOT NULL PRIMARY KEY COMMENT '主键',
+        provider VARCHAR(16) NULL COMMENT '短信厂家',
+        phone VARCHAR(20) NOT NULL COMMENT '通知手机号',
+        template_code VARCHAR(64) NULL COMMENT '模板编号',
+        enterprise_full_name VARCHAR(255) NULL COMMENT '模板变量 name：企业全称',
+        subject_type VARCHAR(32) NULL COMMENT 'invested_enterprise|pre_investment_project',
+        subject_id VARCHAR(19) NULL COMMENT '被分析企业或投前项目 id',
+        run_id VARCHAR(19) NULL COMMENT '竞品分析运行 id',
+        user_id VARCHAR(19) NULL COMMENT '发起人',
+        status VARCHAR(16) NOT NULL COMMENT 'success|failed',
+        provider_message VARCHAR(500) NULL COMMENT '厂家返回或失败原因',
+        F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+        KEY idx_sms_log_subject (subject_type, subject_id, user_id),
+        KEY idx_sms_log_phone (phone)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='竞品分析完成通知短信发送记录';
+    `);
+    console.log('✓ sms_notify_log 表已就绪');
+  } catch (err) {
+    console.warn('创建 sms_notify_log 时出现警告:', err.message);
+  }
+
   const addScrCol = async (colName, ddl) => {
     try {
       const [c] = await dbPool.query(

@@ -113,6 +113,8 @@ async function generateIdUnlocked(tableName, connection) {
       'valuation_sw_industry',
       'sourcing_competitor_run',
       'sourcing_competitor_relation',
+      'sms_notify_config',
+      'sms_notify_log',
       'sourcing_competitor_run_step_log',
       'sourcing_competitor_comparable_pref',
       'sourcing_pre_investment_competitor_run',

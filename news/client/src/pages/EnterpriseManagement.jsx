@@ -710,13 +710,16 @@ function EnterpriseManagement({
     []
   )
 
-  const handleInvestedLensConfirm = async (competitionLens) => {
+  const handleInvestedLensConfirm = async (payload) => {
     const { enterpriseId, enterpriseName } = lensModal
     if (!enterpriseId) return
+    const competitionLens = payload?.competition_lens
+    const notifyPhone = payload?.notify_phone
     setLensModal((prev) => ({ ...prev, confirming: true }))
     try {
       const r2 = await postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, {
         competition_lens: competitionLens,
+        notify_phone: notifyPhone || undefined,
       })
       if (r2.status === 202 && r2.data?.success) {
         Message.success(r2.data.message || '已受理')
@@ -1306,7 +1309,8 @@ function EnterpriseManagement({
                 )}
                 {isAdmin && (
                   <Button
-                    type="outline"
+                    type="primary"
+                    status="danger"
                     loading={competitorRunSubmitting}
                     disabled={!competitorSelectedKeys.length}
                     onClick={handleCompetitorBatchClick}
@@ -1632,6 +1636,8 @@ function EnterpriseManagement({
           })
         }
         subjectTitle={lensModal.enterpriseName}
+        subjectType="invested_enterprise"
+        subjectId={lensModal.enterpriseId}
         loadingProposal={lensModal.loading}
         proposal={lensModal.proposal}
         confirming={lensModal.confirming}

@@ -216,6 +216,17 @@ async function loadCompetitorRelationForReview(req, relationId) {
   return rel;
 }
 
+function readNotifyPhone(body) {
+  const { normalizeNotifyPhone } = require('../../utils/sms/smsNotifyPhone');
+  const parsed = normalizeNotifyPhone(body?.notify_phone);
+  if (!parsed.ok) {
+    const e = new Error(parsed.message);
+    e.code = 400;
+    throw e;
+  }
+  return parsed.phone;
+}
+
 function parseCompetitionLensBody(body) {
   if (!body || typeof body !== 'object') return null;
   const raw = body.competition_lens || body.competitionLens || null;
@@ -463,6 +474,22 @@ function registerCompetitorMatchRoutes(router) {
     }
   );
 
+  /** 当前用户在该企业上一次填写的完成通知手机号 */
+  router.get('/competitor-notify-phone', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const { getLastNotifyPhone } = require('../../utils/sms/smsNotifyService');
+      const phone = await getLastNotifyPhone({
+        userId: req.psUser?.id,
+        subjectType: req.query.subject_type,
+        subjectId: req.query.subject_id,
+      });
+      res.json({ success: true, data: { phone: phone || '' } });
+    } catch (e) {
+      console.error('[competitor-notify-phone]', e);
+      res.status(500).json({ success: false, message: e.message || '读取通知手机号失败' });
+    }
+  });
+
   /** 发起竞品分析：项目挖掘权限；非 admin 仅本人创建的被投；异步跑批 */
   router.post('/invested-enterprises/:id/competitor-analysis-run', requireCompetitorAnalysisAccess, async (req, res) => {
     try {
@@ -481,6 +508,7 @@ function registerCompetitorMatchRoutes(router) {
         });
       }
 
+      const notifyPhone = readNotifyPhone(req.body);
       const force = req.body?.force === true;
       const priorRunId = String(req.body?.prior_run_id || req.query.prior_run_id || '').trim();
 
@@ -521,10 +549,10 @@ function registerCompetitorMatchRoutes(router) {
       const msg = '已受理竞品分析，后台召回与打分中，请稍后刷新查看结果';
       await db.execute(
         `INSERT INTO sourcing_competitor_run (
-           F_Id, invested_enterprise_id, status, message, triggered_by_user_id, started_at,
+           F_Id, invested_enterprise_id, status, message, triggered_by_user_id, notify_phone, started_at,
            F_CreatorTime, F_LastModifyTime, F_DeleteMark
-         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
-        [runId, String(row.F_Id), 'queued', msg, uid]
+         ) VALUES (?,?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
+        [runId, String(row.F_Id), 'queued', msg, uid, notifyPhone]
       );
 
       enqueueCompetitorAnalysisRun({
@@ -2009,6 +2037,7 @@ function registerCompetitorMatchRoutes(router) {
           data: { readiness: ev },
         });
       }
+      const notifyPhone = readNotifyPhone(req.body);
       const force = req.body?.force === true;
 
       /* ── 并发守卫：同一项目已有运行中/排队中的分析则拒绝 ── */
@@ -2047,10 +2076,10 @@ function registerCompetitorMatchRoutes(router) {
       const msg = '已受理投前竞品分析，后台处理中，请稍后刷新查看';
       await db.execute(
         `INSERT INTO sourcing_pre_investment_competitor_run (
-           F_Id, pre_investment_project_id, status, message, triggered_by_user_id, started_at,
+           F_Id, pre_investment_project_id, status, message, triggered_by_user_id, notify_phone, started_at,
            F_CreatorTime, F_LastModifyTime, F_DeleteMark
-         ) VALUES (?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
-        [runId, id, 'queued', msg, uid]
+         ) VALUES (?,?,?,?,?,?,NOW(),NOW(),NOW(),0)`,
+        [runId, id, 'queued', msg, uid, notifyPhone]
       );
 
       enqueueCompetitorAnalysisRun({
@@ -2070,7 +2099,8 @@ function registerCompetitorMatchRoutes(router) {
       });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects/competitor-analysis-run]', e);
-      res.status(500).json({ success: false, message: e.message || '受理失败' });
+      const code = e.code === 400 ? 400 : 500;
+      res.status(code).json({ success: false, message: e.message || '受理失败' });
     }
   });
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Tabs, Card } from '@arco-design/web-react'
 import BasicSystemConfig from './BasicSystemConfig'
+import SmsNotifyConfig from './SmsNotifyConfig'
 import AIConfig from './AIConfig'
 import EmailConfig from './EmailConfig'
 import QichachaConfig from './QichachaConfig'
@@ -46,6 +47,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="basic" title="系统配置">
             <div className="config-content">
               <BasicSystemConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="sms-notify" title="短信通知">
+            <div className="config-content">
+              <SmsNotifyConfig />
             </div>
           </TabPane>
 

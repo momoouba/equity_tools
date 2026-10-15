@@ -109,6 +109,10 @@ export function postInvestedEnterpriseCompetitorAnalysisRun(enterpriseId, body) 
   return axios.post(`${BASE}/invested-enterprises/${enterpriseId}/competitor-analysis-run`, body || {})
 }
 
+export function fetchCompetitorNotifyPhone(params) {
+  return axios.get(`${BASE}/competitor-notify-phone`, { params })
+}
+
 export function fetchInvestedCompetitionLensProposal(enterpriseId) {
   return axios.get(`${BASE}/invested-enterprises/${encodeURIComponent(enterpriseId)}/competition-lens-proposal`)
 }

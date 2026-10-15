@@ -44,6 +44,10 @@
   max-width: 1280px;
 }
 
+.modal-content--sheet.lens-confirm-sheet {
+  max-height: min(94vh, 1040px);
+}
+
 .modal-header {
   display: flex;
   justify-content: space-between;

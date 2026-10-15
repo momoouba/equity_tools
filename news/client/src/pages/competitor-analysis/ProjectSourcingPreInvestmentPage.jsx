@@ -564,9 +564,10 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
     })
   }
 
-  const submitPreInvCompetitorWithLens = async (row, competitionLens) => {
+  const submitPreInvCompetitorWithLens = async (row, competitionLens, notifyPhone) => {
     const res = await postPreInvestmentCompetitorAnalysisRun(row.id, {
       competition_lens: competitionLens || undefined,
+      notify_phone: notifyPhone || undefined,
     })
     if (!(res.status === 202 || res.data?.success)) {
       throw new Error(res.data?.message || '受理失败')
@@ -608,12 +609,12 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
     }
   }
 
-  const handleLensConfirm = async (competitionLens) => {
+  const handleLensConfirm = async (payload) => {
     const row = lensModal.row
     if (!row) return
     setLensModal((prev) => ({ ...prev, confirming: true }))
     try {
-      await submitPreInvCompetitorWithLens(row, competitionLens)
+      await submitPreInvCompetitorWithLens(row, payload?.competition_lens, payload?.notify_phone)
       Message.success('已按确认焦点发起竞品分析')
       setLensModal({
         visible: false,
@@ -1075,7 +1076,8 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
             AI取数
           </Button>
           <Button
-            type="outline"
+            type="primary"
+            status="danger"
             disabled={batchDisabled}
             loading={batchBusy === 'competitor'}
             onClick={handleBatchCompetitor}
@@ -1571,6 +1573,8 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
           })
         }
         subjectTitle={lensModal.row ? rowLabel(lensModal.row) : ''}
+        subjectType="pre_investment_project"
+        subjectId={lensModal.row?.id || ''}
         loadingProposal={lensModal.loading}
         proposal={lensModal.proposal}
         confirming={lensModal.confirming}

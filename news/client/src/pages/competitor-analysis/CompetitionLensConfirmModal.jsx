@@ -11,6 +11,7 @@ import {
 } from '@arco-design/web-react'
 import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { IconEdit, IconLock } from '@arco-design/web-react/icon'
+import { fetchCompetitorNotifyPhone } from '../../api/competitor-analysis'
 
 const { Text } = Typography
 const TextArea = Input.TextArea
@@ -32,6 +33,8 @@ export default function CompetitionLensConfirmModal({
   visible,
   onClose,
   subjectTitle,
+  subjectType = 'invested_enterprise',
+  subjectId = '',
   loadingProposal,
   proposal,
   confirming,
@@ -43,6 +46,7 @@ export default function CompetitionLensConfirmModal({
   const [editingIds, setEditingIds] = useState({})
   const [customKeywords, setCustomKeywords] = useState([])
   const [keywordDraft, setKeywordDraft] = useState('')
+  const [notifyPhone, setNotifyPhone] = useState('')
 
   useEffect(() => {
     if (!visible || !proposal) return
@@ -59,6 +63,21 @@ export default function CompetitionLensConfirmModal({
     )
     setKeywordDraft('')
   }, [visible, proposal])
+
+  useEffect(() => {
+    if (!visible) return undefined
+    setNotifyPhone('')
+    if (!subjectId) return undefined
+    let cancelled = false
+    fetchCompetitorNotifyPhone({ subject_type: subjectType, subject_id: subjectId })
+      .then((res) => {
+        if (!cancelled) setNotifyPhone(res.data?.data?.phone || '')
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [visible, subjectId, subjectType])
 
   const factors = useMemo(
     () =>
@@ -282,19 +301,27 @@ export default function CompetitionLensConfirmModal({
       Message.warning('请至少勾选一项因素，或输入自定义关键词')
       return
     }
+    const phone = String(notifyPhone || '').trim()
+    if (phone && !/^1[3-9]\d{9}$/.test(phone)) {
+      Message.warning('请输入正确的手机号码')
+      return
+    }
     onConfirm?.({
-      selected_factor_ids: selectedIds,
-      custom_keywords: customKeywords,
-      factors: factors.map((f) => ({
-        id: f.id,
-        text: String(factorTexts[f.id] != null ? factorTexts[f.id] : f.text).trim(),
-        base_text: f.base_text,
-        edited:
-          String(factorTexts[f.id] != null ? factorTexts[f.id] : f.text).trim() !==
-          String(f.base_text || f.text || '').trim(),
-      })),
-      confirmed: true,
-      source: 'user',
+      notify_phone: phone,
+      competition_lens: {
+        selected_factor_ids: selectedIds,
+        custom_keywords: customKeywords,
+        factors: factors.map((f) => ({
+          id: f.id,
+          text: String(factorTexts[f.id] != null ? factorTexts[f.id] : f.text).trim(),
+          base_text: f.base_text,
+          edited:
+            String(factorTexts[f.id] != null ? factorTexts[f.id] : f.text).trim() !==
+            String(f.base_text || f.text || '').trim(),
+        })),
+        confirmed: true,
+        source: 'user',
+      },
     })
   }
 
@@ -303,6 +330,7 @@ export default function CompetitionLensConfirmModal({
   return (
     <SheetModal
       visible={visible}
+      className="lens-confirm-sheet"
       title={`确认对标焦点${subjectTitle ? ` — ${subjectTitle}` : ''}`}
       onClose={onClose}
     >
@@ -339,7 +367,7 @@ export default function CompetitionLensConfirmModal({
           ) : (
             <div
               style={{
-                maxHeight: 400,
+                maxHeight: 320,
                 overflowY: 'auto',
                 overflowX: 'hidden',
                 border: '1px solid var(--color-border-2)',
@@ -376,22 +404,42 @@ export default function CompetitionLensConfirmModal({
           )}
 
           <div>
-            <Text bold style={{ display: 'block', marginBottom: 8 }}>
-              自定义关键词
-            </Text>
-            <Space wrap>
-              <Input
-                style={{ width: 320 }}
-                placeholder="如：家庭服务机器人、C端、轮式双臂"
-                value={keywordDraft}
-                onChange={setKeywordDraft}
-                onPressEnter={addKeyword}
-                allowClear
-              />
-              <Button type="outline" onClick={addKeyword}>
-                添加
-              </Button>
-            </Space>
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24 }}>
+              <div>
+                <Text bold style={{ display: 'block', marginBottom: 8 }}>
+                  自定义关键词
+                </Text>
+                <Space wrap>
+                  <Input
+                    style={{ width: 320 }}
+                    placeholder="如：家庭服务机器人、C端、轮式双臂"
+                    value={keywordDraft}
+                    onChange={setKeywordDraft}
+                    onPressEnter={addKeyword}
+                    allowClear
+                  />
+                  <Button type="outline" onClick={addKeyword}>
+                    添加
+                  </Button>
+                </Space>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 1 }}>
+                <Text bold style={{ flex: '0 0 auto' }}>
+                  短信通知
+                </Text>
+                <Input
+                  style={{ width: 240 }}
+                  placeholder="请输入需要被通知的手机号码"
+                  value={notifyPhone}
+                  maxLength={11}
+                  allowClear
+                  onChange={(value) => setNotifyPhone(String(value || '').replace(/\D/g, '').slice(0, 11))}
+                />
+                <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                  留空不发送。同一企业会记住你上次填写的号码
+                </Text>
+              </div>
+            </div>
             {customKeywords.length > 0 ? (
               <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {customKeywords.map((k) => (

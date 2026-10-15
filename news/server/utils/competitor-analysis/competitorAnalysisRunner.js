@@ -2314,6 +2314,27 @@ async function executeCompetitorAnalysisRun(opts) {
       message: msg,
       detail: { saved },
     });
+    try {
+      const { notifyCompetitorAnalysisDone } = require('../sms/smsNotifyService');
+      const smsResult = await notifyCompetitorAnalysisDone({
+        subjectType,
+        runId,
+        subjectId: subjectType === 'pre_investment_project' ? preInvestmentProjectId : investedEnterpriseId,
+        enterpriseFullName: strTrim(row.enterprise_full_name),
+        userId,
+      });
+      if (smsResult?.attempted) {
+        await appendStepLog({
+          runId,
+          subjectType,
+          stepCode: 'S6_sms',
+          status: smsResult.ok ? 'ok' : 'warn',
+          message: smsResult.message,
+        });
+      }
+    } catch (smsErr) {
+      console.warn('[competitorRunner] sms notify failed', smsErr.message);
+    }
     return { ok: true, saved, message: msg };
   } catch (e) {
     logCompetitorRun(runId, 'FAILED', e.message || '运行失败', {
