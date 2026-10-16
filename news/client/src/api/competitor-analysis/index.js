@@ -137,6 +137,10 @@ export function fetchCompetitorAnalysisRuns(params) {
   return axios.get(`${BASE}/competitor-analysis/runs`, { params })
 }
 
+export function deleteLatestCompetitorRun(params) {
+  return axios.delete(`${BASE}/competitor-analysis/runs/latest`, { params })
+}
+
 export function patchCompetitorRelationComparable(relationId, includeInComparable) {
   return axios.patch(`${BASE}/competitor-analysis/relations/${relationId}/comparable`, {
     include_in_comparable: !!includeInComparable,

@@ -662,6 +662,45 @@ function registerCompetitorMatchRoutes(router) {
     }
   });
 
+  /** 删除最新成功版本及其可比勾选记忆、对标焦点 */
+  router.delete('/competitor-analysis/runs/latest', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const ieId = String(req.query.invested_enterprise_id || '').trim();
+      const pipId = String(req.query.pre_investment_project_id || '').trim();
+      if (!ieId && !pipId) {
+        return res.status(400).json({
+          success: false,
+          message: '缺少 invested_enterprise_id 或 pre_investment_project_id',
+        });
+      }
+      if (ieId && pipId) {
+        return res.status(400).json({ success: false, message: '不能同时传 invested_enterprise_id 与 pre_investment_project_id' });
+      }
+      if (ieId) {
+        const row = await getInvestedEnterpriseRowForCompetitor(ieId);
+        assertInvestedEnterpriseCompetitorOwner(req, row);
+      } else {
+        await loadPreInvestmentProjectForWrite(req, pipId);
+      }
+      const { deleteLatestCompetitorVersion } = require('../../utils/competitor-analysis/deleteLatestCompetitorRun');
+      const data = await deleteLatestCompetitorVersion({
+        subjectType: ieId ? 'invested_enterprise' : 'pre_investment_project',
+        subjectId: ieId || pipId,
+        userId: req.psUser?.id || null,
+      });
+      const label = data.version_label ? ` ${data.version_label}` : '';
+      res.json({
+        success: true,
+        message: `已删除最新版本${label}`,
+        data,
+      });
+    } catch (e) {
+      const code = e.code === 400 || e.code === 403 || e.code === 404 || e.code === 409 ? e.code : 500;
+      console.error('[competitor-analysis/runs/latest DELETE]', e);
+      res.status(code).json({ success: false, message: e.message || '删除版本失败' });
+    }
+  });
+
   /** 竞品关系列表：项目挖掘权限；非 admin 仅本人创建的被投 */
   router.get('/competitor-analysis/relations', requireCompetitorAnalysisAccess, async (req, res) => {
     try {

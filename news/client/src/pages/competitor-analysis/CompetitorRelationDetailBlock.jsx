@@ -91,6 +91,7 @@ export default function CompetitorRelationDetailBlock({
   isHistorical = false,
   onOpenSummary,
   onVersionChange,
+  onDeleteLatestVersion,
   onAdd,
   onRefresh,
   refreshLoading = false,
@@ -264,6 +265,18 @@ export default function CompetitorRelationDetailBlock({
                 <Typography.Text style={{ fontSize: 12 }} type="warning">
                   历史版本（只读）
                 </Typography.Text>
+              ) : onDeleteLatestVersion ? (
+                <Button
+                  type="outline"
+                  status="danger"
+                  size="small"
+                  onClick={(e) => {
+                    guardClick(e)
+                    onDeleteLatestVersion()
+                  }}
+                >
+                  删除版本
+                </Button>
               ) : null}
             </Space>
           ) : null}

@@ -17,6 +17,7 @@ import {
   fetchPreInvestmentProjects,
   fetchCompetitorRelations,
   fetchCompetitorAnalysisRuns,
+  deleteLatestCompetitorRun,
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
   postPreInvestmentProject,
@@ -279,8 +280,8 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
     [handleComparableToggle, comparableSavingId, handleEditRelation, handleDeleteRelation, openReviewDrawer]
   )
 
-  const loadRuns = async (projectId) => {
-    if (runMap[projectId]?.loaded) {
+  const loadRuns = async (projectId, force = false) => {
+    if (!force && runMap[projectId]?.loaded) {
       const list = runMap[projectId].list || []
       return { list, latestRunId: latestRunMap[projectId] || (list.length ? list[0].id : null) }
     }
@@ -341,6 +342,33 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
       if (relCacheKey[id] === cacheKey && relMap[id]) continue
       await loadRelations(id, runId)
     }
+  }
+
+  const handleDeleteLatestVersion = (projectId) => {
+    const runs = runMap[projectId]?.list || []
+    const latest = runs[0]
+    const label = latest?.version_label || '最新版本'
+    Modal.confirm({
+      title: '删除最新版本',
+      content: runs.length > 1
+        ? `将删除 ${label} 的竞品数据，以及这一版写下的可比勾选记忆和对标焦点。上一版本会成为当前版本。`
+        : `将删除 ${label} 的竞品数据，以及这一版写下的可比勾选记忆和对标焦点。删除后该项目没有分析版本。`,
+      okButtonProps: { status: 'danger' },
+      onOk: async () => {
+        try {
+          const res = await deleteLatestCompetitorRun({ pre_investment_project_id: projectId })
+          if (!res.data?.success) {
+            throw new Error(res.data?.message || '删除版本失败')
+          }
+          Message.success(res.data.message || '已删除最新版本')
+          const { latestRunId } = await loadRuns(projectId, true)
+          await loadRelations(projectId, latestRunId, true)
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '删除版本失败')
+          throw e
+        }
+      },
+    })
   }
 
   const onVersionChange = async (projectId, runId) => {
@@ -1132,6 +1160,7 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
                 isHistorical={isHistorical}
                 onOpenSummary={() => openSummary(row.id, row)}
                 onVersionChange={(v) => onVersionChange(row.id, v)}
+                onDeleteLatestVersion={() => handleDeleteLatestVersion(row.id)}
                 onAdd={() => {
                   setEditingRelation(null)
                   setManualAddSubject({

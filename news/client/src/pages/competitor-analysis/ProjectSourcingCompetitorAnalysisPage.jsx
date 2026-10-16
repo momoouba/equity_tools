@@ -16,6 +16,7 @@ import axios from '../../utils/axios'
 import {
   fetchCompetitorRelations,
   fetchCompetitorAnalysisRuns,
+  deleteLatestCompetitorRun,
   fetchCompetitorExportYears,
   postCompetitorAnalysisExport,
   patchCompetitorRelationComparable,
@@ -277,8 +278,8 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
     }
   }, [embedded])
 
-  const loadRuns = async (enterpriseId) => {
-    if (runMap[enterpriseId]?.loaded) {
+  const loadRuns = async (enterpriseId, force = false) => {
+    if (!force && runMap[enterpriseId]?.loaded) {
       const list = runMap[enterpriseId].list || []
       return { list, latestRunId: latestRunMap[enterpriseId] || (list.length ? list[0].id : null) }
     }
@@ -339,6 +340,33 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
       if (relCacheKey[id] === cacheKey && relMap[id]) continue
       await loadRelations(id, runId)
     }
+  }
+
+  const handleDeleteLatestVersion = (enterpriseId) => {
+    const runs = runMap[enterpriseId]?.list || []
+    const latest = runs[0]
+    const label = latest?.version_label || '最新版本'
+    Modal.confirm({
+      title: '删除最新版本',
+      content: runs.length > 1
+        ? `将删除 ${label} 的竞品数据，以及这一版写下的可比勾选记忆和对标焦点。上一版本会成为当前版本。`
+        : `将删除 ${label} 的竞品数据，以及这一版写下的可比勾选记忆和对标焦点。删除后该企业没有分析版本。`,
+      okButtonProps: { status: 'danger' },
+      onOk: async () => {
+        try {
+          const res = await deleteLatestCompetitorRun({ invested_enterprise_id: enterpriseId })
+          if (!res.data?.success) {
+            throw new Error(res.data?.message || '删除版本失败')
+          }
+          Message.success(res.data.message || '已删除最新版本')
+          const { latestRunId } = await loadRuns(enterpriseId, true)
+          await loadRelations(enterpriseId, latestRunId, true)
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '删除版本失败')
+          throw e
+        }
+      },
+    })
   }
 
   const onVersionChange = async (enterpriseId, runId) => {
@@ -783,6 +811,7 @@ export default function ProjectSourcingCompetitorAnalysisPage({ embedded = false
                 isHistorical={isHistorical}
                 onOpenSummary={() => openSummary(row.id, row)}
                 onVersionChange={(v) => onVersionChange(row.id, v)}
+                onDeleteLatestVersion={() => handleDeleteLatestVersion(row.id)}
                 onAdd={() => {
                   setEditingRelation(null)
                   setManualAddSubject({
