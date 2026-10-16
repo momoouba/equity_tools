@@ -301,11 +301,18 @@ export default function CompetitionLensConfirmModal({
       Message.warning('请至少勾选一项因素，或输入自定义关键词')
       return
     }
-    const phone = String(notifyPhone || '').trim()
-    if (phone && !/^1[3-9]\d{9}$/.test(phone)) {
-      Message.warning('请输入正确的手机号码')
+    const phoneText = String(notifyPhone || '').trim()
+    const phoneParts = phoneText.split(/[,，]/).map((item) => item.trim()).filter(Boolean)
+    const invalidPhones = phoneParts.filter((item) => !/^1[3-9]\d{9}$/.test(item))
+    if (invalidPhones.length) {
+      Message.warning(`请输入正确的手机号码：${invalidPhones.join('、')}`)
       return
     }
+    if (phoneParts.length > 20) {
+      Message.warning('最多填写 20 个手机号')
+      return
+    }
+    const phone = [...new Set(phoneParts)].join(',')
     onConfirm?.({
       notify_phone: phone,
       competition_lens: {
@@ -404,41 +411,43 @@ export default function CompetitionLensConfirmModal({
           )}
 
           <div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 24 }}>
-              <div>
-                <Text bold style={{ display: 'block', marginBottom: 8 }}>
-                  自定义关键词
-                </Text>
-                <Space wrap>
-                  <Input
-                    style={{ width: 320 }}
-                    placeholder="如：家庭服务机器人、C端、轮式双臂"
-                    value={keywordDraft}
-                    onChange={setKeywordDraft}
-                    onPressEnter={addKeyword}
-                    allowClear
-                  />
-                  <Button type="outline" onClick={addKeyword}>
-                    添加
-                  </Button>
-                </Space>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 1 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(280px, 0.9fr) minmax(360px, 1.4fr)',
+                gap: '8px 24px',
+                alignItems: 'center',
+              }}
+            >
+              <Text bold>自定义关键词</Text>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, minWidth: 0 }}>
                 <Text bold style={{ flex: '0 0 auto' }}>
                   短信通知
                 </Text>
-                <Input
-                  style={{ width: 240 }}
-                  placeholder="请输入需要被通知的手机号码"
-                  value={notifyPhone}
-                  maxLength={11}
-                  allowClear
-                  onChange={(value) => setNotifyPhone(String(value || '').replace(/\D/g, '').slice(0, 11))}
-                />
-                <Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                <Text type="secondary" style={{ fontSize: 12 }}>
                   留空不发送。同一企业会记住你上次填写的号码
                 </Text>
               </div>
+              <Space wrap>
+                <Input
+                  style={{ width: 320 }}
+                  placeholder="如：家庭服务机器人、C端、轮式双臂"
+                  value={keywordDraft}
+                  onChange={setKeywordDraft}
+                  onPressEnter={addKeyword}
+                  allowClear
+                />
+                <Button type="outline" onClick={addKeyword}>
+                  添加
+                </Button>
+              </Space>
+              <Input
+                placeholder="输入11位手机号，多个手机号用逗号隔开"
+                value={notifyPhone}
+                maxLength={240}
+                allowClear
+                onChange={(value) => setNotifyPhone(String(value || '').replace(/[^\d,，]/g, ''))}
+              />
             </div>
             {customKeywords.length > 0 ? (
               <div style={{ marginTop: 10, display: 'flex', flexWrap: 'wrap', gap: 6 }}>

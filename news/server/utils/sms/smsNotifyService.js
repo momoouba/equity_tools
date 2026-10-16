@@ -241,7 +241,11 @@ async function sendTencent({
   const timestamp = Math.floor(Date.now() / 1000);
   const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
   const payload = JSON.stringify({
-    PhoneNumberSet: [`+86${phone}`],
+    PhoneNumberSet: String(phone || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((item) => `+86${item}`),
     SmsSdkAppId: sdkAppId,
     SignName: signName,
     TemplateId: templateCode,
@@ -277,9 +281,19 @@ async function sendTencent({
   }
   const apiErr = data?.Response?.Error;
   if (apiErr) throw new Error(String(apiErr.Message || apiErr.Code || '腾讯云短信发送失败').slice(0, 300));
-  const send = data?.Response?.SendStatusSet?.[0];
-  if (send && String(send.Code || '').toLowerCase() === 'ok') return send.Message || 'OK';
-  throw new Error(String(send?.Message || send?.Code || '腾讯云短信发送失败').slice(0, 300));
+  const set = data?.Response?.SendStatusSet || [];
+  const failed = set.filter((item) => String(item.Code || '').toLowerCase() !== 'ok');
+  if (!set.length || failed.length === set.length) {
+    const send = failed[0] || set[0];
+    throw new Error(String(send?.Message || send?.Code || '腾讯云短信发送失败').slice(0, 300));
+  }
+  if (failed.length) {
+    const err = new Error(failed.map((item) => item.Message || item.Code).join('；').slice(0, 300));
+    err.partial = true;
+    err.failedPhones = failed.map((item) => String(item.PhoneNumber || '').replace(/^\+86/, ''));
+    throw err;
+  }
+  return set[0]?.Message || 'OK';
 }
 
 async function writeSendLog(entry) {
@@ -340,31 +354,38 @@ async function notifyCompetitorAnalysisDone({ subjectType, runId, subjectId, ent
     `SELECT notify_phone, triggered_by_user_id FROM \`${table}\` WHERE F_Id = ? LIMIT 1`,
     [runId]
   );
-  const phone = rows[0]?.notify_phone ? String(rows[0].notify_phone).trim() : '';
-  if (!phone) return { attempted: false };
+  const parsed = normalizeNotifyPhone(rows[0]?.notify_phone);
+  const phones = parsed.phones || [];
+  if (!parsed.ok || !phones.length) return { attempted: false };
+  const phone = phones.join(',');
 
   const name = trimTo(enterpriseFullName, 100);
   const actorId = userId || rows[0]?.triggered_by_user_id || null;
   const baseLog = {
-    phone,
     enterpriseFullName: name,
     subjectType,
     subjectId,
     runId,
     userId: actorId,
   };
+  const logEach = async (status, message, onlyPhones, extra) => {
+    for (const one of onlyPhones || phones) {
+      await writeSendLog({ ...baseLog, ...(extra || {}), phone: one, status, message });
+    }
+  };
   if (!name) {
-    await writeSendLog({ ...baseLog, status: 'failed', message: '缺少企业全称，未发送' });
+    await logEach('failed', '缺少企业全称，未发送');
     return { attempted: true, ok: false, message: '缺少企业全称，未发送短信' };
   }
 
   const config = await loadConfigRow();
   if (!config || Number(config.is_active) !== 1) {
-    await writeSendLog({ ...baseLog, status: 'failed', message: '短信通知未配置或未启用' });
+    await logEach('failed', '短信通知未配置或未启用');
     return { attempted: true, ok: false, message: '短信通知未配置或未启用，未发送' };
   }
 
   const provider = config.provider === 'tencent' ? 'tencent' : 'aliyun';
+  const providerExtra = { provider, templateCode: config.template_code };
   try {
     const providerMessage =
       provider === 'tencent'
@@ -385,22 +406,16 @@ async function notifyCompetitorAnalysisDone({ subjectType, runId, subjectId, ent
             phone,
             enterpriseFullName: name,
           });
-    await writeSendLog({
-      ...baseLog,
-      provider,
-      templateCode: config.template_code,
-      status: 'success',
-      message: providerMessage,
-    });
+    await logEach('success', providerMessage, null, providerExtra);
     return { attempted: true, ok: true, message: `已向 ${maskNotifyPhone(phone)} 发送完成通知` };
   } catch (err) {
-    await writeSendLog({
-      ...baseLog,
-      provider,
-      templateCode: config.template_code,
-      status: 'failed',
-      message: err.message,
-    });
+    const failedSet = new Set(err.failedPhones || []);
+    if (err.partial && failedSet.size) {
+      await logEach('success', 'OK', phones.filter((one) => !failedSet.has(one)), providerExtra);
+      await logEach('failed', err.message, phones.filter((one) => failedSet.has(one)), providerExtra);
+    } else {
+      await logEach('failed', err.message, null, providerExtra);
+    }
     return { attempted: true, ok: false, message: `短信发送失败：${err.message}` };
   }
 }

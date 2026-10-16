@@ -9154,13 +9154,32 @@ async function initializeTables(dbPool) {
   await ensureSmsColumn(
     'sourcing_competitor_run',
     'notify_phone',
-    `ADD COLUMN notify_phone VARCHAR(20) NULL COMMENT '竞品分析完成通知手机号' AFTER triggered_by_user_id`
+    `ADD COLUMN notify_phone VARCHAR(500) NULL COMMENT '竞品分析完成通知手机号，英文逗号分隔' AFTER triggered_by_user_id`
   );
   await ensureSmsColumn(
     'sourcing_pre_investment_competitor_run',
     'notify_phone',
-    `ADD COLUMN notify_phone VARCHAR(20) NULL COMMENT '竞品分析完成通知手机号' AFTER triggered_by_user_id`
+    `ADD COLUMN notify_phone VARCHAR(500) NULL COMMENT '竞品分析完成通知手机号，英文逗号分隔' AFTER triggered_by_user_id`
   );
+  const widenNotifyPhone = async (table) => {
+    try {
+      const [c] = await dbPool.query(
+        `SELECT CHARACTER_MAXIMUM_LENGTH AS len FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'notify_phone'`,
+        [table]
+      );
+      if (c.length && Number(c[0].len) < 500) {
+        await dbPool.query(
+          `ALTER TABLE \`${table}\` MODIFY COLUMN notify_phone VARCHAR(500) NULL COMMENT '竞品分析完成通知手机号，英文逗号分隔'`
+        );
+        console.log(`  ✓ ${table}.notify_phone 已扩为 VARCHAR(500)`);
+      }
+    } catch (err) {
+      console.warn(`扩容 ${table}.notify_phone 时出现警告:`, err.message);
+    }
+  };
+  await widenNotifyPhone('sourcing_competitor_run');
+  await widenNotifyPhone('sourcing_pre_investment_competitor_run');
 
   try {
     await dbPool.query(`
