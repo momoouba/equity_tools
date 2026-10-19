@@ -45,10 +45,15 @@ function filterAiModelConfigsForPrompt(configs, interfaceType, promptType) {
     interfaceType === '项目估值' ||
     String(promptType || '').startsWith('valuation_comparable_')
   ) {
-    return list.filter(
+    const preferred = list.filter(
       (c) =>
         c.application_type === 'project_valuation' || c.usage_type === 'project_valuation'
     )
+    const rest = list.filter(
+      (c) =>
+        c.application_type !== 'project_valuation' && c.usage_type !== 'project_valuation'
+    )
+    return [...preferred, ...rest]
   }
   // 新榜 / 企查查 / 上海国际集团 / 打新其它：新闻侧为主，允许 general 兜底
   return list.filter(
@@ -509,12 +514,15 @@ function PromptConfig() {
                     ? '暂无「上市进展分析 / 上市数据」用途的启用模型，请先在「AI模型配置」中新增。'
                     : formData.interface_type === '项目估值' ||
                         String(formData.prompt_type || '').startsWith('valuation_comparable_')
-                      ? '暂无「项目估值」用途的启用模型，请先在「AI模型配置」中新增。'
+                      ? '没有已启用的大模型。请先在「AI模型配置」里新增并启用一条，再回到此处绑定。'
                     : '暂无与当前接口类型匹配的启用模型（新闻分析或通用）。'}
               </div>
             ) : (
               <div style={{ marginTop: 6, fontSize: 12, color: 'var(--color-text-3)' }}>
-                已按当前「接口类型 + 提示词类型」筛选可选模型，与后端任务实际使用的 application_type 一致。
+                {formData.interface_type === '项目估值' ||
+                String(formData.prompt_type || '').startsWith('valuation_comparable_')
+                  ? '已列出全部启用模型。有「项目估值」类型时排在前面；提名使用这里绑定的模型，并强制联网。'
+                  : '已按当前「接口类型 + 提示词类型」筛选可选模型，与后端任务实际使用的 application_type 一致。'}
               </div>
             )}
           </div>

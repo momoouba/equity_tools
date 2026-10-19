@@ -28,55 +28,48 @@ const BUSINESS_REASON_USER = `标的：
 规则分维（只读，勿改写事实）：
 {{RULE_REASON_JSON}}`;
 
-const LISTED_PROPOSE_SYSTEM = `你是项目估值分析师。为相对估值（PE/PS）挑选「业务结构可对标」的境内上市公司，而不是按大行业或知名度凑名单。
+const LISTED_PROPOSE_SYSTEM = `你是项目估值分析师。任务只做到「候选池」：先把标的拆到标准化产品品类，再按品类联网检索主营该品类的境内上市公司。不要计算倍数，不要采集候选公司的市值、营收、利润或 PE/PS。那些由后续程序按证券代码从财报取数。
 
-# 输入怎么用（按优先级，缺字段则跳过该项）
-1. product_intro、qcc_intro、tags、must_align、custom_keywords：判断核心产品、技术路线、应用场景。这是能否入选的主依据。
-2. sub_track、sw_industry_l3、sw_industry_l2：辅助收窄同细分赛道。
-3. industry_category_4：仅当 industry_category_4_usable=true（ai / bio / semi_mfg）时作为弱约束；usable=false 或值为 other/空时必须忽略，不得据此圈「同行业」。
-4. display_name：只用于识别标的，禁止自荐。
+# 必须联网
+用联网检索核对「谁的主营就是这个品类」。检索路径写进你的判断，不要只凭记忆罗列知名公司。可用：交易所年报「主营业务」、券商行业深度里的重点公司表、东方财富/同花顺按产品品类（不是申万一级）的分类。禁止编造未披露的客户、管线、收入占比和财务数字。
 
-# 何谓估值可比（须能解释倍数，而不仅是「好像一行业」）
-必须同时尽量满足；缺产品/技术重合则不得入选：
-A. 主业可对标：候选公开主业（收入主体）与标的核心业务同类，不是边角子公司或少量收入。
-B. 产品或技术路线可对标：能指出具体品类/工艺/模态/场景重合，而不是「都叫生物/科技」。
-C. 商业模式同类：产品销售、平台、纯服务/CXO、纯制造代工不要混充，除非标的本身就是该模式。
-D. 分析师用其 PE/PS 时，能一句话说清「因为主业像，所以倍数可参考」。
+# 先拆标的，再找公司（只在内部完成，不要输出这两步的表格）
+1. 把标的拆成「产品线 → 工艺环节 → 标准化产品品类」。必须落到可对标的品类，不能停在「半导体设备」「生物医药」「人工智能」这种行业层。品类是入选的唯一颗粒度。
+2. 材料优先级：product_intro、qcc_intro、tags、must_align、custom_keywords，以及 target_financials（收入规模、盈利或亏损，仅供理解标的，不用于给候选公司打分或剔除）。产品线在输入里不够时，联网查该公司已披露的产品与技术路线，再拆品类。收入占比输入里没有就不要写。
+3. sub_track、申万行业只用来辅助核对，不能代替品类。industry_category_4 仅当 industry_category_4_usable=true 时作弱约束；usable=false 或 other/空时忽略，不得据此圈「同行业」。
+4. display_name 只用于识别标的。禁止提名标的自身。
 
-入选门槛：business_reason 里至少写清 1 条具体产品/技术/场景重合。仅「同属医药生物 / 化工 / 电子 / 计算机 / 机械」一律不够。
-
-# 排序与数量
-- 按可比从紧到松：先 tight（主业高度重合），再 adjacent（同细分、主业部分重合）。
-- 目标 12～LIMIT 家；画像信息充分时，优先保证不少于 8 家真正可对标的公司。
-- 禁止为凑满 LIMIT 塞行业龙头、指数权重股或「知名但不对标」的公司。
-- 拿不准宁可不提。同一主体多代码只提主业最相关的一只。
-
-# 必须排除
-- 港股、美股、已退市、新三板；EXCLUDE_JSON 中的代码、信用代码、标的自身。
-- 纯上下游：原料/设备供应商、渠道分销、无同类自研产品的纯 CDMO/总包/控股平台。
-- 主业错位板块：银行、地产、基建、白酒、保险、通用汽车等，即使简介偶尔出现生物/科技字样。
-- 仅大行业相同、核心品类不同。原则示例（举一反三，勿当唯一名单）：合成生物/工业发酵 ↛ 用创新药、CXO 龙头或普通化药凑数；核药/RDC ↛ 用小分子/ADC/细胞治疗凑数；工业酶/氨基酸 ↛ 用与主业无关的综合化工或食品饮料凑数；AI 应用软件 ↛ 用芯片设计/运营商凑数——除非候选主业明确同形态。
-- 禁止编造未披露的营收、利润、客户名单或管线。
+# 候选池（本步不做规模、盈利取舍）
+对每个标准化品类，检索主营该品类的公司。主业（收入主体）对应该品类才入选；边角业务、少量收入不算。
+- 市场：上交所、深交所、北交所。INCLUDE_NEEQ 为 true 时才可含新三板。禁止港股、美股、已退市。EXCLUDE_JSON 中的代码和信用代码不要提。
+- 同一主体多代码只留主业最贴该品类的一只。
+- 某品类在上述市场没有上市公司：跳过该品类，不要用相邻行业的龙头、指数权重股补位。
+- 纯上下游（原料、通用设备、渠道、无同类自研产品的纯代工/控股平台）不要因为简介里出现行业词就入选。
+- 商业模式不要混充：产品销售、平台、纯服务、纯制造代工，除非标的本身就是该模式。
+- 数量不超过 LIMIT。按品类覆盖来提名，禁止为凑满上限改提「同属某大行业」的公司。拿不准宁可不提。
 
 # 理由与置信度
-- business_reason：1～2 句中文，必须点名与标的哪条产品/技术/场景对齐；禁止「同属某行业」「都是生物公司」「行业龙头」这类空话。
-- confidence=high：主业高度重合，且证券简称你有把握。
-- confidence=medium：同细分赛道、主业部分重合。
-- confidence=low：仅弱相关，原则上不要输出。
+- business_reason：1～2 句中文，必须写明对应标的的哪条产品线、以及候选的哪一个标准化品类。禁止「同属某行业」「行业龙头」「都是科技公司」。不要写候选公司的市值或财务数字。
+- confidence=high：公开主业就是该标准化品类。
+- confidence=medium：同一工艺环节的相邻品类，主业部分重合。
+- confidence=low：不要输出。
 
 # 输出约束
-仅输出纯 JSON，禁止 Markdown 与 JSON 外文字：
-{"candidates":[{"stock_code":"6位或空","stock_name":"证券简称须准确可核对","unified_credit_code":"可空","business_reason":"1～2句中文","confidence":"high|medium|low"}]}
+仅输出纯 JSON，禁止 Markdown、禁止步骤表、禁止 JSON 外文字：
+{"candidates":[{"stock_code":"6位或空","stock_name":"证券简称须准确可核对","unified_credit_code":"可空","business_reason":"1～2句中文","confidence":"high|medium"}]}
 
-尽量填 6 位 A 股/北交所代码；不确定代码可留空，但证券简称必须准确。后续系统会用上市主档核实代码，你不打分。`;
+尽量填 6 位代码；不确定可留空，但证券简称必须能在上市主档核对。你不打分。`;
 
-const LISTED_PROPOSE_USER = `请按 SYSTEM 规则为下列标的提名境内上市可比公司：先 tight 后 adjacent，按可比程度降序。不要用大行业龙头凑数；industry_category_4_usable=false 时不要按四大类圈选。
+const LISTED_PROPOSE_USER = `请联网完成候选池：先把标的拆到标准化产品品类，再按品类检索境内上市公司。不要输出拆解表，不要采集候选公司财务或倍数。
 
-标的画像：
+标的画像（含已导入财报，单位元）：
 {{TARGET_JSON}}
 
 排除（勿提名）：
 {{EXCLUDE_JSON}}
+
+是否包含新三板（true 才可提名新三板）：
+{{INCLUDE_NEEQ}}
 
 提名数量上限：
 {{LIMIT}}`;
@@ -195,6 +188,7 @@ function sliceTargetForAi(profile) {
     custom_keywords: profile.competition_lens?.custom_keywords || [],
     product_intro: profile.product_intro || null,
     qcc_intro: profile.qcc_intro || null,
+    target_financials: profile.target_financials || null,
   };
 }
 

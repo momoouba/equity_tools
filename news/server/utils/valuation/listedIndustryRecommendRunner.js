@@ -4,7 +4,7 @@ const db = require('../../db');
 const { generateId } = require('../idGenerator');
 const C = require('./constants');
 const { getDraft } = require('./caseService');
-const { recommendListedComparables, DEFAULT_LIMIT, MAX_LIMIT } = require('./listedIndustryRecommend');
+const { recommendListedComparables, snapshotTargetFinancials, DEFAULT_LIMIT, MAX_LIMIT } = require('./listedIndustryRecommend');
 const { enrichBusinessReasons } = require('./listedIndustryRecommendAi');
 const { applyRecommendCodes, parseJson } = require('./comparableService');
 
@@ -234,6 +234,10 @@ async function startRecommendRun(req, cse, body = {}) {
   const state = await getLatestRecommendState(caseId);
   if (state.running) {
     throw httpError('推荐进行中 / 请稍后再试', 409);
+  }
+  const draft = await getDraft(caseId);
+  if (!snapshotTargetFinancials(draft?.payload).ready) {
+    throw httpError('请先在标的利润表导入或填写至少一年的营业收入或净利润，再推荐可比公司', 400);
   }
   lastStartedAt.set(caseId, now);
 

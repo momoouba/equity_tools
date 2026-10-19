@@ -136,7 +136,7 @@ function parseProposedCandidates(parsed) {
 /**
  * AI 提名境内上市可比；不打分。核实与规则分在 recommend 侧完成。
  */
-async function proposeListedPeers(profile, { limit = 20, excludeCodes = [], excludeCredits = [] } = {}) {
+async function proposeListedPeers(profile, { limit = 20, excludeCodes = [], excludeCredits = [], includeNeeq = false } = {}) {
   const cap = Math.min(20, Math.max(8, Number(limit) || 20));
   let bundle;
   let config;
@@ -157,15 +157,16 @@ async function proposeListedPeers(profile, { limit = 20, excludeCodes = [], excl
         unified_credit_codes: excludeCredits,
         display_name: profile?.display_name || null,
       }),
+      INCLUDE_NEEQ: includeNeeq ? 'true' : 'false',
       LIMIT: String(cap),
     });
     const result = await llmInvoke(config, {
       systemContent: bundle.system,
       userContent,
-      wantSearch: false,
-      searchRequired: false,
+      wantSearch: true,
+      searchRequired: true,
       logPrefix: '[valuationListedPropose]',
-      timeout: 120000,
+      timeout: 180000,
     });
     const text = typeof result === 'string' ? result : result?.content || result?.text || '';
     const parsed = extractJsonObject(text);

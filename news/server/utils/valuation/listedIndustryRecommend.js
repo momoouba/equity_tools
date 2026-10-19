@@ -8,6 +8,8 @@ const {
   listingMarketFromCode,
   isAllowedListingMarket,
   isLikelyHkOrUs,
+  toNumber,
+  yuanToYi,
 } = require('./marketUtils');
 const {
   resolveStockFromNewShare,
@@ -98,6 +100,35 @@ async function queryRowById(table, id) {
     console.warn('[listedIndustryRecommend] query', table, e.message);
     return null;
   }
+}
+
+function snapshotTargetFinancials(payload) {
+  const pl = payload?.targetPl || {};
+  const years = Array.isArray(pl.years) ? pl.years : [];
+  const lines = [];
+  for (let i = 0; i < years.length; i += 1) {
+    const revenue = toNumber(pl.revenue?.[i]);
+    const net = toNumber(pl.net_income?.[i]);
+    if (revenue == null && net == null) continue;
+    const year = strTrim(years[i]);
+    lines.push({
+      fiscal_year: year,
+      revenue_yuan: revenue,
+      revenue_yi: yuanToYi(revenue),
+      net_income_yuan: net,
+      net_income_yi: yuanToYi(net),
+      rd_yuan: toNumber(pl.rd?.[i]),
+      profit_status: net == null ? null : (net < 0 ? '亏损' : '盈利'),
+    });
+  }
+  lines.sort((a, b) => (Number(b.fiscal_year) || 0) - (Number(a.fiscal_year) || 0));
+  return {
+    valuation_date: strTrim(payload?.assumptions?.valuation_date) || null,
+    unit: '元',
+    lines,
+    latest: lines[0] || null,
+    ready: lines.length > 0,
+  };
 }
 
 function metaFromSubjectRow(row) {
@@ -306,6 +337,7 @@ async function assembleProfile(cse, draft) {
   if (fin?.listed_stock_code) excludeCodes.add(padStockCode(fin.listed_stock_code));
   profile.exclude_credits = [...excludeCredits];
   profile.exclude_codes = [...excludeCodes].filter(Boolean);
+  profile.target_financials = snapshotTargetFinancials(draft?.payload);
   profile.sources = sources;
   profile.warnings = warnings;
 
@@ -655,6 +687,7 @@ async function recommendListedComparables({ cse, draft, relax = false, includeNe
     limit: Math.min(20, Math.max(15, topN)),
     excludeCodes: profile.exclude_codes,
     excludeCredits: profile.exclude_credits,
+    includeNeeq: !!includeNeeq,
   });
   const verifiedPack = aiRaw.status === 'success'
     ? await verifyAiProposals(aiRaw.candidates, { profile, includeNeeq: !!includeNeeq })
@@ -684,7 +717,11 @@ async function recommendListedComparables({ cse, draft, relax = false, includeNe
   scored = pickBestByCredit(scored);
   scored.sort((a, b) => (b.score - a.score) || String(a.stock_code).localeCompare(String(b.stock_code)));
   const candidates = takeTopCandidates(scored, topN);
-  const default_checked = defaultCheckedCodes(candidates);
+  const aiFirst = candidates.filter((c) => String(c.recall_source || '').includes('ai_propose'));
+  const ruleRest = candidates.filter((c) => !String(c.recall_source || '').includes('ai_propose'));
+  const fromAi = defaultCheckedCodes(aiFirst, { minScore: 0, max: 15 });
+  const fromRest = defaultCheckedCodes(ruleRest, { max: Math.max(0, 15 - fromAi.length) });
+  const default_checked = [...fromAi, ...fromRest];
   const ai_propose = {
     status: aiRaw.status,
     nominated: aiRaw.nominated || 0,
@@ -712,6 +749,7 @@ async function recommendListedComparables({ cse, draft, relax = false, includeNe
 module.exports = {
   assembleProfile,
   recommendListedComparables,
+  snapshotTargetFinancials,
   DEFAULT_LIMIT,
   MAX_LIMIT,
 };

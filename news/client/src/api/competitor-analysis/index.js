@@ -169,6 +169,10 @@ export function fetchPreInvestmentProjects(params) {
   return axios.get(`${BASE}/pre-investment-projects`, { params })
 }
 
+export function fetchPreInvestmentAnalysisStages(id) {
+  return axios.get(`${BASE}/pre-investment-projects/${encodeURIComponent(id)}/analysis-stages`)
+}
+
 export function postPreInvestmentProject(body) {
   return axios.post(`${BASE}/pre-investment-projects`, body)
 }

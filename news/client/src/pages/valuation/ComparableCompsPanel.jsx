@@ -26,7 +26,7 @@ function ReasonCell({ text, extra }) {
   )
 }
 
-export default function ComparableCompsPanel({ caseId, isDraftView, comps, setComps }) {
+export default function ComparableCompsPanel({ caseId, isDraftView, comps, setComps, financialsReady = false }) {
   const [previewMsg, setPreviewMsg] = useState('')
   const [refreshBlocked, setRefreshBlocked] = useState(false)
   const [manualCode, setManualCode] = useState('')
@@ -96,6 +96,10 @@ export default function ComparableCompsPanel({ caseId, isDraftView, comps, setCo
 
   const onRecommend = async () => {
     if (!draftGuard()) return
+    if (!financialsReady && buttonState !== 'running') {
+      Message.warning('请先在标的利润表导入或填写至少一年的营业收入或净利润')
+      return
+    }
     if (buttonState === 'running') {
       setProgressOpen(true)
       return
@@ -215,11 +219,17 @@ export default function ComparableCompsPanel({ caseId, isDraftView, comps, setCo
 
   return (
     <CardLike>
-      {!comps.length ? (
+      {!financialsReady ? (
+        <Alert
+          type="warning"
+          style={{ marginBottom: 12 }}
+          content="请先在「标的利润表」导入或填写至少一年的营业收入或净利润。推荐会按产品品类联网检索境内上市公司，候选公司的财报仍在勾选后采集。"
+        />
+      ) : !comps.length ? (
         <Alert
           type="info"
           style={{ marginBottom: 12 }}
-          content="可点「按行业/赛道推荐」，按标的行业/赛道从上市主档挑选可比公司；无需先跑竞品分析。"
+          content="可点「按行业/赛道推荐」。系统会按标的产品品类联网提名境内上市公司，并用上市主档核实代码。"
         />
       ) : null}
       {previewMsg ? <Alert type="info" content={previewMsg} style={{ marginBottom: 12 }} /> : null}
@@ -227,7 +237,15 @@ export default function ComparableCompsPanel({ caseId, isDraftView, comps, setCo
         <Alert type="warning" content="竞品分析来源已删除，无法刷新可比，仅可使用已勾选快照或手工导入" style={{ marginBottom: 12 }} />
       ) : null}
       <Space style={{ marginBottom: 12 }} wrap>
-        <Button {...recommendBtnProps} onClick={onRecommend}>按行业/赛道推荐</Button>
+        {financialsReady || buttonState === 'running' ? (
+          <Button {...recommendBtnProps} onClick={onRecommend}>按行业/赛道推荐</Button>
+        ) : (
+          <Tooltip content="请先在标的利润表导入或填写至少一年的营业收入或净利润">
+            <span>
+              <Button {...recommendBtnProps} disabled onClick={onRecommend}>按行业/赛道推荐</Button>
+            </span>
+          </Tooltip>
+        )}
         {buttonState !== 'running' && latestSuccessId ? (
           <Button type="text" onClick={onViewLatest}>查看本次推荐的企业信息</Button>
         ) : null}

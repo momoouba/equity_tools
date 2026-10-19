@@ -1496,10 +1496,40 @@ function registerCompetitorMatchRoutes(router) {
           } catch { /* keep original */ }
         }
       }
+      const { attachPreInvestmentAnalysisStatus } = require('../../utils/competitor-analysis/competitorAnalysisStageStatus');
+      await attachPreInvestmentAnalysisStatus(list);
       res.json({ success: true, data: { list, total, page, pageSize } });
     } catch (e) {
       console.error('[project-sourcing/pre-investment-projects GET]', e);
       res.status(500).json({ success: false, message: e.message || '查询失败' });
+    }
+  });
+
+  /** 投前：最新一次竞品分析的各阶段完成时间与本阶段耗时 */
+  router.get('/pre-investment-projects/:id/analysis-stages', requireCompetitorAnalysisAccess, async (req, res) => {
+    try {
+      const id = String(req.params.id || '').trim();
+      const rows = await db.query(
+        `SELECT F_Id AS id, F_CreatorUserId AS creator_user_id, F_DeleteMark AS delete_mark
+         FROM pre_investment_project WHERE F_Id = ? LIMIT 1`,
+        [id]
+      );
+      if (!rows.length || Number(rows[0].delete_mark) !== 0) {
+        return res.status(404).json({ success: false, message: '记录不存在' });
+      }
+      const uid = req.psUser && req.psUser.id ? String(req.psUser.id) : null;
+      if (!isAdminUser(req.psUser) && String(rows[0].creator_user_id || '') !== String(uid)) {
+        return res.status(403).json({ success: false, message: '仅创建人或管理员可查看' });
+      }
+      const { loadPreInvestmentAnalysisStages } = require('../../utils/competitor-analysis/competitorAnalysisStageStatus');
+      const data = await loadPreInvestmentAnalysisStages(id);
+      if (!data.run_id) {
+        return res.status(404).json({ success: false, message: '尚未发起竞品分析' });
+      }
+      res.json({ success: true, data });
+    } catch (e) {
+      console.error('[pre-investment-projects/analysis-stages]', e);
+      res.status(500).json({ success: false, message: e.message || '读取阶段时间失败' });
     }
   });
 

@@ -77,6 +77,8 @@ const { applyPersistTypeQuota } = require('./competitorPersistQuota');
 const {
   loadGoldStandardAnnotations,
   annotateCandidatesWithGoldStandard,
+  applyCarriedComparableMarks,
+  loadPreviousComparableRelations,
 } = require('./competitorGoldStandardRecall');
 const { buildEvidenceMeta } = require('./competitorEvidenceUtils');
 const {
@@ -1323,21 +1325,24 @@ async function persistRelations({
       competitor_display_name: displayNameFinal,
       competitor_weak_key: creditFinal ? null : strTrim(displayNameFinal).slice(0, 160) || null,
     };
-    const includeComparable = isComparablePreferred(comparablePrefs, prefFields)
-      ? 1
-      : isComparableExcluded(comparableExcludedPrefs, prefFields)
-        ? 0
-        : autoSuggestIncludeInComparable(cand.validation, competitorType, {
-            hasInternal: !!cand.hasInternal,
-            fromGoldStandard: !!cand._fromGoldStandard,
-            goldNegative: !!cand._goldStandardNegative,
-            goldComparableExclude: !!cand._goldStandardComparableExclude,
-            fromAiWeb: candidateFromAiWeb(cand),
-          })
-          ? 1
-          : defaultIncludeInComparable(competitorType)
-            ? 1
-            : 0;
+    let includeComparable = 0;
+    if (isComparableExcluded(comparableExcludedPrefs, prefFields)) {
+      includeComparable = 0;
+    } else if (r._forceIncludeComparable || isComparablePreferred(comparablePrefs, prefFields)) {
+      includeComparable = 1;
+    } else if (
+      autoSuggestIncludeInComparable(cand.validation, competitorType, {
+        hasInternal: !!cand.hasInternal,
+        fromGoldStandard: !!cand._fromGoldStandard,
+        goldNegative: !!cand._goldStandardNegative,
+        goldComparableExclude: !!cand._goldStandardComparableExclude,
+        fromAiWeb: candidateFromAiWeb(cand),
+      })
+    ) {
+      includeComparable = 1;
+    } else if (defaultIncludeInComparable(competitorType)) {
+      includeComparable = 1;
+    }
     const relId = relIds[idx];
 
     return {
@@ -1729,7 +1734,7 @@ async function executeCompetitorAnalysisRun(opts) {
     let goldAnnotStat = { positive: 0, negative: 0 };
     let goldAnnotations = [];
     try {
-      goldAnnotations = await loadGoldStandardAnnotations(target);
+      goldAnnotations = await loadGoldStandardAnnotations(target, goldRecallCtx);
       goldAnnotStat = annotateCandidatesWithGoldStandard(scored, goldAnnotations);
       if (goldAnnotStat.positive || goldAnnotStat.negative) {
         logCompetitorRun(runId, 'S2_gold_annotate', '金标标注覆盖 scored 池', goldAnnotStat);
@@ -2269,6 +2274,44 @@ async function executeCompetitorAnalysisRun(opts) {
     });
 
     finalList = await finalizePersistRows(finalList, logCtx);
+    try {
+      const prevComparable = await loadPreviousComparableRelations({
+        subjectType,
+        investedEnterpriseId,
+        preInvestmentProjectId,
+      });
+      if (prevComparable.length) {
+        const excludedPrefs = await loadComparableExcludedPrefsForSubject({
+          subjectType,
+          investedEnterpriseId,
+          preInvestmentProjectId,
+        });
+        const carried = applyCarriedComparableMarks(finalList, prevComparable, excludedPrefs);
+        const kept = carried.rows.filter((row) => finalList.includes(row));
+        const newcomers = carried.rows.filter((row) => !finalList.includes(row));
+        const finalizedNew = newcomers.length ? await finalizePersistRows(newcomers, logCtx) : [];
+        for (const row of finalizedNew) row._forceIncludeComparable = true;
+        finalList = [...kept, ...finalizedNew];
+        await appendStepLog({
+          runId,
+          subjectType,
+          stepCode: 'S6_carry_comparable',
+          status: 'ok',
+          message: `沿用已勾选可比：列表内 ${carried.marked} 家，补回 ${finalizedNew.length} 家`,
+          detail: {
+            previous_checked: prevComparable.length,
+            marked: carried.marked,
+            added: finalizedNew.length,
+          },
+        });
+      }
+    } catch (carryErr) {
+      logCompetitorRun(
+        runId,
+        'S6_carry_comparable',
+        `沿用上一版本可比勾选失败（忽略）: ${carryErr.message}`
+      );
+    }
     if (!finalList.length) {
       throw new Error('落库列表无有效竞品（境内须可补齐统一社会信用代码，或保留有效境外竞品名称）');
     }

@@ -15,6 +15,7 @@ import {
 } from '@arco-design/web-react'
 import {
   fetchPreInvestmentProjects,
+  fetchPreInvestmentAnalysisStages,
   fetchCompetitorRelations,
   fetchCompetitorAnalysisRuns,
   deleteLatestCompetitorRun,
@@ -155,6 +156,13 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
   const [exporting, setExporting] = useState(false)
   const [exportModalOpen, setExportModalOpen] = useState(false)
   const [exportBatchMode, setExportBatchMode] = useState('latest')
+  const [stageModal, setStageModal] = useState({
+    visible: false,
+    loading: false,
+    title: '',
+    stages: [],
+    hint: '',
+  })
   const [form] = Form.useForm()
   const [editForm] = Form.useForm()
   const [editVisible, setEditVisible] = useState(false)
@@ -992,6 +1000,33 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
     }
   }
 
+  const openStageModal = async (row) => {
+    setStageModal({
+      visible: true,
+      loading: true,
+      title: row.enterprise_full_name || row.project_no || '分析阶段',
+      stages: [],
+      hint: '',
+    })
+    try {
+      const res = await fetchPreInvestmentAnalysisStages(row.id)
+      if (!res.data?.success) {
+        throw new Error(res.data?.message || '读取阶段时间失败')
+      }
+      const data = res.data.data || {}
+      setStageModal({
+        visible: true,
+        loading: false,
+        title: row.enterprise_full_name || row.project_no || '分析阶段',
+        stages: Array.isArray(data.stages) ? data.stages : [],
+        hint: data.hint || '',
+      })
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '读取阶段时间失败')
+      setStageModal((prev) => ({ ...prev, loading: false, visible: false }))
+    }
+  }
+
   const columns = [
     {
       title: (
@@ -1031,7 +1066,34 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
       width: 150,
       render: (t) => <IntroPopoverCell columnTitle="企业介绍（企查查）" raw={t} triggerMaxWidth={130} />,
     },
-    { title: '状态', dataIndex: 'pipeline_status', width: 80 },
+    {
+      title: '状态',
+      dataIndex: 'analysis_status_label',
+      width: 112,
+      render: (text, row) => {
+        const label = text || row.pipeline_status || '-'
+        if (!row.analysis_status_clickable) return label
+        return (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              openStageModal(row)
+            }}
+            style={{
+              padding: 0,
+              border: 'none',
+              background: 'none',
+              color: 'rgb(var(--primary-6))',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            {label}
+          </button>
+        )
+      },
+    },
     {
       title: '操作',
       width: 86,
@@ -1609,6 +1671,58 @@ export default function ProjectSourcingPreInvestmentPage({ showPublish = true })
         confirming={lensModal.confirming}
         onConfirm={handleLensConfirm}
       />
+      <Modal
+        title={`分析阶段 — ${stageModal.title}`}
+        visible={stageModal.visible}
+        onCancel={() => setStageModal((prev) => ({ ...prev, visible: false }))}
+        footer={null}
+        style={{ width: 640 }}
+      >
+        {stageModal.loading ? (
+          <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--color-text-3)' }}>加载中…</div>
+        ) : (
+          <>
+            {stageModal.hint ? (
+              <p style={{ margin: '0 0 12px', color: 'var(--color-text-3)', fontSize: 13 }}>{stageModal.hint}</p>
+            ) : null}
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr>
+                  {['阶段', '完成时间', '本阶段运行时间'].map((head) => (
+                    <th
+                      key={head}
+                      style={{
+                        textAlign: 'left',
+                        padding: '8px 10px',
+                        borderBottom: '1px solid var(--color-border-2)',
+                        color: 'var(--color-text-2)',
+                        fontWeight: 500,
+                      }}
+                    >
+                      {head}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {stageModal.stages.map((stage) => (
+                  <tr key={stage.label}>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--color-border-1)' }}>
+                      {stage.label}
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--color-border-1)' }}>
+                      {stage.state === 'running' ? '进行中' : stage.finished_at || '—'}
+                    </td>
+                    <td style={{ padding: '8px 10px', borderBottom: '1px solid var(--color-border-1)' }}>
+                      {stage.duration_text || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </>
+        )}
+      </Modal>
     </div>
   )
 }

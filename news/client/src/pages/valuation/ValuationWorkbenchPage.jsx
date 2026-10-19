@@ -59,10 +59,10 @@ const NAV_GROUPS = [
     tone: 'input',
     items: [
       { key: 'method', title: '方法配置' },
-      { key: 'comps', title: '可比与采集' },
       { key: 'pl', title: '标的利润表' },
       { key: 'bs', title: '标的资产负债表' },
       { key: 'cf', title: '标的现金流量表' },
+      { key: 'comps', title: '可比与采集' },
       { key: 'changelog', title: '变更记录' },
     ],
   },
@@ -100,6 +100,18 @@ function emptyPl() {
   const pl = { years: [], revenue: [], cogs: [], selling: [], admin: [], rd: [], operating_profit: [], net_income: [] }
   for (const k of PL_RATIO_KEYS) pl[k] = []
   return pl
+}
+
+function hasTargetFinancialInput(pl) {
+  const years = Array.isArray(pl?.years) ? pl.years : []
+  const revenue = Array.isArray(pl?.revenue) ? pl.revenue : []
+  const net = Array.isArray(pl?.net_income) ? pl.net_income : []
+  const filled = (v) => {
+    if (v == null || String(v).trim() === '') return false
+    const n = Number(String(v).replace(/,/g, ''))
+    return Number.isFinite(n)
+  }
+  return years.some((_, i) => filled(revenue[i]) || filled(net[i]))
 }
 
 const PL_SERIES_KEYS = [
@@ -2023,6 +2035,7 @@ export default function ValuationWorkbenchPage() {
               isDraftView={isDraftView}
               comps={comps}
               setComps={setComps}
+              financialsReady={hasTargetFinancialInput(payload?.targetPl)}
             />
           </Card>
         )}

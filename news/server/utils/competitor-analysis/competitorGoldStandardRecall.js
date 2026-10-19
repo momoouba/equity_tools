@@ -23,6 +23,7 @@ const {
   creditBoundNameConsistent,
 } = require('./competitorCompanyMatch');
 const { normalizeDomesticCandidateIdentity } = require('./competitorDomesticIdentityUtils');
+const { isComparableExcluded } = require('./competitorComparablePrefService');
 
 const FIN_SELECT = `F_Id, company_name, project_name, company_credit_code, project_desc,
                 ai_product_intro, ai_company_tags_display, ai_company_tags_json,
@@ -330,6 +331,162 @@ function goldNotesExcludeComparable() {
   return false;
 }
 
+function safeJson(raw, fallback) {
+  if (raw == null || raw === '') return fallback;
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function sameCarryEntity(row, rel) {
+  const ac = normalizeCreditCode(row?.unified_credit_code);
+  const bc = normalizeCreditCode(rel?.unified_credit_code);
+  if (ac && bc && ac === bc) return true;
+  return namesMatchLoosely(
+    row?.display_name || row?._candidate?.display_name,
+    rel?.competitor_display_name
+  );
+}
+
+function relationToCarryRow(rel) {
+  const display = strTrim(rel.competitor_display_name);
+  const credit = normalizeCreditCode(rel.unified_credit_code);
+  const sources = safeJson(rel.data_sources_json, []);
+  const breakdown = safeJson(rel.score_breakdown_json, {}) || {};
+  breakdown.carried_comparable = true;
+  const competitorType = strTrim(rel.competitor_type) || 'direct';
+  return {
+    display_name: display,
+    unified_credit_code: credit || null,
+    finalScore: Number(rel.relevance_score) || 0,
+    grade: rel.confidence_grade || null,
+    sources: Array.isArray(sources) ? sources : [],
+    financing_amount_text: rel.financing_amount_text || null,
+    competitorType,
+    dimensionScores: safeJson(rel.dimension_scores, null),
+    evidenceSummary: rel.evidence_summary || '沿用上一版本用户可比勾选',
+    evidenceConfidence: rel.evidence_confidence ?? null,
+    needsReview: Number(rel.needs_review) === 1,
+    evidenceBreakdown: safeJson(rel.evidence_breakdown_json, null),
+    reviewStatus: rel.review_status || null,
+    breakdown,
+    _forceIncludeComparable: true,
+    _candidate: {
+      display_name: display,
+      unified_credit_code: credit || null,
+      product_intro: strTrim(rel.competitor_product_intro),
+      _fromGoldStandard: true,
+      _goldStandardIsCompetitor: true,
+      _goldStandardNegative: false,
+      _goldStandardType: competitorType,
+      validation: {
+        is_competitor: true,
+        competitor_type: competitorType,
+        validated_score: Number(rel.relevance_score) || 60,
+        is_upstream_downstream: false,
+      },
+    },
+  };
+}
+
+/**
+ * 把上一成功版本里用户勾选的可比公司并入本轮落库列表，并强制保持勾选。
+ * 用户已在偏好里取消勾选的不带回。
+ */
+function applyCarriedComparableMarks(rows, prevRelations, excludedPrefs) {
+  const out = [...(rows || [])];
+  let marked = 0;
+  let added = 0;
+  for (const rel of prevRelations || []) {
+    const fields = {
+      unified_credit_code: rel.unified_credit_code,
+      competitor_display_name: rel.competitor_display_name,
+      competitor_weak_key: rel.competitor_weak_key,
+    };
+    if (isComparableExcluded(excludedPrefs, fields)) continue;
+    const hit = out.find((row) => sameCarryEntity(row, rel));
+    if (hit) {
+      hit._forceIncludeComparable = true;
+      if (!hit._candidate) hit._candidate = {};
+      hit._candidate._fromGoldStandard = true;
+      hit._candidate._goldStandardNegative = false;
+      marked += 1;
+      continue;
+    }
+    out.push(relationToCarryRow(rel));
+    added += 1;
+  }
+  return { rows: out, marked, added };
+}
+
+const PREV_COMPARABLE_SELECT = `competitor_display_name, unified_credit_code, competitor_weak_key,
+              relevance_score, confidence_grade, score_breakdown_json, competitor_type,
+              dimension_scores, evidence_summary, evidence_confidence, needs_review,
+              evidence_breakdown_json, review_status, data_sources_json,
+              financing_amount_text, competitor_product_intro`;
+
+function sameCheckedRelation(a, b) {
+  const ac = normalizeCreditCode(a?.unified_credit_code);
+  const bc = normalizeCreditCode(b?.unified_credit_code);
+  if (ac && bc && ac === bc) return true;
+  return namesMatchLoosely(a?.competitor_display_name, b?.competitor_display_name);
+}
+
+function dedupeCheckedRelations(rows) {
+  const kept = [];
+  for (const rel of rows || []) {
+    if (kept.some((item) => sameCheckedRelation(item, rel))) continue;
+    kept.push(rel);
+  }
+  return kept;
+}
+
+/**
+ * 仍有效的用户可比勾选。不限定最近一次成功版本：
+ * 下一轮若把公司丢掉，勾选还留在更早的版本上，再跑一轮也要能补回。
+ * 同一公司取最近一次勾选记录。用户后来取消勾选的由偏好表排除。
+ */
+async function loadPreviousComparableRelations({
+  subjectType,
+  investedEnterpriseId,
+  preInvestmentProjectId,
+}) {
+  if (subjectType === 'pre_investment_project' && preInvestmentProjectId) {
+    const rows = await db.query(
+      `SELECT ${PREV_COMPARABLE_SELECT}
+       FROM sourcing_competitor_relation
+       WHERE pre_investment_project_id = ?
+         AND subject_type = 'pre_investment_project'
+         AND F_DeleteMark = 0
+         AND include_in_comparable = 1
+         AND F_CreatorUserId IS NULL
+         AND COALESCE(human_locked, 0) = 0
+       ORDER BY F_LastModifyTime DESC, F_CreatorTime DESC`,
+      [String(preInvestmentProjectId)]
+    );
+    return dedupeCheckedRelations(rows);
+  }
+  if (subjectType === 'invested_enterprise' && investedEnterpriseId) {
+    const rows = await db.query(
+      `SELECT ${PREV_COMPARABLE_SELECT}
+       FROM sourcing_competitor_relation
+       WHERE invested_enterprise_id = ?
+         AND F_DeleteMark = 0
+         AND include_in_comparable = 1
+         AND F_CreatorUserId IS NULL
+         AND COALESCE(human_locked, 0) = 0
+         AND (subject_type = 'invested_enterprise' OR subject_type IS NULL)
+       ORDER BY F_LastModifyTime DESC, F_CreatorTime DESC`,
+      [String(investedEnterpriseId)]
+    );
+    return dedupeCheckedRelations(rows);
+  }
+  return [];
+}
+
 function annotateCandidatesWithGoldStandard(scored, annotations) {
   if (!scored?.length || !annotations?.length) return { positive: 0, negative: 0 };
   let positive = 0;
@@ -358,4 +515,6 @@ module.exports = {
   mapIpoRow,
   mapNewShareRow,
   goldNotesExcludeComparable,
+  applyCarriedComparableMarks,
+  loadPreviousComparableRelations,
 };
