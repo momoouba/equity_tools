@@ -12,6 +12,8 @@ import {
   Switch,
   Select,
   DatePicker,
+  Tag,
+  Tooltip,
 } from '@arco-design/web-react'
 import './ListingProjectProgressPage.css'
 import './listingTableColumns.css'
@@ -771,6 +773,49 @@ export default function ListingProjectProgressPage() {
         tooltip: true,
       },
       { title: '企业全称', dataIndex: 'company', key: 'company', width: 220, ellipsis: true, tooltip: true },
+      {
+        title: '匹配公开公司名',
+        dataIndex: 'matched_progress_company',
+        key: 'matched_progress_company',
+        width: 200,
+        ellipsis: true,
+        render: (v, record) => {
+          const name = v || record.matched_progress_project_name || ''
+          if (!name) return '-'
+          const differs = Number(record.match_name_differs) === 1
+          const cell = (
+            <span style={{ color: differs ? 'rgb(var(--orange-6))' : undefined }}>{name}</span>
+          )
+          return differs ? (
+            <Tooltip content="与持仓企业全称不一致，请核对是否误匹配">{cell}</Tooltip>
+          ) : (
+            cell
+          )
+        },
+      },
+      {
+        title: '源行状态',
+        dataIndex: 'matched_progress_valid',
+        key: 'matched_progress_valid',
+        width: 110,
+        render: (v, record) => {
+          const n = Number(v)
+          if (n === 1) return <Tag color="green">有效</Tag>
+          if (n === 2) return <Tag color="arcoblue">打新日历</Tag>
+          if (Number(record.matched_progress_deleted) === 1) {
+            return (
+              <Tooltip content="关联的上市信息表记录已删除或失效">
+                <Tag color="red">源行已失效</Tag>
+              </Tooltip>
+            )
+          }
+          return (
+            <Tooltip content="无关联上市信息表行，可能为误匹配残留或仅持仓快照">
+              <Tag color="orangered">无关联源行</Tag>
+            </Tooltip>
+          )
+        },
+      },
       buildListingNumericColumn('投资金额', 'inv_amount', 130, (v) => formatListingAmount(v)),
       buildListingNumericColumn('剩余金额', 'residual_amount', 130, (v) => formatListingAmount(v)),
       buildListingNumericColumn('穿透权益占比', 'ratio', 130, (v) => formatListingPercent(v, true)),

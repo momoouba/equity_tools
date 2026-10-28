@@ -6,6 +6,7 @@ const { generateId } = require('../utils/idGenerator');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('../utils/listing/listingBeijingDate');
 const { rowsToCsv, sendCsv, formatCsvDateYmdSlash } = require('../utils/listing/listingCsv');
 const { IPP_ORDER_BY_PLAIN } = require('../utils/listing/listingProjectProgressOrder');
+const { IPP_LIST_DEDUPE_ROW_NUMBER_PLAIN_SQL } = require('../utils/listing/listingProjectProgressDedupe');
 const { shouldUseViteFrontendHost } = require('../utils/devHost');
 
 const router = express.Router();
@@ -312,14 +313,23 @@ router.get('/data/:token', async (req, res) => {
     const { whereSql, params: dateParams } = buildShareProjectProgressDateWhere(req.query);
 
     const countRows = await db.query(
-      `SELECT COUNT(*) AS total FROM ipo_project_progress ${whereSql}`,
+      `SELECT COUNT(*) AS total FROM (
+         SELECT F_Id, ${IPP_LIST_DEDUPE_ROW_NUMBER_PLAIN_SQL} AS _dedupe_rn
+         FROM ipo_project_progress
+         ${whereSql}
+       ) t WHERE t._dedupe_rn = 1`,
       dateParams
     );
     const dataRows = await db.query(
-      `SELECT F_Id AS id, F_Id AS f_id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
-              status, board, exchange, DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time
-       FROM ipo_project_progress
-       ${whereSql}
+      `SELECT t.*, t.f_id AS id FROM (
+         SELECT F_Id AS f_id, fund, sub, project_name, company, inv_amount, residual_amount, ratio, ct_amount, ct_residual,
+                status, board, exchange, F_UpdateTime,
+                DATE_FORMAT(F_UpdateTime, '%Y-%m-%d') AS f_update_time,
+                ${IPP_LIST_DEDUPE_ROW_NUMBER_PLAIN_SQL} AS _dedupe_rn
+         FROM ipo_project_progress
+         ${whereSql}
+       ) t
+       WHERE t._dedupe_rn = 1
        ORDER BY ${IPP_ORDER_BY_PLAIN}
        LIMIT ? OFFSET ?`,
       [...dateParams, pageSize, offset]
@@ -347,22 +357,27 @@ router.get('/project-progress-export/:token', async (req, res) => {
 
     const { whereSql, params } = buildShareProjectProgressDateWhere(req.query);
     const rows = await db.query(
-      `SELECT
-         DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
-         exchange,
-         board,
-         status,
-         fund,
-         sub,
-         project_name,
-         company,
-         inv_amount,
-         residual_amount,
-         ratio,
-         ct_amount,
-         ct_residual
-       FROM ipo_project_progress
-       ${whereSql}
+      `SELECT * FROM (
+         SELECT
+           DATE_FORMAT(F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+           F_UpdateTime,
+           exchange,
+           board,
+           status,
+           fund,
+           sub,
+           project_name,
+           company,
+           inv_amount,
+           residual_amount,
+           ratio,
+           ct_amount,
+           ct_residual,
+           ${IPP_LIST_DEDUPE_ROW_NUMBER_PLAIN_SQL} AS _dedupe_rn
+         FROM ipo_project_progress
+         ${whereSql}
+       ) t
+       WHERE t._dedupe_rn = 1
        ORDER BY ${IPP_ORDER_BY_PLAIN}
        LIMIT 50000`,
       params

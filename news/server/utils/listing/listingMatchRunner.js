@@ -1,6 +1,10 @@
 const db = require('../../db');
 const { getApplicationIdByAppName } = require('../applicationIdResolve');
-const { canonicalCompanyForMatchCross, fuzzySimilarity } = require('./listingCompanyNormalize');
+const {
+  canonicalCompanyForMatchCross,
+  companiesExactMatchForListing,
+  isHkIpoExchange: isHkExchangeFromNormalize,
+} = require('./listingCompanyNormalize');
 const { containsTraditional } = require('./zhconvUtils');
 const { createShanghaiDate, formatDateOnly, addDaysCalendar } = require('./listingBeijingDate');
 
@@ -33,8 +37,8 @@ function deriveBoardFromNewShare(row) {
 }
 
 /**
- * 打新「昨日上市」入库：仅企业全称与中/英披露全称在 canonical 后完全一致（与 ipo_progress 匹配同一套规范化），
- * 不再使用项目简称↔股票简称或模糊相似度阈值。
+ * 打新「昨日上市」入库：仅企业全称与中/英披露全称在 canonical 后完全一致
+ *（沪深北去括号精确；港股繁转简后精确），不用简称、不用模糊。
  */
 function isNewShareMatch(projectRow, newShareRow) {
   const ex = String(newShareRow.exchange || '').trim();
@@ -50,32 +54,15 @@ function isNewShareMatch(projectRow, newShareRow) {
   }
   const cn = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_cn, ex);
   const en = canonicalCompanyForMatchCross(newShareRow.enterprise_full_name_en, ex);
-  const companyCnScore = proj && cn && proj === cn ? 1 : (proj && cn ? fuzzySimilarity(proj, cn) : 0);
-  const companyEnScore = proj && en && proj === en ? 1 : (proj && en ? fuzzySimilarity(proj, en) : 0);
-
-  // #6: project_name matching (ipo_project.project_name ↔ ipo_new_share.stock_name)
-  const projName = canonicalCompanyForMatchCross(projectRow.project_name, ex);
-  const stockName = canonicalCompanyForMatchCross(newShareRow.stock_name, ex);
-  let projectNameScore = 0;
-  if (projName && stockName) {
-    projectNameScore = projName === stockName ? 1 : fuzzySimilarity(projName, stockName);
-  }
-
-  const COMPANY_THRESHOLD = 0.85;
-  const PROJECT_NAME_THRESHOLD = 0.80;
-  const companyHit = companyCnScore >= COMPANY_THRESHOLD || companyEnScore >= COMPANY_THRESHOLD;
-  const projectHit = projectNameScore >= PROJECT_NAME_THRESHOLD;
-  const hit = companyHit || projectHit;
-
-  // score: weighted combination (company match weighs more)
-  const score = hit
-    ? Math.max(companyCnScore, companyEnScore, projectNameScore * 0.9)
-    : 0;
+  const companyCnScore = proj && cn && proj === cn ? 1 : 0;
+  const companyEnScore = proj && en && proj === en ? 1 : 0;
+  const hit = companyCnScore === 1 || companyEnScore === 1;
+  const score = hit ? Math.max(companyCnScore, companyEnScore) : 0;
 
   return {
     hit,
     score: Math.round(score * 10000) / 10000,
-    projectNameScore: Math.round(projectNameScore * 10000) / 10000,
+    projectNameScore: 0,
     companyCnScore: Math.round(companyCnScore * 10000) / 10000,
     companyEnScore: Math.round(companyEnScore * 10000) / 10000,
   };
@@ -319,29 +306,13 @@ function isListingMatchSkipNewShareEnvOn() {
 }
 
 function isHkIpoExchange(exchange) {
-  const s = String(exchange || '').trim();
-  return s === '港交所' || s === '香港联交所';
-}
-
-/** 长度差过大时 dice/包含相似度不可能达到 threshold，跳过模糊计算 */
-function canReachFuzzyThreshold(a, b, threshold) {
-  const sa = String(a || '');
-  const sb = String(b || '');
-  const shortLen = Math.min(sa.length, sb.length);
-  const longLen = Math.max(sa.length, sb.length);
-  if (!shortLen || !longLen) return false;
-  if (shortLen / longLen >= threshold) return true;
-  const minG = Math.max(1, shortLen - 1);
-  const maxG = Math.max(1, longLen - 1);
-  return (2 * minG) / (minG + maxG) >= threshold;
+  return isHkExchangeFromNormalize(exchange);
 }
 
 function attachProjectMatchKeys(projectRows) {
   for (const p of projectRows) {
     p._ccn = canonicalCompanyForMatchCross(p.company, '上交所');
     p._chk = canonicalCompanyForMatchCross(p.company, '港交所');
-    p._ncn = canonicalCompanyForMatchCross(p.project_name, '上交所');
-    p._nhk = canonicalCompanyForMatchCross(p.project_name, '港交所');
   }
 }
 
@@ -349,8 +320,34 @@ function projectMatchKeys(p, exchange) {
   const hk = isHkIpoExchange(exchange);
   return {
     company: hk ? p._chk : p._ccn,
-    projectName: hk ? p._nhk : p._ncn,
   };
+}
+
+/**
+ * 软删历史误匹配：持仓全称与公开行全称在现行规则下已不能精确对齐的 ipo_progress 快照。
+ * （例如曾用模糊把「立芯」对上「宸芯」）
+ */
+async function softDeleteNonExactCompanyMatches() {
+  const rows = await db.query(
+    `SELECT ipp.F_Id AS id, ipp.company AS project_company, ip.company AS progress_company, ip.exchange
+     FROM ipo_project_progress ipp
+     INNER JOIN ipo_progress ip ON ip.F_Id = ipp.ipo_progress_row_id
+     WHERE IFNULL(ipp.F_DeleteMark, 0) = 0
+       AND ipp.match_source = 'ipo_progress'
+       AND ipp.ipo_progress_row_id IS NOT NULL`
+  );
+  let n = 0;
+  for (const r of rows || []) {
+    if (companiesExactMatchForListing(r.project_company, r.progress_company, r.exchange)) continue;
+    await db.execute(
+      `UPDATE ipo_project_progress
+       SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system_match_exact_cleanup'
+       WHERE F_Id = ? AND IFNULL(F_DeleteMark, 0) = 0`,
+      [r.id]
+    );
+    n += 1;
+  }
+  return n;
 }
 
 function ipoProgressMatchKey(projectFId, progressRowId, updateTime) {
@@ -399,16 +396,17 @@ function emptyMatchBatchResult(extra = {}) {
     yesterdayStatusBackfilled: 0,
     yesterdaySourceBackfilled: 0,
     duplicateEventSoftDeleted: 0,
+    nonExactCompanySoftDeleted: 0,
     ...extra,
   };
 }
 
 /**
  * 同一底层项目 + 同一业务日 + 同一状态/板块/交易所：只保留 F_Id 最小的一条有效匹配行。
- * 历史在幂等键不完整时可能写入多条，列表会看起来像大量重复。
+ * 另：展示字段全同（含基金/金额）的重复快照也软删，覆盖「底层项目重复导入」导致的列表双胞胎。
  */
 async function softDeleteDuplicateIpoProgressMatches() {
-  const dups = await db.query(
+  const eventDups = await db.query(
     `SELECT a.F_Id
      FROM ipo_project_progress a
      INNER JOIN ipo_project_progress b
@@ -423,13 +421,38 @@ async function softDeleteDuplicateIpoProgressMatches() {
       AND TRIM(IFNULL(a.exchange, '')) = TRIM(IFNULL(b.exchange, ''))
       AND a.F_Id > b.F_Id`
   );
+  const displayDups = await db.query(
+    `SELECT a.F_Id
+     FROM ipo_project_progress a
+     INNER JOIN ipo_project_progress b
+       ON IFNULL(a.F_DeleteMark, 0) = 0
+      AND IFNULL(b.F_DeleteMark, 0) = 0
+      AND TRIM(IFNULL(a.fund, '')) = TRIM(IFNULL(b.fund, ''))
+      AND TRIM(IFNULL(a.sub, '')) = TRIM(IFNULL(b.sub, ''))
+      AND TRIM(IFNULL(a.project_name, '')) = TRIM(IFNULL(b.project_name, ''))
+      AND TRIM(IFNULL(a.company, '')) = TRIM(IFNULL(b.company, ''))
+      AND TRIM(IFNULL(a.status, '')) = TRIM(IFNULL(b.status, ''))
+      AND TRIM(IFNULL(a.exchange, '')) = TRIM(IFNULL(b.exchange, ''))
+      AND TRIM(IFNULL(a.board, '')) = TRIM(IFNULL(b.board, ''))
+      AND DATE(a.F_UpdateTime) = DATE(b.F_UpdateTime)
+      AND IFNULL(a.inv_amount, 0) = IFNULL(b.inv_amount, 0)
+      AND IFNULL(a.residual_amount, 0) = IFNULL(b.residual_amount, 0)
+      AND IFNULL(a.ratio, 0) = IFNULL(b.ratio, 0)
+      AND IFNULL(a.ct_amount, 0) = IFNULL(b.ct_amount, 0)
+      AND IFNULL(a.ct_residual, 0) = IFNULL(b.ct_residual, 0)
+      AND a.F_Id > b.F_Id`
+  );
+  const idSet = new Set();
+  for (const r of [...eventDups, ...displayDups]) {
+    if (r?.F_Id != null) idSet.add(r.F_Id);
+  }
   let n = 0;
-  for (const r of dups) {
+  for (const id of idSet) {
     await db.execute(
       `UPDATE ipo_project_progress
        SET F_DeleteMark = 1, F_DeleteTime = NOW(), F_DeleteUserId = 'system_match_dedupe'
        WHERE F_Id = ? AND IFNULL(F_DeleteMark, 0) = 0`,
-      [r.F_Id]
+      [id]
     );
     n += 1;
   }
@@ -530,6 +553,7 @@ async function runListingMatchBatchImpl({
       });
 
   let duplicateEventSoftDeleted = 0;
+  let nonExactCompanySoftDeleted = 0;
   try {
     duplicateEventSoftDeleted = await softDeleteDuplicateIpoProgressMatches();
     if (duplicateEventSoftDeleted) {
@@ -537,6 +561,14 @@ async function runListingMatchBatchImpl({
     }
   } catch (e) {
     console.warn('[listing-match] 同事件去重失败（继续匹配）:', e.message);
+  }
+  try {
+    nonExactCompanySoftDeleted = await softDeleteNonExactCompanyMatches();
+    if (nonExactCompanySoftDeleted) {
+      console.log(`[listing-match] 软删全称未精确对齐的历史匹配 ${nonExactCompanySoftDeleted} 条`);
+    }
+  } catch (e) {
+    console.warn('[listing-match] 非精确全称清理失败（继续匹配）:', e.message);
   }
 
   if (listingAppId && (includeIpoProgress || includeNewShare)) {
@@ -617,7 +649,6 @@ async function runListingMatchBatchImpl({
 
   /** @type {Map<string, { ip: object, p: object }[]>} */
   const matchBuckets = new Map();
-  const FUZZY_MATCH_THRESHOLD = 0.85;
   const matchLoopStarted = Date.now();
   let progressScanned = 0;
   for (const ip of progressRows) {
@@ -627,39 +658,11 @@ async function runListingMatchBatchImpl({
     }
     const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
     if (!nip) continue;
-    const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
     for (const p of projectRows) {
       const keys = projectMatchKeys(p, ip.exchange);
       const np = keys.company;
-      let matched = false;
-      let matchScore = null;
-      if (np && nip === np) {
-        matched = true;
-      } else if (np && canReachFuzzyThreshold(nip, np, FUZZY_MATCH_THRESHOLD)) {
-        const sim = fuzzySimilarity(nip, np);
-        if (sim >= FUZZY_MATCH_THRESHOLD) {
-          matched = true;
-          matchScore = Math.round(sim * 1000) / 1000;
-        }
-      }
-      if (!matched) {
-        const pProjName = keys.projectName;
-        if (ipProjName && pProjName && ipProjName === pProjName) {
-          matched = true;
-          matchScore = matchScore || 1;
-        } else if (
-          ipProjName &&
-          pProjName &&
-          canReachFuzzyThreshold(ipProjName, pProjName, FUZZY_MATCH_THRESHOLD)
-        ) {
-          const projSim = fuzzySimilarity(ipProjName, pProjName);
-          if (projSim >= FUZZY_MATCH_THRESHOLD) {
-            matched = true;
-            matchScore = Math.round(projSim * 1000) / 1000;
-          }
-        }
-      }
-      if (!matched) continue;
+      // 沪深北/辅导/港股：仅企业全称（去括号；港股繁转简）精确相等，禁止模糊与简称对齐
+      if (!np || nip !== np) continue;
       const dateStr = String(ip.F_UpdateTime || '').slice(0, 10);
       const bucketKey = [
         p.F_Id,
@@ -669,7 +672,7 @@ async function runListingMatchBatchImpl({
         String(ip.exchange || '').trim(),
       ].join('|');
       if (!matchBuckets.has(bucketKey)) matchBuckets.set(bucketKey, []);
-      matchBuckets.get(bucketKey).push({ ip, p, matchScore });
+      matchBuckets.get(bucketKey).push({ ip, p, matchScore: null });
     }
   }
   console.log(
@@ -759,6 +762,7 @@ async function runListingMatchBatchImpl({
     yesterdayStatusBackfilled: Number(backfillResult.statusBackfilled || 0),
     yesterdaySourceBackfilled: Number(backfillResult.sourceBackfilled || 0),
     duplicateEventSoftDeleted,
+    nonExactCompanySoftDeleted,
   };
 }
 
@@ -786,31 +790,11 @@ async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null }
   const nip = canonicalCompanyForMatchCross(ip.company, ip.exchange);
   if (!nip) return { inserted: 0, skipped: true, reason: 'empty_company' };
 
-  const FUZZY_MATCH_THRESHOLD = 0.85;
   let inserted = 0;
   const now = new Date();
 
   for (const p of projectRows) {
-    const np = canonicalCompanyForMatchCross(p.company, ip.exchange);
-    let matched = false;
-    let matchScore = null;
-    if (np && nip === np) matched = true;
-    else if (np) {
-      const sim = fuzzySimilarity(nip, np);
-      if (sim >= FUZZY_MATCH_THRESHOLD) {
-        matched = true;
-        matchScore = Math.round(sim * 1000) / 1000;
-      }
-    }
-    if (!matched) {
-      const ipProjName = canonicalCompanyForMatchCross(ip.project_name, ip.exchange);
-      const pProjName = canonicalCompanyForMatchCross(p.project_name, ip.exchange);
-      if (ipProjName && pProjName && ipProjName === pProjName) {
-        matched = true;
-        matchScore = 1;
-      }
-    }
-    if (!matched) continue;
+    if (!companiesExactMatchForListing(p.company, ip.company, ip.exchange)) continue;
     if (await existsIpoProgressMatch(p.F_Id, ip.F_Id, ip.F_UpdateTime, ip)) continue;
 
     await db.execute(
@@ -828,7 +812,7 @@ async function matchSingleIpoProgressRow(rowId, { restrictProjectUserId = null }
         ip.F_Id,
         null,
         'ipo_progress',
-        matchScore,
+        null,
         p.fund,
         p.sub,
         p.project_name,

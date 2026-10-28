@@ -8,7 +8,62 @@ const {
   hasListingFeature,
   LISTING_FEATURE,
 } = require('../../utils/listing/listingAuth');
-const { IPP_ORDER_BY_IPP } = require('../../utils/listing/listingProjectProgressOrder');
+const { IPP_ORDER_BY_OUTER } = require('../../utils/listing/listingProjectProgressOrder');
+const {
+  IPP_LIST_DEDUPE_ROW_NUMBER_SQL,
+} = require('../../utils/listing/listingProjectProgressDedupe');
+
+/** 列表/导出：持仓快照 + 匹配公开行诊断字段 */
+const IPP_LIST_SELECT_INNER = `
+         ipp.F_Id AS f_id,
+         ipp.ipo_progress_row_id,
+         ipp.ipo_project_f_id,
+         ipp.new_share_row_id,
+         ipp.match_source,
+         ipp.match_score,
+         ipp.fund,
+         ipp.sub,
+         ipp.project_name,
+         ipp.company,
+         ipp.inv_amount,
+         ipp.residual_amount,
+         ipp.ratio,
+         ipp.ct_amount,
+         ipp.ct_residual,
+         ipp.status,
+         ipp.board,
+         ipp.exchange,
+         ipp.F_UpdateTime,
+         DATE_FORMAT(ipp.F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
+         ipp.F_CreatorTime,
+         ipp.F_CreatorUserId,
+         u.account AS creator_account,
+         ip.company AS matched_progress_company,
+         ip.project_name AS matched_progress_project_name,
+         CASE
+           WHEN ipp.match_source = 'new_share' AND ipp.ipo_progress_row_id IS NULL THEN 2
+           WHEN ip.F_Id IS NOT NULL AND IFNULL(ip.F_DeleteMark, 0) = 0 THEN 1
+           ELSE 0
+         END AS matched_progress_valid,
+         CASE
+           WHEN ipp.ipo_progress_row_id IS NOT NULL
+            AND (ip.F_Id IS NULL OR IFNULL(ip.F_DeleteMark, 0) = 1) THEN 1
+           ELSE 0
+         END AS matched_progress_deleted,
+         CASE
+           WHEN ip.company IS NOT NULL
+            AND TRIM(ip.company) <> ''
+            AND TRIM(IFNULL(ipp.company, '')) <> TRIM(ip.company) THEN 1
+           ELSE 0
+         END AS match_name_differs,
+         ${IPP_LIST_DEDUPE_ROW_NUMBER_SQL} AS _dedupe_rn
+`;
+
+const IPP_LIST_FROM_JOINS = `
+       FROM ipo_project_progress ipp
+       LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
+       LEFT JOIN ipo_progress ip ON ip.F_Id = ipp.ipo_progress_row_id
+`;
 
 function unauthorized(res) {
   return res.status(401).json({ success: false, message: '未登录' });
@@ -139,6 +194,14 @@ async function buildProgressWhere(req, user) {
   return { whereSql, params };
 }
 
+function matchedProgressStatusLabel(row) {
+  const v = Number(row?.matched_progress_valid);
+  if (v === 2) return '打新日历';
+  if (v === 1) return '有效';
+  if (Number(row?.matched_progress_deleted) === 1) return '源行已失效';
+  return '无关联源行';
+}
+
 async function listIpoProjectProgress(req, res) {
   try {
     const user = await getUserFromHeader(req);
@@ -151,38 +214,24 @@ async function listIpoProjectProgress(req, res) {
     const { whereSql, params } = await buildProgressWhere(req, user);
 
     const countRows = await db.query(
-      `SELECT COUNT(*) AS total FROM ipo_project_progress ipp ${whereSql}`,
+      `SELECT COUNT(*) AS total FROM (
+         SELECT ipp.F_Id, ${IPP_LIST_DEDUPE_ROW_NUMBER_SQL} AS _dedupe_rn
+         ${IPP_LIST_FROM_JOINS}
+         ${whereSql}
+       ) t WHERE t._dedupe_rn = 1`,
       params
     );
     const total = countRows[0].total;
     const offset = (page - 1) * pageSize;
 
     const rows = await db.query(
-      `SELECT
-         ipp.F_Id,
-         ipp.F_Id AS f_id,
-         ipp.ipo_progress_row_id,
-         ipp.ipo_project_f_id,
-         ipp.fund,
-         ipp.sub,
-         ipp.project_name,
-         ipp.company,
-         ipp.inv_amount,
-         ipp.residual_amount,
-         ipp.ratio,
-         ipp.ct_amount,
-         ipp.ct_residual,
-         ipp.status,
-         ipp.board,
-         ipp.exchange,
-         DATE_FORMAT(ipp.F_UpdateTime, '%Y-%m-%d %H:%i:%s') AS f_update_time,
-         ipp.F_CreatorTime,
-         ipp.F_CreatorUserId,
-         u.account AS creator_account
-       FROM ipo_project_progress ipp
-       LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
-       ${whereSql}
-       ORDER BY ${IPP_ORDER_BY_IPP}
+      `SELECT * FROM (
+         SELECT ${IPP_LIST_SELECT_INNER}
+         ${IPP_LIST_FROM_JOINS}
+         ${whereSql}
+       ) t
+       WHERE t._dedupe_rn = 1
+       ORDER BY ${IPP_ORDER_BY_OUTER}
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );
@@ -202,17 +251,19 @@ async function exportIpoProjectProgressCsv(req, res) {
 
     const { whereSql, params } = await buildProgressWhere(req, user);
     const rows = await db.query(
-      `SELECT ipp.*, u.account AS creator_account
-       FROM ipo_project_progress ipp
-       LEFT JOIN users u ON u.F_Id = ipp.F_CreatorUserId
-       ${whereSql}
-       ORDER BY ${IPP_ORDER_BY_IPP}
+      `SELECT * FROM (
+         SELECT ${IPP_LIST_SELECT_INNER}
+         ${IPP_LIST_FROM_JOINS}
+         ${whereSql}
+       ) t
+       WHERE t._dedupe_rn = 1
+       ORDER BY ${IPP_ORDER_BY_OUTER}
        LIMIT 50000`,
       params
     );
 
     const csv = rowsToCsv(rows, [
-      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.F_UpdateTime) },
+      { label: '更新日期', key: 'f_update_time', get: (r) => formatCsvDateYmdSlash(r.F_UpdateTime || r.f_update_time) },
       { label: '交易所', key: 'exchange' },
       { label: '板块', key: 'board' },
       { label: '审核状态', key: 'status' },
@@ -220,6 +271,11 @@ async function exportIpoProjectProgressCsv(req, res) {
       { label: '归属子基金', key: 'sub' },
       { label: '项目简称', key: 'project_name' },
       { label: '企业全称', key: 'company' },
+      { label: '匹配公开公司名', key: 'matched_progress_company' },
+      { label: '匹配公开简称', key: 'matched_progress_project_name' },
+      { label: '源行状态', key: 'matched_progress_status', get: (r) => matchedProgressStatusLabel(r) },
+      { label: '持仓名与公开名不一致', key: 'match_name_differs', get: (r) => (Number(r.match_name_differs) === 1 ? '是' : '否') },
+      { label: '匹配来源', key: 'match_source' },
       { label: '投资金额', key: 'inv_amount' },
       { label: '剩余金额', key: 'residual_amount' },
       { label: '穿透权益占比', key: 'ratio' },

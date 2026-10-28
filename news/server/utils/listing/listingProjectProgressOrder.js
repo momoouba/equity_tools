@@ -8,4 +8,7 @@ const IPP_ORDER_BY_IPP = `DATE(ipp.F_UpdateTime) DESC, TRIM(ipp.fund) ASC, IFNUL
 
 const IPP_ORDER_BY_PLAIN = `DATE(F_UpdateTime) DESC, TRIM(fund) ASC, IFNULL(TRIM(sub), '') ASC, TRIM(project_name) ASC, F_UpdateTime DESC`;
 
-module.exports = { IPP_ORDER_BY_IPP, IPP_ORDER_BY_PLAIN };
+/** 去重子查询外层排序（列已无表别名） */
+const IPP_ORDER_BY_OUTER = IPP_ORDER_BY_PLAIN;
+
+module.exports = { IPP_ORDER_BY_IPP, IPP_ORDER_BY_PLAIN, IPP_ORDER_BY_OUTER };

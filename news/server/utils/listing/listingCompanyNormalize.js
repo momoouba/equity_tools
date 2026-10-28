@@ -3,6 +3,26 @@ const { normalizeCompanyName, containsTraditional } = require('./zhconvUtils');
 /** 港股 IPO 进展 exchange 枚举（与 ipo_progress.exchange 一致） */
 const HK_IPO_PROGRESS_EXCHANGES = new Set(['港交所', '香港联交所']);
 
+/** 境内沪深北：匹配只用企业全称（去括号后精确相等），禁止模糊 */
+const DOMESTIC_A_SHARE_EXCHANGES = new Set(['上交所', '深交所', '北交所']);
+
+function isHkIpoExchange(exchange) {
+  return HK_IPO_PROGRESS_EXCHANGES.has(String(exchange || '').trim());
+}
+
+function isDomesticAShareExchange(exchange) {
+  return DOMESTIC_A_SHARE_EXCHANGES.has(String(exchange || '').trim());
+}
+
+/** 境内公开审核（含辅导备案）：全称精确匹配；港股：繁转简后再精确匹配 */
+function isStrictCompanyExactExchange(exchange) {
+  const ex = String(exchange || '').trim();
+  if (isDomesticAShareExchange(ex)) return true;
+  if (ex === '证监会辅导备案') return true;
+  if (isHkIpoExchange(ex)) return true;
+  return false;
+}
+
 /**
  * 上市进展匹配用：去掉全角/半角括号字符，括号内文字保留拼接（与需求文档示例一致）
  * 例：华太电子（深圳）有限公司 → 华太电子深圳有限公司
@@ -38,14 +58,27 @@ function canonicalCompanyForMatchCross(name, ipoExchange) {
   const base = normalizeCompanyNameForMatch(name);
   if (!base) return '';
   const ex = String(ipoExchange || '').trim();
-  const hk = HK_IPO_PROGRESS_EXCHANGES.has(ex);
+  const hk = isHkIpoExchange(ex);
+  // 港股：含中文时一律繁转简后再比，避免繁简各写一行对不上
   if (hk && /[\u4e00-\u9fff]/.test(base)) {
     return normalizeCompanyName(base);
   }
+  // 境内 / 辅导：若有繁体字也转简，再与去括号全称精确比较
   if (!hk && containsTraditional(base)) {
     return normalizeCompanyName(base);
   }
   return base;
+}
+
+/**
+ * 上市进展 ↔ 底层项目：是否应按「企业全称精确」命中。
+ * 沪深北、辅导备案、港股：仅全称 canonical 后全等（港股先繁转简）。
+ * 其它（如境外备案）同样要求全称精确，不再用模糊相似度。
+ */
+function companiesExactMatchForListing(projectCompany, progressCompany, exchange) {
+  const a = canonicalCompanyForMatchCross(projectCompany, exchange);
+  const b = canonicalCompanyForMatchCross(progressCompany, exchange);
+  return !!(a && b && a === b);
 }
 
 function normalizeFuzzyText(input) {
@@ -159,7 +192,12 @@ function extractCsrcGuidanceCompanyName(input) {
 module.exports = {
   normalizeCompanyNameForMatch,
   canonicalCompanyForMatchCross,
+  companiesExactMatchForListing,
+  isHkIpoExchange,
+  isDomesticAShareExchange,
+  isStrictCompanyExactExchange,
   HK_IPO_PROGRESS_EXCHANGES,
+  DOMESTIC_A_SHARE_EXCHANGES,
   extractCsrcGuidanceCompanyName,
   fuzzySimilarity,
 };
