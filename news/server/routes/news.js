@@ -8,6 +8,7 @@ const { checkNewsPermission } = require('../utils/permissionChecker');
 const { logRecipientChange } = require('../utils/logger');
 const { sendNewsEmailsToAllRecipients, sendNewsEmailToRecipient, getEmailConfigForRecipient } = require('../utils/emailSender');
 const { updateScheduledTasks, sendNewsEmailWithExcel, getUserVisibleYesterdayNews, deduplicateNewsBySemanticSimilarity, mergeShanghaiLitigationIntoNewsList, normalizeNewsListIds } = require('../utils/scheduledEmailTasks');
+const { enqueueEmailJob } = require('../utils/emailSendQueue');
 const qichachaCategoryMapperModule = require('../utils/qichachaCategoryMapper');
 const { convertCategoryCodeToChinese, convertCategoryCodesToChinese, getCategoryMap } = qichachaCategoryMapperModule;
 const { logWithTag, errorWithTag, warnWithTag, getLogTimestamp } = require('../utils/logUtils');
@@ -4663,8 +4664,16 @@ router.post('/recipients/:id/send-email', async (req, res) => {
       });
     }
     logWithTag('[手动发送邮件]', `========== 最终数据检查结束 ==========`);
-    
-    const result = await sendNewsEmailWithExcel(recipient, emailConfig, newsList);
+
+    // 与定时邮件共用串行队列，避免 SMTP/附件生成与其它收件配置并发互拖
+    const enqueueResult = await enqueueEmailJob({
+      key: `recipient:${id}`,
+      label: `手动舆情发信 ${id}`,
+      source: 'manual-ui',
+      wait: true,
+      run: () => sendNewsEmailWithExcel(recipient, emailConfig, newsList),
+    });
+    const result = (enqueueResult && enqueueResult.result) || enqueueResult || {};
     
     res.json({
       success: true,

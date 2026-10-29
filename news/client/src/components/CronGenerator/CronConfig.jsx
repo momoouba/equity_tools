@@ -1,101 +1,145 @@
-import React, { useState, useEffect } from 'react'
-import { Tabs, Radio, InputNumber, Input, Switch, Select } from '@arco-design/web-react'
+import React from 'react'
+import { Tabs, Radio, InputNumber, Switch, Checkbox } from '@arco-design/web-react'
 import './CronConfig.css'
-
-const Option = Select.Option
 
 const DIMENSIONS = [
   { key: 'second', label: '秒', min: 0, max: 59 },
   { key: 'minute', label: '分钟', min: 0, max: 59 },
-  { key: 'hour', label: '小时', min: 1, max: 23 }, // 用户要求：小时是1-23
+  { key: 'hour', label: '小时', min: 1, max: 23 },
   { key: 'day', label: '日', min: 1, max: 31 },
   { key: 'month', label: '月', min: 1, max: 12 },
   { key: 'weekday', label: '周', min: 1, max: 7 },
-  { key: 'year', label: '年', min: 1970, max: 2099 }
+  { key: 'year', label: '年', min: new Date().getFullYear(), max: new Date().getFullYear() + 10 },
 ]
 
 const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
+function normalizeSpecifyValue(raw) {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((v) => (typeof v === 'number' ? v : parseInt(v, 10)))
+      .filter((n) => !Number.isNaN(n))
+  }
+  if (raw === null || raw === undefined || raw === '' || raw === '*' || raw === '?') return []
+  if (typeof raw === 'number') return [raw]
+  const n = parseInt(String(raw), 10)
+  return Number.isNaN(n) ? [] : [n]
+}
+
 /**
- * Cron 配置区组件
+ * Cron 配置区：指定值用页内勾选网格，避免 SheetModal 内 Select 下拉被遮挡/秒关。
  */
 function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfigChange, onSkipHolidayChange }) {
   const currentConfig = cronConfig[activeTab] || { mode: 'wildcard', value: '*' }
-  const currentDimension = DIMENSIONS.find(d => d.key === activeTab)
+  const currentDimension = DIMENSIONS.find((d) => d.key === activeTab)
 
-  // 处理配置模式变化
   const handleModeChange = (mode) => {
     const newConfig = { ...currentConfig, mode }
-    
-    // 根据模式设置默认值
+
     if (mode === 'wildcard') {
       newConfig.value = activeTab === 'weekday' ? '?' : '*'
     } else if (mode === 'range') {
       newConfig.start = currentConfig.start ?? currentDimension.min
       newConfig.end = currentConfig.end ?? currentDimension.max
     } else if (mode === 'step') {
-      newConfig.start = currentConfig.start ?? 0
+      newConfig.start = currentConfig.start ?? currentDimension.min
       newConfig.step = currentConfig.step ?? 1
     } else if (mode === 'specify') {
-      newConfig.value = currentConfig.value ?? (Array.isArray(currentConfig.value) ? currentConfig.value : [currentDimension.min])
-      if (Array.isArray(newConfig.value)) {
-        newConfig.values = newConfig.value
-      }
+      const existing = normalizeSpecifyValue(currentConfig.values ?? currentConfig.value).filter(
+        (n) => n >= currentDimension.min && n <= currentDimension.max
+      )
+      const values = existing.length ? existing : [currentDimension.min]
+      newConfig.value = values.length === 1 ? values[0] : values
+      newConfig.values = values
     }
 
     onConfigChange(activeTab, newConfig)
   }
 
-  // 处理范围配置变化
   const handleRangeChange = (field, value) => {
-    const newConfig = {
+    onConfigChange(activeTab, {
       ...currentConfig,
       mode: 'range',
-      [field]: value
-    }
-    onConfigChange(activeTab, newConfig)
+      [field]: value,
+    })
   }
 
-  // 处理间隔配置变化
   const handleStepChange = (field, value) => {
-    const newConfig = {
+    onConfigChange(activeTab, {
       ...currentConfig,
       mode: 'step',
-      [field]: value
-    }
-    onConfigChange(activeTab, newConfig)
+      [field]: value,
+    })
   }
 
-  // 处理指定值变化
-  const handleSpecifyChange = (value) => {
-    // 处理多选下拉框的值（直接是数组）或输入框的值（逗号分隔的字符串）
-    let values = []
-    if (Array.isArray(value)) {
-      // 多选下拉框返回的是数组
-      values = value.filter(v => {
-        const num = typeof v === 'number' ? v : parseInt(v, 10)
-        return !isNaN(num) && num >= currentDimension.min && num <= currentDimension.max
-      }).sort((a, b) => a - b) // 排序，便于阅读
-    } else if (typeof value === 'string') {
-      // 输入框的值（逗号分隔的字符串）
-      values = value.split(',').map(v => {
-        const num = parseInt(v.trim(), 10)
-        return isNaN(num) ? null : num
-      }).filter(v => v !== null && v >= currentDimension.min && v <= currentDimension.max)
-    } else if (typeof value === 'number') {
-      values = [value]
-    }
+  const handleSpecifyValuesChange = (values) => {
+    const sorted = [...values]
+      .map((v) => (typeof v === 'number' ? v : parseInt(v, 10)))
+      .filter((n) => !Number.isNaN(n) && n >= currentDimension.min && n <= currentDimension.max)
+      .sort((a, b) => a - b)
 
-    const newConfig = {
+    onConfigChange(activeTab, {
       ...currentConfig,
       mode: 'specify',
-      value: values.length === 1 ? values[0] : values,
-      values: values
-    }
-    onConfigChange(activeTab, newConfig)
+      value: sorted.length === 1 ? sorted[0] : sorted,
+      values: sorted,
+    })
   }
 
-  // 渲染配置控件
+  const renderSpecifyPicker = () => {
+    const selected = normalizeSpecifyValue(currentConfig.values ?? currentConfig.value).filter(
+      (n) => n >= currentDimension.min && n <= currentDimension.max
+    )
+    const disabled = currentConfig.mode !== 'specify'
+    const options =
+      activeTab === 'weekday'
+        ? WEEKDAY_NAMES.map((name, index) => ({ value: index + 1, label: name }))
+        : Array.from({ length: currentDimension.max - currentDimension.min + 1 }, (_, i) => {
+            const value = currentDimension.min + i
+            return { value, label: String(value) }
+          })
+
+    return (
+      <div className={`cron-specify-panel${disabled ? ' is-disabled' : ''}`}>
+        <div className="cron-specify-toolbar">
+          <button
+            type="button"
+            className="cron-specify-link"
+            disabled={disabled}
+            onClick={() => handleSpecifyValuesChange(options.map((o) => o.value))}
+          >
+            全选
+          </button>
+          <button
+            type="button"
+            className="cron-specify-link"
+            disabled={disabled}
+            onClick={() => handleSpecifyValuesChange([])}
+          >
+            清空
+          </button>
+          <span className="cron-specify-hint">已选 {selected.length} 项（可多选）</span>
+        </div>
+        <Checkbox.Group
+          value={selected}
+          disabled={disabled}
+          onChange={handleSpecifyValuesChange}
+          className={
+            activeTab === 'weekday' || activeTab === 'month' || activeTab === 'hour'
+              ? 'cron-specify-grid cron-specify-grid--wide'
+              : 'cron-specify-grid'
+          }
+        >
+          {options.map((opt) => (
+            <Checkbox key={opt.value} value={opt.value}>
+              {opt.label}
+            </Checkbox>
+          ))}
+        </Checkbox.Group>
+      </div>
+    )
+  }
+
   const renderConfigControls = () => {
     const { mode } = currentConfig
 
@@ -103,9 +147,11 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
       <div className="cron-config-controls">
         <Radio.Group value={mode} onChange={handleModeChange}>
           <Radio value="wildcard">
-            {activeTab === 'weekday' ? '周, 允许的通配符[, - * / ?]' : `${currentDimension.label}, 允许的通配符[, - * /]`}
+            {activeTab === 'weekday'
+              ? '周, 允许的通配符[, - * / ?]'
+              : `${currentDimension.label}, 允许的通配符[, - * /]`}
           </Radio>
-          
+
           <Radio value="range">
             <span>周期从</span>
             <InputNumber
@@ -131,7 +177,7 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
           <Radio value="step">
             <span>从</span>
             <InputNumber
-              value={currentConfig.start ?? 0}
+              value={currentConfig.start ?? currentDimension.min}
               min={currentDimension.min}
               max={currentDimension.max}
               onChange={(val) => handleStepChange('start', val)}
@@ -150,51 +196,10 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
             <span>{currentDimension.label}执行一次</span>
           </Radio>
 
-          <Radio value="specify">
-            <span>指定</span>
-            {activeTab === 'weekday' ? (
-              <Select
-                mode="multiple"
-                value={Array.isArray(currentConfig.value) ? currentConfig.value : (currentConfig.value != null ? [currentConfig.value] : [])}
-                onChange={handleSpecifyChange}
-                disabled={mode !== 'specify'}
-                style={{ width: 200, margin: '0 8px' }}
-                placeholder="请选择星期"
-              >
-                {WEEKDAY_NAMES.map((name, index) => (
-                  <Option key={index + 1} value={index + 1}>{name}</Option>
-                ))}
-              </Select>
-            ) : (activeTab === 'second' || activeTab === 'minute' || activeTab === 'hour' || activeTab === 'day' || activeTab === 'month') ? (
-              <Select
-                mode="multiple"
-                value={Array.isArray(currentConfig.value) ? currentConfig.value : (currentConfig.value != null ? [currentConfig.value] : [])}
-                onChange={handleSpecifyChange}
-                disabled={mode !== 'specify'}
-                style={{ width: 300, margin: '0 8px' }}
-                placeholder={`请选择${currentDimension.label}（可多选）`}
-                maxTagCount="responsive"
-              >
-                {Array.from({ length: currentDimension.max - currentDimension.min + 1 }, (_, i) => {
-                  const value = currentDimension.min + i
-                  return (
-                    <Option key={value} value={value}>
-                      {value}
-                    </Option>
-                  )
-                })}
-              </Select>
-            ) : (
-              <Input
-                value={Array.isArray(currentConfig.value) ? currentConfig.value.join(',') : (currentConfig.value ?? '')}
-                onChange={handleSpecifyChange}
-                disabled={mode !== 'specify'}
-                placeholder="多个值用逗号分隔"
-                style={{ width: 200, margin: '0 8px' }}
-              />
-            )}
-          </Radio>
+          <Radio value="specify">指定</Radio>
         </Radio.Group>
+
+        {mode === 'specify' ? renderSpecifyPicker() : null}
       </div>
     )
   }
@@ -211,7 +216,7 @@ function CronConfig({ cronConfig, activeTab, isSkipHoliday, onTabChange, onConfi
       </div>
 
       <Tabs activeTab={activeTab} onChange={onTabChange} type="line">
-        {DIMENSIONS.map(dim => (
+        {DIMENSIONS.map((dim) => (
           <Tabs.TabPane key={dim.key} title={dim.label}>
             {activeTab === dim.key && renderConfigControls()}
           </Tabs.TabPane>

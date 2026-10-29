@@ -39,3 +39,66 @@
 .cron-config-controls .arco-tabs {
   margin-top: 16px;
 }
+
+/* 指定：页内勾选网格（无弹出层，不受 SheetModal z-index/overflow 影响） */
+.cron-specify-panel {
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fafbfc;
+}
+
+.cron-specify-panel.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.cron-specify-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.cron-specify-link {
+  border: none;
+  background: transparent;
+  color: #165dff;
+  cursor: pointer;
+  padding: 0;
+  font-size: 13px;
+}
+
+.cron-specify-link:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.cron-specify-hint {
+  margin-left: auto;
+  color: #86909c;
+  font-size: 12px;
+}
+
+.cron-specify-grid {
+  display: grid !important;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 6px 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.cron-specify-grid--wide {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cron-specify-grid .arco-checkbox {
+  margin-right: 0 !important;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.cron-specify-grid .arco-checkbox:hover {
+  background: #e8f3ff;
+}

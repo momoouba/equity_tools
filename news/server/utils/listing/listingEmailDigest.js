@@ -41,9 +41,11 @@ async function queryNewShareListedYesterdayRows(todayYmd) {
 }
 
 /**
- * IPO上市（昨日）行若缺首日收盘/涨幅/发行价，先同步打新日历再重查；
- * 若仍有空字段（常见于港股 etnet 失败），再定向补抓一次（港股跳过 etnet）。
- * 同步失败不阻断发信（仍用当前数据发送）。
+ * IPO上市（昨日）行若缺首日收盘/涨幅/发行价：发信路径只做「定向指标补抓」，
+ * 不再跑整段 syncNewShareCalendar（易拖到 10 分钟+，与晨间邮件/分析抢资源）。
+ * 全量打新同步由 listing_data_config 定时任务承担；失败不阻断发信。
+ *
+ * 紧急回退：EMAIL_LISTING_FULL_PREFLIGHT=1 时恢复旧的全量补齐。
  */
 async function ensureNewShareListedYesterdayMetrics(todayYmd, reportDay, rows) {
   const incomplete = (rows || []).filter(isIncompleteNewShareFirstDayRow);
@@ -54,61 +56,69 @@ async function ensureNewShareListedYesterdayMetrics(todayYmd, reportDay, rows) {
   if (!inflight) {
     inflight = (async () => {
       const codes = incomplete.map((r) => r.stock_code).filter(Boolean);
-      console.warn(
-        `[上市进展邮件] IPO上市（昨日）存在空字段，触发打新日历补齐 reportDay=${reportDay} incomplete=${incomplete.length} codes=${codes.join(',')}`
-      );
-      const issueAfter = subtractOneBeijingCalendarDay(todayYmd) || reportDay;
-      const updateAfter = issueAfter;
-      const to = formatDateOnly(addDaysCalendar(createShanghaiDate(new Date(`${todayYmd}T12:00:00+08:00`)), 14));
-      try {
-        const syncResult = await syncNewShareCalendar({
-          from: todayYmd,
-          to,
-          issueDateAfterExclusive: issueAfter,
-          updateDateAfterExclusive: updateAfter,
-          listingDateLookbackDays: 14,
-          triggerType: 'email-preflight',
-          skipFullNameBackfill: true,
-          logTag: '[上市进展邮件][打新补齐]',
-        });
-        console.log('[上市进展邮件] 打新日历补齐完成', {
-          reportDay,
-          dailyMetricsUpdated: Number(syncResult.dailyMetricsUpdated || 0),
-          dailyMetricsFailed: Number(syncResult.dailyMetricsFailed || 0),
-          inserted: Number(syncResult.inserted || 0),
-          updated: Number(syncResult.updated || 0),
-        });
-      } catch (err) {
+      const allowFull =
+        String(process.env.EMAIL_LISTING_FULL_PREFLIGHT || '').trim() === '1';
+
+      if (allowFull) {
         console.warn(
-          `[上市进展邮件] 打新日历补齐失败（继续定向重试） reportDay=${reportDay} err=${String(err.message || err).slice(0, 300)}`
+          `[上市进展邮件] IPO上市（昨日）空字段，EMAIL_LISTING_FULL_PREFLIGHT=1 触发全量打新补齐 reportDay=${reportDay} incomplete=${incomplete.length} codes=${codes.join(',')}`
+        );
+        const issueAfter = subtractOneBeijingCalendarDay(todayYmd) || reportDay;
+        const updateAfter = issueAfter;
+        const to = formatDateOnly(addDaysCalendar(createShanghaiDate(new Date(`${todayYmd}T12:00:00+08:00`)), 14));
+        try {
+          const syncResult = await syncNewShareCalendar({
+            from: todayYmd,
+            to,
+            issueDateAfterExclusive: issueAfter,
+            updateDateAfterExclusive: updateAfter,
+            listingDateLookbackDays: 14,
+            triggerType: 'email-preflight',
+            skipFullNameBackfill: true,
+            logTag: '[上市进展邮件][打新补齐]',
+          });
+          console.log('[上市进展邮件] 打新日历补齐完成', {
+            reportDay,
+            dailyMetricsUpdated: Number(syncResult.dailyMetricsUpdated || 0),
+            dailyMetricsFailed: Number(syncResult.dailyMetricsFailed || 0),
+            inserted: Number(syncResult.inserted || 0),
+            updated: Number(syncResult.updated || 0),
+          });
+        } catch (err) {
+          console.warn(
+            `[上市进展邮件] 打新日历补齐失败（继续定向重试） reportDay=${reportDay} err=${String(err.message || err).slice(0, 300)}`
+          );
+        }
+      } else {
+        console.warn(
+          `[上市进展邮件] IPO上市（昨日）空字段，仅定向补抓首日指标（跳过全量打新同步） reportDay=${reportDay} incomplete=${incomplete.length} codes=${codes.join(',')}`
         );
       }
 
-      // 二次保底：仍缺的行（尤其港股）跳过 etnet，直打东财/Python
-      let stillIncomplete = [];
+      let stillIncomplete = incomplete;
       try {
         const afterSync = await queryNewShareListedYesterdayRows(todayYmd);
         stillIncomplete = afterSync.filter(isIncompleteNewShareFirstDayRow);
       } catch (qErr) {
         stillIncomplete = incomplete;
-        console.warn(`[上市进展邮件] 补齐后重查失败，沿用原空字段行: ${String(qErr.message || qErr).slice(0, 200)}`);
+        console.warn(`[上市进展邮件] 补齐前重查失败，沿用原空字段行: ${String(qErr.message || qErr).slice(0, 200)}`);
       }
       if (stillIncomplete.length) {
         const hkCodes = stillIncomplete
           .filter((r) => String(r.exchange || '').trim() === '港交所')
           .map((r) => r.stock_code);
         console.warn(
-          `[上市进展邮件] 打新同步后仍有空字段，启动定向指标重试 count=${stillIncomplete.length} hk=${hkCodes.join(',') || '-'}`
+          `[上市进展邮件] 启动定向指标补抓 count=${stillIncomplete.length} hk=${hkCodes.join(',') || '-'}`
         );
         try {
           const retryResult = await refreshFirstDayMetricsForRows(stillIncomplete, {
             forceSkipEtnet: true,
-            logTag: '[上市进展邮件][首日指标二次保底]',
+            logTag: '[上市进展邮件][首日指标定向补抓]',
           });
-          console.log('[上市进展邮件] 定向指标重试完成', retryResult);
+          console.log('[上市进展邮件] 定向指标补抓完成', retryResult);
         } catch (retryErr) {
           console.warn(
-            `[上市进展邮件] 定向指标重试失败（仍继续发信） err=${String(retryErr.message || retryErr).slice(0, 300)}`
+            `[上市进展邮件] 定向指标补抓失败（仍继续发信） err=${String(retryErr.message || retryErr).slice(0, 300)}`
           );
         }
       }

@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { updateScheduledTasks, executeEmailTask } = require('../utils/scheduledEmailTasks');
+const { updateScheduledTasks, enqueueEmailTask } = require('../utils/scheduledEmailTasks');
 const { updateNewsSyncScheduledTasks } = require('../utils/scheduledNewsSyncTasks');
 const { generateId } = require('../utils/idGenerator');
 const { initializeScheduledTask: initializeNewsReanalysisTask } = require('../utils/scheduledNewsReanalysisTasks');
@@ -866,7 +866,7 @@ router.post('/:id/execute', checkAdminPermission, async (req, res) => {
     console.log(`管理员手动触发执行定时任务: ${id}, 类型: ${task_type}`);
     
     if (task_type === 'email') {
-      await executeEmailTask(id);
+      await enqueueEmailTask(id, { source: 'manual-admin', wait: true });
     } else if (task_type === 'news_sync') {
       // 执行新闻接口同步任务
       const newsRoutes = require('./news');

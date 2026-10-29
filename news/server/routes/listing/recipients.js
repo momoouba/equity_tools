@@ -12,6 +12,7 @@ const {
 } = require('../../utils/listing/listingAuth');
 const { executeListingEmailDigest } = require('../../utils/listing/listingEmailDigest');
 const { updateScheduledTasks } = require('../../utils/scheduledEmailTasks');
+const { enqueueEmailJob } = require('../../utils/emailSendQueue');
 
 /** Column list with aliases for recipient_management queries returned to the frontend */
 const RM_SELECT_COLS = `rm.F_Id AS id, rm.user_id, rm.app_id, rm.recipient_email, rm.email_subject,
@@ -299,10 +300,17 @@ async function sendTest(req, res) {
     if (!to || !to.includes('@')) {
       return res.status(400).json({ success: false, message: '收件人邮箱无效' });
     }
-    // 与定时任务保持一致：按收件配置所选发件内容发送对应摘要分段
-    await executeListingEmailDigest(existing[0], {
-      skipHolidayCheck: false,
-      currentUser: user,
+    // 与定时舆情/上市邮件共用串行队列，避免与晨间定时并发互拖
+    await enqueueEmailJob({
+      key: `recipient:${id}`,
+      label: `上市进展试发 ${id}`,
+      source: 'listing-test',
+      wait: true,
+      run: () =>
+        executeListingEmailDigest(existing[0], {
+          skipHolidayCheck: false,
+          currentUser: user,
+        }),
     });
     return res.json({ success: true, message: '邮件已发送（按发件内容配置生成）' });
   } catch (e) {

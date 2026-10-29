@@ -232,6 +232,24 @@ function isHolidayContentTaggedNews(news) {
 // 存储所有定时任务的Map
 const scheduledTasks = new Map();
 
+const { enqueueEmailJob, queueSnapshot: emailSendQueueSnapshot } = require('./emailSendQueue');
+
+/**
+ * 入队执行收件配置邮件（舆情 / 上市进展共用串行队列）。
+ * @param {string} recipientId
+ * @param {{ source?: string, wait?: boolean }} [options]
+ */
+function enqueueEmailTask(recipientId, options = {}) {
+  const id = String(recipientId);
+  return enqueueEmailJob({
+    key: `recipient:${id}`,
+    label: `收件配置 ${id}`,
+    source: options.source || 'unknown',
+    wait: options.wait === true,
+    run: () => executeEmailTask(id),
+  });
+}
+
 /**
  * 格式化日期为 YYYY-MM-DD，使用北京时区
  * @param {Date} date - 日期对象
@@ -3613,6 +3631,7 @@ async function executeEmailTask(recipientId) {
     console.log(`✓ 邮件发送任务完成: 收件管理配置 ${recipientId}`);
   } catch (error) {
     console.error(`✗ 邮件发送任务失败: 收件管理配置 ${recipientId}`, error);
+    throw error;
   }
 }
 
@@ -3713,8 +3732,12 @@ async function updateScheduledTasks() {
         }
         
         const task = cron.schedule(cronExpression, async () => {
-          console.log(`[定时任务] 执行收件管理配置 ${recipient.id} 的邮件发送任务`);
-          await executeEmailTask(recipient.id);
+          console.log(`[定时任务] 收件管理配置 ${recipient.id} 触发，入队邮件发送`);
+          try {
+            await enqueueEmailTask(recipient.id, { source: 'cron', wait: false });
+          } catch (e) {
+            console.error(`[定时任务] 收件管理配置 ${recipient.id} 入队失败:`, e.message || e);
+          }
         }, {
           scheduled: true,
           timezone: 'Asia/Shanghai'
@@ -3745,6 +3768,8 @@ module.exports = {
   updateScheduledTasks,
   initializeScheduledTasks,
   executeEmailTask,
+  enqueueEmailTask,
+  emailSendQueueSnapshot,
   sendNewsEmailWithExcel,
   getUserVisibleYesterdayNews,
   exportNewsToExcel,
