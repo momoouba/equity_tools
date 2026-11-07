@@ -481,6 +481,34 @@ def _norm_date(v):
         return ""
 
 
+def _status_looks_like_date(status):
+    """审核状态若整段都是日期（列错位把备案时间读进 status），返回 True。"""
+    t = str(status or "").strip()
+    if not t or not _norm_date(t):
+        return False
+    # 去掉数字与日期分隔后应无其它汉字/字母（排除「辅导备案」等正常状态）
+    rest = re.sub(r"[\d\s\-/\.年月日:]", "", t)
+    return rest == ""
+
+
+def _repair_guidance_shifted_fields(status, register_address, board):
+    """
+    列左偏时常见：status=备案日期、register_address=原状态、board=派出机构。
+    不丢弃行：status→辅导备案；派出机构取含「局」的字段；board→辅导备案报告。
+    """
+    st = str(status or "").strip()
+    addr = str(register_address or "").strip()
+    bd = str(board or "").strip()
+    if not _status_looks_like_date(st):
+        return st or "辅导备案", addr, bd
+    office = ""
+    for cand in (addr, bd, st):
+        if cand and "局" in cand:
+            office = cand
+            break
+    return "辅导备案", office, "辅导备案报告"
+
+
 def _extract_csrc_guidance_company_name(s):
     """报告标题/混写文案 → 仅保留公司全称（与 Node extractCsrcGuidanceCompanyName 对齐）。
     注意：如果输入已经是公司名称（如从辅导对象列获取），直接返回，不做额外提取。
@@ -561,6 +589,9 @@ def _build_rows(df, start_date, end_date):
         ).strip()
         board = str(_pick(d, ["拟上市板块", "板块", "上市板块"]) or "").strip()
         code = str(_pick(d, ["证券代码", "股票代码", "代码"]) or "").strip()
+        status, dispatch_office, board = _repair_guidance_shifted_fields(
+            status, dispatch_office, board
+        )
         rows.append(
             {
                 "company": company,
@@ -758,6 +789,7 @@ def _rows_from_csrcfd_dom(html, start_date, end_date):
         if record_date < start_date or record_date > end_date:
             continue
 
+        status, dispatch, board = _repair_guidance_shifted_fields(status, dispatch, board)
         out.append(
             {
                 "company": _extract_csrc_guidance_company_name(company.strip()),

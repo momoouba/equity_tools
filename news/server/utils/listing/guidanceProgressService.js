@@ -2,6 +2,7 @@ const db = require('../../db');
 const { createShanghaiDate, formatDateOnly } = require('./listingBeijingDate');
 const { normalizeCompanyNameForMatch, extractCsrcGuidanceCompanyName } = require('./listingCompanyNormalize');
 const { runGuidanceProgressSync } = require('./guidanceProgressSync');
+const { repairGuidanceShiftedFields } = require('./guidanceProgressRepair');
 
 async function resolveAdminId() {
   const rows = await db.query(`SELECT F_Id AS id FROM users WHERE account='admin' LIMIT 1`);
@@ -19,9 +20,10 @@ async function upsertGuidanceRow(row, adminId, writeDate) {
   const updateTime = `${updateDate} 00:00:00`;
   const createDate = String(writeDate || '').slice(0, 10) || formatDateOnly(createShanghaiDate());
   const exchange = '证监会辅导备案';
-  const board = String(row.board || '').trim() || '辅导备案';
-  const status = String(row.status || '').trim() || '辅导备案';
-  const registerAddress = String(row.register_address || '').trim();
+  const repaired = repairGuidanceShiftedFields(row.status, row.register_address, row.board);
+  const board = String(repaired.board || '').trim() || '辅导备案';
+  const status = String(repaired.status || '').trim() || '辅导备案';
+  const registerAddress = String(repaired.registerAddress || '').trim();
   const code = String(row.code || '').trim();
   const projectName = company;
 
