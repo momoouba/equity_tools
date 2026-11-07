@@ -4,9 +4,7 @@
  * 锚定年不是 12 月时，扣营运资本前现金流用年底全年减去锚定日累计，不乘剩余月比例。
  */
 const { normalizeBs, netDebtAmount, nwcStockFromBs, equityBookFromBs, totalAssetsFromBs, totalLiabFromBs } = require('./targetBsFields');
-const { parseYmd } = require('./marketUtils');
-
-const STATEMENT_MD = new Set(['03-31', '06-30', '09-30', '12-31']);
+const { parseValuationDate, reportCutoffYmd, parseReportCutoff } = require('./marketUtils');
 
 const RATIOS = [
   { key: 'cogs_ratio', label: '营业成本', nonNegative: false, growth: true, amountKey: 'cogs' },
@@ -58,35 +56,13 @@ function num0(v) {
   return n == null ? 0 : n;
 }
 
+/** 估值日（任意日历日）。折现原点用这一天；可比财报截止见 reportCutoffYmd。 */
 function parseAnchor(value) {
-  const parsed = parseYmd(value);
-  const raw = parsed || (value == null ? '' : String(value).trim().slice(0, 10));
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return {
-      ok: false,
-      ymd: raw || null,
-      year: null,
-      month: null,
-      message: '请选择估值锚定日，须为最近一期报表日',
-    };
-  }
-  const year = Number(raw.slice(0, 4));
-  const month = Number(raw.slice(5, 7));
-  const md = raw.slice(5);
-  if (!STATEMENT_MD.has(md)) {
-    return {
-      ok: false,
-      ymd: raw,
-      year,
-      month,
-      message: '估值锚定日须为 3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日，请到方法配置修改',
-    };
-  }
-  return { ok: true, ymd: raw, year, month, message: null };
+  return parseValuationDate(value);
 }
 
 function isStatementAnchor(value) {
-  return parseAnchor(value).ok;
+  return parseValuationDate(value).ok;
 }
 
 function discountYears(forecastYear, anchor) {
@@ -893,6 +869,9 @@ function applyForecastCashflow(targetCf, dcf) {
 module.exports = {
   RATIOS,
   parseAnchor,
+  parseValuationDate,
+  reportCutoffYmd,
+  parseReportCutoff,
   isStatementAnchor,
   discountYears,
   flowScale,

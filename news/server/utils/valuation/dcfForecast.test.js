@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { buildDcfForecast, discountYears, parseAnchor, applyForecastCashflow, applyForecastPl, impliedForecastDa } = require('./dcfForecast');
+const { buildDcfForecast, discountYears, parseAnchor, reportCutoffYmd, applyForecastCashflow, applyForecastPl, impliedForecastDa } = require('./dcfForecast');
 const { sumCashflowDa } = require('./cashflowDa');
 const { mergeTargetFinancials, matchAlias, suggestAnchorYmd, buildTargetFinancialTemplateBuffer, parseTargetFinancialWorkbook, sheetToCalculatedAoa } = require('./targetImport');
 const { parseYmd } = require('./marketUtils');
@@ -12,9 +12,15 @@ const anchor = { year: 2026, month: 3 };
 eq(discountYears(2026, anchor), 0.75, '2026 period');
 eq(discountYears(2027, anchor), 1.75, '2027 period');
 eq(discountYears(2026, { year: 2025, month: 12 }), 1, 'year-end anchor period');
-assert.strictEqual(parseAnchor('2026-10-02').ok, false);
+eq(discountYears(2026, { year: 2026, month: 11 }), 1 / 12, 'nov valuation period');
+assert.strictEqual(parseAnchor('2026-10-02').ok, true);
+assert.strictEqual(parseAnchor('2026-11-01').ok, true);
 assert.strictEqual(parseAnchor('').ok, false);
 assert.strictEqual(parseAnchor('2026-03-31').ok, true);
+assert.strictEqual(reportCutoffYmd('2026-11-01'), '2026-09-30');
+assert.strictEqual(reportCutoffYmd('2026-09-30'), '2026-09-30');
+assert.strictEqual(reportCutoffYmd('2026-10-01'), '2026-09-30');
+assert.strictEqual(reportCutoffYmd('2026-01-15'), '2025-12-31');
 
 const bs = {
   cash: 20,
@@ -216,10 +222,18 @@ eq(notes.pvs[0].fcf, out.pvs[0].fcf, 'notes folded into AR');
 
 const badDate = buildDcfForecast({
   ...base,
-  assumptions: { ...base.assumptions, valuation_date: '2026-10-02' },
+  assumptions: { ...base.assumptions, valuation_date: '' },
 });
 assert.strictEqual(badDate.blocked, true);
-assert.ok(badDate.blockers.some((m) => m.includes('3 月 31 日')));
+assert.ok(badDate.blockers.some((m) => m.includes('估值日')));
+
+const anyMonth = buildDcfForecast({
+  ...base,
+  assumptions: { ...base.assumptions, valuation_date: '2026-11-01' },
+});
+assert.strictEqual(anyMonth.blocked, false, (anyMonth.blockers || []).join('；'));
+eq(anyMonth.pvs[0].periods, 1 / 12, 'nov discount periods');
+assert.strictEqual(reportCutoffYmd('2026-11-01'), '2026-09-30');
 
 const negRev = buildDcfForecast({
   ...base,
@@ -330,21 +344,19 @@ assert.strictEqual(merged.assumptions.market_net_income, 8);
 assert.strictEqual(merged.targetBs.cash, 20);
 assert.strictEqual(merged.targetBs.accounts_receivable, 11);
 
-assert.strictEqual(suggestAnchorYmd('2026-01-15'), '2025-12-31');
-assert.strictEqual(suggestAnchorYmd('2026-04-30'), '2025-12-31');
-assert.strictEqual(suggestAnchorYmd('2026-05-01'), '2026-03-31');
-assert.strictEqual(suggestAnchorYmd('2026-07-31'), '2026-03-31');
-assert.strictEqual(suggestAnchorYmd('2026-08-01'), '2026-06-30');
-assert.strictEqual(suggestAnchorYmd('2026-10-02'), '2026-06-30');
-assert.strictEqual(suggestAnchorYmd('2026-11-02'), '2026-09-30');
-assert.strictEqual(suggestAnchorYmd('2026-12-31'), '2026-09-30');
-assert.strictEqual(suggestAnchorYmd('2026-04-30 23:30:00'), '2025-12-31');
-assert.strictEqual(suggestAnchorYmd('2026-04-30T16:30:00.000Z'), '2026-03-31');
-assert.strictEqual(suggestAnchorYmd('2026-04-30T15:30:00.000Z'), '2025-12-31');
-assert.strictEqual(suggestAnchorYmd(new Date('2026-07-31T16:30:00.000Z')), '2026-06-30');
-assert.strictEqual(suggestAnchorYmd(new Date('2026-10-31T16:00:00.000Z')), '2026-09-30');
-assert.ok(/^\d{4}-(12-31|03-31|06-30|09-30)$/.test(suggestAnchorYmd('not-a-date')));
-assert.ok(/^\d{4}-(12-31|03-31|06-30|09-30)$/.test(suggestAnchorYmd(new Date(NaN))));
+assert.strictEqual(suggestAnchorYmd('2026-01-15'), '2026-01-15');
+assert.strictEqual(suggestAnchorYmd('2026-04-30'), '2026-04-30');
+assert.strictEqual(suggestAnchorYmd('2026-05-01'), '2026-05-01');
+assert.strictEqual(suggestAnchorYmd('2026-10-02'), '2026-10-02');
+assert.strictEqual(suggestAnchorYmd('2026-11-02'), '2026-11-02');
+assert.strictEqual(suggestAnchorYmd('2026-12-31'), '2026-12-31');
+assert.strictEqual(suggestAnchorYmd('2026-04-30 23:30:00'), '2026-04-30');
+assert.strictEqual(suggestAnchorYmd('2026-04-30T16:30:00.000Z'), '2026-05-01');
+assert.strictEqual(suggestAnchorYmd('2026-04-30T15:30:00.000Z'), '2026-04-30');
+assert.strictEqual(suggestAnchorYmd(new Date('2026-07-31T16:30:00.000Z')), '2026-08-01');
+assert.strictEqual(suggestAnchorYmd(new Date('2026-10-31T16:00:00.000Z')), '2026-11-01');
+assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(suggestAnchorYmd('not-a-date')));
+assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(suggestAnchorYmd(new Date(NaN))));
 assert.strictEqual(parseYmd('2026-06-30'), '2026-06-30');
 assert.strictEqual(parseYmd('2026-04-30 23:30:00'), '2026-04-30');
 assert.strictEqual(parseYmd('2026-04-30T16:30:00.000Z'), '2026-05-01');
@@ -360,7 +372,7 @@ const selected = parseTargetFinancialWorkbook(buildTargetFinancialTemplateBuffer
 assert.strictEqual(selected.assumptions.valuation_date, '2025-09-30');
 
 const template = parseTargetFinancialWorkbook(buildTargetFinancialTemplateBuffer(null, '2026-10-02'));
-assert.strictEqual(template.assumptions.valuation_date, '2026-06-30');
+assert.strictEqual(template.assumptions.valuation_date, '2026-10-02');
 assert.deepStrictEqual(template.forecast.years, ['2027', '2028', '2029', '2030']);
 assert.ok(template.sheets.includes('锚定日'));
 assert.ok(template.sheets.includes('当期利润表'));
@@ -423,7 +435,7 @@ assert.ok(noteOf('敏感参数2步长').includes('20、30、40、50、60'));
 assert.ok(noteOf('敏感参数2步长').includes('0%、2.5%、当前预测、7.5%、10%'));
 const cfLabels = XLSX.utils.sheet_to_json(templateBook.Sheets['现金流量表'], { header: 1 }).slice(1).map((row) => row[0]);
 assert.deepStrictEqual(cfLabels, ['折旧摊销', '资本性支出', '营运资本增加']);
-assert.strictEqual(XLSX.utils.sheet_to_json(templateBook.Sheets['现金流量表'], { header: 1 })[0][2], '2026-06-30');
+assert.strictEqual(XLSX.utils.sheet_to_json(templateBook.Sheets['现金流量表'], { header: 1 })[0][2], '2026-10-02');
 const currentLabels = XLSX.utils.sheet_to_json(templateBook.Sheets['当期利润表'], { header: 1 }).slice(1).map((row) => row[0]);
 assert.deepStrictEqual(
   currentLabels.slice(0, 12),
@@ -891,12 +903,15 @@ const relativeBuf = buildWorkbookBuffer({
 const relativeWb = XLSX.read(relativeBuf, { type: 'buffer' });
 const relativeWs = relativeWb.Sheets['相对估值'];
 const relativeFormulas = Object.values(relativeWs).map((c) => c && c.f).filter(Boolean);
-assert.ok(relativeFormulas.some((f) => f === 'STDEV.S(S5:S7)'), relativeFormulas.join('\n'));
-assert.ok(relativeFormulas.some((f) => f === 'MEDIAN(S5:S7)'));
-assert.ok(relativeFormulas.some((f) => f === 'STDEV.S(T5:T7)'));
+assert.ok(relativeFormulas.some((f) => f === 'IF(I5="",IF(H5="",G5,H5),I5)'), relativeFormulas.join('\n'));
 assert.ok(relativeFormulas.every((f) => !f.includes('@') && !/STDEV\.S\(IF/.test(f) && !/MEDIAN\(IF/.test(f)));
+assert.ok(!relativeFormulas.some((f) => f === 'MEDIAN(S5:S7)'));
+assert.ok(!relativeFormulas.some((f) => f === 'STDEV.S(S5:S7)'));
 assert.strictEqual(relativeWs.S5.f, 'IF(I5="",IF(H5="",G5,H5),I5)');
 assert.ok(!relativeWs.S7 || !relativeWs.S7.f);
+const relativeAoA = XLSX.utils.sheet_to_json(relativeWs, { header: 1 });
+assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('PE 取用')));
+assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('平均数')));
 const styled = XLSX.read(relativeBuf, { type: 'buffer', cellStyles: true });
 const seqCell = styled.Sheets['相对估值'].A5;
 const seqFmt = seqCell.z || seqCell.s?.numFmt;

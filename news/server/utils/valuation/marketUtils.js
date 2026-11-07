@@ -279,6 +279,70 @@ function resolveValuationDate(value, createdAt) {
   return parseYmd(value) || parseYmd(createdAt) || beijingYmd();
 }
 
+const STATEMENT_CUTOFF_MDS = ['03-31', '06-30', '09-30', '12-31'];
+
+/**
+ * 估值日：任意合法日历日即可。非法或空则 ok=false。
+ * 折现原点与标的当期实际列用这一天。
+ */
+function parseValuationDate(value) {
+  const raw = parseYmd(value);
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return {
+      ok: false,
+      ymd: raw || null,
+      year: null,
+      month: null,
+      message: '请选择估值日',
+    };
+  }
+  const year = Number(raw.slice(0, 4));
+  const month = Number(raw.slice(5, 7));
+  if (!Number.isFinite(year) || month < 1 || month > 12) {
+    return {
+      ok: false,
+      ymd: raw,
+      year: null,
+      month: null,
+      message: '请选择估值日',
+    };
+  }
+  return { ok: true, ymd: raw, year, month, message: null };
+}
+
+/**
+ * 财报/倍数截止日：≤ 估值日的最近季末（03-31 / 06-30 / 09-30 / 12-31）。
+ * 例：2026-11-01 → 2026-09-30；2026-09-30 → 2026-09-30。
+ */
+function reportCutoffYmd(valuationYmd) {
+  const ymd = parseYmd(valuationYmd);
+  if (!ymd) return null;
+  const year = Number(ymd.slice(0, 4));
+  const md = ymd.slice(5);
+  for (let i = STATEMENT_CUTOFF_MDS.length - 1; i >= 0; i -= 1) {
+    const candidate = `${year}-${STATEMENT_CUTOFF_MDS[i]}`;
+    if (candidate <= ymd) return candidate;
+  }
+  return `${year - 1}-12-31`;
+}
+
+/** 将估值日或已是季末的日期解析为财报截止（ok 时必为季末）。 */
+function parseReportCutoff(value) {
+  const cutoff = reportCutoffYmd(value) || parseYmd(value);
+  if (!cutoff) {
+    return {
+      ok: false,
+      ymd: null,
+      year: null,
+      month: null,
+      message: '请选择估值日',
+    };
+  }
+  const year = Number(cutoff.slice(0, 4));
+  const month = Number(cutoff.slice(5, 7));
+  return { ok: true, ymd: cutoff, year, month, message: null };
+}
+
 function sqlDate(value) {
   return parseYmd(value);
 }
@@ -327,5 +391,8 @@ module.exports = {
   beijingYmd,
   parseYmd,
   resolveValuationDate,
+  parseValuationDate,
+  reportCutoffYmd,
+  parseReportCutoff,
   sqlDate,
 };

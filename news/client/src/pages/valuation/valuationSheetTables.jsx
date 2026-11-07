@@ -14,10 +14,6 @@ function asArray(data) {
   return Array.isArray(data) ? data : []
 }
 
-function AdoptedLine({ children }) {
-  return <div className="valuation-adopted">{children}</div>
-}
-
 function finite(v) {
   if (v == null || v === '') return null
   const n = Number(v)
@@ -29,6 +25,12 @@ function medianOf(values) {
   if (!arr.length) return null
   const mid = Math.floor(arr.length / 2)
   return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2
+}
+
+function meanOf(values) {
+  const arr = values.filter((n) => n != null)
+  if (!arr.length) return null
+  return arr.reduce((s, x) => s + x, 0) / arr.length
 }
 
 function stdevOf(values) {
@@ -95,20 +97,14 @@ function numCol(title, dataIndex, width, render) {
 export function RelativeValuationTable({ rows, editable = false, onOverrideChange }) {
   const source = asArray(rows).filter((r) => !r._summary)
   if (!source.length) return <Empty description="暂无相对估值结果，请先采集/计算" />
-  const peBand = poolBand(source.map((r) => poolUsed(r, 'pe')).filter((n) => n != null))
-  const psBand = poolBand(source.map((r) => poolUsed(r, 'ps')).filter((n) => n != null))
-  const data = [
-    ...source,
-    {
-      _summary: true,
-      stock_code: '',
-      stock_name: '取用结果',
-      pe_used: peBand.high,
-      pe_minus_1s: peBand.low,
-      ps_used: psBand.high,
-      ps_minus_1s: psBand.low,
-    },
-  ]
+  const peVals = source.map((r) => poolUsed(r, 'pe')).filter((n) => n != null)
+  const psVals = source.map((r) => poolUsed(r, 'ps')).filter((n) => n != null)
+  const peBand = poolBand(peVals)
+  const psBand = poolBand(psVals)
+  const peAvg = meanOf(peVals)
+  const psAvg = meanOf(psVals)
+  const peMed = medianOf(peVals)
+  const psMed = medianOf(psVals)
   const rowNotes = source.flatMap((r) => {
     const bits = []
     if (r.quality_warning) bits.push(r.quality_warning)
@@ -118,7 +114,6 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
     return [`${r.stock_code || ''} ${r.stock_name || ''}：${bits.join('；')}`.trim()]
   })
   const overrideCol = (title, field) => numCol(title, field, 120, (v, r) => {
-    if (r._summary) return '—'
     const shown = shownDraftMedian(r, field)
     if (!(editable && onOverrideChange)) return fmtNum(shown, 2)
     return (
@@ -131,17 +126,18 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
       />
     )
   })
+  const fmtX = (v) => fmtNum(v, 2)
   return (
     <div>
       <ListTable
-        rowKey={(r, i) => (r._summary ? 'pool-take' : (r.stock_code || String(i)))}
+        rowKey={(r, i) => r.stock_code || String(i)}
         pagination={false}
         size="small"
         scroll={{ x: 1680 }}
         columns={[
           { title: '代码', dataIndex: 'stock_code', width: 96, fixed: 'left', className: 'valuation-nowrap-cell' },
           { title: '名称', dataIndex: 'stock_name', width: 88, ellipsis: true, fixed: 'left' },
-          { title: '入池', dataIndex: 'in_pool', width: 52, render: (v, r) => (r._summary ? '—' : (v ? '是' : '否')) },
+          { title: '入池', dataIndex: 'in_pool', width: 52, render: (v) => (v ? '是' : '否') },
           {
             title: '可比',
             dataIndex: 'comparability',
@@ -152,22 +148,28 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
           numCol('PE 锚定截面', 'pe_latest', 108, (v) => fmtNum(v, 2)),
           numCol('PE 中位', 'pe_median', 88, (v) => fmtNum(v, 2)),
           overrideCol('PE 底稿中位', 'pe_median_override'),
-          numCol('PE 取用', 'pe_used', 88, (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'pe'), 2)),
+          numCol('PE 取用', 'pe_used', 88, (v, r) => fmtNum(poolUsed(r, 'pe'), 2)),
           numCol('PE σ', 'pe_stdev', 80, (v) => fmtNum(v, 2)),
           numCol('PE −1σ', 'pe_minus_1s', 88, (v) => fmtNum(v, 2)),
           numCol('PE +1σ', 'pe_plus_1s', 88, (v) => fmtNum(v, 2)),
           numCol('PS 锚定截面', 'ps_latest', 108, (v) => fmtNum(v, 2)),
           numCol('PS 中位', 'ps_median', 88, (v) => fmtNum(v, 2)),
           overrideCol('PS 底稿中位', 'ps_median_override'),
-          numCol('PS 取用', 'ps_used', 88, (v, r) => fmtNum(r._summary ? v : poolUsed(r, 'ps'), 2)),
+          numCol('PS 取用', 'ps_used', 88, (v, r) => fmtNum(poolUsed(r, 'ps'), 2)),
           numCol('PS σ', 'ps_stdev', 80, (v) => fmtNum(v, 2)),
           numCol('PS −1σ', 'ps_minus_1s', 88, (v) => fmtNum(v, 2)),
           numCol('PS +1σ', 'ps_plus_1s', 88, (v) => fmtNum(v, 2)),
         ]}
-        data={data}
+        data={source}
+      />
+      <StatsFooter
+        lines={[
+          `PE 取用 ${fmtStat(fmtX, peBand.high)}　低端 ${fmtStat(fmtX, peBand.low)}　平均数：${fmtStat(fmtX, peAvg)}　中位数 ${fmtStat(fmtX, peMed)}`,
+          `PS 取用 ${fmtStat(fmtX, psBand.high)}　低端 ${fmtStat(fmtX, psBand.low)}　平均数：${fmtStat(fmtX, psAvg)}　中位数 ${fmtStat(fmtX, psMed)}`,
+        ]}
       />
       <Typography.Paragraph type="secondary" className="valuation-ratio-formula" style={{ marginTop: 8, marginBottom: 0 }}>
-        取用列是高端倍数，−1σ 列是低端倍数。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。底稿中位已写入东财历史中位，可以直接改；改过的数会保存。
+        取用是高端倍数（取用列中位数），低端是取用 − σ（高倍数截断后算 σ）。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。底稿中位已写入东财历史中位，可以直接改；改过的数会保存。
       </Typography.Paragraph>
       {rowNotes.length ? (
         <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }}>
@@ -196,50 +198,111 @@ function collectItemYears(companies) {
   return [...set].filter((y) => /^\d{4}/.test(y)).sort()
 }
 
-function MetricYearTable({ companies, format, empty }) {
-  const list = asArray(companies)
-  if (!list.length) return <Empty description={empty} />
-  const yearKeys = collectItemYears(list)
-  const data = []
-  list.forEach((c) => {
-    (c.items || []).forEach((item) => {
-      const row = {
-        _key: `${c.stock_code || ''}-${item.key}`,
-        stock_code: c.stock_code,
-        stock_name: c.stock_name,
-        item: item.name,
-        latest: item.latest,
-        median: item.median,
-      }
-      yearKeys.forEach((y) => {
-        row[`y_${y}`] = item.by_year?.[y]
-      })
-      data.push(row)
-    })
-  })
-  if (!data.length) return <Empty description={empty} />
+function fmtStat(format, v) {
+  return v == null ? '—' : format(v)
+}
+
+function StatsFooter({ avg, median, format, take, low, prefix, lines }) {
+  if (lines?.length) {
+    return (
+      <div className="valuation-stats-footer">
+        {lines.map((line) => (
+          <div key={line}>{line}</div>
+        ))}
+      </div>
+    )
+  }
+  const bits = []
+  if (prefix) bits.push(prefix)
+  if (take !== undefined) bits.push(`取用 ${fmtStat(format, take)}`)
+  if (low !== undefined) bits.push(`低端 ${fmtStat(format, low)}`)
+  bits.push(`平均数：${fmtStat(format, avg)}`)
+  bits.push(`中位数 ${fmtStat(format, median)}`)
   return (
-    <ListTable
-      rowKey="_key"
-      pagination={false}
-      size="small"
-      scroll={{ x: 520 + yearKeys.length * 76 }}
-      columns={[
-        { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
-        { title: '名称', dataIndex: 'stock_name', width: 80, ellipsis: true, fixed: 'left' },
-        { title: '项目', dataIndex: 'item', width: 168, fixed: 'left' },
-        { title: '最新', dataIndex: 'latest', width: 76, align: 'right', render: (v) => format(v) },
-        { title: '中位数', dataIndex: 'median', width: 76, align: 'right', render: (v) => format(v) },
-        ...yearKeys.map((y) => ({
-          title: y,
-          dataIndex: `y_${y}`,
-          width: 76,
-          align: 'right',
-          render: (v) => (v == null ? '—' : format(v)),
-        })),
-      ]}
-      data={data}
-    />
+    <div className="valuation-stats-footer">
+      {bits.join('　')}
+    </div>
+  )
+}
+
+function itemCompanyMedians(companies, key) {
+  return asArray(companies)
+    .map((c) => finite((c.items || []).find((it) => it.key === key)?.median))
+    .filter((n) => n != null)
+}
+
+const FEE_SECTIONS = [
+  { key: 'selling', name: '销售费用率', medianKey: 'selling_median' },
+  { key: 'admin', name: '管理费用率', medianKey: 'admin_median' },
+  { key: 'rd', name: '研发费用率', medianKey: 'rd_median' },
+]
+
+const WC_SECTIONS = [
+  { key: 'dso', name: 'DSO（应收周转天数）', medianKey: 'dso_median' },
+  { key: 'dpo', name: 'DPO（应付周转天数）', medianKey: 'dpo_median' },
+  { key: 'dio', name: 'DIO（存货周转天数）', medianKey: 'dio_median' },
+]
+
+function MetricOneTable({ companies, itemKey, title, adoptedMedian, format, empty }) {
+  const rows = asArray(companies)
+    .map((c) => {
+      const item = (c.items || []).find((it) => it.key === itemKey)
+      if (!item) return null
+      return { stock_code: c.stock_code, stock_name: c.stock_name, item }
+    })
+    .filter(Boolean)
+  if (!rows.length && adoptedMedian == null) return <Empty description={empty} />
+
+  const yearKeys = collectItemYears(rows.map((r) => ({ items: [r.item] })))
+  const companyMedians = rows.map((r) => finite(r.item.median)).filter((n) => n != null)
+  const avg = meanOf(companyMedians)
+  const setMedian = adoptedMedian != null ? finite(adoptedMedian) : medianOf(companyMedians)
+
+  const data = rows.map((r) => {
+    const row = {
+      _key: `${r.stock_code || ''}-${itemKey}`,
+      stock_code: r.stock_code,
+      stock_name: r.stock_name,
+      latest: r.item.latest,
+      median: r.item.median,
+    }
+    yearKeys.forEach((y) => {
+      row[`y_${y}`] = r.item.by_year?.[y]
+    })
+    return row
+  })
+
+  return (
+    <div className="valuation-metric-one">
+      {title ? <Typography.Title heading={6} className="valuation-ratio-col-title">{title}</Typography.Title> : null}
+      {!data.length ? (
+        <Empty description={empty} />
+      ) : (
+        <>
+          <ListTable
+            rowKey="_key"
+            pagination={false}
+            size="small"
+            scroll={{ x: 360 + yearKeys.length * 76 }}
+            columns={[
+              { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
+              { title: '名称', dataIndex: 'stock_name', width: 96, ellipsis: true, fixed: 'left' },
+              { title: '最新', dataIndex: 'latest', width: 76, align: 'right', render: (v) => (v == null ? '—' : format(v)) },
+              { title: '中位数', dataIndex: 'median', width: 88, align: 'right', render: (v) => (v == null ? '—' : format(v)) },
+              ...yearKeys.map((y) => ({
+                title: y,
+                dataIndex: `y_${y}`,
+                width: 76,
+                align: 'right',
+                render: (v) => (v == null ? '—' : format(v)),
+              })),
+            ]}
+            data={data}
+          />
+          <StatsFooter avg={avg} median={setMedian} format={format} />
+        </>
+      )}
+    </div>
   )
 }
 
@@ -249,11 +312,18 @@ export function FeesTable({ payload }) {
     return <Empty description="暂无三费结果" />
   }
   return (
-    <div>
-      <AdoptedLine>
-        可比集中位数：销售费用率 {fmtPct(payload?.selling_median, 2)}，管理费用率 {fmtPct(payload?.admin_median, 2)}，研发费用率 {fmtPct(payload?.rd_median, 2)}
-      </AdoptedLine>
-      <MetricYearTable companies={companies} format={(v) => fmtPct(v, 2)} empty="暂无三费分年数据，请重新计算" />
+    <div className="valuation-metric-stack">
+      {FEE_SECTIONS.map((sec) => (
+        <MetricOneTable
+          key={sec.key}
+          companies={companies}
+          itemKey={sec.key}
+          title={sec.name}
+          adoptedMedian={payload?.[sec.medianKey]}
+          format={(v) => fmtPct(v, 2)}
+          empty={`暂无${sec.name}分年数据，请重新计算`}
+        />
+      ))}
     </div>
   )
 }
@@ -288,6 +358,9 @@ export function GrossMarginTable({ payload }) {
   const companies = asArray(payload?.companies)
   if (!companies.length && payload?.set_median == null) return <Empty description="暂无毛利结果" />
   const yearKeys = collectGmYearKeys(companies)
+  const companyMedians = companies.map((c) => finite(c.median)).filter((n) => n != null)
+  const avg = meanOf(companyMedians)
+  const setMedian = payload?.set_median != null ? finite(payload.set_median) : medianOf(companyMedians)
   const data = companies.map((c, i) => {
     const byYear = companyGmByYear(c)
     const row = {
@@ -301,11 +374,6 @@ export function GrossMarginTable({ payload }) {
   })
   return (
     <div>
-      {payload?.set_median != null ? (
-        <AdoptedLine>
-          可比集毛利率中位数：{fmtPct(payload.set_median, 2)}
-        </AdoptedLine>
-      ) : null}
       <ListTable
         rowKey="_key"
         pagination={false}
@@ -326,6 +394,9 @@ export function GrossMarginTable({ payload }) {
         ]}
         data={data}
       />
+      {companies.length ? (
+        <StatsFooter avg={avg} median={setMedian} format={(v) => fmtPct(v, 2)} />
+      ) : null}
     </div>
   )
 }
@@ -337,22 +408,52 @@ export function WorkingCapitalTable({ payload }) {
   }
   return (
     <div>
-      <AdoptedLine>
-        {payload?.complete_year ? `${payload.complete_year} 年报截面中位数` : '年报截面中位数'}：DSO {fmtNum(payload?.dso_median, 1)} 天，DPO {fmtNum(payload?.dpo_median, 1)} 天，DIO {fmtNum(payload?.dio_median, 1)} 天
-      </AdoptedLine>
+      {payload?.complete_year ? (
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
+          取用中位数为 {payload.complete_year} 年报截面中位数（已入池公司）。
+        </Typography.Paragraph>
+      ) : null}
       {Array.isArray(payload?.dso_prior) && payload.dso_prior.length ? (
         <Typography.Paragraph type="secondary" style={{ marginBottom: 8, fontSize: 12 }}>
           前两年 DSO {payload.dso_prior.map((r) => `${r.year}:${fmtNum(r.median, 1)}`).join('，')}
         </Typography.Paragraph>
       ) : null}
-      <MetricYearTable companies={companies} format={(v) => fmtNum(v, 1)} empty="暂无营运分年数据，请重新计算" />
+      <div className="valuation-metric-stack">
+        {WC_SECTIONS.map((sec) => (
+          <MetricOneTable
+            key={sec.key}
+            companies={companies}
+            itemKey={sec.key}
+            title={sec.name}
+            adoptedMedian={payload?.[sec.medianKey]}
+            format={(v) => fmtNum(v, 1)}
+            empty={`暂无${sec.name}分年数据，请重新计算`}
+          />
+        ))}
+      </div>
     </div>
   )
 }
 
-export function ForecastDaysResult({ forecastDays }) {
+export function ForecastDaysResult({ forecastDays, workingCapital }) {
   const years = asArray(forecastDays?.years)
   const rows = asArray(forecastDays?.rows)
+  const wc = workingCapital || {}
+  const companies = asArray(wc.companies)
+  const fmtDay = (v) => fmtNum(v, 1)
+  const footerLines = [
+    { key: 'dso', label: 'DSO', medianKey: 'dso_median' },
+    { key: 'dpo', label: 'DPO', medianKey: 'dpo_median' },
+    { key: 'dio', label: '存货周转天数', medianKey: 'dio_median' },
+  ].map((sec) => {
+    const row = rows.find((r) => r.key === sec.key)
+    const forecastVals = asArray(row?.values).map(finite).filter((n) => n != null)
+    const take = forecastVals.length ? forecastVals[0] : finite(wc[sec.medianKey])
+    const companyMedians = itemCompanyMedians(companies, sec.key)
+    const avg = meanOf(companyMedians)
+    const med = finite(wc[sec.medianKey]) ?? medianOf(companyMedians)
+    return `${sec.label} 取用 ${fmtStat(fmtDay, take)}　平均数：${fmtStat(fmtDay, avg)}　中位数 ${fmtStat(fmtDay, med)}`
+  })
   return (
     <div className="valuation-gm-block">
       <Typography.Title heading={6} className="valuation-ratio-col-title">周转天数预测</Typography.Title>
@@ -364,30 +465,33 @@ export function ForecastDaysResult({ forecastDays }) {
       {!years.length || !rows.length ? (
         <Empty description="请先在标的利润表保留预测年" />
       ) : (
-        <ListTable
-          className="valuation-forecast-days"
-          rowKey="key"
-          pagination={false}
-          size="small"
-          showSeq={false}
-          scroll={{ x: 160 + years.length * 88 }}
-          columns={[
-            { title: '天数', dataIndex: 'name', width: 140, fixed: 'left', className: 'valuation-nowrap-cell' },
-            ...years.map((year, i) => ({
-              title: forecastYearLabel(year),
-              dataIndex: `y${i}`,
-              width: 88,
-              align: 'right',
-              className: 'valuation-nowrap-cell',
-              render: (v) => (v == null || v === '' ? '—' : fmtNum(v, 1)),
-            })),
-          ]}
-          data={rows.map((row) => {
-            const item = { key: row.key, name: row.name }
-            years.forEach((_, i) => { item[`y${i}`] = row.values?.[i] })
-            return item
-          })}
-        />
+        <>
+          <ListTable
+            className="valuation-forecast-days"
+            rowKey="key"
+            pagination={false}
+            size="small"
+            showSeq={false}
+            scroll={{ x: 160 + years.length * 88 }}
+            columns={[
+              { title: '天数', dataIndex: 'name', width: 140, fixed: 'left', className: 'valuation-nowrap-cell' },
+              ...years.map((year, i) => ({
+                title: forecastYearLabel(year),
+                dataIndex: `y${i}`,
+                width: 88,
+                align: 'right',
+                className: 'valuation-nowrap-cell',
+                render: (v) => (v == null || v === '' ? '—' : fmtNum(v, 1)),
+              })),
+            ]}
+            data={rows.map((row) => {
+              const item = { key: row.key, name: row.name }
+              years.forEach((_, i) => { item[`y${i}`] = row.values?.[i] })
+              return item
+            })}
+          />
+          <StatsFooter lines={footerLines} />
+        </>
       )}
     </div>
   )
@@ -401,7 +505,7 @@ export function RatiosTables({ fees, grossMargin, workingCapital, forecastDays }
   const wcPayload = workingCapital?.payload || workingCapital
   return (
     <div className="valuation-sheet-stack">
-      <ForecastDaysResult forecastDays={forecastDays} />
+      <ForecastDaysResult forecastDays={forecastDays} workingCapital={wcPayload} />
       <div className="valuation-gm-block">
         <Typography.Title heading={6} className="valuation-ratio-col-title">三费</Typography.Title>
         {fees?.formula ? (

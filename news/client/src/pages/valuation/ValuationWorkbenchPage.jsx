@@ -119,11 +119,27 @@ const PL_SERIES_KEYS = [
   'other_income', 'other', 'da', 'operating_profit', 'net_income', ...PL_RATIO_KEYS,
 ]
 
+/** 估值日：任意合法日历日。折现与标的当期跟这一天。 */
 function statementAnchor(ymd) {
   const formatted = formatChinaYmd(ymd)
   const s = String(formatted || ymd || '').slice(0, 10)
-  if (!/^\d{4}-(03-31|06-30|09-30|12-31)$/.test(s)) return null
-  return { ymd: s, year: Number(s.slice(0, 4)), month: Number(s.slice(5, 7)) }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const year = Number(s.slice(0, 4))
+  const month = Number(s.slice(5, 7))
+  if (!Number.isFinite(year) || month < 1 || month > 12) return null
+  return { ymd: s, year, month }
+}
+
+/** 可比财报/倍数截止：≤ 估值日的最近季末。 */
+function reportCutoffFromValuation(ymd) {
+  const a = statementAnchor(ymd)
+  if (!a) return null
+  const mds = ['03-31', '06-30', '09-30', '12-31']
+  for (let i = mds.length - 1; i >= 0; i -= 1) {
+    const candidate = `${a.year}-${mds[i]}`
+    if (candidate <= a.ymd) return candidate
+  }
+  return `${a.year - 1}-12-31`
 }
 
 function yearNum(y) {
@@ -668,7 +684,7 @@ function ratiosTouched(pl) {
   return PL_RATIO_KEYS.some((k) => (pl?.[k] || []).some((v) => v != null && v !== ''))
 }
 
-const ANCHOR_DATE_HELP = '只能选最近一期报表日：3 月 31 日、6 月 30 日、9 月 30 日或 12 月 31 日。新建时按案件创建日预填，与下载模板相同：1–4 月为上年 12 月 31 日，5–7 月为当年 3 月 31 日，8–10 月为当年 6 月 30 日，11–12 月为当年 9 月 30 日。可以改。市场法倍数、DCF 折现起点和资产负债表实际列都用这一天。'
+const ANCHOR_DATE_HELP = '估值日可选任意日历日。DCF 折现起点和标的当期利润表/资产负债表实际列跟这一天。可比公司财报与倍数自动按「≤ 估值日的最近季末」截取（例如估值日 2026-11-01 → 财报截止 2026-09-30；估值日恰为季末则截止日同日）。新建时按案件创建日预填，可以改。'
 
 const FORECAST_RATIO_ROWS = [
   { key: 'revenue_growth', name: '收入增速（较上一年）', note: '较上一年。锚定日不是 12 月 31 日时，当年年底收入在预测利润表填写，本表从下一年起填增速。12 月 31 日时，第一年 = 当年全年收入 ×（1+增速）。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
@@ -1351,7 +1367,7 @@ function splitValuationNotices(list) {
       continue
     }
     if (m.startsWith('待补：')) continue
-    if (/已跳过抓取|仅用库内数据重算|市场法按(锚定日|今天)|折现率已用 WACC|WACC 分项未填齐|行业法：/.test(m)) {
+    if (/已跳过抓取|仅用库内数据重算|市场法按(锚定日|今天|财报截止日)|折现率已用 WACC|WACC 分项未填齐|行业法：/.test(m)) {
       info.push(m)
       continue
     }
@@ -1889,7 +1905,7 @@ export default function ValuationWorkbenchPage() {
               </div>
               <div className="valuation-method-field">
                 <span className="valuation-anchor-label">
-                  估值锚定日 <span style={{ color: '#f53f3f' }}>*</span>
+                  估值日 <span style={{ color: '#f53f3f' }}>*</span>
                   <Tooltip
                     content={ANCHOR_DATE_HELP}
                     position="top"
@@ -1905,12 +1921,8 @@ export default function ValuationWorkbenchPage() {
                   style={{ width: '100%' }}
                   allowClear
                   format="YYYY-MM-DD"
-                  placeholder="请选择最近一期报表日"
+                  placeholder="请选择估值日"
                   getPopupContainer={() => document.body}
-                  disabledDate={(current) => {
-                    const ymd = formatChinaYmd(current)
-                    return !ymd || !/-(03-31|06-30|09-30|12-31)$/.test(ymd)
-                  }}
                   status={statementAnchor(assumptions.valuation_date) ? undefined : 'error'}
                   value={assumptions.valuation_date || undefined}
                   onChange={(dateString, date) => {
@@ -1982,7 +1994,7 @@ export default function ValuationWorkbenchPage() {
                       return
                     }
                     if (!statementAnchor(assumptions.valuation_date)) {
-                      Message.warning('请选择估值锚定日，须为最近一期报表日')
+                      Message.warning('请选择估值日')
                       return
                     }
                     const next = { ...method, confirmed: true }
@@ -1996,6 +2008,12 @@ export default function ValuationWorkbenchPage() {
                 <Typography.Text type={method.confirmed ? 'success' : 'warning'}>
                   {method.confirmed ? '已确认' : '尚未确认'}
                 </Typography.Text>
+              </div>
+              <div className="valuation-method-field valuation-method-cutoff">
+                <span>可比财报截止</span>
+                <div className="valuation-method-cutoff-value">
+                  {reportCutoffFromValuation(assumptions.valuation_date) || '—'}
+                </div>
               </div>
             </div>
             <div className="valuation-dcf-param-block" style={{ marginTop: 16 }}>
@@ -2071,7 +2089,7 @@ export default function ValuationWorkbenchPage() {
                       onChange={(v) => patchPayload({ assumptions: { ...assumptions, ytd_revenue: v } })}
                     />
                   ),
-                  note: '估值锚定日当期累计营业收入，须为正数。锚定日不是 12 月 31 日时，DCF 当年年底收入改在预测利润表填写，不再用这里年化',
+                  note: '估值日当期累计营业收入，须为正数。估值日不是 12 月 31 日时，DCF 当年年底收入改在预测利润表填写，不再用这里年化',
                 },
                 {
                   name: '市场法营业收入',
@@ -2101,7 +2119,7 @@ export default function ValuationWorkbenchPage() {
                 const anchor = statementAnchor(assumptions.valuation_date)
                 return anchor
                   ? `左边是 ${anchor.year - 1}-12-31 上一年年末，右边是 ${anchor.ymd} 当期累计，单位元。改当期营业收入或净利润时，累计营业收入和市场法基数为空会一并带出。`
-                  : '请先选择估值锚定日。上一年年末和当期金额都可以导入或手填。'
+                  : '请先选择估值日。上一年年末和当期金额都可以导入或手填。'
               })()}
             </Typography.Paragraph>
             <ListTable
@@ -2278,7 +2296,7 @@ export default function ValuationWorkbenchPage() {
                     ? last + 1
                     : (anchor ? (anchor.month === 12 ? anchor.year + 1 : anchor.year) : null)
                   if (nextYear == null) {
-                    Message.warning('请先选择估值锚定日')
+                    Message.warning('请先选择估值日')
                     return
                   }
                   years.push(String(nextYear))
@@ -2295,7 +2313,7 @@ export default function ValuationWorkbenchPage() {
               <Button
                 onClick={() => {
                   if (!statementAnchor(assumptions.valuation_date)) {
-                    Message.warning('请先选择估值锚定日')
+                    Message.warning('请先选择估值日')
                     return
                   }
                   const base = payloadRef.current || {}
@@ -2383,7 +2401,7 @@ export default function ValuationWorkbenchPage() {
                 { key: 'dnwc', name: '营运资本变动', note: '当年预测余额 − 上一年余额。第一年的上一年实际 =（应收账款 − 合同负债）+ 存货 −（应付账款 − 预付款项）。估值锚定日要落在这一年，资产负债表填该年实际数。', total: true },
               ]
               if (!statement) {
-                return <Typography.Paragraph type="secondary">请先选择估值锚定日，并保留预测年。</Typography.Paragraph>
+                return <Typography.Paragraph type="secondary">请先选择估值日，并保留预测年。</Typography.Paragraph>
               }
               return (
                 <ListTable
@@ -2783,7 +2801,7 @@ export default function ValuationWorkbenchPage() {
                 <Alert
                   type="info"
                   style={{ marginBottom: 12 }}
-                  content="最下面一行是取用结果：单家有底稿中位用底稿，否则用历史中位，再否则用锚定截面。取用列是这些数的中位数（高端倍数），−1σ 列是低端倍数。贴完底稿请点「开始采集/计算/保存」刷新市场法。可比强度不参与计算。"
+                  content="表底汇总：取用=取用列中位数（高端），低端=中位数−σ，并给出取用列的平均数与中位数。单家有底稿中位用底稿，否则用历史中位，再否则用锚定截面。贴完底稿请点「开始采集/计算/保存」刷新市场法。可比强度不参与计算。"
                 />
                 <RelativeValuationTable
                   rows={mergeRelativeOverrides(payload.sheets?.relative?.payload, comps)}

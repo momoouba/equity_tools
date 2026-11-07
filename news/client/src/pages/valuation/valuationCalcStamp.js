@@ -181,7 +181,7 @@ function buildCalcStamp(payload, comps) {
 }
 
 const NAMED = [
-  ['valuation_date', '估值锚定日', 'text'],
+  ['valuation_date', '估值日', 'text'],
   ['discount_rate', '折现率', 'pct'],
   ['exit_pe', '退出 P/E', 'multiple'],
   ['exit_ps', '退出 P/S', 'multiple'],

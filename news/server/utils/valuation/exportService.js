@@ -901,23 +901,22 @@ function buildRelative(sheet, title) {
   const psVals = rows.map((r) => poolUsedNumber(r, 'ps')).filter((n) => n != null);
   const peMed = medianNums(peVals);
   const psMed = medianNums(psVals);
+  const peAvg = peVals.length ? peVals.reduce((s, x) => s + x, 0) / peVals.length : null;
+  const psAvg = psVals.length ? psVals.reduce((s, x) => s + x, 0) / psVals.length : null;
   const peSd = stdevNums(peVals);
   const psSd = stdevNums(psVals);
-  const takeExcel = b.aoa.length + 1;
-  const lastData = dataStart + rows.length - 1;
-  const peMedF = peTakeCount ? `MEDIAN(S${dataStart}:S${lastData})` : null;
-  const psMedF = psTakeCount ? `MEDIAN(T${dataStart}:T${lastData})` : null;
-  const peSdF = peTakeCount >= 2 ? `STDEV.S(S${dataStart}:S${lastData})` : null;
-  const psSdF = psTakeCount >= 2 ? `STDEV.S(T${dataStart}:T${lastData})` : null;
   const peLow = peMed != null && peSd != null ? peMed - peSd : peMed;
   const psLow = psMed != null && psSd != null ? psMed - psSd : psMed;
-  b.data([
-    '', '取用结果', null, `${poolCount} 家入池`, null, null,
-    null, F(peMed, peMedF), null, F(peSd, peSdF), F(peLow, `H${takeExcel}-J${takeExcel}`), null,
-    null, F(psMed, psMedF), null, F(psSd, psSdF), F(psLow, `N${takeExcel}-P${takeExcel}`), null,
-    null, null,
-    '单家取数：底稿中位，否则历史中位，否则锚定截面。本行中位=高端倍数，−1σ=低端倍数。可比强度不参与',
-  ], kinds);
+  const fmtX = (v) => (v == null ? '—' : Number(v).toFixed(2));
+  b.note(
+    `PE 取用 ${fmtX(peMed)}　低端 ${fmtX(peLow)}　平均数：${fmtX(peAvg)}　中位数 ${fmtX(peMed)}（${poolCount} 家入池${peTakeCount ? `，PE ${peTakeCount} 个` : ''}）`,
+    headers.length,
+  );
+  b.note(
+    `PS 取用 ${fmtX(psMed)}　低端 ${fmtX(psLow)}　平均数：${fmtX(psAvg)}　中位数 ${fmtX(psMed)}${psTakeCount ? `（PS ${psTakeCount} 个）` : ''}`,
+    headers.length,
+  );
+  b.note('取用=取用列中位数（高端）；低端=中位数−σ。单家取数：底稿中位，否则历史中位，否则锚定截面。可比强度不参与', headers.length);
   return b;
 }
 
@@ -950,15 +949,53 @@ function stdevNums(arr) {
 }
 
 function buildFees(sheet, title) {
-  return buildMetricYearSheet(sheet, title, true, {
-    selling: '销售费用率',
-    admin: '管理费用率',
-    rd: '研发费用率',
-  }, [
-    ['销售费用率可比集中位数', sheet?.payload?.selling_median],
-    ['管理费用率可比集中位数', sheet?.payload?.admin_median],
-    ['研发费用率可比集中位数', sheet?.payload?.rd_median],
-  ]);
+  const p = sheet?.payload || {};
+  const companies = Array.isArray(p.companies) ? p.companies : [];
+  const years = collectItemYears(companies);
+  const b = sheetBuilder(title, sheet?.formula);
+  const headers = ['序号', '代码', '名称', '最新（%）', '中位数（%）', ...years.map((y) => `${y}（%）`)];
+  b.start(Math.max(headers.length, 5));
+  const sections = [
+    { key: 'selling', name: '销售费用率', median: p.selling_median },
+    { key: 'admin', name: '管理费用率', median: p.admin_median },
+    { key: 'rd', name: '研发费用率', median: p.rd_median },
+  ];
+  const kinds = ['seq', 'text', 'text', ...Array(2 + years.length).fill('num')];
+  let wrote = false;
+  sections.forEach((sec, si) => {
+    if (si > 0) b.gap(1, headers.length);
+    b.note(sec.name, headers.length);
+    b.header(headers);
+    let seq = 0;
+    const medians = [];
+    companies.forEach((c) => {
+      const item = (c.items || []).find((it) => it.key === sec.key);
+      if (!item) return;
+      seq += 1;
+      wrote = true;
+      const m = num(item.median);
+      if (m != null) medians.push(m);
+      const byYear = item.by_year || {};
+      b.data([
+        seq, c.stock_code, c.stock_name, asPct(item.latest), asPct(item.median),
+        ...years.map((y) => asPct(byYear[y])),
+      ], kinds);
+    });
+    if (!seq) {
+      b.data(['', `暂无${sec.name}`, null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+      return;
+    }
+    const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const setMed = sec.median != null ? num(sec.median) : medianNums(medians);
+    const avgText = avg == null ? '—' : `${(avg * 100).toFixed(2)}%`;
+    const medText = setMed == null ? '—' : `${(setMed * 100).toFixed(2)}%`;
+    b.note(`平均数：${avgText}　中位数 ${medText}`, headers.length);
+  });
+  if (!wrote && !sections.some((s) => s.median != null)) {
+    b.header(headers);
+    b.data(['', '暂无三费结果', null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+  }
+  return b;
 }
 
 function buildGross(sheet, title) {
@@ -968,57 +1005,77 @@ function buildGross(sheet, title) {
   const b = sheetBuilder(title, sheet?.formula);
   const headers = ['序号', '代码', '名称', '最新（%）', '中位数（%）', ...years.map((y) => `${y}（%）`)];
   b.start(Math.max(headers.length, 5));
-  if (p.set_median != null) {
-    b.note(`可比集毛利率中位数：${(Number(p.set_median) * 100).toFixed(2)}%`, headers.length);
-  }
   b.header(headers);
   const kinds = ['seq', 'text', 'text', ...Array(2 + years.length).fill('num')];
+  const medians = [];
   companies.forEach((c, i) => {
     const byYear = companyGmByYear(c);
+    const m = num(c.median);
+    if (m != null) medians.push(m);
     b.data([i + 1, c.stock_code, c.stock_name, asPct(c.latest), asPct(c.median), ...years.map((y) => asPct(byYear[y]))], kinds);
   });
-  if (!companies.length) b.data(['', '暂无毛利结果', null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+  if (!companies.length) {
+    b.data(['', '暂无毛利结果', null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+  } else {
+    const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const setMed = p.set_median != null ? num(p.set_median) : medianNums(medians);
+    const avgText = avg == null ? '—' : `${(avg * 100).toFixed(2)}%`;
+    const medText = setMed == null ? '—' : `${(setMed * 100).toFixed(2)}%`;
+    b.note(`平均数：${avgText}　中位数 ${medText}`, headers.length);
+  }
   return b;
 }
 
 function buildWc(sheet, title) {
-  return buildMetricYearSheet(sheet, title, false, {
-    dso: 'DSO（应收周转天数）',
-    dpo: 'DPO（应付周转天数）',
-    dio: 'DIO（存货周转天数）',
-  }, [
-    ['DSO 可比集中位数（天）', sheet?.payload?.dso_median],
-    ['DPO 可比集中位数（天）', sheet?.payload?.dpo_median],
-    ['DIO 可比集中位数（天）', sheet?.payload?.dio_median],
-  ]);
-}
-
-function buildMetricYearSheet(sheet, title, asPercent, nameByKey, setLines) {
   const p = sheet?.payload || {};
   const companies = Array.isArray(p.companies) ? p.companies : [];
   const years = collectItemYears(companies);
   const b = sheetBuilder(title, sheet?.formula);
-  const headers = ['序号', '代码', '名称', '项目', asPercent ? '最新（%）' : '最新', asPercent ? '中位数（%）' : '中位数', ...years.map((y) => (asPercent ? `${y}（%）` : String(y)))];
-  b.start(Math.max(headers.length, 6));
-  (setLines || []).forEach(([label, value]) => {
-    if (value == null) return;
-    b.note(`${label}：${asPercent ? `${(Number(value) * 100).toFixed(2)}%` : Number(value).toFixed(1)}`, headers.length);
-  });
-  b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', ...Array(2 + years.length).fill('num')];
-  let seq = 0;
-  companies.forEach((c) => {
-    (c.items || []).forEach((item) => {
+  const headers = ['序号', '代码', '名称', '最新', '中位数', ...years.map((y) => String(y))];
+  b.start(Math.max(headers.length, 5));
+  if (p.complete_year) {
+    b.note(`取用中位数为 ${p.complete_year} 年报截面中位数（已入池公司）。`, headers.length);
+  }
+  const sections = [
+    { key: 'dso', name: 'DSO（应收周转天数）', median: p.dso_median },
+    { key: 'dpo', name: 'DPO（应付周转天数）', median: p.dpo_median },
+    { key: 'dio', name: 'DIO（存货周转天数）', median: p.dio_median },
+  ];
+  const kinds = ['seq', 'text', 'text', ...Array(2 + years.length).fill('num')];
+  let wrote = false;
+  sections.forEach((sec, si) => {
+    if (si > 0) b.gap(1, headers.length);
+    b.note(sec.name, headers.length);
+    b.header(headers);
+    let seq = 0;
+    const medians = [];
+    companies.forEach((c) => {
+      const item = (c.items || []).find((it) => it.key === sec.key);
+      if (!item) return;
       seq += 1;
+      wrote = true;
+      const m = num(item.median);
+      if (m != null) medians.push(m);
       const byYear = item.by_year || {};
-      const cell = (v) => (asPercent ? asPct(v) : num(v));
       b.data([
-        seq, c.stock_code, c.stock_name, item.name || nameByKey[item.key] || item.key,
-        cell(item.latest), cell(item.median), ...years.map((y) => cell(byYear[y])),
+        seq, c.stock_code, c.stock_name, num(item.latest), num(item.median),
+        ...years.map((y) => num(byYear[y])),
       ], kinds);
     });
+    if (!seq) {
+      b.data(['', `暂无${sec.name}`, null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+      return;
+    }
+    const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const setMed = sec.median != null ? num(sec.median) : medianNums(medians);
+    const avgText = avg == null ? '—' : Number(avg).toFixed(1);
+    const medText = setMed == null ? '—' : Number(setMed).toFixed(1);
+    b.note(`平均数：${avgText}　中位数 ${medText}`, headers.length);
   });
-  if (!seq) b.data(['', '暂无结果', null, null, null, null], ['seq', 'text', 'text', 'text', 'num', 'num']);
+  if (!wrote && !sections.some((s) => s.median != null)) {
+    b.header(headers);
+    b.data(['', '暂无营运天数结果', null, null, null], ['seq', 'text', 'num', 'num', 'num']);
+  }
   return b;
 }
 

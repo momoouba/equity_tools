@@ -1,5 +1,8 @@
 const C = require('./constants');
-const { toNumber, median, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd, resolveValuationDate, parseYmd } = require('./marketUtils');
+const {
+  toNumber, median, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd,
+  resolveValuationDate, parseYmd, reportCutoffYmd, parseReportCutoff,
+} = require('./marketUtils');
 const { nwcStockFromBs, netDebtAmount } = require('./targetBsFields');
 const { buildDcfForecast, parseAnchor } = require('./dcfForecast');
 const { buildExitView } = require('./sensitivityTables');
@@ -519,10 +522,11 @@ function rememberStatement(map, stmt) {
 }
 
 function computeComparableStats(compsFinancials, opts = {}) {
-  const asOfYmd = resolveValuationDate(opts.asOfDate);
-  const anchorForWc = parseAnchor(opts.asOfDate);
-  const wcCompleteYear = anchorForWc.ok
-    ? (anchorForWc.month === 12 ? anchorForWc.year : anchorForWc.year - 1)
+  // asOfDate 应为财报截止日（≤估值日最近季末）；未传时回退解析。
+  const asOfYmd = reportCutoffYmd(opts.asOfDate) || resolveValuationDate(opts.asOfDate);
+  const cutoffForWc = parseReportCutoff(asOfYmd);
+  const wcCompleteYear = cutoffForWc.ok
+    ? (cutoffForWc.month === 12 ? cutoffForWc.year : cutoffForWc.year - 1)
     : null;
   const annualDso = new Map();
   const annualDpo = new Map();
@@ -658,8 +662,8 @@ function computeComparableStats(compsFinancials, opts = {}) {
     else if (!peUsable && (peLatest != null || peMed != null)) extraWarn.push('PE 为负或极端，不参与 POOL 倍数');
     if (!psUsable && (psLatest != null || psMed != null)) extraWarn.push('PS 为负或极端，不参与 POOL 倍数');
     if (peHist.length < 2 && psHist.length < 2) extraWarn.push('仅 1 期倍数，无法计算 σ / ±1σ');
-    if (!asofTrade) extraWarn.push(`锚定日 ${asOfYmd} 及以前无倍数截面`);
-    else if (asofTrade < asOfYmd) extraWarn.push(`锚定日无交易，已用 ${asofTrade} 截面`);
+    if (!asofTrade) extraWarn.push(`财报截止日 ${asOfYmd} 及以前无倍数截面`);
+    else if (asofTrade < asOfYmd) extraWarn.push(`财报截止日无交易，已用 ${asofTrade} 截面`);
     const peOverride = toNumber(c.pe_median_override);
     const psOverride = toNumber(c.ps_median_override);
     if (peOverride != null) extraWarn.push('PE 已用底稿中位进 POOL');
@@ -1272,11 +1276,12 @@ function runValuationEngine(input) {
       warnings: [anchor.message],
       pe: {},
       ps: {},
-      formula: '估值锚定日不是报表日，市场法与 DCF 都未计算',
+      formula: '请选择估值日，市场法与 DCF 都未计算',
     };
   } else {
+    const cutoff = reportCutoffYmd(anchor.ymd) || anchor.ymd;
     const asOf = asOfDateObj(anchor.ymd);
-    warnings.push(`市场法按锚定日 ${anchor.ymd} 及以前各股历史中位（无中位则回退该日截面）`);
+    warnings.push(`市场法按财报截止日 ${cutoff} 及以前各股历史中位（无中位则回退该日截面）；折现基准 ${anchor.ymd}`);
     const explicitRev = toNumber(assumptions.market_revenue);
     const explicitNi = toNumber(assumptions.market_net_income);
     const marketPl = (explicitRev != null || explicitNi != null)
@@ -1293,9 +1298,9 @@ function runValuationEngine(input) {
     if (explicitRev == null && explicitNi == null) {
       const marketBaseYear = yearNum(rawPl.years?.[baseYearIndex]);
       if (marketBaseYear != null && marketBaseYear === anchor.year) {
-        warnings.push(`市场法基数用锚定日所在年 ${marketBaseYear}`);
+        warnings.push(`市场法基数用估值日所在年 ${marketBaseYear}`);
       } else if (marketBaseYear != null && marketBaseYear > anchor.year) {
-        warnings.push(`利润表没有锚定年 ${anchor.year} 的营收，市场法基数暂用 ${marketBaseYear}。可在标的利润表填写市场法基数`);
+        warnings.push(`利润表没有估值年 ${anchor.year} 的营收，市场法基数暂用 ${marketBaseYear}。可在标的利润表填写市场法基数`);
       }
     }
     market = marketMethod({
