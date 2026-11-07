@@ -3475,24 +3475,42 @@ class NewsAnalysis {
     }
   }
 
+  /**
+   * 新闻舆情默认模型：仅取「新闻分析」应用下已启用配置。
+   * 优先 usage_type=content_analysis（情绪分析）；不再按创建时间盲目取最新一条（避免误用图片识别等其它用途配置）。
+   */
   async getActiveAIConfig() {
     if (!this.aiConfig) {
-      const configs = await db.query(
-        `SELECT * FROM ai_model_config 
-         WHERE application_type = 'news_analysis' 
-         AND is_active = 1 
-         AND F_DeleteMark = 0 
-         ORDER BY F_CreatorTime DESC 
+      let configs = await db.query(
+        `SELECT * FROM ai_model_config
+         WHERE application_type = 'news_analysis'
+           AND usage_type = 'content_analysis'
+           AND is_active = 1
+           AND F_DeleteMark = 0
+         ORDER BY F_LastModifyTime DESC, F_CreatorTime DESC
          LIMIT 1`
       );
-      
+      if (!configs.length) {
+        configs = await db.query(
+          `SELECT * FROM ai_model_config
+           WHERE application_type = 'news_analysis'
+             AND is_active = 1
+             AND F_DeleteMark = 0
+           ORDER BY F_LastModifyTime DESC, F_CreatorTime DESC
+           LIMIT 1`
+        );
+      }
+
       if (configs.length === 0) {
         throw new Error('未找到可用的AI模型配置');
       }
-      
+
       this.aiConfig = configs[0];
+      console.log(
+        `[getActiveAIConfig] 默认模型=${this.aiConfig.model_name} 配置=${this.aiConfig.config_name || this.aiConfig.F_Id} usage=${this.aiConfig.usage_type || '-'}`
+      );
     }
-    
+
     return this.aiConfig;
   }
 
@@ -4413,15 +4431,14 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
     // 记录最终Prompt的长度（用于调试）
     console.log(`[analyzeNewsSentimentAndType] 最终Prompt长度: ${finalPrompt.length}字符`);
 
-    // 重试机制：对于400错误（请求非法），如果max模型失败直接切换到qwen-plus，不再重试3次
+    // 重试机制：仅缩内容/重建 Prompt，始终使用提示词绑定模型（或 getActiveAIConfig 默认配置），禁止切换到其它模型名
     let maxRetries = 3;
     let retryCount = 0;
     let response = null;
     let lastError = null;
     let currentPrompt = finalPrompt;
     let currentContent = contentForAnalysis;
-    let currentModelConfig = aiModelConfig;
-    let switchedToBackupModel = false;
+    const currentModelConfig = aiModelConfig;
     
     while (retryCount <= maxRetries) {
       try {
@@ -4429,15 +4446,12 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         const requestContentTokens = this.estimateTokenCount(currentContent);
         const requestPromptTokens = this.estimateTokenCount(currentPrompt);
         const requestTotalTokens = requestContentTokens + requestPromptTokens;
-        console.log(`[analyzeNewsSentimentAndType] 第${retryCount + 1}次尝试 - 模型: ${currentModelConfig?.model_name || 'default'}, 内容长度: ${currentContent.length}字符, Token: 内容${requestContentTokens}, Prompt${requestPromptTokens}, 总计${requestTotalTokens}`);
+        console.log(`[analyzeNewsSentimentAndType] 第${retryCount + 1}次尝试 - 模型: ${currentModelConfig?.model_name || 'default(getActiveAIConfig)'}, 内容长度: ${currentContent.length}字符, Token: 内容${requestContentTokens}, Prompt${requestPromptTokens}, 总计${requestTotalTokens}`);
         
         // 如果提示词配置中有关联的AI模型配置，使用它；否则使用默认配置
         response = await this.callAIModel(currentPrompt, currentModelConfig);
         // 如果成功，跳出重试循环
         lastError = null;
-        if (switchedToBackupModel) {
-          console.log(`[analyzeNewsSentimentAndType] ✓ 使用备用模型（qwen-plus）成功完成分析`);
-        }
         break;
       } catch (error) {
         lastError = error;
@@ -4447,89 +4461,45 @@ ${isAdditionalAccount ? `**额外公众号新闻特殊处理（重要）：**
         const isRequestError = is400Error || 
                               (error.message && (error.message.includes('请求') || error.message.includes('非法') || error.message.includes('格式错误')));
         
-        // 检查当前模型是否是max模型
-        const isMaxModel = currentModelConfig?.model_name === 'qwen-max-longcontext' || 
-                          currentModelConfig?.model_name === 'qwen-max';
-        
-        // 如果是max模型且第一次失败，直接切换到qwen-plus
-        if (isRequestError && retryCount === 0 && isMaxModel && !switchedToBackupModel) {
+        if (isRequestError && retryCount < maxRetries) {
           retryCount++;
-          console.warn(`[analyzeNewsSentimentAndType] ⚠️ max模型调用失败，直接切换到备用模型 qwen-plus`);
-          try {
-            // 尝试获取qwen-plus模型配置
-            const backupModelConfig = await this.getAIModelConfigByName('qwen-plus');
-            if (backupModelConfig) {
-              currentModelConfig = backupModelConfig;
-              switchedToBackupModel = true;
-              console.log(`[analyzeNewsSentimentAndType] ✓ 已切换到备用模型: ${backupModelConfig.model_name}`);
-            } else {
-              console.warn(`[analyzeNewsSentimentAndType] ⚠️ 未找到qwen-plus模型配置，继续使用原模型`);
-            }
-          } catch (configError) {
-            console.warn(`[analyzeNewsSentimentAndType] ⚠️ 获取备用模型配置失败: ${configError.message}，继续使用原模型`);
-          }
+          console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI调用失败（400/请求类错误），第${retryCount}次重试（仍用原配置模型，不切换）`);
           
-          // 等待一小段时间后重试（避免立即重试）
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue; // 继续重试
-        } else if (isRequestError && retryCount < maxRetries) {
-          retryCount++;
-          console.warn(`[analyzeNewsSentimentAndType] ⚠️ AI调用失败（400错误），尝试第${retryCount}次重试`);
-          
-          // 如果不是max模型或已经切换到plus，使用原有的重试逻辑：清理内容 + 精简Prompt
-          if (retryCount <= 2) {
-            // 如果是400错误，可能是内容问题，进一步清理内容
-            if (is400Error) {
-              console.warn(`[analyzeNewsSentimentAndType] 检测到400错误，进一步清理内容`);
-              const furtherCleanedContent = this.cleanContentForAnalysis(currentContent);
+          // 清理内容 + 精简 Prompt 后重试同一模型
+          if (is400Error) {
+            console.warn(`[analyzeNewsSentimentAndType] 检测到400错误，进一步清理内容`);
+            const furtherCleanedContent = this.cleanContentForAnalysis(currentContent);
+            
+            // 如果清理后内容变化较大，更新内容并重新构建prompt
+            if (furtherCleanedContent.length < currentContent.length * 0.9) {
+              console.log(`[analyzeNewsSentimentAndType] 进一步清理后，内容从${currentContent.length}字符减少到${furtherCleanedContent.length}字符`);
+              currentContent = furtherCleanedContent;
               
-              // 如果清理后内容变化较大，更新内容并重新构建prompt
-              if (furtherCleanedContent.length < currentContent.length * 0.9) {
-                console.log(`[analyzeNewsSentimentAndType] 进一步清理后，内容从${currentContent.length}字符减少到${furtherCleanedContent.length}字符`);
-                currentContent = furtherCleanedContent;
-                
-                // 进一步截断到2000字符（更保守）
-                if (currentContent.length > 2000) {
-                  currentContent = this.truncateContentToLength(currentContent, 2000);
-                  console.log(`[analyzeNewsSentimentAndType] 内容截断到2000字符`);
-                }
-                
-                // 重新构建prompt
-                currentPrompt = this.replacePromptVariables(processedPrompt, {
-                  title: title || '',
-                  content: currentContent + contentNote,
-                  sourceUrl: sourceUrl || '',
-                  isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。注意区分"榜单"和"获奖"：只有明确由企业发布的榜单或标题包含"榜单"字样时才使用"榜单"标签，企业单独获奖应使用"获奖"标签。**' : ''
-                });
-                
-                // 验证并移除未替换的变量
-                const remainingVarsRetry = currentPrompt.match(/\$\{[^}]+\}/g);
-                if (remainingVarsRetry && remainingVarsRetry.length > 0) {
-                  console.warn(`[analyzeNewsSentimentAndType] ⚠️ 重试时Prompt中仍有未替换的模板变量: ${remainingVarsRetry.join(', ')}`);
-                  currentPrompt = currentPrompt.replace(/\$\{[^}]+\}/g, '');
-                }
-                
-                // 重新估算token
-                const newContentTokens = this.estimateTokenCount(currentContent);
-                const newPromptTokens = this.estimateTokenCount(currentPrompt);
-                console.log(`[analyzeNewsSentimentAndType] 重试前Token重新估算: 内容${newContentTokens}, Prompt${newPromptTokens}, 总计${newContentTokens + newPromptTokens}`);
+              // 进一步截断到2000字符（更保守）
+              if (currentContent.length > 2000) {
+                currentContent = this.truncateContentToLength(currentContent, 2000);
+                console.log(`[analyzeNewsSentimentAndType] 内容截断到2000字符`);
               }
-            }
-          } else if (retryCount === 3) {
-            // 第三次重试：切换到备用模型（qwen-plus）（仅当不是max模型时才会到这里）
-            console.warn(`[analyzeNewsSentimentAndType] 前两次重试均失败，切换到备用模型 qwen-plus`);
-            try {
-              // 尝试获取qwen-plus模型配置
-              const backupModelConfig = await this.getAIModelConfigByName('qwen-plus');
-              if (backupModelConfig) {
-                currentModelConfig = backupModelConfig;
-                switchedToBackupModel = true;
-                console.log(`[analyzeNewsSentimentAndType] ✓ 已切换到备用模型: ${backupModelConfig.model_name}`);
-              } else {
-                console.warn(`[analyzeNewsSentimentAndType] ⚠️ 未找到qwen-plus模型配置，继续使用原模型`);
+              
+              // 重新构建prompt
+              currentPrompt = this.replacePromptVariables(processedPrompt, {
+                title: title || '',
+                content: currentContent + contentNote,
+                sourceUrl: sourceUrl || '',
+                isAdditionalAccount: isAdditionalAccount ? '\n**注意：此新闻来自额外公众号，请特别关注榜单、获奖、荣誉等相关信息。注意区分"榜单"和"获奖"：只有明确由企业发布的榜单或标题包含"榜单"字样时才使用"榜单"标签，企业单独获奖应使用"获奖"标签。**' : ''
+              });
+              
+              // 验证并移除未替换的变量
+              const remainingVarsRetry = currentPrompt.match(/\$\{[^}]+\}/g);
+              if (remainingVarsRetry && remainingVarsRetry.length > 0) {
+                console.warn(`[analyzeNewsSentimentAndType] ⚠️ 重试时Prompt中仍有未替换的模板变量: ${remainingVarsRetry.join(', ')}`);
+                currentPrompt = currentPrompt.replace(/\$\{[^}]+\}/g, '');
               }
-            } catch (configError) {
-              console.warn(`[analyzeNewsSentimentAndType] ⚠️ 获取备用模型配置失败: ${configError.message}，继续使用原模型`);
+              
+              // 重新估算token
+              const newContentTokens = this.estimateTokenCount(currentContent);
+              const newPromptTokens = this.estimateTokenCount(currentPrompt);
+              console.log(`[analyzeNewsSentimentAndType] 重试前Token重新估算: 内容${newContentTokens}, Prompt${newPromptTokens}, 总计${newContentTokens + newPromptTokens}`);
             }
           }
           
