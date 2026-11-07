@@ -1,6 +1,6 @@
 const C = require('./constants');
 const {
-  toNumber, median, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd,
+  toNumber, median, mean, stdev, minMax, yuanToYi, isHistPe, isSanePs, beijingYmd,
   resolveValuationDate, parseYmd, reportCutoffYmd, parseReportCutoff,
 } = require('./marketUtils');
 const { nwcStockFromBs, netDebtAmount } = require('./targetBsFields');
@@ -524,6 +524,7 @@ function rememberStatement(map, stmt) {
 function computeComparableStats(compsFinancials, opts = {}) {
   // asOfDate 应为财报截止日（≤估值日最近季末）；未传时回退解析。
   const asOfYmd = reportCutoffYmd(opts.asOfDate) || resolveValuationDate(opts.asOfDate);
+  const valuationYmd = parseYmd(opts.valuationDate) || asOfYmd;
   const cutoffForWc = parseReportCutoff(asOfYmd);
   const wcCompleteYear = cutoffForWc.ok
     ? (cutoffForWc.month === 12 ? cutoffForWc.year : cutoffForWc.year - 1)
@@ -653,8 +654,16 @@ function computeComparableStats(compsFinancials, opts = {}) {
     const asofTrade = tradeDateYmd(latestRow?.trade_date) || null;
     const peMed = median(peHist);
     const psMed = median(psHist);
+    const peMean = mean(peHist);
+    const psMean = mean(psHist);
     const peSd = stdev(peHist);
     const psSd = stdev(psHist);
+    // 估值基准日截面 TTM（选区参考）；无更新截面时回退财报截止日截面。
+    const valSliced = multiplesOnOrBefore(c.multiples, valuationYmd);
+    const valRow = valSliced.length ? valSliced[valSliced.length - 1] : null;
+    const peTtm = toNumber(valRow?.pe_ttm) ?? toNumber(peLatest);
+    const psTtm = toNumber(valRow?.ps_ttm) ?? toNumber(psLatest);
+    const valuationTrade = tradeDateYmd(valRow?.trade_date) || asofTrade;
     const peUsable = isHistPe(peMed) || isHistPe(peLatest);
     const psUsable = isSanePs(psMed) || isSanePs(psLatest);
     const extraWarn = [];
@@ -673,6 +682,12 @@ function computeComparableStats(compsFinancials, opts = {}) {
       stock_name: c.stock_name,
       asof_date: parseYmd(asOfYmd) || beijingYmd(),
       asof_trade_date: parseYmd(asofTrade),
+      valuation_date: parseYmd(valuationYmd) || null,
+      valuation_trade_date: parseYmd(valuationTrade),
+      pe_ttm: peTtm,
+      ps_ttm: psTtm,
+      pe_mean: peMean,
+      ps_mean: psMean,
       pe_latest: peLatest,
       pe_median: peMed,
       pe_median_override: peOverride,

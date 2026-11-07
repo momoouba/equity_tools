@@ -345,22 +345,26 @@ async function saveRelative(caseId, versionId, rows, pool) {
     await d.execute(
       `INSERT INTO valuation_relative_row (
          F_Id, case_id, version_id, stock_code, stock_name, in_pool, comparability,
+         pe_ttm, ps_ttm, pe_mean, ps_mean,
          pe_latest, pe_median, pe_median_override, pe_stdev, pe_minus_1s, pe_plus_1s, pe_usable,
          ps_latest, ps_median, ps_median_override, ps_stdev, ps_minus_1s, ps_plus_1s, ps_usable,
-         asof_date, asof_trade_date, quality_warning, F_CreatorTime
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+         asof_date, asof_trade_date, valuation_date, valuation_trade_date, quality_warning, F_CreatorTime
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
       [
         id, caseId, versionId,
         strOrNull(r.stock_code, 32),
         strOrNull(r.stock_name, 200),
         r.in_pool ? 1 : 0,
         strOrNull(r.comparability, 16),
+        numOrNull(r.pe_ttm), numOrNull(r.ps_ttm), numOrNull(r.pe_mean), numOrNull(r.ps_mean),
         numOrNull(r.pe_latest), numOrNull(r.pe_median), numOrNull(r.pe_median_override), numOrNull(r.pe_stdev),
         numOrNull(r.pe_minus_1s), numOrNull(r.pe_plus_1s), r.pe_usable === false ? 0 : 1,
         numOrNull(r.ps_latest), numOrNull(r.ps_median), numOrNull(r.ps_median_override), numOrNull(r.ps_stdev),
         numOrNull(r.ps_minus_1s), numOrNull(r.ps_plus_1s), r.ps_usable === false ? 0 : 1,
         sqlDate(r.asof_date),
         sqlDate(r.asof_trade_date),
+        sqlDate(r.valuation_date),
+        sqlDate(r.valuation_trade_date),
         strOrNull(r.quality_warning, 500),
       ]
     );
@@ -378,6 +382,10 @@ async function loadRelative(caseId, versionId, pool) {
     stock_name: r.stock_name,
     in_pool: Number(r.in_pool) === 1,
     comparability: r.comparability || null,
+    pe_ttm: numOrNull(r.pe_ttm),
+    ps_ttm: numOrNull(r.ps_ttm),
+    pe_mean: numOrNull(r.pe_mean),
+    ps_mean: numOrNull(r.ps_mean),
     pe_latest: numOrNull(r.pe_latest),
     pe_median: numOrNull(r.pe_median),
     pe_median_override: numOrNull(r.pe_median_override),
@@ -394,6 +402,8 @@ async function loadRelative(caseId, versionId, pool) {
     ps_usable: Number(r.ps_usable) === 1,
     asof_date: sqlDate(r.asof_date),
     asof_trade_date: sqlDate(r.asof_trade_date),
+    valuation_date: sqlDate(r.valuation_date),
+    valuation_trade_date: sqlDate(r.valuation_trade_date),
     quality_warning: r.quality_warning || null,
   }));
 }

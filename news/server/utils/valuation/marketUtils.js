@@ -84,6 +84,12 @@ function median(values) {
   return arr.length % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
 }
 
+function mean(values) {
+  const arr = (values || []).map(toNumber).filter((n) => n != null && Number.isFinite(n));
+  if (!arr.length) return null;
+  return arr.reduce((s, x) => s + x, 0) / arr.length;
+}
+
 function stdev(values) {
   const arr = (values || []).map(toNumber).filter((n) => n != null && Number.isFinite(n));
   if (arr.length < 2) return null;
@@ -375,6 +381,7 @@ module.exports = {
   reportTypeFromPeriod,
   toNumber,
   median,
+  mean,
   stdev,
   minMax,
   yuanToYi,

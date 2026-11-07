@@ -142,7 +142,7 @@ async function runJob(jobId) {
           ps_median_override: c.ps_median_override,
         });
       }
-      compStats = computeComparableStats(bundles, { asOfDate: reportCutoff });
+      compStats = computeComparableStats(bundles, { asOfDate: reportCutoff, valuationDate });
     }
     const assumptions = seedDcfLiquidityDiscount({
       ...(defaultAssumptions()),

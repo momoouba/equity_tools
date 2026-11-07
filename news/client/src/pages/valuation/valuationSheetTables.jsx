@@ -133,7 +133,7 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
         rowKey={(r, i) => r.stock_code || String(i)}
         pagination={false}
         size="small"
-        scroll={{ x: 1680 }}
+        scroll={{ x: 2100 }}
         columns={[
           { title: '代码', dataIndex: 'stock_code', width: 96, fixed: 'left', className: 'valuation-nowrap-cell' },
           { title: '名称', dataIndex: 'stock_name', width: 88, ellipsis: true, fixed: 'left' },
@@ -145,6 +145,10 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
             render: (v) => ({ strong: '强', medium: '中', weak: '弱' }[v] || '-'),
           },
           { title: '截面日', dataIndex: 'asof_trade_date', width: 108, className: 'valuation-nowrap-cell', render: (v, r) => v || r.asof_date || '-' },
+          numCol('PE TTM', 'pe_ttm', 88, (v, r) => fmtNum(v ?? r.pe_latest, 2)),
+          numCol('PS TTM', 'ps_ttm', 88, (v, r) => fmtNum(v ?? r.ps_latest, 2)),
+          numCol('PE 近年均', 'pe_mean', 88, (v) => fmtNum(v, 2)),
+          numCol('PS 近年均', 'ps_mean', 88, (v) => fmtNum(v, 2)),
           numCol('PE 锚定截面', 'pe_latest', 108, (v) => fmtNum(v, 2)),
           numCol('PE 中位', 'pe_median', 88, (v) => fmtNum(v, 2)),
           overrideCol('PE 底稿中位', 'pe_median_override'),
@@ -169,7 +173,7 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
         ]}
       />
       <Typography.Paragraph type="secondary" className="valuation-ratio-formula" style={{ marginTop: 8, marginBottom: 0 }}>
-        取用是高端倍数（取用列中位数），低端是取用 − σ（高倍数截断后算 σ）。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。底稿中位已写入东财历史中位，可以直接改；改过的数会保存。
+        PE/PS TTM 是估值基准日截面（选区参考）；近年均是财报截止日及以前历史点的算术平均。取用是高端倍数（取用列中位数），低端是取用 − σ。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。
       </Typography.Paragraph>
       {rowNotes.length ? (
         <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }}>
@@ -243,6 +247,23 @@ const WC_SECTIONS = [
   { key: 'dio', name: 'DIO（存货周转天数）', medianKey: 'dio_median' },
 ]
 
+function yearMeanRow(rows, yearKeys, itemKey) {
+  const latestAvg = meanOf(rows.map((r) => finite(r.item.latest)).filter((n) => n != null))
+  const medianAvg = meanOf(rows.map((r) => finite(r.item.median)).filter((n) => n != null))
+  const row = {
+    _summary: true,
+    _key: `${itemKey}-year-mean`,
+    stock_code: '',
+    stock_name: '平均数',
+    latest: latestAvg,
+    median: medianAvg,
+  }
+  yearKeys.forEach((y) => {
+    row[`y_${y}`] = meanOf(rows.map((r) => finite(r.item.by_year?.[y])).filter((n) => n != null))
+  })
+  return row
+}
+
 function MetricOneTable({ companies, itemKey, title, adoptedMedian, format, empty }) {
   const rows = asArray(companies)
     .map((c) => {
@@ -271,6 +292,7 @@ function MetricOneTable({ companies, itemKey, title, adoptedMedian, format, empt
     })
     return row
   })
+  if (rows.length) data.push(yearMeanRow(rows, yearKeys, itemKey))
 
   return (
     <div className="valuation-metric-one">
@@ -283,6 +305,7 @@ function MetricOneTable({ companies, itemKey, title, adoptedMedian, format, empt
             rowKey="_key"
             pagination={false}
             size="small"
+            mergeSummaryLead
             scroll={{ x: 360 + yearKeys.length * 76 }}
             columns={[
               { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
@@ -298,6 +321,7 @@ function MetricOneTable({ companies, itemKey, title, adoptedMedian, format, empt
               })),
             ]}
             data={data}
+            rowClassName={(r) => (r._summary ? 'valuation-year-mean-row' : undefined)}
           />
           <StatsFooter avg={avg} median={setMedian} format={format} />
         </>
@@ -372,18 +396,33 @@ export function GrossMarginTable({ payload }) {
     })
     return row
   })
+  if (companies.length) {
+    const meanRow = {
+      _summary: true,
+      _key: 'gm-year-mean',
+      stock_code: '',
+      stock_name: '平均数',
+      latest: meanOf(companies.map((c) => finite(c.latest)).filter((n) => n != null)),
+      median: avg,
+    }
+    yearKeys.forEach((y) => {
+      meanRow[`y_${y}`] = meanOf(companies.map((c) => finite(companyGmByYear(c)[y])).filter((n) => n != null))
+    })
+    data.push(meanRow)
+  }
   return (
     <div>
       <ListTable
         rowKey="_key"
         pagination={false}
         size="small"
+        mergeSummaryLead
         scroll={{ x: 384 + yearKeys.length * 76 }}
         columns={[
           { title: '代码', dataIndex: 'stock_code', width: 72, fixed: 'left' },
           { title: '名称', dataIndex: 'stock_name', width: 80, ellipsis: true, fixed: 'left' },
-          { title: '最新', dataIndex: 'latest', width: 76, align: 'right', render: (v) => fmtPct(v, 2) },
-          { title: '中位数', dataIndex: 'median', width: 76, align: 'right', render: (v) => fmtPct(v, 2) },
+          { title: '最新', dataIndex: 'latest', width: 76, align: 'right', render: (v) => (v == null ? '—' : fmtPct(v, 2)) },
+          { title: '中位数', dataIndex: 'median', width: 76, align: 'right', render: (v) => (v == null ? '—' : fmtPct(v, 2)) },
           ...yearKeys.map((y) => ({
             title: y,
             dataIndex: `y_${y}`,
@@ -393,6 +432,7 @@ export function GrossMarginTable({ payload }) {
           })),
         ]}
         data={data}
+        rowClassName={(r) => (r._summary ? 'valuation-year-mean-row' : undefined)}
       />
       {companies.length ? (
         <StatsFooter avg={avg} median={setMedian} format={(v) => fmtPct(v, 2)} />

@@ -856,13 +856,14 @@ function buildRelative(sheet, title) {
   const b = sheetBuilder(title, sheet?.formula || '单家取数：底稿中位，否则历史中位，否则锚定截面。低端=取用值中位数−σ，高端=中位数。可比强度只作标记');
   const headers = [
     '序号', '代码', '名称', '入池', '可比强度', '截面日',
+    'PE TTM', 'PS TTM', 'PE 近年均', 'PS 近年均',
     'PE 锚定截面', 'PE 中位', 'PE 底稿中位', 'PE σ', 'PE −1σ', 'PE +1σ',
     'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ',
     'PE 取用', 'PS 取用', '提示',
   ];
   b.start(headers.length);
   b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(14).fill('num'), 'text'];
+  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(18).fill('num'), 'text'];
   const dataStart = b.aoa.length + 1;
   const degreeLabel = { strong: '强', medium: '中', weak: '弱' };
   let poolCount = 0;
@@ -881,19 +882,20 @@ function buildRelative(sheet, title) {
       i + 1, r.stock_code, r.stock_name, r.in_pool ? '是' : '否',
       degreeLabel[r.comparability] || '中',
       r.asof_trade_date || r.asof_date || null,
+      num(r.pe_ttm ?? r.pe_latest), num(r.ps_ttm ?? r.ps_latest), num(r.pe_mean), num(r.ps_mean),
       num(r.pe_latest), num(r.pe_median), num(r.pe_median_override), num(r.pe_stdev),
-      F(num(r.pe_minus_1s), `H${excel}-J${excel}`),
-      F(num(r.pe_plus_1s), `H${excel}+J${excel}`),
+      F(num(r.pe_minus_1s), `L${excel}-N${excel}`),
+      F(num(r.pe_plus_1s), `L${excel}+N${excel}`),
       num(r.ps_latest), num(r.ps_median), num(r.ps_median_override), num(r.ps_stdev),
-      F(num(r.ps_minus_1s), `N${excel}-P${excel}`),
-      F(num(r.ps_plus_1s), `N${excel}+P${excel}`),
-      peUsed != null ? F(peUsed, `IF(I${excel}="",IF(H${excel}="",G${excel},H${excel}),I${excel})`) : null,
-      psUsed != null ? F(psUsed, `IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`) : null,
+      F(num(r.ps_minus_1s), `R${excel}-T${excel}`),
+      F(num(r.ps_plus_1s), `R${excel}+T${excel}`),
+      peUsed != null ? F(peUsed, `IF(M${excel}="",IF(L${excel}="",K${excel},L${excel}),M${excel})`) : null,
+      psUsed != null ? F(psUsed, `IF(S${excel}="",IF(R${excel}="",Q${excel},R${excel}),S${excel})`) : null,
       hint,
     ], kinds);
   });
   if (!rows.length) {
-    b.data(['', '暂无相对估值结果', ...Array(19).fill(null)], kinds);
+    b.data(['', '暂无相对估值结果', ...Array(23).fill(null)], kinds);
     return b;
   }
   b.gap(1, headers.length);
@@ -968,6 +970,8 @@ function buildFees(sheet, title) {
     b.header(headers);
     let seq = 0;
     const medians = [];
+    const latests = [];
+    const yearVals = years.map(() => []);
     companies.forEach((c) => {
       const item = (c.items || []).find((it) => it.key === sec.key);
       if (!item) return;
@@ -975,7 +979,13 @@ function buildFees(sheet, title) {
       wrote = true;
       const m = num(item.median);
       if (m != null) medians.push(m);
+      const lat = num(item.latest);
+      if (lat != null) latests.push(lat);
       const byYear = item.by_year || {};
+      years.forEach((y, yi) => {
+        const v = num(byYear[y]);
+        if (v != null) yearVals[yi].push(v);
+      });
       b.data([
         seq, c.stock_code, c.stock_name, asPct(item.latest), asPct(item.median),
         ...years.map((y) => asPct(byYear[y])),
@@ -986,7 +996,12 @@ function buildFees(sheet, title) {
       return;
     }
     const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const latestAvg = latests.length ? latests.reduce((s, x) => s + x, 0) / latests.length : null;
     const setMed = sec.median != null ? num(sec.median) : medianNums(medians);
+    b.data([
+      '', '', '平均数', asPct(latestAvg), asPct(avg),
+      ...yearVals.map((arr) => asPct(arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null)),
+    ], kinds);
     const avgText = avg == null ? '—' : `${(avg * 100).toFixed(2)}%`;
     const medText = setMed == null ? '—' : `${(setMed * 100).toFixed(2)}%`;
     b.note(`平均数：${avgText}　中位数 ${medText}`, headers.length);
@@ -1008,17 +1023,30 @@ function buildGross(sheet, title) {
   b.header(headers);
   const kinds = ['seq', 'text', 'text', ...Array(2 + years.length).fill('num')];
   const medians = [];
+  const latests = [];
+  const yearVals = years.map(() => []);
   companies.forEach((c, i) => {
     const byYear = companyGmByYear(c);
     const m = num(c.median);
     if (m != null) medians.push(m);
+    const lat = num(c.latest);
+    if (lat != null) latests.push(lat);
+    years.forEach((y, yi) => {
+      const v = num(byYear[y]);
+      if (v != null) yearVals[yi].push(v);
+    });
     b.data([i + 1, c.stock_code, c.stock_name, asPct(c.latest), asPct(c.median), ...years.map((y) => asPct(byYear[y]))], kinds);
   });
   if (!companies.length) {
     b.data(['', '暂无毛利结果', null, null, null], ['seq', 'text', 'num', 'num', 'num']);
   } else {
     const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const latestAvg = latests.length ? latests.reduce((s, x) => s + x, 0) / latests.length : null;
     const setMed = p.set_median != null ? num(p.set_median) : medianNums(medians);
+    b.data([
+      '', '', '平均数', asPct(latestAvg), asPct(avg),
+      ...yearVals.map((arr) => asPct(arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null)),
+    ], kinds);
     const avgText = avg == null ? '—' : `${(avg * 100).toFixed(2)}%`;
     const medText = setMed == null ? '—' : `${(setMed * 100).toFixed(2)}%`;
     b.note(`平均数：${avgText}　中位数 ${medText}`, headers.length);
@@ -1049,6 +1077,8 @@ function buildWc(sheet, title) {
     b.header(headers);
     let seq = 0;
     const medians = [];
+    const latests = [];
+    const yearVals = years.map(() => []);
     companies.forEach((c) => {
       const item = (c.items || []).find((it) => it.key === sec.key);
       if (!item) return;
@@ -1056,7 +1086,13 @@ function buildWc(sheet, title) {
       wrote = true;
       const m = num(item.median);
       if (m != null) medians.push(m);
+      const lat = num(item.latest);
+      if (lat != null) latests.push(lat);
       const byYear = item.by_year || {};
+      years.forEach((y, yi) => {
+        const v = num(byYear[y]);
+        if (v != null) yearVals[yi].push(v);
+      });
       b.data([
         seq, c.stock_code, c.stock_name, num(item.latest), num(item.median),
         ...years.map((y) => num(byYear[y])),
@@ -1067,6 +1103,11 @@ function buildWc(sheet, title) {
       return;
     }
     const avg = medians.length ? medians.reduce((s, x) => s + x, 0) / medians.length : null;
+    const latestAvg = latests.length ? latests.reduce((s, x) => s + x, 0) / latests.length : null;
+    b.data([
+      '', '', '平均数', latestAvg, avg,
+      ...yearVals.map((arr) => (arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null)),
+    ], kinds);
     const setMed = sec.median != null ? num(sec.median) : medianNums(medians);
     const avgText = avg == null ? '—' : Number(avg).toFixed(1);
     const medText = setMed == null ? '—' : Number(setMed).toFixed(1);

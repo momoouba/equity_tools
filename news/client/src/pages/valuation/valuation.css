@@ -550,6 +550,23 @@
   margin-top: 2px;
 }
 
+.valuation-list-table .arco-table-tr.valuation-year-mean-row .arco-table-td {
+  background-color: #f7f8fa !important;
+  font-weight: 600;
+  color: #1d2129;
+}
+
+.valuation-list-table .arco-table-tr.valuation-year-mean-row .valuation-seq-col {
+  text-align: left !important;
+}
+
+.valuation-year-mean-label {
+  display: inline-block;
+  text-align: left;
+  font-weight: 700;
+  padding-left: 2em;
+}
+
 .valuation-adopted {
   display: inline-block;
   margin: 0 0 8px;

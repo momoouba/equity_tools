@@ -473,6 +473,24 @@ async function ensureValuationSchema(dbPool) {
     if (!relCols.has('comparability')) {
       await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN comparability VARCHAR(16) NULL COMMENT 'strong/medium/weak，仅标记，不参与计算'`);
     }
+    if (!relCols.has('pe_ttm')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN pe_ttm DECIMAL(20,6) NULL COMMENT '估值基准日 PE TTM'`);
+    }
+    if (!relCols.has('ps_ttm')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN ps_ttm DECIMAL(20,6) NULL COMMENT '估值基准日 PS TTM'`);
+    }
+    if (!relCols.has('pe_mean')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN pe_mean DECIMAL(20,6) NULL COMMENT '财报截止日及以前 PE 近年均'`);
+    }
+    if (!relCols.has('ps_mean')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN ps_mean DECIMAL(20,6) NULL COMMENT '财报截止日及以前 PS 近年均'`);
+    }
+    if (!relCols.has('valuation_date')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN valuation_date DATE NULL COMMENT '估值基准日'`);
+    }
+    if (!relCols.has('valuation_trade_date')) {
+      await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN valuation_trade_date DATE NULL COMMENT '估值基准日实际截面交易日'`);
+    }
   }
   try {
     await migrateListedMetricsJson(dbPool);
@@ -760,6 +778,10 @@ async function createStructuredResultTables(dbPool) {
       stock_name VARCHAR(200) NULL,
       in_pool TINYINT(1) NOT NULL DEFAULT 1,
       comparability VARCHAR(16) NULL COMMENT 'strong/medium/weak，仅标记，不参与计算',
+      pe_ttm DECIMAL(20,6) NULL COMMENT '估值基准日 PE TTM',
+      ps_ttm DECIMAL(20,6) NULL COMMENT '估值基准日 PS TTM',
+      pe_mean DECIMAL(20,6) NULL COMMENT '财报截止日及以前 PE 近年均',
+      ps_mean DECIMAL(20,6) NULL COMMENT '财报截止日及以前 PS 近年均',
       pe_latest DECIMAL(20,6) NULL,
       pe_median DECIMAL(20,6) NULL,
       pe_median_override DECIMAL(20,6) NULL COMMENT '底稿 PE 中位',
@@ -776,6 +798,8 @@ async function createStructuredResultTables(dbPool) {
       ps_usable TINYINT(1) NULL,
       asof_date DATE NULL COMMENT '市场法锚定日',
       asof_trade_date DATE NULL COMMENT '该公司实际截面交易日',
+      valuation_date DATE NULL COMMENT '估值基准日',
+      valuation_trade_date DATE NULL COMMENT '估值基准日实际截面交易日',
       quality_warning VARCHAR(500) NULL,
       F_CreatorTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
       KEY idx_vrr (case_id, version_id)
