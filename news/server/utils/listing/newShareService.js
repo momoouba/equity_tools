@@ -165,7 +165,7 @@ async function upsertNewShareRow(row) {
   const nextExpectedRaiseAmount = calcExpectedRaiseAmountYi(nextIssuePrice, nextIssueTotalWan);
 
   const rowPubSlice = String(row.public_date || '').trim().slice(0, 10);
-  const nextPublicDate = isYmd(rowPubSlice) ? rowPubSlice : toYmdDb(old.public_date) || null;
+  let nextPublicDate = isYmd(rowPubSlice) ? rowPubSlice : toYmdDb(old.public_date) || null;
 
   const nextWinRate = pickFiniteNumberOrNull(row.win_rate, old.win_rate);
 
@@ -175,6 +175,16 @@ async function upsertNewShareRow(row) {
       ? (old.first_day_chg_pct != null && old.first_day_chg_pct !== '' ? Number(old.first_day_chg_pct) : null)
       : Number(row.first_day_chg_pct);
   const nextFirstDayMarketCap = pickPositiveOrNullFromRow(row.first_day_market_cap, old.first_day_market_cap);
+
+  // 已有首日表现时：禁止日历源把上市日回退到更早的原定日（延期上市后已用实际首日回写）
+  const oldPub = toYmdDb(old.public_date);
+  const oldHasFirstDayMetrics =
+    Number(old.first_day_close) > 0 &&
+    old.first_day_chg_pct != null &&
+    String(old.first_day_chg_pct).trim() !== '';
+  if (oldHasFirstDayMetrics && isYmd(oldPub) && isYmd(nextPublicDate || '') && nextPublicDate < oldPub) {
+    nextPublicDate = oldPub;
+  }
 
   const changed =
     String(old.stock_name || '') !== nextStockName ||
@@ -232,6 +242,17 @@ function maxYmd(a, b) {
   if (!isYmd(aa)) return bb;
   if (!isYmd(bb)) return aa;
   return aa >= bb ? aa : bb;
+}
+
+/**
+ * 延期上市：K 线首日交易日晚于原定 public_date 时，用实际首日回写上市日。
+ */
+function resolvePublicDateFromFirstTrade(storedPublicDate, tradeDate) {
+  const stored = String(storedPublicDate || '').slice(0, 10);
+  const traded = String(tradeDate || '').slice(0, 10);
+  if (!isYmd(traded)) return isYmd(stored) ? stored : null;
+  if (!isYmd(stored)) return traded;
+  return traded > stored ? traded : stored;
 }
 
 function calcFirstDayMarketCap(close, totalIssuedShares) {
@@ -735,9 +756,11 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
       chgPct = computeFirstDayChgPctFromPrices(close, issuePx);
     }
     const marketCap = calcFirstDayMarketCap(close, totalIssuedShares);
+    const resolvedPublicDate = resolvePublicDateFromFirstTrade(listDate, first.trade_date);
 
     const result = await upsertNewShareRow({
       ...row,
+      public_date: resolvedPublicDate,
       issue_price:
         row.issue_price != null && Number.isFinite(Number(row.issue_price)) && Number(row.issue_price) > 0
           ? Number(row.issue_price)
@@ -754,7 +777,7 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
     const refreshedItem = {
       stockCode: row.stock_code,
       exchange: row.exchange || '',
-      listDate,
+      listDate: resolvedPublicDate || listDate,
       tradeDate: first.trade_date || null,
       close: close ?? null,
       chgPct: chgPct ?? null,
@@ -763,6 +786,11 @@ async function refreshNewShareDailyMetrics(rows, logTag, minSyncDate, progressRe
       source: fetched.source || null,
       state: result,
     };
+    if (resolvedPublicDate && resolvedPublicDate !== listDate) {
+      console.log(
+        `${logTag} 延期上市回写上市日 stock=${row.stock_code} planned=${listDate} actual=${resolvedPublicDate}`
+      );
+    }
     console.log(
       `${logTag} 首日指标抓取成功 stock=${row.stock_code} exchange=${row.exchange || ''} listDate=${listDate} tradeDate=${
         first.trade_date || '-'
@@ -1447,8 +1475,10 @@ async function refreshFirstDayMetricsForRows(rows, options = {}) {
           : fetched.totalShares != null && Number.isFinite(Number(fetched.totalShares))
             ? Number(fetched.totalShares)
             : null;
+      const resolvedPublicDate = resolvePublicDateFromFirstTrade(listDate, first.trade_date);
       const state = await upsertNewShareRow({
         ...row,
+        public_date: resolvedPublicDate,
         issue_price:
           row.issue_price != null && Number.isFinite(Number(row.issue_price)) && Number(row.issue_price) > 0
             ? Number(row.issue_price)
@@ -1460,6 +1490,11 @@ async function refreshFirstDayMetricsForRows(rows, options = {}) {
       });
       if (state === 'updated' || state === 'inserted') updated += 1;
       else skipped += 1;
+      if (resolvedPublicDate && resolvedPublicDate !== listDate) {
+        console.log(
+          `${logTag} 延期上市回写上市日 stock=${row.stock_code} planned=${listDate} actual=${resolvedPublicDate}`
+        );
+      }
       console.log(
         `${logTag} 成功 stock=${row.stock_code} close=${close ?? 'null'} chgPct=${chgPct ?? 'null'} source=${fetched.source || '-'} state=${state}`
       );

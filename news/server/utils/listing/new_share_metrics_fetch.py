@@ -339,7 +339,11 @@ def main():
     try:
         dt = datetime.strptime(list_date, "%Y-%m-%d")
         start_date = dt.strftime("%Y%m%d")
-        end_date = (dt + timedelta(days=20)).strftime("%Y%m%d")
+        # 延期上市：原定日后可能很久才有首根 K 线；默认向前 180 天且至少覆盖到今天
+        lookahead_days = max(20, min(730, int(os.environ.get("NEW_SHARE_METRICS_FIRST_TRADE_LOOKAHEAD_DAYS", "180") or 180)))
+        end_from_list = dt + timedelta(days=lookahead_days)
+        end_dt = max(end_from_list, datetime.now())
+        end_date = end_dt.strftime("%Y%m%d")
     except Exception:
         print(json.dumps({"ok": False, "error": "invalid list-date"}, ensure_ascii=False))
         raise SystemExit(1)

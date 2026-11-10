@@ -180,8 +180,15 @@ async function fetchEastmoneyFirstRow({ stockCode, listDate, market }) {
   const listYmd = String(listDate || '').slice(0, 10);
   const beg = listYmd.replace(/-/g, '');
   const emAttempts = Math.max(1, Number(process.env.NEW_SHARE_METRICS_EM_ATTEMPTS || 5));
-  const end = new Date(`${listYmd}T00:00:00`);
-  end.setDate(end.getDate() + 20);
+  // 延期上市可能远晚于原定日：向前多扫一段（默认 180 天，且至少覆盖到今天）
+  const lookaheadDays = Math.max(
+    20,
+    Math.min(730, Number(process.env.NEW_SHARE_METRICS_FIRST_TRADE_LOOKAHEAD_DAYS || 180))
+  );
+  const endFromList = new Date(`${listYmd}T00:00:00`);
+  endFromList.setDate(endFromList.getDate() + lookaheadDays);
+  const now = new Date();
+  const end = endFromList > now ? endFromList : now;
   const endYmd = `${end.getFullYear()}${String(end.getMonth() + 1).padStart(2, '0')}${String(end.getDate()).padStart(2, '0')}`;
   for (const secid of eastmoneySecids(stockCode, market)) {
     for (const baseUrl of EASTMONEY_KLINE_URLS) {

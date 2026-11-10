@@ -131,7 +131,18 @@ async function ensureNewShareListedYesterdayMetrics(todayYmd, reportDay, rows) {
     }
   }
   await inflight;
-  return queryNewShareListedYesterdayRows(todayYmd);
+  const afterRetry = await queryNewShareListedYesterdayRows(todayYmd);
+  const complete = (afterRetry || []).filter((r) => !isIncompleteNewShareFirstDayRow(r));
+  const dropped = (afterRetry || []).filter(isIncompleteNewShareFirstDayRow);
+  if (dropped.length) {
+    console.warn(
+      `[上市进展邮件] IPO上市（昨日）缺首日收盘/涨幅（疑似延期上市），本日邮件跳过 count=${dropped.length} codes=${dropped
+        .map((r) => r.stock_code)
+        .filter(Boolean)
+        .join(',') || '-'}`
+    );
+  }
+  return complete;
 }
 
 async function isWorkdayForListingEmail(date) {
