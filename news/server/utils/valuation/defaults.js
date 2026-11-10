@@ -28,6 +28,8 @@ function defaultAssumptions() {
     forecast_years: 5,
     esop: 0,
     valuation_date: null,
+    financial_anchor_date: null,
+    discount_base_dirty: false,
     ytd_revenue: null,
     market_revenue: null,
     market_net_income: null,

@@ -111,13 +111,19 @@ function Block({ title, subtitle, pe, ps, block, dealYi, dilution, years, axis }
   )
 }
 
+function axisTitle(view) {
+  if (view?.axis_title) return view.axis_title
+  if (view?.axes === 'exit_x_wacc') return '折现率 × 退出倍数'
+  if (view?.axes === 'exit_x_rd_cagr') return '研发费用 CAGR × 退出倍数'
+  if (view?.axes === 'rev_cagr_x_rd_cagr') return '营收 CAGR × 研发费用 CAGR'
+  if (view?.axes === 'univariate') return '单变量试算'
+  if (view?.axes === 'custom') return '自定义'
+  return '营收 CAGR × 退出倍数'
+}
+
 function OneScenario({ view, dealYi, dilution }) {
   if (!view) return <Typography.Text type="secondary">请点「开始采集/计算/保存」后显示敏感性</Typography.Text>
-  const axis = view.axes === 'exit_x_wacc'
-    ? '折现率 × 退出倍数'
-    : (view.axes === 'exit_x_rd_cagr'
-      ? '研发费用 CAGR × 退出倍数'
-      : (view.axes === 'rev_cagr_x_rd_cagr' ? '营收 CAGR × 研发费用 CAGR' : '营收 CAGR × 退出倍数'))
+  const axis = axisTitle(view)
   const deal = Number(dealYi)
   const d = dilution == null || dilution === '' ? 1 : Number(dilution)
   const showReturn = deal > 0 && Number.isFinite(d) && d >= 0 && d <= 1
@@ -175,7 +181,45 @@ const AXIS_OPTIONS = [
   { value: 'exit_x_wacc', label: '折现率 × 退出倍数' },
   { value: 'exit_x_rd_cagr', label: '研发费用 CAGR × 退出倍数' },
   { value: 'rev_cagr_x_rd_cagr', label: '营收 CAGR × 研发费用 CAGR' },
+  { value: 'univariate', label: '单变量试算' },
+  { value: 'custom', label: '自定义' },
 ]
+
+const PARAM_OPTIONS = [
+  { value: 'rev_cagr', label: '营收 CAGR' },
+  { value: 'rd_cagr', label: '研发费用 CAGR' },
+  { value: 'rate', label: '折现率' },
+  { value: 'exit_multiple', label: '退出倍数' },
+  { value: 'gross_margin', label: '毛利率' },
+  { value: 'selling_ratio', label: '销售费用率' },
+  { value: 'admin_ratio', label: '管理费用率' },
+  { value: 'rd_ratio', label: '研发费用率' },
+  { value: 'capex_ratio', label: '资本开支率' },
+  { value: 'dso', label: 'DSO' },
+  { value: 'dio', label: '存货周转天数' },
+  { value: 'dpo', label: 'DPO' },
+]
+
+const PCT_PARAMS = new Set(['rev_cagr', 'rd_cagr', 'rate', 'gross_margin', 'selling_ratio', 'admin_ratio', 'rd_ratio', 'capex_ratio'])
+
+function parseLevelsInput(text, percent) {
+  const parts = String(text || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean)
+  const out = []
+  for (const p of parts) {
+    const n = Number(String(p).replace(/%/g, ''))
+    if (!Number.isFinite(n)) continue
+    out.push(percent ? n / 100 : n)
+  }
+  return out
+}
+
+function formatLevelsInput(levels, percent) {
+  if (!Array.isArray(levels) || !levels.length) return ''
+  return levels.map((n) => {
+    if (percent) return String(Math.round(Number(n) * 10000) / 100)
+    return String(n)
+  }).join(', ')
+}
 
 function shownStep(value, fallback, percent) {
   const n = Number(value)
@@ -248,12 +292,132 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
         {axes === 'exit_x_rd_cagr' || axes === 'rev_cagr_x_rd_cagr' ? (
           <StepControl label="研发费用 CAGR 步长" value={method?.rd_cagr_step} fallback={0.05} presets={[2.5, 5]} percent disabled={!!readOnly} onChange={(v) => setMethod({ rd_cagr_step: v })} />
         ) : null}
-        {axes === 'rev_cagr_x_rd_cagr' ? null : (
+        {axes === 'rev_cagr_x_rd_cagr' || axes === 'univariate' || axes === 'custom' ? null : (
           <>
             <StepControl label="P/E 步长" value={method?.pe_multiple_step} fallback={10} presets={[5, 10]} disabled={!!readOnly} onChange={(v) => setMethod({ pe_multiple_step: v })} />
             <StepControl label="P/S 步长" value={method?.ps_multiple_step} fallback={2} presets={[2, 5]} disabled={!!readOnly} onChange={(v) => setMethod({ ps_multiple_step: v })} />
           </>
         )}
+        {axes === 'univariate' || axes === 'custom' ? (
+          <>
+            <div className="valuation-sens-step">
+              <span>{axes === 'univariate' ? '参数' : '纵轴'}</span>
+              <Select
+                size="small"
+                style={{ width: 160 }}
+                disabled={!!readOnly}
+                getPopupContainer={() => document.body}
+                value={method?.sensitivity_row_param || 'rev_cagr'}
+                onChange={(v) => setMethod({ sensitivity_row_param: v })}
+                options={PARAM_OPTIONS}
+              />
+            </div>
+            {axes === 'custom' ? (
+              <div className="valuation-sens-step">
+                <span>横轴</span>
+                <Select
+                  size="small"
+                  style={{ width: 160 }}
+                  disabled={!!readOnly}
+                  getPopupContainer={() => document.body}
+                  value={method?.sensitivity_col_param || 'exit_multiple'}
+                  onChange={(v) => setMethod({ sensitivity_col_param: v })}
+                  options={PARAM_OPTIONS}
+                />
+              </div>
+            ) : null}
+            <div className="valuation-sens-step">
+              <span>纵轴模式</span>
+              <Select
+                size="small"
+                style={{ width: 100 }}
+                disabled={!!readOnly}
+                getPopupContainer={() => document.body}
+                value={method?.sensitivity_row_mode || 'step'}
+                onChange={(v) => setMethod({ sensitivity_row_mode: v })}
+                options={[
+                  { value: 'step', label: '步长' },
+                  { value: 'levels', label: '档位 Δ' },
+                ]}
+              />
+            </div>
+            {(method?.sensitivity_row_mode || 'step') === 'step' ? (
+              <StepControl
+                label="纵轴步长"
+                value={method?.sensitivity_row_step}
+                fallback={PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr') ? 0.05 : 5}
+                presets={PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr') ? [2.5, 5] : [5, 10]}
+                percent={PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr')}
+                disabled={!!readOnly}
+                onChange={(v) => setMethod({ sensitivity_row_step: v })}
+              />
+            ) : (
+              <div className="valuation-sens-step">
+                <span>纵轴 Δ</span>
+                <input
+                  className="arco-input arco-input-size-small"
+                  style={{ width: 180 }}
+                  disabled={!!readOnly}
+                  placeholder={PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr') ? '-5, 0, 5' : '-10, 0, 10'}
+                  defaultValue={formatLevelsInput(method?.sensitivity_row_levels, PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr'))}
+                  onBlur={(e) => setMethod({
+                    sensitivity_row_levels: parseLevelsInput(e.target.value, PCT_PARAMS.has(method?.sensitivity_row_param || 'rev_cagr')),
+                  })}
+                />
+              </div>
+            )}
+            {axes === 'custom' ? (
+              <>
+                <div className="valuation-sens-step">
+                  <span>横轴模式</span>
+                  <Select
+                    size="small"
+                    style={{ width: 100 }}
+                    disabled={!!readOnly}
+                    getPopupContainer={() => document.body}
+                    value={method?.sensitivity_col_mode || 'step'}
+                    onChange={(v) => setMethod({ sensitivity_col_mode: v })}
+                    options={[
+                      { value: 'step', label: '步长' },
+                      { value: 'levels', label: '档位 Δ' },
+                    ]}
+                  />
+                </div>
+                {(method?.sensitivity_col_mode || 'step') === 'step' ? (
+                  <StepControl
+                    label="横轴步长"
+                    value={method?.sensitivity_col_step}
+                    fallback={PCT_PARAMS.has(method?.sensitivity_col_param || 'exit_multiple') ? 0.05 : 5}
+                    presets={PCT_PARAMS.has(method?.sensitivity_col_param || 'exit_multiple') ? [2.5, 5] : [5, 10]}
+                    percent={PCT_PARAMS.has(method?.sensitivity_col_param || 'exit_multiple')}
+                    disabled={!!readOnly}
+                    onChange={(v) => setMethod({ sensitivity_col_step: v })}
+                  />
+                ) : (
+                  <div className="valuation-sens-step">
+                    <span>横轴 Δ</span>
+                    <input
+                      className="arco-input arco-input-size-small"
+                      style={{ width: 180 }}
+                      disabled={!!readOnly}
+                      placeholder="-5, 0, 5"
+                      defaultValue={formatLevelsInput(method?.sensitivity_col_levels, PCT_PARAMS.has(method?.sensitivity_col_param || 'exit_multiple'))}
+                      onBlur={(e) => setMethod({
+                        sensitivity_col_levels: parseLevelsInput(e.target.value, PCT_PARAMS.has(method?.sensitivity_col_param || 'exit_multiple')),
+                      })}
+                    />
+                  </div>
+                )}
+              </>
+            ) : null}
+            {(method?.sensitivity_row_param === 'exit_multiple' || method?.sensitivity_col_param === 'exit_multiple' || (!method?.sensitivity_col_param && axes === 'custom')) ? (
+              <>
+                <StepControl label="P/E 步长" value={method?.pe_multiple_step} fallback={10} presets={[5, 10]} disabled={!!readOnly} onChange={(v) => setMethod({ pe_multiple_step: v })} />
+                <StepControl label="P/S 步长" value={method?.ps_multiple_step} fallback={2} presets={[2, 5]} disabled={!!readOnly} onChange={(v) => setMethod({ ps_multiple_step: v })} />
+              </>
+            ) : null}
+          </>
+        ) : null}
       </div>
       {storedDual ? (
         <Radio.Group

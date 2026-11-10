@@ -1,26 +1,51 @@
 const assert = require('assert');
-const { buildDcfForecast, discountYears, parseAnchor, reportCutoffYmd, applyForecastCashflow, applyForecastPl, impliedForecastDa } = require('./dcfForecast');
+const { buildDcfForecast, discountYears, parseAnchor, reportCutoffYmd, applyForecastCashflow, applyForecastPl, impliedForecastDa, migrateAssumptionsDates, resolveDcfDates } = require('./dcfForecast');
 const { sumCashflowDa } = require('./cashflowDa');
 const { mergeTargetFinancials, matchAlias, suggestAnchorYmd, buildTargetFinancialTemplateBuffer, parseTargetFinancialWorkbook, sheetToCalculatedAoa } = require('./targetImport');
-const { parseYmd } = require('./marketUtils');
+const { parseYmd, calendarDaysBetween } = require('./marketUtils');
 
 function eq(actual, expected, label) {
   assert.ok(Math.abs(actual - expected) < 1e-6, `${label}: ${actual} !== ${expected}`);
 }
 
-const anchor = { year: 2026, month: 3 };
-eq(discountYears(2026, anchor), 0.75, '2026 period');
-eq(discountYears(2027, anchor), 1.75, '2027 period');
-eq(discountYears(2026, { year: 2025, month: 12 }), 1, 'year-end anchor period');
-eq(discountYears(2026, { year: 2026, month: 11 }), 1 / 12, 'nov valuation period');
+eq(discountYears(2026, { ymd: '2026-03-31' }), calendarDaysBetween('2026-03-31', '2026-12-31') / 365, '2026 period days/365');
+eq(discountYears(2027, { ymd: '2026-03-31' }), calendarDaysBetween('2026-03-31', '2027-12-31') / 365, '2027 period days/365');
+eq(discountYears(2026, { ymd: '2025-12-31' }), calendarDaysBetween('2025-12-31', '2026-12-31') / 365, 'year-end discount base');
+eq(discountYears(2026, { ymd: '2026-11-01' }), calendarDaysBetween('2026-11-01', '2026-12-31') / 365, 'nov discount base');
+eq(discountYears(2026, { ymd: '2027-01-15' }), 0, 'year-end before discount base → 0');
 assert.strictEqual(parseAnchor('2026-10-02').ok, true);
-assert.strictEqual(parseAnchor('2026-11-01').ok, true);
+assert.strictEqual(parseAnchor('2026-10-02').ymd, '2026-10-02');
+assert.strictEqual(parseAnchor('2026-11-01').ymd, '2026-11-01');
+assert.strictEqual(parseAnchor('2026-05-31').ok, true);
 assert.strictEqual(parseAnchor('').ok, false);
 assert.strictEqual(parseAnchor('2026-03-31').ok, true);
 assert.strictEqual(reportCutoffYmd('2026-11-01'), '2026-09-30');
 assert.strictEqual(reportCutoffYmd('2026-09-30'), '2026-09-30');
 assert.strictEqual(reportCutoffYmd('2026-10-01'), '2026-09-30');
 assert.strictEqual(reportCutoffYmd('2026-01-15'), '2025-12-31');
+
+const migratedQuarter = migrateAssumptionsDates({ valuation_date: '2026-06-30' });
+assert.strictEqual(migratedQuarter.financial_anchor_date, '2026-06-30');
+assert.strictEqual(migratedQuarter.valuation_date, '2026-06-30');
+assert.strictEqual(migratedQuarter.discount_base_dirty, false);
+const migratedInvest = migrateAssumptionsDates({ valuation_date: '2026-11-01' });
+assert.strictEqual(migratedInvest.financial_anchor_date, '2026-11-01');
+assert.strictEqual(migratedInvest.valuation_date, '2026-11-01');
+assert.strictEqual(migratedInvest.discount_base_dirty, false);
+const raised = migrateAssumptionsDates({
+  financial_anchor_date: '2026-09-30',
+  valuation_date: '2026-06-30',
+  discount_base_dirty: true,
+});
+assert.strictEqual(raised.valuation_date, '2026-09-30');
+const splitOk = resolveDcfDates({
+  financial_anchor_date: '2026-09-30',
+  valuation_date: '2026-11-15',
+  discount_base_dirty: true,
+});
+assert.strictEqual(splitOk.ok, true);
+assert.strictEqual(splitOk.financial.ymd, '2026-09-30');
+assert.strictEqual(splitOk.discount.ymd, '2026-11-15');
 
 const bs = {
   cash: 20,
@@ -106,8 +131,8 @@ eq(dayDefault.series.dio[1], 90, 'forecast dio default year 2');
 
 const out = buildDcfForecast(base);
 assert.strictEqual(out.blocked, false, (out.blockers || []).join('；'));
-eq(out.pvs[0].periods, 0.75, 'p0');
-eq(out.pvs[1].periods, 1.75, 'p1');
+eq(out.pvs[0].periods, calendarDaysBetween('2026-03-31', '2026-12-31') / 365, 'p0');
+eq(out.pvs[1].periods, calendarDaysBetween('2026-03-31', '2027-12-31') / 365, 'p1');
 eq(out.series.revenue[0], 440, 'rev2026');
 eq(out.series.revenue[1], 484, 'rev2027');
 eq(out.series.finance_expense[0], 0, 'blank finance expense is 0');
@@ -225,14 +250,21 @@ const badDate = buildDcfForecast({
   assumptions: { ...base.assumptions, valuation_date: '' },
 });
 assert.strictEqual(badDate.blocked, true);
-assert.ok(badDate.blockers.some((m) => m.includes('估值日')));
+assert.ok(badDate.blockers.some((m) => m.includes('财务锚定日') || m.includes('折现基准日')));
 
 const anyMonth = buildDcfForecast({
   ...base,
-  assumptions: { ...base.assumptions, valuation_date: '2026-11-01' },
+  assumptions: {
+    ...base.assumptions,
+    financial_anchor_date: '2026-03-31',
+    valuation_date: '2026-11-01',
+    discount_base_dirty: true,
+  },
 });
 assert.strictEqual(anyMonth.blocked, false, (anyMonth.blockers || []).join('；'));
-eq(anyMonth.pvs[0].periods, 1 / 12, 'nov discount periods');
+eq(anyMonth.pvs[0].periods, calendarDaysBetween('2026-11-01', '2026-12-31') / 365, 'nov discount periods');
+assert.strictEqual(anyMonth.financial_anchor_date, '2026-03-31');
+assert.strictEqual(anyMonth.discount_base_date, '2026-11-01');
 assert.strictEqual(reportCutoffYmd('2026-11-01'), '2026-09-30');
 
 const negRev = buildDcfForecast({
@@ -318,7 +350,7 @@ const closed = buildDcfForecast({
 });
 assert.strictEqual(closed.blocked, false, (closed.blockers || []).join('；'));
 assert.strictEqual(String(closed.pvs[0].year), '2026');
-eq(closed.pvs[0].periods, 1, 'closed-year first period');
+eq(closed.pvs[0].periods, calendarDaysBetween('2025-12-31', '2026-12-31') / 365, 'closed-year first period');
 eq(closed.series.revenue[0], 110, 'closed-year ignores imported growth');
 
 assert.strictEqual(matchAlias('应收账款', [

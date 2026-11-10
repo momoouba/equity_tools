@@ -144,25 +144,28 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
             width: 52,
             render: (v) => ({ strong: '强', medium: '中', weak: '弱' }[v] || '-'),
           },
-          { title: '截面日', dataIndex: 'asof_trade_date', width: 108, className: 'valuation-nowrap-cell', render: (v, r) => v || r.asof_date || '-' },
+          { title: '计算截面日', dataIndex: 'valuation_trade_date', width: 108, className: 'valuation-nowrap-cell', render: (v, r) => v || r.asof_trade_date || r.asof_date || '-' },
           numCol('PE TTM', 'pe_ttm', 88, (v, r) => fmtNum(v ?? r.pe_latest, 2)),
           numCol('PS TTM', 'ps_ttm', 88, (v, r) => fmtNum(v ?? r.ps_latest, 2)),
           numCol('PE 近年均', 'pe_mean', 88, (v) => fmtNum(v, 2)),
           numCol('PS 近年均', 'ps_mean', 88, (v) => fmtNum(v, 2)),
-          numCol('PE 锚定截面', 'pe_latest', 108, (v) => fmtNum(v, 2)),
+          numCol('PE 计算截面', 'pe_latest', 108, (v) => fmtNum(v, 2)),
           numCol('PE 中位', 'pe_median', 88, (v) => fmtNum(v, 2)),
           overrideCol('PE 底稿中位', 'pe_median_override'),
           numCol('PE 取用', 'pe_used', 88, (v, r) => fmtNum(poolUsed(r, 'pe'), 2)),
           numCol('PE σ', 'pe_stdev', 80, (v) => fmtNum(v, 2)),
           numCol('PE −1σ', 'pe_minus_1s', 88, (v) => fmtNum(v, 2)),
           numCol('PE +1σ', 'pe_plus_1s', 88, (v) => fmtNum(v, 2)),
-          numCol('PS 锚定截面', 'ps_latest', 108, (v) => fmtNum(v, 2)),
+          numCol('PS 计算截面', 'ps_latest', 108, (v) => fmtNum(v, 2)),
           numCol('PS 中位', 'ps_median', 88, (v) => fmtNum(v, 2)),
           overrideCol('PS 底稿中位', 'ps_median_override'),
           numCol('PS 取用', 'ps_used', 88, (v, r) => fmtNum(poolUsed(r, 'ps'), 2)),
           numCol('PS σ', 'ps_stdev', 80, (v) => fmtNum(v, 2)),
           numCol('PS −1σ', 'ps_minus_1s', 88, (v) => fmtNum(v, 2)),
           numCol('PS +1σ', 'ps_plus_1s', 88, (v) => fmtNum(v, 2)),
+          { title: '最新取值日', dataIndex: 'latest_trade_date', width: 108, className: 'valuation-nowrap-cell', render: (v) => v || '—' },
+          numCol('最新 PE', 'latest_pe', 88, (v) => fmtNum(v, 2)),
+          numCol('最新 PS', 'latest_ps', 88, (v) => fmtNum(v, 2)),
         ]}
         data={source}
       />
@@ -170,10 +173,16 @@ export function RelativeValuationTable({ rows, editable = false, onOverrideChang
         lines={[
           `PE 取用 ${fmtStat(fmtX, peBand.high)}　低端 ${fmtStat(fmtX, peBand.low)}　平均数：${fmtStat(fmtX, peAvg)}　中位数 ${fmtStat(fmtX, peMed)}`,
           `PS 取用 ${fmtStat(fmtX, psBand.high)}　低端 ${fmtStat(fmtX, psBand.low)}　平均数：${fmtStat(fmtX, psAvg)}　中位数 ${fmtStat(fmtX, psMed)}`,
+          (() => {
+            const days = source.map((r) => r.latest_trade_date).filter(Boolean).sort()
+            if (!days.length) return '最新交易日倍数：暂无（只读参考，不进市场法结论）'
+            if (days[0] === days[days.length - 1]) return `最新交易日倍数取值日 ${days[0]}（只读参考，不进市场法结论）`
+            return `最新交易日倍数取值日 ${days[0]} ~ ${days[days.length - 1]}（只读参考，不进市场法结论）`
+          })(),
         ]}
       />
       <Typography.Paragraph type="secondary" className="valuation-ratio-formula" style={{ marginTop: 8, marginBottom: 0 }}>
-        PE/PS TTM 是估值基准日截面（选区参考）；近年均是财报截止日及以前历史点的算术平均。取用是高端倍数（取用列中位数），低端是取用 − σ。单家取用：有底稿中位用底稿，否则用东财历史中位，再否则用锚定截面。
+        PE/PS TTM 与计算截面是折现基准日及以前的倍数，进市场法结论。最新 PE/PS 是数据源最新可用交易日，只读参考。取用是高端倍数（取用列中位数），低端是取用 − σ。单家取用：有底稿中位用底稿，否则用历史中位，再否则用计算截面。
       </Typography.Paragraph>
       {rowNotes.length ? (
         <Typography.Paragraph type="secondary" style={{ marginTop: 4, marginBottom: 0, fontSize: 12 }}>

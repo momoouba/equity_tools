@@ -4,7 +4,14 @@
  * 锚定年不是 12 月时，扣营运资本前现金流用年底全年减去锚定日累计，不乘剩余月比例。
  */
 const { normalizeBs, netDebtAmount, nwcStockFromBs, equityBookFromBs, totalAssetsFromBs, totalLiabFromBs } = require('./targetBsFields');
-const { parseValuationDate, reportCutoffYmd, parseReportCutoff } = require('./marketUtils');
+const {
+  parseValuationDate,
+  parseFinancialAnchorDate,
+  reportCutoffYmd,
+  parseReportCutoff,
+  calendarDaysBetween,
+  migrateAssumptionsDates,
+} = require('./marketUtils');
 
 const RATIOS = [
   { key: 'cogs_ratio', label: '营业成本', nonNegative: false, growth: true, amountKey: 'cogs' },
@@ -56,18 +63,36 @@ function num0(v) {
   return n == null ? 0 : n;
 }
 
-/** 估值日（任意日历日）。折现原点用这一天；可比财报截止见 reportCutoffYmd。 */
+/** 解析标的财务锚定日（任意日历日）。优先读 assumptions.financial_anchor_date。 */
 function parseAnchor(value) {
-  return parseValuationDate(value);
+  return parseFinancialAnchorDate(value);
 }
 
-function isStatementAnchor(value) {
-  return parseValuationDate(value).ok;
+function resolveDcfDates(assumptions) {
+  const migrated = migrateAssumptionsDates(assumptions || {});
+  const financial = parseFinancialAnchorDate(migrated.financial_anchor_date);
+  const discount = parseValuationDate(migrated.valuation_date);
+  const ok = financial.ok && discount.ok && discount.ymd >= financial.ymd;
+  return { migrated, financial, discount, ok };
 }
 
-function discountYears(forecastYear, anchor) {
+/** 两日齐全且折现基准日 ≥ 财务锚定日。字符串参数按旧案迁移后再判。 */
+function isStatementAnchor(valueOrAssumptions) {
+  if (valueOrAssumptions && typeof valueOrAssumptions === 'object' && !Array.isArray(valueOrAssumptions)) {
+    return resolveDcfDates(valueOrAssumptions).ok;
+  }
+  return resolveDcfDates({ valuation_date: valueOrAssumptions }).ok;
+}
+
+/** 预测年末相对折现基准日的年数 = 日历天数 / 365；年末 ≤ 基准日时为 0。 */
+function discountYears(forecastYear, discountBase) {
   const y = Number(forecastYear);
-  return ((y - anchor.year) * 12 + (12 - anchor.month)) / 12;
+  const ymd = discountBase?.ymd;
+  if (!Number.isFinite(y) || !ymd) return null;
+  const days = calendarDaysBetween(ymd, `${y}-12-31`);
+  if (days == null) return null;
+  if (days <= 0) return 0;
+  return days / 365;
 }
 
 function flowScale(forecastYear, anchor) {
@@ -278,12 +303,18 @@ function buildDcfForecast({
   overrides = {},
   revenueOverride = null,
   rdOverride = null,
+  sensitivityShocks = null,
 } = {}) {
   const blockers = [];
-  const anchor = parseAnchor(assumptions.valuation_date);
+  const dates = resolveDcfDates(assumptions);
+  assumptions = dates.migrated;
+  const anchor = dates.financial;
+  const discountBase = dates.discount;
   const sourcePl = targetPl || {};
   if (anchor.ok) targetPl = sliceForecastPl(sourcePl, anchor);
-  if (!anchor.ok) blockers.push(anchor.message);
+  if (!anchor.ok) blockers.push(anchor.message || '请选择标的财务锚定日');
+  else if (!discountBase.ok) blockers.push(discountBase.message || '请选择 DCF 折现基准日');
+  else if (discountBase.ymd < anchor.ymd) blockers.push('DCF 折现基准日不能早于标的财务锚定日');
 
   const yearCheck = anchor.ok
     ? yearListBlockers(targetPl.years, anchor)
@@ -331,7 +362,7 @@ function buildDcfForecast({
       blockers.push(`预测利润表 ${yLabel} 年底${spec.label}小于现金流量表实际列，全年预测没有覆盖已发生数`);
     });
   } else if (ytd == null || ytd <= 0) {
-    blockers.push('请到标的利润表填写估值锚定日当期累计营业收入，须为正数');
+    blockers.push('请到标的利润表填写财务锚定日当期累计营业收入，须为正数');
   }
 
   const rawTax = toNumber(assumptions.tax_rate);
@@ -381,14 +412,17 @@ function buildDcfForecast({
     dio: forecastDayDefault(assumptions, toNumber(workingCapital?.dio_median), 'dio'),
   };
   const daysByYear = years.map(() => ({}));
+  const dayDeltas = sensitivityShocks?.dayDeltas || {};
   for (let i = 0; i < n; i += 1) {
     for (const spec of DAY_SPECS) {
       const override = toNumber(targetPl[spec.key]?.[i]);
       const used = resolveDays(override, medians[spec.key]);
-      daysByYear[i][spec.key] = used;
-      if (used == null) {
+      const delta = toNumber(dayDeltas[spec.key]) || 0;
+      const shocked = used == null ? null : used + delta;
+      daysByYear[i][spec.key] = shocked;
+      if (shocked == null) {
         blockers.push(`标的资产负债表 ${years[i]} 年${spec.label}没有可比中位数，也未填写，请到标的资产负债表补周转天数`);
-      } else if (used < 0) {
+      } else if (shocked < 0) {
         blockers.push(`标的资产负债表 ${years[i]} 年${spec.label}小于 0，请改为大于等于 0`);
       }
     }
@@ -549,18 +583,20 @@ function buildDcfForecast({
   const rdGrowth = assumptions.rd_growth_mode !== 'share';
   for (let i = 0; i < n; i += 1) {
     const rev = revenues[i];
+    const ratioDeltas = sensitivityShocks?.ratioDeltas || {};
     const line = (ratioKey) => {
       const seriesKey = FORECAST_PL_SERIES[ratioKey];
+      const delta = toNumber(ratioDeltas[ratioKey]) || 0;
       if (stub && i === 0) {
         const entered = yearEndAmount(forecastPl, years[i], seriesKey);
-        if (entered != null) return entered;
+        if (entered != null) return entered; // 绝对额年份：费率轴跳过
         return 0;
       }
       const manual = manualPlAmount(forecastPl, years[i], seriesKey);
-      if (manual != null) return manual;
+      if (manual != null) return manual; // 绝对额年份：费率轴跳过
       const raw = toNumber(carriedRatios[ratioKey].values[i]);
-      if (raw != null && Math.abs(raw) > 10000) return raw;
-      return rev * num0(raw);
+      if (raw != null && Math.abs(raw) > 10000) return raw; // 绝对额年份：费率轴跳过
+      return rev * (num0(raw) + delta);
     };
     const cogs = line('cogs_ratio');
     const surtax = line('surtax_ratio');
@@ -685,9 +721,11 @@ function buildDcfForecast({
 
   const pvs = [];
   let ev = 0;
+  let zeroPeriodHint = false;
   for (let i = 0; i < n; i += 1) {
     const fcf = series.fcff_before_nwc[i] - series.dnwc[i];
-    const periods = discountYears(years[i], anchor);
+    const periods = discountYears(years[i], discountBase);
+    if (periods === 0) zeroPeriodHint = true;
     const factor = pvFactor(rate, periods);
     const pv = fcf * factor;
     ev += pv;
@@ -722,10 +760,17 @@ function buildDcfForecast({
   let equity = ev - nd;
   const liq = applyLiquidity ? liquidity : null;
   if (applyLiquidity) equity *= (1 - liq);
+  const warnings = [];
+  if (zeroPeriodHint) {
+    warnings.push('折现基准日已不早于部分预测年末，这些年按期数 0 计入');
+  }
   return {
     blocked: false,
     blockers: [],
+    warnings,
     scenario_name: scenarioName || null,
+    financial_anchor_date: anchor.ymd,
+    discount_base_date: discountBase.ymd,
     discount_rate: rate,
     apply_liquidity: applyLiquidity,
     liquidity_discount: liq,
@@ -870,14 +915,18 @@ module.exports = {
   RATIOS,
   parseAnchor,
   parseValuationDate,
+  parseFinancialAnchorDate,
   reportCutoffYmd,
   parseReportCutoff,
+  resolveDcfDates,
   isStatementAnchor,
   discountYears,
+  calendarDaysBetween,
   flowScale,
   expectedFirstYear,
   buildDcfForecast,
   applyForecastCashflow,
   applyForecastPl,
   impliedForecastDa,
+  migrateAssumptionsDates,
 };

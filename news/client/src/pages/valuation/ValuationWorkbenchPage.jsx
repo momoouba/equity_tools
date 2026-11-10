@@ -119,7 +119,9 @@ const PL_SERIES_KEYS = [
   'other_income', 'other', 'da', 'operating_profit', 'net_income', ...PL_RATIO_KEYS,
 ]
 
-/** 估值日：任意合法日历日。折现与标的当期跟这一天。 */
+const QUARTER_MDS = ['03-31', '06-30', '09-30', '12-31']
+
+/** 任意合法日历日（财务锚定日 / DCF 折现基准日）。 */
 function statementAnchor(ymd) {
   const formatted = formatChinaYmd(ymd)
   const s = String(formatted || ymd || '').slice(0, 10)
@@ -130,16 +132,45 @@ function statementAnchor(ymd) {
   return { ymd: s, year, month }
 }
 
-/** 可比财报/倍数截止：≤ 估值日的最近季末。 */
-function reportCutoffFromValuation(ymd) {
+/** ≤ 某日的最近季末（可比公开报表截止展示）。 */
+function nearestQuarterOnOrBefore(ymd) {
   const a = statementAnchor(ymd)
   if (!a) return null
-  const mds = ['03-31', '06-30', '09-30', '12-31']
-  for (let i = mds.length - 1; i >= 0; i -= 1) {
-    const candidate = `${a.year}-${mds[i]}`
+  for (let i = QUARTER_MDS.length - 1; i >= 0; i -= 1) {
+    const candidate = `${a.year}-${QUARTER_MDS[i]}`
     if (candidate <= a.ymd) return candidate
   }
   return `${a.year - 1}-12-31`
+}
+
+/** 从 assumptions 取财务锚定日（含旧案迁移）。 */
+function financialAnchorOf(assumptions) {
+  const direct = statementAnchor(assumptions?.financial_anchor_date)
+  if (direct) return direct
+  return statementAnchor(assumptions?.valuation_date)
+}
+
+function discountBaseOf(assumptions) {
+  const d = statementAnchor(assumptions?.valuation_date)
+  const f = financialAnchorOf(assumptions)
+  if (d && f && d.ymd < f.ymd) return f
+  return d || f
+}
+
+function migrateClientAssumptions(assumptions) {
+  const a = { ...(assumptions || {}) }
+  const discount = statementAnchor(a.valuation_date)
+  let financial = statementAnchor(a.financial_anchor_date)
+  let dirty = a.discount_base_dirty === true || a.discount_base_dirty === 1 || a.discount_base_dirty === '1'
+  if (!financial && discount) {
+    financial = discount
+    dirty = false
+  }
+  if (financial && !discount) a.valuation_date = financial.ymd
+  else if (financial && discount && discount.ymd < financial.ymd) a.valuation_date = financial.ymd
+  if (financial) a.financial_anchor_date = financial.ymd
+  a.discount_base_dirty = dirty
+  return a
 }
 
 function yearNum(y) {
@@ -363,8 +394,8 @@ function carrySeries(arr) {
 }
 
 function forecastStatement(pl, assumptions, forecastPl) {
-  const anchor = statementAnchor(assumptions?.valuation_date)
-  const entries = forecastYearEntries(pl, assumptions?.valuation_date)
+  const anchor = financialAnchorOf(assumptions)
+  const entries = forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd)
   const years = entries.map(({ y }) => String(yearNum(y) || y))
   if (!anchor || !years.length) return null
   const stub = anchor.month < 12 && yearNum(years[0]) === anchor.year
@@ -581,7 +612,7 @@ function priorActualStatement(pl, assumptions, bs, firstYear) {
   const tax = taxRaw == null ? 0.15 : taxRaw
   const nopat = pretax == null ? null : (pretax > 0 ? pretax * (1 - tax) : pretax)
   const ebitda = pretax == null || da == null ? null : pretax + da
-  const anchor = statementAnchor(assumptions?.valuation_date)
+  const anchor = financialAnchorOf(assumptions)
   const stocks = anchor && anchor.year === year ? bsNwcParts(bs) : null
   return {
     year,
@@ -639,7 +670,7 @@ function withWorkingCapital(statement, pl, assumptions, payload) {
     return ar + inv - ap
   })
   const firstYear = yearNum(next.years?.[0])
-  const anchor = statementAnchor(assumptions?.valuation_date)
+  const anchor = financialAnchorOf(assumptions)
   const priorYear = Number.isFinite(firstYear) ? firstYear - 1 : null
   const priorStocks = anchor && priorYear != null && anchor.year === priorYear ? bsNwcParts(bs) : null
   const opening = priorStocks?.nwc != null ? priorStocks.nwc : nwcStockFromBs(bs)
@@ -684,7 +715,8 @@ function ratiosTouched(pl) {
   return PL_RATIO_KEYS.some((k) => (pl?.[k] || []).some((v) => v != null && v !== ''))
 }
 
-const ANCHOR_DATE_HELP = '估值日可选任意日历日。DCF 折现起点和标的当期利润表/资产负债表实际列跟这一天。可比公司财报与倍数自动按「≤ 估值日的最近季末」截取（例如估值日 2026-11-01 → 财报截止 2026-09-30；估值日恰为季末则截止日同日）。新建时按案件创建日预填，可以改。'
+const FINANCIAL_ANCHOR_HELP = '标的财务锚定日可任选日历日（常见为各月月末报表日）。标的三表实际列、净负债和营运资本取这一天；锚定年残段也按这一天的累计切分。'
+const DISCOUNT_BASE_HELP = 'DCF 折现基准日为预计投资日，可任选日历日，且不能早于财务锚定日。现金流挂各年 12/31，按实际天数/365 折到这一天。默认等于财务锚定日；改晚后财务锚定日再变时，未手改过的折现基准日会跟随。计算用可比倍数截取到这一天及以前；最新交易日倍数只读参考。'
 
 const FORECAST_RATIO_ROWS = [
   { key: 'revenue_growth', name: '收入增速（较上一年）', note: '较上一年。锚定日不是 12 月 31 日时，当年年底收入在预测利润表填写，本表从下一年起填增速。12 月 31 日时，第一年 = 当年全年收入 ×（1+增速）。空白年份沿用最近一次已填增速，可为负或 0。', min: -500 },
@@ -754,8 +786,8 @@ function cfYearsFrom(pl, cf) {
 }
 
 function impliedDaView(pl, assumptions) {
-  const anchor = statementAnchor(assumptions?.valuation_date)
-  const entries = forecastYearEntries(pl, assumptions?.valuation_date)
+  const anchor = financialAnchorOf(assumptions)
+  const entries = forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd)
   if (!anchor || !entries.length) return { actual: undefined, byYear: {} }
   const ytd = Number(assumptions?.ytd_revenue)
   let revenueBase = Number.isFinite(ytd) && ytd > 0 ? ytd : null
@@ -1025,11 +1057,11 @@ function shownForecastDay(pl, assumptions, wc, key, index) {
 }
 
 function forecastDaysView(payload) {
-  const assumptions = payload?.assumptions || {}
+  const assumptions = migrateClientAssumptions(payload?.assumptions || {})
   const pl = payload?.targetPl || {}
   const wc = payload?.sheets?.working_capital?.payload || {}
   const series = payload?.sheets?.dcf?.payload?.primary?.series
-  const entries = forecastYearEntries(pl, assumptions.valuation_date)
+  const entries = forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd)
   const fromCalc = Array.isArray(series?.years) && series.years.length > 0
   const years = fromCalc
     ? series.years.map((year) => String(year))
@@ -1052,7 +1084,7 @@ function forecastDaysView(payload) {
 function TurnoverDefaultRow({ assumptions, payload, patchPayload, payloadRef }) {
   const wc = payload?.sheets?.working_capital?.payload || {}
   const pl = payload?.targetPl || {}
-  const years = forecastYearEntries(pl, assumptions?.valuation_date)
+  const years = forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd)
   const rows = [
     { key: 'dso', name: 'DSO' },
     { key: 'dpo', name: 'DPO' },
@@ -1406,7 +1438,10 @@ export default function ValuationWorkbenchPage() {
   const archivedVersions = cse?.versions || []
 
   const method = payload?.methodConfig || {}
-  const assumptions = payload?.assumptions || {}
+  const assumptions = migrateClientAssumptions(payload?.assumptions || {})
+  const faYmd = financialAnchorOf(assumptions)?.ymd || null
+  const discountYmd = discountBaseOf(assumptions)?.ymd || null
+  const compsReportCutoffYmd = nearestQuarterOnOrBefore(discountYmd)
   const enterpriseName = cse?.subject?.enterprise_full_name
     || cse?.subject?.live_name
     || cse?.subject?.display_name
@@ -1905,12 +1940,12 @@ export default function ValuationWorkbenchPage() {
               </div>
               <div className="valuation-method-field">
                 <span className="valuation-anchor-label">
-                  估值日 <span style={{ color: '#f53f3f' }}>*</span>
+                  标的财务锚定日 <span style={{ color: '#f53f3f' }}>*</span>
                   <Tooltip
-                    content={ANCHOR_DATE_HELP}
+                    content={FINANCIAL_ANCHOR_HELP}
                     position="top"
                     getPopupContainer={() => document.body}
-                    popupVisible={(!!payload && !statementAnchor(assumptions.valuation_date)) || anchorTipOpen}
+                    popupVisible={(!!payload && !financialAnchorOf(assumptions)) || anchorTipOpen}
                     onVisibleChange={setAnchorTipOpen}
                   >
                     <IconQuestionCircle className="valuation-help-icon" />
@@ -1921,20 +1956,77 @@ export default function ValuationWorkbenchPage() {
                   style={{ width: '100%' }}
                   allowClear
                   format="YYYY-MM-DD"
-                  placeholder="请选择估值日"
+                  placeholder="报表截止日"
                   getPopupContainer={() => document.body}
-                  status={statementAnchor(assumptions.valuation_date) ? undefined : 'error'}
-                  value={assumptions.valuation_date || undefined}
+                  status={financialAnchorOf(assumptions) ? undefined : 'error'}
+                  value={faYmd || undefined}
                   onChange={(dateString, date) => {
                     const ymd = formatChinaYmd(date) || formatChinaYmd(dateString) || null
+                    const dirty = assumptions.discount_base_dirty === true
+                    let nextDiscount = assumptions.valuation_date
+                    let raised = false
+                    if (!dirty || !nextDiscount) {
+                      nextDiscount = ymd
+                    } else if (ymd && nextDiscount < ymd) {
+                      nextDiscount = ymd
+                      raised = true
+                    }
                     const nextPl = { ...(payload.targetPl || emptyPl()) }
                     if (!ratiosTouched(nextPl)) {
                       nextPl.years = defaultForecastYears(ymd, assumptions.forecast_years)
                     }
                     patchPayload({
-                      assumptions: { ...assumptions, valuation_date: ymd },
+                      assumptions: {
+                        ...assumptions,
+                        financial_anchor_date: ymd,
+                        valuation_date: nextDiscount,
+                        discount_base_dirty: dirty,
+                      },
                       methodConfig: { ...method, confirmed: false },
                       targetPl: nextPl,
+                    })
+                    if (raised) Message.info('折现基准日已早于新的财务锚定日，已自动对齐')
+                  }}
+                />
+              </div>
+              <div className="valuation-method-field">
+                <span className="valuation-anchor-label">
+                  DCF 折现基准日 <span style={{ color: '#f53f3f' }}>*</span>
+                  <Tooltip
+                    content={DISCOUNT_BASE_HELP}
+                    position="top"
+                    getPopupContainer={() => document.body}
+                  >
+                    <IconQuestionCircle className="valuation-help-icon" />
+                  </Tooltip>
+                </span>
+                <DatePicker
+                  size="small"
+                  style={{ width: '100%' }}
+                  allowClear
+                  format="YYYY-MM-DD"
+                  placeholder="预计投资日"
+                  getPopupContainer={() => document.body}
+                  status={discountBaseOf(assumptions) ? undefined : 'error'}
+                  value={discountYmd || undefined}
+                  disabledDate={(current) => {
+                    const ymd = formatChinaYmd(current)
+                    if (!ymd || !faYmd) return false
+                    return ymd < faYmd
+                  }}
+                  onChange={(dateString, date) => {
+                    const ymd = formatChinaYmd(date) || formatChinaYmd(dateString) || null
+                    if (ymd && faYmd && ymd < faYmd) {
+                      Message.warning('折现基准日不能早于标的财务锚定日')
+                      return
+                    }
+                    patchPayload({
+                      assumptions: {
+                        ...assumptions,
+                        valuation_date: ymd,
+                        discount_base_dirty: true,
+                      },
+                      methodConfig: { ...method, confirmed: false },
                     })
                   }}
                 />
@@ -1993,8 +2085,12 @@ export default function ValuationWorkbenchPage() {
                       Message.warning('请先选择申万三级行业')
                       return
                     }
-                    if (!statementAnchor(assumptions.valuation_date)) {
-                      Message.warning('请选择估值日')
+                    if (!financialAnchorOf(assumptions)) {
+                      Message.warning('请选择标的财务锚定日')
+                      return
+                    }
+                    if (!discountBaseOf(assumptions)) {
+                      Message.warning('请选择 DCF 折现基准日')
                       return
                     }
                     const next = { ...method, confirmed: true }
@@ -2012,7 +2108,7 @@ export default function ValuationWorkbenchPage() {
               <div className="valuation-method-field valuation-method-cutoff">
                 <span>可比财报截止</span>
                 <div className="valuation-method-cutoff-value">
-                  {reportCutoffFromValuation(assumptions.valuation_date) || '—'}
+                  {compsReportCutoffYmd || '—'}
                 </div>
               </div>
             </div>
@@ -2060,7 +2156,7 @@ export default function ValuationWorkbenchPage() {
 
         {step === 'pl' && (
           <Card title="标的利润表（录入单位：元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
+            <TargetFinancialImportBar caseId={caseId} valuationDate={financialAnchorOf(assumptions)?.ymd} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
@@ -2116,7 +2212,7 @@ export default function ValuationWorkbenchPage() {
             <Typography.Title heading={6}>当期（导入）</Typography.Title>
             <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
               {(() => {
-                const anchor = statementAnchor(assumptions.valuation_date)
+                const anchor = financialAnchorOf(assumptions)
                 return anchor
                   ? `左边是 ${anchor.year - 1}-12-31 上一年年末，右边是 ${anchor.ymd} 当期累计，单位元。改当期营业收入或净利润时，累计营业收入和市场法基数为空会一并带出。`
                   : '请先选择估值日。上一年年末和当期金额都可以导入或手填。'
@@ -2133,14 +2229,14 @@ export default function ValuationWorkbenchPage() {
                 { title: '科目', dataIndex: 'name', width: 120, fixed: 'left', className: 'valuation-nowrap-cell' },
                 {
                   title: (() => {
-                    const anchor = statementAnchor(assumptions.valuation_date)
+                    const anchor = financialAnchorOf(assumptions)
                     return anchor ? `${anchor.year - 1}-12-31` : '上一年年末'
                   })(),
                   width: 160,
                   align: 'right',
                   className: 'valuation-num-cell',
                   render: (_, row) => {
-                    const anchor = statementAnchor(assumptions.valuation_date)
+                    const anchor = financialAnchorOf(assumptions)
                     const year = anchor ? anchor.year - 1 : null
                     const idx = year == null ? -1 : (pl.years || []).findIndex((y) => yearNum(y) === year)
                     return (
@@ -2157,14 +2253,14 @@ export default function ValuationWorkbenchPage() {
                   },
                 },
                 {
-                  title: assumptions.valuation_date || '当期',
+                  title: financialAnchorOf(assumptions)?.ymd || '当期',
                   width: 160,
                   align: 'right',
                   className: 'valuation-num-cell',
                   render: (_, row) => (
                     <WanInput
                       value={(() => {
-                        const idx = currentPlIndex(pl, assumptions.valuation_date)
+                        const idx = currentPlIndex(pl, financialAnchorOf(assumptions)?.ymd)
                         return idx >= 0 ? pl[row.key]?.[idx] : undefined
                       })()}
                       onChange={(nv) => {
@@ -2172,7 +2268,7 @@ export default function ValuationWorkbenchPage() {
                         const plNow = base.targetPl || pl
                         const assumptionsNow = base.assumptions || assumptions
                         const beforeYears = (plNow.years || []).join('|')
-                        const nextPl = setCurrentAmount(plNow, assumptionsNow.valuation_date, row.key, nv)
+                        const nextPl = setCurrentAmount(plNow, financialAnchorOf(assumptionsNow)?.ymd, row.key, nv)
                         const yearInserted = (nextPl.years || []).join('|') !== beforeYears
                         const assumptionsPatch = {}
                         if (row.key === 'revenue' && (assumptionsNow.ytd_revenue == null || assumptionsNow.ytd_revenue === '')) {
@@ -2203,7 +2299,7 @@ export default function ValuationWorkbenchPage() {
               scroll={{ x: true }}
               columns={[
                 { title: '科目', dataIndex: 'name', width: 200, fixed: 'left', className: 'valuation-nowrap-cell' },
-                ...ratioYearEntries(pl, assumptions.valuation_date, payload.forecastPl).map(({ y, i }) => ({
+                ...ratioYearEntries(pl, financialAnchorOf(assumptions)?.ymd, payload.forecastPl).map(({ y, i }) => ({
                   align: 'right',
                   className: 'valuation-num-cell',
                   title: (
@@ -2219,7 +2315,7 @@ export default function ValuationWorkbenchPage() {
                         }}
                         />
                       <span className="valuation-pl-year-e">E</span>
-                      {forecastYearEntries(pl, assumptions.valuation_date).length > 1 && i === (pl.years || []).length - 1 ? (
+                      {forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).length > 1 && i === (pl.years || []).length - 1 ? (
                         <Button
                           className="valuation-pl-year-remove"
                           type="text"
@@ -2284,26 +2380,26 @@ export default function ValuationWorkbenchPage() {
             />
             <Space style={{ marginTop: 8 }}>
               <Button
-                disabled={forecastYearEntries(pl, assumptions.valuation_date).length >= 15}
+                disabled={forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).length >= 15}
                 onClick={() => {
                   const base = payloadRef.current || {}
                   const plNow = base.targetPl || pl
                   const assumptionsNow = base.assumptions || assumptions
                   const years = [...(plNow.years || [])]
                   const last = Number(years[years.length - 1])
-                  const anchor = statementAnchor(assumptionsNow.valuation_date)
+                  const anchor = financialAnchorOf(assumptionsNow)
                   const nextYear = Number.isFinite(last)
                     ? last + 1
                     : (anchor ? (anchor.month === 12 ? anchor.year + 1 : anchor.year) : null)
                   if (nextYear == null) {
-                    Message.warning('请先选择估值日')
+                    Message.warning('请先选择标的财务锚定日')
                     return
                   }
                   years.push(String(nextYear))
                   patchPayload({
                     targetPl: { ...plNow, years },
                     assumptions: {
-                      forecast_years: forecastYearEntries({ ...plNow, years }, assumptionsNow.valuation_date).length,
+                      forecast_years: forecastYearEntries({ ...plNow, years }, financialAnchorOf(assumptionsNow)?.ymd).length,
                     },
                   })
                 }}
@@ -2312,15 +2408,15 @@ export default function ValuationWorkbenchPage() {
               </Button>
               <Button
                 onClick={() => {
-                  if (!statementAnchor(assumptions.valuation_date)) {
-                    Message.warning('请先选择估值日')
+                  if (!financialAnchorOf(assumptions)) {
+                    Message.warning('请先选择标的财务锚定日')
                     return
                   }
                   const base = payloadRef.current || {}
                   const plNow = base.targetPl || pl
                   const assumptionsNow = base.assumptions || assumptions
-                  const forecast = defaultForecastYears(assumptionsNow.valuation_date, assumptionsNow.forecast_years || 5)
-                  const anchor = statementAnchor(assumptionsNow.valuation_date)
+                  const forecast = defaultForecastYears(financialAnchorOf(assumptionsNow)?.ymd, assumptionsNow.forecast_years || 5)
+                  const anchor = financialAnchorOf(assumptionsNow)
                   const current = anchor ? String(anchor.year) : null
                   const prior = anchor ? String(anchor.year - 1) : null
                   const keepPrior = prior && (plNow.years || []).some((y) => yearNum(y) === anchor.year - 1)
@@ -2338,7 +2434,7 @@ export default function ValuationWorkbenchPage() {
               </Button>
               <Button
                 status="danger"
-                disabled={forecastYearEntries(pl, assumptions.valuation_date).length <= 1}
+                disabled={forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).length <= 1}
                 onClick={() => {
                   const base = payloadRef.current || {}
                   const plNow = base.targetPl || pl
@@ -2347,7 +2443,7 @@ export default function ValuationWorkbenchPage() {
                   patchPayload({
                     targetPl: next,
                     assumptions: {
-                      forecast_years: forecastYearEntries(next, assumptionsNow.valuation_date).length,
+                      forecast_years: forecastYearEntries(next, financialAnchorOf(assumptionsNow)?.ymd).length,
                     },
                   })
                 }}
@@ -2441,8 +2537,8 @@ export default function ValuationWorkbenchPage() {
                                   row.engineKey,
                                   v,
                                   formula[row.key]?.[i],
-                                  statementAnchor(assumptions.valuation_date)?.month < 12
-                                    && yearNum(year) === statementAnchor(assumptions.valuation_date)?.year,
+                                  financialAnchorOf(assumptions)?.month < 12
+                                    && yearNum(year) === financialAnchorOf(assumptions)?.year,
                                 ),
                                 ...(row.engineKey === 'rd' ? { assumptions: { rd_growth_mode: 'growth' } } : {}),
                               })
@@ -2462,7 +2558,7 @@ export default function ValuationWorkbenchPage() {
 
         {step === 'bs' && (
           <Card title="标的资产负债表（录入单位：元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
+            <TargetFinancialImportBar caseId={caseId} valuationDate={financialAnchorOf(assumptions)?.ymd} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
@@ -2486,7 +2582,7 @@ export default function ValuationWorkbenchPage() {
                     : v),
                 },
                 {
-                  title: assumptions.valuation_date ? `实际 ${assumptions.valuation_date}` : '实际（锚定日）',
+                  title: financialAnchorOf(assumptions)?.ymd ? `实际 ${financialAnchorOf(assumptions).ymd}` : '实际（锚定日）',
                   dataIndex: 'value',
                   width: 168,
                   align: 'right',
@@ -2513,7 +2609,7 @@ export default function ValuationWorkbenchPage() {
                     )
                   },
                 },
-                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y }) => {
+                ...forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).map(({ y }) => {
                   const yearKey = String(yearNum(y) || y)
                   const pv = (payload?.sheets?.dcf?.payload?.primary?.pvs || []).find((p) => yearNum(p.year) === yearNum(y))
                   const yearOverrides = payload.forecastBs?.[yearKey]
@@ -2668,7 +2764,7 @@ export default function ValuationWorkbenchPage() {
               scroll={{ x: true }}
               columns={[
                 { title: '天数', dataIndex: 'name', width: 140, fixed: 'left' },
-                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y, i }) => ({
+                ...forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).map(({ y, i }) => ({
                   title: forecastYearLabel(y),
                   width: 112,
                   align: 'right',
@@ -2705,7 +2801,7 @@ export default function ValuationWorkbenchPage() {
 
         {step === 'cf' && (
           <Card title="标的现金流量表 / DCF 联动项（录入单位：元）" bordered={false}>
-            <TargetFinancialImportBar caseId={caseId} valuationDate={assumptions.valuation_date} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
+            <TargetFinancialImportBar caseId={caseId} valuationDate={financialAnchorOf(assumptions)?.ymd} enterpriseName={enterpriseName} onImported={adoptImportedPayload} />
             <Alert
               type="info"
               style={{ marginBottom: 12 }}
@@ -2727,7 +2823,7 @@ export default function ValuationWorkbenchPage() {
                 { title: '对应现金流量表科目', dataIndex: 'cf', width: 280 },
                 { title: 'DCF', dataIndex: 'dcf', width: 70 },
                 {
-                  title: assumptions.valuation_date ? `实际 ${assumptions.valuation_date}` : '实际',
+                  title: financialAnchorOf(assumptions)?.ymd ? `实际 ${financialAnchorOf(assumptions).ymd}` : '实际',
                   width: 148,
                   align: 'right',
                   className: 'valuation-num-cell',
@@ -2743,7 +2839,7 @@ export default function ValuationWorkbenchPage() {
                     />
                   ),
                 },
-                ...forecastYearEntries(pl, assumptions.valuation_date).map(({ y }) => ({
+                ...forecastYearEntries(pl, financialAnchorOf(assumptions)?.ymd).map(({ y }) => ({
                   title: `${yearNum(y) || y}E`,
                   width: 148,
                   align: 'right',

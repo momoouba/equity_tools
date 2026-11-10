@@ -43,6 +43,26 @@ function strOrNull(v, max) {
   return max ? s.slice(0, max) : s;
 }
 
+function jsonOrNull(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') {
+    const s = v.trim();
+    return s ? s : null;
+  }
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return null;
+  }
+}
+
+function levelsFromDb(v) {
+  const parsed = parseJson(v, null);
+  if (!Array.isArray(parsed)) return null;
+  const list = parsed.map(Number).filter((n) => Number.isFinite(n));
+  return list.length ? list : null;
+}
+
 async function upsertByCaseVersion(d, table, caseId, versionId, columns, values) {
   const exist = await d.query(
     `SELECT F_Id FROM ${table} WHERE case_id = ? AND version_id = ? LIMIT 1`,
@@ -73,6 +93,10 @@ async function saveMethod(caseId, versionId, method, pool) {
     'terminal_type', 'fcf_method', 'sensitivity_axes', 'scenario_mode',
     'multiple_source', 'industry_stat_method', 'confirmed',
     'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rd_cagr_step', 'rate_step',
+    'sensitivity_row_param', 'sensitivity_col_param',
+    'sensitivity_row_mode', 'sensitivity_col_mode',
+    'sensitivity_row_step', 'sensitivity_col_step',
+    'sensitivity_row_levels_json', 'sensitivity_col_levels_json',
   ], [
     strOrNull(m.terminal_type, 32),
     strOrNull(m.fcf_method, 32),
@@ -86,16 +110,21 @@ async function saveMethod(caseId, versionId, method, pool) {
     numOrNull(m.cagr_step),
     numOrNull(m.rd_cagr_step),
     numOrNull(m.rate_step),
+    strOrNull(m.sensitivity_row_param, 32),
+    strOrNull(m.sensitivity_col_param, 32),
+    strOrNull(m.sensitivity_row_mode, 16),
+    strOrNull(m.sensitivity_col_mode, 16),
+    numOrNull(m.sensitivity_row_step),
+    numOrNull(m.sensitivity_col_step),
+    jsonOrNull(m.sensitivity_row_levels),
+    jsonOrNull(m.sensitivity_col_levels),
   ]);
 }
 
 async function loadMethod(caseId, versionId, pool) {
   const d = wrapDb(pool);
   const rows = await d.query(
-    `SELECT terminal_type, fcf_method, sensitivity_axes, scenario_mode,
-            multiple_source, industry_stat_method, confirmed,
-            pe_multiple_step, ps_multiple_step, cagr_step, rd_cagr_step, rate_step
-     FROM valuation_method WHERE case_id = ? AND version_id = ? LIMIT 1`,
+    `SELECT * FROM valuation_method WHERE case_id = ? AND version_id = ? LIMIT 1`,
     [caseId, versionId]
   );
   if (!rows.length) return defaultMethodConfig();
@@ -113,6 +142,14 @@ async function loadMethod(caseId, versionId, pool) {
     cagr_step: numOrNull(r.cagr_step),
     rd_cagr_step: numOrNull(r.rd_cagr_step),
     rate_step: numOrNull(r.rate_step),
+    sensitivity_row_param: r.sensitivity_row_param || null,
+    sensitivity_col_param: r.sensitivity_col_param || null,
+    sensitivity_row_mode: r.sensitivity_row_mode || null,
+    sensitivity_col_mode: r.sensitivity_col_mode || null,
+    sensitivity_row_step: numOrNull(r.sensitivity_row_step),
+    sensitivity_col_step: numOrNull(r.sensitivity_col_step),
+    sensitivity_row_levels: levelsFromDb(r.sensitivity_row_levels_json),
+    sensitivity_col_levels: levelsFromDb(r.sensitivity_col_levels_json),
   };
 }
 
@@ -121,9 +158,14 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
   const a = seedDcfLiquidityDiscount({ ...defaultAssumptions(), ...(assumptions || {}) });
   a.valuation_date = parseYmd(assumptions?.valuation_date);
   const w = a.wacc_breakdown || {};
+  a.financial_anchor_date = parseYmd(assumptions?.financial_anchor_date);
+  a.discount_base_dirty = assumptions?.discount_base_dirty === true
+    || assumptions?.discount_base_dirty === 1
+    || assumptions?.discount_base_dirty === '1';
   await upsertByCaseVersion(d, 'valuation_assumption', caseId, versionId, [
     'discount_rate', 'exit_pe', 'exit_ps', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
-    'esop', 'valuation_date', 'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
+    'esop', 'valuation_date', 'financial_anchor_date', 'discount_base_dirty',
+    'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
     'pe_low_multiple', 'pe_median_multiple', 'ps_low_multiple', 'ps_median_multiple',
     'forecast_dso', 'forecast_dpo', 'forecast_dio', 'follow_on_dilution', 'rd_growth_mode',
@@ -137,6 +179,8 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     a.forecast_years == null ? null : Number(a.forecast_years),
     numOrNull(a.esop),
     sqlDate(a.valuation_date),
+    sqlDate(a.financial_anchor_date),
+    a.discount_base_dirty ? 1 : 0,
     numOrNull(a.ytd_revenue),
     numOrNull(a.market_revenue),
     numOrNull(a.market_net_income),
@@ -180,6 +224,8 @@ async function loadAssumptions(caseId, versionId, pool) {
     forecast_years: r.forecast_years == null ? 5 : Number(r.forecast_years),
     esop: numOrNull(r.esop) ?? 0,
     valuation_date: parseYmd(r.valuation_date),
+    financial_anchor_date: parseYmd(r.financial_anchor_date),
+    discount_base_dirty: Number(r.discount_base_dirty) === 1,
     ytd_revenue: numOrNull(r.ytd_revenue),
     market_revenue: numOrNull(r.market_revenue),
     market_net_income: numOrNull(r.market_net_income),

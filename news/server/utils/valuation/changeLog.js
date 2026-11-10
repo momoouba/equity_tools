@@ -23,6 +23,8 @@ const ENUM_LABELS = {
     wacc_x_exit: '折现率 × 退出倍数',
     exit_x_rd_cagr: '研发费用 CAGR × 退出倍数',
     rev_cagr_x_rd_cagr: '营收 CAGR × 研发费用 CAGR',
+    univariate: '单变量试算',
+    custom: '自定义敏感性',
   },
   rd_growth_mode: { growth: '较上一年' },
   scenario_mode: { single: '单套情景', ma_and_ipo: '并购 + 上市并排' },
@@ -31,7 +33,8 @@ const ENUM_LABELS = {
 };
 
 const TRACKED_FIELDS = [
-  { key: 'valuation_date', label: '市场法锚定日', path: ['assumptions', 'valuation_date'], type: 'date' },
+  { key: 'valuation_date', label: 'DCF 折现基准日', path: ['assumptions', 'valuation_date'], type: 'date' },
+  { key: 'financial_anchor_date', label: '标的财务锚定日', path: ['assumptions', 'financial_anchor_date'], type: 'date' },
   { key: 'discount_rate', label: '汇总折现率', path: ['assumptions', 'discount_rate'], type: 'pct' },
   { key: 'exit_pe', label: '退出 P/E', path: ['assumptions', 'exit_pe'], type: 'multiple' },
   { key: 'exit_ps', label: '退出 P/S', path: ['assumptions', 'exit_ps'], type: 'multiple' },
@@ -55,6 +58,12 @@ const TRACKED_FIELDS = [
   { key: 'terminal_type', label: '终值口径', path: ['methodConfig', 'terminal_type'], type: 'enum' },
   { key: 'fcf_method', label: '现金流口径', path: ['methodConfig', 'fcf_method'], type: 'enum' },
   { key: 'sensitivity_axes', label: '敏感性轴', path: ['methodConfig', 'sensitivity_axes'], type: 'enum' },
+  { key: 'sensitivity_row_param', label: '敏感性纵轴', path: ['methodConfig', 'sensitivity_row_param'], type: 'text' },
+  { key: 'sensitivity_col_param', label: '敏感性横轴', path: ['methodConfig', 'sensitivity_col_param'], type: 'text' },
+  { key: 'sensitivity_row_mode', label: '敏感性纵轴模式', path: ['methodConfig', 'sensitivity_row_mode'], type: 'text' },
+  { key: 'sensitivity_col_mode', label: '敏感性横轴模式', path: ['methodConfig', 'sensitivity_col_mode'], type: 'text' },
+  { key: 'sensitivity_row_step', label: '敏感性纵轴步长', path: ['methodConfig', 'sensitivity_row_step'], type: 'number' },
+  { key: 'sensitivity_col_step', label: '敏感性横轴步长', path: ['methodConfig', 'sensitivity_col_step'], type: 'number' },
   { key: 'pe_multiple_step', label: 'P/E 倍数步长', path: ['methodConfig', 'pe_multiple_step'], type: 'number' },
   { key: 'ps_multiple_step', label: 'P/S 倍数步长', path: ['methodConfig', 'ps_multiple_step'], type: 'number' },
   { key: 'cagr_step', label: '营收 CAGR 步长', path: ['methodConfig', 'cagr_step'], type: 'pct' },

@@ -3,6 +3,8 @@
  * 缺报告期，或这些科目为空，就开始采集时再抓取。
  */
 
+const { reportCutoffYmd } = require('./marketUtils');
+
 const PL_REQUIRED = ['revenue', 'cogs', 'selling', 'admin', 'operating_profit', 'net_income'];
 const BS_REQUIRED = ['accounts_receivable', 'accounts_payable', 'inventory', 'cash', 'total_assets', 'equity'];
 const CF_REQUIRED = ['cfo', 'cfi', 'cff', 'da', 'capex', 'cash_end'];
@@ -55,10 +57,11 @@ function reportTypeForMonth(month) {
 function statementNeeds(asOfYmd, todayYmd) {
   const asOf = periodKey(asOfYmd);
   const today = periodKey(todayYmd) || asOf;
-  const m = /^(\d{4})-(03-31|06-30|09-30|12-31)$/.exec(asOf);
-  if (!m || !today) return [];
-  const year = Number(m[1]);
-  const md = m[2];
+  if (!asOf || !today) return [];
+  // 可比公开报表多为季末；财务锚定日若非季末，按 ≤ 该日的最近季末取公开期
+  const cutoff = reportCutoffYmd(asOf) || asOf;
+  const year = Number(cutoff.slice(0, 4));
+  const md = cutoff.slice(5);
   const month = Number(md.slice(0, 2));
   let completeYear = month === 12 ? year : year - 1;
   while (`${completeYear}-12-31` > today && completeYear > year - 8) completeYear -= 1;

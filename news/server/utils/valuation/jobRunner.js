@@ -3,8 +3,8 @@ const { generateId } = require('../idGenerator');
 const C = require('./constants');
 const { runValuationEngine, computeComparableStats } = require('./engine');
 const { defaultMethodConfig, defaultAssumptions, defaultScenarioSet, seedDcfLiquidityDiscount } = require('./defaults');
-const { prepareAmountsForEngine, parseYmd, reportCutoffYmd } = require('./marketUtils');
-const { isStatementAnchor, applyForecastCashflow, applyForecastPl } = require('./dcfForecast');
+const { prepareAmountsForEngine, parseYmd, migrateAssumptionsDates, reportCutoffYmd } = require('./marketUtils');
+const { resolveDcfDates, applyForecastCashflow, applyForecastPl } = require('./dcfForecast');
 const { listCaseComparables } = require('./comparableService');
 const {
   ensureComparablesFetched,
@@ -79,17 +79,20 @@ async function runJob(jobId) {
       });
       return;
     }
-    const valuationDate = parseYmd(payload.assumptions?.valuation_date);
-    const anchorOk = isStatementAnchor(valuationDate);
-    const reportCutoff = reportCutoffYmd(valuationDate);
-    payload.assumptions = { ...(payload.assumptions || {}), valuation_date: valuationDate };
+    payload.assumptions = migrateAssumptionsDates({ ...(payload.assumptions || {}) });
+    const dates = resolveDcfDates(payload.assumptions);
+    payload.assumptions = dates.migrated;
+    const valuationDate = dates.discount.ok ? dates.discount.ymd : parseYmd(payload.assumptions.valuation_date);
+    // 可比公开报表：≤ 折现基准日的最近季末
+    const compsReportCutoff = valuationDate ? reportCutoffYmd(valuationDate) : null;
+    const anchorOk = dates.ok;
     let industryNote = '';
     if (anchorOk && methodConfig.multiple_source === C.MULTIPLE_INDUSTRY) {
       await updateJob(jobId, { progress: 12, message: `汇总申万行业「${payload.sw_industry_l3 || ''}」倍数…` });
       const industry = await fetchIndustryMultiples(
         payload.sw_industry_l3,
         methodConfig.industry_stat_method,
-        reportCutoff,
+        valuationDate,
         (msg) => updateJob(jobId, { progress: 12, message: msg }).catch(() => {})
       );
       if (industry?.unavailable) {
@@ -106,7 +109,7 @@ async function runJob(jobId) {
     await updateJob(jobId, {
       progress: 15,
       message: anchorOk
-        ? `按财报截止日 ${reportCutoff} 检查库内财报（${comps.length} 家；估值日 ${valuationDate}）…`
+        ? `按折现基准日最近季末 ${compsReportCutoff} 检查库内财报（${comps.length} 家；折现基准日 ${valuationDate}）…`
         : `检查库内财报（${comps.length} 家）…`,
     });
     let fetchWarnings = [];
@@ -117,7 +120,7 @@ async function runJob(jobId) {
       const fetched = await ensureComparablesFetched(comps, { case_id: job.case_id, job_id: jobId }, (i, n, code) => {
         const p = 15 + Math.round((i / Math.max(n, 1)) * 50);
         updateJob(jobId, { progress: p, message: `核验/采集 ${code}（${i}/${n}）` }).catch(() => {});
-      }, reportCutoff);
+      }, compsReportCutoff);
       fetchWarnings = fetched.warnings || [];
       fetchNotes = industryNote
         ? [industryNote, ...(fetched.notes || [])]
@@ -126,7 +129,7 @@ async function runJob(jobId) {
       fetchedCount = fetched.fetchedCount || 0;
     }
 
-    await updateJob(jobId, { progress: 70, message: anchorOk ? '计算可比比率与估值…' : '估值日未就绪，先列出待补项…' });
+    await updateJob(jobId, { progress: 70, message: anchorOk ? '计算可比比率与估值…' : '财务锚定日或折现基准日未就绪，先列出待补项…' });
     let compStats = null;
     if (anchorOk) {
       const bundles = [];
@@ -142,7 +145,11 @@ async function runJob(jobId) {
           ps_median_override: c.ps_median_override,
         });
       }
-      compStats = computeComparableStats(bundles, { asOfDate: reportCutoff, valuationDate });
+      compStats = computeComparableStats(bundles, {
+        asOfDate: compsReportCutoff,
+        valuationDate,
+        financialAnchorDate: compsReportCutoff,
+      });
     }
     const assumptions = seedDcfLiquidityDiscount({
       ...(defaultAssumptions()),

@@ -522,8 +522,11 @@ function rememberStatement(map, stmt) {
 }
 
 function computeComparableStats(compsFinancials, opts = {}) {
-  // asOfDate 应为财报截止日（≤估值日最近季末）；未传时回退解析。
-  const asOfYmd = reportCutoffYmd(opts.asOfDate) || resolveValuationDate(opts.asOfDate);
+  // asOfDate / financialAnchorDate：标的与可比财报截止（任意日历日）。
+  // valuationDate：DCF 折现基准日，计算用倍数截取上限。
+  const asOfYmd = parseYmd(opts.financialAnchorDate)
+    || reportCutoffYmd(opts.asOfDate)
+    || resolveValuationDate(opts.asOfDate);
   const valuationYmd = parseYmd(opts.valuationDate) || asOfYmd;
   const cutoffForWc = parseReportCutoff(asOfYmd);
   const wcCompleteYear = cutoffForWc.ok
@@ -645,34 +648,36 @@ function computeComparableStats(compsFinancials, opts = {}) {
       }
     }
 
-    const sliced = multiplesOnOrBefore(c.multiples, asOfYmd);
-    const latestRow = sliced.length ? sliced[sliced.length - 1] : null;
-    const peHist = sliced.map((x) => toNumber(x.pe_ttm)).filter((n) => isHistPe(n));
-    const psHist = sliced.map((x) => toNumber(x.ps_ttm)).filter((n) => isSanePs(n));
-    const peLatest = latestRow?.pe_ttm ?? (peHist.length ? peHist[peHist.length - 1] : null);
-    const psLatest = latestRow?.ps_ttm ?? (psHist.length ? psHist[psHist.length - 1] : null);
-    const asofTrade = tradeDateYmd(latestRow?.trade_date) || null;
+    // 计算用：折现基准日及以前。展示用最新：不截取，取序列最后一条。
+    const valSliced = multiplesOnOrBefore(c.multiples, valuationYmd);
+    const valRow = valSliced.length ? valSliced[valSliced.length - 1] : null;
+    const peHist = valSliced.map((x) => toNumber(x.pe_ttm)).filter((n) => isHistPe(n));
+    const psHist = valSliced.map((x) => toNumber(x.ps_ttm)).filter((n) => isSanePs(n));
+    const peAtVal = toNumber(valRow?.pe_ttm);
+    const psAtVal = toNumber(valRow?.ps_ttm);
+    const valuationTrade = tradeDateYmd(valRow?.trade_date) || null;
+    const allMultiples = Array.isArray(c.multiples) ? c.multiples : [];
+    const rawLatestRow = allMultiples.length ? allMultiples[allMultiples.length - 1] : null;
+    const latestTrade = tradeDateYmd(rawLatestRow?.trade_date) || null;
+    const peLatestRaw = toNumber(rawLatestRow?.pe_ttm);
+    const psLatestRaw = toNumber(rawLatestRow?.ps_ttm);
     const peMed = median(peHist);
     const psMed = median(psHist);
     const peMean = mean(peHist);
     const psMean = mean(psHist);
     const peSd = stdev(peHist);
     const psSd = stdev(psHist);
-    // 估值基准日截面 TTM（选区参考）；无更新截面时回退财报截止日截面。
-    const valSliced = multiplesOnOrBefore(c.multiples, valuationYmd);
-    const valRow = valSliced.length ? valSliced[valSliced.length - 1] : null;
-    const peTtm = toNumber(valRow?.pe_ttm) ?? toNumber(peLatest);
-    const psTtm = toNumber(valRow?.ps_ttm) ?? toNumber(psLatest);
-    const valuationTrade = tradeDateYmd(valRow?.trade_date) || asofTrade;
-    const peUsable = isHistPe(peMed) || isHistPe(peLatest);
-    const psUsable = isSanePs(psMed) || isSanePs(psLatest);
+    const peTtm = peAtVal ?? (peHist.length ? peHist[peHist.length - 1] : null);
+    const psTtm = psAtVal ?? (psHist.length ? psHist[psHist.length - 1] : null);
+    const peUsable = isHistPe(peMed) || isHistPe(peAtVal);
+    const psUsable = isSanePs(psMed) || isSanePs(psAtVal);
     const extraWarn = [];
     if (peMed != null && peMed < 0) extraWarn.push('PE 历史中位为负，仍计入 POOL（对齐底稿亏损股）');
-    else if (!peUsable && (peLatest != null || peMed != null)) extraWarn.push('PE 为负或极端，不参与 POOL 倍数');
-    if (!psUsable && (psLatest != null || psMed != null)) extraWarn.push('PS 为负或极端，不参与 POOL 倍数');
+    else if (!peUsable && (peAtVal != null || peMed != null)) extraWarn.push('PE 为负或极端，不参与 POOL 倍数');
+    if (!psUsable && (psAtVal != null || psMed != null)) extraWarn.push('PS 为负或极端，不参与 POOL 倍数');
     if (peHist.length < 2 && psHist.length < 2) extraWarn.push('仅 1 期倍数，无法计算 σ / ±1σ');
-    if (!asofTrade) extraWarn.push(`财报截止日 ${asOfYmd} 及以前无倍数截面`);
-    else if (asofTrade < asOfYmd) extraWarn.push(`财报截止日无交易，已用 ${asofTrade} 截面`);
+    if (!valuationTrade) extraWarn.push(`折现基准日 ${valuationYmd} 及以前无倍数截面`);
+    else if (valuationTrade < valuationYmd) extraWarn.push(`折现基准日无交易，已用 ${valuationTrade} 截面`);
     const peOverride = toNumber(c.pe_median_override);
     const psOverride = toNumber(c.ps_median_override);
     if (peOverride != null) extraWarn.push('PE 已用底稿中位进 POOL');
@@ -681,27 +686,31 @@ function computeComparableStats(compsFinancials, opts = {}) {
       stock_code: c.stock_code,
       stock_name: c.stock_name,
       asof_date: parseYmd(asOfYmd) || beijingYmd(),
-      asof_trade_date: parseYmd(asofTrade),
+      asof_trade_date: parseYmd(valuationTrade),
       valuation_date: parseYmd(valuationYmd) || null,
       valuation_trade_date: parseYmd(valuationTrade),
       pe_ttm: peTtm,
       ps_ttm: psTtm,
       pe_mean: peMean,
       ps_mean: psMean,
-      pe_latest: peLatest,
+      pe_latest: peAtVal,
       pe_median: peMed,
       pe_median_override: peOverride,
       pe_stdev: peSd,
       pe_minus_1s: peMed != null && peSd != null ? peMed - peSd : null,
       pe_plus_1s: peMed != null && peSd != null ? peMed + peSd : null,
       pe_usable: peOverride != null ? true : peUsable,
-      ps_latest: psLatest,
+      ps_latest: psAtVal,
       ps_median: psMed,
       ps_median_override: psOverride,
       ps_stdev: psSd,
       ps_minus_1s: psMed != null && psSd != null ? psMed - psSd : null,
       ps_plus_1s: psMed != null && psSd != null ? psMed + psSd : null,
       ps_usable: psOverride != null ? true : psUsable,
+      // 只读参考：数据源最新可用交易日，不进市场法结论
+      latest_trade_date: parseYmd(latestTrade),
+      latest_pe: peLatestRaw,
+      latest_ps: psLatestRaw,
       quality_warning: [c.quality_warning, ...extraWarn].filter(Boolean).join('；') || null,
       in_pool: !!c.in_pool,
       comparability: c.comparability || null,
@@ -1238,6 +1247,16 @@ function runValuationEngine(input) {
         rdCagrStep: method.rd_cagr_step,
         rateStep: method.rate_step,
       },
+      custom: {
+        rowParam: method.sensitivity_row_param,
+        colParam: method.sensitivity_col_param,
+        rowMode: method.sensitivity_row_mode,
+        colMode: method.sensitivity_col_mode,
+        rowStep: method.sensitivity_row_step,
+        colStep: method.sensitivity_col_step,
+        rowLevels: method.sensitivity_row_levels,
+        colLevels: method.sensitivity_col_levels,
+      },
       rebuild: (patch) => buildDcfForecast({
         assumptions,
         targetPl: input.targetPl || {},
@@ -1255,6 +1274,7 @@ function runValuationEngine(input) {
         overrides: input.overrides || {},
         revenueOverride: patch.revenueOverride,
         rdOverride: patch.rdOverride,
+        sensitivityShocks: patch.sensitivityShocks || null,
       }),
     });
     return { selected, peRun, psRun };

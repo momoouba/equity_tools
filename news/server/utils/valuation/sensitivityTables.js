@@ -1,4 +1,5 @@
 const { round2, yuanToYi2 } = require('./exitReturn');
+const { PARAMS, axisLevels, patchFromLevel, mergePatches } = require('./sensitivityCustom');
 
 const RATE_FLOOR = 0.01;
 const DEFAULT_PE_STEP = 10;
@@ -10,6 +11,7 @@ function normalizeAxes(axes) {
   if (axes === 'exit_x_wacc' || axes === 'wacc_x_exit') return 'exit_x_wacc';
   if (axes === 'exit_x_rd_cagr') return 'exit_x_rd_cagr';
   if (axes === 'rev_cagr_x_rd_cagr') return 'rev_cagr_x_rd_cagr';
+  if (axes === 'univariate' || axes === 'custom') return axes;
   return 'exit_x_cagr';
 }
 
@@ -135,11 +137,161 @@ function rateRows(rate, step) {
  * @param {object} [args.steps]
  * @param {string} args.scenarioMode
  */
-function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode } = {}) {
+function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
   const peOk = peRun && !peRun.blocked && peRun.equity_value != null;
   const psOk = psRun && !psRun.blocked && psRun.equity_value != null;
   if (!peOk && !psOk) return null;
+  const rate = baseRateOf(peRun, psRun);
+  const stepSet = steps || {};
+  const cfg = custom || {};
+  const rowParam = cfg.rowParam || 'rev_cagr';
+  const colParam = axes === 'univariate' ? null : (cfg.colParam || 'exit_multiple');
+  if (colParam && rowParam === colParam) {
+    return {
+      scenario_mode: scenarioMode || 'single',
+      axes,
+      holding_years: holdingYearsOf(peRun, psRun),
+      wacc_floored: false,
+      discount_rate: rate,
+      axis_title: '横轴与纵轴不能相同',
+      pe: { blocked: true, cells: null },
+      ps: { blocked: true, cells: null },
+    };
+  }
+  const ctx = {
+    revValues: seriesOf(peRun, psRun, 'revenue'),
+    rdValues: seriesOf(peRun, psRun, 'rd'),
+  };
+  const rowLevels = axisLevels(rowParam, {
+    mode: cfg.rowMode || 'step',
+    step: cfg.rowStep,
+    levels: cfg.rowLevels,
+    peStep: stepSet.peStep,
+    psStep: stepSet.psStep,
+  });
+  const colLevels = colParam
+    ? axisLevels(colParam, {
+      mode: cfg.colMode || 'step',
+      step: cfg.colStep,
+      levels: cfg.colLevels,
+      peStep: stepSet.peStep,
+      psStep: stepSet.psStep,
+    })
+    : [{ delta: 0, center: true, label: '当前', meta: null }];
+
+  const buildSide = (run, terminalType, ok) => {
+    const multiple = Number(run?.exit_multiple);
+    if (!ok || !(multiple > 0)) {
+      return {
+        blocked: true,
+        multiple: Number.isFinite(multiple) ? multiple : null,
+        equity_yi: null,
+        cap_yi: null,
+        row_labels: null,
+        col_labels: null,
+        center_row: null,
+        center_col: null,
+        cells: null,
+      };
+    }
+    const center = copyCell(run);
+    const resolvedCols = colParam === 'exit_multiple'
+      ? axisLevels('exit_multiple', {
+        mode: cfg.colMode || 'step',
+        step: cfg.colStep,
+        levels: cfg.colLevels,
+        peStep: stepSet.peStep,
+        psStep: stepSet.psStep,
+        terminalType,
+      })
+      : (colParam ? colLevels : [{ delta: 0, center: true, label: '当前', meta: null }]);
+    const resolvedRows = rowParam === 'exit_multiple'
+      ? axisLevels('exit_multiple', {
+        mode: cfg.rowMode || 'step',
+        step: cfg.rowStep,
+        levels: cfg.rowLevels,
+        peStep: stepSet.peStep,
+        psStep: stepSet.psStep,
+        terminalType,
+      })
+      : rowLevels;
+
+    const cells = resolvedRows.map((row) => resolvedCols.map((col) => {
+      if (row.center && col.center) return center;
+      let patch = mergePatches(
+        patchFromLevel(rowParam, row, ctx),
+        colParam ? patchFromLevel(colParam, col, ctx) : {},
+      );
+      let usedMultiple = multiple + (patch.multipleDelta || 0);
+      if (rowParam === 'exit_multiple') usedMultiple = multiple + row.delta;
+      if (colParam === 'exit_multiple') usedMultiple = multiple + col.delta;
+      if (!(usedMultiple > 0)) return { equity_yi: null, cap_yi: null, blank: 'multiple' };
+      const nextRate = rate + (patch.rateDelta || 0);
+      const usedRate = nextRate < RATE_FLOOR ? RATE_FLOOR : nextRate;
+      if (Array.isArray(patch.revenueOverride) && patch.revenueOverride.some((v) => !(Number(v) > 0))) {
+        return { equity_yi: null, cap_yi: null, blank: 'revenue' };
+      }
+      const next = rebuild({
+        rate: usedRate,
+        multiple: usedMultiple,
+        terminalType,
+        revenueOverride: patch.revenueOverride,
+        rdOverride: patch.rdOverride,
+        sensitivityShocks: {
+          ratioDeltas: patch.ratioDeltas,
+          dayDeltas: patch.dayDeltas,
+        },
+      });
+      return cellFromRun(next, terminalType);
+    }));
+    const labelFor = (param, level) => {
+      if (level.center) return param ? '当前预测' : '当前';
+      if (!param) return level.label;
+      if (PARAMS[param]?.kind === 'cagr') {
+        const base = impliedCagr(param === 'rd_cagr' ? ctx.rdValues : ctx.revValues);
+        return base == null ? level.label : pctLabel(base + level.delta);
+      }
+      if (PARAMS[param]?.kind === 'rate') return pctLabel(rate + level.delta);
+      if (PARAMS[param]?.kind === 'multiple') return multipleLabel(multiple + level.delta);
+      return level.label;
+    };
+    return {
+      blocked: false,
+      multiple,
+      equity_yi: center.equity_yi,
+      cap_yi: center.cap_yi,
+      row_labels: resolvedRows.map((r) => labelFor(rowParam, r)),
+      col_labels: resolvedCols.map((c) => labelFor(colParam, c)),
+      center_row: resolvedRows.findIndex((r) => r.center),
+      center_col: resolvedCols.findIndex((c) => c.center),
+      cells,
+    };
+  };
+
+  const rowLabel = PARAMS[rowParam]?.label || rowParam;
+  const colLabel = colParam ? (PARAMS[colParam]?.label || colParam) : null;
+  return {
+    scenario_mode: scenarioMode || 'single',
+    axes,
+    axis_title: colLabel ? `${rowLabel} × ${colLabel}` : rowLabel,
+    holding_years: holdingYearsOf(peRun, psRun),
+    wacc_floored: false,
+    discount_rate: rate,
+    pe: buildSide(peRun, 'exit_pe', peOk),
+    ps: buildSide(psRun, 'exit_ps', psOk),
+  };
+}
+
+function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
   const mode = normalizeAxes(axes);
+  if (mode === 'univariate' || mode === 'custom') {
+    return buildCustomExitView({
+      peRun, psRun, rebuild, axes: mode, steps, scenarioMode, custom,
+    });
+  }
+  const peOk = peRun && !peRun.blocked && peRun.equity_value != null;
+  const psOk = psRun && !psRun.blocked && psRun.equity_value != null;
+  if (!peOk && !psOk) return null;
   const rate = baseRateOf(peRun, psRun);
   const stepSet = steps || {};
   const revenueStep = positiveStep(stepSet.cagrStep, DEFAULT_CAGR_STEP);
@@ -246,4 +398,5 @@ module.exports = {
   blankReason,
   buildExitView,
   positiveStep,
+  PARAMS,
 };

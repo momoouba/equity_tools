@@ -287,9 +287,16 @@ function resolveValuationDate(value, createdAt) {
 
 const STATEMENT_CUTOFF_MDS = ['03-31', '06-30', '09-30', '12-31'];
 
+function ymdParts(raw) {
+  const year = Number(raw.slice(0, 4));
+  const month = Number(raw.slice(5, 7));
+  const day = Number(raw.slice(8, 10));
+  return { year, month, day };
+}
+
 /**
- * 估值日：任意合法日历日即可。非法或空则 ok=false。
- * 折现原点与标的当期实际列用这一天。
+ * DCF 折现基准日（assumptions.valuation_date）：任意合法日历日。
+ * 非法或空则 ok=false。
  */
 function parseValuationDate(value) {
   const raw = parseYmd(value);
@@ -299,32 +306,61 @@ function parseValuationDate(value) {
       ymd: raw || null,
       year: null,
       month: null,
-      message: '请选择估值日',
+      day: null,
+      message: '请选择 DCF 折现基准日',
     };
   }
-  const year = Number(raw.slice(0, 4));
-  const month = Number(raw.slice(5, 7));
-  if (!Number.isFinite(year) || month < 1 || month > 12) {
+  const { year, month, day } = ymdParts(raw);
+  if (!Number.isFinite(year) || month < 1 || month > 12 || day < 1 || day > 31) {
     return {
       ok: false,
       ymd: raw,
       year: null,
       month: null,
-      message: '请选择估值日',
+      day: null,
+      message: '请选择 DCF 折现基准日',
     };
   }
-  return { ok: true, ymd: raw, year, month, message: null };
+  return { ok: true, ymd: raw, year, month, day, message: null };
 }
 
 /**
- * 财报/倍数截止日：≤ 估值日的最近季末（03-31 / 06-30 / 09-30 / 12-31）。
- * 例：2026-11-01 → 2026-09-30；2026-09-30 → 2026-09-30。
+ * 标的财务锚定日：任意合法日历日（常见为各月月末报表日）。
+ */
+function parseFinancialAnchorDate(value) {
+  const raw = parseYmd(value);
+  if (!raw || !/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return {
+      ok: false,
+      ymd: raw || null,
+      year: null,
+      month: null,
+      day: null,
+      message: '请选择标的财务锚定日',
+    };
+  }
+  const { year, month, day } = ymdParts(raw);
+  if (!Number.isFinite(year) || month < 1 || month > 12 || day < 1 || day > 31) {
+    return {
+      ok: false,
+      ymd: raw,
+      year: null,
+      month: null,
+      day: null,
+      message: '请选择标的财务锚定日',
+    };
+  }
+  return { ok: true, ymd: raw, year, month, day, message: null };
+}
+
+/**
+ * 由任意日推导「≤ 该日的最近季末」。迁移旧案或兼容仍可用。
+ * 财务锚定日已显式保存后，采集/残段应直接用 financial_anchor_date，不再经此推导。
  */
 function reportCutoffYmd(valuationYmd) {
   const ymd = parseYmd(valuationYmd);
   if (!ymd) return null;
   const year = Number(ymd.slice(0, 4));
-  const md = ymd.slice(5);
   for (let i = STATEMENT_CUTOFF_MDS.length - 1; i >= 0; i -= 1) {
     const candidate = `${year}-${STATEMENT_CUTOFF_MDS[i]}`;
     if (candidate <= ymd) return candidate;
@@ -332,21 +368,57 @@ function reportCutoffYmd(valuationYmd) {
   return `${year - 1}-12-31`;
 }
 
-/** 将估值日或已是季末的日期解析为财报截止（ok 时必为季末）。 */
+/** 将日期解析为财报截止日（任意日历日均可）。 */
 function parseReportCutoff(value) {
-  const cutoff = reportCutoffYmd(value) || parseYmd(value);
-  if (!cutoff) {
-    return {
-      ok: false,
-      ymd: null,
-      year: null,
-      month: null,
-      message: '请选择估值日',
-    };
+  const direct = parseFinancialAnchorDate(value);
+  if (direct.ok) return direct;
+  return {
+    ok: false,
+    ymd: null,
+    year: null,
+    month: null,
+    day: null,
+    message: '请选择标的财务锚定日',
+  };
+}
+
+/** 两日差（end − start）的日历天数；非法返回 null。 */
+function calendarDaysBetween(startYmd, endYmd) {
+  const a = parseYmd(startYmd);
+  const b = parseYmd(endYmd);
+  if (!a || !b) return null;
+  const start = Date.UTC(Number(a.slice(0, 4)), Number(a.slice(5, 7)) - 1, Number(a.slice(8, 10)));
+  const end = Date.UTC(Number(b.slice(0, 4)), Number(b.slice(5, 7)) - 1, Number(b.slice(8, 10)));
+  return Math.round((end - start) / 86400000);
+}
+
+/**
+ * 打开旧案或补全假设：financial_anchor_date + valuation_date（折现基准日）+ dirty。
+ * - 仅有 valuation_date → 财务锚定默认同日，dirty=false
+ * - 已有两日且折现基准早于财务锚定 → 抬升到财务锚定
+ */
+function migrateAssumptionsDates(assumptions) {
+  const a = { ...(assumptions || {}) };
+  const discount = parseYmd(a.valuation_date);
+  let financial = parseYmd(a.financial_anchor_date);
+  let dirty = a.discount_base_dirty === true || a.discount_base_dirty === 1 || a.discount_base_dirty === '1';
+
+  if (!financial && discount) {
+    financial = discount;
+    dirty = false;
   }
-  const year = Number(cutoff.slice(0, 4));
-  const month = Number(cutoff.slice(5, 7));
-  return { ok: true, ymd: cutoff, year, month, message: null };
+
+  if (financial && !discount) {
+    a.valuation_date = financial;
+  } else if (financial && discount && discount < financial) {
+    a.valuation_date = financial;
+  } else if (discount) {
+    a.valuation_date = discount;
+  }
+
+  if (financial) a.financial_anchor_date = financial;
+  a.discount_base_dirty = dirty;
+  return a;
 }
 
 function sqlDate(value) {
@@ -399,7 +471,11 @@ module.exports = {
   parseYmd,
   resolveValuationDate,
   parseValuationDate,
+  parseFinancialAnchorDate,
   reportCutoffYmd,
   parseReportCutoff,
+  calendarDaysBetween,
+  migrateAssumptionsDates,
+  STATEMENT_CUTOFF_MDS,
   sqlDate,
 };

@@ -568,6 +568,8 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['forecast_dio', "DECIMAL(20,4) NULL COMMENT '预测默认存货周转天数；空则用可比中位数'"],
     ['follow_on_dilution', "DECIMAL(20,8) NULL COMMENT '后续股权稀释，空值表示 100%'"],
     ['rd_growth_mode', "VARCHAR(16) NULL COMMENT '研发费用百分数口径：growth 为较上一年，空为占收入'"],
+    ['financial_anchor_date', "VARCHAR(16) NULL COMMENT '标的财务锚定日（任意日历日）'"],
+    ['discount_base_dirty', "TINYINT(1) NULL COMMENT '折现基准日是否已手改'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_method', [
     ['pe_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长'"],
@@ -575,6 +577,14 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['cagr_step', "DECIMAL(20,8) NULL COMMENT '营收 CAGR 步长，小数'"],
     ['rd_cagr_step', "DECIMAL(20,8) NULL COMMENT '研发费用 CAGR 步长，小数'"],
     ['rate_step', "DECIMAL(20,8) NULL COMMENT '折现率步长，小数'"],
+    ['sensitivity_row_param', "VARCHAR(32) NULL COMMENT '自定义/单变量纵轴参数'"],
+    ['sensitivity_col_param', "VARCHAR(32) NULL COMMENT '自定义横轴参数'"],
+    ['sensitivity_row_mode', "VARCHAR(16) NULL COMMENT 'step/levels'"],
+    ['sensitivity_col_mode', "VARCHAR(16) NULL COMMENT 'step/levels'"],
+    ['sensitivity_row_step', "DECIMAL(20,8) NULL COMMENT '纵轴步长'"],
+    ['sensitivity_col_step', "DECIMAL(20,8) NULL COMMENT '横轴步长'"],
+    ['sensitivity_row_levels_json', "JSON NULL COMMENT '纵轴相对 Δ 档位'"],
+    ['sensitivity_col_levels_json', "JSON NULL COMMENT '横轴相对 Δ 档位'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_dcf_run', [
     ['series_json', "JSON NULL COMMENT '预测明细：收入到自由现金流的分年序列，元'"],
