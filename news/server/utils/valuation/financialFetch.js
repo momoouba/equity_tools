@@ -222,14 +222,18 @@ async function upsertMultipleRow(code, market, row) {
   );
   const peLyr = toNumber(pick(row, ['PE_LYR', 'pe_lyr', 'PELYR', 'PE_LAR']));
   const psLyr = toNumber(pick(row, ['PS_LYR', 'ps_lyr', 'PSLYR']));
+  const peNtm = toNumber(pick(row, ['PE_NTM', 'pe_ntm', 'PE_DYNAMIC', 'DYNAMIC_PE', 'PE_TTM2', 'PETTM2']));
+  const psNtm = toNumber(pick(row, ['PS_NTM', 'ps_ntm', 'PS_DYNAMIC', 'DYNAMIC_PS']));
   const cap = toNumber(pick(row, ['TOTAL_MARKET_CAP', 'market_cap', 'MARKET_CAP_A']));
   if (exist.length) {
     await db.execute(
       `UPDATE listed_company_market_multiples
        SET pe_ttm = COALESCE(pe_ttm, ?), ps_ttm = COALESCE(ps_ttm, ?),
-           pe_lyr = COALESCE(pe_lyr, ?), ps_lyr = COALESCE(ps_lyr, ?)
+           pe_lyr = COALESCE(pe_lyr, ?), ps_lyr = COALESCE(ps_lyr, ?),
+           pe_ntm = COALESCE(?, pe_ntm), ps_ntm = COALESCE(?, ps_ntm),
+           market_cap = COALESCE(?, market_cap)
        WHERE F_Id = ?`,
-      [pe, ps, peLyr, psLyr, exist[0].F_Id]
+      [pe, ps, peLyr, psLyr, peNtm, psNtm, cap, exist[0].F_Id]
     );
     return { inserted: false, withPe: pe != null, date };
   }
@@ -237,11 +241,90 @@ async function upsertMultipleRow(code, market, row) {
   await db.execute(
     `INSERT INTO listed_company_market_multiples (
        F_Id, stock_code, listing_market, trade_date, pe_ttm, pe_lyr, ps_ttm, ps_lyr,
-       market_cap, data_source, fetched_at, F_CreatorTime
-     ) VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
-    [id, code, market, date, pe, peLyr, ps, psLyr, cap, 'eastmoney.valueanalysis']
+       pe_ntm, ps_ntm, market_cap, data_source, fetched_at, F_CreatorTime
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
+    [id, code, market, date, pe, peLyr, ps, psLyr, peNtm, psNtm, cap, 'eastmoney.valueanalysis']
   );
   return { inserted: true, withPe: pe != null, date };
+}
+
+/** 可比公司 NTM：拉一致预期净利润/营收；倍数 = 截面市值 ÷ 预测（仅用于可比 POOL，不是目标公司基数）。 */
+async function fetchNtmForecast(stockCode, listingMarket) {
+  const code = padStockCode(stockCode);
+  const market = listingMarket || listingMarketFromCode(code);
+  const secucode = eastmoneySecucode(code, market);
+  const reportAttempts = [
+    {
+      reportName: 'RPT_BASIC_DERIEXP',
+      filter: `(SECUCODE="${secucode}")`,
+      pickNi: ['EPS_TTM', 'NETPROFIT_AVG', 'NETPROFIT', 'PREDICT_NETPROFIT', 'YAER1_NETPROFIT'],
+      pickRev: ['OPERATEREVE_AVG', 'OPERATEREVE', 'PREDICT_OPERATEREVE', 'YAER1_OPERATEREVE', 'TOTAL_OPERATEINCOME'],
+    },
+    {
+      reportName: 'RPT_ESTIMATE_DETC',
+      filter: `(SECURITY_CODE="${code}")`,
+      pickNi: ['NET_PROFIT', 'NETPROFIT', 'PROFIT_NTM', 'YEAR1_NETPROFIT'],
+      pickRev: ['OPERATE_INCOME', 'REVENUE', 'REVENUE_NTM', 'YEAR1_REVENUE'],
+    },
+    {
+      reportName: 'RPTA_WEB_STOCKPREDICT',
+      filter: `(SECURITY_CODE="${code}")`,
+      pickNi: ['NETPROFIT', 'YJYG_NETPROFIT', 'PREDICT_NP'],
+      pickRev: ['OPERATEREVE', 'YJYG_OPERATEREVE', 'PREDICT_REV'],
+    },
+  ];
+  for (const attempt of reportAttempts) {
+    try {
+      const rows = await fetchDatacenterTable({
+        reportName: attempt.reportName,
+        filter: attempt.filter,
+        pageSize: 8,
+        sortColumns: 'NOTICE_DATE',
+        source: 'WEB',
+        client: 'WEB',
+      });
+      if (!rows.length) continue;
+      const row = rows[0];
+      let ni = toNumber(pick(row, attempt.pickNi));
+      let rev = toNumber(pick(row, attempt.pickRev));
+      // 部分接口净利润单位为万元
+      if (ni != null && Math.abs(ni) < 1e7 && Math.abs(ni) > 1) ni *= 10000;
+      if (rev != null && Math.abs(rev) < 1e8 && Math.abs(rev) > 1) rev *= 10000;
+      if (ni != null || rev != null) {
+        return { ok: true, ni_ntm: ni, rev_ntm: rev, source: attempt.reportName };
+      }
+    } catch {
+      // try next
+    }
+  }
+  return { ok: false, ni_ntm: null, rev_ntm: null };
+}
+
+async function upsertNtmOnLatestMultiple(stockCode, listingMarket) {
+  const code = padStockCode(stockCode);
+  const forecast = await fetchNtmForecast(code, listingMarket);
+  const latest = await db.query(
+    `SELECT F_Id, market_cap, pe_ntm, ps_ntm FROM listed_company_market_multiples
+     WHERE stock_code = ? ORDER BY trade_date DESC LIMIT 1`,
+    [code]
+  );
+  if (!latest.length) return forecast;
+  const row = latest[0];
+  const cap = toNumber(row.market_cap);
+  let peNtm = toNumber(row.pe_ntm);
+  let psNtm = toNumber(row.ps_ntm);
+  const ni = forecast.ni_ntm;
+  const rev = forecast.rev_ntm;
+  if (peNtm == null && cap != null && ni != null && ni !== 0) peNtm = cap / ni;
+  if (psNtm == null && cap != null && rev != null && rev !== 0) psNtm = cap / rev;
+  await db.execute(
+    `UPDATE listed_company_market_multiples
+     SET ni_ntm = COALESCE(?, ni_ntm), rev_ntm = COALESCE(?, rev_ntm),
+         pe_ntm = COALESCE(?, pe_ntm), ps_ntm = COALESCE(?, ps_ntm)
+     WHERE F_Id = ?`,
+    [ni, rev, peNtm, psNtm, row.F_Id]
+  );
+  return { ...forecast, pe_ntm: peNtm, ps_ntm: psNtm, market_cap: cap };
 }
 
 async function eastmoneySuggestCodes(input) {
@@ -425,7 +508,8 @@ async function loadCompanyFinancialBundle(stockCode) {
     [code]
   );
   const multiples = await db.query(
-    `SELECT stock_code, trade_date, pe_ttm, pe_lyr, ps_ttm, ps_lyr, market_cap, quality_warning
+    `SELECT stock_code, trade_date, pe_ttm, pe_lyr, ps_ttm, ps_lyr,
+            pe_ntm, ps_ntm, ni_ntm, rev_ntm, market_cap, quality_warning
      FROM listed_company_market_multiples
      WHERE stock_code = ?
      ORDER BY trade_date ASC`,
@@ -827,6 +911,12 @@ async function ensureComparablesFetched(comps, logCtx, onProgress, asOfYmd) {
     const cov = await inspectLocalCoverage(code, asOfYmd);
     if (cov.statementsReady && cov.multiplesReady) {
       skipped.push(code);
+      try {
+        await upsertNtmOnLatestMultiple(code, market);
+      } catch (e) {
+        warnings.push(`${code}：NTM 预测倍数补采失败（${e.message || 'unknown'}）`);
+      }
+      await sleep(200);
       continue;
     }
 
@@ -858,6 +948,11 @@ async function ensureComparablesFetched(comps, logCtx, onProgress, asOfYmd) {
         }
       }
     }
+    try {
+      await upsertNtmOnLatestMultiple(code, market);
+    } catch (e) {
+      warnings.push(`${code}：NTM 预测倍数补采失败（${e.message || 'unknown'}）`);
+    }
     await sleep(400);
   }
 
@@ -872,6 +967,8 @@ async function ensureComparablesFetched(comps, logCtx, onProgress, asOfYmd) {
 module.exports = {
   ensureComparablesFetched,
   fetchHistoryMultiples,
+  fetchNtmForecast,
+  upsertNtmOnLatestMultiple,
   loadCompanyFinancialBundle,
   fetchIndustryMultiples,
   listSwIndustryNames,

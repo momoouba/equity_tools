@@ -80,9 +80,16 @@ function SensTable({ title, side, block, dealYi, dilution, years }) {
             <tr key={`${label}-${i}`}>
               <th>{label}</th>
               {(side.cells[i] || []).map((cell, j) => {
+                const inBand = side.center_row != null
+                  && side.center_col != null
+                  && Math.abs(i - side.center_row) <= 1
+                  && Math.abs(j - side.center_col) <= 1
+                  && cell?.equity_yi != null
+                  && Number.isFinite(Number(cell.equity_yi))
                 const center = i === side.center_row && j === side.center_col
+                const cls = inBand ? (center ? 'is-center is-band' : 'is-band') : undefined
                 return (
-                  <td key={`${i}-${j}`} className={center ? 'is-center' : undefined}>
+                  <td key={`${i}-${j}`} className={cls}>
                     {cellText(cell, block, dealYi, dilution, years)}
                   </td>
                 )

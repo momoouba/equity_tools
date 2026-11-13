@@ -80,6 +80,42 @@ function copyCell(run) {
   };
 }
 
+/** 中心 ±1 邻域内有 equity_yi 的 min/max；全空则回退中心点。 */
+function bandFromCells(cells, centerRow, centerCol, fallbackYi) {
+  const vals = [];
+  if (!Array.isArray(cells) || centerRow == null || centerCol == null) {
+    return { band_low_yi: fallbackYi ?? null, band_high_yi: fallbackYi ?? null };
+  }
+  for (let i = centerRow - 1; i <= centerRow + 1; i += 1) {
+    if (i < 0 || i >= cells.length) continue;
+    const row = cells[i] || [];
+    for (let j = centerCol - 1; j <= centerCol + 1; j += 1) {
+      if (j < 0 || j >= row.length) continue;
+      const v = Number(row[j]?.equity_yi);
+      if (Number.isFinite(v)) vals.push(v);
+    }
+  }
+  if (!vals.length) {
+    const fb = fallbackYi != null && Number.isFinite(Number(fallbackYi)) ? Number(fallbackYi) : null;
+    return { band_low_yi: fb, band_high_yi: fb };
+  }
+  return { band_low_yi: Math.min(...vals), band_high_yi: Math.max(...vals) };
+}
+
+function withBand(side) {
+  if (!side || side.blocked || !side.cells) {
+    return {
+      ...side,
+      band_low_yi: side?.equity_yi ?? null,
+      band_high_yi: side?.equity_yi ?? null,
+    };
+  }
+  return {
+    ...side,
+    ...bandFromCells(side.cells, side.center_row, side.center_col, side.equity_yi),
+  };
+}
+
 function holdingYearsOf(peRun, psRun) {
   const run = (psRun && !psRun.blocked && psRun.pvs?.length) ? psRun : peRun;
   const periods = run?.pvs?.length ? run.pvs[run.pvs.length - 1].periods : null;
@@ -277,8 +313,8 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
     holding_years: holdingYearsOf(peRun, psRun),
     wacc_floored: false,
     discount_rate: rate,
-    pe: buildSide(peRun, 'exit_pe', peOk),
-    ps: buildSide(psRun, 'exit_ps', psOk),
+    pe: withBand(buildSide(peRun, 'exit_pe', peOk)),
+    ps: withBand(buildSide(psRun, 'exit_ps', psOk)),
   };
 }
 
@@ -387,8 +423,8 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custo
     holding_years: holdingYearsOf(peRun, psRun),
     wacc_floored: waccFloored,
     discount_rate: rate,
-    pe: buildSide(peRun, 'exit_pe', peOk),
-    ps: buildSide(psRun, 'exit_ps', psOk),
+    pe: withBand(buildSide(peRun, 'exit_pe', peOk)),
+    ps: withBand(buildSide(psRun, 'exit_ps', psOk)),
   };
 }
 
@@ -397,6 +433,7 @@ module.exports = {
   impliedCagr,
   blankReason,
   buildExitView,
+  bandFromCells,
   positiveStep,
   PARAMS,
 };

@@ -21,33 +21,82 @@ function band(name, low, high) {
   return { name, low: lo, high: hi, span: hi - lo }
 }
 
-export default function ValuationFootballField({ comparison, dealYi, height = 248 }) {
+function pushBand(list, name, low, high) {
+  const row = band(name, low, high)
+  if (row) list.push(row)
+}
+
+function sideBand(side) {
+  if (!side || side.blocked) return { low: null, high: null }
+  const low = side.band_low_yi != null ? side.band_low_yi : side.equity_yi
+  const high = side.band_high_yi != null ? side.band_high_yi : side.equity_yi
+  return { low, high }
+}
+
+/**
+ * @param {object} props
+ * @param {object} props.comparison display_yi comparison
+ * @param {object} [props.primary] dcf primary payload (with exit_view)
+ * @param {object} [props.secondary] dcf secondary payload
+ * @param {number|string} [props.dealYi]
+ * @param {number} [props.height]
+ */
+export default function ValuationFootballField({
+  comparison,
+  primary,
+  secondary,
+  dealYi,
+  height = 280,
+}) {
   const rows = useMemo(() => {
     if (!comparison) return []
     const list = []
-    const dcf = comparison.dcf || {}
-    if (dcf.ma) {
-      const ma = band('DCF 并购', dcf.ma.low, dcf.ma.high)
-      const ipo = band('DCF 上市', dcf.ipo?.low, dcf.ipo?.high)
-      if (ma) list.push(ma)
-      if (ipo) list.push(ipo)
+    const peView = primary?.exit_view?.pe
+    const psView = primary?.exit_view?.ps
+    const peBand = sideBand(peView)
+    const psBand = sideBand(psView)
+    const dual = primary?.exit_view?.scenario_mode === 'ma_and_ipo' && secondary?.exit_view
+
+    if (dual) {
+      const maPe = sideBand(primary.exit_view?.pe)
+      const maPs = sideBand(primary.exit_view?.ps)
+      const ipoPe = sideBand(secondary.exit_view?.pe)
+      const ipoPs = sideBand(secondary.exit_view?.ps)
+      pushBand(list, 'DCF 并购 P/E', maPe.low, maPe.high)
+      pushBand(list, 'DCF 并购 P/S', maPs.low, maPs.high)
+      pushBand(list, 'DCF 上市 P/E', ipoPe.low, ipoPe.high)
+      pushBand(list, 'DCF 上市 P/S', ipoPs.low, ipoPs.high)
+    } else if (peView || psView) {
+      pushBand(list, 'DCF P/E', peBand.low, peBand.high)
+      pushBand(list, 'DCF P/S', psBand.low, psBand.high)
     } else {
-      const one = band('DCF', dcf.low, dcf.high)
-      if (one) list.push(one)
+      const dcf = comparison.dcf || {}
+      if (dcf.ma) {
+        pushBand(list, 'DCF 并购', dcf.ma.low, dcf.ma.high)
+        pushBand(list, 'DCF 上市', dcf.ipo?.low, dcf.ipo?.high)
+      } else {
+        pushBand(list, 'DCF', dcf.low, dcf.high)
+      }
     }
-    const pe = band('市场法 P/E', comparison.market_pe?.low, comparison.market_pe?.high)
-    const ps = band('市场法 P/S', comparison.market_ps?.low, comparison.market_ps?.high)
-    if (pe) list.push(pe)
-    if (ps) list.push(ps)
+
+    pushBand(list, '市场法 P/E TTM', comparison.market_pe_ttm?.low ?? comparison.market_pe?.low, comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)
+    pushBand(list, '市场法 P/E NTM', comparison.market_pe_ntm?.low, comparison.market_pe_ntm?.high)
+    pushBand(list, '市场法 P/S TTM', comparison.market_ps_ttm?.low ?? comparison.market_ps?.low, comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)
+    pushBand(list, '市场法 P/S NTM', comparison.market_ps_ntm?.low, comparison.market_ps_ntm?.high)
     return list
-  }, [comparison])
+  }, [comparison, primary, secondary])
 
   const option = useMemo(() => {
     if (!rows.length) return null
     const deal = num(dealYi)
-    const maxVal = Math.max(...rows.map((r) => r.high), deal != null && deal > 0 ? deal : 0, 0)
-    const xMax = Math.max(5, Math.ceil((maxVal * 1.12) / 5) * 5)
+    const lows = rows.map((r) => r.low)
+    const highs = rows.map((r) => r.high)
+    const dataMin = Math.min(...lows, 0)
+    const dataMax = Math.max(...highs, deal != null && deal > 0 ? deal : 0, 0)
+    const xMin = dataMin < 0 ? Math.floor(dataMin / 5) * 5 : 0
+    const xMax = Math.max(5, Math.ceil((dataMax * 1.12) / 5) * 5)
     const ordered = [...rows].reverse()
+    const chartH = Math.max(height, 48 + rows.length * 28)
     return {
       animation: false,
       grid: { left: 36, right: 40, top: 12, bottom: 28 },
@@ -64,7 +113,7 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
       },
       xAxis: {
         type: 'value',
-        min: 0,
+        min: xMin,
         max: xMax,
         interval: 5,
         axisLabel: { color: '#86909c', fontSize: 11, formatter: (v) => Number(v).toFixed(1) },
@@ -85,7 +134,7 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
           type: 'bar',
           stack: 'range',
           silent: true,
-          barWidth: 16,
+          barWidth: 14,
           data: ordered.map((r) => r.low),
           itemStyle: { color: 'transparent' },
           label: {
@@ -99,7 +148,7 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
         {
           type: 'bar',
           stack: 'range',
-          barWidth: 16,
+          barWidth: 14,
           data: ordered.map((r) => r.span),
           itemStyle: { color: '#5B8FF9', borderRadius: 1 },
           label: {
@@ -118,10 +167,12 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
           },
         },
       ],
+      _chartH: chartH,
     }
-  }, [rows, dealYi])
+  }, [rows, dealYi, height])
 
   if (!option) return <Empty description="暂无估值区间" />
+  const chartH = option._chartH || height
   return (
     <div className="valuation-football">
       <div className="valuation-football-body">
@@ -133,7 +184,7 @@ export default function ValuationFootballField({ comparison, dealYi, height = 24
         <div className="valuation-football-chart">
           <ReactECharts
             option={option}
-            style={{ height, width: '100%' }}
+            style={{ height: chartH, width: '100%' }}
             opts={{ renderer: 'canvas' }}
             notMerge
           />

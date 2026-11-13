@@ -168,6 +168,7 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
     'pe_low_multiple', 'pe_median_multiple', 'ps_low_multiple', 'ps_median_multiple',
+    'pe_low_multiple_ntm', 'pe_median_multiple_ntm', 'ps_low_multiple_ntm', 'ps_median_multiple_ntm',
     'forecast_dso', 'forecast_dpo', 'forecast_dio', 'follow_on_dilution', 'rd_growth_mode',
   ], [
     numOrNull(a.discount_rate),
@@ -196,6 +197,10 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(a.pe_median_multiple),
     numOrNull(a.ps_low_multiple),
     numOrNull(a.ps_median_multiple),
+    numOrNull(a.pe_low_multiple_ntm),
+    numOrNull(a.pe_median_multiple_ntm),
+    numOrNull(a.ps_low_multiple_ntm),
+    numOrNull(a.ps_median_multiple_ntm),
     numOrNull(a.forecast_dso),
     numOrNull(a.forecast_dpo),
     numOrNull(a.forecast_dio),
@@ -243,6 +248,10 @@ async function loadAssumptions(caseId, versionId, pool) {
     pe_median_multiple: numOrNull(r.pe_median_multiple),
     ps_low_multiple: numOrNull(r.ps_low_multiple),
     ps_median_multiple: numOrNull(r.ps_median_multiple),
+    pe_low_multiple_ntm: numOrNull(r.pe_low_multiple_ntm),
+    pe_median_multiple_ntm: numOrNull(r.pe_median_multiple_ntm),
+    ps_low_multiple_ntm: numOrNull(r.ps_low_multiple_ntm),
+    ps_median_multiple_ntm: numOrNull(r.ps_median_multiple_ntm),
     forecast_dso: numOrNull(r.forecast_dso),
     forecast_dpo: numOrNull(r.forecast_dpo),
     forecast_dio: numOrNull(r.forecast_dio),
@@ -391,18 +400,19 @@ async function saveRelative(caseId, versionId, rows, pool) {
     await d.execute(
       `INSERT INTO valuation_relative_row (
          F_Id, case_id, version_id, stock_code, stock_name, in_pool, comparability,
-         pe_ttm, ps_ttm, pe_mean, ps_mean,
+         pe_ttm, ps_ttm, pe_ntm, ps_ntm, pe_mean, ps_mean,
          pe_latest, pe_median, pe_median_override, pe_stdev, pe_minus_1s, pe_plus_1s, pe_usable,
          ps_latest, ps_median, ps_median_override, ps_stdev, ps_minus_1s, ps_plus_1s, ps_usable,
          asof_date, asof_trade_date, valuation_date, valuation_trade_date, quality_warning, F_CreatorTime
-       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
       [
         id, caseId, versionId,
         strOrNull(r.stock_code, 32),
         strOrNull(r.stock_name, 200),
         r.in_pool ? 1 : 0,
         strOrNull(r.comparability, 16),
-        numOrNull(r.pe_ttm), numOrNull(r.ps_ttm), numOrNull(r.pe_mean), numOrNull(r.ps_mean),
+        numOrNull(r.pe_ttm), numOrNull(r.ps_ttm), numOrNull(r.pe_ntm), numOrNull(r.ps_ntm),
+        numOrNull(r.pe_mean), numOrNull(r.ps_mean),
         numOrNull(r.pe_latest), numOrNull(r.pe_median), numOrNull(r.pe_median_override), numOrNull(r.pe_stdev),
         numOrNull(r.pe_minus_1s), numOrNull(r.pe_plus_1s), r.pe_usable === false ? 0 : 1,
         numOrNull(r.ps_latest), numOrNull(r.ps_median), numOrNull(r.ps_median_override), numOrNull(r.ps_stdev),
@@ -430,6 +440,8 @@ async function loadRelative(caseId, versionId, pool) {
     comparability: r.comparability || null,
     pe_ttm: numOrNull(r.pe_ttm),
     ps_ttm: numOrNull(r.ps_ttm),
+    pe_ntm: numOrNull(r.pe_ntm),
+    ps_ntm: numOrNull(r.ps_ntm),
     pe_mean: numOrNull(r.pe_mean),
     ps_mean: numOrNull(r.ps_mean),
     pe_latest: numOrNull(r.pe_latest),
@@ -675,16 +687,34 @@ async function loadRatios(caseId, versionId, pool) {
 async function saveMarket(caseId, versionId, market, formula, pool) {
   if (!market) return;
   const d = wrapDb(pool);
-  const pe = market.pe || {};
-  const ps = market.ps || {};
+  const pe = market.pe || market.pe_ttm || {};
+  const ps = market.ps || market.ps_ttm || {};
   const peM = market.pe_multiples || {};
   const psM = market.ps_multiples || {};
+  const detail = {
+    pe_ttm: market.pe_ttm || market.pe,
+    ps_ttm: market.ps_ttm || market.ps,
+    pe_ntm: market.pe_ntm,
+    ps_ntm: market.ps_ntm,
+    pe_ntm_multiples: market.pe_ntm_multiples,
+    ps_ntm_multiples: market.ps_ntm_multiples,
+    pool_pe_multiples: market.pool_pe_multiples,
+    pool_ps_multiples: market.pool_ps_multiples,
+    pool_pe_ntm_multiples: market.pool_pe_ntm_multiples,
+    pool_ps_ntm_multiples: market.pool_ps_ntm_multiples,
+    revenue_base_ttm: market.revenue_base_ttm ?? market.revenue_base,
+    revenue_base_ntm: market.revenue_base_ntm,
+    net_income_base_ttm: market.net_income_base_ttm ?? market.operating_profit_base,
+    net_income_base_ntm: market.net_income_base_ntm,
+    ttm_label: market.ttm_label,
+    ntm_window: market.ntm_window,
+  };
   await upsertByCaseVersion(d, 'valuation_market_result', caseId, versionId, [
     'base_year', 'revenue_base', 'operating_profit_base', 'liquidity_discount',
     'pe_min', 'pe_median', 'pe_max', 'ps_min', 'ps_median', 'ps_max',
     'pe_low_circ', 'pe_low_illiq', 'pe_mid_circ', 'pe_mid_illiq', 'pe_high_circ', 'pe_high_illiq',
     'ps_low_circ', 'ps_low_illiq', 'ps_mid_circ', 'ps_mid_illiq', 'ps_high_circ', 'ps_high_illiq',
-    'formula',
+    'formula', 'detail_json',
   ], [
     strOrNull(market.base_year, 16),
     numOrNull(market.revenue_base),
@@ -699,6 +729,7 @@ async function saveMarket(caseId, versionId, market, formula, pool) {
     numOrNull(ps.mid?.circulating), numOrNull(ps.mid?.illiquid),
     numOrNull(ps.high?.circulating), numOrNull(ps.high?.illiquid),
     strOrNull(formula || market.formula, 1000),
+    JSON.stringify(detail),
   ]);
 }
 
@@ -710,6 +741,22 @@ async function loadMarket(caseId, versionId, pool) {
   );
   if (!rows.length) return null;
   const r = rows[0];
+  let detail = {};
+  try {
+    detail = typeof r.detail_json === 'string' ? JSON.parse(r.detail_json) : (r.detail_json || {});
+  } catch {
+    detail = {};
+  }
+  const pe = {
+    low: applyBand(r.pe_low_circ, r.pe_low_illiq),
+    mid: applyBand(r.pe_mid_circ, r.pe_mid_illiq),
+    high: applyBand(r.pe_high_circ, r.pe_high_illiq),
+  };
+  const ps = {
+    low: applyBand(r.ps_low_circ, r.ps_low_illiq),
+    mid: applyBand(r.ps_mid_circ, r.ps_mid_illiq),
+    high: applyBand(r.ps_high_circ, r.ps_high_illiq),
+  };
   return {
     title: '市场法',
     formula: r.formula || null,
@@ -720,27 +767,37 @@ async function loadMarket(caseId, versionId, pool) {
       liquidity_discount: numOrNull(r.liquidity_discount),
       pe_multiples: { min: numOrNull(r.pe_min), median: numOrNull(r.pe_median), max: numOrNull(r.pe_max) },
       ps_multiples: { min: numOrNull(r.ps_min), median: numOrNull(r.ps_median), max: numOrNull(r.ps_max) },
-      pe: {
-        low: applyBand(r.pe_low_circ, r.pe_low_illiq),
-        mid: applyBand(r.pe_mid_circ, r.pe_mid_illiq),
-        high: applyBand(r.pe_high_circ, r.pe_high_illiq),
-      },
-      ps: {
-        low: applyBand(r.ps_low_circ, r.ps_low_illiq),
-        mid: applyBand(r.ps_mid_circ, r.ps_mid_illiq),
-        high: applyBand(r.ps_high_circ, r.ps_high_illiq),
-      },
+      pe,
+      ps,
+      pe_ttm: detail.pe_ttm || pe,
+      ps_ttm: detail.ps_ttm || ps,
+      pe_ntm: detail.pe_ntm || null,
+      ps_ntm: detail.ps_ntm || null,
+      pe_ntm_multiples: detail.pe_ntm_multiples || null,
+      ps_ntm_multiples: detail.ps_ntm_multiples || null,
+      pool_pe_multiples: detail.pool_pe_multiples,
+      pool_ps_multiples: detail.pool_ps_multiples,
+      pool_pe_ntm_multiples: detail.pool_pe_ntm_multiples || null,
+      pool_ps_ntm_multiples: detail.pool_ps_ntm_multiples || null,
+      revenue_base_ttm: detail.revenue_base_ttm ?? numOrNull(r.revenue_base),
+      revenue_base_ntm: detail.revenue_base_ntm ?? null,
+      net_income_base_ttm: detail.net_income_base_ttm ?? numOrNull(r.operating_profit_base),
+      net_income_base_ntm: detail.net_income_base_ntm ?? null,
+      ttm_label: detail.ttm_label || null,
+      ntm_window: detail.ntm_window || null,
     },
   };
 }
 
 function comparisonColumns(c) {
   const dual = !!(c && c.dcf && c.dcf.ma);
+  const psTtm = c?.market_ps_ttm || c?.market_ps;
+  const peTtm = c?.market_pe_ttm || c?.market_pe;
   return [
-    numOrNull(c?.market_ps?.low),
-    numOrNull(c?.market_ps?.high),
-    numOrNull(c?.market_pe?.low),
-    numOrNull(c?.market_pe?.high),
+    numOrNull(psTtm?.low),
+    numOrNull(psTtm?.high),
+    numOrNull(peTtm?.low),
+    numOrNull(peTtm?.high),
     dual ? 1 : 0,
     dual ? numOrNull(c.dcf.ma.low) : numOrNull(c?.dcf?.low),
     dual ? numOrNull(c.dcf.ma.high) : numOrNull(c?.dcf?.high),
@@ -749,6 +806,10 @@ function comparisonColumns(c) {
     strOrNull(c?.dcf?.ma?.name, 64),
     strOrNull(c?.dcf?.ipo?.name, 64),
     strOrNull(c?.formula, 1000),
+    numOrNull(c?.market_ps_ntm?.low),
+    numOrNull(c?.market_ps_ntm?.high),
+    numOrNull(c?.market_pe_ntm?.low),
+    numOrNull(c?.market_pe_ntm?.high),
   ];
 }
 
@@ -757,6 +818,8 @@ function comparisonFromRow(r) {
   const dual = Number(r.scenario_dual) === 1;
   const ps = bandYi(r.market_ps_low, r.market_ps_high);
   const pe = bandYi(r.market_pe_low, r.market_pe_high);
+  const psNtm = bandYi(r.market_ps_ntm_low, r.market_ps_ntm_high);
+  const peNtm = bandYi(r.market_pe_ntm_low, r.market_pe_ntm_high);
   let dcf;
   let dcfYi;
   if (dual) {
@@ -776,10 +839,18 @@ function comparisonFromRow(r) {
     rows: ['low', 'increment', 'high'],
     market_ps: { low: ps.low, increment: ps.increment, high: ps.high },
     market_pe: { low: pe.low, increment: pe.increment, high: pe.high },
+    market_ps_ttm: { low: ps.low, increment: ps.increment, high: ps.high },
+    market_pe_ttm: { low: pe.low, increment: pe.increment, high: pe.high },
+    market_ps_ntm: { low: psNtm.low, increment: psNtm.increment, high: psNtm.high },
+    market_pe_ntm: { low: peNtm.low, increment: peNtm.increment, high: peNtm.high },
     dcf,
     display_yi: {
       market_ps: ps.display,
       market_pe: pe.display,
+      market_ps_ttm: ps.display,
+      market_pe_ttm: pe.display,
+      market_ps_ntm: psNtm.display,
+      market_pe_ntm: peNtm.display,
       dcf: dcfYi,
     },
     formula: r.formula || '增量=高端−低端（堆叠区间，不是第三种方法）',
@@ -793,6 +864,7 @@ async function saveComparison(caseId, versionId, comparison, pool) {
     'market_ps_low', 'market_ps_high', 'market_pe_low', 'market_pe_high',
     'scenario_dual', 'dcf_low', 'dcf_high', 'dcf_ipo_low', 'dcf_ipo_high',
     'dcf_ma_name', 'dcf_ipo_name', 'formula',
+    'market_ps_ntm_low', 'market_ps_ntm_high', 'market_pe_ntm_low', 'market_pe_ntm_high',
   ], comparisonColumns(comparison));
 }
 

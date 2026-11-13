@@ -812,42 +812,43 @@ function buildDcf(sheet, title, payload, refs) {
 function buildMarket(sheet, title, _payload, refs) {
   const p = sheet?.payload || {};
   const b = sheetBuilder(title, sheet?.formula || '非流通权益（亿元）=倍数×基数（万元）×(1−折扣)/10000');
-  b.start(6);
-  const revWan = wanFromYuan(p.revenue_base);
-  const peBaseWan = wanFromYuan(p.net_income_base ?? p.operating_profit_base);
+  b.start(7);
   const disc = num(p.liquidity_discount, 0.3);
-  b.data(['基数年份', p.base_year || null], ['text', 'text']);
-  const revExcel = b.aoa.length + 1;
-  b.data(['营业收入（万元）', revWan], ['text', 'wan']);
-  const peExcel = b.aoa.length + 1;
-  b.data(['P/E 基数（万元）', peBaseWan], ['text', 'wan']);
+  b.data(['TTM 基数年份', p.base_year || null], ['text', 'text']);
+  b.data(['NTM 窗口', p.ntm_window || null], ['text', 'text']);
   const discExcel = b.aoa.length + 1;
   b.data(['市场法缺乏流动性折扣（小数，0.3=30%）', disc], ['text', 'num']);
-  b.gap(1, 6);
-  b.header(['序号', '项目', '低端倍数', '高端倍数', '低端非流通权益（亿元）', '高端非流通权益（亿元）']);
+  b.gap(1, 7);
+  b.header(['序号', '项目', '基数（万元）', '低端倍数', '高端倍数', '低端非流通权益（亿元）', '高端非流通权益（亿元）']);
   const peM = p.pe_multiples || {};
   const psM = p.ps_multiples || {};
-  const psExcel = b.aoa.length + 1;
-  b.data([
-    1, 'P/S',
-    num(psM.min), num(psM.median),
-    F(p.ps?.low?.illiquid_yi ?? asYi(p.ps?.low?.illiquid), `C${psExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
-    F(p.ps?.mid?.illiquid_yi ?? asYi(p.ps?.mid?.illiquid), `D${psExcel}*$B$${revExcel}*(1-$B$${discExcel})/10000`),
-  ], ['seq', 'text', 'num', 'num', 'yi', 'yi']);
-  const peExcelRow = b.aoa.length + 1;
-  b.data([
-    2, 'P/E',
-    num(peM.min), num(peM.median),
-    F(p.pe?.low?.illiquid_yi ?? asYi(p.pe?.low?.illiquid), `C${peExcelRow}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
-    F(p.pe?.mid?.illiquid_yi ?? asYi(p.pe?.mid?.illiquid), `D${peExcelRow}*$B$${peExcel}*(1-$B$${discExcel})/10000`),
-  ], ['seq', 'text', 'num', 'num', 'yi', 'yi']);
+  const peNtmM = p.pe_ntm_multiples || {};
+  const psNtmM = p.ps_ntm_multiples || {};
+  const psTtm = p.ps_ttm || p.ps || {};
+  const peTtm = p.pe_ttm || p.pe || {};
+  const psNtm = p.ps_ntm || {};
+  const peNtm = p.pe_ntm || {};
+  const write = (seq, name, baseWan, lowX, highX, side) => {
+    const excel = b.aoa.length + 1;
+    b.data([
+      seq, name, baseWan,
+      num(lowX), num(highX),
+      F(side?.low?.illiquid_yi ?? asYi(side?.low?.illiquid), `D${excel}*C${excel}*(1-$B$${discExcel})/10000`),
+      F(side?.mid?.illiquid_yi ?? asYi(side?.mid?.illiquid), `E${excel}*C${excel}*(1-$B$${discExcel})/10000`),
+    ], ['seq', 'text', 'wan', 'num', 'num', 'yi', 'yi']);
+    return excel;
+  };
+  const psExcel = write(1, 'P/S TTM', wanFromYuan(p.revenue_base_ttm ?? p.revenue_base), psM.min, psM.median, psTtm);
+  write(2, 'P/S NTM', wanFromYuan(p.revenue_base_ntm), psNtmM.min, psNtmM.median, psNtm);
+  const peExcelRow = write(3, 'P/E TTM', wanFromYuan(p.net_income_base_ttm ?? p.net_income_base ?? p.operating_profit_base), peM.min, peM.median, peTtm);
+  write(4, 'P/E NTM', wanFromYuan(p.net_income_base_ntm), peNtmM.min, peNtmM.median, peNtm);
   if (refs) {
-    refs.psIlliqLow = `E${psExcel}`;
-    refs.psIlliqMid = `F${psExcel}`;
-    refs.peIlliqLow = `E${peExcelRow}`;
-    refs.peIlliqMid = `F${peExcelRow}`;
+    refs.psIlliqLow = `F${psExcel}`;
+    refs.psIlliqMid = `G${psExcel}`;
+    refs.peIlliqLow = `F${peExcelRow}`;
+    refs.peIlliqMid = `G${peExcelRow}`;
   }
-  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 24 }, { wch: 24 });
+  b.widths.splice(0, b.widths.length, { wch: 8 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 24 }, { wch: 24 });
   return b;
 }
 
@@ -856,14 +857,14 @@ function buildRelative(sheet, title) {
   const b = sheetBuilder(title, sheet?.formula || '单家取数：底稿中位，否则历史中位，否则锚定截面。低端=取用值中位数−σ，高端=中位数。可比强度只作标记');
   const headers = [
     '序号', '代码', '名称', '入池', '可比强度', '截面日',
-    'PE TTM', 'PS TTM', 'PE 近年均', 'PS 近年均',
+    'PE TTM', 'PS TTM', 'PE NTM', 'PS NTM', 'PE 近年均', 'PS 近年均',
     'PE 锚定截面', 'PE 中位', 'PE 底稿中位', 'PE σ', 'PE −1σ', 'PE +1σ',
     'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ',
     'PE 取用', 'PS 取用', '提示',
   ];
   b.start(headers.length);
   b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(18).fill('num'), 'text'];
+  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(20).fill('num'), 'text'];
   const dataStart = b.aoa.length + 1;
   const degreeLabel = { strong: '强', medium: '中', weak: '弱' };
   let poolCount = 0;
@@ -882,20 +883,22 @@ function buildRelative(sheet, title) {
       i + 1, r.stock_code, r.stock_name, r.in_pool ? '是' : '否',
       degreeLabel[r.comparability] || '中',
       r.asof_trade_date || r.asof_date || null,
-      num(r.pe_ttm ?? r.pe_latest), num(r.ps_ttm ?? r.ps_latest), num(r.pe_mean), num(r.ps_mean),
+      num(r.pe_ttm ?? r.pe_latest), num(r.ps_ttm ?? r.ps_latest),
+      num(r.pe_ntm), num(r.ps_ntm),
+      num(r.pe_mean), num(r.ps_mean),
       num(r.pe_latest), num(r.pe_median), num(r.pe_median_override), num(r.pe_stdev),
-      F(num(r.pe_minus_1s), `L${excel}-N${excel}`),
-      F(num(r.pe_plus_1s), `L${excel}+N${excel}`),
+      F(num(r.pe_minus_1s), `N${excel}-P${excel}`),
+      F(num(r.pe_plus_1s), `N${excel}+P${excel}`),
       num(r.ps_latest), num(r.ps_median), num(r.ps_median_override), num(r.ps_stdev),
-      F(num(r.ps_minus_1s), `R${excel}-T${excel}`),
-      F(num(r.ps_plus_1s), `R${excel}+T${excel}`),
-      peUsed != null ? F(peUsed, `IF(M${excel}="",IF(L${excel}="",K${excel},L${excel}),M${excel})`) : null,
-      psUsed != null ? F(psUsed, `IF(S${excel}="",IF(R${excel}="",Q${excel},R${excel}),S${excel})`) : null,
+      F(num(r.ps_minus_1s), `T${excel}-V${excel}`),
+      F(num(r.ps_plus_1s), `T${excel}+V${excel}`),
+      peUsed != null ? F(peUsed, `IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`) : null,
+      psUsed != null ? F(psUsed, `IF(U${excel}="",IF(T${excel}="",S${excel},T${excel}),U${excel})`) : null,
       hint,
     ], kinds);
   });
   if (!rows.length) {
-    b.data(['', '暂无相对估值结果', ...Array(23).fill(null)], kinds);
+    b.data(['', '暂无相对估值结果', ...Array(headers.length - 2).fill(null)], kinds);
     return b;
   }
   b.gap(1, headers.length);

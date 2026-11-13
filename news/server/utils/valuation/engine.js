@@ -671,6 +671,13 @@ function computeComparableStats(compsFinancials, opts = {}) {
     const psTtm = psAtVal ?? (psHist.length ? psHist[psHist.length - 1] : null);
     const peUsable = isHistPe(peMed) || isHistPe(peAtVal);
     const psUsable = isSanePs(psMed) || isSanePs(psAtVal);
+    const capAtVal = toNumber(valRow?.market_cap);
+    const niNtm = toNumber(valRow?.ni_ntm) ?? toNumber(rawLatestRow?.ni_ntm);
+    const revNtm = toNumber(valRow?.rev_ntm) ?? toNumber(rawLatestRow?.rev_ntm);
+    let peNtm = toNumber(valRow?.pe_ntm) ?? toNumber(rawLatestRow?.pe_ntm);
+    let psNtm = toNumber(valRow?.ps_ntm) ?? toNumber(rawLatestRow?.ps_ntm);
+    if (peNtm == null && capAtVal != null && niNtm != null && niNtm !== 0) peNtm = capAtVal / niNtm;
+    if (psNtm == null && capAtVal != null && revNtm != null && revNtm !== 0) psNtm = capAtVal / revNtm;
     const extraWarn = [];
     if (peMed != null && peMed < 0) extraWarn.push('PE 历史中位为负，仍计入 POOL（对齐底稿亏损股）');
     else if (!peUsable && (peAtVal != null || peMed != null)) extraWarn.push('PE 为负或极端，不参与 POOL 倍数');
@@ -678,6 +685,7 @@ function computeComparableStats(compsFinancials, opts = {}) {
     if (peHist.length < 2 && psHist.length < 2) extraWarn.push('仅 1 期倍数，无法计算 σ / ±1σ');
     if (!valuationTrade) extraWarn.push(`折现基准日 ${valuationYmd} 及以前无倍数截面`);
     else if (valuationTrade < valuationYmd) extraWarn.push(`折现基准日无交易，已用 ${valuationTrade} 截面`);
+    if (peNtm == null && psNtm == null) extraWarn.push('无 PE/PS NTM（预测或市值公式）');
     const peOverride = toNumber(c.pe_median_override);
     const psOverride = toNumber(c.ps_median_override);
     if (peOverride != null) extraWarn.push('PE 已用底稿中位进 POOL');
@@ -691,6 +699,8 @@ function computeComparableStats(compsFinancials, opts = {}) {
       valuation_trade_date: parseYmd(valuationTrade),
       pe_ttm: peTtm,
       ps_ttm: psTtm,
+      pe_ntm: peNtm,
+      ps_ntm: psNtm,
       pe_mean: peMean,
       ps_mean: psMean,
       pe_latest: peAtVal,
@@ -956,56 +966,162 @@ function explicitMultipleSet(minV, medianV) {
   };
 }
 
+function warnPoolSet(set, label) {
+  const warnings = [];
+  if (set.dropped) warnings.push(`已排除 ${set.dropped} 家负/极端 ${label}，不参与市场法 ${label} 的 ±1σ`);
+  if (set.clamped) warnings.push(`POOL ${label} −1σ 为负，低端倍数已按 0.01x 处理`);
+  if (set.sigma_winsorized) warnings.push(`计算 ${label} 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）`);
+  if (set.median == null) warnings.push(`POOL 中无可用 ${label}，该口径市场法为空`);
+  return warnings;
+}
+
 function defaultMarketMultipleSets({ multipleSource, poolRelatives, industryMultiples }) {
   if (multipleSource === C.MULTIPLE_INDUSTRY && industryMultiples) {
+    const peSet = {
+      min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
+      median: toNumber(industryMultiples.pe_median),
+      max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
+    };
+    const psSet = {
+      min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
+      median: toNumber(industryMultiples.ps_median),
+      max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
+    };
     return {
-      peSet: {
-        min: toNumber(industryMultiples.pe_min) ?? toNumber(industryMultiples.pe_median),
-        median: toNumber(industryMultiples.pe_median),
-        max: toNumber(industryMultiples.pe_max) ?? toNumber(industryMultiples.pe_median),
-      },
-      psSet: {
-        min: toNumber(industryMultiples.ps_min) ?? toNumber(industryMultiples.ps_median),
-        median: toNumber(industryMultiples.ps_median),
-        max: toNumber(industryMultiples.ps_max) ?? toNumber(industryMultiples.ps_median),
-      },
+      peSet,
+      psSet,
+      peNtmSet: peSet,
+      psNtmSet: psSet,
       peWarnings: [],
       psWarnings: [],
+      peNtmWarnings: ['行业法暂无独立 NTM，预测口径暂用行业 TTM 倍数'],
+      psNtmWarnings: ['行业法暂无独立 NTM，预测口径暂用行业 TTM 倍数'],
     };
   }
   const pool = (poolRelatives || []).filter((r) => r.in_pool);
   const peSet = poolSigmaSet(pool, 'pe_median', 'pe_latest', isHistPe, 'pe_median_override');
   const psSet = poolSigmaSet(pool, 'ps_median', 'ps_latest', isSanePs, 'ps_median_override');
-  const peWarnings = [];
-  const psWarnings = [];
-  if (peSet.dropped) peWarnings.push(`已排除 ${peSet.dropped} 家负 PE/极端 PE，不参与市场法 P/E 的 ±1σ`);
-  if (peSet.clamped) peWarnings.push('POOL P/E −1σ 为负，低端倍数已按 0.01x 处理');
-  if (peSet.sigma_winsorized) peWarnings.push('计算 P/E 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL）');
-  if (peSet.median == null) peWarnings.push('POOL 中无可用 P/E 历史中位，市场法 P/E 为空');
-  if (psSet.dropped) psWarnings.push(`已排除 ${psSet.dropped} 家负 PS/极端 PS，不参与市场法 P/S 的 ±1σ`);
-  if (psSet.clamped) psWarnings.push('POOL P/S −1σ 为负，低端倍数已按 0.01x 处理');
-  if (psSet.sigma_winsorized) psWarnings.push('计算 P/S 的 σ 时，超过 3×中位的倍数已截尾（公司仍留在 POOL，不再整段剔除）');
-  if (psSet.median == null) psWarnings.push('POOL 中无可用 P/S 历史中位，市场法 P/S 为空');
-  return { peSet, psSet, peWarnings, psWarnings };
+  const peNtmSet = poolSigmaSet(pool, 'pe_ntm', 'pe_ntm', isHistPe, null);
+  const psNtmSet = poolSigmaSet(pool, 'ps_ntm', 'ps_ntm', isSanePs, null);
+  return {
+    peSet,
+    psSet,
+    peNtmSet,
+    psNtmSet,
+    peWarnings: warnPoolSet(peSet, 'P/E TTM'),
+    psWarnings: warnPoolSet(psSet, 'P/S TTM'),
+    peNtmWarnings: warnPoolSet(peNtmSet, 'P/E NTM'),
+    psNtmWarnings: warnPoolSet(psNtmSet, 'P/S NTM'),
+  };
+}
+
+/**
+ * 目标公司 NTM 基数：折现/锚定日起未来 12 个月营业收入、净利润。
+ * 由预测利润表各年金额按落入窗口的月数加权。
+ */
+function ntmBaseFromForecastPl(pl, asOf) {
+  const years = (pl?.years || []).map((y) => yearNum(y)).filter((y) => y != null);
+  if (!years.length || !(asOf instanceof Date) || !Number.isFinite(asOf.getTime())) {
+    return { revenue: null, net_income: null, label: null };
+  }
+  const start = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
+  const monthWeight = (year, monthIdx) => {
+    const cell = new Date(year, monthIdx, 15);
+    const end = new Date(start);
+    end.setFullYear(end.getFullYear() + 1);
+    return cell >= start && cell < end ? 1 : 0;
+  };
+  const weighted = (field) => {
+    let sum = 0;
+    let months = 0;
+    for (let i = 0; i < (pl.years || []).length; i += 1) {
+      const y = yearNum(pl.years[i]);
+      const v = toNumber(pl[field]?.[i]);
+      if (y == null || v == null) continue;
+      let m = 0;
+      for (let mo = 0; mo < 12; mo += 1) m += monthWeight(y, mo);
+      if (!m) continue;
+      sum += v * (m / 12);
+      months += m;
+    }
+    if (!months) return null;
+    return sum;
+  };
+  const revenue = weighted('revenue');
+  const ni = weighted('net_income');
+  const end = new Date(start);
+  end.setFullYear(end.getFullYear() + 1);
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const label = `${ymd(start)}~${ymd(end)}`;
+  return { revenue, net_income: ni, label };
+}
+
+/**
+ * 目标公司 TTM 基数：优先手填「市场法营业收入/净利润」（视为过去 12 个月）；
+ * 否则用利润表锚定日所在年 / 已实现年近似。
+ */
+function targetTtmBases({ explicitRev, explicitNi, rawPl, asOf }) {
+  if (explicitRev != null || explicitNi != null) {
+    return {
+      revenue: explicitRev,
+      net_income: explicitNi,
+      operating_profit: null,
+      base_year: null,
+      label: '目标公司手填（过去 12 个月）',
+      source: 'explicit',
+    };
+  }
+  const idx = marketBaseYearIndex(rawPl, asOf);
+  const revenue = toNumber(rawPl?.revenue?.[idx]);
+  const ni = toNumber(rawPl?.net_income?.[idx]);
+  const op = toNumber(rawPl?.operating_profit?.[idx]);
+  return {
+    revenue,
+    net_income: ni != null ? ni : (op != null ? op : null),
+    operating_profit: op,
+    base_year: rawPl?.years?.[idx] || null,
+    label: rawPl?.years?.[idx] != null
+      ? `目标公司历史口径（${rawPl.years[idx]} 年近似 TTM）`
+      : '目标公司历史口径（近似 TTM）',
+    source: 'pl',
+  };
+}
+
+function applyMarketBand(set, base, discount) {
+  const apply = (multiple) => {
+    const circ = (toNumber(multiple) == null || base == null) ? null : toNumber(multiple) * base;
+    const illiq = circ == null ? null : circ * (1 - discount);
+    return { circulating: circ, illiquid: illiq, illiquid_yi: yuanToYi(illiq) };
+  };
+  return {
+    multiples: set,
+    base,
+    low: apply(set?.min),
+    mid: apply(set?.median),
+    high: apply(set?.max),
+  };
 }
 
 function marketMethod({
   multipleSource,
   poolRelatives,
   industryMultiples,
-  pl,
+  targetTtm,
+  targetNtm,
   liquidityDiscount,
-  baseYearIndex,
   multipleBand,
+  multipleBandNtm,
 }) {
-  const maxIdx = Math.max(0, (pl.years || []).length - 1);
-  const lastIdx = Math.min(Math.max(0, baseYearIndex == null ? maxIdx : baseYearIndex), maxIdx);
-  const revenue = toNumber(pl.revenue?.[lastIdx]);
-  const ni = toNumber(pl.net_income?.[lastIdx]);
-  const op = toNumber(pl.operating_profit?.[lastIdx]);
-  const peBase = ni != null ? ni : num(op);
+  const revenueTtm = toNumber(targetTtm?.revenue);
+  const peBaseTtm = toNumber(targetTtm?.net_income);
+  const revenueNtm = toNumber(targetNtm?.revenue);
+  const peBaseNtm = toNumber(targetNtm?.net_income);
   const warnings = [];
-  if (peBase < 0) warnings.push('利润为负，P/E 仅供参考');
+  if (peBaseTtm != null && peBaseTtm < 0) warnings.push('目标公司 TTM 利润为负，P/E TTM 仅供参考');
+  if (peBaseNtm != null && peBaseNtm < 0) warnings.push('目标公司 NTM 利润为负，P/E NTM 仅供参考');
+  if (revenueNtm == null && peBaseNtm == null) {
+    warnings.push('无法从目标公司预测表拼出未来 12 个月基数，市场法 NTM 为空');
+  }
 
   const defaults = defaultMarketMultipleSets({
     multipleSource,
@@ -1014,55 +1130,84 @@ function marketMethod({
   });
   const peBand = explicitMultipleSet(multipleBand?.pe_min, multipleBand?.pe_median);
   const psBand = explicitMultipleSet(multipleBand?.ps_min, multipleBand?.ps_median);
+  const peBandNtm = explicitMultipleSet(multipleBandNtm?.pe_min, multipleBandNtm?.pe_median);
+  const psBandNtm = explicitMultipleSet(multipleBandNtm?.ps_min, multipleBandNtm?.ps_median);
   const peSet = peBand || defaults.peSet;
   const psSet = psBand || defaults.psSet;
-  if (peBand || psBand) {
-    warnings.push('市场法倍数已按填写值覆盖 POOL 的低端 / 高端');
+  // NTM 口径：优先可比 NTM 倍数；没有则回退 TTM 倍数（基数仍用目标公司 NTM）
+  let peNtmSet = peBandNtm || defaults.peNtmSet;
+  let psNtmSet = psBandNtm || defaults.psNtmSet;
+  if (!peBandNtm && (peNtmSet?.median == null) && peSet?.median != null) {
+    peNtmSet = peSet;
+    warnings.push('可比 POOL 无 P/E NTM，预测口径暂用可比 P/E TTM 倍数 × 目标公司 NTM 净利润');
   }
+  if (!psBandNtm && (psNtmSet?.median == null) && psSet?.median != null) {
+    psNtmSet = psSet;
+    warnings.push('可比 POOL 无 P/S NTM，预测口径暂用可比 P/S TTM 倍数 × 目标公司 NTM 营业收入');
+  }
+  if (peBand || psBand) warnings.push('市场法 TTM 倍数已按填写值覆盖 POOL');
+  if (peBandNtm || psBandNtm) warnings.push('市场法 NTM 倍数已按填写值覆盖 POOL');
   if (!peBand) warnings.push(...defaults.peWarnings);
   if (!psBand) warnings.push(...defaults.psWarnings);
+  if (!peBandNtm && peNtmSet === defaults.peNtmSet) warnings.push(...defaults.peNtmWarnings);
+  if (!psBandNtm && psNtmSet === defaults.psNtmSet) warnings.push(...defaults.psNtmWarnings);
 
   const d = num(liquidityDiscount, 0.3);
-  const apply = (multiple, base) => {
-    const circ = (toNumber(multiple) == null || base == null) ? null : toNumber(multiple) * base;
-    const illiq = circ == null ? null : circ * (1 - d);
-    return { circulating: circ, illiquid: illiq, illiquid_yi: yuanToYi(illiq) };
-  };
-
-  const peLow = apply(peSet.min, peBase);
-  const peMid = apply(peSet.median, peBase);
-  const peHigh = apply(peSet.max, peBase);
-  const psLow = apply(psSet.min, revenue);
-  const psMid = apply(psSet.median, revenue);
-  const psHigh = apply(psSet.max, revenue);
+  const peTtm = applyMarketBand(peSet, peBaseTtm, d);
+  const psTtm = applyMarketBand(psSet, revenueTtm, d);
+  const peNtm = applyMarketBand(peNtmSet, peBaseNtm, d);
+  const psNtm = applyMarketBand(psNtmSet, revenueNtm, d);
 
   return {
     pe_multiples: peSet,
     ps_multiples: psSet,
+    pe_ntm_multiples: peNtmSet,
+    ps_ntm_multiples: psNtmSet,
     pool_pe_multiples: defaults.peSet,
     pool_ps_multiples: defaults.psSet,
-    revenue_base: revenue,
-    operating_profit_base: peBase,
-    net_income_base: ni,
-    base_year: pl.years?.[lastIdx] || null,
+    pool_pe_ntm_multiples: defaults.peNtmSet,
+    pool_ps_ntm_multiples: defaults.psNtmSet,
+    revenue_base: revenueTtm,
+    revenue_base_ttm: revenueTtm,
+    revenue_base_ntm: revenueNtm,
+    operating_profit_base: peBaseTtm,
+    net_income_base: peBaseTtm,
+    net_income_base_ttm: peBaseTtm,
+    net_income_base_ntm: peBaseNtm,
+    ttm_label: targetTtm?.label || null,
+    ntm_window: targetNtm?.label || null,
+    base_year: targetTtm?.base_year || null,
     liquidity_discount: d,
-    pe: { low: peLow, mid: peMid, high: peHigh },
-    ps: { low: psLow, mid: psMid, high: psHigh },
+    pe: { low: peTtm.low, mid: peTtm.mid, high: peTtm.high },
+    ps: { low: psTtm.low, mid: psTtm.mid, high: psTtm.high },
+    pe_ttm: { low: peTtm.low, mid: peTtm.mid, high: peTtm.high },
+    ps_ttm: { low: psTtm.low, mid: psTtm.mid, high: psTtm.high },
+    pe_ntm: { low: peNtm.low, mid: peNtm.mid, high: peNtm.high },
+    ps_ntm: { low: psNtm.low, mid: psNtm.mid, high: psNtm.high },
     warnings,
-    formula: '流通基础权益=倍数×基数；非流通=流通×(1−市场法缺乏流动性折扣)。P/S、P/E 基数优先用锚定日所在年，无则已实现年。倍数默认取可比 POOL：低端=中位数−σ，高端=中位数。可比强度只作标记。改过市场法倍数则覆盖 POOL',
+    formula: '流通权益=可比倍数×目标公司基数；非流通=流通×(1−市场法折扣)。四套口径的基数均取目标公司：P/S TTM=过去12个月营业收入，P/E TTM=过去12个月净利润，P/S NTM=未来12个月预测营业收入，P/E NTM=未来12个月预测净利润。倍数来自可比 POOL（TTM/NTM 各一套；缺 NTM 时回退 TTM 倍数）。低端=中位数−σ，高端=中位数',
   };
 }
 
 function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
-  const psLow = market?.ps?.low?.illiquid ?? null;
-  const psHigh = market?.ps?.mid?.illiquid ?? null;
-  const peLow = market?.pe?.low?.illiquid ?? null;
-  const peHigh = market?.pe?.mid?.illiquid ?? null;
+  const bandOf = (side) => ({
+    low: side?.low?.illiquid ?? null,
+    high: side?.mid?.illiquid ?? null,
+  });
+  const psTtm = bandOf(market?.ps_ttm || market?.ps);
+  const peTtm = bandOf(market?.pe_ttm || market?.pe);
+  const psNtm = bandOf(market?.ps_ntm);
+  const peNtm = bandOf(market?.pe_ntm);
 
   const row = (low, high) => ({
     low,
     increment: (low != null && high != null) ? high - low : null,
     high,
+  });
+  const yiRow = (b) => ({
+    low: yuanToYi(b.low),
+    increment: yuanToYi((b.low != null && b.high != null) ? b.high - b.low : null),
+    high: yuanToYi(b.high),
   });
   const dcfExitRow = (run) => {
     const exitPe = toNumber(run?.exit_range?.exit_pe);
@@ -1094,29 +1239,34 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
       }
     : dcfExitRow(dcfPrimary);
 
+  const marketPs = row(psTtm.low, psTtm.high);
+  const marketPe = row(peTtm.low, peTtm.high);
+  const marketPsNtm = row(psNtm.low, psNtm.high);
+  const marketPeNtm = row(peNtm.low, peNtm.high);
+
   return {
     rows: ['low', 'increment', 'high'],
-    market_ps: row(psLow, psHigh),
-    market_pe: row(peLow, peHigh),
+    market_ps: marketPs,
+    market_pe: marketPe,
+    market_ps_ttm: marketPs,
+    market_pe_ttm: marketPe,
+    market_ps_ntm: marketPsNtm,
+    market_pe_ntm: marketPeNtm,
     dcf: dcfCol,
     display_yi: {
-      market_ps: {
-        low: yuanToYi(psLow),
-        increment: yuanToYi((psLow != null && psHigh != null) ? psHigh - psLow : null),
-        high: yuanToYi(psHigh),
-      },
-      market_pe: {
-        low: yuanToYi(peLow),
-        increment: yuanToYi((peLow != null && peHigh != null) ? peHigh - peLow : null),
-        high: yuanToYi(peHigh),
-      },
+      market_ps: yiRow(psTtm),
+      market_pe: yiRow(peTtm),
+      market_ps_ttm: yiRow(psTtm),
+      market_pe_ttm: yiRow(peTtm),
+      market_ps_ntm: yiRow(psNtm),
+      market_pe_ntm: yiRow(peNtm),
       dcf: scenarioMode === C.SCENARIO_DUAL
         ? { ma: yiExit(dcfCol.ma), ipo: yiExit(dcfCol.ipo) }
         : yiExit(dcfCol),
     },
     formula: scenarioMode === C.SCENARIO_DUAL
-      ? '增量=高端−低端。市场法 P/S、P/E 用可比公司自己的倍数（低端=POOL 中位数−σ，高端=POOL 中位数，均×(1−市场法折扣)），不用 DCF 的退出倍数。DCF 低端和高端是退出 P/E 与退出 P/S 两套终值的股权价值。并购扣并购折扣，上市不扣'
-      : '增量=高端−低端。市场法低端=(中位数−σ)×基数×(1−市场法折扣)，高端=中位数×基数×(1−市场法折扣)，P/E 与 P/S 各用各的倍数。DCF 低端和高端是退出 P/E 与退出 P/S 两套终值算出来的股权价值',
+      ? '增量=高端−低端。市场法按 P/E·P/S × TTM·NTM 四套；DCF 点估值仍为退出 P/E 与退出 P/S。并购扣并购折扣，上市不扣。估值区间图 DCF 条取敏感性中心 3×3'
+      : '增量=高端−低端。市场法按 P/E·P/S × TTM·NTM 四套（低端=中位−σ，高端=中位）。DCF 点估值仍为退出 P/E 与退出 P/S；估值区间图取敏感性中心 3×3',
   };
 }
 
@@ -1316,40 +1466,43 @@ function runValuationEngine(input) {
   } else {
     const cutoff = reportCutoffYmd(anchor.ymd) || anchor.ymd;
     const asOf = asOfDateObj(anchor.ymd);
-    warnings.push(`市场法按财报截止日 ${cutoff} 及以前各股历史中位（无中位则回退该日截面）；折现基准 ${anchor.ymd}`);
-    const explicitRev = toNumber(assumptions.market_revenue);
-    const explicitNi = toNumber(assumptions.market_net_income);
-    const marketPl = (explicitRev != null || explicitNi != null)
-      ? {
-        years: [String(anchor.year)],
-        revenue: [explicitRev],
-        net_income: [explicitNi],
-        operating_profit: [null],
-      }
-      : rawPl;
-    const baseYearIndex = (explicitRev != null || explicitNi != null)
-      ? 0
-      : marketBaseYearIndex(rawPl, asOf);
-    if (explicitRev == null && explicitNi == null) {
-      const marketBaseYear = yearNum(rawPl.years?.[baseYearIndex]);
+    warnings.push(`可比倍数按财报截止日 ${cutoff} 及以前各股历史中位（无中位则回退该日截面）；目标公司基数按 TTM/NTM；折现基准 ${anchor.ymd}`);
+    const targetTtm = targetTtmBases({
+      explicitRev: toNumber(assumptions.market_revenue),
+      explicitNi: toNumber(assumptions.market_net_income),
+      rawPl,
+      asOf,
+    });
+    const targetNtm = ntmBaseFromForecastPl(rawPl, asOf);
+    if (targetTtm.source === 'pl' && targetTtm.base_year != null) {
+      const marketBaseYear = yearNum(targetTtm.base_year);
       if (marketBaseYear != null && marketBaseYear === anchor.year) {
-        warnings.push(`市场法基数用估值日所在年 ${marketBaseYear}`);
+        warnings.push(`目标公司 TTM 基数暂用估值日所在年 ${marketBaseYear}（可在利润表填写市场法营业收入/净利润覆盖）`);
       } else if (marketBaseYear != null && marketBaseYear > anchor.year) {
-        warnings.push(`利润表没有估值年 ${anchor.year} 的营收，市场法基数暂用 ${marketBaseYear}。可在标的利润表填写市场法基数`);
+        warnings.push(`利润表没有估值年 ${anchor.year} 的营收，目标公司 TTM 暂用 ${marketBaseYear}。可填写市场法基数`);
       }
+    }
+    if (targetNtm.label) {
+      warnings.push(`目标公司 NTM 窗口 ${targetNtm.label}`);
     }
     market = marketMethod({
       multipleSource: method.multiple_source,
       poolRelatives: input.compStats?.relative,
       industryMultiples: input.industryMultiples,
-      pl: marketPl,
+      targetTtm,
+      targetNtm,
       liquidityDiscount: assumptions.liquidity_discount,
-      baseYearIndex,
       multipleBand: {
         pe_min: assumptions.pe_low_multiple,
         pe_median: assumptions.pe_median_multiple,
         ps_min: assumptions.ps_low_multiple,
         ps_median: assumptions.ps_median_multiple,
+      },
+      multipleBandNtm: {
+        pe_min: assumptions.pe_low_multiple_ntm,
+        pe_median: assumptions.pe_median_multiple_ntm,
+        ps_min: assumptions.ps_low_multiple_ntm,
+        ps_median: assumptions.ps_median_multiple_ntm,
       },
     });
     warnings.push(...(market.warnings || []));

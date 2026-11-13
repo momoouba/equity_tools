@@ -492,6 +492,31 @@ async function ensureValuationSchema(dbPool) {
       await dbPool.query(`ALTER TABLE valuation_relative_row ADD COLUMN valuation_trade_date DATE NULL COMMENT '估值基准日实际截面交易日'`);
     }
   }
+  await addColumnsIfMissing(dbPool, 'listed_company_market_multiples', [
+    ['pe_ntm', "DECIMAL(20,6) NULL COMMENT '预测市盈率 NTM'"],
+    ['ps_ntm', "DECIMAL(20,6) NULL COMMENT '预测市销率 NTM'"],
+    ['ni_ntm', "DECIMAL(24,4) NULL COMMENT '未来12个月预测净利润，元'"],
+    ['rev_ntm', "DECIMAL(24,4) NULL COMMENT '未来12个月预测营业收入，元'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_relative_row', [
+    ['pe_ntm', "DECIMAL(20,6) NULL COMMENT '估值基准日 PE NTM'"],
+    ['ps_ntm', "DECIMAL(20,6) NULL COMMENT '估值基准日 PS NTM'"],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_market_result', [
+    ['detail_json', 'JSON NULL COMMENT \'TTM/NTM 四套市场法明细\''],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_comparison', [
+    ['market_ps_ntm_low', "DECIMAL(24,4) NULL COMMENT '元'"],
+    ['market_ps_ntm_high', 'DECIMAL(24,4) NULL'],
+    ['market_pe_ntm_low', 'DECIMAL(24,4) NULL'],
+    ['market_pe_ntm_high', 'DECIMAL(24,4) NULL'],
+  ]);
+  await addColumnsIfMissing(dbPool, 'valuation_assumption', [
+    ['pe_low_multiple_ntm', "DECIMAL(20,6) NULL COMMENT '市场法 P/E NTM 低端倍数覆盖'"],
+    ['pe_median_multiple_ntm', "DECIMAL(20,6) NULL COMMENT '市场法 P/E NTM 高端倍数覆盖'"],
+    ['ps_low_multiple_ntm', "DECIMAL(20,6) NULL COMMENT '市场法 P/S NTM 低端倍数覆盖'"],
+    ['ps_median_multiple_ntm', "DECIMAL(20,6) NULL COMMENT '市场法 P/S NTM 高端倍数覆盖'"],
+  ]);
   try {
     await migrateListedMetricsJson(dbPool);
     const { migrateValuationJsonStores } = require('./workspaceStore');

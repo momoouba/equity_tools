@@ -587,23 +587,33 @@ export function RatiosTables({ fees, grossMargin, workingCapital, forecastDays }
 }
 
 export function MarketMethodTable({ payload }) {
-  if (!payload || (!payload.pe && !payload.ps)) return <Empty description="暂无市场法结果，请先采集/计算" />
+  if (!payload || (!payload.pe && !payload.ps && !payload.pe_ttm && !payload.ps_ttm)) {
+    return <Empty description="暂无市场法结果，请先采集/计算" />
+  }
   const peM = payload.pe_multiples || {}
   const psM = payload.ps_multiples || {}
+  const peNtmM = payload.pe_ntm_multiples || {}
+  const psNtmM = payload.ps_ntm_multiples || {}
+  const peTtm = payload.pe_ttm || payload.pe || {}
+  const psTtm = payload.ps_ttm || payload.ps || {}
+  const peNtm = payload.pe_ntm || {}
+  const psNtm = payload.ps_ntm || {}
   return (
     <div>
       <Typography.Paragraph type="secondary" className="valuation-formula-wrap" style={{ fontSize: 12 }}>
-        基数年份 {payload.base_year || '-'}；营业收入 {fmtWan(payload.revenue_base)}；P/E 基数（净利润） {fmtWan(payload.operating_profit_base)}；
-        市场法流动性折扣 {fmtPct(payload.liquidity_discount, 0)}。P/S、P/E 各一行：低端 = 中位数 − σ，高端 = 中位数。
+        流通权益 = 可比倍数 × 目标公司基数；非流通 = 流通 × (1 − 折扣 {fmtPct(payload.liquidity_discount, 0)})。
+        目标 TTM：{payload.ttm_label || (payload.base_year ? `${payload.base_year} 年近似` : '-')}；
+        目标 NTM：{payload.ntm_window || '-'}。低端 = 中位数 − σ，高端 = 中位数。
       </Typography.Paragraph>
       <ListTable
         className="valuation-market-result-table"
         rowKey="row"
         pagination={false}
         size="small"
-        scroll={{ x: 720 }}
+        scroll={{ x: 880 }}
         columns={[
-          { title: '项目', dataIndex: 'row', width: 72, className: 'valuation-nowrap-cell' },
+          { title: '项目', dataIndex: 'row', width: 96, className: 'valuation-nowrap-cell' },
+          { title: '目标公司基数（元）', dataIndex: 'baseYuan', width: 148, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtWan(v) },
           { title: '低端倍数', dataIndex: 'lowX', width: 96, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
           { title: '高端倍数', dataIndex: 'highX', width: 96, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
           { title: '低端非流通权益（亿元）', dataIndex: 'lowYi', width: 168, align: 'right', className: 'valuation-nowrap-cell', render: (v) => fmtNum(v, 2) },
@@ -611,18 +621,36 @@ export function MarketMethodTable({ payload }) {
         ]}
         data={[
           {
-            row: 'P/S',
+            row: 'P/S TTM',
+            baseYuan: payload.revenue_base_ttm ?? payload.revenue_base,
             lowX: psM.min,
             highX: psM.median,
-            lowYi: payload.ps?.low?.illiquid_yi,
-            highYi: payload.ps?.mid?.illiquid_yi,
+            lowYi: psTtm.low?.illiquid_yi,
+            highYi: psTtm.mid?.illiquid_yi,
           },
           {
-            row: 'P/E',
+            row: 'P/S NTM',
+            baseYuan: payload.revenue_base_ntm,
+            lowX: psNtmM.min,
+            highX: psNtmM.median,
+            lowYi: psNtm.low?.illiquid_yi,
+            highYi: psNtm.mid?.illiquid_yi,
+          },
+          {
+            row: 'P/E TTM',
+            baseYuan: payload.net_income_base_ttm ?? payload.operating_profit_base,
             lowX: peM.min,
             highX: peM.median,
-            lowYi: payload.pe?.low?.illiquid_yi,
-            highYi: payload.pe?.mid?.illiquid_yi,
+            lowYi: peTtm.low?.illiquid_yi,
+            highYi: peTtm.mid?.illiquid_yi,
+          },
+          {
+            row: 'P/E NTM',
+            baseYuan: payload.net_income_base_ntm,
+            lowX: peNtmM.min,
+            highX: peNtmM.median,
+            lowYi: peNtm.low?.illiquid_yi,
+            highYi: peNtm.mid?.illiquid_yi,
           },
         ]}
       />

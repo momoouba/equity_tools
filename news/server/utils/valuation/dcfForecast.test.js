@@ -935,12 +935,12 @@ const relativeBuf = buildWorkbookBuffer({
 const relativeWb = XLSX.read(relativeBuf, { type: 'buffer' });
 const relativeWs = relativeWb.Sheets['相对估值'];
 const relativeFormulas = Object.values(relativeWs).map((c) => c && c.f).filter(Boolean);
-assert.ok(relativeFormulas.some((f) => f === 'IF(M5="",IF(L5="",K5,L5),M5)'), relativeFormulas.join('\n'));
+assert.ok(relativeFormulas.some((f) => f === 'IF(O5="",IF(N5="",M5,N5),O5)'), relativeFormulas.join('\n'));
 assert.ok(relativeFormulas.every((f) => !f.includes('@') && !/STDEV\.S\(IF/.test(f) && !/MEDIAN\(IF/.test(f)));
 assert.ok(!relativeFormulas.some((f) => f === 'MEDIAN(S5:S7)'));
 assert.ok(!relativeFormulas.some((f) => f === 'STDEV.S(S5:S7)'));
-assert.strictEqual(relativeWs.W5.f, 'IF(M5="",IF(L5="",K5,L5),M5)');
-assert.ok(!relativeWs.W7 || !relativeWs.W7.f);
+assert.strictEqual(relativeWs.Y5.f, 'IF(O5="",IF(N5="",M5,N5),O5)');
+assert.ok(!relativeWs.Y7 || !relativeWs.Y7.f);
 const relativeAoA = XLSX.utils.sheet_to_json(relativeWs, { header: 1 });
 assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('PE 取用')));
 assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('平均数')));
@@ -982,6 +982,11 @@ assert.strictEqual(
   view.pe.cells[view.pe.center_row][view.pe.center_col].equity_yi,
   view.pe.equity_yi,
 );
+assert.ok(Number.isFinite(view.pe.band_low_yi));
+assert.ok(Number.isFinite(view.pe.band_high_yi));
+assert.ok(view.pe.band_low_yi <= view.pe.band_high_yi);
+assert.ok(Number.isFinite(view.ps.band_low_yi));
+assert.ok(Number.isFinite(view.ps.band_high_yi));
 assert.strictEqual(view.holding_years, round2(out.pvs[out.pvs.length - 1].periods));
 assert.ok(view.pe.col_labels.filter(Boolean).every((label) => label.includes('倍')));
 assert.strictEqual(view.pe.cells[view.pe.center_row][0].blank, 'multiple');

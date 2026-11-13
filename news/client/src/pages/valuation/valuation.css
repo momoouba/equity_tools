@@ -343,8 +343,12 @@
   text-align: center;
 }
 
-.valuation-sens-table td.is-center {
+.valuation-sens-table td.is-band {
   background: #fff3cd;
+}
+
+.valuation-sens-table td.is-center {
+  background: #ffe69c;
   font-weight: 600;
 }
 
