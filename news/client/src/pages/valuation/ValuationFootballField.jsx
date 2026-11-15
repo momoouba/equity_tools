@@ -79,10 +79,10 @@ export default function ValuationFootballField({
       }
     }
 
-    pushBand(list, '市场法 P/E TTM', comparison.market_pe_ttm?.low ?? comparison.market_pe?.low, comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)
-    pushBand(list, '市场法 P/E NTM', comparison.market_pe_ntm?.low, comparison.market_pe_ntm?.high)
-    pushBand(list, '市场法 P/S TTM', comparison.market_ps_ttm?.low ?? comparison.market_ps?.low, comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)
-    pushBand(list, '市场法 P/S NTM', comparison.market_ps_ntm?.low, comparison.market_ps_ntm?.high)
+    pushBand(list, '市场法 P/E LFY', comparison.market_pe_ttm?.low ?? comparison.market_pe?.low, comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)
+    pushBand(list, '市场法 P/E CFY', comparison.market_pe_ntm?.low, comparison.market_pe_ntm?.high)
+    pushBand(list, '市场法 P/S LFY', comparison.market_ps_ttm?.low ?? comparison.market_ps?.low, comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)
+    pushBand(list, '市场法 P/S CFY', comparison.market_ps_ntm?.low, comparison.market_ps_ntm?.high)
     return list
   }, [comparison, primary, secondary])
 

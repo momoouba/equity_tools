@@ -602,8 +602,9 @@ export function MarketMethodTable({ payload }) {
     <div>
       <Typography.Paragraph type="secondary" className="valuation-formula-wrap" style={{ fontSize: 12 }}>
         流通权益 = 可比倍数 × 目标公司基数；非流通 = 流通 × (1 − 折扣 {fmtPct(payload.liquidity_discount, 0)})。
-        目标 TTM：{payload.ttm_label || (payload.base_year ? `${payload.base_year} 年近似` : '-')}；
-        目标 NTM：{payload.ntm_window || '-'}。低端 = 中位数 − σ，高端 = 中位数。
+        目标 LFY：{payload.ttm_label || (payload.base_year ? `${payload.base_year}` : '-')}；
+        目标 CFY：{payload.ntm_window || '-'}。
+        LFY = Last Fiscal Year（上一财年）；CFY = Current Fiscal Year（当年财年）。低端 = 中位数 − σ，高端 = 中位数。
       </Typography.Paragraph>
       <ListTable
         className="valuation-market-result-table"
@@ -621,7 +622,7 @@ export function MarketMethodTable({ payload }) {
         ]}
         data={[
           {
-            row: 'P/S TTM',
+            row: 'P/S LFY',
             baseYuan: payload.revenue_base_ttm ?? payload.revenue_base,
             lowX: psM.min,
             highX: psM.median,
@@ -629,7 +630,7 @@ export function MarketMethodTable({ payload }) {
             highYi: psTtm.mid?.illiquid_yi,
           },
           {
-            row: 'P/S NTM',
+            row: 'P/S CFY',
             baseYuan: payload.revenue_base_ntm,
             lowX: psNtmM.min,
             highX: psNtmM.median,
@@ -637,7 +638,7 @@ export function MarketMethodTable({ payload }) {
             highYi: psNtm.mid?.illiquid_yi,
           },
           {
-            row: 'P/E TTM',
+            row: 'P/E LFY',
             baseYuan: payload.net_income_base_ttm ?? payload.operating_profit_base,
             lowX: peM.min,
             highX: peM.median,
@@ -645,7 +646,7 @@ export function MarketMethodTable({ payload }) {
             highYi: peTtm.mid?.illiquid_yi,
           },
           {
-            row: 'P/E NTM',
+            row: 'P/E CFY',
             baseYuan: payload.net_income_base_ntm,
             lowX: peNtmM.min,
             highX: peNtmM.median,

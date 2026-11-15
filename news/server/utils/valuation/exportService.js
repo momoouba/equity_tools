@@ -814,8 +814,8 @@ function buildMarket(sheet, title, _payload, refs) {
   const b = sheetBuilder(title, sheet?.formula || '非流通权益（亿元）=倍数×基数（万元）×(1−折扣)/10000');
   b.start(7);
   const disc = num(p.liquidity_discount, 0.3);
-  b.data(['TTM 基数年份', p.base_year || null], ['text', 'text']);
-  b.data(['NTM 窗口', p.ntm_window || null], ['text', 'text']);
+  b.data(['LFY 基数年份（Last Fiscal Year）', p.base_year || null], ['text', 'text']);
+  b.data(['CFY（Current Fiscal Year）', p.ntm_window || null], ['text', 'text']);
   const discExcel = b.aoa.length + 1;
   b.data(['市场法缺乏流动性折扣（小数，0.3=30%）', disc], ['text', 'num']);
   b.gap(1, 7);
@@ -838,10 +838,10 @@ function buildMarket(sheet, title, _payload, refs) {
     ], ['seq', 'text', 'wan', 'num', 'num', 'yi', 'yi']);
     return excel;
   };
-  const psExcel = write(1, 'P/S TTM', wanFromYuan(p.revenue_base_ttm ?? p.revenue_base), psM.min, psM.median, psTtm);
-  write(2, 'P/S NTM', wanFromYuan(p.revenue_base_ntm), psNtmM.min, psNtmM.median, psNtm);
-  const peExcelRow = write(3, 'P/E TTM', wanFromYuan(p.net_income_base_ttm ?? p.net_income_base ?? p.operating_profit_base), peM.min, peM.median, peTtm);
-  write(4, 'P/E NTM', wanFromYuan(p.net_income_base_ntm), peNtmM.min, peNtmM.median, peNtm);
+  const psExcel = write(1, 'P/S LFY', wanFromYuan(p.revenue_base_ttm ?? p.revenue_base), psM.min, psM.median, psTtm);
+  write(2, 'P/S CFY', wanFromYuan(p.revenue_base_ntm), psNtmM.min, psNtmM.median, psNtm);
+  const peExcelRow = write(3, 'P/E LFY', wanFromYuan(p.net_income_base_ttm ?? p.net_income_base ?? p.operating_profit_base), peM.min, peM.median, peTtm);
+  write(4, 'P/E CFY', wanFromYuan(p.net_income_base_ntm), peNtmM.min, peNtmM.median, peNtm);
   if (refs) {
     refs.psIlliqLow = `F${psExcel}`;
     refs.psIlliqMid = `G${psExcel}`;

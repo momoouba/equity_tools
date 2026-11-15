@@ -1228,10 +1228,10 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
     patchPayload({ assumptions: { ...assumptions, ...cleared } })
   }
   const rows = [
-    { name: 'P/S TTM', low: 'ps_low_multiple', high: 'ps_median_multiple' },
-    { name: 'P/E TTM', low: 'pe_low_multiple', high: 'pe_median_multiple' },
-    { name: 'P/S NTM', low: 'ps_low_multiple_ntm', high: 'ps_median_multiple_ntm' },
-    { name: 'P/E NTM', low: 'pe_low_multiple_ntm', high: 'pe_median_multiple_ntm' },
+    { name: 'P/S LFY', low: 'ps_low_multiple', high: 'ps_median_multiple' },
+    { name: 'P/E LFY', low: 'pe_low_multiple', high: 'pe_median_multiple' },
+    { name: 'P/S CFY', low: 'ps_low_multiple_ntm', high: 'ps_median_multiple_ntm' },
+    { name: 'P/E CFY', low: 'pe_low_multiple_ntm', high: 'pe_median_multiple_ntm' },
   ]
   return (
     <div className="valuation-dcf-param-block">
@@ -1257,7 +1257,7 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
       <Typography.Paragraph className="valuation-dcf-terminal-hint">
         {locked
           ? '已按填写值覆盖 POOL。点「跟随 POOL」后再点「开始采集/计算/保存」，会重新用可比股算出的低端和高端。'
-          : 'TTM / NTM 各两行。低端 = POOL 中位数 − σ，高端 = POOL 中位数。改数字会锁定，点「开始采集/计算/保存」时不再跟 POOL。'}
+          : 'LFY / CFY 各两行（LFY=Last Fiscal Year 上一财年，CFY=Current Fiscal Year 当年财年）。低端 = POOL 中位数 − σ，高端 = POOL 中位数。改数字会锁定，点「开始采集/计算/保存」时不再跟 POOL。'}
       </Typography.Paragraph>
     </div>
   )
@@ -2186,7 +2186,7 @@ export default function ValuationWorkbenchPage() {
                       onChange={(v) => patchPayload({ assumptions: { ...assumptions, market_revenue: v } })}
                     />
                   ),
-                  note: '目标公司过去 12 个月营业收入（P/S TTM 基数），不进 DCF',
+                  note: '目标公司上一财年营业收入（P/S LFY 基数），不进 DCF',
                 },
                 {
                   name: '市场法净利润',
@@ -2196,7 +2196,7 @@ export default function ValuationWorkbenchPage() {
                       onChange={(v) => patchPayload({ assumptions: { ...assumptions, market_net_income: v } })}
                     />
                   ),
-                  note: '目标公司过去 12 个月净利润（P/E TTM 基数），不进 DCF',
+                  note: '目标公司上一财年净利润（P/E LFY 基数），不进 DCF',
                 },
               ]}
             />
@@ -2947,10 +2947,13 @@ export default function ValuationWorkbenchPage() {
                         return `本次参数：折现率 ${(shownRate * 100).toFixed(1)}%，${exitLabel}，市场法流动性折扣 ${(liq * 100).toFixed(1)}%${dcfOn ? `，DCF 流动性折扣 ${(dcfLiq * 100).toFixed(1)}%` : ''}，ESOP ${assumptions.esop ?? 0} 元。与方法配置是同一组数。`
                       })()}
                     </Typography.Paragraph>
-                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法按目标公司 TTM/NTM 基数拆分。">
-                      市场法四套 = 可比倍数 × 目标公司基数。基数：P/S TTM = 目标过去 12 个月营收，P/E TTM = 目标过去 12 个月净利润，P/S·P/E NTM = 目标未来 12 个月预测营收/净利润。倍数来自可比 POOL（缺 NTM 时回退 TTM 倍数）。低端 = 中位数 − σ，高端 = 中位数。
+                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法按目标公司 LFY/CFY 基数拆分。">
+                      市场法四套 = 可比倍数 × 目标公司基数。基数：P/S LFY = 上一财年营收，P/E LFY = 上一财年净利润，P/S·P/E CFY = 当年财年预测营收/净利润。倍数来自可比 POOL（缺预测倍数时回退历史倍数）。低端 = 中位数 − σ，高端 = 中位数。
                       顶栏 DCF 仍展示退出 P/E、P/S 两套点估值；估值区间图 DCF 条取敏感性中心 3×3 的最小/最大。
                       {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时区间图为情景×退出方式共 4 条 DCF。' : ''}
+                    </Typography.Paragraph>
+                    <Typography.Paragraph type="secondary" className="valuation-abbr-note" style={{ fontSize: 12, marginTop: -4 }}>
+                      简写：LFY = Last Fiscal Year（上一财年）；CFY = Current Fiscal Year（当年财年）。
                     </Typography.Paragraph>
                     {!isDefaultMethodConfig(method) ? (
                       <Alert
@@ -2981,13 +2984,13 @@ export default function ValuationWorkbenchPage() {
                             <>
                               <div className="valuation-result-card">
                                 <h4>市场法 P/S</h4>
-                                <div>TTM {fmtYi(comparison.market_ps_ttm?.low ?? comparison.market_ps?.low)} ~ {fmtYi(comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)}</div>
-                                <div>NTM {fmtYi(comparison.market_ps_ntm?.low)} ~ {fmtYi(comparison.market_ps_ntm?.high)}</div>
+                                <div title="LFY = Last Fiscal Year 上一财年">LFY {fmtYi(comparison.market_ps_ttm?.low ?? comparison.market_ps?.low)} ~ {fmtYi(comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)}</div>
+                                <div title="CFY = Current Fiscal Year 当年财年">CFY {fmtYi(comparison.market_ps_ntm?.low)} ~ {fmtYi(comparison.market_ps_ntm?.high)}</div>
                               </div>
                               <div className="valuation-result-card">
                                 <h4>市场法 P/E</h4>
-                                <div>TTM {fmtYi(comparison.market_pe_ttm?.low ?? comparison.market_pe?.low)} ~ {fmtYi(comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)}</div>
-                                <div>NTM {fmtYi(comparison.market_pe_ntm?.low)} ~ {fmtYi(comparison.market_pe_ntm?.high)}</div>
+                                <div title="LFY = Last Fiscal Year 上一财年">LFY {fmtYi(comparison.market_pe_ttm?.low ?? comparison.market_pe?.low)} ~ {fmtYi(comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)}</div>
+                                <div title="CFY = Current Fiscal Year 当年财年">CFY {fmtYi(comparison.market_pe_ntm?.low)} ~ {fmtYi(comparison.market_pe_ntm?.high)}</div>
                               </div>
                               <div className="valuation-result-card">
                                 <h4>DCF</h4>

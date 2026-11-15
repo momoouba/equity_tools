@@ -994,8 +994,8 @@ function defaultMarketMultipleSets({ multipleSource, poolRelatives, industryMult
       psNtmSet: psSet,
       peWarnings: [],
       psWarnings: [],
-      peNtmWarnings: ['行业法暂无独立 NTM，预测口径暂用行业 TTM 倍数'],
-      psNtmWarnings: ['行业法暂无独立 NTM，预测口径暂用行业 TTM 倍数'],
+      peNtmWarnings: ['行业法暂无独立预测倍数，CFY 口径暂用行业历史倍数'],
+      psNtmWarnings: ['行业法暂无独立预测倍数，CFY 口径暂用行业历史倍数'],
     };
   }
   const pool = (poolRelatives || []).filter((r) => r.in_pool);
@@ -1008,83 +1008,101 @@ function defaultMarketMultipleSets({ multipleSource, poolRelatives, industryMult
     psSet,
     peNtmSet,
     psNtmSet,
-    peWarnings: warnPoolSet(peSet, 'P/E TTM'),
-    psWarnings: warnPoolSet(psSet, 'P/S TTM'),
-    peNtmWarnings: warnPoolSet(peNtmSet, 'P/E NTM'),
-    psNtmWarnings: warnPoolSet(psNtmSet, 'P/S NTM'),
+    peWarnings: warnPoolSet(peSet, 'P/E LFY'),
+    psWarnings: warnPoolSet(psSet, 'P/S LFY'),
+    peNtmWarnings: warnPoolSet(peNtmSet, 'P/E CFY'),
+    psNtmWarnings: warnPoolSet(psNtmSet, 'P/S CFY'),
   };
 }
 
-/**
- * 目标公司 NTM 基数：折现/锚定日起未来 12 个月营业收入、净利润。
- * 由预测利润表各年金额按落入窗口的月数加权。
- */
-function ntmBaseFromForecastPl(pl, asOf) {
-  const years = (pl?.years || []).map((y) => yearNum(y)).filter((y) => y != null);
-  if (!years.length || !(asOf instanceof Date) || !Number.isFinite(asOf.getTime())) {
-    return { revenue: null, net_income: null, label: null };
+/** 目标公司 LFY（Last Fiscal Year）年份下标：上一完整财年。 */
+function lastFiscalYearIndex(rawPl, asOf) {
+  const years = rawPl?.years || [];
+  const revs = rawPl?.revenue || [];
+  const completed = latestCompletedFiscalYear(asOf);
+  const n = Math.max(years.length, revs.length);
+  let exact = null;
+  let hist = null;
+  for (let i = 0; i < n; i += 1) {
+    const r = toNumber(revs[i]);
+    if (r == null || r === 0) continue;
+    const y = yearNum(years[i]);
+    if (y != null && y === completed) exact = i;
+    if (y != null && y <= completed) hist = i;
   }
-  const start = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
-  const monthWeight = (year, monthIdx) => {
-    const cell = new Date(year, monthIdx, 15);
-    const end = new Date(start);
-    end.setFullYear(end.getFullYear() + 1);
-    return cell >= start && cell < end ? 1 : 0;
-  };
-  const weighted = (field) => {
-    let sum = 0;
-    let months = 0;
-    for (let i = 0; i < (pl.years || []).length; i += 1) {
-      const y = yearNum(pl.years[i]);
-      const v = toNumber(pl[field]?.[i]);
-      if (y == null || v == null) continue;
-      let m = 0;
-      for (let mo = 0; mo < 12; mo += 1) m += monthWeight(y, mo);
-      if (!m) continue;
-      sum += v * (m / 12);
-      months += m;
-    }
-    if (!months) return null;
-    return sum;
-  };
-  const revenue = weighted('revenue');
-  const ni = weighted('net_income');
-  const end = new Date(start);
-  end.setFullYear(end.getFullYear() + 1);
-  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  const label = `${ymd(start)}~${ymd(end)}`;
-  return { revenue, net_income: ni, label };
+  if (exact != null) return exact;
+  if (hist != null) return hist;
+  return lastFilledYearIndex(rawPl);
 }
 
 /**
- * 目标公司 TTM 基数：优先手填「市场法营业收入/净利润」（视为过去 12 个月）；
- * 否则用利润表锚定日所在年 / 已实现年近似。
+ * 目标公司 CFY（Current Fiscal Year）基数：锚定日所在财年全年营业收入/净利润（预测表）。
  */
-function targetTtmBases({ explicitRev, explicitNi, rawPl, asOf }) {
+function targetCfyBases(pl, asOf) {
+  if (!(asOf instanceof Date) || !Number.isFinite(asOf.getTime())) {
+    return { revenue: null, net_income: null, label: null, base_year: null };
+  }
+  const cfy = asOf.getFullYear();
+  let idx = null;
+  for (let i = 0; i < (pl?.years || []).length; i += 1) {
+    if (yearNum(pl.years[i]) === cfy) {
+      idx = i;
+      break;
+    }
+  }
+  if (idx == null) {
+    return { revenue: null, net_income: null, label: null, base_year: null };
+  }
+  const revenue = toNumber(pl.revenue?.[idx]);
+  const ni = toNumber(pl.net_income?.[idx]);
+  return {
+    revenue,
+    net_income: ni,
+    label: `${cfy} 年（CFY · Current Fiscal Year）`,
+    base_year: pl.years[idx],
+  };
+}
+
+/**
+ * 目标公司 LFY 基数：优先手填「市场法营业收入/净利润」（视为上一财年）；
+ * 否则取利润表上一完整财年。
+ */
+function targetLfyBases({ explicitRev, explicitNi, rawPl, asOf }) {
   if (explicitRev != null || explicitNi != null) {
     return {
       revenue: explicitRev,
       net_income: explicitNi,
       operating_profit: null,
       base_year: null,
-      label: '目标公司手填（过去 12 个月）',
+      label: '目标公司手填（LFY · Last Fiscal Year）',
       source: 'explicit',
     };
   }
-  const idx = marketBaseYearIndex(rawPl, asOf);
+  const idx = lastFiscalYearIndex(rawPl, asOf);
   const revenue = toNumber(rawPl?.revenue?.[idx]);
   const ni = toNumber(rawPl?.net_income?.[idx]);
   const op = toNumber(rawPl?.operating_profit?.[idx]);
+  const yLabel = rawPl?.years?.[idx];
   return {
     revenue,
     net_income: ni != null ? ni : (op != null ? op : null),
     operating_profit: op,
-    base_year: rawPl?.years?.[idx] || null,
-    label: rawPl?.years?.[idx] != null
-      ? `目标公司历史口径（${rawPl.years[idx]} 年近似 TTM）`
-      : '目标公司历史口径（近似 TTM）',
+    base_year: yLabel || null,
+    label: yLabel != null
+      ? `目标公司上一财年（${yLabel} · LFY）`
+      : '目标公司上一财年（LFY）',
     source: 'pl',
   };
+}
+
+/** @deprecated 兼容旧名 */
+function ntmBaseFromForecastPl(pl, asOf) {
+  return targetCfyBases(pl, asOf);
+}
+
+/** @deprecated 兼容旧名 */
+function targetTtmBases(args) {
+  return targetLfyBases(args);
 }
 
 function applyMarketBand(set, base, discount) {
@@ -1117,10 +1135,10 @@ function marketMethod({
   const revenueNtm = toNumber(targetNtm?.revenue);
   const peBaseNtm = toNumber(targetNtm?.net_income);
   const warnings = [];
-  if (peBaseTtm != null && peBaseTtm < 0) warnings.push('目标公司 TTM 利润为负，P/E TTM 仅供参考');
-  if (peBaseNtm != null && peBaseNtm < 0) warnings.push('目标公司 NTM 利润为负，P/E NTM 仅供参考');
+  if (peBaseTtm != null && peBaseTtm < 0) warnings.push('目标公司 LFY 利润为负，P/E LFY 仅供参考');
+  if (peBaseNtm != null && peBaseNtm < 0) warnings.push('目标公司 CFY 利润为负，P/E CFY 仅供参考');
   if (revenueNtm == null && peBaseNtm == null) {
-    warnings.push('无法从目标公司预测表拼出未来 12 个月基数，市场法 NTM 为空');
+    warnings.push('无法从目标公司预测表取得当年财年（CFY）基数，市场法 CFY 为空');
   }
 
   const defaults = defaultMarketMultipleSets({
@@ -1134,19 +1152,19 @@ function marketMethod({
   const psBandNtm = explicitMultipleSet(multipleBandNtm?.ps_min, multipleBandNtm?.ps_median);
   const peSet = peBand || defaults.peSet;
   const psSet = psBand || defaults.psSet;
-  // NTM 口径：优先可比 NTM 倍数；没有则回退 TTM 倍数（基数仍用目标公司 NTM）
+  // CFY 口径：优先可比预测倍数；没有则回退历史倍数（基数仍用目标公司 CFY）
   let peNtmSet = peBandNtm || defaults.peNtmSet;
   let psNtmSet = psBandNtm || defaults.psNtmSet;
   if (!peBandNtm && (peNtmSet?.median == null) && peSet?.median != null) {
     peNtmSet = peSet;
-    warnings.push('可比 POOL 无 P/E NTM，预测口径暂用可比 P/E TTM 倍数 × 目标公司 NTM 净利润');
+    warnings.push('可比 POOL 无 P/E 预测倍数，CFY 口径暂用可比 P/E LFY 倍数 × 目标公司 CFY 净利润');
   }
   if (!psBandNtm && (psNtmSet?.median == null) && psSet?.median != null) {
     psNtmSet = psSet;
-    warnings.push('可比 POOL 无 P/S NTM，预测口径暂用可比 P/S TTM 倍数 × 目标公司 NTM 营业收入');
+    warnings.push('可比 POOL 无 P/S 预测倍数，CFY 口径暂用可比 P/S LFY 倍数 × 目标公司 CFY 营业收入');
   }
-  if (peBand || psBand) warnings.push('市场法 TTM 倍数已按填写值覆盖 POOL');
-  if (peBandNtm || psBandNtm) warnings.push('市场法 NTM 倍数已按填写值覆盖 POOL');
+  if (peBand || psBand) warnings.push('市场法 LFY 倍数已按填写值覆盖 POOL');
+  if (peBandNtm || psBandNtm) warnings.push('市场法 CFY 倍数已按填写值覆盖 POOL');
   if (!peBand) warnings.push(...defaults.peWarnings);
   if (!psBand) warnings.push(...defaults.psWarnings);
   if (!peBandNtm && peNtmSet === defaults.peNtmSet) warnings.push(...defaults.peNtmWarnings);
@@ -1185,7 +1203,7 @@ function marketMethod({
     pe_ntm: { low: peNtm.low, mid: peNtm.mid, high: peNtm.high },
     ps_ntm: { low: psNtm.low, mid: psNtm.mid, high: psNtm.high },
     warnings,
-    formula: '流通权益=可比倍数×目标公司基数；非流通=流通×(1−市场法折扣)。四套口径的基数均取目标公司：P/S TTM=过去12个月营业收入，P/E TTM=过去12个月净利润，P/S NTM=未来12个月预测营业收入，P/E NTM=未来12个月预测净利润。倍数来自可比 POOL（TTM/NTM 各一套；缺 NTM 时回退 TTM 倍数）。低端=中位数−σ，高端=中位数',
+    formula: '流通权益=可比倍数×目标公司基数；非流通=流通×(1−市场法折扣)。四套口径的基数均取目标公司：P/S LFY=上一财年营业收入，P/E LFY=上一财年净利润，P/S CFY=当年财年预测营业收入，P/E CFY=当年财年预测净利润（LFY=Last Fiscal Year，CFY=Current Fiscal Year）。倍数来自可比 POOL（历史/预测各一套；缺预测倍数时回退历史倍数）。低端=中位数−σ，高端=中位数',
   };
 }
 
@@ -1265,8 +1283,8 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
         : yiExit(dcfCol),
     },
     formula: scenarioMode === C.SCENARIO_DUAL
-      ? '增量=高端−低端。市场法按 P/E·P/S × TTM·NTM 四套；DCF 点估值仍为退出 P/E 与退出 P/S。并购扣并购折扣，上市不扣。估值区间图 DCF 条取敏感性中心 3×3'
-      : '增量=高端−低端。市场法按 P/E·P/S × TTM·NTM 四套（低端=中位−σ，高端=中位）。DCF 点估值仍为退出 P/E 与退出 P/S；估值区间图取敏感性中心 3×3',
+      ? '增量=高端−低端。市场法按 P/E·P/S × LFY·CFY 四套；DCF 点估值仍为退出 P/E 与退出 P/S。并购扣并购折扣，上市不扣。估值区间图 DCF 条取敏感性中心 3×3'
+      : '增量=高端−低端。市场法按 P/E·P/S × LFY·CFY 四套（低端=中位−σ，高端=中位）。DCF 点估值仍为退出 P/E 与退出 P/S；估值区间图取敏感性中心 3×3',
   };
 }
 
@@ -1466,24 +1484,21 @@ function runValuationEngine(input) {
   } else {
     const cutoff = reportCutoffYmd(anchor.ymd) || anchor.ymd;
     const asOf = asOfDateObj(anchor.ymd);
-    warnings.push(`可比倍数按财报截止日 ${cutoff} 及以前各股历史中位（无中位则回退该日截面）；目标公司基数按 TTM/NTM；折现基准 ${anchor.ymd}`);
-    const targetTtm = targetTtmBases({
+    warnings.push(`可比倍数按财报截止日 ${cutoff} 及以前各股历史中位（无中位则回退该日截面）；目标公司基数按 LFY/CFY；折现基准 ${anchor.ymd}`);
+    const targetTtm = targetLfyBases({
       explicitRev: toNumber(assumptions.market_revenue),
       explicitNi: toNumber(assumptions.market_net_income),
       rawPl,
       asOf,
     });
-    const targetNtm = ntmBaseFromForecastPl(rawPl, asOf);
+    const targetNtm = targetCfyBases(rawPl, asOf);
     if (targetTtm.source === 'pl' && targetTtm.base_year != null) {
-      const marketBaseYear = yearNum(targetTtm.base_year);
-      if (marketBaseYear != null && marketBaseYear === anchor.year) {
-        warnings.push(`目标公司 TTM 基数暂用估值日所在年 ${marketBaseYear}（可在利润表填写市场法营业收入/净利润覆盖）`);
-      } else if (marketBaseYear != null && marketBaseYear > anchor.year) {
-        warnings.push(`利润表没有估值年 ${anchor.year} 的营收，目标公司 TTM 暂用 ${marketBaseYear}。可填写市场法基数`);
-      }
+      warnings.push(`目标公司 LFY 基数用 ${targetTtm.base_year}（可填写市场法营业收入/净利润覆盖）`);
     }
     if (targetNtm.label) {
-      warnings.push(`目标公司 NTM 窗口 ${targetNtm.label}`);
+      warnings.push(`目标公司 CFY：${targetNtm.label}`);
+    } else {
+      warnings.push(`目标公司预测表缺少锚定日所在年 ${anchor.year}，CFY 基数为空`);
     }
     market = marketMethod({
       multipleSource: method.multiple_source,
