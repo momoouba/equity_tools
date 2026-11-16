@@ -5364,10 +5364,10 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 news_abstract 字段时出现警告:', err.message);
   }
 
-  // 检查并添加 news_sentiment 字段
+  // 检查并添加 news_sentiment 字段；已存在则确保含 attention（关注）
   try {
     const [sentimentColumns] = await dbPool.query(`
-      SELECT COLUMN_NAME 
+      SELECT COLUMN_NAME, COLUMN_TYPE
       FROM INFORMATION_SCHEMA.COLUMNS 
       WHERE TABLE_SCHEMA = DATABASE() 
       AND TABLE_NAME = 'news_detail' 
@@ -5377,12 +5377,42 @@ async function initializeTables(dbPool) {
     if (sentimentColumns.length === 0) {
       await dbPool.query(`
         ALTER TABLE news_detail 
-        ADD COLUMN news_sentiment ENUM('positive', 'neutral', 'negative') DEFAULT 'neutral' COMMENT '新闻情绪：positive-正面，neutral-中性，negative-负面' AFTER news_abstract
+        ADD COLUMN news_sentiment ENUM('positive', 'neutral', 'negative', 'attention') DEFAULT 'neutral' COMMENT '新闻情绪：positive-正面，neutral-中性，negative-负面，attention-关注' AFTER news_abstract
       `);
-      // 已为 news_detail 表添加 news_sentiment 字段
+    } else {
+      const colType = String(sentimentColumns[0].COLUMN_TYPE || '').toLowerCase();
+      if (!colType.includes("'attention'")) {
+        await dbPool.query(`
+          ALTER TABLE news_detail
+          MODIFY COLUMN news_sentiment ENUM('positive', 'neutral', 'negative', 'attention') DEFAULT 'neutral' COMMENT '新闻情绪：positive-正面，neutral-中性，negative-负面，attention-关注'
+        `);
+        console.log('✓ news_sentiment 已扩展 attention（关注）');
+      }
     }
   } catch (err) {
     console.warn('检查/添加 news_sentiment 字段时出现警告:', err.message);
+  }
+
+  // 破产重整：主体身份为「申请人」的历史数据从负面回填为关注
+  try {
+    const [backfillResult] = await dbPool.query(`
+      UPDATE news_detail
+      SET news_sentiment = 'attention'
+      WHERE account_name = '破产重整'
+        AND news_sentiment = 'negative'
+        AND (
+          news_abstract LIKE '%主体身份为申请人%'
+          OR content LIKE '%主体身份为申请人%'
+          OR summary LIKE '%的申请人%'
+        )
+        AND news_abstract NOT LIKE '%主体身份为被申请人%'
+        AND content NOT LIKE '%主体身份为被申请人%'
+    `);
+    if (backfillResult && backfillResult.affectedRows > 0) {
+      console.log(`✓ 破产重整申请人情绪回填为关注：${backfillResult.affectedRows} 条`);
+    }
+  } catch (err) {
+    console.warn('破产重整申请人情绪回填时出现警告:', err.message);
   }
 
   // 检查并添加删除相关字段

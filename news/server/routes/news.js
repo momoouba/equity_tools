@@ -5617,9 +5617,34 @@ function buildDeliveryAnnouncementContent(item) {
   return `${subjInstnNm}作为${subjRole}涉及相关案件，公告标题为《${anncmntTitle}》，公告法院为${anncmntCrt}，于 ${dateZh} 发布。`;
 }
 
+/** 司法字段是否视为未披露（空串/null/仅空白） */
+function isJudicialFieldBlank(value) {
+  return value == null || String(value).trim() === '';
+}
+
+/**
+ * 拼接「有值用『为』、无值归入未披露」的司法字段片段
+ * @param {Array<[string, any]>} fields - [[标签, 值], ...]，按展示顺序
+ * @param {string[]} alwaysUndisclosed - 始终未披露的信息名（不含「未披露」后缀）
+ * @returns {{ disclosedParts: string[], undisclosedLabels: string[] }}
+ */
+function splitJudicialDisclosedFields(fields, alwaysUndisclosed = []) {
+  const disclosedParts = [];
+  const undisclosedLabels = [];
+  for (const [label, value] of fields) {
+    if (!isJudicialFieldBlank(value)) disclosedParts.push(`${label}为${String(value).trim()}`);
+    else undisclosedLabels.push(label);
+  }
+  for (const label of alwaysUndisclosed) {
+    if (label && !undisclosedLabels.includes(label)) undisclosedLabels.push(label);
+  }
+  return { disclosedParts, undisclosedLabels };
+}
+
 /**
  * 拼接单条开庭公告记录的 summary（不做 AI 分析，仅拼接）
  * 示例：龙元建设集团股份有限公司作为被告涉及 (2012) 开民初字第 0138 号建设工程施工合同纠纷案件，2013 年 10 月 30 日在徐州经济技术开发区人民法院第四法庭开庭，承办部门为民事审判庭，主审人为聂新国
+ * 缺字段时归入未披露，避免「承办部门为，主审人为」空壳表述
  */
 function buildCourtHearingSummary(item) {
   const subjInstnNm = item.subj_instn_nm || '';
@@ -5631,12 +5656,22 @@ function buildCourtHearingSummary(item) {
   const courtroom = item.courtroom || '';
   const adminDept = item.admin_dept || '';
   const judNm = item.jud_nm || '';
-  return `${subjInstnNm}作为${subjRole}涉及 ${caseNo} ${caseCause}案件，${sessDtZh}在${crtNm}${courtroom}开庭，承办部门为${adminDept}，主审人为${judNm}`;
+  const place = `${crtNm}${courtroom}`.trim();
+  const placePart = place ? `${sessDtZh}在${place}开庭` : `${sessDtZh}开庭`;
+  const { disclosedParts, undisclosedLabels } = splitJudicialDisclosedFields([
+    ['承办部门', adminDept],
+    ['主审人', judNm]
+  ]);
+  let result = `${subjInstnNm}作为${subjRole}涉及 ${caseNo} ${caseCause}案件，${placePart}`;
+  if (disclosedParts.length) result += `，${disclosedParts.join('，')}`;
+  if (undisclosedLabels.length) result += `，${undisclosedLabels.join('，')}未披露`;
+  return result;
 }
 
 /**
  * 拼接单条开庭公告记录的 content/news_abstract（不做 AI 分析，仅拼接）
- * 示例：龙元建设集团股份有限公司作为被告涉及案号为 (2012) 开民初字第 0138 号的建设工程施工合同纠纷案件，于 2013 年 10 月 30 日开庭，承办部门为民事审判庭，主审人为聂新国，审理法院为徐州经济技术开发区人民法院，审理法庭为第四法庭，地区及排期日期信息未披露，公告内容未披露
+ * 示例（字段齐全）：龙元建设集团股份有限公司作为被告涉及案号为 (2012) 开民初字第 0138 号的建设工程施工合同纠纷案件，于 2013 年 10 月 30 日开庭，承办部门为民事审判庭，主审人为聂新国，审理法院为徐州经济技术开发区人民法院，审理法庭为第四法庭，地区及排期日期信息未披露，公告内容未披露
+ * 示例（部分未披露）：…于 2026年9月11日 开庭，审理法院为上海市浦东新区人民法院，承办部门，主审人，审理法庭，地区及排期日期信息未披露，公告内容未披露
  */
 function buildCourtHearingContent(item) {
   const subjInstnNm = item.subj_instn_nm || '';
@@ -5648,7 +5683,20 @@ function buildCourtHearingContent(item) {
   const judNm = item.jud_nm || '';
   const crtNm = item.crt_nm || '';
   const courtroom = item.courtroom || '';
-  return `${subjInstnNm}作为${subjRole}涉及案号为 ${caseNo} 的${caseCause}案件，于 ${sessDtZh} 开庭，承办部门为${adminDept}，主审人为${judNm}，审理法院为${crtNm}，审理法庭为${courtroom}，地区及排期日期信息未披露，公告内容未披露`;
+  const { disclosedParts, undisclosedLabels } = splitJudicialDisclosedFields(
+    [
+      ['承办部门', adminDept],
+      ['主审人', judNm],
+      ['审理法院', crtNm],
+      ['审理法庭', courtroom]
+    ],
+    ['地区及排期日期信息']
+  );
+  let result = `${subjInstnNm}作为${subjRole}涉及案号为 ${caseNo} 的${caseCause}案件，于 ${sessDtZh} 开庭`;
+  if (disclosedParts.length) result += `，${disclosedParts.join('，')}`;
+  if (undisclosedLabels.length) result += `，${undisclosedLabels.join('，')}未披露`;
+  result += '，公告内容未披露';
+  return result;
 }
 
 /**
@@ -9075,6 +9123,9 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           const accountName = '破产重整';
           const APItype = '上海国际';
           const keywords = JSON.stringify(['破产重整']); // keywords 列为 JSON 类型
+          // 被投企业为主体「申请人」→ 关注；「被申请人」等其余角色 → 负面
+          const subjRole = String(item.subj_role || '').trim();
+          const newsSentiment = subjRole === '申请人' ? 'attention' : 'negative';
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
             subjInstnNm,
@@ -9099,7 +9150,7 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
               summary,
               publicTime,
               content,
-              'negative',
+              newsSentiment,
               APItype,
               newsAbstract,
               keywords,

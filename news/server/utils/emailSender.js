@@ -162,13 +162,71 @@ function formatNewsTags(keywords) {
 }
 
 /**
+ * 邮件展示时清洗司法类摘要中的空壳「X为，」：
+ * 将未披露字段归并到「…未披露」，避免「承办部门为，主审人为，」这类空表达。
+ * 例：…开庭，承办部门为，主审人为，审理法院为上海市浦东新区人民法院，审理法庭为，地区及排期日期信息未披露
+ *   → …开庭，审理法院为上海市浦东新区人民法院，承办部门，主审人，审理法庭，地区及排期日期信息未披露
+ */
+function polishJudicialEmailAbstract(text) {
+  if (!text || typeof text !== 'string') return text || '';
+  const fieldLabels = ['承办部门', '主审人', '审理法院', '审理法庭'];
+  // 「字段为，」或「字段为」紧挨句末 —— 值为空
+  const emptyRe = new RegExp(`(${fieldLabels.join('|')})为(?=[，,。]|$)`, 'g');
+  const emptyLabels = [];
+  let m;
+  while ((m = emptyRe.exec(text)) !== null) {
+    if (!emptyLabels.includes(m[1])) emptyLabels.push(m[1]);
+  }
+  if (emptyLabels.length === 0) return text;
+
+  let result = text;
+  for (const label of emptyLabels) {
+    // 只删除空值片段「承办部门为，」，保留「审理法院为上海市…」
+    result = result.replace(new RegExp(`${label}为[，,]?`, 'g'), '');
+  }
+  result = result.replace(/，{2,}/g, '，').replace(/^[，,]+/, '').replace(/[，,]+$/, '');
+
+  // 已有「地区及排期日期信息未披露」则把空字段名并入；否则补上
+  if (/地区及排期日期信息未披露/.test(result)) {
+    result = result.replace(
+      /地区及排期日期信息未披露/,
+      `${emptyLabels.join('，')}，地区及排期日期信息未披露`
+    );
+  } else if (/公告内容未披露/.test(result)) {
+    result = result.replace(
+      /公告内容未披露/,
+      `${emptyLabels.join('，')}，地区及排期日期信息未披露，公告内容未披露`
+    );
+  } else {
+    result = `${result}，${emptyLabels.join('，')}未披露`;
+  }
+  return result.replace(/，{2,}/g, '，').trim();
+}
+
+/**
+ * 解析邮件展示用情绪：破产重整且正文标明「主体身份为申请人」时，历史 negative 也按关注展示
+ */
+function resolveEmailSentiment(news) {
+  const raw = news && news.news_sentiment;
+  if (raw && raw !== 'negative') return raw;
+  const accountName = news && news.account_name ? String(news.account_name).trim() : '';
+  if (accountName !== '破产重整' && accountName !== '破产重组') return raw;
+  const text = `${news.news_abstract || ''}\n${news.content || ''}\n${news.summary || ''}`;
+  if (/主体身份为被申请人/.test(text)) return 'negative';
+  if (/主体身份为申请人|作为[^，,]{0,20}的申请人/.test(text)) return 'attention';
+  return raw;
+}
+
+/**
  * 格式化新闻情绪（返回HTML格式的圆角色块）
  */
 function formatNewsSentiment(sentiment) {
   const sentimentMap = {
     'positive': { text: '正面', color: '#4caf50', bgColor: '#e8f5e9' },
     'negative': { text: '负面', color: '#f44336', bgColor: '#ffebee' },
-    'neutral': { text: '中性', color: '#757575', bgColor: '#f5f5f5' }
+    'neutral': { text: '中性', color: '#757575', bgColor: '#f5f5f5' },
+    // 破产重整等：被投企业为主体申请人时用黄色「关注」，区别于红色「负面」
+    'attention': { text: '关注', color: '#f9a825', bgColor: '#fff8e1' }
   };
   
   const sentimentInfo = sentimentMap[sentiment] || { text: sentiment || '未知', color: '#9e9e9e', bgColor: '#f5f5f5' };
@@ -515,9 +573,9 @@ function generateEmailContent(newsData, timeRangeFrom = null) {
     
     for (const news of newsList) {
       const tags = formatNewsTags(news.keywords);
-      const sentiment = formatNewsSentiment(news.news_sentiment);
+      const sentiment = formatNewsSentiment(resolveEmailSentiment(news));
       const footerMeta = formatNewsFooterMeta(news);
-      const abstract = news.news_abstract || '暂无摘要';
+      const abstract = polishJudicialEmailAbstract(news.news_abstract || '暂无摘要');
       const showSourceLink = !isNoLinkType(news);
       const sourceLinkHtml = showSourceLink
         ? `<a href="${news.source_url || '#'}" target="_blank" style="color: #4CAF50; text-decoration: none;">原文链接</a>`
@@ -670,9 +728,9 @@ function generateEmailTextContent(newsData, timeRangeFrom = null) {
       
       for (const news of newsList) {
         const tags = formatNewsTags(news.keywords);
-        const sentiment = formatNewsSentiment(news.news_sentiment);
+        const sentiment = formatNewsSentiment(resolveEmailSentiment(news));
         const footerMeta = formatNewsFooterMeta(news);
-        const abstract = news.news_abstract || '暂无摘要';
+        const abstract = polishJudicialEmailAbstract(news.news_abstract || '暂无摘要');
         const sourcePart = isNoLinkType(news) ? '' : `，${news.source_url || ''}`;
         
         text += `${news.title || '无标题'} ${tags} ${sentiment}\n`;
@@ -1144,6 +1202,7 @@ module.exports = {
   getYesterdayNewsByEnterprise,
   generateEmailContent,
   generateEmailTextContent,
-  truncateContentForEmailLog
+  truncateContentForEmailLog,
+  polishJudicialEmailAbstract
 };
 
