@@ -30,6 +30,7 @@ const DEFAULT_DISCOUNT = 0.3;
 const DEFAULT_EXIT_PE = 40;
 const DEFAULT_EXIT_PS = 20;
 const DEFAULT_LIQUIDITY = 0.3;
+const DEFAULT_TERMINAL_GROWTH = 0.02;
 
 const DAY_SPECS = [
   { key: 'dso', label: 'DSO' },
@@ -297,6 +298,7 @@ function buildDcfForecast({
   scenarioName = '',
   terminalType = 'exit_pe',
   exitMultiple = null,
+  terminalGrowth = null,
   applyLiquidity = false,
   liquidityDiscount = null,
   forecastPl = {},
@@ -444,14 +446,24 @@ function buildDcfForecast({
     rate = baseRate;
   }
 
+  const useGordon = terminalType === 'gordon';
   const usePs = terminalType === 'exit_ps';
   let multiple = toNumber(exitMultiple);
   const multipleName = usePs ? '退出 P/S' : '退出 P/E';
   const who = scenarioLabel ? `${scenarioLabel}的` : '';
-  if (multiple == null) multiple = usePs ? DEFAULT_EXIT_PS : DEFAULT_EXIT_PE;
-  else if (multiple <= 0) {
-    blockers.push(`${who}${multipleName}小于等于 0，请到方法配置修改`);
+  if (!useGordon) {
+    if (multiple == null) multiple = usePs ? DEFAULT_EXIT_PS : DEFAULT_EXIT_PE;
+    else if (multiple <= 0) {
+      blockers.push(`${who}${multipleName}小于等于 0，请到方法配置修改`);
+    }
+  } else {
+    multiple = null;
   }
+  const growthDelta = toNumber(sensitivityShocks?.growthDelta) || 0;
+  let perpGrowth = toNumber(terminalGrowth);
+  if (perpGrowth == null) perpGrowth = toNumber(assumptions.terminal_growth);
+  if (perpGrowth == null) perpGrowth = DEFAULT_TERMINAL_GROWTH;
+  perpGrowth += growthDelta;
 
   let liquidity = toNumber(liquidityDiscount);
   if (applyLiquidity) {
@@ -521,7 +533,8 @@ function buildDcfForecast({
     ));
   const daysOk = daysByYear.every((row) => DAY_SPECS.every((spec) => row[spec.key] != null && row[spec.key] >= 0));
   const revenueOk = canProject && revenues.length === n && revenues.every((r) => r > 0);
-  const ready = blockers.length === 0 && revenueOk && ratiosOk && daysOk && bsBalanced(bs) && rate > 0 && multiple > 0;
+  const multipleOk = useGordon || (multiple != null && multiple > 0);
+  const ready = blockers.length === 0 && revenueOk && ratiosOk && daysOk && bsBalanced(bs) && rate > 0 && multipleOk;
 
   if (!ready) {
     return blankResult({
@@ -705,8 +718,8 @@ function buildDcfForecast({
   }
 
   const lastNopat = series.nopat[n - 1];
-  if (!usePs && !(lastNopat > 0)) {
-    blockers.push(`最后一年 ${years[n - 1]} 税后经营利润小于等于 0，不能乘退出 P/E。请把预测延到该年为正，或在方法配置把退出方式改成 P/S`);
+  if (!useGordon && !usePs && !(lastNopat > 0)) {
+    blockers.push(`最后一年 ${years[n - 1]} 税后经营利润小于等于 0，不能乘退出 P/E。请把预测延到该年为正，或在方法配置把退出方式改成 P/S / 永续增长`);
     return blankResult({
       blockers,
       scenario_name: scenarioName || null,
@@ -751,9 +764,52 @@ function buildDcfForecast({
       imbalance: forecastBs[i].imbalance,
     });
   }
-  const terminalBase = usePs ? series.revenue[n - 1] : lastNopat;
-  const exitEquity = multiple * terminalBase;
-  const exitEv = exitEquity + nd;
+
+  // 永续终值用末期全年 FCFF，不用锚定年残段期间数
+  const fcfFullLast = series.nopat[n - 1] + series.da[n - 1] + esopAnnual - series.capex[n - 1] - series.dnwc[n - 1];
+  let terminalBase;
+  let exitEquity;
+  let exitEv;
+  let terminalBaseKind;
+  if (useGordon) {
+    if (!(fcfFullLast > 0)) {
+      blockers.push(`最后一年 ${years[n - 1]} 全年自由现金流小于等于 0，不能用永续增长终值。请调整预测或改用退出倍数`);
+      return blankResult({
+        blockers,
+        scenario_name: scenarioName || null,
+        series,
+        forecast_bs: forecastBs,
+        net_debt: nd,
+        discount_rate: rate,
+        apply_liquidity: applyLiquidity,
+        liquidity_discount: applyLiquidity ? liquidity : null,
+        terminal_growth: perpGrowth,
+      });
+    }
+    if (!(rate > perpGrowth)) {
+      blockers.push(`永续增长率 ${pctText(perpGrowth)} 须小于折现率 ${pctText(rate)}，请到方法配置修改`);
+      return blankResult({
+        blockers,
+        scenario_name: scenarioName || null,
+        series,
+        forecast_bs: forecastBs,
+        net_debt: nd,
+        discount_rate: rate,
+        apply_liquidity: applyLiquidity,
+        liquidity_discount: applyLiquidity ? liquidity : null,
+        terminal_growth: perpGrowth,
+      });
+    }
+    terminalBase = fcfFullLast;
+    terminalBaseKind = 'fcff';
+    exitEv = fcfFullLast * (1 + perpGrowth) / (rate - perpGrowth);
+    exitEquity = exitEv - nd;
+  } else {
+    terminalBase = usePs ? series.revenue[n - 1] : lastNopat;
+    terminalBaseKind = usePs ? 'revenue' : 'after_tax_operating_profit';
+    exitEquity = multiple * terminalBase;
+    exitEv = exitEquity + nd;
+  }
   const tvPeriods = pvs[n - 1].periods;
   const tvPv = exitEv * pvFactor(rate, tvPeriods);
   ev += tvPv;
@@ -777,8 +833,9 @@ function buildDcfForecast({
     fcf: pvs.map((p) => p.fcf),
     pvs,
     terminal_year: years[n - 1],
-    terminal_base_kind: usePs ? 'revenue' : 'after_tax_operating_profit',
+    terminal_base_kind: terminalBaseKind,
     terminal_base: terminalBase,
+    terminal_growth: useGordon ? perpGrowth : null,
     exit_multiple: multiple,
     exit_equity_value: exitEquity,
     terminal_value: exitEv,
@@ -790,6 +847,12 @@ function buildDcfForecast({
     forecast_bs: forecastBs,
     series,
   };
+}
+
+function pctText(rate) {
+  const n = Math.round(Number(rate) * 10000) / 100;
+  if (!Number.isFinite(n)) return '';
+  return `${Number(n.toFixed(2))}%`;
 }
 
 function forecastYearKey(y) {

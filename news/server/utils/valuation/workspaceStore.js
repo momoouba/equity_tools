@@ -92,7 +92,7 @@ async function saveMethod(caseId, versionId, method, pool) {
   await upsertByCaseVersion(d, 'valuation_method', caseId, versionId, [
     'terminal_type', 'fcf_method', 'sensitivity_axes', 'scenario_mode',
     'multiple_source', 'industry_stat_method', 'confirmed',
-    'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rd_cagr_step', 'rate_step',
+    'pe_multiple_step', 'ps_multiple_step', 'cagr_step', 'rd_cagr_step', 'rate_step', 'growth_step',
     'sensitivity_row_param', 'sensitivity_col_param',
     'sensitivity_row_mode', 'sensitivity_col_mode',
     'sensitivity_row_step', 'sensitivity_col_step',
@@ -110,6 +110,7 @@ async function saveMethod(caseId, versionId, method, pool) {
     numOrNull(m.cagr_step),
     numOrNull(m.rd_cagr_step),
     numOrNull(m.rate_step),
+    numOrNull(m.growth_step),
     strOrNull(m.sensitivity_row_param, 32),
     strOrNull(m.sensitivity_col_param, 32),
     strOrNull(m.sensitivity_row_mode, 16),
@@ -142,6 +143,7 @@ async function loadMethod(caseId, versionId, pool) {
     cagr_step: numOrNull(r.cagr_step),
     rd_cagr_step: numOrNull(r.rd_cagr_step),
     rate_step: numOrNull(r.rate_step),
+    growth_step: numOrNull(r.growth_step),
     sensitivity_row_param: r.sensitivity_row_param || null,
     sensitivity_col_param: r.sensitivity_col_param || null,
     sensitivity_row_mode: r.sensitivity_row_mode || null,
@@ -163,7 +165,7 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     || assumptions?.discount_base_dirty === 1
     || assumptions?.discount_base_dirty === '1';
   await upsertByCaseVersion(d, 'valuation_assumption', caseId, versionId, [
-    'discount_rate', 'exit_pe', 'exit_ps', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
+    'discount_rate', 'exit_pe', 'exit_ps', 'terminal_growth', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
     'esop', 'valuation_date', 'financial_anchor_date', 'discount_base_dirty',
     'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
@@ -174,6 +176,7 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(a.discount_rate),
     numOrNull(a.exit_pe),
     numOrNull(a.exit_ps),
+    numOrNull(a.terminal_growth),
     numOrNull(a.liquidity_discount),
     numOrNull(a.dcf_liquidity_discount),
     numOrNull(a.tax_rate),
@@ -223,6 +226,7 @@ async function loadAssumptions(caseId, versionId, pool) {
     discount_rate: numOrNull(r.discount_rate),
     exit_pe: numOrNull(r.exit_pe),
     exit_ps: numOrNull(r.exit_ps),
+    terminal_growth: numOrNull(r.terminal_growth),
     liquidity_discount: numOrNull(r.liquidity_discount),
     dcf_liquidity_discount: numOrNull(r.dcf_liquidity_discount),
     tax_rate: numOrNull(r.tax_rate),
@@ -1018,6 +1022,10 @@ async function loadOneDcf(d, run) {
       exitView = null;
     }
   }
+  const terminals = exitView?.terminals || null;
+  const terminalBaseKind = run.terminal_type === 'exit_ps'
+    ? 'revenue'
+    : (run.terminal_type === 'gordon' ? 'fcff' : 'after_tax_operating_profit');
   return {
     scenario_name: run.scenario_name,
     discount_rate: numOrNull(run.discount_rate),
@@ -1028,7 +1036,10 @@ async function loadOneDcf(d, run) {
     terminal_value: numOrNull(run.terminal_value),
     terminal_pv: numOrNull(run.terminal_pv),
     terminal_base: numOrNull(run.terminal_base),
-    terminal_base_kind: run.terminal_type === 'exit_ps' ? 'revenue' : 'net_income',
+    terminal_base_kind: terminalBaseKind,
+    terminal_growth: terminals?.gordon?.terminal_growth != null
+      ? numOrNull(terminals.gordon.terminal_growth)
+      : null,
     terminal_year: years.length ? years[years.length - 1].fiscal_year : null,
     terminal_type: run.terminal_type || null,
     exit_multiple: numOrNull(run.exit_multiple),
@@ -1051,6 +1062,7 @@ async function loadOneDcf(d, run) {
     series,
     sensitivity,
     exit_view: exitView,
+    terminals,
   };
 }
 

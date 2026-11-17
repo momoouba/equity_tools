@@ -29,8 +29,15 @@ function exitMocIrr(capYi, dilution, dealYi, holdingYears) {
   return { moc, irr, note: null }
 }
 
+function formatGrowth(v) {
+  if (v == null || !Number.isFinite(Number(v))) return '—'
+  const n = Math.round(Number(v) * 10000) / 100
+  return `${Number(n.toFixed(2))}%`
+}
+
 export function formatExitRange(view) {
-  const vals = [view?.pe?.equity_yi, view?.ps?.equity_yi].filter((v) => v != null && Number.isFinite(Number(v)))
+  const vals = [view?.pe?.equity_yi, view?.ps?.equity_yi, view?.gordon?.equity_yi]
+    .filter((v) => v != null && Number.isFinite(Number(v)))
   if (!vals.length) return '—'
   const lo = Math.min(...vals.map(Number))
   const hi = Math.max(...vals.map(Number))
@@ -40,7 +47,10 @@ export function formatExitRange(view) {
 
 export function formatExitLine(kind, side, dealYi, dilution, years) {
   if (!side || side.blocked || side.equity_yi == null) return null
-  const head = `退出 ${kind} ${formatMultiple(side.multiple)} → 股权价值 ${fmt2(side.equity_yi)} 亿；退出市值 ${fmt2(side.cap_yi)} 亿`
+  const marker = kind === '永续增长'
+    ? `永续增长 ${formatGrowth(side.growth)}`
+    : `退出 ${kind} ${formatMultiple(side.multiple)}`
+  const head = `${marker} → 股权价值 ${fmt2(side.equity_yi)} 亿；退出市值 ${fmt2(side.cap_yi)} 亿`
   const hold = years == null ? '' : `（持有 ${Number(years).toFixed(2)} 年）`
   const m = exitMocIrr(side.cap_yi, dilution, dealYi, years)
   if (m.note === 'MOC 不为正，无 IRR') return `${head}；退出 MOC ${fmt2(m.moc)}；MOC 不为正，无 IRR${hold}`
@@ -52,6 +62,7 @@ export function formatExitLine(kind, side, dealYi, dilution, years) {
 function cellText(cell, block, dealYi, dilution, years) {
   if (!cell || cell.blank === 'revenue' || cell.blank === 'other' || cell.blank === 'multiple') return ''
   if (cell.blank === 'nopat') return '税后经营利润小于等于 0'
+  if (cell.blank === 'gordon') return 'g ≥ r 或现金流非正'
   if (block === 'equity') return cell.equity_yi == null ? '' : fmt2(cell.equity_yi)
   const m = exitMocIrr(cell.cap_yi, dilution, dealYi, years)
   if (block === 'moc') {
@@ -102,10 +113,11 @@ function SensTable({ title, side, block, dealYi, dilution, years }) {
   )
 }
 
-function Block({ title, subtitle, pe, ps, block, dealYi, dilution, years, axis }) {
+function Block({ title, subtitle, pe, ps, gordon, block, dealYi, dilution, years, axis }) {
   const peTitle = `退出 P/E · ${axis}`
   const psTitle = `退出 P/S · ${axis}`
-  if (!pe?.cells && !ps?.cells) return null
+  const gTitle = viewAxisForGordon(axis)
+  if (!pe?.cells && !ps?.cells && !gordon?.cells) return null
   return (
     <div className="valuation-sens-block">
       <div className="valuation-sens-block-title">{title}</div>
@@ -113,14 +125,22 @@ function Block({ title, subtitle, pe, ps, block, dealYi, dilution, years, axis }
       <div className="valuation-sens-pair">
         <SensTable title={peTitle} side={pe} block={block} dealYi={dealYi} dilution={dilution} years={years} />
         <SensTable title={psTitle} side={ps} block={block} dealYi={dealYi} dilution={dilution} years={years} />
+        <SensTable title={gTitle} side={gordon} block={block} dealYi={dealYi} dilution={dilution} years={years} />
       </div>
     </div>
   )
 }
 
+function viewAxisForGordon(axis) {
+  if (!axis) return '永续增长'
+  if (axis.includes('退出倍数')) return axis.replace('退出倍数', '永续增长率')
+  return `永续增长 · ${axis}`
+}
+
 function axisTitle(view) {
   if (view?.axis_title) return view.axis_title
   if (view?.axes === 'exit_x_wacc') return '折现率 × 退出倍数'
+  if (view?.axes === 'rate_x_g') return '折现率 × 永续增长率'
   if (view?.axes === 'exit_x_rd_cagr') return '研发费用 CAGR × 退出倍数'
   if (view?.axes === 'rev_cagr_x_rd_cagr') return '营收 CAGR × 研发费用 CAGR'
   if (view?.axes === 'univariate') return '单变量试算'
@@ -142,11 +162,11 @@ function OneScenario({ view, dealYi, dilution }) {
   }
   return (
     <div>
-      <Block title="估值" pe={view.pe} ps={view.ps} block="equity" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
+      <Block title="估值" pe={view.pe} ps={view.ps} gordon={view.gordon} block="equity" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
       {showReturn ? (
         <>
-          <Block title="退出 MOC" pe={view.pe} ps={view.ps} block="moc" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
-          <Block title="退出 IRR" subtitle={yearText} pe={view.pe} ps={view.ps} block="irr" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
+          <Block title="退出 MOC" pe={view.pe} ps={view.ps} gordon={view.gordon} block="moc" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
+          <Block title="退出 IRR" subtitle={yearText} pe={view.pe} ps={view.ps} gordon={view.gordon} block="irr" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
         </>
       ) : (
         <Typography.Paragraph type="secondary" className="valuation-sens-block-sub">{returnNote}</Typography.Paragraph>
@@ -167,6 +187,7 @@ export function DcfExitCard({ primary, secondary, dealYi, dilution }) {
       <div className={prefix ? 'valuation-exit-line' : 'num'}>{prefix}{formatExitRange(item)}</div>
       <div className="valuation-exit-line">{formatExitLine('P/E', item.pe, dealYi, dilution, item.holding_years)}</div>
       <div className="valuation-exit-line">{formatExitLine('P/S', item.ps, dealYi, dilution, item.holding_years)}</div>
+      <div className="valuation-exit-line">{formatExitLine('永续增长', item.gordon, dealYi, dilution, item.holding_years)}</div>
     </>
   )
   if (!view) return null
@@ -186,6 +207,7 @@ export function DcfExitCard({ primary, secondary, dealYi, dilution }) {
 const AXIS_OPTIONS = [
   { value: 'exit_x_cagr', label: '营收 CAGR × 退出倍数' },
   { value: 'exit_x_wacc', label: '折现率 × 退出倍数' },
+  { value: 'rate_x_g', label: '折现率 × 永续增长率' },
   { value: 'exit_x_rd_cagr', label: '研发费用 CAGR × 退出倍数' },
   { value: 'rev_cagr_x_rd_cagr', label: '营收 CAGR × 研发费用 CAGR' },
   { value: 'univariate', label: '单变量试算' },
@@ -197,6 +219,7 @@ const PARAM_OPTIONS = [
   { value: 'rd_cagr', label: '研发费用 CAGR' },
   { value: 'rate', label: '折现率' },
   { value: 'exit_multiple', label: '退出倍数' },
+  { value: 'perp_growth', label: '永续增长率' },
   { value: 'gross_margin', label: '毛利率' },
   { value: 'selling_ratio', label: '销售费用率' },
   { value: 'admin_ratio', label: '管理费用率' },
@@ -207,7 +230,7 @@ const PARAM_OPTIONS = [
   { value: 'dpo', label: 'DPO' },
 ]
 
-const PCT_PARAMS = new Set(['rev_cagr', 'rd_cagr', 'rate', 'gross_margin', 'selling_ratio', 'admin_ratio', 'rd_ratio', 'capex_ratio'])
+const PCT_PARAMS = new Set(['rev_cagr', 'rd_cagr', 'rate', 'perp_growth', 'gross_margin', 'selling_ratio', 'admin_ratio', 'rd_ratio', 'capex_ratio'])
 
 function parseLevelsInput(text, percent) {
   const parts = String(text || '').split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean)
@@ -290,8 +313,11 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
             options={AXIS_OPTIONS}
           />
         </div>
-        {axes === 'exit_x_wacc' ? (
+        {axes === 'exit_x_wacc' || axes === 'rate_x_g' ? (
           <StepControl label="折现率步长" value={method?.rate_step} fallback={0.02} presets={[2, 4]} percent disabled={!!readOnly} onChange={(v) => setMethod({ rate_step: v })} />
+        ) : null}
+        {axes === 'rate_x_g' || axes === 'exit_x_cagr' || axes === 'exit_x_wacc' || axes === 'exit_x_rd_cagr' ? (
+          <StepControl label="永续增长率步长" value={method?.growth_step} fallback={0.005} presets={[0.5, 1]} percent disabled={!!readOnly} onChange={(v) => setMethod({ growth_step: v })} />
         ) : null}
         {axes === 'exit_x_cagr' || axes === 'rev_cagr_x_rd_cagr' ? (
           <StepControl label="营收 CAGR 步长" value={method?.cagr_step} fallback={0.05} presets={[2.5, 5]} percent disabled={!!readOnly} onChange={(v) => setMethod({ cagr_step: v })} />

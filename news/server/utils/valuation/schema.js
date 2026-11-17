@@ -595,6 +595,7 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['rd_growth_mode', "VARCHAR(16) NULL COMMENT '研发费用百分数口径：growth 为较上一年，空为占收入'"],
     ['financial_anchor_date', "VARCHAR(16) NULL COMMENT '标的财务锚定日（任意日历日）'"],
     ['discount_base_dirty', "TINYINT(1) NULL COMMENT '折现基准日是否已手改'"],
+    ['terminal_growth', "DECIMAL(20,8) NULL COMMENT 'DCF 永续经营增长率 g，小数'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_method', [
     ['pe_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长'"],
@@ -602,6 +603,7 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['cagr_step', "DECIMAL(20,8) NULL COMMENT '营收 CAGR 步长，小数'"],
     ['rd_cagr_step', "DECIMAL(20,8) NULL COMMENT '研发费用 CAGR 步长，小数'"],
     ['rate_step', "DECIMAL(20,8) NULL COMMENT '折现率步长，小数'"],
+    ['growth_step', "DECIMAL(20,8) NULL COMMENT '永续增长率步长，小数'"],
     ['sensitivity_row_param', "VARCHAR(32) NULL COMMENT '自定义/单变量纵轴参数'"],
     ['sensitivity_col_param', "VARCHAR(32) NULL COMMENT '自定义横轴参数'"],
     ['sensitivity_row_mode', "VARCHAR(16) NULL COMMENT 'step/levels'"],

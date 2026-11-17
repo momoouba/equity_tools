@@ -666,14 +666,23 @@ function fmtAxis(kind, v) {
 }
 
 function terminalFormulaText(dcf, terminalType) {
-  const usePs = (dcf?.terminal_base_kind || (terminalType === 'exit_ps' ? 'revenue' : 'net_income')) === 'revenue'
   const year = dcf?.terminal_year || (asArray(dcf?.pvs).slice(-1)[0]?.year) || ''
+  const yearBit = year ? `${forecastYearLabel(year)} ` : ''
+  const useGordon = (dcf?.terminal_base_kind === 'fcff') || terminalType === 'gordon'
+  if (useGordon) {
+    const g = dcf?.terminal_growth
+    const r = dcf?.discount_rate
+    if (dcf?.terminal_base == null || g == null || r == null) {
+      return '永续企业价值 = 末期全年 FCFF × (1+g) / (r−g)'
+    }
+    return `永续企业价值 = ${yearBit}全年 FCFF ${fmtYuanAsWan(dcf.terminal_base)} × (1+${fmtPct(g, 1)}) / (${fmtPct(r, 1)}−${fmtPct(g, 1)}) = ${fmtYuanAsWan(dcf.terminal_value)}`
+  }
+  const usePs = (dcf?.terminal_base_kind || (terminalType === 'exit_ps' ? 'revenue' : 'net_income')) === 'revenue'
   const kind = usePs ? '末期全年营业收入' : '末期全年税后经营利润'
   const multipleName = usePs ? '退出 P/S' : '退出 P/E'
   if (dcf?.exit_multiple == null || dcf?.terminal_base == null) {
     return `退出企业价值 = ${multipleName} × ${kind} + 锚定日净负债`
   }
-  const yearBit = year ? `${forecastYearLabel(year)} ` : ''
   return `退出企业价值 = ${fmtNum(dcf.exit_multiple, 2)} × ${yearBit}${kind} ${fmtYuanAsWan(dcf.terminal_base)} + 净负债 ${fmtYuanAsWan(dcf.net_debt)} = ${fmtYuanAsWan(dcf.terminal_value)}`
 }
 
@@ -794,6 +803,130 @@ function ForecastBridge({ dcf }) {
   )
 }
 
+function TerminalMethodsBlock({ dcf }) {
+  const terminals = dcf?.terminals || dcf?.exit_view?.terminals
+  if (!terminals) return null
+  const rows = [
+    { key: 'exit_pe', name: '退出 P/E', term: terminals.exit_pe },
+    { key: 'exit_ps', name: '退出 P/S', term: terminals.exit_ps },
+    { key: 'gordon', name: '永续增长', term: terminals.gordon },
+  ]
+  const gordon = terminals.gordon
+  return (
+    <div style={{ marginTop: 16 }}>
+      <Typography.Title heading={6}>终值三套测算（单位：万元 / 亿元）</Typography.Title>
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
+        预测期自由现金流三套相同；差别只在终值。永续增长用末期全年 FCFF × (1+g)/(r−g)，不再乘退出倍数。
+      </Typography.Paragraph>
+      <ListTable
+        className="valuation-dcf-terminal-compare"
+        rowKey="key"
+        pagination={false}
+        size="small"
+        showSeq={false}
+        scroll={{ x: 980 }}
+        columns={[
+          { title: '终值方式', dataIndex: 'name', width: 100, fixed: 'left', className: 'valuation-nowrap-cell' },
+          {
+            title: '状态',
+            width: 88,
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => (r.term?.blocked ? '未算出' : '已算出'),
+          },
+          {
+            title: '终值基数',
+            width: 140,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => {
+              if (r.term?.blocked) return '—'
+              if (r.key === 'gordon') return `全年 FCFF ${fmtYuanAsWan(r.term.terminal_base)}`
+              if (r.key === 'exit_ps') return `收入 ${fmtYuanAsWan(r.term.terminal_base)}`
+              return `税后经营利润 ${fmtYuanAsWan(r.term.terminal_base)}`
+            },
+          },
+          {
+            title: '倍数 / g',
+            width: 100,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => {
+              if (r.term?.blocked) return '—'
+              if (r.key === 'gordon') return fmtPct(r.term.terminal_growth, 1)
+              return fmtNum(r.term.exit_multiple, 2)
+            },
+          },
+          {
+            title: '终值企业价值',
+            width: 120,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => (r.term?.blocked ? '—' : fmtYuanAsWan(r.term.terminal_value)),
+          },
+          {
+            title: '终值现值',
+            width: 110,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => (r.term?.blocked ? '—' : fmtYuanAsWan(r.term.terminal_pv)),
+          },
+          {
+            title: '企业价值',
+            width: 110,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => (r.term?.blocked ? '—' : fmtYiFromYuan(r.term.enterprise_value)),
+          },
+          {
+            title: '股权价值（亿元）',
+            width: 130,
+            align: 'right',
+            className: 'valuation-nowrap-cell',
+            render: (_, r) => (r.term?.blocked ? '—' : fmtNum(r.term.equity_value_yi, 2)),
+          },
+        ]}
+        data={rows}
+      />
+      {gordon ? (
+        <div className="valuation-formula-wrap" style={{ marginTop: 8 }}>
+          <Typography.Paragraph style={{ fontSize: 13, marginBottom: 4 }}>
+            <strong>永续增长明细：</strong>
+            {gordon.blocked
+              ? `未算出。${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与折现率、永续增长率。'}`
+              : [
+                `末期全年 FCFF ${fmtYuanAsWan(gordon.terminal_base)}`,
+                `g ${fmtPct(gordon.terminal_growth, 1)}`,
+                `r ${fmtPct(gordon.discount_rate, 1)}`,
+                `永续企业价值 ${fmtYuanAsWan(gordon.terminal_value)}`,
+                `终值现值 ${fmtYuanAsWan(gordon.terminal_pv)}`,
+                `企业价值 ${fmtYiFromYuan(gordon.enterprise_value)}`,
+                `净负债 ${fmtYuanAsWan(gordon.net_debt)}`,
+                `股权价值 ${fmtNum(gordon.equity_value_yi, 2)} 亿元`,
+                gordon.apply_liquidity
+                  ? `（已扣并购流动性折扣 ${fmtPct(gordon.liquidity_discount ?? 0.3, 0)}）`
+                  : '',
+              ].filter(Boolean).join('；')}
+          </Typography.Paragraph>
+          {!gordon.blocked ? (
+            <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+              {terminalFormulaText(gordon, 'gordon')}。预测各年自由现金流与上方折现表相同，只替换终值这一行。
+            </Typography.Paragraph>
+          ) : null}
+        </div>
+      ) : null}
+      {rows.some((r) => r.term?.blocked && (r.term.blockers || []).length) ? (
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginTop: 6 }}>
+          {[
+            terminals.exit_pe?.blocked ? `退出 P/E：${(terminals.exit_pe.blockers || []).join('；')}` : null,
+            terminals.exit_ps?.blocked ? `退出 P/S：${(terminals.exit_ps.blockers || []).join('；')}` : null,
+            terminals.gordon?.blocked ? `永续增长：${(terminals.gordon.blockers || []).join('；')}` : null,
+          ].filter(Boolean).join('　')}
+        </Typography.Paragraph>
+      ) : null}
+    </div>
+  )
+}
+
 function DcfOne({ title, dcf, terminalType }) {
   if (!dcf) return null
   const pvs = asArray(dcf.pvs)
@@ -823,13 +956,14 @@ function DcfOne({ title, dcf, terminalType }) {
       />
       <ForecastBridge dcf={dcf} />
       <Typography.Paragraph className="valuation-formula-wrap" style={{ marginTop: 8, fontSize: 13 }}>
-        {terminalFormulaText(dcf, terminalType)}；终值现值 {fmtYuanAsWan(dcf.terminal_pv)}；
+        明细默认展开：{terminalFormulaText(dcf, terminalType)}；终值现值 {fmtYuanAsWan(dcf.terminal_pv)}；
         企业价值 {fmtYiFromYuan(dcf.enterprise_value)}；净负债 {fmtYuanAsWan(dcf.net_debt)}；
         股权价值 {fmtNum(dcf.equity_value_yi, 2)} 亿元
         {dcf.apply_liquidity
           ? `（已扣并购流动性折扣 ${fmtPct(dcf.liquidity_discount ?? 0.3, 0)}）`
           : ''}
       </Typography.Paragraph>
+      <TerminalMethodsBlock dcf={dcf} />
       {sens?.grid ? (
         <ListTable
           style={{ marginTop: 8 }}

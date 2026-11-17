@@ -264,19 +264,22 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
   if (!view) return;
   b.colCount = Math.max(b.colCount || 1, 13);
   const years = view.holding_years;
-  const axis = view.axes === 'exit_x_wacc'
+  const axis = view.axes === 'exit_x_wacc' || view.axes === 'rate_x_g'
     ? '折现率'
     : (view.axes === 'exit_x_rd_cagr' ? '研发费用 CAGR' : '营收 CAGR');
   const axisPair = view.axes === 'exit_x_wacc'
     ? '折现率 × 退出倍数'
-    : (view.axes === 'exit_x_rd_cagr'
-      ? '研发费用 CAGR × 退出倍数'
-      : (view.axes === 'rev_cagr_x_rd_cagr' ? '营收 CAGR × 研发费用 CAGR' : '营收 CAGR × 退出倍数'));
+    : (view.axes === 'rate_x_g'
+      ? '折现率 × 永续增长率'
+      : (view.axes === 'exit_x_rd_cagr'
+        ? '研发费用 CAGR × 退出倍数'
+        : (view.axes === 'rev_cagr_x_rd_cagr' ? '营收 CAGR × 研发费用 CAGR' : '营收 CAGR × 退出倍数')));
   const deal = num(dealYi);
   const showReturn = deal > 0 && (dilution == null || dilution === '' || (Number(dilution) >= 0 && Number(dilution) <= 1));
   const sides = [
     ['退出 P/E', view.pe],
     ['退出 P/S', view.ps],
+    ['永续增长', view.gordon],
   ].filter(([, side]) => side && !side.blocked && side.cells);
   if (!sides.length) return;
   b.gap(1);
@@ -299,8 +302,11 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
   }
   const sideCells = (name, side) => {
     const m = exitMocIrr(side.cap_yi, dilution, dealYi, years);
+    const head = name === '永续'
+      ? [`${name}g`, side.growth, 'num']
+      : [`${name}倍`, side.multiple, 'num'];
     return [
-      [`${name}倍`, side.multiple, 'num'],
+      head,
       [`${name}股权`, side.equity_yi, 'num'],
       [`${name}市值`, side.cap_yi, 'num'],
       [`${name} MOC`, m.moc == null ? m.note : m.moc, m.moc == null ? 'text' : 'num'],
@@ -309,10 +315,12 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
   };
   const peSide = sides.find(([name]) => name === '退出 P/E');
   const psSide = sides.find(([name]) => name === '退出 P/S');
+  const gordonSide = sides.find(([name]) => name === '永续增长');
   const left = peSide ? sideCells('P/E', peSide[1]).slice(0, includeDeal ? 4 : 5) : [];
   const right = [];
   if (includeDeal && peSide) right.push(sideCells('P/E', peSide[1])[4]);
   if (psSide) right.push(...sideCells('P/S', psSide[1]));
+  if (gordonSide) right.push(...sideCells('永续', gordonSide[1]));
   left.forEach((item) => addBase(...item));
   while (labels.length < 6) addBase(null, null, 'text');
   addBase(null, null, 'text');
@@ -335,11 +343,14 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
     if (block.key === 'note') return;
     const pe = sides.find(([name]) => name === '退出 P/E')?.[1];
     const ps = sides.find(([name]) => name === '退出 P/S')?.[1];
-    const rowCount = Math.max(pe?.row_labels?.length || 0, ps?.row_labels?.length || 0);
+    const gordon = sides.find(([name]) => name === '永续增长')?.[1];
+    const rowCount = Math.max(pe?.row_labels?.length || 0, ps?.row_labels?.length || 0, gordon?.row_labels?.length || 0);
     const header = [
       ...(pe ? [axis, ...pe.col_labels] : []),
       ...(pe && ps ? [null] : []),
       ...(ps ? [axis, ...ps.col_labels] : []),
+      ...((pe || ps) && gordon ? [null] : []),
+      ...(gordon ? [axis, ...gordon.col_labels] : []),
     ];
     b.data(header, header.map(() => 'text'), 'tight');
     for (let i = 0; i < rowCount; i += 1) {
@@ -362,6 +373,11 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
         kinds.push('text');
       }
       pushSide(ps);
+      if ((pe || ps) && gordon) {
+        row.push(null);
+        kinds.push('text');
+      }
+      pushSide(gordon);
       b.data(row, kinds, 'tight');
     }
   });
@@ -370,7 +386,7 @@ function appendExitBlock(b, view, dealYi, dilution, heading, includeDeal) {
 
 function buildResult(sheet, title, payload, refs) {
   const yi = sheet?.payload?.display_yi;
-  const b = sheetBuilder(title, sheet?.formula || '增量=高端−低端。市场法低端=−1σ×基数×(1−折扣)，高端=中位×基数×(1−折扣)。DCF 低端和高端是退出 P/E 与退出 P/S 的股权价值');
+  const b = sheetBuilder(title, sheet?.formula || '增量=高端−低端。市场法低端=−1σ×基数×(1−折扣)，高端=中位×基数×(1−折扣)。DCF 低端和高端取退出 P/E、退出 P/S、永续增长股权价值中的最小/最大');
   const dual = !!(yi && yi.dcf?.ma);
   const headers = dual
     ? ['序号', '区间', '市场法 P/S（亿元）', '市场法 P/E（亿元）', 'DCF 并购预期（亿元）', 'DCF 上市预期（亿元）']
@@ -430,7 +446,7 @@ function buildResult(sheet, title, payload, refs) {
       F(yi.dcf?.high, dcfHighF),
     ];
   b.data(highCells, kinds);
-  b.note('DCF 低端和高端是退出 P/E 与退出 P/S 的股权价值。下面三块表是敏感性，改折现率或倍数后需回系统重算再导出。');
+  b.note('DCF 低端和高端取退出 P/E、退出 P/S、永续增长股权价值中的最小/最大。DCF 表另有终值三套对照与永续增长明细。下面是敏感性，改折现率、倍数或 g 后需回系统重算再导出。');
   const dcfPayload = payload?.sheets?.dcf?.payload;
   const dealYi = payload?.export_deal_yi != null ? payload.export_deal_yi : payload?.assumptions?.round_deal_value_yi;
   const dilution = payload?.assumptions?.follow_on_dilution;
@@ -772,11 +788,103 @@ function appendDcfBlock(b, dcf, heading, ctx, refs) {
   b.data(['股权价值（万元）', F(eqWan, eqF)], ['text', 'wan']);
   b.data(['股权价值（亿元）', F(num(dcf.equity_value_yi) ?? asYi(dcf.equity_value), `B${eqExcel}/10000`)], ['text', 'yi']);
   b.gap(1, colCount);
+  appendTerminalMethodsBlock(b, dcf, heading);
+}
+
+function terminalBaseLabel(term) {
+  if (!term || term.blocked) return '—';
+  if (term.terminal_type === 'gordon' || term.terminal_base_kind === 'fcff') {
+    return `全年 FCFF ${fmtExportWan(term.terminal_base)}`;
+  }
+  if (term.terminal_type === 'exit_ps' || term.terminal_base_kind === 'revenue') {
+    return `收入 ${fmtExportWan(term.terminal_base)}`;
+  }
+  return `税后经营利润 ${fmtExportWan(term.terminal_base)}`;
+}
+
+function fmtExportWan(v) {
+  const n = wanFromYuan(v);
+  if (n == null) return '—';
+  return `${Number(n.toFixed(2))}`;
+}
+
+function fmtExportPct(v) {
+  const n = num(v);
+  if (n == null) return '—';
+  return `${Number((n * 100).toFixed(2))}%`;
+}
+
+function appendTerminalMethodsBlock(b, dcf, heading) {
+  const terminals = dcf?.terminals || dcf?.exit_view?.terminals;
+  if (!terminals) {
+    b.note('本次结果没有终值三套明细（退出 P/E、退出 P/S、永续增长）。请回系统重新计算后再导出。');
+    return;
+  }
+  const prefix = heading ? `${heading} · ` : '';
+  b.section(`${prefix}终值三套测算`, 8);
+  b.note('预测期自由现金流三套相同；差别只在终值。永续增长 = 末期全年 FCFF × (1+g)/(r−g)。金额：基数/终值/现值为万元，股权价值为亿元。');
+  b.header(['终值方式', '状态', '终值基数', '倍数或g', '折现率', '终值企业价值（万元）', '终值现值（万元）', '股权价值（亿元）']);
+  const rows = [
+    ['退出 P/E', terminals.exit_pe],
+    ['退出 P/S', terminals.exit_ps],
+    ['永续增长', terminals.gordon],
+  ];
+  for (const [name, term] of rows) {
+    if (!term) {
+      b.data([name, '无数据', null, null, null, null, null, null], ['text', 'text', 'text', 'text', 'text', 'wan', 'wan', 'yi']);
+      continue;
+    }
+    if (term.blocked) {
+      b.data([
+        name,
+        '未算出',
+        (term.blockers || []).join('；') || '—',
+        null,
+        null,
+        null,
+        null,
+        null,
+      ], ['text', 'text', 'text', 'text', 'text', 'wan', 'wan', 'yi']);
+      continue;
+    }
+    const isGordon = name === '永续增长';
+    b.data([
+      name,
+      '已算出',
+      terminalBaseLabel(term),
+      isGordon ? fmtExportPct(term.terminal_growth) : num(term.exit_multiple),
+      fmtExportPct(term.discount_rate),
+      wanFromYuan(term.terminal_value),
+      wanFromYuan(term.terminal_pv),
+      num(term.equity_value_yi) ?? asYi(term.equity_value),
+    ], ['text', 'text', 'text', isGordon ? 'text' : 'num', 'text', 'wan', 'wan', 'yi']);
+  }
+
+  const gordon = terminals.gordon;
+  if (gordon && !gordon.blocked) {
+    b.gap(1, 8);
+    b.section(`${prefix}永续增长明细`, 2);
+    b.data(['末期全年 FCFF（万元）', wanFromYuan(gordon.terminal_base)], ['text', 'wan']);
+    b.data(['永续增长率 g', num(gordon.terminal_growth)], ['text', 'num']);
+    b.data(['折现率 r', num(gordon.discount_rate)], ['text', 'num']);
+    b.data(['永续企业价值（万元）= FCFF×(1+g)/(r−g)', wanFromYuan(gordon.terminal_value)], ['text', 'wan']);
+    b.data(['终值现值（万元）', wanFromYuan(gordon.terminal_pv)], ['text', 'wan']);
+    b.data(['企业价值（万元）', wanFromYuan(gordon.enterprise_value)], ['text', 'wan']);
+    b.data(['净负债（万元）', wanFromYuan(gordon.net_debt)], ['text', 'wan']);
+    b.data(['股权价值（万元）', wanFromYuan(gordon.equity_value)], ['text', 'wan']);
+    b.data(['股权价值（亿元）', num(gordon.equity_value_yi) ?? asYi(gordon.equity_value)], ['text', 'yi']);
+    if (gordon.apply_liquidity) {
+      b.data(['并购流动性折扣（小数）', num(gordon.liquidity_discount)], ['text', 'num']);
+    }
+  } else if (gordon?.blocked) {
+    b.note(`永续增长未算出：${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与 g、r'}`);
+  }
+  b.gap(1, 8);
 }
 
 function buildDcf(sheet, title, payload, refs) {
   const p = sheet?.payload || {};
-  const formula = sheet?.formula || 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。终值=退出倍数×末期全年基数+锚定日净负债。股权价值=企业价值−同一笔净负债';
+  const formula = sheet?.formula || 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。退出倍数终值=倍数×末期全年基数+锚定日净负债；永续增长终值=末期全年FCFF×(1+g)/(r−g)。股权价值=企业价值−同一笔净负债。底稿含退出P/E、退出P/S、永续增长三套终值对照。';
   const pickedPl = pickPl(payload);
   const pickedCf = pickCf(payload);
   const ctx = {
@@ -797,7 +905,7 @@ function buildDcf(sheet, title, payload, refs) {
   };
   const n = (p.primary?.pvs || []).length;
   const b = sheetBuilder(title, formula);
-  b.start(Math.max(4, n + 1));
+  b.start(Math.max(8, n + 1));
   if (!p.primary) {
     b.header(['年份', '自由现金流（万元）', '折现因子', '现值（万元）']);
     b.data(['暂无 DCF 结果', null, null, null], ['text', 'wan', 'num', 'wan']);
@@ -805,7 +913,7 @@ function buildDcf(sheet, title, payload, refs) {
   }
   appendDcfBlock(b, p.primary, p.primary.scenario_name || '基准', ctx, refs);
   if (p.secondary) appendDcfBlock(b, p.secondary, p.secondary.scenario_name || '第二情景', ctx, null);
-  b.widths.splice(0, b.widths.length, { wch: 28 }, ...Array(Math.max(1, n)).fill({ wch: 14 }));
+  b.widths.splice(0, b.widths.length, { wch: 36 }, ...Array(Math.max(1, n)).fill({ wch: 14 }));
   return b;
 }
 
@@ -854,17 +962,17 @@ function buildMarket(sheet, title, _payload, refs) {
 
 function buildRelative(sheet, title) {
   const rows = Array.isArray(sheet?.payload) ? sheet.payload : [];
-  const b = sheetBuilder(title, sheet?.formula || '单家取数：底稿中位，否则历史中位，否则锚定截面。低端=取用值中位数−σ，高端=中位数。可比强度只作标记');
+  const b = sheetBuilder(title, sheet?.formula || '单家取数：底稿中位，否则历史中位，否则锚定截面。低端=取用值中位数−σ，高端=中位数。可比强度只作标记。不导出 PE/PS NTM（系统未取预测倍数）');
   const headers = [
     '序号', '代码', '名称', '入池', '可比强度', '截面日',
-    'PE TTM', 'PS TTM', 'PE NTM', 'PS NTM', 'PE 近年均', 'PS 近年均',
+    'PE TTM', 'PS TTM', 'PE 近年均', 'PS 近年均',
     'PE 锚定截面', 'PE 中位', 'PE 底稿中位', 'PE σ', 'PE −1σ', 'PE +1σ',
     'PS 锚定截面', 'PS 中位', 'PS 底稿中位', 'PS σ', 'PS −1σ', 'PS +1σ',
     'PE 取用', 'PS 取用', '提示',
   ];
   b.start(headers.length);
   b.header(headers);
-  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(20).fill('num'), 'text'];
+  const kinds = ['seq', 'text', 'text', 'text', 'text', 'text', ...Array(18).fill('num'), 'text'];
   const dataStart = b.aoa.length + 1;
   const degreeLabel = { strong: '强', medium: '中', weak: '弱' };
   let poolCount = 0;
@@ -884,16 +992,15 @@ function buildRelative(sheet, title) {
       degreeLabel[r.comparability] || '中',
       r.asof_trade_date || r.asof_date || null,
       num(r.pe_ttm ?? r.pe_latest), num(r.ps_ttm ?? r.ps_latest),
-      num(r.pe_ntm), num(r.ps_ntm),
       num(r.pe_mean), num(r.ps_mean),
       num(r.pe_latest), num(r.pe_median), num(r.pe_median_override), num(r.pe_stdev),
-      F(num(r.pe_minus_1s), `N${excel}-P${excel}`),
-      F(num(r.pe_plus_1s), `N${excel}+P${excel}`),
+      F(num(r.pe_minus_1s), `L${excel}-N${excel}`),
+      F(num(r.pe_plus_1s), `L${excel}+N${excel}`),
       num(r.ps_latest), num(r.ps_median), num(r.ps_median_override), num(r.ps_stdev),
-      F(num(r.ps_minus_1s), `T${excel}-V${excel}`),
-      F(num(r.ps_plus_1s), `T${excel}+V${excel}`),
-      peUsed != null ? F(peUsed, `IF(O${excel}="",IF(N${excel}="",M${excel},N${excel}),O${excel})`) : null,
-      psUsed != null ? F(psUsed, `IF(U${excel}="",IF(T${excel}="",S${excel},T${excel}),U${excel})`) : null,
+      F(num(r.ps_minus_1s), `R${excel}-T${excel}`),
+      F(num(r.ps_plus_1s), `R${excel}+T${excel}`),
+      peUsed != null ? F(peUsed, `IF(M${excel}="",IF(L${excel}="",K${excel},L${excel}),M${excel})`) : null,
+      psUsed != null ? F(psUsed, `IF(S${excel}="",IF(R${excel}="",Q${excel},R${excel}),S${excel})`) : null,
       hint,
     ], kinds);
   });

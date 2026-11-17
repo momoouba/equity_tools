@@ -15,7 +15,7 @@ const SOURCE_LABELS = {
 };
 
 const ENUM_LABELS = {
-  terminal_type: { exit_pe: '退出 P/E × 末期税后经营利润', exit_ps: '退出 P/S × 末期营业收入' },
+  terminal_type: { exit_pe: '退出 P/E × 末期税后经营利润', exit_ps: '退出 P/S × 末期营业收入', gordon: '永续增长' },
   fcf_method: { ni_bridge: '净利润桥', nopat_fcff: 'NOPAT / FCFF' },
   sensitivity_axes: {
     exit_x_cagr: '营收 CAGR × 退出倍数',
@@ -38,6 +38,7 @@ const TRACKED_FIELDS = [
   { key: 'discount_rate', label: '汇总折现率', path: ['assumptions', 'discount_rate'], type: 'pct' },
   { key: 'exit_pe', label: '退出 P/E', path: ['assumptions', 'exit_pe'], type: 'multiple' },
   { key: 'exit_ps', label: '退出 P/S', path: ['assumptions', 'exit_ps'], type: 'multiple' },
+  { key: 'terminal_growth', label: '永续增长率', path: ['assumptions', 'terminal_growth'], type: 'pct' },
   { key: 'liquidity_discount', label: '市场法流动性折扣', path: ['assumptions', 'liquidity_discount'], type: 'pct' },
   { key: 'dcf_liquidity_discount', label: '并购 DCF 流动性折扣', path: ['assumptions', 'dcf_liquidity_discount'], type: 'pct' },
   { key: 'ps_low_multiple', label: '市场法 P/S 低端倍数', path: ['assumptions', 'ps_low_multiple'], type: 'multiple' },

@@ -138,6 +138,29 @@ eq(out.series.revenue[1], 484, 'rev2027');
 eq(out.series.finance_expense[0], 0, 'blank finance expense is 0');
 eq(out.series.pretax[0], 220, 'finance expense stays out of pretax');
 eq(out.series.opening_nwc, 7, 'opening nwc without advances');
+
+const gordonOut = buildDcfForecast({
+  ...base,
+  terminalType: 'gordon',
+  terminalGrowth: 0.02,
+  assumptions: { ...base.assumptions, terminal_growth: 0.02 },
+});
+assert.strictEqual(gordonOut.blocked, false, (gordonOut.blockers || []).join('；'));
+assert.strictEqual(gordonOut.terminal_base_kind, 'fcff');
+eq(gordonOut.terminal_growth, 0.02, 'gordon g');
+const lastFullFcf = gordonOut.series.nopat[1] + gordonOut.series.da[1] + 0
+  - gordonOut.series.capex[1] - gordonOut.series.dnwc[1];
+eq(gordonOut.terminal_base, lastFullFcf, 'gordon base is full-year fcff');
+eq(gordonOut.terminal_value, lastFullFcf * 1.02 / (0.1 - 0.02), 'gordon TV = FCFF(1+g)/(r-g)');
+assert.ok(gordonOut.equity_value != null && gordonOut.equity_value > 0, 'gordon equity positive');
+const gordonBlocked = buildDcfForecast({
+  ...base,
+  terminalType: 'gordon',
+  terminalGrowth: 0.15,
+  baseRate: 0.1,
+});
+assert.strictEqual(gordonBlocked.blocked, true);
+assert.ok((gordonBlocked.blockers || []).some((m) => m.includes('须小于折现率')));
 const netted = buildDcfForecast({
   ...base,
   targetBs: { ...bs, contract_liability: 4, advance_receipt: 1 },
@@ -912,10 +935,16 @@ const ranged = runValuationEngine({
 assert.strictEqual(ranged.dcf.primary.blocked, false, ranged.warnings.filter((w) => String(w).startsWith('待补')).join(';'));
 assert.ok(ranged.dcf.primary.exit_range.exit_pe != null);
 assert.ok(ranged.dcf.primary.exit_range.exit_ps != null);
+assert.ok(ranged.dcf.primary.exit_range.gordon != null);
+assert.ok(ranged.dcf.primary.terminals?.gordon);
+assert.strictEqual(ranged.dcf.primary.terminals.gordon.terminal_base_kind, 'fcff');
+assert.ok(ranged.dcf.primary.terminals.gordon.terminal_base > 0);
+assert.ok(ranged.dcf.primary.exit_view?.terminals?.gordon);
 assert.notStrictEqual(ranged.dcf.primary.exit_range.exit_pe, ranged.dcf.primary.exit_range.exit_ps);
 const band = ranged.comparison.display_yi.dcf;
-assert.strictEqual(band.low, Math.min(band.exit_pe, band.exit_ps));
-assert.strictEqual(band.high, Math.max(band.exit_pe, band.exit_ps));
+const bandVals = [band.exit_pe, band.exit_ps, band.gordon].filter((v) => v != null);
+assert.strictEqual(band.low, Math.min(...bandVals));
+assert.strictEqual(band.high, Math.max(...bandVals));
 assert.ok(band.high > band.low);
 
 const { buildWorkbookBuffer } = require('./exportService');
@@ -935,12 +964,14 @@ const relativeBuf = buildWorkbookBuffer({
 const relativeWb = XLSX.read(relativeBuf, { type: 'buffer' });
 const relativeWs = relativeWb.Sheets['相对估值'];
 const relativeFormulas = Object.values(relativeWs).map((c) => c && c.f).filter(Boolean);
-assert.ok(relativeFormulas.some((f) => f === 'IF(O5="",IF(N5="",M5,N5),O5)'), relativeFormulas.join('\n'));
+assert.ok(relativeFormulas.some((f) => f === 'IF(M5="",IF(L5="",K5,L5),M5)'), relativeFormulas.join('\n'));
 assert.ok(relativeFormulas.every((f) => !f.includes('@') && !/STDEV\.S\(IF/.test(f) && !/MEDIAN\(IF/.test(f)));
 assert.ok(!relativeFormulas.some((f) => f === 'MEDIAN(S5:S7)'));
 assert.ok(!relativeFormulas.some((f) => f === 'STDEV.S(S5:S7)'));
-assert.strictEqual(relativeWs.Y5.f, 'IF(O5="",IF(N5="",M5,N5),O5)');
-assert.ok(!relativeWs.Y7 || !relativeWs.Y7.f);
+assert.strictEqual(relativeWs.W5.f, 'IF(M5="",IF(L5="",K5,L5),M5)');
+assert.ok(!relativeWs.W7 || !relativeWs.W7.f);
+const relativeHeader = XLSX.utils.sheet_to_json(relativeWs, { header: 1 })[0] || [];
+assert.ok(!relativeHeader.includes('PE NTM') && !relativeHeader.includes('PS NTM'));
 const relativeAoA = XLSX.utils.sheet_to_json(relativeWs, { header: 1 });
 assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('PE 取用')));
 assert.ok(relativeAoA.some((row) => String(row[0] || '').includes('平均数')));

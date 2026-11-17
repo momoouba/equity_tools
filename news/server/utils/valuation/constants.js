@@ -45,11 +45,13 @@ module.exports = {
 
   TERMINAL_PE: 'exit_pe',
   TERMINAL_PS: 'exit_ps',
+  TERMINAL_GORDON: 'gordon',
   FCF_NI_BRIDGE: 'ni_bridge',
   FCF_NOPAT: 'nopat_fcff',
   SENS_EXIT_CAGR: 'exit_x_cagr',
   SENS_EXIT_WACC: 'exit_x_wacc',
   SENS_WACC_EXIT: 'wacc_x_exit',
+  SENS_RATE_G: 'rate_x_g',
   SENS_REV_RD_CAGR: 'rev_cagr_x_rd_cagr',
   SCENARIO_SINGLE: 'single',
   SCENARIO_DUAL: 'ma_and_ipo',

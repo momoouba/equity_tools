@@ -22,6 +22,7 @@ function defaultAssumptions() {
     discount_rate: 0.3,
     exit_pe: 40,
     exit_ps: 20,
+    terminal_growth: 0.02,
     liquidity_discount: 0.3,
     dcf_liquidity_discount: 0.3,
     tax_rate: 0.15,

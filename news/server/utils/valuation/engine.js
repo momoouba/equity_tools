@@ -1230,11 +1230,12 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
   const dcfExitRow = (run) => {
     const exitPe = toNumber(run?.exit_range?.exit_pe);
     const exitPs = toNumber(run?.exit_range?.exit_ps);
-    const vals = [exitPe, exitPs].filter((v) => v != null);
+    const exitGordon = toNumber(run?.exit_range?.gordon);
+    const vals = [exitPe, exitPs, exitGordon].filter((v) => v != null);
     const span = vals.length
       ? row(Math.min(...vals), Math.max(...vals))
       : row(toNumber(run?.equity_value), toNumber(run?.equity_value));
-    return { ...span, exit_pe: exitPe, exit_ps: exitPs };
+    return { ...span, exit_pe: exitPe, exit_ps: exitPs, gordon: exitGordon };
   };
   const yiExit = (band) => ({
     low: yuanToYi(band.low),
@@ -1242,6 +1243,7 @@ function resultComparison({ market, dcfPrimary, dcfSecondary, scenarioMode }) {
     high: yuanToYi(band.high),
     exit_pe: yuanToYi(band.exit_pe),
     exit_ps: yuanToYi(band.exit_ps),
+    gordon: yuanToYi(band.gordon),
   });
 
   const dcfCol = scenarioMode === C.SCENARIO_DUAL
@@ -1373,9 +1375,12 @@ function runValuationEngine(input) {
   const runOne = (scenario, scenarioKey, type) => {
     const label = scenarioKey === 'ma' ? '并购' : scenarioKey === 'ipo' ? '上市' : '';
     const usePs = type === C.TERMINAL_PS;
-    const exitMultiple = usePs
-      ? (scenario?.exit_ps ?? assumptions.exit_ps ?? 20)
-      : (scenario?.exit_pe ?? assumptions.exit_pe ?? 40);
+    const useGordon = type === C.TERMINAL_GORDON;
+    const exitMultiple = useGordon
+      ? null
+      : (usePs
+        ? (scenario?.exit_ps ?? assumptions.exit_ps ?? 20)
+        : (scenario?.exit_pe ?? assumptions.exit_pe ?? 40));
     return buildDcfForecast({
       assumptions,
       targetPl: input.targetPl || {},
@@ -1387,6 +1392,7 @@ function runValuationEngine(input) {
       scenarioName: scenario?.name || null,
       terminalType: type,
       exitMultiple,
+      terminalGrowth: assumptions.terminal_growth,
       applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
       liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
       forecastPl: input.forecastPl || {},
@@ -1394,18 +1400,55 @@ function runValuationEngine(input) {
     });
   };
 
+  const summarizeTerminal = (run, type) => {
+    if (!run) {
+      return { blocked: true, blockers: ['未计算'], terminal_type: type };
+    }
+    return {
+      blocked: !!run.blocked,
+      blockers: run.blockers || [],
+      warnings: run.warnings || [],
+      terminal_type: type,
+      discount_rate: toNumber(run.discount_rate),
+      terminal_growth: toNumber(run.terminal_growth),
+      terminal_year: run.terminal_year || null,
+      terminal_base_kind: run.terminal_base_kind || null,
+      terminal_base: toNumber(run.terminal_base),
+      exit_multiple: toNumber(run.exit_multiple),
+      exit_equity_value: toNumber(run.exit_equity_value),
+      terminal_value: toNumber(run.terminal_value),
+      terminal_pv: toNumber(run.terminal_pv),
+      enterprise_value: toNumber(run.enterprise_value),
+      net_debt: toNumber(run.net_debt),
+      equity_value: toNumber(run.equity_value),
+      equity_value_yi: toNumber(run.equity_value_yi),
+      apply_liquidity: !!run.apply_liquidity,
+      liquidity_discount: toNumber(run.liquidity_discount),
+    };
+  };
+
   const withExitRange = (scenario, scenarioKey) => {
     const peRun = runOne(scenario, scenarioKey, C.TERMINAL_PE);
     const psRun = runOne(scenario, scenarioKey, C.TERMINAL_PS);
-    const selected = terminalType === C.TERMINAL_PS ? psRun : peRun;
+    const gordonRun = runOne(scenario, scenarioKey, C.TERMINAL_GORDON);
+    const selected = terminalType === C.TERMINAL_PS
+      ? psRun
+      : (terminalType === C.TERMINAL_GORDON ? gordonRun : peRun);
     selected.exit_range = {
       exit_pe: peRun && !peRun.blocked ? toNumber(peRun.equity_value) : null,
       exit_ps: psRun && !psRun.blocked ? toNumber(psRun.equity_value) : null,
+      gordon: gordonRun && !gordonRun.blocked ? toNumber(gordonRun.equity_value) : null,
+    };
+    selected.terminals = {
+      exit_pe: summarizeTerminal(peRun, C.TERMINAL_PE),
+      exit_ps: summarizeTerminal(psRun, C.TERMINAL_PS),
+      gordon: summarizeTerminal(gordonRun, C.TERMINAL_GORDON),
     };
     const label = scenarioKey === 'ma' ? '并购' : scenarioKey === 'ipo' ? '上市' : '';
     selected.exit_view = buildExitView({
       peRun,
       psRun,
+      gordonRun,
       axes: method.sensitivity_axes,
       scenarioMode: method.scenario_mode,
       steps: {
@@ -1414,6 +1457,7 @@ function runValuationEngine(input) {
         cagrStep: method.cagr_step,
         rdCagrStep: method.rd_cagr_step,
         rateStep: method.rate_step,
+        growthStep: method.growth_step,
       },
       custom: {
         rowParam: method.sensitivity_row_param,
@@ -1436,6 +1480,7 @@ function runValuationEngine(input) {
         scenarioName: scenario?.name || null,
         terminalType: patch.terminalType,
         exitMultiple: patch.multiple,
+        terminalGrowth: patch.terminalGrowth != null ? patch.terminalGrowth : assumptions.terminal_growth,
         applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
         liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
         forecastPl: input.forecastPl || {},
@@ -1445,7 +1490,8 @@ function runValuationEngine(input) {
         sensitivityShocks: patch.sensitivityShocks || null,
       }),
     });
-    return { selected, peRun, psRun };
+    if (selected.exit_view) selected.exit_view.terminals = selected.terminals;
+    return { selected, peRun, psRun, gordonRun };
   };
 
   if (method.scenario_mode === C.SCENARIO_DUAL) {
@@ -1466,8 +1512,10 @@ function runValuationEngine(input) {
   const blockerTexts = [...new Set([
     ...(primaryPack.peRun?.blockers || []),
     ...(primaryPack.psRun?.blockers || []),
+    ...(primaryPack.gordonRun?.blockers || []),
     ...(secondaryPack?.peRun?.blockers || []),
     ...(secondaryPack?.psRun?.blockers || []),
+    ...(secondaryPack?.gordonRun?.blockers || []),
   ])];
   for (const msg of blockerTexts) warnings.push(`待补：${msg}`);
 
@@ -1539,7 +1587,7 @@ function runValuationEngine(input) {
     dcf: {
       title: 'DCF',
       payload: { primary, secondary, fcf_method: fcfMethod, terminal_type: terminalType },
-      formula: 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。终值=退出倍数×末期全年基数+锚定日净负债，再按最后一列期数折现。股权价值=企业价值−同一笔净负债。',
+      formula: 'FCFF=期间税后经营利润+期间折旧摊销+期间ESOP−期间资本开支−ΔNWC。锚定年且不是12月时，期间数=年底全年−锚定日累计，ESOP按剩余月；以后各年期间数=全年。退出倍数终值=倍数×末期全年基数+锚定日净负债；永续增长终值=末期全年FCFF×(1+g)/(r−g)。再按最后一列期数折现。股权价值=企业价值−同一笔净负债。',
     },
     market: {
       title: '市场法',

@@ -53,22 +53,29 @@ export default function ValuationFootballField({
     const list = []
     const peView = primary?.exit_view?.pe
     const psView = primary?.exit_view?.ps
+    const gordonView = primary?.exit_view?.gordon
     const peBand = sideBand(peView)
     const psBand = sideBand(psView)
+    const gordonBand = sideBand(gordonView)
     const dual = primary?.exit_view?.scenario_mode === 'ma_and_ipo' && secondary?.exit_view
 
     if (dual) {
       const maPe = sideBand(primary.exit_view?.pe)
       const maPs = sideBand(primary.exit_view?.ps)
+      const maG = sideBand(primary.exit_view?.gordon)
       const ipoPe = sideBand(secondary.exit_view?.pe)
       const ipoPs = sideBand(secondary.exit_view?.ps)
+      const ipoG = sideBand(secondary.exit_view?.gordon)
       pushBand(list, 'DCF 并购 P/E', maPe.low, maPe.high)
       pushBand(list, 'DCF 并购 P/S', maPs.low, maPs.high)
+      pushBand(list, 'DCF 并购永续', maG.low, maG.high)
       pushBand(list, 'DCF 上市 P/E', ipoPe.low, ipoPe.high)
       pushBand(list, 'DCF 上市 P/S', ipoPs.low, ipoPs.high)
-    } else if (peView || psView) {
+      pushBand(list, 'DCF 上市永续', ipoG.low, ipoG.high)
+    } else if (peView || psView || gordonView) {
       pushBand(list, 'DCF P/E', peBand.low, peBand.high)
       pushBand(list, 'DCF P/S', psBand.low, psBand.high)
+      pushBand(list, 'DCF 永续增长', gordonBand.low, gordonBand.high)
     } else {
       const dcf = comparison.dcf || {}
       if (dcf.ma) {

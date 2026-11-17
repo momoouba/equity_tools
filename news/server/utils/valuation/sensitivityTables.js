@@ -6,9 +6,12 @@ const DEFAULT_PE_STEP = 10;
 const DEFAULT_PS_STEP = 2;
 const DEFAULT_CAGR_STEP = 0.05;
 const DEFAULT_RATE_STEP = 0.02;
+const DEFAULT_GROWTH_STEP = 0.005;
+const DEFAULT_TERMINAL_GROWTH = 0.02;
 
 function normalizeAxes(axes) {
   if (axes === 'exit_x_wacc' || axes === 'wacc_x_exit') return 'exit_x_wacc';
+  if (axes === 'rate_x_g' || axes === 'g_x_rate') return 'rate_x_g';
   if (axes === 'exit_x_rd_cagr') return 'exit_x_rd_cagr';
   if (axes === 'rev_cagr_x_rd_cagr') return 'rev_cagr_x_rd_cagr';
   if (axes === 'univariate' || axes === 'custom') return axes;
@@ -57,9 +60,16 @@ function seriesOf(peRun, psRun, key) {
 function blankReason(run, terminalType) {
   const text = (run?.blockers || []).join('\n');
   if (terminalType === 'exit_pe' && text.includes('税后经营利润小于等于 0')) return 'nopat';
+  if (terminalType === 'gordon' && (text.includes('自由现金流小于等于 0') || text.includes('须小于折现率'))) return 'gordon';
   if (text.includes('营业收入小于等于 0')) return 'revenue';
   if (run?.blocked) return 'other';
   return null;
+}
+
+function baseGrowthOf(gordonRun) {
+  const n = Number(gordonRun?.terminal_growth);
+  if (Number.isFinite(n)) return n;
+  return DEFAULT_TERMINAL_GROWTH;
 }
 
 function cellFromRun(run, terminalType) {
@@ -116,16 +126,32 @@ function withBand(side) {
   };
 }
 
-function holdingYearsOf(peRun, psRun) {
-  const run = (psRun && !psRun.blocked && psRun.pvs?.length) ? psRun : peRun;
+function holdingYearsOf(peRun, psRun, gordonRun) {
+  const run = (psRun && !psRun.blocked && psRun.pvs?.length)
+    ? psRun
+    : ((peRun && !peRun.blocked && peRun.pvs?.length) ? peRun : gordonRun);
   const periods = run?.pvs?.length ? run.pvs[run.pvs.length - 1].periods : null;
   return round2(periods);
 }
 
-function baseRateOf(peRun, psRun) {
-  const run = (peRun && !peRun.blocked) ? peRun : psRun;
+function baseRateOf(peRun, psRun, gordonRun) {
+  const run = (peRun && !peRun.blocked)
+    ? peRun
+    : ((psRun && !psRun.blocked) ? psRun : gordonRun);
   const n = Number(run?.discount_rate);
   return Number.isFinite(n) ? n : null;
+}
+
+function growthCols(growth, step) {
+  return [-2, -1, 0, 1, 2].map((k) => {
+    const next = growth + k * step;
+    return {
+      center: k === 0,
+      growth: next,
+      blank: false,
+      label: pctLabel(next),
+    };
+  });
 }
 
 function cagrLevels(values, step) {
@@ -173,11 +199,13 @@ function rateRows(rate, step) {
  * @param {object} [args.steps]
  * @param {string} args.scenarioMode
  */
-function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
+function buildCustomExitView({ peRun, psRun, gordonRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
   const peOk = peRun && !peRun.blocked && peRun.equity_value != null;
   const psOk = psRun && !psRun.blocked && psRun.equity_value != null;
-  if (!peOk && !psOk) return null;
-  const rate = baseRateOf(peRun, psRun);
+  const gordonOk = gordonRun && !gordonRun.blocked && gordonRun.equity_value != null;
+  if (!peOk && !psOk && !gordonOk) return null;
+  const rate = baseRateOf(peRun, psRun, gordonRun);
+  const growth = baseGrowthOf(gordonRun);
   const stepSet = steps || {};
   const cfg = custom || {};
   const rowParam = cfg.rowParam || 'rev_cagr';
@@ -186,17 +214,19 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
     return {
       scenario_mode: scenarioMode || 'single',
       axes,
-      holding_years: holdingYearsOf(peRun, psRun),
+      holding_years: holdingYearsOf(peRun, psRun, gordonRun),
       wacc_floored: false,
       discount_rate: rate,
+      terminal_growth: growth,
       axis_title: '横轴与纵轴不能相同',
       pe: { blocked: true, cells: null },
       ps: { blocked: true, cells: null },
+      gordon: { blocked: true, cells: null },
     };
   }
   const ctx = {
-    revValues: seriesOf(peRun, psRun, 'revenue'),
-    rdValues: seriesOf(peRun, psRun, 'rd'),
+    revValues: seriesOf(peRun, psRun, 'revenue') || seriesOf(gordonRun, null, 'revenue'),
+    rdValues: seriesOf(peRun, psRun, 'rd') || seriesOf(gordonRun, null, 'rd'),
   };
   const rowLevels = axisLevels(rowParam, {
     mode: cfg.rowMode || 'step',
@@ -216,11 +246,13 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
     : [{ delta: 0, center: true, label: '当前', meta: null }];
 
   const buildSide = (run, terminalType, ok) => {
+    const isGordon = terminalType === 'gordon';
     const multiple = Number(run?.exit_multiple);
-    if (!ok || !(multiple > 0)) {
+    if (!ok || (!isGordon && !(multiple > 0))) {
       return {
         blocked: true,
         multiple: Number.isFinite(multiple) ? multiple : null,
+        growth: isGordon ? growth : null,
         equity_yi: null,
         cap_yi: null,
         row_labels: null,
@@ -231,7 +263,9 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
       };
     }
     const center = copyCell(run);
-    const resolvedCols = colParam === 'exit_multiple'
+    const sideColParam = (isGordon && colParam === 'exit_multiple') ? 'perp_growth' : colParam;
+    const sideRowParam = (isGordon && rowParam === 'exit_multiple') ? 'perp_growth' : rowParam;
+    const resolvedCols = sideColParam === 'exit_multiple'
       ? axisLevels('exit_multiple', {
         mode: cfg.colMode || 'step',
         step: cfg.colStep,
@@ -240,8 +274,17 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
         psStep: stepSet.psStep,
         terminalType,
       })
-      : (colParam ? colLevels : [{ delta: 0, center: true, label: '当前', meta: null }]);
-    const resolvedRows = rowParam === 'exit_multiple'
+      : (sideColParam === 'perp_growth' && colParam === 'exit_multiple'
+        ? axisLevels('perp_growth', {
+          mode: 'step',
+          step: stepSet.growthStep || DEFAULT_GROWTH_STEP,
+        })
+        : (sideColParam ? (sideColParam === colParam ? colLevels : axisLevels(sideColParam, {
+          mode: cfg.colMode || 'step',
+          step: cfg.colStep || stepSet.growthStep,
+          levels: cfg.colLevels,
+        })) : [{ delta: 0, center: true, label: '当前', meta: null }]));
+    const resolvedRows = sideRowParam === 'exit_multiple'
       ? axisLevels('exit_multiple', {
         mode: cfg.rowMode || 'step',
         step: cfg.rowStep,
@@ -250,20 +293,31 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
         psStep: stepSet.psStep,
         terminalType,
       })
-      : rowLevels;
+      : (sideRowParam === 'perp_growth' && rowParam === 'exit_multiple'
+        ? axisLevels('perp_growth', {
+          mode: 'step',
+          step: stepSet.growthStep || DEFAULT_GROWTH_STEP,
+        })
+        : (sideRowParam === rowParam ? rowLevels : axisLevels(sideRowParam, {
+          mode: cfg.rowMode || 'step',
+          step: cfg.rowStep || stepSet.growthStep,
+          levels: cfg.rowLevels,
+        })));
 
     const cells = resolvedRows.map((row) => resolvedCols.map((col) => {
       if (row.center && col.center) return center;
       let patch = mergePatches(
-        patchFromLevel(rowParam, row, ctx),
-        colParam ? patchFromLevel(colParam, col, ctx) : {},
+        patchFromLevel(sideRowParam, row, ctx),
+        sideColParam ? patchFromLevel(sideColParam, col, ctx) : {},
       );
-      let usedMultiple = multiple + (patch.multipleDelta || 0);
-      if (rowParam === 'exit_multiple') usedMultiple = multiple + row.delta;
-      if (colParam === 'exit_multiple') usedMultiple = multiple + col.delta;
-      if (!(usedMultiple > 0)) return { equity_yi: null, cap_yi: null, blank: 'multiple' };
+      let usedMultiple = isGordon ? null : (multiple + (patch.multipleDelta || 0));
+      if (!isGordon && sideRowParam === 'exit_multiple') usedMultiple = multiple + row.delta;
+      if (!isGordon && sideColParam === 'exit_multiple') usedMultiple = multiple + col.delta;
+      if (!isGordon && !(usedMultiple > 0)) return { equity_yi: null, cap_yi: null, blank: 'multiple' };
       const nextRate = rate + (patch.rateDelta || 0);
       const usedRate = nextRate < RATE_FLOOR ? RATE_FLOOR : nextRate;
+      const usedGrowth = growth + (patch.growthDelta || 0);
+      if (isGordon && !(usedRate > usedGrowth)) return { equity_yi: null, cap_yi: null, blank: 'gordon' };
       if (Array.isArray(patch.revenueOverride) && patch.revenueOverride.some((v) => !(Number(v) > 0))) {
         return { equity_yi: null, cap_yi: null, blank: 'revenue' };
       }
@@ -271,16 +325,18 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
         rate: usedRate,
         multiple: usedMultiple,
         terminalType,
+        terminalGrowth: usedGrowth,
         revenueOverride: patch.revenueOverride,
         rdOverride: patch.rdOverride,
         sensitivityShocks: {
           ratioDeltas: patch.ratioDeltas,
           dayDeltas: patch.dayDeltas,
+          growthDelta: 0,
         },
       });
       return cellFromRun(next, terminalType);
     }));
-    const labelFor = (param, level) => {
+    const labelFor = (param, level, baseMultiple) => {
       if (level.center) return param ? '当前预测' : '当前';
       if (!param) return level.label;
       if (PARAMS[param]?.kind === 'cagr') {
@@ -288,16 +344,18 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
         return base == null ? level.label : pctLabel(base + level.delta);
       }
       if (PARAMS[param]?.kind === 'rate') return pctLabel(rate + level.delta);
-      if (PARAMS[param]?.kind === 'multiple') return multipleLabel(multiple + level.delta);
+      if (PARAMS[param]?.kind === 'growth') return pctLabel(growth + level.delta);
+      if (PARAMS[param]?.kind === 'multiple') return multipleLabel(baseMultiple + level.delta);
       return level.label;
     };
     return {
       blocked: false,
-      multiple,
+      multiple: isGordon ? null : multiple,
+      growth: isGordon ? growth : null,
       equity_yi: center.equity_yi,
       cap_yi: center.cap_yi,
-      row_labels: resolvedRows.map((r) => labelFor(rowParam, r)),
-      col_labels: resolvedCols.map((c) => labelFor(colParam, c)),
+      row_labels: resolvedRows.map((r) => labelFor(sideRowParam, r, multiple)),
+      col_labels: resolvedCols.map((c) => labelFor(sideColParam, c, multiple)),
       center_row: resolvedRows.findIndex((r) => r.center),
       center_col: resolvedCols.findIndex((c) => c.center),
       cells,
@@ -310,54 +368,62 @@ function buildCustomExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode,
     scenario_mode: scenarioMode || 'single',
     axes,
     axis_title: colLabel ? `${rowLabel} × ${colLabel}` : rowLabel,
-    holding_years: holdingYearsOf(peRun, psRun),
+    holding_years: holdingYearsOf(peRun, psRun, gordonRun),
     wacc_floored: false,
     discount_rate: rate,
+    terminal_growth: growth,
     pe: withBand(buildSide(peRun, 'exit_pe', peOk)),
     ps: withBand(buildSide(psRun, 'exit_ps', psOk)),
+    gordon: withBand(buildSide(gordonRun, 'gordon', gordonOk)),
   };
 }
 
-function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
+function buildExitView({ peRun, psRun, gordonRun, rebuild, axes, steps, scenarioMode, custom } = {}) {
   const mode = normalizeAxes(axes);
   if (mode === 'univariate' || mode === 'custom') {
     return buildCustomExitView({
-      peRun, psRun, rebuild, axes: mode, steps, scenarioMode, custom,
+      peRun, psRun, gordonRun, rebuild, axes: mode, steps, scenarioMode, custom,
     });
   }
   const peOk = peRun && !peRun.blocked && peRun.equity_value != null;
   const psOk = psRun && !psRun.blocked && psRun.equity_value != null;
-  if (!peOk && !psOk) return null;
-  const rate = baseRateOf(peRun, psRun);
+  const gordonOk = gordonRun && !gordonRun.blocked && gordonRun.equity_value != null;
+  if (!peOk && !psOk && !gordonOk) return null;
+  const rate = baseRateOf(peRun, psRun, gordonRun);
+  const growth = baseGrowthOf(gordonRun);
   const stepSet = steps || {};
   const revenueStep = positiveStep(stepSet.cagrStep, DEFAULT_CAGR_STEP);
   const rdStep = positiveStep(stepSet.rdCagrStep, DEFAULT_CAGR_STEP);
+  const growthStep = positiveStep(stepSet.growthStep, DEFAULT_GROWTH_STEP);
   let waccFloored = false;
   let rows;
-  if (mode === 'exit_x_wacc') {
+  if (mode === 'exit_x_wacc' || mode === 'rate_x_g') {
     const built = rateRows(rate, positiveStep(stepSet.rateStep, DEFAULT_RATE_STEP));
     rows = built.rows;
     waccFloored = built.floored;
   } else if (mode === 'exit_x_rd_cagr') {
-    const values = seriesOf(peRun, psRun, 'rd');
+    const values = seriesOf(peRun, psRun, 'rd') || seriesOf(gordonRun, null, 'rd');
     rows = cagrRows(values, rdStep, mode);
   } else if (mode === 'rev_cagr_x_rd_cagr') {
-    const values = seriesOf(peRun, psRun, 'revenue');
+    const values = seriesOf(peRun, psRun, 'revenue') || seriesOf(gordonRun, null, 'revenue');
     rows = cagrRows(values, revenueStep, 'exit_x_cagr');
   } else {
-    const values = seriesOf(peRun, psRun, 'revenue');
+    const values = seriesOf(peRun, psRun, 'revenue') || seriesOf(gordonRun, null, 'revenue');
     rows = cagrRows(values, revenueStep, mode);
   }
   const rdLevels = mode === 'rev_cagr_x_rd_cagr'
-    ? cagrLevels(seriesOf(peRun, psRun, 'rd'), rdStep)
+    ? cagrLevels(seriesOf(peRun, psRun, 'rd') || seriesOf(gordonRun, null, 'rd'), rdStep)
     : null;
+  const gCols = mode === 'rate_x_g' ? growthCols(growth, growthStep) : null;
 
   const buildSide = (run, terminalType, ok) => {
+    const isGordon = terminalType === 'gordon';
     const multiple = Number(run?.exit_multiple);
-    if (!ok || !(multiple > 0)) {
+    if (!ok || (!isGordon && !(multiple > 0))) {
       return {
         blocked: true,
         multiple: Number.isFinite(multiple) ? multiple : null,
+        growth: isGordon ? growth : null,
         equity_yi: null,
         cap_yi: null,
         row_labels: null,
@@ -371,15 +437,12 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custo
       terminalType === 'exit_pe' ? stepSet.peStep : stepSet.psStep,
       terminalType === 'exit_pe' ? DEFAULT_PE_STEP : DEFAULT_PS_STEP,
     );
-    const cols = rdLevels
-      ? rdLevels.map((level) => ({
-        center: level.center,
-        multiple,
-        blank: false,
-        label: level.label,
-        rdOverride: level.path,
-      }))
-      : [-2, -1, 0, 1, 2].map((k) => {
+    let cols;
+    if (gCols && isGordon) {
+      cols = gCols;
+    } else if (gCols && !isGordon) {
+      // 折现率 × 永续增长率：倍数侧横轴仍用退出倍数
+      cols = [-2, -1, 0, 1, 2].map((k) => {
         const next = multiple + k * step;
         return {
           center: k === 0,
@@ -388,17 +451,45 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custo
           label: next > 0 ? multipleLabel(next) : '',
         };
       });
+    } else if (rdLevels) {
+      cols = rdLevels.map((level) => ({
+        center: level.center,
+        multiple,
+        growth,
+        blank: false,
+        label: level.label,
+        rdOverride: level.path,
+      }));
+    } else if (isGordon) {
+      cols = growthCols(growth, growthStep);
+    } else {
+      cols = [-2, -1, 0, 1, 2].map((k) => {
+        const next = multiple + k * step;
+        return {
+          center: k === 0,
+          multiple: next,
+          blank: !(next > 0),
+          label: next > 0 ? multipleLabel(next) : '',
+        };
+      });
+    }
     const center = copyCell(run);
     const cells = rows.map((row) => cols.map((col) => {
-      if (col.blank) return { equity_yi: null, cap_yi: null, blank: 'multiple' };
+      if (col.blank) return { equity_yi: null, cap_yi: null, blank: isGordon ? 'gordon' : 'multiple' };
       if (row.center && col.center) return center;
       if (Array.isArray(row.revenueOverride) && row.revenueOverride.some((v) => !(Number(v) > 0))) {
         return { equity_yi: null, cap_yi: null, blank: 'revenue' };
       }
+      const usedRate = row.rate != null ? row.rate : rate;
+      const usedGrowth = col.growth != null ? col.growth : growth;
+      if (isGordon && !(usedRate > usedGrowth)) {
+        return { equity_yi: null, cap_yi: null, blank: 'gordon' };
+      }
       const next = rebuild({
-        rate: row.rate != null ? row.rate : rate,
-        multiple: col.multiple,
+        rate: usedRate,
+        multiple: isGordon ? null : col.multiple,
         terminalType,
+        terminalGrowth: usedGrowth,
         revenueOverride: row.revenueOverride,
         rdOverride: col.rdOverride || row.rdOverride,
       });
@@ -406,7 +497,8 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custo
     }));
     return {
       blocked: false,
-      multiple,
+      multiple: isGordon ? null : multiple,
+      growth: isGordon ? growth : null,
       equity_yi: center.equity_yi,
       cap_yi: center.cap_yi,
       row_labels: rows.map((row) => row.label),
@@ -420,11 +512,13 @@ function buildExitView({ peRun, psRun, rebuild, axes, steps, scenarioMode, custo
   return {
     scenario_mode: scenarioMode || 'single',
     axes: mode,
-    holding_years: holdingYearsOf(peRun, psRun),
+    holding_years: holdingYearsOf(peRun, psRun, gordonRun),
     wacc_floored: waccFloored,
     discount_rate: rate,
+    terminal_growth: growth,
     pe: withBand(buildSide(peRun, 'exit_pe', peOk)),
     ps: withBand(buildSide(psRun, 'exit_ps', psOk)),
+    gordon: withBand(buildSide(gordonRun, 'gordon', gordonOk)),
   };
 }
 

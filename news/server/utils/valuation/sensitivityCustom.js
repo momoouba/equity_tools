@@ -23,6 +23,7 @@ const PARAMS = {
   rd_cagr: { label: '研发费用 CAGR', kind: 'cagr', defaultStep: 0.05 },
   rate: { label: '折现率', kind: 'rate', defaultStep: 0.02 },
   exit_multiple: { label: '退出倍数', kind: 'multiple', defaultStep: null },
+  perp_growth: { label: '永续增长率', kind: 'growth', defaultStep: 0.005 },
   gross_margin: { label: '毛利率', kind: 'ratio', ratioKey: 'cogs_ratio', invert: true, defaultStep: 0.02 },
   selling_ratio: { label: '销售费用率', kind: 'ratio', ratioKey: 'selling_ratio', defaultStep: 0.01 },
   admin_ratio: { label: '管理费用率', kind: 'ratio', ratioKey: 'admin_ratio', defaultStep: 0.01 },
@@ -125,6 +126,9 @@ function patchFromLevel(paramId, level, ctx) {
   if (meta.kind === 'rate') {
     return { rateDelta: delta };
   }
+  if (meta.kind === 'growth') {
+    return { growthDelta: delta };
+  }
   if (meta.kind === 'multiple') {
     return { multipleDelta: delta };
   }
@@ -143,6 +147,7 @@ function mergePatches(a, b) {
     revenueOverride: b.revenueOverride || a.revenueOverride,
     rdOverride: b.rdOverride || a.rdOverride,
     rateDelta: (a.rateDelta || 0) + (b.rateDelta || 0),
+    growthDelta: (a.growthDelta || 0) + (b.growthDelta || 0),
     multipleDelta: (a.multipleDelta || 0) + (b.multipleDelta || 0),
     ratioDeltas: { ...(a.ratioDeltas || {}), ...(b.ratioDeltas || {}) },
     dayDeltas: { ...(a.dayDeltas || {}), ...(b.dayDeltas || {}) },

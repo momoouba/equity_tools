@@ -1153,18 +1153,37 @@ function waccHint(assumptions, payload) {
   return body + last
 }
 
-function DiscountWaccLine({ method, assumptions, payload, patchPayload, singleRow = false }) {
-  const fields = [
-    ...buildDcfParamFields({ method, assumptions, payload, patchPayload }),
-    ...buildWaccFields({ assumptions, patchPayload }),
-  ]
+function ParamColumn({ label, fields, tone, wide = false }) {
+  if (!fields?.length) return null
   return (
-    <div className={singleRow ? 'valuation-dcf-param-line valuation-dcf-param-line-single' : 'valuation-dcf-param-line'}>
-      {fields.map((f) => (
-        <div key={f.label} className="valuation-dcf-param-item">
-          <span title={f.label}>{f.label}</span>
-          {f.control}
-        </div>
+    <div className={`valuation-dcf-param-method-col tone-${tone}${wide ? ' is-wide' : ''}`}>
+      <div className="valuation-dcf-param-method-label">{label}</div>
+      <div className="valuation-dcf-param-method-fields">
+        {fields.map((f) => (
+          <div key={f.label} className="valuation-dcf-param-item">
+            <span title={f.label}>{f.label}</span>
+            {f.control}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function DiscountWaccLine({ method, assumptions, payload, patchPayload }) {
+  const groups = buildMethodParamGroups({ method, assumptions, payload, patchPayload })
+    .slice()
+    .sort((a, b) => (a.fields?.length || 0) - (b.fields?.length || 0) || (a.order || 0) - (b.order || 0))
+  return (
+    <div className="valuation-dcf-param-methods">
+      {groups.map((g) => (
+        <ParamColumn
+          key={g.label}
+          label={g.label}
+          fields={g.fields}
+          tone={g.tone}
+          wide={g.tone === 'dcf'}
+        />
       ))}
     </div>
   )
@@ -1263,9 +1282,90 @@ function MarketMultiplesBlock({ assumptions, payload, patchPayload }) {
   )
 }
 
-function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
+function buildMethodParamGroups({ method, assumptions, payload, patchPayload }) {
   const waccPreview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
-  const fields = [
+  const dual = method.scenario_mode === 'ma_and_ipo'
+  const dcfLiqApplies = dual || method.fcf_method === 'nopat_fcff'
+
+  const marketFields = [
+    {
+      label: '市场法折扣',
+      control: (
+        <PctInput
+          value={assumptions.liquidity_discount ?? 0.3}
+          onChange={(v) => patchPayload({ assumptions: { ...assumptions, liquidity_discount: v } })}
+        />
+      ),
+    },
+  ]
+
+  const peFields = dual
+    ? [
+      {
+        label: '上市退出 P/E',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe ?? 40}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_pe', v))}
+          />
+        ),
+      },
+      {
+        label: '并购退出 P/E',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe ?? 40}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_pe', v))}
+          />
+        ),
+      },
+    ]
+    : [
+      {
+        label: '退出 P/E',
+        control: (
+          <DcfNumInput
+            value={assumptions.exit_pe ?? 40}
+            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_pe: v } })}
+          />
+        ),
+      },
+    ]
+
+  const psFields = dual
+    ? [
+      {
+        label: '上市退出 P/S',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_ps', v))}
+          />
+        ),
+      },
+      {
+        label: '并购退出 P/S',
+        control: (
+          <DcfNumInput
+            value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_ps', v))}
+          />
+        ),
+      },
+    ]
+    : [
+      {
+        label: '退出 P/S',
+        control: (
+          <DcfNumInput
+            value={assumptions.exit_ps ?? 20}
+            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_ps: v } })}
+          />
+        ),
+      },
+    ]
+
+  const dcfFields = [
     {
       label: '汇总折现率',
       control: (
@@ -1276,62 +1376,18 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
         />
       ),
     },
-  ]
-  if (method.scenario_mode !== 'ma_and_ipo') {
-    fields.push(
-      {
-        label: '退出 P/E',
-        control: (
-          <DcfNumInput
-            value={assumptions.exit_pe ?? 40}
-            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_pe: v } })}
-          />
-        ),
-      },
-      {
-        label: '退出 P/S',
-        control: (
-          <DcfNumInput
-            value={assumptions.exit_ps ?? 20}
-            onChange={(v) => patchPayload({ assumptions: { ...assumptions, exit_ps: v } })}
-          />
-        ),
-      },
-    )
-  }
-  fields.push({
-    label: '市场法折扣',
-    control: (
-      <PctInput
-        value={assumptions.liquidity_discount ?? 0.3}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, liquidity_discount: v } })}
-      />
-    ),
-  })
-  const dcfLiqApplies = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
-  if (dcfLiqApplies) {
-    fields.push({
-      label: method.scenario_mode === 'ma_and_ipo' ? '并购折扣' : 'DCF 折扣',
+    {
+      label: '永续增长率',
       control: (
         <PctInput
-          value={assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3}
-          onChange={(v) => patchPayload({ assumptions: { ...assumptions, dcf_liquidity_discount: v } })}
+          value={assumptions.terminal_growth ?? 0.02}
+          onChange={(v) => patchPayload({ assumptions: { ...assumptions, terminal_growth: v } })}
         />
       ),
-    })
-  }
-  const esopField = {
-    label: 'ESOP',
-    control: (
-      <DcfNumInput
-        {...wanInputNumberProps}
-        value={assumptions.esop ?? 0}
-        onChange={(v) => patchPayload({ assumptions: { ...assumptions, esop: v ?? 0 } })}
-      />
-    ),
-  }
-  if (method.scenario_mode === 'ma_and_ipo') {
-    fields.push(
+    },
+  ]
+  if (dual) {
+    dcfFields.push(
       {
         label: '上市折现率',
         control: (
@@ -1350,50 +1406,37 @@ function buildDcfParamFields({ method, assumptions, payload, patchPayload }) {
           />
         ),
       },
-      esopField,
     )
-    fields.push(
-      {
-        label: '上市退出 P/E',
-        control: (
-          <DcfNumInput
-            value={payload.scenarios?.ipo?.exit_pe ?? assumptions.exit_pe ?? 40}
-            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_pe', v))}
-          />
-        ),
-      },
-      {
-        label: '上市退出 P/S',
-        control: (
-          <DcfNumInput
-            value={payload.scenarios?.ipo?.exit_ps ?? assumptions.exit_ps ?? 20}
-            onChange={(v) => patchPayload(scenarioPatch(payload, 'ipo', 'exit_ps', v))}
-          />
-        ),
-      },
-      {
-        label: '并购退出 P/E',
-        control: (
-          <DcfNumInput
-            value={payload.scenarios?.ma?.exit_pe ?? assumptions.exit_pe ?? 40}
-            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_pe', v))}
-          />
-        ),
-      },
-      {
-        label: '并购退出 P/S',
-        control: (
-          <DcfNumInput
-            value={payload.scenarios?.ma?.exit_ps ?? assumptions.exit_ps ?? 20}
-            onChange={(v) => patchPayload(scenarioPatch(payload, 'ma', 'exit_ps', v))}
-          />
-        ),
-      },
-    )
-  } else {
-    fields.push(esopField)
   }
-  return fields
+  if (dcfLiqApplies) {
+    dcfFields.push({
+      label: dual ? '并购折扣' : 'DCF 折扣',
+      control: (
+        <PctInput
+          value={assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3}
+          onChange={(v) => patchPayload({ assumptions: { ...assumptions, dcf_liquidity_discount: v } })}
+        />
+      ),
+    })
+  }
+  dcfFields.push({
+    label: 'ESOP',
+    control: (
+      <DcfNumInput
+        {...wanInputNumberProps}
+        value={assumptions.esop ?? 0}
+        onChange={(v) => patchPayload({ assumptions: { ...assumptions, esop: v ?? 0 } })}
+      />
+    ),
+  })
+  dcfFields.push(...buildWaccFields({ assumptions, patchPayload }))
+
+  return [
+    { label: '市场法', fields: marketFields, order: 1, tone: 'market' },
+    { label: 'P/E 法', fields: peFields, order: 2, tone: 'pe' },
+    { label: 'P/S 法', fields: psFields, order: 3, tone: 'ps' },
+    { label: 'DCF 法', fields: dcfFields, order: 4, tone: 'dcf' },
+  ]
 }
 
 function splitValuationNotices(list) {
@@ -2110,11 +2153,11 @@ export default function ValuationWorkbenchPage() {
               </div>
               <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
               <Typography.Paragraph className="valuation-dcf-terminal-hint">
-                折现率默认 30%，退出 P/E 默认 40，退出 P/S 默认 20，流动性折扣默认 30%，ESOP 默认 0。这里改完，计算输出用同一组数。{waccHint(assumptions, payload)}
+                横向四列按参数多少排布：市场法、P/E、P/S 各填一项，DCF 列填折现率、永续增长率、WACC 与 ESOP。折现率默认 30%，退出 P/E 默认 40，退出 P/S 默认 20，永续增长率默认 2%，流动性折扣默认 30%，ESOP 默认 0。这里改完，计算输出用同一组数。{waccHint(assumptions, payload)}
               </Typography.Paragraph>
             </div>
             <Typography.Paragraph type="secondary" className="valuation-dcf-terminal-hint">
-              退出 P/E 和退出 P/S 都会算一笔终值。顶栏 DCF 指标卡仍展示这两套点估值；估值区间图的 DCF 条取敏感性中间 3×3 格的最小/最大股权价值，按 P/E、P/S 分开画。明细表默认按退出 P/E 展开。
+              退出 P/E、退出 P/S、永续增长各算一笔终值。顶栏 DCF 指标卡展示这三套点估值；估值区间图的 DCF 条取敏感性中间 3×3 格的最小/最大股权价值，按 P/E、P/S、永续增长分开画。明细表默认按退出 P/E 展开。
             </Typography.Paragraph>
             {!isDefaultMethodConfig(method) ? (
               <Alert
@@ -2940,7 +2983,8 @@ export default function ValuationWorkbenchPage() {
                       {(() => {
                         const preview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
                         const shownRate = preview.used_breakdown ? preview.rate : (assumptions.discount_rate ?? 0.3)
-                        const exitLabel = `退出 P/E ${assumptions.exit_pe ?? 40}，退出 P/S ${assumptions.exit_ps ?? 20}`
+                        const g = assumptions.terminal_growth ?? 0.02
+                        const exitLabel = `退出 P/E ${assumptions.exit_pe ?? 40}，退出 P/S ${assumptions.exit_ps ?? 20}，永续增长率 ${(Number(g) * 100).toFixed(1)}%`
                         const liq = assumptions.liquidity_discount ?? 0.3
                         const dcfLiq = assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3
                         const dcfOn = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
@@ -2949,8 +2993,8 @@ export default function ValuationWorkbenchPage() {
                     </Typography.Paragraph>
                     <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法按目标公司 LFY/CFY 基数拆分。">
                       市场法四套 = 可比倍数 × 目标公司基数。基数：P/S LFY = 上一财年营收，P/E LFY = 上一财年净利润，P/S·P/E CFY = 当年财年预测营收/净利润。倍数来自可比 POOL（缺预测倍数时回退历史倍数）。低端 = 中位数 − σ，高端 = 中位数。
-                      顶栏 DCF 仍展示退出 P/E、P/S 两套点估值；估值区间图 DCF 条取敏感性中心 3×3 的最小/最大。
-                      {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时区间图为情景×退出方式共 4 条 DCF。' : ''}
+                      顶栏 DCF 仍展示退出 P/E、P/S、永续增长三套点估值；估值区间图 DCF 条取敏感性中心 3×3 的最小/最大。
+                      {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时区间图为情景×终值方式共 6 条 DCF。' : ''}
                     </Typography.Paragraph>
                     <Typography.Paragraph type="secondary" className="valuation-abbr-note" style={{ fontSize: 12, marginTop: -4 }}>
                       简写：LFY = Last Fiscal Year（上一财年）；CFY = Current Fiscal Year（当年财年）。
@@ -3088,9 +3132,9 @@ export default function ValuationWorkbenchPage() {
                           <Typography.Title heading={6} className="valuation-ratio-col-title">可调整参数</Typography.Title>
                           <Tag className="valuation-edit-tag" size="small">可编辑</Tag>
                         </div>
-                        <DiscountWaccLine singleRow method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
+                        <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
                         <Typography.Paragraph className="valuation-dcf-terminal-hint">
-                          退出 P/E 与退出 P/S 各算一笔终值：分别 × 末期全年税后经营利润 / 末期全年营业收入，再加锚定日净负债后折现。明细默认按退出 P/E 展开。
+                          退出 P/E、退出 P/S、永续增长各算一笔终值：前两套分别 × 末期全年税后经营利润 / 末期全年营业收入再加净负债；永续增长 = 末期全年 FCFF × (1+g) / (r−g)。下方明细在预测现金流之后单独列出三套终值，并展开永续增长测算。
                           {waccHint(assumptions, payload)}
                         </Typography.Paragraph>
                         {method.scenario_mode === 'ma_and_ipo' ? (
