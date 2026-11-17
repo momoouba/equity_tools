@@ -31,6 +31,7 @@ const DEFAULT_EXIT_PE = 40;
 const DEFAULT_EXIT_PS = 20;
 const DEFAULT_LIQUIDITY = 0.3;
 const DEFAULT_TERMINAL_GROWTH = 0.02;
+const DEFAULT_GORDON_STAGE1_YEARS = 5;
 
 const DAY_SPECS = [
   { key: 'dso', label: 'DSO' },
@@ -204,10 +205,124 @@ function blankResult(extra) {
     terminal_base: null,
     terminal_year: null,
     exit_multiple: null,
+    gordon_stages: null,
     forecast_bs: [],
     series: null,
     ...extra,
   };
+}
+
+/**
+ * 解析永续多阶段：只填一阶段 → 两阶段（显式预测后 + 一阶段高增 + 以 g1 永续）；
+ * 一、二阶段都填 → 三阶段（再加二阶段过渡，以 g2 永续）。
+ * 旧案未写阶段字段时：年限按 0，预测期末直接以 terminal_growth 永续（兼容原结果）。
+ * terminalGrowthArg 非空时覆盖末段永续 g（敏感性用）。
+ */
+function resolveGordonStages(assumptions, terminalGrowthArg, growthDelta) {
+  const n1Raw = toNumber(assumptions?.gordon_stage1_years);
+  const g1Raw = toNumber(assumptions?.gordon_stage1_growth);
+  let g1 = g1Raw;
+  if (g1 == null) g1 = toNumber(assumptions?.terminal_growth);
+  if (g1 == null) g1 = DEFAULT_TERMINAL_GROWTH;
+
+  let n1;
+  if (n1Raw != null && n1Raw > 0) n1 = Math.floor(n1Raw);
+  else if (n1Raw === 0) n1 = 0;
+  else if (g1Raw == null && assumptions?.gordon_stage1_years == null) n1 = 0; // 旧案
+  else n1 = DEFAULT_GORDON_STAGE1_YEARS;
+
+  const n2Raw = toNumber(assumptions?.gordon_stage2_years);
+  const g2Raw = toNumber(assumptions?.gordon_stage2_growth);
+  const n2Ok = n2Raw != null && n2Raw > 0;
+  const g2Ok = g2Raw != null;
+  const blockers = [];
+  if (n2Ok !== g2Ok) {
+    blockers.push('永续二阶段须同时填写年限与增长率；只填一阶段则按两阶段测算');
+  }
+  const threeStage = n2Ok && g2Ok;
+  const n2 = threeStage ? Math.max(1, Math.floor(n2Raw)) : 0;
+  const g2 = threeStage ? g2Raw : null;
+
+  let terminalGrowth = threeStage ? g2 : g1;
+  const override = toNumber(terminalGrowthArg);
+  if (override != null) terminalGrowth = override;
+  terminalGrowth += (toNumber(growthDelta) || 0);
+
+  return {
+    blockers,
+    stage_mode: threeStage ? 'three_stage' : 'two_stage',
+    stage1_years: n1,
+    stage1_growth: g1,
+    stage2_years: threeStage ? n2 : null,
+    stage2_growth: threeStage ? g2 : null,
+    terminal_growth: terminalGrowth,
+  };
+}
+
+/** 预测期结束后按阶段增长 FCFF，再以末段 g 做 Gordon 永续。 */
+function buildGordonExtension({
+  fcf0,
+  lastExplicitYear,
+  discountBase,
+  rate,
+  plan,
+}) {
+  const rows = [];
+  let fcf = fcf0;
+  let year = Number(lastExplicitYear);
+  let stage1Pv = 0;
+  let stage2Pv = 0;
+
+  const pushYears = (count, growth, stage) => {
+    for (let i = 1; i <= count; i += 1) {
+      year += 1;
+      fcf *= (1 + growth);
+      const periods = discountYears(year, discountBase);
+      const factor = pvFactor(rate, periods);
+      const pv = fcf * factor;
+      if (stage === 1) stage1Pv += pv;
+      else stage2Pv += pv;
+      rows.push({
+        stage,
+        year,
+        growth,
+        fcf,
+        periods,
+        factor,
+        pv,
+      });
+    }
+  };
+
+  pushYears(plan.stage1_years, plan.stage1_growth, 1);
+  if (plan.stage_mode === 'three_stage') {
+    pushYears(plan.stage2_years, plan.stage2_growth, 2);
+  }
+
+  const g = plan.terminal_growth;
+  const terminalValue = fcf * (1 + g) / (rate - g);
+  const tvPeriods = discountYears(year, discountBase);
+  const tvFactor = pvFactor(rate, tvPeriods);
+  const terminalPv = terminalValue * tvFactor;
+
+  return {
+    rows,
+    stage1_fcf_pv: stage1Pv,
+    stage2_fcf_pv: plan.stage_mode === 'three_stage' ? stage2Pv : null,
+    extension_fcf_pv: stage1Pv + (plan.stage_mode === 'three_stage' ? stage2Pv : 0),
+    terminal_year: year,
+    terminal_base: fcf,
+    terminal_growth: g,
+    terminal_value: terminalValue,
+    terminal_pv: terminalPv,
+    last_stage_fcf: fcf,
+  };
+}
+
+function applyLiquidityToEquity(ev, nd, applyLiquidity, liquidity) {
+  let equity = ev - nd;
+  if (applyLiquidity) equity *= (1 - liquidity);
+  return equity;
 }
 
 function bsBalanced(bs) {
@@ -460,10 +575,11 @@ function buildDcfForecast({
     multiple = null;
   }
   const growthDelta = toNumber(sensitivityShocks?.growthDelta) || 0;
-  let perpGrowth = toNumber(terminalGrowth);
-  if (perpGrowth == null) perpGrowth = toNumber(assumptions.terminal_growth);
-  if (perpGrowth == null) perpGrowth = DEFAULT_TERMINAL_GROWTH;
-  perpGrowth += growthDelta;
+  const gordonPlan = useGordon
+    ? resolveGordonStages(assumptions, terminalGrowth, growthDelta)
+    : null;
+  if (gordonPlan?.blockers?.length) blockers.push(...gordonPlan.blockers);
+  const perpGrowth = gordonPlan ? gordonPlan.terminal_growth : null;
 
   let liquidity = toNumber(liquidityDiscount);
   if (applyLiquidity) {
@@ -765,12 +881,16 @@ function buildDcfForecast({
     });
   }
 
-  // 永续终值用末期全年 FCFF，不用锚定年残段期间数
+  // 退出倍数终值挂预测末年；永续多阶段在预测期后再延长 FCFF，末段再 Gordon
   const fcfFullLast = series.nopat[n - 1] + series.da[n - 1] + esopAnnual - series.capex[n - 1] - series.dnwc[n - 1];
   let terminalBase;
   let exitEquity;
   let exitEv;
   let terminalBaseKind;
+  let tvPv;
+  let terminalYear = years[n - 1];
+  let gordonStages = null;
+  let gordonMeta = null;
   if (useGordon) {
     if (!(fcfFullLast > 0)) {
       blockers.push(`最后一年 ${years[n - 1]} 全年自由现金流小于等于 0，不能用永续增长终值。请调整预测或改用退出倍数`);
@@ -784,6 +904,7 @@ function buildDcfForecast({
         apply_liquidity: applyLiquidity,
         liquidity_discount: applyLiquidity ? liquidity : null,
         terminal_growth: perpGrowth,
+        gordon_stage_mode: gordonPlan?.stage_mode,
       });
     }
     if (!(rate > perpGrowth)) {
@@ -798,21 +919,88 @@ function buildDcfForecast({
         apply_liquidity: applyLiquidity,
         liquidity_discount: applyLiquidity ? liquidity : null,
         terminal_growth: perpGrowth,
+        gordon_stage_mode: gordonPlan?.stage_mode,
       });
     }
+    const ext = buildGordonExtension({
+      fcf0: fcfFullLast,
+      lastExplicitYear: years[n - 1],
+      discountBase,
+      rate,
+      plan: gordonPlan,
+    });
+    gordonStages = ext.rows;
     terminalBase = fcfFullLast;
     terminalBaseKind = 'fcff';
-    exitEv = fcfFullLast * (1 + perpGrowth) / (rate - perpGrowth);
+    terminalYear = ext.terminal_year;
+    exitEv = ext.terminal_value;
     exitEquity = exitEv - nd;
+    tvPv = ext.extension_fcf_pv + ext.terminal_pv;
+    ev += tvPv;
+
+    let twoStageCompare = null;
+    if (gordonPlan.stage_mode === 'three_stage') {
+      const twoPlan = {
+        ...gordonPlan,
+        stage_mode: 'two_stage',
+        stage2_years: null,
+        stage2_growth: null,
+        // 对照：去掉二阶段后，以一阶段 g 永续（敏感性绝对覆盖只作用于三阶段末 g）
+        terminal_growth: gordonPlan.stage1_growth + (toNumber(growthDelta) || 0),
+      };
+      if (!(rate > twoPlan.terminal_growth)) {
+        twoStageCompare = { blocked: true, blockers: [`两阶段对照：一阶段 g ${pctText(twoPlan.terminal_growth)} 须小于折现率`] };
+      } else {
+        const twoExt = buildGordonExtension({
+          fcf0: fcfFullLast,
+          lastExplicitYear: years[n - 1],
+          discountBase,
+          rate,
+          plan: twoPlan,
+        });
+        const twoEv = ev - tvPv + twoExt.extension_fcf_pv + twoExt.terminal_pv;
+        const twoEquity = applyLiquidityToEquity(twoEv, nd, applyLiquidity, liquidity);
+        const threeEquityPreview = applyLiquidityToEquity(ev, nd, applyLiquidity, liquidity);
+        twoStageCompare = {
+          blocked: false,
+          stage_mode: 'two_stage',
+          stage1_years: twoPlan.stage1_years,
+          stage1_growth: twoPlan.stage1_growth,
+          terminal_growth: twoPlan.terminal_growth,
+          stage1_fcf_pv: twoExt.stage1_fcf_pv,
+          terminal_pv: twoExt.terminal_pv,
+          enterprise_value: twoEv,
+          equity_value: twoEquity,
+          equity_value_yi: yuanToYi(twoEquity),
+          delta_equity_value: threeEquityPreview - twoEquity,
+          delta_equity_value_yi: yuanToYi(threeEquityPreview - twoEquity),
+        };
+      }
+    }
+
+    gordonMeta = {
+      stage_mode: gordonPlan.stage_mode,
+      stage1_years: gordonPlan.stage1_years,
+      stage1_growth: gordonPlan.stage1_growth,
+      stage2_years: gordonPlan.stage2_years,
+      stage2_growth: gordonPlan.stage2_growth,
+      stage1_fcf_pv: ext.stage1_fcf_pv,
+      stage2_fcf_pv: ext.stage2_fcf_pv,
+      extension_fcf_pv: ext.extension_fcf_pv,
+      gordon_terminal_pv: ext.terminal_pv,
+      gordon_terminal_base: ext.terminal_base,
+      explicit_fcff: fcfFullLast,
+      two_stage_compare: twoStageCompare,
+    };
   } else {
     terminalBase = usePs ? series.revenue[n - 1] : lastNopat;
     terminalBaseKind = usePs ? 'revenue' : 'after_tax_operating_profit';
     exitEquity = multiple * terminalBase;
     exitEv = exitEquity + nd;
+    const tvPeriods = pvs[n - 1].periods;
+    tvPv = exitEv * pvFactor(rate, tvPeriods);
+    ev += tvPv;
   }
-  const tvPeriods = pvs[n - 1].periods;
-  const tvPv = exitEv * pvFactor(rate, tvPeriods);
-  ev += tvPv;
   let equity = ev - nd;
   const liq = applyLiquidity ? liquidity : null;
   if (applyLiquidity) equity *= (1 - liq);
@@ -832,7 +1020,7 @@ function buildDcfForecast({
     liquidity_discount: liq,
     fcf: pvs.map((p) => p.fcf),
     pvs,
-    terminal_year: years[n - 1],
+    terminal_year: terminalYear,
     terminal_base_kind: terminalBaseKind,
     terminal_base: terminalBase,
     terminal_growth: useGordon ? perpGrowth : null,
@@ -846,6 +1034,8 @@ function buildDcfForecast({
     equity_value_yi: yuanToYi(equity),
     forecast_bs: forecastBs,
     series,
+    gordon_stages: gordonStages,
+    ...(gordonMeta || {}),
   };
 }
 

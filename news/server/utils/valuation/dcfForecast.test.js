@@ -161,6 +161,50 @@ const gordonBlocked = buildDcfForecast({
 });
 assert.strictEqual(gordonBlocked.blocked, true);
 assert.ok((gordonBlocked.blockers || []).some((m) => m.includes('须小于折现率')));
+
+const gordonTwo = buildDcfForecast({
+  ...base,
+  terminalType: 'gordon',
+  terminalGrowth: null,
+  assumptions: {
+    ...base.assumptions,
+    gordon_stage1_years: 2,
+    gordon_stage1_growth: 0.05,
+    gordon_stage2_years: null,
+    gordon_stage2_growth: null,
+  },
+});
+assert.strictEqual(gordonTwo.blocked, false, (gordonTwo.blockers || []).join('；'));
+assert.strictEqual(gordonTwo.stage_mode, 'two_stage');
+eq(gordonTwo.stage1_years, 2, 'two-stage years');
+eq(gordonTwo.gordon_stages.length, 2, 'two-stage rows');
+eq(gordonTwo.terminal_year, 2029, 'two-stage ends after +2y');
+const twoBase0 = gordonTwo.explicit_fcff;
+const twoFcf1 = twoBase0 * 1.05;
+const twoFcf2 = twoFcf1 * 1.05;
+eq(gordonTwo.gordon_terminal_base, twoFcf2, 'two-stage gordon base');
+eq(gordonTwo.terminal_value, twoFcf2 * 1.05 / (0.1 - 0.05), 'two-stage TV');
+assert.ok(gordonTwo.stage1_fcf_pv > 0, 'stage1 pv');
+assert.strictEqual(gordonTwo.two_stage_compare, null);
+
+const gordonThree = buildDcfForecast({
+  ...base,
+  terminalType: 'gordon',
+  terminalGrowth: null,
+  assumptions: {
+    ...base.assumptions,
+    gordon_stage1_years: 1,
+    gordon_stage1_growth: 0.08,
+    gordon_stage2_years: 2,
+    gordon_stage2_growth: 0.03,
+  },
+});
+assert.strictEqual(gordonThree.blocked, false, (gordonThree.blockers || []).join('；'));
+assert.strictEqual(gordonThree.stage_mode, 'three_stage');
+eq(gordonThree.gordon_stages.length, 3, 'three-stage rows');
+assert.ok(gordonThree.two_stage_compare && !gordonThree.two_stage_compare.blocked, 'two-stage compare');
+assert.ok(Number.isFinite(gordonThree.two_stage_compare.delta_equity_value), 'stage delta');
+eq(gordonThree.terminal_growth, 0.03, 'three-stage terminal g is g2');
 const netted = buildDcfForecast({
   ...base,
   targetBs: { ...bs, contract_liability: 4, advance_receipt: 1 },

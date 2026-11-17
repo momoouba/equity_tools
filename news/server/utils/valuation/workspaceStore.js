@@ -165,7 +165,9 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     || assumptions?.discount_base_dirty === 1
     || assumptions?.discount_base_dirty === '1';
   await upsertByCaseVersion(d, 'valuation_assumption', caseId, versionId, [
-    'discount_rate', 'exit_pe', 'exit_ps', 'terminal_growth', 'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
+    'discount_rate', 'exit_pe', 'exit_ps', 'terminal_growth',
+    'gordon_stage1_years', 'gordon_stage1_growth', 'gordon_stage2_years', 'gordon_stage2_growth',
+    'liquidity_discount', 'dcf_liquidity_discount', 'tax_rate', 'forecast_years',
     'esop', 'valuation_date', 'financial_anchor_date', 'discount_base_dirty',
     'ytd_revenue', 'market_revenue', 'market_net_income', 'round_deal_value_yi', 'display_unit',
     'wacc_risk_free_rate', 'wacc_erp', 'wacc_beta', 'wacc_debt_equity', 'wacc_debt_cost', 'wacc_tax_rate',
@@ -177,6 +179,10 @@ async function saveAssumptions(caseId, versionId, assumptions, pool) {
     numOrNull(a.exit_pe),
     numOrNull(a.exit_ps),
     numOrNull(a.terminal_growth),
+    numOrNull(a.gordon_stage1_years),
+    numOrNull(a.gordon_stage1_growth),
+    numOrNull(a.gordon_stage2_years),
+    numOrNull(a.gordon_stage2_growth),
     numOrNull(a.liquidity_discount),
     numOrNull(a.dcf_liquidity_discount),
     numOrNull(a.tax_rate),
@@ -227,6 +233,10 @@ async function loadAssumptions(caseId, versionId, pool) {
     exit_pe: numOrNull(r.exit_pe),
     exit_ps: numOrNull(r.exit_ps),
     terminal_growth: numOrNull(r.terminal_growth),
+    gordon_stage1_years: numOrNull(r.gordon_stage1_years),
+    gordon_stage1_growth: numOrNull(r.gordon_stage1_growth),
+    gordon_stage2_years: numOrNull(r.gordon_stage2_years),
+    gordon_stage2_growth: numOrNull(r.gordon_stage2_growth),
     liquidity_discount: numOrNull(r.liquidity_discount),
     dcf_liquidity_discount: numOrNull(r.dcf_liquidity_discount),
     tax_rate: numOrNull(r.tax_rate),

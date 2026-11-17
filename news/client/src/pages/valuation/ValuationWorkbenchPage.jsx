@@ -17,7 +17,7 @@ import ValuationDetailModal from './ValuationDetailModal'
 import SheetModal, { SheetActions } from '../../components/SheetModal'
 import { coercePayloadToYuan, fmtYi, fmtNum, fmtPct, fmtAmountWan, fmtWanPlain, roundWanToFen, wanInputNumberProps, formatChinaDateTime, formatChinaYmd, previewWaccBreakdown } from './valuationUnits'
 import ValuationFootballField from './ValuationFootballField'
-import ValuationExitPanel, { DcfExitCard } from './ValuationExitPanel'
+import ValuationExitPanel, { DcfExitCard, DcfGordonCard } from './ValuationExitPanel'
 import { buildCalcStamp, diffCalcStamp, needsRefetch } from './valuationCalcStamp'
 import {
   RelativeValuationTable,
@@ -1153,10 +1153,17 @@ function waccHint(assumptions, payload) {
   return body + last
 }
 
-function ParamColumn({ label, fields, tone, wide = false }) {
+function ParamColumn({ label, fields, tone, wide = false, narrow = false, gordonBox = false }) {
   if (!fields?.length) return null
+  const cls = [
+    'valuation-dcf-param-method-col',
+    `tone-${tone}`,
+    wide ? 'is-wide' : '',
+    narrow ? 'is-narrow' : '',
+    gordonBox ? 'is-gordon-box' : '',
+  ].filter(Boolean).join(' ')
   return (
-    <div className={`valuation-dcf-param-method-col tone-${tone}${wide ? ' is-wide' : ''}`}>
+    <div className={cls}>
       <div className="valuation-dcf-param-method-label">{label}</div>
       <div className="valuation-dcf-param-method-fields">
         {fields.map((f) => (
@@ -1170,21 +1177,56 @@ function ParamColumn({ label, fields, tone, wide = false }) {
   )
 }
 
+function ResultBriefLine({ assumptions, method, payload }) {
+  const preview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
+  const shownRate = preview.used_breakdown ? preview.rate : (assumptions.discount_rate ?? 0.3)
+  const g1 = assumptions.gordon_stage1_growth ?? assumptions.terminal_growth ?? 0.02
+  const n1 = assumptions.gordon_stage1_years ?? 5
+  const n2 = assumptions.gordon_stage2_years
+  const g2 = assumptions.gordon_stage2_growth
+  const gordonBit = (n2 != null && Number(n2) > 0 && g2 != null)
+    ? `永续 ${n1}/${(Number(g1) * 100).toFixed(0)}%+${n2}/${(Number(g2) * 100).toFixed(0)}%`
+    : `永续 ${n1}年/${(Number(g1) * 100).toFixed(0)}%`
+  return (
+    <Typography.Text type="secondary" className="valuation-result-brief">
+      折现 {(shownRate * 100).toFixed(1)}% · P/E {assumptions.exit_pe ?? 40} · P/S {assumptions.exit_ps ?? 20} · {gordonBit}
+      {method.scenario_mode === 'ma_and_ipo' ? ' · 并购+上市' : ''}
+      {payload?.wacc?.used_breakdown ? ` · WACC ${(Number(payload.wacc.rate) * 100).toFixed(1)}%` : ''}
+    </Typography.Text>
+  )
+}
+
 function DiscountWaccLine({ method, assumptions, payload, patchPayload }) {
   const groups = buildMethodParamGroups({ method, assumptions, payload, patchPayload })
     .slice()
-    .sort((a, b) => (a.fields?.length || 0) - (b.fields?.length || 0) || (a.order || 0) - (b.order || 0))
+    .sort((a, b) => (a.order || 0) - (b.order || 0))
+  const top = groups.filter((g) => g.narrow || g.gordonBox)
+  const rest = groups.filter((g) => !g.narrow && !g.gordonBox)
   return (
-    <div className="valuation-dcf-param-methods">
-      {groups.map((g) => (
-        <ParamColumn
-          key={g.label}
-          label={g.label}
-          fields={g.fields}
-          tone={g.tone}
-          wide={g.tone === 'dcf'}
-        />
-      ))}
+    <div className="valuation-dcf-param-methods-wrap">
+      <div className="valuation-dcf-param-methods valuation-dcf-param-methods-top">
+        {top.map((g) => (
+          <ParamColumn
+            key={g.label}
+            label={g.label}
+            fields={g.fields}
+            tone={g.tone}
+            narrow={!!g.narrow}
+            gordonBox={!!g.gordonBox}
+          />
+        ))}
+      </div>
+      <div className="valuation-dcf-param-methods">
+        {rest.map((g) => (
+          <ParamColumn
+            key={g.label}
+            label={g.label}
+            fields={g.fields}
+            tone={g.tone}
+            wide={g.wide || g.tone === 'dcf'}
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -1365,6 +1407,62 @@ function buildMethodParamGroups({ method, assumptions, payload, patchPayload }) 
       },
     ]
 
+  const patchGordon = (part) => {
+    const next = { ...assumptions, ...part }
+    const n2 = next.gordon_stage2_years
+    const g2 = next.gordon_stage2_growth
+    if (n2 != null && Number(n2) > 0 && g2 != null) next.terminal_growth = g2
+    else if (next.gordon_stage1_growth != null) next.terminal_growth = next.gordon_stage1_growth
+    patchPayload({ assumptions: next })
+  }
+
+  const gordonFields = [
+    {
+      label: '一阶段年限',
+      control: (
+        <DcfNumInput
+          precision={0}
+          min={0}
+          step={1}
+          value={assumptions.gordon_stage1_years ?? 5}
+          onChange={(v) => patchGordon({ gordon_stage1_years: v })}
+        />
+      ),
+    },
+    {
+      label: '一阶段增长率',
+      control: (
+        <PctInput
+          value={assumptions.gordon_stage1_growth ?? assumptions.terminal_growth ?? 0.02}
+          onChange={(v) => patchGordon({ gordon_stage1_growth: v })}
+        />
+      ),
+    },
+    {
+      label: '二阶段年限',
+      control: (
+        <DcfNumInput
+          precision={0}
+          min={0}
+          step={1}
+          placeholder="可空"
+          value={assumptions.gordon_stage2_years}
+          onChange={(v) => patchGordon({ gordon_stage2_years: v })}
+        />
+      ),
+    },
+    {
+      label: '二阶段增长率',
+      control: (
+        <PctInput
+          placeholder="可空"
+          value={assumptions.gordon_stage2_growth}
+          onChange={(v) => patchGordon({ gordon_stage2_growth: v })}
+        />
+      ),
+    },
+  ]
+
   const dcfFields = [
     {
       label: '汇总折现率',
@@ -1373,15 +1471,6 @@ function buildMethodParamGroups({ method, assumptions, payload, patchPayload }) 
           disabled={waccPreview.used_breakdown}
           value={waccPreview.used_breakdown ? waccPreview.rate : (assumptions.discount_rate ?? 0.3)}
           onChange={(v) => patchPayload({ assumptions: { ...assumptions, discount_rate: v } })}
-        />
-      ),
-    },
-    {
-      label: '永续增长率',
-      control: (
-        <PctInput
-          value={assumptions.terminal_growth ?? 0.02}
-          onChange={(v) => patchPayload({ assumptions: { ...assumptions, terminal_growth: v } })}
         />
       ),
     },
@@ -1432,10 +1521,11 @@ function buildMethodParamGroups({ method, assumptions, payload, patchPayload }) 
   dcfFields.push(...buildWaccFields({ assumptions, patchPayload }))
 
   return [
-    { label: '市场法', fields: marketFields, order: 1, tone: 'market' },
-    { label: 'P/E 法', fields: peFields, order: 2, tone: 'pe' },
-    { label: 'P/S 法', fields: psFields, order: 3, tone: 'ps' },
-    { label: 'DCF 法', fields: dcfFields, order: 4, tone: 'dcf' },
+    { label: '市场法', fields: marketFields, order: 1, tone: 'market', narrow: true },
+    { label: 'P/E 法', fields: peFields, order: 2, tone: 'pe', narrow: true },
+    { label: 'P/S 法', fields: psFields, order: 3, tone: 'ps', narrow: true },
+    { label: 'DCF 法（永续）', fields: gordonFields, order: 4, tone: 'gordon', gordonBox: true },
+    { label: 'DCF 法', fields: dcfFields, order: 5, tone: 'dcf', wide: true },
   ]
 }
 
@@ -1461,6 +1551,7 @@ export default function ValuationWorkbenchPage() {
   const { caseId } = useParams()
   const navigate = useNavigate()
   const [step, setStep] = useState('method')
+  const [resultTab, setResultTab] = useState('overview')
   const [cse, setCse] = useState(null)
   const [payload, setPayload] = useState(null)
   const [comps, setComps] = useState([])
@@ -2153,11 +2244,11 @@ export default function ValuationWorkbenchPage() {
               </div>
               <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
               <Typography.Paragraph className="valuation-dcf-terminal-hint">
-                横向四列按参数多少排布：市场法、P/E、P/S 各填一项，DCF 列填折现率、永续增长率、WACC 与 ESOP。折现率默认 30%，退出 P/E 默认 40，退出 P/S 默认 20，永续增长率默认 2%，流动性折扣默认 30%，ESOP 默认 0。这里改完，计算输出用同一组数。{waccHint(assumptions, payload)}
+                前三列市场法 / P/E / P/S 缩窄；DCF 永续单独一框填一阶段、二阶段年限与增长率；DCF 列填折现率、WACC 与 ESOP。只填一阶段做两阶段永续，两阶段都填做三阶段。折现率默认 30%，退出 P/E 默认 40，退出 P/S 默认 20，一阶段默认 5 年 / 2%，流动性折扣默认 30%，ESOP 默认 0。{waccHint(assumptions, payload)}
               </Typography.Paragraph>
             </div>
             <Typography.Paragraph type="secondary" className="valuation-dcf-terminal-hint">
-              退出 P/E、退出 P/S、永续增长各算一笔终值。顶栏 DCF 指标卡展示这三套点估值；估值区间图的 DCF 条取敏感性中间 3×3 格的最小/最大股权价值，按 P/E、P/S、永续增长分开画。明细表默认按退出 P/E 展开。
+              退出 P/E、退出 P/S、永续增长各算一笔终值。顶栏在 P/S 后单独放「DCF 永续」指标卡；区间图 DCF 条按 P/E、P/S、永续分开。明细默认按退出 P/E 展开。
             </Typography.Paragraph>
             {!isDefaultMethodConfig(method) ? (
               <Alert
@@ -2962,80 +3053,76 @@ export default function ValuationWorkbenchPage() {
 
         {(step === 'result' || step === 'market' || step === 'dcf') && (
           <Card bordered={false} className="valuation-output-card">
-            <Tabs type="line" size="small" defaultActiveTab="present" className="valuation-output-page-tabs">
-              <TabPane key="present" title="结果呈现">
+            <div className="valuation-output-page">
+              {blockerLines.length ? (
+                <Alert
+                  type="error"
+                  style={{ marginBottom: 12 }}
+                  title="计算未完成，请补下面这些"
+                  content={(
+                    <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+                      {blockerLines.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                  )}
+                />
+              ) : null}
+              {staleLines.length ? (
+                <Alert
+                  type="warning"
+                  style={{ marginBottom: 12 }}
+                  title="输入已修改，需要重新计算"
+                  content={(
+                    <div>
+                      <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
+                        {staleLines.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                      <div>请点「开始采集/计算/保存」。</div>
+                    </div>
+                  )}
+                />
+              ) : null}
+              <div className="valuation-result-heading">
+                <Typography.Title heading={6} className="valuation-ratio-col-title">计算输出（亿元）</Typography.Title>
+                <ResultBriefLine assumptions={assumptions} method={method} payload={payload} />
+              </div>
+              {!isDefaultMethodConfig(method) ? (
+                <Alert
+                  type="warning"
+                  style={{ marginBottom: 8 }}
+                  content="本次 DCF 不是系统默认口径，区间口径可能与默认（退出 P/E + 净利润桥）不同。"
+                />
+              ) : null}
+            </div>
+            <Tabs
+              type="line"
+              size="small"
+              activeTab={resultTab}
+              onChange={setResultTab}
+              className="valuation-output-page-tabs"
+            >
+              <TabPane key="overview" title="总览">
                 <div className="valuation-output-page">
-                  {blockerLines.length ? (
-                    <Alert
-                      type="error"
-                      style={{ marginBottom: 12 }}
-                      title="计算未完成，请补下面这些"
-                      content={(
-                        <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
-                          {blockerLines.map((line) => <li key={line}>{line}</li>)}
-                        </ul>
-                      )}
-                    />
-                  ) : null}
                   <section className="valuation-output-section">
-                    <Typography.Title heading={6} className="valuation-ratio-col-title">结果对比（亿元）</Typography.Title>
-                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula">
-                      {(() => {
-                        const preview = previewWaccBreakdown(assumptions.wacc_breakdown, assumptions.discount_rate, assumptions.tax_rate)
-                        const shownRate = preview.used_breakdown ? preview.rate : (assumptions.discount_rate ?? 0.3)
-                        const g = assumptions.terminal_growth ?? 0.02
-                        const exitLabel = `退出 P/E ${assumptions.exit_pe ?? 40}，退出 P/S ${assumptions.exit_ps ?? 20}，永续增长率 ${(Number(g) * 100).toFixed(1)}%`
-                        const liq = assumptions.liquidity_discount ?? 0.3
-                        const dcfLiq = assumptions.dcf_liquidity_discount ?? assumptions.liquidity_discount ?? 0.3
-                        const dcfOn = method.scenario_mode === 'ma_and_ipo' || method.fcf_method === 'nopat_fcff'
-                        return `本次参数：折现率 ${(shownRate * 100).toFixed(1)}%，${exitLabel}，市场法流动性折扣 ${(liq * 100).toFixed(1)}%${dcfOn ? `，DCF 流动性折扣 ${(dcfLiq * 100).toFixed(1)}%` : ''}，ESOP ${assumptions.esop ?? 0} 元。与方法配置是同一组数。`
-                      })()}
+                    <Typography.Paragraph type="secondary" className="valuation-result-brief" style={{ marginBottom: 10 }}>
+                      点估值与区间对照。敏感性、市场法倍数、DCF 过程表请切上方 Tab。LFY=上一财年，CFY=当年财年。
                     </Typography.Paragraph>
-                    <Typography.Paragraph type="secondary" className="valuation-ratio-formula" title="市场法按目标公司 LFY/CFY 基数拆分。">
-                      市场法四套 = 可比倍数 × 目标公司基数。基数：P/S LFY = 上一财年营收，P/E LFY = 上一财年净利润，P/S·P/E CFY = 当年财年预测营收/净利润。倍数来自可比 POOL（缺预测倍数时回退历史倍数）。低端 = 中位数 − σ，高端 = 中位数。
-                      顶栏 DCF 仍展示退出 P/E、P/S、永续增长三套点估值；估值区间图 DCF 条取敏感性中心 3×3 的最小/最大。
-                      {method.scenario_mode === 'ma_and_ipo' ? ' 并购 + 上市并排时区间图为情景×终值方式共 6 条 DCF。' : ''}
-                    </Typography.Paragraph>
-                    <Typography.Paragraph type="secondary" className="valuation-abbr-note" style={{ fontSize: 12, marginTop: -4 }}>
-                      简写：LFY = Last Fiscal Year（上一财年）；CFY = Current Fiscal Year（当年财年）。
-                    </Typography.Paragraph>
-                    {!isDefaultMethodConfig(method) ? (
-                      <Alert
-                        type="warning"
-                        style={{ marginBottom: 12 }}
-                        content="本次 DCF 不是系统默认口径。默认是退出 P/E × 末期税后经营利润、净利润桥、营收 CAGR × 退出倍数；当前若是退出 P/S + NOPAT + 折现率轴，区间口径会不同。"
-                      />
-                    ) : null}
-                    {staleLines.length ? (
-                      <Alert
-                        type="warning"
-                        style={{ marginBottom: 12 }}
-                        title="输入已修改，需要重新计算"
-                        content={(
-                          <div>
-                            <ul style={{ margin: '8px 0', paddingLeft: 18 }}>
-                              {staleLines.map((line) => <li key={line}>{line}</li>)}
-                            </ul>
-                            <div>请点「开始采集/计算/保存」。</div>
-                          </div>
-                        )}
-                      />
-                    ) : null}
-                    <div className="valuation-result-top">
-                      <div className="valuation-result-left">
-                        <div className="valuation-result-grid">
-                          {comparison ? (
-                            <>
-                              <div className="valuation-result-card">
+                    <div className="valuation-result-overview">
+                      <div className="valuation-result-stack">
+                        {comparison ? (
+                          <>
+                            <div className="valuation-result-market-row">
+                              <div className="valuation-result-card valuation-result-card-market">
                                 <h4>市场法 P/S</h4>
                                 <div title="LFY = Last Fiscal Year 上一财年">LFY {fmtYi(comparison.market_ps_ttm?.low ?? comparison.market_ps?.low)} ~ {fmtYi(comparison.market_ps_ttm?.high ?? comparison.market_ps?.high)}</div>
                                 <div title="CFY = Current Fiscal Year 当年财年">CFY {fmtYi(comparison.market_ps_ntm?.low)} ~ {fmtYi(comparison.market_ps_ntm?.high)}</div>
                               </div>
-                              <div className="valuation-result-card">
+                              <div className="valuation-result-card valuation-result-card-market">
                                 <h4>市场法 P/E</h4>
                                 <div title="LFY = Last Fiscal Year 上一财年">LFY {fmtYi(comparison.market_pe_ttm?.low ?? comparison.market_pe?.low)} ~ {fmtYi(comparison.market_pe_ttm?.high ?? comparison.market_pe?.high)}</div>
                                 <div title="CFY = Current Fiscal Year 当年财年">CFY {fmtYi(comparison.market_pe_ntm?.low)} ~ {fmtYi(comparison.market_pe_ntm?.high)}</div>
                               </div>
+                            </div>
+                            <div className="valuation-result-dcf-row">
                               <div className="valuation-result-card">
                                 <h4>DCF</h4>
                                 {payload.sheets?.dcf?.payload?.primary?.exit_view ? (
@@ -3044,6 +3131,7 @@ export default function ValuationWorkbenchPage() {
                                     secondary={payload.sheets.dcf.payload.secondary}
                                     dealYi={dealYi}
                                     dilution={dilution}
+                                    mode="exits"
                                   />
                                 ) : comparison.dcf?.ma ? (
                                   <>
@@ -3051,111 +3139,133 @@ export default function ValuationWorkbenchPage() {
                                     <div>上市 {fmtYi(comparison.dcf.ipo.low)} ~ {fmtYi(comparison.dcf.ipo.high)}</div>
                                   </>
                                 ) : (
-                                  <div className="num">{fmtYi(comparison.dcf?.low)} ~ {fmtYi(comparison.dcf?.high)}</div>
+                                  <div className="valuation-exit-line">{fmtYi(comparison.dcf?.low)} ~ {fmtYi(comparison.dcf?.high)}</div>
                                 )}
                               </div>
-                            </>
-                          ) : (
-                            <Typography.Text type="secondary">请先确认方法配置并开跑计算</Typography.Text>
-                          )}
-                          <div className="valuation-result-card valuation-result-card-edit">
-                            <div className="valuation-result-card-head">
-                              <h4>本轮交易估值（投前）</h4>
-                              {isDraftView ? <Tag className="valuation-edit-tag" size="small">可输入</Tag> : null}
+                              <div className="valuation-result-card valuation-result-card-gordon">
+                                <h4>DCF 永续</h4>
+                                {payload.sheets?.dcf?.payload?.primary?.exit_view ? (
+                                  <DcfGordonCard
+                                    primary={payload.sheets.dcf.payload.primary}
+                                    secondary={payload.sheets.dcf.payload.secondary}
+                                    dealYi={dealYi}
+                                    dilution={dilution}
+                                  />
+                                ) : (
+                                  <div className="valuation-exit-line">—</div>
+                                )}
+                              </div>
                             </div>
-                            <InputNumber
-                              className="valuation-result-card-input"
-                              placeholder="输入对照值"
-                              disabled={!isDraftView}
-                              value={dealYi}
-                              onChange={(v) => {
-                                if (!isDraftView) return
-                                setCse((prev) => ({ ...prev, round_deal_value_yi: v }))
-                                patchValuationCase(caseId, { round_deal_value_yi: v })
-                              }}
-                            />
-                            <div>亿元。对照虚线，并作为退出 MOC、退出 IRR 的分母，不进入股权价值。</div>
-                            <div style={{ marginTop: 8 }}>后续股权稀释</div>
-                            <PctInput
-                              disabled={!isDraftView}
-                              value={dilution}
-                              onChange={(v) => patchPayload({ assumptions: { ...assumptions, follow_on_dilution: v } })}
-                            />
-                            <div>空着按 100%。不进入股权价值。</div>
+                          </>
+                        ) : (
+                          <Typography.Text type="secondary">请先确认方法配置并开跑计算</Typography.Text>
+                        )}
+                        <div className="valuation-result-card valuation-result-card-edit">
+                          <div className="valuation-result-card-head">
+                            <h4>本轮交易估值（投前）</h4>
+                            {isDraftView ? <Tag className="valuation-edit-tag" size="small">可输入</Tag> : null}
                           </div>
+                          <InputNumber
+                            className="valuation-result-card-input"
+                            placeholder="输入对照值"
+                            disabled={!isDraftView}
+                            value={dealYi}
+                            onChange={(v) => {
+                              if (!isDraftView) return
+                              setCse((prev) => ({ ...prev, round_deal_value_yi: v }))
+                              patchValuationCase(caseId, { round_deal_value_yi: v })
+                            }}
+                          />
+                          <div>亿元。对照虚线，并作为退出 MOC、退出 IRR 的分母，不进入股权价值。</div>
+                          <div style={{ marginTop: 8 }}>后续股权稀释</div>
+                          <PctInput
+                            disabled={!isDraftView}
+                            value={dilution}
+                            onChange={(v) => patchPayload({ assumptions: { ...assumptions, follow_on_dilution: v } })}
+                          />
+                          <div>空着按 100%。不进入股权价值。</div>
                         </div>
-                        <ValuationFootballField
-                          comparison={comparison}
-                          primary={payload.sheets?.dcf?.payload?.primary}
-                          secondary={payload.sheets?.dcf?.payload?.secondary}
-                          dealYi={dealYi}
-                        />
                       </div>
-                      <ValuationExitPanel
+                      <ValuationFootballField
+                        comparison={comparison}
                         primary={payload.sheets?.dcf?.payload?.primary}
                         secondary={payload.sheets?.dcf?.payload?.secondary}
                         dealYi={dealYi}
-                        dilution={dilution}
-                        method={method}
-                        readOnly={!isDraftView}
-                        onMethodChange={(patch) => patchPayload({ methodConfig: { ...method, ...patch } })}
+                        height={460}
                       />
                     </div>
                   </section>
-
-                  <div className="valuation-output-stack">
-                    <section className="valuation-output-section">
-                      <Typography.Title heading={6} className="valuation-ratio-col-title">市场法</Typography.Title>
-                      <div className="valuation-market-output-row">
-                        <div>
-                          {payload.sheets?.market?.formula ? (
-                            <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
-                              {payload.sheets.market.formula}
-                            </Typography.Paragraph>
-                          ) : null}
-                          <MarketMultiplesBlock
-                            assumptions={assumptions}
-                            payload={payload}
-                            patchPayload={patchPayload}
-                          />
-                        </div>
-                        <div className="valuation-market-output-side">
-                          <MarketMethodTable payload={payload.sheets?.market?.payload} />
-                        </div>
-                      </div>
-                    </section>
-
-                    <section className="valuation-output-section valuation-output-dcf">
-                      <Typography.Title heading={6} className="valuation-ratio-col-title">DCF</Typography.Title>
-                      <div className="valuation-dcf-param-block">
-                        <div className="valuation-dcf-param-head">
-                          <Typography.Title heading={6} className="valuation-ratio-col-title">可调整参数</Typography.Title>
-                          <Tag className="valuation-edit-tag" size="small">可编辑</Tag>
-                        </div>
-                        <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
-                        <Typography.Paragraph className="valuation-dcf-terminal-hint">
-                          退出 P/E、退出 P/S、永续增长各算一笔终值：前两套分别 × 末期全年税后经营利润 / 末期全年营业收入再加净负债；永续增长 = 末期全年 FCFF × (1+g) / (r−g)。下方明细在预测现金流之后单独列出三套终值，并展开永续增长测算。
-                          {waccHint(assumptions, payload)}
-                        </Typography.Paragraph>
-                        {method.scenario_mode === 'ma_and_ipo' ? (
-                          <Alert
-                            type="info"
-                            style={{ marginTop: 8 }}
-                            content={dualParamsLookSame(method, assumptions, payload)
-                              ? '折现率、退出倍数目前相同。两套 DCF 仍会不同：并购用「并购 DCF 流动性折扣」，上市不扣。改市场法折扣不会动 DCF。并购/上市折现率有数会覆盖 WACC 分项。'
-                              : '并购 DCF 用「并购流动性折扣」，上市不扣。市场法 P/S、P/E 只用「市场法流动性折扣」。并购/上市折现率有数会覆盖 WACC 分项。'}
-                          />
+                </div>
+              </TabPane>
+              <TabPane key="sensitivity" title="敏感性">
+                <div className="valuation-output-page">
+                  <ValuationExitPanel
+                    primary={payload.sheets?.dcf?.payload?.primary}
+                    secondary={payload.sheets?.dcf?.payload?.secondary}
+                    dealYi={dealYi}
+                    dilution={dilution}
+                    method={method}
+                    readOnly={!isDraftView}
+                    refreshing={!!(job && (job.status === 'queued' || job.status === 'running'))}
+                    onRefresh={runJob}
+                    onMethodChange={(patch) => patchPayload({ methodConfig: { ...method, ...patch } })}
+                  />
+                </div>
+              </TabPane>
+              <TabPane key="market" title="市场法">
+                <div className="valuation-output-page">
+                  <section className="valuation-output-section">
+                    <div className="valuation-market-output-row">
+                      <div>
+                        {payload.sheets?.market?.formula ? (
+                          <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
+                            {payload.sheets.market.formula}
+                          </Typography.Paragraph>
                         ) : null}
+                        <MarketMultiplesBlock
+                          assumptions={assumptions}
+                          payload={payload}
+                          patchPayload={patchPayload}
+                        />
                       </div>
-                      <TurnoverDefaultRow assumptions={assumptions} payload={payload} patchPayload={patchPayload} payloadRef={payloadRef} />
-                      {payload.sheets?.dcf?.formula ? (
-                        <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
-                          {payload.sheets.dcf.formula}
-                        </Typography.Paragraph>
+                      <div className="valuation-market-output-side">
+                        <MarketMethodTable payload={payload.sheets?.market?.payload} />
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              </TabPane>
+              <TabPane key="dcf" title="DCF">
+                <div className="valuation-output-page">
+                  <section className="valuation-output-section valuation-output-dcf">
+                    <div className="valuation-dcf-param-block">
+                      <div className="valuation-dcf-param-head">
+                        <Typography.Title heading={6} className="valuation-ratio-col-title">可调整参数</Typography.Title>
+                        <Tag className="valuation-edit-tag" size="small">可编辑</Tag>
+                      </div>
+                      <DiscountWaccLine method={method} assumptions={assumptions} payload={payload} patchPayload={patchPayload} />
+                      <Typography.Paragraph className="valuation-dcf-terminal-hint">
+                        退出 P/E、退出 P/S、永续增长各算一笔终值。永续：预测期后再按一/二阶段延长 FCFF，末段以对应 g 做 Gordon；只填一阶段为两阶段，两阶段都填为三阶段。
+                        {waccHint(assumptions, payload)}
+                      </Typography.Paragraph>
+                      {method.scenario_mode === 'ma_and_ipo' ? (
+                        <Alert
+                          type="info"
+                          style={{ marginTop: 8 }}
+                          content={dualParamsLookSame(method, assumptions, payload)
+                            ? '折现率、退出倍数目前相同。两套 DCF 仍会不同：并购用「并购 DCF 流动性折扣」，上市不扣。'
+                            : '并购 DCF 用「并购流动性折扣」，上市不扣。市场法只用「市场法流动性折扣」。'}
+                        />
                       ) : null}
-                      <DcfProcessTables payload={payload.sheets?.dcf?.payload} />
-                    </section>
-                  </div>
+                    </div>
+                    <TurnoverDefaultRow assumptions={assumptions} payload={payload} patchPayload={patchPayload} payloadRef={payloadRef} />
+                    {payload.sheets?.dcf?.formula ? (
+                      <Typography.Paragraph type="secondary" className="valuation-ratio-formula valuation-formula-wrap">
+                        {payload.sheets.dcf.formula}
+                      </Typography.Paragraph>
+                    ) : null}
+                    <DcfProcessTables payload={payload.sheets?.dcf?.payload} />
+                  </section>
                 </div>
               </TabPane>
               <TabPane key="version" title="版本对比">

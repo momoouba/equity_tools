@@ -595,7 +595,11 @@ async function addValuationForecastColumnsIfMissing(dbPool) {
     ['rd_growth_mode', "VARCHAR(16) NULL COMMENT '研发费用百分数口径：growth 为较上一年，空为占收入'"],
     ['financial_anchor_date', "VARCHAR(16) NULL COMMENT '标的财务锚定日（任意日历日）'"],
     ['discount_base_dirty', "TINYINT(1) NULL COMMENT '折现基准日是否已手改'"],
-    ['terminal_growth', "DECIMAL(20,8) NULL COMMENT 'DCF 永续经营增长率 g，小数'"],
+    ['terminal_growth', "DECIMAL(20,8) NULL COMMENT 'DCF 永续经营增长率 g，小数；兼容旧案，新案以阶段 g 为准'"],
+    ['gordon_stage1_years', "DECIMAL(20,6) NULL COMMENT 'DCF 永续一阶段年限（高速/过渡前）'"],
+    ['gordon_stage1_growth', "DECIMAL(20,8) NULL COMMENT 'DCF 永续一阶段增长率，小数'"],
+    ['gordon_stage2_years', "DECIMAL(20,6) NULL COMMENT 'DCF 永续二阶段年限；与增长率齐填则为三阶段'"],
+    ['gordon_stage2_growth', "DECIMAL(20,8) NULL COMMENT 'DCF 永续二阶段增长率，小数；亦为三阶段末永续 g'"],
   ]);
   await addColumnsIfMissing(dbPool, 'valuation_method', [
     ['pe_multiple_step', "DECIMAL(20,6) NULL COMMENT '敏感性 P/E 倍数步长'"],

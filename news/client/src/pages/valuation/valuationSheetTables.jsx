@@ -672,10 +672,12 @@ function terminalFormulaText(dcf, terminalType) {
   if (useGordon) {
     const g = dcf?.terminal_growth
     const r = dcf?.discount_rate
-    if (dcf?.terminal_base == null || g == null || r == null) {
-      return '永续企业价值 = 末期全年 FCFF × (1+g) / (r−g)'
+    const base = dcf?.gordon_terminal_base ?? dcf?.terminal_base
+    const mode = dcf?.stage_mode === 'three_stage' ? '三阶段' : '两阶段'
+    if (base == null || g == null || r == null) {
+      return `${mode}永续企业价值 = 末段全年 FCFF × (1+g) / (r−g)`
     }
-    return `永续企业价值 = ${yearBit}全年 FCFF ${fmtYuanAsWan(dcf.terminal_base)} × (1+${fmtPct(g, 1)}) / (${fmtPct(r, 1)}−${fmtPct(g, 1)}) = ${fmtYuanAsWan(dcf.terminal_value)}`
+    return `${mode}永续企业价值 = ${yearBit}末段全年 FCFF ${fmtYuanAsWan(base)} × (1+${fmtPct(g, 1)}) / (${fmtPct(r, 1)}−${fmtPct(g, 1)}) = ${fmtYuanAsWan(dcf.terminal_value)}`
   }
   const usePs = (dcf?.terminal_base_kind || (terminalType === 'exit_ps' ? 'revenue' : 'net_income')) === 'revenue'
   const kind = usePs ? '末期全年营业收入' : '末期全年税后经营利润'
@@ -816,7 +818,7 @@ function TerminalMethodsBlock({ dcf }) {
     <div style={{ marginTop: 16 }}>
       <Typography.Title heading={6}>终值三套测算（单位：万元 / 亿元）</Typography.Title>
       <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 8 }}>
-        预测期自由现金流三套相同；差别只在终值。永续增长用末期全年 FCFF × (1+g)/(r−g)，不再乘退出倍数。
+        预测期自由现金流三套相同；差别只在终值。永续：预测期后按一/二阶段延长 FCFF，末段再 × (1+g)/(r−g)。
       </Typography.Paragraph>
       <ListTable
         className="valuation-dcf-terminal-compare"
@@ -892,13 +894,21 @@ function TerminalMethodsBlock({ dcf }) {
           <Typography.Paragraph style={{ fontSize: 13, marginBottom: 4 }}>
             <strong>永续增长明细：</strong>
             {gordon.blocked
-              ? `未算出。${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与折现率、永续增长率。'}`
+              ? `未算出。${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与折现率、阶段增长率。'}`
               : [
-                `末期全年 FCFF ${fmtYuanAsWan(gordon.terminal_base)}`,
-                `g ${fmtPct(gordon.terminal_growth, 1)}`,
+                gordon.stage_mode === 'three_stage' ? '三阶段' : '两阶段',
+                `预测期末全年 FCFF ${fmtYuanAsWan(gordon.explicit_fcff ?? gordon.terminal_base)}`,
+                `一阶段 ${gordon.stage1_years ?? '—'} 年 / ${fmtPct(gordon.stage1_growth, 1)}（阶段 FCFF 现值 ${fmtYuanAsWan(gordon.stage1_fcf_pv)}）`,
+                gordon.stage_mode === 'three_stage'
+                  ? `二阶段 ${gordon.stage2_years ?? '—'} 年 / ${fmtPct(gordon.stage2_growth, 1)}（阶段 FCFF 现值 ${fmtYuanAsWan(gordon.stage2_fcf_pv)}）`
+                  : null,
+                `末段 g ${fmtPct(gordon.terminal_growth, 1)}`,
                 `r ${fmtPct(gordon.discount_rate, 1)}`,
+                `Gordon 基数 FCFF ${fmtYuanAsWan(gordon.gordon_terminal_base ?? gordon.terminal_base)}`,
                 `永续企业价值 ${fmtYuanAsWan(gordon.terminal_value)}`,
-                `终值现值 ${fmtYuanAsWan(gordon.terminal_pv)}`,
+                `阶段 FCFF 现值合计 ${fmtYuanAsWan(gordon.extension_fcf_pv)}`,
+                `永续终值现值 ${fmtYuanAsWan(gordon.gordon_terminal_pv)}`,
+                `终值相关现值合计 ${fmtYuanAsWan(gordon.terminal_pv)}`,
                 `企业价值 ${fmtYiFromYuan(gordon.enterprise_value)}`,
                 `净负债 ${fmtYuanAsWan(gordon.net_debt)}`,
                 `股权价值 ${fmtNum(gordon.equity_value_yi, 2)} 亿元`,
@@ -907,9 +917,35 @@ function TerminalMethodsBlock({ dcf }) {
                   : '',
               ].filter(Boolean).join('；')}
           </Typography.Paragraph>
+          {!gordon.blocked && gordon.two_stage_compare && !gordon.two_stage_compare.blocked ? (
+            <Typography.Paragraph style={{ fontSize: 13, marginBottom: 4 }}>
+              <strong>一阶段 vs 二阶段差异：</strong>
+              {`仅一阶段（两阶段模型）股权价值 ${fmtNum(gordon.two_stage_compare.equity_value_yi, 2)} 亿元；加入二阶段后差额 ${fmtNum(gordon.two_stage_compare.delta_equity_value_yi, 2)} 亿元（三阶段 − 两阶段）。`}
+            </Typography.Paragraph>
+          ) : null}
+          {!gordon.blocked && Array.isArray(gordon.gordon_stages) && gordon.gordon_stages.length ? (
+            <ListTable
+              className="valuation-dcf-gordon-stages"
+              rowKey={(r, i) => `${r.stage}-${r.year}-${i}`}
+              pagination={false}
+              size="small"
+              showSeq={false}
+              style={{ marginTop: 8, marginBottom: 8 }}
+              scroll={{ x: 640 }}
+              columns={[
+                { title: '阶段', width: 72, render: (_, r) => (r.stage === 1 ? '一阶段' : '二阶段') },
+                { title: '年份', dataIndex: 'year', width: 72 },
+                { title: '增长率', width: 88, align: 'right', render: (_, r) => fmtPct(r.growth, 1) },
+                { title: '全年 FCFF', width: 120, align: 'right', render: (_, r) => fmtYuanAsWan(r.fcf) },
+                { title: '折现期', width: 88, align: 'right', render: (_, r) => fmtNum(r.periods, 2) },
+                { title: '现值', width: 120, align: 'right', render: (_, r) => fmtYuanAsWan(r.pv) },
+              ]}
+              data={gordon.gordon_stages}
+            />
+          ) : null}
           {!gordon.blocked ? (
             <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
-              {terminalFormulaText(gordon, 'gordon')}。预测各年自由现金流与上方折现表相同，只替换终值这一行。
+              {terminalFormulaText(gordon, 'gordon')}。预测期 FCFF 与上方折现表相同；其后按阶段延长，末年再接永续终值。
             </Typography.Paragraph>
           ) : null}
         </div>

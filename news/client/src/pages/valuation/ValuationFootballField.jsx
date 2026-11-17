@@ -46,7 +46,7 @@ export default function ValuationFootballField({
   primary,
   secondary,
   dealYi,
-  height = 280,
+  height = 420,
 }) {
   const rows = useMemo(() => {
     if (!comparison) return []
@@ -103,7 +103,7 @@ export default function ValuationFootballField({
     const xMin = dataMin < 0 ? Math.floor(dataMin / 5) * 5 : 0
     const xMax = Math.max(5, Math.ceil((dataMax * 1.12) / 5) * 5)
     const ordered = [...rows].reverse()
-    const chartH = Math.max(height, 48 + rows.length * 28)
+    const chartH = Math.max(height, 56 + rows.length * 36)
     return {
       animation: false,
       grid: { left: 36, right: 40, top: 12, bottom: 28 },

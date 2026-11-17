@@ -822,7 +822,7 @@ function appendTerminalMethodsBlock(b, dcf, heading) {
   }
   const prefix = heading ? `${heading} · ` : '';
   b.section(`${prefix}终值三套测算`, 8);
-  b.note('预测期自由现金流三套相同；差别只在终值。永续增长 = 末期全年 FCFF × (1+g)/(r−g)。金额：基数/终值/现值为万元，股权价值为亿元。');
+  b.note('预测期自由现金流三套相同；差别只在终值。永续：预测期后按一/二阶段延长 FCFF，末段再 × (1+g)/(r−g)。金额：基数/终值/现值为万元，股权价值为亿元。');
   b.header(['终值方式', '状态', '终值基数', '倍数或g', '折现率', '终值企业价值（万元）', '终值现值（万元）', '股权价值（亿元）']);
   const rows = [
     ['退出 P/E', terminals.exit_pe],
@@ -864,20 +864,51 @@ function appendTerminalMethodsBlock(b, dcf, heading) {
   if (gordon && !gordon.blocked) {
     b.gap(1, 8);
     b.section(`${prefix}永续增长明细`, 2);
-    b.data(['末期全年 FCFF（万元）', wanFromYuan(gordon.terminal_base)], ['text', 'wan']);
-    b.data(['永续增长率 g', num(gordon.terminal_growth)], ['text', 'num']);
+    b.data(['阶段模式', gordon.stage_mode === 'three_stage' ? '三阶段' : '两阶段'], ['text', 'text']);
+    b.data(['预测期末全年 FCFF（万元）', wanFromYuan(gordon.explicit_fcff ?? gordon.terminal_base)], ['text', 'wan']);
+    b.data(['一阶段年限', num(gordon.stage1_years)], ['text', 'num']);
+    b.data(['一阶段增长率', num(gordon.stage1_growth)], ['text', 'num']);
+    b.data(['一阶段 FCFF 现值（万元）', wanFromYuan(gordon.stage1_fcf_pv)], ['text', 'wan']);
+    if (gordon.stage_mode === 'three_stage') {
+      b.data(['二阶段年限', num(gordon.stage2_years)], ['text', 'num']);
+      b.data(['二阶段增长率', num(gordon.stage2_growth)], ['text', 'num']);
+      b.data(['二阶段 FCFF 现值（万元）', wanFromYuan(gordon.stage2_fcf_pv)], ['text', 'wan']);
+    }
+    b.data(['末段永续 g', num(gordon.terminal_growth)], ['text', 'num']);
     b.data(['折现率 r', num(gordon.discount_rate)], ['text', 'num']);
+    b.data(['Gordon 基数 FCFF（万元）', wanFromYuan(gordon.gordon_terminal_base ?? gordon.terminal_base)], ['text', 'wan']);
     b.data(['永续企业价值（万元）= FCFF×(1+g)/(r−g)', wanFromYuan(gordon.terminal_value)], ['text', 'wan']);
-    b.data(['终值现值（万元）', wanFromYuan(gordon.terminal_pv)], ['text', 'wan']);
+    b.data(['阶段 FCFF 现值合计（万元）', wanFromYuan(gordon.extension_fcf_pv)], ['text', 'wan']);
+    b.data(['永续终值现值（万元）', wanFromYuan(gordon.gordon_terminal_pv)], ['text', 'wan']);
+    b.data(['终值相关现值合计（万元）', wanFromYuan(gordon.terminal_pv)], ['text', 'wan']);
     b.data(['企业价值（万元）', wanFromYuan(gordon.enterprise_value)], ['text', 'wan']);
     b.data(['净负债（万元）', wanFromYuan(gordon.net_debt)], ['text', 'wan']);
     b.data(['股权价值（万元）', wanFromYuan(gordon.equity_value)], ['text', 'wan']);
     b.data(['股权价值（亿元）', num(gordon.equity_value_yi) ?? asYi(gordon.equity_value)], ['text', 'yi']);
+    if (gordon.two_stage_compare && !gordon.two_stage_compare.blocked) {
+      b.data(['仅一阶段股权价值（亿元）', num(gordon.two_stage_compare.equity_value_yi)], ['text', 'yi']);
+      b.data(['三阶段相对两阶段差额（亿元）', num(gordon.two_stage_compare.delta_equity_value_yi)], ['text', 'yi']);
+    }
     if (gordon.apply_liquidity) {
       b.data(['并购流动性折扣（小数）', num(gordon.liquidity_discount)], ['text', 'num']);
     }
+    if (Array.isArray(gordon.gordon_stages) && gordon.gordon_stages.length) {
+      b.gap(1, 6);
+      b.section(`${prefix}永续阶段明细`, 6);
+      b.header(['阶段', '年份', '增长率', '全年FCFF（万元）', '折现期', '现值（万元）']);
+      gordon.gordon_stages.forEach((row) => {
+        b.data([
+          row.stage === 1 ? '一阶段' : '二阶段',
+          row.year,
+          num(row.growth),
+          wanFromYuan(row.fcf),
+          num(row.periods),
+          wanFromYuan(row.pv),
+        ], ['text', 'num', 'num', 'wan', 'num', 'wan']);
+      });
+    }
   } else if (gordon?.blocked) {
-    b.note(`永续增长未算出：${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与 g、r'}`);
+    b.note(`永续增长未算出：${(gordon.blockers || []).join('；') || '请检查末年全年 FCFF 与阶段 g、r'}`);
   }
   b.gap(1, 8);
 }

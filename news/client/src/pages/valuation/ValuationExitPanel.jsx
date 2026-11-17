@@ -35,9 +35,12 @@ function formatGrowth(v) {
   return `${Number(n.toFixed(2))}%`
 }
 
-export function formatExitRange(view) {
-  const vals = [view?.pe?.equity_yi, view?.ps?.equity_yi, view?.gordon?.equity_yi]
-    .filter((v) => v != null && Number.isFinite(Number(v)))
+export function formatExitRange(view, { includeGordon = true } = {}) {
+  const vals = [
+    view?.pe?.equity_yi,
+    view?.ps?.equity_yi,
+    includeGordon ? view?.gordon?.equity_yi : null,
+  ].filter((v) => v != null && Number.isFinite(Number(v)))
   if (!vals.length) return '—'
   const lo = Math.min(...vals.map(Number))
   const hi = Math.max(...vals.map(Number))
@@ -60,18 +63,27 @@ export function formatExitLine(kind, side, dealYi, dilution, years) {
 }
 
 function cellText(cell, block, dealYi, dilution, years) {
-  if (!cell || cell.blank === 'revenue' || cell.blank === 'other' || cell.blank === 'multiple') return ''
-  if (cell.blank === 'nopat') return '税后经营利润小于等于 0'
-  if (cell.blank === 'gordon') return 'g ≥ r 或现金流非正'
-  if (block === 'equity') return cell.equity_yi == null ? '' : fmt2(cell.equity_yi)
+  if (!cell || cell.blank === 'revenue' || cell.blank === 'other' || cell.blank === 'multiple') return '—'
+  if (cell.blank === 'nopat' || cell.blank === 'gordon') return '—'
+  if (block === 'equity') return cell.equity_yi == null ? '—' : fmt2(cell.equity_yi)
   const m = exitMocIrr(cell.cap_yi, dilution, dealYi, years)
   if (block === 'moc') {
-    if (m.moc == null) return m.note || ''
+    if (m.moc == null) return '—'
     return fmt2(m.moc)
   }
-  if (m.note === 'MOC 不为正，无 IRR') return m.note
-  if (m.irr == null) return m.note || ''
+  if (m.note === 'MOC 不为正，无 IRR') return '—'
+  if (m.irr == null) return '—'
   return `${Number(m.irr).toFixed(1)}%`
+}
+
+function cellTitle(cell, block, dealYi, dilution, years) {
+  if (!cell) return ''
+  if (cell.blank === 'nopat') return '税后经营利润小于等于 0'
+  if (cell.blank === 'gordon') return 'g ≥ r 或现金流非正'
+  if (cell.blank === 'revenue' || cell.blank === 'other' || cell.blank === 'multiple') return '无效'
+  if (block === 'equity') return ''
+  const m = exitMocIrr(cell.cap_yi, dilution, dealYi, years)
+  return m.note || ''
 }
 
 function SensTable({ title, side, block, dealYi, dilution, years }) {
@@ -100,7 +112,7 @@ function SensTable({ title, side, block, dealYi, dilution, years }) {
                 const center = i === side.center_row && j === side.center_col
                 const cls = inBand ? (center ? 'is-center is-band' : 'is-band') : undefined
                 return (
-                  <td key={`${i}-${j}`} className={cls}>
+                  <td key={`${i}-${j}`} className={cls} title={cellTitle(cell, block, dealYi, dilution, years)}>
                     {cellText(cell, block, dealYi, dilution, years)}
                   </td>
                 )
@@ -149,7 +161,7 @@ function axisTitle(view) {
 }
 
 function OneScenario({ view, dealYi, dilution }) {
-  if (!view) return <Typography.Text type="secondary">请点「开始采集/计算/保存」后显示敏感性</Typography.Text>
+  if (!view) return <Typography.Text type="secondary">请点「刷新敏感性」或「开始采集/计算/保存」后显示敏感性</Typography.Text>
   const axis = axisTitle(view)
   const deal = Number(dealYi)
   const d = dilution == null || dilution === '' ? 1 : Number(dilution)
@@ -158,19 +170,20 @@ function OneScenario({ view, dealYi, dilution }) {
   const yearText = years == null ? '' : `持有 ${Number(years).toFixed(2)} 年`
   let returnNote = null
   if (!showReturn) {
-    returnNote = !(deal > 0) ? '待填写本轮交易估值（投前）' : '后续股权稀释需在 0% 到 100%'
+    returnNote = !(deal > 0) ? '待填写本轮交易估值（投前）后显示退出 MOC / IRR' : '后续股权稀释需在 0% 到 100%'
   }
   return (
     <div>
+      {!showReturn ? (
+        <Typography.Paragraph type="secondary" className="valuation-sens-block-sub">{returnNote}</Typography.Paragraph>
+      ) : null}
       <Block title="估值" pe={view.pe} ps={view.ps} gordon={view.gordon} block="equity" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
       {showReturn ? (
         <>
           <Block title="退出 MOC" pe={view.pe} ps={view.ps} gordon={view.gordon} block="moc" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
           <Block title="退出 IRR" subtitle={yearText} pe={view.pe} ps={view.ps} gordon={view.gordon} block="irr" dealYi={dealYi} dilution={dilution} years={years} axis={axis} />
         </>
-      ) : (
-        <Typography.Paragraph type="secondary" className="valuation-sens-block-sub">{returnNote}</Typography.Paragraph>
-      )}
+      ) : null}
       {view.wacc_floored ? (
         <div className="valuation-sens-block-sub">折现率低于 1% 的档已按 1% 计算。</div>
       ) : null}
@@ -178,30 +191,150 @@ function OneScenario({ view, dealYi, dilution }) {
   )
 }
 
-export function DcfExitCard({ primary, secondary, dealYi, dilution }) {
+export function DcfExitCard({ primary, secondary, dealYi, dilution, mode = 'exits' }) {
+  const [open, setOpen] = useState(false)
   const view = primary?.exit_view
   const other = secondary?.exit_view
   const dual = view?.scenario_mode === 'ma_and_ipo' && other
-  const lines = (item, prefix) => (
+  const showExits = mode === 'exits' || mode === 'all'
+  const showGordon = mode === 'gordon' || mode === 'all'
+  const summary = (item, prefix) => (
+    <div className={prefix ? 'valuation-exit-line' : 'num'}>
+      {prefix}{formatExitRange(item, { includeGordon: showGordon })}
+    </div>
+  )
+  const detail = (item) => (
     <>
-      <div className={prefix ? 'valuation-exit-line' : 'num'}>{prefix}{formatExitRange(item)}</div>
-      <div className="valuation-exit-line">{formatExitLine('P/E', item.pe, dealYi, dilution, item.holding_years)}</div>
-      <div className="valuation-exit-line">{formatExitLine('P/S', item.ps, dealYi, dilution, item.holding_years)}</div>
-      <div className="valuation-exit-line">{formatExitLine('永续增长', item.gordon, dealYi, dilution, item.holding_years)}</div>
+      {showExits ? (
+        <>
+          <div className="valuation-exit-line">{formatExitLine('P/E', item.pe, dealYi, dilution, item.holding_years)}</div>
+          <div className="valuation-exit-line">{formatExitLine('P/S', item.ps, dealYi, dilution, item.holding_years)}</div>
+        </>
+      ) : null}
+      {showGordon ? (
+        <div className="valuation-exit-line">
+          {formatExitLine('永续增长', item.gordon, dealYi, dilution, item.holding_years)}
+        </div>
+      ) : null}
     </>
   )
   if (!view) return null
   return (
     <>
-      <div>上次计算</div>
+      <div className="valuation-card-kicker">上次计算</div>
       {dual ? (
         <>
-          {lines(view, '并购 ')}
-          {lines(other, '上市 ')}
+          {summary(view, '并购 ')}
+          {summary(other, '上市 ')}
         </>
-      ) : lines(view, '')}
+      ) : summary(view, '')}
+      <button type="button" className="valuation-card-detail-toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? '收起明细' : '展开明细'}
+      </button>
+      {open ? (
+        <div className="valuation-card-detail-body">
+          {dual ? (
+            <>
+              <div className="valuation-exit-line">并购</div>
+              {detail(view)}
+              <div className="valuation-exit-line">上市</div>
+              {detail(other)}
+            </>
+          ) : detail(view)}
+        </div>
+      ) : null}
     </>
   )
+}
+
+function gordonDetailLines(side, term, dealYi, dilution, years, prefix) {
+  if (!side || side.blocked || side.equity_yi == null) {
+    return (
+      <div className="valuation-exit-line">
+        {prefix || ''}未算出{term?.blockers?.length ? `：${term.blockers.join('；')}` : ''}
+      </div>
+    )
+  }
+  const m = exitMocIrr(side.cap_yi, dilution, dealYi, years)
+  const hold = years == null ? '' : `（持有 ${Number(years).toFixed(2)} 年）`
+  let mocIrr = ''
+  if (m.note === 'MOC 不为正，无 IRR') mocIrr = `退出 MOC ${fmt2(m.moc)}；MOC 不为正，无 IRR${hold}`
+  else if (m.note) mocIrr = `退出 MOC、退出 IRR ${m.note}`
+  else {
+    const irr = m.irr == null ? '—' : `${Number(m.irr).toFixed(1)}%`
+    mocIrr = `退出 MOC ${fmt2(m.moc)}；退出 IRR ${irr}${hold}`
+  }
+  const mode = term?.stage_mode === 'three_stage' ? '三阶段' : '两阶段'
+  const s1 = `一阶段 ${term?.stage1_years ?? '—'} 年 / ${fmtPctMaybe(term?.stage1_growth)}`
+  const s2 = term?.stage_mode === 'three_stage'
+    ? `；二阶段 ${term?.stage2_years ?? '—'} 年 / ${fmtPctMaybe(term?.stage2_growth)}`
+    : ''
+  const delta = term?.two_stage_compare && !term.two_stage_compare.blocked && term.two_stage_compare.delta_equity_value_yi != null
+    ? `；相对两阶段差额 ${fmt2(term.two_stage_compare.delta_equity_value_yi)} 亿`
+    : ''
+  return (
+    <>
+      <div className="valuation-exit-line">{prefix || ''}永续增长 {formatGrowth(side.growth)}</div>
+      <div className="valuation-exit-line">{mocIrr}</div>
+      <div className="valuation-exit-line">{mode}：{s1}{s2}{delta}</div>
+    </>
+  )
+}
+
+export function DcfGordonCard({ primary, secondary, dealYi, dilution }) {
+  const [open, setOpen] = useState(false)
+  const view = primary?.exit_view
+  const other = secondary?.exit_view
+  const term = primary?.terminals?.gordon || view?.terminals?.gordon
+  const otherTerm = secondary?.terminals?.gordon || other?.terminals?.gordon
+  const dual = view?.scenario_mode === 'ma_and_ipo' && other
+  if (!view) return null
+  const head = (side, prefix) => {
+    if (!side || side.blocked || side.equity_yi == null) {
+      return <div className="valuation-exit-line">{prefix || ''}未算出</div>
+    }
+    return (
+      <>
+        {prefix ? <div className="valuation-exit-line">{prefix}</div> : null}
+        <div className="valuation-gordon-metrics">
+          <div className="num">股权价值 {fmt2(side.equity_yi)} 亿</div>
+          <div className="num">退出市值 {fmt2(side.cap_yi)} 亿</div>
+        </div>
+      </>
+    )
+  }
+  return (
+    <>
+      <div className="valuation-card-kicker">上次计算</div>
+      {dual ? (
+        <>
+          {head(view.gordon, '并购')}
+          {head(other.gordon, '上市')}
+        </>
+      ) : head(view.gordon, '')}
+      <button type="button" className="valuation-card-detail-toggle" onClick={() => setOpen((v) => !v)}>
+        {open ? '收起明细' : '展开明细'}
+      </button>
+      {open ? (
+        <div className="valuation-card-detail-body">
+          {dual ? (
+            <>
+              {gordonDetailLines(view.gordon, term, dealYi, dilution, view.holding_years, '并购 ')}
+              {gordonDetailLines(other.gordon, otherTerm, dealYi, dilution, other.holding_years, '上市 ')}
+            </>
+          ) : (
+            gordonDetailLines(view.gordon, term, dealYi, dilution, view.holding_years, '')
+          )}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
+function fmtPctMaybe(v) {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return '—'
+  return `${(n * 100).toFixed(1)}%`
 }
 
 const AXIS_OPTIONS = [
@@ -289,7 +422,9 @@ function StepControl({ label, value, fallback, presets, percent, disabled, onCha
   )
 }
 
-export default function ValuationExitPanel({ primary, secondary, dealYi, dilution, method, readOnly, onMethodChange }) {
+export default function ValuationExitPanel({
+  primary, secondary, dealYi, dilution, method, readOnly, onMethodChange, onRefresh, refreshing,
+}) {
   const storedDual = primary?.exit_view?.scenario_mode === 'ma_and_ipo' && secondary?.exit_view
   const [which, setWhich] = useState('ma')
   const view = storedDual && which === 'ipo' ? secondary.exit_view : primary?.exit_view
@@ -298,6 +433,12 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
     if (readOnly || !onMethodChange) return
     onMethodChange(patch)
   }
+  const quickAxes = [
+    { value: 'exit_x_cagr', label: '营收×退出' },
+    { value: 'exit_x_wacc', label: '折现×退出' },
+    { value: 'rate_x_g', label: '折现×永续' },
+    { value: 'rev_cagr_x_rd_cagr', label: '营收×研发' },
+  ]
   return (
     <div className="valuation-result-sens">
       <div className="valuation-sens-controls">
@@ -305,7 +446,7 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
           <span>敏感性</span>
           <Select
             size="small"
-            style={{ width: 260 }}
+            style={{ width: 220 }}
             disabled={!!readOnly}
             getPopupContainer={() => document.body}
             value={axes}
@@ -313,6 +454,32 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
             options={AXIS_OPTIONS}
           />
         </div>
+        <div className="valuation-sens-quick">
+          {quickAxes.map((q) => (
+            <Button
+              key={q.value}
+              size="mini"
+              type={axes === q.value ? 'primary' : 'outline'}
+              disabled={!!readOnly}
+              onClick={() => setMethod({ sensitivity_axes: q.value })}
+            >
+              {q.label}
+            </Button>
+          ))}
+        </div>
+        {onRefresh ? (
+          <Button
+            type="primary"
+            size="small"
+            loading={!!refreshing}
+            disabled={!!readOnly || !!refreshing}
+            onClick={() => onRefresh()}
+          >
+            刷新敏感性
+          </Button>
+        ) : null}
+      </div>
+      <div className="valuation-sens-controls valuation-sens-controls-steps">
         {axes === 'exit_x_wacc' || axes === 'rate_x_g' ? (
           <StepControl label="折现率步长" value={method?.rate_step} fallback={0.02} presets={[2, 4]} percent disabled={!!readOnly} onChange={(v) => setMethod({ rate_step: v })} />
         ) : null}
@@ -452,6 +619,9 @@ export default function ValuationExitPanel({ primary, secondary, dealYi, dilutio
           </>
         ) : null}
       </div>
+      <Typography.Paragraph type="secondary" className="valuation-sens-block-sub" style={{ marginBottom: 8 }}>
+        改轴或步长后点「刷新敏感性」才会按新参数重算表格。P/E、P/S、永续三套并排显示。
+      </Typography.Paragraph>
       {storedDual ? (
         <Radio.Group
           type="button"

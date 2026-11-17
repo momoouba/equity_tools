@@ -1392,7 +1392,8 @@ function runValuationEngine(input) {
       scenarioName: scenario?.name || null,
       terminalType: type,
       exitMultiple,
-      terminalGrowth: assumptions.terminal_growth,
+      // 永续 g 由 assumptions 阶段字段解析；敏感性 rebuild 再传绝对 terminalGrowth
+      terminalGrowth: null,
       applyLiquidity: dcfApplyLiquidity(method, scenarioKey),
       liquidityDiscount: resolveDcfLiquidityDiscount(assumptions),
       forecastPl: input.forecastPl || {},
@@ -1404,7 +1405,7 @@ function runValuationEngine(input) {
     if (!run) {
       return { blocked: true, blockers: ['未计算'], terminal_type: type };
     }
-    return {
+    const base = {
       blocked: !!run.blocked,
       blockers: run.blockers || [],
       warnings: run.warnings || [],
@@ -1424,6 +1425,23 @@ function runValuationEngine(input) {
       equity_value_yi: toNumber(run.equity_value_yi),
       apply_liquidity: !!run.apply_liquidity,
       liquidity_discount: toNumber(run.liquidity_discount),
+    };
+    if (type !== C.TERMINAL_GORDON) return base;
+    return {
+      ...base,
+      stage_mode: run.stage_mode || null,
+      stage1_years: toNumber(run.stage1_years),
+      stage1_growth: toNumber(run.stage1_growth),
+      stage2_years: toNumber(run.stage2_years),
+      stage2_growth: toNumber(run.stage2_growth),
+      stage1_fcf_pv: toNumber(run.stage1_fcf_pv),
+      stage2_fcf_pv: toNumber(run.stage2_fcf_pv),
+      extension_fcf_pv: toNumber(run.extension_fcf_pv),
+      gordon_terminal_pv: toNumber(run.gordon_terminal_pv),
+      gordon_terminal_base: toNumber(run.gordon_terminal_base),
+      explicit_fcff: toNumber(run.explicit_fcff),
+      gordon_stages: Array.isArray(run.gordon_stages) ? run.gordon_stages : null,
+      two_stage_compare: run.two_stage_compare || null,
     };
   };
 
