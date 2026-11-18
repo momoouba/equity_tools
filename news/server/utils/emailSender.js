@@ -203,17 +203,27 @@ function polishJudicialEmailAbstract(text) {
   return result.replace(/，{2,}/g, '，').trim();
 }
 
+/** 邮件/导出中可按「申请人/上诉人」回退为关注的司法账号名 */
+const JUDICIAL_ATTENTION_ACCOUNT_NAMES = ['破产重整', '破产重组', '开庭公告'];
+
 /**
- * 解析邮件展示用情绪：破产重整且正文标明「主体身份为申请人」时，历史 negative 也按关注展示
+ * 解析邮件展示用情绪：破产重整/开庭公告等正文标明「申请人」「上诉人」时，历史 negative 也按关注展示
  */
 function resolveEmailSentiment(news) {
   const raw = news && news.news_sentiment;
   if (raw && raw !== 'negative') return raw;
   const accountName = news && news.account_name ? String(news.account_name).trim() : '';
-  if (accountName !== '破产重整' && accountName !== '破产重组') return raw;
+  if (!JUDICIAL_ATTENTION_ACCOUNT_NAMES.includes(accountName)) return raw;
   const text = `${news.news_abstract || ''}\n${news.content || ''}\n${news.summary || ''}`;
-  if (/主体身份为被申请人/.test(text)) return 'negative';
-  if (/主体身份为申请人|作为[^，,]{0,20}的申请人/.test(text)) return 'attention';
+  // 先排除被申请人/被上诉人，避免子串误匹配
+  if (/主体身份为被(?:申请人|上诉人)|作为被(?:申请人|上诉人)/.test(text)) return 'negative';
+  if (
+    /主体身份为(?:申请人|上诉人)/.test(text) ||
+    /作为[^，,]{0,20}的(?:申请人|上诉人)/.test(text) ||
+    /作为(?:申请人|上诉人)涉及/.test(text)
+  ) {
+    return 'attention';
+  }
   return raw;
 }
 
@@ -225,7 +235,7 @@ function formatNewsSentiment(sentiment) {
     'positive': { text: '正面', color: '#4caf50', bgColor: '#e8f5e9' },
     'negative': { text: '负面', color: '#f44336', bgColor: '#ffebee' },
     'neutral': { text: '中性', color: '#757575', bgColor: '#f5f5f5' },
-    // 破产重整等：被投企业为主体申请人时用黄色「关注」，区别于红色「负面」
+    // 破产重整/开庭公告等：被投企业为主体申请人、上诉人时用黄色「关注」，区别于红色「负面」
     'attention': { text: '关注', color: '#f9a825', bgColor: '#fff8e1' }
   };
   
@@ -1203,6 +1213,7 @@ module.exports = {
   generateEmailContent,
   generateEmailTextContent,
   truncateContentForEmailLog,
-  polishJudicialEmailAbstract
+  polishJudicialEmailAbstract,
+  resolveEmailSentiment
 };
 

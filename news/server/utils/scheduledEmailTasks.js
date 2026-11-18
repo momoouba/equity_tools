@@ -6,6 +6,7 @@ const {
   truncateContentForEmailLog,
   getEmailConfigForRecipient,
   polishJudicialEmailAbstract,
+  resolveEmailSentiment,
 } = require('./emailSender');
 const XLSX = require('xlsx');
 const { logWithTimestamp, errorWithTimestamp, warnWithTimestamp } = require('./logUtils');
@@ -2549,14 +2550,8 @@ function exportNewsToExcel(newsList) {
       'attention': '关注'
     };
 
-    // 与邮件一致：破产重整「主体身份为申请人」的历史 negative 按关注导出
-    let sentimentKey = news.news_sentiment;
-    const accountName = news.account_name ? String(news.account_name).trim() : '';
-    if ((accountName === '破产重整' || accountName === '破产重组') && (!sentimentKey || sentimentKey === 'negative')) {
-      const text = `${news.news_abstract || ''}\n${news.content || ''}\n${news.summary || ''}`;
-      if (/主体身份为被申请人/.test(text)) sentimentKey = 'negative';
-      else if (/主体身份为申请人|作为[^，,]{0,20}的申请人/.test(text)) sentimentKey = 'attention';
-    }
+    // 与邮件一致：破产重整/开庭公告「申请人」「上诉人」的历史 negative 按关注导出
+    let sentimentKey = resolveEmailSentiment(news);
     
     // 如果没有企业名称，使用公众号名称（或_display_enterprise_name标记）
     const displayEnterpriseName = news.enterprise_full_name || 

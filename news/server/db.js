@@ -5393,26 +5393,41 @@ async function initializeTables(dbPool) {
     console.warn('检查/添加 news_sentiment 字段时出现警告:', err.message);
   }
 
-  // 破产重整：主体身份为「申请人」的历史数据从负面回填为关注
+  // 破产重整/开庭公告：主体身份为「申请人」「上诉人」的历史数据从负面回填为关注
   try {
     const [backfillResult] = await dbPool.query(`
       UPDATE news_detail
       SET news_sentiment = 'attention'
-      WHERE account_name = '破产重整'
+      WHERE account_name IN ('破产重整', '开庭公告')
         AND news_sentiment = 'negative'
         AND (
           news_abstract LIKE '%主体身份为申请人%'
           OR content LIKE '%主体身份为申请人%'
           OR summary LIKE '%的申请人%'
+          OR news_abstract LIKE '%主体身份为上诉人%'
+          OR content LIKE '%主体身份为上诉人%'
+          OR summary LIKE '%的上诉人%'
+          OR news_abstract LIKE '%作为申请人涉及%'
+          OR content LIKE '%作为申请人涉及%'
+          OR summary LIKE '%作为申请人涉及%'
+          OR news_abstract LIKE '%作为上诉人涉及%'
+          OR content LIKE '%作为上诉人涉及%'
+          OR summary LIKE '%作为上诉人涉及%'
         )
         AND news_abstract NOT LIKE '%主体身份为被申请人%'
         AND content NOT LIKE '%主体身份为被申请人%'
+        AND news_abstract NOT LIKE '%作为被申请人%'
+        AND content NOT LIKE '%作为被申请人%'
+        AND news_abstract NOT LIKE '%主体身份为被上诉人%'
+        AND content NOT LIKE '%主体身份为被上诉人%'
+        AND news_abstract NOT LIKE '%作为被上诉人%'
+        AND content NOT LIKE '%作为被上诉人%'
     `);
     if (backfillResult && backfillResult.affectedRows > 0) {
-      console.log(`✓ 破产重整申请人情绪回填为关注：${backfillResult.affectedRows} 条`);
+      console.log(`✓ 司法申请人/上诉人情绪回填为关注：${backfillResult.affectedRows} 条`);
     }
   } catch (err) {
-    console.warn('破产重整申请人情绪回填时出现警告:', err.message);
+    console.warn('司法申请人/上诉人情绪回填时出现警告:', err.message);
   }
 
   // 检查并添加删除相关字段

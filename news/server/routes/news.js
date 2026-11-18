@@ -5617,6 +5617,17 @@ function buildDeliveryAnnouncementContent(item) {
   return `${subjInstnNm}作为${subjRole}涉及相关案件，公告标题为《${anncmntTitle}》，公告法院为${anncmntCrt}，于 ${dateZh} 发布。`;
 }
 
+/**
+ * 司法主体身份 → 新闻情绪：申请人/上诉人 → 关注，其余 → 负面
+ * @param {string} role - subj_role / party_role
+ * @returns {'attention'|'negative'}
+ */
+function resolveJudicialRoleSentiment(role) {
+  const r = String(role || '').trim();
+  if (r === '申请人' || r === '上诉人') return 'attention';
+  return 'negative';
+}
+
 /** 司法字段是否视为未披露（空串/null/仅空白） */
 function isJudicialFieldBlank(value) {
   return value == null || String(value).trim() === '';
@@ -8233,6 +8244,8 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
           const summary = buildCourtHearingSummary(item);
           const content = buildCourtHearingContent(item);
           const APItype = '上海国际';
+          // 被投企业为主体「申请人」「上诉人」→ 关注；其余角色 → 负面
+          const newsSentiment = resolveJudicialRoleSentiment(item.subj_role);
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
             enterpriseFullName || item.subj_instn_nm,
@@ -8257,7 +8270,7 @@ async function syncShanghaiInternationalGroupCourtHearingData(configId = null, l
               summary,
               publicTime,
               content,
-              'negative',
+              newsSentiment,
               APItype,
               content,
               keywords,
@@ -9123,9 +9136,8 @@ async function syncShanghaiInternationalGroupBankrptReorgData(configId = null, l
           const accountName = '破产重整';
           const APItype = '上海国际';
           const keywords = JSON.stringify(['破产重整']); // keywords 列为 JSON 类型
-          // 被投企业为主体「申请人」→ 关注；「被申请人」等其余角色 → 负面
-          const subjRole = String(item.subj_role || '').trim();
-          const newsSentiment = subjRole === '申请人' ? 'attention' : 'negative';
+          // 被投企业为主体「申请人」「上诉人」→ 关注；「被申请人」等其余角色 → 负面
+          const newsSentiment = resolveJudicialRoleSentiment(item.subj_role);
 
           const { fund, sub_fund } = await getFundAndSubFundFromEnterprise(
             subjInstnNm,
