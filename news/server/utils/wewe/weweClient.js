@@ -112,13 +112,14 @@ function pickArticleFields(raw, feedHint = null) {
     raw.description ||
     raw.summary ||
     '';
-  // wewe JSON Feed 常见为 date_modified，不一定有 date_published
+  // wewe：date_published / date_modified；we-mp-rss JSON Feed：updated
   const publicTime =
     raw.date_published ||
     raw.published ||
     raw.pubDate ||
     raw.publishTime ||
     raw.date ||
+    raw.updated ||
     raw.date_modified ||
     raw.created ||
     raw.updateTime ||

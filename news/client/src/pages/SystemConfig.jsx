@@ -74,7 +74,7 @@ function SystemConfig({ isAdmin = true }) {
             </div>
           </TabPane>
 
-          <TabPane key="wewe-private" title="私有公众号 wewe">
+          <TabPane key="wewe-private" title="私有公众号采集">
             <div className="config-content">
               <WewePrivateConfig />
             </div>

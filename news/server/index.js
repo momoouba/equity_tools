@@ -507,11 +507,11 @@ async function startServer() {
 
           try {
             const { getWewePrivateConfig } = require('./utils/wewe/wewePrivateTeam');
-            const { setWeweBaseUrlOverride } = require('./utils/wewe/weweClient');
+            const { applyBaseUrlFromConfig } = require('./utils/wewe/mpClient');
             const cfg = await getWewePrivateConfig();
-            if (cfg && cfg.wewe_base_url) setWeweBaseUrlOverride(cfg.wewe_base_url);
+            if (cfg) await applyBaseUrlFromConfig(cfg);
           } catch (e) {
-            console.warn('加载 wewe_base_url 覆盖失败:', e.message);
+            console.warn('加载私有公众号采集配置失败:', e.message);
           }
 
           console.log('正在初始化上市进展定时任务...');

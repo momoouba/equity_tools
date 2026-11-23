@@ -13,7 +13,7 @@ const {
   setExtractPaused
 } = require('./weweExtractService');
 const { applyExtractTickDelay } = require('./scheduledWeweExtractTasks');
-const { createLoginUrl, getLoginResult, addWeweAccount, hasEnabledWeweAccount } = require('./weweClient');
+const { createLoginUrl, getLoginResult, addWeweAccount, hasEnabledWeweAccount } = require('./mpClient');
 
 function publicBaseUrl(req) {
   if (process.env.NEWS_PUBLIC_BASE_URL) {

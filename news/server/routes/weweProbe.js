@@ -9,7 +9,16 @@
  */
 const express = require('express');
 const { getCurrentUser } = require('../middleware/auth');
-const { probeHealth, fetchAllFeedsJson, fetchFeedJson, getWeweConfig, setWeweBaseUrlOverride, listWeweAccounts } = require('../utils/wewe/weweClient');
+const {
+  probeHealth,
+  fetchAllFeedsJson,
+  fetchFeedJson,
+  getWeweConfig,
+  setWeweBaseUrlOverride,
+  listWeweAccounts,
+  applyBaseUrlFromConfig,
+  resolveProvider
+} = require('../utils/wewe/mpClient');
 const { getWewePrivateConfig, enqueueFromXinbangError, unsubscribeFromWewe, setAccountEnqueueBlocked } = require('../utils/wewe/wewePrivateTeam');
 const { mapAccountWithSampleUrl, tryAutoMapAfterEnqueue } = require('../utils/wewe/weweFeedMap');
 const {
@@ -141,19 +150,24 @@ async function enrichWeweTeamAccounts(rows) {
 
 router.get('/health', requireAdmin, async (req, res) => {
   try {
-    const cfg = getWeweConfig();
+    const cfg = await getWeweConfig();
     const health = await probeHealth();
+    const provider = await resolveProvider();
     res.json({
       success: true,
       phase: 'G0',
-      config: { baseUrl: cfg.baseUrl, authConfigured: Boolean(cfg.authCode) },
+      config: {
+        baseUrl: cfg.baseUrl,
+        authConfigured: Boolean(cfg.authCode),
+        provider
+      },
       health
     });
   } catch (e) {
     res.status(502).json({
       success: false,
       message: e.message || 'wewe health failed',
-      config: getWeweConfig()
+      config: await getWeweConfig().catch(() => ({}))
     });
   }
 });
@@ -233,6 +247,13 @@ router.patch('/team/config', requireAdmin, async (req, res) => {
       fields.push('wewe_base_url = ?');
       values.push(String(req.body.wewe_base_url || '').slice(0, 500));
     }
+    if (req.body.collector_provider !== undefined) {
+      const raw = String(req.body.collector_provider || 'wewe').trim().toLowerCase();
+      const provider =
+        raw === 'werss' || raw === 'we-mp-rss' || raw === 'mp-rss' ? 'werss' : 'wewe';
+      fields.push('collector_provider = ?');
+      values.push(provider);
+    }
     if (req.body.ops_email !== undefined) {
       fields.push('ops_email = ?');
       values.push(String(req.body.ops_email || '').slice(0, 1000));
@@ -275,10 +296,11 @@ router.patch('/team/config', requireAdmin, async (req, res) => {
       values
     );
     const next = await getWewePrivateConfig();
-    if (next && next.wewe_base_url) {
-      setWeweBaseUrlOverride(next.wewe_base_url);
-    } else {
-      setWeweBaseUrlOverride('');
+    try {
+      await applyBaseUrlFromConfig(next || {});
+    } catch (e) {
+      console.warn('[wewe-probe] applyBaseUrlFromConfig:', e.message);
+      setWeweBaseUrlOverride((next && next.wewe_base_url) || '');
     }
     try {
       await updateWeweExtractScheduledTasks();
@@ -323,7 +345,7 @@ router.get('/team/accounts', requireAdmin, async (req, res) => {
 router.get('/team/wewe-auth-bootstrap', requireAdmin, async (req, res) => {
   try {
     const { signWeweEmbedTicket } = require('./weweRssProxy');
-    const { authCode, baseUrl } = getWeweConfig();
+    const { authCode, baseUrl } = await getWeweConfig();
     const embedTicket = signWeweEmbedTicket(authCode || '', 180);
     res.json({
       success: true,
@@ -608,8 +630,8 @@ router.post('/team/ingest-run', requireAdmin, async (req, res) => {
 router.get('/team/session', requireAdmin, async (req, res) => {
   try {
     const cfg = await getWewePrivateConfig();
-    const session = await ensureSessionRow();
-    const phaseInfo = computeSessionPhase(session, cfg || {});
+    let session = await ensureSessionRow();
+    let phaseInfo = computeSessionPhase(session, cfg || {});
     let weweAccounts = [];
     let hasEnabledAccount = false;
     try {
@@ -618,13 +640,30 @@ router.get('/team/session', requireAdmin, async (req, res) => {
     } catch (e) {
       weweAccounts = [{ error: e.message }];
     }
+    // we-mp-rss：Cookie 已在采集端配置时，同步新闻侧会话，避免旧 TTL 一直 phase=dead
+    const provider = String((cfg && cfg.collector_provider) || '').toLowerCase();
+    const isWerss = provider === 'werss' || provider === 'we-mp-rss' || provider === 'mp-rss';
+    if (isWerss && hasEnabledAccount && phaseInfo.phase === 'dead') {
+      try {
+        const acc = weweAccounts.find((a) => Number(a.status) === 1) || {};
+        await markSessionRecovered({
+          vid: acc.id || 'werss',
+          username: acc.name || 'we-mp-rss-cookie'
+        });
+        session = await ensureSessionRow();
+        phaseInfo = computeSessionPhase(session, cfg || {});
+      } catch (e) {
+        console.warn('[wewe-probe] werss 会话自动恢复失败:', e.message);
+      }
+    }
     res.json({
       success: true,
       phase: 'P5',
       session,
       phaseInfo,
       weweAccounts,
-      hasEnabledAccount
+      hasEnabledAccount,
+      provider: await resolveProvider()
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });

@@ -3,7 +3,7 @@
  */
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
-const { fetchFeedJson, getMpArticles, htmlToPlainText } = require('./weweClient');
+const { fetchFeedJson, getMpArticles, htmlToPlainText } = require('./mpClient');
 const { getWewePrivateConfig } = require('./wewePrivateTeam');
 const {
   isSessionDeadError,

@@ -225,7 +225,7 @@ async function unsubscribeFromWewe(wechatAccountId) {
   let wewe = { skipped: true };
 
   if (feedId) {
-    const { deleteWeweFeed } = require('./weweClient');
+    const { deleteWeweFeed } = require('./mpClient');
     try {
       wewe = await deleteWeweFeed(feedId);
     } catch (e) {

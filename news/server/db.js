@@ -10069,6 +10069,23 @@ async function initializeTables(dbPool) {
     console.warn('创建 wewe_private_config 时出现警告:', err.message);
   }
 
+  // 采集后端：wewe（旧）| werss（we-mp-rss）
+  try {
+    const [providerCols] = await dbPool.query(
+      "SHOW COLUMNS FROM wewe_private_config LIKE 'collector_provider'"
+    );
+    if (!providerCols.length) {
+      await dbPool.query(
+        `ALTER TABLE wewe_private_config
+         ADD COLUMN collector_provider VARCHAR(20) NOT NULL DEFAULT 'wewe'
+         COMMENT '采集后端 wewe|werss' AFTER wewe_base_url`
+      );
+      console.log('✓ wewe_private_config.collector_provider 已添加');
+    }
+  } catch (err) {
+    console.warn('迁移 collector_provider 时出现警告:', err.message);
+  }
+
   try {
     await dbPool.query(`
       CREATE TABLE IF NOT EXISTS wewe_private_accounts (

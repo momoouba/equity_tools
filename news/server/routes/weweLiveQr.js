@@ -12,7 +12,7 @@ const {
   ensureSessionRow
 } = require('../utils/wewe/weweRemindService');
 const { getWewePrivateConfig } = require('../utils/wewe/wewePrivateTeam');
-const { listWeweAccounts } = require('../utils/wewe/weweClient');
+const { listWeweAccounts } = require('../utils/wewe/mpClient');
 const { getCurrentUser } = require('../middleware/auth');
 
 const router = express.Router();
@@ -70,7 +70,7 @@ function isPlatformRelayError(message) {
 }
 
 const PLATFORM_RELAY_HINT =
-  '微信读书中转（wewe 的 PLATFORM_URL）连不上，所以出不了码。这不是新闻站缺路由。默认 https://weread.111965.xyz 现为 502；备用 https://weread.965111.xyz 已 404（Deno Deploy Classic 于 2026-07-20 下线）。请看 docker compose logs wewe-rss --tail 80。中转恢复或换可用 PLATFORM_URL 之前无法扫码。';
+  '出不了码：若仍用旧 wewe，其中转 PLATFORM_URL（weread.111965.xyz）已 502。请在「私有公众号采集」把 collector_provider 改为 we-mp-rss，Base URL 指向 http://127.0.0.1:8001，并在 we-mp-rss 管理页完成微信读书扫码/Cookie。';
 
 router.post('/qr', authLiveQr, async (req, res) => {
   try {

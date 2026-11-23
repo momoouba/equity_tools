@@ -1,0 +1,30 @@
+# we-mp-rss 本地部署（替换已失效的 wewe-rss 中转）
+# 用法：
+#   cd news/deploy/we-mp-rss
+#   copy .env.example .env   # 按需改密码
+#   docker compose up -d
+# 管理页：http://127.0.0.1:8001  默认账号 admin / admin@123
+# 文档：./README.md 、 https://github.com/rachelos/we-mp-rss
+
+services:
+  we-mp-rss:
+    image: ${MP_RSS_IMAGE:-ghcr.io/rachelos/we-mp-rss:latest}
+    container_name: we-mp-rss
+    ports:
+      - "${MP_RSS_HOST_BIND:-127.0.0.1}:${MP_RSS_HOST_PORT:-8001}:8001"
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      PORT: 8001
+      USERNAME: ${MP_RSS_USERNAME:-admin}
+      PASSWORD: ${MP_RSS_PASSWORD:-admin@123}
+      # 微信读书直连采集（不经 wewe 死掉的 PLATFORM_URL 中转）
+      GATHER.MODEL: ${GATHER_MODEL:-weread_mp}
+      GATHER.CONTENT: ${GATHER_CONTENT:-True}
+      RSS_FULL_CONTEXT: ${RSS_FULL_CONTEXT:-True}
+      WEREAD_CONTENT_INTERVAL: ${WEREAD_CONTENT_INTERVAL:-2}
+      # 可选：部署时直接注入 Cookie（也可登录管理页「微信读书」扫码/粘贴）
+      WEREAD_COOKIE: ${WEREAD_COOKIE:-}
+      DB: ${MP_RSS_DB:-sqlite:///./data/db.db}
+    volumes:
+      - ./data:/app/data

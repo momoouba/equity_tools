@@ -47,8 +47,13 @@ function statusColor(s) {
   return 'gray'
 }
 
-/** 同源反代 + ticket 注入 authCode */
-function WeweRssAdminEmbed() {
+/**
+ * 采集管理嵌入：
+ * - werss：直接打开 we-mp-rss（默认 http://127.0.0.1:8001），在其内登录/订号/配 Cookie
+ * - wewe：同源反代 + ticket 注入 AUTH_CODE
+ */
+function CollectorAdminEmbed({ provider = 'wewe', baseUrl = '' }) {
+  const isWerss = provider === 'werss' || provider === 'we-mp-rss' || provider === 'mp-rss'
   const [iframeKey, setIframeKey] = useState(0)
   const [bootError, setBootError] = useState('')
   const [gateUrl, setGateUrl] = useState('')
@@ -58,6 +63,13 @@ function WeweRssAdminEmbed() {
     setBootError('')
     setGateUrl('')
     try {
+      if (isWerss) {
+        const url = String(baseUrl || 'http://127.0.0.1:8001').trim().replace(/\/$/, '') || 'http://127.0.0.1:8001'
+        setGateUrl(url)
+        setDirectUrl(url)
+        setIframeKey((k) => k + 1)
+        return
+      }
       const res = await axios.get('/api/wewe-probe/team/wewe-auth-bootstrap')
       if (!res.data?.success) throw new Error(res.data?.message || 'bootstrap failed')
       const ticket = res.data.embedTicket
@@ -68,11 +80,11 @@ function WeweRssAdminEmbed() {
       setDirectUrl(url)
       setIframeKey((k) => k + 1)
     } catch (e) {
-      const msg = e.response?.data?.message || e.message || '获取 wewe 授权失败'
+      const msg = e.response?.data?.message || e.message || '获取采集管理页失败'
       setBootError(msg)
       Message.error(msg)
     }
-  }, [])
+  }, [isWerss, baseUrl])
 
   useEffect(() => {
     loadEmbed()
@@ -82,7 +94,14 @@ function WeweRssAdminEmbed() {
     <div className="wewe-rss-embed">
       <div className="wewe-rss-embed__toolbar">
         <Typography.Text type="secondary" style={{ flex: 1 }}>
-          自动注入 AUTH_CODE 后进入管理页（扫码/订阅）。嵌入与「新窗口打开」均走本站反代，无需手输授权码。
+          {isWerss ? (
+            <>
+              嵌入 <strong>we-mp-rss</strong> 管理页（订阅公众号、微信读书 Cookie）。
+              默认账号 <code>admin</code> / <code>admin@123</code>；若 iframe 被浏览器拦截，请用「新窗口打开」。
+            </>
+          ) : (
+            <>自动注入 AUTH_CODE 后进入 wewe-rss 管理页。嵌入与「新窗口打开」均走本站反代。</>
+          )}
         </Typography.Text>
         <Space>
           <Button size="small" onClick={loadEmbed}>
@@ -98,7 +117,7 @@ function WeweRssAdminEmbed() {
           </Button>
         </Space>
       </div>
-      <div className="wewe-rss-embed__url">{gateUrl || '正在签发嵌入票据…'}</div>
+      <div className="wewe-rss-embed__url">{gateUrl || (isWerss ? '正在加载 we-mp-rss…' : '正在签发嵌入票据…')}</div>
       {bootError ? (
         <div className="wewe-rss-embed__fallback">
           <p>{bootError}</p>
@@ -110,12 +129,12 @@ function WeweRssAdminEmbed() {
         <iframe
           key={iframeKey}
           className="wewe-rss-embed__frame"
-          title="wewe-rss 管理"
+          title={isWerss ? 'we-mp-rss 管理' : 'wewe-rss 管理'}
           src={gateUrl}
         />
       ) : (
         <div className="wewe-rss-embed__fallback">
-          <p>正在加载 wewe-rss…</p>
+          <p>{isWerss ? '正在加载 we-mp-rss…' : '正在加载 wewe-rss…'}</p>
         </div>
       )}
     </div>
@@ -238,6 +257,7 @@ function WewePrivateConfig() {
     if (!config) return
     patchConfig(
       {
+        collector_provider: config.collector_provider || 'wewe',
         wewe_base_url: config.wewe_base_url || '',
         ops_email: config.ops_email || '',
         extract_start: config.extract_start || '21:00',
@@ -588,11 +608,12 @@ function WewePrivateConfig() {
             ) : (
               <>
                 <Typography.Paragraph className="wewe-private-config__intro">
-                  私有公众号 wewe 专队运维。密钥 <code>WEWE_RSS_AUTH_CODE</code> 仅在服务端环境变量配置，本页不展示。
+                  私有公众号专队运维。推荐采集后端 <strong>we-mp-rss</strong>（直连微信读书；旧 wewe 中转已失效）。
+                  wewe 密钥 <code>WEWE_RSS_AUTH_CODE</code>、we-mp-rss 账号 <code>MP_RSS_USERNAME/PASSWORD</code> 仅在服务端环境变量配置。
                   建议分步放开：总开关 → 只入队 → 提取/入库 → 催办可独立早开保登录。
                   <br />
                   <strong>缺分享链接时：</strong>
-                  到左侧「专队账号」列表右侧点「粘贴链接」（不是 wewe-rss 管理页）。待订阅催办合并为一封汇总邮件。
+                  到左侧「专队账号」列表右侧点「粘贴链接」。待订阅催办合并为一封汇总邮件。
                   {pendingCount > 0 ? ` 当前待订阅 ${pendingCount} 个。` : ''}
                 </Typography.Paragraph>
 
@@ -624,11 +645,40 @@ function WewePrivateConfig() {
                   <Typography.Title heading={6}>时间与催办参数</Typography.Title>
                   <div className="wewe-private-config__grid">
                     <label>
-                      wewe Base URL
+                      采集后端 collector_provider
+                      <select
+                        className="wewe-private-config__select"
+                        value={config.collector_provider === 'werss' ? 'werss' : 'wewe'}
+                        onChange={(e) =>
+                          setConfig({
+                            ...config,
+                            collector_provider: e.target.value,
+                            wewe_base_url:
+                              e.target.value === 'werss'
+                                ? config.wewe_base_url && !/4000/.test(config.wewe_base_url)
+                                  ? config.wewe_base_url
+                                  : 'http://127.0.0.1:8001'
+                                : config.wewe_base_url || 'http://127.0.0.1:4000'
+                          })
+                        }
+                      >
+                        <option value="werss">we-mp-rss（推荐，端口 8001）</option>
+                        <option value="wewe">wewe-rss（旧，中转已失效）</option>
+                      </select>
+                      <span className="wewe-private-config__hint">
+                        本地：<code>cd news/deploy/we-mp-rss && docker compose up -d</code>
+                      </span>
+                    </label>
+                    <label>
+                      采集 Base URL
                       <Input
                         value={config.wewe_base_url || ''}
                         onChange={(v) => setConfig({ ...config, wewe_base_url: v })}
-                        placeholder="http://127.0.0.1:4000"
+                        placeholder={
+                          config.collector_provider === 'werss'
+                            ? 'http://127.0.0.1:8001'
+                            : 'http://127.0.0.1:4000'
+                        }
                       />
                     </label>
                     <label>
@@ -764,19 +814,38 @@ function WewePrivateConfig() {
                   </Space>
                   {phaseInfo?.phase === 'dead' && (
                     <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                      微信读书会话已失效（与 wewe 服务是否在线无关）。请点「打开活码页」扫码，
-                      直到页内出现绿色「扫码成功」，再回本页刷新；恢复后提取会自动继续。
+                      {config?.collector_provider === 'werss' ? (
+                        <>
+                          新闻侧会话过期。若已在 we-mp-rss（http://127.0.0.1:8001）配好微信读书 Cookie，
+                          点「刷新」即可同步；否则请到 we-mp-rss 管理页「微信读书」扫码/粘贴 Cookie。
+                          使用 we-mp-rss 时不必依赖本页「打开活码页」。
+                        </>
+                      ) : (
+                        <>
+                          微信读书会话已失效（与 wewe 服务是否在线无关）。请点「打开活码页」扫码，
+                          直到页内出现绿色「扫码成功」，再回本页刷新；恢复后提取会自动继续。
+                        </>
+                      )}
                     </Typography.Paragraph>
                   )}
                   {hasEnabledAccount === false && (
                     <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                      「探测 wewe」只说明服务在线。粘贴链接 / 提取需要<strong>启用中的微信读书账号</strong>。
-                      请点「打开活码页」扫码，直到页内出现绿色「扫码成功」，再回本页刷新。
+                      {config?.collector_provider === 'werss' ? (
+                        <>
+                          探测只说明服务在线。请到 <strong>we-mp-rss 管理页 → 微信读书</strong> 配置 Cookie，
+                          再回本页点「刷新」。
+                        </>
+                      ) : (
+                        <>
+                          「探测 wewe」只说明服务在线。粘贴链接 / 提取需要<strong>启用中的微信读书账号</strong>。
+                          请点「打开活码页」扫码，直到页内出现绿色「扫码成功」，再回本页刷新。
+                        </>
+                      )}
                     </Typography.Paragraph>
                   )}
                   {Array.isArray(weweAccounts) && weweAccounts.length > 0 && !weweAccounts[0]?.error && (
                     <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-                      wewe 账号：
+                      采集账号：
                       {weweAccounts
                         .map((a) => `${a.name || a.id}(status=${a.status})`)
                         .join('；')}
@@ -909,9 +978,17 @@ function WewePrivateConfig() {
           </div>
         </TabPane>
 
-        <TabPane key="wewe-admin" title="wewe-rss 管理">
+        <TabPane
+          key="wewe-admin"
+          title={
+            config?.collector_provider === 'werss' ? 'we-mp-rss 管理' : 'wewe-rss 管理'
+          }
+        >
           <div className="wewe-private-config__pane wewe-private-config__pane--embed">
-            <WeweRssAdminEmbed />
+            <CollectorAdminEmbed
+              provider={config?.collector_provider || 'wewe'}
+              baseUrl={config?.wewe_base_url || ''}
+            />
           </div>
         </TabPane>
       </Tabs>

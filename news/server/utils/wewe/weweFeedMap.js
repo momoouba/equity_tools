@@ -5,7 +5,7 @@ const db = require('../../db');
 const {
   getMpInfoByArticleUrl,
   ensureWeweFeedSubscribed
-} = require('./weweClient');
+} = require('./mpClient');
 const { notifyPendingSubscribe } = require('./wewePendingSubscribeMail');
 
 function isWeixinShareUrl(url) {
@@ -96,19 +96,20 @@ async function mapAccountWithSampleUrl(wechatAccountId, sampleArticleUrl) {
 
   const mp = await getMpInfoByArticleUrl(url);
   const sub = await ensureWeweFeedSubscribed(mp);
+  const feedId = String(sub.feedId || mp.id).trim();
   await markMapped(rows[0].F_Id, {
-    feedId: mp.id,
+    feedId,
     sampleUrl: url,
-    note: sub.created ? '已订阅 wewe 并映射' : 'wewe 已有该 feed，完成映射'
+    note: sub.created ? '已订阅 we-mp-rss/wewe 并映射' : '采集端已有该 feed，完成映射'
   });
 
   console.log(
-    `[wewe映射] 成功 account=${gh} feedId=${mp.id} created=${sub.created} name=${mp.name}`
+    `[wewe映射] 成功 account=${gh} feedId=${feedId} created=${sub.created} name=${mp.name}`
   );
   return {
     action: 'mapped',
     wechatAccountId: gh,
-    feedId: mp.id,
+    feedId,
     mpName: mp.name,
     weweFeedCreated: sub.created,
     sampleArticleUrl: url
