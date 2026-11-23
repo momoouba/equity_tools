@@ -60,7 +60,7 @@ services:
       # 格式: http://<Mac局域网IP>:<代理端口>
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,wewe-rss,host.docker.internal}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,mysql,wewe-rss,we-mp-rss,host.docker.internal}
       ALL_PROXY: ${ALL_PROXY:-}
       # 竞品分析 S4 联网（从宿主机 .env 注入）
       COMPETITOR_WEB_TIMEOUT_MS: ${COMPETITOR_WEB_TIMEOUT_MS:-180000}
@@ -71,7 +71,12 @@ services:
       LLM_RESPONSES_SUBMIT_TIMEOUT_MS: ${LLM_RESPONSES_SUBMIT_TIMEOUT_MS:-45000}
       LLM_RESPONSES_POLL_MAX_MS: ${LLM_RESPONSES_POLL_MAX_MS:-900000}
       LLM_RESPONSES_POLL_INTERVAL_MS: ${LLM_RESPONSES_POLL_INTERVAL_MS:-5000}
-      # wewe-rss：容器内走服务名；AUTH 与下方 wewe-rss 服务 AUTH_CODE 一致
+      # we-mp-rss（推荐）：容器内走服务名；专队 collector_provider=werss
+      MP_RSS_PROVIDER: ${MP_RSS_PROVIDER:-werss}
+      MP_RSS_BASE_URL: ${MP_RSS_BASE_URL:-http://we-mp-rss:8001}
+      MP_RSS_USERNAME: ${MP_RSS_USERNAME:-admin}
+      MP_RSS_PASSWORD: ${MP_RSS_PASSWORD:-admin@123}
+      # wewe-rss：对照保留；AUTH 与下方 wewe-rss 服务 AUTH_CODE 一致
       WEWE_RSS_BASE_URL: ${WEWE_RSS_BASE_URL:-http://wewe-rss:4000}
       WEWE_RSS_AUTH_CODE: ${WEWE_RSS_AUTH_CODE:-}
       NEWS_PUBLIC_BASE_URL: ${NEWS_PUBLIC_BASE_URL:-}
@@ -99,8 +104,44 @@ services:
       retries: 3
       start_period: 120s  # 增加到120秒，确保应用完全初始化（数据库初始化、定时任务等）
 
+  # we-mp-rss：私有公众号采集（微信读书直连，替代已失效的 wewe PLATFORM_URL）
+  # 本地也可单独：deploy/we-mp-rss/docker-compose.yml
+  we-mp-rss:
+    image: ${MP_RSS_IMAGE:-ghcr.io/rachelos/we-mp-rss:latest}
+    container_name: newsapp-we-mp-rss
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      PORT: 8001
+      USERNAME: ${MP_RSS_USERNAME:-admin}
+      PASSWORD: ${MP_RSS_PASSWORD:-admin@123}
+      GATHER.MODEL: ${GATHER_MODEL:-weread_mp}
+      GATHER.CONTENT: ${GATHER_CONTENT:-True}
+      RSS_FULL_CONTEXT: ${RSS_FULL_CONTEXT:-True}
+      WEREAD_CONTENT_INTERVAL: ${WEREAD_CONTENT_INTERVAL:-2}
+      WEREAD_COOKIE: ${WEREAD_COOKIE:-}
+      DB: ${MP_RSS_DB:-sqlite:///./data/db.db}
+    ports:
+      - "${MP_RSS_HOST_BIND:-127.0.0.1}:${MP_RSS_HOST_PORT:-8001}:8001"
+    volumes:
+      - ./deploy/we-mp-rss/data:/app/data
+    networks:
+      - newsapp-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/', timeout=5)"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
   # wewe-rss：私有公众号补抓（独立容器，与 app 同网络；勿打进 app 镜像）
-  # 本地开发仍可只用 deploy/wewe-rss/docker-compose.yml；生产推荐本服务一并 up
+  # 本地开发仍可只用 deploy/wewe-rss/docker-compose.yml；PLATFORM_URL 已失效，优先用上方 we-mp-rss
   wewe-rss:
     image: cooderl/wewe-rss-sqlite:latest
     container_name: newsapp-wewe-rss
