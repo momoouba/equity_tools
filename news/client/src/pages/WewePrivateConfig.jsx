@@ -34,7 +34,7 @@ function apiOrigin() {
 
 const boolFields = [
   { key: 'wewe_enabled', label: '总开关', hint: '关闭则专队全部不跑' },
-  { key: 'enqueue_enabled', label: '允许入队', hint: '新榜「数据不存在」写入专队' },
+  { key: 'enqueue_enabled', label: '允许入队', hint: '遗留开关；正式名单请用「从监控同步」，新榜不再自动进出队' },
   { key: 'extract_enabled', label: '允许提取', hint: 'extract_start 当晚入队；catchup_extract_start 隔日补抓昨天 21:00 后；有文优先，空号 1 分钟' },
   { key: 'ingest_enabled', label: '允许入库', hint: '工作日 ingest_at 写入 news_detail' },
   { key: 'remind_enabled', label: '允许催办', hint: '可独立早开；读书失效催办 00:00–07:00 静默，7 点后再发' }
@@ -156,14 +156,20 @@ function WewePrivateConfig() {
   const [sampleUrl, setSampleUrl] = useState('')
   const [mapping, setMapping] = useState(false)
   const [accountFilter, setAccountFilter] = useState('all')
+  const [accountSourceFilter, setAccountSourceFilter] = useState('all')
   const [accountKeyword, setAccountKeyword] = useState('')
   const [filterCollapsed, setFilterCollapsed] = useState(false)
   const [accountPage, setAccountPage] = useState(1)
   const [accountPageSize, setAccountPageSize] = useState(ACCOUNT_PAGE_SIZE_OPTIONS[0])
   const [remindingPending, setRemindingPending] = useState(false)
   const [unsubscribingId, setUnsubscribingId] = useState('')
+  const [batchUnsubscribing, setBatchUnsubscribing] = useState(false)
+  const [syncingFromMonitor, setSyncingFromMonitor] = useState(false)
+  const [selectedAccountKeys, setSelectedAccountKeys] = useState([])
   const [enqueueBlockingId, setEnqueueBlockingId] = useState('')
-  const [tableScrollY, setTableScrollY] = useState(360)
+  const [tableScrollY, setTableScrollY] = useState(() =>
+    typeof window !== 'undefined' ? Math.max(420, window.innerHeight - 380) : 420
+  )
   const tableScrollAreaRef = useRef(null)
 
   const loadConfigAndSession = useCallback(async () => {
@@ -219,19 +225,26 @@ function WewePrivateConfig() {
     if (!el || typeof ResizeObserver === 'undefined') return undefined
     const measure = () => {
       const h = el.clientHeight
-      if (h < 80) return
+      const fallback = Math.max(420, Math.floor(window.innerHeight - 380))
+      if (h < 120) {
+        setTableScrollY(fallback)
+        return
+      }
       const head = el.querySelector('.arco-table-header')
       const headH = head ? Math.ceil(head.getBoundingClientRect().height) : 40
-      setTableScrollY(Math.max(160, Math.floor(h - headH - 2)))
+      // 至少约一屏可用高度，避免只露出两三行
+      setTableScrollY(Math.max(360, Math.floor(h - headH - 2)))
     }
     const raf = requestAnimationFrame(() => measure())
     const ro = new ResizeObserver(() => measure())
     ro.observe(el)
+    window.addEventListener('resize', measure)
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      window.removeEventListener('resize', measure)
     }
-  }, [subTab, filterCollapsed, accountPageSize])
+  }, [subTab, filterCollapsed, accountPageSize, accountsLoading])
 
   const patchConfig = async (patch, okMsg = '已保存') => {
     setSaving(true)
@@ -345,11 +358,16 @@ function WewePrivateConfig() {
     }
   }
 
+  const canUnsubscribeRow = (row) =>
+    Boolean(row?.feed_id) ||
+    row?.team_status === 'active' ||
+    row?.team_status === 'pending_subscribe'
+
   const unsubscribeAccount = (row) => {
     const name = row.account_name || row.wechat_account_id
     Modal.confirm({
-      title: '从 wewe 退订',
-      content: `将删除 wewe-rss 里「${name}」的订阅，并把专队状态标为已出队。若仅不想再次被新榜自动拉回队列，可改用「禁止重新入队」（不删 wewe 订阅）。`,
+      title: '从采集端退订',
+      content: `将删除 we-mp-rss/wewe 里「${name}」的订阅，并把专队状态标为已出队。若仅不想再次被新榜自动拉回队列，可改用「禁止重新入队」（不删采集端订阅）。`,
       okText: '退订',
       okButtonProps: { status: 'danger' },
       cancelText: '取消',
@@ -371,6 +389,59 @@ function WewePrivateConfig() {
           loadAccounts()
         } finally {
           setUnsubscribingId('')
+        }
+      }
+    })
+  }
+
+  const syncFromMonitor = async () => {
+    setSyncingFromMonitor(true)
+    try {
+      const res = await axios.post('/api/wewe-probe/team/sync-from-monitor', { autoMap: true })
+      if (res.data?.success) {
+        Message.success(res.data.message || '已从监控对象同步')
+        setSelectedAccountKeys([])
+        await loadAccounts()
+      } else {
+        Message.error(res.data?.message || '同步失败')
+      }
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '同步失败')
+    } finally {
+      setSyncingFromMonitor(false)
+    }
+  }
+
+  const batchUnsubscribeAccounts = () => {
+    const selected = accounts.filter(
+      (a) => selectedAccountKeys.includes(a.F_Id) && canUnsubscribeRow(a)
+    )
+    if (!selected.length) {
+      Message.warning('请先勾选可退订的账号（在队 / 待订阅 / 已映射）')
+      return
+    }
+    Modal.confirm({
+      title: '批量退订',
+      content: `将对已选 ${selected.length} 个账号：删除采集端订阅，并把专队状态标为已出队。此操作不可批量撤销。`,
+      okText: `退订 ${selected.length} 个`,
+      okButtonProps: { status: 'danger' },
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchUnsubscribing(true)
+        try {
+          const res = await axios.post('/api/wewe-probe/team/unsubscribe-batch', {
+            wechat_account_ids: selected.map((a) => a.wechat_account_id)
+          })
+          const msg = res.data?.message || '批量退订完成'
+          if (res.data?.success) Message.success(msg)
+          else Message.warning(msg)
+          setSelectedAccountKeys([])
+          await loadAccounts()
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '批量退订失败')
+          await loadAccounts()
+        } finally {
+          setBatchUnsubscribing(false)
         }
       }
     })
@@ -439,6 +510,14 @@ function WewePrivateConfig() {
       if (accountFilter === 'active' && a.team_status !== 'active') {
         return false
       }
+      const src = String(a.source_type || '').toLowerCase()
+      if (accountSourceFilter === 'enterprise') {
+        // 监控对象企业；both = 同时挂在企业与第三方
+        if (src !== 'invested' && src !== 'both') return false
+      }
+      if (accountSourceFilter === 'third_party') {
+        if (src !== 'additional' && src !== 'both') return false
+      }
       if (!kw) return true
       const hay = [
         a.wechat_account_id,
@@ -454,7 +533,7 @@ function WewePrivateConfig() {
         .join(' ')
       return hay.includes(kw)
     })
-  }, [accounts, accountFilter, accountKeyword])
+  }, [accounts, accountFilter, accountSourceFilter, accountKeyword])
 
   const pagedAccounts = useMemo(() => {
     const start = (accountPage - 1) * accountPageSize
@@ -463,43 +542,54 @@ function WewePrivateConfig() {
 
   useEffect(() => {
     setAccountPage(1)
-  }, [accountFilter, accountKeyword])
+  }, [accountFilter, accountSourceFilter, accountKeyword])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredAccounts.length / accountPageSize) || 1)
     if (accountPage > maxPage) setAccountPage(maxPage)
   }, [filteredAccounts.length, accountPage, accountPageSize])
 
+  const wrapCell = (text) => (
+    <span className="wewe-private-config__cell-wrap">{text || '-'}</span>
+  )
+
   const columns = [
     {
       title: '公众号 ID',
       dataIndex: 'wechat_account_id',
-      width: 160
+      width: 160,
+      render: (v) => wrapCell(v)
     },
     {
       title: '公众号名称',
       dataIndex: 'account_name',
       width: 140,
-      render: (v) => v || '-'
+      render: (v) => wrapCell(v)
     },
     {
       title: '被投企业',
       dataIndex: 'enterprise_full_name',
-      width: 207,
-      render: (v, row) => v || row.project_abbreviation || '-'
+      width: 200,
+      render: (v, row) => wrapCell(v || row.project_abbreviation)
     },
     {
       title: '来源',
       dataIndex: 'source_type',
       width: 100,
-      render: (v) => v || '-'
+      render: (v) => {
+        const src = String(v || '').toLowerCase()
+        if (src === 'invested') return wrapCell('企业')
+        if (src === 'additional') return wrapCell('第三方')
+        if (src === 'both') return wrapCell('企业+第三方')
+        return wrapCell(v || '—')
+      }
     },
     {
       title: '专队状态',
       dataIndex: 'team_status',
-      width: 110,
+      width: 120,
       render: (v, row) => (
-        <Space size={4}>
+        <Space size={4} wrap>
           <Tag color={statusColor(v)}>{v}</Tag>
           {Number(row.enqueue_blocked) === 1 ? (
             <Tag color="purple" size="small">
@@ -512,20 +602,20 @@ function WewePrivateConfig() {
     {
       title: '映射',
       dataIndex: 'map_status',
-      width: 79,
+      width: 88,
       render: (v) => <Tag color={statusColor(v)}>{v}</Tag>
     },
     {
       title: 'feed_id',
       dataIndex: 'feed_id',
       width: 168,
-      render: (v) => v || '-'
+      render: (v) => wrapCell(v)
     },
     {
       title: '最近提取',
       dataIndex: 'last_extract_status',
       width: 110,
-      render: (v) => (v ? `${v}` : '-')
+      render: (v) => wrapCell(v)
     },
     {
       title: '操作',
@@ -533,10 +623,7 @@ function WewePrivateConfig() {
       className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, row) => {
         const blocked = Number(row.enqueue_blocked) === 1
-        const canUnsubscribe =
-          Boolean(row.feed_id) ||
-          row.team_status === 'active' ||
-          row.team_status === 'pending_subscribe'
+        const canUnsubscribe = canUnsubscribeRow(row)
         const canBlockEnqueue =
           !blocked && (row.team_status === 'pending_subscribe' || row.team_status === 'active')
         return (
@@ -609,11 +696,13 @@ function WewePrivateConfig() {
               <>
                 <Typography.Paragraph className="wewe-private-config__intro">
                   私有公众号专队运维。推荐采集后端 <strong>we-mp-rss</strong>（直连微信读书；旧 wewe 中转已失效）。
-                  wewe 密钥 <code>WEWE_RSS_AUTH_CODE</code>、we-mp-rss 账号 <code>MP_RSS_USERNAME/PASSWORD</code> 仅在服务端环境变量配置。
-                  建议分步放开：总开关 → 只入队 → 提取/入库 → 催办可独立早开保登录。
+                  we-mp-rss 账号 <code>MP_RSS_USERNAME/PASSWORD</code> 仅在服务端环境变量配置。
+                  建议分步放开：总开关 → 提取/入库 → 催办可独立早开保登录。
                   <br />
-                  <strong>缺分享链接时：</strong>
-                  到左侧「专队账号」列表右侧点「粘贴链接」。待订阅催办合并为一封汇总邮件。
+                  <strong>专队名单：</strong>
+                  来自「新闻舆情监控对象」中已填企业公众号 id 的记录，外加「第三方/额外公众号」；
+                  在「专队账号」点「从监控同步」。不再由新榜「数据不存在」自动进出队。
+                  缺分享链接时到列表右侧「粘贴链接」。
                   {pendingCount > 0 ? ` 当前待订阅 ${pendingCount} 个。` : ''}
                 </Typography.Paragraph>
 
@@ -869,6 +958,18 @@ function WewePrivateConfig() {
                 </span>
               </h3>
               <Space wrap>
+                <Button type="primary" loading={syncingFromMonitor} onClick={syncFromMonitor}>
+                  从监控同步
+                </Button>
+                <Button
+                  type="outline"
+                  status="danger"
+                  loading={batchUnsubscribing}
+                  disabled={!selectedAccountKeys.length || batchUnsubscribing}
+                  onClick={batchUnsubscribeAccounts}
+                >
+                  批量退订{selectedAccountKeys.length ? ` (${selectedAccountKeys.length})` : ''}
+                </Button>
                 <Button
                   type="outline"
                   loading={remindingPending}
@@ -908,6 +1009,18 @@ function WewePrivateConfig() {
                       </Select>
                     </div>
                     <div className="filter-item">
+                      <label>来源</label>
+                      <Select
+                        value={accountSourceFilter}
+                        onChange={(v) => setAccountSourceFilter(v)}
+                        style={{ width: 160 }}
+                      >
+                        <Option value="all">全部</Option>
+                        <Option value="enterprise">企业</Option>
+                        <Option value="third_party">第三方</Option>
+                      </Select>
+                    </div>
+                    <div className="filter-item">
                       <label>关键词</label>
                       <Input
                         value={accountKeyword}
@@ -922,6 +1035,7 @@ function WewePrivateConfig() {
                         type="outline"
                         onClick={() => {
                           setAccountFilter('all')
+                          setAccountSourceFilter('all')
                           setAccountKeyword('')
                           setAccountPage(1)
                         }}
@@ -935,8 +1049,8 @@ function WewePrivateConfig() {
             </Collapse>
 
             <Typography.Paragraph type="secondary" className="wewe-private-config__list-hint">
-              待订阅账号点右侧「粘贴链接」，填入该号任意一篇文章的 mp.weixin 分享 URL。
-              新榜已能抓到、但 wewe 仍在订阅的号，点「退订」（不要只在 wewe-rss 管理页点删除：那边删的是 wewe 自己的库，新闻专队列表不会变）。
+              名单请用「从监控同步」：拉取舆情监控对象（有企业公众号 id）+ 第三方公众号；不会自动删已出队外的旧号。
+              待订阅点「粘贴链接」完成 we-mp-rss 订号并写 feed_id。停抓请本页「退订」（不要只在 we-mp-rss 里删）。
             </Typography.Paragraph>
 
             <div ref={tableScrollAreaRef} className="table-container wewe-private-config__table-area">
@@ -951,7 +1065,15 @@ function WewePrivateConfig() {
                   pagination={false}
                   page={accountPage}
                   pageSize={accountPageSize}
-                  scroll={{ y: tableScrollY }}
+                  scroll={{ x: 1380, y: tableScrollY }}
+                  rowSelection={{
+                    type: 'checkbox',
+                    selectedRowKeys: selectedAccountKeys,
+                    onChange: (keys) => setSelectedAccountKeys(keys),
+                    checkboxProps: (row) => ({
+                      disabled: !canUnsubscribeRow(row)
+                    })
+                  }}
                 />
               )}
             </div>

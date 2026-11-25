@@ -1,9 +1,11 @@
 /**
  * wewe 私有公众号专队：入队 / 出队 / 开关（P1）
- * 提取/入库/映射完整逻辑见 P2+；此处只做标记与配置。
+ * 专队名单来源：新闻舆情监控对象（有企业公众号 id）+ 第三方/额外公众号；
+ * 不再由新榜「数据不存在」自动入队、成功自动出队。
  */
 const db = require('../../db');
 const { generateId } = require('../idGenerator');
+const { IE_NEWS_APP_FILTER_SQL } = require('../investedEnterpriseNewsAppSql');
 
 const DATA_MISSING_RE = /数据不存在|不存在|无数据|没有数据/;
 
@@ -12,6 +14,14 @@ function isDataMissingError(typeOrMessage) {
   if (!s) return false;
   if (s === '数据不存在' || s.includes('404')) return true;
   return DATA_MISSING_RE.test(s);
+}
+
+function splitWechatAccountIds(raw) {
+  if (raw == null) return [];
+  return String(raw)
+    .split(/[,，;\s]+/)
+    .map((id) => id.trim())
+    .filter((id) => id && id !== '');
 }
 
 async function getWewePrivateConfig() {
@@ -36,7 +46,8 @@ async function resolveSourceType(wechatAccountId) {
   try {
     const ie = await db.query(
       `SELECT F_Id FROM invested_enterprises
-       WHERE F_DeleteMark = 0
+       WHERE ${IE_NEWS_APP_FILTER_SQL} AND F_DeleteMark = 0
+         AND COALESCE(exit_status, '') NOT IN ('完全退出', '不再观察')
          AND (wechat_official_account_id = ?
            OR wechat_official_account_id LIKE ?
            OR wechat_official_account_id LIKE ?
@@ -312,35 +323,175 @@ async function setAccountEnqueueBlocked(wechatAccountId, blocked, opts = {}) {
 }
 
 /**
- * 在账号同步收尾时根据结果调用入/出队（不抛错）
+ * 新榜收尾钩子：专队已改为监控对象/第三方同步，不再因新榜结果入队或出队。
+ * 保留函数以免调用方报错；仅记一条 debug 级日志。
  */
 async function handleXinbangAccountFinish(wechatAccountId, result) {
-  const {
-    hasData = false,
-    errorType = null,
-    errorMessage = null
-  } = result || {};
+  return {
+    action: 'skip_roster_from_monitor',
+    wechatAccountId: String(wechatAccountId || '').trim() || null,
+    hasData: Boolean(result && result.hasData)
+  };
+}
+
+/**
+ * 收集监控侧应进专队的公众号 id → Map<gh, sourceType>
+ * - invested：新闻舆情监控对象且填写了企业公众号 id（含已上市；排除完全退出/不再观察）
+ * - additional：第三方/额外公众号 active
+ * - both：两边都有
+ */
+async function collectMonitorWechatAccounts() {
+  const sourceByGh = new Map();
+
+  const mark = (gh, kind) => {
+    const id = String(gh || '').trim();
+    if (!id) return;
+    const prev = sourceByGh.get(id);
+    if (!prev) sourceByGh.set(id, kind);
+    else if (prev !== kind) sourceByGh.set(id, 'both');
+  };
 
   try {
-    if (hasData) {
-      return await dequeueOnXinbangSuccess(wechatAccountId, { reason: 'has_data' });
-    }
-    if (errorType || errorMessage) {
-      if (isDataMissingError(errorType) || isDataMissingError(errorMessage)) {
-        return await enqueueFromXinbangError(wechatAccountId, {
-          type: errorType,
-          message: errorMessage
-        });
+    const enterprises = await db.query(
+      `SELECT wechat_official_account_id
+       FROM invested_enterprises
+       WHERE ${IE_NEWS_APP_FILTER_SQL}
+         AND F_DeleteMark = 0
+         AND wechat_official_account_id IS NOT NULL
+         AND TRIM(wechat_official_account_id) != ''
+         AND COALESCE(exit_status, '') NOT IN ('完全退出', '不再观察')`
+    );
+    for (const row of enterprises) {
+      for (const gh of splitWechatAccountIds(row.wechat_official_account_id)) {
+        mark(gh, 'invested');
       }
-      // 超时/网络等：不入队、不出队
-      return { action: 'skip_other_error', type: errorType };
     }
-    // 无错误且无数据：视为明确空成功 → 出队
-    return await dequeueOnXinbangSuccess(wechatAccountId, { reason: 'empty_ok' });
   } catch (e) {
-    console.warn(`[wewe专队] handleXinbangAccountFinish: ${e.message}`);
-    return { action: 'error', error: e.message };
+    console.warn(`[wewe专队] 读取监控对象公众号失败: ${e.message}`);
   }
+
+  try {
+    const additional = await db.query(
+      `SELECT wechat_account_id
+       FROM additional_wechat_accounts
+       WHERE F_DeleteMark = 0
+         AND status = 'active'
+         AND wechat_account_id IS NOT NULL
+         AND TRIM(wechat_account_id) != ''`
+    );
+    for (const row of additional) {
+      mark(row.wechat_account_id, 'additional');
+    }
+  } catch (e) {
+    console.warn(`[wewe专队] 读取第三方公众号失败: ${e.message}`);
+  }
+
+  return sourceByGh;
+}
+
+/**
+ * 从监控对象 + 第三方公众号同步专队名单（只增改，不自动退订）。
+ * @param {{ autoMap?: boolean }} options autoMap 默认 true，对新入队异步尝试历史链接映射
+ */
+async function syncTeamFromMonitorSources(options = {}) {
+  const autoMap = options.autoMap !== false;
+  const sourceByGh = await collectMonitorWechatAccounts();
+  const summary = {
+    action: 'synced_from_monitor',
+    sourceCount: sourceByGh.size,
+    inserted: 0,
+    reEnqueued: 0,
+    refreshed: 0,
+    skippedBlocked: 0,
+    mappedKickoff: 0
+  };
+  const kickoffMap = [];
+
+  for (const [gh, sourceType] of sourceByGh) {
+    const existing = await db.query(
+      `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+      [gh]
+    );
+
+    if (existing.length === 0) {
+      const id = await generateId('wewe_private_accounts');
+      await db.execute(
+        `INSERT INTO wewe_private_accounts
+         (F_Id, wechat_account_id, source_type, team_status, map_status, feed_id, sample_article_url,
+          last_xinbang_error, last_enqueued_at)
+         VALUES (?, ?, ?, 'pending_subscribe', 'pending_subscribe', NULL, NULL, ?, NOW())`,
+        [id, gh, sourceType, 'sync:monitor']
+      );
+      summary.inserted += 1;
+      kickoffMap.push(gh);
+      continue;
+    }
+
+    const row = existing[0];
+    if (Number(row.enqueue_blocked) === 1) {
+      await db.execute(
+        `UPDATE wewe_private_accounts
+         SET source_type = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ?`,
+        [sourceType, row.F_Id]
+      );
+      summary.skippedBlocked += 1;
+      continue;
+    }
+
+    if (row.team_status === 'active' || row.team_status === 'pending_subscribe') {
+      await db.execute(
+        `UPDATE wewe_private_accounts
+         SET source_type = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_Id = ?`,
+        [sourceType, row.F_Id]
+      );
+      summary.refreshed += 1;
+      if (row.map_status !== 'mapped' || !row.feed_id) kickoffMap.push(gh);
+      continue;
+    }
+
+    // exited / disabled → 拉回待订阅（保留已有 feed_id）
+    await db.execute(
+      `UPDATE wewe_private_accounts
+       SET team_status = 'pending_subscribe',
+           map_status = CASE WHEN feed_id IS NOT NULL AND feed_id != '' THEN 'mapped' ELSE 'pending_subscribe' END,
+           source_type = ?,
+           last_enqueued_at = NOW(),
+           last_exited_at = NULL,
+           last_xinbang_error = ?,
+           F_LastModifyTime = CURRENT_TIMESTAMP
+       WHERE F_Id = ?`,
+      [sourceType, 'sync:monitor_reenqueue', row.F_Id]
+    );
+    summary.reEnqueued += 1;
+    if (!(row.feed_id && String(row.feed_id).trim())) kickoffMap.push(gh);
+  }
+
+  if (autoMap && kickoffMap.length) {
+    summary.mappedKickoff = kickoffMap.length;
+    setImmediate(() => {
+      try {
+        const { tryAutoMapAfterEnqueue } = require('./weweFeedMap');
+        (async () => {
+          for (const gh of kickoffMap) {
+            try {
+              await tryAutoMapAfterEnqueue(gh, { notify: false });
+            } catch (e) {
+              console.warn(`[wewe映射] 同步后自动映射失败 account=${gh}: ${e.message}`);
+            }
+          }
+        })().catch((e) => console.warn(`[wewe映射] 同步后批量映射异常: ${e.message}`));
+      } catch (e) {
+        console.warn(`[wewe映射] 加载失败: ${e.message}`);
+      }
+    });
+  }
+
+  console.log(
+    `[wewe专队] 从监控同步 source=${summary.sourceCount} +${summary.inserted} re=${summary.reEnqueued} refresh=${summary.refreshed} blocked=${summary.skippedBlocked}`
+  );
+  return summary;
 }
 
 module.exports = {
@@ -353,5 +504,8 @@ module.exports = {
   unsubscribeFromWewe,
   setAccountEnqueueBlocked,
   handleXinbangAccountFinish,
-  resolveSourceType
+  syncTeamFromMonitorSources,
+  collectMonitorWechatAccounts,
+  resolveSourceType,
+  splitWechatAccountIds
 };

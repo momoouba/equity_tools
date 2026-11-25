@@ -1178,15 +1178,11 @@ async function executeNewsSyncForConfig(config, range, options = {}) {
         }
       }
 
-      // wewe 专队：数据不存在入队；有文/空成功出队（开关默认关，失败不影响同步）
+      // wewe 专队：名单改由「监控对象+第三方公众号」同步，新榜结果不再入队/出队（钩子保留为空操作）
       try {
-        let finishErrorType = null;
-        if (accountErrorMsg && /数据不存在|不存在|无数据|没有数据/.test(accountErrorMsg)) {
-          finishErrorType = '数据不存在';
-        }
         await handleXinbangAccountFinish(account, {
           hasData: accountHasData,
-          errorType: finishErrorType,
+          errorType: null,
           errorMessage: accountErrorMsg
         });
       } catch (weweHookErr) {

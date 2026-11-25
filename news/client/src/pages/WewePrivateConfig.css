@@ -64,6 +64,8 @@
 
 .wewe-private-config__pane--list {
   width: 100%;
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -256,10 +258,45 @@
 
 .wewe-private-config .table-container,
 .wewe-private-config .wewe-private-config__table-area {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  /* 避免 flex 子项被表格内容撑成「矮条」，占满配置区剩余高度 */
+  min-height: min(520px, calc(100vh - 340px));
   margin-bottom: 0;
   overflow: hidden;
+}
+
+/* 专队账号列多：保证横向滚动，避免表头挤叠 */
+.wewe-private-config__pane--list .arco-table-container {
+  width: 100%;
+}
+
+.wewe-private-config__pane--list .arco-table-content-inner,
+.wewe-private-config__pane--list .arco-table-body,
+.wewe-private-config__pane--list .arco-table-header {
+  overflow-x: auto !important;
+}
+
+/* 文本列换行；操作列仍单行 */
+.wewe-private-config__pane--list .arco-table-th .arco-table-cell,
+.wewe-private-config__pane--list .arco-table-td .arco-table-cell {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.wewe-private-config__pane--list .arco-table-td.admin-ops-col .arco-table-cell,
+.wewe-private-config__pane--list .arco-table-td.list-ops-col .arco-table-cell,
+.wewe-private-config__pane--list .arco-table-th.admin-ops-col .arco-table-cell,
+.wewe-private-config__pane--list .arco-table-th.list-ops-col .arco-table-cell {
+  white-space: nowrap;
+}
+
+.wewe-private-config__cell-wrap {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
 }
 
 .wewe-private-config .pagination-wrapper {

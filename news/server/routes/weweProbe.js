@@ -19,7 +19,13 @@ const {
   applyBaseUrlFromConfig,
   resolveProvider
 } = require('../utils/wewe/mpClient');
-const { getWewePrivateConfig, enqueueFromXinbangError, unsubscribeFromWewe, setAccountEnqueueBlocked } = require('../utils/wewe/wewePrivateTeam');
+const {
+  getWewePrivateConfig,
+  enqueueFromXinbangError,
+  unsubscribeFromWewe,
+  setAccountEnqueueBlocked,
+  syncTeamFromMonitorSources
+} = require('../utils/wewe/wewePrivateTeam');
 const { mapAccountWithSampleUrl, tryAutoMapAfterEnqueue } = require('../utils/wewe/weweFeedMap');
 const {
   extractOneAccount,
@@ -363,7 +369,22 @@ router.get('/team/wewe-auth-bootstrap', requireAdmin, async (req, res) => {
   }
 });
 
-/** P1 自检：模拟「数据不存在」入队（不打新榜；需已开 wewe_enabled+enqueue_enabled） */
+/** 从舆情监控对象（有公众号 id）+ 第三方公众号同步专队名单 */
+router.post('/team/sync-from-monitor', requireAdmin, async (req, res) => {
+  try {
+    const autoMap = req.body.autoMap !== false;
+    const result = await syncTeamFromMonitorSources({ autoMap });
+    res.json({
+      success: true,
+      message: `已同步：来源 ${result.sourceCount}，新增 ${result.inserted}，重新入队 ${result.reEnqueued}，刷新 ${result.refreshed}，禁入队跳过 ${result.skippedBlocked}`,
+      result
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** P1 自检：模拟「数据不存在」入队（遗留探路；正式名单请用 sync-from-monitor） */
 router.post('/team/enqueue-test', requireAdmin, async (req, res) => {
   try {
     const gh = String(req.body.wechat_account_id || req.body.account || '').trim();
@@ -390,7 +411,7 @@ router.post('/team/enqueue-test', requireAdmin, async (req, res) => {
   }
 });
 
-/** 出队并删除 wewe-rss 订阅源（新闻库不软删，只把 team_status 标为 exited） */
+/** 出队并删除 wewe-rss / we-mp-rss 订阅源（新闻库不软删，只把 team_status 标为 exited） */
 router.post('/team/unsubscribe', requireAdmin, async (req, res) => {
   try {
     const gh = String(req.body.wechat_account_id || req.body.account || '').trim();
@@ -409,10 +430,62 @@ router.post('/team/unsubscribe', requireAdmin, async (req, res) => {
     res.status(weweFailed ? 502 : 200).json({
       success: !weweFailed,
       message: weweFailed
-        ? `专队已出队，但 wewe-rss 退订失败：${result.wewe?.error || '未知错误'}`
-        : '已出队并从 wewe-rss 删除订阅',
+        ? `专队已出队，但采集端退订失败：${result.wewe?.error || '未知错误'}`
+        : '已出队并从采集端删除订阅',
       result,
       account: rows[0] || null
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** 批量退订：body.wechat_account_ids = string[] */
+router.post('/team/unsubscribe-batch', requireAdmin, async (req, res) => {
+  try {
+    const raw = req.body.wechat_account_ids || req.body.accounts || [];
+    const ids = [...new Set((Array.isArray(raw) ? raw : String(raw).split(',')).map((s) => String(s || '').trim()).filter(Boolean))];
+    if (!ids.length) {
+      return res.status(400).json({ success: false, message: '需要 wechat_account_ids' });
+    }
+    if (ids.length > 200) {
+      return res.status(400).json({ success: false, message: '单次最多 200 个账号' });
+    }
+
+    const items = [];
+    let ok = 0;
+    let failed = 0;
+    let notFound = 0;
+    for (const gh of ids) {
+      try {
+        const result = await unsubscribeFromWewe(gh);
+        if (result.action === 'not_found') {
+          notFound += 1;
+          items.push({ wechat_account_id: gh, action: 'not_found' });
+        } else if (result.action === 'dequeued_wewe_failed') {
+          failed += 1;
+          items.push({
+            wechat_account_id: gh,
+            action: result.action,
+            error: result.wewe?.error || '采集端退订失败'
+          });
+        } else {
+          ok += 1;
+          items.push({ wechat_account_id: gh, action: result.action, feedId: result.feedId || null });
+        }
+      } catch (e) {
+        failed += 1;
+        items.push({ wechat_account_id: gh, action: 'error', error: e.message });
+      }
+    }
+
+    res.json({
+      success: failed === 0,
+      message: `批量退订完成：成功 ${ok}，采集端失败 ${failed}，未找到 ${notFound}`,
+      ok,
+      failed,
+      notFound,
+      items
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });
