@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Form, Input, Button, Message, Alert, Checkbox } from '@arco-design/web-react'
 import axios from '../utils/axios'
 import { setUserSession, isLoggedIn } from '../utils/auth'
+import { redirectToH5IfMobile } from '../utils/mobileH5Redirect'
 import './Login.css'
 
 const FormItem = Form.Item
@@ -21,6 +22,8 @@ function Login() {
   const mouseRef = useRef({ x: null, y: null, radius: 150 })
 
   useEffect(() => {
+    // 手机同址 → H5（分享等路径已在工具内排除）
+    if (redirectToH5IfMobile()) return
     // 已登录（含记住我未过期）直接进系统
     if (isLoggedIn()) {
       navigate('/dashboard', { replace: true })

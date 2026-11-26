@@ -2,8 +2,10 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import {
   Button,
   Collapse,
+  Dropdown,
   Input,
   InputNumber,
+  Menu,
   Message,
   Modal,
   Pagination,
@@ -48,8 +50,30 @@ function statusColor(s) {
 }
 
 /**
+ * 浏览器打开 we-mp-rss 的地址。
+ * 优先独立 HTTPS 根路径端口 8443（Vue 路由正常）；勿用 docker 内网名；
+ * /we-mp-rss/ 子路径仅作兜底（易出现顶栏有、内容空白）。
+ */
+function resolveWerssBrowserUrl(baseUrl) {
+  const raw = String(baseUrl || '').trim()
+  const isBrowserReachable =
+    raw &&
+    !/^https?:\/\/(we-mp-rss|wewe-rss|host\.docker\.internal)(:|\/|$)/i.test(raw) &&
+    !/^https?:\/\/(10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/i.test(raw)
+  if (isBrowserReachable && /^https?:\/\//i.test(raw)) {
+    return raw.replace(/\/$/, '') + '/'
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    const proto = window.location.protocol || 'https:'
+    const host = window.location.hostname
+    return `${proto}//${host}:8443/`
+  }
+  return 'https://news.gf-dsai.com:8443/'
+}
+
+/**
  * 采集管理嵌入：
- * - werss：直接打开 we-mp-rss（默认 http://127.0.0.1:8001），在其内登录/订号/配 Cookie
+ * - werss：同源反代 /we-mp-rss/（服务端 Base URL 仍用 http://we-mp-rss:8001）
  * - wewe：同源反代 + ticket 注入 AUTH_CODE
  */
 function CollectorAdminEmbed({ provider = 'wewe', baseUrl = '' }) {
@@ -64,7 +88,7 @@ function CollectorAdminEmbed({ provider = 'wewe', baseUrl = '' }) {
     setGateUrl('')
     try {
       if (isWerss) {
-        const url = String(baseUrl || 'http://127.0.0.1:8001').trim().replace(/\/$/, '') || 'http://127.0.0.1:8001'
+        const url = resolveWerssBrowserUrl(baseUrl)
         setGateUrl(url)
         setDirectUrl(url)
         setIframeKey((k) => k + 1)
@@ -97,7 +121,9 @@ function CollectorAdminEmbed({ provider = 'wewe', baseUrl = '' }) {
           {isWerss ? (
             <>
               嵌入 <strong>we-mp-rss</strong> 管理页（订阅公众号、微信读书 Cookie）。
-              默认账号 <code>admin</code> / <code>admin@123</code>；若 iframe 被浏览器拦截，请用「新窗口打开」。
+              浏览器走 <code>https://本域:8443/</code>（根路径，内容才完整）；专队 Base URL 仍填{' '}
+              <code>http://we-mp-rss:8001</code> 给服务端贴链接。默认账号 <code>admin</code> /{' '}
+              <code>admin@123</code>。
             </>
           ) : (
             <>自动注入 AUTH_CODE 后进入 wewe-rss 管理页。嵌入与「新窗口打开」均走本站反代。</>
@@ -164,9 +190,12 @@ function WewePrivateConfig() {
   const [remindingPending, setRemindingPending] = useState(false)
   const [unsubscribingId, setUnsubscribingId] = useState('')
   const [batchUnsubscribing, setBatchUnsubscribing] = useState(false)
+  const [batchBlocking, setBatchBlocking] = useState(false)
+  const [batchSubscribing, setBatchSubscribing] = useState(false)
   const [syncingFromMonitor, setSyncingFromMonitor] = useState(false)
   const [selectedAccountKeys, setSelectedAccountKeys] = useState([])
   const [enqueueBlockingId, setEnqueueBlockingId] = useState('')
+  const [subscribingId, setSubscribingId] = useState('')
   const [tableScrollY, setTableScrollY] = useState(() =>
     typeof window !== 'undefined' ? Math.max(420, window.innerHeight - 380) : 420
   )
@@ -363,11 +392,18 @@ function WewePrivateConfig() {
     row?.team_status === 'active' ||
     row?.team_status === 'pending_subscribe'
 
+  /** 未禁入队的账号均可禁止（含已出队，避免同步再次拉回） */
+  const canBlockEnqueueRow = (row) => Number(row?.enqueue_blocked) !== 1
+
+  /** 可批量/单行订阅：未禁入队，且非已在队 active */
+  const canSubscribeRow = (row) =>
+    Number(row?.enqueue_blocked) !== 1 && row?.team_status !== 'active'
+
   const unsubscribeAccount = (row) => {
     const name = row.account_name || row.wechat_account_id
     Modal.confirm({
       title: '从采集端退订',
-      content: `将删除 we-mp-rss/wewe 里「${name}」的订阅，并把专队状态标为已出队。若仅不想再次被新榜自动拉回队列，可改用「禁止重新入队」（不删采集端订阅）。`,
+      content: `将删除 we-mp-rss/wewe 里「${name}」的订阅，并把专队状态标为已出队。若不想被「从监控同步」再次拉回，请再用「禁止重新入队」（不删采集端订阅）。`,
       okText: '退订',
       okButtonProps: { status: 'danger' },
       cancelText: '取消',
@@ -394,13 +430,20 @@ function WewePrivateConfig() {
     })
   }
 
-  const syncFromMonitor = async () => {
+  const runSyncFromMonitor = async (sourceKinds = 'all', includeInactiveAdditional = false) => {
     setSyncingFromMonitor(true)
     try {
-      const res = await axios.post('/api/wewe-probe/team/sync-from-monitor', { autoMap: true })
+      const res = await axios.post('/api/wewe-probe/team/sync-from-monitor', {
+        autoMap: true,
+        sourceKinds,
+        includeInactiveAdditional
+      })
       if (res.data?.success) {
-        Message.success(res.data.message || '已从监控对象同步')
+        const msg = res.data.message || '已从监控对象同步'
+        if (String(msg).includes('全部为「失效」')) Message.warning(msg)
+        else Message.success(msg)
         setSelectedAccountKeys([])
+        if (sourceKinds === 'additional') setAccountSourceFilter('third_party')
         await loadAccounts()
       } else {
         Message.error(res.data?.message || '同步失败')
@@ -410,6 +453,32 @@ function WewePrivateConfig() {
     } finally {
       setSyncingFromMonitor(false)
     }
+  }
+
+  const confirmSyncFromMonitor = (sourceKinds, includeInactiveAdditional = false) => {
+    const kindLabel =
+      sourceKinds === 'additional'
+        ? includeInactiveAdditional
+          ? '仅第三方·含失效'
+          : '仅第三方·仅生效'
+        : sourceKinds === 'invested'
+          ? '仅企业'
+          : '全部'
+    const warn =
+      sourceKinds === 'all'
+        ? '会把监控对象里仍有效、且未「禁入队」的已出队企业号重新拉回待订阅。第三方默认只收「生效」。'
+        : sourceKinds === 'additional'
+          ? includeInactiveAdditional
+            ? '将把第三方表中有 ID 的账号（含「失效」）按去重写入专队；不会拉回企业号。'
+            : '只同步第三方「生效」账号。若管理页全是「失效」，这里会是 0——请先批量设为生效，或改选「含失效」。'
+          : '只处理监控对象企业公众号。'
+    Modal.confirm({
+      title: `从监控同步（${kindLabel}）`,
+      content: warn,
+      okText: '开始同步',
+      cancelText: '取消',
+      onOk: () => runSyncFromMonitor(sourceKinds, includeInactiveAdditional)
+    })
   }
 
   const batchUnsubscribeAccounts = () => {
@@ -447,12 +516,99 @@ function WewePrivateConfig() {
     })
   }
 
+  const batchBlockEnqueue = () => {
+    const selected = accounts.filter(
+      (a) => selectedAccountKeys.includes(a.F_Id) && canBlockEnqueueRow(a)
+    )
+    if (!selected.length) {
+      Message.warning('请先勾选尚未禁止入队的账号')
+      return
+    }
+    Modal.confirm({
+      title: '批量禁止重新入队',
+      content: `将对已选 ${selected.length} 个账号标记「禁入队」并标为已出队。之后「从监控同步」不会再把它们拉回。不会删除采集端已有订阅。`,
+      okText: `禁止 ${selected.length} 个`,
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchBlocking(true)
+        try {
+          const res = await axios.post('/api/wewe-probe/team/enqueue-block-batch', {
+            wechat_account_ids: selected.map((a) => a.wechat_account_id),
+            blocked: true
+          })
+          const msg = res.data?.message || '批量禁止入队完成'
+          if (res.data?.success) Message.success(msg)
+          else Message.warning(msg)
+          setSelectedAccountKeys([])
+          await loadAccounts()
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '批量禁止入队失败')
+          await loadAccounts()
+        } finally {
+          setBatchBlocking(false)
+        }
+      }
+    })
+  }
+
+  const batchSubscribeAccounts = () => {
+    const selected = accounts.filter(
+      (a) => selectedAccountKeys.includes(a.F_Id) && canSubscribeRow(a)
+    )
+    if (!selected.length) {
+      Message.warning('请先勾选可订阅的账号（非在队、未禁入队）')
+      return
+    }
+    Modal.confirm({
+      title: '批量订阅',
+      content: `将对已选 ${selected.length} 个账号：已有 feed 的直接重新入队；否则尝试历史/样例链接自动映射。仍缺链接的需稍后「粘贴链接」。`,
+      okText: `订阅 ${selected.length} 个`,
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchSubscribing(true)
+        try {
+          const res = await axios.post('/api/wewe-probe/team/subscribe-batch', {
+            wechat_account_ids: selected.map((a) => a.wechat_account_id)
+          })
+          const msg = res.data?.message || '批量订阅完成'
+          if (res.data?.success) Message.success(msg)
+          else Message.warning(msg)
+          setSelectedAccountKeys([])
+          await loadAccounts()
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '批量订阅失败')
+          await loadAccounts()
+        } finally {
+          setBatchSubscribing(false)
+        }
+      }
+    })
+  }
+
+  const subscribeOneAccount = async (row) => {
+    setSubscribingId(row.F_Id)
+    try {
+      const res = await axios.post('/api/wewe-probe/team/subscribe-batch', {
+        wechat_account_ids: [row.wechat_account_id]
+      })
+      const msg = res.data?.message || '订阅完成'
+      if (res.data?.success) Message.success(msg)
+      else Message.warning(msg)
+      await loadAccounts()
+    } catch (e) {
+      Message.error(e.response?.data?.message || e.message || '订阅失败')
+      await loadAccounts()
+    } finally {
+      setSubscribingId('')
+    }
+  }
+
   const toggleEnqueueBlock = (row, blocked) => {
     const name = row.account_name || row.wechat_account_id
     if (blocked) {
       Modal.confirm({
         title: '禁止重新入队',
-        content: `「${name}」将标为已出队，且新榜再报「数据不存在」时也不会自动回到待订阅。不会删除 wewe-rss 已有订阅；若要退订请用「退订」。`,
+        content: `「${name}」将标为已出队，且之后「从监控同步」也不会再把它拉回。不会删除采集端已有订阅；若要退订请用「退订」。`,
         okText: '禁止入队',
         cancelText: '取消',
         onOk: () => postEnqueueBlock(row, true)
@@ -619,13 +775,13 @@ function WewePrivateConfig() {
     },
     {
       title: '操作',
-      width: 248,
+      width: 320,
       className: 'admin-ops-col admin-ops-col-nowrap',
       render: (_, row) => {
         const blocked = Number(row.enqueue_blocked) === 1
         const canUnsubscribe = canUnsubscribeRow(row)
-        const canBlockEnqueue =
-          !blocked && (row.team_status === 'pending_subscribe' || row.team_status === 'active')
+        const canBlockEnqueue = canBlockEnqueueRow(row)
+        const canSubscribe = canSubscribeRow(row)
         return (
           <AdminOps>
             <Button
@@ -638,6 +794,16 @@ function WewePrivateConfig() {
             >
               粘贴链接
             </Button>
+            {canSubscribe ? (
+              <Button
+                type="outline"
+                size="small"
+                loading={subscribingId === row.F_Id}
+                onClick={() => subscribeOneAccount(row)}
+              >
+                订阅
+              </Button>
+            ) : null}
             {canBlockEnqueue ? (
               <Button
                 type="outline"
@@ -765,10 +931,15 @@ function WewePrivateConfig() {
                         onChange={(v) => setConfig({ ...config, wewe_base_url: v })}
                         placeholder={
                           config.collector_provider === 'werss'
-                            ? 'http://127.0.0.1:8001'
+                            ? 'http://we-mp-rss:8001'
                             : 'http://127.0.0.1:4000'
                         }
                       />
+                      <span className="wewe-private-config__hint">
+                        {config.collector_provider === 'werss'
+                          ? '给服务端贴链接/订号用（生产填 http://we-mp-rss:8001）。浏览器管理页走本站 /we-mp-rss/，勿把内网名填进浏览器地址栏。'
+                          : 'wewe 上游地址'}
+                      </span>
                     </label>
                     <label>
                       运维邮箱 ops_email
@@ -958,8 +1129,46 @@ function WewePrivateConfig() {
                 </span>
               </h3>
               <Space wrap>
-                <Button type="primary" loading={syncingFromMonitor} onClick={syncFromMonitor}>
-                  从监控同步
+                <Dropdown
+                  droplist={
+                    <Menu
+                      onClickMenuItem={(key) => {
+                        if (key === 'additional') confirmSyncFromMonitor('additional', false)
+                        else if (key === 'additional_inactive') {
+                          confirmSyncFromMonitor('additional', true)
+                        } else if (key === 'invested') confirmSyncFromMonitor('invested', false)
+                        else if (key === 'all') confirmSyncFromMonitor('all', false)
+                      }}
+                    >
+                      <Menu.Item key="additional">仅同步第三方（仅生效）</Menu.Item>
+                      <Menu.Item key="additional_inactive">仅同步第三方（含失效）</Menu.Item>
+                      <Menu.Item key="invested">仅同步企业</Menu.Item>
+                      <Menu.Item key="all">同步全部</Menu.Item>
+                    </Menu>
+                  }
+                  trigger="click"
+                  disabled={syncingFromMonitor}
+                >
+                  <Button type="primary" loading={syncingFromMonitor}>
+                    从监控同步
+                  </Button>
+                </Dropdown>
+                <Button
+                  type="outline"
+                  loading={batchSubscribing}
+                  disabled={!selectedAccountKeys.length || batchSubscribing}
+                  onClick={batchSubscribeAccounts}
+                >
+                  批量订阅{selectedAccountKeys.length ? ` (${selectedAccountKeys.length})` : ''}
+                </Button>
+                <Button
+                  type="outline"
+                  loading={batchBlocking}
+                  disabled={!selectedAccountKeys.length || batchBlocking}
+                  onClick={batchBlockEnqueue}
+                >
+                  批量禁止入队
+                  {selectedAccountKeys.length ? ` (${selectedAccountKeys.length})` : ''}
                 </Button>
                 <Button
                   type="outline"
@@ -1049,8 +1258,8 @@ function WewePrivateConfig() {
             </Collapse>
 
             <Typography.Paragraph type="secondary" className="wewe-private-config__list-hint">
-              名单请用「从监控同步」：拉取舆情监控对象（有企业公众号 id）+ 第三方公众号；不会自动删已出队外的旧号。
-              待订阅点「粘贴链接」完成 we-mp-rss 订号并写 feed_id。停抓请本页「退订」（不要只在 we-mp-rss 里删）。
+              名单请用「从监控同步」：可选仅第三方 / 仅企业 / 全部；按公众号 ID 去重；不会自动删已出队旧号。
+              已退订又不想被同步拉回：勾选后点「批量禁止入队」。待订阅可「批量订阅」或「粘贴链接」完成 we-mp-rss 订号。
             </Typography.Paragraph>
 
             <div ref={tableScrollAreaRef} className="table-container wewe-private-config__table-area">

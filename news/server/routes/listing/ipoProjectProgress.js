@@ -159,6 +159,15 @@ async function buildProgressWhere(req, user) {
     params.push(rangeStart, rangeEnd);
   }
 
+  const fundRaw = String(req.query.fund || '').trim();
+  const fund = fundRaw.length > 100 ? fundRaw.slice(0, 100) : fundRaw;
+  if (fund) {
+    where.push(
+      `${listingProgressKeywordBlob("IFNULL(ipp.fund, '')")} LIKE CONVERT(? USING utf8mb4) COLLATE utf8mb4_general_ci`
+    );
+    params.push(`%${fund}%`);
+  }
+
   const kwRaw = String(req.query.keyword || '').trim();
   const kw = kwRaw.length > 200 ? kwRaw.slice(0, 200) : kwRaw;
   if (kw) {

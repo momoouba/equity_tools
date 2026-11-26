@@ -4,6 +4,7 @@ import { Layout, Button, Spin, Message } from '@arco-design/web-react'
 import { IconCommon, IconApps, IconSettings, IconFolder, IconBulb, IconMindMapping, IconSafe } from '@arco-design/web-react/icon'
 import axios from '../utils/axios'
 import { clearUser, getUser, updateStoredUser } from '../utils/auth'
+import { redirectToH5IfMobile } from '../utils/mobileH5Redirect'
 import EnterpriseManagement from './EnterpriseManagement'
 import CompanyManagement from './CompanyManagement'
 import SystemConfig from './SystemConfig'
@@ -166,6 +167,8 @@ function Dashboard() {
   }
 
   useEffect(() => {
+    // 手机访问 Dashboard 同址跳 H5（?pc=1 可留在电脑版）
+    if (redirectToH5IfMobile()) return
     const userInfo = getUser()
     if (!userInfo) {
       navigate('/login')

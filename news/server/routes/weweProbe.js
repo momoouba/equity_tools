@@ -24,6 +24,7 @@ const {
   enqueueFromXinbangError,
   unsubscribeFromWewe,
   setAccountEnqueueBlocked,
+  subscribeTeamAccount,
   syncTeamFromMonitorSources
 } = require('../utils/wewe/wewePrivateTeam');
 const { mapAccountWithSampleUrl, tryAutoMapAfterEnqueue } = require('../utils/wewe/weweFeedMap');
@@ -338,7 +339,7 @@ router.get('/team/accounts', requireAdmin, async (req, res) => {
       sql += ` AND team_status = ?`;
       params.push(status);
     }
-    sql += ` ORDER BY last_enqueued_at DESC, F_CreatorTime DESC LIMIT 200`;
+    sql += ` ORDER BY last_enqueued_at DESC, F_CreatorTime DESC LIMIT 2000`;
     const rows = await db.query(sql, params);
     const enriched = await enrichWeweTeamAccounts(rows);
     res.json({ success: true, phase: 'P1', count: enriched.length, accounts: enriched });
@@ -373,10 +374,40 @@ router.get('/team/wewe-auth-bootstrap', requireAdmin, async (req, res) => {
 router.post('/team/sync-from-monitor', requireAdmin, async (req, res) => {
   try {
     const autoMap = req.body.autoMap !== false;
-    const result = await syncTeamFromMonitorSources({ autoMap });
+    const sourceKinds = req.body.sourceKinds || req.body.source || 'all';
+    const includeInactiveAdditional =
+      req.body.includeInactiveAdditional === true ||
+      req.body.includeInactive === true;
+    const result = await syncTeamFromMonitorSources({
+      autoMap,
+      sourceKinds,
+      includeInactiveAdditional
+    });
+    const totals = result.monitorTotals || {};
+    const kindLabel =
+      result.sourceKinds === 'additional'
+        ? '仅第三方'
+        : result.sourceKinds === 'invested'
+          ? '仅企业'
+          : '全部';
+    let message =
+      `已同步（${kindLabel}）：处理 ${result.sourceCount}` +
+      `（本次纳入第三方 ${totals.additional || 0}/企业 ${totals.invested || 0}/重叠 ${totals.both || 0}），` +
+      `新增 ${result.inserted}，重新入队 ${result.reEnqueued}，刷新 ${result.refreshed}，禁入队跳过 ${result.skippedBlocked}`;
+    message +=
+      `；第三方表 ${totals.additionalRows || 0} 行/去重 ${totals.additionalDistinct || 0}` +
+      `（生效去重 ${totals.additionalActiveDistinct || 0}，失效去重 ${totals.additionalInactiveDistinct || 0}）`;
+    if (
+      !includeInactiveAdditional &&
+      Number(totals.additionalActiveDistinct || 0) === 0 &&
+      Number(totals.additionalInactiveDistinct || 0) > 0
+    ) {
+      message +=
+        '。注意：第三方目前全部为「失效」，默认同步不会入队；请先在第三方公众号管理设为生效，或勾选「含失效第三方」再同步';
+    }
     res.json({
       success: true,
-      message: `已同步：来源 ${result.sourceCount}，新增 ${result.inserted}，重新入队 ${result.reEnqueued}，刷新 ${result.refreshed}，禁入队跳过 ${result.skippedBlocked}`,
+      message,
       result
     });
   } catch (e) {
@@ -492,7 +523,7 @@ router.post('/team/unsubscribe-batch', requireAdmin, async (req, res) => {
   }
 });
 
-/** 人工禁止/恢复新榜自动重新入队（单条；禁止时标 exited，不删 wewe 订阅） */
+/** 人工禁止/恢复同步重新入队（单条；禁止时标 exited，不删采集端订阅） */
 router.post('/team/enqueue-block', requireAdmin, async (req, res) => {
   try {
     const gh = String(req.body.wechat_account_id || req.body.account || '').trim();
@@ -514,10 +545,134 @@ router.post('/team/enqueue-block', requireAdmin, async (req, res) => {
     res.json({
       success: true,
       message: blocked
-        ? '已禁止该账号被新榜自动重新入队（已标为已出队）'
-        : '已恢复允许新榜自动入队',
+        ? '已禁止该账号被「从监控同步」重新入队（已标为已出队）'
+        : '已恢复允许同步重新入队',
       result,
       account: rows[0] || null
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** 批量禁止/恢复同步重新入队 */
+router.post('/team/enqueue-block-batch', requireAdmin, async (req, res) => {
+  try {
+    const raw = req.body.wechat_account_ids || req.body.accounts || [];
+    const ids = [
+      ...new Set(
+        (Array.isArray(raw) ? raw : String(raw).split(','))
+          .map((s) => String(s || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (!ids.length) {
+      return res.status(400).json({ success: false, message: '需要 wechat_account_ids' });
+    }
+    if (ids.length > 500) {
+      return res.status(400).json({ success: false, message: '单次最多 500 个账号' });
+    }
+    const blockedRaw = req.body.blocked ?? req.body.enqueue_blocked;
+    const blocked = blockedRaw !== false && blockedRaw !== 0 && blockedRaw !== '0';
+
+    let ok = 0;
+    let notFound = 0;
+    let failed = 0;
+    const items = [];
+    for (const gh of ids) {
+      try {
+        const result = await setAccountEnqueueBlocked(gh, blocked, {
+          note: req.body.note || undefined
+        });
+        if (result.action === 'not_found') {
+          notFound += 1;
+          items.push({ wechat_account_id: gh, action: 'not_found' });
+        } else {
+          ok += 1;
+          items.push({ wechat_account_id: gh, action: result.action });
+        }
+      } catch (e) {
+        failed += 1;
+        items.push({ wechat_account_id: gh, action: 'error', error: e.message });
+      }
+    }
+
+    res.json({
+      success: failed === 0,
+      message: blocked
+        ? `批量禁止入队：成功 ${ok}，未找到 ${notFound}，失败 ${failed}`
+        : `批量恢复允许入队：成功 ${ok}，未找到 ${notFound}，失败 ${failed}`,
+      ok,
+      notFound,
+      failed,
+      items
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+/** 批量订阅：已有 feed 则重新入队 active；否则尝试历史/样例链接映射 */
+router.post('/team/subscribe-batch', requireAdmin, async (req, res) => {
+  try {
+    const raw = req.body.wechat_account_ids || req.body.accounts || [];
+    const ids = [
+      ...new Set(
+        (Array.isArray(raw) ? raw : String(raw).split(','))
+          .map((s) => String(s || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (!ids.length) {
+      return res.status(400).json({ success: false, message: '需要 wechat_account_ids' });
+    }
+    if (ids.length > 200) {
+      return res.status(400).json({ success: false, message: '单次最多 200 个账号' });
+    }
+
+    let ok = 0;
+    let pending = 0;
+    let skipped = 0;
+    let failed = 0;
+    const items = [];
+    for (const gh of ids) {
+      try {
+        const result = await subscribeTeamAccount(gh);
+        const action = result.action || 'unknown';
+        items.push({ wechat_account_id: gh, ...result });
+        if (
+          action === 'activated' ||
+          action === 'mapped_by_sample' ||
+          action === 'mapped' ||
+          action === 'auto_mapped'
+        ) {
+          ok += 1;
+        } else if (
+          action === 'pending_subscribe' ||
+          action === 'already_mapped' ||
+          action === 'skip_enqueue_blocked' ||
+          action === 'not_found' ||
+          action === 'skip_empty'
+        ) {
+          if (action === 'pending_subscribe') pending += 1;
+          else skipped += 1;
+        } else {
+          failed += 1;
+        }
+      } catch (e) {
+        failed += 1;
+        items.push({ wechat_account_id: gh, action: 'error', error: e.message });
+      }
+    }
+
+    res.json({
+      success: failed === 0,
+      message: `批量订阅完成：成功 ${ok}，仍待订阅 ${pending}，跳过 ${skipped}，失败 ${failed}`,
+      ok,
+      pending,
+      skipped,
+      failed,
+      items
     });
   } catch (e) {
     res.status(500).json({ success: false, message: e.message });

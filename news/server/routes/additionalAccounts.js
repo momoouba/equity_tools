@@ -425,6 +425,74 @@ router.put('/:id', checkAuth, async (req, res) => {
   }
 });
 
+/**
+ * 批量改状态：body.status = active|inactive
+ * - ids: string[] 指定行；或 allInactive=true 把全部失效改为生效（管理员）
+ */
+router.post('/batch-status', checkAuth, async (req, res) => {
+  try {
+    const status = String(req.body.status || '').trim();
+    if (status !== 'active' && status !== 'inactive') {
+      return res.status(400).json({ success: false, message: 'status 须为 active 或 inactive' });
+    }
+
+    const allInactive = req.body.allInactive === true || req.body.all_inactive === true;
+    const rawIds = req.body.ids || req.body.account_ids || [];
+    const ids = [
+      ...new Set(
+        (Array.isArray(rawIds) ? rawIds : String(rawIds).split(','))
+          .map((s) => String(s || '').trim())
+          .filter(Boolean)
+      )
+    ];
+
+    if (!allInactive && !ids.length) {
+      return res.status(400).json({ success: false, message: '请提供 ids，或 allInactive=true' });
+    }
+    if (allInactive && !req.isAdmin) {
+      return res.status(403).json({ success: false, message: '仅管理员可将全部失效设为生效' });
+    }
+    if (ids.length > 500) {
+      return res.status(400).json({ success: false, message: '单次最多 500 条' });
+    }
+
+    let affected = 0;
+    if (allInactive && status === 'active') {
+      const result = await db.execute(
+        `UPDATE additional_wechat_accounts
+         SET status = 'active', F_LastModifyUserId = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+         WHERE F_DeleteMark = 0 AND status != 'active'`,
+        [req.currentUserId]
+      );
+      affected = result?.affectedRows ?? result?.[0]?.affectedRows ?? 0;
+    } else {
+      const placeholders = ids.map(() => '?').join(',');
+      let sql = `UPDATE additional_wechat_accounts
+                 SET status = ?, F_LastModifyUserId = ?, F_LastModifyTime = CURRENT_TIMESTAMP
+                 WHERE F_DeleteMark = 0 AND F_Id IN (${placeholders})`;
+      const params = [status, req.currentUserId, ...ids];
+      if (!req.isAdmin) {
+        sql += ' AND F_CreatorUserId = ?';
+        params.push(req.currentUserId);
+      }
+      const result = await db.execute(sql, params);
+      affected = result?.affectedRows ?? result?.[0]?.affectedRows ?? 0;
+    }
+
+    res.json({
+      success: true,
+      message:
+        status === 'active'
+          ? `已设为生效 ${affected} 条`
+          : `已设为失效 ${affected} 条`,
+      affected
+    });
+  } catch (error) {
+    console.error('批量改第三方公众号状态失败：', error);
+    res.status(500).json({ success: false, message: '批量改状态失败：' + error.message });
+  }
+});
+
 // 删除额外公众号（软删除，用户只能删除自己创建的，管理员可以删除所有）
 router.delete('/:id', checkAuth, async (req, res) => {
   try {

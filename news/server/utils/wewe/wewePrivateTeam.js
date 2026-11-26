@@ -273,8 +273,8 @@ async function unsubscribeFromWewe(wechatAccountId) {
 }
 
 /**
- * 人工禁止/恢复新榜自动重新入队（单条账号）。
- * 禁止时标为 exited 并清 extract_pending，不删 wewe 订阅（需退订请走 unsubscribe）。
+ * 人工禁止/恢复「从监控同步」重新入队（单条账号）。
+ * 禁止时标为 exited 并清 extract_pending，不删采集端订阅（需退订请走 unsubscribe）。
  */
 async function setAccountEnqueueBlocked(wechatAccountId, blocked, opts = {}) {
   const gh = String(wechatAccountId || '').trim();
@@ -335,12 +335,55 @@ async function handleXinbangAccountFinish(wechatAccountId, result) {
 }
 
 /**
+ * 第三方公众号数量统计（按公众号 ID 去重）。
+ */
+async function countAdditionalWechatAccounts() {
+  const stats = {
+    rows: 0,
+    activeRows: 0,
+    inactiveRows: 0,
+    distinctIds: 0,
+    activeDistinctIds: 0,
+    inactiveDistinctIds: 0
+  };
+  try {
+    const rows = await db.query(
+      `SELECT
+         COUNT(*) AS rows_cnt,
+         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_rows,
+         SUM(CASE WHEN status = 'active' THEN 0 ELSE 1 END) AS inactive_rows,
+         COUNT(DISTINCT NULLIF(TRIM(wechat_account_id), '')) AS distinct_ids,
+         COUNT(DISTINCT CASE
+           WHEN status = 'active' AND TRIM(IFNULL(wechat_account_id,'')) != ''
+           THEN wechat_account_id END) AS active_distinct_ids,
+         COUNT(DISTINCT CASE
+           WHEN status != 'active' AND TRIM(IFNULL(wechat_account_id,'')) != ''
+           THEN wechat_account_id END) AS inactive_distinct_ids
+       FROM additional_wechat_accounts
+       WHERE F_DeleteMark = 0`
+    );
+    const r = rows[0] || {};
+    stats.rows = Number(r.rows_cnt || 0);
+    stats.activeRows = Number(r.active_rows || 0);
+    stats.inactiveRows = Number(r.inactive_rows || 0);
+    stats.distinctIds = Number(r.distinct_ids || 0);
+    stats.activeDistinctIds = Number(r.active_distinct_ids || 0);
+    stats.inactiveDistinctIds = Number(r.inactive_distinct_ids || 0);
+  } catch (e) {
+    console.warn(`[wewe专队] 统计第三方公众号失败: ${e.message}`);
+  }
+  return stats;
+}
+
+/**
  * 收集监控侧应进专队的公众号 id → Map<gh, sourceType>
  * - invested：新闻舆情监控对象且填写了企业公众号 id（含已上市；排除完全退出/不再观察）
- * - additional：第三方/额外公众号 active
+ * - additional：第三方/额外公众号（默认仅 active；可 includeInactiveAdditional）
  * - both：两边都有
+ * @param {{ includeInactiveAdditional?: boolean }} options
  */
-async function collectMonitorWechatAccounts() {
+async function collectMonitorWechatAccounts(options = {}) {
+  const includeInactiveAdditional = options.includeInactiveAdditional === true;
   const sourceByGh = new Map();
 
   const mark = (gh, kind) => {
@@ -375,9 +418,9 @@ async function collectMonitorWechatAccounts() {
       `SELECT wechat_account_id
        FROM additional_wechat_accounts
        WHERE F_DeleteMark = 0
-         AND status = 'active'
          AND wechat_account_id IS NOT NULL
-         AND TRIM(wechat_account_id) != ''`
+         AND TRIM(wechat_account_id) != ''
+         ${includeInactiveAdditional ? '' : "AND status = 'active'"}`
     );
     for (const row of additional) {
       mark(row.wechat_account_id, 'additional');
@@ -391,14 +434,62 @@ async function collectMonitorWechatAccounts() {
 
 /**
  * 从监控对象 + 第三方公众号同步专队名单（只增改，不自动退订）。
- * @param {{ autoMap?: boolean }} options autoMap 默认 true，对新入队异步尝试历史链接映射
+ * @param {{
+ *   autoMap?: boolean,
+ *   sourceKinds?: 'all'|'additional'|'invested',
+ *   includeInactiveAdditional?: boolean
+ * }} options
+ *   autoMap 默认 true；sourceKinds 默认 all（仅第三方/仅企业时不会动另一侧已出队号）
+ *   includeInactiveAdditional：第三方是否包含「失效」账号（默认 false，与新榜一致只收生效）
  */
 async function syncTeamFromMonitorSources(options = {}) {
   const autoMap = options.autoMap !== false;
-  const sourceByGh = await collectMonitorWechatAccounts();
+  const includeInactiveAdditional = options.includeInactiveAdditional === true;
+  const kindsRaw = String(options.sourceKinds || options.source || 'all').toLowerCase();
+  const sourceKinds =
+    kindsRaw === 'additional' || kindsRaw === 'third_party' || kindsRaw === 'third'
+      ? 'additional'
+      : kindsRaw === 'invested' || kindsRaw === 'enterprise'
+        ? 'invested'
+        : 'all';
+
+  const additionalStats = await countAdditionalWechatAccounts();
+  const allByGh = await collectMonitorWechatAccounts({ includeInactiveAdditional });
+  let sourceByGh = allByGh;
+  if (sourceKinds === 'additional') {
+    sourceByGh = new Map(
+      [...allByGh].filter(([, t]) => t === 'additional' || t === 'both')
+    );
+  } else if (sourceKinds === 'invested') {
+    sourceByGh = new Map(
+      [...allByGh].filter(([, t]) => t === 'invested' || t === 'both')
+    );
+  }
+
+  let additionalCount = 0;
+  let investedCount = 0;
+  let bothCount = 0;
+  for (const t of allByGh.values()) {
+    if (t === 'additional') additionalCount += 1;
+    else if (t === 'invested') investedCount += 1;
+    else if (t === 'both') bothCount += 1;
+  }
+
   const summary = {
     action: 'synced_from_monitor',
+    sourceKinds,
+    includeInactiveAdditional,
     sourceCount: sourceByGh.size,
+    monitorTotals: {
+      all: allByGh.size,
+      additional: additionalCount,
+      invested: investedCount,
+      both: bothCount,
+      additionalRows: additionalStats.rows,
+      additionalDistinct: additionalStats.distinctIds,
+      additionalActiveDistinct: additionalStats.activeDistinctIds,
+      additionalInactiveDistinct: additionalStats.inactiveDistinctIds
+    },
     inserted: 0,
     reEnqueued: 0,
     refreshed: 0,
@@ -489,9 +580,84 @@ async function syncTeamFromMonitorSources(options = {}) {
   }
 
   console.log(
-    `[wewe专队] 从监控同步 source=${summary.sourceCount} +${summary.inserted} re=${summary.reEnqueued} refresh=${summary.refreshed} blocked=${summary.skippedBlocked}`
+    `[wewe专队] 从监控同步 kinds=${summary.sourceKinds} source=${summary.sourceCount} (monitor additional=${additionalCount} invested=${investedCount} both=${bothCount}) +${summary.inserted} re=${summary.reEnqueued} refresh=${summary.refreshed} blocked=${summary.skippedBlocked}`
   );
   return summary;
+}
+
+/**
+ * 批量订阅/重新入队：已有 feed_id 则标 active；否则尝试历史链接自动映射。
+ */
+async function subscribeTeamAccount(wechatAccountId) {
+  const gh = String(wechatAccountId || '').trim();
+  if (!gh) return { action: 'skip_empty' };
+
+  const existing = await db.query(
+    `SELECT * FROM wewe_private_accounts WHERE wechat_account_id = ? AND F_DeleteMark = 0 LIMIT 1`,
+    [gh]
+  );
+  if (!existing.length) return { action: 'not_found' };
+  const row = existing[0];
+
+  if (Number(row.enqueue_blocked) === 1) {
+    return { action: 'skip_enqueue_blocked', accountId: row.F_Id };
+  }
+
+  const feedId = String(row.feed_id || '').trim();
+  if (feedId) {
+    await db.execute(
+      `UPDATE wewe_private_accounts
+       SET team_status = 'active',
+           map_status = 'mapped',
+           last_enqueued_at = NOW(),
+           last_exited_at = NULL,
+           extract_pending = 0,
+           note = ?,
+           F_LastModifyTime = CURRENT_TIMESTAMP
+       WHERE F_Id = ?`,
+      ['subscribe:resume_mapped', row.F_Id]
+    );
+    return { action: 'activated', accountId: row.F_Id, feedId };
+  }
+
+  const sampleUrl = String(row.sample_article_url || '').trim();
+  if (sampleUrl) {
+    try {
+      const { mapAccountWithSampleUrl } = require('./weweFeedMap');
+      const mapped = await mapAccountWithSampleUrl(gh, sampleUrl);
+      return { action: 'mapped_by_sample', accountId: row.F_Id, ...mapped };
+    } catch (e) {
+      return { action: 'map_failed', accountId: row.F_Id, error: e.message };
+    }
+  }
+
+  try {
+    const { tryAutoMapAfterEnqueue } = require('./weweFeedMap');
+    const mapped = await tryAutoMapAfterEnqueue(gh, { notify: false });
+    if (
+      (mapped.action === 'already_mapped' || mapped.action === 'auto_mapped' || mapped.action === 'mapped') &&
+      (mapped.feedId || feedId)
+    ) {
+      const ensuredFeed = String(mapped.feedId || feedId || '').trim();
+      if (ensuredFeed) {
+        await db.execute(
+          `UPDATE wewe_private_accounts
+           SET team_status = 'active',
+               map_status = 'mapped',
+               feed_id = COALESCE(NULLIF(feed_id, ''), ?),
+               last_enqueued_at = NOW(),
+               last_exited_at = NULL,
+               F_LastModifyTime = CURRENT_TIMESTAMP
+           WHERE F_Id = ?`,
+          [ensuredFeed, row.F_Id]
+        );
+        return { action: 'activated', accountId: row.F_Id, feedId: ensuredFeed, via: mapped.action };
+      }
+    }
+    return { action: mapped.action || 'auto_map', accountId: row.F_Id, ...mapped };
+  } catch (e) {
+    return { action: 'error', accountId: row.F_Id, error: e.message };
+  }
 }
 
 module.exports = {
@@ -503,9 +669,11 @@ module.exports = {
   dequeueOnXinbangSuccess,
   unsubscribeFromWewe,
   setAccountEnqueueBlocked,
+  subscribeTeamAccount,
   handleXinbangAccountFinish,
   syncTeamFromMonitorSources,
   collectMonitorWechatAccounts,
+  countAdditionalWechatAccounts,
   resolveSourceType,
   splitWechatAccountIds
 };

@@ -31,6 +31,8 @@ function buildWhere(req) {
   const exchange = String(req.query.exchange || '').trim();
   const startDate = String(req.query.startDate || '').trim();
   const endDate = String(req.query.endDate || '').trim();
+  // listed | unlisted | ''(全部，PC 默认)
+  const listedStatus = String(req.query.listedStatus || '').trim().toLowerCase();
   if (keyword) {
     where.push('(stock_code LIKE ? OR stock_name LIKE ?)');
     params.push(`%${keyword}%`, `%${keyword}%`);
@@ -47,7 +49,18 @@ function buildWhere(req) {
     where.push('issue_date <= ?');
     params.push(endDate);
   }
-  return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params };
+  if (listedStatus === 'listed') {
+    where.push('public_date IS NOT NULL');
+  } else if (listedStatus === 'unlisted') {
+    where.push('public_date IS NULL');
+  }
+  let orderBy = 'issue_date DESC, stock_code ASC';
+  if (listedStatus === 'listed') {
+    orderBy = 'public_date DESC, stock_code ASC';
+  } else if (listedStatus === 'unlisted') {
+    orderBy = 'issue_date DESC, stock_code ASC';
+  }
+  return { whereSql: where.length ? `WHERE ${where.join(' AND ')}` : '', params, orderBy, listedStatus };
 }
 
 async function listNewShare(req, res) {
@@ -58,7 +71,7 @@ async function listNewShare(req, res) {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize, 10) || 15));
     const offset = (page - 1) * pageSize;
-    const { whereSql, params } = buildWhere(req);
+    const { whereSql, params, orderBy } = buildWhere(req);
 
     const countRows = await db.query(`SELECT COUNT(*) AS total FROM ipo_new_share ${whereSql}`, params);
     const list = await db.query(
@@ -72,7 +85,7 @@ async function listNewShare(req, res) {
               DATE_FORMAT(F_CreatorTime, '%Y-%m-%d %H:%i:%s') AS created_at,
               DATE_FORMAT(F_LastModifyTime, '%Y-%m-%d %H:%i:%s') AS updated_at
        FROM ipo_new_share ${whereSql}
-       ORDER BY issue_date DESC, stock_code ASC
+       ORDER BY ${orderBy}
        LIMIT ? OFFSET ?`,
       [...params, pageSize, offset]
     );

@@ -22,18 +22,26 @@ docker compose up -d
 ## 新闻侧配置
 
 1. 系统配置 → 私有公众号 → **采集后端**选 `we-mp-rss`
-2. Base URL 填 `http://127.0.0.1:8001`
-3. 环境变量（新闻 `news/.env` 或进程环境）：
+2. Base URL（**服务端**）生产填 `http://we-mp-rss:8001`；本地可 `http://127.0.0.1:8001`
+3. 浏览器管理页走新闻站同源反代 **`/we-mp-rss/`**（nginx），不要在浏览器打开 `http://we-mp-rss:8001`
+4. 环境变量（新闻 `news/.env` 或进程环境）：
 
 ```env
 MP_RSS_PROVIDER=werss
-MP_RSS_BASE_URL=http://127.0.0.1:8001
+MP_RSS_BASE_URL=http://we-mp-rss:8001
 MP_RSS_USERNAME=admin
 MP_RSS_PASSWORD=admin@123
 ```
 
-4. 在 we-mp-rss 管理页完成「微信读书」扫码或粘贴 Cookie，并订阅目标公众号
-5. 专队账号「粘贴分享链接」映射 `feed_id`，再开提取/入库开关
+5. 在 we-mp-rss 管理页完成「微信读书」扫码或粘贴 Cookie，并订阅目标公众号
+6. 专队账号「粘贴分享链接」映射 `feed_id`，再开提取/入库开关
+
+单独 compose 起的 `we-mp-rss` 要挂到新闻网络，nginx 才能反代：
+
+```bash
+docker network connect news_newsapp-network we-mp-rss
+docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+```
 
 ## 探活
 

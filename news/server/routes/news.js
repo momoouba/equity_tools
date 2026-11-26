@@ -2256,6 +2256,8 @@ router.get('/user-news', async (req, res) => {
     const search = req.query.search || '';
     const timeRange = req.query.timeRange || 'all'; // yesterday, thisWeek, thisMonth, all
     const enterpriseFilter = req.query.enterpriseFilter || 'all'; // enterprise, fund, sub_fund, third_party, all
+    // H5 分类：全部 / 企业 / 半导体 / 生物医疗 / 人工智能 / 其他（第三方行业标签）
+    const h5Category = String(req.query.h5Category || req.query.category || '').trim();
     const offset = (page - 1) * pageSize;
 
     // 计算时间范围（使用北京时区）
@@ -2421,24 +2423,98 @@ router.get('/user-news', async (req, res) => {
       params.push(...timeParams);
     }
 
-    // 添加企业过滤条件
-    if (enterpriseFilter === 'enterprise') {
-      // 企业相关：只显示企业类型为被投企业的数据
-      condition += ' AND entity_type = \'被投企业\'';
-    } else if (enterpriseFilter === 'fund') {
-      // 基金相关主体：只显示企业类型为基金相关主体的数据
-      condition += ' AND entity_type = \'基金相关主体\'';
-    } else if (enterpriseFilter === 'sub_fund') {
-      // 子基金：只显示企业类型为子基金、子基金管理人、子基金GP的数据
-      condition += ' AND entity_type IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
-    } else if (enterpriseFilter === 'third_party') {
-      // 第三方公众号：按公众号ID映射 additional_wechat_accounts 判定
-      condition += ` AND EXISTS (
-        SELECT 1
-        FROM additional_wechat_accounts awa
-        WHERE awa.F_DeleteMark = 0
-          AND awa.wechat_account_id = wechat_account
-      )`;
+    // 添加企业过滤条件（PC 原有；若传了 h5Category 则由下方 H5 分类接管，避免双重过滤）
+    if (!h5Category || h5Category === 'all') {
+      if (enterpriseFilter === 'enterprise') {
+        condition += ' AND entity_type = \'被投企业\'';
+      } else if (enterpriseFilter === 'fund') {
+        condition += ' AND entity_type = \'基金相关主体\'';
+      } else if (enterpriseFilter === 'sub_fund') {
+        condition += ' AND entity_type IN (\'子基金\', \'子基金管理人\', \'子基金GP\')';
+      } else if (enterpriseFilter === 'third_party') {
+        condition += ` AND EXISTS (
+          SELECT 1
+          FROM additional_wechat_accounts awa
+          WHERE awa.F_DeleteMark = 0
+            AND awa.wechat_account_id = wechat_account
+        )`;
+      }
+    }
+
+    // H5：全部 / 企业 / 行业标签（第三方公众号）/ 其他
+    if (h5Category && h5Category !== 'all') {
+      const NAMED_INDUSTRY = ['半导体', '生物医疗', '人工智能'];
+      if (h5Category === 'enterprise' || h5Category === '企业') {
+        condition += ' AND entity_type = \'被投企业\'';
+      } else if (NAMED_INDUSTRY.includes(h5Category)) {
+        const tagRows = await db.query(
+          `SELECT c.item_code, c.item_name
+           FROM base_dictionary p
+           INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+           WHERE p.F_DeleteMark = 0 AND p.parent_id IS NULL AND p.dict_code = 'industry'
+             AND (c.item_name = ? OR c.item_code = ?)`,
+          [h5Category, h5Category]
+        );
+        const matchValues = new Set([h5Category]);
+        tagRows.forEach((r) => {
+          if (r.item_code) matchValues.add(String(r.item_code).trim());
+          if (r.item_name) matchValues.add(String(r.item_name).trim());
+        });
+        const vals = [...matchValues].filter(Boolean);
+        const ph = vals.map(() => '?').join(',');
+        condition += ` AND EXISTS (
+          SELECT 1
+          FROM additional_wechat_accounts awa
+          LEFT JOIN base_dictionary p
+            ON p.dict_code = 'industry' AND p.parent_id IS NULL AND p.F_DeleteMark = 0
+          LEFT JOIN base_dictionary t
+            ON t.parent_id = p.F_Id AND t.item_code = awa.industry_tag_code AND t.F_DeleteMark = 0
+          WHERE awa.F_DeleteMark = 0
+            AND awa.status = 'active'
+            AND awa.wechat_account_id = wechat_account
+            AND (
+              awa.industry_tag_code IN (${ph})
+              OR t.item_name IN (${ph})
+            )
+        )`;
+        params.push(...vals, ...vals);
+      } else if (h5Category === '其他' || h5Category === 'other') {
+        const tagRows = await db.query(
+          `SELECT c.item_code, c.item_name
+           FROM base_dictionary p
+           INNER JOIN base_dictionary c ON c.parent_id = p.F_Id AND c.F_DeleteMark = 0
+           WHERE p.F_DeleteMark = 0 AND p.parent_id IS NULL AND p.dict_code = 'industry'
+             AND c.item_name IN (?, ?, ?)`,
+          NAMED_INDUSTRY
+        );
+        const namedVals = new Set(NAMED_INDUSTRY);
+        tagRows.forEach((r) => {
+          if (r.item_code) namedVals.add(String(r.item_code).trim());
+          if (r.item_name) namedVals.add(String(r.item_name).trim());
+        });
+        const vals = [...namedVals].filter(Boolean);
+        const ph = vals.map(() => '?').join(',');
+        condition += ` AND EXISTS (
+          SELECT 1
+          FROM additional_wechat_accounts awa
+          LEFT JOIN base_dictionary p
+            ON p.dict_code = 'industry' AND p.parent_id IS NULL AND p.F_DeleteMark = 0
+          LEFT JOIN base_dictionary t
+            ON t.parent_id = p.F_Id AND t.item_code = awa.industry_tag_code AND t.F_DeleteMark = 0
+          WHERE awa.F_DeleteMark = 0
+            AND awa.status = 'active'
+            AND awa.wechat_account_id = wechat_account
+            AND (
+              awa.industry_tag_code IS NULL
+              OR TRIM(awa.industry_tag_code) = ''
+              OR (
+                awa.industry_tag_code NOT IN (${ph})
+                AND (t.item_name IS NULL OR t.item_name NOT IN (${ph}))
+              )
+            )
+        )`;
+        params.push(...vals, ...vals);
+      }
     }
 
     // 添加搜索条件（支持多标签搜索）
@@ -2496,6 +2572,7 @@ router.get('/user-news', async (req, res) => {
         }
       }
       return {
+        id: item.id || item.F_Id || null,
         account_name: item.account_name || '',
         wechat_account: item.wechat_account || '',
         enterprise_full_name: item.enterprise_full_name || '',

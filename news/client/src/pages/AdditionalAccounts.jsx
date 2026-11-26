@@ -37,6 +37,7 @@ function AdditionalAccounts() {
   const [importFile, setImportFile] = useState(null)
   const [importLoading, setImportLoading] = useState(false)
   const [exportLoading, setExportLoading] = useState(false)
+  const [batchStatusLoading, setBatchStatusLoading] = useState(false)
   const [showImportErrorModal, setShowImportErrorModal] = useState(false)
   const [importErrors, setImportErrors] = useState([])
   const [importSummary, setImportSummary] = useState({
@@ -207,6 +208,37 @@ function AdditionalAccounts() {
         } catch (error) {
           console.error('删除失败:', error)
           Message.error('删除失败，请重试')
+        }
+      }
+    })
+  }
+
+  /** 管理员：把全部「失效」一次性改为「生效」（专队同步只收生效） */
+  const handleActivateAllInactive = () => {
+    Modal.confirm({
+      title: '全部设为生效',
+      content:
+        '将把第三方公众号中所有「失效」记录改为「生效」。专队「从监控同步」默认只收生效账号；改完后再去专队同步即可。',
+      okText: '全部设为生效',
+      cancelText: '取消',
+      onOk: async () => {
+        setBatchStatusLoading(true)
+        try {
+          const response = await axios.post('/api/additional-accounts/batch-status', {
+            status: 'active',
+            allInactive: true
+          })
+          if (response.data?.success) {
+            Message.success(response.data.message || '已设为生效')
+            fetchAccounts(new AbortController().signal)
+          } else {
+            Message.error(response.data?.message || '操作失败')
+          }
+        } catch (error) {
+          console.error('批量设为生效失败:', error)
+          Message.error(error.response?.data?.message || '批量设为生效失败')
+        } finally {
+          setBatchStatusLoading(false)
         }
       }
     })
@@ -518,6 +550,16 @@ function AdditionalAccounts() {
             >
               批量导入
             </Button>
+            {userRole === 'admin' && (
+              <Button
+                type="outline"
+                status="warning"
+                loading={batchStatusLoading}
+                onClick={handleActivateAllInactive}
+              >
+                全部设为生效
+              </Button>
+            )}
             <Button
               onClick={handleExport}
               loading={exportLoading}
