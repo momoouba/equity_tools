@@ -28,7 +28,7 @@ export default function Home() {
       {canNews ? (
         <Link className="h5-card-link" to="/news">
           <h3>舆情信息</h3>
-          <p>查看与我相关的企业舆情（只读）</p>
+          <p>按项目查看舆情标题与内容（只读）</p>
         </Link>
       ) : null}
       {canListing ? (
