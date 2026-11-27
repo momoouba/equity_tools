@@ -270,6 +270,10 @@ const competitorAnalysisRoutes = require('./routes/competitor-analysis');
 app.use('/api/competitor-analysis', competitorAnalysisRoutes);
 const valuationRoutes = require('./routes/valuation');
 app.use('/api/valuation', valuationRoutes);
+const agentRoutes = require('./routes/agent');
+app.use('/api/integrations/agent/v1', agentRoutes);
+const agentAdminRoutes = require('./routes/agentAdmin');
+app.use('/api/system/agent', agentAdminRoutes);
 
 // P5：活码页（免登录 HTML，不依赖前端构建）
 app.get(['/wewe/live-qr', '/wewe/live-qr/'], (req, res) => {

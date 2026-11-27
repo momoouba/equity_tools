@@ -25,10 +25,15 @@ const {
  * 不带令牌的普通登录请求原样放行。
  */
 async function publishAuthMiddleware(req, res, next) {
+  const pathOnly = String(req.originalUrl || req.url || '').split('?')[0];
+  if (pathOnly.startsWith('/api/integrations/agent')) {
+    delete req.headers['x-user-id'];
+    delete req.headers['x-user-role'];
+    return next();
+  }
+
   const token = req.headers['x-publish-token'];
   if (!token) return next();
-
-  const pathOnly = String(req.originalUrl || req.url || '').split('?')[0];
   if (pathOnly.startsWith('/api/app-publish')) {
     // 发布管理接口只认登录态，避免嵌入页凭令牌改写或关闭发布
     delete req.headers['x-user-id'];

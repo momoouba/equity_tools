@@ -12,6 +12,7 @@ import HolidayConfig from './HolidayConfig'
 import DatabaseConfig from './DatabaseConfig'
 import ListingDataConfig from './listing/ListingDataConfig'
 import FinancingSourceConfig from './project-sourcing/FinancingSourceConfig'
+import AgentKeyConfig from './AgentKeyConfig'
 import CompetitorRecallSourceConfig from './competitor-analysis/CompetitorRecallSourceConfig'
 import CompetitorMigrationConfig from './competitor-analysis/CompetitorMigrationConfig'
 import BaseDictionaryConfig from './BaseDictionaryConfig'
@@ -131,6 +132,12 @@ function SystemConfig({ isAdmin = true }) {
           <TabPane key="financing-source" title="融资信息源配置">
             <div className="config-content">
               <FinancingSourceConfig />
+            </div>
+          </TabPane>
+
+          <TabPane key="agent" title="agent调用">
+            <div className="config-content">
+              <AgentKeyConfig />
             </div>
           </TabPane>
         </Tabs>

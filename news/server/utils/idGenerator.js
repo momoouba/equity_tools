@@ -58,6 +58,7 @@ async function generateIdUnlocked(tableName, connection) {
       'shanghai_international_group_config', 'qichacha_news_categories', 'recipient_management', 'email_logs', 'system_file_storage',
       'holiday_calendar', 'external_db_config', 'news_sync_execution_log', 'news_sync_detail_log', 'news_fetch_day_log',
       'ai_prompt_config', 'ai_prompt_change_log', 'news_share_links', 'app_publish_links', 'interface_news_type_enabled',
+      'agent_client', 'agent_access_token', 'agent_audit',
       // 业绩看板相关表
       'b_version', 'b_version_run_log', 'b_indicator_describe', 'b_sql', 'b_sql_change_log',
       'b_manage_indicator', 'b_manage', 'b_transaction_indicator', 'b_investment_indicator',

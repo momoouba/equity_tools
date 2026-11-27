@@ -91,6 +91,24 @@
   flex-direction: column;
 }
 
+/* 页内再套一层 Tabs 时，不要套用外层「撑满并裁切」的高度，否则内容区高度为 0 */
+.config-tabs .agent-config.arco-tabs {
+  height: auto;
+  overflow: visible;
+}
+
+.config-tabs .agent-config .arco-tabs-content,
+.config-tabs .agent-config .arco-tabs-content-wrapper,
+.config-tabs .agent-config .arco-tabs-content-inner,
+.config-tabs .agent-config .arco-tabs-content-list,
+.config-tabs .agent-config .arco-tabs-content-item,
+.config-tabs .agent-config .arco-tabs-content-item-active,
+.config-tabs .agent-config .arco-tabs-content-item-active > .arco-tabs-pane {
+  height: auto !important;
+  flex: none;
+  overflow: visible;
+}
+
 .system-config .arco-table-container {
   border: 1px solid #c9d6e8;
 }
