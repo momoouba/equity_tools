@@ -639,7 +639,7 @@ async function extractOneAccount(accountRow, options = {}) {
       candidates = attachFeedContent(catalogSnapshot.length ? catalogSnapshot : candidates, index);
     };
 
-    const refreshFeedForContent = async (reason) => {
+    const refreshFeedForContent = async (reason, { forceCollect = false } = {}) => {
       const titleInclude = titleIncludeFromMissing();
       console.log(
         `[wewe提取] 补全文 ${reason} account=${gh} feed=${feedId} titles=${titleInclude} catalog=${feedArticles.length} mpList=${rawList.length}`
@@ -668,7 +668,10 @@ async function extractOneAccount(accountRow, options = {}) {
           if (isSessionDeadError(e2)) throw e2;
         }
       }
-      if (!updateFeed || missingContent().length === 0) return;
+      // 目录为空 / 仅有旧稿时 missingContent 也为空，旧逻辑会直接 return，从不触发 weread/collect
+      const shouldCollect =
+        updateFeed && (forceCollect || missingContent().length > 0 || catalogSnapshot.length === 0);
+      if (!shouldCollect) return;
       try {
         await loadFeedArticles(feedId, {
           update: true,
@@ -684,6 +687,13 @@ async function extractOneAccount(accountRow, options = {}) {
           limit: FULLTEXT_LIMIT
         });
         mergeFulltext(fulltextList);
+        // 强制采集后目录可能换新，刷新快照供后续按业务日过滤
+        if (forceCollect || catalogSnapshot.length === 0) {
+          feedArticles = fulltextList.length ? fulltextList : feedArticles;
+          index = indexFeedContent(feedArticles);
+          candidates = buildCandidates([], feedArticles, index);
+          catalogSnapshot.splice(0, catalogSnapshot.length, ...candidates);
+        }
       } catch (e) {
         console.warn(`[wewe提取] feed 刷新失败 account=${gh}: ${e.message}`);
         if (isSessionDeadError(e)) throw e;
@@ -692,7 +702,7 @@ async function extractOneAccount(accountRow, options = {}) {
 
     const missing = missingContent();
     if (rawList.length === 0 && feedArticles.length === 0) {
-      await refreshFeedForContent('目录为空');
+      await refreshFeedForContent('目录为空', { forceCollect: true });
     } else if (missing.length > 0) {
       await refreshFeedForContent(`当日缺正文 ${missing.length} 篇`);
     } else if (dayItems().length === 0 && feedArticles.length > 0) {
@@ -701,6 +711,8 @@ async function extractOneAccount(accountRow, options = {}) {
           feedArticles[0] && feedArticles[0].publicTime
         )} 样例标题=${String((feedArticles[0] && feedArticles[0].title) || '').slice(0, 30)}`
       );
+      // 目录停在旧稿时也触发一次上游采集，避免 we-mp-rss 未增量更新就一直 empty
+      await refreshFeedForContent('目录无当日稿，强制刷新', { forceCollect: true });
     }
 
     let staged = 0;

@@ -75,7 +75,15 @@ const PLATFORM_RELAY_HINT =
 router.post('/qr', authLiveQr, async (req, res) => {
   try {
     const qr = await createLoginUrl();
-    res.json({ success: true, phase: 'P5', uuid: qr.uuid, scanUrl: qr.scanUrl });
+    res.json({
+      success: true,
+      phase: 'P5',
+      uuid: qr.uuid,
+      scanUrl: qr.scanUrl,
+      isImage: Boolean(qr.isImage),
+      provider: qr.provider || null,
+      hint: qr.hint || null
+    });
   } catch (e) {
     const message = e.message || '生成二维码失败';
     res.status(502).json({
@@ -145,6 +153,7 @@ function liveQrHtml() {
 <body>
   <h1>微信读书会话续期</h1>
   <p class="muted">请用手机微信扫描下方二维码。成功后应只剩绿色「扫码成功」，可关闭本页。</p>
+  <p class="muted" id="werssHint" style="display:none">若已切到 <b>we-mp-rss</b>：更稳妥是打开管理页（本站 <code>/we-mp-rss/</code> 或 <code>:8443</code>）→「微信读书」扫码/粘贴 Cookie，不必依赖本活码页。</p>
   <p id="status" class="muted">准备中…</p>
   <div id="qr"></div>
   <pre id="detail"></pre>
@@ -156,6 +165,7 @@ function liveQrHtml() {
     const statusEl = document.getElementById('status');
     const qrEl = document.getElementById('qr');
     const detailEl = document.getElementById('detail');
+    const werssHintEl = document.getElementById('werssHint');
     let uuid = null;
     let timer = null;
     let pollCount = 0;
@@ -167,6 +177,12 @@ function liveQrHtml() {
       statusEl.textContent = t;
     }
     function setDetail(t) { detailEl.textContent = t || ''; }
+
+    function looksLikeImageUrl(u) {
+      const s = String(u || '');
+      return /^data:image\\//i.test(s) || /\\.(png|jpe?g|gif|webp)(\\?|$)/i.test(s)
+        || /\\/we-mp-rss\\//i.test(s) || /\\/(static|qr)\\//i.test(s);
+    }
 
     function markSuccess(data) {
       done = true;
@@ -195,9 +211,21 @@ function liveQrHtml() {
       uuid = data.uuid;
       const scanUrl = data.scanUrl || '';
       if (!scanUrl) throw new Error('未返回 scanUrl');
+      if (data.provider === 'werss' || data.hint) {
+        werssHintEl.style.display = 'block';
+        if (data.hint) setDetail(data.hint);
+      }
       const img = document.createElement('img');
       img.alt = '扫码登录';
-      img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(scanUrl);
+      // we-mp-rss 常直接返回二维码图片 URL；再包一层 qrserver 会导致微信扫了无效、一直 waiting
+      if (data.isImage || looksLikeImageUrl(scanUrl)) {
+        img.src = scanUrl;
+      } else {
+        img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(scanUrl);
+      }
+      img.onerror = function () {
+        setStatus('二维码图片加载失败。请改用 we-mp-rss 管理页扫码，或检查 /we-mp-rss/ 反代。', 'err');
+      };
       qrEl.appendChild(img);
       setStatus('请扫码；状态：等待中…', 'wait');
       timer = setInterval(poll, 2000);

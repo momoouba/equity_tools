@@ -197,6 +197,11 @@ a {
   padding: 14px;
   background: var(--h5-card);
   border-radius: 12px;
+  border-left: 3px solid #4caf50;
+}
+
+.h5-news-card--third {
+  border-left-color: #1890ff;
 }
 
 .h5-news-card__title {
@@ -231,19 +236,85 @@ a {
 }
 
 .h5-news-card__title--short {
+  margin: 0 0 10px;
   font-size: 18px;
   font-weight: 700;
   font-family: 'PingFang SC', 'Microsoft YaHei', 'Heiti SC', 'SimHei', sans-serif;
-  color: #1a1a1a;
+  color: #2c3e50;
+  line-height: 1.35;
 }
 
 .h5-news-card__title-company {
-  margin-left: 6px;
-  font-size: 12px;
+  margin-left: 8px;
+  font-size: 13px;
   font-weight: 400;
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
-  color: var(--h5-muted);
+  color: #888;
   line-height: 1.4;
+}
+
+.h5-news-card__headline {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #2c3e50;
+  line-height: 1.5;
+}
+
+.h5-news-card__item {
+  padding: 0;
+}
+
+.h5-news-card__item-wrap {
+  margin-top: 0;
+}
+
+.h5-news-card__divider {
+  height: 1px;
+  margin: 14px 0;
+  background: #eef0f3;
+}
+
+.h5-news-card__senti-row {
+  margin: 0 0 2px;
+}
+
+/* 对齐邮件情绪色块 */
+.h5-senti {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.h5-senti--pos {
+  background: #e8f5e9;
+  color: #4caf50;
+}
+
+.h5-senti--neg {
+  background: #ffebee;
+  color: #f44336;
+}
+
+.h5-senti--neu {
+  background: #f5f5f5;
+  color: #757575;
+}
+
+.h5-senti--attention {
+  background: #fff8e1;
+  color: #f9a825;
+}
+
+.h5-news-card__source {
+  display: inline-block;
+  margin-top: 10px;
+  font-size: 13px;
+  color: #4caf50;
+  text-decoration: none;
 }
 
 .h5-meta-investors {

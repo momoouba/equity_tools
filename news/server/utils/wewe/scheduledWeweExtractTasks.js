@@ -30,6 +30,8 @@ let runningTick = false;
 let nextTickAllowedAt = 0;
 /** 隔日补抓队列清空后已补入库的北京日，避免每分钟重复入库 */
 let catchupIngestDoneYmd = '';
+/** 本轮隔日补抓已真正提取过的次数；用于避免 markAll 前的空队列误触发「补入库」并封口 */
+let catchupExtractTicks = 0;
 
 function delayMinutesForResult(result, longMinutes) {
   if (!result || !result.action) return 0;
@@ -62,6 +64,10 @@ async function maybeIngestAfterCatchupIdle(result) {
   if (!result || result.action !== 'idle_empty_queue' || result.extractKind !== 'catchup') {
     return;
   }
+  // markAll 完成前可能先打到空队列；此时尚未补抓，不能入库封口，否则刚暂存的稿会漏进 news_detail
+  if (catchupExtractTicks <= 0) {
+    return;
+  }
   const today = formatBeijingYmd();
   if (catchupIngestDoneYmd === today) return;
   const cfg = await getWewePrivateConfig();
@@ -79,9 +85,9 @@ async function maybeIngestAfterCatchupIdle(result) {
       catchupIngestDoneYmd = today;
     }
     console.log('[wewe提取调度] 隔日补抓后入库', {
-      action: ingestResult.action,
-      pending: ingestResult.pending,
-      ingested: ingestResult.ingested
+      action: ingestResult && ingestResult.action,
+      pending: ingestResult && ingestResult.pending,
+      ingested: ingestResult && ingestResult.ingested
     });
   } catch (e) {
     console.warn(`[wewe提取调度] 隔日补抓后入库失败: ${e.message}`);
@@ -137,6 +143,7 @@ async function updateWeweExtractScheduledTasks() {
         console.log(`[wewe提取调度] catchup_extract_start 触发 ${ymd}（抓昨天 21:00 后）`);
         nextTickAllowedAt = 0;
         catchupIngestDoneYmd = '';
+        catchupExtractTicks = 0;
         await markAllActiveForExtract();
       } catch (e) {
         console.error('[wewe提取调度] 隔日补抓 markAll 失败:', e.message);
@@ -154,6 +161,9 @@ async function updateWeweExtractScheduledTasks() {
       try {
         if (!(await isExtractEnabled())) return;
         const result = await runExtractTick();
+        if (result && result.action === 'extracted' && result.extractKind === 'catchup') {
+          catchupExtractTicks += 1;
+        }
         const waitMin = delayMinutesForResult(result, interval);
         if (waitMin > 0) {
           nextTickAllowedAt = Date.now() + waitMin * 60 * 1000;

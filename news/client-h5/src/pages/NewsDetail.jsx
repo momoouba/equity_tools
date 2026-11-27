@@ -3,13 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Button, DotLoading, NavBar, Toast } from 'antd-mobile'
 import axios from '../utils/axios'
 import { readCachedNewsItem, cacheNewsItem } from '../utils/newsCache'
+import { formatNewsSentiment, newsCardHeader } from '../utils/newsSentiment'
 
-function sentimentTag(s) {
-  const v = String(s || '')
-  if (v.includes('正')) return <span className="h5-tag h5-tag--pos">{v}</span>
-  if (v.includes('负')) return <span className="h5-tag h5-tag--neg">{v}</span>
-  if (v) return <span className="h5-tag h5-tag--neu">{v}</span>
-  return null
+function SentimentBadge({ news }) {
+  const { text, tone } = formatNewsSentiment(news)
+  return <span className={`h5-senti h5-senti--${tone}`}>{text}</span>
 }
 
 function formatTime(t) {
@@ -17,12 +15,6 @@ function formatTime(t) {
   const d = new Date(t)
   if (Number.isNaN(d.getTime())) return String(t)
   return d.toLocaleString('zh-CN', { hour12: false })
-}
-
-function projectNameOf(item) {
-  const abbr = String(item?.enterprise_abbreviation || '').trim()
-  const full = String(item?.enterprise_full_name || '').trim()
-  return abbr || full || '未命名项目'
 }
 
 export default function NewsDetail() {
@@ -65,12 +57,7 @@ export default function NewsDetail() {
     }
   }, [id])
 
-  const projectName = item ? projectNameOf(item) : ''
-  const fullName = item
-    ? String(item.enterprise_full_name || '').trim()
-    : ''
-  const showFull =
-    fullName && fullName !== projectName ? fullName : ''
+  const header = item ? newsCardHeader(item) : null
 
   return (
     <div className="h5-page--no-tab" style={{ minHeight: '100vh', background: 'var(--h5-bg)' }}>
@@ -83,19 +70,28 @@ export default function NewsDetail() {
         <div className="h5-empty">暂无数据</div>
       ) : (
         <div className="h5-detail">
-          {/* 项目名 → 换行标题 → 再内容 */}
-          <div className="h5-detail__project">{projectName}</div>
-          {showFull ? <div className="h5-detail__project-full">{showFull}</div> : null}
-          <h1 className="h5-detail__title">{item.title || '无标题'}</h1>
-          <div className="h5-news-card__meta" style={{ marginBottom: 8 }}>
-            {sentimentTag(item.news_sentiment)}
-            <span>{formatTime(item.public_time)}</span>
+          <h1 className="h5-detail__title h5-news-card__title--short">
+            {header.primary}
+            {header.secondary ? (
+              <span className="h5-news-card__title-company">{header.secondary}</span>
+            ) : null}
+          </h1>
+          <div className="h5-news-card__headline" style={{ marginBottom: 8 }}>
+            {item.title || '无标题'}
+          </div>
+          <div className="h5-news-card__senti-row" style={{ marginBottom: 8 }}>
+            <SentimentBadge news={item} />
+            <span style={{ marginLeft: 10, fontSize: 12, color: 'var(--h5-muted)' }}>
+              {formatTime(item.public_time)}
+            </span>
           </div>
 
-          <div className="h5-detail__block">
-            <h4>公众号</h4>
-            <p>{item.account_name || item.wechat_account || '—'}</p>
-          </div>
+          {!header.thirdParty ? (
+            <div className="h5-detail__block">
+              <h4>公众号</h4>
+              <p>{item.account_name || item.wechat_account || '—'}</p>
+            </div>
+          ) : null}
 
           {item.entity_type ? (
             <div className="h5-detail__block">

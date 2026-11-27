@@ -416,39 +416,119 @@ async function getMpArticles(mpId) {
   }));
 }
 
+/** 把 we-mp-rss 内网地址改成新闻站可给浏览器加载的 /we-mp-rss/ 路径 */
+function toBrowserMpRssUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^data:image\//i.test(raw)) return raw;
+  const { baseUrl } = getMpRssConfig();
+  let path = raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const u = new URL(raw);
+      const baseHost = (() => {
+        try {
+          return new URL(baseUrl).host;
+        } catch (_) {
+          return '';
+        }
+      })();
+      // Docker 服务名 / 本机回环 → 走 nginx 反代，手机才能打开图
+      if (
+        /we-mp-rss/i.test(u.hostname) ||
+        u.hostname === '127.0.0.1' ||
+        u.hostname === 'localhost' ||
+        (baseHost && u.host === baseHost)
+      ) {
+        path = u.pathname + u.search;
+      } else {
+        return raw;
+      }
+    } catch (_) {
+      return raw;
+    }
+  }
+  path = path.replace(/^\.\//, '');
+  if (!path.startsWith('/')) path = `/${path}`;
+  return `/we-mp-rss${path}`;
+}
+
+function looksLikeQrImage(url, row = {}) {
+  const s = String(url || '');
+  if (!s) return false;
+  if (/^data:image\//i.test(s)) return true;
+  if (row.image || row.qr_image || row.img || row.code_img || row.is_image) return true;
+  if (/\.(png|jpe?g|gif|webp)(\?|$)/i.test(s)) return true;
+  if (/\/(qr|weread).*\/(image|code|img)/i.test(s)) return true;
+  if (/\/static\//i.test(s) && /qr|code|weread/i.test(s)) return true;
+  return false;
+}
+
 /** 微信读书扫码：对齐 wewe createLoginUrl 返回形状 */
 async function createLoginUrl() {
   const data = await apiRequest('get', '/api/v1/wx/weread/qr/code');
   const row = data && typeof data === 'object' ? data : {};
-  const code = row.code || row.code_url || row.scanUrl || row.url || '';
+  const code =
+    row.image ||
+    row.qr_image ||
+    row.img ||
+    row.code_img ||
+    row.code ||
+    row.code_url ||
+    row.scanUrl ||
+    row.url ||
+    '';
   const uuid = String(row.uid || row.uuid || row.id || `werss-${Date.now()}`);
   const { baseUrl } = getMpRssConfig();
   let scanUrl = String(code || '');
   if (scanUrl && scanUrl.startsWith('/')) {
     scanUrl = `${baseUrl}${scanUrl}`;
-  } else if (scanUrl && !/^https?:\/\//i.test(scanUrl) && scanUrl.includes('static/')) {
+  } else if (scanUrl && !/^https?:\/\//i.test(scanUrl) && !/^data:image\//i.test(scanUrl) && scanUrl.includes('static/')) {
     scanUrl = `${baseUrl}/${scanUrl.replace(/^\.\//, '')}`;
   }
   if (!scanUrl) {
-    throw new Error('we-mp-rss weread qr 未返回二维码地址；也可在管理页「微信读书」扫码');
+    throw new Error(
+      'we-mp-rss weread qr 未返回二维码地址。请改用 we-mp-rss 管理页（/we-mp-rss/ 或 :8443）「微信读书」扫码/粘贴 Cookie'
+    );
   }
-  return { uuid, scanUrl };
+  const isImage = looksLikeQrImage(scanUrl, row);
+  // 浏览器展示用公网可访问地址；服务端仍可用原 scanUrl 语义
+  const browserUrl = isImage ? toBrowserMpRssUrl(scanUrl) : scanUrl;
+  return {
+    uuid,
+    scanUrl: browserUrl || scanUrl,
+    isImage,
+    provider: 'werss',
+    hint: '推荐直接在 we-mp-rss 管理页完成微信读书登录；本活码页为兼容入口'
+  };
 }
 
 async function getLoginResult(uuid) {
   const data = await apiRequest('get', '/api/v1/wx/weread/qr/status');
   const row = data && typeof data === 'object' ? data : {};
-  const loggedIn = row.login_status === true || row.ok === true || row.status === 'success';
+  const payload = row.data && typeof row.data === 'object' ? row.data : row;
+  const status = String(row.status || payload.status || '').toLowerCase();
+  const loggedIn =
+    row.login_status === true ||
+    payload.login_status === true ||
+    row.ok === true ||
+    payload.ok === true ||
+    row.configured === true ||
+    status === 'success' ||
+    status === 'ok' ||
+    status === 'done' ||
+    status === 'scanned' ||
+    status === 'confirmed' ||
+    Boolean(payload.vid || payload.userVid || row.vid);
   if (!loggedIn) {
     return { message: 'waiting', ...row };
   }
-  const payload = row.data || row;
-  const vid = payload.vid || payload.userVid || uuid;
+  const vid = payload.vid || payload.userVid || row.vid || uuid;
   // Cookie 已由 we-mp-rss 写入；返回占位 token 让 completeLoginFromPoll 走通
   return {
     vid: String(vid),
     token: 'werss-cookie-managed',
-    username: payload.name || payload.username || '微信读书',
+    username: payload.name || payload.username || row.name || '微信读书',
     message: 'ok',
     ...row
   };
